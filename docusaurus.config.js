@@ -83,7 +83,7 @@ const config = {
           type: 'docSidebar',
           sidebarId: 'docSidebar',
           position: 'left',
-          label: 'Docs',
+          label: 'Guide',
         },
         { to: '/use-cases', label: 'Use Cases', position: 'left' },
         { to: '/faq', label: 'FAQ', position: 'left' },
