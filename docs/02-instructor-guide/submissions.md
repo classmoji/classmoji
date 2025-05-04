@@ -55,5 +55,3 @@ If a student reopens an issue and closes it again, only the **most recent closur
 - You can configure resubmissions and feedback workflows per assignment
 - Submissions are only accepted on or after issue creation
 - You can review timestamps, submission branches, and token usage from the dashboard
-
-Next: [Enable resubmissions and feedback-based grading](./resubmissions.md)

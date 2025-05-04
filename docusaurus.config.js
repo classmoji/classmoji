@@ -27,7 +27,7 @@ const config = {
   organizationName: 'classmoji', // Usually your GitHub org/user name.
   projectName: 'classmoji', // Usually your repo name.
 
-  // onBrokenLinks: 'throw',
+  onBrokenLinks: 'throw',
   onBrokenMarkdownLinks: 'warn',
 
   // Even if you don't use internationalization, you can use this field to set
