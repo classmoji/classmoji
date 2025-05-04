@@ -85,11 +85,7 @@
   padding-left: 1.5rem !important; /* or 24px */
 }
 
-/* Apply only to FAQ page using custom class */
-.faq-page .theme-doc-toc-desktop {
-  width: 300px;
-}
-
-.faq-page .theme-doc-markdown.markdown {
-  max-width: 720px;
+p,
+li {
+  font-size: 14px;
 }

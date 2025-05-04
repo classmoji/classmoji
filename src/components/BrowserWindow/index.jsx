@@ -11,7 +11,7 @@ const BrowserWindow = ({ img }) => {
         <span className={styles['browser-url']}>https://app.classmoji.io</span>
       </div>
       <img
-        src={`/screenshots/${img}.png`}
+        src={`/screenshots/${img}`}
         alt={`${img} screenshot`}
         className={styles['browser-image']}
       />

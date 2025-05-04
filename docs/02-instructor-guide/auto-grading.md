@@ -83,6 +83,40 @@ CTRF is a JSON-based test report format created to unify the structure of test r
 
 The CTRF format is an open-source initiative that provides reporters for a variety of widely used testing frameworks. These include popular tools such as Jest, Cypress, Mocha, Selenium, JUnit, and many others. This open-source approach ensures that you can generate CTRF reports across different languages and frameworks, facilitating seamless integration with GitHub Actions for automated grading.
 
+The report will look like this regardless of the testing framework or programming language you use:
+
+```json
+{
+  "results": {
+    "tool": {
+      "name": "AnyTool"
+    },
+    "summary": {
+      "tests": 1,
+      "passed": 1,
+      "failed": 0,
+      "pending": 0,
+      "skipped": 0,
+      "other": 0,
+      "start": 1706828654274,
+      "stop": 1706828655782
+    },
+    "tests": [
+      {
+        "name": "should be able to login",
+        "status": "passed",
+        "duration": 801
+      }
+    ],
+    "environment": {
+      "appName": "MyApp",
+      "buildName": "MyApp",
+      "buildNumber": "100"
+    }
+  }
+}
+```
+
 ## 🔧 Supported Languages
 
 You can use any language that works with GitHub Actions. We provide example workflows for:
