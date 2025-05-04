@@ -4,7 +4,8 @@
  * work well for content-centric websites.
  */
 
-@import 'tailwindcss';
+/* @import 'tailwindcss'; */
+@import url('https://fonts.googleapis.com/css2?family=Noto+Sans:ital,wght@0,100..900;1,100..900&display=swap');
 
 /* You can override the default Infima variables here. */
 /* :root {
@@ -41,6 +42,10 @@
   --ifm-color-primary-lighter: #32d8b4;
   --ifm-color-primary-lightest: #4fddbf;
   --docusaurus-highlighted-code-line-bg: rgba(0, 0, 0, 0.3);
+}
+
+* {
+  font-family: 'Noto Sans', sans-serif;
 }
 
 /* Hide external link icon */
