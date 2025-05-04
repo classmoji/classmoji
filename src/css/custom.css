@@ -5,7 +5,6 @@
  */
 
 @import 'tailwindcss';
-@import url('https://fonts.googleapis.com/css2?family=Noto+Sans:ital,wght@0,100..900;1,100..900&display=swap');
 
 /* You can override the default Infima variables here. */
 /* :root {
@@ -45,7 +44,7 @@
 }
 
 * {
-  font-family: 'Noto Sans', sans-serif;
+  font-family: 'Noto Sans', sans-serif !important;
 }
 
 /* Hide external link icon */
