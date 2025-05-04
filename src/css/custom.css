@@ -4,7 +4,7 @@
  * work well for content-centric websites.
  */
 
-/* @import 'tailwindcss'; */
+@import 'tailwindcss';
 @import url('https://fonts.googleapis.com/css2?family=Noto+Sans:ital,wght@0,100..900;1,100..900&display=swap');
 
 /* You can override the default Infima variables here. */
@@ -74,4 +74,9 @@
 /* Hover = deeper golden */
 .navbar__signin-button:hover {
   background-color: var(--ifm-color-primary-dark); /* darker yellow */
+}
+
+.markdown ul {
+  list-style-type: disc;
+  padding-left: 1.5rem; /* or 24px */
 }

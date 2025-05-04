@@ -38,8 +38,8 @@ export const Home = () => {
       <div className={clsx('hero hero--primary', styles.heroBanner)}>
         <div className='flex flex-col items-center justify-center w-screen h-screen gap-4'>
           <div className='text-7xl font-bold'>classm😅ji</div>
-          <p className=' text-5xl font-semibold'>{siteConfig.tagline}</p>
-          <p className='text-3xl  max-w-2xl text-center leading-relaxed'>
+          <p className=' text-4xl font-semibold'>{siteConfig.tagline}</p>
+          <p className='text-2xl  max-w-2xl text-center leading-relaxed'>
             A creative and best-practices-based learning management platform for
             GitHub-based projects and grades.
           </p>
