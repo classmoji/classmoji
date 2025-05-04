@@ -44,5 +44,3 @@ This documentation will walk you through:
 - Managing students, TAs, and resubmissions
 - Understanding tokens, emojis, and classroom settings
 - Helping students succeed on the platform
-
-Ready? Head to the [Instructor Guide](./instructor-guide/setup.md) to get started.
