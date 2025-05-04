@@ -98,5 +98,3 @@ You can use any language that works with GitHub Actions. We provide example work
 - Use `continue-on-error: true` to ensure all steps complete
 - Always commit your workflow and test files to the template repo before publishing a module
 - Use unique branch names per assignment (e.g., `part1`, `lab2`) to isolate auto-grading logic
-
-Next: Learn how tokens and late penalties work in [Deadlines & Tokens](./deadlines-tokens.md)
