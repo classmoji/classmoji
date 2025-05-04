@@ -1,7 +1,7 @@
 import React from 'react';
 import styles from './style.module.css';
 
-const BrowserWindow = () => {
+const BrowserWindow = ({ img }) => {
   return (
     <div className={styles['browser-window']}>
       <div className={styles['browser-header']}>
@@ -10,7 +10,11 @@ const BrowserWindow = () => {
         <span className={`${styles.dot} ${styles.green}`}></span>
         <span className={styles['browser-url']}>https://app.classmoji.io</span>
       </div>
-      <img src='/img/your-screenshot.png' alt='Classmoji student dashboard' />
+      <img
+        src={`/screenshots/${img}.png`}
+        alt={`${img} screenshot`}
+        className={styles['browser-image']}
+      />
     </div>
   );
 };
