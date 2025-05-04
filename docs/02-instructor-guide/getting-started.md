@@ -1,11 +1,11 @@
 ---
-title: Getting Started
-sidebar_label: Getting Started
+title: 🚀 Getting Started
+sidebar_label: 🚀 Getting Started
 sidebar_position: 1
 ---
 
 :::info[IMPORTANT]
-You must be added to platform first before completing the steps below.
+You must be added to platform by us first before completing the steps below.
 :::
 
 Welcome! Before you create a classroom on Classmoji, you’ll first need to set up a **GitHub Organization**. This is essential because Classmoji uses GitHub repositories and issues to manage assignments and submissions.

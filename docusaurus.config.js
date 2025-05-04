@@ -37,8 +37,7 @@ const config = {
   presets: [
     [
       'classic',
-      /** @type {import('@docusaurus/preset-classic').Options} */
-      ({
+      {
         docs: {
           sidebarPath: './sidebars.js',
 
@@ -65,7 +64,7 @@ const config = {
         theme: {
           customCss: './src/css/custom.css',
         },
-      }),
+      },
     ],
   ],
 
@@ -73,11 +72,11 @@ const config = {
     // Replace with your project's social card
     image: 'img/docusaurus-social-card.jpg',
     navbar: {
-      title: 'Classm😅ji',
-      // logo: {
-      //   alt: 'My Site Logo',
-      //   src: 'img/logo.svg',
-      // },
+      // title: 'Classm😅ji',
+      logo: {
+        alt: 'My Site Logo',
+        src: 'img/logo.png',
+      },
       items: [
         {
           type: 'docSidebar',
@@ -88,11 +87,7 @@ const config = {
         // { to: '/use-cases', label: 'Use Cases', position: 'left' },
         // { to: '/faq', label: 'FAQ', position: 'left' },
         // { to: '/blog', label: 'Blog', position: 'left' },
-        // // {
-        //   href: 'https://github.com/facebook/docusaurus',
-        //   label: 'GitHub',
-        //   position: 'right',
-        // },
+
         {
           label: 'Sign In',
           href: `https://github.com/login/oauth/authorize?client_id=${process.env.GITHUB_APP_CLIENT_ID}&scope=repo%20admin:org`,

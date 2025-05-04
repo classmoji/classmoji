@@ -1,7 +1,44 @@
 ---
 title: Accout Setup
-sidebar_label: Account Setup
+sidebar_label: 🧑‍💻 Account Setup
 sidebar_position: 1
 ---
 
-Coming soon!
+# 🧑‍💻 Setting Up Your Classmoji Account
+
+Getting started with Classmoji takes just a few steps—and you only need to do it once.
+
+## ✅ Step 1: Log in with GitHub
+
+Click **“Log in with GitHub”** to sign into Classmoji.  
+We’ll use your GitHub account to:
+
+- Match you to your classroom
+- Create your assignment repositories
+- Track submissions and grading
+
+:::warning[No GitHub account?]
+Don’t have a GitHub account yet? [Create one here](https://github.com/join) before logging in.
+:::
+
+## 🪪 Step 2: Confirm Your Identity (First-Time Only)
+
+The first time you log in, you’ll be asked to confirm:
+
+- Your **school email**
+- Your **student ID**
+
+This helps your instructor make sure the right work is associated with the right student.
+
+You won’t need to do this again after the first time.
+
+## 🏫 Step 3: Join Your Class
+
+Once you’re logged in, you’ll see **cards** for each class you’ve been invited to.
+
+Click on your class card to:
+
+- Trigger a GitHub invite to the course’s organization
+- Accept it to gain access to your private assignment repositories
+
+From there, you're ready to start submitting work and getting feedback!

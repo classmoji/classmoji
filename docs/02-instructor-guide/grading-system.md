@@ -1,6 +1,6 @@
 ---
 title: Grading System
-sidebar_label: Grading System
+sidebar_label: 🎯 Grading System
 sidebar_position: 6
 ---
 

@@ -1,6 +1,6 @@
 ---
 title: Auto-grading
-sidebar_label: Auto-grading
+sidebar_label: 🤖 Auto-grading
 sidebar_position: 3
 ---
 

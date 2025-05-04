@@ -1,10 +1,10 @@
 ---
 title: Adding Students
-sidebar_label: Adding Students
+sidebar_label: 📝 Adding Students
 sidebar_position: 2
 ---
 
-# Adding Students to Your Classroom
+# 📝 Adding Students to Your Classroom
 
 Once your GitHub Organization is connected and your Classmoji classroom is set up, you’re ready to enroll students. Classmoji offers two ways to add students: manually one at a time, or in bulk via a CSV class roster.
 

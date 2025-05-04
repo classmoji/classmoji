@@ -1,6 +1,6 @@
 ---
 title: Modules & Assignments
-sidebar_label: Modules & Assignments
+sidebar_label: 🧱 Modules & Assignments
 sidebar_position: 2
 ---
 

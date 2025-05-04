@@ -1,6 +1,6 @@
 ---
 title: Teaching Assistants
-sidebar_label: Teaching Assistants
+sidebar_label: 🧑🏽‍🏫 Teaching Assistants
 sidebar_position: 7
 ---
 

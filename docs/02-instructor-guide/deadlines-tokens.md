@@ -1,6 +1,6 @@
 ---
 title: Deadlines & Tokens
-sidebar_label: Deadlines & Tokens
+sidebar_label: 🕒 Deadlines & Tokens
 sidebar_position: 4
 ---
 

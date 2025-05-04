@@ -1,6 +1,6 @@
 ---
 title: Submissions
-sidebar_label: Submissions
+sidebar_label: 📤 Submissions
 sidebar_position: 5
 ---
 
