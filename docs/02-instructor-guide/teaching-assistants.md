@@ -1,0 +1,63 @@
+---
+title: Teaching Assistants
+sidebar_label: Teaching Assistants
+sidebar_position: 7
+---
+
+# 🧑🏽‍🏫 Teaching Assistants in Classmoji
+
+Classmoji makes it easy to collaborate with **Teaching Assistants (TAs)** by streamlining repo access, grading workflows, and feedback tracking.
+
+You can assign TAs to grade specific students, modules, or entire classes—all without manually managing GitHub permissions.
+
+## 👥 Adding TAs to a Classroom
+
+To add a TA:
+
+1. Go to your Classroom Settings
+2. Enter the TA’s **name**, **email**, and optionally their **GitHub username**
+3. Assign their role (e.g., TA, grader)
+
+Once added, Classmoji will automatically:
+
+- Invite the TA to the classroom’s GitHub organization
+- Grant access to relevant student repositories
+- Display grading assignments in their TA dashboard
+
+## 📘 Assigning TAs to Students or Modules
+
+You can assign TAs in two ways:
+
+### Manual Assignment
+
+- Choose specific TAs to grade a student or module
+- Useful for small classes or when TAs follow particular sections
+
+### Auto-Assignment
+
+- Let Classmoji evenly distribute grading responsibilities
+- Automatically assigns TAs based on availability and load balancing
+
+:::info
+You can reassign TAs at any time—even after work is submitted.
+:::
+
+## ✏️ TA Grading Tools
+
+Each TA sees a **grading dashboard** showing:
+
+- Repos they’re assigned to
+- Student submissions that need grading
+- Emoji-based grading form with optional comments
+- Feedback branch (if enabled) to leave inline code suggestions
+
+Once a TA submits a grade, it’s visible to the student immediately—unless you’ve disabled grade visibility.
+
+:::tip[Best Practices]
+
+- Assign TAs to students or teams early to avoid confusion
+- Encourage use of consistent emoji feedback
+- Use Feedback Branches for deeper code review when needed
+- Check TA progress from the instructor dashboard to ensure timely grading
+
+:::

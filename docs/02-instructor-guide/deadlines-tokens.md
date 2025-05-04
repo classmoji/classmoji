@@ -1,0 +1,56 @@
+---
+title: Deadlines & Tokens
+sidebar_label: Deadlines & Tokens
+sidebar_position: 4
+---
+
+# ⏳ Deadlines & Tokens
+
+Classmoji offers a flexible system for managing assignment deadlines using a **token-based extension system**. This helps you enforce structure while also supporting students who need extra time.
+
+## 📅 Setting Deadlines
+
+When you create an assignment, you specify a **student deadline** — the latest time a student can submit work without penalty.
+
+You can also set a **grader deadline**, which tells TAs or instructors when feedback and grading should be completed.
+
+## 🪙 What Are Tokens?
+
+Each student starts with a configurable number of **tokens** for the term. They can spend these tokens to submit assignments after the deadline without a grade penalty.
+
+- Tokens are deducted automatically when a late submission is detected
+- Instructors define how many tokens are required **per hour late**
+- Instructors can manually award or refund tokens at any time
+
+:::note
+This approach encourages responsibility and gives students agency, without needing constant deadline exception handling.
+:::
+
+## ⚙️ How to Configure Token Settings
+
+In each assignment, you can specify:
+
+- **Student Deadline** – the submission cutoff time
+- **Tokens per Hour** – how many tokens are spent per hour of lateness
+
+You can also set **default token values** for the classroom in your Classroom Settings.
+
+## 📊 Instructor View
+
+Instructors and TAs can view:
+
+- Total tokens each student has used
+- Current token balance
+- Whether an assignment was submitted late, and by how many hours
+- Whether the student paid with tokens or incurred a penalty
+
+## 🔁 Token Use Cases
+
+- Extend submission deadlines without needing one-on-one email approvals
+- Reward tokens as extra credit
+
+## ✅ Best Practices
+
+- Make the token system transparent to students from day one
+- Use consistent token-to-hour ratios across assignments
+- Encourage students to track their usage and save tokens for emergencies

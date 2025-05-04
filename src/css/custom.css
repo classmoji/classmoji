@@ -4,6 +4,8 @@
  * work well for content-centric websites.
  */
 
+@import 'tailwindcss';
+
 /* You can override the default Infima variables here. */
 /* :root {
   --ifm-color-primary: #2e8555;
@@ -39,4 +41,32 @@
   --ifm-color-primary-lighter: #32d8b4;
   --ifm-color-primary-lightest: #4fddbf;
   --docusaurus-highlighted-code-line-bg: rgba(0, 0, 0, 0.3);
+}
+
+/* Hide external link icon */
+.navbar__signin-button > svg {
+  display: none !important;
+  content: none !important;
+  background-image: none !important;
+  padding-right: 0 !important;
+  margin-left: 0 !important;
+}
+
+/* Style Sign In link as button */
+.navbar__signin-button {
+  background-color: var(--ifm-color-primary); /* golden yellow */
+  padding: 6px 28px;
+  margin-right: 12px;
+  border-radius: 6px;
+  font-weight: 600;
+  text-decoration: none !important;
+  transition: background-color 0.3s ease, color 0.3s ease;
+  display: inline-block;
+  line-height: 1.4;
+  color: white !important;
+}
+
+/* Hover = deeper golden */
+.navbar__signin-button:hover {
+  background-color: var(--ifm-color-primary-dark); /* darker yellow */
 }
