@@ -72,10 +72,11 @@ const config = {
     // Replace with your project's social card
     image: 'img/docusaurus-social-card.jpg',
     navbar: {
-      // title: 'Classm😅ji',
+      // title: 'classmoji',
       logo: {
         alt: 'My Site Logo',
         src: 'img/logo.png',
+        height: 200,
       },
       items: [
         {
@@ -84,8 +85,8 @@ const config = {
           position: 'left',
           label: 'Docs',
         },
-        // { to: '/use-cases', label: 'Use Cases', position: 'left' },
-        // { to: '/faq', label: 'FAQ', position: 'left' },
+        { to: '/use-cases', label: 'Use Cases', position: 'left' },
+        { to: '/faq', label: 'FAQ', position: 'left' },
         // { to: '/blog', label: 'Blog', position: 'left' },
 
         {

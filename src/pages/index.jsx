@@ -36,10 +36,30 @@ export const Home = () => {
       description='Description will go into a meta tag in <head />'
     >
       <div className={clsx('hero hero--primary', styles.heroBanner)}>
-        <div className='flex flex-col items-center justify-center w-screen h-screen gap-4'>
-          <div className='text-7xl font-bold'>classm😅ji</div>
-          <p className=' text-4xl font-semibold'>{siteConfig.tagline}</p>
-          <p className='text-2xl  max-w-2xl text-center leading-relaxed'>
+        <div
+          style={{
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            justifyContent: 'center',
+            width: '100vw',
+            height: '100vh',
+          }}
+        >
+          <div style={{ fontSize: '4.5rem', fontWeight: 'bold' }}>
+            classm😅ji
+          </div>
+          <p style={{ fontSize: '2.5rem', fontWeight: '600' }}>
+            {siteConfig.tagline}
+          </p>
+          <p
+            style={{
+              fontSize: '1.5rem',
+              maxWidth: '32rem',
+              textAlign: 'center',
+              lineHeight: '1.75',
+            }}
+          >
             A creative and best-practices-based learning management platform for
             GitHub-based projects and grades.
           </p>

@@ -27,8 +27,7 @@ Once your GitHub Organization is ready, you're all set to [create your classroom
 
 After creating your GitHub Organization, you'll need to authorize Classmoji to manage repositories, issues, and pull requests on your behalf.
 
-1. Visit the Classmoji website and sign in:  
-   👉 **https://app.classmoji.io**
+1. Click on the sign in button top right of the page
 
 2. Click **Add new class**
 

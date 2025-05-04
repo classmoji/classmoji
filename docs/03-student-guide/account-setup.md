@@ -4,7 +4,7 @@ sidebar_label: 🧑‍💻 Account Setup
 sidebar_position: 1
 ---
 
-# 🧑‍💻 Setting Up Your Classmoji Account
+# 🧑‍💻 Setting Up Your Account
 
 Getting started with Classmoji takes just a few steps—and you only need to do it once.
 
