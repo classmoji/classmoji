@@ -6,28 +6,6 @@ import Layout from '@theme/Layout';
 import Heading from '@theme/Heading';
 import styles from './index.module.css';
 
-const HomepageHeader = () => {
-  const { siteConfig } = useDocusaurusContext();
-  return (
-    <header className={clsx('hero hero--primary', styles.heroBanner)}>
-      <div className='container'>
-        <Heading as='h1' className='hero__title'>
-          {siteConfig.title}
-        </Heading>
-        <p className='hero__subtitle'>{siteConfig.tagline}</p>
-        <div className={styles.buttons}>
-          <Link
-            className='button button--secondary button--lg'
-            to='/docs/intro'
-          >
-            Get Started
-          </Link>
-        </div>
-      </div>
-    </header>
-  );
-};
-
 export const Home = () => {
   const { siteConfig } = useDocusaurusContext();
   return (
@@ -73,16 +51,14 @@ export const Home = () => {
           </div>
         </div>
       </div>
-      {/* <div className='mx-auto max-w-[800px] flex flex-col items-center pt-[10vh]'>
-        <p className='text-center text-3xl leading-relaxed'>
-          Classmoji is built on the belief that grading should be meaningful,
-          not mechanical. Instead of rigid points and deadlines, we use emojis,
-          tokens, and flexible workflows to foster feedback, autonomy, and
-          iteration. By integrating directly with GitHub, Classmoji lets
-          instructors focus on what matters: helping students grow—not managing
-          spreadsheets.
+      <div className={styles.footer}>
+        <p style={{ fontSize: '1.025rem', marginTop: '20px' }}>
+          © 2025 Classmoji · Made with 🤝 by the{' '}
+          <a href='https://dali.dartmouth.edu'>DALI Lab</a> and{' '}
+          <a href='https://cs.dartmouth.edu'>CS Department</a> at Dartmouth
+          College
         </p>
-      </div> */}
+      </div>
     </Layout>
   );
 };
