@@ -85,6 +85,23 @@ Use the **Sync Module** feature to:
 
 Deleting a module in Classmoji removes it from your dashboard, but **does not delete** associated GitHub repositories or issues.
 
+## 🔄 Updating Student Repos After Publishing
+
+Many instructors miss using GitHub's template repository approach rather than the official GitHub Classroom fork-based model. While this is a good attempt to solve the problem of updating repositories after they've been created,it does leave a common question:
+
+> How do I update assignment files after the repos have already been created?
+
+Here’s how **we handle** it in Classmoji:
+
+1. You update the template repo (add new files, fix instructions, change tests — whatever you need).
+2. For each student repo, we create a new branch (e.g., `update-assignment-1`).
+3. We **pull in changes from the updated template repo** into that branch.
+4. Then, you **open a pull request** from that branch into the student's **main**.
+
+This doesn’t overwrite student work. It keeps everything separate, lets them resolve merge conflicts cleanly, and shows the exact changes you’re trying to bring in.
+
+It works and it’s a whole lot cleaner than trying to reset or re-clone every repo.
+
 ## ✅ Best Practices
 
 - Use branches for different parts of multi-stage assignments
