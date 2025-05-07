@@ -89,14 +89,14 @@ Deleting a module in Classmoji removes it from your dashboard, but **does not de
 
 Many instructors miss using GitHub's template repository approach rather than the official GitHub Classroom fork-based model. While this is a good attempt to solve the problem of updating repositories after they've been created,it does leave a common question:
 
-> How do I update assignment files after the repos have already been created?
+> How do I update assignment files after the repos have already been created in an easy way?
 
 Here’s how **we handle** it in Classmoji:
 
 1. You update the template repo (add new files, fix instructions, change tests — whatever you need).
-2. For each student repo, we create a new branch (e.g., `update-assignment-1`).
+2. For each student repo, we create a new branch (e.g., `update-2025-05-06-add-new-files`).
 3. We **pull in changes from the updated template repo** into that branch.
-4. Then, you **open a pull request** from that branch into the student's **main**.
+4. Then, we **open a pull request** from that branch into the student's **main**.
 
 This doesn’t overwrite student work. It keeps everything separate, lets them resolve merge conflicts cleanly, and shows the exact changes you’re trying to bring in.
 
