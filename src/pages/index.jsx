@@ -53,7 +53,7 @@ export const Home = () => {
       </div>
       <div className={styles.footer}>
         <p style={{ fontSize: '1.025rem', marginTop: '20px' }}>
-          © 2025 Classmoji · Made with 🤝 by the{' '}
+          © 2025 Classmoji · Sponsored by the{' '}
           <a href='https://dali.dartmouth.edu'>DALI Lab</a> and{' '}
           <a href='https://cs.dartmouth.edu'>CS Department</a> at Dartmouth
           College
