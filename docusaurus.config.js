@@ -91,7 +91,7 @@ const config = {
 
         {
           label: 'Sign In',
-          href: `https://github.com/login/oauth/authorize?client_id=${process.env.GITHUB_APP_CLIENT_ID}&scope=repo%20admin:org`,
+          href: `https://github.com/login/oauth/authorize?client_id=${process.env.CLIENT_ID}&scope=repo%20admin:org`,
           position: 'right',
           target: '_self',
           className: 'navbar__signin-button',
