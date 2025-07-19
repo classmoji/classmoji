@@ -31,11 +31,23 @@ You provide a GitHub Actions workflow and CTRF-compatible test suite in the temp
 
 Yes. You can assign TAs to students or modules manually, or let Classmoji auto-assign them evenly. TAs get grading dashboards and repo access.
 
+### Is Classmoji FERPA compliant?
+
+Yes, Classmoji is designed with student privacy and FERPA compliance in mind. We use managed databases hosted by [Digital Ocean](https://www.digitalocean.com/products/managed-databases-postgresql) with enterprise-grade security:
+
+- **End-to-end encryption**: All data is encrypted both in transit and at rest
+- **Private network isolation**: Databases run in private networks with restricted access
+- **Controlled access**: Only whitelisted requests can reach our databases
+- **Limited data collection**: We only store necessary academic information required for course management
+- **Access controls**: Only authorized instructors and TAs can view student data within their courses
+
+Student educational records remain secure and are only accessible to authorized course personnel.
+
 ## 🧑‍🎓 Student Questions
 
 ### How do I log in?
 
-Click **“Sign In”** on the homepage. If it’s your first time, you’ll also confirm your school email and ID.
+Click **"Sign In"** on the homepage. If it's your first time, you'll also confirm your school email and ID.
 
 ### How do I join my class?
 
@@ -43,7 +55,7 @@ After logging in, click your course card to accept the GitHub invite. That gives
 
 ### How do I submit an assignment?
 
-Work on the correct branch, then **close the GitHub issue** linked to the assignment. That’s how Classmoji knows you’re done.
+Work on the correct branch, then **close the GitHub issue** linked to the assignment. That's how Classmoji knows you're done.
 
 ### What are tokens?
 
@@ -55,6 +67,32 @@ If your instructor allows it, yes! Just update your code and send a resubmit req
 
 ### Where do I see my grades?
 
-You’ll see emoji feedback on each assignment. If enabled, your dashboard will also show your current estimated letter grade.
+You'll see emoji feedback on each assignment. If enabled, your dashboard will also show your current estimated letter grade.
+
+### Is my data secure?
+
+Yes. Your educational records and personal information are protected with enterprise-grade security measures, including encryption and access controls. Only your instructors and authorized TAs can access your course data.
+
+## 🔒 Privacy & Security
+
+### What data does Classmoji collect?
+
+We only collect information necessary for course management:
+
+- GitHub username and basic profile information
+- School email address and student ID
+- Assignment submissions and grades
+- Course enrollment data
+
+### Who can see my information?
+
+- **Students**: Can only see their own grades and course information
+- **Instructors**: Can view data for students in their courses
+- **TAs**: Can view data for students they're assigned to help
+- **Classmoji**: Staff cannot access your educational records
+
+### How long is data retained?
+
+Course data is retained for the duration of the academic term plus a reasonable period for grade reporting. Instructors can export their data at any time.
 
 Still need help? Visit the relevant guide or ask your instructor or TA.
