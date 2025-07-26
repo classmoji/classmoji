@@ -5,94 +5,170 @@ sidebar_label: FAQ
 hide_table_of_contents: true
 ---
 
-# Frequently Asked Questions (FAQ)
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
+import styles from './styles.module.css';
 
-Whether you're an instructor, TA, or student, here are the answers to common questions about using Classmoji.
+<div className={styles.faqHeader}>
+  <h1>❓ Frequently Asked Questions</h1>
+  <p className='lead'>
+    Find quick answers to common questions about Classmoji. Whether you're an
+    instructor, TA, or student, we've got you covered.
+  </p>
+</div>
 
-## 👩‍🏫 Instructor Questions
+<Tabs>
+  <TabItem value="instructor" label="👩‍🏫 Instructors" default>
 
-### What does Classmoji do?
+<div className={styles.faqSection}>
+  <h2>🚀 Getting Started</h2>
+  
+  <h3>What does Classmoji do?</h3>
+  <p>Classmoji helps you manage coding assignments using GitHub. It automates repo creation, uses emoji-based grading, and supports tokens, resubmissions, and auto-grading workflows.</p>
 
-Classmoji helps you manage coding assignments using GitHub. It automates repo creation, uses emoji-based grading, and supports tokens, resubmissions, and auto-grading workflows.
+  <h3>🎯 Do I need GitHub Classroom?</h3>
+  <p>Nope! Classmoji is a standalone alternative. It uses GitHub directly, but handles the organization, repo setup, issue creation, and access control for you.</p>
+</div>
 
-### Do I need GitHub Classroom?
+<div className={styles.faqSection}>
+  <h2>🎨 Customization & Features</h2>
+  
+  <h3>Can I customize the emoji grading system?</h3>
+  <p>Yes. You can set your own emojis, scores, token values, and feedback labels in your **Classroom Settings**.</p>
 
-Nope! Classmoji is a standalone alternative. It uses GitHub directly, but handles the organization, repo setup, issue creation, and access control for you.
+  <h3>⚙️ How do auto-grading and workflows work?</h3>
+  <p>You provide a GitHub Actions workflow and CTRF-compatible test suite in the template repo. Classmoji runs those tests when students push code.</p>
 
-### Can I customize the emoji grading system?
+  <h3>👥 Can I manage TAs?</h3>
+  <p>Yes. You can assign TAs to students or modules manually, or let Classmoji auto-assign them evenly. TAs get grading dashboards and repo access.</p>
+</div>
 
-Yes. You can set your own emojis, scores, token values, and feedback labels in your **Classroom Settings**.
+<div className={styles.faqSection}>
+  <h2>🔒 Security & Compliance</h2>
+  
+  <h3>Is Classmoji FERPA compliant?</h3>
+  <p>Yes, Classmoji is designed with student privacy and FERPA compliance in mind. We use managed databases hosted by <a href="https://www.digitalocean.com/products/managed-databases-postgresql">Digital Ocean</a> with enterprise-grade security:</p>
 
-### How do auto-grading and workflows work?
+  <div className={styles.securityFeatures}>
+    <div className={styles.featureGrid}>
+      <div className={styles.featureItem}>
+        <strong>🔐 End-to-end encryption</strong>
+        <p>All data is encrypted both in transit and at rest</p>
+      </div>
+      <div className={styles.featureItem}>
+        <strong>🏠 Private network isolation</strong>
+        <p>Databases run in private networks with restricted access</p>
+      </div>
+      <div className={styles.featureItem}>
+        <strong>🛡️ Controlled access</strong>
+        <p>Only whitelisted requests can reach our databases</p>
+      </div>
+      <div className={styles.featureItem}>
+        <strong>📊 Limited data collection</strong>
+        <p>
+          We only store necessary academic information required for course
+          management
+        </p>
+      </div>
+    </div>
+  </div>
 
-You provide a GitHub Actions workflow and CTRF-compatible test suite in the template repo. Classmoji runs those tests when students push code.
+  <p>Student educational records remain secure and are only accessible to authorized course personnel.</p>
+</div>
 
-### Can I manage TAs?
+  </TabItem>
+  <TabItem value="student" label="🧑‍🎓 Students">
 
-Yes. You can assign TAs to students or modules manually, or let Classmoji auto-assign them evenly. TAs get grading dashboards and repo access.
+<div className={styles.faqSection}>
+  <h2>🚀 Getting Started</h2>
+  
+  <h3>🔑 How do I log in?</h3>
+  <p>Click <strong>"Sign In"</strong> on the homepage. If it's your first time, you'll also confirm your school email and ID.</p>
 
-### Is Classmoji FERPA compliant?
+  <h3>📚 How do I join my class?</h3>
+  <p>After logging in, click your course card to accept the GitHub invite. That gives you access to your assignment repo.</p>
+</div>
 
-Yes, Classmoji is designed with student privacy and FERPA compliance in mind. We use managed databases hosted by [Digital Ocean](https://www.digitalocean.com/products/managed-databases-postgresql) with enterprise-grade security:
+<div className={styles.faqSection}>
+  <h2>📝 Working with Assignments</h2>
+  
+  <h3>How do I submit an assignment?</h3>
+  <p>Work on the correct branch, then <strong>close the GitHub issue</strong> linked to the assignment. That's how Classmoji knows you're done.</p>
 
-- **End-to-end encryption**: All data is encrypted both in transit and at rest
-- **Private network isolation**: Databases run in private networks with restricted access
-- **Controlled access**: Only whitelisted requests can reach our databases
-- **Limited data collection**: We only store necessary academic information required for course management
-- **Access controls**: Only authorized instructors and TAs can view student data within their courses
+  <h3>🪙 What are tokens?</h3>
+  <p>Tokens let you submit late work or unlock resubmissions. You start with a set number and spend them as needed. Your instructor decides how they work.</p>
 
-Student educational records remain secure and are only accessible to authorized course personnel.
+  <h3>🔄 Can I resubmit work?</h3>
+  <p>If your instructor allows it, yes! Just update your code and send a resubmit request.</p>
 
-## 🧑‍🎓 Student Questions
+  <h3>📊 Where do I see my grades?</h3>
+  <p>You'll see emoji feedback on each assignment. If enabled, your dashboard will also show your current estimated letter grade.</p>
+</div>
 
-### How do I log in?
+<div className={styles.faqSection}>
+  <h2>🔒 Privacy & Security</h2>
+  
+  <h3>Is my data secure?</h3>
+  <p>Yes. Your educational records and personal information are protected with enterprise-grade security measures, including encryption and access controls. Only your instructors and authorized TAs can access your course data.</p>
+</div>
 
-Click **"Sign In"** on the homepage. If it's your first time, you'll also confirm your school email and ID.
+  </TabItem>
+  <TabItem value="privacy" label="🔒 Privacy & Security">
 
-### How do I join my class?
+<div className={styles.faqSection}>
+  <h2>📋 Data Collection & Usage</h2>
+  
+  <h3>What data does Classmoji collect?</h3>
+  <p>We only collect information necessary for course management:</p>
 
-After logging in, click your course card to accept the GitHub invite. That gives you access to your assignment repo.
+  <div className={styles.dataCollection}>
+    <ul className={styles.dataList}>
+      <li>📧 GitHub username and basic profile information</li>
+      <li>🎓 School email address and student ID</li>
+      <li>📚 Assignment submissions and grades</li>
+      <li>👥 Course enrollment data</li>
+    </ul>
+  </div>
+</div>
 
-### How do I submit an assignment?
+<div className={styles.faqSection}>
+  <h2>👀 Access & Permissions</h2>
+  
+  <h3>Who can see my information?</h3>
 
-Work on the correct branch, then **close the GitHub issue** linked to the assignment. That's how Classmoji knows you're done.
+  <div className={styles.permissionsGrid}>
+    <div className={styles.permissionItem}>
+      <strong>🧑‍🎓 Students</strong>
+      <p>Can only see their own grades and course information</p>
+    </div>
+    <div className={styles.permissionItem}>
+      <strong>👩‍🏫 Instructors</strong>
+      <p>Can view data for students in their courses</p>
+    </div>
+    <div className={styles.permissionItem}>
+      <strong>🤝 TAs</strong>
+      <p>Can view data for students they're assigned to help</p>
+    </div>
+    <div className={styles.permissionItem}>
+      <strong>🛡️ Classmoji Staff</strong>
+      <p>Cannot access your educational records</p>
+    </div>
+  </div>
+</div>
 
-### What are tokens?
+<div className={styles.faqSection}>
+  <h2>⏰ Data Retention</h2>
+  
+  <h3>How long is data retained?</h3>
+  <p>Course data is retained for the duration of the academic term plus a reasonable period for grade reporting. Instructors can export their data at any time.</p>
+</div>
 
-Tokens let you submit late work or unlock resubmissions. You start with a set number and spend them as needed. Your instructor decides how they work.
+  </TabItem>
+</Tabs>
 
-### Can I resubmit work?
+---
 
-If your instructor allows it, yes! Just update your code and send a resubmit request.
-
-### Where do I see my grades?
-
-You'll see emoji feedback on each assignment. If enabled, your dashboard will also show your current estimated letter grade.
-
-### Is my data secure?
-
-Yes. Your educational records and personal information are protected with enterprise-grade security measures, including encryption and access controls. Only your instructors and authorized TAs can access your course data.
-
-## 🔒 Privacy & Security
-
-### What data does Classmoji collect?
-
-We only collect information necessary for course management:
-
-- GitHub username and basic profile information
-- School email address and student ID
-- Assignment submissions and grades
-- Course enrollment data
-
-### Who can see my information?
-
-- **Students**: Can only see their own grades and course information
-- **Instructors**: Can view data for students in their courses
-- **TAs**: Can view data for students they're assigned to help
-- **Classmoji**: Staff cannot access your educational records
-
-### How long is data retained?
-
-Course data is retained for the duration of the academic term plus a reasonable period for grade reporting. Instructors can export their data at any time.
-
-Still need help? Visit the relevant guide or ask your instructor or TA.
+<div className={styles.helpSection}>
+  <h2>💬 Still need help?</h2>
+  <p>Visit the relevant guide or ask your instructor or TA for assistance.</p>
+</div>

@@ -1,0 +1,127 @@
+/* Use Cases Page Styles */
+.useCasesHeader {
+  text-align: center;
+  margin-bottom: 2.5rem;
+  padding: 2rem 0;
+}
+
+.useCasesHeader h1 {
+  font-size: 2.5rem;
+  margin-bottom: 1rem;
+  color: var(--ifm-color-primary-darkest);
+}
+
+.useCasesHeader .lead {
+  font-size: 1.125rem;
+  color: var(--ifm-heading-color);
+  max-width: 700px;
+  margin: 0 auto;
+  line-height: 1.6;
+  font-weight: 500;
+}
+
+/* Use Case Cards */
+.useCaseCard {
+  background: var(--ifm-background-surface-color);
+  border: 1px solid var(--ifm-color-emphasis-200);
+  border-radius: 12px;
+  padding: 2rem;
+  margin-bottom: 2rem;
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.useCaseCard:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+}
+
+.useCaseCard h2 {
+  color: var(--ifm-color-primary-darker);
+  margin-bottom: 1rem;
+  font-size: 1.5rem;
+}
+
+.idealFor {
+  background: var(--ifm-color-emphasis-100);
+  border-left: 4px solid var(--ifm-color-primary);
+  padding: 0.75rem 1rem;
+  margin: 1rem 0;
+  border-radius: 0 6px 6px 0;
+  font-style: italic;
+  color: var(--ifm-color-content);
+  font-weight: 500;
+}
+
+.challenge {
+  margin: 1.5rem 0;
+}
+
+.challenge strong {
+  color: var(--ifm-color-danger-darker);
+  font-size: 1rem;
+}
+
+.solution {
+  margin: 1.5rem 0;
+}
+
+.solution strong {
+  color: var(--ifm-color-success-darker);
+  font-size: 1rem;
+}
+
+.solutionList {
+  margin-top: 1rem;
+  padding-left: 0;
+  list-style: none;
+}
+
+.solutionList li {
+  background: var(--ifm-color-success-contrast-background);
+  border-left: 3px solid var(--ifm-color-success);
+  padding: 0.75rem 1rem;
+  margin-bottom: 0.5rem;
+  border-radius: 0 6px 6px 0;
+  font-weight: 500;
+  color: var(--ifm-color-content);
+  transition: background-color 0.2s ease;
+}
+
+.solutionList li:hover {
+  background: var(--ifm-color-success-contrast-background);
+  filter: brightness(0.95);
+}
+
+/* Conclusion */
+.conclusion {
+  background: var(--ifm-background-surface-color);
+  border: 1px solid var(--ifm-color-emphasis-200);
+  border-radius: 12px;
+  padding: 2rem;
+  text-align: center;
+  margin-top: 3rem;
+  font-size: 1.125rem;
+  color: var(--ifm-color-content);
+  font-weight: 500;
+}
+
+/* Dark mode adjustments */
+[data-theme='dark'] .useCasesHeader .lead {
+  color: var(--ifm-color-content);
+}
+
+[data-theme='dark'] .useCaseCard {
+  border-color: var(--ifm-color-emphasis-300);
+}
+
+[data-theme='dark'] .useCaseCard:hover {
+  box-shadow: 0 4px 12px rgba(37, 194, 160, 0.1);
+}
+
+[data-theme='dark'] .idealFor {
+  background: var(--ifm-color-emphasis-200);
+}
+
+[data-theme='dark'] .conclusion {
+  border-color: var(--ifm-color-emphasis-300);
+}

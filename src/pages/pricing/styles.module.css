@@ -1,0 +1,315 @@
+/* Pricing Page Styles */
+/* Remove margin-bottom from all p tags on this page */
+p {
+  margin-bottom: 0;
+}
+
+.pricingHeader {
+  text-align: center;
+  margin-bottom: 2.5rem;
+  padding: 2rem 0;
+}
+
+.pricingHeader h1 {
+  font-size: 2.5rem;
+  margin-bottom: 1rem;
+  color: var(--ifm-color-primary-darkest);
+}
+
+.pricingHeader .lead {
+  font-size: 1.125rem;
+  color: var(--ifm-heading-color);
+  max-width: 600px;
+  margin: 0 auto;
+  line-height: 1.6;
+  font-weight: 500;
+}
+
+/* Pricing Cards Container */
+.pricingCards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(350px, 1fr));
+  gap: 2rem;
+  margin-bottom: 3rem;
+  max-width: 900px;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+/* Individual Pricing Card - Enhanced visibility */
+.pricingCard {
+  background: var(--ifm-background-surface-color);
+  border: 2px solid var(--ifm-color-emphasis-300);
+  border-radius: 12px;
+  padding: 1.5rem;
+  margin-bottom: 2rem;
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+  position: relative;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+
+.pricingCard:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.15);
+}
+
+/* Pro Card Special Styling */
+.proCard {
+  border-color: var(--ifm-color-primary);
+  border-width: 3px;
+  box-shadow: 0 4px 12px rgba(232, 167, 35, 0.2);
+}
+
+.proCard::before {
+  content: 'Most Popular';
+  position: absolute;
+  top: -20px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--ifm-color-primary);
+  color: white;
+  padding: 0.5rem 1.5rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  border-radius: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+/* Card Headers */
+.cardHeader h2 {
+  color: var(--ifm-color-primary-darker);
+  margin-bottom: 1rem;
+  font-size: 1.5rem;
+  text-align: center;
+}
+
+.cardSubtitle {
+  color: var(--ifm-color-content);
+  font-size: 1rem;
+  text-align: center;
+  display: block;
+}
+
+/* Pricing */
+.price {
+  margin-bottom: 1.5rem;
+  text-align: center;
+}
+
+.priceAmount {
+  font-size: 3rem;
+  font-weight: 700;
+  color: var(--ifm-color-primary-darkest);
+  line-height: 1;
+}
+
+.pricePeriod {
+  font-size: 1rem;
+  color: var(--ifm-color-content);
+  margin-left: 0.5rem;
+}
+
+.priceFree {
+  font-size: 2.5rem;
+  font-weight: 700;
+  color: var(--ifm-color-success-darker);
+}
+
+/* Feature List */
+.featureList {
+  list-style: none;
+  padding: 0;
+  margin: 1rem 0;
+}
+
+.featureList li {
+  padding: 0.5rem 0;
+  border-bottom: 1px solid var(--ifm-color-emphasis-200);
+  font-weight: 500;
+  color: var(--ifm-color-content);
+  display: flex;
+  align-items: center;
+  font-size: 1rem;
+}
+
+.featureList li:last-child {
+  border-bottom: none;
+}
+
+.featureIcon {
+  margin-right: 1rem;
+  font-size: 1.2rem;
+  min-width: 24px;
+}
+
+.featureIncluded .featureIcon {
+  color: var(--ifm-color-success);
+}
+
+.featureExcluded {
+  opacity: 0.7;
+}
+
+.featureExcluded .featureIcon {
+  color: var(--ifm-color-danger);
+}
+
+.featureLimited .featureIcon {
+  color: var(--ifm-color-warning-darker);
+  font-weight: 700;
+}
+
+/* CTA Button */
+.ctaButton {
+  background: var(--ifm-color-primary);
+  color: white !important;
+  border: none;
+  padding: 0.75rem 1.5rem;
+  border-radius: 6px;
+  font-size: 0.9rem;
+  font-weight: 600;
+  text-decoration: none !important;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  transition: background-color 0.2s ease, transform 0.2s ease;
+  margin-top: 1rem;
+  width: auto;
+  min-width: 140px;
+  vertical-align: middle;
+  line-height: 1;
+}
+
+.ctaButton > p {
+  margin: 0;
+}
+
+.ctaButton:hover {
+  background: var(--ifm-color-primary-dark);
+  transform: translateY(-1px);
+  color: white !important;
+}
+
+.ctaSecondary {
+  background: transparent;
+  color: var(--ifm-color-primary) !important;
+  border: 2px solid var(--ifm-color-primary);
+}
+
+.ctaSecondary:hover {
+  background: var(--ifm-color-primary);
+  color: white !important;
+}
+
+/* Feature Comparison Section - Same style as use-cases */
+.comparisonSection {
+  background: var(--ifm-background-surface-color);
+  border: 1px solid var(--ifm-color-emphasis-200);
+  border-radius: 12px;
+  padding: 2rem;
+  margin-bottom: 2rem;
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.comparisonSection:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+}
+
+.comparisonSection h2 {
+  color: var(--ifm-color-primary-darker);
+  margin-bottom: 1.5rem;
+  font-size: 1.5rem;
+  border-bottom: 2px solid var(--ifm-color-primary-lighter);
+  padding-bottom: 0.5rem;
+}
+
+.comparisonTable {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 1rem;
+}
+
+.comparisonTable th,
+.comparisonTable td {
+  padding: 1rem;
+  text-align: left;
+  border-bottom: 1px solid var(--ifm-color-emphasis-200);
+}
+
+.comparisonTable th {
+  background: var(--ifm-color-emphasis-100);
+  font-weight: 600;
+  color: var(--ifm-color-primary-darker);
+}
+
+.comparisonTable td:nth-child(2),
+.comparisonTable td:nth-child(3) {
+  text-align: center;
+  font-weight: 500;
+}
+
+/* FAQ Section - Same style as use-cases */
+.faqSection {
+  background: var(--ifm-background-surface-color);
+  border: 1px solid var(--ifm-color-emphasis-200);
+  border-radius: 12px;
+  padding: 2rem;
+  margin-bottom: 2rem;
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.faqSection:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+}
+
+.faqSection h2 {
+  color: var(--ifm-color-primary-darker);
+  margin-bottom: 1.5rem;
+  font-size: 1.5rem;
+  border-bottom: 2px solid var(--ifm-color-primary-lighter);
+  padding-bottom: 0.5rem;
+}
+
+.faqSection h3 {
+  color: var(--ifm-color-primary-darker);
+  margin-top: 1.5rem;
+  margin-bottom: 0.75rem;
+  font-size: 1.125rem;
+}
+
+.faqSection p {
+  color: var(--ifm-color-content);
+  line-height: 1.6;
+  margin-bottom: 1rem;
+}
+
+/* Dark mode adjustments */
+[data-theme='dark'] .pricingHeader .lead {
+  color: var(--ifm-color-content);
+}
+
+[data-theme='dark'] .pricingCard {
+  border-color: var(--ifm-color-emphasis-300);
+}
+
+[data-theme='dark'] .pricingCard:hover {
+  box-shadow: 0 4px 12px rgba(37, 194, 160, 0.1);
+}
+
+[data-theme='dark'] .comparisonSection,
+[data-theme='dark'] .faqSection {
+  border-color: var(--ifm-color-emphasis-300);
+}
+
+[data-theme='dark'] .comparisonSection:hover,
+[data-theme='dark'] .faqSection:hover {
+  box-shadow: 0 4px 12px rgba(37, 194, 160, 0.1);
+}
+
+[data-theme='dark'] .comparisonTable th {
+  background: var(--ifm-color-emphasis-200);
+}

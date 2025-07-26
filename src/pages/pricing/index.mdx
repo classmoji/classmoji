@@ -1,0 +1,156 @@
+---
+id: pricing
+title: Pricing
+sidebar_label: Pricing
+hide_table_of_contents: true
+---
+
+import styles from './styles.module.css';
+
+<div className={styles.pricingHeader}>
+  <h1>💰 Simple, Transparent Pricing</h1>
+  <p className='lead'>
+    Choose the plan that fits your teaching style. Start free and upgrade when
+    you need more features.
+  </p>
+</div>
+
+<div className={styles.pricingCards}>
+  <div className={styles.pricingCard}>
+    <div className={styles.cardHeader}>
+      <h2>🚀 Free</h2>
+      <span className={styles.cardSubtitle}>Perfect for getting started</span>
+    </div>
+    
+    <div className={styles.price}>
+      <span className={styles.priceFree}>Free</span>
+    </div>
+
+    <ul className={styles.featureList}>
+      <li className={styles.featureLimited}>
+        <span className={styles.featureIcon}>15</span>
+        Students per course
+      </li>
+      <li className={styles.featureLimited}>
+        <span className={styles.featureIcon}>1</span>
+        Active course
+      </li>
+      <li className={styles.featureIncluded}>
+        <span className={styles.featureIcon}>✅</span>
+        GitHub integration
+      </li>
+      <li className={styles.featureIncluded}>
+        <span className={styles.featureIcon}>✅</span>
+        Emoji grading system
+      </li>
+      <li className={styles.featureExcluded}>
+        <span className={styles.featureIcon}>❌</span>
+        TA management
+      </li>
+      <li className={styles.featureExcluded}>
+        <span className={styles.featureIcon}>❌</span>
+        Team projects
+      </li>
+      <li className={styles.featureExcluded}>
+        <span className={styles.featureIcon}>❌</span>
+        Token extensions
+      </li>
+      <li className={styles.featureExcluded}>
+        <span className={styles.featureIcon}>❌</span>
+        Priority support
+      </li>
+    </ul>
+
+    <div style={{textAlign: 'center'}}>
+      <a href="#" className={`${styles.ctaButton} ${styles.ctaSecondary}`}>
+        Get Started Free
+      </a>
+    </div>
+  </div>
+
+  <div className={`${styles.pricingCard} ${styles.proCard}`}>
+    <div className={styles.cardHeader}>
+      <h2>⭐ Pro</h2>
+      <span className={styles.cardSubtitle}>For serious educators</span>
+    </div>
+    
+    <div className={styles.price}>
+      <span className={styles.priceAmount}>$29</span>
+      <span className={styles.pricePeriod}>/ month</span>
+    </div>
+
+    <ul className={styles.featureList}>
+      <li className={styles.featureLimited}>
+        <span className={styles.featureIcon}>100</span>
+        Students per course
+      </li>
+      <li className={styles.featureLimited}>
+        <span className={styles.featureIcon}>3</span>
+        Active courses
+      </li>
+      <li className={styles.featureIncluded}>
+        <span className={styles.featureIcon}>✅</span>
+        GitHub integration
+      </li>
+      <li className={styles.featureIncluded}>
+        <span className={styles.featureIcon}>✅</span>
+        Emoji grading system
+      </li>
+      <li className={styles.featureIncluded}>
+        <span className={styles.featureIcon}>✅</span>
+        TA management
+      </li>
+      <li className={styles.featureIncluded}>
+        <span className={styles.featureIcon}>✅</span>
+        Team projects
+      </li>
+      <li className={styles.featureIncluded}>
+        <span className={styles.featureIcon}>✅</span>
+        Token extensions
+      </li>
+      <li className={styles.featureIncluded}>
+        <span className={styles.featureIcon}>✅</span>
+        Priority support
+      </li>
+    </ul>
+
+    <div style={{textAlign: 'center'}}>
+      <a href="#" className={styles.ctaButton}>
+        Start Pro Trial
+      </a>
+    </div>
+  </div>
+</div>
+
+
+<div className={styles.faqSection}>
+  <h2>❓ Pricing FAQ</h2>
+  
+  <h3>Can I switch plans anytime?</h3>
+  <p>Yes! You can upgrade or downgrade your plan at any time. Changes take effect immediately, and we'll prorate your billing accordingly.</p>
+
+{' '}
+<h3>What happens if I exceed my student limit?</h3>
+<p>
+  We'll notify you when you're approaching your limit. You can either upgrade
+  your plan or remove inactive students to stay within your limit.
+</p>
+
+{' '}
+<h3>Do you offer educational discounts?</h3>
+<p>
+  Yes! We offer special pricing for educational institutions.{' '}
+  <a href='mailto:support@classmoji.com'>Contact us</a> to learn more about our
+  academic programs.
+</p>
+
+{' '}
+<h3>Is there a free trial for Pro?</h3>
+<p>
+  Absolutely! We offer a 14-day free trial of Pro features. No credit card
+  required to start.
+</p>
+
+  <h3>What payment methods do you accept?</h3>
+  <p>We accept all major credit cards, PayPal, and can accommodate institutional purchase orders for annual subscriptions.</p>
+</div>
