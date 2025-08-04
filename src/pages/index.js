@@ -3,6 +3,7 @@ import Link from '@docusaurus/Link';
 import useDocusaurusContext from '@docusaurus/useDocusaurusContext';
 import Layout from '@theme/Layout';
 import Heading from '@theme/Heading';
+import VideoPlayer from '@site/src/components/VideoPlayer';
 import styles from './index.module.css';
 
 const FeatureList = [
@@ -71,20 +72,28 @@ export const Home = () => {
         }}
       >
         <div className='container' style={{ zIndex: 2 }}>
-          <div className='row'>
+          <div className='row' style={{ position: 'relative', top: '-1.5rem' }}>
             <div className='col col--12 text--center'>
               <div
                 style={{
                   fontSize: 'clamp(3rem, 8vw, 5rem)',
                   fontWeight: '800',
-                  marginBottom: '1.5rem',
                   color: 'white',
                 }}
               >
-                classm😅ji
+                classm
+                <span
+                  style={{
+                    paddingLeft: '0.1em',
+                    paddingRight: '0.05em',
+                  }}
+                >
+                  🎯
+                </span>
+                ji
               </div>
 
-              <p
+              {/* <p
                 style={{
                   fontSize: 'clamp(1.5rem, 4vw, 2.5rem)',
                   fontWeight: '600',
@@ -93,22 +102,37 @@ export const Home = () => {
                 }}
               >
                 {siteConfig.tagline}
-              </p>
+              </p> */}
 
               <p
                 style={{
                   fontSize: 'clamp(1.1rem, 2.5vw, 1.4rem)',
                   maxWidth: '42rem',
-                  margin: '0 auto 3rem',
+                  margin: '0 auto 2rem',
                   lineHeight: '1.7',
                   color: 'white',
                   fontWeight: '400',
                 }}
               >
                 A creative and best-practices-based learning management platform
-                for GitHub-based projects and grades. Engage students with
-                modern tools and automated workflows.
+                for GitHub-based projects and grades.
               </p>
+
+              {/* Demo Video */}
+              <div
+                style={{
+                  maxWidth: '1000px',
+                  margin: '0 auto 1.5rem',
+                  borderRadius: '16px',
+                  overflow: 'hidden',
+                  boxShadow: '0 20px 60px rgba(0,0,0,0.4)',
+                  background:
+                    'linear-gradient(135deg, rgba(255,255,255,0.1), rgba(255,255,255,0.05))',
+                  padding: '6px',
+                }}
+              >
+                <VideoPlayer url='/videos/quick_demo.mp4' height='100%' />
+              </div>
 
               <div
                 style={{

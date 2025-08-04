@@ -24,7 +24,11 @@ const Logo = ({ size = 1.5, color = '#000000' }) => {
         />
       </svg>
 
-      <span style={{ fontSize: '1.5rem', marginBottom: '-4px' }}>😅</span>
+      <span
+        style={{ fontSize: '1.75em', marginLeft: '2px', marginBottom: '4px' }}
+      >
+        🎯
+      </span>
 
       <svg
         width={size * 11}

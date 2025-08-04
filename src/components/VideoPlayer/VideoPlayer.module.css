@@ -1,0 +1,290 @@
+.videoContainer {
+  position: relative;
+  background: #000;
+  border-radius: 12px;
+  overflow: hidden;
+  cursor: pointer;
+}
+
+.videoContainer.fullscreen {
+  border-radius: 0;
+}
+
+.videoContainer:hover .controls {
+  opacity: 1;
+  visibility: visible;
+}
+
+/* Controls */
+.controls {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  background: linear-gradient(transparent, rgba(0, 0, 0, 0.8));
+  padding: 20px 20px 16px;
+  transition: all 0.3s ease;
+  z-index: 10;
+}
+
+.controls.visible {
+  opacity: 1;
+  visibility: visible;
+}
+
+.controls.hidden {
+  opacity: 0;
+  visibility: hidden;
+}
+
+.progressContainer {
+  margin-bottom: 12px;
+}
+
+.progressBar {
+  width: 100%;
+  height: 6px;
+  background: rgba(255, 255, 255, 0.3);
+  border-radius: 3px;
+  outline: none;
+  cursor: pointer;
+  appearance: none;
+  -webkit-appearance: none;
+}
+
+.progressBar::-webkit-slider-thumb {
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #fff;
+  cursor: pointer;
+  border: 2px solid #007bff;
+  transition: all 0.2s ease;
+}
+
+.progressBar::-webkit-slider-thumb:hover {
+  transform: scale(1.2);
+}
+
+.progressBar::-moz-range-thumb {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #fff;
+  cursor: pointer;
+  border: 2px solid #007bff;
+  transition: all 0.2s ease;
+}
+
+.controlsRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.leftControls {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.rightControls {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+/* Buttons */
+.playButton,
+.volumeButton,
+.fullscreenButton {
+  background: none;
+  border: none;
+  color: white;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 8px;
+  border-radius: 4px;
+  transition: all 0.2s ease;
+}
+
+.playButton:hover,
+.volumeButton:hover,
+.fullscreenButton:hover {
+  background: rgba(255, 255, 255, 0.1);
+  transform: scale(1.05);
+}
+
+.playButton {
+  padding: 10px;
+}
+
+/* Volume Controls */
+.volumeControls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.volumeSlider {
+  width: 80px;
+  height: 4px;
+  background: rgba(255, 255, 255, 0.3);
+  border-radius: 2px;
+  outline: none;
+  cursor: pointer;
+  appearance: none;
+  -webkit-appearance: none;
+}
+
+.volumeSlider::-webkit-slider-thumb {
+  appearance: none;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #fff;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.volumeSlider::-webkit-slider-thumb:hover {
+  transform: scale(1.2);
+}
+
+.volumeSlider::-moz-range-thumb {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #fff;
+  cursor: pointer;
+  border: none;
+  transition: all 0.2s ease;
+}
+
+/* Time Display */
+.timeDisplay {
+  color: white;
+  font-size: 14px;
+  font-family: system-ui, -apple-system, sans-serif;
+  font-weight: 500;
+  min-width: 100px;
+}
+
+/* Overlays */
+.playOverlay,
+.errorOverlay,
+.loadingOverlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.3);
+  cursor: pointer;
+  z-index: 5;
+}
+
+.errorOverlay {
+  background: rgba(0, 0, 0, 0.8);
+  cursor: default;
+}
+
+.loadingOverlay {
+  background: rgba(0, 0, 0, 0.5);
+  cursor: default;
+}
+
+.playOverlayButton {
+  background: rgba(255, 255, 255, 0.9);
+  border-radius: 50%;
+  width: 120px;
+  height: 120px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #333;
+  transition: all 0.3s ease;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+}
+
+.playOverlayButton:hover {
+  transform: scale(1.1);
+  background: rgba(255, 255, 255, 1);
+}
+
+.playOverlayButton svg {
+  margin-left: 6px; /* Slight offset to center the play triangle */
+}
+
+/* Error State */
+.errorMessage {
+  text-align: center;
+  color: white;
+  font-family: system-ui, -apple-system, sans-serif;
+}
+
+.errorMessage p {
+  margin: 0 0 16px 0;
+  font-size: 1.1rem;
+}
+
+.retryButton {
+  background: #007bff;
+  color: white;
+  border: none;
+  padding: 10px 20px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 0.9rem;
+  font-weight: 500;
+  transition: all 0.2s ease;
+}
+
+.retryButton:hover {
+  background: #0056b3;
+  transform: translateY(-1px);
+}
+
+/* Loading State */
+.loadingSpinner {
+  text-align: center;
+  color: white;
+  font-family: system-ui, -apple-system, sans-serif;
+}
+
+.loadingSpinner p {
+  margin: 16px 0 0 0;
+  font-size: 1rem;
+  opacity: 0.9;
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+  .controls {
+    padding: 16px 16px 12px;
+  }
+  
+  .leftControls {
+    gap: 12px;
+  }
+  
+  .volumeControls {
+    display: none; /* Hide volume controls on mobile */
+  }
+  
+  .timeDisplay {
+    font-size: 12px;
+    min-width: 80px;
+  }
+  
+  .playOverlayButton {
+    width: 80px;
+    height: 80px;
+  }
+}
