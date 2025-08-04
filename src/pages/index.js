@@ -5,6 +5,7 @@ import Layout from '@theme/Layout';
 import Heading from '@theme/Heading';
 import VideoPlayer from '@site/src/components/VideoPlayer';
 import styles from './index.module.css';
+import thumbnail from '@site/static/img/thumbnail.png';
 
 const FeatureList = [
   {
@@ -93,17 +94,6 @@ export const Home = () => {
                 ji
               </div>
 
-              {/* <p
-                style={{
-                  fontSize: 'clamp(1.5rem, 4vw, 2.5rem)',
-                  fontWeight: '600',
-                  marginBottom: '2rem',
-                  color: 'white',
-                }}
-              >
-                {siteConfig.tagline}
-              </p> */}
-
               <p
                 style={{
                   fontSize: 'clamp(1.1rem, 2.5vw, 1.4rem)',
@@ -131,7 +121,10 @@ export const Home = () => {
                   padding: '6px',
                 }}
               >
-                <VideoPlayer url='/videos/quick_demo.mp4' height='100%' />
+                <VideoPlayer
+                  url='/videos/quick_demo.mp4'
+                  thumbnail={thumbnail}
+                />
               </div>
 
               <div
