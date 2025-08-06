@@ -16,7 +16,6 @@ Give students agency over their deadlines. They can spend tokens to submit late 
 
 - Auto-creates repositories for every student or team
 - Uses GitHub Issues as assignments
-- Supports auto-grading via GitHub Actions
 - Maintains real-world development workflows
 
 **👥 Built for Scale**  
@@ -49,7 +48,7 @@ From small seminars to large lectures, Classmoji handles TA assignment, grading 
 
 ## 🎯 Perfect For
 
-- **Programming Courses**: Individual coding assignments with auto-testing
+- **Programming Courses**: Individual coding assignments with clear feedback
 - **Team Projects**: Capstone work with shared repositories and fair grading
 - **Large Classes**: Scalable grading with TA coordination
 - **Flexible Learning**: Token systems that support student agency
@@ -68,7 +67,6 @@ From small seminars to large lectures, Classmoji handles TA assignment, grading 
 - Customizable emoji-to-score mapping
 - Token rewards for exceptional work
 - Resubmission support with instructor approval
-- Auto-grading integration via CTRF test reports
 
 ### ⏰ Deadline Flexibility
 
