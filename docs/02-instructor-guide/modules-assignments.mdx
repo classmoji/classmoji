@@ -16,59 +16,59 @@ This structure mirrors real-world development workflows while enabling flexible 
 
 A **module** represents a unit of coursework (like a lab or project). When you publish a module:
 
-- A GitHub **repository** is created for each student or team
+- A GitHub **repository** (module)is created for each student or team
 - One or more **issues** (assignments) are created inside that repository
 - Students complete assignments by pushing code and **closing issues**
 
-<BrowserWindow img='admin_modules_list.png' />
-
 ## 🧰 Creating a Module
+
+<img alt='Create Module' className='rounded' src='/guide/module_details.png' />
 
 To create a module, you'll define:
 
-- **Title** – the name of the module (e.g., `Project 1`)
+- **Title** – the name of the module (e.g., `react-intro`)
 - **Type** – `Individual` or `Team`
-- **Weight** – how much this module contributes to the final grade
+- **Weight** – how much this module contributes to a student's final grade in the class
 - **Extra Credit?** – mark if this is optional bonus work
-- **Create Feedback Branch?** – optionally create a branch for TA/instructor comments
 - **Template Repository** – the starting code (structure, files, branches) used to generate student repos
 
-<BrowserWindow img='module_form.png' />
-
-:::tip
-📁 **Student repo naming format**: `moduleName-studentGithubUsername` (e.g., `project1-adaLovelace`)
+:::info
+📁 **Student repo naming format**: `moduleName-studentGithubUsername` (e.g., `react-intro-adaLovelace`)
 :::
 
 ## 📝 Adding Assignments to a Module
 
 Each assignment is a GitHub **issue** that lives inside the module repository. You can add multiple assignments per module.
 
+<img
+  alt='Create Assignment'
+  className='rounded'
+  src='/guide/create_assignment.png'
+/>
+
 ### Properties
 
 - **Title** – the issue title (e.g., “Build the API endpoints”)
-- **Branch** – the target branch for submission (e.g., `part1`, `part2`)
-- **Workflow File** – name of the GitHub Actions file for auto-grading (must exist in the template repo)
 - **Weight** – % contribution to the module grade
+- **Release Date** – when the issue/assignment should be created in the module repository
 - **Student Deadline** – when students must close the issue
 - **Grader Deadline** – when TAs should finish grading
 - **Tokens per Hour** – cost for late submission extensions
 - **Description** – full instructions shown to the student in the GitHub issue
 
-<BrowserWindow img='assignment_form.png' />
-
 :::info
-Assignments are only created if a **student deadline** is set. This allows you to release them gradually.
+**Publishing a Module**: Classmoji automatically creates repositories for each student or team and generates all assignments (issues) with release dates on or before today's date. Assignments require a **Release Date** to be created and are released daily at 12:01 AM EST.
 :::
 
 ## 🚀 Publishing a Module
 
-Publishing a module triggers Classmoji to:
+<img alt='Publish Module' className='rounded' src='/guide/module_actions.png' />
 
-- Create a repository for each student or team
-- Add students and TAs to the repo
-- Create issues (assignments) as defined
+When you publish a module, Classmoji:
 
-<BrowserWindow img='publish_module.gif' />
+- Creates a repository for each student or team
+- Adds students and TAs to each repo
+- Generates all assignments (issues) with current or past release dates
 
 :::warning
 **Template Repos Cannot Be Changed** after publishing. Choose carefully before publishing!
@@ -101,10 +101,3 @@ Here’s how **we handle** it in Classmoji:
 This doesn’t overwrite student work. It keeps everything separate, lets them resolve merge conflicts cleanly, and shows the exact changes you’re trying to bring in.
 
 It works and it’s a whole lot cleaner than trying to reset or re-clone every repo.
-
-## ✅ Best Practices
-
-- Use branches for different parts of multi-stage assignments
-- Include auto-grading workflows in your template repo
-- Keep issue instructions concise and formatted (markdown supported)
-- Set student deadlines first, then stagger grader deadlines after

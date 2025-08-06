@@ -90,3 +90,6 @@ li {
   font-size: 14px;
 }
 
+.rounded {
+  border-radius: 10px;
+}
