@@ -2,7 +2,16 @@
 
 **From 🤷 to 🎯 all in one platform.**
 
-Classmoji is a modern teaching platform that transforms how educators manage coding assignments. Built as a GitHub-native alternative to traditional classroom tools, it combines the power of version control with intuitive, emoji-based grading and flexible deadline management.
+A modern teaching platform that transforms how educators manage coding assignments. Built as a GitHub-native alternative to traditional classroom tools, it combines the power of version control with intuitive, emoji-based grading and flexible deadline management.
+
+[Website](https://classmoji.io) | [Documentation](https://docs.classmoji.io) | [Discord](https://discord.gg/classmoji) | [Discussions](https://github.com/classmoji/classmoji/discussions)
+
+![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)
+![GitHub Stars](https://img.shields.io/github/stars/classmoji/classmoji)
+![Discord](https://img.shields.io/discord/1234567890?label=chat&logo=discord)
+![GitHub Issues](https://img.shields.io/github/issues/classmoji/classmoji)
+
+<img alt="Classmoji Admin Dashboard" src="static/guide/admin_dashboard.jpeg" style="border-radius: 10px; margin: 20px 0;" />
 
 ## ✨ What Makes Classmoji Special
 
@@ -23,7 +32,7 @@ From small seminars to large lectures, Classmoji handles TA assignment, grading 
 
 ## 🚀 How It Works
 
-### For Instructors
+### 👩‍🏫 For Instructors
 
 1. **Set up your GitHub Organization** and connect it to Classmoji
 2. **Create modules** (projects) with template repositories
@@ -31,7 +40,7 @@ From small seminars to large lectures, Classmoji handles TA assignment, grading 
 4. **Publish modules** to auto-generate student/team repositories
 5. **Grade with emojis** and let TAs help with the workload
 
-### For Students
+### 🧑‍🎓 For Students
 
 1. **Sign in with GitHub** and confirm your identity
 2. **Join your class** and accept the GitHub organization invite
@@ -39,7 +48,7 @@ From small seminars to large lectures, Classmoji handles TA assignment, grading 
 4. **Submit by closing issues** when your work is complete
 5. **Use tokens wisely** for deadline extensions and resubmissions
 
-### For Teaching Assistants
+### 🤝 For Teaching Assistants
 
 1. **Get assigned to students** or modules automatically
 2. **Access grading dashboards** with submission status and links
@@ -78,7 +87,7 @@ From small seminars to large lectures, Classmoji handles TA assignment, grading 
 ### 👨‍🏫 Teaching Support
 
 - TA assignment and distribution
-- Role-based dashboards and permissions
+- Role-based dashrooms and permissions
 - Progress tracking and analytics
 - Grade export and reporting
 
@@ -89,6 +98,22 @@ From small seminars to large lectures, Classmoji handles TA assignment, grading 
 - Private network isolation
 - Limited data collection focused on educational needs
 
+## 🤝 Contributing
+
+We welcome contributions! Please see our [Contributing Guide](CONTRIBUTING.md) for details.
+
+- 🐛 [Report bugs](https://github.com/classmoji/classmoji/issues/new?template=bug_report.md)
+- 💡 [Request features](https://github.com/classmoji/classmoji/issues/new?template=feature_request.md)
+- 💬 [Join discussions](https://github.com/classmoji/classmoji/discussions)
+- 🗨️ [Chat with us on Discord](https://discord.gg/classmoji)
+
+## 📖 Documentation
+
+- [Getting Started](https://docs.classmoji.io/getting-started)
+- [Installation Guide](https://docs.classmoji.io/installation)
+- [API Reference](https://docs.classmoji.io/api)
+- [Deployment Guide](https://docs.classmoji.io/deployment)
+
 ## 🎓 Educational Philosophy
 
 Classmoji believes in:
@@ -98,10 +123,16 @@ Classmoji believes in:
 - **Real tools over toys** - GitHub skills transfer to professional development
 - **Scale with humanity** - Automation handles logistics, humans handle learning
 
-## 🌍 Built for Modern Education
+## 📄 License
 
-Whether you're teaching 20 students or 200, whether your course focuses on individual mastery or team collaboration, Classmoji adapts to your pedagogical approach while handling the technical complexity of repository management, grading workflows, and deadline enforcement.
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+## 🙏 Acknowledgments
+
+Special thanks to all our contributors and the educational community for their feedback and support.
 
 ---
 
 _Making coding education more human, one emoji at a time._ 😊
+
+**[⭐ Star us on GitHub](https://github.com/classmoji/classmoji) if you find Classmoji useful!**
