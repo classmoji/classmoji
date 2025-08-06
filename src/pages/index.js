@@ -122,7 +122,7 @@ export const Home = () => {
                 }}
               >
                 <VideoPlayer
-                  url='/videos/quick_demo.mp4'
+                  src='/videos/quick_demo.mp4'
                   thumbnail={thumbnail}
                 />
               </div>

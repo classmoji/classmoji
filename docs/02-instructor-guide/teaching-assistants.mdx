@@ -4,11 +4,11 @@ sidebar_label: 🧑🏽‍🏫 Teaching Assistants
 sidebar_position: 7
 ---
 
-import BrowserWindow from '@site/src/components/BrowserWindow';
+import VideoPlayer from '@site/src/components/VideoPlayer';
 
 # 🧑🏽‍🏫 Teaching Assistants
 
-Classmoji makes it easy to collaborate with **Teaching Assistants (TAs)** by streamlining repo access, grading workflows, and feedback tracking.
+Classmoji makes it easy to collaborate with **Teaching Assistants (TAs)** by streamlining repo access andgrading workflows.
 
 You can assign TAs to grade specific students, modules, or entire classes—all without manually managing GitHub permissions.
 
@@ -34,12 +34,16 @@ You can assign TAs in two ways:
 - Choose specific TAs to grade a student or module
 - Useful for small classes or when TAs follow particular sections
 
+<img
+  alt='Manual Assignment'
+  className='rounded'
+  src='/guide/manual_ta_assignment.png'
+/>
+
 ### Auto-Assignment
 
 - Let Classmoji evenly distribute grading responsibilities
 - Automatically assigns TAs based on availability and load balancing
-
-<BrowserWindow img='assign_graders.gif' />
 
 :::info
 You can reassign TAs at any time—even after work is submitted.
@@ -49,10 +53,9 @@ You can reassign TAs at any time—even after work is submitted.
 
 Each TA sees a **grading dashboard** showing:
 
-- Repos they’re assigned to
+- Repositories they’re assigned to
 - Student submissions that need grading
-- Emoji-based grading form with optional comments
-- Feedback branch (if enabled) to leave inline code suggestions
+- All class submissions
 
 Once a TA submits a grade, it’s visible to the student immediately—unless you’ve disabled grade visibility.
 
@@ -60,7 +63,5 @@ Once a TA submits a grade, it’s visible to the student immediately—unless yo
 
 - Assign TAs to students or teams early to avoid confusion
 - Encourage use of consistent emoji feedback
-- Use Feedback Branches for deeper code review when needed
 - Check TA progress from the instructor dashboard to ensure timely grading
-
-:::
+  :::

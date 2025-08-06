@@ -20,21 +20,25 @@ You can also set a **grader deadline**, which tells TAs or instructors when feed
 
 Each student starts with a configurable number of **tokens** for the term. They can spend these tokens to submit assignments after the deadline without a grade penalty.
 
-- Tokens are deducted automatically when a late submission is detected
-- Instructors define how many tokens are required **per hour late**
+- Instructors define how many tokens are required to extend the deadline by 1 hour
 - Instructors can manually award or refund tokens at any time
 
 :::note
 This approach encourages responsibility and gives students agency, without needing constant deadline exception handling.
 :::
 
-<BrowserWindow img='admin_token_transactions.png' />
+<img
+  alt='Token Transactions'
+  className='rounded'
+  src='/guide/assign_tokens.png'
+/>
+
 ## ⚙️ How to Configure Token Settings
 
 In each assignment, you can specify:
 
 - **Student Deadline** – the submission cutoff time
-- **Tokens per Hour** – how many tokens are spent per hour of lateness
+- **Tokens per Hour** – how many tokens students need to extend their deadline by 1 hour
 
 You can also set **default token values** for the classroom in your Classroom Settings.
 
@@ -45,7 +49,6 @@ Instructors and TAs can view:
 - Total tokens each student has used
 - Current token balance
 - Whether an assignment was submitted late, and by how many hours
-- Whether the student paid with tokens or incurred a penalty
 
 ## 🔁 Token Use Cases
 

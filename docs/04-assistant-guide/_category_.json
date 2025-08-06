@@ -1,8 +1,8 @@
 {
-  "label": "Student Experience",
+  "label": "Assistant Guide",
   "collapsible": true,
   "collapsed": false,
-  "position": 3,
+  "position": 4,
   "link": {
     "type": "generated-index"
   }

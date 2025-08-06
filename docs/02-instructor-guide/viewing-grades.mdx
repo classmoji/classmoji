@@ -5,8 +5,6 @@ sidebar_label: 🥽 Viewing Grades
 sidebar_position: 3
 ---
 
-import BrowserWindow from '@site/src/components/BrowserWindow';
-
 # 🥽 Viewing Grades
 
 Classmoji makes it easy to keep track of student progress across modules and assignments. Whether you want a full overview or need to check on a specific student, you can access grading data in just a few clicks.
@@ -17,26 +15,46 @@ To see how an entire class performed on a specific module:
 
 1. Go to your modules page
 2. Click on the eye icon for the module you want to look at
-3. You’ll see a table of:
-   - Each student (or team)
-   - Submission status
-   - Assigned emoji and score
-   - Assigned graders
-   - Lateness and token usage
 
-<BrowserWindow img='admin_module.png' />
+<img
+  alt='View Grades for a Module'
+  className='rounded'
+  src='/guide/view_grades.png'
+/>
+
+## 📁 View Grades for an Assignment
+
+You can view grades for a specific assignment by clicking on the assignment name.
+
+<img
+  alt='View Grades for a Module'
+  className='rounded'
+  src='/guide/view_grades_for_assignment.png'
+/>
 
 ## 🙋 View Grades for a Specific Student
 
 Need to check one student’s progress across all assignments?
 
 1. Go to the **Students** tab in your classroom
-2. Click on the student’s name
-3. You’ll see a per-assignment breakdown of:
-   - Emojis and scores
-   - Time submitted vs. deadline
-   - Token balance and usage
+2. Click on the eye icon for the student you want to look at
 
-<BrowserWindow img='admin_single_student.png' />
+:::info
+The raw grades do not take into account penalties for late submissions while the final grades do.
+:::
 
-This view is great for writing midterm reports or answering “How am I doing?” emails.
+<img
+  alt='View Grades for a Specific Student'
+  className='rounded'
+  src='/guide/student_profile.png'
+/>
+
+## 🙋 View Grades for an Entire Class
+
+You can view grades for an entire class by access the grades page.
+
+<img
+  alt='View Grades for an Entire Class'
+  className='rounded'
+  src='/guide/class_grades.png'
+/>

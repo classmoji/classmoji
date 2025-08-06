@@ -2,7 +2,7 @@ import React from 'react';
 import ReactPlayer from 'react-player';
 
 const VideoPlayer = ({
-  url,
+  src,
   thumbnail = 'https://example.com/thumbnail.png',
   aspectRatio = '16 / 9', // Default 16:9
 }) => {
@@ -19,7 +19,7 @@ const VideoPlayer = ({
       }}
     >
       <ReactPlayer
-        src={url}
+        src={src}
         width='100%'
         height='100%'
         controls={true}
