@@ -1,6 +1,6 @@
-# 🎯 Classmoji
+<div align="center">
 
-**From 🤷 to 🎯 all in one platform.**
+<h1>From 🤷 to 🎯 all in one platform.</h1>
 
 A modern teaching platform that transforms how educators manage coding assignments. Built as a GitHub-native alternative to traditional classroom tools, it combines the power of version control with intuitive, emoji-based grading and flexible deadline management.
 
@@ -10,6 +10,8 @@ A modern teaching platform that transforms how educators manage coding assignmen
 ![GitHub Stars](https://img.shields.io/github/stars/classmoji/classmoji)
 ![Discord](https://img.shields.io/discord/1234567890?label=chat&logo=discord)
 ![GitHub Issues](https://img.shields.io/github/issues/classmoji/classmoji)
+
+</div>
 
 <img alt="Classmoji Admin Dashboard" src="static/guide/admin_dashboard.jpeg" style="border-radius: 10px; margin: 20px 0;" />
 
@@ -106,13 +108,6 @@ We welcome contributions! Please see our [Contributing Guide](CONTRIBUTING.md) f
 - 💡 [Request features](https://github.com/classmoji/classmoji/issues/new?template=feature_request.md)
 - 💬 [Join discussions](https://github.com/classmoji/classmoji/discussions)
 - 🗨️ [Chat with us on Discord](https://discord.gg/classmoji)
-
-## 📖 Documentation
-
-- [Getting Started](https://docs.classmoji.io/getting-started)
-- [Installation Guide](https://docs.classmoji.io/installation)
-- [API Reference](https://docs.classmoji.io/api)
-- [Deployment Guide](https://docs.classmoji.io/deployment)
 
 ## 🎓 Educational Philosophy
 
