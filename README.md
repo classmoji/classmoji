@@ -118,10 +118,6 @@ Classmoji believes in:
 - **Real tools over toys** - GitHub skills transfer to professional development
 - **Scale with humanity** - Automation handles logistics, humans handle learning
 
-## 📄 License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
 ## 🙏 Acknowledgments
 
 Special thanks to all our contributors and the educational community for their feedback and support.
