@@ -87,7 +87,7 @@ const config = {
         },
         { to: '/use-cases', label: 'Use Cases', position: 'left' },
         { to: '/faq', label: 'FAQ', position: 'left' },
-        { to: '/pricing', label: 'Pricing', position: 'left' },
+        // { to: '/pricing', label: 'Pricing', position: 'left' },
         // { to: '/blog', label: 'Blog', position: 'left' },
 
         {
