@@ -97,6 +97,12 @@ const config = {
           target: '_self',
           className: 'navbar__signin-button',
         },
+        {
+          'href': 'https://github.com/orgs/classmoji/discussions',
+          'position': 'right',
+          'className': 'header-github-link',
+          'aria-label': 'GitHub discussions',
+        },
       ],
     },
     // footer: {

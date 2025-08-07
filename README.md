@@ -4,7 +4,7 @@
 
 A modern teaching platform that transforms how educators manage coding assignments. Built as a GitHub-native alternative to traditional classroom tools, it combines the power of version control with intuitive, emoji-based grading and flexible deadline management.
 
-[Website](https://classmoji.io) | [Documentation](https://docs.classmoji.io) | [Discord](https://discord.gg/classmoji) | [Discussions](https://github.com/classmoji/classmoji/discussions)
+[Website](https://classmoji.io) | [Documentation](https://docs.classmoji.io) | [Discord](https://discord.gg/Bxvkh3SHeF) | [Discussions](https://github.com/classmoji/classmoji/discussions)
 
 ![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)
 ![GitHub Stars](https://img.shields.io/github/stars/classmoji/classmoji)

@@ -297,51 +297,6 @@ export const Home = () => {
         </section>
       </main>
 
-      {/* Footer */}
-      <footer
-        style={{
-          padding: '3rem 0 2rem',
-          background: 'var(--ifm-footer-background-color)',
-          borderTop: '1px solid var(--ifm-color-emphasis-200)',
-        }}
-      >
-        <div className='container'>
-          <div className='text--center'>
-            <p
-              style={{
-                fontSize: '1rem',
-                margin: 0,
-                color: 'var(--ifm-color-emphasis-700)',
-              }}
-            >
-              © 2025 Classmoji · Sponsored by the{' '}
-              <a
-                href='https://dali.dartmouth.edu'
-                style={{
-                  color: 'var(--ifm-color-primary)',
-                  textDecoration: 'none',
-                  fontWeight: '600',
-                }}
-              >
-                DALI Lab
-              </a>{' '}
-              and{' '}
-              <a
-                href='https://cs.dartmouth.edu'
-                style={{
-                  color: 'var(--ifm-color-primary)',
-                  textDecoration: 'none',
-                  fontWeight: '600',
-                }}
-              >
-                CS Department
-              </a>{' '}
-              at Dartmouth College
-            </p>
-          </div>
-        </div>
-      </footer>
-
       <style jsx>{`
         @keyframes float {
           0%,
