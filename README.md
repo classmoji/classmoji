@@ -13,7 +13,7 @@ A modern teaching platform that transforms how educators manage coding assignmen
 
 </div>
 
-<img alt="Classmoji Admin Dashboard" src="static/guide/admin_dashboard.jpeg" style="border-radius: 10px; margin: 20px 0;" />
+<img alt="Classmoji Admin Dashboard" src="static/guide/admin_dashboard.jpeg" style="border-radius: 20px; margin: 20px 0;" />
 
 ## ✨ What Makes Classmoji Special
 
