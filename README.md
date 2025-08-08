@@ -8,7 +8,6 @@ A modern teaching platform that transforms how educators manage coding assignmen
 
 ![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)
 ![GitHub Stars](https://img.shields.io/github/stars/classmoji/classmoji)
-![Discord](https://img.shields.io/discord/1234567890?label=chat&logo=discord)
 ![GitHub Issues](https://img.shields.io/github/issues/classmoji/classmoji)
 
 </div>
