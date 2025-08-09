@@ -60,14 +60,17 @@
 .navbar__signin-button {
   background-color: var(--ifm-color-primary); /* golden yellow */
   padding: 6px 28px;
-  margin-right: 12px;
+  margin-right: 0px;
   border-radius: 6px;
   font-weight: 600;
   text-decoration: none !important;
   transition: background-color 0.3s ease, color 0.3s ease;
-  display: inline-block;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   line-height: 1.4;
   color: white !important;
+  white-space: nowrap;
 }
 
 /* Hover = deeper golden */
@@ -109,4 +112,12 @@ li {
 
 [data-theme='dark'] .header-github-link:before {
   filter: invert(1);
+}
+
+.navbar__items--right {
+  gap: 10px !important;
+}
+
+.navbar__items--right > :last-child {
+  padding-right: 20px !important;
 }

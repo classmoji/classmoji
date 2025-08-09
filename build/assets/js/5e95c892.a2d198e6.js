@@ -1,0 +1,1 @@
+"use strict";(self.webpackChunkclassmoji_website=self.webpackChunkclassmoji_website||[]).push([[9647],{8122:(e,s,r)=>{r.r(s),r.d(s,{default:()=>n});r(6540);var a=r(4164),c=r(1082),t=r(204),u=r(2831),i=r(9780),l=r(4848);function n(e){return(0,l.jsx)(c.e3,{className:(0,a.A)(t.G.wrapper.docsPages),children:(0,l.jsx)(i.A,{children:(0,u.v)(e.route.routes)})})}}}]);

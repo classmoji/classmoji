@@ -1,0 +1,44 @@
+/* Alternative CSS approach if you prefer external styles */
+
+.githubStars {
+  display: inline-flex;
+  align-items: center;
+  text-decoration: none;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans',
+    Helvetica, Arial, sans-serif;
+  font-size: 14px;
+  font-weight: 500;
+  color: #656d76;
+  border: 1px solid #d0d7de;
+  border-radius: 6px;
+  overflow: hidden;
+  transition: all 0.15s ease;
+  background-color: white;
+  cursor: pointer;
+  box-shadow: 0 1px 0 rgba(27, 31, 36, 0.04);
+}
+
+.githubStars:hover {
+  background-color: #f3f4f6;
+  border-color: #a5a5a5;
+  text-decoration: none;
+  color: #656d76;
+}
+
+.starSection {
+  display: flex;
+  align-items: center;
+  padding: 6px 10px;
+  gap: 5px;
+  border-right: 1px solid #d0d7de;
+  background-color: transparent;
+}
+
+.starCount {
+  padding: 6px 12px;
+  background-color: transparent;
+  font-weight: 600;
+  color: #24292f;
+  min-width: 32px;
+  text-align: center;
+}
