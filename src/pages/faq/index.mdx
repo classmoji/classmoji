@@ -24,7 +24,7 @@ import styles from './styles.module.css';
   <h2>🚀 Getting Started</h2>
   
   <h3>What does Classmoji do?</h3>
-  <p>Classmoji helps you manage coding assignments using GitHub. It automates repo creation, uses emoji-based grading, and supports tokens, resubmissions, and auto-grading workflows.</p>
+  <p>Classmoji helps you manage coding assignments using GitHub. It automates repo creation, uses emoji-based grading, and supports tokens, resubmissions.</p>
 
   <h3>🎯 Do I need GitHub Classroom?</h3>
   <p>Nope! Classmoji is a standalone alternative. It uses GitHub directly, but handles the organization, repo setup, issue creation, and access control for you.</p>
@@ -36,9 +36,6 @@ import styles from './styles.module.css';
   <h3>Can I customize the emoji grading system?</h3>
   <p>Yes. You can set your own emojis, scores, token values, and feedback labels in your **Classroom Settings**.</p>
 
-  <h3>⚙️ How do auto-grading and workflows work?</h3>
-  <p>You provide a GitHub Actions workflow and CTRF-compatible test suite in the template repo. Classmoji runs those tests when students push code.</p>
-
   <h3>👥 Can I manage TAs?</h3>
   <p>Yes. You can assign TAs to students or modules manually, or let Classmoji auto-assign them evenly. TAs get grading dashboards and repo access.</p>
 </div>
@@ -49,29 +46,31 @@ import styles from './styles.module.css';
   <h3>Is Classmoji FERPA compliant?</h3>
   <p>Yes, Classmoji is designed with student privacy and FERPA compliance in mind. We use managed databases hosted by <a href="https://www.digitalocean.com/products/managed-databases-postgresql">Digital Ocean</a> with enterprise-grade security:</p>
 
-  <div className={styles.securityFeatures}>
-    <div className={styles.featureGrid}>
-      <div className={styles.featureItem}>
-        <strong>🔐 End-to-end encryption</strong>
-        <p>All data is encrypted both in transit and at rest</p>
-      </div>
-      <div className={styles.featureItem}>
-        <strong>🏠 Private network isolation</strong>
-        <p>Databases run in private networks with restricted access</p>
-      </div>
-      <div className={styles.featureItem}>
-        <strong>🛡️ Controlled access</strong>
-        <p>Only whitelisted requests can reach our databases</p>
-      </div>
-      <div className={styles.featureItem}>
-        <strong>📊 Limited data collection</strong>
-        <p>
-          We only store necessary academic information required for course
-          management
-        </p>
-      </div>
+{' '}
+
+<div className={styles.securityFeatures}>
+  <div className={styles.featureGrid}>
+    <div className={styles.featureItem}>
+      <strong>🔐 End-to-end encryption</strong>
+      <p>All data is encrypted both in transit and at rest</p>
+    </div>
+    <div className={styles.featureItem}>
+      <strong>🏠 Private network isolation</strong>
+      <p>Databases run in private networks with restricted access</p>
+    </div>
+    <div className={styles.featureItem}>
+      <strong>🛡️ Controlled access</strong>
+      <p>Only whitelisted requests can reach our databases</p>
+    </div>
+    <div className={styles.featureItem}>
+      <strong>📊 Limited data collection</strong>
+      <p>
+        We only store necessary academic information required for course
+        management
+      </p>
     </div>
   </div>
+</div>
 
   <p>Student educational records remain secure and are only accessible to authorized course personnel.</p>
 </div>
@@ -95,11 +94,21 @@ import styles from './styles.module.css';
   <h3>How do I submit an assignment?</h3>
   <p>Work on the correct branch, then <strong>close the GitHub issue</strong> linked to the assignment. That's how Classmoji knows you're done.</p>
 
-  <h3>🪙 What are tokens?</h3>
-  <p>Tokens let you submit late work or unlock resubmissions. You start with a set number and spend them as needed. Your instructor decides how they work.</p>
+{' '}
 
-  <h3>🔄 Can I resubmit work?</h3>
-  <p>If your instructor allows it, yes! Just update your code and send a resubmit request.</p>
+<h3>🪙 What are tokens?</h3>
+<p>
+  Tokens let you submit late work or unlock resubmissions. You start with a set
+  number and spend them as needed. Your instructor decides how they work.
+</p>
+
+{' '}
+
+<h3>🔄 Can I resubmit work?</h3>
+<p>
+  If your instructor allows it, yes! Just update your code and send a resubmit
+  request.
+</p>
 
   <h3>📊 Where do I see my grades?</h3>
   <p>You'll see emoji feedback on each assignment. If enabled, your dashboard will also show your current estimated letter grade.</p>
@@ -107,9 +116,14 @@ import styles from './styles.module.css';
 
 <div className={styles.faqSection}>
   <h2>🔒 Privacy & Security</h2>
-  
+
   <h3>Is my data secure?</h3>
-  <p>Yes. Your educational records and personal information are protected with enterprise-grade security measures, including encryption and access controls. Only your instructors and authorized TAs can access your course data.</p>
+  <p>
+    Yes. Your educational records and personal information are protected with
+    enterprise-grade security measures, including encryption and access
+    controls. Only your instructors and authorized TAs can access your course
+    data.
+  </p>
 </div>
 
   </TabItem>
@@ -158,9 +172,13 @@ import styles from './styles.module.css';
 
 <div className={styles.faqSection}>
   <h2>⏰ Data Retention</h2>
-  
+
   <h3>How long is data retained?</h3>
-  <p>Course data is retained for the duration of the academic term plus a reasonable period for grade reporting. Instructors can export their data at any time.</p>
+  <p>
+    Course data is retained for the duration of the academic term plus a
+    reasonable period for grade reporting. Instructors can export their data at
+    any time.
+  </p>
 </div>
 
   </TabItem>
