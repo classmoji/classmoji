@@ -4,7 +4,7 @@
 
 A modern teaching platform that transforms how educators manage coding assignments. Built as a GitHub-native alternative to traditional classroom tools, it combines the power of version control with intuitive, emoji-based grading and flexible deadline management.
 
-[Website](https://classmoji.io) | [Documentation](https://docs.classmoji.io) | [Discord](https://discord.gg/Bxvkh3SHeF) | [Discussions](https://github.com/classmoji/classmoji/discussions)
+[Website](https://classmoji.io) | [Documentation](https://docs.classmoji.io) | [Slack](https://join.slack.com/t/classmoji/shared_invite/zt-3b59s28sl-gkaDSF23LtVco3V5gD1gbg) | [Discussions](https://github.com/classmoji/classmoji/discussions)
 
 ![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)
 ![GitHub Stars](https://img.shields.io/github/stars/classmoji/classmoji)
@@ -107,7 +107,7 @@ We welcome contributions! Please see our [Contributing Guide](CONTRIBUTING.md) f
 - 🐛 [Report bugs](https://github.com/classmoji/classmoji/issues/new?template=bug_report.md)
 - 💡 [Request features](https://github.com/classmoji/classmoji/issues/new?template=feature_request.md)
 - 💬 [Join discussions](https://github.com/classmoji/classmoji/discussions)
-- 🗨️ [Chat with us on Discord](https://discord.gg/classmoji)
+- 🗨️ [Chat with us on Slack](https://join.slack.com/t/classmoji/shared_invite/zt-3b59s28sl-gkaDSF23LtVco3V5gD1gbg)
 
 ## 🎓 Educational Philosophy
 
