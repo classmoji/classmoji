@@ -1,0 +1,23 @@
+<svg width="24" height="24" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+  <!-- Background circle for better visibility -->
+  <circle cx="12" cy="12" r="12" fill="#4A154B"/>
+  
+  <!-- Simplified Slack logo -->
+  <g transform="translate(6, 6)">
+    <!-- Top left (red) -->
+    <rect x="0" y="4.5" width="3" height="7.5" rx="1.5" fill="#E01E5A"/>
+    <rect x="0" y="0" width="7.5" height="3" rx="1.5" fill="#E01E5A"/>
+    
+    <!-- Top right (cyan) -->
+    <rect x="4.5" y="0" width="7.5" height="3" rx="1.5" fill="#36C5F0"/>
+    <rect x="9" y="0" width="3" height="7.5" rx="1.5" fill="#36C5F0"/>
+    
+    <!-- Bottom right (green) -->
+    <rect x="9" y="4.5" width="3" height="7.5" rx="1.5" fill="#2EB67D"/>
+    <rect x="4.5" y="9" width="7.5" height="3" rx="1.5" fill="#2EB67D"/>
+    
+    <!-- Bottom left (yellow) -->
+    <rect x="0" y="9" width="7.5" height="3" rx="1.5" fill="#ECB22E"/>
+    <rect x="0" y="4.5" width="3" height="7.5" rx="1.5" fill="#ECB22E"/>
+  </g>
+</svg>

@@ -103,6 +103,13 @@ const config = {
           'className': 'header-github-link',
           'aria-label': 'GitHub discussions',
         },
+        {
+          'href':
+            'https://join.slack.com/t/classmoji/shared_invite/zt-3b59s28sl-gkaDSF23LtVco3V5gD1gbg',
+          'position': 'right',
+          'className': 'header-slack-link',
+          'aria-label': 'Slack',
+        },
       ],
     },
     prism: {
