@@ -4,7 +4,7 @@
         <title>classmoji Blog</title>
         <link>https://classmoji.io/blog</link>
         <description>classmoji Blog</description>
-        <lastBuildDate>Thu, 26 Aug 2021 00:00:00 GMT</lastBuildDate>
+        <lastBuildDate>Wed, 13 Aug 2025 00:00:00 GMT</lastBuildDate>
         <docs>https://validator.w3.org/feed/docs/rss2.html</docs>
         <generator>https://github.com/jpmonette/feed</generator>
         <language>en</language>
@@ -12,23 +12,88 @@
             <title><![CDATA[Welcome]]></title>
             <link>https://classmoji.io/blog/welcome</link>
             <guid>https://classmoji.io/blog/welcome</guid>
-            <pubDate>Thu, 26 Aug 2021 00:00:00 GMT</pubDate>
-            <description><![CDATA[Docusaurus blogging features are powered by the blog plugin.]]></description>
-            <content:encoded><![CDATA[<p><a href="https://docusaurus.io/docs/blog" target="_blank" rel="noopener noreferrer">Docusaurus blogging features</a> are powered by the <a href="https://docusaurus.io/docs/api/plugins/@docusaurus/plugin-content-blog" target="_blank" rel="noopener noreferrer">blog plugin</a>.</p>
-<p>Here are a few tips you might find useful.</p>
-<p>Simply add Markdown files (or folders) to the <code>blog</code> directory.</p>
-<p>Regular blog authors can be added to <code>authors.yml</code>.</p>
-<p>The blog post date can be extracted from filenames, such as:</p>
+            <pubDate>Wed, 13 Aug 2025 00:00:00 GMT</pubDate>
+            <description><![CDATA[So, full transparency, we've been working on Classmoji for years, and we're just now ready to share it. Classmoji is the product of years of teaching experimentation in my classes CS52 and CS98 at Dartmouth College's Computer Science Department and the DALI Lab; years of being an opinionated self-motivated home-schooled student myself; and years of talking to students about how to make their learning journey more effective.]]></description>
+            <content:encoded><![CDATA[<p>So, full transparency, we've been working on <a href="https://classmoji.io/" target="_blank" rel="noopener noreferrer">Classmoji</a> for years, and we're just now ready to share it. Classmoji is the product of years of teaching experimentation in my classes <a href="https://cs52.me/" target="_blank" rel="noopener noreferrer">CS52</a> and <a href="https://cs98.me/" target="_blank" rel="noopener noreferrer">CS98</a> at <a href="https://web.cs.dartmouth.edu/" target="_blank" rel="noopener noreferrer">Dartmouth College's Computer Science Department</a> and the <a href="https://dali.dartmouth.edu/" target="_blank" rel="noopener noreferrer">DALI Lab</a>; years of being an opinionated self-motivated home-schooled student myself; and years of talking to students about how to make their learning journey more effective.</p>
+<p>My teaching philosophy is rooted in these truths‼️:</p>
 <ul>
-<li><code>2019-05-30-welcome.md</code></li>
-<li><code>2019-05-30-welcome/index.md</code></li>
+<li><strong>Learning is a naturally joyful human activity</strong></li>
+<li><strong>Learning is driven by curiosity and exploration</strong></li>
+<li><strong>Learning is fulfilled by creation aka goal driven problem-solving</strong></li>
 </ul>
-<p>A blog post folder can be convenient to co-locate blog post images:</p>
-<p>The blog supports tags as well!</p>
-<p><strong>And if you don't want a blog</strong>: just delete this directory, and use <code>blog: false</code> in your Docusaurus config.</p>]]></content:encoded>
-            <category>Facebook</category>
-            <category>Hello</category>
-            <category>Docusaurus</category>
+<p>Classmoji isn't just about streamlining repository management, assignment creation, permissions, TA load-balancing, grading collation, etc, although it does all of those things. Classmoji is about <strong>reimagining how we teach, assess, and support learning—especially in technical/coding and project focused courses.</strong></p>
+<p>🤯 Insert rant:  <em>And we desperately need some reimagining. So called "higher-ed" pedagogy hasn't evolved much since the Ford Model T.  We sit groups of chronologically aligned people down in big brick buildings, talk at them, assign expensive textbooks, give them a letter or number to indicate their performance, and hope that they have enough attention span to absorb something.  I am, of course, exaggerating, there are innovations such as making students watch videos, use online forums, and discuss the weather together in breakout-groups. Teaching is hard!</em></p>
+<p>Back to Classmoji. The goal is to better support project-based courses, especially in the AI age. Let's run through some of the features:</p>
+<ul>
+<li>GitHub-native to support code and technical assignments</li>
+<li>Feedback focused grading system</li>
+<li>Gamified late policy</li>
+<li>Iterative resubmissions encouraged to promote mastery</li>
+<li>TA assignment and load balancing</li>
+<li>Team project support end-to-end</li>
+<li>Individual team project contribution accounting</li>
+<li>AI driven "oral" assessments (coming soon)</li>
+</ul>
+<p>Today, we'll focus on 🐘 grades.</p>
+<hr>
+<h2 class="anchor anchorWithStickyNavbar_LWe7" id="why-grades-dont-work-the-way-we-think">Why Grades Don’t Work the Way We Think<a href="https://classmoji.io/blog/welcome#why-grades-dont-work-the-way-we-think" class="hash-link" aria-label="Direct link to Why Grades Don’t Work the Way We Think" title="Direct link to Why Grades Don’t Work the Way We Think">​</a></h2>
+<p>There is an unspoken assumption that giving conventional grades will accomplish three things:</p>
+<ol>
+<li>Motivate students</li>
+<li>Provide feedback</li>
+<li>Signal skill level to others (e.g., employers)</li>
+</ol>
+<p>But the evidence says they’re surprisingly bad at all three.</p>
+<ol>
+<li>
+<p><strong>Grades (aka a stick) are poor motivation.</strong> Some more effective techniques would be: make assignments more interesting, but damn that is hard; peer accountability through showing student work to their peers or peer reviews, surprisingly effective, at the end of the day we are social animals and care what our friends think; various reward systems such as praise -- research says that praise is more effective than money (and I'm assuming more effective than a grade).</p>
+</li>
+<li>
+<p><strong>Grades are lazy feedback.</strong>  Does getting a B+ or a 93 really help a student understand what they need to do to learn?  Nope, constructive, actionable narrative feedback is much better. In the software industry, specific pull request reviews are how we grow and learn, can we do that in class?</p>
+</li>
+<li>
+<p>Where do we start... <strong>Nobody gives a f*** what grade you got.</strong> A person's story is more important than their certification. The whole academic premise that grades correspond to some sort of valuation of excellence is broken. I've had 4.0 students who knew how to choose classes and play to the rubric to get straight As, and I've had students who struggled and cried through every CS class but persevered.  Who do you think I respect more? Who do you think was more able to face hardships and innovate and lead?</p>
+</li>
+</ol>
+<p>Traditional grades are inconsistent, bias-prone, and often fail to motivate learning or provide meaningful feedback (<a href="https://doi.org/10.1187/cbe.cbe-14-03-0054" target="_blank" rel="noopener noreferrer">Schinske &amp; Tanner, 2014</a>). Grades tend to reward rule-following over curiosity, and they often communicate little about how a student can improve.</p>
+<hr>
+<h2 class="anchor anchorWithStickyNavbar_LWe7" id="lessons-from-going-passfail">Lessons from Going Pass/Fail<a href="https://classmoji.io/blog/welcome#lessons-from-going-passfail" class="hash-link" aria-label="Direct link to Lessons from Going Pass/Fail" title="Direct link to Lessons from Going Pass/Fail">​</a></h2>
+<p>During the pandemic, we had one term that was pass/fail. I was terrified; students wouldn't push themselves, and they wouldn't do the final project if they were already passing. To my surprise, the class did better than usual.</p>
+<p>This matches recent research showing that removing traditional grades can <strong>increase motivation</strong> and <strong>reduce rote learning</strong> without lowering achievement (<a href="https://doi.org/10.1080/03075079.2023.2233007" target="_blank" rel="noopener noreferrer">Kjærgaard et al., 2024</a>). Freed from point-chasing, students focused more on learning itself. High performers pushed further, while struggling students re-engaged without fear of “digging a hole” in their GPA.</p>
+<p>It was an excellent experiment and changed how I taught. Yes, there were probably some confounding factors, people were at home, classes were something to focus on, and this class had group-projects so it also provided social connection.</p>
+<p><img decoding="async" loading="lazy" alt="extra credit" src="https://classmoji.io/assets/images/extra-credit2-ce56e6023ba79f09e9a1e310c67d7c30.png" width="1730" height="1120" class="img_ev3q"></p>
+<hr>
+<h2 class="anchor anchorWithStickyNavbar_LWe7" id="emoji-">Emoji?!?! 🎉<a href="https://classmoji.io/blog/welcome#emoji-" class="hash-link" aria-label="Direct link to Emoji?!?! 🎉" title="Direct link to Emoji?!?! 🎉">​</a></h2>
+<p>I have since been grading with a new system:</p>
+<ul>
+<li><strong>🔥/🚀</strong> – Above and beyond: extra credit, mastery, standout creativity</li>
+<li><strong>👍</strong> – Satisfactory work meeting basic expectations</li>
+<li><strong>👀</strong> – Not yet satisfactory</li>
+<li><strong>👎/😭</strong> – Yikes!</li>
+</ul>
+<p>An average of 👍 translates to roughly an A-.  A totally fine grade, but not mastery. To reach the top, students have to innovate and earn some 🔥.</p>
+<p>Turns out for graders and for students, an emoji removes all the associations that come with a number or a letter.  A student can intuitively know that yeah, a 👍 is fair for what they did. They don't argue that you deducted 2 points for some seemingly arbitrary mistake. The intuitive visual aspect here is important. For graders similarly, they no longer get stuck penalizing and deducting points. Nobody enjoys the literal negativity of subtracting points. Well, almost nobody; there are sometimes zealous graders 😅. Overall, graders are now liberated to focus on providing constructive actionable narrative feedback.  The mental/emotional struggle of the rubric math is removed and instead we can do the positive work of adding feedback 💯.</p>
+<p>This isn’t just for fun. Decades of feedback research show that <strong>specific, narrative comments</strong> lead to greater learning gains than grades alone—students given a score often ignore comments altogether (<a href="https://doi.org/10.3102/0034654307313795" target="_blank" rel="noopener noreferrer">Shute, 2008</a>).</p>
+<p>Emojis add a quick emotional cue, making feedback more personal and engaging, while still backed by detailed comments.<br>
+<!-- -->Recent studies confirm that expressive feedback, including emoji, can make instructors feel more approachable, increase student motivation, and improve performance (<a href="https://doi.org/10.1007/s10639-024-12345-1" target="_blank" rel="noopener noreferrer">Sia et al., 2024</a>).</p>
+<hr>
+<h2 class="anchor anchorWithStickyNavbar_LWe7" id="other-pedagogical-features-in-classmoji">Other Pedagogical Features in Classmoji<a href="https://classmoji.io/blog/welcome#other-pedagogical-features-in-classmoji" class="hash-link" aria-label="Direct link to Other Pedagogical Features in Classmoji" title="Direct link to Other Pedagogical Features in Classmoji">​</a></h2>
+<ul>
+<li>⏳ <strong>Soft late penalties</strong> – Reduces the panic that can drive academic dishonesty and encourages honest submissions. When I first started teaching my mentor said "give them a 0 at 12:01am -- it keeps the median down".  Talk about perverse incentives. We all need deadlines, but let's think about how to make them helpful to learning. In Classmoji we encourage soft penalties that can be bought out with earned tokens.</li>
+<li>🎮 <strong>Gamified extra credit</strong> – How can you earn some tokens to give you more leeway on assignments. Students earn tokens to “buy back” late penalties or offset quiz grades, making extra effort feel rewarding.  Extra effort is also the only way to show true mastery and get that 🔥.</li>
+<li>🧑‍🤝‍🧑 <strong>TA load balancing</strong> – Leaderboards and tracking to keep teaching teams engaged and fair.  We auto assign grades, allow graders to pitch in and help each other, and a little bit of social pressure to keep on track with grading deadlines.</li>
+<li>🤖 <strong>(Coming soon) AI interactive quizzes</strong> – Automated, adaptive questioning inspired by the benefits of oral exams. Research shows oral-style assessment can reduce plagiarism, verify understanding, and build communication skills (<a href="https://doi.org/10.3102/0013189X251333638" target="_blank" rel="noopener noreferrer">Fenton, 2025</a>)—our AI-driven version aims to deliver these benefits at scale.</li>
+</ul>
+<h2 class="anchor anchorWithStickyNavbar_LWe7" id="why-this-matters">Why This Matters<a href="https://classmoji.io/blog/welcome#why-this-matters" class="hash-link" aria-label="Direct link to Why This Matters" title="Direct link to Why This Matters">​</a></h2>
+<p>If grades aren’t the best motivator, the clearest feedback, or the signal employers value most, why center them in our teaching?<br>
+<!-- -->Classmoji’s approach—clear, expressive cues backed by actionable comments, flexible deadlines, gamified incentives, and authentic assessments—puts the focus back where it belongs: on learning.</p>
+<p>If you’re an educator, try it. You might find yourself enjoying grading, and your students will love it.</p>
+<p>Thoughts/Feedback/Feature requests? <a href="mailto://hello@classmoji.io" target="_blank" rel="noopener noreferrer">Get at us</a></p>
+<p><img decoding="async" loading="lazy" alt="extra credit" src="https://classmoji.io/assets/images/extra-credit-bdd9d4da6b5524307dcd6f4b88138a64.png" width="1506" height="904" class="img_ev3q"></p>]]></content:encoded>
+            <category>welcome</category>
+            <category>grading</category>
+            <category>pedagogy</category>
+            <category>computer science</category>
         </item>
     </channel>
 </rss>
