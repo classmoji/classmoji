@@ -123,7 +123,16 @@ const config = {
       rel: 'stylesheet', // ✅ Required
     },
   ],
-  plugins: ['./src/plugins/tailwind-config.js'],
+  plugins: [
+    './src/plugins/tailwind-config.js',
+    [
+      '@dipakparmar/docusaurus-plugin-umami',
+      {
+        websiteID: 'e269f0fd-7edf-4dfd-9722-7be31d63f971', // Required
+        analyticsDomain: 'analytics.classmoji.io', // Required
+      },
+    ],
+  ],
 };
 
 export default config;

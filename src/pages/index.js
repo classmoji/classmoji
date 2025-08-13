@@ -39,14 +39,15 @@ const FeatureList = [
     icon: '🧑‍🤝‍🧑',
   },
   {
-    title: '(Coming Soon) AI Interactive Quizzes',
+    title: 'AI Interactive Quizzes',
     description:
       'Coming soon: AI interactive quizzes that deliver adaptive, oral-exam–style questioning to reduce plagiarism, verify understanding, and build communication skills at scale.',
     icon: '🤖',
+    comingSoon: true,
   },
 ];
 
-function Feature({ title, description, icon }) {
+function Feature({ title, description, icon, comingSoon }) {
   return (
     <div className={clsx('col col--4')}>
       <div className='text--center padding-horiz--md'>
@@ -56,7 +57,22 @@ function Feature({ title, description, icon }) {
           style={{ fontSize: '1.3rem', marginBottom: '0.75rem' }}
         >
           {title}
+          {comingSoon && (
+            <span
+              style={{
+                fontSize: '12px',
+                marginLeft: '0.5rem',
+                backgroundColor: 'var(--ifm-color-primary)',
+                color: 'white',
+                borderRadius: '20px',
+                padding: '2px 6px',
+              }}
+            >
+              Coming soon
+            </span>
+          )}
         </Heading>
+
         <p
           style={{
             fontSize: '1rem',
