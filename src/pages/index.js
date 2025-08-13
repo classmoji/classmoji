@@ -11,20 +11,38 @@ const FeatureList = [
   {
     title: 'GitHub Integration',
     description:
-      'Seamlessly connect with GitHub repositories for project-based learning and automated grading workflows.',
+      'Seamlessly, manage GitHub repositories for project-based learning, automated grading workflows, and pull request review style feedback.',
     icon: '🔗',
   },
   {
-    title: 'Smart Grading',
+    title: 'Emoji Feedback*',
     description:
-      'Automated assessment tools that understand code quality, testing, and best practices in software development.',
-    icon: '🎯',
+      'Classmoji promotes clear emoji feedback (🔥👍👀👎) backed by actionable comments.',
+    icon: '🔥',
   },
   {
-    title: 'Student Engagement',
+    title: 'Soft Late Penalties',
     description:
-      'Gamified learning experience with tokens, achievements, and progress tracking to keep students motivated.',
-    icon: '🚀',
+      'Soft late penalties reduce panic and encourage honest submissions by keeping deadlines meaningful while allowing students to buy back deductions with earned tokens.',
+    icon: '⏳',
+  },
+  {
+    title: 'Gamified Extra Credit',
+    description:
+      'Gamified extra credit lets students earn tokens to buy back late penalties or offset quiz grades, turning extra effort into tangible rewards and pathways to 🔥-level mastery.',
+    icon: '🎮',
+  },
+  {
+    title: 'TA Load Balancing',
+    description:
+      'TA load balancing uses leaderboards, tracking, and auto-assignment to keep grading fair, enable collaboration, and maintain momentum toward deadlines.',
+    icon: '🧑‍🤝‍🧑',
+  },
+  {
+    title: '(Coming Soon) AI Interactive Quizzes',
+    description:
+      'Coming soon: AI interactive quizzes that deliver adaptive, oral-exam–style questioning to reduce plagiarism, verify understanding, and build communication skills at scale.',
+    icon: '🤖',
   },
 ];
 
@@ -252,6 +270,19 @@ export const Home = () => {
                 <Feature key={idx} {...props} />
               ))}
             </div>
+            <p
+              className='text--center'
+              style={{
+                marginTop: '1rem',
+                fontSize: '0.95rem',
+                color: 'var(--ifm-color-emphasis-700)',
+              }}
+            >
+              <em>
+                * Learn more about the pedagogy behind these features{' '}
+                <Link to='/blog/welcome'>on our blog</Link>.
+              </em>
+            </p>
           </div>
         </section>
 
