@@ -1,6 +1,6 @@
 tim:
   name: Tim
-  title: Title
+  title: "Senior Lecturer in Computer Science; Director of the DALI Lab"
   url: https://github.com/timofei7
   image_url: https://avatars.githubusercontent.com/u/1221134
   page: true
@@ -10,7 +10,7 @@ tim:
 
 pape:
   name: Pape
-  title: Docusaurus maintainer
+  title: "CTO DALI Lab"
   url: https://github.com/pape98
   image_url: https://avatars.githubusercontent.com/u/28971016?v=4
   socials:
