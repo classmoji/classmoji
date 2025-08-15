@@ -128,7 +128,7 @@ const config = {
     [
       '@dipakparmar/docusaurus-plugin-umami',
       {
-        websiteID: 'e269f0fd-7edf-4dfd-9722-7be31d63f971', // Required
+        websiteID: '72a3e176-ca67-4431-bc45-4627c65bf948', // Required
         analyticsDomain: 'analytics.classmoji.io', // Required
       },
     ],
