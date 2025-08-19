@@ -1,7 +1,7 @@
 ---
 name: Question
-about: Describe this issue template's purpose here.
-title: ''
+about: Ask a question about this project
+title: Question
 labels: question
 assignees: timofei7, pape98
 ---
