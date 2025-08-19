@@ -1,7 +1,7 @@
 ---
-name: Feature request
+name: 🚀 Feature request
 about: Suggest an idea for this project
-title: Feature request
+title: 🚀 Feature request
 labels: enhancement
 assignees: timofei7, pape98
 ---
