@@ -1,0 +1,22 @@
+.changelogHeader {
+  text-align: center;
+  margin-bottom: 2rem;
+}
+
+.changelogHeader h1 {
+  margin-bottom: 1rem;
+  font-size: 3rem;
+}
+
+.changelogHeader .lead {
+  font-size: 1.2rem;
+  color: var(--ifm-color-emphasis-700);
+  margin-bottom: 0;
+}
+
+.emptyState {
+  text-align: center;
+  padding: 3rem 1rem;
+  color: var(--ifm-color-emphasis-600);
+  font-style: italic;
+}
