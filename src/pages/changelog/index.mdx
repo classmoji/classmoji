@@ -3,17 +3,98 @@ id: changelog
 title: Changelog
 sidebar_label: Changelog
 hide_table_of_contents: false
+toc_min_heading_level: 2
+toc_max_heading_level: 2
 ---
 
-import styles from './styles.module.css';
+import styles from "./styles.module.css";
 
 <div className={styles.changelogHeader}>
   <h1>📝 Changelog</h1>
-  <p className='lead'>
-    Track the latest updates, features, and improvements to Classmoji. Updates will be posted here as they become available.
+  <p className="lead">
+    Track the latest updates, features, and improvements to Classmoji. Updates
+    will be posted here as they become available.
   </p>
 </div>
 
-<div className={styles.emptyState}>
-  <p>No updates yet. Check back soon for the latest changes!</p>
+## v1.3.0 {#v130}
+
+<div className={styles.versionCard}>
+
+<span className={styles.badge}>Current</span>
+
+#### 🚀 Features
+
+- New PR workflow to update student repositories
+- PostHog analytics integration for usage insights
+
+#### 🎨 User Experience
+
+- Improved mobile responsiveness across all pages
+- Enhanced webhook reliability and error handling
+
+</div>
+
+## v1.2.1 {#v121}
+
+<div className={styles.versionCard}>
+
+#### 🐛 Bug Fixes
+
+- Fixed race condition in repository creation causing duplicate repos
+- Resolved token balance calculation error for students with refunded transactions
+- Fixed GitHub webhook signature verification timeout issues
+- Corrected issue where team members couldn't access shared repositories
+
+#### 🔧 Improvements
+
+- Enhanced error handling for GitHub API rate limits
+- Improved webhook retry logic for failed deliveries
+
+</div>
+
+## v1.2.0 {#v120}
+
+<div className={styles.versionCard}>
+
+#### 🚀 Features
+
+- Token economy system for course management
+- Token-based deadline extensions
+- Advanced settings and configuration options
+
+#### 🔧 Improvements
+
+- Improved analytics tracking
+
+</div>
+
+## v1.1.0 {#v110}
+
+<div className={styles.versionCard}>
+
+#### 🚀 Features
+
+- Team management for group projects
+- Extension request workflow
+- Regrade request system
+- Contribution tracking for team assignments
+
+#### 🔧 Improvements
+
+- Enhanced student and grading dashboards
+
+</div>
+
+## v1.0.0 {#v100}
+
+<div className={styles.versionCard}>
+
+#### 🚀 Features
+
+- Assignment creation and distribution
+- Emoji-based grading system (😊 😐 😢)
+- GitHub OAuth authentication
+- Automatic repository creation from templates
+
 </div>
