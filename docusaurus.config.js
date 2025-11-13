@@ -116,6 +116,10 @@ const config = {
     prism: {
       theme: prismThemes.github,
     },
+    footer: {
+      style: 'dark',
+      copyright: `Made with ❤️ by <a href="https://dali.dartmouth.edu" target="_blank" rel="noopener noreferrer">DALI</a> with support from the <a href="https://web.cs.dartmouth.edu" target="_blank" rel="noopener noreferrer">Computer Science Department</a> at Dartmouth College.`,
+    },
   },
   stylesheets: [
     {
