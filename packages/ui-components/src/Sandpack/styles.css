@@ -1,0 +1,402 @@
+/**
+ * Sandpack UI Components - Custom Styles
+ */
+
+/* ==========================================================================
+   CSS Isolation from Reveal.js (and other parent contexts)
+
+   Problem: Reveal.js themes set large font sizes (40px+), custom text styles,
+   and other properties on .reveal section elements. These cascade into
+   Sandpack and break the code editor.
+
+   Solution: Reset only the typography and text-related properties that cause
+   issues, while preserving Sandpack's own layout styles (flexbox, etc.).
+   ========================================================================== */
+
+/* Container-level isolation - reset inherited typography */
+.sandpack-embed,
+.sandpack-mount,
+.sandpack-embed-wrapper {
+  /* Typography reset */
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif !important;
+  font-size: 14px !important;
+  font-weight: 400 !important;
+  font-style: normal !important;
+  line-height: 1.5 !important;
+  letter-spacing: normal !important;
+  text-transform: none !important;
+  text-align: left !important;
+  text-shadow: none !important;
+  color: #1f2933 !important;
+  /* Reset other inheritable properties that Reveal.js might set */
+  word-spacing: normal !important;
+  white-space: normal !important;
+  direction: ltr !important;
+  visibility: visible !important;
+  /* Ensure proper containment */
+  box-sizing: border-box !important;
+}
+
+/* Reset typography on ALL child elements to prevent Reveal.js inheritance */
+.sandpack-embed *,
+.sandpack-embed *::before,
+.sandpack-embed *::after {
+  font-family: inherit;
+  font-size: inherit;
+  font-weight: inherit;
+  line-height: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  text-shadow: none !important;
+  box-sizing: border-box;
+}
+
+/* CodeMirror editor - explicit monospace font and sizing */
+.sandpack-embed .cm-editor,
+.sandpack-embed .cm-scroller,
+.sandpack-embed .cm-content,
+.sandpack-embed .cm-line,
+.sandpack-embed .cm-gutters,
+.sandpack-embed .cm-gutter,
+.sandpack-embed .cm-lineNumbers,
+.sandpack-embed .cm-gutterElement,
+.sandpack-embed .sp-cm,
+.sandpack-embed .sp-code-editor,
+.sandpack-embed [class*="sp-syntax"] {
+  font-family: 'Fira Code', 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace !important;
+  font-size: 13px !important;
+  line-height: 1.5 !important;
+  font-weight: 400 !important;
+  text-shadow: none !important;
+}
+
+/* Tab bar - proper sizing */
+.sandpack-embed .sp-tabs,
+.sandpack-embed .sp-tabs-scrollable-container,
+.sandpack-embed .sp-tab-button {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif !important;
+  font-size: 13px !important;
+  line-height: 1.4 !important;
+  font-weight: 500 !important;
+  text-transform: none !important;
+}
+
+/* Preview actions and controls */
+.sandpack-embed .sp-preview-container,
+.sandpack-embed .sp-preview-actions,
+.sandpack-embed .sp-navigator,
+.sandpack-embed button {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif !important;
+  font-size: 12px !important;
+  line-height: 1.4 !important;
+  text-transform: none !important;
+}
+
+/* ==========================================================================
+   Sandpack Embed Wrapper - Containment
+   ========================================================================== */
+
+/* Ensure full height chain from sl-block-content down to wrapper */
+.sl-block-content > .sandpack-embed,
+.sandpack-embed,
+.sandpack-mount {
+  height: 100%;
+}
+
+.sandpack-embed-wrapper {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border-radius: var(--sp-border-radius, 4px);
+  height: 100%; /* Fill parent container */
+}
+
+/* Make the Sandpack provider use flex to contain layout + console */
+.sandpack-embed-wrapper .sp-wrapper {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0; /* Allow flex shrinking */
+  background: transparent;
+}
+
+/* Ensure no grey gap between layout and console */
+.sandpack-embed-wrapper .sp-wrapper > * {
+  flex-shrink: 0;
+}
+
+.sandpack-embed-wrapper .sp-wrapper > .sp-layout {
+  flex: 1 1 auto;
+  flex-shrink: 1;
+}
+
+/* Make the layout take remaining space */
+.sandpack-embed-wrapper .sp-layout {
+  flex: 1 1 auto;
+  min-height: 0; /* Allow flex shrinking */
+  overflow: hidden;
+  background: transparent !important; /* Remove grey background */
+  border: 1px solid var(--sp-colors-surface2, #efefef) !important; /* Ensure consistent border */
+  border-radius: var(--sp-border-radius, 4px) !important;
+}
+
+/* Make editor and preview fill the layout height */
+.sandpack-embed-wrapper .sp-editor,
+.sandpack-embed-wrapper .sp-preview {
+  min-height: 100% !important;
+  height: 100% !important;
+}
+
+/* Add divider line between editor and preview */
+.sandpack-embed-wrapper .sp-editor {
+  border-right: 1px solid var(--sp-colors-surface2, #e4e7eb);
+}
+
+/* ==========================================================================
+   Collapsible Console
+   ========================================================================== */
+
+.collapsible-console {
+  border-top: 1px solid var(--sp-colors-surface2, #e4e7eb);
+  background: var(--sp-colors-surface1, #f8f9fb);
+  flex-shrink: 0; /* Don't grow or shrink - just take natural height */
+}
+
+.collapsible-console-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding: 6px 12px;
+  border: none;
+  background: var(--sp-colors-surface2, #e4e7eb);
+  cursor: pointer;
+  font-family: var(--sp-font-mono, ui-monospace, monospace);
+  font-size: 12px;
+  color: var(--sp-colors-clickable, #757575);
+  transition: background-color 0.15s ease;
+}
+
+.collapsible-console-header:hover {
+  background: var(--sp-colors-surface3, #dde1e5);
+}
+
+.collapsible-console-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 500;
+}
+
+.collapsible-console-chevron {
+  transition: transform 0.2s ease;
+}
+
+.collapsible-console-chevron.expanded {
+  transform: rotate(90deg);
+}
+
+.collapsible-console-badges {
+  display: flex;
+  gap: 6px;
+}
+
+.console-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 6px;
+  border-radius: 9px;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.console-badge-error {
+  background: #fee2e2;
+  color: #dc2626;
+}
+
+.console-badge-warn {
+  background: #fef3c7;
+  color: #d97706;
+}
+
+.console-badge-log {
+  background: #e0e7ff;
+  color: #4f46e5;
+}
+
+.console-badge-empty {
+  background: transparent;
+  color: var(--sp-colors-disabled, #999);
+  font-weight: 400;
+}
+
+.collapsible-console-content {
+  overflow: hidden;
+  background: #f9fafb; /* Very light grey background */
+  border-top: 1px solid var(--sp-colors-surface2, #e4e7eb);
+}
+
+/* Ensure the console content doesn't affect layout when height is 0 */
+.collapsible-console-content[style*="height: 0"] {
+  visibility: hidden;
+  border-top: none;
+}
+
+/* ==========================================================================
+   Compact Console Messages
+   Override Sandpack's default spacing for tighter console output
+   ========================================================================== */
+
+/* Remove padding on the console list container */
+.collapsible-console .sp-console-list {
+  padding: 0 !important;
+  gap: 0 !important;
+  border: none !important;
+  outline: none !important;
+  box-shadow: none !important;
+  background-color: #f9fafb !important;
+}
+
+/* Target Sandpack's internal console wrappers */
+.collapsible-console .sp-console,
+.collapsible-console [class*="sp-console"] {
+  border: none !important;
+  outline: none !important;
+  box-shadow: none !important;
+  background-color: #f9fafb !important;
+}
+
+/* Compact individual console items - ZERO shadows, ZERO lines */
+.collapsible-console .sp-console-item,
+.collapsible-console .sp-console-item * {
+  padding: 4px 12px !important;
+  min-height: auto !important;
+  line-height: 1.3 !important;
+  margin: 0 !important;
+  border: none !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+  -webkit-box-shadow: none !important;
+  -moz-box-shadow: none !important;
+  text-shadow: none !important;
+  filter: none !important;
+  outline: none !important;
+  background-color: #f9fafb !important;
+}
+
+/* Remove any pseudo-element lines */
+.collapsible-console .sp-console-item::before,
+.collapsible-console .sp-console-item::after,
+.collapsible-console .sp-console-item *::before,
+.collapsible-console .sp-console-item *::after {
+  display: none !important;
+  content: none !important;
+  border: none !important;
+  background: none !important;
+}
+
+/* Reset nested element padding */
+.collapsible-console .sp-console-item * {
+  padding: 0 !important;
+}
+
+/* No borders between items */
+.collapsible-console .sp-console-item:not(:last-child) {
+  border-bottom: none !important;
+}
+
+/* Warning items - colored text, no background */
+.collapsible-console .sp-console-item[data-type="warn"],
+.collapsible-console .sp-console-item.sp-console-item-warn,
+.collapsible-console [class*="warn"] {
+  background-color: #f9fafb !important;
+  box-shadow: none !important;
+  color: #b45309 !important;
+}
+
+.collapsible-console .sp-console-item[data-type="warn"] *,
+.collapsible-console .sp-console-item.sp-console-item-warn *,
+.collapsible-console [class*="warn"] * {
+  color: #b45309 !important;
+}
+
+/* Error items - colored text, no background */
+.collapsible-console .sp-console-item[data-type="error"],
+.collapsible-console .sp-console-item.sp-console-item-error,
+.collapsible-console [class*="error"] {
+  background-color: #f9fafb !important;
+  box-shadow: none !important;
+  color: #dc2626 !important;
+}
+
+.collapsible-console .sp-console-item[data-type="error"] *,
+.collapsible-console .sp-console-item.sp-console-item-error *,
+.collapsible-console [class*="error"] * {
+  color: #dc2626 !important;
+}
+
+/* Reduce font size for compactness */
+.collapsible-console .sp-console-item .sp-cm {
+  font-size: 12px !important;
+}
+
+/* Remove all margins and padding from nested elements */
+.collapsible-console .sp-console-item .sp-pre-placeholder,
+.collapsible-console .sp-console-item > div,
+.collapsible-console .sp-console-item pre {
+  margin: 0 !important;
+  padding: 0 !important;
+}
+
+/* Make sure inline elements don't add extra spacing */
+.collapsible-console .sp-console-item span {
+  line-height: inherit !important;
+}
+
+/* Compact the actions bar */
+.collapsible-console .sp-console-actions {
+  padding: 2px 8px !important;
+  border-top: 1px solid var(--sp-colors-surface2, #e4e7eb) !important;
+}
+
+/* Remove any wrapper shadows/borders */
+.collapsible-console .sp-console {
+  border: none !important;
+  box-shadow: none !important;
+}
+
+/* Kill any separator/divider elements Sandpack might use */
+.collapsible-console [class*="separator"],
+.collapsible-console [class*="divider"],
+.collapsible-console [class*="border"],
+.collapsible-console hr {
+  display: none !important;
+  border: none !important;
+  height: 0 !important;
+  background: none !important;
+}
+
+/* ==========================================================================
+   Dark theme adjustments
+   ========================================================================== */
+
+[data-theme="dark"] .collapsible-console,
+.sp-wrapper[data-theme="dark"] .collapsible-console {
+  border-top-color: var(--sp-colors-surface3, #2a2a2a);
+  background: var(--sp-colors-surface1, #1a1a1a);
+}
+
+[data-theme="dark"] .collapsible-console-header,
+.sp-wrapper[data-theme="dark"] .collapsible-console-header {
+  background: var(--sp-colors-surface2, #2a2a2a);
+  color: var(--sp-colors-clickable, #999);
+}
+
+[data-theme="dark"] .collapsible-console-header:hover,
+.sp-wrapper[data-theme="dark"] .collapsible-console-header:hover {
+  background: var(--sp-colors-surface3, #3a3a3a);
+}

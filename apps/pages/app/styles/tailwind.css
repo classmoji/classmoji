@@ -1,0 +1,108 @@
+@import 'tailwindcss';
+
+/* Notion-inspired design tokens */
+:root {
+  /* Colors - Light Mode */
+  --color-bg-default: #ffffff;
+  --color-bg-subtle: #f7f7f5;
+  --color-border-default: rgba(0, 0, 0, 0.06);
+  --color-border-medium: rgba(0, 0, 0, 0.12);
+  --color-text-default: #37352f;
+  --color-text-subtle: rgba(55, 53, 47, 0.65);
+
+  /* Shadows - Layered, subtle */
+  --shadow-sm: 0 1px 1px rgba(0, 0, 0, 0.03), 0 1px 2px rgba(0, 0, 0, 0.04);
+  --shadow-md: 0 2px 4px rgba(0, 0, 0, 0.04), 0 2px 8px rgba(0, 0, 0, 0.06);
+  --shadow-hover: 0 4px 8px rgba(0, 0, 0, 0.08), 0 4px 16px rgba(0, 0, 0, 0.12);
+
+  /* Typography */
+  --font-sans: 'Noto Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  --font-mono: 'JetBrains Mono', 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+  --line-height-relaxed: 1.65;
+  --letter-spacing-tight: -0.011em;
+
+  /* Border Radius */
+  --radius-sm: 3px;
+  --radius-md: 4px;
+  --radius-lg: 8px;
+
+  /* Alert Colors - Muted palette */
+  --alert-info-bg: #e7f3ff;
+  --alert-info-border: #d0e7ff;
+  --alert-info-text: #0b5cab;
+  --alert-warning-bg: #fef3e0;
+  --alert-warning-border: #fde4b8;
+  --alert-warning-text: #946c00;
+  --alert-error-bg: #ffefef;
+  --alert-error-border: #ffd5d5;
+  --alert-error-text: #c0382b;
+  --alert-success-bg: #edfbf3;
+  --alert-success-border: #d3f5e1;
+  --alert-success-text: #0f6438;
+  --alert-note-bg: #f5f3ff;
+  --alert-note-border: #e8e3ff;
+  --alert-note-text: #6941c6;
+}
+
+.dark {
+  /* Colors - Dark Mode */
+  --color-bg-default: #191919;
+  --color-bg-subtle: #252525;
+  --color-border-default: rgba(255, 255, 255, 0.06);
+  --color-border-medium: rgba(255, 255, 255, 0.12);
+  --color-text-default: rgba(255, 255, 255, 0.9);
+  --color-text-subtle: rgba(255, 255, 255, 0.5);
+
+  /* Alert Colors - Dark Mode */
+  --alert-info-bg: #203855;
+  --alert-info-border: #2a4a6f;
+  --alert-info-text: #88c7ff;
+  --alert-warning-bg: #3d3020;
+  --alert-warning-border: #594620;
+  --alert-warning-text: #ffd580;
+  --alert-error-bg: #3d2020;
+  --alert-error-border: #592e2e;
+  --alert-error-text: #ff9b9b;
+  --alert-success-bg: #1f3d2e;
+  --alert-success-border: #2d5842;
+  --alert-success-text: #80e5a8;
+  --alert-note-bg: #2d2540;
+  --alert-note-border: #3e3459;
+  --alert-note-text: #c8b1ff;
+}
+
+@theme {
+  /* Override Tailwind defaults with Notion-inspired values */
+  --font-family-sans: var(--font-sans);
+  --font-family-mono: var(--font-mono);
+  --radius-sm: 3px;
+  --radius-DEFAULT: 4px;
+  --radius-md: 4px;
+  --radius-lg: 8px;
+
+  /* Primary color palette (matching webapp) */
+  --color-primary: #1f883d;
+  --color-primary-50: #e6f4ea;
+  --color-primary-100: #1f883d;
+  --color-primary-200: #1f883d;
+  --color-primary-300: #1f883d;
+  --color-primary-400: #1f883d;
+  --color-primary-500: #1f883d;
+  --color-primary-600: #1f883d;
+  --color-primary-700: #1f883d;
+  --color-primary-800: #1f883d;
+  --color-primary-900: #1f883d;
+}
+
+/* Global styles - exactly match webapp */
+* {
+  box-sizing: border-box;
+  font-family: 'Noto Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+}
+
+body {
+  font-size: 14px;
+}
+
+@import './blocknote-overrides.css';
+@import './page-viewer.css';

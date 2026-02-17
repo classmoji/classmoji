@@ -1,0 +1,95 @@
+---
+import { getCollection } from 'astro:content';
+import Layout from '../../layouts/Layout.astro';
+import Header from '../../components/Header.astro';
+import Footer from '../../components/Footer.astro';
+import EmojiHero from '../../components/EmojiHero.astro';
+
+const allPosts = await getCollection('blog');
+const isDev = import.meta.env.DEV;
+const posts = allPosts
+  .filter(post => isDev || !post.data.draft)
+  .sort((a, b) => b.data.pubDate.valueOf() - a.data.pubDate.valueOf());
+
+function getReadingTime(content: string): number {
+  const wordsPerMinute = 200;
+  const words = content.trim().split(/\s+/).length;
+  return Math.max(1, Math.ceil(words / wordsPerMinute));
+}
+
+const authorGitHub: Record<string, string> = {
+  Pape: 'pape98',
+  Tim: 'timofei7',
+};
+
+function getAuthorAvatar(author: string): string | null {
+  const username = authorGitHub[author];
+  return username ? `https://github.com/${username}.png` : null;
+}
+---
+
+<Layout title="Blog — Classmoji">
+  <Header />
+
+  <main class="pt-32 pb-16 px-6">
+    <div class="max-w-4xl mx-auto">
+      <h1 class="text-4xl font-bold text-gray-900 mb-4">Blog</h1>
+      <p class="text-lg text-gray-600 mb-12">Updates, tutorials, and insights from the Classmoji team.</p>
+
+      <div class="space-y-8">
+        {posts.map(post => (
+          <article class="border-b border-gray-100 pb-8">
+            <a href={`/blog/${post.id}`} class="group flex gap-6">
+              {post.data.emoji && (
+                <EmojiHero
+                  emoji={post.data.emoji}
+                  background={post.data.emojiBackground}
+                  size="sm"
+                />
+              )}
+              <div class="flex-1">
+                <h2 class="text-2xl font-semibold text-gray-900 group-hover:text-primary transition-colors mb-2">
+                  {post.data.title}
+                </h2>
+                <p class="text-gray-600 mb-3">{post.data.description}</p>
+                <div class="flex items-center gap-2 text-sm text-gray-500">
+                  {post.data.author && getAuthorAvatar(post.data.author) && (
+                    <img
+                      src={getAuthorAvatar(post.data.author)!}
+                      alt={post.data.author}
+                      class="w-5 h-5 rounded-full ring-1 ring-gray-200"
+                    />
+                  )}
+                  {post.data.author && <span>{post.data.author}</span>}
+                  {post.data.author && <span>·</span>}
+                  <time datetime={post.data.pubDate.toISOString()}>
+                    {post.data.pubDate.toLocaleDateString('en-US', {
+                      year: 'numeric',
+                      month: 'long',
+                      day: 'numeric',
+                    })}
+                  </time>
+                  <span>·</span>
+                  <span>{getReadingTime(post.body ?? '')} min read</span>
+                </div>
+                {post.data.tags && (
+                  <div class="flex gap-2 mt-3">
+                    {post.data.tags.map(tag => (
+                      <span class="px-2 py-1 text-xs bg-gray-100 text-gray-600 rounded">{tag}</span>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </a>
+          </article>
+        ))}
+      </div>
+
+      {posts.length === 0 && (
+        <p class="text-gray-500 text-center py-12">No posts yet. Check back soon!</p>
+      )}
+    </div>
+  </main>
+
+  <Footer />
+</Layout>

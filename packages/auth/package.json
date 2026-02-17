@@ -1,0 +1,14 @@
+{
+  "name": "@classmoji/auth",
+  "version": "1.0.0",
+  "type": "module",
+  "exports": {
+    "./server": "./src/server.js",
+    "./client": "./src/client.js"
+  },
+  "dependencies": {
+    "@classmoji/database": "*",
+    "@classmoji/services": "*",
+    "better-auth": "^1.4.7"
+  }
+}

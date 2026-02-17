@@ -1,0 +1,39 @@
+/* Grades Float Button - Notion Style */
+.grades-float-button .ant-float-btn-body {
+  background: #ffffff !important;
+  box-shadow: 0 4px 14px 0 rgba(0, 0, 0, 0.1), 0 0 0 1px rgba(0, 0, 0, 0.05) !important;
+  transition: all 0.2s ease !important;
+  width: 56px !important;
+  height: 56px !important;
+}
+
+.grades-float-button:hover .ant-float-btn-body {
+  background: #ffffff !important;
+  box-shadow: 0 6px 20px 0 rgba(0, 0, 0, 0.15), 0 0 0 1px rgba(0, 0, 0, 0.08) !important;
+  transform: translateY(-1px);
+}
+
+.grades-float-button .ant-float-btn-icon {
+  color: #000000 !important;
+}
+
+.grades-float-button .ant-float-btn {
+  width: 56px !important;
+  height: 56px !important;
+}
+
+/* Dark mode adjustments */
+.dark .grades-float-button .ant-float-btn-body {
+  background: #1f2937 !important;
+  box-shadow: 0 4px 14px 0 rgba(0, 0, 0, 0.3), 0 0 0 1px rgba(255, 255, 255, 0.1) !important;
+}
+
+.dark .grades-float-button:hover .ant-float-btn-body {
+  background: #1f2937 !important;
+  box-shadow: 0 6px 20px 0 rgba(0, 0, 0, 0.4), 0 0 0 1px rgba(255, 255, 255, 0.15) !important;
+  transform: translateY(-1px);
+}
+
+.dark .grades-float-button .ant-float-btn-icon {
+  color: #ffffff !important;
+}

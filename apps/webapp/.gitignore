@@ -1,0 +1,18 @@
+# Node.js specific ignores
+node_modules/
+.cache/
+build/
+public/build/
+test-results/
+playwright-report/
+playwright/.cache/
+tests/.auth/
+.env
+.trigger
+
+# General ignores
+.DS_Store
+*.log
+
+# Python ignores
+models/.venv

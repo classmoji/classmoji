@@ -1,0 +1,109 @@
+---
+import { getCollection, render } from 'astro:content';
+import Layout from '../../layouts/Layout.astro';
+import Header from '../../components/Header.astro';
+import Footer from '../../components/Footer.astro';
+import TableOfContents from '../../components/TableOfContents.astro';
+import EmojiHero from '../../components/EmojiHero.astro';
+
+export async function getStaticPaths() {
+  const posts = await getCollection('blog');
+  return posts.map(post => ({
+    params: { slug: post.id },
+    props: { post },
+  }));
+}
+
+const { post } = Astro.props;
+const { Content, headings } = await render(post);
+
+function getReadingTime(content: string): number {
+  const wordsPerMinute = 200;
+  const words = content.trim().split(/\s+/).length;
+  return Math.max(1, Math.ceil(words / wordsPerMinute));
+}
+
+const authorGitHub: Record<string, string> = {
+  Pape: 'pape98',
+  Tim: 'timofei7',
+};
+
+function getAuthorAvatar(author: string): string | null {
+  const username = authorGitHub[author];
+  return username ? `https://github.com/${username}.png` : null;
+}
+---
+
+<Layout title={`${post.data.title} — Classmoji Blog`} description={post.data.description}>
+  <Header />
+
+  <main class="pt-32 pb-16 px-6">
+    <div class="max-w-6xl mx-auto">
+      <!-- Back link -->
+      <a href="/blog" class="inline-flex items-center text-sm text-gray-500 hover:text-gray-900 mb-8">
+        <svg class="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7" />
+        </svg>
+        Back to Blog
+      </a>
+
+      <div class="lg:grid lg:grid-cols-[1fr_250px] lg:gap-12">
+        <article>
+          <!-- Post header -->
+          <header class="mb-8">
+            <h1 class="text-4xl font-bold text-gray-900 mb-4">{post.data.title}</h1>
+            {post.data.author && getAuthorAvatar(post.data.author) && (
+              <div class="flex items-center gap-3 mb-6">
+                <img
+                  src={getAuthorAvatar(post.data.author)!}
+                  alt={post.data.author}
+                  class="w-10 h-10 rounded-full ring-1 ring-gray-200"
+                />
+                <div>
+                  <span class="text-sm font-medium text-gray-900">{post.data.author}</span>
+                  <div class="flex items-center gap-2 text-sm text-gray-500">
+                    <time datetime={post.data.pubDate.toISOString()}>
+                      {post.data.pubDate.toLocaleDateString('en-US', {
+                        year: 'numeric',
+                        month: 'long',
+                        day: 'numeric',
+                      })}
+                    </time>
+                    <span>·</span>
+                    <span>{getReadingTime(post.body ?? '')} min read</span>
+                  </div>
+                </div>
+              </div>
+            )}
+            {post.data.emoji && (
+              <div class="mb-6">
+                <EmojiHero
+                  emoji={post.data.emoji}
+                  background={post.data.emojiBackground}
+                  size="lg"
+                />
+              </div>
+            )}
+            {post.data.tags && (
+              <div class="flex gap-2 mt-4">
+                {post.data.tags.map(tag => (
+                  <span class="px-2 py-1 text-xs bg-gray-100 text-gray-600 rounded">{tag}</span>
+                ))}
+              </div>
+            )}
+          </header>
+
+          <!-- Post content -->
+          <div class="prose prose-lg prose-gray max-w-none">
+            <Content />
+          </div>
+        </article>
+
+        <!-- Table of Contents -->
+        <TableOfContents headings={headings} />
+      </div>
+    </div>
+  </main>
+
+  <Footer />
+</Layout>

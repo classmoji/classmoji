@@ -1,0 +1,409 @@
+@import 'tailwindcss' reference;
+@import url('https://fonts.googleapis.com/css2?family=Noto+Sans:ital,wght@0,100..900;1,100..900&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,100..1000;1,9..40,100..1000&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=DM+Mono:ital,wght@0,300;0,400;0,500;1,300;1,400;1,500&display=swap');
+
+* {
+  box-sizing: border-box;
+  font-family: 'Noto Sans', sans-serif;
+}
+
+body {
+  font-size: 13.5px;
+
+}
+
+
+/* Dark mode contenteditable text color */
+.dark [contenteditable] {
+  color: #f3f4f6; /* gray-100 */
+}
+
+.dark [contenteditable]::placeholder,
+.dark [contenteditable][data-placeholder]:empty::before {
+  color: #6b7280; /* gray-500 */
+}
+
+
+label {
+  font-size: 14px !important;
+}
+
+.font-header {
+  font-family: 'Noto Sans', sans-serif !important;
+}
+
+
+.weight-cell {
+  padding: 0 !important;
+}
+
+/* Dark mode heading styles */
+.dark h1.text-gray-900,
+.dark h2.text-gray-900,
+.dark h3.text-gray-900,
+.dark h4.text-gray-900,
+.dark h5.text-gray-900,
+.dark h6.text-gray-900 {
+  color: #e5e7eb; /* gray-200 */
+}
+
+.dark h1.text-gray-700,
+.dark h2.text-gray-700,
+.dark h3.text-gray-700,
+.dark h4.text-gray-700,
+.dark h5.text-gray-700,
+.dark h6.text-gray-700 {
+  color: #d1d5db; /* gray-300 */
+}
+
+.dark h1.text-gray-600,
+.dark h2.text-gray-600,
+.dark h3.text-gray-600,
+.dark h4.text-gray-600,
+.dark h5.text-gray-600,
+.dark h6.text-gray-600 {
+  color: #9ca3af; /* gray-400 */
+}
+
+.dark h1.text-gray-500,
+.dark h2.text-gray-500,
+.dark h3.text-gray-500,
+.dark h4.text-gray-500,
+.dark h5.text-gray-500,
+.dark h6.text-gray-500 {
+  color: #9ca3af; /* gray-400 */
+}
+
+/* Also update any general heading without specific color class */
+.dark h1:not([class*='text-']),
+.dark h2:not([class*='text-']),
+.dark h3:not([class*='text-']),
+.dark h4:not([class*='text-']),
+.dark h5:not([class*='text-']),
+.dark h6:not([class*='text-']) {
+  color: #e5e7eb; /* gray-200 */
+}
+
+/* Dark mode text styles for common elements */
+.dark p.text-gray-900,
+.dark span.text-gray-900,
+.dark div.text-gray-900,
+.dark label.text-gray-900 {
+  color: #e5e7eb; /* gray-200 */
+}
+
+.dark p.text-gray-700,
+.dark span.text-gray-700,
+.dark div.text-gray-700,
+.dark label.text-gray-700 {
+  color: #d1d5db; /* gray-300 */
+}
+
+.dark p.text-gray-600,
+.dark span.text-gray-600,
+.dark div.text-gray-600,
+.dark label.text-gray-600 {
+  color: #9ca3af; /* gray-400 */
+}
+
+.dark p.text-gray-500,
+.dark span.text-gray-500,
+.dark div.text-gray-500,
+.dark label.text-gray-500 {
+  color: #9ca3af; /* gray-400 */
+}
+
+/* Dark mode background adjustments */
+.dark .bg-gray-100 {
+  background-color: #1f2937; /* gray-800 */
+}
+
+.dark .bg-gray-50 {
+  background-color: #111827; /* gray-900 */
+}
+
+/* Additional gray backgrounds */
+.dark .bg-gray-200 {
+  background-color: #374151; /* gray-700 */
+}
+
+/* White backgrounds - only apply if no explicit dark: class exists */
+.dark .bg-white:not([class*='dark:bg-']) {
+  background-color: #111827; /* gray-900 */
+}
+
+/* Colored backgrounds for info/alert boxes */
+.dark .bg-blue-50 {
+  background-color: rgba(29, 78, 216, 0.2); /* blue-900/20 */
+}
+
+.dark .bg-red-50 {
+  background-color: rgba(127, 29, 29, 0.2); /* red-900/20 */
+}
+
+.dark .bg-green-50 {
+  background-color: rgba(20, 83, 45, 0.2); /* green-900/20 */
+}
+
+.dark .bg-yellow-50:not(.stat-card) {
+  background-color: rgba(113, 63, 18, 0.2); /* yellow-900/20 */
+}
+
+.dark .bg-orange-50 {
+  background-color: rgba(124, 45, 18, 0.2); /* orange-900/20 */
+}
+
+.dark .bg-purple-50 {
+  background-color: rgba(88, 28, 135, 0.2); /* purple-900/20 */
+}
+
+.dark .bg-indigo-50 {
+  background-color: rgba(49, 46, 129, 0.2); /* indigo-900/20 */
+}
+
+/* Colored text for status indicators */
+.dark .text-red-600 {
+  color: #f87171; /* red-400 */
+}
+
+.dark .text-red-500 {
+  color: #ef4444; /* red-500 */
+}
+
+.dark .text-green-600 {
+  color: #4ade80; /* green-400 */
+}
+
+.dark .text-green-500 {
+  color: #1f883d; /* primary-500 */
+}
+
+.dark .text-blue-600 {
+  color: #60a5fa; /* blue-400 */
+}
+
+.dark .text-blue-500 {
+  color: #3b82f6; /* blue-500 */
+}
+
+.dark .text-yellow-600 {
+  color: #facc15; /* yellow-400 */
+}
+
+.dark .text-orange-600 {
+  color: #fb923c; /* orange-400 */
+}
+
+/* Border colors */
+.dark .border-gray-200 {
+  border-color: #374151; /* gray-700 */
+}
+
+.dark .border-gray-300 {
+  border-color: #374151; /* gray-700 */
+}
+
+.dark .border-gray-400 {
+  border-color: #4b5563; /* gray-600 */
+}
+
+.dark .border-iron {
+  border-color: #4b5563; /* gray-600 */
+}
+
+.dark .border-blue-200 {
+  border-color: rgba(29, 78, 216, 0.5); /* blue-900/50 */
+}
+
+.dark .border-red-200 {
+  border-color: rgba(127, 29, 29, 0.5); /* red-900/50 */
+}
+
+.dark .border-green-200 {
+  border-color: rgba(20, 83, 45, 0.5); /* green-900/50 */
+}
+
+.dark .border-yellow-200 {
+  border-color: rgba(113, 63, 18, 0.5); /* yellow-900/50 */
+}
+
+.dark .border-red-300 {
+  border-color: rgba(127, 29, 29, 0.7); /* red-900/70 */
+}
+
+.dark .border-green-300 {
+  border-color: rgba(20, 83, 45, 0.7); /* green-900/70 */
+}
+
+/* Stat card styles */
+.stat-card {
+  @apply bg-yellow-50 rounded-lg p-4 text-center;
+}
+
+.dark .stat-card {
+  background-color: rgba(217, 119, 6, 0.2); /* yellow-900/20 */
+}
+
+.stat-card-value {
+  @apply text-2xl font-bold text-yellow-600;
+}
+
+.dark .stat-card-value {
+  @apply text-yellow-400;
+}
+
+.stat-card-label {
+  @apply text-sm text-gray-600;
+}
+
+.dark .stat-card-label {
+  @apply text-gray-400;
+}
+
+/* Reduce Ant Design Card padding */
+.ant-card-body {
+  padding: 16px !important;
+}
+
+/* Dark mode for Ant Design Table */
+.dark .ant-table {
+  background: transparent;
+  color: #e5e7eb; /* gray-200 */
+}
+
+.dark .ant-table-thead > tr > th {
+  background-color: #1f2937 !important; /* gray-800 */
+  color: #e5e7eb !important; /* gray-200 */
+  border-bottom-color: #374151 !important; /* gray-700 */
+}
+
+.dark .ant-table-tbody > tr > td {
+  background-color: #111827; /* gray-900 - opaque background needed for fixed columns */
+  border-bottom-color: #374151; /* gray-700 */
+}
+
+.dark .ant-table-tbody > tr:hover > td {
+  background-color: #1f2937 !important; /* gray-800 */
+}
+
+/* Fixed columns need opaque backgrounds to prevent content bleeding through */
+.dark .ant-table-cell-fix-left,
+.dark .ant-table-cell-fix-right {
+  background-color: #111827 !important; /* gray-900 */
+}
+
+.dark .ant-table-thead .ant-table-cell-fix-left,
+.dark .ant-table-thead .ant-table-cell-fix-right {
+  background-color: #1f2937 !important; /* gray-800 - match header */
+}
+
+.dark .ant-table-tbody > tr:hover .ant-table-cell-fix-left,
+.dark .ant-table-tbody > tr:hover .ant-table-cell-fix-right {
+  background-color: #1f2937 !important; /* gray-800 - match hover */
+}
+
+.dark .ant-table-pagination .ant-pagination-item {
+  background-color: #1f2937; /* gray-800 */
+  border-color: #374151; /* gray-700 */
+}
+
+.dark .ant-table-pagination .ant-pagination-item a {
+  color: #e5e7eb; /* gray-200 */
+}
+
+.dark .ant-table-pagination .ant-pagination-item-active {
+  border-color: #1f883d; /* primary-500 */
+}
+
+.dark .ant-table-pagination .ant-pagination-prev button,
+.dark .ant-table-pagination .ant-pagination-next button {
+  color: #9ca3af; /* gray-400 */
+}
+
+.dark .ant-table-pagination .ant-pagination-disabled button {
+  color: #4b5563; /* gray-600 */
+}
+
+/* ============================================
+   Toast Notifications - Apple Theme Colors
+   ============================================ */
+
+/* Success Toast - Apple Green 🍏 */
+.Toastify__toast--success {
+  background-color: #1f883d !important; /* PRIMARY_500 */
+}
+
+.Toastify__toast--success .Toastify__progress-bar {
+  background-color: #e6f4ea !important; /* PRIMARY_50 */
+}
+
+/* Error Toast - Apple Red 🍎 */
+.Toastify__toast--error {
+  background-color: #ef4444 !important; /* SECONDARY_500 */
+}
+
+.Toastify__toast--error .Toastify__progress-bar {
+  background-color: #fee2e2 !important; /* SECONDARY_100 */
+}
+
+/* Info Toast - keep blue but ensure visibility */
+.Toastify__toast--info {
+  background-color: #3b82f6 !important; /* blue-500 */
+}
+
+/* Warning Toast - orange */
+.Toastify__toast--warning {
+  background-color: #f59e0b !important; /* amber-500 */
+}
+
+/* Loading/Default Toast - blue (same as info) */
+.Toastify__toast--default {
+  background-color: #3b82f6 !important; /* blue-500 */
+}
+
+/* Ensure toast text is always readable */
+.Toastify__toast--success,
+.Toastify__toast--error,
+.Toastify__toast--info,
+.Toastify__toast--warning,
+.Toastify__toast--default {
+  color: #ffffff !important;
+}
+
+.Toastify__toast--success .Toastify__close-button,
+.Toastify__toast--error .Toastify__close-button,
+.Toastify__toast--info .Toastify__close-button,
+.Toastify__toast--warning .Toastify__close-button,
+.Toastify__toast--default .Toastify__close-button {
+  color: #ffffff !important;
+  opacity: 0.8;
+}
+
+.Toastify__toast--success .Toastify__close-button:hover,
+.Toastify__toast--error .Toastify__close-button:hover,
+.Toastify__toast--info .Toastify__close-button:hover,
+.Toastify__toast--warning .Toastify__close-button:hover,
+.Toastify__toast--default .Toastify__close-button:hover {
+  opacity: 1;
+}
+
+/* Fix for Ant Design tabs layout */
+.ant-tabs-nav-list {
+  display: flex !important;
+  flex-direction: row !important;
+}
+
+.ant-tabs-tab {
+  display: inline-flex !important;
+  white-space: nowrap !important;
+  font-size: 14px !important;
+}
+
+/* Ensure tab labels are inline */
+.ant-tabs-tab-btn {
+  display: inline-flex !important;
+  align-items: center !important;
+}
+
+

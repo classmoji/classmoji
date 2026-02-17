@@ -1,0 +1,1006 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================================================
+// ENUMS
+// ============================================================================
+
+enum GitProvider {
+  GITHUB
+  GITLAB
+  BITBUCKET
+  GITEA
+}
+
+enum Role {
+  OWNER
+  TEACHER
+  STUDENT
+  ASSISTANT
+}
+
+enum Term {
+  FALL
+  SPRING
+  SUMMER
+  WINTER
+}
+
+enum AssignmentType {
+  INDIVIDUAL
+  GROUP
+}
+
+enum TeamFormationMode {
+  INSTRUCTOR
+  SELF_FORMED
+}
+
+enum IssueStatus {
+  OPEN
+  CLOSED
+}
+
+enum QuizStatus {
+  DRAFT
+  PUBLISHED
+  CLOSED
+}
+
+enum QuizGradingStrategy {
+  HIGHEST
+  MOST_RECENT
+  FIRST
+}
+
+enum SubscriptionTier {
+  FREE
+  PRO
+  ENTERPRISE
+}
+
+enum TokenTransactionType {
+  GAIN
+  PURCHASE
+  REFUND
+  REMOVAL
+}
+
+enum RegradeRequestStatus {
+  IN_REVIEW
+  APPROVED
+  DENIED
+}
+
+enum AuditLogAction {
+  CREATE
+  UPDATE
+  DELETE
+  ACCESS_DENIED
+  VIEW
+}
+
+enum AIConversationType {
+  QUIZ
+  SYLLABUS_BOT
+  PROMPT_ASSISTANT
+}
+
+enum AIConversationStatus {
+  ACTIVE
+  COMPLETED
+  ABANDONED
+}
+
+enum MessageRole {
+  USER
+  ASSISTANT
+  SYSTEM
+}
+
+enum EventType {
+  OFFICE_HOURS
+  LECTURE
+  LAB
+  ASSESSMENT
+}
+
+// ============================================================================
+// BETTERAUTH TABLES
+// ============================================================================
+
+model Account {
+  id                       String    @id @default(uuid())
+  user_id                  String
+  account_id               String // Provider's user ID (e.g., GitHub user ID)
+  provider_id              String // e.g., "github", "gitlab"
+  access_token             String? // OAuth access token for API calls
+  refresh_token            String?
+  access_token_expires_at  DateTime?
+  refresh_token_expires_at DateTime?
+  scope                    String?
+  id_token                 String?
+  password                 String?
+  created_at               DateTime  @default(now())
+  updated_at               DateTime  @default(now()) @updatedAt
+
+  user User @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@unique([provider_id, account_id])
+  @@index([user_id])
+  @@map("accounts")
+}
+
+model Session {
+  id             String   @id @default(uuid())
+  user_id        String
+  token          String   @unique
+  expires_at     DateTime
+  ip_address     String?
+  user_agent     String?
+  impersonatedBy String?  @map("impersonated_by")
+  created_at     DateTime @default(now())
+  updated_at     DateTime @default(now()) @updatedAt
+
+  user                 User  @relation("SessionUser", fields: [user_id], references: [id], onDelete: Cascade)
+  impersonated_by_user User? @relation("ImpersonatedBy", fields: [impersonatedBy], references: [id])
+
+  @@index([user_id])
+  @@map("sessions")
+}
+
+model Verification {
+  id         String   @id @default(uuid())
+  identifier String
+  value      String
+  expires_at DateTime
+  created_at DateTime @default(now())
+  updated_at DateTime @default(now()) @updatedAt
+
+  @@index([identifier])
+  @@map("verifications")
+}
+
+// ============================================================================
+// USER & SUBSCRIPTION
+// ============================================================================
+
+model User {
+  id             String       @id @default(uuid())
+  provider       GitProvider?
+  provider_id    String? // User's ID from the OAuth provider (GitHub user ID, GitLab ID, etc.)
+  provider_email String? // User's email from the OAuth provider
+  login          String?      @unique
+  email          String?      @unique
+  emailVerified  Boolean      @default(false) // BetterAuth required
+  name           String?
+  image          String? // BetterAuth required (avatar URL)
+  student_id     String? // School student ID
+  is_admin       Boolean      @default(false)
+
+  // better-auth fields
+  role           String?
+  banned         Boolean   @default(false)
+  ban_reason     String?
+  ban_expires_at DateTime?
+
+  stripe_customer_id String?  @unique
+  created_at         DateTime @default(now())
+  updated_at         DateTime @default(now()) @updatedAt
+
+  // Relations
+  accounts                      Account[]
+  sessions                      Session[]                    @relation("SessionUser")
+  impersonated_sessions         Session[]                    @relation("ImpersonatedBy")
+  subscriptions                 Subscription[]
+  classroom_memberships         ClassroomMembership[]
+  repositories                  Repository[]                 @relation("StudentRepositories")
+  graded_repository_assignments RepositoryAssignmentGrader[]
+  grades_given                  AssignmentGrade[]
+  quiz_attempts                 QuizAttempt[]
+  regrade_requests              RegradeRequest[]
+  token_transactions            TokenTransaction[]
+  audit_logs                    AuditLog[]
+  team_memberships              TeamMembership[]
+  pages_created                 Page[]
+  slides_created                Slide[]
+  calendar_events               CalendarEvent[]
+  ai_conversations              AIConversation[]
+  resource_views                ResourceView[]
+
+  @@unique([provider, provider_id])
+  @@index([provider, login])
+  @@map("users")
+}
+
+model Subscription {
+  id                     String           @id @default(uuid())
+  user_id                String
+  tier                   SubscriptionTier @default(FREE)
+  stripe_subscription_id String?          @unique
+  started_at             DateTime         @default(now())
+  ends_at                DateTime?
+  cancelled_at           DateTime?
+  cancellation_reason    String?
+  created_at             DateTime         @default(now())
+  updated_at             DateTime         @default(now()) @updatedAt
+
+  user User @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@index([user_id])
+  @@map("subscriptions")
+}
+
+// ============================================================================
+// GIT ORGANIZATION & CLASSROOM
+// ============================================================================
+
+model GitOrganization {
+  id                     String      @id @default(uuid())
+  provider               GitProvider
+  provider_id            String // GitHub org ID, GitLab group ID
+  login                  String // org login/slug
+  base_url               String? // For self-hosted (null for github.com)
+  github_installation_id String? // GitHub App installation ID
+  access_token           String? // GitLab/Gitea/Bitbucket token (encrypted)
+  created_at             DateTime    @default(now())
+  updated_at             DateTime    @default(now()) @updatedAt
+
+  classrooms Classroom[]
+
+  @@unique([provider, provider_id])
+  @@index([provider, login])
+  @@map("git_organizations")
+}
+
+model Classroom {
+  id         String   @id @default(uuid())
+  slug       String   @unique // URL slug: "cs101-fall-2025"
+  git_org_id String
+  name       String
+  term       Term?
+  year       Int?
+  is_active  Boolean  @default(true)
+  created_at DateTime @default(now())
+  updated_at DateTime @default(now()) @updatedAt
+
+  git_organization      GitOrganization       @relation(fields: [git_org_id], references: [id], onDelete: Cascade)
+  settings              ClassroomSettings?
+  memberships           ClassroomMembership[]
+  modules               Module[]
+  repositories          Repository[]
+  teams                 Team[]
+  tags                  Tag[]
+  quizzes               Quiz[]
+  pages                 Page[]
+  slides                Slide[]
+  emoji_mappings        EmojiMapping[]
+  letter_grade_mappings LetterGradeMapping[]
+  token_transactions    TokenTransaction[]
+  regrade_requests      RegradeRequest[]
+  audit_logs            AuditLog[]
+  calendar_events       CalendarEvent[]
+  ai_conversations      AIConversation[]
+  classroom_invites     ClassroomInvite[]
+  resource_views        ResourceView[]
+
+  @@index([git_org_id])
+  @@map("classrooms")
+}
+
+model ClassroomSettings {
+  classroom_id                 String   @id
+  default_tokens_per_hour      Int      @default(0)
+  late_penalty_points_per_hour Float    @default(0)
+  show_grades_to_students      Boolean  @default(false)
+  quizzes_enabled              Boolean  @default(true)
+  slides_enabled               Boolean  @default(false)
+  syllabus_bot_enabled         Boolean  @default(false)
+  recent_viewers_enabled       Boolean  @default(true)
+  syllabus_bot_model           String?
+  llm_provider                 String?
+  llm_model                    String?
+  llm_temperature              Float?
+  llm_max_tokens               Int?
+  openai_api_key               String?
+  anthropic_api_key            String?
+  code_aware_model             String?
+  content_repo_name            String?
+  default_student_page         String   @default("dashboard")
+  created_at                   DateTime @default(now())
+  updated_at                   DateTime @default(now()) @updatedAt
+
+  classroom Classroom @relation(fields: [classroom_id], references: [id], onDelete: Cascade)
+
+  @@map("classroom_settings")
+}
+
+model ClassroomMembership {
+  id                  String   @id @default(uuid())
+  classroom_id        String
+  user_id             String
+  role                Role     @default(STUDENT)
+  is_grader           Boolean  @default(false)
+  has_accepted_invite Boolean  @default(false)
+  comment             String?
+  letter_grade        String?
+  created_at          DateTime @default(now())
+  updated_at          DateTime @default(now()) @updatedAt
+
+  classroom Classroom @relation(fields: [classroom_id], references: [id], onDelete: Cascade)
+  user      User      @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@unique([classroom_id, user_id])
+  @@index([user_id])
+  @@map("classroom_memberships")
+}
+
+// ============================================================================
+// MODULE & ASSIGNMENT (formerly Assignment & Issue)
+// ============================================================================
+
+model Module {
+  id                      String             @id @default(uuid())
+  classroom_id            String
+  title                   String
+  slug                    String? // Set once on creation from title, never updated
+  template                String // Template repo name
+  description             String?
+  is_published            Boolean            @default(false)
+  weight                  Int                @default(100)
+  type                    AssignmentType
+  tag_id                  String?
+  is_extra_credit         Boolean            @default(false)
+  drop_lowest_count       Int                @default(0)
+  team_formation_mode     TeamFormationMode? @default(INSTRUCTOR)
+  team_formation_deadline DateTime?
+  max_team_size           Int?
+  project_template_id     String? // GitHub Projects V2 node_id for copying template
+  project_template_title  String? // Human-readable name for UI display
+  created_at              DateTime           @default(now())
+  updated_at              DateTime           @default(now()) @updatedAt
+
+  classroom    Classroom    @relation(fields: [classroom_id], references: [id], onDelete: Cascade)
+  tag          Tag?         @relation(fields: [tag_id], references: [id])
+  assignments  Assignment[]
+  repositories Repository[]
+  quizzes      Quiz[]
+  pages        PageLink[]
+  slides       SlideLink[]
+
+  @@unique([classroom_id, title])
+  @@index([classroom_id])
+  @@map("modules")
+}
+
+model Assignment {
+  id               String    @id @default(uuid())
+  module_id        String
+  title            String
+  slug             String? // Set once on creation from title, never updated
+  weight           Int       @default(100)
+  is_published     Boolean   @default(false)
+  description      String    @default("")
+  student_deadline DateTime?
+  grader_deadline  DateTime?
+  tokens_per_hour  Int       @default(0)
+  release_at       DateTime?
+  grades_released  Boolean   @default(false)
+  created_at       DateTime  @default(now())
+  updated_at       DateTime  @default(now()) @updatedAt
+
+  module                 Module                        @relation(fields: [module_id], references: [id], onDelete: Cascade)
+  repository_assignments RepositoryAssignment[]
+  pages                  PageLink[]
+  slides                 SlideLink[]
+  calendarEventLinks     CalendarEventAssignmentLink[]
+
+  @@unique([module_id, title])
+  @@index([module_id])
+  @@map("assignments")
+}
+
+// ============================================================================
+// REPOSITORY & REPOSITORY ASSIGNMENT (formerly RepositoryIssue)
+// ============================================================================
+
+model Repository {
+  id            String      @id @default(uuid())
+  provider      GitProvider
+  provider_id   String // GitHub repo ID
+  name          String
+  classroom_id  String
+  module_id     String
+  student_id     String?
+  team_id        String?
+  contributions  String?
+  project_id     String? // GitHub Projects V2 node_id of created project
+  project_number Int?    // Project number for URL building
+  created_at     DateTime    @default(now())
+  updated_at    DateTime    @default(now()) @updatedAt
+
+  classroom   Classroom              @relation(fields: [classroom_id], references: [id], onDelete: Cascade)
+  module      Module                 @relation(fields: [module_id], references: [id], onDelete: Cascade)
+  student     User?                  @relation("StudentRepositories", fields: [student_id], references: [id], onDelete: Cascade)
+  team        Team?                  @relation(fields: [team_id], references: [id], onDelete: Cascade)
+  assignments RepositoryAssignment[]
+
+  @@unique([provider, provider_id])
+  @@index([classroom_id])
+  @@index([module_id])
+  @@index([student_id])
+  @@map("repositories")
+}
+
+model RepositoryAssignment {
+  id                    String      @id @default(uuid())
+  provider              GitProvider
+  provider_id           String // GitHub issue ID
+  provider_issue_number Int // Issue #number
+  repository_id         String
+  assignment_id         String
+  status                IssueStatus @default(OPEN)
+  closed_at             DateTime?
+  is_late_override      Boolean     @default(false)
+  created_at            DateTime    @default(now())
+  updated_at            DateTime    @default(now()) @updatedAt
+
+  repository         Repository                   @relation(fields: [repository_id], references: [id], onDelete: Cascade)
+  assignment         Assignment                   @relation(fields: [assignment_id], references: [id], onDelete: Cascade)
+  grades             AssignmentGrade[]
+  graders            RepositoryAssignmentGrader[]
+  regrade_requests   RegradeRequest[]
+  token_transactions TokenTransaction[]
+
+  @@unique([provider, provider_id])
+  @@index([repository_id])
+  @@index([assignment_id])
+  @@map("repository_assignments")
+}
+
+// ============================================================================
+// GRADING
+// ============================================================================
+
+model RepositoryAssignmentGrader {
+  id                       String   @id @default(uuid())
+  repository_assignment_id String
+  grader_id                String
+  created_at               DateTime @default(now())
+  updated_at               DateTime @default(now()) @updatedAt
+
+  repository_assignment RepositoryAssignment @relation(fields: [repository_assignment_id], references: [id], onDelete: Cascade)
+  grader                User                 @relation(fields: [grader_id], references: [id], onDelete: Cascade)
+
+  @@unique([repository_assignment_id, grader_id])
+  @@map("repository_assignment_graders")
+}
+
+model AssignmentGrade {
+  id                       String   @id @default(uuid())
+  repository_assignment_id String
+  grader_id                String?
+  emoji                    String
+  token_transaction_id     String?  @unique
+  created_at               DateTime @default(now())
+  updated_at               DateTime @default(now()) @updatedAt
+
+  repository_assignment RepositoryAssignment @relation(fields: [repository_assignment_id], references: [id], onDelete: Cascade)
+  grader                User?                @relation(fields: [grader_id], references: [id])
+  token_transaction     TokenTransaction?    @relation(fields: [token_transaction_id], references: [id], onDelete: SetNull)
+
+  @@map("assignment_grades")
+}
+
+model RegradeRequest {
+  id                       String               @id @default(uuid())
+  repository_assignment_id String
+  classroom_id             String
+  student_id               String
+  student_comment          String?
+  grader_comment           String?
+  previous_grade           String[]
+  status                   RegradeRequestStatus @default(IN_REVIEW)
+  created_at               DateTime             @default(now())
+  updated_at               DateTime             @default(now()) @updatedAt
+
+  repository_assignment RepositoryAssignment @relation(fields: [repository_assignment_id], references: [id], onDelete: Cascade)
+  classroom             Classroom            @relation(fields: [classroom_id], references: [id], onDelete: Cascade)
+  student               User                 @relation(fields: [student_id], references: [id], onDelete: Cascade)
+
+  @@index([classroom_id])
+  @@index([student_id])
+  @@map("regrade_requests")
+}
+
+model EmojiMapping {
+  id           String   @id @default(uuid())
+  classroom_id String
+  emoji        String
+  grade        Float
+  extra_tokens Int      @default(0)
+  description  String   @default("")
+  created_at   DateTime @default(now())
+  updated_at   DateTime @default(now()) @updatedAt
+
+  classroom Classroom @relation(fields: [classroom_id], references: [id], onDelete: Cascade)
+
+  @@unique([classroom_id, emoji])
+  @@map("emoji_mappings")
+}
+
+model LetterGradeMapping {
+  id           String   @id @default(uuid())
+  classroom_id String
+  letter_grade String
+  min_grade    Float
+  created_at   DateTime @default(now())
+  updated_at   DateTime @default(now()) @updatedAt
+
+  classroom Classroom @relation(fields: [classroom_id], references: [id], onDelete: Cascade)
+
+  @@unique([classroom_id, letter_grade])
+  @@map("letter_grade_mappings")
+}
+
+// ============================================================================
+// TEAMS & TAGS
+// ============================================================================
+
+model Team {
+  id           String       @id @default(uuid())
+  provider     GitProvider?
+  provider_id  String? // GitHub team ID
+  classroom_id String
+  name         String
+  slug         String
+  is_visible   Boolean      @default(false)
+  created_at   DateTime     @default(now())
+  updated_at   DateTime     @default(now()) @updatedAt
+
+  classroom    Classroom        @relation(fields: [classroom_id], references: [id], onDelete: Cascade)
+  repositories Repository[]
+  memberships  TeamMembership[]
+  tags         TeamTag[]
+
+  @@unique([classroom_id, slug])
+  @@unique([provider, provider_id])
+  @@map("teams")
+}
+
+model TeamMembership {
+  id         String   @id @default(uuid())
+  team_id    String
+  user_id    String
+  created_at DateTime @default(now())
+  updated_at DateTime @default(now()) @updatedAt
+
+  team Team @relation(fields: [team_id], references: [id], onDelete: Cascade)
+  user User @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@unique([team_id, user_id])
+  @@map("team_memberships")
+}
+
+model Tag {
+  id           String   @id @default(uuid())
+  classroom_id String
+  name         String
+  created_at   DateTime @default(now())
+  updated_at   DateTime @default(now()) @updatedAt
+
+  classroom Classroom @relation(fields: [classroom_id], references: [id], onDelete: Cascade)
+  modules   Module[]
+  teams     TeamTag[]
+
+  @@unique([classroom_id, name])
+  @@map("tags")
+}
+
+model TeamTag {
+  id         String   @id @default(uuid())
+  tag_id     String
+  team_id    String
+  created_at DateTime @default(now())
+  updated_at DateTime @default(now()) @updatedAt
+
+  tag  Tag  @relation(fields: [tag_id], references: [id], onDelete: Cascade)
+  team Team @relation(fields: [team_id], references: [id], onDelete: Cascade)
+
+  @@unique([tag_id, team_id])
+  @@map("team_tags")
+}
+
+// ============================================================================
+// TOKENS & AUDIT
+// ============================================================================
+
+model TokenTransaction {
+  id                       String               @id @default(uuid())
+  classroom_id             String
+  student_id               String
+  repository_assignment_id String?
+  amount                   Int
+  type                     TokenTransactionType
+  hours_purchased          Int?
+  balance_after            Int
+  description              String               @default("")
+  is_cancelled             Boolean              @default(false)
+  created_at               DateTime             @default(now())
+  updated_at               DateTime             @default(now()) @updatedAt
+
+  classroom             Classroom             @relation(fields: [classroom_id], references: [id], onDelete: Cascade)
+  student               User                  @relation(fields: [student_id], references: [id], onDelete: Cascade)
+  repository_assignment RepositoryAssignment? @relation(fields: [repository_assignment_id], references: [id], onDelete: Cascade)
+  assignment_grade      AssignmentGrade?
+
+  @@index([classroom_id])
+  @@index([student_id])
+  @@map("token_transactions")
+}
+
+model AuditLog {
+  id            String         @id @default(uuid())
+  classroom_id  String
+  user_id       String
+  role          Role
+  action        AuditLogAction
+  resource_type String
+  resource_id   String?
+  data          Json?
+  timestamp     DateTime       @default(now())
+  updated_at    DateTime       @default(now()) @updatedAt
+
+  classroom Classroom @relation(fields: [classroom_id], references: [id], onDelete: Cascade)
+  user      User      @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@index([classroom_id])
+  @@index([user_id])
+  @@index([timestamp])
+  @@map("audit_logs")
+}
+
+// ============================================================================
+// QUIZ
+// ============================================================================
+
+model Quiz {
+  id                   String              @id @default(uuid())
+  classroom_id         String
+  module_id            String?
+  name                 String
+  system_prompt        String?
+  rubric_prompt        String
+  due_date             DateTime?
+  status               QuizStatus          @default(DRAFT)
+  weight               Int                 @default(0)
+  question_count       Int                 @default(5)
+  difficulty_level     String?
+  subject              String?
+  include_code_context Boolean             @default(false)
+  grading_strategy     QuizGradingStrategy @default(HIGHEST)
+  max_attempts         Int                 @default(1)
+  created_at           DateTime            @default(now())
+  updated_at           DateTime            @default(now()) @updatedAt
+
+  classroom Classroom     @relation(fields: [classroom_id], references: [id], onDelete: Cascade)
+  module    Module?       @relation(fields: [module_id], references: [id])
+  attempts  QuizAttempt[]
+
+  @@index([classroom_id])
+  @@index([module_id])
+  @@map("quizzes")
+}
+
+model QuizAttempt {
+  id                        String    @id @default(uuid())
+  quiz_id                   String
+  user_id                   String
+  conversation_id           String?   @unique
+  started_at                DateTime  @default(now())
+  completed_at              DateTime?
+  score                     Float?
+  feedback                  String?
+  attempt_number            Int       @default(1)
+  questions_asked           Int       @default(0)
+  session_token             String?   @unique
+  last_activity             DateTime  @default(now())
+  total_duration_ms         Int?
+  unfocused_duration_ms     Int?
+  modal_closed_at           DateTime?
+  question_results_json     Json?
+  partial_credit_percentage Float?
+  first_attempt_percentage  Float?
+  session_status            String?   @default("active")
+  codebase_path             String?
+  agent_config              Json?
+  created_at                DateTime  @default(now())
+  updated_at                DateTime  @default(now()) @updatedAt
+
+  quiz         Quiz            @relation(fields: [quiz_id], references: [id], onDelete: Cascade)
+  user         User            @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  conversation AIConversation? @relation(fields: [conversation_id], references: [id])
+
+  @@index([quiz_id])
+  @@index([user_id])
+  @@map("quiz_attempts")
+}
+
+// ============================================================================
+// CONTENT (Slides, Pages, Calendar)
+// ============================================================================
+
+model Slide {
+  id                 String   @id @default(uuid())
+  classroom_id       String
+  title              String
+  slug               String
+  term               String
+  content_path       String
+  multiplex_id       String?
+  multiplex_secret   String?
+  is_public          Boolean  @default(false)
+  is_draft           Boolean  @default(true)
+  allow_team_edit    Boolean  @default(false)
+  show_speaker_notes Boolean  @default(false)
+  created_by         String
+  created_at         DateTime @default(now())
+  updated_at         DateTime @default(now()) @updatedAt
+
+  classroom          Classroom                @relation(fields: [classroom_id], references: [id], onDelete: Cascade)
+  creator            User                     @relation(fields: [created_by], references: [id])
+  links              SlideLink[]
+  calendarEventLinks CalendarEventSlideLink[]
+
+  @@unique([classroom_id, slug])
+  @@index([classroom_id])
+  @@map("slides")
+}
+
+model Page {
+  id                    String   @id @default(uuid())
+  classroom_id          String
+  title                 String
+  slug                  String? // Set once on creation from title, never updated
+  content_path          String
+  created_by            String
+  width                 Int      @default(2)
+  show_in_student_menu  Boolean  @default(false)
+  is_draft              Boolean  @default(true)
+  is_public             Boolean  @default(false)
+  menu_order            Int?
+  header_image_url      String?
+  header_image_position Int      @default(50)
+  created_at            DateTime @default(now())
+  updated_at            DateTime @updatedAt
+
+  classroom          Classroom               @relation(fields: [classroom_id], references: [id], onDelete: Cascade)
+  creator            User                    @relation(fields: [created_by], references: [id])
+  links              PageLink[]
+  calendarEventLinks CalendarEventPageLink[]
+
+  @@unique([classroom_id, title])
+  @@index([classroom_id])
+  @@map("pages")
+}
+
+model PageLink {
+  id            String   @id @default(uuid())
+  page_id       String
+  module_id     String?
+  assignment_id String?
+  order         Int      @default(0)
+  created_at    DateTime @default(now())
+
+  page       Page        @relation(fields: [page_id], references: [id], onDelete: Cascade)
+  module     Module?     @relation(fields: [module_id], references: [id], onDelete: Cascade)
+  assignment Assignment? @relation(fields: [assignment_id], references: [id], onDelete: Cascade)
+
+  @@unique([page_id, module_id, assignment_id])
+  @@index([module_id])
+  @@index([assignment_id])
+  @@map("page_links")
+}
+
+model SlideLink {
+  id            String   @id @default(uuid())
+  slide_id      String
+  module_id     String?
+  assignment_id String?
+  order         Int      @default(0)
+  created_at    DateTime @default(now())
+
+  slide      Slide       @relation(fields: [slide_id], references: [id], onDelete: Cascade)
+  module     Module?     @relation(fields: [module_id], references: [id], onDelete: Cascade)
+  assignment Assignment? @relation(fields: [assignment_id], references: [id], onDelete: Cascade)
+
+  @@unique([slide_id, module_id, assignment_id])
+  @@index([module_id])
+  @@index([assignment_id])
+  @@map("slide_links")
+}
+
+model CalendarEvent {
+  id              String    @id @default(uuid())
+  classroom_id    String
+  title           String
+  description     String?
+  event_type      EventType @default(LECTURE)
+  start_time      DateTime
+  end_time        DateTime
+  location        String?
+  meeting_link    String?
+  is_recurring    Boolean   @default(false)
+  recurrence_rule Json?
+  created_by      String
+  created_at      DateTime  @default(now())
+  updated_at      DateTime  @default(now()) @updatedAt
+
+  classroom       Classroom                     @relation(fields: [classroom_id], references: [id], onDelete: Cascade)
+  creator         User                          @relation(fields: [created_by], references: [id])
+  overrides       CalendarEventOverride[]
+  pageLinks       CalendarEventPageLink[]
+  slideLinks      CalendarEventSlideLink[]
+  assignmentLinks CalendarEventAssignmentLink[]
+
+  @@index([classroom_id])
+  @@index([start_time])
+  @@map("calendar_events")
+}
+
+model CalendarEventOverride {
+  id               String    @id @default(uuid())
+  event_id         String
+  date             DateTime
+  is_cancelled     Boolean   @default(false)
+  new_start_time   DateTime?
+  new_end_time     DateTime?
+  new_location     String?
+  new_meeting_link String?
+  created_at       DateTime  @default(now())
+  updated_at       DateTime  @default(now()) @updatedAt
+
+  event CalendarEvent @relation(fields: [event_id], references: [id], onDelete: Cascade)
+
+  @@unique([event_id, date])
+  @@map("calendar_event_overrides")
+}
+
+model CalendarEventPageLink {
+  id              String    @id @default(uuid())
+  event_id        String
+  page_id         String
+  occurrence_date DateTime? @db.Date // Date-only to avoid timezone issues
+  order           Int       @default(0)
+  created_at      DateTime  @default(now())
+
+  event CalendarEvent @relation(fields: [event_id], references: [id], onDelete: Cascade)
+  page  Page          @relation(fields: [page_id], references: [id], onDelete: Cascade)
+
+  // Standard unique constraint for non-NULL dates
+  @@unique([event_id, page_id, occurrence_date])
+  @@index([event_id])
+  @@index([event_id, occurrence_date])
+  @@map("calendar_event_page_links")
+}
+
+model CalendarEventSlideLink {
+  id              String    @id @default(uuid())
+  event_id        String
+  slide_id        String
+  occurrence_date DateTime? @db.Date
+  order           Int       @default(0)
+  created_at      DateTime  @default(now())
+
+  event CalendarEvent @relation(fields: [event_id], references: [id], onDelete: Cascade)
+  slide Slide         @relation(fields: [slide_id], references: [id], onDelete: Cascade)
+
+  @@unique([event_id, slide_id, occurrence_date])
+  @@index([event_id])
+  @@index([event_id, occurrence_date])
+  @@map("calendar_event_slide_links")
+}
+
+model CalendarEventAssignmentLink {
+  id              String    @id @default(uuid())
+  event_id        String
+  assignment_id   String
+  occurrence_date DateTime? @db.Date
+  order           Int       @default(0)
+  created_at      DateTime  @default(now())
+
+  event      CalendarEvent @relation(fields: [event_id], references: [id], onDelete: Cascade)
+  assignment Assignment    @relation(fields: [assignment_id], references: [id], onDelete: Cascade)
+
+  @@unique([event_id, assignment_id, occurrence_date])
+  @@index([event_id])
+  @@index([event_id, occurrence_date])
+  @@map("calendar_event_assignment_links")
+}
+
+// ============================================================================
+// AI CONVERSATIONS
+// ============================================================================
+
+model AIConversation {
+  id            String               @id @default(uuid())
+  type          AIConversationType
+  classroom_id  String
+  user_id       String
+  context       Json?
+  started_at    DateTime             @default(now())
+  ended_at      DateTime?
+  last_activity DateTime             @default(now())
+  status        AIConversationStatus @default(ACTIVE)
+
+  classroom    Classroom               @relation(fields: [classroom_id], references: [id], onDelete: Cascade)
+  user         User                    @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  messages     AIConversationMessage[]
+  quiz_attempt QuizAttempt?
+
+  @@index([classroom_id])
+  @@index([user_id])
+  @@index([type])
+  @@map("ai_conversations")
+}
+
+model AIConversationMessage {
+  id              String      @id @default(uuid())
+  conversation_id String
+  role            MessageRole
+  content         String
+  metadata        Json?
+  created_at      DateTime    @default(now())
+
+  conversation AIConversation @relation(fields: [conversation_id], references: [id], onDelete: Cascade)
+
+  @@index([conversation_id])
+  @@map("ai_conversation_messages")
+}
+
+// ============================================================================
+// CLASSROOM INVITES
+// ============================================================================
+
+model ClassroomInvite {
+  id           String   @id @default(uuid())
+  school_email String
+  student_name String
+  student_id   String
+  classroom_id String
+  created_at   DateTime @default(now())
+
+  classroom Classroom @relation(fields: [classroom_id], references: [id], onDelete: Cascade)
+
+  @@unique([school_email, classroom_id])
+  @@index([school_email, student_id])
+  @@index([classroom_id])
+  @@map("classroom_invites")
+}
+
+// ============================================================================
+// RESOURCE VIEWS (Presence Tracking)
+// ============================================================================
+
+model ResourceView {
+  id             String   @id @default(uuid())
+  resource_path  String   // Normalized path like "pages/abc123" or "dashboard"
+  user_id        String
+  classroom_id   String
+  viewed_as_role Role?    // The role/view used when accessing (OWNER viewing as student, etc.)
+  last_viewed_at DateTime @default(now()) @updatedAt
+
+  user      User      @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  classroom Classroom @relation(fields: [classroom_id], references: [id], onDelete: Cascade)
+
+  @@unique([resource_path, user_id, classroom_id])
+  @@index([classroom_id, resource_path])
+  @@index([last_viewed_at])
+  @@map("resource_views")
+}

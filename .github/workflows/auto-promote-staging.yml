@@ -1,0 +1,125 @@
+name: Auto-promote Staging to Main
+
+on:
+  pull_request:
+    types: [closed]
+    branches:
+      - staging
+
+jobs:
+  create-main-pr:
+    if: github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write
+      pull-requests: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
+
+      - name: Configure Git
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Check if staging is ahead of main
+        id: check-changes
+        run: |
+          git fetch origin main staging
+          COMMITS_AHEAD=$(git rev-list --count origin/main..origin/staging)
+          echo "commits_ahead=$COMMITS_AHEAD" >> $GITHUB_OUTPUT
+          echo "Staging is $COMMITS_AHEAD commits ahead of main"
+
+      - name: Check for existing PR
+        id: check-pr
+        run: |
+          EXISTING_PR=$(gh pr list --head staging --base main --state open --json number --jq '.[0].number // empty')
+          echo "existing_pr=$EXISTING_PR" >> $GITHUB_OUTPUT
+          if [ -n "$EXISTING_PR" ]; then
+            echo "Existing PR #$EXISTING_PR found"
+          else
+            echo "No existing PR found"
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
+
+      - name: Create PR from staging to main
+        if: steps.check-changes.outputs.commits_ahead > 0 && steps.check-pr.outputs.existing_pr == ''
+        run: |
+          # Get the latest merged PR info for context
+          MERGED_PR_TITLE="${{ github.event.pull_request.title }}"
+          MERGED_PR_NUMBER="${{ github.event.pull_request.number }}"
+          MERGED_PR_AUTHOR="${{ github.event.pull_request.user.login }}"
+
+          # Create PR with detailed body (without labels to avoid errors)
+          gh pr create \
+            --title "🚀 Promote staging to main" \
+            --body "## Summary
+
+          This PR promotes the latest changes from \`staging\` to \`main\`.
+
+          **Triggered by:** Merge of PR #$MERGED_PR_NUMBER by @$MERGED_PR_AUTHOR
+          **Latest change:** $MERGED_PR_TITLE
+
+          ## Changes
+
+          This includes all changes currently in staging that are not yet in main.
+
+          ## Checklist
+
+          - [ ] Review the changes below
+          - [ ] Ensure all tests pass
+          - [ ] Confirm staging is stable
+          - [ ] Ready for production deployment
+
+          ---
+
+          🤖 This PR was automatically created by GitHub Actions when PR #$MERGED_PR_NUMBER was merged into staging." \
+            --base main \
+            --head staging
+
+          echo "✅ Created PR from staging to main"
+        env:
+          GH_TOKEN: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
+
+      - name: Add labels to PR (if they exist)
+        if: steps.check-changes.outputs.commits_ahead > 0 && steps.check-pr.outputs.existing_pr == ''
+        run: |
+          # Get the PR number that was just created
+          PR_NUMBER=$(gh pr list --head staging --base main --state open --json number --jq '.[0].number')
+
+          # Try to add labels, but don't fail if they don't exist
+          gh pr edit $PR_NUMBER --add-label "staging-to-main" || echo "⚠️ Could not add staging-to-main label (label may not exist)"
+          gh pr edit $PR_NUMBER --add-label "auto-generated" || echo "⚠️ Could not add auto-generated label (label may not exist)"
+
+          echo "✅ Attempted to add labels to PR #$PR_NUMBER"
+        env:
+          GH_TOKEN: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
+
+      - name: Update existing PR
+        if: steps.check-changes.outputs.commits_ahead > 0 && steps.check-pr.outputs.existing_pr != ''
+        run: |
+          MERGED_PR_TITLE="${{ github.event.pull_request.title }}"
+          MERGED_PR_NUMBER="${{ github.event.pull_request.number }}"
+          MERGED_PR_AUTHOR="${{ github.event.pull_request.user.login }}"
+
+          gh pr comment ${{ steps.check-pr.outputs.existing_pr }} --body "🔄 **New changes available**
+
+          PR #$MERGED_PR_NUMBER by @$MERGED_PR_AUTHOR was just merged into staging:
+          **$MERGED_PR_TITLE**
+
+          This PR now includes these latest changes."
+
+          echo "✅ Updated existing PR with new changes"
+        env:
+          GH_TOKEN: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
+
+      - name: No changes to promote
+        if: steps.check-changes.outputs.commits_ahead == 0
+        run: |
+          echo "ℹ️ No new changes to promote - staging and main are in sync"

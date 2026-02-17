@@ -1,0 +1,27 @@
+# fly.toml app configuration file generated for classmoji-webapp on 2026-01-07T14:41:15-05:00
+#
+# See https://fly.io/docs/reference/configuration/ for information about how to use this file.
+#
+
+app = 'classmoji-webapp'
+primary_region = 'iad'
+
+[build]
+
+[deploy]
+  release_command = "sh -c 'cd packages/database && npx prisma migrate deploy'"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = false
+  auto_start_machines = true
+  min_machines_running = 1
+
+[env]
+  HOST = "0.0.0.0"
+  PORT = "8080"
+
+[[vm]]
+  memory = '1gb'
+  cpus = 1

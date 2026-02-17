@@ -1,0 +1,23 @@
+{
+  "name": "@classmoji/ui-components",
+  "version": "0.0.1",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.js",
+    "./sandpack": "./src/Sandpack/index.js"
+  },
+  "scripts": {
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "format": "prettier --write \"**/*.{js,jsx,ts,tsx,json,md}\"",
+    "format:check": "prettier --check \"**/*.{js,jsx,ts,tsx,json,md}\""
+  },
+  "peerDependencies": {
+    "react": "^18.0.0 || ^19.0.0",
+    "react-dom": "^18.0.0 || ^19.0.0"
+  },
+  "dependencies": {
+    "@codesandbox/sandpack-react": "^2.20.0",
+    "@codesandbox/sandpack-themes": "^2.0.21"
+  }
+}

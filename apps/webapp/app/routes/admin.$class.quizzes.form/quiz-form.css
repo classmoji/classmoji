@@ -1,0 +1,31 @@
+/* AI Assistant Panel - Side by side layout */
+.assistant-panel {
+  flex: 1;
+  min-width: 320px;
+  height: 100%;
+  background: var(--panel-bg);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding: 24px;
+}
+
+/* Responsive adjustments */
+@media (max-width: 1024px) {
+  .assistant-panel {
+    width: 360px;
+    min-width: 320px;
+  }
+}
+
+@media (max-width: 768px) {
+  .assistant-panel {
+    position: absolute;
+    top: 0;
+    right: 0;
+    width: 100%;
+    min-width: 100%;
+    border-radius: 0;
+    z-index: 10;
+  }
+}

@@ -1,0 +1,51 @@
+---
+interface Props {
+  emoji: string;
+  background?: string;
+  size?: 'sm' | 'md' | 'lg';
+}
+
+const { emoji, background = 'emerald', size = 'md' } = Astro.props;
+
+const bgColors: Record<string, { bg: string; pattern: string }> = {
+  emerald: { bg: 'bg-emerald-100', pattern: 'rgba(16, 185, 129, 0.15)' },
+  blue: { bg: 'bg-blue-100', pattern: 'rgba(59, 130, 246, 0.15)' },
+  purple: { bg: 'bg-purple-100', pattern: 'rgba(168, 85, 247, 0.15)' },
+  amber: { bg: 'bg-amber-100', pattern: 'rgba(245, 158, 11, 0.15)' },
+  rose: { bg: 'bg-rose-100', pattern: 'rgba(244, 63, 94, 0.15)' },
+  slate: { bg: 'bg-slate-100', pattern: 'rgba(100, 116, 139, 0.15)' },
+};
+
+const defaultColors = { bg: 'bg-gray-100', pattern: 'rgba(156, 163, 175, 0.15)' };
+
+const sizeClasses = {
+  sm: 'w-18 h-18 text-3xl rounded-lg',
+  md: 'w-24 h-24 text-5xl rounded-xl',
+  lg: 'w-full h-48 text-8xl rounded-2xl',
+};
+
+const colors = bgColors[background] || defaultColors;
+const patternColor = colors.pattern;
+---
+
+<div class:list={['flex items-center justify-center shrink-0 relative overflow-hidden transition-transform duration-200 group-hover:scale-105', sizeClasses[size], colors.bg]}>
+  <div class="circuit-pattern absolute inset-0" style={`--pattern-color: ${patternColor}`}></div>
+  <span class="relative z-10">{emoji}</span>
+</div>
+
+<style>
+  .circuit-pattern {
+    background-image:
+      /* Horizontal lines */
+      linear-gradient(90deg, var(--pattern-color) 1px, transparent 1px),
+      /* Vertical lines */
+      linear-gradient(0deg, var(--pattern-color) 1px, transparent 1px),
+      /* Nodes/dots at intersections */
+      radial-gradient(circle at 0 0, var(--pattern-color) 3px, transparent 3px),
+      radial-gradient(circle at 20px 20px, var(--pattern-color) 2px, transparent 2px),
+      radial-gradient(circle at 40px 0, var(--pattern-color) 3px, transparent 3px),
+      radial-gradient(circle at 0 40px, var(--pattern-color) 3px, transparent 3px);
+    background-size: 40px 40px;
+    background-position: 0 0;
+  }
+</style>

@@ -1,0 +1,3 @@
+[submodule "apps/ai-agent"]
+	path = apps/ai-agent
+	url = git@github.com:classmoji/ai-agent.git

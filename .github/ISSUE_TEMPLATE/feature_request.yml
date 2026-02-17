@@ -1,0 +1,35 @@
+name: ✨ Feature Request
+description: Suggest a new feature or improvement
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Have an idea for a new feature? We'd love to hear it!
+
+  - type: textarea
+    id: feature
+    attributes:
+      label: What feature would you like?
+      description: A clear description of the feature
+      placeholder: "Example: Add ability to export quiz results as PDF"
+    validations:
+      required: true
+
+  - type: textarea
+    id: why
+    attributes:
+      label: Why is this useful?
+      description: How would this help you or other users?
+      placeholder: "Example: Teachers need to print quiz results for offline grading"
+    validations:
+      required: true
+
+  - type: textarea
+    id: additional
+    attributes:
+      label: Additional context
+      description: Screenshots, mockups, or examples from other apps
+      placeholder: "Example: Here's how Canvas does it..."
+    validations:
+      required: false

@@ -1,0 +1,19 @@
+.turbo
+node_modules
+.env
+.DS_Store
+.react-router
+.claude
+.mcp.json
+.cursor
+.codebases
+.devport
+.dev-context
+.vscode
+test-results
+playwright-report
+apps/slides/build/
+
+# Cloned student repositories
+packages/tasks/repos/
+apps/pages/build

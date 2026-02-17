@@ -1,0 +1,1108 @@
+/* Import Tailwind CSS */
+@import 'tailwindcss';
+
+/* Import Reveal.js base styles */
+@import 'reveal.js/dist/reveal.css';
+
+/* Theme is loaded dynamically based on data-theme-light/data-theme-dark attributes */
+/* See RevealSlides.jsx for dynamic theme loading logic */
+
+/* Import highlight.js theme for code syntax highlighting */
+@import 'highlight.js/styles/github-dark.css';
+
+/* Slides navbar */
+.slides-navbar {
+  @apply fixed top-0 left-0 right-0 z-50;
+  @apply flex items-center justify-between;
+  @apply px-4 py-2;
+  @apply bg-white/80 dark:bg-gray-900/80 backdrop-blur-sm;
+  @apply border-b border-gray-200 dark:border-gray-800;
+}
+
+/* Navbar in editing mode: 3-column grid to center toolbar */
+.slides-navbar-editing {
+  @apply grid;
+  /* Left column: shrinks to fit content (min 120px)
+     Center: gets remaining space (1fr) for toolbar to expand
+     Right: shrinks to fit content (min 180px) */
+  grid-template-columns: minmax(120px, max-content) 1fr minmax(180px, max-content);
+  @apply gap-2;
+}
+
+/* Toolbar container - scrollable when viewport is narrow */
+.slides-navbar-editing > div:nth-child(2) {
+  @apply overflow-x-auto;
+  max-width: calc(100vw - 350px); /* Leave room for left/right sections */
+  scrollbar-width: thin;
+}
+
+.slides-navbar-editing > div:nth-child(2)::-webkit-scrollbar {
+  height: 4px;
+}
+
+.slides-navbar-editing > div:nth-child(2)::-webkit-scrollbar-thumb {
+  @apply bg-gray-300 dark:bg-gray-600 rounded;
+}
+
+/* Save button in navbar - needs high specificity to override theme CSS
+   Theme stylesheets (e.g., slides.com imports) set `button { background: transparent }`
+   which would otherwise override Tailwind utilities */
+.slides-navbar .save-button {
+  background-color: #16a34a; /* green-600 */
+  color: white;
+}
+
+.slides-navbar .save-button:hover:not(:disabled) {
+  background-color: #15803d; /* green-700 */
+}
+
+.slides-navbar .save-button:disabled {
+  opacity: 0.5;
+}
+
+/* Reveal container - positioned below navbar */
+.reveal-container {
+  @apply fixed inset-0 pt-14;
+  /* Let Reveal.js theme set the background via .reveal-viewport */
+}
+
+/* Override Reveal.js backgrounds for container */
+.reveal-container .reveal {
+  height: 100%;
+}
+
+/* Loading and error states */
+.reveal-loading,
+.reveal-error {
+  @apply flex flex-col items-center justify-center h-full;
+}
+
+/* =============================================================================
+   CURSOR MANAGEMENT
+   Reveal.js hides cursor after inactivity via inline styles (style.cursor='none').
+   These rules ensure proper cursor behavior in both edit and view modes.
+   ============================================================================= */
+
+/* View mode: Reset cursor on the reveal container to prevent inline cursor:none
+   from Reveal.js's hideInactiveCursor feature. Uses !important to override inline styles.
+   In view mode (not presenter mode), users may want to interact with slides,
+   so cursor hiding doesn't make sense. */
+.reveal-container .reveal {
+  cursor: auto !important;
+}
+
+/* View mode: Allow Reveal.js controls to have pointer cursor */
+.reveal-container .reveal .controls,
+.reveal-container .reveal .progress {
+  cursor: pointer !important;
+}
+
+/* Editing mode styles */
+/* Make text elements editable - override Reveal.js cursor hiding */
+.reveal section[contenteditable='true'],
+.reveal section[contenteditable='true'] * {
+  cursor: text !important;
+}
+
+/* Remove browser's default focus outline on contenteditable sections */
+.reveal section[contenteditable='true'] {
+  outline: none !important;
+}
+
+/* When any section is contenteditable, keep cursor visible on the whole reveal container */
+.reveal:has(section[contenteditable='true']) {
+  cursor: auto !important;
+}
+
+.reveal:has(section[contenteditable='true']) .controls,
+.reveal:has(section[contenteditable='true']) .progress {
+  cursor: pointer !important;
+}
+
+/* Reveal.js themes handle their own backgrounds via --r-background-color.
+   Site dark/light mode for navbar/panels follows system preference. */
+
+/* Properties sidebar layout */
+.properties-sidebar {
+  @apply fixed top-14 right-0 bottom-0 z-40;
+  @apply w-64;
+}
+
+/* Adjust reveal container when sidebar is visible */
+.reveal-container-with-sidebar {
+  @apply pr-64;
+}
+
+/* Hover highlight for selectable elements in edit mode */
+/* Shows a subtle dotted border to indicate elements can be selected */
+/* Uses --r-main-color from Reveal.js theme to automatically contrast with any background */
+.reveal section[contenteditable='true'] h1:hover,
+.reveal section[contenteditable='true'] h2:hover,
+.reveal section[contenteditable='true'] h3:hover,
+.reveal section[contenteditable='true'] h4:hover,
+.reveal section[contenteditable='true'] h5:hover,
+.reveal section[contenteditable='true'] h6:hover,
+.reveal section[contenteditable='true'] p:hover,
+.reveal section[contenteditable='true'] li:hover,
+.reveal section[contenteditable='true'] pre:hover,
+.reveal section[contenteditable='true'] img:hover,
+.reveal section[contenteditable='true'] .iframe-wrapper:hover {
+  outline: 2px dotted color-mix(in srgb, var(--r-main-color, #666) 50%, transparent);
+  outline-offset: 2px;
+}
+
+/* Make images have pointer cursor when hovering in edit mode */
+.reveal section[contenteditable='true'] img {
+  cursor: pointer !important;
+}
+
+/* Slide Overview Thumbnails */
+.reveal-thumbnail {
+  /* Inherit basic Reveal.js typography */
+  font-family: system-ui, -apple-system, sans-serif;
+  color: #222;
+  background: white;
+  height: 100%;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+}
+
+.reveal-thumbnail h1,
+.reveal-thumbnail h2,
+.reveal-thumbnail h3 {
+  margin: 0 0 0.5em 0;
+  font-weight: 600;
+  line-height: 1.2;
+}
+
+.reveal-thumbnail h1 { font-size: 2em; }
+.reveal-thumbnail h2 { font-size: 1.5em; }
+.reveal-thumbnail h3 { font-size: 1.25em; }
+
+.reveal-thumbnail p {
+  margin: 0.5em 0;
+  font-size: 0.9em;
+  line-height: 1.4;
+}
+
+.reveal-thumbnail ul,
+.reveal-thumbnail ol {
+  margin: 0.5em 0;
+  padding-left: 1.5em;
+  text-align: left;
+}
+
+.reveal-thumbnail li {
+  margin: 0.25em 0;
+  font-size: 0.85em;
+}
+
+.reveal-thumbnail pre {
+  background: #1e1e1e;
+  color: #d4d4d4;
+  border-radius: 4px;
+  padding: 0.5em;
+  font-size: 0.7em;
+  text-align: left;
+  overflow: hidden;
+}
+
+.reveal-thumbnail code {
+  font-family: 'Fira Code', 'Monaco', 'Consolas', monospace;
+  font-size: 0.9em;
+}
+
+.reveal-thumbnail img {
+  max-width: 100%;
+  max-height: 200px;
+  object-fit: contain;
+}
+
+/* Dark mode thumbnail support */
+@media (prefers-color-scheme: dark) {
+  .reveal-thumbnail {
+    color: #eee;
+    background: #2a2a2a;
+  }
+}
+
+/* =============================================================================
+   SLIDE LAYOUT SYSTEM
+   These classes apply CSS Grid layouts to slide sections.
+   Use <div> tags within slides to create column content.
+   ============================================================================= */
+
+/* 2 Columns - Equal width */
+.reveal section.slide-layout-2col {
+  display: grid !important;
+  grid-template-columns: 1fr 1fr;
+  gap: 2em;
+  align-items: start;
+  text-align: left;
+}
+
+/* 2 Columns - Left column wider (2:1 ratio) */
+.reveal section.slide-layout-2col-left {
+  display: grid !important;
+  grid-template-columns: 2fr 1fr;
+  gap: 2em;
+  align-items: start;
+  text-align: left;
+}
+
+/* 2 Columns - Right column wider (1:2 ratio) */
+.reveal section.slide-layout-2col-right {
+  display: grid !important;
+  grid-template-columns: 1fr 2fr;
+  gap: 2em;
+  align-items: start;
+  text-align: left;
+}
+
+/* 3 Columns - Equal width */
+.reveal section.slide-layout-3col {
+  display: grid !important;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 1.5em;
+  align-items: start;
+  text-align: left;
+}
+
+/* Edit mode: Use fixed height based on Reveal.js default slide dimensions (960x700)
+   The slide content area is roughly 700px minus padding from themes (~40px each side)
+   Using 580px gives comfortable space with the column padding */
+.reveal section[contenteditable='true'][class*='slide-layout-'] {
+  min-height: 580px;
+  align-items: stretch;
+}
+
+/* Layout columns - direct children become grid items */
+.reveal section[class*='slide-layout-'] > div {
+  min-width: 0; /* Prevent overflow */
+}
+
+/* Center images within layout columns */
+.reveal section[class*='slide-layout-'] img {
+  max-width: 100%;
+  height: auto;
+}
+
+/* =============================================================================
+   COLUMN EDITING STYLES
+   Visual feedback for columns in edit mode
+   ============================================================================= */
+
+/* Columns in edit mode - show borders, fill full height via grid stretch */
+/* Uses --r-main-color from Reveal.js theme to automatically contrast with any background */
+.reveal section[contenteditable='true'][class*='slide-layout-'] > div {
+  border: 2px dashed color-mix(in srgb, var(--r-main-color, #666) 30%, transparent);
+  border-radius: 8px;
+  padding: 1em;
+  transition: border-color 0.2s, background-color 0.2s;
+  /* Content starts at top of column */
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+}
+
+/* Hover state for columns */
+.reveal section[contenteditable='true'][class*='slide-layout-'] > div:hover {
+  border-color: rgba(59, 130, 246, 0.5);
+  background-color: rgba(59, 130, 246, 0.05);
+}
+
+/* Selected/active column - marked with data attribute */
+.reveal section[contenteditable='true'][class*='slide-layout-'] > div[data-column-active='true'] {
+  border-color: rgba(59, 130, 246, 0.8);
+  border-style: solid;
+  background-color: rgba(59, 130, 246, 0.08);
+}
+
+/* Column label indicator (shows "Column 1", "Column 2" etc in edit mode) */
+.reveal section[contenteditable='true'][class*='slide-layout-'] > div::before {
+  content: attr(data-column-label);
+  display: block;
+  font-size: 0.65em;
+  font-weight: 600;
+  color: color-mix(in srgb, var(--r-main-color, #666) 50%, transparent);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 0.5em;
+  pointer-events: none;
+}
+
+/* Active column label is more visible */
+.reveal section[contenteditable='true'][class*='slide-layout-'] > div[data-column-active='true']::before {
+  color: rgba(59, 130, 246, 0.8);
+}
+
+/* Hide column styling in presentation mode (non-edit) */
+.reveal section:not([contenteditable='true'])[class*='slide-layout-'] > div {
+  border: none;
+  padding: 0;
+  min-height: auto;
+}
+
+.reveal section:not([contenteditable='true'])[class*='slide-layout-'] > div::before {
+  display: none;
+}
+
+/* =============================================================================
+   TOOLBAR OVERFLOW MENU
+   Styles for the responsive toolbar hamburger menu popover
+   Ant Design Popover renders in a portal, so we style via overlayClassName
+   ============================================================================= */
+
+/* Popover container - remove default Ant Design background/padding */
+.slides-toolbar-popover .ant-popover-inner {
+  padding: 0;
+  background: transparent;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+/* Dark mode for popover (class-based - when .dark is on html/body) */
+.dark .slides-toolbar-popover .ant-popover-inner {
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+}
+
+/* Dark mode for popover (system preference fallback) */
+@media (prefers-color-scheme: dark) {
+  .slides-toolbar-popover .ant-popover-inner {
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+  }
+}
+
+/* =============================================================================
+   IMAGE RESIZE HANDLES
+   Resize handles appear when an image is selected in edit mode
+   ============================================================================= */
+
+/* Hide the default hover outline on images when resize handles are active */
+.reveal section[contenteditable='true'] img[data-resize-active] {
+  outline: none !important;
+}
+
+/* Resize handle hover state - scale up slightly */
+.image-resize-handle:hover {
+  transform: scale(1.2);
+  background-color: #3b82f6 !important;
+}
+
+/* Active/dragging state for handles */
+.image-resize-handle:active {
+  transform: scale(1.1);
+  background-color: #2563eb !important;
+}
+
+/* Transition for smooth handle interactions */
+.image-resize-handle {
+  transition: transform 0.1s ease, background-color 0.1s ease;
+}
+
+/* During resize, disable pointer events on the image to prevent selection issues */
+.image-resize-overlay.resizing ~ .reveal section img {
+  pointer-events: none !important;
+}
+
+/* Size indicator animation */
+.image-resize-size-indicator {
+  animation: fadeIn 0.15s ease;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateX(-50%) translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+  }
+}
+
+/* =============================================================================
+   IFRAME EMBED STYLES
+   Placeholder styling for empty iframes in edit mode
+   ============================================================================= */
+
+/* Iframe wrapper - provides clickable area and placeholder when iframe is empty */
+.reveal section[contenteditable='true'] .iframe-wrapper {
+  position: relative;
+  min-height: 200px;
+  background: linear-gradient(135deg, #f5f5f5 25%, #e8e8e8 25%, #e8e8e8 50%, #f5f5f5 50%, #f5f5f5 75%, #e8e8e8 75%);
+  background-size: 20px 20px;
+  border: 2px dashed rgba(100, 100, 100, 0.4);
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Dark mode iframe wrapper */
+@media (prefers-color-scheme: dark) {
+  .reveal section[contenteditable='true'] .iframe-wrapper {
+    background: linear-gradient(135deg, #2a2a2a 25%, #333 25%, #333 50%, #2a2a2a 50%, #2a2a2a 75%, #333 75%);
+    background-size: 20px 20px;
+    border-color: rgba(150, 150, 150, 0.4);
+  }
+}
+
+/* Class-based dark mode */
+.dark .reveal section[contenteditable='true'] .iframe-wrapper {
+  background: linear-gradient(135deg, #2a2a2a 25%, #333 25%, #333 50%, #2a2a2a 50%, #2a2a2a 75%, #333 75%);
+  background-size: 20px 20px;
+  border-color: rgba(150, 150, 150, 0.4);
+}
+
+/* Placeholder text for empty iframes */
+.reveal section[contenteditable='true'] .iframe-wrapper[data-iframe-placeholder]::before {
+  content: '🎬 Click to configure embed URL';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  font-size: 0.9em;
+  color: rgba(100, 100, 100, 0.7);
+  pointer-events: none;
+  z-index: 1;
+  text-align: center;
+  padding: 1em;
+}
+
+/* Dark mode placeholder text */
+@media (prefers-color-scheme: dark) {
+  .reveal section[contenteditable='true'] .iframe-wrapper[data-iframe-placeholder]::before {
+    color: rgba(180, 180, 180, 0.7);
+  }
+}
+
+.dark .reveal section[contenteditable='true'] .iframe-wrapper[data-iframe-placeholder]::before {
+  color: rgba(180, 180, 180, 0.7);
+}
+
+/* When iframe has a real URL, hide placeholder background but keep subtle border for selection */
+.reveal section[contenteditable='true'] .iframe-wrapper:not([data-iframe-placeholder]) {
+  background: transparent;
+  border: 1px solid rgba(100, 100, 100, 0.2);
+  min-height: auto;
+}
+
+/* Iframe inside wrapper */
+.reveal section[contenteditable='true'] .iframe-wrapper iframe {
+  position: relative;
+  z-index: 2;
+  /* Always disable pointer events in edit mode so clicks go to wrapper for selection */
+  pointer-events: none;
+}
+
+/* Hover state for iframe wrapper */
+.reveal section[contenteditable='true'] .iframe-wrapper:hover {
+  border-color: rgba(59, 130, 246, 0.6);
+  cursor: pointer !important;
+}
+
+/* Hide wrapper styling in presentation mode */
+.reveal section:not([contenteditable='true']) .iframe-wrapper {
+  background: transparent;
+  border: none;
+  min-height: auto;
+}
+
+.reveal section:not([contenteditable='true']) .iframe-wrapper::before {
+  display: none;
+}
+
+/* =============================================================================
+   SL-BLOCK SYSTEM
+   Absolutely positioned block elements for slides.com-compatible slide design.
+   Blocks can be placed anywhere, overlapped, and precisely positioned.
+   ============================================================================= */
+
+/* Section must be the positioning context for sl-blocks */
+.reveal section {
+  position: relative;
+}
+
+/* SL-Block base styles - absolute positioning within slide */
+.sl-block {
+  position: absolute;
+  box-sizing: border-box;
+  /* Prevent content changes elsewhere from affecting block position */
+  contain: layout;
+}
+
+.sl-block-content {
+  width: 100%;
+  height: 100%;
+  /* Isolate block content from external layout changes */
+  overflow: visible;
+}
+
+/* Override Tailwind's responsive image constraint for sl-block images.
+   slides.com uses images larger than their containers with negative positioning
+   to implement crop/pan. Without this override, Tailwind's preflight rule
+   (max-width: 100%) constrains images to container size, breaking the
+   crop positioning and making images invisible when offset. */
+.reveal .sl-block[data-block-type="image"] .sl-block-content img {
+  max-width: none;
+}
+
+/* Edit mode styles - .editing-mode class is on .reveal container */
+/* Uses --r-main-color from Reveal.js theme to automatically contrast with any background */
+.reveal.editing-mode .sl-block {
+  outline: 1px dashed color-mix(in srgb, var(--r-main-color, #666) 30%, transparent);
+  cursor: move;
+}
+
+.reveal.editing-mode .sl-block:hover {
+  outline-color: rgba(59, 130, 246, 0.5);
+}
+
+/* Selected block - ready for move/resize */
+.reveal.editing-mode .sl-block.selected {
+  outline: 2px solid rgba(59, 130, 246, 0.8);
+  user-select: none; /* Prevent text selection while dragging */
+}
+
+/* Block in text-editing mode (double-clicked) */
+.reveal.editing-mode .sl-block.editing {
+  outline: 2px solid rgba(34, 197, 94, 0.8); /* Green to indicate edit mode */
+  cursor: text;
+}
+
+.reveal.editing-mode .sl-block.editing .sl-block-content {
+  cursor: text;
+}
+
+/* Hide outlines in presentation mode (when not editing) */
+.reveal:not(.editing-mode) .sl-block {
+  outline: none;
+  cursor: default;
+}
+
+/* Iframe blocks in edit mode - disable pointer events so clicks select the block */
+.reveal.editing-mode .sl-block[data-block-type="iframe"] iframe {
+  pointer-events: none;
+}
+
+/* When the iframe block is in editing mode (double-clicked), re-enable pointer events */
+.reveal.editing-mode .sl-block[data-block-type="iframe"].editing iframe {
+  pointer-events: auto;
+}
+
+/* Block selection overlay styles */
+.block-resize-overlay {
+  position: fixed;
+  pointer-events: none;
+  z-index: 1000;
+}
+
+.block-resize-border {
+  position: absolute;
+  inset: 0;
+  border: 2px solid #3b82f6;
+  border-radius: 2px;
+  pointer-events: none;
+}
+
+/* Block resize handles */
+.block-resize-handle {
+  position: absolute;
+  width: 10px;
+  height: 10px;
+  background-color: #ffffff;
+  border: 2px solid #3b82f6;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+  pointer-events: auto;
+  transition: transform 0.1s ease, background-color 0.1s ease;
+}
+
+.block-resize-handle:hover {
+  transform: scale(1.2);
+  background-color: #3b82f6 !important;
+}
+
+.block-resize-handle:active {
+  transform: scale(1.1);
+  background-color: #2563eb !important;
+}
+
+/* Move handle (center of block) */
+.block-move-area {
+  position: absolute;
+  inset: 10px;
+  cursor: move;
+  pointer-events: auto;
+}
+
+/* Size indicator during drag/resize */
+.block-size-indicator {
+  position: absolute;
+  bottom: -24px;
+  left: 50%;
+  transform: translateX(-50%);
+  background-color: rgba(0,0,0,0.75);
+  color: white;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-family: monospace;
+  white-space: nowrap;
+  pointer-events: none;
+  animation: fadeIn 0.15s ease;
+}
+
+/* Position indicator during move */
+.block-position-indicator {
+  position: absolute;
+  top: -24px;
+  left: 50%;
+  transform: translateX(-50%);
+  background-color: rgba(0,0,0,0.75);
+  color: white;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-family: monospace;
+  white-space: nowrap;
+  pointer-events: none;
+  animation: fadeIn 0.15s ease;
+}
+
+/* Code editing indicator for Sandpack blocks */
+.block-editing-indicator {
+  position: absolute;
+  top: -28px;
+  left: 50%;
+  transform: translateX(-50%);
+  background-color: #10b981;
+  color: white;
+  padding: 4px 12px;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+  pointer-events: none;
+  animation: fadeIn 0.15s ease;
+  box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+}
+
+/* Green border when in code editing mode */
+.block-resize-overlay.editing-code-mode .block-resize-border {
+  border-color: #10b981 !important;
+  border-width: 2px;
+}
+
+/* =============================================================================
+   EDITOR GRID OVERLAY
+   Visual grid and boundary indicators for the 960×700 slide coordinate space.
+   Grid is applied to .reveal .slides container which IS the coordinate space.
+   ============================================================================= */
+
+/* Grid overlay - applied to the slides container when in edit mode */
+/* The .slides container has the actual 960×700 dimensions (width/height set by Reveal) */
+/* Uses --r-main-color from Reveal.js theme to automatically contrast with any background */
+
+.reveal.editing-mode .slides {
+  background-image:
+    radial-gradient(circle, color-mix(in srgb, var(--r-main-color, #222) 35%, transparent) 1px, transparent 1px);
+  background-size: 40px 40px;
+  background-position: 0 0;
+}
+
+/* Boundary indicator - shows the 960×700 safe area */
+.reveal.editing-mode .slides::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  border: 1px dashed color-mix(in srgb, var(--r-main-color, #222) 40%, transparent);
+  border-radius: 2px;
+  pointer-events: none;
+  z-index: 0;
+}
+
+/* Hide grid in presentation mode (non-editing) */
+.reveal:not(.editing-mode) .slides {
+  background-image: none !important;
+}
+
+.reveal:not(.editing-mode) .slides::before {
+  display: none;
+}
+
+/* =============================================================================
+   SPEAKER NOTES PANEL
+   Collapsible panel below the slide preview for editing speaker notes.
+   Notes are stored as <aside class="notes"> inside each <section>.
+   ============================================================================= */
+
+/* Hide notes content in the slide preview (edit mode) */
+.reveal section aside.notes {
+  display: none !important;
+}
+
+/* Layout container for notes panel - make it a flex column */
+.reveal-editor-layout {
+  @apply flex flex-col h-full;
+}
+
+.reveal-editor-layout .reveal-slide-area {
+  @apply flex-1 min-h-0 relative;
+  /* Use Reveal.js theme background to block parent's dark mode background */
+  background-color: var(--r-background-color, #fff);
+}
+
+/* Notes panel container */
+.slide-notes-panel {
+  @apply border-t border-gray-300 dark:border-gray-700;
+  @apply bg-gray-100 dark:bg-gray-800;
+  @apply transition-all duration-200;
+}
+
+/* Collapsed state - just show the header bar */
+.slide-notes-panel.collapsed {
+  /* Height determined by header only */
+}
+
+/* Notes panel header - always visible */
+.slide-notes-panel-header {
+  @apply flex items-center justify-between;
+  @apply px-4 py-2;
+  @apply cursor-pointer select-none;
+  @apply hover:bg-gray-200 dark:hover:bg-gray-700;
+  @apply transition-colors;
+}
+
+.slide-notes-panel-header h3 {
+  @apply text-sm font-medium text-gray-700 dark:text-gray-300;
+  @apply flex items-center gap-2;
+}
+
+.slide-notes-panel-header .toggle-icon {
+  @apply w-4 h-4 text-gray-500 dark:text-gray-400;
+  @apply transition-transform duration-200;
+}
+
+.slide-notes-panel-header .toggle-icon.expanded {
+  @apply rotate-180;
+}
+
+/* Notes panel content (textarea area) */
+.slide-notes-panel-content {
+  @apply px-4 pb-4;
+}
+
+.slide-notes-panel-content textarea {
+  @apply w-full h-32 p-3;
+  @apply text-sm text-gray-800 dark:text-gray-200;
+  @apply bg-white dark:bg-gray-900;
+  @apply border border-gray-300 dark:border-gray-600;
+  @apply rounded-md;
+  @apply resize-y;
+  @apply focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent;
+  @apply placeholder-gray-400 dark:placeholder-gray-500;
+}
+
+.slide-notes-panel-content .hint {
+  @apply text-xs text-gray-400 dark:text-gray-500 mt-2;
+}
+
+/* Notes mode toggle (Edit/Preview) */
+.slide-notes-panel-content .notes-mode-toggle {
+  @apply flex gap-1 mb-2;
+}
+
+.slide-notes-panel-content .notes-mode-toggle .toggle-btn {
+  @apply px-3 py-1 text-xs font-medium rounded;
+  @apply bg-transparent text-gray-500 dark:text-gray-400;
+  @apply hover:bg-gray-200 dark:hover:bg-gray-700;
+  @apply transition-colors;
+  @apply border-0 cursor-pointer;
+}
+
+.slide-notes-panel-content .notes-mode-toggle .toggle-btn.active {
+  @apply bg-blue-100 dark:bg-blue-900/40 text-blue-600 dark:text-blue-400;
+}
+
+/* Notes preview (rendered markdown) */
+.slide-notes-panel-content .notes-preview {
+  @apply w-full min-h-[8rem] p-3;
+  @apply text-sm text-gray-800 dark:text-gray-200;
+  @apply bg-white dark:bg-gray-900;
+  @apply border border-gray-300 dark:border-gray-600;
+  @apply rounded-md;
+  @apply cursor-text;
+  @apply overflow-auto;
+}
+
+.slide-notes-panel-content .notes-preview .placeholder {
+  @apply text-gray-400 dark:text-gray-500 italic m-0;
+}
+
+/* Read-only mode (view mode) - no edit cursor */
+.slide-notes-panel-content .notes-preview.read-only {
+  @apply cursor-default;
+}
+
+/* Markdown styling within notes preview */
+.slide-notes-panel-content .notes-preview p {
+  @apply my-2 first:mt-0 last:mb-0;
+}
+
+.slide-notes-panel-content .notes-preview ul {
+  @apply my-2 pl-5 list-disc;
+}
+
+.slide-notes-panel-content .notes-preview ol {
+  @apply my-2 pl-5 list-decimal;
+}
+
+.slide-notes-panel-content .notes-preview li {
+  @apply my-1;
+  list-style-position: outside;
+}
+
+.slide-notes-panel-content .notes-preview strong {
+  @apply font-semibold;
+}
+
+.slide-notes-panel-content .notes-preview em {
+  @apply italic;
+}
+
+.slide-notes-panel-content .notes-preview code {
+  @apply px-1 py-0.5 rounded text-xs;
+  @apply bg-gray-100 dark:bg-gray-800;
+  @apply font-mono;
+}
+
+.slide-notes-panel-content .notes-preview pre {
+  @apply my-2 p-2 rounded text-xs overflow-auto;
+  @apply bg-gray-100 dark:bg-gray-800;
+}
+
+.slide-notes-panel-content .notes-preview pre code {
+  @apply p-0 bg-transparent;
+}
+
+.slide-notes-panel-content .notes-preview blockquote {
+  @apply my-2 pl-3 border-l-2 border-gray-300 dark:border-gray-600;
+  @apply text-gray-600 dark:text-gray-400 italic;
+}
+
+.slide-notes-panel-content .notes-preview h1,
+.slide-notes-panel-content .notes-preview h2,
+.slide-notes-panel-content .notes-preview h3 {
+  @apply font-semibold mt-3 mb-1 first:mt-0;
+}
+
+.slide-notes-panel-content .notes-preview h1 {
+  @apply text-base;
+}
+
+.slide-notes-panel-content .notes-preview h2 {
+  @apply text-sm;
+}
+
+.slide-notes-panel-content .notes-preview h3 {
+  @apply text-sm;
+}
+
+/* =============================================================================
+   SLIDE PROPERTIES PANEL - COLLAPSIBLE SECTIONS
+   Styles for the properties panel collapse component using Ant Design Collapse.
+   ============================================================================= */
+
+.slide-properties {
+  @apply p-2;
+}
+
+/* Ant Design Collapse customization for slide properties */
+.slide-properties-collapse {
+  @apply !bg-transparent !border-0;
+}
+
+/* Panel container - card-like appearance */
+.slide-properties-collapse .ant-collapse-item {
+  @apply !mb-2 !rounded-lg !overflow-hidden;
+  @apply !bg-white dark:!bg-gray-800;
+  @apply !border !border-gray-200 dark:!border-gray-700;
+}
+
+/* Panel headers */
+.slide-properties-collapse .ant-collapse-header {
+  @apply !text-sm !font-semibold !text-gray-700 dark:!text-gray-200;
+  @apply !py-2.5 !px-3;
+  @apply !bg-gray-50 dark:!bg-gray-800;
+  @apply hover:!bg-gray-100 dark:hover:!bg-gray-700;
+  @apply !transition-colors;
+}
+
+/* Active/open panel header */
+.slide-properties-collapse .ant-collapse-item-active > .ant-collapse-header {
+  @apply !bg-gray-100 dark:!bg-gray-700;
+}
+
+/* Panel content */
+.slide-properties-collapse .ant-collapse-content {
+  @apply !border-t !border-gray-200 dark:!border-gray-700;
+}
+
+.slide-properties-collapse .ant-collapse-content-box {
+  @apply !px-3 !pt-3 !pb-3;
+  @apply !bg-white dark:!bg-gray-800;
+}
+
+/* Expand/collapse arrow */
+.slide-properties-collapse .ant-collapse-expand-icon {
+  @apply !text-gray-500 dark:!text-gray-400;
+}
+
+/* =============================================================================
+   HIDDEN SLIDES
+   Visual indicator for slides marked as hidden in edit mode.
+   Hidden slides are filtered out in presentation modes (present/speaker/follow).
+   Staff can still view/edit hidden slides but cannot present them until unmarked.
+   ============================================================================= */
+
+/* Hidden slide indicator in edit mode - dimmed appearance */
+/* Note: .editing-mode is on the section element, not the .reveal container */
+.reveal section.editing-mode.slide-hidden {
+  position: relative;
+  opacity: 0.5;
+}
+
+/* Hidden badge overlay - positioned top-right */
+.reveal section.editing-mode.slide-hidden::before {
+  content: 'HIDDEN';
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  z-index: 100;
+  padding: 4px 12px;
+  background-color: rgba(239, 68, 68, 0.9); /* red-500 */
+  color: white;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  border-radius: 4px;
+  pointer-events: none;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+}
+
+/* Striped overlay pattern for hidden slides - diagonal lines */
+.reveal section.editing-mode.slide-hidden::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: repeating-linear-gradient(
+    -45deg,
+    transparent,
+    transparent 10px,
+    rgba(239, 68, 68, 0.1) 10px,
+    rgba(239, 68, 68, 0.1) 20px
+  );
+  pointer-events: none;
+  z-index: 99;
+}
+
+/* Ensure hidden slides are still fully editable */
+.reveal section.editing-mode.slide-hidden[contenteditable='true'] {
+  cursor: text !important;
+}
+
+/* Override the ::before/::after for nested elements within hidden slides */
+.reveal section.editing-mode.slide-hidden * {
+  /* Children inherit the dimmed look but don't get their own badges */
+}
+
+/* Hide the visual indicators in presentation mode (they're filtered out anyway) */
+.reveal section.slide-hidden:not(.editing-mode)::before,
+.reveal section.slide-hidden:not(.editing-mode)::after {
+  display: none;
+}
+
+/* ==========================================================================
+   Code Block Background Fallbacks for Edit Mode
+   ============================================================================
+   In edit mode, we strip the .hljs class from code blocks to allow clean editing.
+   But the highlight.js theme CSS only applies backgrounds to .hljs elements.
+   These fallbacks provide backgrounds based on data-highlight-theme when there's
+   no .hljs class present.
+   ========================================================================== */
+
+/* Default fallback for any unknown theme - light gray (lowest priority) */
+.reveal .sl-block-content[data-highlight-theme] pre,
+.reveal .sl-block-content[data-highlight-theme] code:not(.hljs) {
+  background-color: #f5f5f5;
+}
+
+/* Solarized Light - cream/beige background */
+.reveal .sl-block-content[data-highlight-theme="solarized-light"] pre,
+.reveal .sl-block-content[data-highlight-theme="solarized-light"] code:not(.hljs) {
+  background-color: #fdf6e3;
+}
+
+/* GitHub - light background */
+.reveal .sl-block-content[data-highlight-theme="github"] pre,
+.reveal .sl-block-content[data-highlight-theme="github"] code:not(.hljs) {
+  background-color: #f8f8f8;
+}
+
+/* Monokai - dark background */
+.reveal .sl-block-content[data-highlight-theme="monokai"] pre,
+.reveal .sl-block-content[data-highlight-theme="monokai"] code:not(.hljs) {
+  background-color: #272822;
+  color: #f8f8f2;
+}
+
+/* Atom One Dark */
+.reveal .sl-block-content[data-highlight-theme="atom-one-dark"] pre,
+.reveal .sl-block-content[data-highlight-theme="atom-one-dark"] code:not(.hljs) {
+  background-color: #282c34;
+  color: #abb2bf;
+}
+
+/* Atom One Light */
+.reveal .sl-block-content[data-highlight-theme="atom-one-light"] pre,
+.reveal .sl-block-content[data-highlight-theme="atom-one-light"] code:not(.hljs) {
+  background-color: #fafafa;
+  color: #383a42;
+}
+
+/* Dracula */
+.reveal .sl-block-content[data-highlight-theme="dracula"] pre,
+.reveal .sl-block-content[data-highlight-theme="dracula"] code:not(.hljs) {
+  background-color: #282a36;
+  color: #f8f8f2;
+}
+
+/* VS / Visual Studio */
+.reveal .sl-block-content[data-highlight-theme="vs"] pre,
+.reveal .sl-block-content[data-highlight-theme="vs"] code:not(.hljs) {
+  background-color: #ffffff;
+  color: #000000;
+}
+
+/* VS Code Dark+ */
+.reveal .sl-block-content[data-highlight-theme="vs2015"] pre,
+.reveal .sl-block-content[data-highlight-theme="vs2015"] code:not(.hljs) {
+  background-color: #1e1e1e;
+  color: #dcdcdc;
+}
+
+/* XCode */
+.reveal .sl-block-content[data-highlight-theme="xcode"] pre,
+.reveal .sl-block-content[data-highlight-theme="xcode"] code:not(.hljs) {
+  background-color: #ffffff;
+  color: #000000;
+}

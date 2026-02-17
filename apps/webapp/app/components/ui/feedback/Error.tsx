@@ -1,0 +1,5 @@
+const Error = (props: JSX.IntrinsicElements['div']) => {
+  return <div className="text-sm text-red-600" {...props} style={{ color: 'red' }} />;
+};
+
+export default Error;

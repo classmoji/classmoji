@@ -1,0 +1,55 @@
+services:
+  postgres:
+    container_name: classmoji-postgres
+    image: postgres:16
+    # Increase max_connections for parallel devport testing (10 devports × ~20 connections each)
+    command: postgres -c max_connections=500
+    environment:
+      POSTGRES_USER: classmoji
+      POSTGRES_PASSWORD: classmoji
+      POSTGRES_DB: classmoji
+    ports:
+      - '5433:5432'
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - classmoji-network
+
+  ai-agent:
+    container_name: classmoji-ai-agent
+    build:
+      context: .
+      dockerfile: apps/ai-agent/Dockerfile
+    ports:
+      - '6000:6000'
+    environment:
+      - NODE_ENV=development
+      - HOST=0.0.0.0
+      - PORT=6000
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - LLM_PROVIDER=${LLM_PROVIDER:-openai}
+      - LLM_MODEL=${LLM_MODEL:-gpt-4o}
+      - DATABASE_URL=${DATABASE_URL}
+      - WEBAPP_URL=${WEBAPP_URL:-http://localhost:3000}
+    volumes:
+      - ai-agent-codebases:/app/.codebases
+    networks:
+      - classmoji-network
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 4G
+    depends_on:
+      - postgres
+
+volumes:
+  postgres_data:
+  ai-agent-codebases:
+    driver: local
+
+networks:
+  classmoji-network:
+    driver: bridge

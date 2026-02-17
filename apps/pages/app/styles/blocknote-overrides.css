@@ -1,0 +1,848 @@
+/* BlockNote theme customizations for Classmoji pages */
+
+/* Override default BlockNote font size */
+.bn-editor {
+  font-size: 16px;
+  font-weight: 500;
+}
+
+/* Side menu spacing - increase gap from content */
+.bn-side-menu {
+  margin-right: 12px !important;
+}
+
+/* Side menu vertical alignment - align with first line of content */
+.bn-side-menu {
+  align-self: flex-start !important;
+}
+
+/* Link styling - make links blue and distinguishable */
+.bn-editor a,
+.bn-editor [data-content-type="link"] {
+  color: #2563eb !important;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.bn-editor a:hover,
+.bn-editor [data-content-type="link"]:hover {
+  color: #1d4ed8 !important;
+}
+
+.dark .bn-editor a,
+.dark .bn-editor [data-content-type="link"] {
+  color: #60a5fa !important;
+}
+
+.dark .bn-editor a:hover,
+.dark .bn-editor [data-content-type="link"]:hover {
+  color: #93c5fd !important;
+}
+
+/* Inline code styling - Notion-style (inline only, not code blocks) */
+.bn-inline-content[data-code="true"],
+.bn-inline-content code {
+  background-color: #f1f1ef !important;
+  color: #eb5757 !important;
+  padding: 0.2em 0.4em;
+  border-radius: 3px;
+  font-size: 0.9em;
+  font-family: var(--font-mono) !important;
+}
+
+/* Dark mode inline code */
+.dark .bn-inline-content[data-code="true"],
+.dark .bn-inline-content code {
+  background-color: rgba(255, 255, 255, 0.1) !important;
+  color: #ff6b6b !important;
+}
+
+/* Heading sizes - Notion style (H1: 30px, H2: 24px, H3: 20px) */
+/* More specific selectors to override inline styles */
+.page-editor .bn-editor h1,
+.page-editor .bn-block-content h1 {
+  font-size: 30px !important;
+  font-weight: 700 !important;
+}
+
+.page-editor .bn-editor h2,
+.page-editor .bn-block-content h2 {
+  font-size: 24px !important;
+  font-weight: 700 !important;
+}
+
+.page-editor .bn-editor h3,
+.page-editor .bn-block-content h3 {
+  font-size: 20px !important;
+  font-weight: 700 !important;
+}
+
+/* Apply background colors from data-background-color attribute */
+/* BlockNote sets this attribute to a color name (e.g. "blue", "red") */
+.bn-block-content[data-content-type="heading"][data-background-color] {
+  padding: 3px 4px !important;
+  border-radius: 0 !important;
+}
+
+/* Override the parent .bn-block background in dark mode — BlockNote sets light-mode
+   colors on .bn-block which leak through if .bn-block-content has border-radius */
+.dark .bn-block:has(> .bn-block-content[data-content-type="heading"][data-background-color]) {
+  background-color: transparent !important;
+}
+
+/* Dark mode overrides — rich, saturated solids inspired by Notion dark mode */
+.dark .bn-block-content[data-content-type="heading"][data-background-color="blue"] {
+  background-color: #28456a !important;
+}
+.dark .bn-block-content[data-content-type="heading"][data-background-color="red"] {
+  background-color: #6e3630 !important;
+}
+.dark .bn-block-content[data-content-type="heading"][data-background-color="yellow"] {
+  background-color: #6a5b2e !important;
+}
+.dark .bn-block-content[data-content-type="heading"][data-background-color="orange"] {
+  background-color: #6a4328 !important;
+}
+.dark .bn-block-content[data-content-type="heading"][data-background-color="green"] {
+  background-color: #2e5a3a !important;
+}
+.dark .bn-block-content[data-content-type="heading"][data-background-color="purple"] {
+  background-color: #4a3560 !important;
+}
+.dark .bn-block-content[data-content-type="heading"][data-background-color="pink"] {
+  background-color: #5e3050 !important;
+}
+.dark .bn-block-content[data-content-type="heading"][data-background-color="brown"] {
+  background-color: #5a4030 !important;
+}
+.dark .bn-block-content[data-content-type="heading"][data-background-color="gray"] {
+  background-color: #373737 !important;
+}
+
+/* Slash Menu Styling - Notion-style */
+.bn-suggestion-menu {
+  background: white !important;
+  border: 1px solid rgba(0, 0, 0, 0.08) !important;
+  border-radius: 12px !important;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.08) !important;
+  padding: 8px !important;
+  min-width: 280px !important;
+}
+
+.dark .bn-suggestion-menu {
+  background: #2d2d2d !important;
+  border-color: rgba(255, 255, 255, 0.1) !important;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3) !important;
+}
+
+/* Group labels (TEXT, CODE, etc.) */
+.bn-suggestion-menu-label {
+  font-size: 11px !important;
+  font-weight: 600 !important;
+  text-transform: uppercase !important;
+  letter-spacing: 0.5px !important;
+  color: #9ca3af !important;
+  padding: 8px 12px 4px !important;
+  margin-top: 4px !important;
+}
+
+.bn-suggestion-menu-label:first-child {
+  margin-top: 0 !important;
+}
+
+.dark .bn-suggestion-menu-label {
+  color: #6b7280 !important;
+}
+
+/* Menu items */
+.bn-suggestion-menu-item {
+  display: flex !important;
+  align-items: center !important;
+  gap: 10px !important;
+  padding: 8px 12px !important;
+  border-radius: 6px !important;
+  cursor: pointer !important;
+  transition: background-color 0.15s ease !important;
+  color: #1f2937 !important;
+  font-size: 14px !important;
+}
+
+.dark .bn-suggestion-menu-item {
+  color: #e5e7eb !important;
+}
+
+/* Menu item hover */
+.bn-suggestion-menu-item:hover,
+.bn-suggestion-menu-item[data-hovered="true"],
+.bn-suggestion-menu-item[data-selected="true"] {
+  background-color: rgba(0, 0, 0, 0.04) !important;
+}
+
+.dark .bn-suggestion-menu-item:hover,
+.dark .bn-suggestion-menu-item[data-hovered="true"],
+.dark .bn-suggestion-menu-item[data-selected="true"] {
+  background-color: rgba(255, 255, 255, 0.08) !important;
+}
+
+/* Menu item icon styling */
+.bn-suggestion-menu-item > div:first-child {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  width: 32px !important;
+  height: 32px !important;
+  min-width: 32px !important;
+  background-color: rgba(0, 0, 0, 0.04) !important;
+  border-radius: 6px !important;
+  flex-shrink: 0 !important;
+}
+
+.dark .bn-suggestion-menu-item > div:first-child {
+  background-color: rgba(255, 255, 255, 0.06) !important;
+}
+
+/* Force JetBrains Mono for all code-related blocks */
+.bn-block-content[data-content-type="codeBlock"],
+.bn-block-content[data-content-type="codeBlock"] *,
+.bn-block-content[data-content-type="terminal"],
+.bn-block-content[data-content-type="terminal"] * {
+  font-family: var(--font-mono) !important;
+  font-size: 14px !important;
+}
+
+/* Ensure BlockNote editor fills its container */
+.bn-editor {
+  min-height: 400px;
+}
+
+/* Remove default BlockNote padding to align content with page title */
+.bn-container .bn-editor {
+  padding-left: 0;
+  padding-right: 0;
+}
+
+/* Dark mode overrides for BlockNote's Mantine-based UI */
+.dark .bn-container {
+  color-scheme: dark;
+}
+
+/* Terminal block styling */
+.bn-block-content[data-content-type="terminal"] {
+  width: 100%;
+}
+
+/* Terminal block container */
+.terminal-block {
+  background-color: #1e1e1e;
+  border-radius: 8px;
+  overflow: hidden;
+  font-family: var(--font-mono);
+  font-size: 14px;
+  line-height: 1.5;
+  color: #d4d4d4;
+  width: 100%;
+}
+
+/* Header bar */
+.terminal-header {
+  background-color: #2d2d2d;
+  border-bottom: 1px solid #1a1a1a;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  padding: 0 1rem;
+  gap: 0.75rem;
+}
+
+/* Window control dots */
+.terminal-dots {
+  display: flex;
+  gap: 8px;
+}
+
+.terminal-dots .dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+}
+
+.dot-red { background-color: #ff5f56; }
+.dot-yellow { background-color: #ffbd2e; }
+.dot-green { background-color: #27c93f; }
+
+/* Terminal title */
+.terminal-title {
+  font-size: 13px;
+  color: #8e8e8e;
+  font-weight: 500;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+}
+
+/* Content area */
+.terminal-content {
+  padding: 1rem;
+}
+
+/* Divider block */
+.divider-block hr {
+  border: none;
+  border-top: 1px solid var(--color-border-default);
+  margin: 1rem 0;
+}
+
+/* Profile card styling */
+.profile-block {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding: 1rem;
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-lg);
+  background-color: var(--color-bg-subtle);
+}
+
+/* Avatar wrapper */
+.profile-avatar-wrapper {
+  flex-shrink: 0;
+  position: relative;
+  width: 64px;
+  height: 64px;
+  border-radius: 50%;
+  overflow: hidden;
+}
+
+.profile-avatar-editable {
+  cursor: pointer;
+}
+
+.profile-avatar-image {
+  width: 64px;
+  height: 64px;
+  object-fit: cover;
+  display: block;
+}
+
+.profile-avatar-placeholder {
+  width: 64px;
+  height: 64px;
+  background-color: #e5e7eb;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.5rem;
+}
+
+.dark .profile-avatar-placeholder {
+  background-color: #374151;
+}
+
+/* Hover overlay — only visible on hover in edit mode */
+.profile-avatar-overlay {
+  position: absolute;
+  inset: 0;
+  background-color: rgba(0, 0, 0, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: white;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+
+.profile-avatar-editable:hover .profile-avatar-overlay {
+  opacity: 1;
+}
+
+/* Uploading spinner overlay */
+.profile-avatar-uploading {
+  position: absolute;
+  inset: 0;
+  background-color: rgba(0, 0, 0, 0.4);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: white;
+}
+
+@keyframes profile-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.profile-avatar-spinner {
+  animation: profile-spin 1s linear infinite;
+  display: inline-block;
+  font-size: 1.25rem;
+}
+
+/* Text inputs (edit mode) */
+.profile-input {
+  display: block;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: inherit;
+  width: 100%;
+  padding: 0;
+  margin: 0;
+  font-family: inherit;
+}
+
+.profile-input-name {
+  font-weight: 600;
+  font-size: 1rem;
+  line-height: 1.4;
+}
+
+.profile-input-title {
+  font-size: 0.875rem;
+  color: #6b7280;
+  line-height: 1.4;
+}
+
+.dark .profile-input-title {
+  color: #9ca3af;
+}
+
+/* Display text (view mode) */
+.profile-display-name {
+  font-weight: 600;
+  font-size: 1rem;
+  line-height: 1.4;
+}
+
+.profile-display-title {
+  font-size: 0.875rem;
+  color: #6b7280;
+  line-height: 1.4;
+}
+
+.dark .profile-display-title {
+  color: #9ca3af;
+}
+
+
+/* ============================================
+   Media Block Captions (Video)
+   ============================================ */
+
+/* Caption (edit mode) */
+.media-block-caption {
+  display: block;
+  width: 100%;
+  text-align: center;
+  font-size: 0.875rem;
+  color: #6b7280;
+  border: none;
+  outline: none;
+  background: transparent;
+  margin-top: 0.5rem;
+  padding: 0;
+  font-family: inherit;
+}
+
+.media-block-caption::placeholder {
+  color: #9ca3af;
+}
+
+.dark .media-block-caption {
+  color: #9ca3af;
+}
+
+/* Caption (view mode) */
+.media-block-caption-view {
+  text-align: center;
+  font-size: 0.875rem;
+  color: #6b7280;
+  margin-top: 0.5rem;
+}
+
+.dark .media-block-caption-view {
+  color: #9ca3af;
+}
+
+/* ============================================
+   Embed & Video Block Notion-Style Styling
+   ============================================ */
+
+/* Ensure embed and video blocks are full width */
+.bn-block-content[data-content-type="embed"],
+.bn-block-content[data-content-type="video"] {
+  width: 100%;
+}
+
+.bn-block-content[data-content-type="embed"] > div,
+.bn-block-content[data-content-type="video"] > div {
+  width: 100%;
+}
+
+/* Empty state wrappers - Notion-like appearance */
+.embed-input-wrapper-empty,
+.video-input-wrapper-empty {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  border-radius: 6px;
+  transition: background-color 0.15s ease;
+  background-color: #f9f8f7;
+  width: 100%;
+}
+
+.embed-input-wrapper-empty:hover,
+.video-input-wrapper-empty:hover {
+  background-color: #f1f0ef;
+}
+
+.dark .embed-input-wrapper-empty,
+.dark .video-input-wrapper-empty {
+  background-color: #2d2d2d;
+}
+
+.dark .embed-input-wrapper-empty:hover,
+.dark .video-input-wrapper-empty:hover {
+  background-color: #3a3a3a;
+}
+
+/* Icons in empty state */
+.embed-icon,
+.video-icon {
+  color: #9ca3af;
+  flex-shrink: 0;
+  opacity: 0.7;
+}
+
+.dark .embed-icon,
+.dark .video-icon {
+  color: #6b7280;
+}
+
+/* Input styling in empty state */
+.embed-input-wrapper-empty input,
+.video-input-wrapper-empty input {
+  border: none !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  font-size: 14px;
+  background: transparent !important;
+}
+
+.embed-input-wrapper-empty input::placeholder,
+.video-input-wrapper-empty input::placeholder {
+  color: #9ca3af;
+  font-weight: 400;
+}
+
+.dark .embed-input-wrapper-empty input::placeholder,
+.dark .video-input-wrapper-empty input::placeholder {
+  color: #6b7280;
+}
+
+/* Focus states */
+.embed-input:focus,
+.video-url-input:focus {
+  outline: none;
+}
+
+/* ============================================
+   Drag Handle Menu Styling (Six Dots Menu)
+   Match Slash Menu Design
+   ============================================ */
+
+/* Dropdown container - match slash menu */
+.bn-side-menu .mantine-Menu-dropdown {
+  background: white !important;
+  border: 1px solid rgba(0, 0, 0, 0.08) !important;
+  border-radius: 12px !important;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.08) !important;
+  padding: 4px !important;
+  min-width: 180px !important;
+}
+
+.dark .bn-side-menu .mantine-Menu-dropdown {
+  background: #2d2d2d !important;
+  border-color: rgba(255, 255, 255, 0.1) !important;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3) !important;
+}
+
+/* Menu items - match slash menu style */
+.bn-side-menu .mantine-Menu-item {
+  display: flex !important;
+  align-items: center !important;
+  gap: 10px !important;
+  padding: 6px 10px !important;
+  border-radius: 6px !important;
+  cursor: pointer !important;
+  transition: background-color 0.15s ease !important;
+  color: #1f2937 !important;
+  font-size: 14px !important;
+  height: auto !important;
+}
+
+.dark .bn-side-menu .mantine-Menu-item {
+  color: #e5e7eb !important;
+}
+
+/* Menu item hover - match slash menu */
+.bn-side-menu .mantine-Menu-item:hover {
+  background-color: rgba(0, 0, 0, 0.04) !important;
+}
+
+.dark .bn-side-menu .mantine-Menu-item:hover {
+  background-color: rgba(255, 255, 255, 0.08) !important;
+}
+
+/* ===========================
+   Page Link Block Styling
+   =========================== */
+
+/* Ensure PageLink block is full width */
+.bn-block-content[data-content-type="pageLink"] {
+  width: 100%;
+}
+
+.bn-block-content[data-content-type="pageLink"] > div {
+  width: 100%;
+}
+
+/* Empty state container */
+.page-link-empty {
+  position: relative;
+  width: 100%;
+}
+
+/* Search input wrapper */
+.page-link-input-wrapper {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  border-radius: 6px;
+  background-color: #f9f8f7;
+  width: 100%;
+  transition: background-color 0.15s ease;
+}
+
+.page-link-input-wrapper:hover {
+  background-color: #f1f0ef;
+}
+
+.dark .page-link-input-wrapper {
+  background-color: #2d2d2d;
+}
+
+.dark .page-link-input-wrapper:hover {
+  background-color: #3a3a3a;
+}
+
+.page-link-icon {
+  color: #9ca3af;
+  flex-shrink: 0;
+  opacity: 0.7;
+}
+
+.dark .page-link-icon {
+  color: #6b7280;
+}
+
+/* Search input field */
+.page-link-input {
+  width: 100%;
+  border: none !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  font-size: 14px;
+  background: transparent !important;
+  outline: none !important;
+  color: inherit;
+  font-family: inherit;
+}
+
+.page-link-input::placeholder {
+  color: #9ca3af;
+  font-weight: 400;
+}
+
+.dark .page-link-input::placeholder {
+  color: #6b7280;
+}
+
+/* Dropdown container */
+.page-link-dropdown {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  margin-top: 8px;
+  background: white;
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  border-radius: 12px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.08);
+  padding: 8px;
+  min-width: 320px;
+  max-width: 100%;
+  max-height: 400px;
+  overflow-y: auto;
+  z-index: 1000;
+}
+
+.dark .page-link-dropdown {
+  background: #2d2d2d;
+  border-color: rgba(255, 255, 255, 0.1);
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+}
+
+/* Dropdown header */
+.page-link-dropdown-header {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: #9ca3af;
+  padding: 8px 12px 4px;
+}
+
+.dark .page-link-dropdown-header {
+  color: #6b7280;
+}
+
+/* Page list */
+.page-link-dropdown-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+/* Individual page item */
+.page-link-dropdown-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background-color 0.15s ease;
+  background: transparent;
+  border: none;
+  text-align: left;
+  width: 100%;
+  color: #1f2937;
+}
+
+.dark .page-link-dropdown-item {
+  color: #e5e7eb;
+}
+
+.page-link-dropdown-item:hover {
+  background-color: rgba(0, 0, 0, 0.04);
+}
+
+.dark .page-link-dropdown-item:hover {
+  background-color: rgba(255, 255, 255, 0.08);
+}
+
+.page-link-item-icon {
+  color: #6b7280;
+  flex-shrink: 0;
+}
+
+.dark .page-link-item-icon {
+  color: #9ca3af;
+}
+
+.page-link-item-content {
+  flex: 1;
+  min-width: 0;
+}
+
+.page-link-item-title {
+  font-size: 14px;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.page-link-item-meta {
+  font-size: 12px;
+  color: #6b7280;
+  margin-top: 2px;
+}
+
+.dark .page-link-item-meta {
+  color: #9ca3af;
+}
+
+/* No results state */
+.page-link-no-results {
+  padding: 12px;
+  text-align: center;
+  color: #9ca3af;
+  font-size: 14px;
+}
+
+/* Selected state - clickable link display */
+.page-link-display {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 0;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.15);
+  background-color: transparent;
+  text-decoration: none;
+  color: inherit;
+  transition: border-bottom-color 0.15s ease;
+  cursor: pointer;
+  max-width: fit-content;
+}
+
+.page-link-display:hover {
+  border-bottom-color: rgba(0, 0, 0, 0.3);
+}
+
+.dark .page-link-display {
+  border-bottom-color: rgba(255, 255, 255, 0.2);
+}
+
+.dark .page-link-display:hover {
+  border-bottom-color: rgba(255, 255, 255, 0.4);
+}
+
+.page-link-display-icon {
+  color: #6b7280;
+  flex-shrink: 0;
+}
+
+.dark .page-link-display-icon {
+  color: #9ca3af;
+}
+
+.page-link-title {
+  font-size: 16px;
+  font-weight: 500;
+}
+
+/* Deleted page state */
+.page-link-deleted {
+  opacity: 0.5;
+  pointer-events: none;
+  cursor: default;
+}
+
+.page-link-deleted:hover {
+  background-color: rgba(0, 0, 0, 0.03);
+  transform: none;
+}
+
+.dark .page-link-deleted:hover {
+  background-color: rgba(255, 255, 255, 0.05);
+}
+
+.page-link-deleted-text {
+  text-decoration: line-through;
+  color: #9ca3af;
+}
+
+.dark .page-link-deleted-text {
+  color: #6b7280;
+}
+

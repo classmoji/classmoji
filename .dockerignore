@@ -1,0 +1,11 @@
+node_modules
+**/node_modules
+.git
+*.md
+.env*
+.DS_Store
+.playwright
+test-results
+playwright-report
+**/build
+**/.astro

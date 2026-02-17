@@ -1,0 +1,44 @@
+---
+interface Props {
+  variant?: 'full' | 'icon' | 'text';
+  size?: number;
+  theme?: 'light' | 'dark';
+  className?: string;
+}
+
+const { variant = 'full', size = 28, theme = 'light', className = '' } = Astro.props;
+
+const showIcon = variant === 'full' || variant === 'icon';
+const showText = variant === 'full' || variant === 'text';
+
+const iconSize = Math.round(size * 1.0); // icon height matches size
+const fontSize = Math.round(size * 0.75); // emoji is 75% of height
+const textSize = Math.round(size * 0.7); // text is 70% of height
+
+const themeClass = theme === 'dark' ? 'text-white' : 'text-[#1a1a1a]';
+---
+
+<div class={`inline-flex items-center ${className}`} role="img" aria-label="Classmoji">
+  {
+    showIcon && (
+      <div
+        class="inline-flex items-center justify-center leading-none shrink-0"
+        style={`width: ${iconSize}px; height: ${iconSize}px; font-size: ${fontSize}px;`}
+        role="img"
+        aria-label="Classmoji icon"
+      >
+        🍎
+      </div>
+    )
+  }
+  {
+    showText && (
+      <span
+        class={`leading-none lowercase select-none ${themeClass}`}
+        style={`font-family: 'Noto Sans', sans-serif; font-weight: 800; font-size: ${textSize}px;`}
+      >
+        classmoji
+      </span>
+    )
+  }
+</div>

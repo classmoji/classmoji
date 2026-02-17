@@ -1,0 +1,23 @@
+/* Starlight Theme Black - Minimal custom overrides */
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,100..1000;1,9..40,100..1000&family=DM+Mono:ital,wght@0,300;0,400;0,500;1,300;1,400;1,500&display=swap');
+
+/* Override fonts to use DM Sans and DM Mono */
+:root {
+  --sl-font: 'DM Sans', sans-serif;
+  --sl-font-mono: 'DM Mono', monospace;
+  --sl-font-system: 'DM Sans', sans-serif;
+}
+
+/* Fix excessive list indentation */
+.sl-markdown-content ul {
+  padding-left: 0.5rem;
+}
+
+.sl-markdown-content ol {
+  padding-left: 0.5rem;
+}
+
+
+.markdown-wrapper {
+    padding-top: 0px;
+}

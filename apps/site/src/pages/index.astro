@@ -1,0 +1,148 @@
+---
+import Layout from '../layouts/Layout.astro';
+import Header from '../components/Header.astro';
+import Footer from '../components/Footer.astro';
+
+const features = [
+  {
+    emoji: '😊',
+    title: 'Emoji Grading',
+    description: 'Replace intimidating numbers with expressive, motivating feedback.',
+  },
+  {
+    emoji: '🔗',
+    title: 'GitHub Integration',
+    description: 'Assignments live where your code does. No context switching.',
+  },
+  {
+    emoji: '🪙',
+    title: 'Token System',
+    description: 'Flexible deadline extensions students manage themselves.',
+  },
+  {
+    emoji: '👥',
+    title: 'Team Support',
+    description: 'Individual or group projects with shared repositories.',
+  },
+  {
+    emoji: '🤖',
+    title: 'Auto Repo Creation',
+    description: 'Student repos generated from templates instantly.',
+  },
+  {
+    emoji: '🧠',
+    title: 'AI Interactive Quizzes',
+    description: 'AI-powered quizzes that adapt to student understanding.',
+  },
+];
+---
+
+<Layout>
+  <Header />
+
+  <!-- Hero Section -->
+  <section class="min-h-screen flex flex-col items-center justify-center px-6 text-center">
+    <div class="max-w-3xl">
+      <!-- Logo -->
+      <div class="mb-8">
+        <span class="text-5xl md:text-6xl font-mono font-medium tracking-tight"> 🍎 </span>
+      </div>
+
+      <!-- Tagline -->
+      <h1 class="text-4xl md:text-5xl font-bold text-gray-900 mb-6">
+        Git-native learning, finally.
+      </h1>
+
+      <!-- Subtitle -->
+      <p class="text-xl text-gray-600 mb-10 max-w-2xl mx-auto">
+        The open-source LMS that lives where your code does. Emoji grading, flexible deadlines, and
+        seamless Github integration for modern CS education.
+      </p>
+
+      <!-- CTA Buttons -->
+      <div class="flex items-center justify-center gap-4">
+        <a
+          href="https://app.classmoji.io"
+          class="inline-flex items-center px-6 py-2.5 text-base font-semibold text-white bg-primary hover:bg-primary-dark rounded-lg transition-colors"
+        >
+          Get Started
+          <svg class="ml-2 w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              stroke-width="2"
+              d="M13 7l5 5m0 0l-5 5m5-5H6"></path>
+          </svg>
+        </a>
+        <a
+          href="https://demo.classmoji.io"
+          class="inline-flex items-center px-6 py-2.5 text-base font-semibold text-gray-700 bg-gray-200 hover:bg-gray-300 rounded-lg transition-colors"
+        >
+          Try Demo
+        </a>
+      </div>
+    </div>
+
+    <!-- Scroll indicator -->
+    <div class="absolute bottom-8 animate-bounce">
+      <svg class="w-6 h-6 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          stroke-width="2"
+          d="M19 14l-7 7m0 0l-7-7m7 7V3"></path>
+      </svg>
+    </div>
+  </section>
+
+  <!-- Features Section -->
+  <section class="py-24 px-6 bg-gray-50">
+    <div class="max-w-6xl mx-auto">
+      <h2 class="text-3xl md:text-4xl font-bold text-center text-gray-900 mb-4">
+        Everything you need to teach code
+      </h2>
+      <p class="text-lg text-gray-600 text-center mb-16 max-w-2xl mx-auto">
+        Built for instructors who care about feedback, fairness, and student engagement.
+      </p>
+
+      <div class="grid md:grid-cols-2 lg:grid-cols-3 gap-8">
+        {
+          features.map(feature => (
+            <div class="bg-white p-6 rounded-xl shadow-sm border border-gray-100 hover:shadow-md transition-shadow">
+              <span class="text-4xl mb-4 block">{feature.emoji}</span>
+              <h3 class="text-xl font-semibold text-gray-900 mb-2">{feature.title}</h3>
+              <p class="text-gray-600">{feature.description}</p>
+            </div>
+          ))
+        }
+      </div>
+    </div>
+  </section>
+
+  <!-- CTA Section -->
+  <section class="py-24 px-6">
+    <div class="max-w-3xl mx-auto text-center">
+      <h2 class="text-3xl md:text-4xl font-bold text-gray-900 mb-6">
+        Ready to transform your classroom?
+      </h2>
+      <p class="text-lg text-gray-600 mb-10">
+        Join instructors using Classmoji to make coding education more engaging.
+      </p>
+      <a
+        href="https://app.classmoji.io"
+        class="inline-flex items-center px-6 py-2.5 text-base font-semibold text-white bg-primary hover:bg-primary-dark rounded-lg transition-colors"
+      >
+        Get Started Free
+        <svg class="ml-2 w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            stroke-width="2"
+            d="M13 7l5 5m0 0l-5 5m5-5H6"></path>
+        </svg>
+      </a>
+    </div>
+  </section>
+
+  <Footer />
+</Layout>

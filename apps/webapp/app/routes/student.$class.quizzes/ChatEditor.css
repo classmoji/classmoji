@@ -1,0 +1,193 @@
+/* TipTap editor styles for chat */
+.ProseMirror {
+  min-height: 120px;
+  max-height: 300px;
+  overflow-y: auto;
+  padding: 12px;
+  background-color: #fff;
+  color: #000;
+}
+
+.dark-editor .ProseMirror {
+  background-color: #1f2937;
+  color: #e5e7eb;
+}
+
+.ProseMirror:focus {
+  outline: none;
+}
+
+.ProseMirror p {
+  margin: 0;
+  line-height: 1.5;
+}
+
+.ProseMirror p + p {
+  margin-top: 0.5em;
+}
+
+/* Code block styling - use !important to override Tailwind prose */
+.ProseMirror pre,
+.prose .ProseMirror pre {
+  background: #f6f8fa;
+  color: #24292e;
+  font-family: 'Fira Code', 'Courier New', Courier, monospace;
+  font-size: 1em !important;
+  padding: 1em;
+  border-radius: 0.5em;
+  overflow-x: auto;
+  margin: 0.5em 0;
+  border: 1px solid #e1e4e8;
+}
+
+.dark-editor .ProseMirror pre {
+  background: #111827;
+  color: #d4d4d4;
+  border: 1px solid #374151;
+}
+
+.ProseMirror code,
+.prose .ProseMirror code {
+  background: #f0f2f5;
+  color: #333;
+  padding: 0.2em 0.4em;
+  border-radius: 0.25em;
+  font-family: 'Fira Code', 'Courier New', Courier, monospace;
+  font-size: 1em !important;
+}
+
+.dark-editor .ProseMirror code {
+  background: #374151;
+  color: #e5e7eb;
+}
+
+.ProseMirror pre code {
+  background: none;
+  color: inherit;
+  padding: 0;
+  font-size: inherit;
+  border-radius: 0;
+}
+
+/* Override inline code styles inside code blocks in dark mode */
+.dark-editor .ProseMirror pre code {
+  background: none;
+  color: inherit;
+  padding: 0;
+}
+
+/* Syntax highlighting colors (VS Code Dark theme) */
+.hljs-keyword,
+.hljs-selector-tag,
+.hljs-literal,
+.hljs-section,
+.hljs-link {
+  color: #569cd6;
+}
+
+.hljs-string,
+.hljs-title,
+.hljs-name,
+.hljs-type,
+.hljs-attribute,
+.hljs-symbol,
+.hljs-bullet,
+.hljs-addition,
+.hljs-variable,
+.hljs-template-tag,
+.hljs-template-variable {
+  color: #ce9178;
+}
+
+.hljs-comment,
+.hljs-quote,
+.hljs-deletion,
+.hljs-meta {
+  color: #6a9955;
+}
+
+.hljs-keyword,
+.hljs-selector-tag,
+.hljs-literal,
+.hljs-title,
+.hljs-section,
+.hljs-doctag,
+.hljs-type,
+.hljs-name,
+.hljs-strong {
+  font-weight: normal;
+}
+
+.hljs-params {
+  color: #9cdcfe;
+}
+
+.hljs-number {
+  color: #b5cea8;
+}
+
+.hljs-built_in,
+.hljs-builtin-name {
+  color: #dcdcaa;
+}
+
+.hljs-function > .hljs-title {
+  color: #dcdcaa;
+}
+
+.hljs-class > .hljs-title {
+  color: #4ec9b0;
+}
+
+.hljs-attr {
+  color: #9cdcfe;
+}
+
+.hljs-subst {
+  color: #d4d4d4;
+}
+
+/* Placeholder */
+.ProseMirror p.is-editor-empty:first-child::before {
+  content: attr(data-placeholder);
+  float: left;
+  color: #adb5bd;
+  pointer-events: none;
+  height: 0;
+}
+
+.dark-editor .ProseMirror p.is-editor-empty:first-child::before {
+  color: #6b7280;
+}
+
+/* Scrollbar styling */
+.ProseMirror::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+.ProseMirror::-webkit-scrollbar-track {
+  background: #f1f1f1;
+  border-radius: 3px;
+}
+
+.dark-editor .ProseMirror::-webkit-scrollbar-track {
+  background: #374151;
+}
+
+.ProseMirror::-webkit-scrollbar-thumb {
+  background: #888;
+  border-radius: 3px;
+}
+
+.dark-editor .ProseMirror::-webkit-scrollbar-thumb {
+  background: #6b7280;
+}
+
+.ProseMirror::-webkit-scrollbar-thumb:hover {
+  background: #555;
+}
+
+.dark-editor .ProseMirror::-webkit-scrollbar-thumb:hover {
+  background: #9ca3af;
+}

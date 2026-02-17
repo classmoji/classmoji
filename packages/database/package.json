@@ -1,0 +1,29 @@
+{
+  "name": "@classmoji/database",
+  "type": "module",
+  "scripts": {
+    "db:deploy": "prisma migrate deploy",
+    "db:generate": "prisma generate",
+    "db:reset": "prisma migrate reset --force",
+    "db:seed": "node ./scripts/seed.js",
+    "db:console": "@prismatools/console@latest",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "format": "prettier --write \"**/*.{js,jsx,ts,tsx,json,md}\"",
+    "format:check": "prettier --check \"**/*.{js,jsx,ts,tsx,json,md}\""
+  },
+  "exports": {
+    ".": "./index.js"
+  },
+  "dependencies": {
+    "@classmoji/utils": "*",
+    "@prisma/client": "^6.6.0",
+    "dayjs": "^1.11.13"
+  },
+  "prisma": {
+    "seed": "node ./scripts/seed.js"
+  },
+  "devDependencies": {
+    "prisma": "^6.6.0"
+  }
+}

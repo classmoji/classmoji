@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: 💬 Questions & Discussions
+    url: https://github.com/classmoji/classmoji/discussions
+    about: Ask questions, share ideas, or discuss features
+  - name: 📚 Documentation
+    url: https://docs.classmoji.io
+    about: Check out our documentation and guides

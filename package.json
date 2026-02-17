@@ -1,0 +1,101 @@
+{
+  "private": true,
+  "type": "module",
+  "license": "AGPL-3.0-or-later",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "init": "./scripts/init.sh",
+    "dev": "./scripts/dev.sh",
+    "devport": "./scripts/devport.sh",
+    "lint": "turbo run lint",
+    "lint:fix": "turbo run lint:fix",
+    "format": "turbo run format",
+    "format:check": "turbo run format:check",
+    "web:dev": "dotenv -e .env -- turbo run web:dev --log-prefix=none",
+    "web:build": "dotenv -e .env -- turbo run web:build",
+    "web:start": "dotenv -e .env -- turbo run web:start",
+    "trigger:dev": "dotenv -e .env -- turbo run trigger:dev --log-prefix=none",
+    "trigger:deploy": "cd packages/tasks && dotenv -e ../../.env -- turbo run trigger:deploy",
+    "trigger:deploy:staging": "cd packages/tasks && dotenv -e ../../.env -- turbo run trigger:deploy:staging",
+    "hook:github": "dotenv -e .env -- turbo run hook:github --log-prefix=none",
+    "hook:stripe": "dotenv -e .env -- turbo run hook:stripe --log-prefix=none",
+    "hook:dev": "dotenv -e .env -- turbo run hook:dev --log-prefix=none",
+    "hook:start": "dotenv -e .env -- turbo run hook:start",
+    "ai-agent:dev": "dotenv -e .env -- turbo run dev --filter=@classmoji/ai-agent --log-prefix=none",
+    "ai-agent:start": "dotenv -e .env -- turbo run start --filter=@classmoji/ai-agent",
+    "db:generate": "dotenv -e .env -- turbo run db:generate",
+    "db:seed": "dotenv -e .env -- ./scripts/devport.sh run turbo run db:seed",
+    "db:reset": "dotenv -e .env -- ./scripts/devport.sh run turbo run db:reset",
+    "db:deploy": "dotenv -e .env -- turbo run db:deploy",
+    "db:start": "docker compose up -d",
+    "slides:dev": "dotenv -e .env -- turbo run slides:dev --filter=@classmoji/slides --log-prefix=none",
+    "slides:build": "dotenv -e .env -- turbo run slides:build --filter=@classmoji/slides",
+    "slides:start": "dotenv -e .env -- turbo run slides:start --filter=@classmoji/slides",
+    "pages:dev": "dotenv -e .env -- turbo run pages:dev --filter=@classmoji/pages --log-prefix=none",
+    "pages:build": "dotenv -e .env -- turbo run pages:build --filter=@classmoji/pages",
+    "pages:start": "dotenv -e .env -- turbo run pages:start --filter=@classmoji/pages",
+    "slides:test": "dotenv -e .env -- ./scripts/devport.sh run turbo run test --filter=@classmoji/slides",
+    "slides:test:ui": "dotenv -e .env -- ./scripts/devport.sh run turbo run test:ui --filter=@classmoji/slides",
+    "test": "dotenv -e .env -- ./scripts/devport.sh run turbo run test",
+    "test:ai-agent": "dotenv -e .env -- ./scripts/devport.sh run turbo run test --filter=@classmoji/ai-agent",
+    "test:ai-agent:integration": "dotenv -e .env -- ./scripts/devport.sh run turbo run test:integration --filter=@classmoji/ai-agent",
+    "test:ui": "dotenv -e .env -- ./scripts/devport.sh run turbo run web:test:ui",
+    "web:test": "dotenv -e .env -- ./scripts/devport.sh run turbo run web:test --filter=@classmoji/web",
+    "web:test:ui": "dotenv -e .env -- ./scripts/devport.sh run turbo run web:test:ui --filter=@classmoji/web",
+    "site:dev": "cd apps/site && npm run dev",
+    "fly:site": "fly deploy --config apps/site/fly.toml --dockerfile apps/site/Dockerfile",
+    "fly:webapp": "fly deploy --config apps/webapp/fly.toml --dockerfile apps/webapp/Dockerfile --no-cache",
+    "fly:slides": "fly deploy --config apps/slides/fly.toml --dockerfile apps/slides/Dockerfile --no-cache",
+    "fly:hooks": "fly deploy --config apps/hook-station/fly.toml --dockerfile apps/hook-station/Dockerfile --no-cache",
+    "fly:pages": "fly deploy --config apps/pages/fly.toml --dockerfile apps/pages/Dockerfile --no-cache",
+    "fly:ai": "fly deploy --config apps/ai-agent/fly.toml --dockerfile apps/ai-agent/Dockerfile --no-cache",
+    "cleanup:github-teams": "dotenv -e .env -- node scripts/cleanup-github-teams.js",
+    "commit": "cz"
+  },
+  "dependencies": {
+    "@infisical/sdk": "^3.0.91",
+    "dayjs": "^1.11.13",
+    "dotenv": "^16.4.5",
+    "highlight.js": "^11.11.1",
+    "lodash": "^4.17.21",
+    "lowlight": "^3.3.0",
+    "nanoid": "^5.0.7",
+    "stripe": "^18.3.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.36.0",
+    "@types/node": "^22.18.6",
+    "@types/react": "^19.2.7",
+    "@types/react-dom": "^19.2.3",
+    "commitizen": "^4.3.1",
+    "concurrently": "^9.2.0",
+    "cz-conventional-changelog": "^3.3.0",
+    "dotenv-cli": "^7.3.0",
+    "eslint": "^9.36.0",
+    "eslint-config-prettier": "^10.1.8",
+    "eslint-plugin-import": "^2.32.0",
+    "eslint-plugin-jsx-a11y": "^6.10.2",
+    "eslint-plugin-prettier": "^5.5.4",
+    "eslint-plugin-react": "^7.37.5",
+    "eslint-plugin-react-hooks": "^5.2.0",
+    "globals": "^16.4.0",
+    "prettier": "^3.6.2",
+    "turbo": "^2.3.3",
+    "typescript": "^5.9.2"
+  },
+  "packageManager": "npm@10.9.0",
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "overrides": {
+    "p-map": "^4.0.0"
+  },
+  "config": {
+    "commitizen": {
+      "path": "cz-conventional-changelog"
+    }
+  }
+}

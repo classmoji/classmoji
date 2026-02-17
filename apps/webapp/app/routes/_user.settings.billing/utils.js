@@ -1,0 +1,58 @@
+export const getUsageData = ({ isFreeTier, isProTier }) => [
+  {
+    key: 'students',
+    feature: 'Students per course',
+    allowed: isFreeTier ? 15 : 100,
+    used: 15,
+    available: true,
+  },
+  {
+    key: 'courses',
+    feature: 'Active courses',
+    allowed: isFreeTier ? 1 : 3,
+    used: 1,
+    available: true,
+  },
+  {
+    key: 'github',
+    feature: 'GitHub integration',
+    allowed: '✅',
+    used: '✅',
+    available: true,
+  },
+  {
+    key: 'emoji',
+    feature: 'Emoji grading',
+    allowed: '✅',
+    used: '✅',
+    available: true,
+  },
+  {
+    key: 'ta',
+    feature: 'TA management',
+    allowed: isProTier ? '✅' : '❌',
+    used: isProTier ? '✅' : '-',
+    available: isProTier,
+  },
+  {
+    key: 'team',
+    feature: 'Team projects',
+    allowed: isProTier ? '✅' : '❌',
+    used: isProTier ? '✅' : '-',
+    available: isProTier,
+  },
+  {
+    key: 'tokens',
+    feature: 'Tokens use for extensions',
+    allowed: isProTier ? '✅' : '❌',
+    used: isProTier ? '✅' : '-',
+    available: true,
+  },
+  {
+    key: 'support',
+    feature: 'Priority support',
+    allowed: isProTier ? '✅' : '❌',
+    used: isProTier ? '✅' : '-',
+    available: isProTier,
+  },
+];

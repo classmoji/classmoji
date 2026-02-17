@@ -1,0 +1,54 @@
+name: 🐛 Bug Report
+description: Something isn't working as expected
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report a bug! Please fill out the details below.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: A clear description of the bug
+      placeholder: "Example: When I click the grade export button, nothing happens"
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What should have happened?
+      description: What did you expect to happen instead?
+      placeholder: "Example: It should download a CSV file with grades"
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: How can we reproduce this bug?
+      placeholder: |
+        1. Go to classroom settings
+        2. Click on 'Export Grades'
+        3. See error
+    validations:
+      required: false
+
+  - type: textarea
+    id: additional
+    attributes:
+      label: Screenshots & Additional Info
+      description: |
+        📸 **Screenshots are super helpful!** Just drag & drop images here.
+
+        Also useful: browser/OS info, console errors, or anything else that might help us fix this.
+      placeholder: |
+        You can paste or drag images directly into this field!
+
+        Browser: Chrome 120
+        OS: macOS 14
+    validations:
+      required: false

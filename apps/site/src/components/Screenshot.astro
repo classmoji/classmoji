@@ -1,0 +1,29 @@
+---
+interface Props {
+  src: ImageMetadata;
+  alt: string;
+  caption?: string;
+  size?: 'sm' | 'md' | 'lg';
+}
+
+const { src, alt, caption, size = 'md' } = Astro.props;
+
+const sizeClasses = {
+  sm: 'max-w-md',
+  md: 'max-w-2xl',
+  lg: 'max-w-4xl',
+};
+---
+
+<figure class="my-8">
+  <img
+    src={src.src}
+    alt={alt}
+    class:list={['rounded-lg shadow mx-auto', sizeClasses[size]]}
+  />
+  {caption && (
+    <figcaption class="text-center text-sm text-gray-500 mt-2">
+      {caption}
+    </figcaption>
+  )}
+</figure>

@@ -1,0 +1,224 @@
+/* Base ProseMirror styles */
+.ProseMirror,
+.tiptap {
+  outline: none;
+  background: transparent !important;
+  background-color: transparent !important;
+}
+
+/* Heading styles */
+.ProseMirror h1 {
+  font-size: 2rem;
+  font-weight: bold;
+  margin: 1rem 0 0.5rem 0;
+}
+
+.ProseMirror h2 {
+  font-size: 1.5rem;
+  font-weight: bold;
+  margin: 1rem 0 0.5rem 0;
+}
+
+.ProseMirror h3 {
+  font-size: 1.25rem;
+  font-weight: bold;
+  margin: 0.75rem 0 0.5rem 0;
+}
+
+/* Table styles - Compact rows */
+.ProseMirror table {
+  border-collapse: collapse;
+  table-layout: fixed;
+  width: 100%;
+  margin: 1rem 0;
+  overflow: hidden;
+}
+
+.ProseMirror table td,
+.ProseMirror table th {
+  min-width: 50px;
+  border: 1px solid #ddd;
+  padding: 2px 4px; /* Reduced from 8px to 4px vertical padding */
+  vertical-align: top;
+  box-sizing: border-box;
+  position: relative;
+  line-height: 1.3; /* Tighter line height */
+}
+
+.ProseMirror table th {
+  font-weight: bold;
+  background-color: #f2f2f2;
+  padding: 2px 4px; /* Slightly more padding for headers */
+}
+
+.ProseMirror table .selectedCell {
+  background: #c8e6f5;
+}
+
+.ProseMirror table .column-resize-handle {
+  position: absolute;
+  right: -2px;
+  top: 0;
+  bottom: -2px;
+  width: 4px;
+  background-color: #adf;
+  pointer-events: none;
+}
+
+/* Even more compact option - uncomment if you want super tight rows */
+/*
+.ProseMirror table td {
+  padding: 2px 6px;
+}
+
+.ProseMirror table th {
+  padding: 4px 6px;
+}
+*/
+
+/* List styles - Fix for showing bullets and numbers */
+.ProseMirror ul {
+  list-style-type: disc !important;
+  padding-left: 1.5rem !important;
+  margin: 1rem 0 !important;
+}
+
+.ProseMirror ol {
+  list-style-type: decimal !important;
+  padding-left: 1.5rem !important;
+  margin: 1rem 0 !important;
+}
+
+.ProseMirror li {
+  display: list-item !important;
+  margin: 0.25rem 0 !important;
+}
+
+/* Nested list indentation */
+.ProseMirror ul ul,
+.ProseMirror ol ol,
+.ProseMirror ul ol,
+.ProseMirror ol ul {
+  margin: 0.5rem 0 !important;
+}
+
+/* Blockquote styles */
+.ProseMirror blockquote {
+  border-left: 4px solid #ddd;
+  padding-left: 16px;
+  margin-left: 0;
+  font-style: italic;
+  color: #666;
+  margin: 1rem 0;
+}
+
+/* Link styles */
+.ProseMirror a {
+  color: #2563eb;
+  text-decoration: underline;
+}
+
+.ProseMirror a:hover {
+  color: #1d4ed8;
+}
+
+/* Code styles */
+.ProseMirror code {
+  background-color: #f3f4f6;
+  padding: 2px 4px;
+  border-radius: 3px;
+  font-family: monospace;
+  font-size: 0.875em;
+}
+
+/* Highlight styles */
+.ProseMirror mark {
+  background-color: #fef08a;
+  padding: 1px 2px;
+  border-radius: 2px;
+}
+
+/* Paragraph spacing */
+.ProseMirror p {
+  margin: 0.5rem 0;
+}
+
+/* Text alignment */
+.ProseMirror .has-text-align-left {
+  text-align: left;
+}
+
+.ProseMirror .has-text-align-center {
+  text-align: center;
+}
+
+.ProseMirror .has-text-align-right {
+  text-align: right;
+}
+
+/* Focus styles */
+.ProseMirror:focus {
+  outline: none;
+}
+
+/* Selection styles */
+.ProseMirror-selectednode {
+  outline: 2px solid #68d391;
+}
+
+/* Placeholder text */
+.ProseMirror .is-editor-empty:first-child::before {
+  content: attr(data-placeholder);
+  float: left;
+  color: #adb5bd;
+  pointer-events: none;
+  height: 0;
+}
+
+/* Dark mode styles for Tiptap editor */
+.dark .ProseMirror {
+  color: #e5e7eb;
+}
+
+.dark .ProseMirror h1,
+.dark .ProseMirror h2,
+.dark .ProseMirror h3 {
+  color: #f3f4f6;
+}
+
+.dark .ProseMirror table td,
+.dark .ProseMirror table th {
+  border-color: #4b5563;
+}
+
+.dark .ProseMirror table th {
+  background-color: #374151;
+  color: #f3f4f6;
+}
+
+.dark .ProseMirror table .selectedCell {
+  background: #1f2937;
+}
+
+.dark .ProseMirror blockquote {
+  border-left-color: #6b7280;
+  color: #9ca3af;
+}
+
+.dark .ProseMirror a {
+  color: #60a5fa;
+}
+
+.dark .ProseMirror a:hover {
+  color: #93bbfc;
+}
+
+.dark .ProseMirror code {
+  background-color: #374151;
+  color: #f3f4f6;
+}
+
+.dark .ProseMirror mark {
+  background-color: #854d0e;
+  color: #fef3c7;
+}

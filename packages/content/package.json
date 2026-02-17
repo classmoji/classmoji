@@ -1,0 +1,20 @@
+{
+  "name": "@classmoji/content",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "GitHub content service for reading via GitHub Pages and writing via GitHub API",
+  "main": "src/index.js",
+  "exports": {
+    ".": "./src/index.js"
+  },
+  "scripts": {
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix"
+  },
+  "dependencies": {
+    "@classmoji/services": "*"
+  },
+  "devDependencies": {
+    "eslint": "^8.57.0"
+  }
+}
