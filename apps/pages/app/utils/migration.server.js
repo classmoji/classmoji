@@ -72,6 +72,17 @@ export async function migrateHtmlToBlockNote(html, schema) {
     '<p class="VIDEO_EMBED_PLACEHOLDER">VIDEO_EMBED:::$1</p>'
   );
 
+  // Handle images inside list items — BlockNote drops <img> within <li>.
+  // Convert <img> to placeholder text so it survives parsing as a child paragraph,
+  // then postProcessBlocks converts it back to an image block.
+  bodyHtml = bodyHtml.replace(
+    /<li[^>]*>[\s\S]*?<\/li>/g,
+    (liBlock) => liBlock.replace(
+      /<p>\s*<img\s+src="([^"]*)"[^>]*>\s*<\/p>/g,
+      '<p>IMAGE_EMBED:::$1</p>'
+    )
+  );
+
   // Parse CSS background colors from original HTML (before body extraction)
   const cssBackgroundColors = parseCssBackgroundColors(html);
 
@@ -204,15 +215,23 @@ function postProcessBlocks(blocks, cssBackgroundColors = {}) {
 
     // 1. Video embed placeholder (from pre-processing)
     if (textContent.startsWith('VIDEO_EMBED:::')) {
-      // Extract video URL from the text (format: VIDEO_EMBED:::URL)
       const videoUrl = textContent.substring('VIDEO_EMBED:::'.length).trim();
       if (videoUrl) {
         result.push({
           type: 'video',
-          props: {
-            url: videoUrl,
-            caption: ''
-          }
+          props: { url: videoUrl, caption: '' }
+        });
+        continue;
+      }
+    }
+
+    // 1b. Image embed placeholder (from pre-processing of images inside list items)
+    if (textContent.startsWith('IMAGE_EMBED:::')) {
+      const imageUrl = textContent.substring('IMAGE_EMBED:::'.length).trim();
+      if (imageUrl) {
+        result.push({
+          type: 'image',
+          props: { url: imageUrl, caption: '', width: 512 }
         });
         continue;
       }
