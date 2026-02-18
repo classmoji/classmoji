@@ -72,15 +72,12 @@ export async function migrateHtmlToBlockNote(html, schema) {
     '<p class="VIDEO_EMBED_PLACEHOLDER">VIDEO_EMBED:::$1</p>'
   );
 
-  // Handle images inside list items — BlockNote drops <img> within <li>.
-  // Convert <img> to placeholder text so it survives parsing as a child paragraph,
-  // then postProcessBlocks converts it back to an image block.
+  // Handle images wrapped in bare <p> tags (typically inside list items).
+  // BlockNote drops <img> when it's inside <p> within <li>, so convert to
+  // placeholder text. Standalone images use <figure> and parse fine.
   bodyHtml = bodyHtml.replace(
-    /<li[^>]*>[\s\S]*?<\/li>/g,
-    (liBlock) => liBlock.replace(
-      /<p>\s*<img\s+src="([^"]*)"[^>]*>\s*<\/p>/g,
-      '<p>IMAGE_EMBED:::$1</p>'
-    )
+    /<p>\s*<img\s+src="([^"]*)"[^>]*>\s*<\/p>/g,
+    '<p>IMAGE_EMBED:::$1</p>'
   );
 
   // Parse CSS background colors from original HTML (before body extraction)
@@ -200,8 +197,20 @@ function postProcessBlocks(blocks, cssBackgroundColors = {}) {
       }
     }
 
-    // Skip other non-paragraph blocks
+    // Handle non-paragraph blocks
     if (block.type !== 'paragraph') {
+      // Check for IMAGE_EMBED placeholder leaked into list item content
+      // (happens when <li> contains only an image and no other text)
+      if (isListItem(block.type)) {
+        const text = getBlockTextContent(block);
+        if (text.startsWith('IMAGE_EMBED:::')) {
+          const imageUrl = text.substring('IMAGE_EMBED:::'.length).trim();
+          if (imageUrl) {
+            result.push({ type: 'image', props: { url: imageUrl, caption: '', previewWidth: 512 } });
+            continue;
+          }
+        }
+      }
       // Recursively process children
       if (block.children && block.children.length > 0) {
         block.children = postProcessBlocks(block.children, cssBackgroundColors);
@@ -231,7 +240,7 @@ function postProcessBlocks(blocks, cssBackgroundColors = {}) {
       if (imageUrl) {
         result.push({
           type: 'image',
-          props: { url: imageUrl, caption: '', width: 512 }
+          props: { url: imageUrl, caption: '', previewWidth: 512 }
         });
         continue;
       }
@@ -536,5 +545,12 @@ function getBlockTextContent(block) {
     .filter(item => item.type === 'text')
     .map(item => item.text)
     .join('');
+}
+
+/**
+ * Check if a block type is a list item variant.
+ */
+function isListItem(type) {
+  return type === 'bulletListItem' || type === 'numberedListItem' || type === 'checkListItem';
 }
 
