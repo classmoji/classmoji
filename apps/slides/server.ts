@@ -251,6 +251,19 @@ multiplex.on('connection', (socket) => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Health check endpoint (used by Fly.io to detect unhealthy machines)
+// ─────────────────────────────────────────────────────────────────────────────
+app.get('/health', async (_req, res) => {
+  try {
+    await prisma.$queryRaw`SELECT 1`;
+    res.status(200).json({ status: 'ok' });
+  } catch (err) {
+    console.error('[health] DB check failed:', err);
+    res.status(503).json({ status: 'error', message: 'database unreachable' });
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Chrome DevTools well-known URL (noop to prevent 404 errors)
 // ─────────────────────────────────────────────────────────────────────────────
 app.get('/.well-known/appspecific/com.chrome.devtools.json', (_req, res) => {
