@@ -169,34 +169,6 @@ function postProcessBlocks(blocks, cssBackgroundColors = {}) {
       }
     }
 
-    // Check for Terminal/powershell paragraph followed by code block pattern
-    if (block.type === 'paragraph' && i + 1 < blocks.length) {
-      const textContent = getBlockTextContent(block).trim();
-      const nextBlock = blocks[i + 1];
-
-      // If this paragraph contains "Terminal" or "powershell" and next block is a codeBlock, merge them
-      const isTerminalBlock = textContent.toLowerCase().includes('terminal') ||
-                             textContent.toLowerCase().includes('powershell');
-
-      if (isTerminalBlock && nextBlock.type === 'codeBlock') {
-        // Extract code from the next block
-        const code = getBlockTextContent(nextBlock);
-
-        // Create terminal block
-        result.push({
-          type: 'terminal',
-          props: {
-            title: textContent,
-            code: code
-          }
-        });
-
-        // Skip the next block since we merged it
-        i++;
-        continue;
-      }
-    }
-
     // Handle non-paragraph blocks
     if (block.type !== 'paragraph') {
       // Check for IMAGE_EMBED placeholder leaked into list item content
@@ -207,6 +179,11 @@ function postProcessBlocks(blocks, cssBackgroundColors = {}) {
           const imageUrl = text.substring('IMAGE_EMBED:::'.length).trim();
           if (imageUrl) {
             result.push({ type: 'image', props: { url: imageUrl, caption: '', previewWidth: 512 } });
+            // Preserve any nested children (e.g., indented sub-items under this list item)
+            if (block.children && block.children.length > 0) {
+              const processedChildren = postProcessBlocks(block.children, cssBackgroundColors);
+              result.push(...processedChildren);
+            }
             continue;
           }
         }
@@ -246,7 +223,24 @@ function postProcessBlocks(blocks, cssBackgroundColors = {}) {
       }
     }
 
-    // 2. Divider block (existing detection)
+    // 2. Terminal/powershell paragraph followed by code block pattern
+    if (i + 1 < blocks.length) {
+      const nextBlock = blocks[i + 1];
+      const isTerminalBlock = textContent.toLowerCase().includes('terminal') ||
+                             textContent.toLowerCase().includes('powershell');
+
+      if (isTerminalBlock && nextBlock.type === 'codeBlock') {
+        const code = getBlockTextContent(nextBlock);
+        result.push({
+          type: 'terminal',
+          props: { title: textContent, code }
+        });
+        i++;
+        continue;
+      }
+    }
+
+    // 3. Divider block (existing detection)
     if (textContent.trim() === '' && block.props?.className?.includes('divider')) {
       result.push({ type: 'divider', props: {} });
       continue;
