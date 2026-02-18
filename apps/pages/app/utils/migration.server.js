@@ -72,6 +72,14 @@ export async function migrateHtmlToBlockNote(html, schema) {
     '<p class="VIDEO_EMBED_PLACEHOLDER">VIDEO_EMBED:::$1</p>'
   );
 
+  // Handle images wrapped in bare <p> tags (typically inside list items).
+  // BlockNote drops <img> when it's inside <p> within <li>, so convert to
+  // placeholder text. Standalone images use <figure> and parse fine.
+  bodyHtml = bodyHtml.replace(
+    /<p>\s*<img\s+src="([^"]*)"[^>]*>\s*<\/p>/g,
+    '<p>IMAGE_EMBED:::$1</p>'
+  );
+
   // Parse CSS background colors from original HTML (before body extraction)
   const cssBackgroundColors = parseCssBackgroundColors(html);
 
@@ -161,36 +169,25 @@ function postProcessBlocks(blocks, cssBackgroundColors = {}) {
       }
     }
 
-    // Check for Terminal/powershell paragraph followed by code block pattern
-    if (block.type === 'paragraph' && i + 1 < blocks.length) {
-      const textContent = getBlockTextContent(block).trim();
-      const nextBlock = blocks[i + 1];
-
-      // If this paragraph contains "Terminal" or "powershell" and next block is a codeBlock, merge them
-      const isTerminalBlock = textContent.toLowerCase().includes('terminal') ||
-                             textContent.toLowerCase().includes('powershell');
-
-      if (isTerminalBlock && nextBlock.type === 'codeBlock') {
-        // Extract code from the next block
-        const code = getBlockTextContent(nextBlock);
-
-        // Create terminal block
-        result.push({
-          type: 'terminal',
-          props: {
-            title: textContent,
-            code: code
-          }
-        });
-
-        // Skip the next block since we merged it
-        i++;
-        continue;
-      }
-    }
-
-    // Skip other non-paragraph blocks
+    // Handle non-paragraph blocks
     if (block.type !== 'paragraph') {
+      // Check for IMAGE_EMBED placeholder leaked into list item content
+      // (happens when <li> contains only an image and no other text)
+      if (isListItem(block.type)) {
+        const text = getBlockTextContent(block);
+        if (text.startsWith('IMAGE_EMBED:::')) {
+          const imageUrl = text.substring('IMAGE_EMBED:::'.length).trim();
+          if (imageUrl) {
+            result.push({ type: 'image', props: { url: imageUrl, caption: '', previewWidth: 512 } });
+            // Preserve any nested children (e.g., indented sub-items under this list item)
+            if (block.children && block.children.length > 0) {
+              const processedChildren = postProcessBlocks(block.children, cssBackgroundColors);
+              result.push(...processedChildren);
+            }
+            continue;
+          }
+        }
+      }
       // Recursively process children
       if (block.children && block.children.length > 0) {
         block.children = postProcessBlocks(block.children, cssBackgroundColors);
@@ -204,21 +201,46 @@ function postProcessBlocks(blocks, cssBackgroundColors = {}) {
 
     // 1. Video embed placeholder (from pre-processing)
     if (textContent.startsWith('VIDEO_EMBED:::')) {
-      // Extract video URL from the text (format: VIDEO_EMBED:::URL)
       const videoUrl = textContent.substring('VIDEO_EMBED:::'.length).trim();
       if (videoUrl) {
         result.push({
           type: 'video',
-          props: {
-            url: videoUrl,
-            caption: ''
-          }
+          props: { url: videoUrl, caption: '' }
         });
         continue;
       }
     }
 
-    // 2. Divider block (existing detection)
+    // 1b. Image embed placeholder (from pre-processing of images inside list items)
+    if (textContent.startsWith('IMAGE_EMBED:::')) {
+      const imageUrl = textContent.substring('IMAGE_EMBED:::'.length).trim();
+      if (imageUrl) {
+        result.push({
+          type: 'image',
+          props: { url: imageUrl, caption: '', previewWidth: 512 }
+        });
+        continue;
+      }
+    }
+
+    // 2. Terminal/powershell paragraph followed by code block pattern
+    if (i + 1 < blocks.length) {
+      const nextBlock = blocks[i + 1];
+      const isTerminalBlock = textContent.toLowerCase().includes('terminal') ||
+                             textContent.toLowerCase().includes('powershell');
+
+      if (isTerminalBlock && nextBlock.type === 'codeBlock') {
+        const code = getBlockTextContent(nextBlock);
+        result.push({
+          type: 'terminal',
+          props: { title: textContent, code }
+        });
+        i++;
+        continue;
+      }
+    }
+
+    // 3. Divider block (existing detection)
     if (textContent.trim() === '' && block.props?.className?.includes('divider')) {
       result.push({ type: 'divider', props: {} });
       continue;
@@ -517,5 +539,12 @@ function getBlockTextContent(block) {
     .filter(item => item.type === 'text')
     .map(item => item.text)
     .join('');
+}
+
+/**
+ * Check if a block type is a list item variant.
+ */
+function isListItem(type) {
+  return type === 'bulletListItem' || type === 'numberedListItem' || type === 'checkListItem';
 }
 
