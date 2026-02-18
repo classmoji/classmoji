@@ -53,8 +53,22 @@ export async function migrateHtmlToBlockNote(html, schema) {
   // Pre-process: Replace video-embed divs with special paragraphs that BlockNote will parse
   // This is needed because BlockNote ignores unknown custom HTML elements
   // Embed the URL directly in the text since BlockNote doesn't preserve data attributes
+
+  // Handle iframe embeds (YouTube, Vimeo, etc.)
   bodyHtml = bodyHtml.replace(
     /<div class="video-embed">\s*<iframe[^>]*src="([^"]*)"[^>]*><\/iframe>\s*<\/div>/g,
+    '<p class="VIDEO_EMBED_PLACEHOLDER">VIDEO_EMBED:::$1</p>'
+  );
+
+  // Handle native <video> tags with <source> children
+  bodyHtml = bodyHtml.replace(
+    /<div class="video-embed">\s*<video[^>]*>\s*<source\s+src="([^"]*)"[^>]*>[^<]*<\/video>\s*<\/div>/g,
+    '<p class="VIDEO_EMBED_PLACEHOLDER">VIDEO_EMBED:::$1</p>'
+  );
+
+  // Handle native <video> tags with direct src attribute
+  bodyHtml = bodyHtml.replace(
+    /<div class="video-embed">\s*<video[^>]*src="([^"]*)"[^>]*>[^<]*<\/video>\s*<\/div>/g,
     '<p class="VIDEO_EMBED_PLACEHOLDER">VIDEO_EMBED:::$1</p>'
   );
 
