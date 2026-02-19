@@ -83,7 +83,8 @@ export const loader = async ({ request }) => {
     route =>
       url.pathname === route ||
       url.pathname.startsWith('/login') ||
-      url.pathname.startsWith('/test-login')
+      url.pathname.startsWith('/test-login') ||
+      url.pathname.startsWith('/join/')
   );
 
   // Get auth session (works for both OAuth and test-login sessions)
@@ -209,7 +210,8 @@ export const loader = async ({ request }) => {
 
         // User authenticated with GitHub but not in our DB yet - redirect to registration
         if (!user && !isPublicRoute) {
-          return redirect('/select-registration');
+          const next = url.pathname !== '/' ? `?next=${encodeURIComponent(url.pathname)}` : '';
+          return redirect(`/registration${next}`);
         }
 
         if (user && subscription) {

@@ -64,3 +64,30 @@ export const deleteManyInvites = async ids => {
     where: { id: { in: ids } },
   });
 };
+
+/**
+ * Find all invites by email only - used at registration to auto-claim pending invites
+ * @param {string} email - Student's school email
+ * @returns {Promise<Object[]>}
+ */
+export const findInvitesByEmail = async email => {
+  return prisma.classroomInvite.findMany({
+    where: { school_email: { equals: email, mode: 'insensitive' } },
+    include: { classroom: true },
+  });
+};
+
+/**
+ * Find a specific invite for a classroom by student email - used at /join/:id
+ * @param {string} classroomId - UUID of the Classroom
+ * @param {string} email - Student's school email
+ * @returns {Promise<Object|null>}
+ */
+export const findInviteByClassroomAndEmail = async (classroomId, email) => {
+  return prisma.classroomInvite.findFirst({
+    where: {
+      classroom_id: classroomId,
+      school_email: { equals: email, mode: 'insensitive' },
+    },
+  });
+};

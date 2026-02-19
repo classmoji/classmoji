@@ -1,17 +1,21 @@
-import { Button, Form, Input, Spin, Card, Alert } from 'antd';
+import { Button, Form, Input, Spin, Card, Alert, Select } from 'antd';
 import { redirect, useFetcher } from 'react-router';
 import { UserOutlined, MailOutlined, GithubOutlined } from '@ant-design/icons';
+import { IconId, IconUsers } from '@tabler/icons-react';
 
 import { Logo } from '@classmoji/ui-components';
 import { getAuthSession } from '@classmoji/auth/server';
 import prisma from '@classmoji/database';
 import { generateId } from '@classmoji/utils';
-import { GitHubProvider } from '@classmoji/services';
+import { GitHubProvider, ClassmojiService } from '@classmoji/services';
 
 export const loader = async ({ request }) => {
   const authData = await getAuthSession(request);
 
   if (!authData?.token) return redirect('/');
+
+  const url = new URL(request.url);
+  const next = url.searchParams.get('next') || '';
 
   // Get GitHub user info from the token
   const octokit = GitHubProvider.getUserOctokit(authData.token);
@@ -20,15 +24,20 @@ export const loader = async ({ request }) => {
   return {
     githubLogin: githubUser.login,
     githubId: String(githubUser.id), // GitHub provider ID
+    githubEmail: githubUser.email || null, // GitHub profile email (may be null if private)
+    next,
   };
 };
 
 const Registration = ({ loaderData }) => {
-  const { githubLogin, githubId } = loaderData;
+  const { githubLogin, githubId, githubEmail, next } = loaderData;
   const fetcher = useFetcher();
+  const [form] = Form.useForm();
+  const role = Form.useWatch('role', form);
+  const isStudentOrTA = role === 'STUDENT' || role === 'TA';
 
   const onFinish = async values => {
-    fetcher.submit(values, {
+    fetcher.submit({ ...values, githubEmail, next }, {
       method: 'POST',
       encType: 'application/json',
     });
@@ -45,8 +54,8 @@ const Registration = ({ loaderData }) => {
           <div className="flex justify-center mb-4">
             <Logo size={48} />
           </div>
-          <h1 className="text-2xl font-bold mb-2">Instructor Registration</h1>
-          <p className="text-gray-600 text-sm">Complete your instructor profile setup</p>
+          <h1 className="text-2xl font-bold mb-2">Create Your Account</h1>
+          <p className="text-gray-600 text-sm">Complete your profile to get started</p>
         </div>
 
         {/* Main Form Card */}
@@ -59,10 +68,11 @@ const Registration = ({ loaderData }) => {
           <Spin spinning={isSubmitting} tip="Setting up your account..." fullscreen />
 
           {actionError && (
-            <Alert message={actionError} type="error" showIcon className="mb-4" />
+            <Alert message={actionError} type="error" showIcon style={{ marginBottom: 12 }} />
           )}
 
           <Form
+            form={form}
             layout="vertical"
             onFinish={onFinish}
             size="middle"
@@ -138,6 +148,42 @@ const Registration = ({ loaderData }) => {
               />
             </Form.Item>
 
+            {/* Role */}
+            <Form.Item
+              label={
+                <span className="flex items-center gap-2 font-medium text-gray-700 text-sm">
+                  <IconUsers size={14} />
+                  Your Role
+                </span>
+              }
+              name="role"
+              rules={[{ required: true, message: 'Please select your role' }]}
+              className="mb-6"
+            >
+              <Select placeholder="Select your role">
+                <Select.Option value="STUDENT">Student</Select.Option>
+                <Select.Option value="TA">Teaching Assistant</Select.Option>
+                <Select.Option value="INSTRUCTOR">Instructor / Other</Select.Option>
+              </Select>
+            </Form.Item>
+
+            {/* Student ID — shown for students and TAs */}
+            {isStudentOrTA && (
+              <Form.Item
+                label={
+                  <span className="flex items-center gap-2 font-medium text-gray-700 text-sm">
+                    <IconId size={14} />
+                    Student ID
+                  </span>
+                }
+                name="student_id"
+                rules={[{ required: true, message: 'Please enter your student ID' }]}
+                className="mb-6"
+              >
+                <Input placeholder="Enter your student ID" />
+              </Form.Item>
+            )}
+
             {/* Submit Button */}
             <Button
               className="w-full h-10 text-sm font-medium !text-white"
@@ -152,7 +198,7 @@ const Registration = ({ loaderData }) => {
           {/* Help Text */}
           <div className="mt-4 text-center">
             <p className="text-xs text-gray-500">
-              You will be able to create and manage classes after registration.
+              You can create and join classrooms after registration.
             </p>
           </div>
         </Card>
@@ -200,6 +246,7 @@ export const action = async ({ request }) => {
     update: {
       name: formData.name,
       email: formData.email,
+      student_id: formData.student_id || null,
     },
     create: {
       provider: 'GITHUB',
@@ -207,6 +254,8 @@ export const action = async ({ request }) => {
       login: formData.login,
       name: formData.name,
       email: formData.email,
+      provider_email: formData.githubEmail || null,
+      student_id: formData.student_id || null,
       is_admin: true,
       subscriptions: {
         create: {
@@ -236,7 +285,27 @@ export const action = async ({ request }) => {
     data: { user_id: user.id },
   });
 
-  return redirect('/select-organization');
+  // Auto-claim any pending classroom invites matching this email
+  const invites = await ClassmojiService.classroomInvite.findInvitesByEmail(formData.email);
+  if (invites.length > 0) {
+    // Store student_id from invite on the user record
+    await prisma.user.update({
+      where: { id: user.id },
+      data: { student_id: invites[0].student_id },
+    });
+    for (const invite of invites) {
+      await ClassmojiService.classroomMembership.create({
+        classroom_id: invite.classroom_id,
+        user_id: user.id,
+        role: 'STUDENT',
+        has_accepted_invite: false,
+      });
+    }
+    await ClassmojiService.classroomInvite.deleteManyInvites(invites.map(i => i.id));
+  }
+
+  const next = formData.next;
+  return redirect(next || '/select-organization');
 };
 
 export default Registration;

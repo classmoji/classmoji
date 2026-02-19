@@ -18,7 +18,7 @@ export const action = checkAuth(async ({ request }) => {
   const { data: authenticatedUser } = await octokit.rest.users.getAuthenticated();
   const user = await ClassmojiService.user.findByLogin(authenticatedUser.login);
 
-  if (!user || !user.is_admin) {
+  if (!user) {
     return { error: 'Unauthorized' };
   }
 
