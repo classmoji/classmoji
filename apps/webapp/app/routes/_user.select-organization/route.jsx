@@ -162,7 +162,7 @@ const SelectOrganization = ({ loaderData }) => {
         <div className="flex items-center justify-between w-full">
           <h1 className="text-2xl font-bold pb-4 dark:text-gray-100">Your Classes</h1>
           <Link to="/create-classroom">
-            <Button type="primary">+ Add new class</Button>
+            <Button type="primary">+ Create new class</Button>
           </Link>
         </div>
         <div className="w-full flex flex-col justify-start flex-wrap gap-16" id="memberships">

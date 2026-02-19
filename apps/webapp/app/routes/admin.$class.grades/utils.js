@@ -15,7 +15,7 @@ export const exportToCsv = (students, assignments, filename) => {
 const getStudentRows = (students, assignments) => {
   const rows = students.map(student => {
     const studentRow = [
-      student.user.student_id,
+      student.user.school_id,
       student.user.name || student.user.login,
       student.user.login,
       roundToTwo(parseFloat(student.numeric_grade)),

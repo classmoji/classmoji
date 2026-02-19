@@ -255,7 +255,7 @@ const SingleStudentView = props => {
               <h1 className="font-bold text-xl text-gray-900">{student.name}</h1>
               <h3 className="text-gray-600 font-medium">@{student.login}</h3>
               <h3 className="text-sm text-gray-500 bg-gray-100 px-3 py-1 rounded-full">
-                ID: {student.student_id}
+                ID: {student.school_id}
               </h3>
             </div>
           </div>

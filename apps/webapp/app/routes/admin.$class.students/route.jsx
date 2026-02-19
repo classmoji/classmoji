@@ -3,8 +3,8 @@ import { namedAction } from 'remix-utils/named-action';
 import invariant from 'tiny-invariant';
 import { tasks } from '@trigger.dev/sdk';
 import { useState, useMemo } from 'react';
-import { Button, message, Tooltip } from 'antd';
-import { PlusCircleOutlined, LinkOutlined } from '@ant-design/icons';
+import { Button } from 'antd';
+import { PlusCircleOutlined } from '@ant-design/icons';
 
 import { ClassmojiService } from '@classmoji/services';
 import StudentsTable from './StudentsTable';
@@ -37,22 +37,13 @@ const StudentsScreen = ({ loaderData }) => {
   const { class: classSlug } = useParams();
   const navigate = useNavigate();
   const [query, setQuery] = useState('');
-  const [messageApi, contextHolder] = message.useMessage();
-
-  const copyInviteLink = () => {
-    const link = `${window.location.origin}/join/${classroom.id}`;
-    navigator.clipboard.writeText(link).then(() => {
-      messageApi.success('Invite link copied!');
-    });
-  };
-
   // Merge students and invitations into unified list
   const allStudents = useMemo(() => {
     const inviteList = invitations.map(inv => ({
       id: inv.id,
       name: inv.student_name,
       email: inv.school_email,
-      student_id: inv.student_id,
+      school_id: inv.student_id,
       login: 'pending-invite',
       has_accepted_invite: false,
       avatar_url: 'https://github.com/github.png?size=460',
@@ -71,7 +62,6 @@ const StudentsScreen = ({ loaderData }) => {
 
   return (
     <>
-      {contextHolder}
       <Outlet />
       <div className="flex justify-between items-center">
         <PageHeader title="Students" routeName="students" />
@@ -85,11 +75,6 @@ const StudentsScreen = ({ loaderData }) => {
           />
 
           <RequireRole roles={['OWNER']}>
-            <Tooltip title="Copy invite link for students to join">
-              <Button icon={<LinkOutlined />} onClick={copyInviteLink}>
-                Copy Invite Link
-              </Button>
-            </Tooltip>
             <Button
               icon={<PlusCircleOutlined />}
               onClick={() => navigate(`/admin/${classSlug}/students/add`)}

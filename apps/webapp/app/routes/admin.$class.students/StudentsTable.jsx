@@ -81,9 +81,9 @@ const StudentsTable = ({ students, query }) => {
       },
     },
     {
-      title: 'Student ID',
-      dataIndex: 'student_id',
-      key: 'student_id',
+      title: 'School ID',
+      dataIndex: 'school_id',
+      key: 'school_id',
       width: '15%',
       render: id => <span className="font-mono text-sm text-gray-700">{id}</span>,
     },

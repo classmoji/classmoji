@@ -213,7 +213,7 @@ export const action = checkAuth(async ({ request }) => {
     where: { id: authData.userId },
     data: {
       email,
-      student_id,
+      school_id: student_id,
       login,
       provider: 'GITHUB',
       provider_id: githubId,

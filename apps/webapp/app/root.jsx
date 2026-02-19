@@ -83,8 +83,7 @@ export const loader = async ({ request }) => {
     route =>
       url.pathname === route ||
       url.pathname.startsWith('/login') ||
-      url.pathname.startsWith('/test-login') ||
-      url.pathname.startsWith('/join/')
+      url.pathname.startsWith('/test-login')
   );
 
   // Get auth session (works for both OAuth and test-login sessions)
