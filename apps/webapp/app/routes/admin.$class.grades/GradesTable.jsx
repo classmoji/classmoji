@@ -198,15 +198,11 @@ const GradesTable = props => {
           <Checkbox checked={showComments} onChange={() => setShowComments(!showComments)}>
             Show Comments
           </Checkbox>
-          {showIssues && (
-            <>
-              <div className="h-[30px] w-[1px] bg-gray-300" />
-              <Radio.Group value={view} onChange={e => setView(e.target.value)} size="small">
-                <Radio.Button value="Emoji">🎨 Emoji</Radio.Button>
-                <Radio.Button value="Numeric">🔢 Numeric</Radio.Button>
-              </Radio.Group>
-            </>
-          )}
+          <div className="h-[30px] w-[1px] bg-gray-300" />
+          <Radio.Group value={view} onChange={e => setView(e.target.value)} size="small">
+            <Radio.Button value="Emoji">🎨 Emoji</Radio.Button>
+            <Radio.Button value="Numeric">🔢 Numeric</Radio.Button>
+          </Radio.Group>
         </div>
       </PageHeader>
 

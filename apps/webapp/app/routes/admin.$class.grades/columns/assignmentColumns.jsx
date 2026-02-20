@@ -244,6 +244,14 @@ export const createAssignmentColumns = (modules, view, showAssignments, emojiMap
             return <span className="text-gray-500 italic">None</span>;
           }
 
+          if (view === 'Emoji') {
+            const allGrades = repository.assignments?.flatMap(a => a.grades || []) || [];
+            if (allGrades.length === 0) {
+              return <span className="text-gray-500 italic">None</span>;
+            }
+            return <EmojisDisplay grades={allGrades} />;
+          }
+
           let grade = calculateRepositoryGrade(
             repository.assignments,
             emojiMappings,
