@@ -37,6 +37,16 @@ export const action = checkAuth(async ({ request }) => {
     return { error: 'GitHub organization not found' };
   }
 
+  // Verify user is admin in the selected organization
+  const { data: userOrgs } = await octokit.rest.orgs.listForAuthenticatedUser();
+  const selectedOrg = userOrgs.find(org => org.id === parseInt(gitOrg.provider_id));
+
+  if (!selectedOrg || selectedOrg.role !== 'admin') {
+    return {
+      error: 'You must be an organization admin to create a classroom'
+    };
+  }
+
   // Generate unique slug (name, term, year - no gitOrg)
   const slug = await classroomService.generateSlug(name, term, year);
 
