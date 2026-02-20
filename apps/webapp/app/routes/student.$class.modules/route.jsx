@@ -1,4 +1,5 @@
 import prisma from '@classmoji/database';
+import { useLocation } from 'react-router';
 import { ClassmojiService } from '@classmoji/services';
 import { assertClassroomAccess } from '~/utils/helpers';
 import { PageHeader } from '~/components';
@@ -75,6 +76,9 @@ export const loader = async ({ params, request }) => {
 
 const StudentModules = ({ loaderData }) => {
   const { modules, repoAssignmentsByAssignmentId, userTeamsByModuleSlug, slidesUrl, pagesUrl, classSlug } = loaderData;
+  const location = useLocation();
+  // Derive role prefix from current URL (e.g., /student or /assistant)
+  const rolePrefix = location.pathname.split('/')[1];
 
   return (
     <div>
@@ -96,6 +100,7 @@ const StudentModules = ({ loaderData }) => {
           classSlug={classSlug}
           slidesUrl={slidesUrl}
           pagesUrl={pagesUrl}
+          rolePrefix={rolePrefix}
         />
       )}
     </div>
