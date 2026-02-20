@@ -75,7 +75,6 @@ export const loader = async ({ request }) => {
     '/',
     '/select-registration',
     '/registration',
-    '/connect-account',
     '/login',
     '/test-login',
   ];

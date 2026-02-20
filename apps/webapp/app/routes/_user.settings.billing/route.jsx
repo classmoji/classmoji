@@ -7,7 +7,6 @@ import dayjs from 'dayjs';
 
 import { ClassmojiService, StripeService } from '@classmoji/services';
 import { useSubscription } from '~/hooks';
-import { RequireAdmin } from '~/components';
 import InfoCard from './InforCard';
 import { getUsageData } from './utils';
 import { getAuthSession } from '@classmoji/auth/server';
@@ -106,7 +105,7 @@ const SettingsSubscription = ({ loaderData }) => {
   }
 
   return (
-    <RequireAdmin>
+    <>
       <Spin spinning={loading} fullscreen />
       <div className="space-y-6">
         {/* Upgrade Banner for Free Users */}
@@ -260,7 +259,7 @@ const SettingsSubscription = ({ loaderData }) => {
           />
         </Card>
       </div>
-    </RequireAdmin>
+    </>
   );
 };
 

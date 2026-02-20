@@ -1,6 +1,6 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Button, Form, Input, Spin, Card, Alert, Space } from 'antd';
-import { redirect, useFetcher } from 'react-router';
+import { redirect, useFetcher, useNavigate } from 'react-router';
 import { UserOutlined, MailOutlined, GithubOutlined, CheckCircleFilled } from '@ant-design/icons';
 import { IconId } from '@tabler/icons-react';
 
@@ -8,7 +8,7 @@ import { Logo } from '@classmoji/ui-components';
 import { getAuthSession } from '@classmoji/auth/server';
 import prisma from '@classmoji/database';
 import { generateId } from '@classmoji/utils';
-import { GitHubProvider } from '@classmoji/services';
+import { GitHubProvider, ClassmojiService } from '@classmoji/services';
 import Tasks from '@classmoji/tasks';
 
 export const loader = async ({ request }) => {
@@ -32,6 +32,7 @@ const Registration = ({ loaderData }) => {
   const fetcher = useFetcher();
   const codeFetcher = useFetcher();
   const verifyFetcher = useFetcher();
+  const navigate = useNavigate();
   const [form] = Form.useForm();
   const [verifiedEmail, setVerifiedEmail] = useState(null);
 
@@ -41,6 +42,13 @@ const Registration = ({ loaderData }) => {
 
   const isSubmitting = ['submitting', 'loading'].includes(fetcher.state);
   const actionError = fetcher.data?.error;
+
+  // Handle successful registration redirect
+  useEffect(() => {
+    if (fetcher.state === 'idle' && fetcher.data && !fetcher.data.error) {
+      navigate('/select-organization');
+    }
+  }, [fetcher.state, fetcher.data, navigate]);
 
   const handleSendCode = () => {
     const email = form.getFieldValue('email');
@@ -346,7 +354,6 @@ export const action = async ({ request }) => {
       email: formData.email,
       provider_email: formData.githubEmail || null,
       school_id: formData.school_id || null,
-      is_admin: true,
       subscriptions: {
         create: {
           id: String(generateId()),
@@ -372,6 +379,20 @@ export const action = async ({ request }) => {
     },
     data: { user_id: user.id },
   });
+
+  // Claim any pending classroom invites matching email
+  const invites = await ClassmojiService.classroomInvite.findInvitesByEmail(formData.email);
+  if (invites.length > 0) {
+    for (const invite of invites) {
+      await ClassmojiService.classroomMembership.create({
+        classroom_id: invite.classroom_id,
+        user_id: user.id,
+        role: 'STUDENT',
+        has_accepted_invite: false,
+      });
+    }
+    await ClassmojiService.classroomInvite.deleteManyInvites(invites.map(i => i.id));
+  }
 
   return redirect('/select-organization');
 };

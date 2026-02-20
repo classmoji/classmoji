@@ -64,7 +64,6 @@ export const action = async ({ request, params }) => {
   if (studentsToInvite.length > 0) {
     const invites = studentsToInvite.map(student => ({
       school_email: student.email,
-      student_id: student.student_id.toUpperCase(),
       classroom_id: classroom.id,
       student_name: student.name,
     }));

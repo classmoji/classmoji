@@ -2,7 +2,6 @@ import { Popover, Avatar } from 'antd';
 import { Link, useNavigate } from 'react-router';
 
 import { useUser } from '~/hooks';
-import { RequireAdmin } from '~/components';
 import { signOut } from '@classmoji/auth/client';
 
 const ProfileDropdown = ({ children, placement = 'bottomRight' }) => {
@@ -36,9 +35,7 @@ const ProfileDropdown = ({ children, placement = 'bottomRight' }) => {
 
       <div className="flex flex-col gap-0.5 p-1.5">
         <MenuItem label="Account Settings" path="/settings/general" />
-        <RequireAdmin>
-          <MenuItem label="Usage & Billing" path="/settings/billing" />
-        </RequireAdmin>
+        <MenuItem label="Usage & Billing" path="/settings/billing" />
       </div>
 
       <div className="border-t border-gray-200 dark:border-gray-700 p-1.5">

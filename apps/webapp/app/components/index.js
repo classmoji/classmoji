@@ -64,7 +64,6 @@ import TokensLog from './shared/views/TokensLog';
 
 // Utils
 import ProTierFeature from './utils/hocs/ProTierFeature';
-import RequireAdmin from './utils/hocs/RequireAdmin';
 import RequireRole from './utils/hocs/RequireRole';
 
 export {
@@ -144,6 +143,5 @@ export {
 
   // Utils - HOCs
   ProTierFeature,
-  RequireAdmin,
   RequireRole,
 };

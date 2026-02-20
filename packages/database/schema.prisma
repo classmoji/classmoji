@@ -183,7 +183,6 @@ model User {
   name           String?
   image          String? // BetterAuth required (avatar URL)
   school_id      String? // School student ID
-  is_admin       Boolean      @default(false)
 
   // better-auth fields
   role           String?
@@ -973,14 +972,12 @@ model ClassroomInvite {
   id           String   @id @default(uuid())
   school_email String
   student_name String
-  student_id   String
   classroom_id String
   created_at   DateTime @default(now())
 
   classroom Classroom @relation(fields: [classroom_id], references: [id], onDelete: Cascade)
 
   @@unique([school_email, classroom_id])
-  @@index([school_email, student_id])
   @@index([classroom_id])
   @@map("classroom_invites")
 }

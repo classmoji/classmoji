@@ -43,7 +43,7 @@ const StudentsScreen = ({ loaderData }) => {
       id: inv.id,
       name: inv.student_name,
       email: inv.school_email,
-      school_id: inv.student_id,
+      school_id: null,
       login: 'pending-invite',
       has_accepted_invite: false,
       avatar_url: 'https://github.com/github.png?size=460',

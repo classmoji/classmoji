@@ -21,10 +21,7 @@ const UserSettings = () => {
       ),
       children: <Outlet />,
     },
-  ];
-
-  if (user?.is_admin) {
-    items.push({
+    {
       key: 'billing',
       label: (
         <span className="inline-flex items-center gap-2">
@@ -33,8 +30,8 @@ const UserSettings = () => {
         </span>
       ),
       children: <Outlet />,
-    });
-  }
+    },
+  ];
 
   return (
     <>

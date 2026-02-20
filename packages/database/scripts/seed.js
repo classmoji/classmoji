@@ -158,7 +158,6 @@ async function main() {
       login: 'prof-classmoji',
       name: 'Professor Classmoji',
       email: 'prof.classmoji@classmoji.io',
-      is_admin: true,
       provider_email: 'prof.classmoji@classmoji.io',
     },
   });

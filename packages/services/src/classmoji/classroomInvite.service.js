@@ -13,17 +13,15 @@ export const createManyInvites = async invites => {
 };
 
 /**
- * Find all invites by school email and student ID
- * Used during /connect-account to claim all invites for a student
+ * Find all invites by school email
+ * Used during registration to auto-claim invites for a student
  * @param {string} schoolEmail - Student's school email
- * @param {string} studentId - Student's school ID
  * @returns {Promise<Object[]>}
  */
-export const findInvitesByEmailAndStudentId = async (schoolEmail, studentId) => {
+export const findInvitesByEmail = async schoolEmail => {
   return prisma.classroomInvite.findMany({
     where: {
       school_email: { equals: schoolEmail, mode: 'insensitive' },
-      student_id: studentId,
     },
     include: {
       classroom: true,
