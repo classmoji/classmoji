@@ -75,7 +75,6 @@ export const loader = async ({ request }) => {
     '/',
     '/select-registration',
     '/registration',
-    '/connect-account',
     '/login',
     '/test-login',
   ];
@@ -209,7 +208,8 @@ export const loader = async ({ request }) => {
 
         // User authenticated with GitHub but not in our DB yet - redirect to registration
         if (!user && !isPublicRoute) {
-          return redirect('/select-registration');
+          const next = url.pathname !== '/' ? `?next=${encodeURIComponent(url.pathname)}` : '';
+          return redirect(`/registration${next}`);
         }
 
         if (user && subscription) {

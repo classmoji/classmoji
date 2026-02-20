@@ -35,11 +35,7 @@ const AddStudents = ({ loaderData }) => {
   const [inputText, setInputText] = useState('');
   const [parsed, setParsed] = useState(null);
 
-  // Create lookup sets for duplicate detection
-  const currentByStudentId = useMemo(
-    () => new Set(currentStudents.map(s => s.student_id?.toUpperCase())),
-    [currentStudents]
-  );
+  // Create lookup set for duplicate detection
   const currentByEmail = useMemo(
     () => new Set(currentStudents.map(s => s.email?.toLowerCase())),
     [currentStudents]
@@ -51,29 +47,23 @@ const AddStudents = ({ loaderData }) => {
 
     const valid = [];
     const skipped = [];
-    const seenIds = new Set();
     const seenEmails = new Set();
 
     for (const student of parsed) {
       if (student.error) {
         skipped.push({ ...student, reason: student.error });
-      } else if (currentByStudentId.has(student.student_id)) {
-        skipped.push({ ...student, reason: 'Already enrolled (by ID)' });
       } else if (currentByEmail.has(student.email)) {
-        skipped.push({ ...student, reason: 'Already enrolled (by email)' });
-      } else if (seenIds.has(student.student_id)) {
-        skipped.push({ ...student, reason: 'Duplicate in input (by ID)' });
+        skipped.push({ ...student, reason: 'Already enrolled' });
       } else if (seenEmails.has(student.email)) {
-        skipped.push({ ...student, reason: 'Duplicate in input (by email)' });
+        skipped.push({ ...student, reason: 'Duplicate in input' });
       } else {
         valid.push(student);
-        seenIds.add(student.student_id);
         seenEmails.add(student.email);
       }
     }
 
     return { valid, skipped };
-  }, [parsed, currentByStudentId, currentByEmail]);
+  }, [parsed, currentByEmail]);
 
   const handleParse = () => {
     const result = parseStudentInput(inputText);
@@ -107,12 +97,6 @@ const AddStudents = ({ loaderData }) => {
       title: 'Name',
       dataIndex: 'name',
       render: name => <span className="font-medium text-gray-800">{name || '-'}</span>,
-    },
-    {
-      title: 'Student ID',
-      dataIndex: 'student_id',
-      width: 120,
-      render: id => <span className="font-mono text-sm text-gray-700">{id || '-'}</span>,
     },
     {
       title: 'Email',
@@ -171,7 +155,7 @@ const AddStudents = ({ loaderData }) => {
             <Input.TextArea
               value={inputText}
               onChange={e => setInputText(e.target.value)}
-              placeholder={`John Doe, ABC123, john@school.edu\nJane Smith, DEF456, jane@school.edu`}
+              placeholder={`John Doe, john@school.edu\nJane Smith, jane@school.edu`}
               rows={6}
               className="font-mono text-sm"
               disabled={parsed !== null}

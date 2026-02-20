@@ -29,7 +29,7 @@ export const loader = async ({ request }) => {
   }
 
   if (!user?.email) {
-    return redirect('/connect-account');
+    return redirect('/registration');
   }
 
   // If not found by ID, fall back to GitHub API lookup
@@ -58,7 +58,7 @@ export const loader = async ({ request }) => {
   } else {
     // User not found by GitHub login - redirect to connect account flow
     // where they can link their GitHub to their pre-registered school account
-    return redirect('/connect-account');
+    return redirect('/registration');
   }
 
   return {
@@ -161,11 +161,9 @@ const SelectOrganization = ({ loaderData }) => {
       <div className="flex flex-col items-start justify-start gap-4 pb-16">
         <div className="flex items-center justify-between w-full">
           <h1 className="text-2xl font-bold pb-4 dark:text-gray-100">Your Classes</h1>
-          {user.is_admin && (
-            <Link to="/create-classroom">
-              <Button type="primary">+ Add new class</Button>
-            </Link>
-          )}
+          <Link to="/create-classroom">
+            <Button type="primary">+ Create new class</Button>
+          </Link>
         </div>
         <div className="w-full flex flex-col justify-start flex-wrap gap-16" id="memberships">
           {formattedMemberships}

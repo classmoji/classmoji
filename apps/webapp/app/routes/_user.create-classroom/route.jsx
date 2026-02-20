@@ -38,12 +38,7 @@ export const loader = async ({ request }) => {
   const user = await ClassmojiService.user.findByLogin(authenticatedUser.login);
 
   if (!user) {
-    return redirect('/select-registration');
-  }
-
-  // Only admins can create classrooms
-  if (!user.is_admin) {
-    return redirect('/select-organization');
+    return redirect('/registration');
   }
 
   // Get GitHub organizations the user belongs to

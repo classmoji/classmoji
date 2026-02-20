@@ -4,7 +4,8 @@ generator client {
 
 datasource db {
   provider = "postgresql"
-  url      = env("DATABASE_URL")
+  // url      = env("DATABASE_URL")
+  url      = "postgresql://classmoji:classmoji@localhost:5433/classmoji"
 }
 
 // ============================================================================
@@ -181,8 +182,7 @@ model User {
   emailVerified  Boolean      @default(false) // BetterAuth required
   name           String?
   image          String? // BetterAuth required (avatar URL)
-  student_id     String? // School student ID
-  is_admin       Boolean      @default(false)
+  school_id      String? // School student ID
 
   // better-auth fields
   role           String?
@@ -411,19 +411,19 @@ model Assignment {
 // ============================================================================
 
 model Repository {
-  id            String      @id @default(uuid())
-  provider      GitProvider
-  provider_id   String // GitHub repo ID
-  name          String
-  classroom_id  String
-  module_id     String
+  id             String      @id @default(uuid())
+  provider       GitProvider
+  provider_id    String // GitHub repo ID
+  name           String
+  classroom_id   String
+  module_id      String
   student_id     String?
   team_id        String?
   contributions  String?
   project_id     String? // GitHub Projects V2 node_id of created project
-  project_number Int?    // Project number for URL building
+  project_number Int? // Project number for URL building
   created_at     DateTime    @default(now())
-  updated_at    DateTime    @default(now()) @updatedAt
+  updated_at     DateTime    @default(now()) @updatedAt
 
   classroom   Classroom              @relation(fields: [classroom_id], references: [id], onDelete: Cascade)
   module      Module                 @relation(fields: [module_id], references: [id], onDelete: Cascade)
@@ -972,14 +972,12 @@ model ClassroomInvite {
   id           String   @id @default(uuid())
   school_email String
   student_name String
-  student_id   String
   classroom_id String
   created_at   DateTime @default(now())
 
   classroom Classroom @relation(fields: [classroom_id], references: [id], onDelete: Cascade)
 
   @@unique([school_email, classroom_id])
-  @@index([school_email, student_id])
   @@index([classroom_id])
   @@map("classroom_invites")
 }
@@ -990,10 +988,10 @@ model ClassroomInvite {
 
 model ResourceView {
   id             String   @id @default(uuid())
-  resource_path  String   // Normalized path like "pages/abc123" or "dashboard"
+  resource_path  String // Normalized path like "pages/abc123" or "dashboard"
   user_id        String
   classroom_id   String
-  viewed_as_role Role?    // The role/view used when accessing (OWNER viewing as student, etc.)
+  viewed_as_role Role? // The role/view used when accessing (OWNER viewing as student, etc.)
   last_viewed_at DateTime @default(now()) @updatedAt
 
   user      User      @relation(fields: [user_id], references: [id], onDelete: Cascade)

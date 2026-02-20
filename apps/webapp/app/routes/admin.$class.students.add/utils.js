@@ -14,17 +14,16 @@ export const parseStudentInput = text => {
       ? line.split('\t').map(p => p.trim())
       : line.split(',').map(p => p.trim());
 
-    const [name, student_id, email] = parts;
+    const [name, email] = parts;
 
     const parsed = {
       key: index,
       name: name || '',
-      student_id: (student_id || '').toUpperCase(),
       email: (email || '').toLowerCase(),
     };
 
     // Validate
-    if (!parsed.name || !parsed.student_id || !parsed.email) {
+    if (!parsed.name || !parsed.email) {
       parsed.error = 'Missing fields';
     } else if (!isValidEmail(parsed.email)) {
       parsed.error = 'Invalid email';
