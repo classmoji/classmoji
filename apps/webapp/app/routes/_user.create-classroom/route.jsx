@@ -17,7 +17,12 @@ import { slugify, getTermCode, STEPS } from './utils';
 export const loader = async ({ request }) => {
   const authData = await getAuthSession(request);
 
-  if (!authData?.token) return redirect('/');
+  if (!authData?.token) {
+    console.error('[Create Classroom] No auth token found in session');
+    return redirect('/');
+  }
+
+  console.log('[Create Classroom] Auth data:', { userId: authData.userId, hasToken: !!authData.token });
 
   const octokit = GitHubProvider.getUserOctokit(authData.token);
 
@@ -26,9 +31,17 @@ export const loader = async ({ request }) => {
   try {
     const { data } = await octokit.rest.users.getAuthenticated();
     authenticatedUser = data;
+    console.log('[Create Classroom] GitHub user authenticated:', authenticatedUser.login);
   } catch (error) {
+    console.error('[Create Classroom] GitHub API error:', {
+      status: error.status,
+      message: error.message,
+      userId: authData.userId
+    });
+
     // If bad credentials, clear revoked token from cache AND database
     if (error.status === 401 || error.message?.includes('Bad credentials')) {
+      console.error('[Create Classroom] Clearing revoked token for user:', authData.userId);
       await clearRevokedToken(authData.userId);
       return redirect('/');
     }
@@ -45,7 +58,8 @@ export const loader = async ({ request }) => {
   let userOrgs = [];
   try {
     const { data } = await octokit.rest.orgs.listForAuthenticatedUser();
-    userOrgs = data || [];
+    // Only show organizations where user is admin
+    userOrgs = (data || []).filter(org => org.role === 'admin');
   } catch (error) {
     console.error('Error fetching user orgs:', error.message);
   }
