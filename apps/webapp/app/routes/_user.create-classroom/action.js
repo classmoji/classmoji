@@ -37,13 +37,28 @@ export const action = checkAuth(async ({ request }) => {
     return { error: 'GitHub organization not found' };
   }
 
-  // Verify user is admin in the selected organization
-  const { data: userOrgs } = await octokit.rest.orgs.listForAuthenticatedUser();
-  const selectedOrg = userOrgs.find(org => org.id === parseInt(gitOrg.provider_id));
+  // Verify user is admin in the selected organization using GraphQL
+  try {
+    const { organization } = await octokit.graphql(`
+      query($login: String!) {
+        organization(login: $login) {
+          login
+          viewerCanAdminister
+        }
+      }
+    `, {
+      login: gitOrg.login
+    });
 
-  if (!selectedOrg || selectedOrg.role !== 'admin') {
+    if (!organization?.viewerCanAdminister) {
+      return {
+        error: 'You must be an organization admin to create a classroom'
+      };
+    }
+  } catch (error) {
+    console.error('Error checking org membership:', error.message);
     return {
-      error: 'You must be an organization admin to create a classroom'
+      error: 'Unable to verify organization membership'
     };
   }
 

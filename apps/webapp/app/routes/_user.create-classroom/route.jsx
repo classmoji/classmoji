@@ -17,12 +17,7 @@ import { slugify, getTermCode, STEPS } from './utils';
 export const loader = async ({ request }) => {
   const authData = await getAuthSession(request);
 
-  if (!authData?.token) {
-    console.error('[Create Classroom] No auth token found in session');
-    return redirect('/');
-  }
-
-  console.log('[Create Classroom] Auth data:', { userId: authData.userId, hasToken: !!authData.token });
+  if (!authData?.token) return redirect('/');
 
   const octokit = GitHubProvider.getUserOctokit(authData.token);
 
@@ -31,17 +26,9 @@ export const loader = async ({ request }) => {
   try {
     const { data } = await octokit.rest.users.getAuthenticated();
     authenticatedUser = data;
-    console.log('[Create Classroom] GitHub user authenticated:', authenticatedUser.login);
   } catch (error) {
-    console.error('[Create Classroom] GitHub API error:', {
-      status: error.status,
-      message: error.message,
-      userId: authData.userId
-    });
-
     // If bad credentials, clear revoked token from cache AND database
     if (error.status === 401 || error.message?.includes('Bad credentials')) {
-      console.error('[Create Classroom] Clearing revoked token for user:', authData.userId);
       await clearRevokedToken(authData.userId);
       return redirect('/');
     }
@@ -54,12 +41,40 @@ export const loader = async ({ request }) => {
     return redirect('/registration');
   }
 
-  // Get GitHub organizations the user belongs to
+  // Get GitHub organizations the user belongs to (admin only)
+  // Use GraphQL for efficient single-query fetch with admin status
   let userOrgs = [];
   try {
-    const { data } = await octokit.rest.orgs.listForAuthenticatedUser();
-    // Only show organizations where user is admin
-    userOrgs = (data || []).filter(org => org.role === 'admin');
+    const { viewer } = await octokit.graphql(`
+      {
+        viewer {
+          organizations(first: 100) {
+            nodes {
+              id
+              databaseId
+              login
+              name
+              avatarUrl
+              description
+              url
+              viewerCanAdminister
+            }
+          }
+        }
+      }
+    `);
+
+    // Map GraphQL response to REST API format and filter to admin-only
+    userOrgs = viewer.organizations.nodes
+      .filter(org => org.viewerCanAdminister)
+      .map(org => ({
+        id: org.databaseId, // GitHub's numeric ID
+        node_id: org.id, // GraphQL global ID
+        login: org.login,
+        avatar_url: org.avatarUrl,
+        description: org.description || '',
+        url: org.url,
+      }));
   } catch (error) {
     console.error('Error fetching user orgs:', error.message);
   }
@@ -267,12 +282,7 @@ const CreateClassroom = ({ loaderData }) => {
         </>
       ) : (
         <Card>
-          <Steps
-            current={currentStep}
-            items={STEPS}
-            style={{ marginBottom: 24 }}
-            size="small"
-          />
+          <Steps current={currentStep} items={STEPS} style={{ marginBottom: 24 }} size="small" />
 
           <FormProvider {...methods}>
             {currentStep === 0 && (
@@ -308,11 +318,7 @@ const CreateClassroom = ({ loaderData }) => {
             )}
 
             <div className="flex justify-between mt-8">
-              <div>
-                {currentStep > 0 && (
-                  <Button onClick={handlePrev}>Previous</Button>
-                )}
-              </div>
+              <div>{currentStep > 0 && <Button onClick={handlePrev}>Previous</Button>}</div>
               <div className="flex gap-3">
                 {currentStep === 0 && (
                   <Button onClick={() => navigate('/select-organization')}>Cancel</Button>
@@ -338,12 +344,7 @@ const CreateClassroom = ({ loaderData }) => {
 
       {gitOrgs.length > 0 && (
         <div className="mt-6 text-center">
-          <Button
-            type="link"
-            onClick={openInstallPopup}
-            loading={isRefreshing}
-            className="text-sm"
-          >
+          <Button type="link" onClick={openInstallPopup} loading={isRefreshing} className="text-sm">
             Install GitHub App on another organization
           </Button>
         </div>
