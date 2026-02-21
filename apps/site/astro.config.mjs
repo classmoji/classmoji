@@ -42,6 +42,15 @@ export default defineConfig({
           ],
         },
         {
+          label: '🎒 For Students',
+          items: [
+            { label: 'Join a classroom', slug: 'docs/students/join-a-classroom' },
+            { label: 'Submit assignments', slug: 'docs/students/submit-assignments' },
+            { label: 'Use tokens', slug: 'docs/students/use-tokens' },
+            { label: 'View grades', slug: 'docs/students/view-grades' },
+          ],
+        },
+        {
           label: '🐳 Self-hosting',
           items: [
             { label: 'Deploy with Docker', slug: 'docs/self-hosting/docker' },

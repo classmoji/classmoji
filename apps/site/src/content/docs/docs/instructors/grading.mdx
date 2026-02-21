@@ -3,4 +3,44 @@ title: Grading
 description: How emoji grading works and how to grade assignments
 ---
 
-Coming soon.
+Classmoji replaces numeric scores with emojis. Each emoji maps to a numeric value you configure, so grading stays expressive without losing precision.
+
+### Emoji mappings
+
+Before grading, set up your emoji mappings in **Settings > Grades**. Each emoji you add gets assigned a numeric value (0–100). You can click **Populate defaults** to start with a sensible set.
+
+When you grade a submission, you pick from these emojis. If you assign multiple emojis to a submission, the grade is the average of their values.
+
+### Grading an assignment
+
+Open a module from the sidebar and find the assignment you want to grade. Each student or team row has an emoji picker — click it to open, then click an emoji to add a grade. Click the same emoji again to remove it.
+
+Assignments are graded per submission (one repository per student or team). You can assign graders to specific submissions from the module view, so grading responsibilities stay organized across large classes.
+
+### Releasing grades
+
+Grades are hidden from students by default. Each assignment has a **release toggle** in the module view. Flip it to release grades for that assignment — students will see their grade immediately.
+
+Releasing is per-assignment, so you can release one assignment while keeping others hidden.
+
+### Grade calculations
+
+**Assignment grade** — the average of all emoji values applied to that submission.
+
+**Module grade** — the average of all assignment grades within the module. If drop lowest is enabled for the module, the single lowest assignment grade is excluded from the average.
+
+**Final grade** — the average of all module grades. Each module contributes equally unless you configure weights in **Settings > Grades**.
+
+### Letter grades
+
+Map numeric ranges to letter grades in **Settings > Grades** (for example, 90–100 = A, 80–89 = B). Once configured, letter grades appear alongside numeric grades in the gradebook.
+
+### Late penalties
+
+You can apply a late penalty per assignment. When enabled, submissions after the deadline are automatically docked by the configured percentage. The penalty is applied before the grade feeds into module and final grade calculations.
+
+### Gradebook
+
+The **Grades** page shows a full gradebook: every student as a row, every assignment as a column. You can toggle between emoji view and numeric view, search by student name or login, and edit letter grades inline.
+
+For each student you can also leave a grade comment — open the comment panel from the gradebook row to add notes visible only to staff.

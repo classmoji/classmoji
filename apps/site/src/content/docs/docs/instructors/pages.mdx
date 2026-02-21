@@ -1,6 +1,67 @@
 ---
 title: Pages
-description: How to create and manage pages inside modules
+description: How to create and manage content pages in your classroom
 ---
 
-Coming soon.
+### What is a page?
+
+A page is a piece of course content you write and host for your students. Think lecture notes, project specs, reference guides, or any structured material you want to share alongside assignments.
+
+Pages live in a Github repository that Classmoji creates automatically for your classroom (`content-{org}-{term}`). Each page is stored as an HTML file and served from Github Pages. Students access them directly from the classroom.
+
+### Creating a page
+
+Go to **Pages** and click **New Page**. There are three ways to create a page.
+
+**Create blank**
+
+Creates an empty page you fill in with the editor. Good for writing content from scratch.
+
+- **Title**: becomes the page slug (e.g. "Week 3 Notes" -> `week-3-notes`)
+
+**Import**
+
+Convert an existing Markdown file into a hosted page.
+
+- **Title**: the page name
+- **Markdown file**: upload a `.md` file and it gets converted to styled HTML
+- **Images**: optionally upload image files alongside the markdown. Classmoji matches references in the markdown to the uploaded files and rewrites the paths automatically
+
+**Batch import**
+
+Import multiple pages at once from a folder of Markdown files. Useful when migrating existing course notes.
+
+Pages are uploaded sequentially with a progress bar. Failed pages are reported at the end without stopping the rest.
+
+### Editing a page
+
+Click a page title (or the edit button) from the Pages list. This opens the pages editor where you can write and format content visually. Changes are saved back to Github automatically.
+
+### Page status
+
+Each page has a status that controls who can see it.
+
+| Status | Who can access |
+|--------|---------------|
+| **Draft** | Nobody. The page is hidden from all students. |
+| **Private** | Enrolled students only (requires login) |
+| **Public** | Anyone with the link, no login required |
+
+Change status from the dropdown in the Pages table. This is useful for releasing content on a schedule: draft it first, then set it to private or public when you're ready.
+
+### Student navigation menu
+
+The **Menu** toggle controls whether a page appears in the student sidebar navigation. Turn it on for pages you want students to find easily (e.g. the course syllabus or a reference sheet). Leave it off for supplemental content you link to from within assignments.
+
+### What students see
+
+Students navigate to a page via the classroom menu or a direct link. The page renders as a clean, styled document. Public pages work without a login, so you can share them with anyone.
+
+### Viewer tracking
+
+The Pages list shows recent viewers for each page, with avatars grouped by role (students, teaching team). Hover to see total view counts. Useful for knowing which materials students are actually reading.
+
+### What's next
+
+- [Manage modules and assignments](/docs/instructors/modules-and-assignments)
+- [Grade assignments](/docs/instructors/grading)

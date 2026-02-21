@@ -1,0 +1,74 @@
+---
+interface Card {
+  emoji: string;
+  title: string;
+  description: string;
+  href: string;
+}
+
+interface Props {
+  cards: Card[];
+}
+
+const { cards } = Astro.props;
+---
+
+<div class="doc-cards">
+  {cards.map(card => (
+    <a href={card.href} class="doc-card">
+      <span class="doc-card-emoji">{card.emoji}</span>
+      <span class="doc-card-title">{card.title}</span>
+      <span class="doc-card-description">{card.description}</span>
+    </a>
+  ))}
+</div>
+
+<style>
+  .doc-cards {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 1rem;
+    margin-top: 2rem;
+  }
+
+  .doc-card {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+    padding: 1.25rem 1.5rem;
+    border: 1px solid var(--sl-color-gray-5);
+    border-radius: 8px;
+    text-decoration: none;
+    transition: border-color 0.15s ease, transform 0.15s ease;
+    background: var(--sl-color-black);
+  }
+
+  .doc-card:hover {
+    border-color: var(--sl-color-accent);
+    transform: translateY(-2px);
+  }
+
+  .doc-card-emoji {
+    font-size: 1.5rem;
+    line-height: 1;
+    margin-bottom: 0.25rem;
+  }
+
+  .doc-card-title {
+    font-size: 1rem;
+    font-weight: 600;
+    color: var(--sl-color-white);
+  }
+
+  .doc-card-description {
+    font-size: 0.85rem;
+    color: var(--sl-color-gray-3);
+    line-height: 1.4;
+  }
+
+  @media (max-width: 600px) {
+    .doc-cards {
+      grid-template-columns: 1fr;
+    }
+  }
+</style>
