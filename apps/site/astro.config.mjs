@@ -23,30 +23,44 @@ export default defineConfig({
       ],
       sidebar: [
         {
-          label: '👨‍🏫 For Instructors',
+          label: '👋 Introduction',
           items: [
-            { label: 'Getting Started', slug: 'docs/instructors' },
+            { label: 'Welcome', slug: 'docs' },
+            { label: 'Getting started', slug: 'docs/introduction/getting-started' },
+            { label: 'Core concepts', slug: 'docs/introduction/fundamentals' },
           ],
         },
         {
-          label: '🧑‍💻 For Students',
+          label: '👨‍🏫 For Instructors',
           items: [
-            { label: 'Getting Started', slug: 'docs/students' },
+            { label: 'Create a classroom', slug: 'docs/instructors' },
+            { label: 'Manage your roster', slug: 'docs/instructors/roster' },
+            { label: 'Modules & assignments', slug: 'docs/instructors/modules-and-assignments' },
+            { label: 'Grade assignments', slug: 'docs/instructors/grading' },
+            { label: 'Configure tokens', slug: 'docs/instructors/tokens' },
+            { label: 'Build pages', slug: 'docs/instructors/pages' },
+          ],
+        },
+        {
+          label: '🐳 Self-hosting',
+          items: [
+            { label: 'Deploy with Docker', slug: 'docs/self-hosting/docker' },
+            { label: 'Environment variables', slug: 'docs/self-hosting/environment-variables' },
           ],
         },
         {
           label: '🌐 Open Source',
           items: [
-            { label: 'Contributing', slug: 'docs/contributing' },
-            { label: 'GitHub Repo', link: 'https://github.com/classmoji/classmoji' },
-            { label: 'Roadmap', link: 'https://github.com/orgs/classmoji/projects/classmoji-roadmap' },
+            { label: 'Contributing', slug: 'docs/open-source/contributing' },
+            { label: 'Gitbub repo', link: 'https://github.com/classmoji/classmoji' },
+            { label: 'Roadmap', link: 'https://github.com/orgs/classmoji/projects/2' },
           ],
         },
       ],
       social: [
         {
           icon: 'github',
-          label: 'GitHub',
+          label: 'Github',
           href: 'https://github.com/classmoji/classmoji',
         },
       ],
