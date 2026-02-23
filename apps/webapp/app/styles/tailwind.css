@@ -8,17 +8,17 @@
 /*
    * Primary Color - Apple Green 🍏
    */
-  --color-primary: #48a524;
+  --color-primary: #21883d;
   --color-primary-50: #e6f4ea;
-  --color-primary-100: #48a524;
-  --color-primary-200: #48a524;
-  --color-primary-300: #48a524;
-  --color-primary-400: #48a524;
-  --color-primary-500: #48a524;
-  --color-primary-600: #48a524;
-  --color-primary-700: #48a524;
-  --color-primary-800: #4a9e23;
-  --color-primary-900: #3a7e1c;
+  --color-primary-100: #21883d;
+  --color-primary-200: #21883d;
+  --color-primary-300: #21883d;
+  --color-primary-400: #21883d;
+  --color-primary-500: #21883d;
+  --color-primary-600: #21883d;
+  --color-primary-700: #21883d;
+  --color-primary-800: #1a6e31;
+  --color-primary-900: #145526;
 
   /*
    * Secondary Color - Apple Red 🍎

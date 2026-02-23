@@ -239,7 +239,9 @@ const CommonLayout = ({
         <div
           className={`flex items-center ${collapsed ? 'justify-center' : 'justify-start'} h-[53px] px-4 py-3 border-b border-gray-200 dark:border-gray-800`}
         >
-          {collapsed ? <Logo size={32} variant="icon" /> : <Logo size={32} variant="full" />}
+          <Link to="/select-organization" className="flex items-center">
+            {collapsed ? <Logo size={32} variant="icon" /> : <Logo size={32} variant="full" />}
+          </Link>
         </div>
 
         {/* Navigation */}
