@@ -57,7 +57,6 @@
   },
   "dependencies": {
     "@infisical/sdk": "^3.0.91",
-    "@trigger.dev/sdk": "4.4.0",
     "dayjs": "^1.11.13",
     "dotenv": "^16.4.5",
     "highlight.js": "^11.11.1",
