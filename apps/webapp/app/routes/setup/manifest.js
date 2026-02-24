@@ -10,7 +10,7 @@ export function buildManifest(baseUrl, name) {
     redirect_url: `${baseUrl}/setup/callback`,
     callback_urls: [`${baseUrl}/api/auth/callback/github`],
     description: 'GitHub App for Classmoji classroom management',
-    public: false,
+    public: true,
     default_permissions: {
       actions: 'write',
       administration: 'write',

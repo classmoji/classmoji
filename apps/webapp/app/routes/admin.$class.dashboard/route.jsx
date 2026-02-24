@@ -33,8 +33,12 @@ export const loader = async ({ params, request }) => {
   const gitOrgLogin = classroom.git_organization?.login;
   let githubOrganization = null;
   if (gitOrgLogin && classroom.git_organization?.github_installation_id) {
-    const gitProvider = getGitProvider(classroom.git_organization);
-    githubOrganization = await gitProvider.getOrganization(gitOrgLogin);
+    try {
+      const gitProvider = getGitProvider(classroom.git_organization);
+      githubOrganization = await gitProvider.getOrganization(gitOrgLogin);
+    } catch {
+      // GitHub API unavailable or installation invalid (e.g. dev seed with fake installation ID)
+    }
   }
 
   const promises = {

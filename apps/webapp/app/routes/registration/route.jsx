@@ -36,7 +36,7 @@ export const loader = async ({ request }) => {
         email,
         provider_email: githubUser.email || null,
         school_id: 'dev',
-        subscriptions: { create: { id: String(generateId()), tier: 'FREE' } },
+        subscriptions: { create: { id: String(generateId()), tier: 'PRO' } },
       },
     });
 
@@ -51,6 +51,18 @@ export const loader = async ({ request }) => {
       data: { user_id: user.id },
     });
 
+    // Auto-join the dev classroom as OWNER and redirect straight to dashboard
+    const devClassroom = await prisma.classroom.findFirst({
+      where: { slug: 'classmoji-dev-winter-2025' },
+    });
+    if (devClassroom) {
+      await prisma.classroomMembership.upsert({
+        where: { classroom_id_user_id: { classroom_id: devClassroom.id, user_id: user.id } },
+        update: {},
+        create: { classroom_id: devClassroom.id, user_id: user.id, role: 'OWNER', has_accepted_invite: true },
+      });
+      return redirect(`/admin/${devClassroom.slug}/dashboard`);
+    }
     return redirect('/select-organization');
   }
 

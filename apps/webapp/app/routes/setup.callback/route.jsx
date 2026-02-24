@@ -21,7 +21,11 @@ function updateEnvFile(envPath, vars) {
     }
   }
 
-  fs.writeFileSync(envPath, content, 'utf-8');
+  // Write atomically via temp file + rename — collapses two fs events into one
+  // so Vite only restarts once instead of twice
+  const tmp = `${envPath}.tmp`;
+  fs.writeFileSync(tmp, content, 'utf-8');
+  fs.renameSync(tmp, envPath);
 }
 
 export const loader = async ({ request }) => {
