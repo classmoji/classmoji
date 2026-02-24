@@ -11,7 +11,7 @@ export const loader = async ({ request }) => {
     return redirect('/select-organization');
   }
 
-  return { isDev: process.env.MODE === 'development' };
+  return { isDev: process.env.NODE_ENV === 'development' };
 };
 
 const Index = ({ loaderData }) => {
