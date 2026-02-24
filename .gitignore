@@ -4,7 +4,8 @@ node_modules
 .env.real
 .DS_Store
 .react-router
-.claude
+.claude/*
+!.claude/skills
 .mcp.json
 .cursor
 .codebases
