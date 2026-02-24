@@ -2,7 +2,7 @@ import { Avatar } from 'antd';
 import { useUser } from '~/hooks';
 import { IconChevronDown } from '@tabler/icons-react';
 import { Logo } from '@classmoji/ui-components';
-import { ProfileDropdown } from '~/components';
+import ProfileDropdown from '~/components/features/profile/ProfileDropdown';
 
 const UserHeader = () => {
   const { user } = useUser();

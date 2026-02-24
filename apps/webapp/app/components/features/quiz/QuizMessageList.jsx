@@ -15,7 +15,8 @@ import ReactMarkdown from 'react-markdown';
 import rehypeHighlight from 'rehype-highlight';
 import dayjs from 'dayjs';
 import { checkForCompletion, parseQuestionComplete } from '~/utils/quizUtils';
-import { QuizEvaluation, TypingIndicator } from '~/components';
+import QuizEvaluation from '~/components/ui/display/QuizEvaluation';
+import TypingIndicator from '~/components/ui/feedback/TypingIndicator';
 import QuestionCard from './QuestionCard';
 import ProgressDivider from './ProgressDivider';
 

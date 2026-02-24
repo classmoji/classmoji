@@ -56,12 +56,13 @@ export const loader = async ({ request }) => {
       where: { slug: 'classmoji-dev-winter-2025' },
     });
     if (devClassroom) {
-      await prisma.classroomMembership.upsert({
-        where: { classroom_id_user_id: { classroom_id: devClassroom.id, user_id: user.id } },
-        update: {},
-        create: { classroom_id: devClassroom.id, user_id: user.id, role: 'OWNER', has_accepted_invite: true },
-      });
-      return redirect(`/admin/${devClassroom.slug}/dashboard`);
+      for (const role of ['OWNER', 'ASSISTANT', 'STUDENT']) {
+        await prisma.classroomMembership.upsert({
+          where: { classroom_id_user_id_role: { classroom_id: devClassroom.id, user_id: user.id, role } },
+          update: {},
+          create: { classroom_id: devClassroom.id, user_id: user.id, role, has_accepted_invite: true },
+        });
+      }
     }
     return redirect('/select-organization');
   }

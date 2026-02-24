@@ -15,12 +15,13 @@ export const loader = async ({ request }) => {
   const url = new URL(request.url);
   return {
     isDev: process.env.NODE_ENV === 'development',
+    multipleTokens: process.env.MULTIPLE_TOKENS === 'true',
     setupComplete: url.searchParams.get('setup') === 'complete',
   };
 };
 
 const Index = ({ loaderData }) => {
-  const { isDev, setupComplete } = loaderData;
+  const { isDev, setupComplete, multipleTokens } = loaderData;
 
   const handleGitHubLogin = async () => {
     // Use BetterAuth client for OAuth flow
@@ -48,36 +49,40 @@ const Index = ({ loaderData }) => {
           GitHub OAuth
         </button>
 
-        <div className="flex gap-3 mt-4">
-          <button
-            onClick={() => (window.location.href = '/test-login?role=owner')}
-            className="font-medium bg-violet-500/80 hover:bg-violet-500 text-white rounded-md px-4 py-2 text-sm cursor-pointer"
-          >
-            Owner
-          </button>
-          <button
-            onClick={() => (window.location.href = '/test-login?role=instructor')}
-            className="font-medium bg-amber-500/80 hover:bg-amber-500 text-white rounded-md px-4 py-2 text-sm cursor-pointer"
-          >
-            Instructor
-          </button>
-          <button
-            onClick={() => (window.location.href = '/test-login?role=ta')}
-            className="font-medium bg-sky-500/80 hover:bg-sky-500 text-white rounded-md px-4 py-2 text-sm cursor-pointer"
-          >
-            TA
-          </button>
-          <button
-            onClick={() => (window.location.href = '/test-login?role=student')}
-            className="font-medium bg-primary/80 hover:bg-primary text-white rounded-md px-4 py-2 text-sm cursor-pointer"
-          >
-            Student
-          </button>
-        </div>
+        {multipleTokens && (
+          <>
+            <div className="flex gap-3 mt-4">
+              <button
+                onClick={() => (window.location.href = '/test-login?role=owner')}
+                className="font-medium bg-violet-500/80 hover:bg-violet-500 text-white rounded-md px-4 py-2 text-sm cursor-pointer"
+              >
+                Owner
+              </button>
+              <button
+                onClick={() => (window.location.href = '/test-login?role=instructor')}
+                className="font-medium bg-amber-500/80 hover:bg-amber-500 text-white rounded-md px-4 py-2 text-sm cursor-pointer"
+              >
+                Instructor
+              </button>
+              <button
+                onClick={() => (window.location.href = '/test-login?role=ta')}
+                className="font-medium bg-sky-500/80 hover:bg-sky-500 text-white rounded-md px-4 py-2 text-sm cursor-pointer"
+              >
+                TA
+              </button>
+              <button
+                onClick={() => (window.location.href = '/test-login?role=student')}
+                className="font-medium bg-primary/80 hover:bg-primary text-white rounded-md px-4 py-2 text-sm cursor-pointer"
+              >
+                Student
+              </button>
+            </div>
 
-        <div className="text-gray-400 dark:text-gray-500 text-xs mt-2">
-          Quick login uses test tokens from environment
-        </div>
+            <div className="text-gray-400 dark:text-gray-500 text-xs mt-2">
+              Quick login uses test tokens from environment
+            </div>
+          </>
+        )}
       </div>
     );
   }

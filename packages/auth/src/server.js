@@ -540,9 +540,11 @@ export const assertClassroomAccess = async ({
     });
   }
 
+  const rolesForLookup = Array.isArray(allowedRoles) ? allowedRoles : allowedRoles ? [allowedRoles] : [];
   const membership = await ClassmojiService.classroomMembership.findByClassroomAndUser(
     classroom.id,
-    authData.userId
+    authData.userId,
+    rolesForLookup.length ? rolesForLookup : null
   );
 
   // Determine access rights
