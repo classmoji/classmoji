@@ -1,4 +1,3 @@
-import { useEffect } from 'react';
 import { redirect } from 'react-router';
 import fs from 'fs';
 import path from 'path';
@@ -76,10 +75,6 @@ export const loader = async ({ request }) => {
   if (client_id) process.env.GITHUB_CLIENT_ID = client_id;
   if (client_secret) process.env.GITHUB_CLIENT_SECRET = client_secret;
 
-  // Defer the .env write so the HTTP response is sent first.
-  // Writing .env synchronously causes Vite to restart mid-request, dropping the
-  // connection and triggering a browser retry with the same (now expired) code.
-  //
   // Walk up from process.cwd() to find the monorepo root (contains turbo.json).
   // process.cwd() is apps/webapp/ when run via Turbo, not the repo root.
   function findMonorepoRoot(startDir) {
@@ -91,41 +86,25 @@ export const loader = async ({ request }) => {
       dir = parent;
     }
   }
-  const envPath = path.join(findMonorepoRoot(process.cwd()), '.env');
+  const githubVars = {
+    GITHUB_APP_ID: String(id),
+    GITHUB_PRIVATE_KEY_BASE64: privateKeyBase64,
+    ...(webhook_secret ? { GITHUB_WEBHOOK_SECRET: webhook_secret } : {}),
+    ...(name ? { GITHUB_APP_NAME: name } : {}),
+    ...(client_id ? { GITHUB_CLIENT_ID: client_id } : {}),
+    ...(client_secret ? { GITHUB_CLIENT_SECRET: client_secret } : {}),
+  };
+
+  // Defer the .env write so Vite restarts after the redirect is followed.
+  // Writing synchronously would restart Vite mid-request; the browser would
+  // retry /setup/callback?code=XXX with the already-consumed code (404).
+  // A 1s delay lets the browser land on '/' before Vite restarts.
+  const monorepoRoot = findMonorepoRoot(process.cwd());
   setTimeout(() => {
-    updateEnvFile(envPath, {
-      GITHUB_APP_ID: String(id),
-      GITHUB_PRIVATE_KEY_BASE64: privateKeyBase64,
-      ...(webhook_secret ? { GITHUB_WEBHOOK_SECRET: webhook_secret } : {}),
-      ...(name ? { GITHUB_APP_NAME: name } : {}),
-      ...(client_id ? { GITHUB_CLIENT_ID: client_id } : {}),
-      ...(client_secret ? { GITHUB_CLIENT_SECRET: client_secret } : {}),
-    });
-  }, 500);
+    updateEnvFile(path.join(monorepoRoot, '.env'), githubVars);
+  }, 1000);
 
-  return { success: true };
+  // Redirect immediately — process.env is already set in memory above,
+  // so the root guard won't redirect back to /setup.
+  return redirect('/?setup=complete');
 };
-
-const SetupCallback = ({ loaderData }) => {
-  const { success } = loaderData;
-
-  useEffect(() => {
-    if (success) {
-      // Delay to allow the dev server to finish restarting after .env was written
-      const timer = setTimeout(() => {
-        window.location.href = '/';
-      }, 1500);
-      return () => clearTimeout(timer);
-    }
-  }, [success]);
-
-  return (
-    <div className="min-h-screen bg-gray-50 dark:bg-gray-950 flex items-center justify-center">
-      <p className="text-gray-600 dark:text-gray-400">
-        {success ? 'GitHub App configured! Redirecting...' : 'Configuring GitHub App...'}
-      </p>
-    </div>
-  );
-};
-
-export default SetupCallback;

@@ -20,6 +20,40 @@ export const loader = async ({ request }) => {
   const octokit = GitHubProvider.getUserOctokit(authData.token);
   const { data: githubUser } = await octokit.rest.users.getAuthenticated();
 
+  // In local dev, skip the registration form entirely — auto-register using GitHub profile data.
+  if (process.env.NODE_ENV === 'development') {
+    const githubId = String(githubUser.id);
+    const email = githubUser.email || `${githubUser.login}@dev.local`;
+
+    const user = await prisma.user.upsert({
+      where: { provider_provider_id: { provider: 'GITHUB', provider_id: githubId } },
+      update: { email, name: githubUser.name || githubUser.login },
+      create: {
+        provider: 'GITHUB',
+        provider_id: githubId,
+        login: githubUser.login,
+        name: githubUser.name || githubUser.login,
+        email,
+        provider_email: githubUser.email || null,
+        school_id: 'dev',
+        subscriptions: { create: { id: String(generateId()), tier: 'FREE' } },
+      },
+    });
+
+    if (authData?.session?.session?.id) {
+      await prisma.session.updateMany({
+        where: { id: authData.session.session.id },
+        data: { user_id: user.id },
+      });
+    }
+    await prisma.account.updateMany({
+      where: { provider_id: 'github', account_id: githubId },
+      data: { user_id: user.id },
+    });
+
+    return redirect('/select-organization');
+  }
+
   return {
     githubLogin: githubUser.login,
     githubId: String(githubUser.id),

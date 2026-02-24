@@ -1,5 +1,6 @@
 import { redirect } from 'react-router';
 
+import { Alert } from 'antd';
 import { auth } from '@classmoji/auth/server';
 import { authClient } from '@classmoji/auth/client';
 import SignInPage from './SignInPage';
@@ -11,11 +12,15 @@ export const loader = async ({ request }) => {
     return redirect('/select-organization');
   }
 
-  return { isDev: process.env.NODE_ENV === 'development' };
+  const url = new URL(request.url);
+  return {
+    isDev: process.env.NODE_ENV === 'development',
+    setupComplete: url.searchParams.get('setup') === 'complete',
+  };
 };
 
 const Index = ({ loaderData }) => {
-  const { isDev } = loaderData;
+  const { isDev, setupComplete } = loaderData;
 
   const handleGitHubLogin = async () => {
     // Use BetterAuth client for OAuth flow
@@ -25,10 +30,15 @@ const Index = ({ loaderData }) => {
     });
   };
 
+  const setupBanner = setupComplete && (
+    <Alert type="success" message="Github App configured successfully. Sign in to get started." />
+  );
+
   // In development, show quick login buttons for each role
   if (isDev) {
     return (
       <div className="flex flex-col items-center justify-center h-screen bg-lightGray dark:bg-gray-900 gap-4">
+        {setupBanner}
         <div className="text-gray-500 dark:text-gray-400 text-sm mb-2">Development Login</div>
 
         <button
@@ -73,7 +83,12 @@ const Index = ({ loaderData }) => {
   }
 
   // Staging: single OAuth button
-  return <SignInPage handleGitHubLogin={handleGitHubLogin} />;
+  return (
+    <>
+      {setupBanner}
+      <SignInPage handleGitHubLogin={handleGitHubLogin} />
+    </>
+  );
 };
 
 export default Index;

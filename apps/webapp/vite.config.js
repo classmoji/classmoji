@@ -7,6 +7,9 @@ import tailwindcss from '@tailwindcss/vite';
 
 export default () => {
   return defineConfig({
+    // Load .env from monorepo root so Vite watches it for changes.
+    // This triggers a dev server restart when the setup wizard writes GitHub credentials.
+    envDir: '../../',
     ssr: {
       noExternal: ['use-sound'],
     },

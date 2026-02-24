@@ -1,9 +1,14 @@
-import { useOutlet } from 'react-router';
+import { useOutlet, redirect } from 'react-router';
 import { Button } from 'antd';
 import { Logo } from '@classmoji/ui-components';
 import { buildManifest } from './manifest.js';
 
 export const loader = async ({ request }) => {
+  // If credentials are already configured, skip setup
+  if (process.env.GITHUB_APP_ID) {
+    return redirect('/');
+  }
+
   const url = new URL(request.url);
   const error = url.searchParams.get('error');
 
