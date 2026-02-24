@@ -1,6 +1,7 @@
 .turbo
 node_modules
 .env
+.env.real
 .DS_Store
 .react-router
 .claude

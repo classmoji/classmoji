@@ -53,7 +53,7 @@ export const action = async ({ request, params }) => {
         subject: `[Classmoji] You've been added to ${classroom.name}`,
         html: `<p>Hi ${student.userName || student.name}!</p>
           <p>You have been added to <b>${classroom.name}</b> on Classmoji.</p>
-          <p>Click the following link to access your classroom: <a href="${process.env.HOST_URL}">${process.env.HOST_URL}</a></p>`,
+          <p>Click the following link to access your classroom: <a href="${process.env.WEBAPP_URL}">${process.env.WEBAPP_URL}</a></p>`,
       },
     }));
 
@@ -77,7 +77,7 @@ export const action = async ({ request, params }) => {
         subject: `[Classmoji] You're invited to join ${classroom.name}`,
         html: `<p>Hi ${student.name}!</p>
           <p>You have been invited to join <b>${classroom.name}</b> on Classmoji.</p>
-          <p>Click the following link to login: <a href="${process.env.HOST_URL}">${process.env.HOST_URL}</a></p>`,
+          <p>Click the following link to login: <a href="${process.env.WEBAPP_URL}">${process.env.WEBAPP_URL}</a></p>`,
       },
     }));
 

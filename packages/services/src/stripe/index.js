@@ -14,8 +14,8 @@ class StripeService {
           quantity: 1,
         },
       ],
-      success_url: `${process.env.HOST_URL}/settings/billing?success=true&session_id={CHECKOUT_SESSION_ID}`,
-      cancel_url: `${process.env.HOST_URL}/settings/billing?canceled=true`,
+      success_url: `${process.env.WEBAPP_URL}/settings/billing?success=true&session_id={CHECKOUT_SESSION_ID}`,
+      cancel_url: `${process.env.WEBAPP_URL}/settings/billing?canceled=true`,
       metadata: {
         user_id: userId,
       },
@@ -32,7 +32,7 @@ class StripeService {
   static async createBillingPortalSession(customerId) {
     const session = await stripe.billingPortal.sessions.create({
       customer: customerId,
-      return_url: `${process.env.HOST_URL}/settings/billing`,
+      return_url: `${process.env.WEBAPP_URL}/settings/billing`,
     });
     return session;
   }
