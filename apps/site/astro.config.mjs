@@ -60,8 +60,8 @@ export default defineConfig({
         {
           label: '🌐 Open Source',
           items: [
-            { label: 'Contributing', slug: 'docs/open-source/contributing' },
-            { label: 'Gitbub repo', link: 'https://github.com/classmoji/classmoji' },
+            { label: 'Local development', slug: 'docs/open-source/local-development' },
+            { label: 'Github repo', link: 'https://github.com/classmoji/classmoji' },
             { label: 'Roadmap', link: 'https://github.com/orgs/classmoji/projects/2' },
           ],
         },

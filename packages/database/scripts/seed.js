@@ -126,20 +126,21 @@ async function main() {
   });
 
   const assignments = [];
-  for (const title of ['Hello World Part 1', 'Hello World Part 2']) {
+  for (const [i, title] of ['Hello World Part 1', 'Hello World Part 2'].entries()) {
     const a = await prisma.assignment.upsert({
       where: { module_id_title: { module_id: module.id, title } },
-      update: {},
+      update: { grades_released: i === 0 }, // Part 1 grades visible to students
       create: {
         module_id: module.id,
         title,
         weight: 50,
         is_published: true,
+        grades_released: i === 0,
       },
     });
     assignments.push(a);
   }
-  const [assignment1] = assignments;
+  const [assignment1, assignment2] = assignments;
 
   // ── Emoji Grade Scale ───────────────────────────────────────────────────
   const emojiMappings = [
@@ -232,6 +233,20 @@ async function main() {
         },
       });
     }
+
+    // Part 2: submitted but ungraded — fills the TA grading queue
+    await prisma.repositoryAssignment.upsert({
+      where: { provider_provider_id: { provider: 'GITHUB', provider_id: `fake-issue-p2-${student.login}` } },
+      update: {},
+      create: {
+        repository_id: repo.id,
+        assignment_id: assignment2.id,
+        provider: 'GITHUB',
+        provider_id: `fake-issue-p2-${student.login}`,
+        provider_issue_number: 200 + i,
+        status: 'CLOSED',
+      },
+    });
   }
 
   // ── Calendar Events ─────────────────────────────────────────────────────
@@ -288,10 +303,12 @@ async function main() {
   console.log(`   Fake users:  1 TA + 3 students`);
   console.log(`   Module:      hello-world (2 assignments)`);
   console.log(`   Emoji scale: 🔴 🟡 🟢 ⭐`);
-  console.log(`   Grades:      3 graded (Part 1) — 🟢 🟡 🔴`);
+  console.log(`   Grades:      Part 1 graded — 🟢 🟡 🔴 (released)`);
+  console.log(`   TA queue:    3 Part 2 submissions awaiting grading`);
   console.log(`   Calendar:    3 events (lecture, lab, office hours)`);
   console.log(`   Regrade:     1 pending request`);
-  console.log(`\nSign in via GitHub OAuth to auto-join as OWNER.`);
+  console.log(`\nSign in via GitHub OAuth → auto-join as OWNER + ASSISTANT + STUDENT.`);
+  console.log(`Your student data (graded Part 1 + open Part 2) is created on first login.`);
 }
 
 main()

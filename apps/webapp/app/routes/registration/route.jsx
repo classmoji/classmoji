@@ -51,9 +51,16 @@ export const loader = async ({ request }) => {
       data: { user_id: user.id },
     });
 
-    // Auto-join the dev classroom as OWNER and redirect straight to dashboard
+    // Auto-join the dev classroom as OWNER + ASSISTANT + STUDENT
     const devClassroom = await prisma.classroom.findFirst({
       where: { slug: 'classmoji-dev-winter-2025' },
+      include: {
+        modules: {
+          include: {
+            assignments: { orderBy: { created_at: 'asc' } },
+          },
+        },
+      },
     });
     if (devClassroom) {
       for (const role of ['OWNER', 'ASSISTANT', 'STUDENT']) {
@@ -62,6 +69,76 @@ export const loader = async ({ request }) => {
           update: {},
           create: { classroom_id: devClassroom.id, user_id: user.id, role, has_accepted_invite: true },
         });
+      }
+
+      // Seed student data for the real user so the student view is non-empty
+      const helloWorldModule = devClassroom.modules.find(m => m.title === 'hello-world');
+      const [assignment1, assignment2] = helloWorldModule?.assignments ?? [];
+      const fakeTA = await prisma.user.findFirst({ where: { login: 'fake-ta' } });
+
+      if (helloWorldModule && assignment1 && fakeTA) {
+        // Repo for the real user
+        const repo = await prisma.repository.upsert({
+          where: { provider_provider_id: { provider: 'GITHUB', provider_id: `fake-repo-${githubUser.login}` } },
+          update: {},
+          create: {
+            classroom_id: devClassroom.id,
+            module_id: helloWorldModule.id,
+            provider: 'GITHUB',
+            provider_id: `fake-repo-${githubUser.login}`,
+            name: `${githubUser.login}-hello-world`,
+            student_id: user.id,
+          },
+        });
+
+        // Part 1: closed + graded ⭐
+        const repoAssignment1 = await prisma.repositoryAssignment.upsert({
+          where: { provider_provider_id: { provider: 'GITHUB', provider_id: `fake-issue-${githubUser.login}` } },
+          update: {},
+          create: {
+            repository_id: repo.id,
+            assignment_id: assignment1.id,
+            provider: 'GITHUB',
+            provider_id: `fake-issue-${githubUser.login}`,
+            provider_issue_number: 999,
+            status: 'CLOSED',
+          },
+        });
+
+        const existingGrade = await prisma.assignmentGrade.findFirst({
+          where: { repository_assignment_id: repoAssignment1.id },
+        });
+        if (!existingGrade) {
+          await prisma.assignmentGrade.create({
+            data: { repository_assignment_id: repoAssignment1.id, grader_id: fakeTA.id, emoji: '⭐' },
+          });
+          await prisma.tokenTransaction.create({
+            data: {
+              classroom_id: devClassroom.id,
+              student_id: user.id,
+              repository_assignment_id: repoAssignment1.id,
+              amount: 110,
+              type: 'GAIN',
+              balance_after: 110,
+            },
+          });
+        }
+
+        // Part 2: open (unsubmitted) — something still to do as a student
+        if (assignment2) {
+          await prisma.repositoryAssignment.upsert({
+            where: { provider_provider_id: { provider: 'GITHUB', provider_id: `fake-issue-p2-${githubUser.login}` } },
+            update: {},
+            create: {
+              repository_id: repo.id,
+              assignment_id: assignment2.id,
+              provider: 'GITHUB',
+              provider_id: `fake-issue-p2-${githubUser.login}`,
+              provider_issue_number: 998,
+              status: 'OPEN',
+            },
+          });
+        }
       }
     }
     return redirect('/select-organization');
