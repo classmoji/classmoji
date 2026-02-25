@@ -53,6 +53,6 @@ export function buildCalendarUrl(slug) {
   if (!signature) {
     return null;
   }
-  const baseUrl = process.env.HOST_URL || 'https://classmoji.io';
+  const baseUrl = process.env.WEBAPP_URL;
   return `${baseUrl}/api/calendar/${slug}/${signature}.ics`;
 }

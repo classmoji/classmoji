@@ -33,12 +33,13 @@ The classroom management system for teaching CS as it's actually practiced. Stud
 
 - [Try Demo](https://demo.classmoji.io)
 - [Documentation](https://classmoji.io/docs)
+- [Local Development Guide](https://classmoji.io/docs/open-source/local-development)
 
 ## Contributing
 
-Contributions are welcome! We especially encourage student contributions.
+Contributions are welcome! We especially encourage student contributions — this project was built for CS education, and students bring the most valuable perspective.
 
-New features are accepted. Discussing your new ideas with the maintainers before you write code will also increase the chances that your work is accepted.
+See [CONTRIBUTING.md](./CONTRIBUTING.md) to get your local environment running and learn how to submit a pull request.
 
 ## Code of Conduct
 

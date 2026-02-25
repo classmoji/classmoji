@@ -4,7 +4,8 @@ generator client {
 
 datasource db {
   provider = "postgresql"
-  url      = env("DATABASE_URL")
+  // url      = env("DATABASE_URL")
+  url      = "postgresql://classmoji:classmoji@localhost:5433/classmoji"
 }
 
 // ============================================================================
@@ -335,7 +336,8 @@ model ClassroomMembership {
   classroom Classroom @relation(fields: [classroom_id], references: [id], onDelete: Cascade)
   user      User      @relation(fields: [user_id], references: [id], onDelete: Cascade)
 
-  @@unique([classroom_id, user_id])
+  @@unique([classroom_id, user_id, role])
+  @@index([classroom_id, user_id])
   @@index([user_id])
   @@map("classroom_memberships")
 }

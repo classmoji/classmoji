@@ -22,4 +22,138 @@
     padding-top: 10px;
 }
 
+/* =============================================================================
+   Aside / callout overrides — match custom card design
+   ============================================================================= */
+
+/* Base: rounded card with thin full border, remove thick left accent */
+.starlight-aside {
+  border-radius: 0.5rem;
+  border: 1px solid;
+  border-inline-start-width: 1px;
+  padding: 0.75rem 1rem;
+}
+
+/* Hide the default SVG icon */
+.starlight-aside__icon {
+  display: none;
+}
+
+/* Title row: flex with circle icon injected via ::before */
+.starlight-aside__title {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.9rem;
+  font-weight: 600;
+  margin-top: 0;
+  margin-bottom: 0;
+}
+
+.starlight-aside__title::before {
+  content: '';
+  display: inline-flex;
+  flex-shrink: 0;
+  width: 1.1rem;
+  height: 1.1rem;
+  border-radius: 50%;
+  background-size: 65%;
+  background-position: center;
+  background-repeat: no-repeat;
+}
+
+/* Content spacing when description is present */
+.starlight-aside__content {
+  margin-top: 0.35rem;
+  font-size: 0.9rem;
+}
+.starlight-aside__content > :first-child {
+  margin-top: 0;
+}
+.starlight-aside__content > :last-child {
+  margin-bottom: 0;
+}
+
+/* --- Note (blue / info) --- */
+.starlight-aside--note {
+  border-color: #3b82f6;
+  background-color: #eff6ff;
+  color: inherit;
+}
+.starlight-aside--note .starlight-aside__title {
+  color: #1d4ed8;
+}
+.starlight-aside--note .starlight-aside__title::before {
+  background-color: #3b82f6;
+  /* "i" icon */
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='white'%3E%3Cpath d='M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z'/%3E%3C/svg%3E");
+}
+
+/* --- Tip (green / success) --- */
+.starlight-aside--tip {
+  border-color: #22c55e;
+  background-color: #f0fdf4;
+  color: inherit;
+}
+.starlight-aside--tip .starlight-aside__title {
+  color: #15803d;
+}
+.starlight-aside--tip .starlight-aside__title::before {
+  background-color: #22c55e;
+  /* checkmark icon */
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='white'%3E%3Cpath d='M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z'/%3E%3C/svg%3E");
+}
+
+/* --- Caution (yellow / warning) --- */
+.starlight-aside--caution {
+  border-color: #f59e0b;
+  background-color: #fffbeb;
+  color: inherit;
+}
+.starlight-aside--caution .starlight-aside__title {
+  color: #b45309;
+}
+.starlight-aside--caution .starlight-aside__title::before {
+  background-color: #f59e0b;
+  /* exclamation icon */
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='white'%3E%3Cpath d='M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z'/%3E%3C/svg%3E");
+}
+
+/* --- Danger (red / error) --- */
+.starlight-aside--danger {
+  border-color: #ef4444;
+  background-color: #fef2f2;
+  color: inherit;
+}
+.starlight-aside--danger .starlight-aside__title {
+  color: #b91c1c;
+}
+.starlight-aside--danger .starlight-aside__title::before {
+  background-color: #ef4444;
+  /* × icon */
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='white'%3E%3Cpath d='M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z'/%3E%3C/svg%3E");
+}
+
+/* Dark mode adjustments */
+[data-theme="dark"] .starlight-aside--note {
+  background-color: #1e3a5f;
+  border-color: #3b82f6;
+}
+[data-theme="dark"] .starlight-aside--tip {
+  background-color: #14352a;
+  border-color: #22c55e;
+}
+[data-theme="dark"] .starlight-aside--caution {
+  background-color: #3b2a0a;
+  border-color: #f59e0b;
+}
+[data-theme="dark"] .starlight-aside--danger {
+  background-color: #3b1212;
+  border-color: #ef4444;
+}
+[data-theme="dark"] .starlight-aside--note .starlight-aside__title { color: #93c5fd; }
+[data-theme="dark"] .starlight-aside--tip .starlight-aside__title { color: #86efac; }
+[data-theme="dark"] .starlight-aside--caution .starlight-aside__title { color: #fcd34d; }
+[data-theme="dark"] .starlight-aside--danger .starlight-aside__title { color: #fca5a5; }
+
 

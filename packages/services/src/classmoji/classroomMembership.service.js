@@ -6,13 +6,13 @@ import prisma from '@classmoji/database';
  * @param {string} userId - UUID of the User
  * @returns {Promise<Object|null>}
  */
-export const findByClassroomAndUser = async (classroomId, userId) => {
-  return prisma.classroomMembership.findUnique({
+export const findByClassroomAndUser = async (classroomId, userId, roles = null) => {
+  const rolesFilter = roles ? { role: { in: Array.isArray(roles) ? roles : [roles] } } : {};
+  return prisma.classroomMembership.findFirst({
     where: {
-      classroom_id_user_id: {
-        classroom_id: classroomId,
-        user_id: userId,
-      },
+      classroom_id: classroomId,
+      user_id: userId,
+      ...rolesFilter,
     },
     include: {
       user: true,
@@ -135,9 +135,10 @@ export const create = async data => {
 export const upsert = async (classroomId, userId, data) => {
   return prisma.classroomMembership.upsert({
     where: {
-      classroom_id_user_id: {
+      classroom_id_user_id_role: {
         classroom_id: classroomId,
         user_id: userId,
+        role: data.role,
       },
     },
     create: {
@@ -161,13 +162,12 @@ export const upsert = async (classroomId, userId, data) => {
  * @returns {Promise<Object>}
  */
 export const update = async (classroomId, userId, updates) => {
+  const membership = await prisma.classroomMembership.findFirst({
+    where: { classroom_id: classroomId, user_id: userId },
+  });
+  if (!membership) return null;
   return prisma.classroomMembership.update({
-    where: {
-      classroom_id_user_id: {
-        classroom_id: classroomId,
-        user_id: userId,
-      },
-    },
+    where: { id: membership.id },
     data: updates,
     include: {
       user: true,
@@ -200,13 +200,8 @@ export const updateById = async (id, updates) => {
  * @returns {Promise<Object>}
  */
 export const remove = async (classroomId, userId) => {
-  return prisma.classroomMembership.delete({
-    where: {
-      classroom_id_user_id: {
-        classroom_id: classroomId,
-        user_id: userId,
-      },
-    },
+  return prisma.classroomMembership.deleteMany({
+    where: { classroom_id: classroomId, user_id: userId },
   });
 };
 
@@ -309,13 +304,8 @@ export const createMany = async memberships => {
  * @returns {Promise<boolean>}
  */
 export const isMember = async (classroomId, userId) => {
-  const membership = await prisma.classroomMembership.findUnique({
-    where: {
-      classroom_id_user_id: {
-        classroom_id: classroomId,
-        user_id: userId,
-      },
-    },
+  const membership = await prisma.classroomMembership.findFirst({
+    where: { classroom_id: classroomId, user_id: userId },
     select: { id: true },
   });
   return Boolean(membership);
@@ -330,16 +320,9 @@ export const isMember = async (classroomId, userId) => {
  */
 export const hasRole = async (classroomId, userId, roles) => {
   const roleArray = Array.isArray(roles) ? roles : [roles];
-
-  const membership = await prisma.classroomMembership.findUnique({
-    where: {
-      classroom_id_user_id: {
-        classroom_id: classroomId,
-        user_id: userId,
-      },
-    },
-    select: { role: true },
+  const membership = await prisma.classroomMembership.findFirst({
+    where: { classroom_id: classroomId, user_id: userId, role: { in: roleArray } },
+    select: { id: true },
   });
-
-  return membership ? roleArray.includes(membership.role) : false;
+  return Boolean(membership);
 };

@@ -24,8 +24,6 @@ if [ -f ".devport" ]; then
   export QUIZ_AGENT_URL="http://localhost:$QUIZ_AGENT_PORT"
   export AI_AGENT_URL="http://localhost:$QUIZ_AGENT_PORT"  # Alias for new name
   export WEBAPP_URL="http://localhost:$WEBAPP_PORT"
-  export HOST_URL="http://localhost:$WEBAPP_PORT"
-  export BETTER_AUTH_URL="http://localhost:$WEBAPP_PORT"  # Auth must match webapp origin
   export SLIDES_URL="http://localhost:$SLIDES_PORT"
   export PAGES_URL="http://localhost:$PAGES_PORT"
 
@@ -48,7 +46,6 @@ else
   export QUIZ_AGENT_URL="http://localhost:6000"
   export AI_AGENT_URL="http://localhost:6000"  # Alias for new name
   export WEBAPP_URL="http://localhost:3000"
-  export HOST_URL="http://localhost:3000"
   export SLIDES_URL="http://localhost:6500"
   export PAGES_URL="http://localhost:7100"
 fi

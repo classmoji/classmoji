@@ -8,6 +8,9 @@ import tailwindcss from '@tailwindcss/vite';
 export default ({ command }) => {
   const isBuild = command === 'build';
   return defineConfig({
+    // Load .env from monorepo root so Vite watches it for changes.
+    // This triggers a dev server restart when the setup wizard writes GitHub credentials.
+    envDir: '../../',
     ssr: {
       // In production builds, bundle workspace-local node_modules that npm doesn't
       // hoist to the root — the Dockerfile only copies root node_modules to the

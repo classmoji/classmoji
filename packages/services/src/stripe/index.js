@@ -1,10 +1,14 @@
 import Stripe from 'stripe';
 
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
+let _stripe = null;
+const stripe = () => {
+  if (!_stripe) _stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
+  return _stripe;
+};
 
 class StripeService {
   static async createCheckoutSession({ priceId, userId, customerId }) {
-    const session = await stripe.checkout.sessions.create({
+    const session = await stripe().checkout.sessions.create({
       mode: 'subscription',
       customer: customerId,
       client_reference_id: userId,
@@ -14,8 +18,8 @@ class StripeService {
           quantity: 1,
         },
       ],
-      success_url: `${process.env.HOST_URL}/settings/billing?success=true&session_id={CHECKOUT_SESSION_ID}`,
-      cancel_url: `${process.env.HOST_URL}/settings/billing?canceled=true`,
+      success_url: `${process.env.WEBAPP_URL}/settings/billing?success=true&session_id={CHECKOUT_SESSION_ID}`,
+      cancel_url: `${process.env.WEBAPP_URL}/settings/billing?canceled=true`,
       metadata: {
         user_id: userId,
       },
@@ -25,25 +29,25 @@ class StripeService {
   }
 
   static async getCheckoutSession(sessionId) {
-    const session = await stripe.checkout.sessions.retrieve(sessionId);
+    const session = await stripe().checkout.sessions.retrieve(sessionId);
     return session;
   }
 
   static async createBillingPortalSession(customerId) {
-    const session = await stripe.billingPortal.sessions.create({
+    const session = await stripe().billingPortal.sessions.create({
       customer: customerId,
-      return_url: `${process.env.HOST_URL}/settings/billing`,
+      return_url: `${process.env.WEBAPP_URL}/settings/billing`,
     });
     return session;
   }
 
   static async findSubscription(subscriptionId) {
-    const subscription = await stripe.subscriptions.retrieve(subscriptionId);
+    const subscription = await stripe().subscriptions.retrieve(subscriptionId);
     return subscription;
   }
 
   static async constructWebhookEvent(body, signature) {
-    const event = stripe.webhooks.constructEvent(
+    const event = stripe().webhooks.constructEvent(
       body,
       signature,
       process.env.STRIPE_WEBHOOK_SECRET
@@ -52,7 +56,7 @@ class StripeService {
   }
 
   static async createCustomer({ name, email, userId }) {
-    const customer = await stripe.customers.create({
+    const customer = await stripe().customers.create({
       name,
       email,
       metadata: {

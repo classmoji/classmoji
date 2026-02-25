@@ -1,4 +1,5 @@
 import { defineConfig } from 'astro/config';
+import { fileURLToPath } from 'url';
 import tailwindcss from '@tailwindcss/vite';
 import mdx from '@astrojs/mdx';
 import starlight from '@astrojs/starlight';
@@ -33,7 +34,7 @@ export default defineConfig({
         {
           label: '👨‍🏫 For Instructors',
           items: [
-            { label: 'Create a classroom', slug: 'docs/instructors' },
+            { label: 'Create a classroom', slug: 'docs/instructors/create-classroom' },
             { label: 'Manage your roster', slug: 'docs/instructors/roster' },
             { label: 'Modules & assignments', slug: 'docs/instructors/modules-and-assignments' },
             { label: 'Grade assignments', slug: 'docs/instructors/grading' },
@@ -60,8 +61,8 @@ export default defineConfig({
         {
           label: '🌐 Open Source',
           items: [
-            { label: 'Contributing', slug: 'docs/open-source/contributing' },
-            { label: 'Gitbub repo', link: 'https://github.com/classmoji/classmoji' },
+            { label: 'Local development', slug: 'docs/open-source/local-development' },
+            { label: 'Github repo', link: 'https://github.com/classmoji/classmoji' },
             { label: 'Roadmap', link: 'https://github.com/orgs/classmoji/projects/2' },
           ],
         },
@@ -83,6 +84,11 @@ export default defineConfig({
     port: 4000
   },
   vite: {
-    plugins: [tailwindcss()]
+    plugins: [tailwindcss()],
+    resolve: {
+      alias: {
+        '~': fileURLToPath(new URL('./src', import.meta.url)),
+      },
+    },
   }
 });

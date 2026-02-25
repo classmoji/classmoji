@@ -1,7 +1,6 @@
 import Fastify from 'fastify';
 import githubRoutes from './routes/github.js';
 import stripeRoutes from './routes/stripe.js';
-import autograderRoutes from './routes/autograder.js';
 
 const fastify = Fastify({
   logger: true,
@@ -14,7 +13,6 @@ fastify.get('/', async function handler(request, reply) {
 // Register route plugins
 await fastify.register(githubRoutes, { prefix: '/webhooks/callback' });
 await fastify.register(stripeRoutes, { prefix: '/webhooks/callback' });
-await fastify.register(autograderRoutes);
 
 // Start server
 const PORT = process.env.PORT || 4000;

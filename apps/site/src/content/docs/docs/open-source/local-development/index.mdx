@@ -1,0 +1,187 @@
+---
+title: Local development
+description: Run Classmoji on your machine and contribute code.
+---
+
+import Screenshot from '~/components/Screenshot.astro';
+import wizardImg from './wizard.png';
+import classroomsImg from './classrooms.png';
+import environmentImg from './environment.png';
+import keyImg from './key.png';
+import neonDashboardImg from './neon_dashboard.png';
+import installAppImg from './install_app.png';
+import webhookImg from './webhook.png';
+import newSmeeImg from './new_app.png';
+
+:::note
+You clone the repo, copy the env file, run two commands, and you're in 🎉. 
+
+That's the goal, anyway. If reality diverges, we're on [GitHub](https://github.com/classmoji/classmoji) and happy to help.
+:::
+
+
+Minimal setup covers most contributions. Full setup is only needed if you're working on GitHub-integrated features like repository sync, webhooks, or background jobs.
+
+## Prerequisites
+
+- Node.js 22+
+- [Docker](https://www.docker.com/) (if using the Docker database option)
+- A GitHub account
+
+## 1. Fork and clone the repo
+
+Go to [github.com/classmoji/classmoji](https://github.com/classmoji/classmoji), fork it ([how to fork a repo](https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/working-with-forks/fork-a-repo)), then clone your fork:
+
+```bash
+git clone https://github.com/YOUR_USERNAME/classmoji.git
+cd classmoji
+git remote add upstream https://github.com/classmoji/classmoji.git
+npm install
+```
+
+Adding `upstream` lets you pull in future changes from the main repo with `git fetch upstream`.
+
+## 2. Configure environment variables
+
+```bash
+cp .env.example .env
+```
+
+:::note
+Whenever you manually edit `.env`, restart the dev server for changes to take effect: stop it with `Ctrl+C` and run it again.
+:::
+
+
+## 3. Database setup
+
+Choose one option. Both work with the rest of the setup.
+
+### Method 1: Docker
+
+No account needed, runs fully offline. Install [Docker](https://www.docker.com/) if you don't have it.
+
+```bash
+npm run db:start
+```
+
+The `DATABASE_URL` in `.env.example` already points to the Docker instance — no changes needed.
+
+### Method 2: Neon
+
+Neon is a serverless PostgreSQL platform with a generous free tier. It's a great option if you can't run Docker or want to visualize your database — Neon provides a built-in UI where you can browse tables and run queries directly in the browser.
+
+1. Sign up at [neon.com](https://neon.com) and create a new project
+2. On the project dashboard, click the **Connection string** card
+
+<Screenshot src={neonDashboardImg} alt="Neon project dashboard showing the Connection string card" />
+
+3. Copy the connection string and paste it as `DATABASE_URL` in your `.env`
+
+### Apply migrations and seed
+
+Regardless of which option you chose:
+
+```bash
+npm run db:deploy   # applies migrations
+npm run db:seed     # seeds dev classroom and fake users
+```
+
+## 4. Run the app
+
+To start the webapp service:
+
+```bash
+npm run web:dev
+```
+
+Open `http://localhost:3000` — you'll be taken to a setup wizard because `SETUP_GITHUB_APP=true` is set in your `.env`. Click **Create GitHub App on Github**, confirm on GitHub, and you'll be redirected back.
+
+<Screenshot src={wizardImg} alt="Classmoji setup wizard" frame url="localhost:3000/setup" />
+
+<Screenshot src={newSmeeImg} alt="GitHub App creation page on GitHub" />
+
+After the wizard completes, the GitHub App values are automatically written to your `.env` and the setup flag is cleared. Restart the dev server as prompted, then sign in with your GitHub account. You'll be automatically added to the dev classroom as Owner, TA, and Student.
+
+<Screenshot src={classroomsImg} alt="Dev classroom showing Owner, TA, and Student roles" frame url="localhost:3000/select-organization" />
+
+The organization, classroom, and student accounts shown are all seeded fake data — nothing connects to a real GitHub organization or real users.
+
+### What you can work on with this setup
+
+- UI changes — components, styles, dark mode, layouts
+- Database schema changes and migrations
+- Student, instructor, and TA views and workflows
+- Grading, tokens, calendar, and modules
+- Anything that doesn't require real GitHub repositories or live webhooks
+
+---
+
+## 5. Full setup (optional)
+
+:::note
+This section is only needed if you're working on GitHub-integrated features: repository creation, assignment auto-setup, feedback PRs, pages, webhook event handling, or background jobs in `packages/tasks`. Skip it if you're doing UI or database work.
+:::
+
+### Set up Trigger.dev
+
+Trigger.dev is the background job runner Classmoji uses for tasks like repository creation and assignment setup. Its dashboard lets you see the status of jobs as they run locally.
+
+1. Sign up at [trigger.dev](https://trigger.dev) and create a new project
+2. In the sidebar, make sure **Development** is selected as the environment
+
+<Screenshot src={environmentImg} alt="Trigger.dev sidebar showing Development environment and API Keys" />
+
+3. Click **API keys** in the sidebar menu and copy your development key — it starts with `tr_dev_`
+
+<Screenshot src={keyImg} alt="Trigger.dev API keys tab showing a development key" />
+
+4. Add it to your `.env`:
+
+```env
+TRIGGER_SECRET_KEY="tr_dev_your-key-here"
+```
+
+### Set up the webhook tunnel
+
+GitHub needs a public URL to send webhook events to. But your local server isn't reachable from the internet — that's where [Smee](https://smee.io) comes in.
+
+Smee is a free webhook proxy. It gives you a public URL that receives events and forwards them to your local machine in real time.
+
+1. Go to [smee.io/new](https://smee.io/new) — it'll generate a unique channel URL for you (e.g. `https://smee.io/abc123`)
+2. Open [apps/hook-station/package.json](https://github.com/classmoji/classmoji/blob/main/apps/hook-station/package.json) and replace the `hook:github` URL with your channel URL:
+
+```json
+"hook:github": "smee -u https://smee.io/your-channel -p 4000 --path /webhooks/callback/github"
+```
+
+3. Go to your GitHub App settings at `https://github.com/settings/apps/YOUR_APP_NAME` — replace `YOUR_APP_NAME` with the value of `GITHUB_APP_NAME` in your `.env`. Set the **Webhook URL** to your Smee channel URL.
+
+<Screenshot src={webhookImg} alt="GitHub App settings showing the Webhook URL field" />
+
+4. Copy the value of `GITHUB_WEBHOOK_SECRET` from your `.env` into the **Webhook secret** field in the GitHub App settings.
+
+### Create a test GitHub organization
+
+Before doing the steps below, make sure to stop running the webapp service and run:
+
+```bash
+npm run dev # starts all services: webapp, slides, pages, hook, Trigger.dev worker, and the Smee tunnel
+```
+
+1. [Create a free GitHub organization](https://docs.github.com/en/organizations/collaborating-with-groups-in-organizations/creating-a-new-organization-from-scratch) to use for testing.
+
+2. Open `http://localhost:3000/select-organization` and click **Create new class**.
+
+3. Click **Install GitHub App on an organization**. This will open a new window to install the GitHub App on your organization.
+
+<Screenshot src={installAppImg} alt="GitHub App installation page for selecting an organization" frame url="github.com" />
+
+4. Select your organization and click **Install** and make sure to give it access to your repositories.
+
+5. Follow the [create a classroom guide](/docs/instructors/create-classroom) to set up your first classroom. After that, you're fully set up and ready to work on any part of the app.
+
+:::note
+You wired up a GitHub App, tunneled webhooks through the internet, and created a fake org just to test a button. You're not just a contributor — you're a legend 🏆.
+
+Now go break something (and fix it).
+:::

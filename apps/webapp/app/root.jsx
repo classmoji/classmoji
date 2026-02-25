@@ -54,15 +54,30 @@ export const meta = () => {
 export const loader = async ({ request }) => {
   const url = new URL(request.url);
 
-  // Create Trigger.dev public token for task monitoring
-  const publicToken = await triggerAuth.createPublicToken({
-    expirationTime: '1hr',
-    scopes: {
-      read: {
-        runs: true,
+  // Redirect to setup wizard if requested
+  if (process.env.SETUP_GITHUB_APP && !url.pathname.startsWith('/setup')) {
+    return redirect('/setup');
+  }
+
+  // Setup routes are public - bypass all auth and Trigger.dev logic
+  if (url.pathname.startsWith('/setup')) {
+    return { user: null };
+  }
+
+  // Create Trigger.dev public token for task monitoring (non-fatal if not configured)
+  let publicToken = null;
+  try {
+    publicToken = await triggerAuth.createPublicToken({
+      expirationTime: '1hr',
+      scopes: {
+        read: {
+          runs: true,
+        },
       },
-    },
-  });
+    });
+  } catch {
+    // Trigger.dev not configured - skip public token
+  }
 
   if (url.pathname.endsWith('/invitation')) return { user: null };
 
