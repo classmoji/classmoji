@@ -5,13 +5,19 @@ import { envOnlyMacros } from 'vite-env-only';
 import devtoolsJson from 'vite-plugin-devtools-json';
 import tailwindcss from '@tailwindcss/vite';
 
-export default () => {
+export default ({ command }) => {
+  const isBuild = command === 'build';
   return defineConfig({
     // Load .env from monorepo root so Vite watches it for changes.
     // This triggers a dev server restart when the setup wizard writes GitHub credentials.
     envDir: '../../',
     ssr: {
-      noExternal: ['use-sound'],
+      // In production builds, bundle workspace-local node_modules that npm doesn't
+      // hoist to the root — the Dockerfile only copies root node_modules to the
+      // production image, so non-hoisted packages would be missing at runtime.
+      noExternal: isBuild
+        ? ['use-sound', /@trigger\.dev\//, /@mantine\//, /@tabler\//, 'lucide-react', 'zustand']
+        : ['use-sound'],
     },
     resolve: {
       alias: {

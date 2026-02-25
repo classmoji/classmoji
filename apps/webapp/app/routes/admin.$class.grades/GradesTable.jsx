@@ -125,6 +125,17 @@ const GradesTable = props => {
     },
   ];
 
+  // Calculate scroll width dynamically based on visible columns
+  const scrollX = useMemo(() => {
+    const baseWidth = 170 + 100; // Student + Actions (fixed columns)
+    const gradeColumnsWidth = studentGradeColumns.reduce((sum, col) => sum + (col.width || 150), 0);
+    const assignmentColumnsWidth = assignmentColumns.reduce((sum, module) => {
+      if (!module.children?.length) return sum + (module.width || 140);
+      return sum + module.children.reduce((childSum, child) => childSum + (child.width || 140), 0);
+    }, 0);
+    return Math.max(1500, baseWidth + gradeColumnsWidth + assignmentColumnsWidth);
+  }, [studentGradeColumns, assignmentColumns]);
+
   const summary = pageData => {
     // Return null if no data to prevent mean/median errors
     if (!pageData || pageData.length === 0) {
@@ -252,7 +263,7 @@ const GradesTable = props => {
                 size="small"
                 bordered={true}
                 rowKey="id"
-                scroll={{ x: 1500 }}
+                scroll={{ x: scrollX }}
                 sticky
                 pagination={{
                   pageSize: 50,

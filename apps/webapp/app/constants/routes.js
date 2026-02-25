@@ -78,7 +78,7 @@ export const routes = {
     link: '/slides',
     label: 'Slides',
     icon: IconPresentation,
-    roles: ['OWNER', 'TEACHER', 'ASSISTANT'],
+    roles: ['OWNER', 'TEACHER', 'ASSISTANT', 'STUDENT'],
     category: 'content',
   },
   pages: {
