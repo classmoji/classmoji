@@ -1,4 +1,5 @@
 import { defineConfig } from 'astro/config';
+import { fileURLToPath } from 'url';
 import tailwindcss from '@tailwindcss/vite';
 import mdx from '@astrojs/mdx';
 import starlight from '@astrojs/starlight';
@@ -83,6 +84,11 @@ export default defineConfig({
     port: 4000
   },
   vite: {
-    plugins: [tailwindcss()]
+    plugins: [tailwindcss()],
+    resolve: {
+      alias: {
+        '~': fileURLToPath(new URL('./src', import.meta.url)),
+      },
+    },
   }
 });

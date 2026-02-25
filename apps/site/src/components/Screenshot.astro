@@ -4,9 +4,11 @@ interface Props {
   alt: string;
   caption?: string;
   size?: 'sm' | 'md' | 'lg';
+  url?: string;
+  frame?: boolean;
 }
 
-const { src, alt, caption, size = 'md' } = Astro.props;
+const { src, alt, caption, size = 'md', url, frame = false } = Astro.props;
 
 const sizeClasses = {
   sm: 'max-w-md',
@@ -15,12 +17,24 @@ const sizeClasses = {
 };
 ---
 
-<figure class="my-8">
-  <img
-    src={src.src}
-    alt={alt}
-    class:list={['rounded-lg shadow mx-auto', sizeClasses[size]]}
-  />
+<figure class:list={['my-8 mx-auto', sizeClasses[size]]}>
+  {frame ? (
+    <div style="border-radius: 12px; overflow: hidden; box-shadow: 0 4px 24px rgba(0,0,0,0.12); border: 1px solid rgba(128,128,128,0.2);">
+      <div style="display: flex; align-items: center; gap: 8px; padding: 10px 16px; background: rgba(128,128,128,0.08); border-bottom: 1px solid rgba(128,128,128,0.15);">
+        <span style="width: 12px; height: 12px; border-radius: 50%; background: #ff5f57; display: inline-block;"></span>
+        <span style="width: 12px; height: 12px; border-radius: 50%; background: #febc2e; display: inline-block;"></span>
+        <span style="width: 12px; height: 12px; border-radius: 50%; background: #28c840; display: inline-block;"></span>
+        {url && (
+          <span style="margin-left: 8px; flex: 1; font-size: 12px; text-align: center; color: rgba(128,128,128,0.7); background: rgba(128,128,128,0.08); border-radius: 6px; padding: 2px 12px; font-family: monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+            {url}
+          </span>
+        )}
+      </div>
+      <img src={src.src} alt={alt} style="width: 100%; display: block; margin: 0;" />
+    </div>
+  ) : (
+    <img src={src.src} alt={alt} class="rounded-lg shadow mx-auto" />
+  )}
   {caption && (
     <figcaption class="text-center text-sm text-gray-500 mt-2">
       {caption}

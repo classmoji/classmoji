@@ -3,6 +3,14 @@ title: Local development
 description: Run Classmoji on your machine and contribute code.
 ---
 
+import Screenshot from '~/components/Screenshot.astro';
+import wizardImg from './wizard.png';
+import classroomsImg from './classrooms.png';
+import environmentImg from './environment.png';
+import keyImg from './key.png';
+import neonDashboardImg from './neon_dashboard.png';
+import installAppImg from './install_app.png';
+
 Minimal setup covers most contributions. Full setup is only needed if you're working on GitHub-integrated features like repository sync, webhooks, or background jobs.
 
 ## Prerequisites
@@ -13,7 +21,7 @@ Minimal setup covers most contributions. Full setup is only needed if you're wor
 
 ## 1. Fork and clone the repo
 
-Fork the repo on GitHub first, then clone your fork:
+Go to [github.com/classmoji/classmoji](https://github.com/classmoji/classmoji), fork it ([how to fork a repo](https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/working-with-forks/fork-a-repo)), then clone your fork:
 
 ```bash
 git clone https://github.com/YOUR_USERNAME/classmoji.git
@@ -42,7 +50,7 @@ DATABASE_URL="postgresql://classmoji:classmoji@localhost:5433/classmoji"
 GITHUB_WEBHOOK_SECRET="your-webhook-secret"
 ```
 
-The GitHub App credentials (`GITHUB_APP_ID`, `GITHUB_CLIENT_ID`, etc.) get added automatically when you complete the setup wizard in the next steps.
+The GitHub App credentials (`GITHUB_APP_ID`, `GITHUB_CLIENT_ID`, etc.) get added automatically when you complete the setup wizard in the step 4.
 
 ## 3. Database setup
 
@@ -62,8 +70,12 @@ The `DATABASE_URL` in `.env.example` already points to the Docker instance — n
 
 Neon is a serverless PostgreSQL platform with a generous free tier. It's a great option if you can't run Docker or want to visualize your database — Neon provides a built-in UI where you can browse tables and run queries directly in the browser.
 
-1. Create a free project at [neon.com](https://neon.com)
-2. Copy the connection string into your `.env` as `DATABASE_URL`
+1. Sign up at [neon.com](https://neon.com) and create a new project
+2. On the project dashboard, click the **Connection string** card
+
+<Screenshot src={neonDashboardImg} alt="Neon project dashboard showing the Connection string card" />
+
+3. Copy the connection string and paste it as `DATABASE_URL` in your `.env`
 
 ---
 
@@ -78,11 +90,15 @@ npm run db:seed     # seeds dev classroom and fake users
 
 ## 4. Run the app
 
+To start the webapp service:
+
 ```bash
-npm run dev
+npm run web:dev 
 ```
 
 Open `http://localhost:3000` — you'll be taken to a setup wizard. Click **Create GitHub App on Github**, confirm on GitHub, and you'll be redirected back with everything configured automatically.
+
+<Screenshot src={wizardImg} alt="Classmoji setup wizard" frame url="localhost:3000/setup" />
 
 After the wizard completes, these variables will be added to your `.env` automatically:
 
@@ -96,14 +112,16 @@ GITHUB_CLIENT_SECRET="your-client-secret"
 
 Sign in with your GitHub account. You'll be automatically added to the dev classroom as Owner, TA, and Student.
 
+<Screenshot src={classroomsImg} alt="Dev classroom showing Owner, TA, and Student roles" frame url="localhost:3000/select-organization" />
+
+The organization, classroom, and student accounts shown are all seeded fake data — nothing connects to a real GitHub organization or real users.
+
 ### What you can work on with this setup
 
 - UI changes — components, styles, dark mode, layouts
 - Database schema changes and migrations
 - Student, instructor, and TA views and workflows
 - Grading, tokens, calendar, and modules
-- Slide editor
-- Quiz UI and grading logic
 - Anything that doesn't require real GitHub repositories or live webhooks
 
 ---
@@ -112,11 +130,26 @@ Sign in with your GitHub account. You'll be automatically added to the dev class
 
 Needed when working on anything GitHub-integrated: repository creation, assignment auto-setup, feedback PRs, pages (stored on GitHub), webhook event handling, or background jobs in `packages/tasks`. These all go together.
 
-### Create a test GitHub organization
+### Set up Trigger.dev
 
-Create a free GitHub organization to use for testing. Then go to your GitHub App settings and install the app on that org.
+Trigger.dev is the background job runner Classmoji uses for tasks like repository creation and assignment setup. Its dashboard lets you see the status of jobs as they run locally.
 
-### Start the webhook tunnel
+1. Sign up at [trigger.dev](https://trigger.dev) and create a new project
+2. In the sidebar, make sure **Development** is selected as the environment
+
+<Screenshot src={environmentImg} alt="Trigger.dev sidebar showing Development environment and API Keys" />
+
+3. Click **API keys** in the sidebar menu and copy your development key — it starts with `tr_dev_`
+
+<Screenshot src={keyImg} alt="Trigger.dev API keys tab showing a development key" />
+
+4. Add it to your `.env`:
+
+```env
+TRIGGER_SECRET_KEY=tr_dev_your-key-here
+```
+
+### Set up the webhook tunnel
 
 ```bash
 npm run hook:github
@@ -128,10 +161,21 @@ This prints a public tunnel URL. Set it as the webhook URL in your GitHub App se
 GITHUB_WEBHOOK_SECRET=your-webhook-secret
 ```
 
-### Start Trigger.dev
+### Create a test GitHub organization
+
+Before doing the steps below, make sure to stop running the webapp service and run:
 
 ```bash
-npm run trigger:dev
+npm run dev # this will start the webapp, slides, pages, and hook services
 ```
 
-This uses your local `.env` directly — no Infisical needed.
+1. [Create a free GitHub organization](https://docs.github.com/en/organizations/collaborating-with-groups-in-organizations/creating-a-new-organization-from-scratch) to use for testing.
+
+2. Open `http://localhost:3000/select-organization` and click **Create new class**.
+
+3. Click **Install GitHub App on an organization**. This will open a new window to install the GitHub App on your organization.
+
+<Screenshot src={installAppImg} alt="GitHub App installation page for selecting an organization" frame url="github.com" />
+
+4. Select your organization and click **Install** and make sure to give it access to your repositories.
+
