@@ -1,6 +1,8 @@
 # Contributing to Classmoji
 
-Thanks for taking the time to contribute ❤️! We especially encourage student contributors — this project was built for CS education, and students bring the most valuable perspective.
+Thanks for taking the time to contribute ❤️!
+
+We especially encourage student contributors — this project was built for CS education, and students bring the most valuable perspective.
 
 ## Stack
 
