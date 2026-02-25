@@ -4,8 +4,7 @@ generator client {
 
 datasource db {
   provider = "postgresql"
-  // url      = env("DATABASE_URL")
-  url      = "postgresql://classmoji:classmoji@localhost:5433/classmoji"
+  url      = env("DATABASE_URL")
 }
 
 // ============================================================================
