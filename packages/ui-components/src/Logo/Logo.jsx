@@ -68,7 +68,7 @@ export const Logo = ({ variant = 'full', size = 'md', theme = 'light', className
   const customTextSize = isCustomSize ? { fontSize: `${Math.round(size * 0.7)}px` } : {};
 
   const gapClass = showIcon && showText ? 'gap-1.5' : '';
-  const themeClass = theme === 'dark' ? 'text-white' : 'text-[#1a1a1a]';
+  const themeClass = theme === 'dark' ? 'text-white' : 'text-[#1a1a1a] dark:text-white';
 
   return (
     <div

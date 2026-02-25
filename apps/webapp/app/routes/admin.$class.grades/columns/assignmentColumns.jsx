@@ -70,6 +70,7 @@ const createRepositoryAssignmentColumns = (module, view, emojiMappings, settings
     title: `${assignment.title} (${assignment.weight}%)`,
     dataIndex: assignment.title,
     hidden: !showAssignments,
+    width: 140,
     ellipsis: true,
     sorter: (a, b) => {
       const repoA = a.repositories.find(repo => repo.module_id === module.id);
@@ -115,6 +116,7 @@ const createModuleTotalColumn = (module, emojiMappings, settings, showAssignment
   return {
     title: 'Average',
     hidden: !showAssignments,
+    width: 120,
     ellipsis: true,
     sorter: (a, b) => {
       const repoA = a.repositories.find(repo => repo.module_id === module.id);
