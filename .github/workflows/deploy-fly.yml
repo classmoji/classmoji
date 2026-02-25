@@ -147,7 +147,7 @@ jobs:
 
       - name: Deploy to Trigger.dev
         working-directory: packages/tasks
-        run: npx trigger.dev@4.3.3 deploy --push
+        run: npx trigger.dev@4.4.0 deploy --push
         env:
           TRIGGER_ACCESS_TOKEN: ${{ secrets.TRIGGER_ACCESS_TOKEN }}
           INFISICAL_CLIENT_ID: ${{ secrets.INFISICAL_CLIENT_ID }}
