@@ -10,9 +10,11 @@ import environmentImg from './environment.png';
 import keyImg from './key.png';
 import neonDashboardImg from './neon_dashboard.png';
 import installAppImg from './install_app.png';
+import webhookImg from './webhook.png';
+import newSmeeImg from './new_app.png';
 
 :::note
-You clone the repo. You copy the env file. You run two commands. You're in.
+You clone the repo, copy the env file, run two commands, and you're in 🎉. 
 
 That's the goal, anyway. If reality diverges, we're on [GitHub](https://github.com/classmoji/classmoji) and happy to help.
 :::
@@ -45,19 +47,10 @@ Adding `upstream` lets you pull in future changes from the main repo with `git f
 cp .env.example .env
 ```
 
-Your `.env` will look something like this to start:
+:::note
+Whenever you manually edit `.env`, restart the dev server for changes to take effect: stop it with `Ctrl+C` and run it again.
+:::
 
-```env
-WEBAPP_URL="http://localhost:3000"
-SLIDES_URL="http://localhost:6500"
-PAGES_URL="http://localhost:7100"
-BETTER_AUTH_BASE_URL={WEBAPP_URL}
-BETTER_AUTH_SECRET="your-auth-secret"
-DATABASE_URL="postgresql://classmoji:classmoji@localhost:5433/classmoji"
-GITHUB_WEBHOOK_SECRET="your-webhook-secret"
-```
-
-The GitHub App credentials (`GITHUB_APP_ID`, `GITHUB_CLIENT_ID`, etc.) get added automatically when you complete the setup wizard in the step 4.
 
 ## 3. Database setup
 
@@ -84,8 +77,6 @@ Neon is a serverless PostgreSQL platform with a generous free tier. It's a great
 
 3. Copy the connection string and paste it as `DATABASE_URL` in your `.env`
 
----
-
 ### Apply migrations and seed
 
 Regardless of which option you chose:
@@ -100,24 +91,16 @@ npm run db:seed     # seeds dev classroom and fake users
 To start the webapp service:
 
 ```bash
-npm run web:dev 
+npm run web:dev
 ```
 
-Open `http://localhost:3000` — you'll be taken to a setup wizard. Click **Create GitHub App on Github**, confirm on GitHub, and you'll be redirected back with everything configured automatically.
+Open `http://localhost:3000` — you'll be taken to a setup wizard because `SETUP_GITHUB_APP=true` is set in your `.env`. Click **Create GitHub App on Github**, confirm on GitHub, and you'll be redirected back.
 
 <Screenshot src={wizardImg} alt="Classmoji setup wizard" frame url="localhost:3000/setup" />
 
-After the wizard completes, these variables will be added to your `.env` automatically:
+<Screenshot src={newSmeeImg} alt="GitHub App creation page on GitHub" />
 
-```env
-GITHUB_APP_ID="your-app-id"
-GITHUB_PRIVATE_KEY_BASE64="your-private-key"
-GITHUB_APP_NAME="Classmoji-xxxxxx"
-GITHUB_CLIENT_ID="your-client-id"
-GITHUB_CLIENT_SECRET="your-client-secret"
-```
-
-Sign in with your GitHub account. You'll be automatically added to the dev classroom as Owner, TA, and Student.
+After the wizard completes, the GitHub App values are automatically written to your `.env` and the setup flag is cleared. Restart the dev server as prompted, then sign in with your GitHub account. You'll be automatically added to the dev classroom as Owner, TA, and Student.
 
 <Screenshot src={classroomsImg} alt="Dev classroom showing Owner, TA, and Student roles" frame url="localhost:3000/select-organization" />
 
@@ -155,27 +138,34 @@ Trigger.dev is the background job runner Classmoji uses for tasks like repositor
 4. Add it to your `.env`:
 
 ```env
-TRIGGER_SECRET_KEY=tr_dev_your-key-here
+TRIGGER_SECRET_KEY="tr_dev_your-key-here"
 ```
 
 ### Set up the webhook tunnel
 
-```bash
-npm run hook:github
+GitHub needs a public URL to send webhook events to. But your local server isn't reachable from the internet — that's where [Smee](https://smee.io) comes in.
+
+Smee is a free webhook proxy. It gives you a public URL that receives events and forwards them to your local machine in real time.
+
+1. Go to [smee.io/new](https://smee.io/new) — it'll generate a unique channel URL for you (e.g. `https://smee.io/abc123`)
+2. Open [apps/hook-station/package.json](https://github.com/classmoji/classmoji/blob/main/apps/hook-station/package.json) and replace the `hook:github` URL with your channel URL:
+
+```json
+"hook:github": "smee -u https://smee.io/your-channel -p 4000 --path /webhooks/callback/github"
 ```
 
-This prints a public tunnel URL. Set it as the webhook URL in your GitHub App settings, then add the secret to your `.env`:
+3. Go to your GitHub App settings at `https://github.com/settings/apps/YOUR_APP_NAME` — replace `YOUR_APP_NAME` with the value of `GITHUB_APP_NAME` in your `.env`. Set the **Webhook URL** to your Smee channel URL.
 
-```env
-GITHUB_WEBHOOK_SECRET=your-webhook-secret
-```
+<Screenshot src={webhookImg} alt="GitHub App settings showing the Webhook URL field" />
+
+4. Copy the value of `GITHUB_WEBHOOK_SECRET` from your `.env` into the **Webhook secret** field in the GitHub App settings.
 
 ### Create a test GitHub organization
 
 Before doing the steps below, make sure to stop running the webapp service and run:
 
 ```bash
-npm run dev # this will start the webapp, slides, pages, and hook services
+npm run dev # starts all services: webapp, slides, pages, hook, Trigger.dev worker, and the Smee tunnel
 ```
 
 1. [Create a free GitHub organization](https://docs.github.com/en/organizations/collaborating-with-groups-in-organizations/creating-a-new-organization-from-scratch) to use for testing.
@@ -188,3 +178,10 @@ npm run dev # this will start the webapp, slides, pages, and hook services
 
 4. Select your organization and click **Install** and make sure to give it access to your repositories.
 
+5. Follow the [create a classroom guide](/docs/instructors/create-classroom) to set up your first classroom. After that, you're fully set up and ready to work on any part of the app.
+
+:::note
+You wired up a GitHub App, tunneled webhooks through the internet, and created a fake org just to test a button. You're not just a contributor — you're a legend 🏆.
+
+Now go break something (and fix it).
+:::

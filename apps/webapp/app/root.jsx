@@ -54,8 +54,8 @@ export const meta = () => {
 export const loader = async ({ request }) => {
   const url = new URL(request.url);
 
-  // Redirect to setup wizard if GitHub App is not yet configured
-  if (!process.env.GITHUB_APP_ID && !url.pathname.startsWith('/setup')) {
+  // Redirect to setup wizard if requested
+  if (process.env.SETUP_GITHUB_APP && !url.pathname.startsWith('/setup')) {
     return redirect('/setup');
   }
 

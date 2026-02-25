@@ -1,7 +1,7 @@
 export function buildManifest(baseUrl, name) {
   const isLocalhost = baseUrl.includes('localhost') || baseUrl.includes('127.0.0.1');
   return {
-    name,
+    name: name.toLowerCase(),
     url: baseUrl,
     ...(isLocalhost ? {} : {
       hook_attributes: { url: `${baseUrl}/api/github-webhook`, active: true },

@@ -21,8 +21,7 @@ function updateEnvFile(envPath, vars) {
     }
   }
 
-  // Write atomically via temp file + rename — collapses two fs events into one
-  // so Vite only restarts once instead of twice
+  // Write atomically via temp file + rename
   const tmp = `${envPath}.tmp`;
   fs.writeFileSync(tmp, content, 'utf-8');
   fs.renameSync(tmp, envPath);
@@ -72,6 +71,7 @@ export const loader = async ({ request }) => {
   const privateKeyBase64 = Buffer.from(pem).toString('base64');
 
   // Update in-memory immediately so the guard clears on the next request
+  delete process.env.SETUP_GITHUB_APP;
   process.env.GITHUB_APP_ID = String(id);
   process.env.GITHUB_PRIVATE_KEY_BASE64 = privateKeyBase64;
   if (webhook_secret) process.env.GITHUB_WEBHOOK_SECRET = webhook_secret;
@@ -79,8 +79,7 @@ export const loader = async ({ request }) => {
   if (client_id) process.env.GITHUB_CLIENT_ID = client_id;
   if (client_secret) process.env.GITHUB_CLIENT_SECRET = client_secret;
 
-  // Walk up from process.cwd() to find the monorepo root (contains turbo.json).
-  // process.cwd() is apps/webapp/ when run via Turbo, not the repo root.
+  // Write vars to .env so they persist across restarts
   function findMonorepoRoot(startDir) {
     let dir = startDir;
     while (true) {
@@ -90,7 +89,9 @@ export const loader = async ({ request }) => {
       dir = parent;
     }
   }
+
   const githubVars = {
+    SETUP_GITHUB_APP: '',
     GITHUB_APP_ID: String(id),
     GITHUB_PRIVATE_KEY_BASE64: privateKeyBase64,
     ...(webhook_secret ? { GITHUB_WEBHOOK_SECRET: webhook_secret } : {}),
@@ -99,16 +100,8 @@ export const loader = async ({ request }) => {
     ...(client_secret ? { GITHUB_CLIENT_SECRET: client_secret } : {}),
   };
 
-  // Defer the .env write so Vite restarts after the redirect is followed.
-  // Writing synchronously would restart Vite mid-request; the browser would
-  // retry /setup/callback?code=XXX with the already-consumed code (404).
-  // A 1s delay lets the browser land on '/' before Vite restarts.
   const monorepoRoot = findMonorepoRoot(process.cwd());
-  setTimeout(() => {
-    updateEnvFile(path.join(monorepoRoot, '.env'), githubVars);
-  }, 1000);
+  updateEnvFile(path.join(monorepoRoot, '.env'), githubVars);
 
-  // Redirect immediately — process.env is already set in memory above,
-  // so the root guard won't redirect back to /setup.
   return redirect('/?setup=complete');
 };

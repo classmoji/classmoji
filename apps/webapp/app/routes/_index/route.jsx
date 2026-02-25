@@ -32,7 +32,11 @@ const Index = ({ loaderData }) => {
   };
 
   const setupBanner = setupComplete && (
-    <Alert type="success" message="Github App configured successfully. Sign in to get started." />
+    <Alert
+      type="success"
+      message="Github App configured successfully."
+      description="Stop the server (Ctrl+C) and restart it, then sign in."
+    />
   );
 
   // In development, show quick login buttons for each role

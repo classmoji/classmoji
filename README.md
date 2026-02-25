@@ -33,6 +33,7 @@ The classroom management system for teaching CS as it's actually practiced. Stud
 
 - [Try Demo](https://demo.classmoji.io)
 - [Documentation](https://classmoji.io/docs)
+- [Local Development Guide](https://classmoji.io/docs/open-source/local-development)
 
 ## Contributing
 

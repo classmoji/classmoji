@@ -34,7 +34,7 @@ export default defineConfig({
         {
           label: '👨‍🏫 For Instructors',
           items: [
-            { label: 'Create a classroom', slug: 'docs/instructors' },
+            { label: 'Create a classroom', slug: 'docs/instructors/create-classroom' },
             { label: 'Manage your roster', slug: 'docs/instructors/roster' },
             { label: 'Modules & assignments', slug: 'docs/instructors/modules-and-assignments' },
             { label: 'Grade assignments', slug: 'docs/instructors/grading' },
