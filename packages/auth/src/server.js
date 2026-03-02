@@ -540,7 +540,12 @@ export const assertClassroomAccess = async ({
     });
   }
 
-  const rolesForLookup = Array.isArray(allowedRoles) ? allowedRoles : allowedRoles ? [allowedRoles] : [];
+  // Include selfAccessRoles in the lookup so members with those roles are found
+  // (e.g., a STUDENT with selfAccessRoles can still be found as a classroom member)
+  const rolesForLookup = [...new Set([
+    ...(Array.isArray(allowedRoles) ? allowedRoles : allowedRoles ? [allowedRoles] : []),
+    ...selfAccessRoles,
+  ])];
   const membership = await ClassmojiService.classroomMembership.findByClassroomAndUser(
     classroom.id,
     authData.userId,
