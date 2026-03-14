@@ -126,7 +126,7 @@ const TokenPopupForm = ({ repositoryAssignment, balance }) => {
 
   const hasDeadlinePassed = dayjs(repositoryAssignment.assignment.student_deadline).isBefore(dayjs());
 
-  if (hasDeadlinePassed == false || repositoryAssignment.num_late_hours == 0) return null;
+  if (hasDeadlinePassed == false || repositoryAssignment.num_late_hours == 0 || repositoryAssignment.is_late_override) return null;
 
   return (
     <Popover
