@@ -192,15 +192,23 @@ const StudentDashboard = ({ loaderData }) => {
           <div>
             <Countdown deadline={deadline} />
             <div className="mt-2">
-              {record.extension_hours > 0 && record.num_late_hours > 0 && (
-                <p className="pt-2 text-sm font-semibold text-green-600 ">
-                  ➖ {record.extension_hours} extension hour(s).
+              {record.num_late_hours > 0 && record.is_late_override ? (
+                <p className="pt-2 text-sm font-semibold text-green-600">
+                  ✓ Late penalty waived by instructor.
                 </p>
-              )}
-              {record.num_late_hours > 0 && (
-                <p className="pt-2 text-sm font-semibold text-red-600 ">
-                  ⚠️ {record.num_late_hours} hour(s) late.
-                </p>
+              ) : (
+                <>
+                  {record.extension_hours > 0 && record.num_late_hours > 0 && (
+                    <p className="pt-2 text-sm font-semibold text-green-600">
+                      ➖ {record.extension_hours} extension hour(s).
+                    </p>
+                  )}
+                  {record.num_late_hours > 0 && (
+                    <p className="pt-2 text-sm font-semibold text-red-600">
+                      ⚠️ {record.num_late_hours} hour(s) late.
+                    </p>
+                  )}
+                </>
               )}
             </div>
           </div>
