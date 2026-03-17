@@ -35,7 +35,7 @@ export default defineConfig({
 
         // Skip sync if credentials not available (allows local dev without Infisical)
         if (!process.env.INFISICAL_CLIENT_ID || !process.env.INFISICAL_CLIENT_SECRET) {
-          console.warn('[Infisical] Credentials not found, skipping secret sync');
+          console.warn('[Infisical] Credentials not found, skipping secret sync.');
           return {};
         }
 
