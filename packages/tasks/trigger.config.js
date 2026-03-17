@@ -67,10 +67,20 @@ export default defineConfig({
           console.log(`[Infisical] Successfully fetched ${secrets.length} secrets`);
 
           // Transform to Trigger.dev format
-          return secrets.map((secret) => ({
+          const mapped = secrets.map((secret) => ({
             name: secret.secretKey,
             value: secret.secretValue,
           }));
+
+          // Trigger.dev workers need a direct (unpooled) connection
+          const unpooledUrl = mapped.find(s => s.name === 'DATABASE_URL_UNPOOLED')?.value;
+          if (unpooledUrl) {
+            const entry = mapped.find(s => s.name === 'DATABASE_URL');
+            if (entry) entry.value = unpooledUrl;
+            else mapped.push({ name: 'DATABASE_URL', value: unpooledUrl });
+          }
+
+          return mapped;
         } catch (error) {
           console.error('[Infisical] Failed to sync secrets:', error.message);
           // Return empty object to allow deployment to continue with existing vars
