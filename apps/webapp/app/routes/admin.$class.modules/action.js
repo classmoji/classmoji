@@ -30,6 +30,11 @@ export const action = async ({ request, params }) => {
       return publishAssignment(classSlug, assignmentId, userId);
     },
 
+    async unpublish() {
+      await ClassmojiService.module.setPublished(assignmentId, false);
+      return { success: 'Module unpublished' };
+    },
+
     async sync() {
       const res = await syncAssignment(classSlug, assignmentId, userId);
       const {
