@@ -26,12 +26,25 @@ const RepositoryAssignmentsTable = ({
   const { classroom } = useStore(state => state);
 
   useEffect(() => {
-    if (showMyAssignments) {
-      setAssignmentsList(repositoryAssignments);
-    } else {
-      setAssignmentsList(allRepositoryAssignments);
+    const base = showMyAssignments ? repositoryAssignments : allRepositoryAssignments;
+    if (!userQuery.trim()) {
+      setAssignmentsList(base);
+      return;
     }
-  }, [showMyAssignments, repositoryAssignments, allRepositoryAssignments]);
+    const q = userQuery.toLowerCase();
+    setAssignmentsList(
+      base.filter(a => {
+        const student = a.repository?.student;
+        const team = a.repository?.team;
+        return (
+          student?.name?.toLowerCase().includes(q) ||
+          student?.login?.toLowerCase().includes(q) ||
+          team?.name?.toLowerCase().includes(q) ||
+          team?.slug?.toLowerCase().includes(q)
+        );
+      })
+    );
+  }, [showMyAssignments, repositoryAssignments, allRepositoryAssignments, userQuery]);
 
   // Filter functions for different tabs
   const filterAssignments = (assignments, tab) => {

@@ -39,7 +39,8 @@ const GradesTable = props => {
       const name = student.name?.toLowerCase() || '';
       const login = student.login?.toLowerCase() || '';
       const email = student.email?.toLowerCase() || '';
-      return name.includes(query) || login.includes(query) || email.includes(query);
+      const providerEmail = student.provider_email?.toLowerCase() || '';
+      return name.includes(query) || login.includes(query) || email.includes(query) || providerEmail.includes(query);
     });
   }, [students, searchQuery]);
 
