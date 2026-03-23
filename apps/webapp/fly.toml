@@ -19,7 +19,7 @@ primary_region = 'iad'
   min_machines_running = 1
 
   [[http_service.checks]]
-    interval = '15s'
+    interval = '30s'
     timeout = '5s'
     grace_period = '30s'
     method = 'GET'
