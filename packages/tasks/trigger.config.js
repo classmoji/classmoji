@@ -51,9 +51,9 @@ export default defineConfig({
             clientSecret: process.env.INFISICAL_CLIENT_SECRET,
           });
 
-          // Use prod environment for all Trigger.dev environments
-          // TODO: Create dev and sta environments in Infisical for environment-specific secrets
-          const infisicalEnv = 'prod';
+          // Map Trigger.dev environment to Infisical environment
+          const envMap = { prod: 'prod', staging: 'sta' };
+          const infisicalEnv = envMap[ctx.environment] ?? 'prod';
 
           console.log(`[Infisical] Syncing secrets from environment: ${infisicalEnv} (Trigger.dev env: ${ctx.environment})`);
 
