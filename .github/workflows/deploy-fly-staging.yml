@@ -15,6 +15,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       webapp: ${{ steps.filter.outputs.webapp }}
+      hook-station: ${{ steps.filter.outputs.hook-station }}
       tasks: ${{ steps.filter.outputs.tasks }}
     steps:
       - uses: actions/checkout@v4
@@ -24,6 +25,9 @@ jobs:
           filters: |
             webapp:
               - 'apps/webapp/**'
+              - 'packages/**'
+            hook-station:
+              - 'apps/hook-station/**'
               - 'packages/**'
             tasks:
               - 'packages/tasks/**'
@@ -40,6 +44,18 @@ jobs:
       - uses: superfly/flyctl-actions/setup-flyctl@master
       - name: Deploy webapp
         run: flyctl deploy --config apps/webapp/fly.toml --dockerfile apps/webapp/Dockerfile --remote-only --app classmoji-webapp-staging
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+
+  deploy-hook-station:
+    needs: changes
+    if: needs.changes.outputs.hook-station == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+      - name: Deploy hook-station
+        run: flyctl deploy --config apps/hook-station/fly.toml --dockerfile apps/hook-station/Dockerfile --remote-only --app classmoji-hook-station-staging
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
 
