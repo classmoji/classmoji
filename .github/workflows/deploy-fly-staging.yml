@@ -80,7 +80,7 @@ jobs:
 
       - name: Deploy to Trigger.dev
         working-directory: packages/tasks
-        run: npx trigger.dev@4.4.0 deploy --push
+        run: npx trigger.dev@4.4.0 deploy --push -e staging
         env:
           TRIGGER_ACCESS_TOKEN: ${{ secrets.TRIGGER_ACCESS_TOKEN }}
           INFISICAL_CLIENT_ID: ${{ secrets.INFISICAL_CLIENT_ID }}
