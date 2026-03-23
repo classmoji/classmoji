@@ -15,11 +15,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       webapp: ${{ steps.filter.outputs.webapp }}
-      ai-agent: ${{ steps.filter.outputs.ai-agent }}
-      hook-station: ${{ steps.filter.outputs.hook-station }}
-      site: ${{ steps.filter.outputs.site }}
-      slides: ${{ steps.filter.outputs.slides }}
-      pages: ${{ steps.filter.outputs.pages }}
+      tasks: ${{ steps.filter.outputs.tasks }}
     steps:
       - uses: actions/checkout@v4
       - uses: dorny/paths-filter@v3
@@ -29,20 +25,11 @@ jobs:
             webapp:
               - 'apps/webapp/**'
               - 'packages/**'
-            ai-agent:
-              - 'apps/ai-agent/**'
-              - 'packages/**'
-            hook-station:
-              - 'apps/hook-station/**'
-              - 'packages/**'
-            site:
-              - 'apps/site/**'
-            slides:
-              - 'apps/slides/**'
-              - 'packages/**'
-            pages:
-              - 'apps/pages/**'
-              - 'packages/**'
+            tasks:
+              - 'packages/tasks/**'
+              - 'packages/database/**'
+              - 'packages/services/**'
+              - 'packages/utils/**'
 
   deploy-webapp:
     needs: changes
@@ -56,66 +43,31 @@ jobs:
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
 
-  deploy-ai-agent:
+  deploy-trigger:
     needs: changes
-    if: needs.changes.outputs.ai-agent == 'true'
+    if: needs.changes.outputs.tasks == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
           submodules: true
           token: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
-      - uses: superfly/flyctl-actions/setup-flyctl@master
-      - name: Deploy ai-agent
-        run: flyctl deploy --config apps/ai-agent/fly.toml --dockerfile apps/ai-agent/Dockerfile --remote-only --app classmoji-ai-agent-staging
-        env:
-          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
 
-  deploy-hook-station:
-    needs: changes
-    if: needs.changes.outputs.hook-station == 'true'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: superfly/flyctl-actions/setup-flyctl@master
-      - name: Deploy hook-station
-        run: flyctl deploy --config apps/hook-station/fly.toml --dockerfile apps/hook-station/Dockerfile --remote-only --app classmoji-hook-station-staging
-        env:
-          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
 
-  deploy-site:
-    needs: changes
-    if: needs.changes.outputs.site == 'true'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: superfly/flyctl-actions/setup-flyctl@master
-      - name: Deploy site
-        working-directory: apps/site
-        run: flyctl deploy --remote-only --app classmoji-site-staging
-        env:
-          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+      - name: Install dependencies
+        run: npm ci
 
-  deploy-slides:
-    needs: changes
-    if: needs.changes.outputs.slides == 'true'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: superfly/flyctl-actions/setup-flyctl@master
-      - name: Deploy slides
-        run: flyctl deploy --config apps/slides/fly.toml --dockerfile apps/slides/Dockerfile --remote-only --app classmoji-slides-staging
+      - name: Deploy to Trigger.dev
+        working-directory: packages/tasks
+        run: npx trigger.dev@4.4.0 deploy --push
         env:
-          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
-
-  deploy-pages:
-    needs: changes
-    if: needs.changes.outputs.pages == 'true'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: superfly/flyctl-actions/setup-flyctl@master
-      - name: Deploy pages
-        run: flyctl deploy --config apps/pages/fly.toml --dockerfile apps/pages/Dockerfile --remote-only --app classmoji-pages-staging
-        env:
-          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          TRIGGER_ACCESS_TOKEN: ${{ secrets.TRIGGER_ACCESS_TOKEN }}
+          INFISICAL_CLIENT_ID: ${{ secrets.INFISICAL_CLIENT_ID }}
+          INFISICAL_CLIENT_SECRET: ${{ secrets.INFISICAL_CLIENT_SECRET }}
+          INFISICAL_PROJECT_ID: e9a6487c-350e-41e7-8bba-2d95ca5934a6
+          INFISICAL_HOST: https://app.infisical.com
