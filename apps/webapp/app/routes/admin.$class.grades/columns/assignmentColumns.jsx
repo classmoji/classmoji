@@ -1,4 +1,5 @@
 import {
+  applyLatePenalty,
   calculateNumericGrade,
   calculateRepositoryGrade,
   getDroppedRepositoryAssignments,
@@ -14,15 +15,9 @@ const calculateRepositoryAssignmentGrade = (repoAssignment, emojiMappings, setti
   if (!repoAssignment?.grades?.length) return null;
 
   const emojiGrades = repoAssignment.grades.map(({ emoji }) => emoji);
-  let numericGrade = calculateNumericGrade(emojiGrades, emojiMappings);
+  const numericGrade = calculateNumericGrade(emojiGrades, emojiMappings);
 
-  // Apply late penalty if applicable
-  if (repoAssignment.num_late_hours > 0 && !repoAssignment.is_late_override) {
-    const totalLateHours = repoAssignment.num_late_hours + repoAssignment.extension_hours;
-    numericGrade -= totalLateHours * settings.late_penalty_points_per_hour;
-  }
-
-  return Math.max(0, numericGrade);
+  return applyLatePenalty(numericGrade, repoAssignment, settings);
 };
 
 /**
