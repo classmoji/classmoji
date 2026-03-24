@@ -54,11 +54,15 @@ const StudentsScreen = ({ loaderData }) => {
 
   const filteredStudents = !query
     ? allStudents
-    : allStudents.filter(
-        student =>
-          student.name?.toLowerCase().includes(query.toLowerCase()) ||
-          student?.login?.toLowerCase().includes(query.toLowerCase())
-      );
+    : allStudents.filter(student => {
+        const q = query.toLowerCase();
+        return (
+          student.name?.toLowerCase().includes(q) ||
+          student.login?.toLowerCase().includes(q) ||
+          student.email?.toLowerCase().includes(q) ||
+          student.provider_email?.toLowerCase().includes(q)
+        );
+      });
 
   return (
     <>

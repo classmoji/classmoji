@@ -10,6 +10,7 @@ import {
 import { openRepositoryAssignmentInGithub } from '~/utils/helpers.client';
 import useStore from '~/store';
 import {
+  applyLatePenalty,
   calculateNumericGrade,
   calculateRepositoryGrade,
   calculateGrades,
@@ -140,25 +141,12 @@ const SingleStudentView = props => {
       width: '10%',
       render: (grades, repositoryAssignment) => {
         if (!grades.length) return <span className="text-gray-500 italic">No grades yet</span>;
-        let grade = calculateNumericGrade(
+        const rawGrade = calculateNumericGrade(
           grades.map(({ emoji }) => emoji),
           emojiMappings
         );
 
-        // Deduct points for late submissions unless late override is used
-        // Note: num_late_hours, is_late_override, extension_hours are on the RepositoryAssignment
-        if (
-          repositoryAssignment.num_late_hours > 0 &&
-          repositoryAssignment.is_late_override == false
-        ) {
-          grade =
-            grade -
-            (repositoryAssignment.num_late_hours + repositoryAssignment.extension_hours) *
-              settings.late_penalty_points_per_hour;
-        }
-
-        // When late hours is more than 100, set grade to 0
-        if (grade < 0) grade = 0;
+        const grade = applyLatePenalty(rawGrade, repositoryAssignment, settings);
 
         const getGradeColor = grade => {
           if (grade >= 90) return 'text-green-600';

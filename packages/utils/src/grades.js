@@ -128,16 +128,9 @@ export const calculateRepositoryGrade = (
       const emojis = repoAssignment.grades.map(({ emoji }) => emoji);
       numericGrade = calculateNumericGrade(emojis, emojiToNumberMap);
 
-      // Deduct points for late submissions unless late override is used
-      if (includeLatePenalty && repoAssignment.num_late_hours > 0 && repoAssignment.is_late_override == false) {
-        const latePenalty =
-          (repoAssignment.num_late_hours + repoAssignment.extension_hours) * settings.late_penalty_points_per_hour;
-
-        numericGrade = numericGrade - latePenalty;
+      if (includeLatePenalty) {
+        numericGrade = applyLatePenalty(numericGrade, repoAssignment, settings);
       }
-
-      // When grade is negative, set to 0
-      if (numericGrade < 0) numericGrade = 0;
     } else {
       // No grades yet, skip this assignment
       continue;
@@ -191,6 +184,19 @@ export const calculateNumericGrade = (emojis, emojiToNumberMap) => {
     emojis.length
   );
 };
+/**
+ * Apply late penalty to a numeric grade for a repository assignment.
+ * num_late_hours already accounts for extension hours, so no additional
+ * adjustment is needed here.
+ */
+export const applyLatePenalty = (numericGrade, repoAssignment, settings) => {
+  if (repoAssignment.num_late_hours > 0 && repoAssignment.is_late_override == false) {
+    const latePenalty = repoAssignment.num_late_hours * settings.late_penalty_points_per_hour;
+    return Math.max(0, numericGrade - latePenalty);
+  }
+  return numericGrade;
+};
+
 // convert a numeric grade to an emoji. Used CHATGPT to generate this lol .
 export const gradeToEmoji = (score, emojiGrades) => {
   return Object.entries(emojiGrades).reduce((closest, [emoji, value]) => {
@@ -240,14 +246,7 @@ export const getDroppedRepositoryAssignments = (repositoryAssignments, emojiToNu
       const emojis = repoAssignment.grades.map(({ emoji }) => emoji);
       numericGrade = calculateNumericGrade(emojis, emojiToNumberMap);
 
-      // Deduct points for late submissions
-      if (repoAssignment.num_late_hours > 0 && repoAssignment.is_late_override == false) {
-        const latePenalty =
-          (repoAssignment.num_late_hours + repoAssignment.extension_hours) * settings.late_penalty_points_per_hour;
-        numericGrade = numericGrade - latePenalty;
-      }
-
-      if (numericGrade < 0) numericGrade = 0;
+      numericGrade = applyLatePenalty(numericGrade, repoAssignment, settings);
     } else {
       // No grades yet, skip
       continue;
