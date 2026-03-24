@@ -33,7 +33,8 @@ Monorepo via npm workspaces + Turbo; Node 22+ required.
 > ```
 
 - Install: `npm install`; Init: `npm run init`
-- Start DB (Docker): `npm run db:start`
+- Start DB (Docker): `npm run db:start` (postgres only; works without the ai-agent submodule)
+- Start ai-agent container (requires submodule): `npm run ai-agent:docker`
 - **Prisma schema** lives in `packages/database/schema.prisma` (not the default location). Migrations are in `packages/database/migrations/`. **Never use `prisma db push`** — always create proper migrations. Workflow: edit schema → `npm run db:generate` (regenerate client) → create migration → `npm run db:deploy` (apply migrations).
 - Query DB: `psql "$DATABASE_URL" -c "SELECT ..."`
 - All apps (concurrent dev): `npm run dev` (check `.dev-context` for ports/database after starting)
