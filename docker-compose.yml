@@ -16,6 +16,8 @@ services:
       - classmoji-network
 
   ai-agent:
+    profiles:
+      - ai-agent
     container_name: classmoji-ai-agent
     build:
       context: .
