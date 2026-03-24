@@ -10,6 +10,7 @@
     "init": "./scripts/init.sh",
     "dev": "./scripts/dev.sh",
     "devport": "./scripts/devport.sh",
+    "typecheck": "turbo run typecheck",
     "lint": "turbo run lint",
     "lint:fix": "turbo run lint:fix",
     "format": "turbo run format",

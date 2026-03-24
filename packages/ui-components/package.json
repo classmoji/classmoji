@@ -7,6 +7,7 @@
     "./sandpack": "./src/Sandpack/index.js"
   },
   "scripts": {
+    "typecheck": "echo 'skipped until JSX migration'",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "format": "prettier --write \"**/*.{js,jsx,ts,tsx,json,md}\"",

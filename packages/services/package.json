@@ -2,13 +2,14 @@
   "name": "@classmoji/services",
   "type": "module",
   "scripts": {
+    "typecheck": "tsc --noEmit",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "format": "prettier --write \"**/*.{js,jsx,ts,tsx,json,md}\"",
     "format:check": "prettier --check \"**/*.{js,jsx,ts,tsx,json,md}\""
   },
   "exports": {
-    ".": "./src/index.js"
+    ".": "./src/index.ts"
   },
   "dependencies": {
     "@classmoji/database": "*",

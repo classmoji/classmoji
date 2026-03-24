@@ -2,6 +2,7 @@
   "name": "@classmoji/database",
   "type": "module",
   "scripts": {
+    "typecheck": "tsc --noEmit",
     "db:deploy": "prisma migrate deploy",
     "db:generate": "prisma generate",
     "db:reset": "prisma migrate reset --force",
@@ -13,7 +14,7 @@
     "format:check": "prettier --check \"**/*.{js,jsx,ts,tsx,json,md}\""
   },
   "exports": {
-    ".": "./index.js"
+    ".": "./index.ts"
   },
   "dependencies": {
     "@classmoji/utils": "*",

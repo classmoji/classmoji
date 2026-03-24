@@ -4,6 +4,7 @@
   "sideEffects": false,
   "type": "module",
   "scripts": {
+    "typecheck": "echo 'skipped - enable after TS migration'",
     "web:dev": "react-router dev",
     "web:build": "react-router build",
     "web:start": "react-router-serve build/server/index.js",
