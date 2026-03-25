@@ -4,7 +4,7 @@
   "sideEffects": false,
   "type": "module",
   "scripts": {
-    "typecheck": "echo 'skipped - enable after TS migration'",
+    "typecheck": "tsc --noEmit",
     "slides:dev": "node --experimental-strip-types server.ts",
     "slides:build": "react-router build",
     "slides:start": "NODE_ENV=production node --experimental-strip-types server.ts",
