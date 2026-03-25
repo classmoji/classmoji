@@ -12,15 +12,31 @@
  * </div>
  */
 
-import { DEFAULT_FILES } from './constants.js';
+import { DEFAULT_FILES } from './constants.ts';
+
+export interface SandpackOptions {
+  showTabs: boolean;
+  showLineNumbers: boolean;
+  showConsole: boolean;
+  readOnly: boolean;
+  visibleFiles: string[] | null;
+}
+
+export interface SandpackConfig {
+  template: string;
+  theme: string;
+  layout: string;
+  files: Record<string, string>;
+  options: SandpackOptions;
+  editorWidthPercentage: number;
+}
 
 /**
  * Parse Sandpack configuration from an HTML element
  *
- * @param {HTMLElement} element - The .sandpack-embed container element
- * @returns {{ template: string, theme: string, layout: string, files: Record<string, string>, options: object }}
+ * @param element - The .sandpack-embed container element
  */
-export function parseFromHtml(element) {
+export function parseFromHtml(element: HTMLElement): SandpackConfig {
   const template = element.dataset.template || 'vanilla';
   const theme = element.dataset.theme || 'auto';
   const layout = element.dataset.layout || 'preview-right';
@@ -31,7 +47,7 @@ export function parseFromHtml(element) {
     : 50;
 
   // Parse additional options
-  const options = {
+  const options: SandpackOptions = {
     showTabs: element.dataset.showTabs !== 'false',
     showLineNumbers: element.dataset.showLineNumbers !== 'false',
     showConsole: element.dataset.showConsole === 'true',
@@ -67,13 +83,22 @@ export function parseFromHtml(element) {
   return { template, theme, layout, files, options, editorWidthPercentage };
 }
 
+export interface SerializeConfig {
+  template?: string;
+  theme?: string;
+  layout?: string;
+  files?: Record<string, string>;
+  options?: Partial<SandpackOptions>;
+  editorWidthPercentage?: number;
+}
+
 /**
  * Serialize Sandpack configuration to HTML markup
  *
- * @param {{ template?: string, theme?: string, layout?: string, files: Record<string, string>, options?: object }} config
- * @returns {string} HTML string
+ * @param config - Sandpack configuration
+ * @returns HTML string
  */
-export function serializeToHtml(config) {
+export function serializeToHtml(config: SerializeConfig): string {
   const {
     template = 'vanilla',
     theme = 'auto',
@@ -112,10 +137,10 @@ ${filesJson}
 /**
  * Create a new Sandpack element with default configuration
  *
- * @param {string} template - Template name (vanilla, react, etc.)
- * @returns {HTMLElement} The created element
+ * @param template - Template name (vanilla, react, etc.)
+ * @returns The created element
  */
-export function createSandpackElement(template = 'vanilla') {
+export function createSandpackElement(template: string = 'vanilla'): HTMLElement {
   const div = document.createElement('div');
   div.className = 'sandpack-embed';
   div.dataset.template = template;
@@ -135,11 +160,11 @@ export function createSandpackElement(template = 'vanilla') {
 /**
  * Update files in an existing Sandpack element
  *
- * @param {HTMLElement} element - The .sandpack-embed container element
- * @param {Record<string, string>} files - The new files object
+ * @param element - The .sandpack-embed container element
+ * @param files - The new files object
  */
-export function updateFilesInElement(element, files) {
-  let scriptEl = element.querySelector('script[data-sandpack-files]');
+export function updateFilesInElement(element: HTMLElement, files: Record<string, string>): void {
+  let scriptEl = element.querySelector('script[data-sandpack-files]') as HTMLScriptElement | null;
   if (!scriptEl) {
     scriptEl = document.createElement('script');
     scriptEl.type = 'application/json';

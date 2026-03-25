@@ -2,10 +2,26 @@
  * Sandpack constants and default configurations
  */
 
+interface TemplateEntry {
+  id: string;
+  label: string;
+  description: string;
+}
+
+interface ThemeEntry {
+  id: string;
+  label: string;
+}
+
+interface LayoutEntry {
+  id: string;
+  label: string;
+}
+
 /**
  * Available Sandpack templates
  */
-export const SANDPACK_TEMPLATES = {
+export const SANDPACK_TEMPLATES: Record<string, TemplateEntry> = {
   vanilla: {
     id: 'vanilla',
     label: 'Vanilla (HTML/CSS/JS)',
@@ -31,7 +47,7 @@ export const SANDPACK_TEMPLATES = {
 /**
  * Available Sandpack themes
  */
-export const SANDPACK_THEMES = {
+export const SANDPACK_THEMES: Record<string, ThemeEntry> = {
   auto: { id: 'auto', label: 'Auto (match slide)' },
   light: { id: 'light', label: 'Light' },
   dark: { id: 'dark', label: 'Dark' },
@@ -46,7 +62,7 @@ export const SANDPACK_THEMES = {
 /**
  * Layout options for Sandpack preview
  */
-export const SANDPACK_LAYOUTS = {
+export const SANDPACK_LAYOUTS: Record<string, LayoutEntry> = {
   'preview-right': { id: 'preview-right', label: 'Preview on right' },
   'preview-bottom': { id: 'preview-bottom', label: 'Preview below' },
   'preview-only': { id: 'preview-only', label: 'Preview only' },
@@ -56,7 +72,7 @@ export const SANDPACK_LAYOUTS = {
 /**
  * Default file contents for each template
  */
-export const DEFAULT_FILES = {
+export const DEFAULT_FILES: Record<string, Record<string, string>> = {
   vanilla: {
     '/index.html': `<!DOCTYPE html>
 <html>

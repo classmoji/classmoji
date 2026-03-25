@@ -2,7 +2,11 @@
  * Classmoji Logo Component
  */
 
-const SIZE_CLASSES = {
+import React from 'react';
+
+type SizeKey = 'xs' | 'sm' | 'md' | 'lg' | 'xl';
+
+const SIZE_CLASSES: Record<SizeKey, { icon: string; text: string }> = {
   xs: {
     icon: 'w-5 h-5 text-[12px]',
     text: 'text-sm',
@@ -25,12 +29,17 @@ const SIZE_CLASSES = {
   },
 };
 
+interface LogoIconProps {
+  size?: SizeKey | number;
+  className?: string;
+}
+
 /**
  * LogoIcon - Just the apple emoji
  */
-export const LogoIcon = ({ size = 'md', className = '' }) => {
+export const LogoIcon = ({ size = 'md', className = '' }: LogoIconProps): React.JSX.Element => {
   const isCustomSize = typeof size === 'number';
-  const sizeClasses = isCustomSize ? '' : SIZE_CLASSES[size]?.icon || SIZE_CLASSES.md.icon;
+  const sizeClasses = isCustomSize ? '' : SIZE_CLASSES[size as SizeKey]?.icon || SIZE_CLASSES.md.icon;
 
   const customStyles = isCustomSize
     ? {
@@ -50,21 +59,22 @@ export const LogoIcon = ({ size = 'md', className = '' }) => {
   );
 };
 
+interface LogoProps {
+  variant?: 'full' | 'icon' | 'text';
+  size?: SizeKey | number;
+  theme?: 'light' | 'dark' | 'current';
+  className?: string;
+}
+
 /**
  * Logo - Full Classmoji branding with icon and/or text
- *
- * @param {Object} props
- * @param {'full'|'icon'|'text'} props.variant - Display mode (default: 'full')
- * @param {'xs'|'sm'|'md'|'lg'|'xl'|number} props.size - Size preset or custom pixel height (default: 'md')
- * @param {'light'|'dark'} props.theme - Color theme (default: 'light')
- * @param {string} props.className - Optional CSS class for the wrapper
  */
-export const Logo = ({ variant = 'full', size = 'md', theme = 'light', className = '' }) => {
+export const Logo = ({ variant = 'full', size = 'md', theme = 'light', className = '' }: LogoProps): React.JSX.Element => {
   const isCustomSize = typeof size === 'number';
   const showIcon = variant === 'full' || variant === 'icon';
   const showText = variant === 'full' || variant === 'text';
 
-  const textSizeClass = isCustomSize ? '' : SIZE_CLASSES[size]?.text || SIZE_CLASSES.md.text;
+  const textSizeClass = isCustomSize ? '' : SIZE_CLASSES[size as SizeKey]?.text || SIZE_CLASSES.md.text;
   const customTextSize = isCustomSize ? { fontSize: `${Math.round(size * 0.7)}px` } : {};
 
   const gapClass = showIcon && showText ? 'gap-1.5' : '';

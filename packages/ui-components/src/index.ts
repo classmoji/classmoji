@@ -5,7 +5,7 @@
  */
 
 // Logo components
-export { Logo, LogoIcon } from './Logo/index.js';
+export { Logo, LogoIcon } from './Logo/index.ts';
 
 // Sandpack components
 export {
@@ -19,4 +19,4 @@ export {
   SANDPACK_THEMES,
   SANDPACK_LAYOUTS,
   DEFAULT_FILES,
-} from './Sandpack/index.js';
+} from './Sandpack/index.ts';

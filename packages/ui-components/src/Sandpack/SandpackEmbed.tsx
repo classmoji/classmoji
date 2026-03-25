@@ -14,6 +14,7 @@ import {
   SandpackPreview,
   useSandpack,
 } from '@codesandbox/sandpack-react';
+import type { SandpackThemeProp, SandpackPredefinedTemplate } from '@codesandbox/sandpack-react';
 import {
   githubLight,
   nightOwl,
@@ -22,15 +23,15 @@ import {
   atomDark,
   monokaiPro,
 } from '@codesandbox/sandpack-themes';
-import { DEFAULT_FILES } from './constants.js';
-import CollapsibleConsole from './CollapsibleConsole.jsx';
+import { DEFAULT_FILES } from './constants.ts';
+import CollapsibleConsole from './CollapsibleConsole.tsx';
 
 /**
  * Map of theme names to imported theme objects.
  * 'light' and 'dark' are built-in Sandpack themes (strings work).
  * All others must be imported from @codesandbox/sandpack-themes.
  */
-const THEME_MAP = {
+const THEME_MAP: Record<string, SandpackThemeProp> = {
   light: 'light',
   dark: 'dark',
   githubLight,
@@ -41,6 +42,10 @@ const THEME_MAP = {
   monokaiPro,
 };
 
+interface FileSyncListenerProps {
+  onFilesChange: (files: Record<string, string>) => void;
+}
+
 /**
  * Internal component that syncs file changes back to the callback
  *
@@ -48,17 +53,17 @@ const THEME_MAP = {
  * NOT for file content changes. File edits are managed in React state, so we
  * watch sandpack.files directly which triggers re-renders on change.
  */
-function FileSyncListener({ onFilesChange }) {
+function FileSyncListener({ onFilesChange }: FileSyncListenerProps) {
   const { sandpack } = useSandpack();
-  const timeoutRef = useRef(null);
-  const lastFilesRef = useRef(null);
+  const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastFilesRef = useRef<string | null>(null);
 
   useEffect(() => {
     if (!onFilesChange) return;
     if (!sandpack || !sandpack.files) return;
 
     // Extract current file contents
-    const currentFiles = {};
+    const currentFiles: Record<string, string> = {};
     for (const [path, file] of Object.entries(sandpack.files)) {
       currentFiles[path] = file.code;
     }
@@ -84,23 +89,28 @@ function FileSyncListener({ onFilesChange }) {
   return null;
 }
 
+interface SandpackEmbedOptions {
+  showTabs?: boolean;
+  showLineNumbers?: boolean;
+  showConsole?: boolean;
+  readOnly?: boolean;
+  visibleFiles?: string[] | null;
+}
+
+interface SandpackEmbedProps {
+  template?: string;
+  theme?: string;
+  layout?: string;
+  files?: Record<string, string>;
+  options?: SandpackEmbedOptions;
+  onFilesChange?: (files: Record<string, string>) => void;
+  slideTheme?: string;
+  className?: string;
+  editorWidthPercentage?: number;
+}
+
 /**
  * SandpackEmbed component
- *
- * @param {object} props
- * @param {string} [props.template='vanilla'] - Template: vanilla, react, vanilla-ts, react-ts
- * @param {string} [props.theme='auto'] - Theme name or 'auto' to match slide theme
- * @param {string} [props.layout='preview-right'] - Layout: preview-right, preview-bottom, preview-only, editor-only
- * @param {Record<string, string>} [props.files] - File contents keyed by path
- * @param {object} [props.options] - Additional Sandpack options
- * @param {boolean} [props.options.showTabs=true] - Show file tabs
- * @param {boolean} [props.options.showLineNumbers=true] - Show line numbers
- * @param {boolean} [props.options.showConsole=false] - Show console panel
- * @param {boolean} [props.options.readOnly=false] - Read-only mode
- * @param {string[]} [props.options.visibleFiles] - Array of file paths to show as tabs (e.g., ['/index.html']). If not set, all files are visible.
- * @param {function} [props.onFilesChange] - Callback when files change
- * @param {string} [props.slideTheme] - Current slide theme for auto theme detection
- * @param {string} [props.className] - Additional CSS classes
  */
 export default function SandpackEmbed({
   template = 'vanilla',
@@ -112,7 +122,7 @@ export default function SandpackEmbed({
   slideTheme,
   className = '',
   editorWidthPercentage = 50,
-}) {
+}: SandpackEmbedProps) {
   const {
     showTabs = true,
     showLineNumbers = true,
@@ -142,9 +152,9 @@ export default function SandpackEmbed({
         : DEFAULT_FILES[template] || DEFAULT_FILES.vanilla;
 
     // Convert string values to Sandpack file format
-    const formatted = {};
+    const formatted: Record<string, { code: string }> = {};
     for (const [path, content] of Object.entries(sourceFiles)) {
-      formatted[path] = typeof content === 'string' ? { code: content } : content;
+      formatted[path] = typeof content === 'string' ? { code: content } : { code: content };
     }
     return formatted;
   }, [files, template]);
@@ -159,7 +169,7 @@ export default function SandpackEmbed({
       className={`sandpack-embed-wrapper ${className}`}
     >
       <SandpackProvider
-        template={template}
+        template={template as SandpackPredefinedTemplate}
         theme={resolvedTheme}
         files={sandpackFiles}
         options={{

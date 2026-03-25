@@ -3,6 +3,5 @@
   "compilerOptions": {
     "jsx": "react-jsx"
   },
-  "include": ["src"],
-  "exclude": ["src/**/*.jsx"]
+  "include": ["src"]
 }

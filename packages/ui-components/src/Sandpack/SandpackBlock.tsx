@@ -6,35 +6,52 @@
  */
 
 import { useCallback } from 'react';
-import SandpackEmbed from './SandpackEmbed.jsx';
+import SandpackEmbed from './SandpackEmbed.tsx';
 import {
   SANDPACK_TEMPLATES,
   SANDPACK_THEMES,
   SANDPACK_LAYOUTS,
   DEFAULT_FILES,
-} from './constants.js';
+} from './constants.ts';
+interface SandpackBlockData {
+  template?: string;
+  theme?: string;
+  layout?: string;
+  files?: Record<string, string>;
+  options?: {
+    showTabs?: boolean;
+    showLineNumbers?: boolean;
+    showConsole?: boolean;
+    readOnly?: boolean;
+    visibleFiles?: string[] | null;
+  };
+}
+
+interface SandpackBlockItem {
+  data?: SandpackBlockData;
+}
+
+interface SandpackBlockProps {
+  block: SandpackBlockItem;
+  onChange: (block: SandpackBlockItem) => void;
+  isSelected?: boolean;
+  slideTheme?: string;
+}
 
 /**
  * SandpackBlock component for block editors
- *
- * @param {object} props
- * @param {object} props.block - Block data from the editor
- * @param {function} props.onChange - Callback when block data changes
- * @param {boolean} [props.isSelected=false] - Whether the block is selected
- * @param {string} [props.slideTheme] - Current theme for auto detection
  */
-export default function SandpackBlock({ block, onChange, isSelected = false, slideTheme }) {
-  const {
-    template = 'vanilla',
-    theme = 'auto',
-    layout = 'preview-right',
-    files = DEFAULT_FILES[template] || DEFAULT_FILES.vanilla,
-    options = {},
-  } = block.data || {};
+export default function SandpackBlock({ block, onChange, isSelected = false, slideTheme }: SandpackBlockProps) {
+  const data = block.data || {};
+  const template = data.template ?? 'vanilla';
+  const theme = data.theme ?? 'auto';
+  const layout = data.layout ?? 'preview-right';
+  const files: Record<string, string> = data.files ?? DEFAULT_FILES[template] ?? DEFAULT_FILES['vanilla'];
+  const options = data.options ?? {};
 
   // Handle file changes from Sandpack
   const handleFilesChange = useCallback(
-    newFiles => {
+    (newFiles: Record<string, string>) => {
       onChange({
         ...block,
         data: {
@@ -48,7 +65,7 @@ export default function SandpackBlock({ block, onChange, isSelected = false, sli
 
   // Handle configuration changes
   const handleConfigChange = useCallback(
-    (key, value) => {
+    (key: string, value: unknown) => {
       const newData = {
         ...block.data,
         [key]: value,
@@ -56,7 +73,7 @@ export default function SandpackBlock({ block, onChange, isSelected = false, sli
 
       // If template changes, reset files to defaults
       if (key === 'template' && value !== template) {
-        newData.files = DEFAULT_FILES[value] || DEFAULT_FILES.vanilla;
+        newData.files = DEFAULT_FILES[value as string] ?? DEFAULT_FILES['vanilla'];
       }
 
       onChange({

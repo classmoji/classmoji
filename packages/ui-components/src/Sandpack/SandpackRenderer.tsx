@@ -15,34 +15,35 @@
 
 import { useEffect, useRef, useCallback } from 'react';
 import { createRoot } from 'react-dom/client';
-import SandpackEmbed from './SandpackEmbed.jsx';
-import { parseFromHtml, updateFilesInElement } from './utils.js';
+import SandpackEmbed from './SandpackEmbed.tsx';
+import { parseFromHtml, updateFilesInElement } from './utils.ts';
+
+interface SandpackRendererProps {
+  containerSelector?: string;
+  slideTheme?: string;
+  onContentChange?: () => void;
+  isEditing?: boolean;
+}
 
 /**
  * SandpackRenderer component
- *
- * @param {object} props
- * @param {string} [props.containerSelector='.reveal .slides'] - CSS selector for the container to watch
- * @param {string} [props.slideTheme] - Current slide theme for auto theme detection
- * @param {function} [props.onContentChange] - Callback when Sandpack content changes
- * @param {boolean} [props.isEditing=false] - Whether in edit mode (enables file sync)
  */
 export default function SandpackRenderer({
   containerSelector = '.reveal .slides',
   slideTheme,
   onContentChange,
   isEditing = false,
-}) {
+}: SandpackRendererProps) {
   // Track mounted React roots so we can clean them up
-  const rootsRef = useRef(new Map());
+  const rootsRef = useRef(new Map<HTMLElement, ReturnType<typeof createRoot>>());
   // Track observed elements to avoid double-mounting
-  const observedRef = useRef(new WeakSet());
+  const observedRef = useRef(new WeakSet<HTMLElement>());
 
   /**
    * Mount a Sandpack component into an embed element
    */
   const mountSandpack = useCallback(
-    embedEl => {
+    (embedEl: HTMLElement) => {
       // Skip if already mounted
       if (observedRef.current.has(embedEl)) return;
       observedRef.current.add(embedEl);
@@ -60,14 +61,14 @@ export default function SandpackRenderer({
 
       // Handle file changes - sync back to the JSON script tag
       const handleFilesChange = isEditing
-        ? files => {
+        ? (files: Record<string, string>) => {
             updateFilesInElement(embedEl, files);
             onContentChange?.();
           }
         : undefined;
 
       // Create React root and render Sandpack
-      const root = createRoot(mountPoint);
+      const root = createRoot(mountPoint as HTMLElement);
       root.render(
         <SandpackEmbed
           template={config.template}
@@ -90,7 +91,7 @@ export default function SandpackRenderer({
   /**
    * Unmount a Sandpack component from an embed element
    */
-  const unmountSandpack = useCallback(embedEl => {
+  const unmountSandpack = useCallback((embedEl: HTMLElement) => {
     const root = rootsRef.current.get(embedEl);
     if (root) {
       root.unmount();
@@ -110,7 +111,7 @@ export default function SandpackRenderer({
    * Called when data attributes change on the embed element
    */
   const rerenderSandpack = useCallback(
-    embedEl => {
+    (embedEl: HTMLElement) => {
       const root = rootsRef.current.get(embedEl);
       if (!root) return;
 
@@ -119,7 +120,7 @@ export default function SandpackRenderer({
 
       // Handle file changes - sync back to the JSON script tag
       const handleFilesChange = isEditing
-        ? files => {
+        ? (files: Record<string, string>) => {
             updateFilesInElement(embedEl, files);
             onContentChange?.();
           }
@@ -146,8 +147,8 @@ export default function SandpackRenderer({
    * Scan for and mount all Sandpack embeds in the container
    */
   const scanAndMount = useCallback(
-    container => {
-      const embeds = container.querySelectorAll('.sandpack-embed');
+    (container: Element) => {
+      const embeds = container.querySelectorAll<HTMLElement>('.sandpack-embed');
       embeds.forEach(embed => {
         if (!rootsRef.current.has(embed)) {
           mountSandpack(embed);
@@ -158,8 +159,8 @@ export default function SandpackRenderer({
   );
 
   useEffect(() => {
-    let observer = null;
-    let retryTimeout = null;
+    let observer: MutationObserver | null = null;
+    let retryTimeout: ReturnType<typeof setTimeout> | null = null;
     let retryCount = 0;
     const maxRetries = 20; // Try for up to 2 seconds (20 * 100ms)
 
@@ -187,13 +188,13 @@ export default function SandpackRenderer({
           if (mutation.type === 'childList') {
             mutation.addedNodes.forEach(node => {
               if (node.nodeType === Node.ELEMENT_NODE) {
-                const el = /** @type {Element} */ (node);
+                const el = node as HTMLElement;
                 // Check if the node itself is a sandpack embed
                 if (el.classList?.contains('sandpack-embed')) {
                   mountSandpack(el);
                 }
                 // Check for sandpack embeds inside the added node
-                const embeds = el.querySelectorAll?.('.sandpack-embed');
+                const embeds = el.querySelectorAll<HTMLElement>('.sandpack-embed');
                 embeds?.forEach(embed => mountSandpack(embed));
               }
             });
@@ -201,11 +202,11 @@ export default function SandpackRenderer({
             // Check removed nodes for cleanup
             mutation.removedNodes.forEach(node => {
               if (node.nodeType === Node.ELEMENT_NODE) {
-                const el = /** @type {Element} */ (node);
+                const el = node as HTMLElement;
                 if (el.classList?.contains('sandpack-embed')) {
                   unmountSandpack(el);
                 }
-                const embeds = el.querySelectorAll?.('.sandpack-embed');
+                const embeds = el.querySelectorAll<HTMLElement>('.sandpack-embed');
                 embeds?.forEach(embed => unmountSandpack(embed));
               }
             });
@@ -213,7 +214,7 @@ export default function SandpackRenderer({
 
           // Check for attribute changes on sandpack embeds
           if (mutation.type === 'attributes') {
-            const el = /** @type {Element} */ (mutation.target);
+            const el = mutation.target as HTMLElement;
             if (el.classList?.contains('sandpack-embed')) {
               rerenderSandpack(el);
             }
@@ -264,7 +265,7 @@ export default function SandpackRenderer({
       // Only re-render if theme is 'auto'
       if (config.theme === 'auto') {
         const handleFilesChange = isEditing
-          ? files => {
+          ? (files: Record<string, string>) => {
               updateFilesInElement(embedEl, files);
               onContentChange?.();
             }

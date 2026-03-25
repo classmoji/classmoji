@@ -6,24 +6,35 @@
  */
 
 import { useState, useCallback } from 'react';
-import { SandpackConsole, useSandpack } from '@codesandbox/sandpack-react';
+import { SandpackConsole } from '@codesandbox/sandpack-react';
+
+type ConsoleMethod = 'log' | 'debug' | 'info' | 'warn' | 'error' | 'table' | 'clear' | 'time' | 'timeEnd' | 'count' | 'assert';
+
+interface ConsoleLogEntry {
+  id: string;
+  method: ConsoleMethod;
+  data?: Array<string | Record<string, string>>;
+}
+
+type ConsoleData = ConsoleLogEntry[];
+
+interface CollapsibleConsoleProps {
+  defaultExpanded?: boolean;
+  maxHeight?: number;
+}
 
 /**
  * CollapsibleConsole component
- *
- * @param {object} props
- * @param {boolean} [props.defaultExpanded=false] - Whether console starts expanded
- * @param {number} [props.maxHeight=150] - Max height when expanded
  */
 export default function CollapsibleConsole({
   defaultExpanded = false,
   maxHeight = 150,
-}) {
+}: CollapsibleConsoleProps) {
   const [isExpanded, setIsExpanded] = useState(defaultExpanded);
-  const [logs, setLogs] = useState([]);
+  const [logs, setLogs] = useState<ConsoleData>([]);
 
   // Track log changes to show counts in header
-  const handleLogsChange = useCallback((newLogs) => {
+  const handleLogsChange = useCallback((newLogs: ConsoleData) => {
     setLogs(newLogs || []);
   }, []);
 

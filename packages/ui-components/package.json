@@ -3,11 +3,11 @@
   "version": "0.0.1",
   "type": "module",
   "exports": {
-    ".": "./src/index.js",
-    "./sandpack": "./src/Sandpack/index.js"
+    ".": "./src/index.ts",
+    "./sandpack": "./src/Sandpack/index.ts"
   },
   "scripts": {
-    "typecheck": "echo 'skipped until JSX migration'",
+    "typecheck": "tsc --noEmit",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "format": "prettier --write \"**/*.{js,jsx,ts,tsx,json,md}\"",
