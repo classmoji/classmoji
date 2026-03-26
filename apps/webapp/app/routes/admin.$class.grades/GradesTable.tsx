@@ -86,9 +86,9 @@ const GradesTable = (props: GradesTableProps) => {
     });
   }, [students, searchQuery]);
 
-  const handleUpdateLetterGrade = (record: Membership, _dataIndex: string, value: string) => {
+  const handleUpdateLetterGrade = (membershipId: string, letterGrade: string) => {
     fetcher!.submit(
-      { membership_id: record.user_id, letter_grade: value },
+      { membership_id: membershipId, letter_grade: letterGrade },
       {
         method: 'post',
         action: '?/updateLetterGrade',

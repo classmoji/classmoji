@@ -82,6 +82,7 @@ Neon is a serverless PostgreSQL platform with a generous free tier. It's a great
 Regardless of which option you chose:
 
 ```bash
+npm run db:generate # generates the Prisma client
 npm run db:deploy   # applies migrations
 npm run db:seed     # seeds dev classroom and fake users
 ```
@@ -140,7 +141,15 @@ Trigger.dev is the background job runner Classmoji uses for tasks like repositor
 ```env
 TRIGGER_SECRET_KEY="tr_dev_your-key-here"
 ```
+5. In the trigger sidebar, click on the **General** tab and copy the **Project ref** value (e.g. `proj_abccrutouxchmrddss`).
+6. Add it to your `/packages/tasks/trigger.config.js` file as the `project` value.
 
+```js
+export default defineConfig({
+  project: 'proj_abccrutouxchmrddss',
+  ...rest,
+});
+```
 ### Set up the webhook tunnel
 
 GitHub needs a public URL to send webhook events to. But your local server isn't reachable from the internet — that's where [Smee](https://smee.io) comes in.

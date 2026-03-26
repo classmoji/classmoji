@@ -216,6 +216,35 @@ test.describe('Module Actions', () => {
     // Should show "Publish" text for draft modules
     await expect(moduleRow.getByText('Publish')).toBeVisible();
   });
+
+  test('published module shows unpublish option', async ({ authenticatedPage: page }) => {
+    // Find a published module (hello-world is published in seed)
+    const moduleRow = page.getByRole('row').filter({ hasText: 'hello-world' });
+    await expect(moduleRow).toBeVisible();
+
+    // Should show "Unpublish" text for published modules
+    await expect(moduleRow.getByText('Unpublish')).toBeVisible();
+  });
+
+  test('draft module does not show unpublish option', async ({ authenticatedPage: page }) => {
+    // Find a draft module (starterpack is draft in seed)
+    const moduleRow = page.getByRole('row').filter({ hasText: 'starterpack' });
+    await expect(moduleRow).toBeVisible();
+
+    // Draft modules should not have unpublish option
+    await expect(moduleRow.getByText('Unpublish')).not.toBeVisible();
+  });
+
+  test('unpublish shows confirmation popover', async ({ authenticatedPage: page }) => {
+    // Find a published module
+    const moduleRow = page.getByRole('row').filter({ hasText: 'hello-world' });
+    await moduleRow.getByText('Unpublish').click();
+
+    // Should show confirmation popover
+    await expect(page.getByText('This will hide the assignment from students')).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Unpublish' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Cancel' })).toBeVisible();
+  });
 });
 
 test.describe('Module Navigation', () => {

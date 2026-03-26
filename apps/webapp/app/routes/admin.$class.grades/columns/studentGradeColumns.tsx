@@ -55,7 +55,7 @@ export const createStudentGradeColumns = (
   settings: OrganizationSettings,
   letterGradeMappings: LetterGradeMappingEntry[],
   memberships: Membership[],
-  handleUpdateLetterGrade: (record: Membership, dataIndex: string, value: string) => void,
+  handleUpdateLetterGrade: (membershipId: string, letterGrade: string) => void,
   showComments: boolean
 ) => {
   return [

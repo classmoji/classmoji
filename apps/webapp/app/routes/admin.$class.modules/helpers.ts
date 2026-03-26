@@ -19,6 +19,13 @@ export const publishAssignment = async (classroomSlug: string, moduleId: string,
 
     invariant(module != null, 'Module not found');
 
+    // If repos already exist (re-publish after unpublish), just flip the flag
+    const existingRepos = await ClassmojiService.repository.findByModule(classroomSlug, moduleId);
+    if (existingRepos.length > 0) {
+      await ClassmojiService.module.setPublished(moduleId, true);
+      return { success: 'Module re-published. Use Sync to update repositories.' };
+    }
+
     let numReposToCreate = 0;
     let numIssuesToCreate = 0;
     let numStudents = 0;

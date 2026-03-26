@@ -25,6 +25,7 @@
     "hook:stripe": "dotenv -e .env -- turbo run hook:stripe --log-prefix=none",
     "hook:dev": "dotenv -e .env -- turbo run hook:dev --log-prefix=none",
     "hook:start": "dotenv -e .env -- turbo run hook:start",
+    "ai-agent:docker": "docker compose --profile ai-agent up -d",
     "ai-agent:dev": "dotenv -e .env -- turbo run dev --filter=@classmoji/ai-agent --log-prefix=none",
     "ai-agent:start": "dotenv -e .env -- turbo run start --filter=@classmoji/ai-agent",
     "db:generate": "dotenv -e .env -- turbo run db:generate",
