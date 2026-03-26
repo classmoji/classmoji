@@ -5,9 +5,11 @@
     "types": [],
     "jsx": "react-jsx",
     "baseUrl": ".",
+    "rootDirs": [".", "./.react-router/types"],
     "paths": {
       "~/*": ["./app/*"]
     }
   },
-  "include": ["app/**/*"]
+  "include": ["app/**/*", ".react-router/types/**/*"],
+  "exclude": [".react-router/types/+routes.ts", ".react-router/types/app/routes/+types/README.ts"]
 }
