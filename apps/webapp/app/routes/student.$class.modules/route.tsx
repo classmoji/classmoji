@@ -5,6 +5,8 @@ import { assertClassroomAccess } from '~/utils/helpers';
 import { PageHeader } from '~/components';
 import ModuleAccordion from './ModuleAccordion';
 
+type UserTeamResult = NonNullable<Awaited<ReturnType<typeof ClassmojiService.team.findUserTeamByTag>>>;
+
 export const loader = async ({ params, request }: Route.LoaderArgs) => {
   const classSlug = params.class!;
 
@@ -42,7 +44,7 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
   });
 
   // For self-formed team modules, check if user has a team
-  const userTeamsByModuleSlug: Record<string, any> = {};
+  const userTeamsByModuleSlug: Record<string, UserTeamResult> = {};
   const selfFormedModules = modules.filter(m => m.team_formation_mode === 'SELF_FORMED');
 
   for (const module of selfFormedModules) {
@@ -52,7 +54,7 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
     );
     if (tag) {
       const userTeam = await ClassmojiService.team.findUserTeamByTag(classroom.id, tag.id, userId);
-      userTeamsByModuleSlug[module.slug!] = userTeam;
+      if (userTeam) userTeamsByModuleSlug[module.slug!] = userTeam;
     }
   }
 

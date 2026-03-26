@@ -10,6 +10,18 @@
 
 import type { Route } from './+types/route';
 
+interface UnsplashPhoto {
+  id: string;
+  urls: { regular: string; thumb: string; full: string };
+  alt_description: string | null;
+  description: string | null;
+  user: { name: string; username: string; links: { html: string } };
+  links: { download_location: string };
+  color: string;
+  width: number;
+  height: number;
+}
+
 const UNSPLASH_ACCESS_KEY = process.env.UNSPLASH_ACCESS_KEY;
 
 export const loader = async ({ request }: Route.LoaderArgs) => {
@@ -48,7 +60,7 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
     const data = await response.json();
 
     // Return simplified photo data
-    const photos = data.results.map((photo: Record<string, any>) => ({
+    const photos = data.results.map((photo: UnsplashPhoto) => ({
       id: photo.id,
       url: photo.urls.regular, // Good quality for display
       thumb: photo.urls.thumb, // For grid preview

@@ -41,6 +41,9 @@ export const PageContent = memo(function PageContent({ htmlContent, onHeadingsEx
   useEffect(() => {
     if (!contentRef.current || !htmlContent) return;
 
+    const controller = new AbortController();
+    const { signal } = controller;
+
     // Extract headings for TOC
     const headingElements = contentRef.current.querySelectorAll('h1, h2, h3');
     const extractedHeadings: ExtractedHeading[] = [];
@@ -116,11 +119,11 @@ export const PageContent = memo(function PageContent({ htmlContent, onHeadingsEx
       copyBtn.addEventListener('mouseenter', () => {
         copyBtn.style.background = '#374151';
         copyBtn.style.color = '#e5e7eb';
-      });
+      }, { signal });
       copyBtn.addEventListener('mouseleave', () => {
         copyBtn.style.background = 'transparent';
         copyBtn.style.color = '#9ca3af';
-      });
+      }, { signal });
 
       copyBtn.addEventListener('click', async e => {
         e.preventDefault();
@@ -139,7 +142,7 @@ export const PageContent = memo(function PageContent({ htmlContent, onHeadingsEx
             console.error('Failed to copy:', err);
           }
         }
-      });
+      }, { signal });
 
       insertTarget.appendChild(copyBtn);
     };
@@ -179,6 +182,8 @@ export const PageContent = memo(function PageContent({ htmlContent, onHeadingsEx
         addCopyButton(wrapper, () => pre.textContent, btnContainer);
       }
     });
+
+    return () => controller.abort();
   }, [htmlContent, onHeadingsExtracted]);
 
   return (

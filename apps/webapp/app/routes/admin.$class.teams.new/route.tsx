@@ -4,7 +4,7 @@ import { namedAction } from 'remix-utils/named-action';
 import { Input, Modal, Form, Radio, Select } from 'antd';
 
 import { useGlobalFetcher, useDisclosure } from '~/hooks';
-import { ClassmojiService, getGitProvider } from '@classmoji/services';
+import { ClassmojiService, getGitProvider, GitHubProvider } from '@classmoji/services';
 import { GetTeamAvatarQuery } from './queries';
 import { ActionTypes } from '~/constants';
 import { requireClassroomAdmin } from '~/utils/routeAuth.server';
@@ -165,9 +165,8 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
 
       // Need to refetch with graphql because the GitHub API doesn't have avatarUrl
       // for team in the return response for some reason
-      // @ts-expect-error - accessing private getOctokit() for GraphQL query not in base interface
-      const octokit = await gitProvider.getOctokit();
-      const teamQuery = await octokit.graphql(GetTeamAvatarQuery, {
+      const octokit = await (gitProvider as GitHubProvider).getOctokit();
+      const teamQuery = await octokit.graphql<{ organization: { team: { avatarUrl: string } } }>(GetTeamAvatarQuery, {
         org: gitOrgLogin,
         slug: githubTeam.slug,
       });

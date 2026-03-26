@@ -112,7 +112,6 @@ export const action = checkAuth(async ({ request }: { request: Request }) => {
   }
 
   // Create per-classroom GitHub teams (e.g., "cs101-25w-students", "cs101-25w-assistants")
-  // @ts-expect-error - gitOrg shape from prisma query matches what getGitProvider expects at runtime
   const gitProvider = getGitProvider(gitOrg);
 
   try {

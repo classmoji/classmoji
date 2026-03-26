@@ -9,8 +9,7 @@ export const calculateContributions = async (module: { id: string }, classroomSl
     repo => repo.name
   );
   const classroom = await ClassmojiService.classroom.findBySlug(classroomSlug);
-  // @ts-expect-error - classroom.git_organization shape from prisma matches what getGitProvider expects
-  const gitProvider = getGitProvider(classroom!.git_organization);
+  const gitProvider = getGitProvider(classroom!.git_organization!);
   const githubAccessToken = await gitProvider.getAccessToken();
 
   const data = repoNames.map(repo => {

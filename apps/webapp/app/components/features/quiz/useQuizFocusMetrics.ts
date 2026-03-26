@@ -146,7 +146,7 @@ export function useQuizFocusMetrics({
     window.addEventListener('pagehide', handlePagePersist);
 
     return () => {
-      window.removeEventListener('blur-sm', handleBlur);
+      window.removeEventListener('blur', handleBlur);
       window.removeEventListener('focus', handleFocus);
       if (doc) {
         doc.removeEventListener('visibilitychange', handleVisibilityChange);

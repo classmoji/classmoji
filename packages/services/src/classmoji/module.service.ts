@@ -151,7 +151,7 @@ export const findByClassroomId = async (classroomId: string) => {
  * @param {string} classroomSlug - Classroom slug
  * @returns {Promise<Object[]>}
  */
-export const findByClassroomSlug = async (classroomSlug: string) => {
+export const findByClassroomSlug = async (classroomSlug: string, _options?: { includeAssignments?: boolean }) => {
   return prisma!.module.findMany({
     where: {
       classroom: { slug: classroomSlug },

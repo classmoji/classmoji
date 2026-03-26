@@ -3,7 +3,7 @@ import { useNavigate, useParams } from 'react-router';
 import { useEffect } from 'react';
 import { auth, tasks } from '@trigger.dev/sdk';
 import { nanoid } from 'nanoid';
-import { ClassmojiService, getGitProvider } from '@classmoji/services';
+import { ClassmojiService, getGitProvider, GitHubProvider } from '@classmoji/services';
 import { requireClassroomAdmin } from '~/utils/routeAuth.server';
 import { useDisclosure, useGlobalFetcher } from '~/hooks';
 import type { Route } from './+types/route';
@@ -114,8 +114,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
   }
 
   const gitProvider = getGitProvider(classroom.git_organization);
-  // @ts-expect-error - getOctokit() is a private method on GitHubProvider not exposed in the interface
-  const octokit = await gitProvider.getOctokit();
+  const octokit = await (gitProvider as GitHubProvider).getOctokit();
 
   const { data } = await octokit.request(
     'POST /app/installations/{installation_id}/access_tokens',

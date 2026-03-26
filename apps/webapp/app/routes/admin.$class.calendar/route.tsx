@@ -14,7 +14,7 @@ import CourseCalendar from '~/components/features/calendar/CourseCalendar';
 import type { CalendarEvent } from '~/components/features/calendar/utils';
 import CalendarSubscriptionCard from '~/components/features/calendar/CalendarSubscriptionCard';
 import AddEventModal from '~/components/features/calendar/AddEventModal';
-import EditEventModal from '~/components/features/calendar/EditEventModal';
+import EditEventModal, { type EventFormData } from '~/components/features/calendar/EditEventModal';
 import EventCard from '~/components/features/calendar/EventCard';
 import EventLinks from '~/components/features/calendar/EventLinks';
 
@@ -360,7 +360,7 @@ const AdminCalendar = ({ loaderData }: Route.ComponentProps) => {
     fetcher.submit(formData, { method: 'POST' });
   };
 
-  const handleUpdateEvent = (eventData: Record<string, unknown>) => {
+  const handleUpdateEvent = (eventData: EventFormData) => {
     const formData = new FormData();
     formData.append('intent', 'update');
     formData.append('eventId', selectedEvent!.id!);

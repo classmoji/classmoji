@@ -26,7 +26,6 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
     }
 
     const gitProvider = getGitProvider(classroom.git_organization);
-    // @ts-expect-error - listOrganizationProjects is a GitHubProvider method not in the base interface
     const projects = await gitProvider.listOrganizationProjects(
       classroom.git_organization.login
     );

@@ -96,13 +96,13 @@ const EventLinks = ({
       {hasAssignments &&
         event.assignments.map(({ assignment, module }: any) => { // eslint-disable-line @typescript-eslint/no-explicit-any -- Prisma assignment shape
           // Check if user has a repo assignment with a GitHub issue
-          const repoAssignment = (repoAssignmentsByAssignmentId as Record<string, any>)[assignment.id]; // eslint-disable-line @typescript-eslint/no-explicit-any -- dynamic lookup
+          const repoAssignment = (repoAssignmentsByAssignmentId as Record<string, { provider_issue_number?: number | null; repository?: { name: string } } | undefined>)[assignment.id];
           const hasGitHubIssue =
             repoAssignment?.provider_issue_number && gitOrgLogin && repoAssignment.repository?.name;
 
           if (hasGitHubIssue) {
             // Link directly to student's GitHub issue (external)
-            const githubIssueUrl = `https://github.com/${gitOrgLogin}/${repoAssignment.repository.name}/issues/${repoAssignment.provider_issue_number}`;
+            const githubIssueUrl = `https://github.com/${gitOrgLogin}/${repoAssignment!.repository!.name}/issues/${repoAssignment!.provider_issue_number}`;
             return (
               <a
                 key={assignment.id}

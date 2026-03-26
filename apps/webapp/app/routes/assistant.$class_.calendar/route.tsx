@@ -13,7 +13,7 @@ import { buildCalendarUrl, getCalendarDateRange } from '~/utils/calendar.server'
 import CourseCalendar from '~/components/features/calendar/CourseCalendar';
 import CalendarSubscriptionCard from '~/components/features/calendar/CalendarSubscriptionCard';
 import AddEventModal from '~/components/features/calendar/AddEventModal';
-import EditEventModal from '~/components/features/calendar/EditEventModal';
+import EditEventModal, { type EventFormData } from '~/components/features/calendar/EditEventModal';
 import EventCard from '~/components/features/calendar/EventCard';
 import EventLinks from '~/components/features/calendar/EventLinks';
 
@@ -318,7 +318,7 @@ const AssistantCalendar = ({ loaderData }: Route.ComponentProps) => {
     fetcher.submit(formData, { method: 'POST' });
   };
 
-  const handleUpdateEvent = (eventData: Record<string, unknown>) => {
+  const handleUpdateEvent = (eventData: EventFormData) => {
     if (!selectedEvent?.id) {
       console.error('[Calendar] Cannot update: selectedEvent.id is missing');
       toast.error('Unable to update event - please try again');

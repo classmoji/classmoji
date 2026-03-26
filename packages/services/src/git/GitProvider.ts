@@ -117,6 +117,11 @@ export class GitProvider {
     throw new Error('verifyWebhook() must be implemented by subclass');
   }
 
+  // ─── Projects ──────────────────────────────────────────────────────────────
+  async listOrganizationProjects(org: string): Promise<unknown[]> {
+    throw new Error('listOrganizationProjects() must be implemented by subclass');
+  }
+
   // ─── Utilities ─────────────────────────────────────────────────────────────
   getCloneUrl(org: string, repo: string, token: string): string {
     throw new Error('getCloneUrl() must be implemented by subclass');

@@ -10,7 +10,7 @@ import dayjs from 'dayjs';
 import { useDebounce } from '@uidotdev/usehooks';
 
 import { ActionTypes } from '~/constants';
-import { ClassmojiService, getGitProvider } from '@classmoji/services';
+import { ClassmojiService, getGitProvider, GitHubProvider } from '@classmoji/services';
 import { useGlobalFetcher } from '~/hooks';
 import { waitForRunCompletion } from '~/utils/helpers';
 import { requireClassroomAdmin } from '~/utils/routeAuth.server';
@@ -36,13 +36,12 @@ async function fetchOrgRepositories(
 
   try {
     const gitProvider = getGitProvider(gitOrganization);
-    // @ts-expect-error - getOctokit() is a private method on GitHubProvider not exposed in the interface
-    const octokit = await gitProvider.getOctokit();
+    const octokit = await (gitProvider as GitHubProvider).getOctokit();
 
     // If searching, use GitHub's search API which supports name filtering
     if (search) {
       const searchQuery = `org:${gitOrgLogin} ${search} in:name`;
-      const response = await octokit.graphql(
+      const response = await octokit.graphql<{ search: { nodes: { name: string }[]; repositoryCount: number } }>(
         `
           query ($query: String!, $first: Int!, $after: String) {
             search(query: $query, type: REPOSITORY, first: $first, after: $after) {
@@ -116,7 +115,7 @@ async function fetchOrgRepositories(
     }
 
     // Now fetch the actual page
-    const response = await octokit.graphql(
+    const response = await octokit.graphql<{ organization: { repositories: { nodes: { name: string }[]; totalCount: number; pageInfo: { endCursor: string; hasNextPage: boolean } } } }>(
       `
         query ($org: String!, $first: Int!, $after: String) {
           organization(login: $org) {

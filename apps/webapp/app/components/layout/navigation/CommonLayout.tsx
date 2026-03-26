@@ -219,7 +219,7 @@ const CommonLayout = ({
     ...Object.entries(routeCategories).map(([categoryKey, category]) => {
       // First filter to only items the user has access to
       const accessibleItems = category.items
-        .map(routeKey => (routes as Record<string, any>)[routeKey])
+        .map(routeKey => (routes as Record<string, (typeof routes)[keyof typeof routes]>)[routeKey])
         .filter(hasAccessToItem);
 
       // If no accessible items, don't render the category at all

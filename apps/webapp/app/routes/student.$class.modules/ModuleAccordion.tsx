@@ -27,7 +27,7 @@ interface Assignment {
 
 interface TeamMembership {
   user_id: string;
-  user?: { name?: string; login?: string; provider_id?: string };
+  user?: { name?: string | null; login?: string | null; provider_id?: string | null };
 }
 
 interface UserTeam {

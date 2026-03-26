@@ -83,11 +83,39 @@ interface CalendarAssignment {
   module?: { title: string };
 }
 
+interface EventFormValues {
+  event_type: string;
+  title: string;
+  description?: string;
+  date: dayjs.Dayjs;
+  start_time: dayjs.Dayjs;
+  end_time: dayjs.Dayjs;
+  location?: string;
+  meeting_link?: string;
+  recurrence_days?: string[];
+  recurrence_until?: dayjs.Dayjs | null;
+}
+
+interface EventFormData {
+  event_type: string;
+  title: string;
+  description: string | null;
+  start_time: string;
+  end_time: string;
+  location: string | null;
+  meeting_link: string | null;
+  is_recurring: boolean;
+  recurrence_rule: { days: string[]; until: string | null } | null;
+  linkedPageIds?: string[];
+  linkedSlideIds?: string[];
+  linkedAssignmentIds?: string[];
+}
+
 interface EditEventModalProps {
   open: boolean;
   event: CalendarEvent | null;
   onClose: () => void;
-  onSubmit: (data: Record<string, unknown>) => Promise<void>;
+  onSubmit: (data: EventFormData) => Promise<void>;
   onDelete: (id: string, opts?: Record<string, unknown>) => Promise<void>;
   loading?: boolean;
   allowedEventTypes?: string[];
@@ -122,7 +150,7 @@ const EditEventModal = ({
   const [editScope, setEditScope] = useState(EDIT_SCOPES.THIS_ONLY);
   const [showScopeModal, setShowScopeModal] = useState(false);
   const [scopeAction, setScopeAction] = useState<'edit' | 'delete' | null>(null);
-  const [pendingFormData, setPendingFormData] = useState<Record<string, any> | null>(null);
+  const [pendingFormData, setPendingFormData] = useState<EventFormData | null>(null);
 
   // State for linked resources
   const [linkedPageIds, setLinkedPageIds] = useState<string[]>([]);
@@ -175,8 +203,7 @@ const EditEventModal = ({
     }
   }, [event, form]);
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Ant Design form values are dynamically typed
-  const buildEventData = (values: Record<string, any>, includeLinks = true) => {
+  const buildEventData = (values: EventFormValues, includeLinks = true) => {
     const startDate = values.date.toDate();
     const endDate = values.date.toDate();
 
@@ -186,7 +213,7 @@ const EditEventModal = ({
     startDate.setHours(startTime.getHours(), startTime.getMinutes(), 0, 0);
     endDate.setHours(endTime.getHours(), endTime.getMinutes(), 0, 0);
 
-    const eventData: Record<string, any> = {
+    const eventData: EventFormData = {
       event_type: values.event_type,
       title: values.title,
       description: values.description || null,
@@ -531,3 +558,4 @@ const EditEventModal = ({
 };
 
 export default EditEventModal;
+export type { EventFormData };

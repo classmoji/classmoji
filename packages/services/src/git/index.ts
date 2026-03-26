@@ -14,7 +14,7 @@ import { GitLabProvider } from './GitLabProvider.ts';
  * @param {string} [gitOrganization.login] - Organization login (optional)
  * @returns {GitProvider} - A concrete provider instance
  */
-export function getGitProvider(gitOrganization: { provider: string; github_installation_id?: string; access_token?: string; base_url?: string; login?: string; gitlab_group_id?: string }) {
+export function getGitProvider(gitOrganization: { provider: string; github_installation_id?: string | null; access_token?: string | null; base_url?: string | null; login?: string | null; gitlab_group_id?: string | null }) {
   const { provider, github_installation_id, access_token, base_url, login } = gitOrganization;
 
   switch (provider) {

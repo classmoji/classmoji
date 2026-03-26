@@ -15,7 +15,6 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
   });
 
   const [modules, pages, slides] = await Promise.all([
-    // @ts-expect-error - service method accepts options parameter at runtime but types don't reflect it
     ClassmojiService.module.findByClassroomSlug(classSlug, { includeAssignments: true }),
     ClassmojiService.page.findByClassroomId(classroom.id, { includeLinks: true }),
     prisma!.slide.findMany({

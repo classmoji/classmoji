@@ -56,7 +56,7 @@ const OrgSelect = ({ memberships }: any) => { // eslint-disable-line @typescript
               </div>
 
               <Tag
-                color={(roleSettings as Record<string, any>)[membership.role]?.color || 'default'}
+                color={(roleSettings as Record<string, { path: string; color: string }>)[membership.role]?.color || 'default'}
                 className="ml-2 shrink-0 font-semibold text-xs"
               >
                 {membership.role}
@@ -72,7 +72,7 @@ const OrgSelect = ({ memberships }: any) => { // eslint-disable-line @typescript
                 // Students go to class root (student.$class._index handles default page)
                 const suffix = data.role === 'STUDENT' ? '' : '/dashboard';
                 navigate(
-                  `${(roleSettings as Record<string, any>)[data.role].path}/${data.organization.login}${suffix}`
+                  `${(roleSettings as Record<string, { path: string; color: string }>)[data.role].path}/${data.organization.login}${suffix}`
                 );
               }}
             >
@@ -95,7 +95,7 @@ const OrgSelect = ({ memberships }: any) => { // eslint-disable-line @typescript
               </div>
 
               <Tag
-                color={(roleSettings as Record<string, any>)[data.role]?.color || 'default'}
+                color={(roleSettings as Record<string, { path: string; color: string }>)[data.role]?.color || 'default'}
                 className="shrink-0 font-semibold text-xs"
               >
                 {data.role}
