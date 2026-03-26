@@ -1,6 +1,6 @@
 import { Popconfirm, Table, Tag, Card } from 'antd';
 import { useNavigate, useParams } from 'react-router';
-import { IconRefresh, IconSend, IconStarFilled } from '@tabler/icons-react';
+import { IconEyeOff, IconRefresh, IconSend, IconStarFilled } from '@tabler/icons-react';
 
 import { TableActionButtons, EditableCell } from '~/components';
 import { ActionTypes } from '~/constants';
@@ -52,6 +52,19 @@ const AssignmentTable = ({ assignments }) => {
       }
     );
     LocalStorage.forceRefreshRepos();
+  };
+
+  const unpublishAssignment = id => {
+    fetcher.submit(
+      {
+        assignment_id: id,
+      },
+      {
+        method: 'post',
+        action: '?/unpublish',
+        encType: 'application/json',
+      }
+    );
   };
 
   const deleteAssignment = id => {
@@ -143,21 +156,38 @@ const AssignmentTable = ({ assignments }) => {
           onDelete={() => deleteAssignment(record.id)}
         >
           {record.is_published ? (
-            <Popconfirm
-              title="Sync Assignment"
-              description="This will update all student repositories with the latest changes."
-              onConfirm={e => {
-                e.stopPropagation();
-                syncAssignment(record);
-              }}
-              okText="Sync"
-              cancelText="Cancel"
-            >
-              <div className="flex items-center gap-1 text-gray-600 hover:text-gray-800 cursor-pointer">
-                <IconRefresh size={17} />
-                <span>Sync</span>
-              </div>
-            </Popconfirm>
+            <>
+              <Popconfirm
+                title="Sync Assignment"
+                description="This will update all student repositories with the latest changes."
+                onConfirm={e => {
+                  e.stopPropagation();
+                  syncAssignment(record);
+                }}
+                okText="Sync"
+                cancelText="Cancel"
+              >
+                <div className="flex items-center gap-1 text-gray-600 hover:text-gray-800 cursor-pointer">
+                  <IconRefresh size={17} />
+                  <span>Sync</span>
+                </div>
+              </Popconfirm>
+              <Popconfirm
+                title="Unpublish Assignment"
+                description="This will hide the assignment from students. Repositories will not be deleted."
+                onConfirm={e => {
+                  e.stopPropagation();
+                  unpublishAssignment(record.id);
+                }}
+                okText="Unpublish"
+                cancelText="Cancel"
+              >
+                <div className="flex items-center gap-1 text-gray-600 hover:text-gray-800 cursor-pointer">
+                  <IconEyeOff size={17} />
+                  <span>Unpublish</span>
+                </div>
+              </Popconfirm>
+            </>
           ) : (
             <Popconfirm
               title="Publish Assignment"
