@@ -8,8 +8,12 @@ interface MenuProps {
     id: string;
     type: string;
     assignments?: unknown[];
+    [key: string]: unknown;
   };
   assistants: Array<{ id: string }>;
+  repos?: unknown;
+  fetcher?: unknown;
+  notify?: unknown;
 }
 
 const Menu = ({ module, assistants }: MenuProps) => {
@@ -25,7 +29,7 @@ const Menu = ({ module, assistants }: MenuProps) => {
     }
 
     fetcher!.submit(
-      { module },
+      JSON.stringify({ module }),
       {
         method: 'post',
         action: `/admin/${classSlug}/modules/${moduleTitle}?action=calculateContributions`,

@@ -52,11 +52,10 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
         metadata: { assignment_id: data.repositoryAssignment?.assignment_id },
       });
 
-      const { repoName, repositoryAssignment, graderId, grade, studentId, teamId } = data;
+      const { repositoryAssignment, graderId, grade, studentId, teamId } = data;
 
       await HelperService.addGradeToRepositoryAssignment({
         classroom,
-        repoName,
         repositoryAssignment,
         graderId,
         grade,
@@ -80,11 +79,10 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
         metadata: { assignment_id: data.repositoryAssignment?.assignment_id },
       });
 
-      const { grade, repositoryAssignment, repoName } = data;
+      const { grade, repositoryAssignment } = data;
 
       await HelperService.removeGradeFromRepositoryAssignment({
         classroom,
-        repoName,
         repositoryAssignment,
         grade,
       });

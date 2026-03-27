@@ -14,6 +14,25 @@ import QuizMessageList from './QuizMessageList';
  */
 const DEBUG_QUIZ_METRICS = false;
 
+/** Metadata shape for quiz messages */
+interface QuizMessageMetadata {
+  isOpeningMessage?: boolean;
+  isWelcomeMessage?: boolean;
+  isExplorationStep?: boolean;
+  toolName?: string;
+  toolInput?: unknown;
+  explorationSteps?: ExplorationStep[];
+  [key: string]: unknown;
+}
+
+/** Safely extract metadata as a record from Prisma JsonValue */
+function getMetadata(metadata: Prisma.JsonValue | undefined): QuizMessageMetadata | undefined {
+  if (metadata && typeof metadata === 'object' && !Array.isArray(metadata)) {
+    return metadata as QuizMessageMetadata;
+  }
+  return undefined;
+}
+
 /** Shape of a quiz message (from DB or optimistic) */
 interface QuizMessage {
   id: number | string;
@@ -497,7 +516,7 @@ function QuizAttemptInterface({
       // If we have exactly 1 assistant message (the welcome) and no opening message yet, set loading
       const assistantMessages = displayMessages.filter((m: QuizMessage) => m.role === 'assistant');
       const hasOpeningMessage = assistantMessages.some(
-        (m: QuizMessage) => m.metadata?.isOpeningMessage
+        (m: QuizMessage) => getMetadata(m.metadata)?.isOpeningMessage
       );
       const hasWelcomeOnly = assistantMessages.length === 1 && !hasOpeningMessage;
       if (hasWelcomeOnly && !readOnly) {
@@ -623,12 +642,12 @@ function QuizAttemptInterface({
     if (loading && displayMessages.length > 0) {
       const assistantMessages = displayMessages.filter((m: QuizMessage) => m.role === 'assistant');
       const hasOpeningMessage = assistantMessages.some(
-        (m: QuizMessage) => m.metadata?.isOpeningMessage
+        (m: QuizMessage) => getMetadata(m.metadata)?.isOpeningMessage
       );
       // Also check: if last message is assistant and user sent the most recent user message before it
       const lastMsg = displayMessages[displayMessages.length - 1];
       const lastIsAssistantResponse =
-        lastMsg?.role === 'assistant' && !lastMsg?.metadata?.isWelcomeMessage;
+        lastMsg?.role === 'assistant' && !getMetadata(lastMsg?.metadata)?.isWelcomeMessage;
 
       if (hasOpeningMessage || (assistantMessages.length >= 2 && lastIsAssistantResponse)) {
         setLoading(false);
@@ -716,7 +735,7 @@ function QuizAttemptInterface({
     pendingUserMessageRef.current = messageContent;
     // Snapshot current exploration step count so real-time indicator only shows NEW steps
     explorationStepBaseRef.current = (initialMessages || []).filter(
-      (m: QuizMessage) => m.role === 'system' && m.metadata?.isExplorationStep
+      (m: QuizMessage) => m.role === 'system' && getMetadata(m.metadata)?.isExplorationStep
     ).length;
     setSending(true);
 
@@ -767,7 +786,7 @@ function QuizAttemptInterface({
     pendingUserMessageRef.current = action;
     // Snapshot current exploration step count so real-time indicator only shows NEW steps
     explorationStepBaseRef.current = (initialMessages || []).filter(
-      (m: QuizMessage) => m.role === 'system' && m.metadata?.isExplorationStep
+      (m: QuizMessage) => m.role === 'system' && getMetadata(m.metadata)?.isExplorationStep
     ).length;
     setSending(true);
 
@@ -808,14 +827,14 @@ function QuizAttemptInterface({
   const explorationSteps: ExplorationStep[] = useMemo(() => {
     if (!initialMessages) return [];
     const allSteps = initialMessages.filter(
-      (m: QuizMessage) => m.role === 'system' && m.metadata?.isExplorationStep
+      (m: QuizMessage) => m.role === 'system' && getMetadata(m.metadata)?.isExplorationStep
     );
     // During sends, slice off steps that existed before the send started
     const newSteps = sending ? allSteps.slice(explorationStepBaseRef.current) : allSteps;
     return newSteps.map((m: QuizMessage) => ({
       action: m.content,
-      toolName: (m.metadata?.toolName as string) ?? '',
-      toolInput: m.metadata?.toolInput,
+      toolName: (getMetadata(m.metadata)?.toolName as string) ?? '',
+      toolInput: getMetadata(m.metadata)?.toolInput,
       timestamp: m.timestamp ? new Date(m.timestamp).getTime() : 0,
     }));
   }, [initialMessages, sending]);
@@ -824,7 +843,7 @@ function QuizAttemptInterface({
     <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
       <div style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
         <QuizMessageList
-          messages={messages}
+          messages={messages.map(m => ({ ...m, metadata: getMetadata(m.metadata) }))}
           loading={loading || sending}
           isDarkMode={isDarkMode}
           userLogin={userLogin}

@@ -366,9 +366,10 @@ const createMissingAssignments = async (
   });
 
   if (assignmentsData.length) {
-    Tasks.createGithubRepositoryAssignmentTask.batchTrigger(assignmentsData, {
-      concurrencyKey: classroom.slug,
-    } as Parameters<typeof Tasks.createGithubRepositoryAssignmentTask.batchTrigger>[1]);
+    Tasks.createGithubRepositoryAssignmentTask.batchTrigger(
+      assignmentsData as unknown as Parameters<typeof Tasks.createGithubRepositoryAssignmentTask.batchTrigger>[0],
+      { concurrencyKey: classroom.slug } as Parameters<typeof Tasks.createGithubRepositoryAssignmentTask.batchTrigger>[1]
+    );
 
     for (const assignment of Object.values(missingAssignments)) {
       ClassmojiService.assignment.update((assignment as { id: string }).id, {

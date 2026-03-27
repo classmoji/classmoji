@@ -184,7 +184,7 @@ export default function StudentQuizzes({ loaderData }: Route.ComponentProps) {
 
   const handleNewAttempt = async (quiz: StudentQuiz) => {
     // Check if this is a code-aware quiz and user is TA/admin
-    const isInstructor = ['OWNER', 'ASSISTANT'].includes(userRole);
+    const isInstructor = userRole ? ['OWNER', 'ASSISTANT'].includes(userRole) : false;
     if (quiz.include_code_context && isInstructor) {
       // Show repo selection modal first
       setPendingQuiz(quiz);

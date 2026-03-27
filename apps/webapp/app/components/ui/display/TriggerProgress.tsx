@@ -57,6 +57,24 @@ interface TriggerRun {
   payload: TriggerPayload;
 }
 
+interface TriggerSession {
+  id: string;
+  accessToken: string;
+  numReposToCreate: number;
+  numIssuesToCreate: number;
+  numStudentsToSync: number;
+  numReposToDelete: number;
+  numStudentsToAssignTokens: number;
+  numAssignmentsToAddGradersTo: number;
+  numRepos: number;
+  numReposToUpdate: number;
+  numPagesToImport: number;
+}
+
+interface FetcherData {
+  triggerSession?: TriggerSession;
+}
+
 interface TriggerProgressProps {
   callback?: () => void;
   validIdentifiers: string[];
@@ -71,15 +89,16 @@ const TriggerProgress = ({ callback, validIdentifiers, operation }: TriggerProgr
   const [completedCount, setCompletedCount] = useState(0);
   const { isDarkMode } = useDarkMode();
 
-  const session = fetcher!.data?.triggerSession;
+  const fetcherData = fetcher!.data as FetcherData | undefined;
+  const session = fetcherData?.triggerSession;
 
   useEffect(() => {
-    if (visible == false && fetcher!.data?.triggerSession) {
+    if (visible == false && fetcherData?.triggerSession) {
       show();
-    } else if (visible == true && !fetcher!.data?.triggerSession) {
+    } else if (visible == true && !fetcherData?.triggerSession) {
       close();
     }
-  }, [fetcher!.data?.triggerSession]);
+  }, [fetcherData?.triggerSession]);
 
   const totalNumRuns = session
     ? {

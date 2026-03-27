@@ -48,8 +48,8 @@ const SettingsContent = ({ loaderData }: Route.ComponentProps) => {
   const { notify, fetcher } = useGlobalFetcher();
 
   // Generate repo name and URL for display
-  const gitOrgLogin = organization.git_organization?.login || classSlug;
-  const repoName = generateSuggestedRepoName(gitOrgLogin, organization.term, organization.year);
+  const gitOrgLogin = organization.git_organization?.login || classSlug || '';
+  const repoName = generateSuggestedRepoName(gitOrgLogin, String(organization.term ?? ''), organization.year ?? 0);
   const repoUrl = `https://github.com/${gitOrgLogin}/${repoName}`;
 
   // Handler for customizable repo name (currently disabled in UI)

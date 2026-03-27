@@ -11,9 +11,15 @@ interface StudentRecord {
 }
 
 interface Membership {
+  id: string | number;
   user_id: string | number;
   comment?: string | null;
   letter_grade?: string | null;
+}
+
+interface EditableRecord {
+  id: string | number;
+  [key: string]: string | number | null | undefined;
 }
 
 interface GradeColumnConfig {
@@ -55,7 +61,7 @@ export const createStudentGradeColumns = (
   settings: OrganizationSettings,
   letterGradeMappings: LetterGradeMappingEntry[],
   memberships: Membership[],
-  handleUpdateLetterGrade: (membershipId: string, letterGrade: string) => void,
+  handleUpdateLetterGrade: (membershipId: string | number, letterGrade: string | number | null | undefined) => void,
   showComments: boolean
 ) => {
   return [
@@ -86,9 +92,10 @@ export const createStudentGradeColumns = (
       width: 140,
       render: (student: StudentRecord) => {
         const membership = memberships.find((m: Membership) => m.user_id === student.id);
+        if (!membership) return null;
         return (
           <EditableCell
-            record={membership}
+            record={membership as unknown as EditableRecord}
             dataIndex="letter_grade"
             format="text"
             onUpdate={handleUpdateLetterGrade}

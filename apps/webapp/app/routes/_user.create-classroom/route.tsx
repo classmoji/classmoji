@@ -147,8 +147,7 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
       git_organization: {
         select: {
           login: true,
-          avatar_url: true,
-        } as Record<string, boolean>,
+        },
       },
       modules: {
         select: {
@@ -211,8 +210,9 @@ const CreateClassroom = ({ loaderData }: Route.ComponentProps) => {
 
   // Navigate to new classroom on success
   useEffect(() => {
-    if (fetcher!.data?.classroomSlug) {
-      navigate(`/admin/${fetcher!.data.classroomSlug}/dashboard`);
+    const fetcherData = fetcher!.data as { classroomSlug?: string } | undefined;
+    if (fetcherData?.classroomSlug) {
+      navigate(`/admin/${fetcherData.classroomSlug}/dashboard`);
     }
   }, [fetcher!.data, navigate]);
 

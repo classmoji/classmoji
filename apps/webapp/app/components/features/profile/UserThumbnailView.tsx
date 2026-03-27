@@ -22,7 +22,7 @@ const UserThumbnailView = ({ user, truncate = false }: UserThumbnailViewProps) =
       <div className={`flex flex-col gap-[2px] ${truncate ? 'min-w-0 flex-1' : ''}`}>
         <div
           className={`text-xs font-bold dark:text-gray-200 ${truncate ? 'truncate' : ''}`}
-          title={truncate ? user?.name : undefined}
+          title={truncate ? (user?.name ?? undefined) : undefined}
         >
           {user?.name}
         </div>
@@ -30,7 +30,7 @@ const UserThumbnailView = ({ user, truncate = false }: UserThumbnailViewProps) =
           <div className="text-mist dark:text-gray-500 text-xs flex gap-6">
             <div
               className={`text-xs ${truncate ? 'truncate' : ''}`}
-              title={truncate ? user?.login || user?.slug : undefined}
+              title={truncate ? (user?.login || user?.slug) ?? undefined : undefined}
             >
               @{user?.login || user?.slug}
             </div>

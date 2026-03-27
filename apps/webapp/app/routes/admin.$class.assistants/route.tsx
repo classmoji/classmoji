@@ -105,9 +105,7 @@ const AdminAssistants = ({ loaderData }: Route.ComponentProps) => {
   const removeAssistant = (assistant: Assistant) => {
     notify(ActionTypes.REMOVE_USER, 'Removing assistant...');
     fetcher!.submit(
-      {
-        user: assistant,
-      },
+      JSON.stringify({ user: assistant }),
       {
         method: 'delete',
         action: '?/removeAssistant',

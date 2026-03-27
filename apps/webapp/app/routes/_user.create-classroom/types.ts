@@ -30,7 +30,8 @@ export interface OwnedClassroom {
   year: number | null;
   git_organization?: {
     login: string;
-    avatar_url: string | null;
+    avatar_url?: string | null;
+    [key: string]: unknown;
   } | null;
   modules?: ClassroomModule[];
 }

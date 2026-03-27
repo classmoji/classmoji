@@ -84,9 +84,9 @@ const SyllabusBotRoot = () => {
     <SyllabusBotWidget
       key={`${currentClassroom}-${currentRole}`}
       classroomSlug={currentClassroom}
-      slidesUrl={config.slidesUrl}
-      userLogin={user?.login}
-      userRole={currentRole}
+      slidesUrl={config.slidesUrl ?? ''}
+      userLogin={user?.login ?? null}
+      userRole={currentRole ?? ''}
       enabled={config.enabled}
       isDarkMode={isDarkMode}
     />

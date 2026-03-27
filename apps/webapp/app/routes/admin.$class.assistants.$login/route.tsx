@@ -182,7 +182,7 @@ const AdminAssistantDrawer = ({ loaderData }: Route.ComponentProps) => {
               <div className="flex items-center gap-2 ml-2">
                 {assignment.isGraded ? (
                   <Tag color="green" className="flex items-center gap-1">
-                    <span className="text-base">{getEmojiSymbol(assignment.gradeEmoji)}</span>
+                    <span className="text-base">{getEmojiSymbol(assignment.gradeEmoji ?? '')}</span>
                   </Tag>
                 ) : (
                   <Tag color="orange" className="flex items-center gap-1">

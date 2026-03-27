@@ -20,9 +20,9 @@ interface MenuPage {
 }
 
 interface Viewer {
-  user: { id: string; name?: string; login?: string; avatar_url?: string };
-  lastViewedAt: string;
-  role?: string;
+  user: { id: string; name?: string | null; login?: string | null; avatar_url?: string | null };
+  lastViewedAt: string | Date;
+  role?: string | null;
 }
 
 interface NavItem {

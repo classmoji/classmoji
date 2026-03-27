@@ -85,7 +85,7 @@ const SettingsQuizzes = ({ loaderData }: Route.ComponentProps) => {
 
   const { notify, fetcher } = useGlobalFetcher();
 
-  const settings = organization.settings || {};
+  const settings = (organization.settings || {}) as Record<string, unknown>;
   // Use the computed flag from getOrgForUI (API key is never sent to client)
   const hasAnthropicKey = settings.has_anthropic_key;
   const usingSystemDefaults = !hasAnthropicKey;
@@ -186,10 +186,10 @@ const SettingsQuizzes = ({ loaderData }: Route.ComponentProps) => {
         onFinish={handleSaveLLMSettings}
         initialValues={{
           anthropic_api_key: '',
-          llm_model: settings.llm_model || '',
-          llm_temperature: settings.llm_temperature ?? 0.7,
-          llm_max_tokens: settings.llm_max_tokens ?? 1000,
-          code_aware_model: settings.code_aware_model || '',
+          llm_model: (settings.llm_model as string) || '',
+          llm_temperature: (settings.llm_temperature as number) ?? 0.7,
+          llm_max_tokens: (settings.llm_max_tokens as number) ?? 1000,
+          code_aware_model: (settings.code_aware_model as string) || '',
         }}
       >
         {/* API Keys Section */}

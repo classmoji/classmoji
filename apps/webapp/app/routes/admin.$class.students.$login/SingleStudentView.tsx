@@ -21,7 +21,9 @@ import {
 import InfoCard from './InfoCard';
 
 interface StudentGrade {
+  id: string;
   emoji: string;
+  grader?: { name: string };
 }
 
 interface StudentAssignment {
@@ -259,8 +261,8 @@ const SingleStudentView = (props: SingleStudentViewProps) => {
             }
           >
             <EmojiGrader
-              repositoryAssignment={{ ...record, studentId: record.repository.student_id }}
-              emojiMappings={emojiMappings}
+              repositoryAssignment={{ id: record.id, assignment_id: record.assignment_id, studentId: record.repository.student_id, grades: record.grades, repository: record.repository }}
+              emojiMappings={emojiMappings as Record<string, unknown>}
             />
             <LateOverrideButton repositoryAssignment={record} />
           </TableActionButtons>

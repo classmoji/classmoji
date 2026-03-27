@@ -84,7 +84,9 @@ export const assignGradersToAssignmentsHandler = async (data: AssignGradersData,
 
   const flatPayloads = _.flatten(taskPayloads);
 
-  await Tasks.addGraderToRepositoryAssignmentTask.batchTrigger(flatPayloads);
+  await Tasks.addGraderToRepositoryAssignmentTask.batchTrigger(
+    flatPayloads as Parameters<typeof Tasks.addGraderToRepositoryAssignmentTask.batchTrigger>[0]
+  );
 
   const numAssignmentsToAddGradersTo = flatPayloads.length;
 

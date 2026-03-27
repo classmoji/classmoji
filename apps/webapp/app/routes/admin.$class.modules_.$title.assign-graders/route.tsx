@@ -73,7 +73,7 @@ const AssignGraders = ({ loaderData }: Route.ComponentProps) => {
 
   const handleOk = (values: Record<string, unknown>) => {
     fetcher!.submit(
-      { ...values },
+      JSON.stringify(values),
       {
         method: 'post',
         action: pathname,

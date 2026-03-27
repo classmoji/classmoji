@@ -21,8 +21,9 @@ interface Team {
   id: string;
   name: string;
   slug: string;
+  avatar_url?: string;
   tags: Array<{ id: string; tag: { name: string } }>;
-  memberships: Array<{ user: { name: string | null; [key: string]: unknown } }>;
+  memberships: Array<{ user: { name: string | null; login: string | null; avatar_url?: string | null; [key: string]: unknown } }>;
 }
 
 export const loader = async ({ params, request }: Route.LoaderArgs) => {

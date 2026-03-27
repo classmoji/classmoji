@@ -23,6 +23,7 @@
 import { assertClassroomAccess } from '~/utils/helpers';
 import { isAIAgentConfigured } from '~/utils/aiFeatures.server';
 import { getQuestionProgressFromMessage, checkForCompletion } from '@classmoji/utils';
+import type { Role } from '@prisma/client';
 import type { Route } from './+types/route';
 
 const extractDurationMetrics = (payload: Record<string, unknown> | null) => {
@@ -73,7 +74,7 @@ export async function action({ request }: Route.ActionArgs) {
       return jsonResponse(400, 'Invalid action');
     }
 
-    const allowedRoles = ['STUDENT', 'ASSISTANT', 'OWNER'];
+    const allowedRoles: Role[] = ['STUDENT', 'ASSISTANT', 'OWNER'];
 
     const resolveOrgContext = async () => {
       switch (data._action) {
@@ -336,7 +337,7 @@ export async function action({ request }: Route.ActionArgs) {
             const result = await ClassmojiService.quizAttempt.createNew(
               data.quizId,
               userId,
-              access.membership
+              access.membership!
             );
 
             if (!result.success) {
@@ -370,7 +371,7 @@ export async function action({ request }: Route.ActionArgs) {
               try {
                 // Check if user is an instructor (OWNER or ASSISTANT)
                 const isInstructor = ['OWNER', 'ASSISTANT', 'TEACHER'].includes(
-                  access.membership?.role
+                  access.membership!.role
                 );
 
                 let repoName;
@@ -908,7 +909,7 @@ export async function action({ request }: Route.ActionArgs) {
           const result = await ClassmojiService.quizAttempt.createNew(
             data.quizId,
             userId,
-            access.membership
+            access.membership!
           );
 
           if (!result.success) {

@@ -26,7 +26,7 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
     throw error;
   }
 
-  const defaultPage = classroom.settings?.default_student_page || 'dashboard';
+  const defaultPage = (classroom.settings?.default_student_page as string) || 'dashboard';
 
   // Dashboard is the ultimate fallback
   if (defaultPage === 'dashboard') {

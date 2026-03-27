@@ -602,7 +602,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
 
       // Update page's title and updated_at timestamp
       await ClassmojiService.page.quickUpdate(pageId, {
-        title: titleToSave,
+        title: titleToSave ?? undefined,
         updated_at: new Date(),
       });
 

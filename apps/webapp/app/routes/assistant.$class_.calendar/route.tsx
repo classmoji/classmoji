@@ -16,6 +16,7 @@ import AddEventModal from '~/components/features/calendar/AddEventModal';
 import EditEventModal, { type EventFormData } from '~/components/features/calendar/EditEventModal';
 import EventCard from '~/components/features/calendar/EventCard';
 import EventLinks from '~/components/features/calendar/EventLinks';
+import type { CalendarEventWithLinks } from '~/components/features/calendar/types';
 
 export const loader = async ({ request, params }: Route.LoaderArgs) => {
   const { class: classSlug } = params;
@@ -40,7 +41,7 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
 
   const { start, end } = getCalendarDateRange(year, month);
 
-  let events = [];
+  let events: Awaited<ReturnType<typeof ClassmojiService.calendar.getClassroomCalendar>> = [];
   try {
     // Pass includeRawLinks=true for assistant UI editing, includeUnpublished=true to see draft assignments
     events = await ClassmojiService.calendar.getClassroomCalendar(
@@ -272,9 +273,9 @@ const AssistantCalendar = ({ loaderData }: Route.ComponentProps) => {
   const eventsFetcher = useFetcher();
   const [addModalOpen, setAddModalOpen] = useState(false);
   const [editModalOpen, setEditModalOpen] = useState(false);
-  const [selectedEvent, setSelectedEvent] = useState<Record<string, unknown> | null>(null);
+  const [selectedEvent, setSelectedEvent] = useState<CalendarEventWithLinks | null>(null);
   const [viewModalOpen, setViewModalOpen] = useState(false);
-  const [optimisticEvents, setOptimisticEvents] = useState<Record<string, unknown>[] | null>(null);
+  const [optimisticEvents, setOptimisticEvents] = useState<CalendarEventWithLinks[] | null>(null);
 
   // Track current view month/year for refreshing after mutations
   const today = new Date();
@@ -344,7 +345,7 @@ const AssistantCalendar = ({ loaderData }: Route.ComponentProps) => {
     fetcher.submit(formData, { method: 'POST' });
   };
 
-  const handleEventDrop = (event: Record<string, unknown>, newStartTime: Date, newEndTime: Date) => {
+  const handleEventDrop = (event: CalendarEventWithLinks, newStartTime: Date, newEndTime: Date) => {
     // Only allow dragging user's own events (not deadlines)
     if (event.is_deadline || String(event.created_by) !== String(userId)) {
       toast.error('You can only move your own events');
@@ -352,7 +353,7 @@ const AssistantCalendar = ({ loaderData }: Route.ComponentProps) => {
     }
 
     // Optimistically update events immediately for smooth UI
-    const updatedEvents = (events as Record<string, unknown>[]).map((e: Record<string, unknown>) => {
+    const updatedEvents = (events as CalendarEventWithLinks[]).map((e: CalendarEventWithLinks) => {
       const isSameEvent =
         e.id === event.id &&
         ((!e.occurrence_date && !event.occurrence_date) ||
@@ -397,7 +398,7 @@ const AssistantCalendar = ({ loaderData }: Route.ComponentProps) => {
     fetcher.submit(formData, { method: 'POST' });
   };
 
-  const handleEventClick = (event: Record<string, unknown>) => {
+  const handleEventClick = (event: CalendarEventWithLinks) => {
     // Compare as strings (UUIDs)
     const isOwnEvent = String(event.created_by) === String(userId);
 

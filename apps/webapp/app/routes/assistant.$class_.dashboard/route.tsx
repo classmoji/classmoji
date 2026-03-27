@@ -11,22 +11,13 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
   const { class: classSlug } = params;
   const { userId, classroom } = await requireClassroomTeachingTeam(request, classSlug!);
 
-  const promises = {
-    assignments: ClassmojiService.repositoryAssignmentGrader.findAssignedByGrader(
-      userId,
-      classroom.id
-    ),
-    repoAssignments: ClassmojiService.repositoryAssignment.findByClassroomId(classroom.id),
-    gradingProgress: ClassmojiService.helper.findClassroomGradingProgressPerAssignment(
-      classroom.id
-    ),
-    assistantsProgress: ClassmojiService.repositoryAssignmentGrader.findGradersProgress(
-      classroom.id
-    ),
-  };
-
   return {
-    data: Promise.all(Object.values(promises)),
+    data: Promise.all([
+      ClassmojiService.repositoryAssignmentGrader.findAssignedByGrader(userId, classroom.id),
+      ClassmojiService.repositoryAssignment.findByClassroomId(classroom.id),
+      ClassmojiService.helper.findClassroomGradingProgressPerAssignment(classroom.id),
+      ClassmojiService.repositoryAssignmentGrader.findGradersProgress(classroom.id),
+    ]),
   };
 };
 
@@ -39,9 +30,15 @@ const AssistantDashboard = ({ loaderData }: Route.ComponentProps) => {
 
       <Suspense fallback={<Skeleton active />}>
         <Await resolve={data}>
-          {([assignments, repoAssignments, gradingProgress, assistantsProgress]) => {
+          {(resolved: unknown) => {
+            const [assignments, repoAssignments, gradingProgress, assistantsProgress] = resolved as [
+              Array<{ repository_assignment?: { grades?: unknown[] }; [key: string]: unknown }>,
+              unknown[],
+              Array<{ id?: string; title: string; progress: number; student_deadline: string; [key: string]: unknown }>,
+              Array<{ id: string; login: string; name: string | null; progress: number }>,
+            ];
             const numUngradedAssignments = assignments.filter(
-              (a: { repository_assignment?: { grades?: unknown[] } }) => a.repository_assignment?.grades?.length == 0
+              (a) => a.repository_assignment?.grades?.length == 0
             )?.length;
 
             return (

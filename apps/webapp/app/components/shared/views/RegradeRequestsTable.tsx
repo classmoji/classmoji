@@ -15,22 +15,23 @@ import { openRepositoryAssignmentInGithub } from '~/utils/helpers.client';
 interface RegradeGrade {
   id: string;
   emoji: string;
-  grader?: { name: string };
+  grader?: { name: string | null } | null;
 }
 
 interface RegradeRequest {
   id: string;
-  status: 'IN_REVIEW' | 'APPROVED' | 'DENIED';
+  status: 'IN_REVIEW' | 'APPROVED' | 'DENIED' | string;
   student_id: string;
-  student: { name: string; login: string; avatar_url: string; _count: { regrade_requests: number } };
+  student: { name: string | null; login: string | null; avatar_url?: string | null; image?: string | null; _count: { regrade_requests: number } };
   repository_assignment: {
     id: string;
-    assignment: { title: string };
-    repository: { name: string } | null;
+    assignment: { title: string; [key: string]: unknown };
+    repository: { name: string; [key: string]: unknown } | null;
     grades: RegradeGrade[];
     provider_issue_number?: number | null;
     studentId?: string;
     teamId?: string;
+    [key: string]: unknown;
   };
   previous_grade: string[];
   student_comment: string | null;

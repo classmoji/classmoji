@@ -52,26 +52,26 @@ export async function loader({ params, request }: Route.LoaderArgs) {
     return jsonResponse({
       enabled: false,
       hasContentRepo: false,
-      userRole: membership.role,
-      isInstructor: ['OWNER', 'TEACHER'].includes(membership.role),
+      userRole: membership!.role,
+      isInstructor: ['OWNER', 'TEACHER'].includes(membership!.role),
       orgName: classroom.name,
     });
   }
 
   const settings = await ClassmojiService.classroom.getClassroomSettingsForServer(classroom.id);
-  const isInstructor = ['OWNER', 'TEACHER'].includes(membership.role);
+  const isInstructor = ['OWNER', 'TEACHER'].includes(membership!.role);
 
   // Check if we have a content repo (either explicitly set or can be derived)
   const contentRepoName = getContentRepoName({
     login: classroom.git_organization?.login,
-    term: classroom.term,
-    year: classroom.year,
+    term: classroom.term ?? undefined,
+    year: classroom.year ?? undefined,
   });
 
   return jsonResponse({
     enabled: settings?.syllabus_bot_enabled ?? false,
     hasContentRepo: Boolean(contentRepoName),
-    userRole: membership.role,
+    userRole: membership!.role,
     isInstructor,
     orgName: classroom.name,
     courseName: (settings as { course_name?: string })?.course_name,
@@ -126,7 +126,7 @@ async function handleInitConversation(request: Request, classSlug: string, formD
 
   // Use URL-based role context if provided, otherwise fall back to membership role
   // This allows owners visiting /student/... to be treated as students
-  const contextRole = formData.get('userRole') || membership.role;
+  const contextRole = formData.get('userRole') || membership!.role;
 
   // Build org context for the bot
   const orgConfig = {
@@ -155,8 +155,8 @@ async function handleInitConversation(request: Request, classSlug: string, formD
     settings?.content_repo_name ||
     getContentRepoName({
       login: classroom.git_organization?.login,
-      term: classroom.term,
-      year: classroom.year,
+      term: classroom.term ?? undefined,
+      year: classroom.year ?? undefined,
     });
   if (contentRepoNameForClone && classroom.git_organization?.github_installation_id) {
     try {

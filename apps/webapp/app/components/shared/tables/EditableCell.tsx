@@ -5,13 +5,15 @@ import { InputNumber, Input } from 'antd';
 
 interface EditableRecord {
   id: string | number;
-  [key: string]: string | number | null | undefined;
+  [key: string]: unknown;
 }
+
+type ValueType = string | number | null | undefined;
 
 interface EditableCellProps {
   record: EditableRecord;
   dataIndex: string;
-  onUpdate: (recordId: string | number, value: string | number | null | undefined) => void;
+  onUpdate: (recordId: string | number, value: ValueType) => void;
   format?: 'text' | 'number';
   placeholder?: string;
 }
@@ -24,11 +26,11 @@ const EditableCell = ({
   placeholder,
 }: EditableCellProps) => {
   const [editing, setEditing] = useState(false);
-  const [inputValue, setInputValue] = useState(record?.[dataIndex]);
+  const [inputValue, setInputValue] = useState<ValueType>(record?.[dataIndex] as ValueType);
 
   // Sync inputValue when record changes (e.g., after revalidation)
   useEffect(() => {
-    setInputValue(record?.[dataIndex]);
+    setInputValue(record?.[dataIndex] as ValueType);
   }, [record?.[dataIndex]]);
 
   const ref = useClickAway(() => {
@@ -78,14 +80,14 @@ const EditableCell = ({
           formatter={value => `${value} %`.replace(/\B(?=(\d{3})+(?!\d))/g, ',')}
           onKeyDown={handleKeyPress}
           onChange={value => setInputValue(value)}
-          value={inputValue}
+          value={inputValue as number | null}
         />
       ) : (
         <Input
           className="w-full"
           onKeyDown={handleKeyPress}
           onChange={e => setInputValue(e.target.value)}
-          value={inputValue}
+          value={inputValue as string | undefined}
           variant="borderless"
         />
       )}

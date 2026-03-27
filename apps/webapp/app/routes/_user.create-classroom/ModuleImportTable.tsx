@@ -3,7 +3,7 @@ import { Table, Checkbox, Tag, Empty } from 'antd';
 interface ImportModule {
   id: string;
   title: string;
-  template?: string;
+  template?: string | null;
   type: string;
   _count?: { assignments?: number; quizzes?: number };
 }

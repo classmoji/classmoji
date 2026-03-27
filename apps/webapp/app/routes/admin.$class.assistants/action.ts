@@ -18,6 +18,7 @@ interface AssistantPayload {
 
 interface AssistantClassroom {
   id: string;
+  slug: string;
   git_organization: {
     login: string;
     provider: string;
@@ -40,8 +41,8 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
   return namedAction(request, {
     async createAssistant() {
       try {
-        const classroom = await ClassmojiService.classroom.findBySlug(classSlug);
-        await addAssistantHandler({ assistant: data, classroom });
+        const classroom = await ClassmojiService.classroom.findBySlug(classSlug) as AssistantClassroom | null;
+        await addAssistantHandler({ assistant: data, classroom: classroom! });
 
         return {
           success: 'Assistant created',
@@ -122,7 +123,7 @@ export const addAssistantHandler = async ({
   );
 
   try {
-    await gitProvider.inviteToOrganization(classroom.git_organization.login, assistant.id, [
+    await gitProvider.inviteToOrganization(classroom.git_organization.login, String(assistant.id), [
       team.id,
     ]);
   } catch (error: unknown) {
@@ -135,7 +136,7 @@ export const addAssistantHandler = async ({
     create: {
       login: assistant.login,
       name: assistant.name,
-      provider: classroom.git_organization.provider,
+      provider: classroom.git_organization.provider as 'GITHUB' | 'GITLAB' | 'BITBUCKET',
       provider_id: String(assistant.id),
       role: 'user',
       email: assistant.email,

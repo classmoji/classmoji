@@ -39,6 +39,7 @@ const AdminAssignments = ({ loaderData }: Route.ComponentProps) => {
   const [unenrolledStudents, setUnenrolledStudents] = useState<Array<Record<string, unknown>>>([]);
   const [selectedStudents, setSelectedStudents] = useState<Array<Record<string, unknown>>>([]);
   const [repositories, setRepositories] = useState<string[]>([]);
+  const fetcherData = fetcher!.data as { students?: Array<Record<string, unknown>>; repositories?: string[]; triggerSession?: { numReposToDelete?: number; numReposToCreate?: number; numIssuesToCreate?: number } } | undefined;
 
   useEffect(() => {
     if (!visible) {
@@ -48,9 +49,9 @@ const AdminAssignments = ({ loaderData }: Route.ComponentProps) => {
   }, [visible]);
 
   useEffect(() => {
-    if (fetcher!.data) {
-      setUnenrolledStudents(fetcher!.data.students);
-      setRepositories(fetcher!.data.repositories);
+    if (fetcherData) {
+      setUnenrolledStudents(fetcherData.students || []);
+      setRepositories(fetcherData.repositories || []);
     }
   }, [fetcher!.data]);
 
@@ -82,11 +83,11 @@ const AdminAssignments = ({ loaderData }: Route.ComponentProps) => {
     });
 
     fetcher!.submit(
-      {
+      JSON.stringify({
         deleteFromGithub: false,
         repositories: repositoriesToDelete,
         classroomSlug: classSlug,
-      },
+      }),
       {
         method: 'post',
         action: `/api/operation/?action=deleteRepositories`,
@@ -184,12 +185,12 @@ const AdminAssignments = ({ loaderData }: Route.ComponentProps) => {
         )}
       </Modal>
       <>
-        {fetcher!.data?.triggerSession?.numReposToDelete && (
+        {fetcherData?.triggerSession?.numReposToDelete && (
           <TriggerProgress operation="DELETE_REPOS" validIdentifiers={['delete_repository']} />
         )}
 
-        {(fetcher!.data?.triggerSession?.numReposToCreate ||
-          fetcher!.data?.triggerSession?.numIssuesToCreate) && (
+        {(fetcherData?.triggerSession?.numReposToCreate ||
+          fetcherData?.triggerSession?.numIssuesToCreate) && (
           <TriggerProgress
             operation="PUBLISH_OR_SYNC_ASSIGNMENT"
             validIdentifiers={[

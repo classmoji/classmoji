@@ -40,7 +40,7 @@ const UpdateRepositories = ({ loaderData }: Route.ComponentProps) => {
       .then(() => {
         const values = form.getFieldsValue();
         fetcher!.submit(
-          { values, module },
+          JSON.stringify({ values, module }),
           {
             method: 'post',
             action: `/admin/${classSlug}/modules/${title}/update`,
@@ -119,7 +119,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
   const { data } = await octokit.request(
     'POST /app/installations/{installation_id}/access_tokens',
     {
-      installation_id: classroom.git_organization.github_installation_id,
+      installation_id: Number(classroom.git_organization.github_installation_id),
       permissions: {
         contents: 'write',
         pull_requests: 'write',

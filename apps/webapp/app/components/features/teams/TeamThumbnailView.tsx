@@ -2,7 +2,7 @@ import _ from 'lodash';
 
 interface TeamThumbnailViewProps {
   team: {
-    avatar_url: string;
+    avatar_url?: string;
     name: string;
   };
 }

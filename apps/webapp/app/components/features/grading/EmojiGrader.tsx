@@ -10,7 +10,7 @@ import Emoji from '../../ui/display/Emoji';
 interface Grade {
   id: string;
   emoji: string;
-  grader?: { name: string };
+  grader?: { name: string | null } | null;
   token_transaction?: {
     amount: number;
   } | null;

@@ -48,10 +48,17 @@ interface RepoAssignmentEntry {
   id: string;
   assignment_id: string;
   provider_issue_number: number;
+  status?: string;
+  num_late_hours?: number;
+  extension_hours?: number;
+  is_late?: boolean;
+  is_late_override?: boolean;
   grades?: AssignmentGrade[];
   graders?: AssignmentGraderRef[];
   repository?: { name: string; [key: string]: unknown } | null;
   assignment: { weight: number; [key: string]: unknown };
+  studentId?: string | null;
+  teamId?: string | null;
   [key: string]: unknown;
 }
 
@@ -59,8 +66,8 @@ interface Repo {
   name: string;
   student_id: string | null;
   team_id: string | null;
-  student?: Record<string, unknown> | null;
-  team?: Record<string, unknown> | null;
+  student?: { avatar_url?: string | null; name?: string | null; login?: string | null; slug?: string | null; [key: string]: unknown } | null;
+  team?: { avatar_url: string; name: string; slug: string; [key: string]: unknown } | null;
   assignments?: RepoAssignmentEntry[];
   project_number?: number | null;
   [key: string]: unknown;
@@ -78,7 +85,7 @@ interface AssignmentTableProps {
   module: ModuleDef | null;
   repos: Repo[];
   assistants: Assistant[];
-  emojiMappings: Record<string, unknown> | unknown[];
+  emojiMappings: Record<string, unknown>;
   settings: Record<string, unknown> | null;
   org: string;
 }
@@ -260,8 +267,8 @@ const AssignmentTable = ({
               }}
               hideViewText
             >
-              <EmojiGrader repositoryAssignment={repoAssignment} emojiMappings={emojiMappings} />
-              <LateOverrideButton repositoryAssignment={repoAssignment} />
+              <EmojiGrader repositoryAssignment={repoAssignment as Parameters<typeof EmojiGrader>[0]['repositoryAssignment']} emojiMappings={emojiMappings} />
+              <LateOverrideButton repositoryAssignment={repoAssignment as unknown as Parameters<typeof LateOverrideButton>[0]['repositoryAssignment']} />
             </TableActionButtons>
           </div>
         );

@@ -12,8 +12,8 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
     action: 'bulk_add_students',
   });
 
-  const data = await request.json();
-  const emails = data.students.map((s: { email: string }) => s.email.toLowerCase());
+  const data = await request.json() as { students: Array<{ email: string; name?: string }> };
+  const emails = data.students.map((s) => s.email.toLowerCase());
 
   // Find users who already exist on the platform
   const existingUsers = await getPrisma().user.findMany({
@@ -41,7 +41,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
     const memberships = studentsToAddDirectly.map(student => ({
       classroom_id: classroom.id,
       user_id: student.userId,
-      role: 'STUDENT',
+      role: 'STUDENT' as const,
       has_accepted_invite: false, // They still need to accept GitHub org invite
     }));
 

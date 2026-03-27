@@ -87,7 +87,7 @@ const ModuleForm = ({ loaderData }: Route.ComponentProps) => {
         isNew={isNew}
         close={close}
         tags={tags}
-        classroom={classroom}
+        classroom={classroom as Parameters<typeof FormModule>[0]['classroom']}
         pages={pages}
         slides={slides}
         hasReposWithProjects={hasReposWithProjects}

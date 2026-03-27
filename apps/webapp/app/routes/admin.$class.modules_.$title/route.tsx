@@ -17,8 +17,18 @@ import type { Route } from './+types/route';
 interface ModuleAssignmentSummary {
   id: string;
   title: string;
-  student_deadline: number;
+  slug: string | null;
+  description: string;
+  weight: number;
+  student_deadline: Date | null;
+  grader_deadline: Date | null;
+  release_at: Date | null;
   grades_released: boolean;
+  is_published: boolean;
+  tokens_per_hour: number;
+  module_id: string;
+  created_at: Date;
+  updated_at: Date;
 }
 
 export const loader = async ({ params, request }: Route.LoaderArgs) => {
@@ -65,8 +75,10 @@ const SingleModule = ({ loaderData }: Route.ComponentProps) => {
   const tabItems = (module!.assignments as ModuleAssignmentSummary[])
     .sort((a, b) => {
       // First sort by deadline
-      if (a.student_deadline !== b.student_deadline) {
-        return a.student_deadline - b.student_deadline;
+      const aTime = a.student_deadline ? new Date(a.student_deadline).getTime() : 0;
+      const bTime = b.student_deadline ? new Date(b.student_deadline).getTime() : 0;
+      if (aTime !== bTime) {
+        return aTime - bTime;
       }
       // Then sort by title
       return a.title.localeCompare(b.title);
@@ -111,12 +123,12 @@ const SingleModule = ({ loaderData }: Route.ComponentProps) => {
             </Card>
 
             <AssignmentTable
-              assignment={assignment}
-              module={module}
-              repos={repos}
-              assistants={assistants}
-              emojiMappings={emojiMappings}
-              settings={settings}
+              assignment={assignment as unknown as Parameters<typeof AssignmentTable>[0]['assignment']}
+              module={module as Parameters<typeof AssignmentTable>[0]['module']}
+              repos={repos as Parameters<typeof AssignmentTable>[0]['repos']}
+              assistants={assistants as Parameters<typeof AssignmentTable>[0]['assistants']}
+              emojiMappings={emojiMappings as Parameters<typeof AssignmentTable>[0]['emojiMappings']}
+              settings={settings as Parameters<typeof AssignmentTable>[0]['settings']}
               org={classroom.git_organization.login}
             />
           </>
@@ -136,11 +148,8 @@ const SingleModule = ({ loaderData }: Route.ComponentProps) => {
         </div>
 
         <Menu
-          module={module}
-          repos={repos}
-          fetcher={fetcher}
-          assistants={assistants}
-          notify={notify}
+          module={module as Parameters<typeof Menu>[0]['module']}
+          assistants={assistants as Parameters<typeof Menu>[0]['assistants']}
         />
       </div>
       <Divider />
@@ -201,11 +210,10 @@ const SingleModule = ({ loaderData }: Route.ComponentProps) => {
         <Tabs items={tabItems} />
       ) : (
         <ModuleTable
-          module={module}
-          repos={repos}
-          assistants={assistants}
-          emojiMappings={emojiMappings}
-          settings={settings}
+          module={module as Parameters<typeof ModuleTable>[0]['module']}
+          repos={repos as unknown as Parameters<typeof ModuleTable>[0]['repos']}
+          emojiMappings={emojiMappings as Parameters<typeof ModuleTable>[0]['emojiMappings']}
+          settings={settings as Parameters<typeof ModuleTable>[0]['settings']}
           org={classroom.git_organization.login}
         />
       )}

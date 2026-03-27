@@ -2,15 +2,15 @@ import { Avatar, Tooltip, Dropdown } from 'antd';
 
 interface ViewerUser {
   id: string;
-  name?: string;
-  login?: string;
-  avatar_url?: string;
+  name?: string | null;
+  login?: string | null;
+  avatar_url?: string | null;
 }
 
 interface Viewer {
   user: ViewerUser;
-  lastViewedAt: string;
-  role?: string;
+  lastViewedAt: string | Date;
+  role?: string | null;
 }
 
 type RoleCategoryKey = 'teaching' | 'assistant' | 'student';
@@ -18,7 +18,7 @@ type RoleCategoryKey = 'teaching' | 'assistant' | 'student';
 /**
  * Format a date as relative time (e.g., "2 hours ago", "3 days ago")
  */
-const formatRelativeTime = (date: string) => {
+const formatRelativeTime = (date: string | Date) => {
   const now = new Date();
   const then = new Date(date);
   const diffMs = new Date(now).getTime() - new Date(then).getTime();
@@ -73,7 +73,7 @@ const getRoleCategory = (role: string): RoleCategoryKey => {
 /**
  * Viewer row component
  */
-const ViewerRow = ({ user, lastViewedAt }: { user: ViewerUser; lastViewedAt: string }) => (
+const ViewerRow = ({ user, lastViewedAt }: { user: ViewerUser; lastViewedAt: string | Date }) => (
   <div className="flex items-center gap-3">
     <Avatar
       src={user.avatar_url}

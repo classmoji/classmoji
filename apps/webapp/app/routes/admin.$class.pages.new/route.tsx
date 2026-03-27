@@ -27,7 +27,7 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
   });
 
   // Generate term from classroom settings
-  const term = generateTermString(classroom.term, classroom.year);
+  const term = generateTermString(classroom.term ?? undefined, classroom.year ?? undefined);
 
   // Include slug for navigation and gitOrgLogin for API calls
   return {

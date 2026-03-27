@@ -219,7 +219,8 @@ export default function AdminPages({ loaderData }: Route.ComponentProps) {
       key: 'viewers',
       width: 120,
       render: (_: unknown, record: PageRecord) => {
-        const viewerData = pageViewers[`pages/${record.id}`] || { viewers: [], totalCount: 0 };
+        const rawData = pageViewers[`pages/${record.id}`] || { viewers: [], totalCount: 0 };
+        const viewerData = 'viewers' in rawData ? rawData : { viewers: rawData, totalCount: rawData.length };
         return (
           <RecentViewers
             viewers={viewerData.viewers}

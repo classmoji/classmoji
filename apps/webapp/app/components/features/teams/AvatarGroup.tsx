@@ -1,9 +1,10 @@
 import { Tooltip, Avatar } from 'antd';
 
 interface AvatarGroupUser {
-  login: string;
+  login: string | null;
   avatar_url?: string | null;
   avatarUrl?: string | null;
+  [key: string]: unknown;
 }
 
 interface AvatarGroupProps {

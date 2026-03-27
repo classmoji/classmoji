@@ -14,21 +14,22 @@ import {
 } from '~/components';
 
 interface GradeEntry {
+  id: string;
   emoji: string;
-  [key: string]: unknown;
+  grader?: { name: string | null } | null;
+  token_transaction?: { amount: number } | null;
 }
 
 interface AssignmentInfo {
   title: string;
   grader_deadline: string | Date | null;
-  [key: string]: unknown;
 }
 
 interface StudentOrTeam {
   name?: string | null;
   login?: string | null;
-  slug?: string;
-  [key: string]: unknown;
+  slug?: string | null;
+  avatar_url?: string | null;
 }
 
 interface RepositoryInfo {
@@ -36,8 +37,7 @@ interface RepositoryInfo {
   student?: StudentOrTeam | null;
   team?: StudentOrTeam | null;
   student_id?: string | null;
-  module: { title: string; [key: string]: unknown };
-  [key: string]: unknown;
+  module: { title: string };
 }
 
 interface RepoAssignment {
@@ -47,12 +47,11 @@ interface RepoAssignment {
   assignment: AssignmentInfo;
   grades: GradeEntry[];
   repository: RepositoryInfo;
-  [key: string]: unknown;
+  provider_issue_number?: number;
 }
 
 interface ModuleItem {
   title: string;
-  [key: string]: unknown;
 }
 
 interface RepositoryAssignmentsTableProps {
@@ -139,7 +138,7 @@ const RepositoryAssignmentsTable = ({
       dataIndex: ['repository'],
       key: 'student',
       render: (repo: RepositoryInfo) => {
-        const user = repo.student ? repo.student : repo.team;
+        const user = repo.student ?? repo.team ?? undefined;
         return <UserThumbnailView user={user} />;
       },
     },
@@ -249,10 +248,13 @@ const RepositoryAssignmentsTable = ({
           >
             <EmojiGrader
               repositoryAssignment={{
-                ...repoAssignment,
+                id: repoAssignment.id,
+                assignment_id: repoAssignment.assignment_id,
                 studentId: repoAssignment.repository.student_id ?? undefined,
+                grades: repoAssignment.grades,
+                repository: repoAssignment.repository,
               }}
-              emojiMappings={emojiMappings}
+              emojiMappings={emojiMappings as Record<string, unknown>}
             />
           </TableActionButtons>
         );

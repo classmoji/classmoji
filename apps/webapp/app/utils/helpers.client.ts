@@ -1,12 +1,10 @@
 interface RepoAssignmentForGithub {
-  repository: { name: string; [key: string]: unknown } | null;
+  repository?: { name: string } | null;
   provider_issue_number?: number;
-  [key: string]: unknown;
 }
 
 interface RepoAssignmentWithModule {
-  assignment: { id: string; module_id?: string; [key: string]: unknown };
-  [key: string]: unknown;
+  assignment: { id: string; module_id?: string };
 }
 
 export const openRepositoryAssignmentInGithub = (org: string, repositoryAssignment: RepoAssignmentForGithub) =>

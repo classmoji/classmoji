@@ -107,8 +107,8 @@ export const action = async ({ request }: Route.ActionArgs) => {
         });
       });
 
-      // Add unmatched images
-      unmatchedImages.forEach(file => {
+      // Add unmatched images (cast back to File since we know the inputs were File objects)
+      (unmatchedImages as unknown as File[]).forEach(file => {
         const timestamp = Date.now();
         const sanitizedName = file.name
           .toLowerCase()

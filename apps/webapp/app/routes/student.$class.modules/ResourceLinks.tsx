@@ -11,7 +11,7 @@ interface LinkedSlide {
 interface ResourceLinksProps {
   pages?: LinkedPage[];
   slides?: LinkedSlide[];
-  classSlug: string;
+  classSlug: string | undefined;
   slidesUrl: string;
   pagesUrl: string;
   rolePrefix?: string;
@@ -25,15 +25,15 @@ const ResourceLinks = ({
   pagesUrl,
   rolePrefix = 'student',
 }: ResourceLinksProps) => {
-  const hasPages = pages?.length > 0;
-  const hasSlides = slides?.length > 0;
+  const hasPages = (pages?.length ?? 0) > 0;
+  const hasSlides = (slides?.length ?? 0) > 0;
 
   if (!hasPages && !hasSlides) return null;
 
   return (
     <div className="flex flex-wrap gap-4 mt-2">
       {hasPages &&
-        pages.map(({ page }: { page: { id: string; title: string } }) => (
+        pages!.map(({ page }: { page: { id: string; title: string } }) => (
           <a
             key={page.id}
             href={`${pagesUrl}/${classSlug}/${page.id}`}
@@ -46,7 +46,7 @@ const ResourceLinks = ({
           </a>
         ))}
       {hasSlides &&
-        slides.map(({ slide }: { slide: { id: string; title: string } }) => (
+        slides!.map(({ slide }: { slide: { id: string; title: string } }) => (
           <a
             key={slide.id}
             href={`${slidesUrl}/${slide.id}`}

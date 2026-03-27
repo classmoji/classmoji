@@ -169,7 +169,8 @@ export default function SlidesAdmin({ loaderData }: Route.ComponentProps) {
       key: 'viewers',
       width: 120,
       render: (_: unknown, record: Slide) => {
-        const viewerData = slideViewers[`slides/${record.id}`] || { viewers: [], totalCount: 0 };
+        const rawData = slideViewers[`slides/${record.id}`] || { viewers: [], totalCount: 0 };
+        const viewerData = 'viewers' in rawData ? rawData : { viewers: rawData, totalCount: rawData.length };
         return (
           <RecentViewers
             viewers={viewerData.viewers}

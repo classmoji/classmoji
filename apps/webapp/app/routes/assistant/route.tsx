@@ -21,7 +21,7 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
     // Check if recent viewers feature is enabled (settings included from findBySlug)
     const recentViewersEnabled = classroom.settings?.recent_viewers_enabled ?? true;
 
-    let recentViewers = [];
+    let recentViewers: { user: { id: string; name: string | null; login: string | null; avatar_url: string | null }; lastViewedAt: Date; role?: string | null }[] = [];
 
     if (recentViewersEnabled) {
       // Normalize the current path for view tracking

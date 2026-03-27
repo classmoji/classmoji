@@ -39,7 +39,7 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
 
   const { start, end } = getCalendarDateRange(year, month);
 
-  let events = [];
+  let events: Awaited<ReturnType<typeof ClassmojiService.calendar.getClassroomCalendar>> = [];
   try {
     // Pass userId to include GitHub issue links for deadlines
     // Don't include raw links for students (includeRawLinks=false by default)

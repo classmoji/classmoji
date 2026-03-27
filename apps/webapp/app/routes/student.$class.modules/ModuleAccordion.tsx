@@ -4,6 +4,14 @@ import { Link } from 'react-router';
 import ResourceLinks from './ResourceLinks';
 import AssignmentCard from './AssignmentCard';
 
+interface LinkedPage {
+  page: { id: string; title: string };
+}
+
+interface LinkedSlide {
+  slide: { id: string; title: string };
+}
+
 interface Module {
   id: string;
   slug: string | null;
@@ -14,14 +22,16 @@ interface Module {
   team_formation_deadline?: string | Date | null;
   max_team_size?: number | null;
   assignments?: Assignment[];
-  pages?: Array<Record<string, unknown>>;
-  slides?: Array<Record<string, unknown>>;
+  pages?: LinkedPage[];
+  slides?: LinkedSlide[];
   [key: string]: unknown;
 }
 
 interface Assignment {
   id: string | number;
   title: string;
+  grades_released?: boolean;
+  student_deadline?: string | Date | null;
   [key: string]: unknown;
 }
 
@@ -36,6 +46,7 @@ interface UserTeam {
 }
 
 interface RepoAssignment {
+  id: string;
   status: string;
   [key: string]: unknown;
 }

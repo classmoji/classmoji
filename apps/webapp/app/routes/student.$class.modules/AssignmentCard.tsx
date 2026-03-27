@@ -6,17 +6,23 @@ import ResourceLinks from './ResourceLinks';
 
 interface AssignmentCardAssignment {
   title: string;
-  grades_released: boolean;
+  grades_released?: boolean;
   student_deadline?: string | Date | null;
   pages?: Array<{ page: { id: string; title: string } }>;
   slides?: Array<{ slide: { id: string; title: string } }>;
+}
+
+interface Grade {
+  id?: string;
+  emoji: string;
+  grader?: { name: string };
 }
 
 interface AssignmentCardRepositoryAssignment {
   id: string;
   status: 'OPEN' | 'CLOSED' | string;
   provider_issue_number?: number | null;
-  grades?: unknown[];
+  grades?: Grade[];
   repository?: {
     name: string;
     classroom?: {
@@ -30,7 +36,7 @@ interface AssignmentCardRepositoryAssignment {
 interface AssignmentCardProps {
   assignment: AssignmentCardAssignment;
   repoAssignment?: AssignmentCardRepositoryAssignment | null;
-  classSlug: string;
+  classSlug: string | undefined;
   slidesUrl: string;
   pagesUrl: string;
   rolePrefix?: string;
@@ -55,7 +61,7 @@ const AssignmentCard = ({
   rolePrefix = 'student',
 }: AssignmentCardProps) => {
   const status = getStatusDisplay(repoAssignment);
-  const showGrades = assignment.grades_released && repoAssignment?.grades?.length > 0;
+  const showGrades = assignment.grades_released && (repoAssignment?.grades?.length ?? 0) > 0;
 
   const githubIssueUrl = repoAssignment?.repository?.classroom?.git_organization?.login
     ? `https://github.com/${repoAssignment.repository.classroom.git_organization.login}/${repoAssignment.repository.name}/issues/${repoAssignment.provider_issue_number}`
@@ -84,7 +90,7 @@ const AssignmentCard = ({
         </div>
         <div className="flex flex-col items-end gap-2 text-sm">
           <div className="flex items-center gap-4">
-            {showGrades && <EmojisDisplay grades={repoAssignment.grades} />}
+            {showGrades && <EmojisDisplay grades={repoAssignment?.grades} />}
             {assignment.student_deadline && (
               <span className="text-gray-500 dark:text-gray-400">
                 {dayjs(assignment.student_deadline).format('MMM D, YYYY')}

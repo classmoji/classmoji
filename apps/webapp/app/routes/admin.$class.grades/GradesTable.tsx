@@ -10,6 +10,7 @@ import GradeSettings from './GradeSettings';
 import { createAssignmentColumns } from './columns/assignmentColumns';
 import { createStudentGradeColumns } from './columns/studentGradeColumns';
 import { calculateStudentFinalGrade } from '@classmoji/utils';
+import type { TableProps } from 'antd';
 import type { Repository, OrganizationSettings, LetterGradeMappingEntry } from '@classmoji/utils';
 import { useGlobalFetcher } from '~/hooks';
 
@@ -33,6 +34,7 @@ interface Student {
 }
 
 interface Membership {
+  id: string | number;
   user_id: string | number;
   comment?: string | null;
   letter_grade?: string | null;
@@ -86,9 +88,9 @@ const GradesTable = (props: GradesTableProps) => {
     });
   }, [students, searchQuery]);
 
-  const handleUpdateLetterGrade = (membershipId: string, letterGrade: string) => {
+  const handleUpdateLetterGrade = (membershipId: string | number, letterGrade: string | number | null | undefined) => {
     fetcher!.submit(
-      { membership_id: membershipId, letter_grade: letterGrade },
+      { membership_id: String(membershipId), letter_grade: String(letterGrade ?? '') },
       {
         method: 'post',
         action: '?/updateLetterGrade',
@@ -138,7 +140,7 @@ const GradesTable = (props: GradesTableProps) => {
       },
     },
     ...studentGradeColumns,
-    ...assignmentColumns,
+    ...(assignmentColumns ?? []),
     {
       title: 'Actions',
       key: 'actions',
@@ -171,12 +173,14 @@ const GradesTable = (props: GradesTableProps) => {
   // Calculate scroll width dynamically based on visible columns
   const scrollX = useMemo(() => {
     const baseWidth = 170 + 100; // Student + Actions (fixed columns)
-    const gradeColumnsWidth = studentGradeColumns.reduce((sum, col) => sum + (col.width || 150), 0);
-    const assignmentColumnsWidth = assignmentColumns.reduce((sum: number, module: { width?: number; children?: Array<{ width?: number }> }) => {
-      if (!module.children?.length) return sum + (module.width || 140);
+    const gradeColumnsWidth = studentGradeColumns.reduce((sum: number, col) => sum + (Number(col.width) || 150), 0);
+    const cols = assignmentColumns ?? [];
+    const assignmentColumnsWidth = cols.reduce((sum: number, module) => {
+      const mod = module as { width?: number; children?: Array<{ width?: number }> };
+      if (!mod.children?.length) return sum + (Number(mod.width) || 140);
       return (
         sum +
-        module.children.reduce((childSum: number, child: { width?: number }) => childSum + (child.width || 140), 0)
+        mod.children.reduce((childSum: number, child) => childSum + (Number(child.width) || 140), 0)
       );
     }, 0);
     return Math.max(1500, baseWidth + gradeColumnsWidth + assignmentColumnsWidth);
@@ -304,7 +308,7 @@ const GradesTable = (props: GradesTableProps) => {
             >
               <Table
                 dataSource={filteredStudents}
-                columns={columns.filter(col => !col.hidden)}
+                columns={columns.filter(col => !(col as Record<string, unknown>).hidden) as TableProps<Student>['columns']}
                 rowHoverable={true}
                 size="small"
                 bordered={true}

@@ -32,6 +32,7 @@ interface AdminQuiz {
   attemptStatus: string | null;
   score: number | null;
   userAttempt: Record<string, unknown> | null;
+  [key: string]: unknown;
 }
 
 interface ActionButtonProps {
@@ -223,12 +224,12 @@ export default function AdminQuizzes({ loaderData }: Route.ComponentProps) {
     );
   };
 
-  const handleUpdateWeight = (quizId: string, weight: number) => {
+  const handleUpdateWeight = (quizId: string | number, weight: string | number | null | undefined) => {
     fetcher.submit(
       {
         _action: 'updateWeight',
-        id: quizId,
-        weight,
+        id: String(quizId),
+        weight: Number(weight ?? 0),
       },
       { method: 'POST', encType: 'application/json' }
     );

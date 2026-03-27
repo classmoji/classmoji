@@ -131,9 +131,9 @@ const AssignmentTable = ({ assignments }: AssignmentTableProps) => {
       sorter: (a: Assignment, b: Assignment) => a.weight - b.weight,
       render: (assignment: Assignment) => (
         <EditableCell
-          record={assignment}
+          record={{ id: assignment.id, weight: assignment.weight }}
           dataIndex="weight"
-          onUpdate={handleUpdateWeight}
+          onUpdate={(recordId, value) => handleUpdateWeight(recordId as string, value as number)}
           format="number"
         />
       ),

@@ -42,7 +42,7 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
 
   const { start, end } = getCalendarDateRange(year, month);
 
-  let events = [];
+  let events: Awaited<ReturnType<typeof ClassmojiService.calendar.getClassroomCalendar>> = [];
   try {
     // Pass includeRawLinks=true for admin UI editing, includeUnpublished=true to see draft assignments
     events = await ClassmojiService.calendar.getClassroomCalendar(
@@ -78,7 +78,7 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
     }),
   ]);
 
-  const role = membership.role;
+  const role = membership!.role;
   const isAdmin = ['OWNER', 'TEACHER'].includes(role);
 
   // Build subscription URL
@@ -113,7 +113,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
     attemptedAction: 'modify',
   });
 
-  const isAdmin = ['OWNER', 'TEACHER'].includes(membership.role);
+  const isAdmin = ['OWNER', 'TEACHER'].includes(membership!.role);
 
   const formData = await request.formData();
   const intent = formData.get('intent');

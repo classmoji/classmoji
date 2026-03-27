@@ -16,7 +16,7 @@ const StepBasicInfo = ({ gitOrgs, slugPreview, years, githubAppName }: StepBasic
     control,
     formState: { errors },
   } = useFormContext();
-  const { openInstallPopup, isRefreshing } = useGitHubAppInstallPopup(githubAppName);
+  const { openInstallPopup, isRefreshing } = useGitHubAppInstallPopup(githubAppName ?? undefined);
 
   // Custom dropdown footer with "Install on another organization" button
   const dropdownRender = (menu: React.ReactNode) => (

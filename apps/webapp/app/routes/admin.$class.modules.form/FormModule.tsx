@@ -4,7 +4,7 @@ import { Octokit } from '@octokit/rest';
 import { toast } from 'react-toastify';
 
 import { useRevalidator } from 'react-router';
-import { useForm } from 'react-hook-form';
+import { useForm, type Control, type FieldValues } from 'react-hook-form';
 import { FormItem } from 'react-hook-form-antd';
 import {
   Form,
@@ -37,14 +37,20 @@ import AssignmentsTable from './AssignmentsTable';
 import dayjs from 'dayjs';
 import { ActionTypes } from '~/constants';
 
+interface ActionResponse {
+  error?: string;
+  success?: string;
+  action?: string;
+}
+
 interface PageRef {
   id: string;
-  title?: string;
+  title?: string | null;
 }
 
 interface SlideRef {
   id: string;
-  title?: string;
+  title?: string | null;
 }
 
 interface TagRef {
@@ -90,7 +96,7 @@ interface FormModuleProps {
   module: ModuleData | null;
   close: () => void;
   tags: TagRef[];
-  classroom: { slug: string; settings: Record<string, unknown> };
+  classroom: { slug: string; settings: Record<string, unknown>; [key: string]: unknown };
   pages?: PageRef[];
   slides?: SlideRef[];
   hasReposWithProjects?: boolean;
@@ -203,8 +209,9 @@ const FormModule = ({
     if (isSubmitting && fetcher!.state === 'idle') {
       setIsSubmitting(false);
 
-      if (fetcher!.data?.error) {
-        toast.error(fetcher!.data.error || 'Failed to save module.');
+      const fetcherData = fetcher!.data as ActionResponse | undefined;
+      if (fetcherData?.error) {
+        toast.error(fetcherData.error || 'Failed to save module.');
         return;
       }
 
@@ -280,12 +287,12 @@ const FormModule = ({
     const serializedData = serializeDates(data);
 
     fetcher!.submit(
-      {
+      JSON.stringify({
         ...serializedData,
         assignmentsToRemove,
-        linkedPageIds,
-        linkedSlideIds,
-      },
+        linkedPageIds: linkedPageIds.filter((id): id is string => id != null),
+        linkedSlideIds: linkedSlideIds.filter((id): id is string => id != null),
+      }),
       {
         method: 'post',
         action: isNew ? '?/create' : '?/update',
@@ -477,9 +484,10 @@ const FormModule = ({
                 <FormItem control={control} name="project_template_id" label="Project Template">
                   <ProjectTemplateSelect
                     disabled={hasReposWithProjects}
-                    onChange={(value: string | null, option: { title?: string } | null) => {
+                    onChange={(value, option) => {
                       setValue('project_template_id', value || null);
-                      setValue('project_template_title', option?.title || null);
+                      const opt = option as { title?: string } | undefined;
+                      setValue('project_template_title', opt?.title || null);
                     }}
                   />
                 </FormItem>
@@ -519,7 +527,7 @@ const FormModule = ({
             />
 
             <AsyncAutocomplete
-              control={control}
+              control={control as unknown as Control<FieldValues>}
               template={module?.template || ''}
               isPublished={module?.is_published || false}
               setTemplate={setTemplate}
@@ -653,9 +661,9 @@ const FormModule = ({
         >
           <FormAssignment
             templateAssignments={templateAssignments}
-            settings={classroom.settings}
-            pages={pages}
-            slides={slides}
+            settings={classroom.settings as { default_tokens_per_hour: number; [key: string]: unknown }}
+            pages={pages as { id: string; title: string | null }[]}
+            slides={slides as { id: string; title: string | null }[]}
           />
         </Drawer>
 

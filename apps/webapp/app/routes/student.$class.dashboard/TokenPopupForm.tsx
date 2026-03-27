@@ -22,6 +22,7 @@ interface TokenPopupRepositoryAssignment {
 }
 
 interface TokenPopupFormProps {
+  weight?: number;
   repositoryAssignment: TokenPopupRepositoryAssignment;
   balance: number | null | undefined;
 }

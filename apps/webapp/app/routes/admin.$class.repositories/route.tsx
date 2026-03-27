@@ -88,7 +88,7 @@ async function fetchOrgRepositories(
     // Without search, use organization repositories query with pagination
     // GitHub GraphQL uses cursor-based pagination, so we need to calculate the cursor
     // For simplicity, we'll fetch in chunks to get to the right page
-    let afterCursor = null;
+    let afterCursor: string | null = null;
 
     // If not on page 1, we need to skip to the right position
     if (page > 1) {
@@ -98,13 +98,13 @@ async function fetchOrgRepositories(
 
       while (skipped < skipCount) {
         const batchSize = Math.min(100, skipCount - skipped);
-        const skipResponse = await octokit.graphql<{
+        const skipResponse: {
           organization: {
             repositories: {
               pageInfo: OrganizationRepositoryPageInfo;
             };
           };
-        }>(
+        } = await octokit.graphql(
           `
             query ($org: String!, $first: Int!, $after: String) {
               organization(login: $org) {
@@ -245,7 +245,7 @@ const RepositoriesTable = ({
 
   const deleteSelectedRepositories = () => {
     fetcher!.submit(
-      { deleteFromGithub: true, repositories: selectedRepos, classSlug },
+      { deleteFromGithub: true, repositories: selectedRepos, classSlug: classSlug ?? null },
       {
         method: 'delete',
         action: `/api/operation/?action=deleteRepositories`,
@@ -438,10 +438,11 @@ const GithubRepositories = ({ loaderData }: Route.ComponentProps) => {
 
   // Handle delete completion
   useEffect(() => {
-    if (fetcher!.state === 'idle' && fetcher!.data?.success) {
+    const fetcherData = fetcher!.data as { success?: boolean; error?: string } | undefined;
+    if (fetcher!.state === 'idle' && fetcherData?.success) {
       setDeleteLoading(false);
       revalidate();
-    } else if (fetcher!.state === 'idle' && fetcher!.data?.error) {
+    } else if (fetcher!.state === 'idle' && fetcherData?.error) {
       setDeleteLoading(false);
     }
   }, [fetcher!.state, fetcher!.data, revalidate]);

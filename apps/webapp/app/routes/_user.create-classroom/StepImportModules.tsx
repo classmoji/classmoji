@@ -7,22 +7,7 @@ import {
   QuestionCircleOutlined,
 } from '@ant-design/icons';
 import ModuleSelectionDrawer from './ModuleSelectionDrawer';
-
-interface OwnedClassroom {
-  id: string;
-  name: string;
-  term: string | null;
-  year: number | null;
-  git_organization?: Record<string, unknown> | null;
-  modules?: ClassroomModule[];
-  [key: string]: unknown;
-}
-
-interface ClassroomModule {
-  id: string;
-  title: string;
-  _count?: { assignments?: number; quizzes?: number };
-}
+import type { ClassroomModule, OwnedClassroom } from './types';
 
 interface ModuleConfig {
   includeQuizzes: boolean;
