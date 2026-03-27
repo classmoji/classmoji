@@ -1,0 +1,18 @@
+{
+  "extends": "./tsconfig.base.json",
+  "files": [],
+  "references": [
+    { "path": "./apps/hook-station" },
+    { "path": "./apps/pages" },
+    { "path": "./apps/site" },
+    { "path": "./apps/slides" },
+    { "path": "./apps/webapp" },
+    { "path": "./packages/auth" },
+    { "path": "./packages/content" },
+    { "path": "./packages/database" },
+    { "path": "./packages/services" },
+    { "path": "./packages/tasks" },
+    { "path": "./packages/ui-components" },
+    { "path": "./packages/utils" }
+  ]
+}
