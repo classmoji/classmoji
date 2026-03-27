@@ -2,8 +2,18 @@ import { Select, Avatar, Tag } from 'antd';
 import { useNavigate } from 'react-router';
 import useStore from '~/store';
 import { roleSettings } from '~/constants/roleSettings';
+import type { MembershipWithOrganization } from '~/types';
 
-const OrgSelect = ({ memberships }: any) => { // eslint-disable-line @typescript-eslint/no-explicit-any -- Prisma membership shapes vary by loader context
+interface OrgSelectProps {
+  memberships: MembershipWithOrganization[];
+}
+
+type OrgSelectOption = {
+  value: string;
+  label: string;
+} & MembershipWithOrganization;
+
+const OrgSelect = ({ memberships }: OrgSelectProps) => {
   const { membership } = useStore();
   const navigate = useNavigate();
 
@@ -25,8 +35,8 @@ const OrgSelect = ({ memberships }: any) => { // eslint-disable-line @typescript
         }}
         classNames={{ popup: { root: '[&::-webkit-scrollbar]:hidden' } }}
         options={memberships
-          ?.sort((a: any, b: any) => a.organization.name?.localeCompare(b.organization.name)) // eslint-disable-line @typescript-eslint/no-explicit-any -- Prisma membership
-          .map((m: any) => ({ // eslint-disable-line @typescript-eslint/no-explicit-any -- Prisma membership
+          ?.sort((a, b) => a.organization.name?.localeCompare(b.organization.name))
+          .map(m => ({
             value: m.id.toString(),
             label: m.organization.name,
             ...m,
@@ -65,40 +75,41 @@ const OrgSelect = ({ memberships }: any) => { // eslint-disable-line @typescript
           );
         }}
         optionRender={({ data }) => {
+          const membershipOption = data as OrgSelectOption;
           return (
             <button
               className="flex justify-between w-full items-center gap-3 p-3.5 hover:bg-gray-50 dark:hover:bg-gray-800/50 rounded-lg cursor-pointer transition-all duration-150 hover:shadow-sm border border-transparent hover:border-primary-200 dark:hover:border-primary-900/30"
               onClick={() => {
                 // Students go to class root (student.$class._index handles default page)
-                const suffix = data.role === 'STUDENT' ? '' : '/dashboard';
+                const suffix = membershipOption.role === 'STUDENT' ? '' : '/dashboard';
                 navigate(
-                  `${(roleSettings as Record<string, { path: string; color: string }>)[data.role].path}/${data.organization.login}${suffix}`
+                  `${(roleSettings as Record<string, { path: string; color: string }>)[membershipOption.role].path}/${membershipOption.organization.login}${suffix}`
                 );
               }}
             >
               <div className="flex items-center gap-3 flex-1 min-w-0">
                 <Avatar
-                  src={data.organization.avatar_url}
+                  src={membershipOption.organization.avatar_url}
                   size={40}
                   className="border-2 border-gray-200 dark:border-gray-600 shrink-0 shadow-sm"
                 />
                 <div className="text-sm text-gray-800 dark:text-gray-200 truncate flex flex-col items-start gap-1">
                   <div className="font-semibold text-gray-900 dark:text-gray-100">
-                    {data.organization.name}
+                    {membershipOption.organization.name}
                   </div>
-                  {data.organization.term && (
+                  {membershipOption.organization.term && (
                     <div className="text-xs text-gray-500 dark:text-gray-400">
-                      {data.organization.term} {data.organization.year}
+                      {membershipOption.organization.term} {membershipOption.organization.year}
                     </div>
                   )}
                 </div>
               </div>
 
               <Tag
-                color={(roleSettings as Record<string, { path: string; color: string }>)[data.role]?.color || 'default'}
+                color={(roleSettings as Record<string, { path: string; color: string }>)[membershipOption.role]?.color || 'default'}
                 className="shrink-0 font-semibold text-xs"
               >
-                {data.role}
+                {membershipOption.role}
               </Tag>
             </button>
           );

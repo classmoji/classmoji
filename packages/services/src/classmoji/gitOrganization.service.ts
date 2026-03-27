@@ -1,4 +1,5 @@
-import prisma from '@classmoji/database';
+import getPrisma from '@classmoji/database';
+import type { GitProvider, Prisma } from '@prisma/client';
 
 /**
  * Find a GitOrganization by its UUID
@@ -6,7 +7,7 @@ import prisma from '@classmoji/database';
  * @returns {Promise<Object|null>}
  */
 export const findById = async (id: string) => {
-  return prisma!.gitOrganization.findUnique({
+  return getPrisma().gitOrganization.findUnique({
     where: { id },
     include: {
       classrooms: true,
@@ -20,11 +21,11 @@ export const findById = async (id: string) => {
  * @param {string} providerId - Provider-specific ID (GitHub org ID, GitLab group ID)
  * @returns {Promise<Object|null>}
  */
-export const findByProviderId = async (provider: string, providerId: string) => {
-  return prisma!.gitOrganization.findUnique({
+export const findByProviderId = async (provider: GitProvider, providerId: string) => {
+  return getPrisma().gitOrganization.findUnique({
     where: {
       provider_provider_id: {
-        provider: provider as any,
+        provider,
         provider_id: providerId,
       },
     },
@@ -40,10 +41,10 @@ export const findByProviderId = async (provider: string, providerId: string) => 
  * @param {string} login - Organization login/slug on the provider
  * @returns {Promise<Object|null>}
  */
-export const findByLogin = async (provider: string, login: string) => {
-  return prisma!.gitOrganization.findFirst({
+export const findByLogin = async (provider: GitProvider, login: string) => {
+  return getPrisma().gitOrganization.findFirst({
     where: {
-      provider: provider as any,
+      provider,
       login,
     },
     include: {
@@ -58,8 +59,11 @@ export const findByLogin = async (provider: string, login: string) => {
  * @param {Object} include - Optional include clause
  * @returns {Promise<Object[]>}
  */
-export const findAll = async (query: any = {}, include: any = { classrooms: true }) => {
-  return prisma!.gitOrganization.findMany({
+export const findAll = async (
+  query: Prisma.GitOrganizationWhereInput = {},
+  include: Prisma.GitOrganizationInclude = { classrooms: true }
+) => {
+  return getPrisma().gitOrganization.findMany({
     where: query,
     include,
   });
@@ -77,8 +81,8 @@ export const findAll = async (query: any = {}, include: any = { classrooms: true
  * @param {string} [data.base_url] - Base URL for self-hosted providers
  * @returns {Promise<Object>}
  */
-export const create = async (data: any) => {
-  return prisma!.gitOrganization.create({
+export const create = async (data: Prisma.GitOrganizationUncheckedCreateInput) => {
+  return getPrisma().gitOrganization.create({
     data,
     include: {
       classrooms: true,
@@ -91,10 +95,10 @@ export const create = async (data: any) => {
  * @param {Object} data - GitOrganization data
  * @returns {Promise<Object>}
  */
-export const upsert = async (data: any) => {
+export const upsert = async (data: Prisma.GitOrganizationUncheckedCreateInput) => {
   const { provider, provider_id, ...rest } = data;
 
-  return prisma!.gitOrganization.upsert({
+  return getPrisma().gitOrganization.upsert({
     where: {
       provider_provider_id: {
         provider,
@@ -119,8 +123,8 @@ export const upsert = async (data: any) => {
  * @param {Object} updates - Fields to update
  * @returns {Promise<Object>}
  */
-export const update = async (id: string, updates: any) => {
-  return prisma!.gitOrganization.update({
+export const update = async (id: string, updates: Prisma.GitOrganizationUpdateInput) => {
+  return getPrisma().gitOrganization.update({
     where: { id },
     data: updates,
     include: {
@@ -135,7 +139,7 @@ export const update = async (id: string, updates: any) => {
  * @returns {Promise<Object>}
  */
 export const deleteById = async (id: string) => {
-  return prisma!.gitOrganization.delete({
+  return getPrisma().gitOrganization.delete({
     where: { id },
   });
 };
@@ -147,7 +151,7 @@ export const deleteById = async (id: string) => {
  * @returns {Promise<number>}
  */
 export const countClassrooms = async (gitOrgId: string) => {
-  return prisma!.classroom.count({
+  return getPrisma().classroom.count({
     where: { git_org_id: gitOrgId },
   });
 };
@@ -165,7 +169,7 @@ export const deleteIfOrphaned = async (gitOrgId: string) => {
     return false;
   }
 
-  await prisma!.gitOrganization.delete({
+  await getPrisma().gitOrganization.delete({
     where: { id: gitOrgId },
   });
 

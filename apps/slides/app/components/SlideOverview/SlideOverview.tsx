@@ -1,6 +1,8 @@
 import { useState, useCallback, useMemo, useEffect } from 'react';
 import { DndContext, DragOverlay, pointerWithin, rectIntersection } from '@dnd-kit/core';
+import type { CollisionDetection, DragStartEvent, DragEndEvent } from '@dnd-kit/core';
 import { useSlideStructure } from './hooks/useSlideStructure';
+import type { SlideData, StackData } from './hooks/useSlideStructure';
 import SlideGrid from './SlideGrid';
 import NewStackDropZone from './NewStackDropZone';
 import SlideThumbnail from './SlideThumbnail';
@@ -9,7 +11,15 @@ import SlideThumbnail from './SlideThumbnail';
  * Custom collision detection that tries pointerWithin first,
  * then falls back to rectIntersection for better reliability
  */
-function customCollisionDetection(args: any) {
+
+interface SlideOverviewProps {
+  revealInstance: RevealApi | null;
+  onClose?: () => void;
+  onContentChange?: () => void;
+  onNavigate?: (stackIndex: number, slideIndex: number) => void;
+}
+
+const customCollisionDetection: CollisionDetection = (args) => {
   // First try pointer within - most precise
   const pointerCollisions = pointerWithin(args);
   if (pointerCollisions.length > 0) {
@@ -36,7 +46,7 @@ export default function SlideOverview({
   onClose,
   onContentChange,
   onNavigate,
-}: any) {
+}: SlideOverviewProps) {
   // Parse the current slide structure from Reveal.js DOM
   // Pass onContentChange so the hook can auto-sync after state updates
   const {
@@ -52,29 +62,31 @@ export default function SlideOverview({
   } = useSlideStructure(revealInstance, onContentChange);
 
   // Track which item is being dragged
-  const [activeId, setActiveId] = useState<any>(null);
-  const [activeType, setActiveType] = useState<any>(null); // 'slide' or 'stack'
+  const [activeId, setActiveId] = useState<string | null>(null);
+  const [activeType, setActiveType] = useState<'slide' | 'stack' | null>(null); // 'slide' or 'stack'
 
   // Get the active item for DragOverlay
-  const activeItem = useMemo(() => {
-    if (!activeId) return null;
-    if (activeType === 'stack') {
-      return findStackById(activeId);
-    }
+  const activeSlide = useMemo((): SlideData | null => {
+    if (!activeId || activeType !== 'slide') return null;
     return findSlideById(activeId);
-  }, [activeId, activeType, findSlideById, findStackById]);
+  }, [activeId, activeType, findSlideById]);
+
+  const activeStack = useMemo((): StackData | null => {
+    if (!activeId || activeType !== 'stack') return null;
+    return findStackById(activeId);
+  }, [activeId, activeType, findStackById]);
 
   // Handle drag start
-  const handleDragStart = useCallback((event: any) => {
+  const handleDragStart = useCallback((event: DragStartEvent) => {
     const { active } = event;
-    setActiveId(active.id);
-    setActiveType(active.data.current?.type || 'slide');
+    setActiveId(active.id as string);
+    setActiveType((active.data.current?.type as 'slide' | 'stack') || 'slide');
   }, []);
 
   // Handle drag end
   // Note: syncToDOM and onContentChange are now called automatically by useSlideStructure
   // after state updates, so we just need to call the move functions
-  const handleDragEnd = useCallback((event: any) => {
+  const handleDragEnd = useCallback((event: DragEndEvent) => {
     const { active, over } = event;
 
     setActiveId(null);
@@ -82,48 +94,48 @@ export default function SlideOverview({
 
     if (!over) return;
 
-    const activeData = active.data.current;
-    const overData = over.data.current;
+    const activeData = active.data.current as Record<string, unknown> | undefined;
+    const overData = over.data.current as Record<string, unknown> | undefined;
 
     // Determine what was dragged and where
     if (activeData?.type === 'stack') {
       // Dragging a stack - can only drop between stacks
       if (overData?.type === 'stack-gap') {
-        moveStack(active.id, overData.index);
+        moveStack(active.id as string, overData.index as number);
       }
     } else {
       // Dragging a slide
       if (overData?.type === 'stack-gap') {
         // Drop between stacks - creates new single-slide stack
-        moveSlide(active.id, { type: 'new-stack', index: overData.index });
+        moveSlide(active.id as string, { type: 'new-stack', index: overData.index as number });
       } else if (overData?.type === 'slide-gap') {
         // Drop between slides in a stack
-        moveSlide(active.id, {
+        moveSlide(active.id as string, {
           type: 'into-stack',
-          stackId: overData.stackId,
-          index: overData.index,
+          stackId: overData.stackId as string,
+          index: overData.index as number,
         });
       } else if (overData?.type === 'new-stack-zone') {
         // Drop in "new stack" zone - creates new stack at end
-        createStack(active.id);
+        createStack(active.id as string);
       }
     }
   }, [moveSlide, moveStack, createStack]);
 
   // Handle click on a slide thumbnail - navigate and close
-  const handleSlideClick = useCallback((slideId: any, stackIndex: any, slideIndex: any) => {
+  const handleSlideClick = useCallback((slideId: string, stackIndex: number, slideIndex: number) => {
     onNavigate?.(stackIndex, slideIndex);
     onClose?.();
   }, [onNavigate, onClose]);
 
   // Handle delete slide - sync is automatic via useSlideStructure
-  const handleDeleteSlide = useCallback((slideId: any) => {
+  const handleDeleteSlide = useCallback((slideId: string) => {
     deleteSlide(slideId);
   }, [deleteSlide]);
 
   // Handle escape key to close
   useEffect(() => {
-    const handleKeyDown = (e: any) => {
+    const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         onClose?.();
       }
@@ -192,28 +204,28 @@ export default function SlideOverview({
 
         {/* Drag Overlay - shows preview of dragged item */}
         <DragOverlay>
-          {activeItem && activeType === 'slide' && (
+          {activeSlide && activeType === 'slide' && (
             <div className="opacity-80 rotate-3">
               <SlideThumbnail
-                slide={activeItem}
+                slide={activeSlide}
                 isDragging
               />
             </div>
           )}
-          {activeItem && activeType === 'stack' && (
+          {activeStack && activeType === 'stack' && (
             <div className="opacity-80 rotate-3">
               <div className="bg-gray-800 rounded-lg p-2 border-2 border-blue-500">
                 <div className="text-xs text-gray-400 mb-1">
-                  Stack ({activeItem.slides.length} slides)
+                  Stack ({activeStack.slides.length} slides)
                 </div>
-                {activeItem.slides.slice(0, 2).map((slide: any, i: any) => (
+                {activeStack.slides.slice(0, 2).map((slide: SlideData) => (
                   <div key={slide.id} className="mb-1 last:mb-0">
                     <SlideThumbnail slide={slide} small />
                   </div>
                 ))}
-                {activeItem.slides.length > 2 && (
+                {activeStack.slides.length > 2 && (
                   <div className="text-xs text-gray-500 text-center">
-                    +{activeItem.slides.length - 2} more
+                    +{activeStack.slides.length - 2} more
                   </div>
                 )}
               </div>

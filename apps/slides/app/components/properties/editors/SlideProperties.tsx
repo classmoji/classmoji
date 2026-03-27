@@ -69,18 +69,18 @@ const builtInThemeOptions = BUILTIN_THEMES.map(t => ({
   value: t,
 }));
 
-export default function SlideProperties({ element }: any) {
+export default function SlideProperties({ element }: { element: HTMLElement }) {
   const { onContentChange, setActiveColumn, getThemes, setTheme, snippets, onSaveSnippet, onUpdateSnippet, onDeleteSnippet, cssThemes, onSaveTheme, onUpdateTheme, onDeleteTheme, customThemes = [], sharedThemes = [] } = useElementSelection();
 
   // Build theme options: shared themes FIRST, then custom CSS themes, then built-in themes
   const themeOptions = [
     // Shared themes from slides.com imports (complete theme packages)
-    ...sharedThemes.map((t: any) => ({
+    ...sharedThemes.map((t) => ({
       label: `📦 ${t.name}`,
       value: t.id,
     })),
     // Custom CSS themes
-    ...customThemes.map((t: any) => ({
+    ...customThemes.map((t) => ({
       label: `${t.name} ★`,
       value: t.id,
     })),
@@ -97,22 +97,22 @@ export default function SlideProperties({ element }: any) {
   const [snippetName, setSnippetName] = useState('');
   const [snippetHtml, setSnippetHtml] = useState('');
   // When editing, store the original snippet id
-  const [editingSnippetId, setEditingSnippetId] = useState(/** @type {string | null} */ (null));
+  const [editingSnippetId, setEditingSnippetId] = useState<string | null>(null);
 
   // CSS Theme modal state (for both create and edit)
   const [showThemeModal, setShowThemeModal] = useState(false);
   const [themeName, setThemeName] = useState('');
-  const [themeType, setThemeType] = useState(/** @type {'light' | 'dark'} */ ('light'));
+  const [themeType, setThemeType] = useState<'light' | 'dark'>('light');
   const [themeCss, setThemeCss] = useState('');
   // When editing, store the original theme id
-  const [editingThemeId, setEditingThemeId] = useState(/** @type {string | null} */ (null));
+  const [editingThemeId, setEditingThemeId] = useState<string | null>(null);
 
   // Presentation theme state (from context) - single theme
   const [currentTheme, setCurrentTheme] = useState(() => getThemes().theme || 'white');
   const [currentCodeTheme, setCurrentCodeTheme] = useState(() => getThemes().codeTheme || 'github');
 
   // Detect current layout from element classes
-  function detectLayout(el: any) {
+  function detectLayout(el: HTMLElement | null) {
     if (!el) return '';
     for (const [key, className] of Object.entries(LAYOUT_CLASSES)) {
       if (className && el.classList.contains(className)) {
@@ -127,7 +127,7 @@ export default function SlideProperties({ element }: any) {
     if (element) {
       setLayout(detectLayout(element));
       setValign(element.dataset.verticalAlign || '');
-      setIsHidden((element as HTMLElement).dataset?.hidden === 'true');
+      setIsHidden(element?.dataset?.hidden === 'true');
       // Ensure column labels are set on existing columns
       updateColumnLabels(element);
     }
@@ -138,16 +138,16 @@ export default function SlideProperties({ element }: any) {
   }, [element, getThemes]);
 
   // Add data-column-label attributes to column divs
-  function updateColumnLabels(el: any) {
+  function updateColumnLabels(el: HTMLElement | null) {
     if (!el) return;
     const columns = el.querySelectorAll(':scope > div');
-    columns.forEach((col: any, i: any) => {
+    columns.forEach((col: Element, i: number) => {
       col.setAttribute('data-column-label', `Column ${i + 1}`);
     });
   }
 
   // Update layout - automatically creates column divs when switching to multi-column
-  const handleLayoutChange = useCallback((newLayout: any) => {
+  const handleLayoutChange = useCallback((newLayout: string) => {
     if (!element) return;
 
     const previousLayout = detectLayout(element);
@@ -155,25 +155,25 @@ export default function SlideProperties({ element }: any) {
     const isNowMultiColumn = newLayout !== '';
 
     // Remove all layout classes
-    Object.values(LAYOUT_CLASSES).forEach((cls: any) => {
+    Object.values(LAYOUT_CLASSES).forEach((cls) => {
       if (cls) element.classList.remove(cls);
     });
 
     // Add new layout class
-    const newClass = (LAYOUT_CLASSES as any)[newLayout];
+    const newClass = LAYOUT_CLASSES[newLayout as keyof typeof LAYOUT_CLASSES];
     if (newClass) {
       element.classList.add(newClass);
     }
 
     // If switching TO a multi-column layout, automatically set up columns
     if (isNowMultiColumn && !wasMultiColumn) {
-      const expectedCount = (LAYOUT_COLUMN_COUNT as any)[newLayout] || 2;
+      const expectedCount = LAYOUT_COLUMN_COUNT[newLayout as keyof typeof LAYOUT_COLUMN_COUNT] || 2;
       const existingDivs = element.querySelectorAll(':scope > div').length;
 
       if (existingDivs < expectedCount) {
         // Get all existing content (non-div direct children)
         const existingContent = Array.from(element.children).filter(
-          (child: any) => child.tagName !== 'DIV'
+          (child) => (child as HTMLElement).tagName !== 'DIV'
         );
 
         // Create first column with existing content
@@ -209,7 +209,7 @@ export default function SlideProperties({ element }: any) {
   }, [element, onContentChange, setActiveColumn]);
 
   // Update vertical alignment
-  const handleValignChange = useCallback((newValign: any) => {
+  const handleValignChange = useCallback((newValign: string) => {
     if (!element) return;
 
     if (newValign) {
@@ -223,14 +223,14 @@ export default function SlideProperties({ element }: any) {
   }, [element, onContentChange]);
 
   // Toggle hidden state for slide
-  const handleHiddenChange = useCallback((checked: any) => {
+  const handleHiddenChange = useCallback((checked: boolean) => {
     if (!element) return;
 
     if (checked) {
-      (element as HTMLElement).dataset!.hidden = 'true';
+      element.dataset.hidden = 'true';
       element.classList.add('slide-hidden');
     } else {
-      delete (element as HTMLElement).dataset!.hidden;
+      delete element.dataset.hidden;
       element.classList.remove('slide-hidden');
     }
 
@@ -239,12 +239,12 @@ export default function SlideProperties({ element }: any) {
   }, [element, onContentChange]);
 
   // Theme change handlers (single theme)
-  const handleThemeChange = useCallback((value: any) => {
+  const handleThemeChange = useCallback((value: string) => {
     setTheme('theme', value);
     setCurrentTheme(value);
   }, [setTheme]);
 
-  const handleCodeThemeChange = useCallback((value: any) => {
+  const handleCodeThemeChange = useCallback((value: string) => {
     setTheme('codeTheme', value);
     setCurrentCodeTheme(value);
   }, [setTheme]);
@@ -276,7 +276,7 @@ export default function SlideProperties({ element }: any) {
   }, []);
 
   // Open modal for editing an existing snippet
-  const handleEditSnippet = useCallback((/** @type {{id: string, name: string, content: string}} */ snippet: any) => {
+  const handleEditSnippet = useCallback((snippet: { id: string; name: string; content: string }) => {
     setEditingSnippetId(snippet.id);
     setSnippetName(snippet.name);
     setSnippetHtml(snippet.content);
@@ -284,7 +284,7 @@ export default function SlideProperties({ element }: any) {
   }, []);
 
   // Delete a snippet
-  const handleDeleteSnippet = useCallback((/** @type {string} */ id: any) => {
+  const handleDeleteSnippet = useCallback((id: string) => {
     onDeleteSnippet?.(id);
   }, [onDeleteSnippet]);
 
@@ -325,16 +325,16 @@ export default function SlideProperties({ element }: any) {
   }, []);
 
   // Open modal for editing an existing theme
-  const handleEditTheme = useCallback((/** @type {{id: string, name: string, type: string, content: string}} */ theme: any) => {
+  const handleEditTheme = useCallback((theme: { id: string; name: string; type: string; content: string }) => {
     setEditingThemeId(theme.id);
     setThemeName(theme.name);
-    setThemeType(/** @type {'light' | 'dark'} */ (theme.type));
+    setThemeType(theme.type as 'light' | 'dark');
     setThemeCss(theme.content);
     setShowThemeModal(true);
   }, []);
 
   // Delete a theme
-  const handleDeleteTheme = useCallback((/** @type {string} */ id: any) => {
+  const handleDeleteTheme = useCallback((id: string) => {
     onDeleteTheme?.(id);
   }, [onDeleteTheme]);
 
@@ -469,8 +469,8 @@ export default function SlideProperties({ element }: any) {
                     ),
                     onClick: handleCreateSnippet,
                   },
-                  ...(snippets && snippets.length > 0 ? [{ type: 'divider' }] : []),
-                  ...(snippets || []).map((/** @type {{id: string, name: string, content: string}} */ s: any) => ({
+                  ...(snippets && snippets.length > 0 ? [{ type: 'divider' as const }] : []),
+                  ...(snippets || []).map((s) => ({
                     key: s.id,
                     label: (
                       <div className="flex items-center justify-between w-full min-w-[180px]">
@@ -552,8 +552,8 @@ export default function SlideProperties({ element }: any) {
                     ),
                     onClick: handleCreateTheme,
                   },
-                  ...(cssThemes && cssThemes.length > 0 ? [{ type: 'divider' }] : []),
-                  ...(cssThemes || []).map((/** @type {{id: string, name: string, type: string, content: string}} */ t: any) => ({
+                  ...(cssThemes && cssThemes.length > 0 ? [{ type: 'divider' as const }] : []),
+                  ...(cssThemes || []).map((t) => ({
                     key: t.id,
                     label: (
                       <div className="flex items-center justify-between w-full min-w-[180px]">
@@ -648,7 +648,7 @@ export default function SlideProperties({ element }: any) {
             <label className="block text-sm font-medium mb-1">Snippet Name</label>
             <Input
               value={snippetName}
-              onChange={(e) => setSnippetName((e.target as any).value)}
+              onChange={(e) => setSnippetName(e.target.value)}
               placeholder="e.g., Header with Logo"
             />
           </div>
@@ -656,7 +656,7 @@ export default function SlideProperties({ element }: any) {
             <label className="block text-sm font-medium mb-1">HTML Content</label>
             <TextArea
               value={snippetHtml}
-              onChange={(e) => setSnippetHtml((e.target as any).value)}
+              onChange={(e) => setSnippetHtml(e.target.value)}
               placeholder="<div>Your HTML here...</div>"
               rows={8}
               className="font-mono text-sm"
@@ -681,7 +681,7 @@ export default function SlideProperties({ element }: any) {
               <label className="block text-sm font-medium mb-1">Theme Name</label>
               <Input
                 value={themeName}
-                onChange={(e) => setThemeName((e.target as any).value)}
+                onChange={(e) => setThemeName(e.target.value)}
                 placeholder="e.g., Company Brand"
               />
             </div>
@@ -702,7 +702,7 @@ export default function SlideProperties({ element }: any) {
             <label className="block text-sm font-medium mb-1">CSS Content</label>
             <TextArea
               value={themeCss}
-              onChange={(e) => setThemeCss((e.target as any).value)}
+              onChange={(e) => setThemeCss(e.target.value)}
               placeholder={`.reveal {\n  --r-background-color: #fff;\n  --r-main-color: #333;\n}`}
               rows={12}
               className="font-mono text-sm"

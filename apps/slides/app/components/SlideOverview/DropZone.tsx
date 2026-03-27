@@ -6,14 +6,23 @@ import { useDroppable } from '@dnd-kit/core';
  * Shows a highlighted area when dragging over it.
  * Used for both stack-level gaps and slide-level gaps within stacks.
  */
+interface DropZoneProps {
+  id: string;
+  type: 'stack-gap' | 'slide-gap';
+  index: number;
+  stackId?: string | null;
+  isVertical?: boolean;
+  activeType?: 'slide' | 'stack' | null;
+}
+
 export default function DropZone({
   id,
-  type, // 'stack-gap' | 'slide-gap'
+  type,
   index,
   stackId = null,
   isVertical = false,
   activeType = null,
-}: any) {
+}: DropZoneProps) {
   // Determine if this drop zone accepts the current drag type
   // This must be computed before useDroppable so we can disable non-accepting zones
   const canAccept =

@@ -1,6 +1,6 @@
 import { Card, Typography } from 'antd';
 import { QuestionCircleOutlined } from '@ant-design/icons';
-import ReactMarkdown from 'react-markdown';
+import ReactMarkdown, { type Components } from 'react-markdown';
 import rehypeHighlight from 'rehype-highlight';
 
 const { Text, Title } = Typography;
@@ -24,6 +24,10 @@ interface QuestionCardProps {
   questionData: QuestionData;
   isDarkMode?: boolean;
 }
+
+type MarkdownCodeProps = React.ComponentProps<'code'> & {
+  inline?: boolean;
+};
 
 const QuestionCard = ({ questionData, isDarkMode = false }: QuestionCardProps) => {
   const { question_number, total_questions, question_text, code_snippet, code_language, context } =
@@ -135,7 +139,7 @@ const QuestionCard = ({ questionData, isDarkMode = false }: QuestionCardProps) =
           rehypePlugins={[rehypeHighlight]}
           components={{
             p: ({ children }) => <p style={{ margin: 0, lineHeight: '1.6' }}>{children}</p>,
-            code: ({ inline, children, ...props }: any) => // eslint-disable-line @typescript-eslint/no-explicit-any -- ReactMarkdown component overrides have complex union types
+            code: ({ inline, children, ...props }: MarkdownCodeProps) =>
               inline ? (
                 <code
                   style={{

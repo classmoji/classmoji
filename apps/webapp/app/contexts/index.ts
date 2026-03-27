@@ -1,4 +1,5 @@
 import { createContext } from 'react';
+import type { FetcherWithComponents } from 'react-router';
 import type { ToastPosition } from 'react-toastify';
 import type { AppUser } from '~/types';
 
@@ -7,7 +8,7 @@ export const UserContext = createContext<{ user: AppUser | null }>({
 });
 
 export interface FetcherContextValue {
-  fetcher: any; // eslint-disable-line @typescript-eslint/no-explicit-any -- fetcher.data and submit shapes vary per route; no single generic satisfies all consumers
+  fetcher: FetcherWithComponents<unknown> | null;
   notify: (action: string, message?: string, position?: ToastPosition) => void;
 }
 

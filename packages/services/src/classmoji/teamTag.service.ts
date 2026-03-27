@@ -1,7 +1,7 @@
-import prisma from '@classmoji/database';
+import getPrisma from '@classmoji/database';
 
 export const create = async (teamId: string, tagId: string) => {
-  return prisma!.teamTag.create({
+  return getPrisma().teamTag.create({
     data: {
       team_id: teamId,
       tag_id: tagId,
@@ -10,7 +10,7 @@ export const create = async (teamId: string, tagId: string) => {
 };
 
 const deleteTeamTag = async (id: string) => {
-  return prisma!.teamTag.delete({
+  return getPrisma().teamTag.delete({
     where: { id },
   });
 };

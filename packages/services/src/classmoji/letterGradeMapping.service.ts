@@ -1,7 +1,10 @@
-import prisma from '@classmoji/database';
+import getPrisma from '@classmoji/database';
+import type { Prisma } from '@prisma/client';
 
-export const save = async (classroomId: string, values: { letter_grade: string; [key: string]: any }) => {
-  return prisma!.letterGradeMapping.upsert({
+type LetterGradeMappingInput = Prisma.LetterGradeMappingUncheckedCreateWithoutClassroomInput;
+
+export const save = async (classroomId: string, values: LetterGradeMappingInput) => {
+  return getPrisma().letterGradeMapping.upsert({
     where: {
       classroom_id_letter_grade: {
         classroom_id: classroomId,
@@ -10,18 +13,18 @@ export const save = async (classroomId: string, values: { letter_grade: string; 
     },
     update: values,
     create: { classroom_id: classroomId, ...values },
-  } as any);
+  });
 };
 
 export const findByClassroomId = async (classroomId: string) => {
-  return prisma!.letterGradeMapping.findMany({
+  return getPrisma().letterGradeMapping.findMany({
     where: { classroom_id: classroomId },
     orderBy: { min_grade: 'desc' },
   });
 };
 
 const deleteMapping = async (classroomId: string, letterGrade: string) => {
-  return prisma!.letterGradeMapping.delete({
+  return getPrisma().letterGradeMapping.delete({
     where: {
       classroom_id_letter_grade: {
         classroom_id: classroomId,

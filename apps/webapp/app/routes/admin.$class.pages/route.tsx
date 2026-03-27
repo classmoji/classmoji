@@ -5,7 +5,7 @@ import { IconPlus, IconEyeOff, IconLock, IconWorld, IconMenu2 } from '@tabler/ic
 import { toast } from 'react-toastify';
 import { assertClassroomAccess } from '~/utils/helpers';
 import { ClassmojiService } from '@classmoji/services';
-import prisma from '@classmoji/database';
+import getPrisma from '@classmoji/database';
 import { PageHeader, TableActionButtons, RecentViewers } from '~/components';
 import type { Route } from './+types/route';
 
@@ -87,7 +87,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
       is_public = true;
     }
 
-    await prisma!.page.update({
+    await getPrisma().page.update({
       where: { id: pageId },
       data: { is_draft, is_public },
     });
@@ -96,7 +96,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
 
   // Handle boolean toggles (show_in_student_menu)
   if (field === 'show_in_student_menu') {
-    await prisma!.page.update({
+    await getPrisma().page.update({
       where: { id: pageId },
       data: { show_in_student_menu: value === 'true' },
     });

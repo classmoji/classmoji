@@ -92,7 +92,11 @@ export const action = async ({ request }: Route.ActionArgs) => {
       );
 
       // Prepare files to upload
-      const filesToUpload: any[] = []; // eslint-disable-line @typescript-eslint/no-explicit-any -- mixed content types (File objects and strings)
+      const filesToUpload: Array<{
+        path: string;
+        content: File;
+        encoding: 'binary';
+      }> = [];
 
       // Add all matched images
       imageMap.forEach(imageInfo => {

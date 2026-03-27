@@ -15,9 +15,11 @@ import { useState } from 'react';
  * - mobileOpen: Boolean - whether sidebar is open on mobile
  * - onMobileClose: Function - close callback for mobile
  */
+import type { PageSummary, ClassroomSummary } from '~/types/pages.ts';
+
 interface PagesSidebarProps {
-  pages: any[];
-  classroom: any;
+  pages: PageSummary[];
+  classroom: ClassroomSummary;
   currentPageId?: string;
   canEdit: boolean;
   collapsed: boolean;
@@ -84,7 +86,7 @@ const PagesSidebar = ({
         {!collapsed && (
           <div className="flex items-center gap-2 min-w-0">
             <img
-              src={classroom.git_organization?.avatar_url || classroom.avatar_url}
+              src={classroom.git_organization?.avatar_url || classroom.avatar_url || undefined}
               alt={classroom.git_organization?.login || classroom.name}
               className="h-6 w-6 rounded-full border-2 border-gray-200 dark:border-gray-600 flex-shrink-0"
             />

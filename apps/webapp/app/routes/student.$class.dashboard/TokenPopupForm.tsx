@@ -11,7 +11,22 @@ import useStore from '~/store';
 import tokenImage from '~/assets/images/token.png';
 import coinsSound from '~/assets/sounds/coins.mp3';
 
-const TokenPopupForm = ({ repositoryAssignment, balance }: any) => { // eslint-disable-line @typescript-eslint/no-explicit-any -- complex Prisma RepositoryAssignment shape from loader
+interface TokenPopupRepositoryAssignment {
+  id: string;
+  num_late_hours: number;
+  is_late_override: boolean;
+  assignment: {
+    student_deadline: string | Date;
+    tokens_per_hour?: number | null;
+  };
+}
+
+interface TokenPopupFormProps {
+  repositoryAssignment: TokenPopupRepositoryAssignment;
+  balance: number | null | undefined;
+}
+
+const TokenPopupForm = ({ repositoryAssignment, balance }: TokenPopupFormProps) => {
   const [hours, setHours] = useState(1);
   const { fetcher, notify } = useNotifiedFetcher();
   const [open, setOpen] = useState(false);
@@ -42,7 +57,10 @@ const TokenPopupForm = ({ repositoryAssignment, balance }: any) => { // eslint-d
     setHours(time);
   };
 
-  const onPurchaseExtensionHours = (hours: any, repoAssignment: any) => { // eslint-disable-line @typescript-eslint/no-explicit-any -- Prisma shape
+  const onPurchaseExtensionHours = (
+    purchaseHours: number,
+    repoAssignment: TokenPopupRepositoryAssignment
+  ) => {
     // Validate all required values exist
     if (balance === null || balance === undefined) {
       toast.error('Unable to determine token balance. Please refresh the page.');
@@ -56,13 +74,13 @@ const TokenPopupForm = ({ repositoryAssignment, balance }: any) => { // eslint-d
       return;
     }
 
-    if (!hours || hours <= 0) {
+    if (!purchaseHours || purchaseHours <= 0) {
       toast.error('Please select a valid number of hours.');
       hide();
       return;
     }
 
-    const tokenCost = repoAssignment.assignment.tokens_per_hour * hours;
+    const tokenCost = repoAssignment.assignment.tokens_per_hour * purchaseHours;
     if (balance < tokenCost) {
       toast.error(`Insufficient tokens. You need ${tokenCost} tokens but only have ${balance}.`);
       hide();
@@ -74,10 +92,10 @@ const TokenPopupForm = ({ repositoryAssignment, balance }: any) => { // eslint-d
       {
         student_id: user!.id,
         classroom_id: classroom!.id,
-        amount: repoAssignment.assignment.tokens_per_hour * hours * -1,
-        hours_purchased: hours,
+        amount: repoAssignment.assignment.tokens_per_hour * purchaseHours * -1,
+        hours_purchased: purchaseHours,
         type: 'PURCHASE',
-        description: `Purchase of ${hours} hour(s).`,
+        description: `Purchase of ${purchaseHours} hour(s).`,
         repository_assignment_id: repoAssignment.id,
       },
       {

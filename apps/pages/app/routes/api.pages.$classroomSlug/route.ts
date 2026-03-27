@@ -4,8 +4,8 @@ import { ClassmojiService, getAuthSession } from '~/utils/db.server.ts';
  * GET /api/pages/:classroomSlug
  * Returns list of pages for the classroom, filtered by user role
  */
-export const loader = async ({ params, request }: any) => {
-  const { classroomSlug } = params;
+export const loader = async ({ params, request }: { params: Record<string, string | undefined>; request: Request }) => {
+  const classroomSlug = params.classroomSlug!;
 
   // Fetch classroom
   const classroom = await ClassmojiService.classroom.findBySlug(classroomSlug);
@@ -21,7 +21,7 @@ export const loader = async ({ params, request }: any) => {
     // Not authenticated - will show public pages only
   }
 
-  let pages: any[] = [];
+  let pages: Awaited<ReturnType<typeof ClassmojiService.page.findByClassroomId>> = [];
 
   if (authData) {
     // Get membership
@@ -57,7 +57,7 @@ export const loader = async ({ params, request }: any) => {
   }
 
   return Response.json({
-    pages: pages.map((p: any) => ({
+    pages: pages.map((p) => ({
       id: p.id,
       title: p.title,
       slug: p.slug,

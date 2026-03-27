@@ -66,7 +66,7 @@ export function useImportStream(importId: string | null) {
           setError(data.message || 'Import failed');
           eventSource.close();
         }
-      } catch (e: any) {
+      } catch (e: unknown) {
         console.error('[useImportStream] Failed to parse event:', e);
       }
     };

@@ -106,7 +106,7 @@ export function useImageProcessor() {
   /**
    * Apply crop to an image
    */
-  const cropImage = useCallback(async (file: File, crop: any, options: { quality?: number; format?: string | null; displayedWidth?: number; displayedHeight?: number } = {}): Promise<Blob> => {
+  const cropImage = useCallback(async (file: File, crop: { x: number; y: number; width: number; height: number }, options: { quality?: number; format?: string | null; displayedWidth?: number; displayedHeight?: number } = {}): Promise<Blob> => {
     const {
       quality = 0.85,
       format = null,
@@ -175,7 +175,7 @@ export function useImageProcessor() {
   /**
    * Process an image with format-aware handling
    */
-  const processImage = useCallback(async (file: File, options: any = {}): Promise<{ blob: Blob; wasProcessed: boolean; originalSize: number; newSize: number; format: string }> => {
+  const processImage = useCallback(async (file: File, options: { crop?: { x: number; y: number; width: number; height: number }; displayedWidth?: number; displayedHeight?: number; maxWidth?: number; maxHeight?: number; quality?: number } = {}): Promise<{ blob: Blob; wasProcessed: boolean; originalSize: number; newSize: number; format: string }> => {
     const { crop, displayedWidth, displayedHeight, maxWidth = 1920, maxHeight = 1080, quality = 0.85 } = options;
     const isGif = file.type === 'image/gif';
     const isPng = file.type === 'image/png';

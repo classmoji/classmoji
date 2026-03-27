@@ -15,8 +15,19 @@ import {
 } from '@classmoji/services';
 import { ActionTypes, roleSettings } from '~/constants';
 import useStore from '~/store';
-import prisma from '@classmoji/database';
+import getPrisma from '@classmoji/database';
 import type { Route } from './+types/route';
+import type { AppUser, MembershipOrganization, MembershipWithOrganization } from '~/types';
+
+type SelectOrganizationRole = keyof typeof roleSettings;
+type SelectOrganizationCardRole = SelectOrganizationRole | 'TEACHER';
+
+interface SelectOrganizationMembership extends MembershipWithOrganization {
+  has_accepted_invite: boolean;
+  organization: MembershipOrganization & {
+    is_active?: boolean;
+  };
+}
 
 export const loader = async ({ request }: Route.LoaderArgs) => {
   const authData = await getAuthSession(request);
@@ -56,21 +67,30 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
   }
 
   if (user) {
-    const userRecord = user as Record<string, unknown>;
-    userRecord.memberships = (userRecord.memberships as Array<Record<string, unknown>>).filter(
-      ({ organization }: any) => organization.is_active // eslint-disable-line @typescript-eslint/no-explicit-any -- Prisma membership
-    );
+    const typedUser = user as AppUser;
+    const memberships = (typedUser.memberships ?? []) as SelectOrganizationMembership[];
+    typedUser.memberships = memberships.filter(({ organization }) => organization.is_active !== false);
+    const groupedMemberships = (typedUser.memberships ?? []).reduce<
+      Record<string, SelectOrganizationMembership[]>
+    >((groups, membership) => {
+      const period = `${membership.organization.year ?? 'Unknown'} ${membership.organization.term ?? 'Unknown'}`;
+      if (!groups[period]) {
+        groups[period] = [];
+      }
+      groups[period].push(membership);
+      return groups;
+    }, {});
+
+    return {
+      user,
+      memberships: groupedMemberships,
+      githubAppName: process.env.GITHUB_APP_NAME,
+    };
   } else {
     // User not found by GitHub login - redirect to connect account flow
     // where they can link their GitHub to their pre-registered school account
     return redirect('/registration');
   }
-
-  return {
-    user,
-    memberships: groupByYearAndTerm((user as Record<string, unknown>)?.memberships as Parameters<typeof groupByYearAndTerm>[0]),
-    githubAppName: process.env.GITHUB_APP_NAME,
-  };
 };
 
 const SelectOrganization = ({ loaderData }: Route.ComponentProps) => {
@@ -89,10 +109,11 @@ const SelectOrganization = ({ loaderData }: Route.ComponentProps) => {
     return null;
   }
 
-  const acceptInvite = (organization: any) => { // eslint-disable-line @typescript-eslint/no-explicit-any -- Prisma organization
+  const acceptInvite = (organization: MembershipOrganization | null) => {
+    if (!organization || !user.login) return;
     notify(ActionTypes.SEND_INVITATION, 'Sending you Github invite...');
-    fetcher!.submit(
-      { student: user, organization },
+    fetcher?.submit(
+      { student_login: user.login, organization_login: organization.login },
       {
         method: 'post',
         encType: 'application/json',
@@ -101,12 +122,18 @@ const SelectOrganization = ({ loaderData }: Route.ComponentProps) => {
     );
     close();
   };
-  const onCardClick = (role: any, classroomData: any, has_accepted_invite: any) => { // eslint-disable-line @typescript-eslint/no-explicit-any -- Prisma membership data
-    if (has_accepted_invite || role === 'OWNER') {
+  const onCardClick = (
+    role: SelectOrganizationCardRole,
+    classroomData: MembershipOrganization,
+    hasAcceptedInvite: boolean
+  ) => {
+    const resolvedRole = role === 'TEACHER' ? 'OWNER' : role;
+
+    if (hasAcceptedInvite || resolvedRole === 'OWNER') {
       // Students go to class root (let student.$class._index handle default page redirect)
       // Admins/Assistants go directly to dashboard
-      const suffix = role === 'STUDENT' ? '' : '/dashboard';
-      navigate(`${roleSettings[role as keyof typeof roleSettings].path}/${classroomData.login}${suffix}`);
+      const suffix = resolvedRole === 'STUDENT' ? '' : '/dashboard';
+      navigate(`${roleSettings[resolvedRole].path}/${classroomData.login}${suffix}`);
     } else {
       // show modal to send Github invite
       setClassroom(classroomData);
@@ -114,7 +141,7 @@ const SelectOrganization = ({ loaderData }: Route.ComponentProps) => {
     }
   };
 
-  const membershipsByPeriod = memberships as Record<string, any[]>;
+  const membershipsByPeriod = memberships as Record<string, SelectOrganizationMembership[]>;
   const formattedMemberships = Object.keys(membershipsByPeriod)
     .reverse()
     .map(period => {
@@ -124,7 +151,11 @@ const SelectOrganization = ({ loaderData }: Route.ComponentProps) => {
             <h1 className="text-xl mb-5 dark:text-gray-200">{period}</h1>
           )}
           <div className="flex flex-wrap gap-12 items-center">
-            {membershipsByPeriod[period].map(({ organization, role, has_accepted_invite }: any, i: number) => { // eslint-disable-line @typescript-eslint/no-explicit-any -- Prisma membership
+            {membershipsByPeriod[period].map(({ organization, role, has_accepted_invite }, i: number) => {
+              const displayRole =
+                has_accepted_invite || role === 'OWNER'
+                  ? (role as SelectOrganizationCardRole)
+                  : 'PENDING INVITE';
               return (
                 <div
                   key={organization.id + i}
@@ -133,12 +164,11 @@ const SelectOrganization = ({ loaderData }: Route.ComponentProps) => {
                 >
                   <button
                     className="cursor-pointer w-full"
-                    onClick={() => onCardClick(role, organization, has_accepted_invite)}
+                    onClick={() =>
+                      onCardClick(role as SelectOrganizationCardRole, organization, has_accepted_invite)
+                    }
                   >
-                    <ClassroomCard
-                      classroom={organization}
-                      role={has_accepted_invite || role === 'OWNER' ? role : 'PENDING INVITE'}
-                    />
+                    <ClassroomCard classroom={organization} role={displayRole} />
                   </button>
                 </div>
               );
@@ -180,12 +210,15 @@ const SelectOrganization = ({ loaderData }: Route.ComponentProps) => {
 };
 
 export const action = checkAuth(async ({ request }: { request: Request }) => {
-  const { student, organization } = await request.json();
+  const { student_login, organization_login } = (await request.json()) as {
+    student_login: string;
+    organization_login: string;
+  };
 
   // organization is actually a classroom (mapped for backward compat)
   // Need to get the actual git organization login for GitHub API
-  const classroom = await prisma!.classroom.findUnique({
-    where: { slug: organization.login }, // organization.login is actually classroom.slug
+  const classroom = await getPrisma().classroom.findUnique({
+    where: { slug: organization_login }, // organization_login is actually classroom.slug
     include: { git_organization: true },
   });
 
@@ -201,7 +234,7 @@ export const action = checkAuth(async ({ request }: { request: Request }) => {
     classroom,
     'STUDENT'
   );
-  const githubUser = await gitProvider.getUserByLogin(student.login);
+  const githubUser = await gitProvider.getUserByLogin(student_login);
   await gitProvider.inviteToOrganization(classroom.git_organization.login, String(githubUser.id), [
     team.id,
   ]);

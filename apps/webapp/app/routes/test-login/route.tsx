@@ -1,7 +1,7 @@
 import { redirect } from 'react-router';
 import type { Route } from './+types/route';
 import { GitHubProvider } from '@classmoji/services';
-import prisma from '@classmoji/database';
+import getPrisma from '@classmoji/database';
 
 /**
  * Role configuration for test login.
@@ -77,7 +77,7 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
   try {
     // DB-first lookup: Check if this token is already stored in an account
     // This avoids GitHub API calls after the first login with each token
-    let account = await prisma!.account.findFirst({
+    let account = await getPrisma().account.findFirst({
       where: {
         provider_id: 'github',
         access_token: githubToken,
@@ -93,7 +93,7 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
       const githubUserId = String(data.id);
 
       // Now find the account by GitHub ID
-      account = await prisma!.account.findFirst({
+      account = await getPrisma().account.findFirst({
         where: {
           provider_id: 'github',
           account_id: githubUserId,
@@ -109,7 +109,7 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
       }
 
       // Store the token for future lookups
-      await prisma!.account.update({
+      await getPrisma().account.update({
         where: { id: account.id },
         data: { access_token: githubToken },
       });
@@ -126,7 +126,7 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
     const sessionToken = crypto.randomUUID();
     const expiresAt = new Date(Date.now() + 8 * 60 * 60 * 1000); // 8 hours
 
-    await prisma!.session.create({
+    await getPrisma().session.create({
       data: {
         token: sessionToken,
         user_id: user.id,
@@ -143,7 +143,7 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
     // which makes a GitHub API call that can be rate-limited
     const expectedMembershipRole = ROLE_TO_MEMBERSHIP[role];
     const testClassroom = process.env.TEST_CLASSROOM || 'classmoji-dev-winter-2025';
-    const membership = await prisma!.classroomMembership.findFirst({
+    const membership = await getPrisma().classroomMembership.findFirst({
       where: {
         user_id: user.id,
         role: expectedMembershipRole as 'OWNER' | 'ASSISTANT' | 'STUDENT',

@@ -1,6 +1,15 @@
 import { useDraggable } from '@dnd-kit/core';
 import SlideThumbnail from './SlideThumbnail';
 import DropZone from './DropZone';
+import type { StackData, SlideData } from './hooks/useSlideStructure';
+
+interface SlideGridProps {
+  stacks: StackData[];
+  onSlideClick: (slideId: string, stackIndex: number, slideIndex: number) => void;
+  onDeleteSlide: (slideId: string) => void;
+  activeId: string | null;
+  activeType: 'slide' | 'stack' | null;
+}
 
 /**
  * SlideGrid - Horizontal grid of stacks
@@ -14,9 +23,9 @@ export default function SlideGrid({
   onDeleteSlide,
   activeId,
   activeType,
-}: any) {
+}: SlideGridProps) {
   // Count total slides to know if we can delete
-  const totalSlides = stacks.reduce((sum: any, stack: any) => sum + stack.slides.length, 0);
+  const totalSlides = stacks.reduce((sum: number, stack) => sum + stack.slides.length, 0);
   const canDelete = totalSlides > 1;
 
   // Interleave stacks with drop zones as flat array for proper flex stretching
@@ -34,7 +43,7 @@ export default function SlideGrid({
   );
 
   // Add stacks with drop zones after each
-  stacks.forEach((stack: any, stackIndex: any) => {
+  stacks.forEach((stack, stackIndex) => {
     items.push(
       <DraggableStack
         key={stack.id}
@@ -69,6 +78,16 @@ export default function SlideGrid({
 /**
  * DraggableStack - A stack container with drag handle
  */
+interface DraggableStackProps {
+  stack: StackData;
+  stackIndex: number;
+  onSlideClick: (slideId: string, stackIndex: number, slideIndex: number) => void;
+  onDeleteSlide: (slideId: string) => void;
+  activeId: string | null;
+  activeType: 'slide' | 'stack' | null;
+  canDelete: boolean;
+}
+
 function DraggableStack({
   stack,
   stackIndex,
@@ -77,7 +96,7 @@ function DraggableStack({
   activeId,
   activeType,
   canDelete,
-}: any) {
+}: DraggableStackProps) {
   // Stack is draggable via the handle
   const {
     attributes,
@@ -124,7 +143,7 @@ function DraggableStack({
           activeType={activeType}
         />
 
-        {stack.slides.map((slide: any, slideIndex: any) => (
+        {stack.slides.map((slide, slideIndex) => (
           <div key={slide.id}>
             <DraggableSlide
               slide={slide}
@@ -156,6 +175,17 @@ function DraggableStack({
 /**
  * DraggableSlide - Individual slide thumbnail that can be dragged
  */
+interface DraggableSlideProps {
+  slide: SlideData;
+  stackIndex: number;
+  slideIndex: number;
+  onSlideClick: (slideId: string, stackIndex: number, slideIndex: number) => void;
+  onDeleteSlide: (slideId: string) => void;
+  activeId: string | null;
+  canDelete: boolean;
+  isInStack: boolean;
+}
+
 function DraggableSlide({
   slide,
   stackIndex,
@@ -165,7 +195,7 @@ function DraggableSlide({
   activeId,
   canDelete,
   isInStack,
-}: any) {
+}: DraggableSlideProps) {
   const {
     attributes,
     listeners,

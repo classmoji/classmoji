@@ -1,13 +1,16 @@
 import { Result, Button } from 'antd';
 import { IconAlertTriangle } from '@tabler/icons-react';
-import { ErrorBoundary as ReactErrorBoundary } from 'react-error-boundary';
-// eslint-disable-next-line @typescript-eslint/no-explicit-any -- react-error-boundary FallbackProps error type is unknown
-interface ErrorFallbackProps {
-  error: any; // eslint-disable-line @typescript-eslint/no-explicit-any -- error object shape unknown at boundary
-  resetErrorBoundary: () => void;
-}
+import { ErrorBoundary as ReactErrorBoundary, type FallbackProps } from 'react-error-boundary';
 
-function ErrorFallback({ error, resetErrorBoundary }: ErrorFallbackProps) {
+const getErrorMessage = (error: unknown) => {
+  return error instanceof Error ? error.message : 'Unknown error';
+};
+
+const getErrorStack = (error: unknown): string | null => {
+  return error instanceof Error && typeof error.stack === 'string' ? error.stack : null;
+};
+
+function ErrorFallback({ error, resetErrorBoundary }: FallbackProps) {
   const isDevelopment = import.meta.env.MODE === 'development';
 
   const handleReset = () => {
@@ -26,7 +29,7 @@ function ErrorFallback({ error, resetErrorBoundary }: ErrorFallbackProps) {
         title="Something went wrong"
         subTitle={
           isDevelopment
-            ? error?.message
+            ? getErrorMessage(error)
             : "We're sorry, but something unexpected happened. Please try refreshing the page or contact support if the problem persists."
         }
         extra={[
@@ -38,14 +41,16 @@ function ErrorFallback({ error, resetErrorBoundary }: ErrorFallbackProps) {
           </Button>,
         ]}
       >
-        {isDevelopment && error && (
+        {isDevelopment && Boolean(error) && (
           <div className="mt-6 text-left">
             <details className="cursor-pointer">
               <summary className="text-sm font-medium text-gray-700 dark:text-gray-300">
                 Error Details (Development Only)
               </summary>
               <pre className="mt-2 p-4 bg-gray-100 dark:bg-gray-800 rounded-md text-xs overflow-auto max-h-96">
-                <code className="text-red-600 dark:text-red-400">{error?.stack}</code>
+                <code className="text-red-600 dark:text-red-400">
+                  {String(getErrorStack(error) ?? '')}
+                </code>
               </pre>
             </details>
           </div>

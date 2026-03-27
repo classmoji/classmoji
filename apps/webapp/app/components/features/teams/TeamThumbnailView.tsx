@@ -1,6 +1,13 @@
 import _ from 'lodash';
 
-const TeamThumbnailView = ({ team }: any) => { // eslint-disable-line @typescript-eslint/no-explicit-any -- accepts Prisma Team shape which varies by query
+interface TeamThumbnailViewProps {
+  team: {
+    avatar_url: string;
+    name: string;
+  };
+}
+
+const TeamThumbnailView = ({ team }: TeamThumbnailViewProps) => {
   const { avatar_url, name } = team;
   return (
     <div className="flex gap-3">

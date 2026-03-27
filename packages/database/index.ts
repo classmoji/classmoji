@@ -128,14 +128,20 @@ function createPrismaClient() {
   }) as PrismaClient;
 }
 
-let prisma: PrismaClient | undefined;
+let _prisma: PrismaClient | null = null;
+
+const disconnectPrisma = async () => {
+  if (_prisma) {
+    await _prisma.$disconnect();
+  }
+};
 
 if (typeof window === 'undefined') {
-  prisma = createPrismaClient();
+  _prisma = createPrismaClient();
 
   const gracefulShutdown = async (signal: string) => {
     console.log(`Received ${signal}. Closing Prisma connection...`);
-    await prisma!.$disconnect();
+    await disconnectPrisma();
     // eslint-disable-next-line no-process-exit
     process.exit(0);
   };
@@ -143,22 +149,27 @@ if (typeof window === 'undefined') {
   process.on('SIGINT', gracefulShutdown);
   process.on('SIGTERM', gracefulShutdown);
   process.on('beforeExit', async () => {
-    await prisma!.$disconnect();
+    await disconnectPrisma();
   });
 
   process.on('uncaughtException', async (error: Error) => {
     console.error('Uncaught Exception:', error);
-    await prisma!.$disconnect();
+    await disconnectPrisma();
     // eslint-disable-next-line no-process-exit
     process.exit(1);
   });
 
   process.on('unhandledRejection', async (reason: unknown, promise: Promise<unknown>) => {
     console.error('Unhandled Rejection at:', promise, 'reason:', reason);
-    await prisma!.$disconnect();
+    await disconnectPrisma();
     // eslint-disable-next-line no-process-exit
     process.exit(1);
   });
 }
 
-export default prisma;
+export function getPrisma(): PrismaClient {
+  if (!_prisma) throw new Error('[database] Prisma client accessed before initialization. Ensure the server has initialized before calling getPrisma().');
+  return _prisma;
+}
+
+export default getPrisma;

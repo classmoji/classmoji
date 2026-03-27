@@ -1,5 +1,13 @@
-import prisma from '@classmoji/database';
+import getPrisma from '@classmoji/database';
 import { titleToIdentifier } from '@classmoji/utils';
+import type { Prisma } from '@prisma/client';
+
+type ModuleImportClient = Prisma.TransactionClient | ReturnType<typeof getPrisma>;
+
+type SourceAssignmentWithLegacyFields = Prisma.AssignmentGetPayload<Record<string, never>> & {
+  branch?: string | null;
+  workflow_file?: string | null;
+};
 
 /**
  * Clone or find an existing tag in the target classroom
@@ -8,7 +16,11 @@ import { titleToIdentifier } from '@classmoji/utils';
  * @param {Object} [tx] - Optional Prisma transaction client
  * @returns {Promise<Object>} - The cloned or existing tag
  */
-export const cloneTag = async (sourceTagId: string, targetClassroomId: string, tx: any = prisma) => {
+export const cloneTag = async (
+  sourceTagId: string,
+  targetClassroomId: string,
+  tx: ModuleImportClient = getPrisma()
+) => {
   const sourceTag = await tx.tag.findUnique({
     where: { id: sourceTagId },
   });
@@ -49,33 +61,40 @@ export const cloneTag = async (sourceTagId: string, targetClassroomId: string, t
  * @param {Object} [tx] - Optional Prisma transaction client
  * @returns {Promise<Object>} - The cloned assignment
  */
-export const cloneAssignment = async (sourceAssignmentId: string, targetModuleId: string, options: { stripDeadlines?: boolean } = {}, tx: any = prisma) => {
+export const cloneAssignment = async (
+  sourceAssignmentId: string,
+  targetModuleId: string,
+  options: { stripDeadlines?: boolean } = {},
+  tx: ModuleImportClient = getPrisma()
+) => {
   const { stripDeadlines = true } = options;
 
-  const sourceAssignment = await tx.assignment.findUnique({
+  const sourceAssignment = (await tx.assignment.findUnique({
     where: { id: sourceAssignmentId },
-  });
+  })) as SourceAssignmentWithLegacyFields | null;
 
   if (!sourceAssignment) {
     throw new Error(`Source assignment not found: ${sourceAssignmentId}`);
   }
 
+  const assignmentCreateData: unknown = {
+    module_id: targetModuleId,
+    title: sourceAssignment.title,
+    weight: sourceAssignment.weight,
+    is_published: false,
+    description: sourceAssignment.description || '',
+    tokens_per_hour: sourceAssignment.tokens_per_hour || 0,
+    branch: sourceAssignment.branch,
+    workflow_file: sourceAssignment.workflow_file,
+    // Conditionally strip deadlines
+    student_deadline: stripDeadlines ? null : sourceAssignment.student_deadline,
+    grader_deadline: stripDeadlines ? null : sourceAssignment.grader_deadline,
+    release_at: stripDeadlines ? null : sourceAssignment.release_at,
+    grades_released: false,
+  };
+  // TODO: narrow further once legacy assignment fields are aligned with the generated Prisma schema.
   return tx.assignment.create({
-    data: {
-      module_id: targetModuleId,
-      title: sourceAssignment.title,
-      weight: sourceAssignment.weight,
-      is_published: false,
-      description: sourceAssignment.description || '',
-      tokens_per_hour: sourceAssignment.tokens_per_hour || 0,
-      branch: sourceAssignment.branch,
-      workflow_file: sourceAssignment.workflow_file,
-      // Conditionally strip deadlines
-      student_deadline: stripDeadlines ? null : sourceAssignment.student_deadline,
-      grader_deadline: stripDeadlines ? null : sourceAssignment.grader_deadline,
-      release_at: stripDeadlines ? null : sourceAssignment.release_at,
-      grades_released: false,
-    },
+    data: assignmentCreateData as Prisma.AssignmentUncheckedCreateInput,
   });
 };
 
@@ -90,7 +109,13 @@ export const cloneAssignment = async (sourceAssignmentId: string, targetModuleId
  * @param {Object} [tx] - Optional Prisma transaction client
  * @returns {Promise<Object>} - The cloned quiz
  */
-export const cloneQuiz = async (sourceQuizId: string, targetClassroomId: string, targetModuleId: string | null, options: { setDraft?: boolean; stripDeadlines?: boolean } = {}, tx: any = prisma) => {
+export const cloneQuiz = async (
+  sourceQuizId: string,
+  targetClassroomId: string,
+  targetModuleId: string | null,
+  options: { setDraft?: boolean; stripDeadlines?: boolean } = {},
+  tx: ModuleImportClient = getPrisma()
+) => {
   const { setDraft = true, stripDeadlines = true } = options;
 
   const sourceQuiz = await tx.quiz.findUnique({
@@ -133,7 +158,12 @@ export const cloneQuiz = async (sourceQuizId: string, targetClassroomId: string,
  * @param {Object} [tx] - Optional Prisma transaction client
  * @returns {Promise<Object>} - The cloned module with relations
  */
-export const cloneModule = async (sourceModuleId: string, targetClassroomId: string, options: { includeAssignments?: boolean; includeQuizzes?: boolean; stripDeadlines?: boolean } = {}, tx: any = prisma) => {
+export const cloneModule = async (
+  sourceModuleId: string,
+  targetClassroomId: string,
+  options: { includeAssignments?: boolean; includeQuizzes?: boolean; stripDeadlines?: boolean } = {},
+  tx: ModuleImportClient = getPrisma()
+) => {
   const {
     includeAssignments = true,
     includeQuizzes = false,
@@ -175,7 +205,11 @@ export const cloneModule = async (sourceModuleId: string, targetClassroomId: str
     },
   });
 
-  const results: { module: typeof newModule; assignments: any[]; quizzes: any[] } = {
+  const results: {
+    module: typeof newModule;
+    assignments: Awaited<ReturnType<typeof cloneAssignment>>[];
+    quizzes: Awaited<ReturnType<typeof cloneQuiz>>[];
+  } = {
     module: newModule,
     assignments: [],
     quizzes: [],
@@ -224,8 +258,13 @@ export const cloneModule = async (sourceModuleId: string, targetClassroomId: str
 export const cloneModulesWithRelations = async (targetClassroomId: string, moduleConfigs: Array<{ id: string; includeQuizzes?: boolean }>, options: { stripDeadlines?: boolean } = {}) => {
   const { stripDeadlines = true } = options;
 
-  return prisma!.$transaction(async tx => {
-    const results: { modules: any[]; assignments: any[]; quizzes: any[]; tags: any[] } = {
+  return getPrisma().$transaction(async tx => {
+    const results: {
+      modules: Awaited<ReturnType<typeof cloneModule>>['module'][];
+      assignments: Awaited<ReturnType<typeof cloneAssignment>>[];
+      quizzes: Awaited<ReturnType<typeof cloneQuiz>>[];
+      tags: Prisma.TagUncheckedCreateInput[];
+    } = {
       modules: [],
       assignments: [],
       quizzes: [],
@@ -259,7 +298,7 @@ export const cloneModulesWithRelations = async (targetClassroomId: string, modul
  * @returns {Promise<Object[]>} - Modules with relation counts
  */
 export const getModulesForImport = async (classroomId: string) => {
-  return prisma!.module.findMany({
+  return getPrisma().module.findMany({
     where: { classroom_id: classroomId },
     select: {
       id: true,

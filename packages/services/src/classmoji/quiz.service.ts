@@ -1,7 +1,53 @@
-import prisma from '@classmoji/database';
+import getPrisma from '@classmoji/database';
+import type {
+  Prisma,
+  QuizGradingStrategy,
+  QuizStatus,
+  Role,
+} from '@prisma/client';
 
-export const create = async (data: any) => {
-  return prisma!.quiz.create({
+interface QuizCreateInput {
+  name: string;
+  classroomId: string;
+  moduleId?: string | null;
+  systemPrompt?: string | null;
+  rubricPrompt: string;
+  subject?: string | null;
+  difficultyLevel?: string | null;
+  dueDate?: string | Date | null;
+  status?: QuizStatus;
+  weight?: string | number | null;
+  questionCount?: string | number | null;
+  includeCodeContext?: boolean;
+  maxAttempts?: string | number | null;
+  gradingStrategy?: QuizGradingStrategy;
+}
+
+interface QuizUpdateInput {
+  name?: string;
+  moduleId?: string | null;
+  systemPrompt?: string | null;
+  rubricPrompt?: string;
+  subject?: string | null;
+  difficultyLevel?: string | null;
+  dueDate?: string | Date | null;
+  status?: QuizStatus;
+  weight?: string | number | null;
+  questionCount?: string | number | null;
+  includeCodeContext?: boolean;
+  maxAttempts?: string | number | null;
+  gradingStrategy?: QuizGradingStrategy;
+}
+
+interface QuizMembership {
+  role: Role;
+  classroom_id?: string | null;
+  user_id?: string | null;
+  userId?: string | null;
+}
+
+export const create = async (data: QuizCreateInput) => {
+  return getPrisma().quiz.create({
     data: {
       name: data.name,
       classroom_id: data.classroomId,
@@ -12,10 +58,10 @@ export const create = async (data: any) => {
       difficulty_level: data.difficultyLevel || null,
       due_date: data.dueDate ? new Date(data.dueDate) : null,
       status: data.status || 'DRAFT',
-      weight: parseInt(data.weight) || 0,
-      question_count: Math.min(20, Math.max(1, parseInt(data.questionCount) || 5)),
+      weight: parseInt(String(data.weight ?? 0), 10) || 0,
+      question_count: Math.min(20, Math.max(1, parseInt(String(data.questionCount ?? 5), 10) || 5)),
       include_code_context: data.includeCodeContext || false,
-      max_attempts: data.maxAttempts !== undefined ? parseInt(data.maxAttempts) : 1,
+      max_attempts: data.maxAttempts !== undefined ? parseInt(String(data.maxAttempts), 10) : 1,
       grading_strategy: data.gradingStrategy || 'HIGHEST',
     },
     include: {
@@ -29,8 +75,8 @@ export const create = async (data: any) => {
   });
 };
 
-export const update = async (quizId: string, data: any) => {
-  const updateData: Record<string, any> = {};
+export const update = async (quizId: string, data: QuizUpdateInput) => {
+  const updateData: Prisma.QuizUpdateInput = {};
 
   if (data.name !== undefined) updateData.name = data.name;
   if (data.moduleId !== undefined) {
@@ -48,14 +94,14 @@ export const update = async (quizId: string, data: any) => {
   if (data.dueDate !== undefined)
     updateData.due_date = data.dueDate ? new Date(data.dueDate) : null;
   if (data.status !== undefined) updateData.status = data.status;
-  if (data.weight !== undefined) updateData.weight = parseInt(data.weight);
-  if (data.questionCount !== undefined) updateData.question_count = Math.min(20, Math.max(1, parseInt(data.questionCount) || 5));
+  if (data.weight !== undefined) updateData.weight = parseInt(String(data.weight), 10);
+  if (data.questionCount !== undefined) updateData.question_count = Math.min(20, Math.max(1, parseInt(String(data.questionCount), 10) || 5));
   if (data.includeCodeContext !== undefined)
     updateData.include_code_context = data.includeCodeContext;
-  if (data.maxAttempts !== undefined) updateData.max_attempts = parseInt(data.maxAttempts);
+  if (data.maxAttempts !== undefined) updateData.max_attempts = parseInt(String(data.maxAttempts), 10);
   if (data.gradingStrategy !== undefined) updateData.grading_strategy = data.gradingStrategy;
 
-  return prisma!.quiz.update({
+  return getPrisma().quiz.update({
     where: { id: quizId },
     data: updateData,
     include: {
@@ -70,14 +116,14 @@ export const update = async (quizId: string, data: any) => {
 };
 
 const deleteQuiz = async (quizId: string) => {
-  return prisma!.quiz.delete({
+  return getPrisma().quiz.delete({
     where: { id: quizId },
   });
 };
 export { deleteQuiz as delete };
 
 export const findById = async (quizId: string) => {
-  return prisma!.quiz.findUnique({
+  return getPrisma().quiz.findUnique({
     where: { id: quizId },
     include: {
       module: true,
@@ -91,11 +137,14 @@ export const findById = async (quizId: string) => {
   });
 };
 
-export const findByClassroom = async (classroomId: string, membership: any) => {
+export const findByClassroom = async (classroomId: string, membership: QuizMembership | null) => {
   return getQuizzesByOrganization(classroomId, membership);
 };
 
-export const getQuizzesByOrganization = async (classroomId: string, membership: any) => {
+export const getQuizzesByOrganization = async (
+  classroomId: string,
+  membership: QuizMembership | null
+) => {
   if (!membership) {
     throw new Error('Membership required to access classroom quizzes');
   }
@@ -111,7 +160,7 @@ export const getQuizzesByOrganization = async (classroomId: string, membership: 
     throw new Error('Membership does not match classroom');
   }
 
-  const quizzes = await prisma!.quiz.findMany({
+  const quizzes = await getPrisma().quiz.findMany({
     where: { classroom_id: classroomId },
     include: {
       module: true,
@@ -146,7 +195,11 @@ export const getQuizzesByOrganization = async (classroomId: string, membership: 
   });
 };
 
-export const getQuizzesForStudent = async (classroomId: string, userId: string, membership: any) => {
+export const getQuizzesForStudent = async (
+  classroomId: string,
+  userId: string,
+  membership: QuizMembership | null
+) => {
   if (!membership) {
     throw new Error('Membership required to access student quizzes');
   }
@@ -168,7 +221,7 @@ export const getQuizzesForStudent = async (classroomId: string, userId: string, 
     }
   }
 
-  const quizzes = await prisma!.quiz.findMany({
+  const quizzes = await getPrisma().quiz.findMany({
     where: {
       classroom_id: classroomId,
       status: 'PUBLISHED',
@@ -308,7 +361,7 @@ export const getQuizzesForStudent = async (classroomId: string, userId: string, 
 };
 
 export const publish = async (quizId: string) => {
-  return prisma!.quiz.update({
+  return getPrisma().quiz.update({
     where: { id: quizId },
     data: { status: 'PUBLISHED' },
   });
@@ -319,7 +372,7 @@ export const getStatsByClassroom = async (classroomId: string) => {
 };
 
 export const getQuizStatsByOrganization = async (classroomId: string) => {
-  const quizzes = await prisma!.quiz.findMany({
+  const quizzes = await getPrisma().quiz.findMany({
     where: { classroom_id: classroomId },
     include: {
       _count: {
@@ -327,7 +380,7 @@ export const getQuizStatsByOrganization = async (classroomId: string) => {
       },
       attempts: {
         where: { completed_at: { not: null } },
-        select: { score: true },
+        select: { score: true, partial_credit_percentage: true },
       },
     },
   });
@@ -354,7 +407,7 @@ export const getQuizStatsByOrganization = async (classroomId: string) => {
 
   // Calculate overall average score
   const allScores = quizzes
-    .flatMap(q => q.attempts.map(a => (a as any).score ?? (a as any).partial_credit_percentage))
+    .flatMap(q => q.attempts.map(a => a.score ?? a.partial_credit_percentage))
     .filter((s): s is number => s !== null && s !== undefined);
   if (allScores.length > 0) {
     stats.averageScore = Math.round(allScores.reduce((sum, s) => sum + s, 0) / allScores.length);

@@ -6,10 +6,10 @@
  * Body: { slideId, visibility: 'draft' | 'private' | 'public' }
  */
 
-import prisma from '@classmoji/database';
+import getPrisma from '@classmoji/database';
 import { requireAuth } from '@classmoji/auth/server';
 
-export const action = async ({ request }: any) => {
+export const action = async ({ request }: { request: Request }) => {
   // Only available in development
   if (process.env.NODE_ENV !== 'development') {
     return new Response(JSON.stringify({ error: 'Not found' }), {
@@ -38,7 +38,7 @@ export const action = async ({ request }: any) => {
       });
     }
 
-    const updateData: Record<string, any> = {};
+    const updateData: Record<string, boolean> = {};
 
     // Parse visibility setting
     if (visibility) {
@@ -70,7 +70,7 @@ export const action = async ({ request }: any) => {
       });
     }
 
-    await prisma!.slide.update({
+    await getPrisma().slide.update({
       where: { id: slideId },
       data: updateData,
     });
@@ -79,9 +79,10 @@ export const action = async ({ request }: any) => {
       status: 200,
       headers: { 'Content-Type': 'application/json' },
     });
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error('Failed to update visibility:', error);
-    return new Response(JSON.stringify({ error: error.message }), {
+    const message = error instanceof Error ? error.message : String(error);
+    return new Response(JSON.stringify({ error: message }), {
       status: 500,
       headers: { 'Content-Type': 'application/json' },
     });

@@ -71,8 +71,8 @@ async function fetchRepoTree(owner: string, repo: string, token: string): Promis
   const data = await res.json();
   // Filter to blobs (files) only, exclude tree entries (directories)
   return (data.tree || [])
-    .filter((entry: any) => entry.type === 'blob')
-    .map((entry: any) => ({
+    .filter((entry: { type: string; path: string; size?: number }) => entry.type === 'blob')
+    .map((entry: { type: string; path: string; size?: number }) => ({
       path: entry.path,
       size: entry.size || 0,
       type: entry.type,
@@ -239,7 +239,8 @@ Respond with ONLY a JSON array of file paths, nothing else. Example:
     }],
   });
 
-  const text = (response.content[0] as any)?.text || '[]';
+  const firstBlock = response.content[0];
+  const text = firstBlock?.type === 'text' ? firstBlock.text : '[]';
   try {
     // Extract JSON array from response (may include markdown)
     const jsonMatch = text.match(/\[[\s\S]*\]/);
@@ -336,7 +337,8 @@ Respond with ONLY the JSON object, no other text.`,
     }],
   });
 
-  return (response.content[0] as any)?.text || '{}';
+  const firstBlock = response.content[0];
+  return firstBlock?.type === 'text' ? firstBlock.text : '{}';
 }
 
 /**

@@ -2,8 +2,16 @@ import { useFormContext, Controller } from 'react-hook-form';
 import { Input, Select, Avatar, Button, Divider, Spin } from 'antd';
 import { PlusOutlined, LoadingOutlined } from '@ant-design/icons';
 import { useGitHubAppInstallPopup } from '~/hooks';
+import type { GitOrganizationOption } from './types';
 
-const StepBasicInfo = ({ gitOrgs, slugPreview, years, githubAppName }: any) => { // eslint-disable-line @typescript-eslint/no-explicit-any -- complex Prisma git org shapes from loader
+interface StepBasicInfoProps {
+  gitOrgs: GitOrganizationOption[];
+  slugPreview: string;
+  years: number[];
+  githubAppName?: string | null;
+}
+
+const StepBasicInfo = ({ gitOrgs, slugPreview, years, githubAppName }: StepBasicInfoProps) => {
   const {
     control,
     formState: { errors },
@@ -51,7 +59,7 @@ const StepBasicInfo = ({ gitOrgs, slugPreview, years, githubAppName }: any) => {
                 status={errors.git_org_id ? 'error' : ''}
                 dropdownRender={dropdownRender}
               >
-                {gitOrgs.map((org: any) => ( // eslint-disable-line @typescript-eslint/no-explicit-any -- Prisma git org
+                {gitOrgs.map(org => (
                   <Select.Option key={org.id} value={org.id}>
                     <div className="flex items-center gap-2">
                       <Avatar src={org.avatar_url} size={20} />
@@ -137,7 +145,7 @@ const StepBasicInfo = ({ gitOrgs, slugPreview, years, githubAppName }: any) => {
                   className="w-full"
                   status={errors.year ? 'error' : ''}
                 >
-                  {years.map((year: any) => ( // eslint-disable-line @typescript-eslint/no-explicit-any -- number from years array
+                  {years.map(year => (
                     <Select.Option key={year} value={year}>
                       {year}
                     </Select.Option>

@@ -6,7 +6,7 @@ import { data, useFetcher, useParams } from 'react-router';
 import { toast } from 'react-toastify';
 import { PageHeader } from '~/components';
 import { ClassmojiService } from '@classmoji/services';
-import prisma from '@classmoji/database';
+import getPrisma from '@classmoji/database';
 import { assertClassroomAccess } from '~/utils/helpers';
 import { buildCalendarUrl, getCalendarDateRange } from '~/utils/calendar.server';
 import type { Route } from './+types/route';
@@ -61,17 +61,17 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
 
   // Fetch available resources for linking (all published content)
   const [pages, slides, assignments] = await Promise.all([
-    prisma!.page.findMany({
+    getPrisma().page.findMany({
       where: { classroom_id: classroom.id, is_draft: false },
       select: { id: true, title: true },
       orderBy: { title: 'asc' },
     }),
-    prisma!.slide.findMany({
+    getPrisma().slide.findMany({
       where: { classroom_id: classroom.id, is_draft: false },
       select: { id: true, title: true },
       orderBy: { title: 'asc' },
     }),
-    prisma!.assignment.findMany({
+    getPrisma().assignment.findMany({
       where: { module: { classroom_id: classroom.id }, is_published: true },
       select: { id: true, title: true, module: { select: { title: true, slug: true } } },
       orderBy: { title: 'asc' },

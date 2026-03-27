@@ -10,9 +10,15 @@ import { QRCodeSVG } from 'qrcode.react';
  *
  * Dismisses on ESC key or click anywhere.
  */
-export default function QRCodeOverlay({ url, title, onClose }: any) {
+interface QRCodeOverlayProps {
+  url: string;
+  title: string;
+  onClose: () => void;
+}
+
+export default function QRCodeOverlay({ url, title, onClose }: QRCodeOverlayProps) {
   // Handle keyboard events
-  const handleKeyDown = useCallback((e: any) => {
+  const handleKeyDown = useCallback((e: KeyboardEvent) => {
     if (e.key === 'Escape') {
       onClose();
     }

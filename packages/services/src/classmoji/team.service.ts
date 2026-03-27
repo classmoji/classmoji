@@ -1,22 +1,45 @@
-import prisma from '@classmoji/database';
+import getPrisma from '@classmoji/database';
+import type { GitProvider, Prisma } from '@prisma/client';
 
-export const create = async (payload: any) => {
+interface TeamCreatePayload {
+  providerId?: string | number | null;
+  provider?: GitProvider | null;
+  name: string;
+  slug: string;
+  avatarUrl?: string | null;
+  privacy?: string | null;
+  classroomId: string;
+  tag?: unknown;
+}
+
+interface TeamCreateWithMembershipAndTagPayload {
+  name: string;
+  slug: string;
+  classroomId: string;
+  providerId: string | number;
+  userId: string;
+  tagId: string;
+}
+
+export const create = async (payload: TeamCreatePayload) => {
   const { providerId, provider, name, slug, avatarUrl, privacy, classroomId, tag } = payload;
-  return prisma!.team.create({
-    data: {
-      provider_id: providerId ? String(providerId) : null,
-      provider: provider || null,
-      name: name,
-      slug: slug,
-      tag: tag,
-      classroom_id: classroomId,
-      is_visible: privacy !== 'secret',
-    } as any,
+  const teamCreateData: unknown = {
+    provider_id: providerId ? String(providerId) : null,
+    provider: provider || null,
+    name: name,
+    slug: slug,
+    tag: tag,
+    classroom_id: classroomId,
+    is_visible: privacy !== 'secret',
+  };
+  // TODO: narrow further once legacy team relation writes are aligned with generated Prisma input types.
+  return getPrisma().team.create({
+    data: teamCreateData as Prisma.TeamUncheckedCreateInput,
   });
 };
 
 export const deleteBySlug = async (classroomId: string, slug: string) => {
-  return prisma!.team.delete({
+  return getPrisma().team.delete({
     where: {
       classroom_id_slug: {
         slug: slug,
@@ -27,7 +50,7 @@ export const deleteBySlug = async (classroomId: string, slug: string) => {
 };
 
 export const findByClassroomId = async (classroomId: string) => {
-  return prisma!.team.findMany({
+  return getPrisma().team.findMany({
     where: {
       classroom_id: classroomId,
     },
@@ -47,7 +70,7 @@ export const findByClassroomId = async (classroomId: string) => {
 };
 
 export const findBySlugAndClassroomId = async (slug: string, classroomId: string) => {
-  return prisma!.team.findUnique({
+  return getPrisma().team.findUnique({
     where: {
       classroom_id_slug: {
         slug: slug,
@@ -70,7 +93,7 @@ export const findBySlugAndClassroomId = async (slug: string, classroomId: string
 };
 
 export const findById = async (teamId: string) => {
-  return prisma!.team.findUnique({
+  return getPrisma().team.findUnique({
     where: { id: teamId },
     include: {
       memberships: true,
@@ -80,7 +103,7 @@ export const findById = async (teamId: string) => {
 };
 
 export const findByTagId = async (classroomId: string, tagId: string) => {
-  return prisma!.team.findMany({
+  return getPrisma().team.findMany({
     where: {
       classroom_id: classroomId,
       tags: { some: { tag_id: tagId } },
@@ -99,7 +122,7 @@ export const findByTagId = async (classroomId: string, tagId: string) => {
 };
 
 export const findUserTeamByTag = async (classroomId: string, tagId: string, userId: string) => {
-  return prisma!.team.findFirst({
+  return getPrisma().team.findFirst({
     where: {
       classroom_id: classroomId,
       tags: { some: { tag_id: tagId } },
@@ -117,9 +140,9 @@ export const findUserTeamByTag = async (classroomId: string, tagId: string, user
   });
 };
 
-export const createWithMembershipAndTag = async (payload: any) => {
+export const createWithMembershipAndTag = async (payload: TeamCreateWithMembershipAndTagPayload) => {
   const { name, slug, classroomId, providerId, userId, tagId } = payload;
-  return prisma!.team.create({
+  return getPrisma().team.create({
     data: {
       name,
       slug,

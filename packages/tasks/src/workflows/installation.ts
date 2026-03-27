@@ -1,5 +1,10 @@
 import { task } from '@trigger.dev/sdk';
-import prisma from '@classmoji/database';
+import getPrisma from '@classmoji/database';
+
+interface InstallationPayload {
+  installation: { id: number; account: { id: number; login: string; [key: string]: unknown }; [key: string]: unknown };
+  [key: string]: unknown;
+}
 
 /**
  * Handle new GitHub App installation
@@ -8,14 +13,14 @@ import prisma from '@classmoji/database';
  */
 export const newInstallationHandlerTask = task({
   id: 'webhook-new_installation_handler',
-  run: async (payload: any) => {
+  run: async (payload: InstallationPayload) => {
     const {
       installation: { id: installationId, account },
     } = payload;
 
     // Upsert GitOrganization - that's ALL the webhook does
     // No user lookup, no classroom, no membership, no teams yet
-    await prisma!.gitOrganization.upsert({
+    await getPrisma().gitOrganization.upsert({
       where: {
         provider_provider_id: {
           provider: 'GITHUB',
@@ -44,13 +49,13 @@ export const newInstallationHandlerTask = task({
  */
 export const appUninstalledHandlerTask = task({
   id: 'webhook-app_uninstalled_handler',
-  run: async (payload: any) => {
+  run: async (payload: InstallationPayload) => {
     const {
       installation: { account },
     } = payload;
 
     // Clear installation ID - classrooms remain but can't interact with GitHub
-    await prisma!.gitOrganization.updateMany({
+    await getPrisma().gitOrganization.updateMany({
       where: {
         provider: 'GITHUB',
         provider_id: String(account.id),

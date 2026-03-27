@@ -1,5 +1,7 @@
 import { ServerBlockNoteEditor } from '@blocknote/server-util';
 import { extractBodyContent } from './content.server.ts';
+import type { BlockLike } from '~/types/pages.ts';
+import type { PageBlockEditor } from '~/components/editor/blocks/index.tsx';
 
 /**
  * Parse CSS background colors from the <style> block.
@@ -42,7 +44,9 @@ function parseCssBackgroundColors(html: string): Record<number, string> {
  * @param {Object} schema - BlockNote schema with custom blocks
  * @returns {Promise<Array>} BlockNote document blocks
  */
-export async function migrateHtmlToBlockNote(html: string, schema: any): Promise<any[]> {
+type PageBlockSchema = PageBlockEditor['schema'];
+
+export async function migrateHtmlToBlockNote(html: string, schema: PageBlockSchema): Promise<BlockLike[]> {
   // Extract body content from full HTML document
   let bodyHtml = extractBodyContent(html);
 
@@ -90,7 +94,7 @@ export async function migrateHtmlToBlockNote(html: string, schema: any): Promise
   const blocks = await editor.tryParseHTMLToBlocks(bodyHtml);
 
   // Post-process: map known CSS class patterns to custom block types
-  return postProcessBlocks(blocks, cssBackgroundColors);
+  return postProcessBlocks(blocks as unknown as BlockLike[], cssBackgroundColors);
 }
 
 /**
@@ -104,7 +108,7 @@ export async function migrateHtmlToBlockNote(html: string, schema: any): Promise
  * @param {Object} cssBackgroundColors - Map of heading level to background color
  * @returns {Array} Processed blocks with custom block types
  */
-function postProcessBlocks(blocks: any[], cssBackgroundColors: Record<number, string> = {}): any[] {
+function postProcessBlocks(blocks: BlockLike[], cssBackgroundColors: Record<number, string> = {}): BlockLike[] {
   const result = [];
 
   for (let i = 0; i < blocks.length; i++) {
@@ -303,7 +307,7 @@ function postProcessBlocks(blocks: any[], cssBackgroundColors: Record<number, st
         const terminalMatch = html.match(/Terminal|powershell/i);
         const codeBlockIndex = html.indexOf('class="code-block"');
 
-        if (terminalMatch && terminalMatch.index < codeBlockIndex) {
+        if (terminalMatch && terminalMatch.index !== undefined && terminalMatch.index < codeBlockIndex) {
           // Extract Terminal/powershell title if present (text before keyword or use keyword as title)
           const beforeTerminal = html.substring(0, terminalMatch.index);
           const titleMatch = beforeTerminal.match(/>([^<]+)<[^>]*$/);
@@ -533,11 +537,11 @@ function decodeHtmlEntities(text: string): string {
 /**
  * Extract plain text content from a block's inline content array.
  */
-function getBlockTextContent(block: any): string {
+function getBlockTextContent(block: BlockLike): string {
   if (!block.content || !Array.isArray(block.content)) return '';
   return block.content
-    .filter((item: any) => item.type === 'text')
-    .map((item: any) => item.text)
+    .filter((item) => item.type === 'text')
+    .map((item) => item.text || '')
     .join('');
 }
 
@@ -547,4 +551,3 @@ function getBlockTextContent(block: any): string {
 function isListItem(type: string): boolean {
   return type === 'bulletListItem' || type === 'numberedListItem' || type === 'checkListItem';
 }
-

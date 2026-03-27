@@ -1,15 +1,30 @@
 import { task } from '@trigger.dev/sdk';
 
+export interface SendEmailTaskPayload {
+  to: string;
+  subject: string;
+  html: string;
+}
+
+interface SendEmailTaskWrappedPayload {
+  payload: SendEmailTaskPayload;
+}
+
+type SendEmailTaskInput = SendEmailTaskPayload | SendEmailTaskWrappedPayload;
+
+const extractPayload = (input: SendEmailTaskInput): SendEmailTaskPayload => {
+  return 'payload' in input ? input.payload : input;
+};
+
 export const sendEmailTask = task({
   id: 'send_email',
-  run: async (arg: any) => {
-    let nodemailer: any;
-    if (typeof window === 'undefined') {
-      // @ts-ignore
-      nodemailer = (await import('nodemailer')).default; // Explicitly access the default export
+  run: async (input: SendEmailTaskInput) => {
+    if (typeof window !== 'undefined') {
+      throw new Error('sendEmailTask must run on the server');
     }
 
-    const payload = arg?.payload ? arg.payload : arg;
+    const nodemailer = await import('nodemailer');
+    const payload = extractPayload(input);
 
     const transporter = nodemailer.createTransport({
       host: 'mail.privateemail.com',
@@ -23,13 +38,11 @@ export const sendEmailTask = task({
 
     const { to, subject, html } = payload;
 
-    const mailOptions = {
+    return transporter.sendMail({
       from: process.env.EMAIL,
       to,
       subject,
       html,
-    };
-
-    return transporter.sendMail(mailOptions);
+    });
   },
 });

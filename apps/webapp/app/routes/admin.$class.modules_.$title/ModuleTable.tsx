@@ -4,7 +4,30 @@ import { UserThumbnailView, TeamThumbnailView, GradeBadge } from '~/components';
 import { calculateRepositoryGrade } from '@classmoji/utils';
 import RepoActions from './RepoActions';
 
-const ModuleTable = ({ module, repos, emojiMappings, settings, org }: any) => { // eslint-disable-line @typescript-eslint/no-explicit-any -- complex Prisma shapes with nested relations (repos, assignments, grades)
+type RepositoryAssignments = Parameters<typeof calculateRepositoryGrade>[0];
+type EmojiMappings = Parameters<typeof calculateRepositoryGrade>[1];
+type OrganizationSettings = Parameters<typeof calculateRepositoryGrade>[2];
+
+interface ModuleTableRepo {
+  key?: string;
+  name: string;
+  project_number?: number;
+  assignments: RepositoryAssignments;
+  student?: Parameters<typeof UserThumbnailView>[0]['user'];
+  team?: Parameters<typeof TeamThumbnailView>[0]['team'];
+}
+
+interface ModuleTableProps {
+  module: {
+    type: string;
+  };
+  repos: ModuleTableRepo[];
+  emojiMappings: EmojiMappings;
+  settings: OrganizationSettings;
+  org: string;
+}
+
+const ModuleTable = ({ module, repos, emojiMappings, settings, org }: ModuleTableProps) => {
   const isIndividualAssignment = module.type === 'INDIVIDUAL';
 
   const columns = [
@@ -13,7 +36,7 @@ const ModuleTable = ({ module, repos, emojiMappings, settings, org }: any) => { 
       key: 'member',
       fixed: 'left',
       width: '25%',
-      render: (_: any, repo: any) => ( // eslint-disable-line @typescript-eslint/no-explicit-any -- Ant Design render callback
+      render: (_: unknown, repo: ModuleTableRepo) => (
         <>
           {isIndividualAssignment ? (
             repo.student ? (
@@ -33,7 +56,7 @@ const ModuleTable = ({ module, repos, emojiMappings, settings, org }: any) => { 
       title: 'Overall Grade',
       key: 'grade',
       width: '35%',
-      render: (_: any, repo: any) => { // eslint-disable-line @typescript-eslint/no-explicit-any -- Ant Design render callback
+      render: (_: unknown, repo: ModuleTableRepo) => {
         // For module-level view, use a default assignment config (no extra credit, no drop lowest)
         const moduleAssignment = { is_extra_credit: false, drop_lowest_count: 0, weight: 0 };
         const grade = calculateRepositoryGrade(
@@ -56,7 +79,7 @@ const ModuleTable = ({ module, repos, emojiMappings, settings, org }: any) => { 
       title: 'Actions',
       key: 'actions',
       width: '20%',
-      render: (_: any, repo: any) => { // eslint-disable-line @typescript-eslint/no-explicit-any -- Ant Design render callback
+      render: (_: unknown, repo: ModuleTableRepo) => {
         return <RepoActions repo={repo} org={org} />;
       },
     },

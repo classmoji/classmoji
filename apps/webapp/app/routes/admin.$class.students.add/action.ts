@@ -1,6 +1,6 @@
 import { ClassmojiService } from '@classmoji/services';
 import Tasks from '@classmoji/tasks';
-import prisma from '@classmoji/database';
+import getPrisma from '@classmoji/database';
 import { requireClassroomAdmin } from '~/utils/routeAuth.server';
 import type { Route } from './+types/route';
 
@@ -16,7 +16,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
   const emails = data.students.map((s: { email: string }) => s.email.toLowerCase());
 
   // Find users who already exist on the platform
-  const existingUsers = await prisma!.user.findMany({
+  const existingUsers = await getPrisma().user.findMany({
     where: { email: { in: emails } },
     select: { id: true, email: true, name: true },
   });

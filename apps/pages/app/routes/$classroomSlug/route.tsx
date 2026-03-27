@@ -18,7 +18,7 @@ import PagesSidebar from '~/components/layout/PagesSidebar.tsx';
  * - Student/Assistant → StudentPageList (published pages)
  * - Unauthenticated → PublicLanding (public pages only) or redirect
  */
-export const loader = async ({ params, request }: any) => {
+export const loader = async ({ params, request }: { params: Record<string, string | undefined>; request: Request }) => {
   const { classroomSlug } = params;
 
   // Check if embedded (hide sidebar server-side to prevent flash)
@@ -26,11 +26,12 @@ export const loader = async ({ params, request }: any) => {
   const isEmbedded = url.searchParams.get('embed') === 'true';
 
   // Fetch classroom by slug
-  const classroom = await ClassmojiService.classroom.findBySlug(classroomSlug) as any;
+  const classroomRaw = await ClassmojiService.classroom.findBySlug(classroomSlug!);
 
-  if (!classroom) {
+  if (!classroomRaw) {
     throw new Response('Classroom not found', { status: 404 });
   }
+  const classroom = classroomRaw as typeof classroomRaw & { avatar_url?: string; git_organization?: typeof classroomRaw.git_organization & { repo?: string; avatar_url?: string } };
 
   // Try to get auth (nullable for public access)
   let authData = null;
@@ -41,8 +42,8 @@ export const loader = async ({ params, request }: any) => {
   }
 
   let view = 'public';
-  let membership: any = null;
-  let pages: any[] = [];
+  let membership: { role: string } | null = null;
+  let pages: Awaited<ReturnType<typeof ClassmojiService.page.findByClassroomId>> = [];
 
   if (authData) {
     // Get membership in this classroom
@@ -94,7 +95,7 @@ export const loader = async ({ params, request }: any) => {
         avatar_url: classroom.git_organization.avatar_url,
       } : null,
     },
-    pages: pages.map((p: any) => ({
+    pages: pages.map((p) => ({
       id: p.id,
       title: p.title,
       slug: p.slug,
@@ -112,7 +113,7 @@ export const loader = async ({ params, request }: any) => {
 /**
  * Actions for admin dashboard.
  */
-export const action = async ({ params, request }: any) => {
+export const action = async ({ params, request }: { params: Record<string, string | undefined>; request: Request }) => {
   const { classroomSlug } = params;
 
   // All actions require staff access
@@ -121,7 +122,7 @@ export const action = async ({ params, request }: any) => {
     return Response.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
-  const classroom = await ClassmojiService.classroom.findBySlug(classroomSlug) as any;
+  const classroom = await ClassmojiService.classroom.findBySlug(classroomSlug!);
 
   if (!classroom) {
     return Response.json({ error: 'Classroom not found' }, { status: 404 });
@@ -136,7 +137,8 @@ export const action = async ({ params, request }: any) => {
     return Response.json({ error: 'Unauthorized' }, { status: 403 });
   }
 
-  let data: any;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- form/JSON data has dynamic shape
+  let data: Record<string, any>;
   const contentType = request.headers.get('Content-Type') || '';
 
   if (contentType.includes('application/json')) {
@@ -187,8 +189,8 @@ export const action = async ({ params, request }: any) => {
         content_path: `pages/${slug}`,
       });
       return redirect(`/${classroomSlug}/${page.id}`);
-    } catch (error: any) {
-      return Response.json({ error: error.message }, { status: 500 });
+    } catch (error: unknown) {
+      return Response.json({ error: error instanceof Error ? error.message : 'Unknown error' }, { status: 500 });
     }
   }
 
@@ -209,8 +211,8 @@ export const action = async ({ params, request }: any) => {
       await ClassmojiService.page.deletePage(data.pageId);
       // Return redirect instead of JSON response
       return redirect(`/${classroomSlug}`);
-    } catch (error: any) {
-      return Response.json({ error: error.message }, { status: 500 });
+    } catch (error: unknown) {
+      return Response.json({ error: error instanceof Error ? error.message : 'Unknown error' }, { status: 500 });
     }
   }
 
@@ -221,21 +223,22 @@ export const action = async ({ params, request }: any) => {
         updated_at: new Date(),
       });
       return Response.json({ success: true });
-    } catch (error: any) {
-      return Response.json({ error: error.message }, { status: 500 });
+    } catch (error: unknown) {
+      return Response.json({ error: error instanceof Error ? error.message : 'Unknown error' }, { status: 500 });
     }
   }
 
   if (intent === 'update-status') {
     try {
-      const updates: any = { updated_at: new Date() };
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- dynamic page update fields from form data
+      const updates: Record<string, any> = { updated_at: new Date() };
       if ('is_draft' in data) updates.is_draft = data.is_draft;
       if ('is_public' in data) updates.is_public = data.is_public;
 
       await ClassmojiService.page.quickUpdate(data.pageId, updates);
       return Response.json({ success: true });
-    } catch (error: any) {
-      return Response.json({ error: error.message }, { status: 500 });
+    } catch (error: unknown) {
+      return Response.json({ error: error instanceof Error ? error.message : 'Unknown error' }, { status: 500 });
     }
   }
 
@@ -243,14 +246,14 @@ export const action = async ({ params, request }: any) => {
 };
 
 const ClassroomLayout = () => {
-  const { view, isEmbedded, classroom, pages, membership } = useLoaderData() as any;
+  const { view, isEmbedded, classroom, pages, membership } = useLoaderData<typeof loader>();
   const params = useParams();
   const [collapsed, setCollapsed] = useLocalStorageState('classmoji-pages-sidebar-collapsed', {
     defaultValue: false,
   });
   const [mobileOpen, setMobileOpen] = useState(false);
 
-  const canEdit = membership && ['OWNER', 'TEACHER'].includes(membership.role);
+  const canEdit = !!(membership && ['OWNER', 'TEACHER'].includes(membership.role));
   const currentPageId = params.pageId;
 
   // Keyboard shortcut: Cmd/Ctrl+B to toggle sidebar

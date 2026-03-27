@@ -1,5 +1,5 @@
 import { namedAction } from 'remix-utils/named-action';
-import prisma from '@classmoji/database';
+import getPrisma from '@classmoji/database';
 import { ClassmojiService } from '@classmoji/services';
 import { assertClassroomAccess } from '~/utils/helpers';
 import type { Route } from './+types/route';
@@ -20,7 +20,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
       const { resourceId, resourceType, targetType, targetId } = await request.json();
 
       if (resourceType === 'page') {
-        await prisma!.pageLink.create({
+        await getPrisma().pageLink.create({
           data: {
             page_id: resourceId,
             module_id: targetType === 'module' ? targetId : null,
@@ -28,7 +28,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
           },
         });
       } else {
-        await prisma!.slideLink.create({
+        await getPrisma().slideLink.create({
           data: {
             slide_id: resourceId,
             module_id: targetType === 'module' ? targetId : null,
@@ -47,9 +47,9 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
       const { linkId, resourceType } = await request.json();
 
       if (resourceType === 'page') {
-        await prisma!.pageLink.delete({ where: { id: linkId } });
+        await getPrisma().pageLink.delete({ where: { id: linkId } });
       } else {
-        await prisma!.slideLink.delete({ where: { id: linkId } });
+        await getPrisma().slideLink.delete({ where: { id: linkId } });
       }
 
       // Update manifest after removing link

@@ -92,10 +92,33 @@ const STEP_ORDER = [
 /**
  * Get the status of a step relative to current progress
  */
-function getStepStatus(stepKey: any, currentStep: any, isDone: any, hasError: any) {
+interface ImportProgress {
+  step: string;
+  current?: number;
+  total?: number;
+  filename?: string;
+}
+
+interface StepItemProps {
+  stepKey: string;
+  status: 'completed' | 'active' | 'error' | 'pending';
+  progress: ImportProgress | null;
+}
+
+interface ImportProgressModalProps {
+  open: boolean;
+  progress: ImportProgress | null;
+  error: string | null;
+  isDone: boolean;
+  isConnected: boolean;
+  onCancel: () => void;
+  onRetry: () => void;
+}
+
+function getStepStatus(stepKey: string, currentStep: string | undefined, isDone: boolean, hasError: boolean): 'completed' | 'active' | 'error' | 'pending' {
   if (hasError) {
     // Find if error occurred at or after this step
-    const errorIndex = STEP_ORDER.indexOf(currentStep);
+    const errorIndex = currentStep ? STEP_ORDER.indexOf(currentStep) : -1;
     const thisIndex = STEP_ORDER.indexOf(stepKey);
     if (thisIndex < errorIndex) return 'completed';
     if (thisIndex === errorIndex) return 'error';
@@ -104,7 +127,7 @@ function getStepStatus(stepKey: any, currentStep: any, isDone: any, hasError: an
 
   if (isDone) return 'completed';
 
-  const currentIndex = STEP_ORDER.indexOf(currentStep);
+  const currentIndex = currentStep ? STEP_ORDER.indexOf(currentStep) : -1;
   const thisIndex = STEP_ORDER.indexOf(stepKey);
 
   if (thisIndex < currentIndex) return 'completed';
@@ -115,8 +138,8 @@ function getStepStatus(stepKey: any, currentStep: any, isDone: any, hasError: an
 /**
  * Single step item in the progress list
  */
-function StepItem({ stepKey, status, progress }: any) {
-  const config = (STEP_CONFIG as any)[stepKey];
+function StepItem({ stepKey, status, progress }: StepItemProps) {
+  const config = STEP_CONFIG[stepKey as keyof typeof STEP_CONFIG];
   if (!config) return null;
 
   const Icon = config.icon;
@@ -126,7 +149,7 @@ function StepItem({ stepKey, status, progress }: any) {
   const isPending = status === 'pending';
 
   // Show progress for file-level operations
-  const showProgress = isActive && progress?.total > 1;
+  const showProgress = isActive && (progress?.total ?? 0) > 1;
   const hasFilename = isActive && progress?.filename;
 
   return (
@@ -160,7 +183,7 @@ function StepItem({ stepKey, status, progress }: any) {
           ${isPending ? 'text-gray-400 dark:text-gray-500' : ''}
         `}>
           {config.label}
-          {showProgress && (
+          {showProgress && progress && (
             <span className="ml-2 font-normal text-gray-500 dark:text-gray-400">
               ({progress.current}/{progress.total})
             </span>
@@ -168,16 +191,16 @@ function StepItem({ stepKey, status, progress }: any) {
         </div>
 
         {/* Filename for current file */}
-        {hasFilename && (
+        {hasFilename && progress && (
           <div className="text-xs text-gray-400 dark:text-gray-500 truncate mt-0.5">
             {progress.filename}
           </div>
         )}
 
         {/* Progress bar for file operations */}
-        {showProgress && (
+        {showProgress && progress && (
           <Progress
-            percent={Math.round((progress.current / progress.total) * 100)}
+            percent={Math.round(((progress.current ?? 0) / (progress.total ?? 1)) * 100)}
             size="small"
             showInfo={false}
             className="mt-1"
@@ -197,7 +220,7 @@ export default function ImportProgressModal({
   isConnected,
   onCancel,
   onRetry,
-}: any) {
+}: ImportProgressModalProps) {
   const currentStep = progress?.step;
 
   // Detect dark mode for Ant Design theming
@@ -213,7 +236,7 @@ export default function ImportProgressModal({
     // Skip video/cloudinary/theme steps if we're past images and never saw them
     if (stepKey === 'processing_videos' || stepKey === 'uploading_cloudinary' || stepKey === 'saving_theme') {
       const imageIndex = STEP_ORDER.indexOf('processing_images');
-      const currentIndex = STEP_ORDER.indexOf(currentStep);
+      const currentIndex = currentStep ? STEP_ORDER.indexOf(currentStep) : -1;
       // If we're past images and this step was never active, skip it
       if (currentIndex > imageIndex && status === 'pending') {
         return false;

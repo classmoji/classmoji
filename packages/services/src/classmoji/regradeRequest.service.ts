@@ -1,4 +1,5 @@
-import prisma from '@classmoji/database';
+import getPrisma from '@classmoji/database';
+import type { Prisma } from '@prisma/client';
 
 export const create = async ({
   classroom_id,
@@ -10,10 +11,10 @@ export const create = async ({
   classroom_id: string;
   repository_assignment_id: string;
   student_id: string;
-  student_comment?: string;
-  previous_grade?: number;
+  student_comment?: string | null;
+  previous_grade?: string[];
 }): Promise<any> => {
-  return prisma!.regradeRequest.create({
+  return getPrisma().regradeRequest.create({
     data: {
       classroom_id,
       repository_assignment_id,
@@ -21,11 +22,11 @@ export const create = async ({
       student_comment,
       previous_grade,
     },
-  } as any);
+  });
 };
 
-export const findMany = async (query: any): Promise<any[]> => {
-  return prisma!.regradeRequest.findMany({
+export const findMany = async (query: Prisma.RegradeRequestWhereInput) => {
+  return getPrisma().regradeRequest.findMany({
     where: query,
     include: {
       repository_assignment: {
@@ -67,8 +68,14 @@ export const findMany = async (query: any): Promise<any[]> => {
   });
 };
 
-export const update = async ({ id, data }: { id: string; data: any }): Promise<any> => {
-  return prisma!.regradeRequest.update({
+export const update = async ({
+  id,
+  data,
+}: {
+  id: string;
+  data: Prisma.RegradeRequestUpdateInput;
+}) => {
+  return getPrisma().regradeRequest.update({
     where: { id },
     data,
   });

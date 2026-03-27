@@ -1,4 +1,5 @@
-import prisma from '@classmoji/database';
+import getPrisma from '@classmoji/database';
+import type { Prisma } from '@prisma/client';
 
 /**
  * Create multiple invites (bulk) - used when instructor uploads roster
@@ -6,10 +7,12 @@ import prisma from '@classmoji/database';
  * @returns {Promise<{count: number}>}
  */
 export const createManyInvites = async (invites: { school_email: string; student_id?: string; classroom_id: string }[]): Promise<{ count: number }> => {
-  return prisma!.classroomInvite.createMany({
-    data: invites,
+  const inviteData: unknown = invites;
+  // TODO: narrow further once classroom invite input shape is aligned with the generated Prisma schema.
+  return getPrisma().classroomInvite.createMany({
+    data: inviteData as Prisma.ClassroomInviteCreateManyInput[],
     skipDuplicates: true,
-  } as any);
+  });
 };
 
 /**
@@ -18,8 +21,10 @@ export const createManyInvites = async (invites: { school_email: string; student
  * @param {string} schoolEmail - Student's school email
  * @returns {Promise<Object[]>}
  */
-export const findInvitesByEmail = async (schoolEmail: string): Promise<any[]> => {
-  return prisma!.classroomInvite.findMany({
+export const findInvitesByEmail = async (
+  schoolEmail: string
+): Promise<Prisma.ClassroomInviteGetPayload<{ include: { classroom: true } }>[]> => {
+  return getPrisma().classroomInvite.findMany({
     where: {
       school_email: { equals: schoolEmail, mode: 'insensitive' },
     },
@@ -34,8 +39,10 @@ export const findInvitesByEmail = async (schoolEmail: string): Promise<any[]> =>
  * @param {string} classroomId - UUID of the Classroom
  * @returns {Promise<Object[]>}
  */
-export const findInvitesByClassroomId = async (classroomId: string): Promise<any[]> => {
-  return prisma!.classroomInvite.findMany({
+export const findInvitesByClassroomId = async (
+  classroomId: string
+): Promise<Prisma.ClassroomInviteGetPayload<Record<string, never>>[]> => {
+  return getPrisma().classroomInvite.findMany({
     where: { classroom_id: classroomId },
     orderBy: { created_at: 'desc' },
   });
@@ -46,8 +53,10 @@ export const findInvitesByClassroomId = async (classroomId: string): Promise<any
  * @param {string} id - UUID of the invite
  * @returns {Promise<Object>}
  */
-export const deleteInvite = async (id: string): Promise<any> => {
-  return prisma!.classroomInvite.delete({
+export const deleteInvite = async (
+  id: string
+): Promise<Prisma.ClassroomInviteGetPayload<Record<string, never>>> => {
+  return getPrisma().classroomInvite.delete({
     where: { id },
   });
 };
@@ -58,8 +67,7 @@ export const deleteInvite = async (id: string): Promise<any> => {
  * @returns {Promise<{count: number}>}
  */
 export const deleteManyInvites = async (ids: string[]): Promise<{ count: number }> => {
-  return prisma!.classroomInvite.deleteMany({
+  return getPrisma().classroomInvite.deleteMany({
     where: { id: { in: ids } },
   });
 };
-

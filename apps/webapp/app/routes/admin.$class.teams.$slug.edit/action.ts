@@ -2,7 +2,7 @@ import async from 'async';
 import { namedAction } from 'remix-utils/named-action';
 import invariant from 'tiny-invariant';
 import { sleep } from '~/utils/helpers';
-import prisma from '@classmoji/database';
+import getPrisma from '@classmoji/database';
 import { ClassmojiService, getGitProvider } from '@classmoji/services';
 import { ActionTypes } from '~/constants';
 import { requireClassroomAdmin } from '~/utils/routeAuth.server';
@@ -52,7 +52,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
     async removeMemberFromTeam() {
       const { login } = data;
 
-      const user = await prisma!.user.findUnique({
+      const user = await getPrisma().user.findUnique({
         where: { login },
       });
       const gitOrgLogin = classroom.git_organization?.login;

@@ -14,15 +14,15 @@
  */
 
 import { v2 as cloudinary } from 'cloudinary';
-import prisma from '@classmoji/database';
+import getPrisma from '@classmoji/database';
 import { ContentService } from '@classmoji/content';
 import { assertSlideAccess } from '@classmoji/auth/server';
 import { fetchContent, getMimeType } from '~/utils/contentProxy';
 
-export const action = async ({ request }: any) => {
+export const action = async ({ request }: { request: Request }) => {
   const formData = await request.formData();
-  const videoUrl = formData.get('videoUrl');
-  const slideId = formData.get('slideId');
+  const videoUrl = formData.get('videoUrl') as string | null;
+  const slideId = formData.get('slideId') as string | null;
 
   // Validate required fields
   if (!videoUrl || !slideId) {
@@ -34,7 +34,7 @@ export const action = async ({ request }: any) => {
 
   try {
     // Fetch slide to verify it exists and get org info
-    const slide = await prisma!.slide.findUnique({
+    const slide = await getPrisma().slide.findUnique({
       where: { id: slideId },
       include: {
         classroom: {
@@ -87,9 +87,9 @@ export const action = async ({ request }: any) => {
       (videoUrl.includes('/content/') && videoUrl.includes('localhost'));
 
     // Store these for deletion after successful upload
-    let contentOrg: any = null;
-    let contentRepo: any = null;
-    let contentPath: any = null;
+    let contentOrg: string | null = null;
+    let contentRepo: string | null = null;
+    let contentPath: string | null = null;
 
     if (isLocalContentUrl) {
       // Local content URL - fetch the video ourselves since Cloudinary can't access localhost
@@ -164,10 +164,11 @@ export const action = async ({ request }: any) => {
         });
         deletedOriginal = true;
         console.log('Original video deleted successfully');
-      } catch (deleteError: any) {
+      } catch (deleteError: unknown) {
         // Don't fail the whole operation if deletion fails
         // The video is already on Cloudinary, user can manually clean up
-        console.error('Failed to delete original video:', deleteError.message);
+        const message = deleteError instanceof Error ? deleteError.message : String(deleteError);
+        console.error('Failed to delete original video:', message);
       }
     }
 
@@ -186,11 +187,12 @@ export const action = async ({ request }: any) => {
       }),
       { status: 200, headers: { 'Content-Type': 'application/json' } }
     );
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error('Cloudinary upload failed:', error);
+    const message = error instanceof Error ? error.message : String(error);
 
     // Handle specific Cloudinary errors
-    if (error.message?.includes('Invalid image file')) {
+    if (message.includes('Invalid image file')) {
       return new Response(
         JSON.stringify({ error: 'Video format not supported or URL not accessible' }),
         { status: 400, headers: { 'Content-Type': 'application/json' } }
@@ -198,7 +200,7 @@ export const action = async ({ request }: any) => {
     }
 
     return new Response(
-      JSON.stringify({ error: error.message || 'Upload failed' }),
+      JSON.stringify({ error: message || 'Upload failed' }),
       { status: 500, headers: { 'Content-Type': 'application/json' } }
     );
   }

@@ -1,5 +1,6 @@
 import { useRevalidator } from 'react-router';
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import type { Prisma } from '@prisma/client';
 import { checkForCompletion } from '~/utils/quizUtils';
 import type { QuizEvaluation } from '@classmoji/utils';
 import { useDarkMode } from '~/hooks';
@@ -18,7 +19,7 @@ interface QuizMessage {
   id: number | string;
   role: string;
   content: string;
-  metadata?: any; // eslint-disable-line @typescript-eslint/no-explicit-any -- Prisma JsonValue metadata has varied shapes (isOpeningMessage, isExplorationStep, toolName, etc.)
+  metadata?: Prisma.JsonValue;
   timestamp?: string | Date;
 }
 

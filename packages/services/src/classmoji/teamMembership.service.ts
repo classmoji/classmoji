@@ -1,7 +1,7 @@
-import prisma from '@classmoji/database';
+import getPrisma from '@classmoji/database';
 
 export const addMemberToTeam = async (teamId: string, userId: string) => {
-  return prisma!.teamMembership.upsert({
+  return getPrisma().teamMembership.upsert({
     where: {
       team_id_user_id: {
         team_id: teamId,
@@ -17,7 +17,7 @@ export const addMemberToTeam = async (teamId: string, userId: string) => {
 };
 
 export const removeMemberFromTeam = async (teamId: string, userId: string) => {
-  return prisma!.teamMembership.delete({
+  return getPrisma().teamMembership.delete({
     where: {
       team_id_user_id: {
         team_id: teamId,
@@ -28,7 +28,7 @@ export const removeMemberFromTeam = async (teamId: string, userId: string) => {
 };
 
 export const findTeamsByUserId = async (userId: string) => {
-  return prisma!.teamMembership.findMany({
+  return getPrisma().teamMembership.findMany({
     where: {
       user_id: userId,
     },

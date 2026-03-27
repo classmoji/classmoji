@@ -29,9 +29,26 @@ const HANDLES = [
 
 export default function ImageResizeHandles() {
   const { selectedElement, elementType, onContentChange } = useElementSelection();
-  const [bounds, setBounds] = useState<any>(null);
+  interface ResizeBounds {
+    left: number;
+    top: number;
+    width: number;
+    height: number;
+  }
+
+  interface ResizeDragState {
+    handle: string;
+    startX: number;
+    startY: number;
+    startWidth: number;
+    startHeight: number;
+    aspectRatio: number;
+    parentRect?: DOMRect;
+  }
+
+  const [bounds, setBounds] = useState<ResizeBounds | null>(null);
   const [isDragging, setIsDragging] = useState(false);
-  const dragStateRef = useRef<any>(null);
+  const dragStateRef = useRef<ResizeDragState | null>(null);
 
   // Only show handles for images
   const isImage = elementType === 'image' && selectedElement?.tagName === 'IMG';
@@ -83,7 +100,7 @@ export default function ImageResizeHandles() {
   }, [updateBounds]);
 
   // Handle mouse down on a resize handle
-  const handleMouseDown = useCallback((e: any, handle: any) => {
+  const handleMouseDown = useCallback((e: React.MouseEvent, handle: typeof HANDLES[number]) => {
     e.preventDefault();
     e.stopPropagation();
 
@@ -94,8 +111,9 @@ export default function ImageResizeHandles() {
     const computedStyle = window.getComputedStyle(selectedElement);
 
     // Get natural size for aspect ratio calculations
-    const naturalWidth = selectedElement.naturalWidth || rect.width;
-    const naturalHeight = selectedElement.naturalHeight || rect.height;
+    const imgElement = selectedElement as HTMLImageElement;
+    const naturalWidth = imgElement.naturalWidth || rect.width;
+    const naturalHeight = imgElement.naturalHeight || rect.height;
     const aspectRatio = naturalWidth / naturalHeight;
 
     // Store initial state for dragging
@@ -118,7 +136,7 @@ export default function ImageResizeHandles() {
   }, [selectedElement, bounds]);
 
   // Handle mouse move during drag
-  const handleMouseMove = useCallback((e: any) => {
+  const handleMouseMove = useCallback((e: MouseEvent) => {
     if (!dragStateRef.current || !selectedElement) return;
 
     const { handle, startX, startY, startWidth, startHeight, aspectRatio } = dragStateRef.current;

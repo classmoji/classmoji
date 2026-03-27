@@ -29,12 +29,27 @@ const useIsDarkMode = () => {
  * - Videos larger than 5MB (better for CDN delivery)
  * - .mov files (need transcoding to play in browsers)
  */
+interface VideoFile {
+  path: string;
+  filename: string;
+  size: number;
+  ext: string;
+  suggestCloudinary: boolean;
+}
+
+interface VideoSelectionModalProps {
+  open: boolean;
+  onClose: () => void;
+  onConfirm: (paths: string[]) => void;
+  videos?: VideoFile[];
+}
+
 export default function VideoSelectionModal({
   open,
   onClose,
   onConfirm,
   videos = [],
-}: any) {
+}: VideoSelectionModalProps) {
   // Track which video paths are selected for Cloudinary upload
   const [selectedPaths, setSelectedPaths] = useState<Set<string>>(new Set());
 
@@ -42,14 +57,14 @@ export default function VideoSelectionModal({
   useEffect(() => {
     if (open && videos.length > 0) {
       const suggested = new Set<string>(
-        videos.filter((v: any) => v.suggestCloudinary).map((v: any) => v.path)
+        videos.filter((v) => v.suggestCloudinary).map((v) => v.path)
       );
       setSelectedPaths(suggested);
     }
   }, [open, videos]);
 
   // Toggle a single video selection
-  const toggleVideo = useCallback((path: any) => {
+  const toggleVideo = useCallback((path: string) => {
     setSelectedPaths(prev => {
       const next = new Set(prev);
       if (next.has(path)) {
@@ -63,7 +78,7 @@ export default function VideoSelectionModal({
 
   // Select all videos
   const selectAll = useCallback(() => {
-    setSelectedPaths(new Set(videos.map((v: any) => v.path)));
+    setSelectedPaths(new Set(videos.map((v) => v.path)));
   }, [videos]);
 
   // Deselect all videos
@@ -74,14 +89,14 @@ export default function VideoSelectionModal({
   // Select only recommended videos (large or .mov)
   const selectRecommended = useCallback(() => {
     setSelectedPaths(new Set(
-      videos.filter((v: any) => v.suggestCloudinary).map((v: any) => v.path)
+      videos.filter((v) => v.suggestCloudinary).map((v) => v.path)
     ));
   }, [videos]);
 
   // Calculate totals
   const stats = useMemo(() => {
     const selectedSize = getTotalSelectedSize(videos, selectedPaths);
-    const totalSize = videos.reduce((sum: number, v: any) => sum + v.size, 0);
+    const totalSize = videos.reduce((sum: number, v) => sum + v.size, 0);
     const unselectedSize = totalSize - selectedSize;
 
     return {
@@ -100,7 +115,7 @@ export default function VideoSelectionModal({
 
   // Count of recommended videos
   const recommendedCount = useMemo(
-    () => videos.filter((v: any) => v.suggestCloudinary).length,
+    () => videos.filter((v) => v.suggestCloudinary).length,
     [videos]
   );
 
@@ -166,7 +181,7 @@ export default function VideoSelectionModal({
 
         {/* Video list */}
         <div className="border dark:border-gray-700 rounded-lg overflow-hidden max-h-64 overflow-y-auto">
-          {videos.map((video: any) => {
+          {videos.map((video) => {
             const isSelected = selectedPaths.has(video.path);
             const isMovFile = video.ext === 'mov';
 

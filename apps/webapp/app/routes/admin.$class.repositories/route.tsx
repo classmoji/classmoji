@@ -16,12 +16,25 @@ import { waitForRunCompletion } from '~/utils/helpers';
 import { requireClassroomAdmin } from '~/utils/routeAuth.server';
 import type { Route } from './+types/route';
 
+interface OrganizationRepositoryPageInfo {
+  endCursor: string | null;
+  hasNextPage: boolean;
+}
+
+interface GitOrganizationInput {
+  provider: string;
+  login?: string | null;
+  github_installation_id?: string | null;
+  access_token?: string | null;
+  base_url?: string | null;
+}
+
 /**
  * Fetch repositories from the organization using GitHub App installation token.
  * Supports server-side pagination and search via GitHub's GraphQL API.
  */
 async function fetchOrgRepositories(
-  gitOrganization: any, // eslint-disable-line @typescript-eslint/no-explicit-any -- Prisma git_organization shape varies by provider
+  gitOrganization: GitOrganizationInput,
   { page = 1, pageSize = 25, search = '' }
 ) {
   const gitOrgLogin = gitOrganization?.login;
@@ -85,7 +98,13 @@ async function fetchOrgRepositories(
 
       while (skipped < skipCount) {
         const batchSize = Math.min(100, skipCount - skipped);
-        const skipResponse: any = await octokit.graphql( // eslint-disable-line @typescript-eslint/no-explicit-any -- Octokit GraphQL returns untyped response
+        const skipResponse = await octokit.graphql<{
+          organization: {
+            repositories: {
+              pageInfo: OrganizationRepositoryPageInfo;
+            };
+          };
+        }>(
           `
             query ($org: String!, $first: Int!, $after: String) {
               organization(login: $org) {

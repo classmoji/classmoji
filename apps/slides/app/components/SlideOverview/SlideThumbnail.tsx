@@ -6,6 +6,19 @@ import { useMemo } from 'react';
  * Uses CSS transform scaling to show a miniature version of the slide.
  * The actual slide DOM is cloned and scaled down for accurate representation.
  */
+import type { SlideData } from './hooks/useSlideStructure';
+
+interface SlideThumbnailProps {
+  slide: SlideData;
+  onClick?: () => void;
+  onDelete?: () => void;
+  isDragging?: boolean;
+  isInStack?: boolean;
+  small?: boolean;
+  showDelete?: boolean;
+  canDelete?: boolean;
+}
+
 export default function SlideThumbnail({
   slide,
   onClick,
@@ -15,7 +28,7 @@ export default function SlideThumbnail({
   small = false,
   showDelete = true,
   canDelete = true,
-}: any) {
+}: SlideThumbnailProps) {
   // Get the innerHTML from the slide element
   const slideHtml = useMemo(() => {
     if (!slide?.element) return '<p>Empty slide</p>';

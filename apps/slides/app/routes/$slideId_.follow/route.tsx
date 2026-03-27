@@ -1,6 +1,6 @@
 import { useMemo } from 'react';
 import { useLoaderData } from 'react-router';
-import prisma from '@classmoji/database';
+import getPrisma from '@classmoji/database';
 import { assertSlideAccess } from '@classmoji/auth/server';
 import { SandpackRenderer } from '@classmoji/ui-components/sandpack';
 import RevealPresenter from '~/components/RevealPresenter';
@@ -14,13 +14,14 @@ import { fetchContent } from '~/utils/contentProxy';
  * 2. Authenticated classroom members - can follow without shareCode
  * 3. Public links via shareCode - anyone with valid shareCode can follow
  */
-export const loader = async ({ params, request }: any) => {
+export const loader = async ({ params, request }: { params: Record<string, string | undefined>; request: Request }) => {
   const { slideId } = params;
+  if (!slideId) throw new Response('Missing slideId', { status: 400 });
   const url = new URL(request.url);
   const shareCode = url.searchParams.get('shareCode');
   const preview = url.searchParams.get('preview') === 'true';
 
-  const slide = await prisma!.slide.findUnique({
+  const slide = await getPrisma().slide.findUnique({
     where: { id: slideId },
     include: {
       classroom: {
@@ -61,8 +62,8 @@ export const loader = async ({ params, request }: any) => {
   const contentUrl = `/content/${gitOrgLogin}/${repo}/${filePath}`;
 
   // Fetch content using shared utility (CDN first, API fallback)
-  let slideContent: any = null;
-  let contentError: any = null;
+  let slideContent: string | null = null;
+  let contentError: string | null = null;
 
   const contentResult = await fetchContent({
     org: gitOrgLogin,
@@ -71,7 +72,7 @@ export const loader = async ({ params, request }: any) => {
   });
 
   if (contentResult) {
-    slideContent = contentResult.content;
+    slideContent = contentResult.content as string;
 
     // Strip speaker notes from content if user doesn't have permission to view them
     // Followers are typically students/public who shouldn't see notes unless show_speaker_notes is enabled
@@ -94,7 +95,7 @@ export const loader = async ({ params, request }: any) => {
 };
 
 export default function SlideFollow() {
-  const { slide, contentUrl, slideContent, contentError, shareCode, preview } = useLoaderData() as any;
+  const { slide, contentUrl, slideContent, contentError, shareCode, preview } = useLoaderData<typeof loader>();
 
   // Extract theme from slideContent for Sandpack auto-theme detection
   const currentSlideTheme = useMemo(() => {
@@ -120,7 +121,7 @@ export default function SlideFollow() {
         isPresenter={false}
         shareCode={shareCode}
         previewMode={preview}
-        multiplexId={slide.multiplex_id}
+        multiplexId={slide.multiplex_id ?? undefined}
         // Note: multiplexSecret intentionally NOT passed to followers
         // Only presenters (in $slideId_.present) should have the secret
       />

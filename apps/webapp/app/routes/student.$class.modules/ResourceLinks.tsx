@@ -1,6 +1,22 @@
 import { IconFileText, IconPresentation } from '@tabler/icons-react';
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any -- Prisma page/slide shapes from loader
+interface LinkedPage {
+  page: { id: string; title: string };
+}
+
+interface LinkedSlide {
+  slide: { id: string; title: string };
+}
+
+interface ResourceLinksProps {
+  pages?: LinkedPage[];
+  slides?: LinkedSlide[];
+  classSlug: string;
+  slidesUrl: string;
+  pagesUrl: string;
+  rolePrefix?: string;
+}
+
 const ResourceLinks = ({
   pages,
   slides,
@@ -8,7 +24,7 @@ const ResourceLinks = ({
   slidesUrl,
   pagesUrl,
   rolePrefix = 'student',
-}: any) => { // eslint-disable-line @typescript-eslint/no-explicit-any -- component accepts varied data shapes from different routes
+}: ResourceLinksProps) => {
   const hasPages = pages?.length > 0;
   const hasSlides = slides?.length > 0;
 

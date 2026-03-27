@@ -13,7 +13,7 @@ export default function PropertiesPanel() {
   const { selectedElement, elementType, selectElement, clearSelection, onContentChange } = useElementSelection();
 
   // Select the current slide section for slide-level properties
-  const handleSelectSlide = useCallback((event: any) => {
+  const handleSelectSlide = useCallback((event: React.MouseEvent) => {
     // Prevent the button click from bubbling to document handlers
     event?.stopPropagation();
     event?.preventDefault();
@@ -96,7 +96,7 @@ export default function PropertiesPanel() {
           <EmptyState />
         ) : (
           <>
-            <PropertyEditor type={elementType} element={selectedElement} />
+            {selectedElement && <PropertyEditor type={elementType} element={selectedElement} />}
 
             {/* Delete button - shown for deletable element types */}
             {isDeletable && (
@@ -120,8 +120,8 @@ export default function PropertiesPanel() {
 /**
  * PropertyEditor - Renders the appropriate editor for the element type
  */
-function PropertyEditor({ type, element }: any) {
-  const Editor = (elementPropertyEditors as any)[type];
+function PropertyEditor({ type, element }: { type: string; element: HTMLElement }) {
+  const Editor = elementPropertyEditors[type as keyof typeof elementPropertyEditors];
 
   if (!Editor) {
     return (
@@ -131,7 +131,9 @@ function PropertyEditor({ type, element }: any) {
     );
   }
 
-  return <Editor element={element} />;
+  // Each editor expects its specific element subtype; the type registry ensures correct pairing
+  const TypedEditor = Editor as unknown as React.ComponentType<{ element: HTMLElement }>;
+  return <TypedEditor element={element} />;
 }
 
 /**

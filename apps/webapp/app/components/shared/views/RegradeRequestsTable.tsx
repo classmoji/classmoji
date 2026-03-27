@@ -20,7 +20,7 @@ interface RegradeGrade {
 
 interface RegradeRequest {
   id: string;
-  status: 'IN_REVIEW' | 'APPROVED';
+  status: 'IN_REVIEW' | 'APPROVED' | 'DENIED';
   student_id: string;
   student: { name: string; login: string; avatar_url: string; _count: { regrade_requests: number } };
   repository_assignment: {
@@ -28,10 +28,9 @@ interface RegradeRequest {
     assignment: { title: string };
     repository: { name: string } | null;
     grades: RegradeGrade[];
-    provider_issue_number?: number;
+    provider_issue_number?: number | null;
     studentId?: string;
     teamId?: string;
-    [key: string]: unknown;
   };
   previous_grade: string[];
   student_comment: string | null;
@@ -39,7 +38,7 @@ interface RegradeRequest {
 
 interface RegradeRequestsTableProps {
   requests: RegradeRequest[];
-  emojiMappings?: any; // eslint-disable-line @typescript-eslint/no-explicit-any -- emojiMappings can be Record or array depending on Prisma query
+  emojiMappings?: Record<string, unknown>;
   org?: string | null;
 }
 
@@ -86,8 +85,13 @@ const RegradeRequestsTable = ({ requests, emojiMappings, org }: RegradeRequestsT
       key: 'status',
       width: '12%',
       render: (status: RegradeRequest['status']) => (
-        <Tag color={status === 'IN_REVIEW' ? 'orange' : 'green'} className="font-semibold">
-          {status === 'IN_REVIEW' ? 'In Review' : 'Resolved'}
+        <Tag
+          color={
+            status === 'IN_REVIEW' ? 'orange' : status === 'APPROVED' ? 'green' : 'red'
+          }
+          className="font-semibold"
+        >
+          {status === 'IN_REVIEW' ? 'In Review' : status === 'APPROVED' ? 'Resolved' : 'Denied'}
         </Tag>
       ),
     },
@@ -140,7 +144,12 @@ const RegradeRequestsTable = ({ requests, emojiMappings, org }: RegradeRequestsT
         <TableActionButtons
           onView={
             org && request.repository_assignment?.repository
-              ? () => openRepositoryAssignmentInGithub(org, request.repository_assignment)
+              ? () =>
+                  openRepositoryAssignmentInGithub(org, {
+                    ...request.repository_assignment,
+                    provider_issue_number:
+                      request.repository_assignment.provider_issue_number ?? undefined,
+                  })
               : undefined
           }
         >
@@ -163,7 +172,16 @@ const RegradeRequestsTable = ({ requests, emojiMappings, org }: RegradeRequestsT
                 onClick={() => {
                   notify('UPDATE_REGRADE_REQUEST', 'Updating regrade request...');
                   fetcher!.submit(
-                    { request, status: 'APPROVED' },
+                    {
+                      request: {
+                        id: request.id,
+                        student_id: request.student_id,
+                        repository_assignment: {
+                          id: request.repository_assignment.id,
+                        },
+                      },
+                      status: 'APPROVED',
+                    },
                     {
                       method: 'post',
                       action: `/api/operation/?action=updateRegradeRequest`,

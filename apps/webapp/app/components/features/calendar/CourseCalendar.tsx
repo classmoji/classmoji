@@ -583,7 +583,7 @@ const CourseCalendar = ({
                           >
                             <EventCard
                               event={event}
-                              onClick={onEventClick}
+                              onClick={onEventClick ?? undefined}
                               showCreator={showCreator}
                               compact={true}
                             />

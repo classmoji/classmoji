@@ -9,7 +9,7 @@ import {
   IconEdit,
   IconNotes,
 } from '@tabler/icons-react';
-import prisma from '@classmoji/database';
+import getPrisma from '@classmoji/database';
 import { assertClassroomAccess } from '~/utils/helpers';
 import { ClassmojiService } from '@classmoji/services';
 import { PageHeader, TableActionButtons, RecentViewers } from '~/components';
@@ -37,7 +37,7 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
   });
 
   // Get all slides for this classroom
-  const slides = await prisma!.slide.findMany({
+  const slides = await getPrisma().slide.findMany({
     where: { classroom_id: classroom.id },
     orderBy: { updated_at: 'desc' },
   });
@@ -94,7 +94,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
       is_public = true;
     }
 
-    await prisma!.slide.update({
+    await getPrisma().slide.update({
       where: { id: slideId },
       data: { is_draft, is_public },
     });
@@ -104,7 +104,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
 
   // Handle boolean toggles (allow_team_edit, show_speaker_notes)
   if (field === 'allow_team_edit' || field === 'show_speaker_notes') {
-    await prisma!.slide.update({
+    await getPrisma().slide.update({
       where: { id: slideId },
       data: { [field]: value === 'true' },
     });

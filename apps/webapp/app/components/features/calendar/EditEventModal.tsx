@@ -357,7 +357,7 @@ const EditEventModal = ({
           event={event}
           classSlug={classSlug}
           rolePrefix={rolePrefix}
-          slidesUrl={slidesUrl}
+          slidesUrl={slidesUrl ?? ''}
           pagesUrl={pagesUrl}
         />
       </div>

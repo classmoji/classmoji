@@ -2,7 +2,7 @@ import { useCreateBlockNote } from '@blocknote/react';
 import { BlockNoteView } from '@blocknote/mantine';
 import { MantineProvider } from '@mantine/core';
 import { useState, useEffect } from 'react';
-import { schema } from '~/components/editor/blocks/index.tsx';
+import { schema, type PageBlockInsertions } from '~/components/editor/blocks/index.tsx';
 
 import '@blocknote/mantine/style.css';
 import '@blocknote/core/fonts/inter.css';
@@ -12,16 +12,20 @@ import '~/styles/blocknote-overrides.css';
  * BlockNoteViewer - Read-only BlockNote viewer for pages.
  */
 interface BlockNoteViewerProps {
-  content: any;
+  content: unknown;
   darkMode: boolean;
 }
 
 const BlockNoteViewer = ({ content, darkMode }: BlockNoteViewerProps) => {
   const [isMounted, setIsMounted] = useState(false);
+  const initialContent =
+    Array.isArray(content) && content.length > 0
+      ? (content as PageBlockInsertions)
+      : ([{ type: 'paragraph', content: [] }] as PageBlockInsertions);
 
   const editor = useCreateBlockNote({
     schema,
-    initialContent: content?.length ? content : [{ type: 'paragraph', content: [] }],
+    initialContent,
   });
 
   useEffect(() => {
@@ -42,7 +46,7 @@ const BlockNoteViewer = ({ content, darkMode }: BlockNoteViewerProps) => {
       theme={{
         fontFamily: 'Noto Sans, -apple-system, BlinkMacSystemFont, sans-serif',
         fontFamilyMonospace: 'JetBrains Mono, SFMono-Regular, Consolas, Liberation Mono, Menlo, monospace',
-      } as any}
+      }}
     >
       <div className="page-editor">
         <BlockNoteView

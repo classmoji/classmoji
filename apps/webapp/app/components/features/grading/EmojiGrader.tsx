@@ -8,23 +8,26 @@ import useStore from '~/store';
 import Emoji from '../../ui/display/Emoji';
 
 interface Grade {
-  id?: string;
+  id: string;
   emoji: string;
   grader?: { name: string };
+  token_transaction?: {
+    amount: number;
+  } | null;
 }
 
 interface RepositoryAssignment {
   id: string;
+  assignment_id?: string;
   studentId?: string;
   teamId?: string;
   grades?: Grade[];
-  repository?: { name: string; [key: string]: unknown } | null;
-  [key: string]: unknown;
+  repository?: { name?: string | null } | null;
 }
 
 interface EmojiGraderProps {
   repositoryAssignment: RepositoryAssignment;
-  emojiMappings: any; // eslint-disable-line @typescript-eslint/no-explicit-any -- emojiMappings can be Record or array depending on Prisma query shape
+  emojiMappings: Record<string, unknown>;
 }
 
 const EmojiGrader = ({ repositoryAssignment, emojiMappings }: EmojiGraderProps) => {
@@ -42,18 +45,20 @@ const EmojiGrader = ({ repositoryAssignment, emojiMappings }: EmojiGraderProps) 
 
     const { repository, ...assignmentWithoutCircular } = repositoryAssignment;
     const assignmentData = {
-      ...assignmentWithoutCircular,
-      repository: { name: repository?.name },
+      id: assignmentWithoutCircular.id,
+      assignment_id: assignmentWithoutCircular.assignment_id ?? null,
+      studentId: assignmentWithoutCircular.studentId ?? null,
+      teamId: assignmentWithoutCircular.teamId ?? null,
     };
 
     fetcher!.submit(
       {
-        repoName: assignmentData.repository.name,
+        repoName: repository?.name ?? null,
         repositoryAssignment: assignmentData,
         graderId: user!.id,
         grade: emoji,
-        studentId: repositoryAssignment.studentId,
-        teamId: repositoryAssignment.teamId,
+        studentId: repositoryAssignment.studentId ?? null,
+        teamId: repositoryAssignment.teamId ?? null,
       },
       {
         method: 'post',
@@ -68,15 +73,24 @@ const EmojiGrader = ({ repositoryAssignment, emojiMappings }: EmojiGraderProps) 
 
     const { repository, ...assignmentWithoutCircular } = repositoryAssignment;
     const assignmentData = {
-      ...assignmentWithoutCircular,
-      repository: { name: repository?.name },
+      id: assignmentWithoutCircular.id,
+      assignment_id: assignmentWithoutCircular.assignment_id ?? null,
+      studentId: assignmentWithoutCircular.studentId ?? null,
+      teamId: assignmentWithoutCircular.teamId ?? null,
     };
+    const gradeToRemove = repositoryAssignment.grades?.find((grade: Grade) => grade.emoji === emoji);
 
     fetcher!.submit(
       {
-        repoName: assignmentData.repository.name,
+        repoName: repository?.name ?? null,
         repositoryAssignment: assignmentData,
-        grade: repositoryAssignment.grades?.find((grade: Grade) => grade.emoji === emoji),
+        grade: gradeToRemove
+          ? {
+              id: gradeToRemove.id,
+              emoji: gradeToRemove.emoji,
+              token_transaction: gradeToRemove.token_transaction ?? null,
+            }
+          : null,
       },
       {
         method: 'post',

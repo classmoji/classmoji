@@ -34,13 +34,32 @@ const HANDLES = [
 
 export default function BlockHandles() {
   const { selectedElement, elementType, blockElement, onContentChange } = useElementSelection();
-  const [bounds, setBounds] = useState<any>(null);
+  interface ElementBounds {
+    left: number;
+    top: number;
+    width: number;
+    height: number;
+  }
+
+  interface DragState {
+    type: 'resize' | 'move';
+    handle: string;
+    startX: number;
+    startY: number;
+    startLeft: number;
+    startTop: number;
+    startWidth: number;
+    startHeight: number;
+    disabledIframes?: NodeListOf<HTMLIFrameElement>;
+  }
+
+  const [bounds, setBounds] = useState<ElementBounds | null>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [isMoving, setIsMoving] = useState(false);
   const [currentPosition, setCurrentPosition] = useState({ left: 0, top: 0 });
   const [currentSize, setCurrentSize] = useState({ width: 0, height: 0 });
   const [isEditingCode, setIsEditingCode] = useState(false); // For Sandpack code editing mode
-  const dragStateRef = useRef<any>(null);
+  const dragStateRef = useRef<DragState | null>(null);
 
   // Only show handles for sl-blocks
   // For sandpack elements inside sl-blocks, use the blockElement (the sl-block wrapper)
@@ -48,9 +67,9 @@ export default function BlockHandles() {
 
   // For sandpack: if blockElement wasn't passed, try to find the sl-block from selectedElement
   // This handles cases where selection happens through paths that don't set blockElement
-  let effectiveBlockElement = blockElement;
+  let effectiveBlockElement: HTMLElement | null = blockElement;
   if (elementType === 'sandpack' && !blockElement && selectedElement) {
-    effectiveBlockElement = selectedElement.closest('.sl-block');
+    effectiveBlockElement = selectedElement.closest('.sl-block') as HTMLElement | null;
   }
 
   const isSandpackBlock = elementType === 'sandpack' && effectiveBlockElement?.classList?.contains('sl-block');
@@ -85,7 +104,7 @@ export default function BlockHandles() {
   }, []);
 
   // Parse pixel value from style string
-  const parsePixels = useCallback((value: any) => {
+  const parsePixels = useCallback((value: string | undefined | null) => {
     if (!value) return 0;
     return parseInt(value, 10) || 0;
   }, []);
@@ -145,7 +164,7 @@ export default function BlockHandles() {
   }, [updateBounds]);
 
   // Handle resize drag start
-  const handleResizeStart = useCallback((e: any, handle: any) => {
+  const handleResizeStart = useCallback((e: React.MouseEvent, handle: typeof HANDLES[number]) => {
     e.preventDefault();
     e.stopPropagation();
 
@@ -161,7 +180,7 @@ export default function BlockHandles() {
 
     // CRITICAL: Disable pointer events on iframes during drag to prevent event capture
     const iframes = targetElement.querySelectorAll('iframe');
-    iframes.forEach((iframe: any) => {
+    iframes.forEach((iframe) => {
       iframe.style.pointerEvents = 'none';
     });
 
@@ -185,7 +204,7 @@ export default function BlockHandles() {
   }, [targetElement, bounds, getScale, parsePixels]);
 
   // Handle move drag start
-  const handleMoveStart = useCallback((e: any) => {
+  const handleMoveStart = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
 
@@ -197,16 +216,19 @@ export default function BlockHandles() {
     // CRITICAL: Disable pointer events on iframes during drag to prevent event capture
     // Iframes can steal mousemove/mouseup events, causing drag to fail
     const iframes = targetElement.querySelectorAll('iframe');
-    iframes.forEach((iframe: any) => {
+    iframes.forEach((iframe) => {
       iframe.style.pointerEvents = 'none';
     });
 
     dragStateRef.current = {
       type: 'move',
+      handle: '',
       startX: e.clientX,
       startY: e.clientY,
       startLeft,
       startTop,
+      startWidth: 0,
+      startHeight: 0,
       disabledIframes: iframes, // Store for cleanup
     };
 
@@ -218,7 +240,7 @@ export default function BlockHandles() {
   }, [targetElement, bounds, parsePixels]);
 
   // Handle mouse move during drag
-  const handleMouseMove = useCallback((e: any) => {
+  const handleMouseMove = useCallback((e: MouseEvent) => {
     if (!dragStateRef.current || !targetElement) return;
 
     const scale = getScale();
@@ -350,7 +372,7 @@ export default function BlockHandles() {
 
     // Re-enable pointer events on iframes
     if (dragStateRef.current?.disabledIframes) {
-      dragStateRef.current.disabledIframes.forEach((iframe: any) => {
+      dragStateRef.current.disabledIframes.forEach((iframe) => {
         iframe.style.pointerEvents = '';
       });
     }
@@ -372,7 +394,7 @@ export default function BlockHandles() {
   }, [handleMouseMove, handleMouseUp]);
 
   // Handle double-click to enter edit mode
-  const handleDoubleClick = useCallback((e: any) => {
+  const handleDoubleClick = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
 
@@ -386,7 +408,7 @@ export default function BlockHandles() {
       // from capturing keyboard input meant for the Sandpack code editor
       targetElement.contentEditable = 'false';
       // Also disable on the sandpack-embed inside
-      const sandpackEmbed = targetElement.querySelector('.sandpack-embed');
+      const sandpackEmbed = targetElement.querySelector('.sandpack-embed') as HTMLElement | null;
       if (sandpackEmbed) {
         sandpackEmbed.contentEditable = 'false';
       }
@@ -397,7 +419,7 @@ export default function BlockHandles() {
     targetElement.classList.remove('selected');
     targetElement.classList.add('editing');
 
-    const content = targetElement.querySelector('.sl-block-content');
+    const content = targetElement.querySelector('.sl-block-content') as HTMLElement | null;
     if (content) {
       content.contentEditable = 'true';
       content.focus();
@@ -415,9 +437,9 @@ export default function BlockHandles() {
   useEffect(() => {
     if (!isEditingCode || !targetElement) return;
 
-    const handleClickOutside = (e: any) => {
+    const handleClickOutside = (e: MouseEvent) => {
       // Check if click is inside the Sandpack block
-      if (targetElement.contains(e.target)) {
+      if (targetElement.contains(e.target as Node)) {
         return; // Click inside, stay in edit mode
       }
 
@@ -426,7 +448,7 @@ export default function BlockHandles() {
       targetElement.classList.remove('editing-code');
       // Restore contentEditable to inherit from parent (the slide)
       targetElement.contentEditable = 'inherit';
-      const sandpackEmbed = targetElement.querySelector('.sandpack-embed');
+      const sandpackEmbed = targetElement.querySelector('.sandpack-embed') as HTMLElement | null;
       if (sandpackEmbed) {
         sandpackEmbed.contentEditable = 'inherit';
       }
@@ -445,7 +467,7 @@ export default function BlockHandles() {
   useEffect(() => {
     if (!isEditingCode || !targetElement) return;
 
-    const stopKeyboardPropagation = (e: any) => {
+    const stopKeyboardPropagation = (e: KeyboardEvent) => {
       // Allow Escape to bubble up (for exiting edit mode if needed)
       if (e.key === 'Escape') return;
 

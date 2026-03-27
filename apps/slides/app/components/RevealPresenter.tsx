@@ -18,7 +18,19 @@ const BUILTIN_THEMES = ['black', 'white', 'league', 'beige', 'night', 'serif', '
  * @param {string} theme - Theme name or custom path
  * @returns {string | null} Full URL to the theme CSS, or null for shared themes
  */
-function getThemeUrl(theme: any) {
+interface RevealPresenterProps {
+  contentUrl?: string;
+  initialContent?: string | null;
+  initialError?: string | null;
+  slideId: string;
+  isPresenter?: boolean;
+  shareCode?: string | null;
+  previewMode?: boolean;
+  multiplexId?: string;
+  multiplexSecret?: string;
+}
+
+function getThemeUrl(theme: string) {
   // Shared themes are loaded via their embedded CSS links, not dynamically
   if (theme.startsWith('shared:')) {
     return null;
@@ -49,14 +61,14 @@ export default function RevealPresenter({
   previewMode = false,    // Preview mode: no socket, no controls (for speaker view previews)
   multiplexId,
   multiplexSecret,
-}: any) {
-  const deckRef = useRef<any>(null);
-  const revealRef = useRef<any>(null);
-  const socketRef = useRef<any>(null);
+}: RevealPresenterProps) {
+  const deckRef = useRef<HTMLDivElement>(null);
+  const revealRef = useRef<RevealApi | null>(null);
+  const socketRef = useRef<ReturnType<typeof io> | null>(null);
   const isRemoteUpdateRef = useRef(false);  // Prevent socket event loops
   const [loading, setLoading] = useState(!initialContent && !initialError);
   const [error, setError] = useState(initialError);
-  const [htmlContent, setHtmlContent] = useState<any>(null);
+  const [htmlContent, setHtmlContent] = useState<string | null>(null);
   const [isClient, setIsClient] = useState(false);
   const [viewerCount, setViewerCount] = useState(0);
   const [showFollowQR, setShowFollowQR] = useState(false);
@@ -67,9 +79,9 @@ export default function RevealPresenter({
   const [theme, setTheme] = useState('white');
   const [themeLight, setThemeLight] = useState('white');
   const [themeDark, setThemeDark] = useState('black');
-  const themeStyleRef = useRef<any>(null);
+  const themeStyleRef = useRef<HTMLLinkElement | null>(null);
   // Shared theme state - CSS URLs extracted from HTML head
-  const sharedThemeLinksRef = useRef(/** @type {HTMLLinkElement[]} */ ([]));
+  const sharedThemeLinksRef = useRef<HTMLLinkElement[]>([]);
   const [bodyClasses, setBodyClasses] = useState('');
 
   // Hydration check
@@ -92,7 +104,7 @@ export default function RevealPresenter({
       }
 
       // Load the shared theme CSS links that we extracted from HTML
-      sharedThemeLinksRef.current.forEach((link: any) => {
+      sharedThemeLinksRef.current.forEach((link) => {
         if (!document.head.contains(link)) {
           document.head.appendChild(link);
         }
@@ -112,13 +124,13 @@ export default function RevealPresenter({
           document.body.classList.remove(...classes);
         }
         // Remove shared theme links
-        sharedThemeLinksRef.current.forEach((link: any) => link.remove());
+        sharedThemeLinksRef.current.forEach((link) => link.remove());
       };
     }
 
     // Built-in themes: Create or update theme stylesheet link
     /** @param {boolean} isDark */
-    const loadTheme = (isDark: any) => {
+    const loadTheme = (isDark: boolean) => {
       const currentTheme = isDark ? themeDark : themeLight;
       const themeUrl = getThemeUrl(currentTheme);
 
@@ -154,7 +166,7 @@ export default function RevealPresenter({
 
     // Listen for changes to system preference
     /** @param {MediaQueryListEvent} e */
-    const handleChange = (e: any) => {
+    const handleChange = (e: MediaQueryListEvent) => {
       loadTheme(e.matches);
     };
     mediaQuery.addEventListener('change', handleChange);
@@ -173,7 +185,7 @@ export default function RevealPresenter({
   useEffect(() => {
     if (!isClient) return;
 
-    const parseContent = (html: any) => {
+    const parseContent = (html: string) => {
       const parser = new DOMParser();
       const doc = parser.parseFromString(html, 'text/html');
       const slidesContent = doc.querySelector('.slides');
@@ -208,7 +220,7 @@ export default function RevealPresenter({
       // For shared themes, extract CSS links from the HTML head
       // These are the lib CSS and custom theme CSS that were embedded during save
       const headLinks = doc.querySelectorAll('head link[rel="stylesheet"]');
-      const sharedLinks: any[] = [];
+      const sharedLinks: HTMLLinkElement[] = [];
       headLinks.forEach((link) => {
         const href = link.getAttribute('href');
         // Include content proxy URLs (shared theme CSS) but not CDN URLs
@@ -219,7 +231,7 @@ export default function RevealPresenter({
           sharedLinks.push(newLink);
         }
       });
-      sharedThemeLinksRef.current = sharedLinks as any;
+      sharedThemeLinksRef.current = sharedLinks;
 
       if (slidesContent) {
         // Filter out hidden slides (data-hidden="true") for presentation
@@ -270,16 +282,16 @@ export default function RevealPresenter({
         setLoading(true);
         setError(null);
 
-        const response = await fetch(contentUrl);
+        const response = await fetch(contentUrl!);
         if (!response.ok) {
           throw new Error(`Failed to load slides: ${response.status}`);
         }
 
         const html = await response.text();
         parseContent(html);
-      } catch (err: any) {
+      } catch (err: unknown) {
         console.error('Error loading slides:', err);
-        setError(err.message);
+        setError(err instanceof Error ? err.message : String(err));
         setLoading(false);
       }
     };
@@ -353,11 +365,11 @@ export default function RevealPresenter({
       // Process speaker notes: convert markdown to HTML for speaker view
       // This must happen after initialization so the notes are in the DOM
       const notesElements = deckRef.current.querySelectorAll('aside.notes');
-      notesElements.forEach((aside: any) => {
+      notesElements.forEach((aside: Element) => {
         const markdownContent = aside.textContent || '';
         if (markdownContent.trim()) {
           // Convert markdown to HTML using marked
-          aside.innerHTML = marked.parse(markdownContent);
+          aside.innerHTML = marked.parse(markdownContent) as string;
         }
       });
 
@@ -422,7 +434,7 @@ export default function RevealPresenter({
 
     // If presenter, broadcast slide changes
     if (isPresenter) {
-      const handleSlideChanged = (event: any) => {
+      const handleSlideChanged = (event: { indexh: number; indexv: number }) => {
         // Skip if this was triggered by a remote update (loop prevention)
         if (isRemoteUpdateRef.current) return;
         socket.emit('slidechanged', {
@@ -431,7 +443,7 @@ export default function RevealPresenter({
         });
       };
 
-      const handleFragmentShown = (event: any) => {
+      const handleFragmentShown = (event: { fragment: HTMLElement }) => {
         if (isRemoteUpdateRef.current) return;
         socket.emit('fragmentshown', {
           index: event.fragment.dataset.fragmentIndex,
@@ -440,7 +452,7 @@ export default function RevealPresenter({
         });
       };
 
-      const handleFragmentHidden = (event: any) => {
+      const handleFragmentHidden = (event: { fragment: HTMLElement }) => {
         if (isRemoteUpdateRef.current) return;
         socket.emit('fragmenthidden', {
           index: event.fragment.dataset.fragmentIndex,
@@ -510,9 +522,9 @@ export default function RevealPresenter({
   // Handle keyboard shortcuts
   // Uses capture phase to intercept 'S' before Reveal.js's built-in speaker view handler
   useEffect(() => {
-    const handleKeyDown = (e: any) => {
+    const handleKeyDown = (e: KeyboardEvent) => {
       // Don't handle shortcuts if typing in an input
-      if (e.target.matches('input, textarea')) return;
+      if ((e.target as HTMLElement)?.matches?.('input, textarea')) return;
 
       if (e.key === 'Escape') {
         // Close QR overlay if open, otherwise exit presentation

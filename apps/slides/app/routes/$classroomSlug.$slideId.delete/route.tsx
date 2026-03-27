@@ -12,8 +12,9 @@ import { assertSlideAccess } from '@classmoji/auth/server';
 import { useUser } from '~/root';
 import { getSlideDeleteInfo, deleteSlide } from '~/utils/slideService.server';
 
-export const loader = async ({ params, request }: any) => {
+export const loader = async ({ params, request }: { params: Record<string, string | undefined>; request: Request }) => {
   const { classroomSlug, slideId } = params;
+  if (!classroomSlug || !slideId) throw new Response('Missing parameters', { status: 400 });
 
   // Authorization: require edit permission to delete slides
   // Uses same permissions as editing (owner/teacher/assistant with team_edit)
@@ -27,9 +28,10 @@ export const loader = async ({ params, request }: any) => {
   let slideInfo;
   try {
     slideInfo = await getSlideDeleteInfo(slideId);
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.log(error);
-    throw new Response(error.message || 'Slide not found', { status: 404 });
+    const message = error instanceof Error ? error.message : 'Slide not found';
+    throw new Response(message, { status: 404 });
   }
 
   // Validate that the slide belongs to this classroom
@@ -70,8 +72,9 @@ export const loader = async ({ params, request }: any) => {
   };
 };
 
-export const action = async ({ request, params }: any) => {
+export const action = async ({ request, params }: { request: Request; params: Record<string, string | undefined> }) => {
   const { classroomSlug, slideId } = params;
+  if (!classroomSlug || !slideId) return { error: 'Missing parameters' };
   const formData = await request.formData();
 
   const deleteTheme = formData.get('deleteTheme') === 'true';
@@ -84,7 +87,7 @@ export const action = async ({ request, params }: any) => {
   });
 
   // Verify the slide belongs to this classroom
-  if (slide.classroom?.slug !== classroomSlug) {
+  if ((slide as { classroom?: { slug?: string } }).classroom?.slug !== classroomSlug) {
     return { error: 'Slide does not belong to this classroom' };
   }
 
@@ -95,9 +98,10 @@ export const action = async ({ request, params }: any) => {
     // Redirect back to webapp slides list
     const webappUrl = process.env.WEBAPP_URL || 'http://localhost:3000';
     return redirect(`${webappUrl}/admin/${classroomSlug}/slides`);
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error('Failed to delete slide:', error);
-    return { error: error.message || 'Failed to delete slide' };
+    const message = error instanceof Error ? error.message : 'Failed to delete slide';
+    return { error: message };
   }
 };
 
@@ -111,7 +115,7 @@ export default function DeleteSlidePage() {
     otherSlidesUsingTheme,
     slideList,
     webappUrl,
-  } = useLoaderData() as any;
+  } = useLoaderData<typeof loader>();
   const userContext = useUser();
   const user = userContext?.user;
   const navigation = useNavigation();
@@ -124,7 +128,7 @@ export default function DeleteSlidePage() {
   // Check if user has permission using classroom memberships
   // OWNER, TEACHER, and ASSISTANT can delete (ASSISTANT can delete their own slides or when team_edit is enabled)
   // Server-side auth in loader/action handles the detailed permission check
-  const membership = user?.classroom_memberships?.find((m: any) => m.classroom?.slug === classroomSlug);
+  const membership = user?.classroom_memberships?.find((m: { classroom?: { slug: string } }) => m.classroom?.slug === classroomSlug);
   const canDelete = membership?.role === 'OWNER' || membership?.role === 'TEACHER' || membership?.role === 'ASSISTANT';
 
   if (!canDelete) {
@@ -219,7 +223,7 @@ export default function DeleteSlidePage() {
                   <p className="text-gray-500 dark:text-gray-400 mb-1">
                     # Repository: {github.repo}
                   </p>
-                  {github.files.map((file: any, i: any) => (
+                  {github.files.map((file: string, i: number) => (
                     <p key={i} className="text-red-600 dark:text-red-400">
                       - {file}
                     </p>
@@ -241,7 +245,7 @@ export default function DeleteSlidePage() {
                       This theme is also used by {otherSlidesUsingTheme} other slide{otherSlidesUsingTheme !== 1 ? 's' : ''}:
                     </p>
                     <ul className="text-sm text-gray-500 dark:text-gray-400 list-disc list-inside mb-2">
-                      {slideList.slice(0, 5).map((s: any) => (
+                      {slideList.slice(0, 5).map((s: { id: string; title: string }) => (
                         <li key={s.id}>{s.title}</li>
                       ))}
                       {slideList.length > 5 && (

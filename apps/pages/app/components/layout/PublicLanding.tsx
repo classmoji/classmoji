@@ -4,9 +4,11 @@ import { Link } from 'react-router';
  * Public landing page for unauthenticated visitors.
  * Shows public pages if available, or a minimal message.
  */
+import type { PageSummary, ClassroomSummary } from '~/types/pages.ts';
+
 interface PublicLandingProps {
-  pages: any[];
-  classroom: any;
+  pages: PageSummary[];
+  classroom: ClassroomSummary;
 }
 
 const PublicLanding = ({ pages, classroom }: PublicLandingProps) => {

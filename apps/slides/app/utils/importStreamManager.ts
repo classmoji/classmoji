@@ -19,7 +19,7 @@ interface ImportEvent {
   filename?: string;
   slideId?: string;
   message?: string;
-  [key: string]: any;
+  [key: string]: unknown;
 }
 
 class ImportStreamManager extends EventEmitter {
@@ -47,7 +47,7 @@ class ImportStreamManager extends EventEmitter {
       for (const event of buffered) {
         try {
           callback(event);
-        } catch (error: any) {
+        } catch (error: unknown) {
           console.error('[importStreamManager] Error replaying buffered event:', error);
         }
       }

@@ -12,7 +12,7 @@
  * @param {HTMLElement} codeElement - The <code> element inside a <pre>
  * @returns {string} The plain text content (for potential undo)
  */
-export function stripHighlightSpans(codeElement: any) {
+export function stripHighlightSpans(codeElement: HTMLElement) {
   if (!codeElement) return '';
 
   // Get the plain text content (this strips all HTML tags)
@@ -34,7 +34,7 @@ export function stripHighlightSpans(codeElement: any) {
  *
  * @param {HTMLElement} codeElement - The <code> element inside a <pre>
  */
-export async function reHighlightCode(codeElement: any) {
+export async function reHighlightCode(codeElement: HTMLElement) {
   if (!codeElement) return;
 
   // Dynamically import highlight.js
@@ -124,7 +124,7 @@ export async function reHighlightCode(codeElement: any) {
  * @param {HTMLElement} codeElement - The <code> element
  * @param {Function} onContentChange - Callback when content changes
  */
-export function handleCodeBlockTab(event: any, codeElement: any, onContentChange: any) {
+export function handleCodeBlockTab(event: KeyboardEvent, codeElement: HTMLElement, onContentChange?: (() => void) | null) {
   if (event.key !== 'Tab') return;
 
   event.preventDefault();
@@ -171,7 +171,7 @@ export function handleCodeBlockTab(event: any, codeElement: any, onContentChange
  * @param {HTMLElement} codeElement - The <code> element
  * @param {Function} onContentChange - Callback when content changes
  */
-export function handleCodeBlockEnter(event: any, codeElement: any, onContentChange: any) {
+export function handleCodeBlockEnter(event: KeyboardEvent, codeElement: HTMLElement, onContentChange?: (() => void) | null) {
   if (event.key !== 'Enter') return;
 
   event.preventDefault();
@@ -218,7 +218,7 @@ export function handleCodeBlockEnter(event: any, codeElement: any, onContentChan
 /**
  * Get caret position within a contenteditable element.
  */
-function getCaretPosition(element: any) {
+function getCaretPosition(element: HTMLElement) {
   const selection = window.getSelection()!;
   if (!selection.rangeCount) return 0;
 

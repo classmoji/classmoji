@@ -7,7 +7,7 @@
  */
 
 import { useLoaderData, useNavigation, Form, redirect, useActionData } from 'react-router';
-import prisma from '@classmoji/database';
+import getPrisma from '@classmoji/database';
 import { getGitProvider, ClassmojiService } from '@classmoji/services';
 import { ContentService } from '@classmoji/content';
 import { requireClassroomTeachingTeam } from '@classmoji/auth/server';
@@ -15,16 +15,17 @@ import { useUser } from '~/root';
 import { generateTermString } from '@classmoji/utils';
 import { generateSlideTemplate } from '~/utils/slideHelpers.server';
 
-export const loader = async ({ params, request }: any) => {
+export const loader = async ({ params, request }: { params: Record<string, string | undefined>; request: Request }) => {
   const { classroomSlug } = params;
+  if (!classroomSlug) throw new Response('Missing classroomSlug', { status: 400 });
 
   // Authorization: require OWNER, TEACHER, or ASSISTANT role to create slides
   await requireClassroomTeachingTeam(request, classroomSlug, {
     resourceType: 'SLIDE_CONTENT',
-  } as any);
+  });
 
   // Get classroom with git_organization
-  const classroom = await prisma!.classroom.findUnique({
+  const classroom = await getPrisma().classroom.findUnique({
     where: { slug: classroomSlug },
     include: { git_organization: true },
   });
@@ -40,7 +41,7 @@ export const loader = async ({ params, request }: any) => {
   }
 
   // Generate term string from classroom settings
-  const term = generateTermString(classroom.term as any, classroom.year as any);
+  const term = generateTermString(classroom.term ?? undefined, classroom.year ?? undefined);
   if (!term) {
     throw new Response('Classroom term/year not configured', { status: 400 });
   }
@@ -54,12 +55,13 @@ export const loader = async ({ params, request }: any) => {
   };
 };
 
-export const action = async ({ request, params }: any) => {
+export const action = async ({ request, params }: { request: Request; params: Record<string, string | undefined> }) => {
   const { classroomSlug } = params;
+  if (!classroomSlug) return { error: 'Missing classroomSlug' };
   const formData = await request.formData();
 
-  const title = formData.get('title')?.trim();
-  const term = formData.get('term');
+  const title = (formData.get('title') as string | null)?.trim();
+  const term = formData.get('term') as string;
 
   // Validate required fields
   if (!title) {
@@ -69,10 +71,10 @@ export const action = async ({ request, params }: any) => {
   // Authorization: require OWNER, TEACHER, or ASSISTANT role to create slides
   const { userId } = await requireClassroomTeachingTeam(request, classroomSlug, {
     resourceType: 'SLIDE_CONTENT',
-  } as any);
+  });
 
   // Get classroom with git_organization for GitHub API calls
-  const classroom = await prisma!.classroom.findUnique({
+  const classroom = await getPrisma().classroom.findUnique({
     where: { slug: classroomSlug },
     include: { git_organization: true },
   });
@@ -100,7 +102,7 @@ export const action = async ({ request, params }: any) => {
 
   try {
     // Step 1: Check if content repo exists, create if not
-    const gitProvider = getGitProvider(classroom.git_organization as any);
+    const gitProvider = getGitProvider(classroom.git_organization!);
     const repoExists = await gitProvider.repositoryExists(gitOrgLogin, repoName);
     if (!repoExists) {
       console.log(`Creating content repository: ${repoName}`);
@@ -118,9 +120,10 @@ export const action = async ({ request, params }: any) => {
     try {
       console.log(`Ensuring GitHub Pages is enabled for: ${repoName}`);
       await gitProvider.enableGitHubPages(gitOrgLogin, repoName);
-    } catch (pagesError: any) {
+    } catch (pagesError: unknown) {
       // Pages API requires special permission - log but continue
-      console.warn(`Could not auto-enable GitHub Pages: ${pagesError.message}`);
+      const message = pagesError instanceof Error ? pagesError.message : String(pagesError);
+      console.warn(`Could not auto-enable GitHub Pages: ${message}`);
       console.warn('GitHub Pages may need to be enabled manually in repo settings');
     }
 
@@ -138,7 +141,7 @@ export const action = async ({ request, params }: any) => {
     });
 
     // Step 3: Create the database record
-    const slide = await prisma!.slide.create({
+    const slide = await getPrisma().slide.create({
       data: {
         title,
         slug,
@@ -154,14 +157,15 @@ export const action = async ({ request, params }: any) => {
 
     // Redirect to the new slide in edit mode
     return redirect(`/${slide.id}?mode=edit`);
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error('Failed to create slide:', error);
-    return { error: error.message || 'Failed to create slide' };
+    const message = error instanceof Error ? error.message : 'Failed to create slide';
+    return { error: message };
   }
 };
 
 export default function CreateSlidePage() {
-  const { classroomSlug, term, classroom, webappUrl } = useLoaderData() as any;
+  const { classroomSlug, term, classroom, webappUrl } = useLoaderData<typeof loader>();
   const userContext = useUser();
   const user = userContext?.user;
   const navigation = useNavigation();
@@ -172,7 +176,7 @@ export default function CreateSlidePage() {
 
   // Check if user has permission using classroom memberships
   // OWNER, TEACHER, and ASSISTANT can all create slides
-  const membership = user?.classroom_memberships?.find((m: any) => m.classroom?.slug === classroomSlug);
+  const membership = user?.classroom_memberships?.find((m: { classroom?: { slug: string } }) => m.classroom?.slug === classroomSlug);
   const canCreate = membership?.role === 'OWNER' || membership?.role === 'TEACHER' || membership?.role === 'ASSISTANT';
 
   // Format term for display (e.g., "25w" -> "Winter 2025")

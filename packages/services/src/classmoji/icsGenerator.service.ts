@@ -1,5 +1,22 @@
-import { createEvents } from 'ics';
-import * as calendarService from './calendar.service.js';
+import { createEvents, type DateArray, type EventAttributes } from 'ics';
+import * as calendarService from './calendar.service.ts';
+
+interface RecurrenceRuleInput {
+  days?: string[];
+  until?: string | Date;
+}
+
+interface CalendarEventInput {
+  id: string;
+  title: string;
+  description?: string | null;
+  event_type: string;
+  start_time: Date | string;
+  end_time: Date | string;
+  location?: string | null;
+  meeting_link?: string | null;
+  is_deadline?: boolean | null;
+}
 
 /**
  * Day name to ICS RRULE day code mapping
@@ -17,7 +34,7 @@ const DAY_MAP = {
 /**
  * Convert a Date to ICS date array format [year, month, day, hour, minute]
  */
-const dateToArray = (date: Date | string): number[] => {
+const dateToArray = (date: Date | string): DateArray => {
   const d = new Date(date);
   return [
     d.getUTCFullYear(),
@@ -33,12 +50,14 @@ const dateToArray = (date: Date | string): number[] => {
  * Input: { days: ['monday', 'wednesday'], until: '2025-05-15T00:00:00Z' }
  * Output: { freq: 'WEEKLY', byday: ['MO', 'WE'], until: [2025, 5, 15, 0, 0] }
  */
-const convertRecurrenceRule = (recurrenceRule: any): any | null => {
+const convertRecurrenceRule = (
+  recurrenceRule: RecurrenceRuleInput | null | undefined
+): { freq: 'WEEKLY'; byday: string[]; until?: number[] } | null => {
   if (!recurrenceRule || !recurrenceRule.days || !Array.isArray(recurrenceRule.days)) {
     return null;
   }
 
-  const rrule: Record<string, any> = {
+  const rrule: { freq: 'WEEKLY'; byday: string[]; until?: number[] } = {
     freq: 'WEEKLY',
     byday: recurrenceRule.days.map((day: string) => DAY_MAP[day.toLowerCase() as keyof typeof DAY_MAP]).filter(Boolean),
   };
@@ -53,37 +72,32 @@ const convertRecurrenceRule = (recurrenceRule: any): any | null => {
 /**
  * Convert a calendar event to ICS event format
  */
-const convertEventToICS = (event: any, classroomSlug: string): any => {
+const convertEventToICS = (event: CalendarEventInput, classroomSlug: string): EventAttributes => {
   const startArray = dateToArray(event.start_time);
   const endArray = dateToArray(event.end_time);
-
-  // Calculate duration in minutes for all-day events (deadlines)
-  const startDate = new Date(event.start_time);
-  const endDate = new Date(event.end_time);
-  const durationMinutes = Math.round((endDate.getTime() - startDate.getTime()) / (1000 * 60));
-
-  const icsEvent: Record<string, any> = {
+  const baseEvent = {
     uid: `${event.id}@classmoji.io`,
-    start: startArray,
-    startInputType: 'utc',
-    startOutputType: 'utc',
     title: event.title,
     description: event.description || '',
     categories: [event.event_type],
   };
 
-  // For deadlines, make them all-day events
-  if (event.is_deadline || event.event_type === 'DEADLINE') {
-    // For deadlines, just set the date without time
-    icsEvent.start = [startArray[0], startArray[1], startArray[2]];
-    delete icsEvent.startInputType;
-    delete icsEvent.startOutputType;
-  } else {
-    // Regular timed events
-    icsEvent.end = endArray;
-    icsEvent.endInputType = 'utc';
-    icsEvent.endOutputType = 'utc';
-  }
+  const icsEvent: EventAttributes =
+    event.is_deadline || event.event_type === 'DEADLINE'
+      ? {
+          ...baseEvent,
+          start: [startArray[0], startArray[1], startArray[2]],
+          duration: { days: 1 },
+        }
+      : {
+          ...baseEvent,
+          start: startArray,
+          startInputType: 'utc',
+          startOutputType: 'utc',
+          end: endArray,
+          endInputType: 'utc',
+          endOutputType: 'utc',
+        };
 
   // Add location if present
   if (event.location) {
@@ -139,7 +153,7 @@ export const generateCalendarFeed = async (classroomId: string, classroomSlug: s
   }
 
   // Convert events to ICS format
-  const icsEvents = events.map(event => convertEventToICS(event, classroomSlug));
+  const icsEvents = events.map(event => convertEventToICS(event as CalendarEventInput, classroomSlug));
 
   // Generate ICS content
   return new Promise((resolve, reject) => {

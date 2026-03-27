@@ -12,6 +12,8 @@ import React, { useEffect } from 'react';
 import { ToastContainer } from 'react-toastify';
 
 import useStore from '~/store';
+import type { SlideUser } from '~/store';
+import type { loader } from './root.server';
 
 /**
  * Custom hook to access user data from the root loader
@@ -32,7 +34,7 @@ export const meta = () => {
 };
 
 const App = () => {
-  const { user } = useLoaderData() as any;
+  const { user } = useLoaderData<typeof loader>() as { user: SlideUser | null };
   const setUser = useStore(state => state.setUser);
 
   // Populate Zustand store with user from loader
@@ -66,7 +68,7 @@ const App = () => {
                       document.documentElement.classList.remove('dark');
                     }
                   });
-                } catch (error: any) { console.log(error); }
+                } catch (error: unknown) { console.log(error); }
               })();
             `,
           }}
@@ -94,7 +96,7 @@ const App = () => {
 
 // Error boundary
 export function ErrorBoundary() {
-  const error = useRouteError();
+  const error = useRouteError() as { message?: string; stack?: string } | undefined;
   const isDevelopment = import.meta.env.MODE === 'development';
 
   return (
@@ -112,7 +114,7 @@ export function ErrorBoundary() {
             Something went wrong
           </h1>
           <p className="text-gray-600 dark:text-gray-400 mb-4">
-            {isDevelopment ? (error as any)?.message : 'Please try refreshing the page.'}
+            {isDevelopment ? error?.message : 'Please try refreshing the page.'}
           </p>
           <div className="flex gap-4">
             <button
@@ -128,9 +130,9 @@ export function ErrorBoundary() {
               Go Back
             </button>
           </div>
-          {isDevelopment && (error as any)?.stack && (
+          {isDevelopment && error?.stack && (
             <pre className="mt-4 p-4 bg-gray-100 rounded-md text-xs overflow-auto max-w-2xl">
-              {(error as any).stack}
+              {error.stack}
             </pre>
           )}
         </div>

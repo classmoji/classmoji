@@ -7,7 +7,7 @@ import { IconId } from '@tabler/icons-react';
 import type { Route } from './+types/route';
 import { Logo } from '@classmoji/ui-components';
 import { getAuthSession } from '@classmoji/auth/server';
-import prisma from '@classmoji/database';
+import getPrisma from '@classmoji/database';
 import { generateId } from '@classmoji/utils';
 import { GitHubProvider, ClassmojiService } from '@classmoji/services';
 import Tasks from '@classmoji/tasks';
@@ -26,7 +26,7 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
     const githubId = String(githubUser.id);
     const email = githubUser.email || `${githubUser.login}@dev.local`;
 
-    const user = await prisma!.user.upsert({
+    const user = await getPrisma().user.upsert({
       where: { provider_provider_id: { provider: 'GITHUB', provider_id: githubId } },
       update: { email, name: githubUser.name || githubUser.login },
       create: {
@@ -43,18 +43,18 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
 
     const sessionId = (authData as { session?: { session?: { id?: string } } })?.session?.session?.id;
     if (sessionId) {
-      await prisma!.session.updateMany({
+      await getPrisma().session.updateMany({
         where: { id: sessionId },
         data: { user_id: user.id },
       });
     }
-    await prisma!.account.updateMany({
+    await getPrisma().account.updateMany({
       where: { provider_id: 'github', account_id: githubId },
       data: { user_id: user.id },
     });
 
     // Auto-join the dev classroom as OWNER + ASSISTANT + STUDENT
-    const devClassroom = await prisma!.classroom.findFirst({
+    const devClassroom = await getPrisma().classroom.findFirst({
       where: { slug: 'classmoji-dev-winter-2025' },
       include: {
         modules: {
@@ -66,7 +66,7 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
     });
     if (devClassroom) {
       for (const role of ['OWNER', 'ASSISTANT', 'STUDENT']) {
-        await prisma!.classroomMembership.upsert({
+        await getPrisma().classroomMembership.upsert({
           where: {
             classroom_id_user_id_role: {
               classroom_id: devClassroom.id,
@@ -87,11 +87,11 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
       // Seed student data for the real user so the student view is non-empty
       const helloWorldModule = devClassroom.modules.find(m => m.title === 'hello-world');
       const [assignment1, assignment2] = helloWorldModule?.assignments ?? [];
-      const fakeTA = await prisma!.user.findFirst({ where: { login: 'fake-ta' } });
+      const fakeTA = await getPrisma().user.findFirst({ where: { login: 'fake-ta' } });
 
       if (helloWorldModule && assignment1 && fakeTA) {
         // Repo for the real user
-        const repo = await prisma!.repository.upsert({
+        const repo = await getPrisma().repository.upsert({
           where: {
             provider_provider_id: {
               provider: 'GITHUB',
@@ -110,7 +110,7 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
         });
 
         // Part 1: closed + graded ⭐
-        const repoAssignment1 = await prisma!.repositoryAssignment.upsert({
+        const repoAssignment1 = await getPrisma().repositoryAssignment.upsert({
           where: {
             provider_provider_id: {
               provider: 'GITHUB',
@@ -128,18 +128,18 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
           },
         });
 
-        const existingGrade = await prisma!.assignmentGrade.findFirst({
+        const existingGrade = await getPrisma().assignmentGrade.findFirst({
           where: { repository_assignment_id: repoAssignment1.id },
         });
         if (!existingGrade) {
-          await prisma!.assignmentGrade.create({
+          await getPrisma().assignmentGrade.create({
             data: {
               repository_assignment_id: repoAssignment1.id,
               grader_id: fakeTA.id,
               emoji: '⭐',
             },
           });
-          await prisma!.tokenTransaction.create({
+          await getPrisma().tokenTransaction.create({
             data: {
               classroom_id: devClassroom.id,
               student_id: user.id,
@@ -153,7 +153,7 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
 
         // Part 2: open (unsubmitted) — something still to do as a student
         if (assignment2) {
-          await prisma!.repositoryAssignment.upsert({
+          await getPrisma().repositoryAssignment.upsert({
             where: {
               provider_provider_id: {
                 provider: 'GITHUB',
@@ -431,8 +431,8 @@ export const action = async ({ request }: Route.ActionArgs) => {
   // ── Send verification code ──────────────────────────────────────────────
   if (intent === 'send-code') {
     const code = String(Math.floor(100000 + Math.random() * 900000));
-    await prisma!.verification.deleteMany({ where: { identifier: formData.email } });
-    await prisma!.verification.create({
+    await getPrisma().verification.deleteMany({ where: { identifier: formData.email } });
+    await getPrisma().verification.create({
       data: {
         identifier: formData.email,
         value: code,
@@ -449,7 +449,7 @@ export const action = async ({ request }: Route.ActionArgs) => {
 
   // ── Verify code inline ──────────────────────────────────────────────────
   if (intent === 'verify-code') {
-    const v = await prisma!.verification.findFirst({
+    const v = await getPrisma().verification.findFirst({
       where: {
         identifier: formData.email,
         value: formData.code,
@@ -461,7 +461,7 @@ export const action = async ({ request }: Route.ActionArgs) => {
   }
 
   // ── Register (re-validate + create user) ────────────────────────────────
-  const verification = await prisma!.verification.findFirst({
+  const verification = await getPrisma().verification.findFirst({
     where: {
       identifier: formData.email,
       value: formData.code,
@@ -471,10 +471,10 @@ export const action = async ({ request }: Route.ActionArgs) => {
   if (!verification) {
     return { error: 'Verification code is invalid or expired. Please verify your email again.' };
   }
-  await prisma!.verification.deleteMany({ where: { identifier: formData.email } });
+  await getPrisma().verification.deleteMany({ where: { identifier: formData.email } });
 
   // Check if email is already in use by another user
-  const existingUserWithEmail = await prisma!.user.findFirst({
+  const existingUserWithEmail = await getPrisma().user.findFirst({
     where: {
       email: formData.email,
       NOT: {
@@ -487,7 +487,7 @@ export const action = async ({ request }: Route.ActionArgs) => {
   }
 
   // Create user with provider info
-  const user = await prisma!.user.upsert({
+  const user = await getPrisma().user.upsert({
     where: {
       provider_provider_id: {
         provider: 'GITHUB',
@@ -519,14 +519,14 @@ export const action = async ({ request }: Route.ActionArgs) => {
   // Update BetterAuth session to point to the new user
   const sessionId = (authData as { session?: { session?: { id?: string } } })?.session?.session?.id;
   if (sessionId) {
-    await prisma!.session.updateMany({
+    await getPrisma().session.updateMany({
       where: { id: sessionId },
       data: { user_id: user.id },
     });
   }
 
   // Link the GitHub account to the new user
-  await prisma!.account.updateMany({
+  await getPrisma().account.updateMany({
     where: {
       provider_id: 'github',
       account_id: formData.githubId,

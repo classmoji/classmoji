@@ -1,4 +1,6 @@
 import { ServerBlockNoteEditor } from '@blocknote/server-util';
+import type { BlockLike } from '~/types/pages.ts';
+import type { PageBlockEditor, PageBlockInsertions } from '~/components/editor/blocks/index.tsx';
 
 /**
  * Render BlockNote JSON blocks to HTML for read-only page views.
@@ -10,8 +12,13 @@ import { ServerBlockNoteEditor } from '@blocknote/server-util';
  * @param {Object} schema - BlockNote schema with custom blocks
  * @returns {Promise<string>} Full HTML string
  */
-export async function renderBlocksToHtml(blocks: any[], schema: any): Promise<string> {
+type PageBlockSchema = PageBlockEditor['schema'];
+
+export async function renderBlocksToHtml(
+  blocks: BlockLike[],
+  schema: PageBlockSchema
+): Promise<string> {
   const editor = ServerBlockNoteEditor.create({ schema });
-  const html = await editor.blocksToFullHTML(blocks);
+  const html = await editor.blocksToFullHTML(blocks as unknown as PageBlockInsertions);
   return html;
 }

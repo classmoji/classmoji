@@ -23,11 +23,11 @@ const SANDBOX_PRESETS = [
   { value: 'allow-scripts allow-same-origin allow-popups', label: 'Scripts + Popups' },
 ];
 
-export default function IframeProperties({ element }: any) {
+export default function IframeProperties({ element }: { element: HTMLIFrameElement }) {
   const { onContentChange, selectElement } = useElementSelection();
 
   // For iframes, we want to convert the wrapper if it exists
-  const convertibleElement = element?.closest('.iframe-wrapper') || element;
+  const convertibleElement = (element?.closest('.iframe-wrapper') as HTMLElement | null) || element;
 
   // State for all properties
   const [url, setUrl] = useState(() => element?.src || '');
@@ -38,7 +38,7 @@ export default function IframeProperties({ element }: any) {
   const [sandbox, setSandbox] = useState(() => element?.getAttribute('sandbox') || '');
 
   // Parse size value (could be "300px", "50%", or just "300")
-  function parseSize(value: any) {
+  function parseSize(value: string | number | null | undefined) {
     if (!value) return { value: '', unit: 'px' };
     const match = String(value).match(/^(\d+(?:\.\d+)?)(px|%|em|rem|vw|vh)?$/);
     if (match) {
@@ -60,14 +60,14 @@ export default function IframeProperties({ element }: any) {
   }, [element]);
 
   // Update URL
-  const handleUrlChange = useCallback((e: any) => {
+  const handleUrlChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     if (!element) return;
-    const newUrl = (e.target as HTMLInputElement).value;
+    const newUrl = e.target.value;
     element.src = newUrl;
     setUrl(newUrl);
 
     // Remove placeholder styling from wrapper when a real URL is set
-    const wrapper = element.closest('.iframe-wrapper');
+    const wrapper = element.closest('.iframe-wrapper') as HTMLElement | null;
     if (wrapper) {
       if (newUrl && newUrl !== 'about:blank') {
         wrapper.removeAttribute('data-iframe-placeholder');
@@ -80,18 +80,18 @@ export default function IframeProperties({ element }: any) {
   }, [element, onContentChange]);
 
   // Update title
-  const handleTitleChange = useCallback((e: any) => {
+  const handleTitleChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     if (!element) return;
-    const newTitle = (e.target as HTMLInputElement).value;
+    const newTitle = e.target.value;
     element.title = newTitle;
     setTitle(newTitle);
     onContentChange?.();
   }, [element, onContentChange]);
 
   // Update width
-  const handleWidthChange = useCallback((value: any) => {
+  const handleWidthChange = useCallback((value: number | null) => {
     if (!element) return;
-    const newWidth = { ...width, value: value ?? '' };
+    const newWidth = { ...width, value: value !== null ? String(value) : '' };
     setWidth(newWidth);
 
     if (newWidth.value) {
@@ -103,7 +103,7 @@ export default function IframeProperties({ element }: any) {
     onContentChange?.();
   }, [element, width, onContentChange]);
 
-  const handleWidthUnitChange = useCallback((unit: any) => {
+  const handleWidthUnitChange = useCallback((unit: string) => {
     if (!element) return;
     const newWidth = { ...width, unit };
     setWidth(newWidth);
@@ -115,9 +115,9 @@ export default function IframeProperties({ element }: any) {
   }, [element, width, onContentChange]);
 
   // Update height
-  const handleHeightChange = useCallback((value: any) => {
+  const handleHeightChange = useCallback((value: number | null) => {
     if (!element) return;
-    const newHeight = { ...height, value: value ?? '' };
+    const newHeight = { ...height, value: value !== null ? String(value) : '' };
     setHeight(newHeight);
 
     if (newHeight.value) {
@@ -129,7 +129,7 @@ export default function IframeProperties({ element }: any) {
     onContentChange?.();
   }, [element, height, onContentChange]);
 
-  const handleHeightUnitChange = useCallback((unit: any) => {
+  const handleHeightUnitChange = useCallback((unit: string) => {
     if (!element) return;
     const newHeight = { ...height, unit };
     setHeight(newHeight);
@@ -141,7 +141,7 @@ export default function IframeProperties({ element }: any) {
   }, [element, height, onContentChange]);
 
   // Update allowfullscreen
-  const handleAllowFullscreenChange = useCallback((checked: any) => {
+  const handleAllowFullscreenChange = useCallback((checked: boolean) => {
     if (!element) return;
 
     if (checked) {
@@ -154,7 +154,7 @@ export default function IframeProperties({ element }: any) {
   }, [element, onContentChange]);
 
   // Update sandbox
-  const handleSandboxChange = useCallback((newSandbox: any) => {
+  const handleSandboxChange = useCallback((newSandbox: string) => {
     if (!element) return;
 
     if (newSandbox) {

@@ -8,7 +8,7 @@ import {
   classroomService,
 } from '@classmoji/services';
 import { ActionTypes } from '~/constants';
-import prisma from '@classmoji/database';
+import getPrisma from '@classmoji/database';
 
 export const action = checkAuth(async ({ request }: { request: Request }) => {
   const authData = await getAuthSession(request);
@@ -29,7 +29,7 @@ export const action = checkAuth(async ({ request }: { request: Request }) => {
   }
 
   // Get GitOrganization
-  const gitOrg = await prisma!.gitOrganization.findUnique({
+  const gitOrg = await getPrisma().gitOrganization.findUnique({
     where: { id: git_org_id },
   });
 
@@ -69,7 +69,7 @@ export const action = checkAuth(async ({ request }: { request: Request }) => {
   const slug = await classroomService.generateSlug(name, term, year);
 
   // Create Classroom, Settings, and Membership in transaction
-  const classroom = await prisma!.$transaction(async tx => {
+  const classroom = await getPrisma().$transaction(async tx => {
     const classroom = await tx.classroom.create({
       data: {
         git_org_id,

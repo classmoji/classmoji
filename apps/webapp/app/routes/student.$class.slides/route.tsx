@@ -1,5 +1,5 @@
 import { Table, Tag, Card } from 'antd';
-import prisma from '@classmoji/database';
+import getPrisma from '@classmoji/database';
 import type { Route } from './+types/route';
 import { assertClassroomAccess } from '~/utils/helpers';
 import { PageHeader, TableActionButtons } from '~/components';
@@ -16,7 +16,7 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
   });
 
   // Get published slides for this classroom (exclude drafts for students)
-  const slides = await prisma!.slide.findMany({
+  const slides = await getPrisma().slide.findMany({
     where: {
       classroom_id: classroom.id,
       is_draft: false, // Only show published slides to students

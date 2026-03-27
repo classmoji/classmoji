@@ -1,9 +1,11 @@
 import { useFetcher, Link } from 'react-router';
 import dayjs from 'dayjs';
 
+import type { PageSummary, ClassroomSummary } from '~/types/pages.ts';
+
 interface AdminDashboardProps {
-  pages: any[];
-  classroom: any;
+  pages: PageSummary[];
+  classroom: ClassroomSummary;
 }
 
 /**
@@ -12,7 +14,7 @@ interface AdminDashboardProps {
 const AdminDashboard = ({ pages, classroom }: AdminDashboardProps) => {
   const fetcher = useFetcher();
 
-  const statusValue = (page: any): string => {
+  const statusValue = (page: PageSummary): string => {
     if (page.is_draft) return 'draft';
     if (page.is_public) return 'public';
     return 'private';
@@ -24,7 +26,7 @@ const AdminDashboard = ({ pages, classroom }: AdminDashboardProps) => {
     public: 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200',
   };
 
-  const handleStatusChange = (page: any, value: string) => {
+  const handleStatusChange = (page: PageSummary, value: string) => {
     fetcher.submit(
       {
         intent: 'update-status',
@@ -82,7 +84,7 @@ const AdminDashboard = ({ pages, classroom }: AdminDashboardProps) => {
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
-              {pages.map((page: any) => (
+              {pages.map((page) => (
                 <tr key={page.id} className="hover:bg-gray-50 dark:hover:bg-gray-800/50">
                   <td className="px-4 py-3">
                     <Link

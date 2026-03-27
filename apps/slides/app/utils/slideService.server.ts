@@ -6,7 +6,7 @@
 
 import { ContentService } from '@classmoji/content';
 import { GitHubProvider, ClassmojiService } from '@classmoji/services';
-import prisma from '@classmoji/database';
+import getPrisma from '@classmoji/database';
 import { deleteSlideVideos } from './cloudinaryService.server';
 
 const THEMES_FOLDER = '.slidesthemes';
@@ -30,7 +30,7 @@ function getSharedThemeFromHtml(htmlContent: string): string | null {
  */
 export async function countSlidesUsingTheme(gitOrgLogin: string, term: string, themeName: string) {
   // Get git organization for installation ID
-  const gitOrg = await prisma!.gitOrganization.findFirst({
+  const gitOrg = await getPrisma().gitOrganization.findFirst({
     where: { provider: 'GITHUB', login: gitOrgLogin },
   });
 
@@ -39,7 +39,7 @@ export async function countSlidesUsingTheme(gitOrgLogin: string, term: string, t
   }
 
   // Get all slides for this term
-  const slides = await prisma!.slide.findMany({
+  const slides = await getPrisma().slide.findMany({
     where: { term },
     include: {
       classroom: {
@@ -62,21 +62,22 @@ export async function countSlidesUsingTheme(gitOrgLogin: string, term: string, t
   for (const slide of orgSlides) {
     try {
       // Fetch the slide's index.html to check its theme
-      const { data } = await (octokit as any).request('GET /repos/{owner}/{repo}/contents/{path}', {
+      const { data } = await octokit.request('GET /repos/{owner}/{repo}/contents/{path}', {
         owner: gitOrgLogin,
         repo: repoName,
         path: `${slide.content_path}/index.html`,
       });
 
-      const htmlContent = Buffer.from(data.content, 'base64').toString('utf-8');
+      const htmlContent = Buffer.from((data as { content: string }).content, 'base64').toString('utf-8');
       const slideTheme = getSharedThemeFromHtml(htmlContent);
 
       if (slideTheme === themeName) {
         slidesUsingTheme.push({ id: slide.id, title: slide.title });
       }
-    } catch (error: any) {
+    } catch (error: unknown) {
       // Skip slides that can't be read
-      console.warn(`Could not read slide ${slide.id}:`, error.message);
+      const message = error instanceof Error ? error.message : String(error);
+      console.warn(`Could not read slide ${slide.id}:`, message);
     }
   }
 
@@ -93,7 +94,7 @@ export async function countSlidesUsingTheme(gitOrgLogin: string, term: string, t
  * @param {string} themeName - Theme name to delete
  */
 export async function deleteSharedTheme(gitOrgLogin: string, term: string, themeName: string) {
-  const gitOrg = await prisma!.gitOrganization.findFirst({
+  const gitOrg = await getPrisma().gitOrganization.findFirst({
     where: { provider: 'GITHUB', login: gitOrgLogin },
   });
 
@@ -121,7 +122,7 @@ export async function deleteSharedTheme(gitOrgLogin: string, term: string, theme
  */
 export async function deleteSlide({ slideId, deleteTheme = false }: { slideId: string; deleteTheme?: boolean }) {
   // Get the slide with classroom and git organization info
-  const slide = await prisma!.slide.findUnique({
+  const slide = await getPrisma().slide.findUnique({
     where: { id: slideId },
     include: {
       classroom: {
@@ -149,21 +150,22 @@ export async function deleteSlide({ slideId, deleteTheme = false }: { slideId: s
   const octokit = await gitProvider.getOctokit();
 
   // Check if this slide uses a shared theme
-  let themeName: any = null;
+  let themeName: string | null = null;
   let themeDeleted = false;
   let otherSlidesUsingTheme = 0;
 
   try {
-    const { data } = await (octokit as any).request('GET /repos/{owner}/{repo}/contents/{path}', {
+    const { data } = await octokit.request('GET /repos/{owner}/{repo}/contents/{path}', {
       owner: gitOrgLogin,
       repo: repoName,
       path: `${slide.content_path}/index.html`,
     });
 
-    const htmlContent = Buffer.from(data.content, 'base64').toString('utf-8');
+    const htmlContent = Buffer.from((data as { content: string }).content, 'base64').toString('utf-8');
     themeName = getSharedThemeFromHtml(htmlContent);
-  } catch (error: any) {
-    console.warn('Could not read slide HTML:', error.message);
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.warn('Could not read slide HTML:', message);
   }
 
   // Delete the slide content folder from GitHub
@@ -174,7 +176,7 @@ export async function deleteSlide({ slideId, deleteTheme = false }: { slideId: s
       path: slide.content_path,
       message: `Delete slide: ${slide.title}`,
     });
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error('Failed to delete slide content from GitHub:', error);
     // Continue with database deletion even if GitHub fails
   }
@@ -196,7 +198,7 @@ export async function deleteSlide({ slideId, deleteTheme = false }: { slideId: s
       try {
         await deleteSharedTheme(gitOrgLogin, slide.term, themeName);
         themeDeleted = true;
-      } catch (error: any) {
+      } catch (error: unknown) {
         console.error('Failed to delete shared theme:', error);
       }
     }
@@ -206,14 +208,14 @@ export async function deleteSlide({ slideId, deleteTheme = false }: { slideId: s
   const classroomId = slide.classroom_id;
 
   // Delete from database
-  await prisma!.slide.delete({
+  await getPrisma().slide.delete({
     where: { id: slideId },
   });
 
   // Update the manifest
   try {
     await ClassmojiService.contentManifest.saveManifest(classroomId);
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error('Failed to update manifest after slide deletion:', error);
   }
 
@@ -231,7 +233,7 @@ export async function deleteSlide({ slideId, deleteTheme = false }: { slideId: s
  * @returns {Promise<{slide: Object, themeName?: string, otherSlidesUsingTheme?: number, slideList?: Array}>}
  */
 export async function getSlideDeleteInfo(slideId: string) {
-  const slide = await prisma!.slide.findUnique({
+  const slide = await getPrisma().slide.findUnique({
     where: { id: slideId },
     include: {
       classroom: {
@@ -257,20 +259,21 @@ export async function getSlideDeleteInfo(slideId: string) {
   const repoName = `content-${gitOrgLogin}-${slide.term}`;
   const gitProvider = new GitHubProvider(gitOrg.github_installation_id, gitOrgLogin);
 
-  let themeName: any = null;
+  let themeName: string | null = null;
 
   try {
     const octokit = await gitProvider.getOctokit();
-    const { data } = await (octokit as any).request('GET /repos/{owner}/{repo}/contents/{path}', {
+    const { data } = await octokit.request('GET /repos/{owner}/{repo}/contents/{path}', {
       owner: gitOrgLogin,
       repo: repoName,
       path: `${slide.content_path}/index.html`,
     });
 
-    const htmlContent = Buffer.from(data.content, 'base64').toString('utf-8');
+    const htmlContent = Buffer.from((data as { content: string }).content, 'base64').toString('utf-8');
     themeName = getSharedThemeFromHtml(htmlContent);
-  } catch (error: any) {
-    console.warn('Could not read slide HTML:', error.message);
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.warn('Could not read slide HTML:', message);
   }
 
   if (!themeName) {

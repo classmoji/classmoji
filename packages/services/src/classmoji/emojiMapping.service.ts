@@ -1,7 +1,10 @@
-import prisma from '@classmoji/database';
+import getPrisma from '@classmoji/database';
+import type { Prisma } from '@prisma/client';
 
-export const saveEmojiMapping = async (classroomId: string, values: { emoji: string; [key: string]: any }) => {
-  return prisma!.emojiMapping.upsert({
+type EmojiMappingInput = Prisma.EmojiMappingUncheckedCreateWithoutClassroomInput;
+
+export const saveEmojiMapping = async (classroomId: string, values: EmojiMappingInput) => {
+  return getPrisma().emojiMapping.upsert({
     where: {
       classroom_id_emoji: {
         classroom_id: classroomId,
@@ -10,11 +13,11 @@ export const saveEmojiMapping = async (classroomId: string, values: { emoji: str
     },
     update: values,
     create: { classroom_id: classroomId, ...values },
-  } as any);
+  });
 };
 
 export const findClassroomEmojiMappingDescription = async (classroomId: string) => {
-  const mappings = await prisma!.emojiMapping.findMany({
+  const mappings = await getPrisma().emojiMapping.findMany({
     where: { classroom_id: classroomId },
     orderBy: { grade: 'desc' },
   });
@@ -26,7 +29,7 @@ export const findClassroomEmojiMappingDescription = async (classroomId: string) 
 };
 
 export const findByClassroomId = async (classroomId: string, includeExtraTokens = false) => {
-  const mappings = await prisma!.emojiMapping.findMany({
+  const mappings = await getPrisma().emojiMapping.findMany({
     where: { classroom_id: classroomId },
     orderBy: { grade: 'desc' },
   });
@@ -46,7 +49,7 @@ export const findByClassroomId = async (classroomId: string, includeExtraTokens 
 };
 
 export const deleteEmojiMapping = async (classroomId: string, emoji: string) => {
-  return prisma!.emojiMapping.delete({
+  return getPrisma().emojiMapping.delete({
     where: {
       classroom_id_emoji: {
         classroom_id: classroomId,

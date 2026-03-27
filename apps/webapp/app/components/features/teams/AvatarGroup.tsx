@@ -1,9 +1,19 @@
 import { Tooltip, Avatar } from 'antd';
 
-const AvatarGroup = ({ users }: any) => { // eslint-disable-line @typescript-eslint/no-explicit-any -- accepts various Prisma user/member shapes
+interface AvatarGroupUser {
+  login: string;
+  avatar_url?: string | null;
+  avatarUrl?: string | null;
+}
+
+interface AvatarGroupProps {
+  users: AvatarGroupUser[];
+}
+
+const AvatarGroup = ({ users }: AvatarGroupProps) => {
   const slicedUsers = users.length > 20 ? users.slice(0, 20) : users;
 
-  const tooltips = slicedUsers.map((user: any) => { // eslint-disable-line @typescript-eslint/no-explicit-any -- various user shapes
+  const tooltips = slicedUsers.map(user => {
     return (
       <Tooltip title={`@${user.login}`} key={user.login}>
         <Avatar

@@ -8,8 +8,8 @@
 
 import { useState, useCallback, useEffect, useRef } from 'react';
 import { useLoaderData, useNavigate } from 'react-router';
-import { useDropzone } from 'react-dropzone';
-import prisma from '@classmoji/database';
+import { useDropzone, type FileRejection } from 'react-dropzone';
+import getPrisma from '@classmoji/database';
 import { ClassmojiService } from '@classmoji/services';
 import { generateTermString, getContentRepoName } from '@classmoji/utils';
 import { requireClassroomStaff } from '@classmoji/auth/server';
@@ -26,7 +26,7 @@ import { useImportStream } from '~/hooks/useImportStream';
 const MAX_FILE_SIZE = 150 * 1024 * 1024; // 150MB
 const MAX_FILE_SIZE_MB = MAX_FILE_SIZE / 1024 / 1024;
 
-export const loader = async ({ request }: any) => {
+export const loader = async ({ request }: { request: Request }) => {
   const url = new URL(request.url);
   const classroomSlug = url.searchParams.get('class');
 
@@ -37,10 +37,10 @@ export const loader = async ({ request }: any) => {
   // Authorization: require OWNER or TEACHER role to import slides
   await requireClassroomStaff(request, classroomSlug, {
     resourceType: 'SLIDE_CONTENT',
-  } as any);
+  });
 
   // Get classroom with git_organization
-  const classroom = await prisma!.classroom.findUnique({
+  const classroom = await getPrisma().classroom.findUnique({
     where: { slug: classroomSlug },
     include: { git_organization: true },
   });
@@ -56,7 +56,7 @@ export const loader = async ({ request }: any) => {
   }
 
   // Derive term string from classroom data
-  const term = generateTermString(classroom.term as any, classroom.year as any);
+  const term = generateTermString(classroom.term ?? undefined, classroom.year ?? undefined);
 
   // Get modules for dropdown
   const modules = await ClassmojiService.module.findByClassroomSlug(classroomSlug);
@@ -64,8 +64,8 @@ export const loader = async ({ request }: any) => {
   // Get content repo name using utility (same as slidesComImporter)
   const repoName = getContentRepoName({
     login: gitOrgLogin,
-    term: classroom.term as any,
-    year: classroom.year as any,
+    term: classroom.term ?? undefined,
+    year: classroom.year ?? undefined,
   });
   const savedThemes = await listSavedThemes(gitOrgLogin, repoName);
 
@@ -85,30 +85,30 @@ export const loader = async ({ request }: any) => {
 // and stream progress via SSE
 
 export default function ImportPage() {
-  const { classroomSlug, classroom, modules, savedThemes, webappUrl } = useLoaderData() as any;
+  const { classroomSlug, classroom, modules, savedThemes, webappUrl } = useLoaderData<typeof loader>();
   const userContext = useUser();
   const user = userContext?.user;
   const navigate = useNavigate();
-  const [selectedFile, setSelectedFile] = useState<any>(null);
-  const [selectedModule, setSelectedModule] = useState<any>(null);
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [selectedModule, setSelectedModule] = useState<{ id: string; title: string } | null>(null);
   const [themeOption, setThemeOption] = useState('default');
   const [saveThemeName, setSaveThemeName] = useState('');
-  const [dropzoneError, setDropzoneError] = useState<any>(null);
-  const [submitError, setSubmitError] = useState<any>(null);
+  const [dropzoneError, setDropzoneError] = useState<string | null>(null);
+  const [submitError, setSubmitError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   // Video selection state
-  const [detectedVideos, setDetectedVideos] = useState<any[]>([]);
+  const [detectedVideos, setDetectedVideos] = useState<Array<{ path: string; filename: string; size: number; ext: string; suggestCloudinary: boolean }>>([]);
   const [showVideoModal, setShowVideoModal] = useState(false);
-  const [cloudinaryVideoPaths, setCloudinaryVideoPaths] = useState<any[]>([]);
+  const [cloudinaryVideoPaths, setCloudinaryVideoPaths] = useState<string[]>([]);
   const [analyzingVideos, setAnalyzingVideos] = useState(false);
 
   // Import progress state (SSE-based)
-  const [importId, setImportId] = useState<any>(null);
+  const [importId, setImportId] = useState<string | null>(null);
   const { progress, error: streamError, isDone, isConnected, slideId } = useImportStream(importId);
 
   // Form ref for reading form data
-  const formRef = useRef<any>(null);
+  const formRef = useRef<HTMLFormElement>(null);
 
   const isProcessing = isSubmitting || !!importId;
   const error = submitError || streamError || dropzoneError;
@@ -121,11 +121,11 @@ export default function ImportPage() {
   }, [isDone, slideId, navigate]);
 
   // Check if user has permission using classroom memberships
-  const membership = user?.classroom_memberships?.find((m: any) => m.classroom?.slug === classroomSlug);
+  const membership = user?.classroom_memberships?.find((m: { classroom?: { slug: string } }) => m.classroom?.slug === classroomSlug);
   const canImport = membership?.role === 'OWNER' || membership?.role === 'TEACHER';
 
   // File dropzone
-  const onDrop = useCallback(async (acceptedFiles: any) => {
+  const onDrop = useCallback(async (acceptedFiles: File[]) => {
     if (acceptedFiles.length > 0) {
       const file = acceptedFiles[0];
       setSelectedFile(file);
@@ -149,7 +149,7 @@ export default function ImportPage() {
           setDetectedVideos([]);
           setCloudinaryVideoPaths([]);
         }
-      } catch (err: any) {
+      } catch (err: unknown) {
         console.error('Failed to analyze ZIP for videos:', err);
         // Don't block import if analysis fails
       } finally {
@@ -158,7 +158,7 @@ export default function ImportPage() {
     }
   }, []);
 
-  const onDropRejected = useCallback((fileRejections: any) => {
+  const onDropRejected = useCallback((fileRejections: FileRejection[]) => {
     const rejection = fileRejections[0];
     if (!rejection) return;
 
@@ -186,7 +186,7 @@ export default function ImportPage() {
   });
 
   // Handle video modal confirmation
-  const handleVideoModalConfirm = useCallback((selectedPaths: any) => {
+  const handleVideoModalConfirm = useCallback((selectedPaths: string[]) => {
     setCloudinaryVideoPaths(selectedPaths);
     setShowVideoModal(false);
   }, []);
@@ -200,7 +200,7 @@ export default function ImportPage() {
   }, []);
 
   // Handle form submission - start async import with SSE progress
-  const handleSubmit = useCallback(async (e: any) => {
+  const handleSubmit = useCallback(async (e: React.FormEvent) => {
     e.preventDefault();
     setSubmitError(null);
     setIsSubmitting(true);
@@ -233,9 +233,10 @@ export default function ImportPage() {
 
       // Set importId to trigger SSE subscription
       setImportId(result.importId);
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error('Failed to start import:', err);
-      setSubmitError(err.message || 'Failed to start import');
+      const errorMessage = err instanceof Error ? err.message : 'Failed to start import';
+      setSubmitError(errorMessage);
     } finally {
       setIsSubmitting(false);
     }
@@ -436,13 +437,13 @@ export default function ImportPage() {
               <select
                 value={selectedModule?.id || ''}
                 onChange={e => {
-                  const mod = modules.find((m: any) => m.id === (e.target as unknown as HTMLInputElement).value);
+                  const mod = modules.find((m) => m.id === (e.target as unknown as HTMLInputElement).value);
                   setSelectedModule(mod || null);
                 }}
                 className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-md dark:bg-gray-700 dark:text-white focus:ring-2 focus:ring-blue-500 focus:border-transparent"
               >
                 <option value="">No module (standalone)</option>
-                {modules.map((m: any) => (
+                {modules.map((m) => (
                   <option key={m.id} value={m.id}>
                     {m.title}
                   </option>
@@ -544,7 +545,7 @@ export default function ImportPage() {
                             className="w-full px-3 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded-md dark:bg-gray-700 dark:text-white"
                           >
                             <option value="">Select a theme...</option>
-                            {savedThemes.map((theme: any) => (
+                            {savedThemes.map((theme) => (
                               <option key={theme.name} value={theme.name}>
                                 {theme.name}
                               </option>

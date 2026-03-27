@@ -16,7 +16,7 @@
  * @param {Function} onContentChange - Function to notify content change
  * @returns {HTMLElement|null} - The new sl-block element, or null if conversion failed
  */
-export function convertToBlock(element: any, selectElement: any, onContentChange: any) {
+export function convertToBlock(element: HTMLElement, selectElement?: ((el: HTMLElement) => void) | null, onContentChange?: (() => void) | null) {
   if (!element) return null;
 
   // Don't convert elements that are already in sl-blocks
@@ -70,7 +70,7 @@ export function convertToBlock(element: any, selectElement: any, onContentChange
   content.className = 'sl-block-content';
 
   // Clone the element to preserve the original while we work
-  const clonedElement = element.cloneNode(true);
+  const clonedElement = element.cloneNode(true) as HTMLElement;
 
   // Reset any flow-related styles on the cloned element
   clonedElement.style.margin = '0';
@@ -102,7 +102,7 @@ export function convertToBlock(element: any, selectElement: any, onContentChange
  * @param {HTMLElement} element - The element to check
  * @returns {boolean} - Whether the element can be converted
  */
-export function canConvertToBlock(element: any) {
+export function canConvertToBlock(element: HTMLElement | null) {
   if (!element) return false;
 
   // Already in a block

@@ -60,7 +60,7 @@ class CodebaseManager {
     try {
       await fs.rm(session.path, { recursive: true, force: true });
       this.activeSessions.delete(attemptId);
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error(`[CodebaseManager] Cleanup failed for ${attemptId}:`, error);
     }
   }

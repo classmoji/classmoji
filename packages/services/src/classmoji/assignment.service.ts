@@ -4,8 +4,9 @@
  * An Assignment represents a specific deadline/branch configuration within a Module.
  * Students work on RepositoryAssignments which track their progress on these Assignments.
  */
-import prisma from '@classmoji/database';
+import getPrisma from '@classmoji/database';
 import { titleToIdentifier } from '@classmoji/utils';
+import type { Prisma } from '@prisma/client';
 
 /**
  * Find an Assignment by ID
@@ -13,7 +14,7 @@ import { titleToIdentifier } from '@classmoji/utils';
  * @returns {Promise<Object|null>}
  */
 export const findById = async (id: string) => {
-  return prisma!.assignment.findUnique({
+  return getPrisma().assignment.findUnique({
     where: { id },
     include: {
       module: {
@@ -33,7 +34,7 @@ export const findById = async (id: string) => {
  * @returns {Promise<Object|null>}
  */
 export const findByModuleAndTitle = async (moduleId: string, title: string) => {
-  return prisma!.assignment.findUnique({
+  return getPrisma().assignment.findUnique({
     where: {
       module_id_title: {
         module_id: moduleId,
@@ -52,7 +53,7 @@ export const findByModuleAndTitle = async (moduleId: string, title: string) => {
  * @returns {Promise<Object[]>}
  */
 export const findByModuleId = async (moduleId: string) => {
-  return prisma!.assignment.findMany({
+  return getPrisma().assignment.findMany({
     where: { module_id: moduleId },
     orderBy: { created_at: 'asc' },
   });
@@ -64,7 +65,7 @@ export const findByModuleId = async (moduleId: string) => {
  * @returns {Promise<Object[]>}
  */
 export const findPublishedByModuleId = async (moduleId: string) => {
-  return prisma!.assignment.findMany({
+  return getPrisma().assignment.findMany({
     where: {
       module_id: moduleId,
       is_published: true,
@@ -79,8 +80,11 @@ export const findPublishedByModuleId = async (moduleId: string) => {
  * @param {Object} [query] - Additional query filters
  * @returns {Promise<Object[]>}
  */
-export const findByClassroomId = async (classroomId: string, query: any = {}) => {
-  return prisma!.assignment.findMany({
+export const findByClassroomId = async (
+  classroomId: string,
+  query: Prisma.AssignmentWhereInput = {}
+) => {
+  return getPrisma().assignment.findMany({
     where: {
       module: {
         classroom_id: classroomId,
@@ -101,7 +105,7 @@ export const findByClassroomId = async (classroomId: string, query: any = {}) =>
  * @returns {Promise<Object[]>}
  */
 export const findUpcoming = async (classroomId: string, afterDate: Date = new Date()) => {
-  return prisma!.assignment.findMany({
+  return getPrisma().assignment.findMany({
     where: {
       module: {
         classroom_id: classroomId,
@@ -124,7 +128,7 @@ export const findUpcoming = async (classroomId: string, afterDate: Date = new Da
  * @returns {Promise<Object[]>}
  */
 export const findReadyForRelease = async (beforeDate: Date = new Date()) => {
-  return prisma!.assignment.findMany({
+  return getPrisma().assignment.findMany({
     where: {
       is_published: false,
       release_at: {
@@ -160,8 +164,8 @@ export const findReadyForRelease = async (beforeDate: Date = new Date()) => {
  * @param {Date} [data.release_at] - Auto-release date
  * @returns {Promise<Object>}
  */
-export const create = async (data: any) => {
-  return prisma!.assignment.create({
+export const create = async (data: Prisma.AssignmentUncheckedCreateInput) => {
+  return getPrisma().assignment.create({
     data: {
       ...data,
       slug: titleToIdentifier(data.title),
@@ -178,8 +182,8 @@ export const create = async (data: any) => {
  * @param {Object[]} assignments - Array of assignment data
  * @returns {Promise<{count: number}>}
  */
-export const createMany = async (assignments: any[]) => {
-  return prisma!.assignment.createMany({
+export const createMany = async (assignments: Prisma.AssignmentUncheckedCreateInput[]) => {
+  return getPrisma().assignment.createMany({
     data: assignments.map(a => ({
       ...a,
       slug: titleToIdentifier(a.title),
@@ -194,8 +198,8 @@ export const createMany = async (assignments: any[]) => {
  * @param {Object} updates - Fields to update
  * @returns {Promise<Object>}
  */
-export const update = async (id: string, updates: any) => {
-  return prisma!.assignment.update({
+export const update = async (id: string, updates: Prisma.AssignmentUpdateInput) => {
+  return getPrisma().assignment.update({
     where: { id },
     data: updates,
     include: {
@@ -210,7 +214,7 @@ export const update = async (id: string, updates: any) => {
  * @returns {Promise<Object>}
  */
 export const deleteById = async (id: string) => {
-  return prisma!.assignment.delete({
+  return getPrisma().assignment.delete({
     where: { id },
   });
 };
@@ -221,7 +225,7 @@ export const deleteById = async (id: string) => {
  * @returns {Promise<{count: number}>}
  */
 export const deleteMany = async (ids: string[]) => {
-  return prisma!.assignment.deleteMany({
+  return getPrisma().assignment.deleteMany({
     where: { id: { in: ids } },
   });
 };
@@ -232,7 +236,7 @@ export const deleteMany = async (ids: string[]) => {
  * @returns {Promise<Object>}
  */
 export const publish = async (id: string) => {
-  return prisma!.assignment.update({
+  return getPrisma().assignment.update({
     where: { id },
     data: { is_published: true },
   });
@@ -244,7 +248,7 @@ export const publish = async (id: string) => {
  * @returns {Promise<Object>}
  */
 export const releaseGrades = async (id: string) => {
-  return prisma!.assignment.update({
+  return getPrisma().assignment.update({
     where: { id },
     data: { grades_released: true },
   });
@@ -256,7 +260,7 @@ export const releaseGrades = async (id: string) => {
  * @returns {Promise<Object>}
  */
 export const findWithGradingSummary = async (id: string) => {
-  const assignment = await prisma!.assignment.findUnique({
+  const assignment = await getPrisma().assignment.findUnique({
     where: { id },
     include: {
       module: {

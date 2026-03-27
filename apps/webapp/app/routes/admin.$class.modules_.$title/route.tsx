@@ -14,6 +14,13 @@ import ModuleTable from './ModuleTable';
 import { requireClassroomAdmin } from '~/utils/routeAuth.server';
 import type { Route } from './+types/route';
 
+interface ModuleAssignmentSummary {
+  id: string;
+  title: string;
+  student_deadline: number;
+  grades_released: boolean;
+}
+
 export const loader = async ({ params, request }: Route.LoaderArgs) => {
   const { class: classSlug, title } = params;
 
@@ -55,8 +62,8 @@ const SingleModule = ({ loaderData }: Route.ComponentProps) => {
     );
   };
 
-  const tabItems = module!.assignments
-    .sort((a: any, b: any) => { // eslint-disable-line @typescript-eslint/no-explicit-any -- Prisma assignment shape
+  const tabItems = (module!.assignments as ModuleAssignmentSummary[])
+    .sort((a, b) => {
       // First sort by deadline
       if (a.student_deadline !== b.student_deadline) {
         return a.student_deadline - b.student_deadline;
@@ -64,7 +71,7 @@ const SingleModule = ({ loaderData }: Route.ComponentProps) => {
       // Then sort by title
       return a.title.localeCompare(b.title);
     })
-    .map((assignment: any) => { // eslint-disable-line @typescript-eslint/no-explicit-any -- Prisma assignment shape
+    .map(assignment => {
       return {
         key: assignment.id,
         label: assignment.title,

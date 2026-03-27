@@ -40,9 +40,10 @@ export async function fetchContent({ org, repo, path, binary = false }: { org: s
       return { content, source: 'cdn' };
     }
     // CDN returned error (404, 500, etc.) - fall through to API
-  } catch (err: any) {
+  } catch (err: unknown) {
     // Network error (likely ECONNRESET from Fly.io) - fall through to API
-    console.log(`CDN fetch failed for ${path}: ${err.message}`);
+    const message = err instanceof Error ? err.message : String(err);
+    console.log(`CDN fetch failed for ${path}: ${message}`);
   }
 
   // Fallback to GitHub API
@@ -62,8 +63,9 @@ export async function fetchContent({ org, repo, path, binary = false }: { org: s
         : result.content;
       return { content, source: 'api' };
     }
-  } catch (apiErr: any) {
-    console.error(`API fallback failed for ${path}:`, apiErr.message);
+  } catch (apiErr: unknown) {
+    const message = apiErr instanceof Error ? apiErr.message : String(apiErr);
+    console.error(`API fallback failed for ${path}:`, message);
   }
 
   // Try Git Blobs API for large binary files (> 1MB Contents API limit)
@@ -81,8 +83,9 @@ export async function fetchContent({ org, repo, path, binary = false }: { org: s
         const content = Buffer.from(result.content, 'base64');
         return { content, source: 'blob' };
       }
-    } catch (blobErr: any) {
-      console.log(`Git Blob fetch failed for ${path}: ${blobErr.message}`);
+    } catch (blobErr: unknown) {
+      const message = blobErr instanceof Error ? blobErr.message : String(blobErr);
+      console.log(`Git Blob fetch failed for ${path}: ${message}`);
     }
   }
 

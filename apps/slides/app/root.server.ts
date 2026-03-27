@@ -1,8 +1,19 @@
-import prisma from '@classmoji/database';
+import getPrisma from '@classmoji/database';
 import { getAuthSession } from '@classmoji/auth/server';
+import type { Prisma } from '@prisma/client';
 import { redirect } from 'react-router';
 
-export const loader = async ({ request }: any) => {
+type SlidesAppUser = Prisma.UserGetPayload<{
+  include: {
+    classroom_memberships: {
+      include: {
+        classroom: true;
+      };
+    };
+  };
+}>;
+
+export const loader = async ({ request }: { request: Request }) => {
   const url = new URL(request.url);
 
   // Allow public access to /follow routes with valid shareCode
@@ -25,7 +36,7 @@ export const loader = async ({ request }: any) => {
 
     // Check if this slide exists and is public
     try {
-      const slide = await prisma!.slide.findUnique({
+      const slide = await getPrisma().slide.findUnique({
         where: { id: potentialSlideId },
         select: { is_public: true, is_draft: true },
       });
@@ -50,9 +61,9 @@ export const loader = async ({ request }: any) => {
   }
 
   // Get full user with classroom memberships
-  let user: any = null;
+  let user: SlidesAppUser | null = null;
   try {
-    user = await prisma!.user.findUnique({
+    user = await getPrisma().user.findUnique({
       where: { id: authData.userId },
       include: {
         classroom_memberships: {
@@ -62,7 +73,7 @@ export const loader = async ({ request }: any) => {
         },
       },
     });
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error('User lookup failed:', error);
     const webappUrl = process.env.WEBAPP_URL || 'http://localhost:3000';
     return redirect(webappUrl);

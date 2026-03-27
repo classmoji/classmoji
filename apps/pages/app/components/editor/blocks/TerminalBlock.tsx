@@ -1,21 +1,28 @@
-import { createReactBlockSpec } from '@blocknote/react';
+import {
+  createReactBlockSpec,
+  type ReactCustomBlockRenderProps,
+} from '@blocknote/react';
 import { useEffect, useRef, useState } from 'react';
 import { createHighlighterCore } from '@shikijs/core';
 import { createJavaScriptRegexEngine } from '@shikijs/engine-javascript';
 import bash from '@shikijs/langs/bash';
 import oneDarkPro from '@shikijs/themes/one-dark-pro';
 
+const terminalPropSchema = {
+  code: { default: '' },
+  title: { default: '' },
+};
+
+type TerminalRenderProps = ReactCustomBlockRenderProps<'terminal', typeof terminalPropSchema, 'none'>;
+
 export const Terminal = createReactBlockSpec(
   {
     type: 'terminal' as const,
-    propSchema: {
-      code: { default: '' },
-      title: { default: '' },
-    },
+    propSchema: terminalPropSchema,
     content: 'none' as const,
   },
   {
-    render: (props: any) => {
+    render: (props: TerminalRenderProps) => {
       const textareaRef = useRef<HTMLTextAreaElement>(null);
       const codeRef = useRef<HTMLDivElement>(null);
       const [isFocused, setIsFocused] = useState(false);

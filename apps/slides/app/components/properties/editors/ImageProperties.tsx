@@ -30,7 +30,7 @@ const OBJECT_FITS = [
   { value: 'scale-down', label: 'Scale Down' },
 ];
 
-export default function ImageProperties({ element }: any) {
+export default function ImageProperties({ element }: { element: HTMLImageElement }) {
   const { onContentChange, selectElement } = useElementSelection();
 
   // State for all properties
@@ -41,7 +41,7 @@ export default function ImageProperties({ element }: any) {
   const [objectFit, setObjectFit] = useState(() => element?.style.objectFit || '');
 
   // Parse size value (could be "300px", "50%", or just "300")
-  function parseSize(value: any) {
+  function parseSize(value: string | number | null | undefined) {
     if (!value) return { value: '', unit: 'px' };
     const match = String(value).match(/^(\d+(?:\.\d+)?)(px|%|em|rem|vw|vh)?$/);
     if (match) {
@@ -51,7 +51,7 @@ export default function ImageProperties({ element }: any) {
   }
 
   // Get alignment from element style or parent
-  function getAlignment(el: any) {
+  function getAlignment(el: HTMLImageElement | null) {
     if (!el) return '';
     // Check display:block + margin:auto for center
     const style = el.style;
@@ -76,18 +76,18 @@ export default function ImageProperties({ element }: any) {
   }, [element]);
 
   // Update alt text
-  const handleAltChange = useCallback((e: any) => {
+  const handleAltChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     if (!element) return;
-    const newAlt = (e.target as HTMLInputElement).value;
+    const newAlt = e.target.value;
     element.alt = newAlt;
     setAltText(newAlt);
     onContentChange?.();
   }, [element, onContentChange]);
 
   // Update width
-  const handleWidthChange = useCallback((value: any) => {
+  const handleWidthChange = useCallback((value: number | null) => {
     if (!element) return;
-    const newWidth = { ...width, value: value ?? '' };
+    const newWidth = { ...width, value: value !== null ? String(value) : '' };
     setWidth(newWidth);
 
     if (newWidth.value) {
@@ -100,7 +100,7 @@ export default function ImageProperties({ element }: any) {
     onContentChange?.();
   }, [element, width, onContentChange]);
 
-  const handleWidthUnitChange = useCallback((unit: any) => {
+  const handleWidthUnitChange = useCallback((unit: string) => {
     if (!element) return;
     const newWidth = { ...width, unit };
     setWidth(newWidth);
@@ -112,9 +112,9 @@ export default function ImageProperties({ element }: any) {
   }, [element, width, onContentChange]);
 
   // Update height
-  const handleHeightChange = useCallback((value: any) => {
+  const handleHeightChange = useCallback((value: number | null) => {
     if (!element) return;
-    const newHeight = { ...height, value: value ?? '' };
+    const newHeight = { ...height, value: value !== null ? String(value) : '' };
     setHeight(newHeight);
 
     if (newHeight.value) {
@@ -126,7 +126,7 @@ export default function ImageProperties({ element }: any) {
     onContentChange?.();
   }, [element, height, onContentChange]);
 
-  const handleHeightUnitChange = useCallback((unit: any) => {
+  const handleHeightUnitChange = useCallback((unit: string) => {
     if (!element) return;
     const newHeight = { ...height, unit };
     setHeight(newHeight);
@@ -138,7 +138,7 @@ export default function ImageProperties({ element }: any) {
   }, [element, height, onContentChange]);
 
   // Update alignment
-  const handleAlignmentChange = useCallback((newAlign: any) => {
+  const handleAlignmentChange = useCallback((newAlign: string) => {
     if (!element) return;
 
     // Clear previous alignment styles
@@ -165,7 +165,7 @@ export default function ImageProperties({ element }: any) {
   }, [element, onContentChange]);
 
   // Update object fit
-  const handleObjectFitChange = useCallback((newFit: any) => {
+  const handleObjectFitChange = useCallback((newFit: string) => {
     if (!element) return;
     element.style.objectFit = newFit;
     setObjectFit(newFit);

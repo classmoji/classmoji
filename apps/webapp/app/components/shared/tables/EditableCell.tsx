@@ -3,7 +3,26 @@ import { useClickAway } from '@uidotdev/usehooks';
 
 import { InputNumber, Input } from 'antd';
 
-const EditableCell = ({ record, dataIndex, onUpdate, format = 'text', placeholder }: any) => { // eslint-disable-line @typescript-eslint/no-explicit-any -- generic table cell accepting various Prisma record shapes
+interface EditableRecord {
+  id: string | number;
+  [key: string]: string | number | null | undefined;
+}
+
+interface EditableCellProps {
+  record: EditableRecord;
+  dataIndex: string;
+  onUpdate: (recordId: string | number, value: string | number | null | undefined) => void;
+  format?: 'text' | 'number';
+  placeholder?: string;
+}
+
+const EditableCell = ({
+  record,
+  dataIndex,
+  onUpdate,
+  format = 'text',
+  placeholder,
+}: EditableCellProps) => {
   const [editing, setEditing] = useState(false);
   const [inputValue, setInputValue] = useState(record?.[dataIndex]);
 
@@ -18,7 +37,7 @@ const EditableCell = ({ record, dataIndex, onUpdate, format = 'text', placeholde
 
   if (!record) return null;
 
-  const handleKeyPress = (event: any) => { // eslint-disable-line @typescript-eslint/no-explicit-any -- keyboard event from Ant Design
+  const handleKeyPress = (event: React.KeyboardEvent<HTMLElement>) => {
     if (event.key === 'Enter') {
       setEditing(false);
       onUpdate(record.id, inputValue);

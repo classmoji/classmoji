@@ -1,6 +1,17 @@
-import prisma from '@classmoji/database';
+import getPrisma from '@classmoji/database';
 import { ContentService } from '@classmoji/content';
 import { generateTermString } from '@classmoji/utils';
+
+interface ManifestAssignmentEntry {
+  pages: string[];
+  slides: string[];
+}
+
+interface ManifestModuleEntry {
+  pages: string[];
+  slides: string[];
+  assignments: Record<string, ManifestAssignmentEntry>;
+}
 
 /**
  * Content Manifest Service
@@ -13,7 +24,7 @@ import { generateTermString } from '@classmoji/utils';
  */
 export async function saveManifest(classroomId: string): Promise<void> {
   // Get classroom with git organization
-  const classroom = await prisma!.classroom.findUnique({
+  const classroom = await getPrisma().classroom.findUnique({
     where: { id: classroomId },
     include: { git_organization: true },
   });
@@ -24,7 +35,7 @@ export async function saveManifest(classroomId: string): Promise<void> {
   }
 
   // Build manifest from database
-  const modules = await prisma!.module.findMany({
+  const modules = await getPrisma().module.findMany({
     where: { classroom_id: classroomId },
     include: {
       pages: { include: { page: true } },
@@ -40,17 +51,20 @@ export async function saveManifest(classroomId: string): Promise<void> {
   });
 
   // Get all pages/slides to find unlinked ones
-  const allPages = await prisma!.page.findMany({
+  const allPages = await getPrisma().page.findMany({
     where: { classroom_id: classroomId },
     include: { links: true },
   });
-  const allSlides = await prisma!.slide.findMany({
+  const allSlides = await getPrisma().slide.findMany({
     where: { classroom_id: classroomId },
     include: { links: true },
   });
 
   // Build manifest using slugs as keys
-  const manifest: { modules: Record<string, any>; general: { pages: string[]; slides: string[] } } = { modules: {}, general: { pages: [], slides: [] } };
+  const manifest: {
+    modules: Record<string, ManifestModuleEntry>;
+    general: { pages: string[]; slides: string[] };
+  } = { modules: {}, general: { pages: [], slides: [] } };
 
   for (const mod of modules) {
     const modSlug = mod.slug ?? String(mod.id);
@@ -83,14 +97,14 @@ export async function saveManifest(classroomId: string): Promise<void> {
 
   try {
     await ContentService.put({
-      gitOrganization: classroom.git_organization as any,
+      gitOrganization: classroom.git_organization,
       repo: repoName,
       path: '.classmoji/manifest.json',
       content: JSON.stringify(manifest, null, 2),
       message: 'Update content manifest',
     });
-  } catch (error: any) {
+  } catch (error: unknown) {
     // Log but don't fail the request if manifest save fails
-    console.error('Failed to save content manifest:', error.message);
+    console.error('Failed to save content manifest:', error instanceof Error ? error.message : String(error));
   }
 }

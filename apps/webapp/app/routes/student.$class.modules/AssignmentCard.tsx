@@ -4,7 +4,39 @@ import { IconBrandGithub } from '@tabler/icons-react';
 import { EmojisDisplay } from '~/components';
 import ResourceLinks from './ResourceLinks';
 
-const getStatusDisplay = (repoAssignment: any) => { // eslint-disable-line @typescript-eslint/no-explicit-any -- Prisma RepositoryAssignment shape varies by query includes
+interface AssignmentCardAssignment {
+  title: string;
+  grades_released: boolean;
+  student_deadline?: string | Date | null;
+  pages?: Array<{ page: { id: string; title: string } }>;
+  slides?: Array<{ slide: { id: string; title: string } }>;
+}
+
+interface AssignmentCardRepositoryAssignment {
+  id: string;
+  status: 'OPEN' | 'CLOSED' | string;
+  provider_issue_number?: number | null;
+  grades?: unknown[];
+  repository?: {
+    name: string;
+    classroom?: {
+      git_organization?: {
+        login?: string | null;
+      } | null;
+    } | null;
+  } | null;
+}
+
+interface AssignmentCardProps {
+  assignment: AssignmentCardAssignment;
+  repoAssignment?: AssignmentCardRepositoryAssignment | null;
+  classSlug: string;
+  slidesUrl: string;
+  pagesUrl: string;
+  rolePrefix?: string;
+}
+
+const getStatusDisplay = (repoAssignment?: AssignmentCardRepositoryAssignment | null) => {
   if (!repoAssignment) {
     return null;
   }
@@ -14,7 +46,6 @@ const getStatusDisplay = (repoAssignment: any) => { // eslint-disable-line @type
   return { color: 'red', text: 'Not Submitted' };
 };
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any -- complex Prisma assignment/repo shapes from loader
 const AssignmentCard = ({
   assignment,
   repoAssignment,
@@ -22,7 +53,7 @@ const AssignmentCard = ({
   slidesUrl,
   pagesUrl,
   rolePrefix = 'student',
-}: any) => { // eslint-disable-line @typescript-eslint/no-explicit-any -- component accepts varied data shapes from different routes
+}: AssignmentCardProps) => {
   const status = getStatusDisplay(repoAssignment);
   const showGrades = assignment.grades_released && repoAssignment?.grades?.length > 0;
 

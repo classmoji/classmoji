@@ -3,7 +3,16 @@
  *
  * Manages grader assignments to RepositoryAssignments
  */
-import prisma from '@classmoji/database';
+import getPrisma from '@classmoji/database';
+
+interface GraderProgress {
+  name: string | null;
+  login: string | null;
+  id: string;
+  total: number;
+  completed: number;
+  progress: number;
+}
 
 /**
  * Find grader progress for a classroom
@@ -12,7 +21,7 @@ import prisma from '@classmoji/database';
  * @returns {Promise<Object[]>}
  */
 export const findGradersProgress = async (classroomId: string) => {
-  const assignmentGraders = await prisma!.repositoryAssignmentGrader.findMany({
+  const assignmentGraders = await getPrisma().repositoryAssignmentGrader.findMany({
     where: {
       repository_assignment: {
         repository: {
@@ -30,7 +39,7 @@ export const findGradersProgress = async (classroomId: string) => {
     },
   });
 
-  const progress: Record<string, any> = {};
+  const progress: Record<string, GraderProgress> = {};
 
   assignmentGraders.forEach(graderAssignment => {
     const login = graderAssignment.grader.login!;
@@ -57,7 +66,7 @@ export const findGradersProgress = async (classroomId: string) => {
       100;
   });
 
-  const sortedProgress = Object.values(progress).sort((a: any, b: any) => b.progress - a.progress);
+  const sortedProgress = Object.values(progress).sort((a, b) => b.progress - a.progress);
 
   return sortedProgress;
 };
@@ -69,7 +78,7 @@ export const findGradersProgress = async (classroomId: string) => {
  * @returns {Promise<Object>}
  */
 export const addGraderToAssignment = async (repositoryAssignmentId: string, graderId: string) => {
-  return prisma!.repositoryAssignmentGrader.create({
+  return getPrisma().repositoryAssignmentGrader.create({
     data: {
       repository_assignment_id: repositoryAssignmentId,
       grader_id: graderId,
@@ -84,7 +93,7 @@ export const addGraderToAssignment = async (repositoryAssignmentId: string, grad
  * @returns {Promise<Object>}
  */
 export const removeGraderFromAssignment = async (repositoryAssignmentId: string, graderId: string) => {
-  return prisma!.repositoryAssignmentGrader.delete({
+  return getPrisma().repositoryAssignmentGrader.delete({
     where: {
       repository_assignment_id_grader_id: {
         repository_assignment_id: repositoryAssignmentId,
@@ -101,7 +110,7 @@ export const removeGraderFromAssignment = async (repositoryAssignmentId: string,
  * @returns {Promise<Object[]>}
  */
 export const findAssignedByGrader = async (graderId: string, classroomId: string) => {
-  return prisma!.repositoryAssignmentGrader.findMany({
+  return getPrisma().repositoryAssignmentGrader.findMany({
     where: {
       grader_id: graderId,
       repository_assignment: {
@@ -144,7 +153,7 @@ export const findAssignedByGrader = async (graderId: string, classroomId: string
  * @returns {Promise<Object[]>}
  */
 export const findByAssignmentId = async (repositoryAssignmentId: string) => {
-  return prisma!.repositoryAssignmentGrader.findMany({
+  return getPrisma().repositoryAssignmentGrader.findMany({
     where: {
       repository_assignment_id: repositoryAssignmentId,
     },
@@ -161,7 +170,7 @@ export const findByAssignmentId = async (repositoryAssignmentId: string) => {
  * @returns {Promise<{count: number}>}
  */
 export const bulkAssignGraders = async (repositoryAssignmentId: string, graderIds: string[]) => {
-  return prisma!.repositoryAssignmentGrader.createMany({
+  return getPrisma().repositoryAssignmentGrader.createMany({
     data: graderIds.map(graderId => ({
       repository_assignment_id: repositoryAssignmentId,
       grader_id: graderId,
@@ -176,7 +185,7 @@ export const bulkAssignGraders = async (repositoryAssignmentId: string, graderId
  * @returns {Promise<{count: number}>}
  */
 export const removeAllGraders = async (repositoryAssignmentId: string) => {
-  return prisma!.repositoryAssignmentGrader.deleteMany({
+  return getPrisma().repositoryAssignmentGrader.deleteMany({
     where: {
       repository_assignment_id: repositoryAssignmentId,
     },

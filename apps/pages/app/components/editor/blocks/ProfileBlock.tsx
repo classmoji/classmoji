@@ -1,20 +1,27 @@
-import { createReactBlockSpec } from '@blocknote/react';
+import {
+  createReactBlockSpec,
+  type ReactCustomBlockRenderProps,
+} from '@blocknote/react';
 import { useState, useRef } from 'react';
 import { IconCamera } from '@tabler/icons-react';
+
+const profilePropSchema = {
+  name: { default: '' },
+  title: { default: '' },
+  imageUrl: { default: '' },
+  links: { default: '' },
+};
+
+type ProfileRenderProps = ReactCustomBlockRenderProps<'profile', typeof profilePropSchema, 'none'>;
 
 export const Profile = createReactBlockSpec(
   {
     type: 'profile',
-    propSchema: {
-      name: { default: '' },
-      title: { default: '' },
-      imageUrl: { default: '' },
-      links: { default: '' },
-    },
+    propSchema: profilePropSchema,
     content: 'none',
   },
   {
-    render: (props: any) => {
+    render: (props: ProfileRenderProps) => {
       const { name, title, imageUrl } = props.block.props;
       const isEditable = props.editor.isEditable;
       const [isUploading, setIsUploading] = useState(false);
@@ -25,16 +32,18 @@ export const Profile = createReactBlockSpec(
         fileInputRef.current?.click();
       };
 
-      const handleFileChange = async (e: any) => {
+      const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
         const file = e.target.files?.[0];
         if (!file) return;
 
         setIsUploading(true);
         try {
           const url = await props.editor.uploadFile?.(file);
-          props.editor.updateBlock(props.block, {
-            props: { imageUrl: url },
-          });
+          if (typeof url === 'string') {
+            props.editor.updateBlock(props.block, {
+              props: { imageUrl: url },
+            });
+          }
         } catch (err) {
           console.error('Profile image upload failed:', err);
         } finally {
@@ -64,8 +73,8 @@ export const Profile = createReactBlockSpec(
           >
             {imageUrl ? (
               <img
-                src={imageUrl}
-                alt={name}
+                src={typeof imageUrl === 'string' ? imageUrl : ''}
+                alt={typeof name === 'string' ? name : 'Profile image'}
                 className="profile-avatar-image"
               />
             ) : (

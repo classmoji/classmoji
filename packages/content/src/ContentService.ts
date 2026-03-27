@@ -5,8 +5,9 @@
  * Writes go through this service using the GitHub API
  */
 
-import prisma from '@classmoji/database';
+import getPrisma from '@classmoji/database';
 import { getGitProvider } from '@classmoji/services';
+import type { Octokit } from '@octokit/rest';
 import { validateFile, sanitizeFilename } from './utils/validateFile.ts';
 
 interface GitOrganizationRecord {
@@ -15,12 +16,25 @@ interface GitOrganizationRecord {
   github_installation_id?: string | null;
   access_token?: string | null;
   base_url?: string | null;
-  gitlab_group_id?: string;
+  gitlab_group_id?: string | null;
 }
 
-interface CacheEntry {
-  data: any;
+interface CacheEntry<T = unknown> {
+  data: T;
   expiresAt: number;
+}
+
+interface RepositoryContentItem {
+  name: string;
+  path: string;
+  type: string;
+  sha: string;
+  content?: string;
+}
+
+interface ErrorWithStatus {
+  status?: number;
+  message?: string;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -48,10 +62,10 @@ function getCacheKey(org: string, repo: string, path: string): string {
  * @param {string} key - Cache key
  * @returns {any | null}
  */
-function getCache(key: string): any | null {
+function getCache<T>(key: string): T | null {
   const cached = responseCache.get(key);
   if (cached && Date.now() < cached.expiresAt) {
-    return cached.data;
+    return cached.data as T;
   }
   responseCache.delete(key);
   return null;
@@ -62,7 +76,7 @@ function getCache(key: string): any | null {
  * @param {string} key - Cache key
  * @param {any} data - Data to cache
  */
-function setCache(key: string, data: any): void {
+function setCache<T>(key: string, data: T): void {
   responseCache.set(key, { data, expiresAt: Date.now() + CACHE_TTL });
 }
 
@@ -117,7 +131,7 @@ async function resolveGitOrganization(gitOrganization: GitOrganizationRecord | u
 
   // Fall back to looking up by orgLogin (assumes GITHUB provider)
   if (orgLogin) {
-    const org = await prisma!.gitOrganization.findFirst({
+    const org = await getPrisma().gitOrganization.findFirst({
       where: {
         provider: 'GITHUB',
         login: orgLogin,
@@ -137,9 +151,32 @@ async function resolveGitOrganization(gitOrganization: GitOrganizationRecord | u
  * ContentService methods need the raw Octokit for direct API calls
  */
 async function getOctokit(gitOrganization: GitOrganizationRecord): Promise<any> {
-  const provider = getGitProvider(gitOrganization as any);
-  return (provider as any).getOctokit();
+  const provider = getGitProvider(gitOrganization);
+  return provider.getOctokit();
 }
+
+const hasStatus = (error: unknown, status: number): boolean => {
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    'status' in error &&
+    (error as ErrorWithStatus).status === status
+  );
+};
+
+const isGitRaceCondition = (error: unknown): error is ErrorWithStatus => {
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    'status' in error &&
+    'message' in error &&
+    (error as ErrorWithStatus).status === 422 &&
+    Boolean((error as ErrorWithStatus).message?.includes('not a fast forward'))
+  );
+};
+
+const getErrorMessage = (error: unknown): string =>
+  error instanceof Error ? error.message : String(error);
 
 export class ContentService {
   /**
@@ -152,15 +189,12 @@ export class ContentService {
    * @param {number} [options.baseDelay=200] - Base delay in ms (doubles each retry)
    * @returns {Promise<any>} - Result from the operation
    */
-  static async #withGitRetry(operation: () => Promise<any>, { maxRetries = 5, baseDelay = 200 }: { maxRetries?: number; baseDelay?: number } = {}): Promise<any> {
+  static async #withGitRetry<T>(operation: () => Promise<T>, { maxRetries = 5, baseDelay = 200 }: { maxRetries?: number; baseDelay?: number } = {}): Promise<T> {
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
       try {
         return await operation();
-      } catch (error: any) {
-        const isRaceCondition = error.status === 422 &&
-          error.message?.includes('not a fast forward');
-
-        if (!isRaceCondition || attempt === maxRetries) {
+      } catch (error: unknown) {
+        if (!isGitRaceCondition(error) || attempt === maxRetries) {
           throw error;
         }
 
@@ -174,6 +208,8 @@ export class ContentService {
         await new Promise(r => setTimeout(r, delay + jitter));
       }
     }
+
+    throw new Error('Git retry exhausted without returning a result');
   }
 
   /**
@@ -193,7 +229,7 @@ export class ContentService {
       // Check cache first (unless explicitly skipped or is an image)
       const cacheKey = getCacheKey(resolvedOrg.login, repo, path);
       if (!skipCache && !isImagePath(path)) {
-        const cached = getCache(cacheKey + ':meta');
+        const cached = getCache<{ sha: string; size: number }>(cacheKey + ':meta');
         if (cached !== null) {
           return cached;
         }
@@ -217,8 +253,8 @@ export class ContentService {
       }
 
       return result;
-    } catch (error: any) {
-      if (error.status === 404) {
+    } catch (error: unknown) {
+      if (hasStatus(error, 404)) {
         return null;
       }
       throw error;
@@ -246,7 +282,7 @@ export class ContentService {
       const cacheKey = getCacheKey(resolvedOrg.login, repo, path);
       const cacheKeyWithRaw = raw ? cacheKey + ':content:raw' : cacheKey + ':content';
       if (!skipCache && !isImagePath(path)) {
-        const cached = getCache(cacheKeyWithRaw);
+        const cached = getCache<{ content: string; sha: string }>(cacheKeyWithRaw);
         if (cached !== null) {
           return cached;
         }
@@ -277,8 +313,8 @@ export class ContentService {
       }
 
       return result;
-    } catch (error: any) {
-      if (error.status === 404) {
+    } catch (error: unknown) {
+      if (hasStatus(error, 404)) {
         return null;
       }
       throw error;
@@ -319,8 +355,8 @@ export class ContentService {
         content: blobData.content.replace(/\n/g, ''), // Strip newlines from base64
         sha: fileData.sha,
       };
-    } catch (error: any) {
-      if (error.status === 404) {
+    } catch (error: unknown) {
+      if (hasStatus(error, 404)) {
         return null;
       }
       throw error;
@@ -596,7 +632,7 @@ export class ContentService {
       // Check cache first
       const cacheKey = getCacheKey(resolvedOrg.login, repo, path) + ':list';
       if (!skipCache) {
-        const cached = getCache(cacheKey);
+        const cached = getCache<Array<{ name: string; path: string; type: 'file' | 'dir'; sha: string }>>(cacheKey);
         if (cached !== null) {
           return cached;
         }
@@ -614,19 +650,21 @@ export class ContentService {
         return [];
       }
 
-      const result = data.map((item: any) => ({
-        name: item.name as string,
-        path: item.path as string,
-        type: (item.type === 'dir' ? 'dir' : 'file') as 'dir' | 'file',
-        sha: item.sha as string,
+      const result: Array<{ name: string; path: string; type: 'file' | 'dir'; sha: string }> = (
+        data as RepositoryContentItem[]
+      ).map(item => ({
+        name: item.name,
+        path: item.path,
+        type: item.type === 'dir' ? 'dir' : 'file',
+        sha: item.sha,
       }));
 
       // Cache the result
       setCache(cacheKey, result);
 
       return result;
-    } catch (error: any) {
-      if (error.status === 404) {
+    } catch (error: unknown) {
+      if (hasStatus(error, 404)) {
         return [];
       }
       throw error;
@@ -700,8 +738,8 @@ export class ContentService {
           message: message || `Delete ${path}`,
         });
         deleted++;
-      } catch (error: any) {
-        errors.push(`${path}: ${error.message}`);
+      } catch (error: unknown) {
+        errors.push(`${path}: ${getErrorMessage(error)}`);
       }
     }
 
@@ -856,8 +894,8 @@ export class ContentService {
             filesToDelete.push(item.path);
           }
         }
-      } catch (error: any) {
-        if (error.status !== 404) throw error;
+      } catch (error: unknown) {
+        if (!hasStatus(error, 404)) throw error;
       }
     }
 

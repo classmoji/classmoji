@@ -1,7 +1,8 @@
-import prisma from '@classmoji/database';
+import getPrisma from '@classmoji/database';
+import { Prisma, type AuditLogAction, type Role } from '@prisma/client';
 
 // Valid AuditLogAction values from Prisma schema
-const VALID_ACTIONS = ['CREATE', 'UPDATE', 'DELETE', 'ACCESS_DENIED', 'VIEW'];
+const VALID_ACTIONS = ['CREATE', 'UPDATE', 'DELETE', 'ACCESS_DENIED', 'VIEW'] satisfies AuditLogAction[];
 // Valid Role values from Prisma schema
 const VALID_ROLES = ['OWNER', 'TEACHER', 'STUDENT', 'ASSISTANT'];
 
@@ -9,10 +10,10 @@ interface AuditLogData {
   user_id: string;
   classroom_id: string;
   role: string;
-  resource_type?: string;
+  resource_type: string;
   resource_id?: string | number | null;
-  action: string;
-  data?: any;
+  action: AuditLogAction;
+  data?: Prisma.InputJsonValue | null;
 }
 
 export const create = async (data: AuditLogData) => {
@@ -38,12 +39,13 @@ export const create = async (data: AuditLogData) => {
 
   const normalizedResourceId =
     resource_id === null || resource_id === undefined ? null : String(resource_id);
+  const normalizedRole = role as Role;
 
   // Build auditData with only valid fields (exclude invalid role before query)
-  const auditData: Record<string, any> = {
+  const auditData: Prisma.AuditLogUncheckedCreateInput = {
     user_id,
     classroom_id,
-    role,
+    role: normalizedRole,
     resource_type,
     resource_id: normalizedResourceId,
     action,
@@ -51,27 +53,27 @@ export const create = async (data: AuditLogData) => {
 
   // Copy over optional fields if present
   if (data.data !== undefined) {
-    auditData.data = data.data;
+    auditData.data = data.data === null ? Prisma.JsonNull : data.data;
   }
 
   const deduplicationWindowMs = 5 * 1000; // 5-second deduplication window
 
-  const recentLog = await prisma!.auditLog.findFirst({
+  const recentLog = await getPrisma().auditLog.findFirst({
     where: {
       user_id,
       classroom_id,
-      role,
+      role: normalizedRole,
       resource_type,
       resource_id: normalizedResourceId,
       action,
       timestamp: {
         gte: new Date(Date.now() - deduplicationWindowMs),
       },
-    } as any,
+    },
   });
 
   if (!recentLog) {
-    return prisma!.auditLog.create({ data: auditData } as any);
+    return getPrisma().auditLog.create({ data: auditData });
   }
 
   return null;

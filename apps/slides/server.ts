@@ -4,7 +4,7 @@ import { Server as SocketServer } from 'socket.io';
 import { createRequestHandler } from '@react-router/express';
 import compression from 'compression';
 import morgan from 'morgan';
-import prisma from '@classmoji/database';
+import getPrisma from '@classmoji/database';
 import { auth } from '@classmoji/auth/server';
 
 // Helper to get session from socket cookie header
@@ -18,7 +18,7 @@ async function getSocketAuthSession(cookieHeader: string) {
 
   if (session?.user) {
     // Get user with classroom memberships
-    const user = await prisma.user.findUnique({
+    const user = await getPrisma().user.findUnique({
       where: { id: session.user.id },
       include: { classroom_memberships: { include: { classroom: true } } },
     });
@@ -32,13 +32,13 @@ async function getSocketAuthSession(cookieHeader: string) {
 
     if (tokenFromCookie) {
       const tokenOnly = tokenFromCookie.split('.')[0];
-      const directSession = await prisma.session.findUnique({
+      const directSession = await getPrisma().session.findUnique({
         where: { token: tokenOnly },
         include: { user: true },
       });
 
       if (directSession?.user && directSession.expires_at > new Date()) {
-        const user = await prisma.user.findUnique({
+        const user = await getPrisma().user.findUnique({
           where: { id: directSession.user.id },
           include: { classroom_memberships: { include: { classroom: true } } },
         });
@@ -152,7 +152,7 @@ multiplex.on('connection', (socket) => {
 
   socket.on('join', async ({ slideId }: { slideId: string }) => {
     try {
-      const slide = await prisma.slide.findUnique({
+      const slide = await getPrisma().slide.findUnique({
         where: { id: slideId },
         include: { classroom: true },
       });
@@ -255,7 +255,7 @@ multiplex.on('connection', (socket) => {
 // ─────────────────────────────────────────────────────────────────────────────
 app.get('/health', async (_req, res) => {
   try {
-    await prisma.$queryRaw`SELECT 1`;
+    await getPrisma().$queryRaw`SELECT 1`;
     res.status(200).json({ status: 'ok' });
   } catch (err) {
     console.error('[health] DB check failed:', err);

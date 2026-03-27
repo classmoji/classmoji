@@ -21,7 +21,7 @@ import useStore from '~/store';
  * Can be used in any child route to get the current user
  */
 export function useUser() {
-  return useRouteLoaderData('root') as any;
+  return useRouteLoaderData('root') as { user: import('~/types/pages.ts').PagesUser | null };
 }
 
 import 'react-toastify/dist/ReactToastify.css';
@@ -51,7 +51,7 @@ export const links = (): Array<{ rel: string; href: string; crossOrigin?: string
   ];
 };
 
-export const loader = async ({ request }: any) => {
+export const loader = async ({ request }: { request: Request }) => {
   const url = new URL(request.url);
 
   // Health check, API routes, and root index don't require auth from here.
@@ -143,7 +143,7 @@ export const loader = async ({ request }: any) => {
 };
 
 const App = () => {
-  const { user } = useLoaderData() as any;
+  const { user } = useLoaderData<typeof loader>();
   const setUser = useStore(state => state.setUser);
 
   // Populate Zustand store with user from loader
@@ -233,7 +233,7 @@ const App = () => {
 
 // Error boundary
 export function ErrorBoundary() {
-  const error = useRouteError() as any;
+  const error = useRouteError() as { message?: string; stack?: string } | undefined;
   const isDevelopment = import.meta.env.MODE === 'development';
 
   return (

@@ -80,10 +80,10 @@ export class GitHubProvider extends GitProvider {
       });
 
       return octokit;
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error(
         `[GitHubProvider] Failed to get installation ${this.installationId}:`,
-        error.message
+        error instanceof Error ? error.message : String(error)
       );
       GitHubProvider.#installationCache.delete(cacheKey);
       throw error;
@@ -214,8 +214,8 @@ export class GitHubProvider extends GitProvider {
     try {
       await this.getRepository(org, name);
       return true;
-    } catch (error: any) {
-      if (error.status === 404) return false;
+    } catch (error: unknown) {
+      if (error instanceof Error && 'status' in error && (error as Error & { status: number }).status === 404) return false;
       throw error;
     }
   }
@@ -444,10 +444,15 @@ export class GitHubProvider extends GitProvider {
    */
   async inviteToOrganization(org: string, userIdOrEmail: string | number, teamIds: number[]): Promise<void> {
     const octokit = await this.#getOctokit();
-    const payload: Record<string, any> = { org };
+    const payload: {
+      org: string;
+      email?: string;
+      invitee_id?: number;
+      team_ids?: number[];
+    } = { org };
 
     if (String(userIdOrEmail).includes('@')) {
-      payload.email = userIdOrEmail;
+      payload.email = String(userIdOrEmail);
     } else {
       payload.invitee_id = parseInt(String(userIdOrEmail), 10);
     }
@@ -456,7 +461,7 @@ export class GitHubProvider extends GitProvider {
       payload.team_ids = teamIds.map(Number);
     }
 
-    await octokit.request('POST /orgs/{org}/invitations', payload as any);
+    await octokit.request('POST /orgs/{org}/invitations', payload);
   }
 
   /**
@@ -486,8 +491,8 @@ export class GitHubProvider extends GitProvider {
         username,
       });
       return true;
-    } catch (error: any) {
-      if (error.status === 404) return false;
+    } catch (error: unknown) {
+      if (error instanceof Error && 'status' in error && (error as Error & { status: number }).status === 404) return false;
       throw error;
     }
   }
@@ -520,8 +525,8 @@ export class GitHubProvider extends GitProvider {
         privacy: 'closed',
       });
       return { id: data.id, slug: data.slug, name: data.name };
-    } catch (error: any) {
-      if (error.status === 422) {
+    } catch (error: unknown) {
+      if (error instanceof Error && 'status' in error && (error as Error & { status: number }).status === 422) {
         // Team already exists - fetch it
         const slug = name.toLowerCase().replace(/\s+/g, '-');
         return this.getTeam(org, slug);
@@ -653,8 +658,8 @@ export class GitHubProvider extends GitProvider {
         repo,
       });
       return { alreadyEnabled: true };
-    } catch (error: any) {
-      if (error.status !== 404) {
+    } catch (error: unknown) {
+      if (!(error instanceof Error && 'status' in error && (error as Error & { status: number }).status === 404)) {
         throw error;
       }
     }
@@ -713,7 +718,13 @@ export class GitHubProvider extends GitProvider {
    */
   async listOrganizationProjects(org: string): Promise<any[]> {
     const octokit = await this.#getOctokit();
-    const result: any = await octokit.graphql(`
+    const result = await octokit.graphql<{
+      organization: {
+        projectsV2: {
+          nodes: Array<{ id: string; title: string; number: number; url: string }>;
+        };
+      };
+    }>(`
       query($org: String!) {
         organization(login: $org) {
           projectsV2(first: 50, orderBy: {field: TITLE, direction: ASC}) {
@@ -739,7 +750,11 @@ export class GitHubProvider extends GitProvider {
    */
   async copyProjectFromTemplate(templateProjectId: string, ownerId: string, title: string): Promise<{ id: string; number: number; url: string }> {
     const octokit = await this.#getOctokit();
-    const result: any = await octokit.graphql(`
+    const result = await octokit.graphql<{
+      copyProjectV2: {
+        projectV2: { id: string; number: number; url: string };
+      };
+    }>(`
       mutation($projectId: ID!, $ownerId: ID!, $title: String!) {
         copyProjectV2(input: {projectId: $projectId, ownerId: $ownerId, title: $title, includeDraftIssues: false}) {
           projectV2 {
@@ -778,7 +793,11 @@ export class GitHubProvider extends GitProvider {
     const octokit = await this.#getOctokit();
 
     // Add item to project
-    const addResult: any = await octokit.graphql(`
+    const addResult = await octokit.graphql<{
+      addProjectV2ItemById: {
+        item: { id: string };
+      };
+    }>(`
       mutation($projectId: ID!, $contentId: ID!) {
         addProjectV2ItemById(input: {projectId: $projectId, contentId: $contentId}) {
           item {
@@ -809,7 +828,14 @@ export class GitHubProvider extends GitProvider {
   async getProjectStatusField(projectId: string): Promise<{ fieldId: string; firstOptionId: string } | null> {
     const octokit = await this.#getOctokit();
 
-    const result: any = await octokit.graphql(`
+    const result = await octokit.graphql<{
+      node: {
+        field: {
+          id: string;
+          options: Array<{ id: string; name: string }>;
+        } | null;
+      } | null;
+    }>(`
       query($projectId: ID!) {
         node(id: $projectId) {
           ... on ProjectV2 {

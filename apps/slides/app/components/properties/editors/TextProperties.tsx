@@ -61,7 +61,7 @@ const COLUMN_OPTIONS = [
   { value: '3', label: '3 Columns' },
 ];
 
-export default function TextProperties({ element }: any) {
+export default function TextProperties({ element }: { element: HTMLElement }) {
   const { onContentChange, selectElement } = useElementSelection();
 
   const [elementType, setElementType] = useState(() => element?.tagName || 'P');
@@ -71,13 +71,13 @@ export default function TextProperties({ element }: any) {
   const [columns, setColumns] = useState(() => getListColumns(element));
 
   // Get column count from parent list (for list items)
-  function getListColumns(el: any) {
+  function getListColumns(el: HTMLElement | null) {
     if (!el) return '1';
     // If this is a list item, check parent list's column-count
     if (el.tagName === 'LI') {
       const parentList = el.closest('ul, ol');
       if (parentList) {
-        return parentList.style.columnCount || '1';
+        return (parentList as HTMLElement).style.columnCount || '1';
       }
     }
     return '1';
@@ -95,7 +95,7 @@ export default function TextProperties({ element }: any) {
   }, [element]);
 
   // Change element type (e.g., h1 → h2, h1 → p, or h1 → code block)
-  const handleElementTypeChange = useCallback((newType: any) => {
+  const handleElementTypeChange = useCallback((newType: string) => {
     if (!element || element.tagName === newType) return;
 
     // List items can't be converted to other types (they must stay in lists)
@@ -126,7 +126,7 @@ export default function TextProperties({ element }: any) {
     }
 
     // Replace in DOM
-    element.parentNode.replaceChild(newElement, element);
+    element.parentNode?.replaceChild(newElement, element);
 
     // Update state and selection
     setElementType(newType);
@@ -135,7 +135,7 @@ export default function TextProperties({ element }: any) {
   }, [element, selectElement, onContentChange]);
 
   // Update alignment
-  const handleAlignmentChange = useCallback((newAlign: any) => {
+  const handleAlignmentChange = useCallback((newAlign: string) => {
     if (!element) return;
     element.style.textAlign = newAlign === 'left' ? '' : newAlign;
     setAlignment(newAlign);
@@ -143,7 +143,7 @@ export default function TextProperties({ element }: any) {
   }, [element, onContentChange]);
 
   // Update color
-  const handleColorChange = useCallback((newColor: any) => {
+  const handleColorChange = useCallback((newColor: string) => {
     if (!element) return;
     element.style.color = newColor === 'inherit' ? '' : newColor;
     setColor(newColor);
@@ -151,7 +151,7 @@ export default function TextProperties({ element }: any) {
   }, [element, onContentChange]);
 
   // Update font size
-  const handleFontSizeChange = useCallback((newSize: any) => {
+  const handleFontSizeChange = useCallback((newSize: string) => {
     if (!element) return;
     element.style.fontSize = newSize;
     setFontSize(newSize);
@@ -159,10 +159,10 @@ export default function TextProperties({ element }: any) {
   }, [element, onContentChange]);
 
   // Update columns (for list items - applies to parent list)
-  const handleColumnsChange = useCallback((newColumns: any) => {
+  const handleColumnsChange = useCallback((newColumns: string) => {
     if (!element || element.tagName !== 'LI') return;
 
-    const parentList = element.closest('ul, ol');
+    const parentList = element.closest('ul, ol') as HTMLElement | null;
     if (!parentList) return;
 
     if (newColumns === '1') {

@@ -7,7 +7,7 @@ import { useElementSelection } from './properties/ElementSelectionContext';
 // Overflow Detection Hook - Progressively hides groups when toolbar overflows
 // ─────────────────────────────────────────────────────────────
 
-function useToolbarOverflow(toolbarRef: any) {
+function useToolbarOverflow(toolbarRef: React.RefObject<HTMLDivElement | null>) {
   const [hiddenGroups, setHiddenGroups] = useState(0); // 0-4 groups hidden
   const lastAvailableWidthRef = useRef(0);
   const isExpandingRef = useRef(false); // Track if we just expanded to skip collapse check
@@ -17,7 +17,7 @@ function useToolbarOverflow(toolbarRef: any) {
   // (Themes moved to SlideProperties panel)
   // Estimated widths for expansion
   const MAX_HIDDEN = 4;
-  const getNeededSpace = (level: any) => {
+  const getNeededSpace = (level: number) => {
     switch (level) {
       case 1: return 150; // Insert Content
       case 2: return 250; // Slide Management
@@ -33,16 +33,16 @@ function useToolbarOverflow(toolbarRef: any) {
   }, [hiddenGroups]);
 
   // Helper to get available width from parent container
-  const getAvailableWidth = (toolbar: any) => {
+  const getAvailableWidth = (toolbar: HTMLElement) => {
     const navbarCenter = toolbar.closest('.slides-navbar-editing > div:nth-child(2)');
     return navbarCenter ? navbarCenter.clientWidth : toolbar.parentElement?.clientWidth || 0;
   };
 
   // Helper to get actual content width (sum of children) since min-w-0 can shrink container
-  const getContentWidth = (toolbar: any) => {
+  const getContentWidth = (toolbar: HTMLElement) => {
     let width = 0;
     for (const child of toolbar.children) {
-      width += child.offsetWidth;
+      width += (child as HTMLElement).offsetWidth;
     }
     // Add gaps between children (gap-0.5 = 2px)
     const gapCount = Math.max(0, toolbar.children.length - 1);
@@ -156,15 +156,22 @@ function useToolbarOverflow(toolbarRef: any) {
  * - Horizontal slides: sibling <section> elements
  * - Vertical slides: nested <section> elements inside a parent <section>
  */
+interface SlideToolbarProps {
+  revealInstance: RevealApi | null;
+  onContentChange?: () => void;
+  onImageUpload?: (file: File) => Promise<string>;
+  onOpenOverview?: () => void;
+}
+
 export default function SlideToolbar({
   revealInstance,
   onContentChange,
   onImageUpload,
   onOpenOverview,   // Callback to open slide overview
-}: any) {
+}: SlideToolbarProps) {
   const [isImageModalOpen, setIsImageModalOpen] = useState(false);
   const [popoverOpen, setPopoverOpen] = useState(false);
-  const toolbarRef = useRef<any>(null);
+  const toolbarRef = useRef<HTMLDivElement>(null);
 
   // Get snippets from context
   const { snippets } = useElementSelection();
@@ -176,8 +183,8 @@ export default function SlideToolbar({
   // Text Formatting (uses execCommand - still works in all browsers)
   // ─────────────────────────────────────────────────────────────
 
-  const execFormat = useCallback((command: any, value = null) => {
-    document.execCommand(command, false, value as any);
+  const execFormat = useCallback((command: string, value: string | null = null) => {
+    document.execCommand(command, false, value ?? undefined);
     onContentChange?.();
   }, [onContentChange]);
 
@@ -190,7 +197,7 @@ export default function SlideToolbar({
   // Block Formatting (headings, paragraphs, lists)
   // ─────────────────────────────────────────────────────────────
 
-  const formatBlock = (tag: any) => {
+  const formatBlock = (tag: string) => {
     document.execCommand('formatBlock', false, tag);
     onContentChange?.();
   };
@@ -221,15 +228,16 @@ export default function SlideToolbar({
 
   const addSlideLeft = useCallback(() => {
     const currentSlide = getCurrentSlide();
-    if (!currentSlide) return;
+    if (!currentSlide || !revealInstance) return;
 
     const newSlide = createNewSlide();
 
     // If current slide is in a vertical stack, add before the stack
     const parent = currentSlide.parentElement;
+    if (!parent) return;
     if (parent.tagName === 'SECTION') {
       // In vertical stack - add before the parent stack
-      parent.parentElement.insertBefore(newSlide, parent);
+      parent.parentElement?.insertBefore(newSlide, parent);
     } else {
       // Top-level slide - add before current
       parent.insertBefore(newSlide, currentSlide);
@@ -243,15 +251,16 @@ export default function SlideToolbar({
 
   const addSlideRight = useCallback(() => {
     const currentSlide = getCurrentSlide();
-    if (!currentSlide) return;
+    if (!currentSlide || !revealInstance) return;
 
     const newSlide = createNewSlide();
 
     // If current slide is in a vertical stack, add after the stack
     const parent = currentSlide.parentElement;
+    if (!parent) return;
     if (parent.tagName === 'SECTION') {
       // In vertical stack - add after the parent stack
-      parent.parentElement.insertBefore(newSlide, parent.nextSibling);
+      parent.parentElement?.insertBefore(newSlide, parent.nextSibling);
     } else {
       // Top-level slide - add after current
       parent.insertBefore(newSlide, currentSlide.nextSibling);
@@ -265,10 +274,11 @@ export default function SlideToolbar({
 
   const addSlideBelow = useCallback(() => {
     const currentSlide = getCurrentSlide();
-    if (!currentSlide) return;
+    if (!currentSlide || !revealInstance) return;
 
     const newSlide = createNewSlide();
     const parent = currentSlide.parentElement;
+    if (!parent) return;
 
     // Get current position before DOM changes
     const indices = revealInstance.getIndices();
@@ -317,9 +327,10 @@ export default function SlideToolbar({
   // Perform the actual deletion (called by Popconfirm onConfirm)
   const performDeleteSlide = useCallback(() => {
     const currentSlide = getCurrentSlide();
-    if (!currentSlide) return;
+    if (!currentSlide || !revealInstance) return;
 
     const parent = currentSlide.parentElement;
+    if (!parent) return;
 
     // Navigate away from the slide before deleting
     // Try to go to the previous slide, otherwise next
@@ -363,7 +374,7 @@ export default function SlideToolbar({
   }, [getCurrentSlide, revealInstance, onContentChange]);
 
   // Handle delete button click - show warning if can't delete
-  const handleDeleteClick = useCallback((e: any) => {
+  const handleDeleteClick = useCallback((e: React.MouseEvent) => {
     if (!canDeleteSlide()) {
       e.preventDefault();
       e.stopPropagation();
@@ -449,7 +460,7 @@ document.querySelector('h1').addEventListener('click', () => {
   // ─────────────────────────────────────────────────────────────
 
   // Helper to create sl-block wrapper with default positioning
-  const createSlBlock = useCallback((type: any, width = 400, height = 100) => {
+  const createSlBlock = useCallback((type: string, width = 400, height = 100) => {
     const block = document.createElement('div');
     block.className = 'sl-block';
     block.dataset.blockType = type;
@@ -504,7 +515,7 @@ document.querySelector('h1').addEventListener('click', () => {
   }, []);
 
   // Handle image upload for sl-block
-  const handleBlockImageUploaded = useCallback(async (file: any) => {
+  const handleBlockImageUploaded = useCallback(async (file: File) => {
     if (!onImageUpload) {
       message.error('Image upload not available');
       setPendingBlockImage(false);
@@ -586,7 +597,7 @@ document.querySelector('h1').addEventListener('click', () => {
   }, [getCurrentSection, createSlBlock, onContentChange]);
 
   // Insert a snippet as an sl-block
-  const insertSnippet = useCallback((/** @type {{id: string, name: string, content: string}} */ snippet: any) => {
+  const insertSnippet = useCallback((snippet: { id: string; name: string; content: string }) => {
     requestAnimationFrame(() => {
       const section = getCurrentSection();
       if (!section) return;
@@ -607,7 +618,7 @@ document.querySelector('h1').addEventListener('click', () => {
   // Toolbar Button Component
   // ─────────────────────────────────────────────────────────────
 
-  const ToolbarButton = ({ onClick, title, children, className = '' }: any) => (
+  const ToolbarButton = ({ onClick, title, children, className = '' }: { onClick?: () => void; title: string; children: React.ReactNode; className?: string }) => (
     <Tooltip title={title} mouseEnterDelay={0.1} mouseLeaveDelay={0}>
       <button
         onClick={onClick}
@@ -805,7 +816,7 @@ document.querySelector('h1').addEventListener('click', () => {
         {snippets && snippets.length > 0 && (
           <Dropdown
             menu={{
-              items: snippets.map((/** @type {{id: string, name: string, content: string}} */ s: any) => ({
+              items: snippets.map((s: { id: string; name: string; content: string }) => ({
                 key: s.id,
                 label: s.name,
                 onClick: () => insertSnippet(s),

@@ -1,7 +1,7 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
 import { useLoaderData, useFetcher } from 'react-router';
 import { message, Tooltip, Popconfirm } from 'antd';
-import prisma from '@classmoji/database';
+import getPrisma from '@classmoji/database';
 import { ContentService } from '@classmoji/content';
 import { assertSlideAccess } from '@classmoji/auth/server';
 import { ClassmojiService } from '@classmoji/services';
@@ -9,7 +9,7 @@ import { SandpackRenderer } from '@classmoji/ui-components/sandpack';
 import { useUser } from '~/hooks';
 import { fetchContent } from '~/utils/contentProxy';
 import { getThemeUrls } from '~/utils/themeService.server';
-import RevealSlides from '~/components/RevealSlides';
+import RevealSlides, { type RevealSlidesHandle } from '~/components/RevealSlides';
 import SlideToolbar from '~/components/SlideToolbar';
 import SlideNotesPanel from '~/components/SlideNotesPanel';
 import OrphanedImagesModal from '~/components/OrphanedImagesModal';
@@ -20,14 +20,15 @@ import ImageResizeHandles from '~/components/ImageResizeHandles';
 import BlockHandles from '~/components/BlockHandles';
 
 // Loader to fetch slide metadata and content from database/GitHub
-export const loader = async ({ params, request }: any) => {
+export const loader = async ({ params, request }: { params: Record<string, string | undefined>; request: Request }) => {
   const { slideId } = params;
+  if (!slideId) throw new Response('Missing slideId', { status: 400 });
   const url = new URL(request.url);
   const mode = url.searchParams.get('mode');
   const returnUrl = url.searchParams.get('returnUrl');
 
   // Fetch slide from database with classroom and git_organization
-  const slide = await prisma!.slide.findUnique({
+  const slide = await getPrisma().slide.findUnique({
     where: { id: slideId },
     include: {
       classroom: {
@@ -79,10 +80,10 @@ export const loader = async ({ params, request }: any) => {
 
   // Fetch content: API-first for edit mode (freshness), CDN-first for view mode (speed)
   // CDN has ~3 minute propagation delay after saves, so edit mode needs fresh API data
-  let slideContent: any = null;
-  let contentError: any = null;
+  let slideContent: string | null = null;
+  let contentError: string | null = null;
   let usedApiFallback = false;
-  let contentResult: any = null;
+  let contentResult: { content: string | Buffer; source: string } | null = null;
 
   if (mode === 'edit') {
     // API-first for edit mode - ensures fresh content after saves
@@ -95,9 +96,10 @@ export const loader = async ({ params, request }: any) => {
       if (result) {
         contentResult = { content: result.content, source: 'api' };
       }
-    } catch (e: any) {
+    } catch (e: unknown) {
       // Fall back to CDN if API fails
-      console.log('[Loader] API fetch failed, falling back to CDN:', e.message);
+      const message = e instanceof Error ? e.message : String(e);
+      console.log('[Loader] API fetch failed, falling back to CDN:', message);
     }
   }
 
@@ -111,7 +113,7 @@ export const loader = async ({ params, request }: any) => {
   }
 
   if (contentResult) {
-    slideContent = contentResult.content;
+    slideContent = contentResult.content as string;
     usedApiFallback = contentResult.source === 'api';
 
     // Strip speaker notes from content if user doesn't have permission to view them
@@ -132,7 +134,7 @@ export const loader = async ({ params, request }: any) => {
   //
   // EXCEPTION: If the slide uses a shared theme, we pre-load just that one theme
   // so that view mode displays correctly (lazy-loading only triggers in edit mode)
-  let preloadedSharedTheme: any = null;
+  let preloadedSharedTheme: { id: string; name: string; libCssUrl?: string; customThemeUrl?: string; bodyClasses?: string } | null = null;
   if (slideContent) {
     const themeMatch = slideContent.match(/data-theme="shared:([^"]+)"/);
     if (themeMatch) {
@@ -141,11 +143,14 @@ export const loader = async ({ params, request }: any) => {
         const themeUrls = await getThemeUrls(gitOrgLogin, repo, themeName);
         preloadedSharedTheme = {
           id: `shared:${themeName}`,
-          name: themeName.split('-').map((w: any) => w.charAt(0).toUpperCase() + w.slice(1)).join(' '),
-          ...themeUrls,
+          name: themeName.split('-').map((w: string) => w.charAt(0).toUpperCase() + w.slice(1)).join(' '),
+          libCssUrl: themeUrls.libCssUrl,
+          customThemeUrl: themeUrls.customThemeUrl ?? undefined,
+          bodyClasses: themeUrls.bodyClasses as string,
         };
-      } catch (e: any) {
-        console.warn(`Could not preload shared theme "${themeName}":`, e.message);
+      } catch (e: unknown) {
+        const message = e instanceof Error ? e.message : String(e);
+        console.warn(`Could not preload shared theme "${themeName}":`, message);
       }
     }
   }
@@ -180,13 +185,14 @@ export const loader = async ({ params, request }: any) => {
 };
 
 // Action to save slide content or fetch fresh content from GitHub API
-export const action = async ({ request, params }: any) => {
+export const action = async ({ request, params }: { request: Request; params: Record<string, string | undefined> }) => {
   const { slideId } = params;
+  if (!slideId) return { error: 'Missing slideId' };
   const formData = await request.formData();
   const intent = formData.get('intent');
 
   // Fetch slide to get classroom/git org info
-  const slide = await prisma!.slide.findUnique({
+  const slide = await getPrisma().slide.findUnique({
     where: { id: slideId },
     include: {
       classroom: {
@@ -265,7 +271,7 @@ export const action = async ({ request, params }: any) => {
           const baseUrl = `/content/${gitOrgLogin}/${repo}/.slidesthemes/${folder.name}`;
 
           // Check if custom-theme.css exists (uses cached response)
-          let customThemeUrl: any = null;
+          let customThemeUrl: string | null = null;
           const customThemeResult = await ContentService.getContent({
             orgLogin: gitOrgLogin,
             repo,
@@ -294,7 +300,7 @@ export const action = async ({ request, params }: any) => {
         customThemes,
         sharedThemes,
       };
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error('Failed to list themes:', error);
       return { intent: 'list-themes', customThemes: [], sharedThemes: [] };
     }
@@ -339,7 +345,7 @@ export const action = async ({ request, params }: any) => {
         intent: 'get-theme-content',
         cssThemes,
       };
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error('Failed to get theme content:', error);
       return { intent: 'get-theme-content', cssThemes: [] };
     }
@@ -380,7 +386,7 @@ export const action = async ({ request, params }: any) => {
         intent: 'list-snippets',
         snippets,
       };
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error('Failed to list snippets:', error);
       return { intent: 'list-snippets', snippets: [] };
     }
@@ -407,9 +413,9 @@ export const action = async ({ request, params }: any) => {
         content: result.content,
         sha: result.sha,
       };
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error('Failed to fetch latest content:', error);
-      return { error: error.message };
+      return { error: error instanceof Error ? error.message : String(error) };
     }
   }
 
@@ -443,9 +449,9 @@ export const action = async ({ request, params }: any) => {
         url: `/content/${gitOrgLogin}/${repo}/${result.path}`,
         path: result.path,
       };
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error('Failed to upload image:', error);
-      return { error: error.message };
+      return { error: error instanceof Error ? error.message : String(error) };
     }
   }
 
@@ -482,9 +488,9 @@ export const action = async ({ request, params }: any) => {
           content: String(content),
         },
       };
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error('Failed to save snippet:', error);
-      return { error: error.message };
+      return { error: error instanceof Error ? error.message : String(error) };
     }
   }
 
@@ -517,7 +523,7 @@ export const action = async ({ request, params }: any) => {
             path: oldPath,
             message: `Rename snippet: ${id} → ${newFilename}`,
           });
-        } catch (err: any) {
+        } catch (err: unknown) {
           // Old file might not exist, continue anyway
           console.log(err);
         }
@@ -542,9 +548,9 @@ export const action = async ({ request, params }: any) => {
           content: String(content),
         },
       };
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error('Failed to update snippet:', error);
-      return { error: error.message };
+      return { error: error instanceof Error ? error.message : String(error) };
     }
   }
 
@@ -569,9 +575,9 @@ export const action = async ({ request, params }: any) => {
         success: true,
         deletedId: String(id),
       };
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error('Failed to delete snippet:', error);
-      return { error: error.message };
+      return { error: error instanceof Error ? error.message : String(error) };
     }
   }
 
@@ -611,9 +617,9 @@ export const action = async ({ request, params }: any) => {
           content: String(content),
         },
       };
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error('Failed to save theme:', error);
-      return { error: error.message };
+      return { error: error instanceof Error ? error.message : String(error) };
     }
   }
 
@@ -648,7 +654,7 @@ export const action = async ({ request, params }: any) => {
             path: oldPath,
             message: `Rename CSS theme: ${id} → ${newFilename}`,
           });
-        } catch (err: any) {
+        } catch (err: unknown) {
           // Old file might not exist, continue anyway
           console.log(err);
         }
@@ -674,9 +680,9 @@ export const action = async ({ request, params }: any) => {
           content: String(content),
         },
       };
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error('Failed to update theme:', error);
-      return { error: error.message };
+      return { error: error instanceof Error ? error.message : String(error) };
     }
   }
 
@@ -701,16 +707,16 @@ export const action = async ({ request, params }: any) => {
         success: true,
         deletedId: String(id),
       };
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error('Failed to delete theme:', error);
-      return { error: error.message };
+      return { error: error instanceof Error ? error.message : String(error) };
     }
   }
 
   // Delete orphaned images
   if (intent === 'delete-images') {
     try {
-      const pathsJson = formData.get('paths');
+      const pathsJson = formData.get('paths') as string;
       const paths = JSON.parse(pathsJson);
 
       if (!Array.isArray(paths) || paths.length === 0) {
@@ -730,16 +736,16 @@ export const action = async ({ request, params }: any) => {
         deleted: result.deleted,
         errors: result.errors,
       };
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error('Failed to delete images:', error);
-      return { error: error.message };
+      return { error: error instanceof Error ? error.message : String(error) };
     }
   }
 
   // Update slide visibility settings (is_draft, is_public, show_speaker_notes, allow_team_edit)
   if (intent === 'update-visibility') {
     try {
-      const updateData: Record<string, any> = {};
+      const updateData: Record<string, boolean> = {};
 
       // Parse visibility setting
       const visibility = formData.get('visibility');
@@ -771,7 +777,7 @@ export const action = async ({ request, params }: any) => {
         return { error: 'No visibility settings to update' };
       }
 
-      await prisma!.slide.update({
+      await getPrisma().slide.update({
         where: { id: slideId },
         data: updateData,
       });
@@ -781,14 +787,14 @@ export const action = async ({ request, params }: any) => {
         success: true,
         ...updateData,
       };
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error('Failed to update visibility:', error);
-      return { error: error.message };
+      return { error: error instanceof Error ? error.message : String(error) };
     }
   }
 
   // Save content to GitHub
-  const htmlContent = formData.get('content');
+  const htmlContent = formData.get('content') as string;
 
   try {
     // Check if content uses a shared theme (format: shared:theme-name)
@@ -799,7 +805,7 @@ export const action = async ({ request, params }: any) => {
 
     // Look up shared theme URLs if needed
     /** @type {{ theme: string, codeTheme: string, libCssUrl?: string, customThemeUrl?: string | null, bodyClasses?: string }} */
-    let themeOptions: Record<string, any> = { theme, codeTheme };
+    let themeOptions: { theme: string; codeTheme: string; libCssUrl?: string; customThemeUrl?: string | null; bodyClasses?: string } = { theme, codeTheme };
     if (theme.startsWith('shared:')) {
       const sharedThemeName = theme.replace('shared:', '');
       try {
@@ -811,7 +817,7 @@ export const action = async ({ request, params }: any) => {
           customThemeUrl: themeUrls.customThemeUrl,
           bodyClasses: themeUrls.bodyClasses,
         };
-      } catch (err: any) {
+      } catch (err: unknown) {
         console.error(`Failed to get shared theme URLs for ${sharedThemeName}:`, err);
         // Fall back to default theme if shared theme lookup fails
         themeOptions = { theme: 'white', codeTheme };
@@ -831,13 +837,13 @@ export const action = async ({ request, params }: any) => {
     });
 
     // Update the slide's updated_at timestamp
-    await prisma!.slide.update({
+    await getPrisma().slide.update({
       where: { id: slideId },
       data: { updated_at: new Date() },
     });
 
     // Check for orphaned images after save
-    let orphanedImages: any[] = [];
+    let orphanedImages: Array<{ path: string; name: string; url: string }> = [];
     try {
       orphanedImages = await ContentService.findOrphanedImages({
         orgLogin: gitOrgLogin,
@@ -845,7 +851,7 @@ export const action = async ({ request, params }: any) => {
         imagesFolder: `${slide.content_path}/images`,
         htmlContent: fullHtml,
       });
-    } catch (err: any) {
+    } catch (err: unknown) {
       // Don't fail the save if orphan detection fails
       console.error('Failed to detect orphaned images:', err);
     }
@@ -857,9 +863,9 @@ export const action = async ({ request, params }: any) => {
       savedContent: fullHtml,
       orphanedImages,
     };
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error('Failed to save slide:', error);
-    return { error: error.message };
+    return { error: error instanceof Error ? error.message : String(error) };
   }
 };
 
@@ -868,7 +874,7 @@ const BUILTIN_THEMES = ['black', 'white', 'league', 'beige', 'night', 'serif', '
 
 // Generate theme stylesheet URL for built-in themes
 /** @param {string} theme */
-function getBuiltinThemeUrl(theme: any) {
+function getBuiltinThemeUrl(theme: string) {
   if (BUILTIN_THEMES.includes(theme)) {
     return `https://cdn.jsdelivr.net/npm/reveal.js@5.1.0/dist/theme/${theme}.css`;
   }
@@ -891,7 +897,7 @@ function getBuiltinThemeUrl(theme: any) {
  * @param {string | null} [options.customThemeUrl] - Shared theme custom CSS URL
  * @param {string} [options.bodyClasses] - Body classes for shared theme
  */
-function generateSlideHtml(slidesContent: any, title: any, options: Record<string, any> = {}) {
+function generateSlideHtml(slidesContent: string, title: string, options: { theme?: string; codeTheme?: string; libCssUrl?: string | null; customThemeUrl?: string | null; bodyClasses?: string } = {}) {
   const {
     theme = 'white',
     codeTheme = 'github',
@@ -980,9 +986,9 @@ ${cleanContent}
 }
 
 export default function SlideViewer() {
-  const { slide, contentUrl, slideContent, contentError, snippets: initialSnippets, cssThemes: initialCssThemes, customThemes: initialCustomThemes, sharedThemes: initialSharedThemes, webappUrl, autoEdit, returnUrl, canEdit, canPresent, canViewSpeakerNotes, userRole } = useLoaderData() as any;
-  const [snippets, setSnippets] = useState(initialSnippets || []);
-  const [cssThemes, setCssThemes] = useState(initialCssThemes || []);
+  const { slide, contentUrl, slideContent, contentError, snippets: initialSnippets, cssThemes: initialCssThemes, customThemes: initialCustomThemes, sharedThemes: initialSharedThemes, webappUrl, autoEdit, returnUrl, canEdit, canPresent, canViewSpeakerNotes, userRole } = useLoaderData<typeof loader>();
+  const [snippets, setSnippets] = useState<Array<{ id: string; name: string; content: string }>>(initialSnippets || []);
+  const [cssThemes, setCssThemes] = useState<Array<{ id: string; name: string; type: string; content: string }>>(initialCssThemes || []);
   // Themes are now lazy-loaded when entering edit mode
   const [customThemes, setCustomThemes] = useState(initialCustomThemes || []);
   const [sharedThemes, setSharedThemes] = useState(initialSharedThemes || []);
@@ -994,9 +1000,9 @@ export default function SlideViewer() {
   const [isLoadingLatest, setIsLoadingLatest] = useState(false);
   const [autoEditTriggered, setAutoEditTriggered] = useState(false);
   // Track editable content separately from CDN content
-  const [editableContent, setEditableContent] = useState<any>(null);
+  const [editableContent, setEditableContent] = useState<string | null>(null);
   // Orphaned images cleanup
-  const [orphanedImages, setOrphanedImages] = useState<any[]>([]);
+  const [orphanedImages, setOrphanedImages] = useState<Array<{ path: string; name: string; url: string }>>([]);
   const [showOrphanedModal, setShowOrphanedModal] = useState(false);
   const [isDeletingImages, setIsDeletingImages] = useState(false);
   const [showOverview, setShowOverview] = useState(false);
@@ -1005,8 +1011,8 @@ export default function SlideViewer() {
   const fetcher = useFetcher();
   const themeFetcher = useFetcher(); // For lazy-loading themes
   const snippetFetcher = useFetcher(); // For lazy-loading snippets
-  const revealRef = useRef<any>(null);
-  const [revealInstance, setRevealInstance] = useState<any>(null);
+  const revealRef = useRef<RevealSlidesHandle>(null);
+  const [revealInstance, setRevealInstance] = useState<RevealApi | null>(null);
   const [currentSlideTheme, setCurrentSlideTheme] = useState('white'); // For Sandpack auto-theme
 
   // Lazy-load themes when entering edit mode
@@ -1063,7 +1069,7 @@ export default function SlideViewer() {
     if (revealRef.current) {
       // Small delay to ensure Reveal.js has initialized
       const timer = setTimeout(() => {
-        setRevealInstance(revealRef.current?.getRevealInstance?.());
+        setRevealInstance(revealRef.current?.getRevealInstance?.() ?? null);
         // Update current theme for Sandpack auto-theme detection
         const themes = revealRef.current?.getThemes?.();
         if (themes?.theme) {
@@ -1092,7 +1098,7 @@ export default function SlideViewer() {
   // Warn user before closing tab/refreshing if there are unsaved changes
   // Note: Modern browsers ignore custom messages and show their own generic dialog
   useEffect(() => {
-    const handleBeforeUnload = (e: any) => {
+    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
       if (isEditing && hasChanges) {
         e.preventDefault();
         // Modern browsers ignore this, but it's required for the dialog to show
@@ -1147,7 +1153,7 @@ export default function SlideViewer() {
       if (fetcher.data.success && fetcher.data.snippet) {
         message.success(`Snippet "${fetcher.data.snippet.name}" saved!`);
         // Add the new snippet to the list
-        setSnippets((/** @type {Array<{id: string, name: string, content: string}>} */ prev: any) => [...prev, fetcher.data.snippet]);
+        setSnippets((prev: Array<{ id: string; name: string; content: string }>) => [...prev, fetcher.data.snippet]);
       } else if (fetcher.data.error) {
         message.error(`Failed to save snippet: ${fetcher.data.error}`);
       }
@@ -1156,8 +1162,8 @@ export default function SlideViewer() {
       if (fetcher.data.success && fetcher.data.snippet) {
         message.success(`Snippet "${fetcher.data.snippet.name}" updated!`);
         // Replace the old snippet with the updated one
-        setSnippets((/** @type {Array<{id: string, name: string, content: string}>} */ prev: any) =>
-          prev.map((s: any) => s.id === fetcher.data.oldId ? fetcher.data.snippet : s)
+        setSnippets((prev: Array<{ id: string; name: string; content: string }>) =>
+          prev.map((s) => s.id === fetcher.data.oldId ? fetcher.data.snippet : s)
         );
       } else if (fetcher.data.error) {
         message.error(`Failed to update snippet: ${fetcher.data.error}`);
@@ -1167,8 +1173,8 @@ export default function SlideViewer() {
       if (fetcher.data.success) {
         message.success('Snippet deleted');
         // Remove the snippet from the list
-        setSnippets((/** @type {Array<{id: string, name: string, content: string}>} */ prev: any) =>
-          prev.filter((s: any) => s.id !== fetcher.data.deletedId)
+        setSnippets((prev: Array<{ id: string; name: string; content: string }>) =>
+          prev.filter((s) => s.id !== fetcher.data.deletedId)
         );
       } else if (fetcher.data.error) {
         message.error(`Failed to delete snippet: ${fetcher.data.error}`);
@@ -1178,7 +1184,7 @@ export default function SlideViewer() {
       if (fetcher.data.success && fetcher.data.theme) {
         message.success(`CSS theme "${fetcher.data.theme.name}" saved!`);
         // Add the new theme to the list
-        setCssThemes((/** @type {Array<{id: string, name: string, type: string, content: string}>} */ prev: any) => [...prev, fetcher.data.theme]);
+        setCssThemes((prev: Array<{ id: string; name: string; type: string; content: string }>) => [...prev, fetcher.data.theme]);
       } else if (fetcher.data.error) {
         message.error(`Failed to save theme: ${fetcher.data.error}`);
       }
@@ -1187,8 +1193,8 @@ export default function SlideViewer() {
       if (fetcher.data.success && fetcher.data.theme) {
         message.success(`CSS theme "${fetcher.data.theme.name}" updated!`);
         // Replace the old theme with the updated one
-        setCssThemes((/** @type {Array<{id: string, name: string, type: string, content: string}>} */ prev: any) =>
-          prev.map((t: any) => t.id === fetcher.data.oldId ? fetcher.data.theme : t)
+        setCssThemes((prev: Array<{ id: string; name: string; type: string; content: string }>) =>
+          prev.map((t) => t.id === fetcher.data.oldId ? fetcher.data.theme : t)
         );
       } else if (fetcher.data.error) {
         message.error(`Failed to update theme: ${fetcher.data.error}`);
@@ -1198,8 +1204,8 @@ export default function SlideViewer() {
       if (fetcher.data.success) {
         message.success('CSS theme deleted');
         // Remove the theme from the list
-        setCssThemes((/** @type {Array<{id: string, name: string, type: string, content: string}>} */ prev: any) =>
-          prev.filter((t: any) => t.id !== fetcher.data.deletedId)
+        setCssThemes((prev: Array<{ id: string; name: string; type: string; content: string }>) =>
+          prev.filter((t) => t.id !== fetcher.data.deletedId)
         );
       } else if (fetcher.data.error) {
         message.error(`Failed to delete theme: ${fetcher.data.error}`);
@@ -1217,8 +1223,8 @@ export default function SlideViewer() {
   }, [fetcher.data]);
 
   // Handle image upload - returns a promise that resolves with the image URL
-  const handleImageUpload = useCallback(async (file: any) => {
-    return new Promise((resolve, reject) => {
+  const handleImageUpload = useCallback(async (file: File): Promise<string> => {
+    return new Promise<string>((resolve, reject) => {
       const formData = new FormData();
       formData.append('intent', 'upload-image');
       formData.append('file', file);
@@ -1230,8 +1236,8 @@ export default function SlideViewer() {
 
       // We'll resolve this in the useEffect when we get the response
       // Store the resolve/reject for later
-      (window as any).__imageUploadResolve = resolve;
-      (window as any).__imageUploadReject = reject;
+      window.__imageUploadResolve = resolve;
+      window.__imageUploadReject = reject;
     });
   }, [fetcher]);
 
@@ -1239,13 +1245,13 @@ export default function SlideViewer() {
   useEffect(() => {
     if (fetcher.data?.intent === 'upload-image') {
       if (fetcher.data.success && fetcher.data.url) {
-        (window as any).__imageUploadResolve?.(fetcher.data.url);
+        window.__imageUploadResolve?.(fetcher.data.url);
       } else if (fetcher.data.error) {
-        (window as any).__imageUploadReject?.(new Error(fetcher.data.error));
+        window.__imageUploadReject?.(new Error(fetcher.data.error));
       }
       // Clean up
-      delete (window as any).__imageUploadResolve;
-      delete (window as any).__imageUploadReject;
+      delete window.__imageUploadResolve;
+      delete window.__imageUploadReject;
     }
   }, [fetcher.data]);
 
@@ -1308,7 +1314,7 @@ export default function SlideViewer() {
   }, []);
 
   // Delete selected orphaned images
-  const handleDeleteOrphanedImages = useCallback((paths: any) => {
+  const handleDeleteOrphanedImages = useCallback((paths: string[]) => {
     setIsDeletingImages(true);
     fetcher.submit(
       {
@@ -1336,7 +1342,7 @@ export default function SlideViewer() {
   }, []);
 
   // Navigate to a specific slide (from overview)
-  const handleNavigateToSlide = useCallback((h: any, v: any) => {
+  const handleNavigateToSlide = useCallback((h: number, v: number) => {
     const instance = revealRef.current?.getRevealInstance?.();
     if (instance) {
       instance.slide(h, v);
@@ -1349,7 +1355,7 @@ export default function SlideViewer() {
   const displayContent = isEditing ? editableContent : (editableContent || slideContent);
 
   // Save a new snippet
-  const handleSaveSnippet = useCallback((/** @type {string} */ name: any, /** @type {string} */ content: any) => {
+  const handleSaveSnippet = useCallback((name: string, content: string) => {
     fetcher.submit(
       { intent: 'save-snippet', name, content },
       { method: 'post' }
@@ -1357,7 +1363,7 @@ export default function SlideViewer() {
   }, [fetcher]);
 
   // Update an existing snippet
-  const handleUpdateSnippet = useCallback((/** @type {string} */ id: any, /** @type {string} */ name: any, /** @type {string} */ content: any) => {
+  const handleUpdateSnippet = useCallback((id: string, name: string, content: string) => {
     fetcher.submit(
       { intent: 'update-snippet', id, name, content },
       { method: 'post' }
@@ -1365,7 +1371,7 @@ export default function SlideViewer() {
   }, [fetcher]);
 
   // Delete a snippet
-  const handleDeleteSnippet = useCallback((/** @type {string} */ id: any) => {
+  const handleDeleteSnippet = useCallback((id: string) => {
     fetcher.submit(
       { intent: 'delete-snippet', id },
       { method: 'post' }
@@ -1373,7 +1379,7 @@ export default function SlideViewer() {
   }, [fetcher]);
 
   // Save a new CSS theme
-  const handleSaveTheme = useCallback((/** @type {string} */ name: any, /** @type {string} */ type: any, /** @type {string} */ content: any) => {
+  const handleSaveTheme = useCallback((name: string, type: string, content: string) => {
     fetcher.submit(
       { intent: 'save-theme', name, type, content },
       { method: 'post' }
@@ -1381,7 +1387,7 @@ export default function SlideViewer() {
   }, [fetcher]);
 
   // Update an existing CSS theme
-  const handleUpdateTheme = useCallback((/** @type {string} */ id: any, /** @type {string} */ name: any, /** @type {string} */ type: any, /** @type {string} */ content: any) => {
+  const handleUpdateTheme = useCallback((id: string, name: string, type: string, content: string) => {
     fetcher.submit(
       { intent: 'update-theme', id, name, type, content },
       { method: 'post' }
@@ -1389,7 +1395,7 @@ export default function SlideViewer() {
   }, [fetcher]);
 
   // Delete a CSS theme
-  const handleDeleteTheme = useCallback((/** @type {string} */ id: any) => {
+  const handleDeleteTheme = useCallback((id: string) => {
     fetcher.submit(
       { intent: 'delete-theme', id },
       { method: 'post' }

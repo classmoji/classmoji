@@ -4,9 +4,11 @@ import dayjs from 'dayjs';
 /**
  * Student page list — card grid of published pages.
  */
+import type { PageSummary, ClassroomSummary } from '~/types/pages.ts';
+
 interface StudentPageListProps {
-  pages: any[];
-  classroom: any;
+  pages: PageSummary[];
+  classroom: ClassroomSummary;
 }
 
 const StudentPageList = ({ pages, classroom }: StudentPageListProps) => {

@@ -2,9 +2,11 @@ import { useState, useEffect } from 'react';
 import { IconBrandGithub, IconMaximize, IconMinimize, IconDots } from '@tabler/icons-react';
 import PageOptionsMenu from '~/components/editor/PageOptionsMenu.tsx';
 
+import type { PageSummary, ClassroomSummary } from '~/types/pages.ts';
+
 interface HeaderProps {
-  classroom: any;
-  page?: any;
+  classroom: ClassroomSummary;
+  page?: PageSummary;
   saveStatus?: string;
   hasUnsavedChanges?: boolean;
   canEdit?: boolean;

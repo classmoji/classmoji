@@ -4,9 +4,34 @@ import { sendEmailTask } from './email.ts';
 import { createRepositoryTask } from './repository.ts';
 import invariant from 'tiny-invariant';
 
+interface MemberAddedPayload {
+  membership: { user: { login: string }; [key: string]: unknown };
+  organization: { id: number; login: string; [key: string]: unknown };
+  [key: string]: unknown;
+}
+
+interface GitOrgData {
+  id: string;
+  login: string;
+  provider: string;
+  github_installation_id?: string | null;
+  access_token?: string | null;
+  base_url?: string | null;
+  gitlab_group_id?: string | null;
+}
+
+interface RemoveUserPayload {
+  user: { id: string; login: string; has_accepted_invite: boolean };
+  gitOrganization?: GitOrgData;
+  classroom?: { id: string; slug: string };
+  organization?: { id: string; slug: string; git_organization?: GitOrgData };
+  role?: string;
+  payload?: RemoveUserPayload;
+}
+
 export const memberAddedHandlerTask = task({
   id: 'webhook-member_added_handler',
-  run: async (payload: any) => {
+  run: async (payload: MemberAddedPayload) => {
     const {
       membership: { user: githubUser },
       organization: githubOrg,
@@ -54,7 +79,7 @@ export const memberAddedHandlerTask = task({
         const modules = await ClassmojiService.module.findByClassroomSlug(membership.classroom.slug);
         const assignments = modules.flatMap(module =>
           module.assignments
-            .filter(({ is_published, type }: any) => is_published === true && type === 'INDIVIDUAL')
+            .filter(a => a.is_published === true && 'type' in a && a.type === 'INDIVIDUAL')
             .map(assignment => ({ ...assignment, module }))
         );
 
@@ -87,7 +112,7 @@ export const removeUserFromOrganizationTask = task({
   queue: {
     concurrencyLimit: 6,
   },
-  run: async (arg: any) => {
+  run: async (arg: RemoveUserPayload) => {
     const payload = arg?.payload ? arg.payload : arg;
 
     const { user, gitOrganization, classroom, organization, role } = payload;
@@ -95,6 +120,9 @@ export const removeUserFromOrganizationTask = task({
     // Support both new (classroom/gitOrganization) and legacy (organization) params
     const classroomData = classroom || organization;
     const gitOrgData = gitOrganization || organization?.git_organization;
+
+    invariant(classroomData, '[remove_user] Missing classroom data in payload');
+    invariant(gitOrgData, '[remove_user] Missing git organization data in payload');
 
     if (user.has_accepted_invite) {
       const gitProvider = getGitProvider(gitOrgData);
@@ -105,9 +133,9 @@ export const removeUserFromOrganizationTask = task({
       const teamSlug = getTeamNameForClassroom(classroomData, userRole);
       try {
         await gitProvider.removeTeamMember(orgLogin, teamSlug, user.login);
-      } catch (error: any) {
+      } catch (error: unknown) {
         // Team might not exist or user not in team - log but continue
-        console.log(`[remove_user] Could not remove ${user.login} from team ${teamSlug}: ${error.message}`);
+        console.log(`[remove_user] Could not remove ${user.login} from team ${teamSlug}: ${error instanceof Error ? error.message : String(error)}`);
       }
 
       // Step 2: Check if user has other classroom memberships in this GitHub org

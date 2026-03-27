@@ -9,8 +9,16 @@ import {
   getEventTypeLightBg,
   getEventTypeDarkText,
 } from './utils';
+import type { CalendarEventWithLinks } from './types';
 
-const EventCard = ({ event, onClick, showCreator = false, compact = false }: any) => { // eslint-disable-line @typescript-eslint/no-explicit-any -- calendar event shapes vary by query context
+interface EventCardProps {
+  event: CalendarEventWithLinks;
+  onClick?: (event: CalendarEventWithLinks) => void;
+  showCreator?: boolean;
+  compact?: boolean;
+}
+
+const EventCard = ({ event, onClick, showCreator = false, compact = false }: EventCardProps) => {
   const isHappeningNow = isEventNow(event);
   const duration = getEventDuration(event);
 

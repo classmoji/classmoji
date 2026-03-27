@@ -1,5 +1,8 @@
 import React from 'react';
-import { createReactBlockSpec } from '@blocknote/react';
+import {
+  createReactBlockSpec,
+  type ReactCustomBlockRenderProps,
+} from '@blocknote/react';
 import { IconFileText, IconArrowRight } from '@tabler/icons-react';
 import { useState, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router';
@@ -16,17 +19,22 @@ import { useNavigate } from 'react-router';
 /**
  * Dropdown component showing filtered list of pages
  */
+interface PageLinkPage {
+  id: string;
+  title: string;
+}
+
 interface PageLinkDropdownProps {
-  pages: any[];
+  pages: PageLinkPage[];
   searchQuery: string;
-  onSelect: (page: any) => void;
+  onSelect: (page: PageLinkPage) => void;
   onClose: () => void;
   dropdownRef: React.RefObject<HTMLDivElement | null>;
   isLoading: boolean;
 }
 
 const PageLinkDropdown = ({ pages, searchQuery, onSelect, onClose, dropdownRef, isLoading }: PageLinkDropdownProps) => {
-  const filteredPages = pages.filter((page: any) =>
+  const filteredPages = pages.filter((page) =>
     page.title.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
@@ -50,7 +58,7 @@ const PageLinkDropdown = ({ pages, searchQuery, onSelect, onClose, dropdownRef, 
         ) : filteredPages.length === 0 ? (
           <div className="page-link-no-results">No pages found</div>
         ) : (
-          filteredPages.map((page: any) => (
+          filteredPages.map((page) => (
             <button
               key={page.id}
               onClick={() => onSelect(page)}
@@ -75,8 +83,8 @@ interface EmptyStateProps {
   setSearchQuery: (query: string) => void;
   isOpen: boolean;
   setIsOpen: (open: boolean) => void;
-  filteredPages: any[];
-  onSelectPage: (page: any) => void;
+  filteredPages: PageLinkPage[];
+  onSelectPage: (page: PageLinkPage) => void;
   inputRef: React.RefObject<HTMLInputElement | null>;
   dropdownRef: React.RefObject<HTMLDivElement | null>;
   isLoading: boolean;
@@ -120,7 +128,7 @@ interface SelectedStateProps {
   pageId: string;
   pageTitle: string;
   pageExists: boolean;
-  onClickLink: (e: any) => void;
+  onClickLink: (e: React.MouseEvent | React.KeyboardEvent) => void;
 }
 
 const SelectedState = ({ pageId, pageTitle, pageExists, onClickLink }: SelectedStateProps) => {
@@ -157,21 +165,25 @@ const SelectedState = ({ pageId, pageTitle, pageExists, onClickLink }: SelectedS
   );
 };
 
+const pageLinkPropSchema = {
+  pageId: { default: '' },
+  pageTitle: { default: '' },
+};
+
+type PageLinkRenderProps = ReactCustomBlockRenderProps<'pageLink', typeof pageLinkPropSchema, 'none'>;
+
 export const PageLink = createReactBlockSpec(
   {
     type: 'pageLink',
-    propSchema: {
-      pageId: { default: '' },
-      pageTitle: { default: '' },
-    },
+    propSchema: pageLinkPropSchema,
     content: 'none',
   },
   {
-    render: (props: any) => {
+    render: (props: PageLinkRenderProps) => {
       const { pageId, pageTitle } = props.block.props;
       const [isOpen, setIsOpen] = useState(!pageId);
       const [searchQuery, setSearchQuery] = useState('');
-      const [availablePages, setAvailablePages] = useState<any[]>([]);
+      const [availablePages, setAvailablePages] = useState<PageLinkPage[]>([]);
       const [isLoading, setIsLoading] = useState(false);
       const [currentPageId, setCurrentPageId] = useState('');
       const inputRef = useRef<HTMLInputElement>(null);
@@ -220,7 +232,7 @@ export const PageLink = createReactBlockSpec(
       // Filter pages: exclude current page, apply search
       const filteredPages = availablePages.filter(p => p.id !== currentPageId);
 
-      const handleSelectPage = (page: any) => {
+      const handleSelectPage = (page: PageLinkPage) => {
         props.editor.updateBlock(props.block, {
           props: {
             pageId: page.id,
@@ -231,7 +243,7 @@ export const PageLink = createReactBlockSpec(
         setSearchQuery('');
       };
 
-      const handleClickLink = (e: any) => {
+      const handleClickLink = (e: React.MouseEvent | React.KeyboardEvent) => {
         e.preventDefault();
         if (typeof window !== 'undefined') {
           const classroomSlug = window.location.pathname.split('/')[1];

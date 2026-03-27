@@ -16,6 +16,7 @@ interface TokenTransaction {
   type: string;
   is_cancelled: boolean;
   student_id: string;
+  classroom_id: string;
   student: Record<string, unknown>;
   created_at: string | Date;
   amount: number;
@@ -36,7 +37,15 @@ const TokensLog = ({ transactions, students }: TokensLogProps) => {
     notify('CANCEL_TOKEN_TRANSACTION', 'Cancelling transaction...');
 
     fetcher!.submit(
-      { transaction },
+      {
+        transaction: {
+          id: transaction.id,
+          classroom_id: transaction.classroom_id,
+          student_id: transaction.student_id,
+          type: transaction.type,
+          amount: transaction.amount,
+        },
+      },
       {
         method: 'post',
         action: `/api/operation/?action=cancelTokenTransaction`,

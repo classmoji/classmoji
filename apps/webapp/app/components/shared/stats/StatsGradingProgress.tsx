@@ -12,7 +12,7 @@ interface GradingProgressItem {
 }
 
 interface StatsGradingProgressProps {
-  gradingProgress: any[]; // eslint-disable-line @typescript-eslint/no-explicit-any -- Prisma query result shape varies by caller context
+  gradingProgress: GradingProgressItem[];
 }
 
 const StatsGradingProgress = ({ gradingProgress }: StatsGradingProgressProps) => {

@@ -13,7 +13,14 @@ const { Text, Title } = Typography;
  * Renders a floating button that opens a drawer with the chat interface.
  * Only shows when syllabus bot is enabled for the classroom.
  */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any -- props come from various loader contexts with nullable strings
+interface SyllabusBotWidgetProps {
+  classroomSlug: string;
+  slidesUrl: string;
+  userLogin: string | null;
+  userRole: string;
+  enabled?: boolean;
+  isDarkMode?: boolean;
+}
 
 const SyllabusBotWidget = ({
   classroomSlug,
@@ -22,7 +29,7 @@ const SyllabusBotWidget = ({
   userRole,
   enabled = false,
   isDarkMode = false,
-}: any) => { // eslint-disable-line @typescript-eslint/no-explicit-any -- component accepts varied data shapes from different routes
+}: SyllabusBotWidgetProps) => {
   const [isOpen, setIsOpen] = useState(false);
   const [hasInitialized, setHasInitialized] = useState(false);
 

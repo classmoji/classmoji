@@ -100,18 +100,20 @@ export async function deleteSlideVideos(slideId: string): Promise<{ deleted: boo
     // Delete the empty folder
     try {
       await cld.api.delete_folder(folder);
-    } catch (folderError: any) {
+    } catch (folderError: unknown) {
       // Folder might not exist or be already empty - that's OK
-      if (!folderError.message?.includes('not found')) {
-        console.warn('Could not delete Cloudinary folder:', folderError.message);
+      const message = folderError instanceof Error ? folderError.message : String(folderError);
+      if (!message.includes('not found')) {
+        console.warn('Could not delete Cloudinary folder:', message);
       }
     }
 
     console.log(`Deleted Cloudinary folder: ${folder}`);
     return { deleted: true };
-  } catch (error: any) {
-    console.error('Cloudinary cleanup failed:', error.message);
-    return { deleted: false, error: error.message };
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error('Cloudinary cleanup failed:', message);
+    return { deleted: false, error: message };
   }
 }
 

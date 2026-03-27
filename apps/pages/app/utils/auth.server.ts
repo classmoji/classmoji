@@ -1,15 +1,16 @@
 import { prisma, getAuthSession } from '~/utils/db.server.ts';
+import type { PageForContent } from '~/types/pages.ts';
 
 interface AssertPageAccessOptions {
   request: Request;
-  page: any;
+  page: PageForContent;
   accessType?: 'view' | 'edit';
 }
 
 interface PageAccessResult {
   canView: boolean;
   canEdit: boolean;
-  membership: any;
+  membership: { role: string } | null;
   userId: string | null;
 }
 

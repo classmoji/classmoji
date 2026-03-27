@@ -15,7 +15,7 @@ import { useEffect, useRef, useCallback, memo } from 'react';
  */
 interface PageViewerProps {
   htmlContent: string;
-  onHeadingsExtracted?: (headings: any[]) => void;
+  onHeadingsExtracted?: (headings: Array<{ id: string; text: string | null; level: number }>) => void;
 }
 
 const PageViewer = memo(function PageViewer({ htmlContent, onHeadingsExtracted }: PageViewerProps) {
@@ -28,7 +28,7 @@ const PageViewer = memo(function PageViewer({ htmlContent, onHeadingsExtracted }
     const headingElements = contentRef.current.querySelectorAll('h1, h2, h3');
     const extractedHeadings: Array<{ id: string; text: string | null; level: number }> = [];
 
-    headingElements.forEach((heading: any, index: number) => {
+    headingElements.forEach((heading: Element, index: number) => {
       if (!heading.id) {
         const slug = heading.textContent
           .toLowerCase()

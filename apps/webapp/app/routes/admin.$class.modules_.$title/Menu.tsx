@@ -3,7 +3,16 @@ import { useNavigate, useParams } from 'react-router';
 import { toast } from 'react-toastify';
 import { useGlobalFetcher, useSubscription } from '~/hooks';
 
-const Menu = ({ module, assistants }: any) => { // eslint-disable-line @typescript-eslint/no-explicit-any -- complex Prisma module/assistant shapes from loader
+interface MenuProps {
+  module: {
+    id: string;
+    type: string;
+    assignments?: unknown[];
+  };
+  assistants: Array<{ id: string }>;
+}
+
+const Menu = ({ module, assistants }: MenuProps) => {
   const navigate = useNavigate();
   const { class: classSlug, title: moduleTitle } = useParams();
   const { fetcher } = useGlobalFetcher();

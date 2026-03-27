@@ -1,7 +1,153 @@
-import prisma from '@classmoji/database';
+import getPrisma from '@classmoji/database';
+import type { MessageRole, Prisma } from '@prisma/client';
 import { checkForCompletion, DEFAULT_EMOJI_GRADE_MAPPINGS } from '@classmoji/utils';
 
-const sanitizeDuration = (value: any): number | undefined => {
+interface QuizAttemptDurationMetrics {
+  totalDurationMs?: number | string | null;
+  total_duration_ms?: number | string | null;
+  unfocusedDurationMs?: number | string | null;
+  unfocused_duration_ms?: number | string | null;
+}
+
+interface QuizAttemptDurationState {
+  total_duration_ms?: number | null;
+  unfocused_duration_ms?: number | null;
+}
+
+interface LockedQuizAttemptRow extends QuizAttemptDurationState {
+  id?: string;
+  completed_at: Date | string | null;
+  modal_closed_at?: Date | string | null;
+  updated_at?: Date | string | null;
+}
+
+interface QuizAttemptMembership {
+  classroom_id?: string | null;
+  organization_id?: string | null;
+  user_id?: string | null;
+  userId?: string | null;
+  role: string;
+}
+
+interface QuizQuestionResultInput {
+  question_num: number;
+  attempts: number;
+  eventually_correct: boolean;
+  credit_earned: number;
+}
+
+interface StoredQuizQuestionResult extends QuizQuestionResultInput {
+  emoji: string;
+  recorded_at: string;
+}
+
+interface CodeAwareQuizAttempt {
+  id: string;
+  quiz: {
+    module_id: string | null;
+    classroom_id: string;
+    system_prompt: string | null;
+    rubric_prompt: string | null;
+    question_count: number | null;
+    subject: string | null;
+    difficulty_level: string | null;
+  };
+}
+
+interface CodeAwareQuizRepository {
+  name: string;
+}
+
+interface CodeAwareQuizClassroom {
+  slug: string;
+  git_organization?: {
+    github_installation_id: string | null;
+  } | null;
+}
+
+interface QuizAgentConfig {
+  systemPrompt: string;
+}
+
+interface QuizOpeningResult {
+  response?: string | null;
+  explorationSteps?: Prisma.InputJsonArray | null;
+}
+
+interface CompletionPayload {
+  quiz_complete?: boolean;
+  partial_credit_percentage?: string | number | null;
+  raw_percentage?: string | number | null;
+  percentage?: string | number | null;
+  first_attempt_percentage?: string | number | null;
+}
+
+const isJsonObject = (
+  value: Prisma.JsonValue | Prisma.InputJsonValue | null | undefined
+): value is Prisma.JsonObject =>
+  typeof value === 'object' && value !== null && !Array.isArray(value);
+
+const getJsonObjectValue = (
+  object: Prisma.JsonObject,
+  key: string
+): Prisma.JsonValue | undefined => object[key];
+
+const isStoredQuizQuestionResult = (value: Prisma.JsonValue): value is Prisma.JsonObject => {
+  if (!isJsonObject(value)) return false;
+
+  return (
+    typeof getJsonObjectValue(value, 'question_num') === 'number' &&
+    typeof getJsonObjectValue(value, 'attempts') === 'number' &&
+    typeof getJsonObjectValue(value, 'eventually_correct') === 'boolean' &&
+    typeof getJsonObjectValue(value, 'credit_earned') === 'number' &&
+    typeof getJsonObjectValue(value, 'emoji') === 'string' &&
+    typeof getJsonObjectValue(value, 'recorded_at') === 'string'
+  );
+};
+
+const normalizeQuestionResults = (
+  value: Prisma.JsonValue | null | undefined
+): StoredQuizQuestionResult[] => {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value.flatMap(entry =>
+    isStoredQuizQuestionResult(entry)
+      ? [{
+          question_num: getJsonObjectValue(entry, 'question_num') as number,
+          attempts: getJsonObjectValue(entry, 'attempts') as number,
+          eventually_correct: getJsonObjectValue(entry, 'eventually_correct') as boolean,
+          credit_earned: getJsonObjectValue(entry, 'credit_earned') as number,
+          emoji: getJsonObjectValue(entry, 'emoji') as string,
+          recorded_at: getJsonObjectValue(entry, 'recorded_at') as string,
+        }]
+      : []
+  );
+};
+
+const toStoredQuizQuestionResultJson = (
+  result: StoredQuizQuestionResult
+): Prisma.InputJsonObject => ({
+  question_num: result.question_num,
+  attempts: result.attempts,
+  eventually_correct: result.eventually_correct,
+  credit_earned: result.credit_earned,
+  emoji: result.emoji,
+  recorded_at: result.recorded_at,
+});
+
+const getExistingAgentConfig = (
+  value: Prisma.JsonValue | null | undefined
+): Prisma.InputJsonObject => {
+  if (!isJsonObject(value)) {
+    return {};
+  }
+
+  return Object.fromEntries(Object.entries(value)) as Prisma.InputJsonObject;
+};
+
+const sanitizeDuration = (value: unknown): number | undefined => {
   if (value === undefined || value === null) return undefined;
   const numeric = Number(value);
   if (!Number.isFinite(numeric)) return undefined;
@@ -9,12 +155,15 @@ const sanitizeDuration = (value: any): number | undefined => {
   return rounded < 0 ? 0 : rounded;
 };
 
-const buildDurationUpdate = (metrics: any, current: any = null) => {
+const buildDurationUpdate = (
+  metrics: QuizAttemptDurationMetrics | null | undefined,
+  current: QuizAttemptDurationState | null = null
+): Prisma.QuizAttemptUpdateInput => {
   if (!metrics) return {};
   const total = sanitizeDuration(metrics.totalDurationMs ?? metrics.total_duration_ms);
   const unfocused = sanitizeDuration(metrics.unfocusedDurationMs ?? metrics.unfocused_duration_ms);
 
-  const update: Record<string, any> = {};
+  const update: Prisma.QuizAttemptUpdateInput = {};
   if (total !== undefined) {
     const existingTotal = current?.total_duration_ms ?? 0;
     update.total_duration_ms = Math.max(existingTotal, total);
@@ -27,7 +176,7 @@ const buildDurationUpdate = (metrics: any, current: any = null) => {
 };
 
 const getCurrentDurations = (attemptId: string) =>
-  prisma!.quizAttempt.findUnique({
+  getPrisma().quizAttempt.findUnique({
     where: { id: attemptId },
     select: {
       total_duration_ms: true,
@@ -39,7 +188,7 @@ const getCurrentDurations = (attemptId: string) =>
   });
 
 export const findById = async (attemptId: string) => {
-  return prisma!.quizAttempt.findUnique({
+  return getPrisma().quizAttempt.findUnique({
     where: { id: attemptId },
     include: {
       quiz: {
@@ -60,15 +209,21 @@ export const findById = async (attemptId: string) => {
 
 // Bridge function: saves messages to AIConversation (which ai-agent also uses)
 // This allows webapp to save initial messages before ai-agent SSE connects
-export const addMessage = async (attemptId: string, role: string, content: any, hasQuestion: boolean = false, metadata: any = null) => {
+export const addMessage = async (
+  attemptId: string,
+  role: string,
+  content: string,
+  hasQuestion: boolean = false,
+  metadata: Prisma.InputJsonValue | null = null
+) => {
   // Find or create the AIConversation for this attempt
-  let conversation = await prisma!.aIConversation.findFirst({
+  let conversation = await getPrisma().aIConversation.findFirst({
     where: { quiz_attempt: { id: attemptId } },
   });
 
   if (!conversation) {
     // Need to get the attempt to find user_id and classroom_id
-    const attempt = await prisma!.quizAttempt.findUnique({
+    const attempt = await getPrisma().quizAttempt.findUnique({
       where: { id: attemptId },
       include: { quiz: true },
     });
@@ -78,7 +233,7 @@ export const addMessage = async (attemptId: string, role: string, content: any, 
     }
 
     // Create the AIConversation
-    conversation = await prisma!.aIConversation.create({
+    conversation = await getPrisma().aIConversation.create({
       data: {
         type: 'QUIZ',
         user_id: attempt.user_id,
@@ -88,22 +243,22 @@ export const addMessage = async (attemptId: string, role: string, content: any, 
     });
 
     // Link the conversation to the attempt
-    await prisma!.quizAttempt.update({
+    await getPrisma().quizAttempt.update({
       where: { id: attemptId },
       data: { conversation_id: conversation.id },
     });
   }
 
   // Map role to MessageRole enum (USER, ASSISTANT, SYSTEM, TOOL)
-  const messageRole = role.toUpperCase();
+  const messageRole = role.toUpperCase() as MessageRole;
 
   // Create the message
-  return prisma!.aIConversationMessage.create({
+  return getPrisma().aIConversationMessage.create({
     data: {
       conversation_id: conversation.id,
-      role: messageRole as any,
+      role: messageRole,
       content,
-      metadata: metadata || null,
+      metadata: metadata ?? undefined,
     },
   });
 };
@@ -111,7 +266,7 @@ export const addMessage = async (attemptId: string, role: string, content: any, 
 export const getMessages = async (attemptId: string) => {
   // All messages are stored in AIConversation (ai-agent owns persistence)
   // The relation is: QuizAttempt.conversation_id -> AIConversation.id
-  const conversation = await prisma!.aIConversation.findFirst({
+  const conversation = await getPrisma().aIConversation.findFirst({
     where: { quiz_attempt: { id: attemptId } },
   });
 
@@ -119,7 +274,7 @@ export const getMessages = async (attemptId: string) => {
     return []; // No conversation yet
   }
 
-  return prisma!.aIConversationMessage.findMany({
+  return getPrisma().aIConversationMessage.findMany({
     where: { conversation_id: conversation.id },
     orderBy: { created_at: 'asc' },
   });
@@ -134,11 +289,11 @@ const clampPercentage = (value: number): number => {
   return value;
 };
 
-const parsePercentage = (rawValue: any, label: string, attemptId: string): number => {
+const parsePercentage = (rawValue: unknown, label: string, attemptId: string): number => {
   if (rawValue === undefined || rawValue === null) {
     throw new Error(`[completeAttempt] Missing ${label} for attempt ${attemptId}`);
   }
-  const numeric = Number.parseFloat(rawValue);
+  const numeric = Number.parseFloat(String(rawValue));
   if (!Number.isFinite(numeric)) {
     throw new Error(
       `[completeAttempt] ${label} must be numeric, received ${rawValue} for attempt ${attemptId}`
@@ -150,7 +305,7 @@ const parsePercentage = (rawValue: any, label: string, attemptId: string): numbe
 const findCompletionPayload = async (attemptId: string) => {
   // All messages are stored in AIConversation (ai-agent owns persistence)
   // The relation is: QuizAttempt.conversation_id -> AIConversation.id
-  const conversation = await prisma!.aIConversation.findFirst({
+  const conversation = await getPrisma().aIConversation.findFirst({
     where: { quiz_attempt: { id: attemptId } },
   });
 
@@ -158,7 +313,7 @@ const findCompletionPayload = async (attemptId: string) => {
     return null; // No conversation yet
   }
 
-  const assistantMessages = await prisma!.aIConversationMessage.findMany({
+  const assistantMessages = await getPrisma().aIConversationMessage.findMany({
     where: {
       conversation_id: conversation.id,
       role: 'ASSISTANT',
@@ -180,9 +335,12 @@ const findCompletionPayload = async (attemptId: string) => {
   return null;
 };
 
-export const completeAttempt = async (attemptId: string, metrics: any = null) => {
+export const completeAttempt = async (
+  attemptId: string,
+  metrics: QuizAttemptDurationMetrics | null = null
+) => {
   // Get current attempt state including progressive question results
-  const currentAttempt = await prisma!.quizAttempt.findUnique({
+  const currentAttempt = await getPrisma().quizAttempt.findUnique({
     where: { id: attemptId },
     select: {
       total_duration_ms: true,
@@ -207,7 +365,7 @@ export const completeAttempt = async (attemptId: string, metrics: any = null) =>
     currentAttempt.first_attempt_percentage !== null
   ) {
     if (Object.keys(durationUpdate).length === 0) {
-      return prisma!.quizAttempt.findUnique({
+      return getPrisma().quizAttempt.findUnique({
         where: { id: attemptId },
         select: {
           id: true,
@@ -220,7 +378,7 @@ export const completeAttempt = async (attemptId: string, metrics: any = null) =>
       });
     }
 
-    return prisma!.quizAttempt.update({
+    return getPrisma().quizAttempt.update({
       where: { id: attemptId },
       data: {
         ...durationUpdate,
@@ -240,14 +398,14 @@ export const completeAttempt = async (attemptId: string, metrics: any = null) =>
   let firstAttempt;
 
   // PRIORITY 1: Use progressive question_results_json from DB (source of truth)
-  const questionResults = currentAttempt.question_results_json;
-  if (questionResults && Array.isArray(questionResults) && questionResults.length > 0) {
+  const questionResults = normalizeQuestionResults(currentAttempt.question_results_json);
+  if (questionResults.length > 0) {
     const calculated = calculatePercentagesFromResults(questionResults);
     partialCredit = calculated.partial_credit_percentage;
     firstAttempt = calculated.first_attempt_percentage;
   } else {
     // PRIORITY 2: Fall back to LLM's completion payload (legacy/backup)
-    const completion = await findCompletionPayload(attemptId);
+    const completion = await findCompletionPayload(attemptId) as CompletionPayload | null;
 
     if (!completion) {
       throw new Error(
@@ -267,15 +425,17 @@ export const completeAttempt = async (attemptId: string, metrics: any = null) =>
     );
   }
 
-  return prisma!.quizAttempt.update({
+  const updateData: Prisma.QuizAttemptUpdateInput = {
+    completed_at: new Date(),
+    partial_credit_percentage: partialCredit,
+    first_attempt_percentage: firstAttempt,
+    session_status: 'completed',
+    ...durationUpdate,
+  };
+
+  return getPrisma().quizAttempt.update({
     where: { id: attemptId },
-    data: {
-      completed_at: new Date(),
-      partial_credit_percentage: partialCredit,
-      first_attempt_percentage: firstAttempt,
-      session_status: 'completed',
-      ...durationUpdate,
-    } as any,
+    data: updateData,
     select: {
       id: true,
       completed_at: true,
@@ -287,11 +447,14 @@ export const completeAttempt = async (attemptId: string, metrics: any = null) =>
   });
 };
 
-export const updateAttemptDurations = async (attemptId: string, metrics: any = {}) => {
+export const updateAttemptDurations = async (
+  attemptId: string,
+  metrics: QuizAttemptDurationMetrics = {}
+) => {
   // Use a serializable transaction with row locking to prevent race conditions
-  return prisma!.$transaction(async (tx: any) => {
+  return getPrisma().$transaction(async (tx: Prisma.TransactionClient) => {
     // Lock the row by selecting FOR UPDATE
-    const current = await tx.$queryRaw`
+    const current = await tx.$queryRaw<LockedQuizAttemptRow[]>`
       SELECT total_duration_ms, unfocused_duration_ms, completed_at, modal_closed_at
       FROM quiz_attempts
       WHERE id = ${attemptId}
@@ -356,10 +519,13 @@ export const updateAttemptDurations = async (attemptId: string, metrics: any = {
  * @param {Object} metrics - Optional metrics to apply (totalDurationMs, unfocusedDurationMs)
  * @returns {Promise<Object>} Updated attempt with modal_closed_at timestamp and durations
  */
-export const recordModalClosed = async (attemptId: string, metrics: any = null) => {
-  return prisma!.$transaction(async (tx: any) => {
+export const recordModalClosed = async (
+  attemptId: string,
+  metrics: QuizAttemptDurationMetrics | null = null
+) => {
+  return getPrisma().$transaction(async (tx: Prisma.TransactionClient) => {
     // Lock the row
-    const current = await tx.$queryRaw`
+    const current = await tx.$queryRaw<LockedQuizAttemptRow[]>`
       SELECT id, total_duration_ms, unfocused_duration_ms, completed_at, modal_closed_at
       FROM quiz_attempts
       WHERE id = ${attemptId}
@@ -397,7 +563,9 @@ export const recordModalClosed = async (attemptId: string, metrics: any = null) 
     }
 
     // Check for stale request (incoming total < current total means gap was already applied)
-    const incomingTotal = metrics?.totalDurationMs ?? metrics?.total_duration_ms ?? 0;
+    const incomingTotal = sanitizeDuration(
+      metrics?.totalDurationMs ?? metrics?.total_duration_ms
+    ) ?? 0;
     if (incomingTotal > 0 && incomingTotal < Number(row.total_duration_ms)) {
       return {
         id: attemptId,
@@ -410,7 +578,7 @@ export const recordModalClosed = async (attemptId: string, metrics: any = null) 
     }
 
     // Build update
-    const updateData = {
+    const updateData: Prisma.QuizAttemptUpdateInput = {
       modal_closed_at: new Date(),
     };
 
@@ -446,9 +614,9 @@ export const recordModalClosed = async (attemptId: string, metrics: any = null) 
  * @returns {Promise<Object>} Updated durations with gap time added to unfocused
  */
 export const calculateAndApplyModalGap = async (attemptId: string) => {
-  return prisma!.$transaction(async (tx: any) => {
+  return getPrisma().$transaction(async (tx: Prisma.TransactionClient) => {
     // Lock the row - include updated_at as fallback for offline close detection
-    const current = await tx.$queryRaw`
+    const current = await tx.$queryRaw<LockedQuizAttemptRow[]>`
       SELECT total_duration_ms, unfocused_duration_ms, completed_at, modal_closed_at, updated_at
       FROM quiz_attempts
       WHERE id = ${attemptId}
@@ -475,7 +643,7 @@ export const calculateAndApplyModalGap = async (attemptId: string) => {
     // This handles cases where the beacon/fetch call failed on tab close (e.g. offline)
     const lastKnownTime = row.modal_closed_at
       ? new Date(row.modal_closed_at)
-      : new Date(row.updated_at);
+      : new Date(row.updated_at ?? new Date());
 
     // Calculate gap time in milliseconds
     const now = new Date();
@@ -528,7 +696,7 @@ export const calculateAndApplyModalGap = async (attemptId: string) => {
 };
 
 export const findByQuiz = async (quizId: string) => {
-  const attempts = await prisma!.quizAttempt.findMany({
+  const attempts = await getPrisma().quizAttempt.findMany({
     where: { quiz_id: quizId },
     include: {
       user: true,
@@ -540,7 +708,7 @@ export const findByQuiz = async (quizId: string) => {
 };
 
 export const findByUser = async (userId: string, organizationId: string | null = null) => {
-  const whereClause: any = {
+  const whereClause: Prisma.QuizAttemptWhereInput = {
     user_id: userId.toString(),
   };
 
@@ -550,7 +718,7 @@ export const findByUser = async (userId: string, organizationId: string | null =
     };
   }
 
-  return prisma!.quizAttempt.findMany({
+  return getPrisma().quizAttempt.findMany({
     where: whereClause,
     include: {
       quiz: {
@@ -565,7 +733,7 @@ export const findByUser = async (userId: string, organizationId: string | null =
 };
 
 export const getAttemptStatsByQuiz = async (quizId: string) => {
-  const attempts = await prisma!.quizAttempt.findMany({
+  const attempts = await getPrisma().quizAttempt.findMany({
     where: {
       quiz_id: quizId,
       completed_at: { not: null },
@@ -592,7 +760,7 @@ export const getAttemptStatsByQuiz = async (quizId: string) => {
     .map(a => a.partial_credit_percentage)
     .filter(value => value !== null && value !== undefined) as number[];
   const times = attempts.map(a => {
-    const duration = (new Date(a.completed_at as any) as any) - (new Date(a.started_at) as any);
+    const duration = new Date(a.completed_at ?? a.started_at).getTime() - new Date(a.started_at).getTime();
     return duration / (1000 * 60); // Convert to minutes
   });
 
@@ -610,29 +778,29 @@ export const getAttemptStatsByQuiz = async (quizId: string) => {
 
 export const deleteAttempt = async (attemptId: string) => {
   // Check for AIConversation (new unified storage)
-  const conversation = await prisma!.aIConversation.findFirst({
+  const conversation = await getPrisma().aIConversation.findFirst({
     where: { quiz_attempt: { id: attemptId } },
   });
 
   if (conversation) {
     // Delete AIConversationMessages first
-    await prisma!.aIConversationMessage.deleteMany({
+    await getPrisma().aIConversationMessage.deleteMany({
       where: { conversation_id: conversation.id },
     });
     // Delete AIConversation
-    await prisma!.aIConversation.delete({
+    await getPrisma().aIConversation.delete({
       where: { id: conversation.id },
     });
   }
 
   // Then delete the attempt
-  return prisma!.quizAttempt.delete({
+  return getPrisma().quizAttempt.delete({
     where: { id: attemptId },
   });
 };
 
 export const getUserAttemptForQuiz = async (quizId: string, userId: string) => {
-  return prisma!.quizAttempt.findFirst({
+  return getPrisma().quizAttempt.findFirst({
     where: {
       quiz_id: quizId,
       user_id: userId.toString(),
@@ -655,7 +823,7 @@ export const findWithMessages = async (attemptId: string) => {
   }
 
   // All messages are stored in AIConversation (ai-agent owns persistence)
-  const conversation = await prisma!.aIConversation.findFirst({
+  const conversation = await getPrisma().aIConversation.findFirst({
     where: { quiz_attempt: { id: attemptId } },
     include: {
       messages: {
@@ -689,12 +857,12 @@ export const findWithMessages = async (attemptId: string) => {
 
 // Function to increment the questions asked counter
 export const incrementQuestionsAsked = async (attemptId: string) => {
-  const attempt = await prisma!.quizAttempt.findUnique({
+  const attempt = await getPrisma().quizAttempt.findUnique({
     where: { id: attemptId }, // UUID string, no BigInt conversion needed
     select: { questions_asked: true },
   });
 
-  return prisma!.quizAttempt.update({
+  return getPrisma().quizAttempt.update({
     where: { id: attemptId }, // UUID string, no BigInt conversion needed
     data: {
       questions_asked: ((attempt?.questions_asked ?? 0) + 1),
@@ -703,22 +871,32 @@ export const incrementQuestionsAsked = async (attemptId: string) => {
 };
 
 // Update agent_config field for an attempt
-export const updateAgentConfig = async (attemptId: string, config: any) => {
-  const attempt = await prisma!.quizAttempt.findUnique({
+export const updateAgentConfig = async (
+  attemptId: string,
+  config: Prisma.InputJsonObject
+) => {
+  const attempt = await getPrisma().quizAttempt.findUnique({
     where: { id: attemptId },
     select: { agent_config: true },
   });
 
-  return prisma!.quizAttempt.update({
+  return getPrisma().quizAttempt.update({
     where: { id: attemptId },
     data: {
-      agent_config: { ...(attempt?.agent_config as any || {}), ...config },
+      agent_config: {
+        ...getExistingAgentConfig(attempt?.agent_config),
+        ...config,
+      },
     },
   });
 };
 
 // Development-only function to restart a quiz from scratch
-export const restartQuizAttempt = async (quizId: string, userId: string, membership: any) => {
+export const restartQuizAttempt = async (
+  quizId: string,
+  userId: string,
+  membership: QuizAttemptMembership
+) => {
   // Only allow in development mode
   if (process.env.NODE_ENV !== 'development') {
     throw new Error('Quiz restart is only available in development mode');
@@ -728,7 +906,7 @@ export const restartQuizAttempt = async (quizId: string, userId: string, members
     throw new Error('Membership required to restart quiz attempt');
   }
 
-  const quiz = await prisma!.quiz.findUnique({
+  const quiz = await getPrisma().quiz.findUnique({
     where: { id: quizId },
     select: {
       id: true,
@@ -756,7 +934,7 @@ export const restartQuizAttempt = async (quizId: string, userId: string, members
   }
 
   // Find existing attempt
-  const existingAttempt = await prisma!.quizAttempt.findFirst({
+  const existingAttempt = await getPrisma().quizAttempt.findFirst({
     where: {
       quiz_id: quizId,
       user_id: userId.toString(),
@@ -768,23 +946,23 @@ export const restartQuizAttempt = async (quizId: string, userId: string, members
   }
 
   // Check for AIConversation (new unified storage)
-  const conversation = await prisma!.aIConversation.findFirst({
+  const conversation = await getPrisma().aIConversation.findFirst({
     where: { quiz_attempt: { id: existingAttempt.id } },
   });
 
   if (conversation) {
     // Delete AIConversationMessages first
-    await prisma!.aIConversationMessage.deleteMany({
+    await getPrisma().aIConversationMessage.deleteMany({
       where: { conversation_id: conversation.id },
     });
     // Delete AIConversation
-    await prisma!.aIConversation.delete({
+    await getPrisma().aIConversation.delete({
       where: { id: conversation.id },
     });
   }
 
   // Delete the attempt
-  await prisma!.quizAttempt.delete({
+  await getPrisma().quizAttempt.delete({
     where: { id: existingAttempt.id },
   });
 
@@ -798,12 +976,16 @@ export const restartQuizAttempt = async (quizId: string, userId: string, members
  * @param {Object} membership - The user's membership object
  * @returns {Promise<Object>} Result object with success status and attempt details
  */
-export const createNew = async (quizId: string, userId: string, membership: any) => {
+export const createNew = async (
+  quizId: string,
+  userId: string,
+  membership: QuizAttemptMembership
+) => {
   if (!membership) {
     throw new Error('Membership required to create quiz attempt');
   }
 
-  const quiz = await prisma!.quiz.findUnique({
+  const quiz = await getPrisma().quiz.findUnique({
     where: { id: quizId },
     select: {
       id: true,
@@ -836,7 +1018,7 @@ export const createNew = async (quizId: string, userId: string, membership: any)
   // - Create orphaned quiz-agent sessions
   // - Bypass max_attempts limits by leaving attempts incomplete
   if (!isInstructor) {
-    const incompleteAttempts = await prisma!.quizAttempt.findMany({
+    const incompleteAttempts = await getPrisma().quizAttempt.findMany({
       where: {
         quiz_id: quizId,
         user_id: userId.toString(),
@@ -865,7 +1047,7 @@ export const createNew = async (quizId: string, userId: string, membership: any)
   }
 
   // Count existing attempts
-  const existingAttemptsCount = await prisma!.quizAttempt.count({
+  const existingAttemptsCount = await getPrisma().quizAttempt.count({
     where: {
       quiz_id: quizId,
       user_id: userId.toString(),
@@ -899,7 +1081,7 @@ export const createNew = async (quizId: string, userId: string, membership: any)
   // Instructors can always create attempts (for preview/testing)
 
   // Create the new attempt
-  const newAttempt = await prisma!.quizAttempt.create({
+  const newAttempt = await getPrisma().quizAttempt.create({
     data: {
       quiz_id: quizId,
       user_id: userId.toString(),
@@ -924,7 +1106,7 @@ export const createNew = async (quizId: string, userId: string, membership: any)
  * @returns {Promise<Object>} Score calculation result
  */
 export const calculateQuizScore = async (quizId: string, userId: string) => {
-  const quiz = await prisma!.quiz.findUnique({
+  const quiz = await getPrisma().quiz.findUnique({
     where: { id: quizId },
     select: {
       grading_strategy: true,
@@ -937,7 +1119,7 @@ export const calculateQuizScore = async (quizId: string, userId: string) => {
   }
 
   // Get all completed attempts
-  const attempts = await prisma!.quizAttempt.findMany({
+  const attempts = await getPrisma().quizAttempt.findMany({
     where: {
       quiz_id: quizId,
       user_id: userId.toString(),
@@ -1029,16 +1211,48 @@ export const calculateQuizScore = async (quizId: string, userId: string) => {
  * @returns {Promise<{codebasePath: string, openingMessage: string, explorationSteps: Array}>}
  */
 export const initializeCodeAwareQuiz = async (
-  attempt: any,
+  attempt: CodeAwareQuizAttempt,
   userId: string,
-  codebaseManager: any,
-  getInstallationToken: any,
-  createQuizAgent: any,
-  generateQuizResponse: any,
-  findStudentRepository: any,
-  findClassroomById: any,
-  addMessage: any,
-  incrementQuestionsAsked: any
+  codebaseManager: {
+    cloneForAttempt: (
+      attemptId: string,
+      orgLogin: string,
+      repoName: string,
+      accessToken: string
+    ) => Promise<string>;
+  },
+  getInstallationToken: (installationId: string | null | undefined) => Promise<string>,
+  createQuizAgent: (
+    codebasePath: string,
+    options: {
+      systemPrompt: string | null;
+      rubricPrompt: string | null;
+      questionCount: number;
+      subject: string | null;
+      difficultyLevel: string | null;
+    },
+    attemptId: string
+  ) => QuizAgentConfig,
+  generateQuizResponse: (
+    agentConfig: QuizAgentConfig,
+    conversationHistory: unknown[],
+    systemPrompt: string,
+    questionsAsked: number,
+    questionCount: number
+  ) => Promise<QuizOpeningResult>,
+  findStudentRepository: (
+    moduleId: string | null,
+    userId: string
+  ) => Promise<CodeAwareQuizRepository | null>,
+  findClassroomById: (classroomId: string) => Promise<CodeAwareQuizClassroom>,
+  addMessage: (
+    attemptId: string,
+    role: string,
+    content: string,
+    hasQuestion?: boolean,
+    metadata?: Prisma.InputJsonValue | null
+  ) => Promise<unknown>,
+  incrementQuestionsAsked: (attemptId: string) => Promise<unknown>
 ) => {
   // Find student's repository
   const repo = await findStudentRepository(attempt.quiz.module_id, userId);
@@ -1115,7 +1329,7 @@ export const initializeCodeAwareQuiz = async (
  */
 export const clearForUser = async (userId: string, classroomId: string) => {
   // Find all attempts for this user in this classroom
-  const attempts = await prisma!.quizAttempt.findMany({
+  const attempts = await getPrisma().quizAttempt.findMany({
     where: {
       user_id: userId.toString(),
       quiz: {
@@ -1137,7 +1351,7 @@ export const clearForUser = async (userId: string, classroomId: string) => {
   const attemptIds = attempts.map(a => a.id);
 
   // Find all AIConversations for these attempts (new unified storage)
-  const conversations = await prisma!.aIConversation.findMany({
+  const conversations = await getPrisma().aIConversation.findMany({
     where: {
       quiz_attempt: { id: { in: attemptIds } },
     },
@@ -1147,17 +1361,17 @@ export const clearForUser = async (userId: string, classroomId: string) => {
   if (conversations.length > 0) {
     const conversationIds = conversations.map(c => c.id);
     // Delete AIConversationMessages first
-    await prisma!.aIConversationMessage.deleteMany({
+    await getPrisma().aIConversationMessage.deleteMany({
       where: { conversation_id: { in: conversationIds } },
     });
     // Delete AIConversations
-    await prisma!.aIConversation.deleteMany({
+    await getPrisma().aIConversation.deleteMany({
       where: { id: { in: conversationIds } },
     });
   }
 
   // Delete all attempts
-  const deleteResult = await prisma!.quizAttempt.deleteMany({
+  const deleteResult = await getPrisma().quizAttempt.deleteMany({
     where: {
       user_id: userId.toString(),
       quiz: {
@@ -1182,7 +1396,7 @@ export const clearForUser = async (userId: string, classroomId: string) => {
  */
 export const clearForUserAndQuiz = async (userId: string, quizId: string, classroomId: string) => {
   // Verify the quiz exists and belongs to the classroom
-  const quiz = await prisma!.quiz.findUnique({
+  const quiz = await getPrisma().quiz.findUnique({
     where: { id: quizId },
     select: {
       id: true,
@@ -1202,7 +1416,7 @@ export const clearForUserAndQuiz = async (userId: string, quizId: string, classr
   }
 
   // Find all attempts for this user for this specific quiz
-  const attempts = await prisma!.quizAttempt.findMany({
+  const attempts = await getPrisma().quizAttempt.findMany({
     where: {
       user_id: userId.toString(),
       quiz_id: quizId,
@@ -1222,7 +1436,7 @@ export const clearForUserAndQuiz = async (userId: string, quizId: string, classr
   const attemptIds = attempts.map(a => a.id);
 
   // Find all AIConversations for these attempts (new unified storage)
-  const conversations = await prisma!.aIConversation.findMany({
+  const conversations = await getPrisma().aIConversation.findMany({
     where: {
       quiz_attempt: { id: { in: attemptIds } },
     },
@@ -1232,17 +1446,17 @@ export const clearForUserAndQuiz = async (userId: string, quizId: string, classr
   if (conversations.length > 0) {
     const conversationIds = conversations.map(c => c.id);
     // Delete AIConversationMessages first
-    await prisma!.aIConversationMessage.deleteMany({
+    await getPrisma().aIConversationMessage.deleteMany({
       where: { conversation_id: { in: conversationIds } },
     });
     // Delete AIConversations
-    await prisma!.aIConversation.deleteMany({
+    await getPrisma().aIConversation.deleteMany({
       where: { id: { in: conversationIds } },
     });
   }
 
   // Delete all attempts
-  const deleteResult = await prisma!.quizAttempt.deleteMany({
+  const deleteResult = await getPrisma().quizAttempt.deleteMany({
     where: {
       user_id: userId.toString(),
       quiz_id: quizId,
@@ -1267,7 +1481,7 @@ export const clearForUserAndQuiz = async (userId: string, quizId: string, classr
  * @returns {Object} Map of emoji shortcode to grade value, e.g. { heart: 100, '+1': 90 }
  */
 export const getEmojiMappingsForAttempt = async (attemptId: string) => {
-  const attempt = await prisma!.quizAttempt.findUnique({
+  const attempt = await getPrisma().quizAttempt.findUnique({
     where: { id: attemptId },
     include: {
       quiz: {
@@ -1308,18 +1522,22 @@ export const getEmojiMappingsForAttempt = async (attemptId: string) => {
  *   - credit_earned: number (0-100)
  * @param {string} emojiKey - Pre-calculated emoji key from gradeToEmoji()
  */
-export const appendQuestionResult = async (attemptId: string, result: any, emojiKey: string) => {
-  const attempt = await prisma!.quizAttempt.findUnique({
+export const appendQuestionResult = async (
+  attemptId: string,
+  result: QuizQuestionResultInput,
+  emojiKey: string
+) => {
+  const attempt = await getPrisma().quizAttempt.findUnique({
     where: { id: attemptId },
     select: { question_results_json: true },
   });
 
-  const existing: any[] = (attempt?.question_results_json as any[]) || [];
+  const existing = normalizeQuestionResults(attempt?.question_results_json);
 
   // Prevent duplicates (upsert behavior) - filter out any existing result for this question
-  const filtered = existing.filter((r: any) => r.question_num !== result.question_num);
+  const filtered = existing.filter(r => r.question_num !== result.question_num);
 
-  const updated = [
+  const updated: Prisma.InputJsonArray = [
     ...filtered,
     {
       question_num: result.question_num,
@@ -1330,11 +1548,11 @@ export const appendQuestionResult = async (attemptId: string, result: any, emoji
       recorded_at: new Date().toISOString(),
       // first_attempt_correct is NOT stored - derive via (attempts === 1 && eventually_correct)
     },
-  ];
+  ].map(toStoredQuizQuestionResultJson);
 
-  return prisma!.quizAttempt.update({
+  return getPrisma().quizAttempt.update({
     where: { id: attemptId },
-    data: { question_results_json: updated as any },
+    data: { question_results_json: updated },
   });
 };
 
@@ -1345,7 +1563,9 @@ export const appendQuestionResult = async (attemptId: string, result: any, emoji
  * @param {Array} questionResults - Array from question_results_json
  * @returns {Object} { partial_credit_percentage, first_attempt_percentage }
  */
-export const calculatePercentagesFromResults = (questionResults: any[]) => {
+export const calculatePercentagesFromResults = (
+  questionResults: QuizQuestionResultInput[]
+) => {
   if (!questionResults || questionResults.length === 0) {
     return { partial_credit_percentage: null, first_attempt_percentage: null };
   }
@@ -1376,7 +1596,7 @@ export const calculatePercentagesFromResults = (questionResults: any[]) => {
  * @returns {Promise<Array|null>} Array of question results or null if none
  */
 export const getQuestionResults = async (attemptId: string) => {
-  const attempt = await prisma!.quizAttempt.findUnique({
+  const attempt = await getPrisma().quizAttempt.findUnique({
     where: { id: attemptId },
     select: { question_results_json: true },
   });
@@ -1392,4 +1612,3 @@ export const clearUserAttemptsForQuiz = clearForUserAndQuiz;
 export const createNewQuizAttempt = createNew;
 export const getAttemptWithMessages = findWithMessages;
 export const updateDurations = updateAttemptDurations;
-

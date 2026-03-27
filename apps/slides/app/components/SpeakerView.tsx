@@ -27,7 +27,19 @@ marked.setOptions({
 /**
  * Format milliseconds as HH:MM:SS
  */
-function formatTime(ms: any) {
+interface ParsedSlide {
+  h: number;
+  v: number;
+  content: string;
+  notes: string | null;
+}
+
+interface SpeakerViewProps {
+  slideId: string;
+  initialContent: string;
+}
+
+function formatTime(ms: number) {
   const totalSeconds = Math.floor(ms / 1000);
   const hours = Math.floor(totalSeconds / 3600);
   const minutes = Math.floor((totalSeconds % 3600) / 60);
@@ -43,7 +55,7 @@ function formatTime(ms: any) {
  * Parse slides HTML to extract slide data (content, notes)
  * Filters out hidden slides (data-hidden="true") from the list
  */
-function parseSlides(htmlContent: any) {
+function parseSlides(htmlContent: string): ParsedSlide[] {
   if (!htmlContent) return [];
 
   const parser = new DOMParser();
@@ -51,7 +63,7 @@ function parseSlides(htmlContent: any) {
   const slidesContainer = doc.querySelector('.slides');
   if (!slidesContainer) return [];
 
-  const slides: any[] = [];
+  const slides: ParsedSlide[] = [];
   const sections = slidesContainer.querySelectorAll(':scope > section');
 
   sections.forEach((section, h) => {
@@ -103,19 +115,19 @@ function parseSlides(htmlContent: any) {
 export default function SpeakerView({
   slideId,
   initialContent,
-}: any) {
-  const socketRef = useRef<any>(null);
+}: SpeakerViewProps) {
+  const socketRef = useRef<ReturnType<typeof io> | null>(null);
   const isRemoteUpdateRef = useRef(false);
   const startTimeRef = useRef(Date.now());
-  const previewContainerRef = useRef<any>(null);
+  const previewContainerRef = useRef<HTMLDivElement>(null);
 
   const [currentSlide, setCurrentSlide] = useState({ h: 0, v: 0 });
   const [elapsedTime, setElapsedTime] = useState(0);
   const [viewerCount, setViewerCount] = useState(0);
   const [isConnected, setIsConnected] = useState(false);
   const [previewScale, setPreviewScale] = useState(0.5);
-  const [endTime, setEndTime] = useState<any>(null); // Target end time as Date
-  const [timeRemaining, setTimeRemaining] = useState<any>(null); // ms until end time
+  const [endTime, setEndTime] = useState<Date | null>(null); // Target end time as Date
+  const [timeRemaining, setTimeRemaining] = useState<number | null>(null); // ms until end time
   const [showEndTimeInput, setShowEndTimeInput] = useState(false);
   const [notesFontSize, setNotesFontSize] = useState(1); // Font scale: 1 = 100%
   const [showPhoneQR, setShowPhoneQR] = useState(false); // Local QR for phone control
@@ -239,7 +251,7 @@ export default function SpeakerView({
   }, []);
 
   // Set end time from a time string (HH:MM format)
-  const handleSetEndTime = useCallback((timeString: any) => {
+  const handleSetEndTime = useCallback((timeString: string) => {
     if (!timeString) {
       setEndTime(null);
       setTimeRemaining(null);
@@ -288,7 +300,7 @@ export default function SpeakerView({
   }, []);
 
   // Format time remaining as "X min" or "X:XX"
-  const formatTimeRemaining = useCallback((ms: any) => {
+  const formatTimeRemaining = useCallback((ms: number | null) => {
     if (ms === null || ms === undefined) return null;
     if (ms <= 0) return "Time's up!";
 
@@ -326,7 +338,7 @@ export default function SpeakerView({
   }, []);
 
   // Navigate to a specific slide and broadcast
-  const navigateTo = useCallback((h: any, v: any) => {
+  const navigateTo = useCallback((h: number, v: number) => {
     if (isRemoteUpdateRef.current) return;
 
     setCurrentSlide({ h, v });
@@ -408,7 +420,7 @@ export default function SpeakerView({
 
   // Keyboard navigation - use actual directional keys
   useEffect(() => {
-    const handleKeyDown = (e: any) => {
+    const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'ArrowLeft') {
         e.preventDefault();
         goLeft();

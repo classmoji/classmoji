@@ -2,11 +2,30 @@ import { namedAction } from 'remix-utils/named-action';
 import { tasks } from '@trigger.dev/sdk';
 
 import { ClassmojiService, getGitProvider, ensureClassroomTeam } from '@classmoji/services';
-import prisma from '@classmoji/database';
+import getPrisma from '@classmoji/database';
 import { ActionTypes } from '~/constants';
 import { waitForRunCompletion } from '~/utils/helpers';
 import { requireClassroomAdmin } from '~/utils/routeAuth.server';
 import type { Route } from './+types/route';
+
+interface AssistantPayload {
+  id: string | number;
+  login: string;
+  name: string;
+  email?: string | null;
+  provider_email?: string | null;
+}
+
+interface AssistantClassroom {
+  id: string;
+  git_organization: {
+    login: string;
+    provider: string;
+    github_installation_id?: string | null;
+    access_token?: string | null;
+    base_url?: string | null;
+  };
+}
 
 export const action = async ({ request, params }: Route.ActionArgs) => {
   const classSlug = params.class!;
@@ -85,7 +104,13 @@ export const updateAssistantHandler = async (
   });
 };
 
-export const addAssistantHandler = async ({ assistant, classroom }: { assistant: any; classroom: any }) => { // eslint-disable-line @typescript-eslint/no-explicit-any -- complex Prisma classroom/assistant shapes with nested relations
+export const addAssistantHandler = async ({
+  assistant,
+  classroom,
+}: {
+  assistant: AssistantPayload;
+  classroom: AssistantClassroom;
+}) => {
   console.log('assistant', assistant);
 
   const gitProvider = getGitProvider(classroom.git_organization);
@@ -105,7 +130,7 @@ export const addAssistantHandler = async ({ assistant, classroom }: { assistant:
   }
 
   // Upsert user and membership using connectOrCreate
-  const user = await prisma!.user.upsert({
+  const user = await getPrisma().user.upsert({
     where: { login: assistant.login },
     create: {
       login: assistant.login,
@@ -121,7 +146,7 @@ export const addAssistantHandler = async ({ assistant, classroom }: { assistant:
     },
   });
 
-  await prisma!.account.upsert({
+  await getPrisma().account.upsert({
     where: {
       provider_id_account_id: {
         provider_id: classroom.git_organization.provider.toLowerCase(),
@@ -136,7 +161,7 @@ export const addAssistantHandler = async ({ assistant, classroom }: { assistant:
     update: {},
   });
 
-  await prisma!.classroomMembership.create({
+  await getPrisma().classroomMembership.create({
     data: {
       classroom_id: classroom.id,
       user_id: user.id,

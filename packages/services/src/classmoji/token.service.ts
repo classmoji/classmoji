@@ -1,7 +1,25 @@
-import prisma from '@classmoji/database';
+import getPrisma from '@classmoji/database';
+import type { Prisma, TokenTransactionType } from '@prisma/client';
+
+interface UpdateExtensionInput {
+  classroom_id: string;
+  student_id: string;
+  amount: number;
+  [key: string]: unknown;
+}
+
+interface AssignToStudentInput {
+  classroomId: string;
+  studentId: string;
+  amount: number;
+  type?: TokenTransactionType | string;
+  description?: string;
+  repositoryAssignmentId?: string | null;
+  [key: string]: unknown;
+}
 
 export const getBalance = async (classroomId: string, studentId: string) => {
-  const transaction = await prisma!.tokenTransaction.findFirst({
+  const transaction = await getPrisma().tokenTransaction.findFirst({
     where: {
       classroom_id: classroomId,
       student_id: studentId,
@@ -18,8 +36,8 @@ export const getBalance = async (classroomId: string, studentId: string) => {
   return transaction.balance_after;
 };
 
-export const updateExtension = async (data: any) => {
-  return prisma!.$transaction(async tx => {
+export const updateExtension = async (data: UpdateExtensionInput) => {
+  return getPrisma().$transaction(async tx => {
     const transaction = await tx.tokenTransaction.findFirst({
       where: {
         classroom_id: data.classroom_id,
@@ -41,15 +59,15 @@ export const updateExtension = async (data: any) => {
 
     return tx.tokenTransaction.create({
       data: {
-        ...data,
+        ...(data as Prisma.TokenTransactionUncheckedCreateInput),
         balance_after: newBalance,
       },
     });
   });
 };
 
-export const findTransactions = async (query: any) => {
-  return prisma!.tokenTransaction.findMany({
+export const findTransactions = async (query: Prisma.TokenTransactionWhereInput) => {
+  return getPrisma().tokenTransaction.findMany({
     where: query,
     include: {
       student: true,
@@ -66,8 +84,8 @@ export const findTransactions = async (query: any) => {
   });
 };
 
-export const assignToStudent = async (data: any) => {
-  return prisma!.$transaction(async tx => {
+export const assignToStudent = async (data: AssignToStudentInput) => {
+  return getPrisma().$transaction(async tx => {
     const transaction = await tx.tokenTransaction.findFirst({
       where: {
         classroom_id: data.classroomId,
@@ -83,7 +101,7 @@ export const assignToStudent = async (data: any) => {
 
     return tx.tokenTransaction.create({
       data: {
-        type: data.type || 'GAIN',
+        type: (data.type as TokenTransactionType) || 'GAIN',
         amount: data.amount,
         balance_after: newBalance,
         student_id: data.studentId,
@@ -95,9 +113,12 @@ export const assignToStudent = async (data: any) => {
   });
 };
 
-export const updateTransaction = async (id: string, data: any) => {
-  return prisma!.tokenTransaction.update({
+export const updateTransaction = async (
+  id: string,
+  data: Record<string, unknown>
+) => {
+  return getPrisma().tokenTransaction.update({
     where: { id },
-    data,
+    data: data as Prisma.TokenTransactionUncheckedUpdateInput,
   });
 };

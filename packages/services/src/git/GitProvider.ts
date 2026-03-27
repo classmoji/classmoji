@@ -1,8 +1,36 @@
 /* eslint-disable @typescript-eslint/no-unused-vars */
+import type { Octokit } from 'octokit';
 /**
  * Abstract base class for git providers.
  * Each method throws an error if not implemented by subclass.
  */
+export interface GitRepository {
+  id: string;
+  name: string;
+  url: string;
+  node_id?: string;
+}
+
+export interface GitIssue {
+  id: string;
+  number: number;
+  url: string;
+}
+
+export interface GitOrganizationDetails {
+  login?: string | null;
+  node_id?: string;
+  plan?: {
+    name?: string | null;
+  } | null;
+}
+
+export interface GitProject {
+  id: string;
+  number: number;
+  url: string;
+}
+
 export class GitProvider {
   credentials: unknown;
 
@@ -23,11 +51,11 @@ export class GitProvider {
   }
 
   // ─── Repository ────────────────────────────────────────────────────────────
-  async createRepository(org: string, name: string, isPrivate = true): Promise<{ id: string; name: string; url: string }> {
+  async createRepository(org: string, name: string, isPrivate = true): Promise<GitRepository> {
     throw new Error('createRepository() must be implemented by subclass');
   }
 
-  async getRepository(org: string, name: string): Promise<unknown> {
+  async getRepository(org: string, name: string): Promise<GitRepository> {
     throw new Error('getRepository() must be implemented by subclass');
   }
 
@@ -57,7 +85,7 @@ export class GitProvider {
   }
 
   // ─── Issues ────────────────────────────────────────────────────────────────
-  async createIssue(org: string, repo: string, issue: { title: string; body?: string; description?: string }): Promise<unknown> {
+  async createIssue(org: string, repo: string, issue: { title: string; body?: string; description?: string }): Promise<GitIssue> {
     throw new Error('createIssue() must be implemented by subclass');
   }
 
@@ -70,7 +98,7 @@ export class GitProvider {
   }
 
   // ─── Organization/Group ────────────────────────────────────────────────────
-  async getOrganization(org: string): Promise<unknown> {
+  async getOrganization(org: string): Promise<GitOrganizationDetails> {
     throw new Error('getOrganization() must be implemented by subclass');
   }
 
@@ -118,8 +146,36 @@ export class GitProvider {
   }
 
   // ─── Projects ──────────────────────────────────────────────────────────────
-  async listOrganizationProjects(org: string): Promise<unknown[]> {
+  async listOrganizationProjects(org: string): Promise<GitProject[]> {
     throw new Error('listOrganizationProjects() must be implemented by subclass');
+  }
+
+  async copyProjectFromTemplate(templateProjectId: string, ownerId: string, title: string): Promise<GitProject> {
+    throw new Error('copyProjectFromTemplate() must be implemented by subclass');
+  }
+
+  async getOrganizationNodeId(org: string): Promise<string> {
+    throw new Error('getOrganizationNodeId() must be implemented by subclass');
+  }
+
+  async addIssueToProject(projectId: string, contentId: string): Promise<{ itemId: string }> {
+    throw new Error('addIssueToProject() must be implemented by subclass');
+  }
+
+  async addTeamToProject(projectId: string, orgLogin: string, teamSlug: string, role = 'WRITER'): Promise<void> {
+    throw new Error('addTeamToProject() must be implemented by subclass');
+  }
+
+  async linkRepoToProject(projectId: string, repoNodeId: string): Promise<void> {
+    throw new Error('linkRepoToProject() must be implemented by subclass');
+  }
+
+  async getIssueNodeId(org: string, repo: string, issueNumber: number): Promise<string> {
+    throw new Error('getIssueNodeId() must be implemented by subclass');
+  }
+
+  async getOctokit(): Promise<Octokit> {
+    throw new Error('getOctokit() must be implemented by subclass');
   }
 
   // ─── Utilities ─────────────────────────────────────────────────────────────

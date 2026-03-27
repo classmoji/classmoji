@@ -1,6 +1,6 @@
 import { redirect } from 'react-router';
 import { GitHubProvider } from '@classmoji/services';
-import prisma from '@classmoji/database';
+import getPrisma from '@classmoji/database';
 
 /**
  * Role configuration for test login.
@@ -28,7 +28,7 @@ const ROLE_CONFIG: Record<string, string> = {
  *   /test-login?role=student - Login as student (uses GITHUB_STUDENT_TOKEN)
  *   /test-login?role=owner&redirect=/slideId - Login and redirect to specific slide
  */
-export const loader = async ({ request }: any) => {
+export const loader = async ({ request }: { request: Request }) => {
   // Only allow in development
   if (process.env.NODE_ENV !== 'development') {
     throw new Response('Not found', { status: 404 });
@@ -56,7 +56,7 @@ export const loader = async ({ request }: any) => {
   try {
     // DB-first lookup: Check if this token is already stored in an account
     // This avoids GitHub API calls after the first login with each token
-    let account = await prisma!.account.findFirst({
+    let account = await getPrisma().account.findFirst({
       where: {
         provider_id: 'github',
         access_token: githubToken,
@@ -72,7 +72,7 @@ export const loader = async ({ request }: any) => {
       const githubUserId = String(data.id);
 
       // Now find the account by GitHub ID
-      account = await prisma!.account.findFirst({
+      account = await getPrisma().account.findFirst({
         where: {
           provider_id: 'github',
           account_id: githubUserId,
@@ -88,7 +88,7 @@ export const loader = async ({ request }: any) => {
       }
 
       // Store the token for future lookups
-      await prisma!.account.update({
+      await getPrisma().account.update({
         where: { id: account.id },
         data: { access_token: githubToken },
       });
@@ -107,7 +107,7 @@ export const loader = async ({ request }: any) => {
     const sessionToken = crypto.randomUUID();
     const expiresAt = new Date(Date.now() + 8 * 60 * 60 * 1000); // 8 hours
 
-    await prisma!.session.create({
+    await getPrisma().session.create({
       data: {
         token: sessionToken,
         user_id: user.id,
@@ -126,8 +126,9 @@ export const loader = async ({ request }: any) => {
         'Set-Cookie': `classmoji.session_token=${sessionToken}; Path=/; HttpOnly; SameSite=Lax`,
       },
     });
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error('[slides/test-login] Error:', error);
-    throw new Error('Failed to authenticate test user: ' + error.message);
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error('Failed to authenticate test user: ' + message);
   }
 };

@@ -9,6 +9,16 @@ export interface Model {
   created?: number;
 }
 
+interface AnthropicApiModel {
+  id: string;
+  display_name?: string;
+  created_at?: number;
+}
+
+interface AnthropicModelsResponse {
+  data: AnthropicApiModel[];
+}
+
 /**
  * Get Anthropic models
  * Fetches available models from Anthropic's API
@@ -35,13 +45,13 @@ export async function getAnthropicModels(apiKey: string | null = null): Promise<
       throw new Error(`Anthropic API error: ${response.status}`);
     }
 
-    const data = await response.json();
+    const data = (await response.json()) as AnthropicModelsResponse;
 
 
     // Filter and sort Claude models
     const claudeModels = data.data
-      .filter((model: any) => model.id.startsWith('claude-'))
-      .map((model: any) => {
+      .filter((model: AnthropicApiModel) => model.id.startsWith('claude-'))
+      .map((model: AnthropicApiModel) => {
         // Use display_name from API if available, otherwise format the ID
         const label = model.display_name || formatClaudeModelName(model.id);
 

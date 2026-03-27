@@ -7,7 +7,7 @@ import { getAuthSession, clearRevokedToken } from '@classmoji/auth/server';
 import { useGlobalFetcher, useGitHubAppInstallPopup } from '~/hooks';
 import { ClassmojiService, GitHubProvider } from '@classmoji/services';
 import { ActionTypes } from '~/constants';
-import prisma from '@classmoji/database';
+import getPrisma from '@classmoji/database';
 
 import StepBasicInfo from './StepBasicInfo';
 import StepImportModules from './StepImportModules';
@@ -102,7 +102,7 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
   const providerIds = userOrgs.map((org) => String(org.id));
 
   // Cross-reference with our GitOrganization table - only show orgs with active GitHub App installations
-  const gitOrgs = await prisma!.gitOrganization.findMany({
+  const gitOrgs = await getPrisma().gitOrganization.findMany({
     where: {
       provider: 'GITHUB',
       provider_id: { in: providerIds },
@@ -129,7 +129,7 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
   });
 
   // Get all classrooms where user is OWNER (for import source)
-  const ownedClassrooms = await prisma!.classroom.findMany({
+  const ownedClassrooms = await getPrisma().classroom.findMany({
     where: {
       memberships: {
         some: {

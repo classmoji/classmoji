@@ -5,7 +5,7 @@ import { getAuthSession } from '@classmoji/auth/server';
 import { requireClassroomAdmin } from '~/utils/routeAuth.server';
 import FormModule from './FormModule';
 import { ClassmojiService } from '@classmoji/services';
-import prisma from '@classmoji/database';
+import getPrisma from '@classmoji/database';
 import { useRouteDrawer } from '~/hooks';
 import { ActionTypes } from '~/constants';
 import type { Route } from './+types/route';
@@ -34,7 +34,7 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
 
     // Check if any repos have projects (for locking project template field)
     if (module) {
-      const reposWithProjects = await prisma!.repository.count({
+      const reposWithProjects = await getPrisma().repository.count({
         where: {
           module_id: module.id,
           project_id: { not: null },
@@ -48,7 +48,7 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
   const pages = await ClassmojiService.page.findByClassroomId(classroom.id, {
     includeLinks: true,
   });
-  const slides = await prisma!.slide.findMany({
+  const slides = await getPrisma().slide.findMany({
     where: { classroom_id: classroom.id },
     include: {
       links: {
@@ -120,11 +120,11 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
   // Helper to sync module-level content links
   const syncModuleContentLinks = async (moduleId: string) => {
     // Get current links for this module
-    const currentPageLinks = await prisma!.pageLink.findMany({
+    const currentPageLinks = await getPrisma().pageLink.findMany({
       where: { module_id: moduleId },
       select: { page_id: true },
     });
-    const currentSlideLinks = await prisma!.slideLink.findMany({
+    const currentSlideLinks = await getPrisma().slideLink.findMany({
       where: { module_id: moduleId },
       select: { slide_id: true },
     });
@@ -145,7 +145,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
 
     // Add new page links
     if (pagesToAdd.length > 0) {
-      await prisma!.pageLink.createMany({
+      await getPrisma().pageLink.createMany({
         data: pagesToAdd.map((pageId: string) => ({
           page_id: pageId,
           module_id: moduleId,
@@ -156,7 +156,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
 
     // Remove old page links
     if (pagesToRemove.length > 0) {
-      await prisma!.pageLink.deleteMany({
+      await getPrisma().pageLink.deleteMany({
         where: {
           module_id: moduleId,
           page_id: { in: pagesToRemove },
@@ -166,7 +166,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
 
     // Add new slide links
     if (slidesToAdd.length > 0) {
-      await prisma!.slideLink.createMany({
+      await getPrisma().slideLink.createMany({
         data: slidesToAdd.map((slideId: string) => ({
           slide_id: slideId,
           module_id: moduleId,
@@ -177,7 +177,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
 
     // Remove old slide links
     if (slidesToRemove.length > 0) {
-      await prisma!.slideLink.deleteMany({
+      await getPrisma().slideLink.deleteMany({
         where: {
           module_id: moduleId,
           slide_id: { in: slidesToRemove },
@@ -194,11 +194,11 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
       const newSlideIds = assignment.linkedSlideIds || [];
 
       // Get current links for this assignment
-      const currentPageLinks = await prisma!.pageLink.findMany({
+      const currentPageLinks = await getPrisma().pageLink.findMany({
         where: { assignment_id: assignmentId },
         select: { page_id: true },
       });
-      const currentSlideLinks = await prisma!.slideLink.findMany({
+      const currentSlideLinks = await getPrisma().slideLink.findMany({
         where: { assignment_id: assignmentId },
         select: { slide_id: true },
       });
@@ -216,7 +216,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
 
       // Add new page links
       if (pagesToAdd.length > 0) {
-        await prisma!.pageLink.createMany({
+        await getPrisma().pageLink.createMany({
           data: pagesToAdd.map((pageId: string) => ({
             page_id: pageId,
             assignment_id: assignmentId,
@@ -227,7 +227,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
 
       // Remove old page links
       if (pagesToRemove.length > 0) {
-        await prisma!.pageLink.deleteMany({
+        await getPrisma().pageLink.deleteMany({
           where: {
             assignment_id: assignmentId,
             page_id: { in: pagesToRemove },
@@ -237,7 +237,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
 
       // Add new slide links
       if (slidesToAdd.length > 0) {
-        await prisma!.slideLink.createMany({
+        await getPrisma().slideLink.createMany({
           data: slidesToAdd.map((slideId: string) => ({
             slide_id: slideId,
             assignment_id: assignmentId,
@@ -248,7 +248,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
 
       // Remove old slide links
       if (slidesToRemove.length > 0) {
-        await prisma!.slideLink.deleteMany({
+        await getPrisma().slideLink.deleteMany({
           where: {
             assignment_id: assignmentId,
             slide_id: { in: slidesToRemove },

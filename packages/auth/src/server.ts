@@ -1,8 +1,8 @@
 import { betterAuth } from "better-auth";
 import { prismaAdapter } from "better-auth/adapters/prisma";
 import { admin } from "better-auth/plugins";
-import prisma from "@classmoji/database";
-import type { Account as PrismaAccount } from "@prisma/client";
+import getPrisma from "@classmoji/database";
+import type { Account as PrismaAccount, Role } from "@prisma/client";
 import { ClassmojiService } from "@classmoji/services";
 
 // Use explicit secret for consistent session signing
@@ -53,34 +53,67 @@ interface AccessOptions {
 interface AssertClassroomAccessOptions {
   request: Request;
   classroomSlug: string;
-  allowedRoles?: string[];
+  allowedRoles?: Role[];
   resourceType?: string;
   attemptedAction?: string;
   metadata?: Record<string, unknown>;
   resourceOwnerId?: string | null;
-  selfAccessRoles?: string[];
+  selfAccessRoles?: Role[];
   requireOwnership?: boolean;
 }
 
 type SlideAccessType = 'view' | 'edit' | 'present' | 'speakerNotes';
 
+interface SlideForAccess {
+  id: string;
+  classroom_id: string;
+  created_by: string | null;
+  allow_team_edit: boolean;
+  is_draft: boolean;
+  is_public: boolean;
+  multiplex_id: string | null;
+  show_speaker_notes: boolean;
+  [key: string]: unknown;
+}
+
+interface SlideAccessMembership {
+  role: Role;
+  [key: string]: unknown;
+}
+
 interface AssertSlideAccessOptions {
   request: Request;
   slideId: string;
-  slide?: any | null;
+  slide?: SlideForAccess | null;
   accessType: SlideAccessType;
   shareCode?: string | null;
 }
 
 interface SlideAccessResult {
-  slide: any;
-  membership: any | null;
+  slide: SlideForAccess;
+  membership: SlideAccessMembership | null;
   userId: string | null;
   accessGrantedVia: 'public' | 'membership' | 'role' | 'ownership' | 'team_edit' | 'shareCode' | null;
   canView: boolean;
   canEdit: boolean;
   canPresent: boolean;
   canViewSpeakerNotes: boolean;
+}
+
+type ClassroomRecord = NonNullable<Awaited<ReturnType<typeof ClassmojiService.classroom.findBySlug>>>;
+type ClassroomMembershipRecord = Awaited<
+  ReturnType<typeof ClassmojiService.classroomMembership.findByClassroomAndUser>
+>;
+type SafeClassroomRecord = Omit<ClassroomRecord, 'settings'> & {
+  settings: Record<string, unknown> | null;
+};
+
+interface ClassroomAccessResult {
+  userId: string;
+  classroom: SafeClassroomRecord;
+  membership: ClassroomMembershipRecord;
+  isResourceOwner: boolean;
+  accessGrantedVia: 'role' | 'ownership' | null;
 }
 
 // In-memory cache for access tokens (process-local, no persistence, no security risk)
@@ -124,7 +157,7 @@ export function clearTokenCache(userId: string | null = null): void {
     tokenCache.delete(`token:${userId}`);
     // Also clear any session-based cache entries for this user
     for (const [key, value] of tokenCache.entries()) {
-      if (key.startsWith('session:') && (value.value as any)?.userId === userId) {
+      if (key.startsWith('session:') && typeof value.value === 'object' && value.value !== null && 'userId' in value.value && (value.value as { userId: string }).userId === userId) {
         tokenCache.delete(key);
       }
     }
@@ -146,7 +179,7 @@ export async function clearRevokedToken(userId: string): Promise<void> {
   // BetterAuth's refresh detection still triggers: it checks
   // `account.accessTokenExpiresAt && expires < now`. Setting to null would
   // skip the refresh entirely, leaving the user permanently locked out.
-  await prisma!.account.updateMany({
+  await getPrisma().account.updateMany({
     where: { user_id: userId, provider_id: 'github' },
     data: { access_token: null, access_token_expires_at: new Date(0) },
   });
@@ -253,7 +286,7 @@ async function refreshGitHubToken(account: Pick<PrismaAccount, 'refresh_token'>)
  */
 async function getValidGitHubToken(userId: string): Promise<GitHubTokenResult | null> {
   return withRefreshLock(userId, async () => {
-    const account = await prisma!.account.findFirst({
+    const account = await getPrisma().account.findFirst({
       where: { user_id: userId, provider_id: 'github' },
       select: {
         id: true,
@@ -279,7 +312,7 @@ async function getValidGitHubToken(userId: string): Promise<GitHubTokenResult | 
     if (!newTokens) {
       // Refresh failed — another Fly machine may have already refreshed.
       // Re-read from DB to pick up tokens written by a concurrent winner.
-      const freshAccount = await prisma!.account.findFirst({
+      const freshAccount = await getPrisma().account.findFirst({
         where: { user_id: userId, provider_id: 'github' },
         select: { access_token: true, access_token_expires_at: true },
       });
@@ -302,7 +335,7 @@ async function getValidGitHubToken(userId: string): Promise<GitHubTokenResult | 
       updateData.refresh_token_expires_at = newTokens.refreshTokenExpiresAt;
     }
 
-    await prisma!.account.update({
+    await getPrisma().account.update({
       where: { id: account.id },
       data: updateData,
     });
@@ -315,7 +348,7 @@ export const auth = betterAuth({
   basePath: "/api/auth",
   baseURL: process.env.WEBAPP_URL,
   secret: AUTH_SECRET,
-  database: prismaAdapter(prisma!, {
+  database: prismaAdapter(getPrisma(), {
     provider: "postgresql",
   }),
   socialProviders: {
@@ -492,7 +525,7 @@ export async function getAuthSession(request: Request): Promise<AuthSessionResul
       return cachedSession;
     }
 
-    const directSession = await prisma!.session.findUnique({
+    const directSession = await getPrisma().session.findUnique({
       where: { token: tokenOnly },
       include: {
         user: {
@@ -570,7 +603,7 @@ export const assertClassroomAccess = async ({
   resourceOwnerId = null,
   selfAccessRoles = [],
   requireOwnership = false,
-}: AssertClassroomAccessOptions) => {
+}: AssertClassroomAccessOptions): Promise<ClassroomAccessResult> => {
   // SECURITY: Validate parameter combinations to prevent misconfigurations
   if (requireOwnership && !resourceOwnerId) {
     throw new Error(
@@ -620,18 +653,18 @@ export const assertClassroomAccess = async ({
 
   // Determine access rights
   const rolesArray = Array.isArray(allowedRoles) ? allowedRoles : [allowedRoles];
-  const hasAllowedRole = !rolesArray.length || rolesArray.includes(membership?.role ?? '');
+  const hasAllowedRole = !rolesArray.length || (membership?.role ? rolesArray.includes(membership.role) : false);
 
   // Check ownership if resourceOwnerId provided
   let isResourceOwner = false;
   let canAccessOwnResource = false;
-  let accessGrantedVia = null;
+  let accessGrantedVia: ClassroomAccessResult['accessGrantedVia'] = null;
 
   if (resourceOwnerId) {
     isResourceOwner = authData.userId === resourceOwnerId;
 
     // Check if user can access their own resource
-    const hasSelfAccessRole = selfAccessRoles.includes(membership?.role ?? '');
+    const hasSelfAccessRole = membership?.role ? selfAccessRoles.includes(membership.role) : false;
     canAccessOwnResource = isResourceOwner && (hasSelfAccessRole || hasAllowedRole);
 
     // Handle requireOwnership flag
@@ -685,7 +718,7 @@ export const assertClassroomAccess = async ({
           ...metadata,
         },
       });
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error('[assertClassroomAccess] Failed to write audit log', error);
     }
 
@@ -709,7 +742,7 @@ export const assertClassroomAccess = async ({
 
   // SECURITY: Always sanitize classroom before returning to prevent API key leakage.
   // Routes needing secrets should use ClassmojiService.classroom.getClassroomSettingsForServer()
-  const safeClassroom = ClassmojiService.classroom.getClassroomForUI(classroom);
+  const safeClassroom = ClassmojiService.classroom.getClassroomForUI(classroom) as SafeClassroomRecord;
 
   return {
     userId: authData.userId,
@@ -830,7 +863,7 @@ export async function assertSlideAccess({
 }: AssertSlideAccessOptions): Promise<SlideAccessResult> {
   // Fetch slide if not provided
   if (!slide) {
-    slide = await prisma!.slide.findUnique({
+    slide = await getPrisma().slide.findUnique({
       where: { id: slideId },
       include: {
         classroom: {
@@ -846,7 +879,7 @@ export async function assertSlideAccess({
 
   // Get auth data (may be null for public access)
   const authData = await getAuthSession(request);
-  let membership = null;
+  let membership: SlideAccessMembership | null = null;
   const userId = authData?.userId || null;
 
   // Get membership if authenticated
@@ -921,7 +954,7 @@ export async function assertSlideAccess({
         await ClassmojiService.audit.create({
           classroom_id: slide.classroom_id,
           user_id: userId!,
-          role: role || 'NONE',
+          role: role ?? membership.role,
           resource_id: slideId,
           resource_type: 'SLIDE',
           action: 'ACCESS_DENIED',
@@ -933,7 +966,7 @@ export async function assertSlideAccess({
             allow_team_edit: slide.allow_team_edit,
           },
         });
-      } catch (error: any) {
+      } catch (error: unknown) {
         console.error('[assertSlideAccess] Failed to write audit log', error);
       }
     }

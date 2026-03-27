@@ -6,6 +6,24 @@ import {
   IconExternalLink,
   IconClipboardList,
 } from '@tabler/icons-react';
+import type { CalendarEventWithLinks } from './types';
+
+interface RepositoryAssignmentLinkInfo {
+  provider_issue_number?: number | null;
+  repository?: {
+    name: string;
+  } | null;
+}
+
+interface EventLinksProps {
+  event: CalendarEventWithLinks;
+  classSlug?: string;
+  rolePrefix?: string;
+  slidesUrl: string;
+  pagesUrl?: string;
+  gitOrgLogin?: string | null;
+  repoAssignmentsByAssignmentId?: Record<string, RepositoryAssignmentLinkInfo | undefined>;
+}
 
 /**
  * Renders clickable links for calendar events in the detail modal.
@@ -23,7 +41,6 @@ import {
  * @param {string} gitOrgLogin - GitHub organization login (for constructing issue URLs)
  * @param {object} repoAssignmentsByAssignmentId - Map of assignment_id -> RepositoryAssignment
  */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any -- calendar event shapes vary by query context with nested pages/slides/assignments
 const EventLinks = ({
   event,
   classSlug,
@@ -32,11 +49,12 @@ const EventLinks = ({
   pagesUrl = 'http://localhost:7100',
   gitOrgLogin = null,
   repoAssignmentsByAssignmentId = {},
-}: any) => { // eslint-disable-line @typescript-eslint/no-explicit-any -- component accepts varied data shapes from different routes
+}: EventLinksProps) => {
+  const resolvedClassSlug = classSlug ?? '';
   const hasMeetingLink = event.meeting_link;
-  const hasPages = event.pages?.length > 0;
-  const hasSlides = event.slides?.length > 0;
-  const hasAssignments = event.assignments?.length > 0;
+  const hasPages = (event.pages?.length ?? 0) > 0;
+  const hasSlides = (event.slides?.length ?? 0) > 0;
+  const hasAssignments = (event.assignments?.length ?? 0) > 0;
   const hasGitHubIssue = event.github_issue_url;
   const hasAnyLinks = hasMeetingLink || hasPages || hasSlides || hasAssignments || hasGitHubIssue;
 
@@ -49,7 +67,7 @@ const EventLinks = ({
       {/* Meeting Link - opens in new tab */}
       {hasMeetingLink && (
         <a
-          href={event.meeting_link}
+          href={event.meeting_link ?? undefined}
           target="_blank"
           rel="noopener noreferrer"
           className="flex items-center gap-2 text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300 text-sm"
@@ -62,10 +80,10 @@ const EventLinks = ({
 
       {/* Pages - opens in new tab (external pages app) */}
       {hasPages &&
-        event.pages.map(({ page }: any) => ( // eslint-disable-line @typescript-eslint/no-explicit-any -- Prisma page shape
+        (event.pages ?? []).map(({ page }) => (
           <a
             key={page.id}
-            href={`${pagesUrl}/${classSlug}/${page.id}`}
+            href={`${pagesUrl}/${resolvedClassSlug}/${page.id}`}
             target="_blank"
             rel="noopener noreferrer"
             className="flex items-center gap-2 text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300 text-sm"
@@ -78,7 +96,7 @@ const EventLinks = ({
 
       {/* Slides - opens in new tab */}
       {hasSlides &&
-        event.slides.map(({ slide }: any) => ( // eslint-disable-line @typescript-eslint/no-explicit-any -- Prisma slide shape
+        (event.slides ?? []).map(({ slide }) => (
           <a
             key={slide.id}
             href={`${slidesUrl}/${slide.id}`}
@@ -94,9 +112,9 @@ const EventLinks = ({
 
       {/* Assignments - GitHub issue for students with repo, modules page otherwise */}
       {hasAssignments &&
-        event.assignments.map(({ assignment, module }: any) => { // eslint-disable-line @typescript-eslint/no-explicit-any -- Prisma assignment shape
+        (event.assignments ?? []).map(({ assignment, module }) => {
           // Check if user has a repo assignment with a GitHub issue
-          const repoAssignment = (repoAssignmentsByAssignmentId as Record<string, { provider_issue_number?: number | null; repository?: { name: string } } | undefined>)[assignment.id];
+          const repoAssignment = repoAssignmentsByAssignmentId[assignment.id];
           const hasGitHubIssue =
             repoAssignment?.provider_issue_number && gitOrgLogin && repoAssignment.repository?.name;
 
@@ -122,7 +140,7 @@ const EventLinks = ({
           return (
             <NavLink
               key={assignment.id}
-              to={`/${rolePrefix}/${classSlug}/modules#${module?.slug || ''}`}
+              to={`/${rolePrefix}/${resolvedClassSlug}/modules#${module?.slug || ''}`}
               className="flex items-center gap-2 text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300 text-sm"
             >
               <IconClipboardList size={18} className="text-gray-500 dark:text-gray-400" />
@@ -134,7 +152,7 @@ const EventLinks = ({
       {/* GitHub Issue - opens in new tab */}
       {hasGitHubIssue && (
         <a
-          href={event.github_issue_url}
+          href={event.github_issue_url ?? undefined}
           target="_blank"
           rel="noopener noreferrer"
           className="flex items-center gap-2 text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300 text-sm"

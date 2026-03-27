@@ -23,7 +23,7 @@ import {
  * @param {object} props
  * @param {HTMLElement} props.element - The .sandpack-embed element
  */
-export default function SandpackProperties({ element }: any) {
+export default function SandpackProperties({ element }: { element: HTMLElement }) {
   const { onContentChange } = useElementSelection();
   // Counter to force re-renders when DOM attributes change
   // This is needed because parseFromHtml reads from DOM, which React doesn't track
@@ -33,7 +33,7 @@ export default function SandpackProperties({ element }: any) {
   const config = parseFromHtml(element);
 
   // Update a data attribute on the element
-  const updateAttribute = useCallback((key: any, value: any) => {
+  const updateAttribute = useCallback((key: string, value: string) => {
     element.dataset[key] = value;
     forceUpdate(c => c + 1); // Trigger re-render to reflect DOM changes
     onContentChange?.();
@@ -42,7 +42,7 @@ export default function SandpackProperties({ element }: any) {
   // Update options that are stored as data attributes
   // Note: dataset API expects camelCase keys and automatically converts to kebab-case attributes
   // e.g., element.dataset.showConsole = 'true' creates data-show-console="true"
-  const updateOption = useCallback((key: any, value: any) => {
+  const updateOption = useCallback((key: string, value: string | boolean) => {
     if (value === true) {
       element.dataset[key] = 'true';
     } else if (value === false) {
@@ -55,7 +55,7 @@ export default function SandpackProperties({ element }: any) {
   }, [element, onContentChange]);
 
   // Handle template change - also reset files to defaults
-  const handleTemplateChange = useCallback((newTemplate: any) => {
+  const handleTemplateChange = useCallback((newTemplate: string) => {
     element.dataset.template = newTemplate;
     // Reset files to defaults for the new template
     const defaultFiles = DEFAULT_FILES[newTemplate] || DEFAULT_FILES.vanilla;

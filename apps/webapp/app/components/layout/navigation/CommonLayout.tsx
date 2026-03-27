@@ -12,6 +12,7 @@ import useStore from '~/store';
 import tokenImage from '~/assets/images/token.png';
 import githubLogo from '~/assets/images/github_logo.svg';
 import ProfileDropdown from '../../features/profile/ProfileDropdown';
+import type { AppUser, MembershipWithOrganization } from '~/types';
 
 interface MenuPage {
   id: string;
@@ -57,7 +58,14 @@ const CommonLayout = ({
   const { pathname } = location;
   const { role } = useRole();
   const roleSettings = useRoleSettings();
-  const { user, memberships, aiAgentAvailable } = useRouteLoaderData('root') as { user: { name?: string; login?: string; avatar_url?: string }; memberships: unknown[]; aiAgentAvailable: boolean };
+  const rootData = useRouteLoaderData('root') as
+    | {
+        user?: AppUser | null;
+        memberships?: MembershipWithOrganization[];
+        aiAgentAvailable?: boolean;
+      }
+    | undefined;
+  const { user, memberships = [], aiAgentAvailable = false } = rootData ?? {};
   const { isProTier } = useSubscription();
   const { tokenBalance } = useStore();
 

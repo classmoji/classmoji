@@ -18,7 +18,38 @@ export const DARK_THEMES = ['black', 'league', 'night', 'moon', 'dracula', 'bloo
  * @param {Array<{id: string, libCssUrl: string}>} sharedThemes - Shared themes from slides.com imports
  * @returns {string} Full URL to the theme CSS
  */
-function getThemeUrl(theme: any, customThemes: any[] = [], sharedThemes: any[] = []) {
+interface CustomTheme {
+  id: string;
+  cssUrl?: string;
+}
+
+interface SharedTheme {
+  id: string;
+  libCssUrl?: string;
+  bodyClasses?: string;
+  customThemeUrl?: string;
+}
+
+interface RevealSlidesProps {
+  contentUrl?: string;
+  initialContent?: string | null;
+  initialError?: string | null;
+  canEdit?: boolean;
+  isEditing?: boolean;
+  onContentChange?: () => void;
+  onThemeChange?: (themes: { theme: string; codeTheme: string }) => void;
+  customThemes?: CustomTheme[];
+  sharedThemes?: SharedTheme[];
+}
+
+export interface RevealSlidesHandle {
+  getCurrentContent: () => string | null;
+  getRevealInstance: () => RevealApi | null;
+  getThemes: () => { theme: string; codeTheme: string };
+  setThemes: (newThemes: { theme?: string; codeTheme?: string }) => void;
+}
+
+function getThemeUrl(theme: string, customThemes: CustomTheme[] = [], sharedThemes: SharedTheme[] = []) {
   if (BUILTIN_THEMES.includes(theme)) {
     return `https://cdn.jsdelivr.net/npm/reveal.js@5.1.0/dist/theme/${theme}.css`;
   }
@@ -59,23 +90,23 @@ const RevealSlides = forwardRef(function RevealSlides({
   onThemeChange,          // Callback when themes are extracted from content
   customThemes = [],      // Custom themes with cssUrl for loading
   sharedThemes = [],      // Shared themes from slides.com imports (with lib/ folder)
-}: any, ref: any) {
-  const deckRef = useRef<any>(null);
-  const revealRef = useRef<any>(null);
+}: RevealSlidesProps, ref: React.Ref<RevealSlidesHandle>) {
+  const deckRef = useRef<HTMLDivElement>(null);
+  const revealRef = useRef<RevealApi | null>(null);
   const [loading, setLoading] = useState(!initialContent && !initialError);
   const [error, setError] = useState(initialError);
-  const [htmlContent, setHtmlContent] = useState<any>(null);
+  const [htmlContent, setHtmlContent] = useState<string | null>(null);
   const [isClient, setIsClient] = useState(false);
 
   // Theme state - single theme (no light/dark mode split for simplicity)
   const [theme, setTheme] = useState('white');
   const [codeTheme, setCodeTheme] = useState('github');
-  const themeStyleRef = useRef<any>(null);
-  const codeThemeStyleRef = useRef<any>(null);
+  const themeStyleRef = useRef<HTMLLinkElement | null>(null);
+  const codeThemeStyleRef = useRef<HTMLLinkElement | null>(null);
   // Track custom theme CSS link (for shared themes with custom-theme.css)
-  const customThemeStyleRef = useRef<any>(null);
+  const customThemeStyleRef = useRef<HTMLLinkElement | null>(null);
   // Track body classes added by shared themes
-  const sharedThemeBodyClassesRef = useRef([]);
+  const sharedThemeBodyClassesRef = useRef<string[]>([]);
 
   // Hydration check - only render on client
   useEffect(() => {
@@ -126,11 +157,11 @@ const RevealSlides = forwardRef(function RevealSlides({
 
     // If this is a shared theme, also apply body classes and custom theme CSS
     if (theme.startsWith('shared:')) {
-      const sharedTheme = sharedThemes.find((t: any) => t.id === theme);
+      const sharedTheme = sharedThemes.find((t) => t.id === theme);
       if (sharedTheme) {
         // Apply body classes (e.g., "reveal-viewport theme-font-montserrat theme-color-white-blue")
         if (sharedTheme.bodyClasses) {
-          const classes = sharedTheme.bodyClasses.split(' ').filter((c: any) => c.trim());
+          const classes = sharedTheme.bodyClasses.split(' ').filter((c: string) => c.trim());
           document.body.classList.add(...classes);
           sharedThemeBodyClassesRef.current = classes;
         }
@@ -198,7 +229,7 @@ const RevealSlides = forwardRef(function RevealSlides({
   useEffect(() => {
     if (!isClient) return;
 
-    const parseContent = (html: any) => {
+    const parseContent = (html: string) => {
       // Extract just the slides content from the HTML
       // We need the content inside .slides, not the full HTML document
       const parser = new DOMParser();
@@ -262,16 +293,16 @@ const RevealSlides = forwardRef(function RevealSlides({
         setLoading(true);
         setError(null);
 
-        const response = await fetch(contentUrl);
+        const response = await fetch(contentUrl!);
         if (!response.ok) {
           throw new Error(`Failed to load slides: ${response.status}`);
         }
 
         const html = await response.text();
         parseContent(html);
-      } catch (err: any) {
+      } catch (err: unknown) {
         console.error('Error loading slides:', err);
-        setError(err.message);
+        setError(err instanceof Error ? err.message : String(err));
         setLoading(false);
       }
     };
@@ -348,7 +379,7 @@ const RevealSlides = forwardRef(function RevealSlides({
         deckRef.current.classList.add('editing-mode');
 
         const slides = deckRef.current.querySelectorAll('section');
-        slides.forEach((slide: any) => {
+        slides.forEach((slide: Element) => {
           slide.setAttribute('contenteditable', 'true');
           // Add editing-mode class for sl-block visual feedback
           slide.classList.add('editing-mode');
@@ -364,7 +395,7 @@ const RevealSlides = forwardRef(function RevealSlides({
         // Handle Tab and Enter in code blocks
         // We attach to the deck because contenteditable is on <section>, not <code>
         // Events bubble up, so we catch them here and check if cursor is in a code block
-        const handleKeyDown = (event: any) => {
+        const handleKeyDown = (event: KeyboardEvent) => {
           if (event.key !== 'Tab' && event.key !== 'Enter') return;
 
           // Check if the selection is inside a code block
@@ -375,14 +406,13 @@ const RevealSlides = forwardRef(function RevealSlides({
           const startNode = range.startContainer;
 
           // Find the code element - check parent chain for <code> inside <pre>
-          /** @type {HTMLElement | null} */
-          let codeElement: any = null;
+          let codeElement: HTMLElement | null = null;
           if (startNode.nodeType === Node.TEXT_NODE) {
             // Text node - check parent element
-            codeElement = /** @type {HTMLElement | null} */ (startNode.parentElement?.closest('pre code'));
+            codeElement = (startNode.parentElement?.closest('pre code') as HTMLElement | null) ?? null;
           } else if (startNode.nodeType === Node.ELEMENT_NODE) {
             // Element node - check self or parents
-            codeElement = /** @type {HTMLElement | null} */ (/** @type {Element} */ (startNode as Element).closest('pre code'));
+            codeElement = (startNode as Element).closest('pre code') as HTMLElement | null;
           }
 
           if (!codeElement) return;
@@ -418,17 +448,17 @@ const RevealSlides = forwardRef(function RevealSlides({
     if (!slidesDiv) return null;
 
     // Clone the slides to clean up without affecting the live DOM
-    const slidesClone = slidesDiv.cloneNode(true);
+    const slidesClone = slidesDiv.cloneNode(true) as HTMLElement;
 
     // Remove contenteditable attributes added during editing
     // These shouldn't be persisted to the saved HTML
-    slidesClone.querySelectorAll('[contenteditable]').forEach((el: any) => {
+    slidesClone.querySelectorAll('[contenteditable]').forEach((el: Element) => {
       el.removeAttribute('contenteditable');
     });
 
     // Strip highlight.js spans from code blocks - save plain text only
     // This ensures clean HTML that can be re-highlighted on view
-    slidesClone.querySelectorAll('pre code').forEach((codeEl: any) => {
+    slidesClone.querySelectorAll('pre code').forEach((codeEl: Element) => {
       const plainText = codeEl.textContent || '';
       // Escape HTML to preserve code content correctly
       // (textContent returns decoded chars like <, setting innerHTML would interpret them)
@@ -443,8 +473,8 @@ const RevealSlides = forwardRef(function RevealSlides({
     // Clean up Sandpack sl-blocks - the entire sl-block-content needs to be rebuilt
     // When Sandpack renders, it can create text nodes and other content throughout the block
     // We rebuild the entire structure to ensure only clean HTML is saved
-    slidesClone.querySelectorAll('.sl-block[data-block-type="sandpack"]').forEach((block: any) => {
-      const embed = block.querySelector('.sandpack-embed');
+    slidesClone.querySelectorAll('.sl-block[data-block-type="sandpack"]').forEach((block: Element) => {
+      const embed = block.querySelector('.sandpack-embed') as HTMLElement | null;
       const scriptTag = embed?.querySelector('script[data-sandpack-files]');
 
       // Remove invalid blocks (no sandpack-embed or no script tag)
@@ -487,7 +517,7 @@ const RevealSlides = forwardRef(function RevealSlides({
     });
 
     // Remove any Reveal.js runtime classes/attributes that shouldn't be saved
-    slidesClone.querySelectorAll('.present, .past, .future').forEach((el: any) => {
+    slidesClone.querySelectorAll('.present, .past, .future').forEach((el: Element) => {
       el.classList.remove('present', 'past', 'future');
     });
 
@@ -506,10 +536,10 @@ const RevealSlides = forwardRef(function RevealSlides({
     const allSections = slidesClone.querySelectorAll('section');
     // Filter to get only "root" sections (sections not nested inside other sections)
     // Vertical slide children ARE nested in a parent section, so they stay grouped correctly
-    const rootSections = Array.from(allSections).filter((section: any) => {
-      return !section.parentElement.closest('section');
+    const rootSections = Array.from(allSections).filter((section: Element) => {
+      return !section.parentElement?.closest('section');
     });
-    const sectionsHtml = rootSections.map((s: any) => s.outerHTML).join('\n');
+    const sectionsHtml = rootSections.map((s: Element) => s.outerHTML).join('\n');
 
     // Return a thin wrapper with data attributes + slide sections
     // generateSlideHtml() extracts themes via regex, then uses just the sections
@@ -526,8 +556,7 @@ const RevealSlides = forwardRef(function RevealSlides({
       theme,
       codeTheme,
     }),
-    /** @param {{ theme?: string, codeTheme?: string }} newThemes */
-    setThemes: (newThemes: any) => {
+    setThemes: (newThemes: { theme?: string; codeTheme?: string }) => {
       if (newThemes.theme) setTheme(newThemes.theme);
       if (newThemes.codeTheme) setCodeTheme(newThemes.codeTheme);
       // Update data attributes on the reveal div

@@ -7,8 +7,8 @@
  * directly in route files causes a PrismaClient SyntaxError in the browser
  * that prevents React hydration.
  */
-import _prisma from '@classmoji/database';
+import getPrisma from '@classmoji/database';
 
-export const prisma = _prisma!;
+export const prisma = getPrisma();
 export { ClassmojiService } from '@classmoji/services';
 export { getAuthSession } from '@classmoji/auth/server';

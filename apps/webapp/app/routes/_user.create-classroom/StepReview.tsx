@@ -5,8 +5,22 @@ import {
   FileTextOutlined,
   QuestionCircleOutlined,
 } from '@ant-design/icons';
+import type {
+  CreateClassroomFormValues,
+  GitOrganizationOption,
+  ModuleConfig,
+  OwnedClassroom,
+} from './types';
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any -- complex Prisma classroom/module shapes from loader
+interface StepReviewProps {
+  formValues: CreateClassroomFormValues;
+  gitOrgs: GitOrganizationOption[];
+  slugPreview: string;
+  importEnabled: boolean;
+  sourceClassroom?: OwnedClassroom;
+  selectedModules: Map<string, ModuleConfig>;
+}
+
 const StepReview = ({
   formValues,
   gitOrgs,
@@ -14,16 +28,16 @@ const StepReview = ({
   importEnabled,
   sourceClassroom,
   selectedModules,
-}: any) => { // eslint-disable-line @typescript-eslint/no-explicit-any -- component accepts varied data shapes from different routes
+}: StepReviewProps) => {
   const { git_org_id, name, term, year } = formValues;
-  const selectedOrg = gitOrgs.find((o: any) => o.id === git_org_id); // eslint-disable-line @typescript-eslint/no-explicit-any -- Prisma git org
+  const selectedOrg = gitOrgs.find(o => o.id === git_org_id);
 
   // Calculate totals
   let totalAssignments = 0;
   let totalQuizzes = 0;
 
   if (importEnabled && sourceClassroom && selectedModules.size > 0) {
-    sourceClassroom.modules.forEach((m: any) => { // eslint-disable-line @typescript-eslint/no-explicit-any -- Prisma module
+    sourceClassroom.modules?.forEach(m => {
       if (selectedModules.has(m.id)) {
         totalAssignments += m._count?.assignments || 0;
         const config = selectedModules.get(m.id);

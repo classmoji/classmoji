@@ -2,14 +2,16 @@ import { ClassmojiService, getAuthSession } from '~/utils/db.server.ts';
 import { loadPageContent, savePageContent, savePageCoverImage, uploadPageAsset } from '~/utils/content.server.ts';
 import { migrateHtmlToBlockNote } from '~/utils/migration.server.ts';
 import { schema } from '~/components/editor/blocks/index.tsx';
+import type { PageForContent } from '~/types/pages.ts';
 
 /**
  * Public page viewer route - read-only view for students and public access.
  *
  * GET /:classroomSlug/:pageId — Public/Student viewer (no edit mode)
  */
-export const loader = async ({ params, request }: any) => {
-  const { classroomSlug, pageId } = params;
+export const loader = async ({ params, request }: { params: Record<string, string | undefined>; request: Request }) => {
+  const classroomSlug = params.classroomSlug!;
+  const pageId = params.pageId!;
 
   // Fetch page with classroom
   const page = await ClassmojiService.page.findById(pageId, {
@@ -52,16 +54,17 @@ export const loader = async ({ params, request }: any) => {
     throw new Response('Page is not public', { status: 403 });
   }
 
-  // Load content from GitHub
-  const { format, content, coverImage: jsonCoverImage } = await loadPageContent(page);
+  // Load content from GitHub (page includes classroom.git_organization via includeClassroom)
+  const pageForContent = page as unknown as PageForContent;
+  const { format, content, coverImage: jsonCoverImage } = await loadPageContent(pageForContent);
 
-  let viewerContent: any;
+  let viewerContent: unknown;
 
   if (format === 'json') {
     viewerContent = content;
   } else if (format === 'html') {
     // Migrate HTML to BlockNote JSON for viewing
-    viewerContent = await migrateHtmlToBlockNote(content, schema);
+    viewerContent = await migrateHtmlToBlockNote(content as string, schema);
   } else {
     // Empty page
     viewerContent = [{ type: 'paragraph', content: [] }];
@@ -73,7 +76,7 @@ export const loader = async ({ params, request }: any) => {
     : null);
 
   // Build GitHub repo info for link
-  const gitOrg = (page as any).classroom.git_organization;
+  const gitOrg = (page.classroom as Record<string, unknown>).git_organization as { login?: string; avatar_url?: string } | null;
   const term = page.classroom.term;
   const year = page.classroom.year;
 
@@ -102,7 +105,7 @@ export const loader = async ({ params, request }: any) => {
       id: page.classroom.id,
       name: page.classroom.name,
       slug: page.classroom.slug,
-      avatar_url: (page.classroom as any).avatar_url,
+      avatar_url: (page.classroom as Record<string, unknown>).avatar_url as string | undefined,
       git_organization: gitOrg ? {
         login: gitOrg.login,
         repo: repoName,
@@ -119,8 +122,8 @@ export const loader = async ({ params, request }: any) => {
 /**
  * Actions for page mutations (edit mode only).
  */
-export const action = async ({ params, request }: any) => {
-  const { pageId } = params;
+export const action = async ({ params, request }: { params: Record<string, string | undefined>; request: Request }) => {
+  const pageId = params.pageId!;
 
   const page = await ClassmojiService.page.findById(pageId, {
     includeClassroom: true,
@@ -129,6 +132,8 @@ export const action = async ({ params, request }: any) => {
   if (!page) {
     return Response.json({ error: 'Page not found' }, { status: 404 });
   }
+
+  const actionPage = page as unknown as PageForContent;
 
   // Check if user can edit
   const authData = await getAuthSession(request).catch(() => null);
@@ -148,7 +153,8 @@ export const action = async ({ params, request }: any) => {
 
   // Support both JSON and multipart form data (for file uploads)
   const contentType = request.headers.get('content-type') || '';
-  let data: any, formData: FormData | undefined;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- form/JSON data has dynamic shape
+  let data: Record<string, any>, formData: FormData | undefined;
   if (contentType.includes('multipart/form-data')) {
     formData = await request.formData();
     data = { intent: formData!.get('intent') };
@@ -159,54 +165,54 @@ export const action = async ({ params, request }: any) => {
 
   if (intent === 'save') {
     try {
-      const blocks = JSON.parse(data.content);
-      await savePageContent(page, blocks);
+      const blocks = JSON.parse(data.content as string);
+      await savePageContent(actionPage, blocks);
       await ClassmojiService.page.quickUpdate(pageId, {
         updated_at: new Date(),
       });
       return Response.json({ success: true });
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error('Failed to save page:', error);
-      return Response.json({ error: error.message }, { status: 500 });
+      return Response.json({ error: error instanceof Error ? error.message : 'Unknown error' }, { status: 500 });
     }
   }
 
   if (intent === 'update-title') {
     try {
       await ClassmojiService.page.quickUpdate(pageId, {
-        title: data.title,
+        title: data.title as string,
         updated_at: new Date(),
       });
       return Response.json({ success: true });
-    } catch (error: any) {
-      return Response.json({ error: error.message }, { status: 500 });
+    } catch (error: unknown) {
+      return Response.json({ error: error instanceof Error ? error.message : 'Unknown error' }, { status: 500 });
     }
   }
 
   if (intent === 'update-width') {
     try {
       await ClassmojiService.page.quickUpdate(pageId, {
-        width: data.width,
+        width: data.width as number,
         updated_at: new Date(),
       });
       return Response.json({ success: true });
-    } catch (error: any) {
-      return Response.json({ error: error.message }, { status: 500 });
+    } catch (error: unknown) {
+      return Response.json({ error: error instanceof Error ? error.message : 'Unknown error' }, { status: 500 });
     }
   }
 
   if (intent === 'set-header-image') {
     try {
       const coverImage = data.url
-        ? { url: data.url, position: typeof data.position === 'number' ? data.position : 50 }
+        ? { url: data.url as string, position: typeof data.position === 'number' ? data.position : 50 }
         : null;
-      await savePageCoverImage(page, coverImage);
+      await savePageCoverImage(actionPage, coverImage);
       await ClassmojiService.page.quickUpdate(pageId, {
         updated_at: new Date(),
       });
       return Response.json({ success: true });
-    } catch (error: any) {
-      return Response.json({ error: error.message }, { status: 500 });
+    } catch (error: unknown) {
+      return Response.json({ error: error instanceof Error ? error.message : 'Unknown error' }, { status: 500 });
     }
   }
 
@@ -216,15 +222,15 @@ export const action = async ({ params, request }: any) => {
       if (!file || typeof file === 'string') {
         return Response.json({ error: 'No file provided' }, { status: 400 });
       }
-      const { url } = await uploadPageAsset(page, file);
-      await savePageCoverImage(page, { url, position: 50 });
+      const { url } = await uploadPageAsset(actionPage, file);
+      await savePageCoverImage(actionPage, { url, position: 50 });
       await ClassmojiService.page.quickUpdate(pageId, {
         updated_at: new Date(),
       });
       return Response.json({ success: true, url });
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error('Failed to upload header image:', error);
-      return Response.json({ error: error.message }, { status: 500 });
+      return Response.json({ error: error instanceof Error ? error.message : 'Unknown error' }, { status: 500 });
     }
   }
 

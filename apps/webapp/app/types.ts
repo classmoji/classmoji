@@ -45,8 +45,22 @@ export interface MembershipWithOrganization extends RawMembership {
   organization: MembershipOrganization;
 }
 
-// Subscription shape from Prisma
-export type AppSubscription = Prisma.SubscriptionGetPayload<object>;
+// Subscription shape used in the UI.
+// The subscription service returns a synthetic FREE record when no DB row exists.
+export type AppSubscription =
+  | Prisma.SubscriptionGetPayload<object>
+  | {
+      id: null;
+      tier: SubscriptionTier;
+      stripe_subscription_id?: null;
+      started_at?: null;
+      ends_at?: null;
+      cancelled_at?: null;
+      cancellation_reason?: null;
+      created_at?: null;
+      updated_at?: null;
+      user_id?: null;
+    };
 
 // The augmented user stored in the Zustand store
 // Root loader mutates user to add .subscription and .memberships

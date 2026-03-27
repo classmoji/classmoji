@@ -12,6 +12,7 @@ import type {
 } from '@classmoji/utils';
 import { EmojisDisplay, GradeBadge } from '~/components';
 import { Tag, Tooltip } from 'antd';
+import type { TableProps } from 'antd';
 
 type EmojiMappings = Record<string, number>;
 type ViewMode = string;
@@ -277,7 +278,7 @@ export const createAssignmentColumns = (
   showAssignments: boolean,
   emojiMappings: EmojiMappings,
   settings: OrganizationSettings
-): any[] => { // eslint-disable-line @typescript-eslint/no-explicit-any -- return type varies based on dynamic column configuration
+): TableProps<StudentRecord>['columns'] => {
   return modules
     .filter((module: ModuleData) => module.is_published)
     .map((module: ModuleData) => {

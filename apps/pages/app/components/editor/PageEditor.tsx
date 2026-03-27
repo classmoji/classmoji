@@ -20,7 +20,12 @@ import {
   locales as multiColumnLocales,
 } from '@blocknote/xl-multi-column';
 
-import { schema, customSlashMenuItems } from './blocks/index.tsx';
+import {
+  schema,
+  customSlashMenuItems,
+  type PageBlockEditor,
+  type PageBlockInsertions,
+} from './blocks/index.tsx';
 import { ReplaceUrlItem, RemoveProfileImageItem } from './ReplaceUrlItem.tsx';
 
 // Custom drag handle menu — extends default with block-specific actions
@@ -45,10 +50,10 @@ const CustomDragHandleMenu = () => (
  * Exposes `getContent()` via ref for the parent to trigger saves.
  */
 interface PageEditorProps {
-  initialContent: any;
+  initialContent: unknown;
   pageId: string;
   darkMode: boolean;
-  onChange?: (document: any) => void;
+  onChange?: (document: unknown) => void;
 }
 
 const PageEditor = forwardRef(function PageEditor({
@@ -56,7 +61,7 @@ const PageEditor = forwardRef(function PageEditor({
   pageId,
   darkMode,
   onChange
-}: PageEditorProps, ref: React.Ref<any>) {
+}: PageEditorProps, ref: React.Ref<{ getContent: () => unknown }>) {
   // Upload handler: POSTs to the page's upload action
   const uploadFile = useCallback(async (file: File) => {
     const formData = new FormData();
@@ -76,10 +81,15 @@ const PageEditor = forwardRef(function PageEditor({
     return result.url;
   }, [pageId]);
 
+  const typedInitialContent =
+    Array.isArray(initialContent) && initialContent.length > 0
+      ? (initialContent as PageBlockInsertions)
+      : undefined;
+
   // Create the BlockNote editor with multi-column drop cursor + dictionary
   const editor = useCreateBlockNote({
     schema,
-    initialContent: initialContent?.length ? initialContent : undefined,
+    initialContent: typedInitialContent,
     uploadFile,
     dropCursor: multiColumnDropCursor,
     dictionary: { ...defaultLocale, multi_column: multiColumnLocales.en },
@@ -92,7 +102,7 @@ const PageEditor = forwardRef(function PageEditor({
 
   // Slash menu: default + multi-column + custom blocks
   const getAllSlashMenuItems = useMemo(() => {
-    return (editor: any) => {
+    return (editor: PageBlockEditor) => {
       const items = [
         ...getDefaultReactSlashMenuItems(editor),
       ];

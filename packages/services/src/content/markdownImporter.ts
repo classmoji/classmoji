@@ -1,4 +1,4 @@
-import { marked } from 'marked';
+import { marked, type MarkedOptions } from 'marked';
 import * as prettier from 'prettier';
 
 /**
@@ -138,7 +138,7 @@ export async function formatCodeBlocks(markdown: string): Promise<string> {
     if (parser && code.trim()) {
       try {
         formattedCode = await formatWithParser(code, parser);
-      } catch (err: any) {
+      } catch (err: unknown) {
         console.log(err);
         // JSX snippet fallback: wrap in fragment if it looks like JSX and fails due to adjacency.
         const normalizedLang = normalizeLangToken(langToken);
@@ -147,7 +147,7 @@ export async function formatCodeBlocks(markdown: string): Promise<string> {
           parser === 'babel' ||
           parser === 'babel-ts';
         const looksLikeJsx = code.trimStart().startsWith('<');
-        const msg = err?.message || '';
+        const msg = err instanceof Error ? err.message : '';
 
         if (isJsxish && looksLikeJsx && msg.includes('Adjacent JSX elements')) {
           try {
@@ -416,10 +416,11 @@ export function processToggleLists(markdown: string): string {
         if (innerContent.length > 0 && innerContent.some(l => l.trim() !== '')) {
           // Convert inner content back to markdown, then to HTML
           const innerMarkdown = innerContent.join('\n').trim();
-          const innerHtml = marked(innerMarkdown, {
+          const toggleMarkedOptions = {
             breaks: false, // Don't convert single newlines to <br> - breaks code blocks
             gfm: true,
-          } as any) as unknown as string;
+          } satisfies MarkedOptions;
+          const innerHtml = marked(innerMarkdown, toggleMarkedOptions) as unknown as string;
 
           // Base64 encode the inner HTML to preserve it through DOM parsing
           // This prevents the browser from modifying the HTML structure
@@ -452,10 +453,11 @@ export function convertMarkdownToHtml(markdown: string): string {
   // Two or more blank lines = one empty paragraph for spacing
   processed = processed.replace(/\n{3,}/g, '\n\n<p></p>\n\n');
 
-  let html = marked(processed, {
+  const markedOptions = {
     breaks: true,
     gfm: true,
-  } as any) as unknown as string;
+  } satisfies MarkedOptions;
+  let html = marked(processed, markedOptions) as unknown as string;
 
   // Remove trailing newlines inside <code> blocks (marked adds them, causing empty lines)
   html = html.replace(/(<code[^>]*>)([\s\S]*?)(<\/code>)/g, (match, open, content, close) => {

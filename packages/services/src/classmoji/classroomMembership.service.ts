@@ -1,4 +1,13 @@
-import prisma from '@classmoji/database';
+import getPrisma from '@classmoji/database';
+import type { Prisma, Role } from '@prisma/client';
+
+interface ClassroomMembershipUpsertData {
+  role: Role;
+  is_grader?: boolean;
+  has_accepted_invite?: boolean;
+  letter_grade?: string | null;
+  comment?: string | null;
+}
 
 /**
  * Find a membership by classroom and user
@@ -6,9 +15,13 @@ import prisma from '@classmoji/database';
  * @param {string} userId - UUID of the User
  * @returns {Promise<Object|null>}
  */
-export const findByClassroomAndUser = async (classroomId: string, userId: string, roles: string | string[] | null = null) => {
-  const rolesFilter = roles ? { role: { in: (Array.isArray(roles) ? roles : [roles]) as any[] } } : {};
-  return prisma!.classroomMembership.findFirst({
+export const findByClassroomAndUser = async (
+  classroomId: string,
+  userId: string,
+  roles: Role | Role[] | null = null
+) => {
+  const rolesFilter = roles ? { role: { in: Array.isArray(roles) ? roles : [roles] } } : {};
+  return getPrisma().classroomMembership.findFirst({
     where: {
       classroom_id: classroomId,
       user_id: userId,
@@ -27,7 +40,7 @@ export const findByClassroomAndUser = async (classroomId: string, userId: string
  * @returns {Promise<Object[]>}
  */
 export const findByUserId = async (userId: string) => {
-  return prisma!.classroomMembership.findMany({
+  return getPrisma().classroomMembership.findMany({
     where: { user_id: userId },
     include: {
       classroom: {
@@ -45,11 +58,11 @@ export const findByUserId = async (userId: string) => {
  * @param {string} [role] - Optional role filter
  * @returns {Promise<Object[]>}
  */
-export const findByClassroomId = async (classroomId: string, role: string | null = null) => {
-  const where: any = { classroom_id: classroomId };
+export const findByClassroomId = async (classroomId: string, role: Role | null = null) => {
+  const where: Prisma.ClassroomMembershipWhereInput = { classroom_id: classroomId };
   if (role) where.role = role;
 
-  return prisma!.classroomMembership.findMany({
+  return getPrisma().classroomMembership.findMany({
     where,
     include: {
       user: true,
@@ -77,10 +90,10 @@ export const findStudents = async (classroomId: string) => {
  * @returns {Promise<Object[]>}
  */
 export const findStaff = async (classroomId: string) => {
-  return prisma!.classroomMembership.findMany({
+  return getPrisma().classroomMembership.findMany({
     where: {
       classroom_id: classroomId,
-      role: { in: ['OWNER', 'TEACHER'] as any[] },
+      role: { in: ['OWNER', 'TEACHER'] satisfies Role[] },
     },
     include: {
       user: true,
@@ -94,7 +107,7 @@ export const findStaff = async (classroomId: string) => {
  * @returns {Promise<Object[]>}
  */
 export const findGraders = async (classroomId: string) => {
-  return prisma!.classroomMembership.findMany({
+  return getPrisma().classroomMembership.findMany({
     where: {
       classroom_id: classroomId,
       is_grader: true,
@@ -115,8 +128,8 @@ export const findGraders = async (classroomId: string) => {
  * @param {boolean} [data.has_accepted_invite] - Whether user has accepted invite
  * @returns {Promise<Object>}
  */
-export const create = async (data: any) => {
-  return prisma!.classroomMembership.create({
+export const create = async (data: Prisma.ClassroomMembershipUncheckedCreateInput) => {
+  return getPrisma().classroomMembership.create({
     data,
     include: {
       user: true,
@@ -132,8 +145,12 @@ export const create = async (data: any) => {
  * @param {Object} data - Membership data
  * @returns {Promise<Object>}
  */
-export const upsert = async (classroomId: string, userId: string, data: any) => {
-  return prisma!.classroomMembership.upsert({
+export const upsert = async (
+  classroomId: string,
+  userId: string,
+  data: ClassroomMembershipUpsertData
+) => {
+  return getPrisma().classroomMembership.upsert({
     where: {
       classroom_id_user_id_role: {
         classroom_id: classroomId,
@@ -161,12 +178,16 @@ export const upsert = async (classroomId: string, userId: string, data: any) => 
  * @param {Object} updates - Fields to update
  * @returns {Promise<Object>}
  */
-export const update = async (classroomId: string, userId: string, updates: any) => {
-  const membership = await prisma!.classroomMembership.findFirst({
+export const update = async (
+  classroomId: string,
+  userId: string,
+  updates: Prisma.ClassroomMembershipUpdateInput
+) => {
+  const membership = await getPrisma().classroomMembership.findFirst({
     where: { classroom_id: classroomId, user_id: userId },
   });
   if (!membership) return null;
-  return prisma!.classroomMembership.update({
+  return getPrisma().classroomMembership.update({
     where: { id: membership.id },
     data: updates,
     include: {
@@ -182,8 +203,11 @@ export const update = async (classroomId: string, userId: string, updates: any) 
  * @param {Object} updates - Fields to update
  * @returns {Promise<Object>}
  */
-export const updateById = async (id: string, updates: any) => {
-  return prisma!.classroomMembership.update({
+export const updateById = async (
+  id: string,
+  updates: Prisma.ClassroomMembershipUpdateInput
+) => {
+  return getPrisma().classroomMembership.update({
     where: { id },
     data: updates,
     include: {
@@ -200,7 +224,7 @@ export const updateById = async (id: string, updates: any) => {
  * @returns {Promise<Object>}
  */
 export const remove = async (classroomId: string, userId: string) => {
-  return prisma!.classroomMembership.deleteMany({
+  return getPrisma().classroomMembership.deleteMany({
     where: { classroom_id: classroomId, user_id: userId },
   });
 };
@@ -211,7 +235,7 @@ export const remove = async (classroomId: string, userId: string) => {
  * @returns {Promise<Object>}
  */
 export const removeById = async (id: string) => {
-  return prisma!.classroomMembership.delete({
+  return getPrisma().classroomMembership.delete({
     where: { id },
   });
 };
@@ -225,7 +249,7 @@ export const removeById = async (id: string) => {
  * @returns {Promise<number>}
  */
 export const countUserMembershipsInGitOrg = async (gitOrgId: string, userId: string, excludeClassroomId: string | null = null) => {
-  const where: any = {
+  const where: Prisma.ClassroomMembershipWhereInput = {
     user_id: userId,
     classroom: {
       git_org_id: gitOrgId,
@@ -236,7 +260,7 @@ export const countUserMembershipsInGitOrg = async (gitOrgId: string, userId: str
     where.classroom_id = { not: excludeClassroomId };
   }
 
-  return prisma!.classroomMembership.count({ where });
+  return getPrisma().classroomMembership.count({ where });
 };
 
 /**
@@ -259,8 +283,12 @@ export const shouldRemoveFromGitOrg = async (gitOrgId: string, userId: string, c
  * @param {Object} [filters] - Additional filters
  * @returns {Promise<Object[]>}
  */
-export const findUsersByRole = async (classroomId: string, role: string, filters: any = {}) => {
-  const memberships = await prisma!.classroomMembership.findMany({
+export const findUsersByRole = async (
+  classroomId: string,
+  role: Role,
+  filters: Prisma.ClassroomMembershipWhereInput = {}
+) => {
+  const memberships = await getPrisma().classroomMembership.findMany({
     where: {
       classroom_id: classroomId,
       role,
@@ -290,8 +318,10 @@ export const findUsersByRole = async (classroomId: string, role: string, filters
  * @param {Object[]} memberships - Array of membership data
  * @returns {Promise<{count: number}>}
  */
-export const createMany = async (memberships: any[]) => {
-  return prisma!.classroomMembership.createMany({
+export const createMany = async (
+  memberships: Prisma.ClassroomMembershipCreateManyInput[]
+) => {
+  return getPrisma().classroomMembership.createMany({
     data: memberships,
     skipDuplicates: true,
   });
@@ -304,7 +334,7 @@ export const createMany = async (memberships: any[]) => {
  * @returns {Promise<boolean>}
  */
 export const isMember = async (classroomId: string, userId: string) => {
-  const membership = await prisma!.classroomMembership.findFirst({
+  const membership = await getPrisma().classroomMembership.findFirst({
     where: { classroom_id: classroomId, user_id: userId },
     select: { id: true },
   });
@@ -318,10 +348,14 @@ export const isMember = async (classroomId: string, userId: string) => {
  * @param {string|string[]} roles - Role or array of roles to check
  * @returns {Promise<boolean>}
  */
-export const hasRole = async (classroomId: string, userId: string, roles: string | string[]) => {
+export const hasRole = async (
+  classroomId: string,
+  userId: string,
+  roles: Role | Role[]
+) => {
   const roleArray = Array.isArray(roles) ? roles : [roles];
-  const membership = await prisma!.classroomMembership.findFirst({
-    where: { classroom_id: classroomId, user_id: userId, role: { in: roleArray as any[] } },
+  const membership = await getPrisma().classroomMembership.findFirst({
+    where: { classroom_id: classroomId, user_id: userId, role: { in: roleArray } },
     select: { id: true },
   });
   return Boolean(membership);

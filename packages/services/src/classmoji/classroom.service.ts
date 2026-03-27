@@ -1,5 +1,6 @@
-import prisma from '@classmoji/database';
-import { getTermCode } from '../git/index.js';
+import getPrisma from '@classmoji/database';
+import { getTermCode } from '../git/index.ts';
+import type { Prisma, Role } from '@prisma/client';
 
 /**
  * Whitelist of setting fields that are SAFE to expose to the client.
@@ -29,7 +30,7 @@ const SAFE_SETTINGS_FIELDS = [
  * @returns {Promise<Object|null>}
  */
 export const findById = async (id: string) => {
-  return prisma!.classroom.findUnique({
+  return getPrisma().classroom.findUnique({
     where: { id },
     include: {
       git_organization: true,
@@ -45,7 +46,7 @@ export const findById = async (id: string) => {
  * @returns {Promise<Object|null>}
  */
 export const findBySlug = async (slug: string) => {
-  return prisma!.classroom.findUnique({
+  return getPrisma().classroom.findUnique({
     where: { slug },
     include: {
       git_organization: true,
@@ -61,7 +62,7 @@ export const findBySlug = async (slug: string) => {
  * @returns {Promise<Object[]>}
  */
 export const findByGitOrgId = async (gitOrgId: string) => {
-  return prisma!.classroom.findMany({
+  return getPrisma().classroom.findMany({
     where: { git_org_id: gitOrgId },
     include: {
       settings: true,
@@ -77,11 +78,11 @@ export const findByGitOrgId = async (gitOrgId: string) => {
  * @param {string} [role] - Optional role filter
  * @returns {Promise<Object[]>}
  */
-export const findByUserId = async (userId: string, role: string | null = null) => {
-  const where: any = { user_id: userId };
+export const findByUserId = async (userId: string, role: Role | null = null) => {
+  const where: Prisma.ClassroomMembershipWhereInput = { user_id: userId };
   if (role) where.role = role;
 
-  const memberships = await prisma!.classroomMembership.findMany({
+  const memberships = await getPrisma().classroomMembership.findMany({
     where,
     include: {
       classroom: {
@@ -109,8 +110,8 @@ export const findByUserId = async (userId: string, role: string | null = null) =
  * @param {Object} query - Optional where clause
  * @returns {Promise<Object[]>}
  */
-export const findAll = async (query: any = {}) => {
-  return prisma!.classroom.findMany({
+export const findAll = async (query: Prisma.ClassroomWhereInput = {}) => {
+  return getPrisma().classroom.findMany({
     where: { is_active: true, ...query },
     include: {
       git_organization: true,
@@ -131,8 +132,8 @@ export const findAll = async (query: any = {}) => {
  * @param {string} [data.emoji] - Emoji (default: "dart")
  * @returns {Promise<Object>}
  */
-export const create = async (data: any) => {
-  return prisma!.classroom.create({
+export const create = async (data: Prisma.ClassroomUncheckedCreateInput) => {
+  return getPrisma().classroom.create({
     data,
     include: {
       git_organization: true,
@@ -147,8 +148,11 @@ export const create = async (data: any) => {
  * @param {Object} settingsData - ClassroomSettings data (without classroom_id)
  * @returns {Promise<Object>}
  */
-export const createWithSettings = async (classroomData: any, settingsData: any = {}) => {
-  return prisma!.$transaction(async tx => {
+export const createWithSettings = async (
+  classroomData: Prisma.ClassroomUncheckedCreateInput,
+  settingsData: Prisma.ClassroomSettingsUncheckedCreateWithoutClassroomInput = {}
+) => {
+  return getPrisma().$transaction(async tx => {
     const classroom = await tx.classroom.create({
       data: classroomData,
     });
@@ -176,8 +180,8 @@ export const createWithSettings = async (classroomData: any, settingsData: any =
  * @param {Object} updates - Fields to update
  * @returns {Promise<Object>}
  */
-export const update = async (id: string, updates: any) => {
-  return prisma!.classroom.update({
+export const update = async (id: string, updates: Prisma.ClassroomUpdateInput) => {
+  return getPrisma().classroom.update({
     where: { id },
     data: updates,
     include: {
@@ -193,8 +197,8 @@ export const update = async (id: string, updates: any) => {
  * @param {Object} updates - Fields to update
  * @returns {Promise<Object>}
  */
-export const updateBySlug = async (slug: string, updates: any) => {
-  return prisma!.classroom.update({
+export const updateBySlug = async (slug: string, updates: Prisma.ClassroomUpdateInput) => {
+  return getPrisma().classroom.update({
     where: { slug },
     data: updates,
     include: {
@@ -210,7 +214,7 @@ export const updateBySlug = async (slug: string, updates: any) => {
  * @returns {Promise<Object>}
  */
 export const deleteById = async (id: string) => {
-  return prisma!.classroom.delete({
+  return getPrisma().classroom.delete({
     where: { id },
   });
 };
@@ -221,7 +225,7 @@ export const deleteById = async (id: string) => {
  * @returns {Promise<Object>}
  */
 export const deleteBySlug = async (slug: string) => {
-  return prisma!.classroom.delete({
+  return getPrisma().classroom.delete({
     where: { slug },
   });
 };
@@ -232,7 +236,7 @@ export const deleteBySlug = async (slug: string) => {
  * @returns {Promise<number>}
  */
 export const countByGitOrg = async (gitOrgId: string) => {
-  return prisma!.classroom.count({
+  return getPrisma().classroom.count({
     where: { git_org_id: gitOrgId },
   });
 };
@@ -245,7 +249,16 @@ export const countByGitOrg = async (gitOrgId: string) => {
  * @param {Object} classroom - Classroom object (with settings included)
  * @returns {Object} - Classroom with sanitized settings
  */
-export const getClassroomForUI = (classroom: any) => {
+export const getClassroomForUI = <
+  T extends {
+    settings?: {
+      anthropic_api_key?: string | null;
+      openai_api_key?: string | null;
+      [key: string]: unknown;
+    } | null;
+    [key: string]: unknown;
+  } | null,
+>(classroom: T) => {
   if (!classroom) return null;
 
   const { settings, ...safeClassroom } = classroom;
@@ -255,7 +268,7 @@ export const getClassroomForUI = (classroom: any) => {
   }
 
   // Only include whitelisted fields in settings
-  const safeSettings: Record<string, any> = {};
+  const safeSettings: Record<string, unknown> = {};
   for (const field of SAFE_SETTINGS_FIELDS) {
     if (settings[field] !== undefined) {
       safeSettings[field] = settings[field];
@@ -281,7 +294,7 @@ export const getClassroomForUI = (classroom: any) => {
  * @returns {Promise<string|null>} - API key or null if not set
  */
 export const getClassroomApiKey = async (classroomId: string) => {
-  const settings = await prisma!.classroomSettings.findUnique({
+  const settings = await getPrisma().classroomSettings.findUnique({
     where: { classroom_id: classroomId },
     select: { anthropic_api_key: true, openai_api_key: true },
   });
@@ -297,7 +310,7 @@ export const getClassroomApiKey = async (classroomId: string) => {
  * @returns {Promise<Object|null>} - Full settings object including secrets
  */
 export const getClassroomSettingsForServer = async (classroomId: string) => {
-  return prisma!.classroomSettings.findUnique({
+  return getPrisma().classroomSettings.findUnique({
     where: { classroom_id: classroomId },
   });
 };
@@ -308,8 +321,11 @@ export const getClassroomSettingsForServer = async (classroomId: string) => {
  * @param {Object} updates - Settings to update
  * @returns {Promise<Object>}
  */
-export const updateSettings = async (classroomId: string, updates: any) => {
-  return prisma!.classroomSettings.upsert({
+export const updateSettings = async (
+  classroomId: string,
+  updates: Prisma.ClassroomSettingsUncheckedCreateWithoutClassroomInput
+) => {
+  return getPrisma().classroomSettings.upsert({
     where: { classroom_id: classroomId },
     create: {
       classroom_id: classroomId,
@@ -341,7 +357,7 @@ export const generateSlug = async (name: string, term: string, year: number) => 
   let slug = baseSlug;
   let counter = 1;
 
-  while (await prisma!.classroom.findUnique({ where: { slug } })) {
+  while (await getPrisma().classroom.findUnique({ where: { slug } })) {
     slug = `${baseSlug}-${counter}`;
     counter++;
   }

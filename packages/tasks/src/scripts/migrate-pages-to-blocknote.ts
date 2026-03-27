@@ -1,17 +1,17 @@
 import { PrismaClient } from '@prisma/client';
 import { ContentService } from '@classmoji/content';
-import { migrateHtmlToBlockNote } from '../../../../apps/pages/app/utils/migration.server.js';
+import { migrateHtmlToBlockNote } from '../../../../apps/pages/app/utils/migration.server.ts';
 import { generateTermString } from '@classmoji/utils';
 import { BlockNoteSchema, defaultBlockSpecs, createCodeBlockSpec } from '@blocknote/core';
 import { multiColumnSchema } from '@blocknote/xl-multi-column';
 import { codeBlockOptions } from '@blocknote/code-block';
-import { Callout } from '../../../../apps/pages/app/components/editor/blocks/CalloutBlock.jsx';
-import { Terminal } from '../../../../apps/pages/app/components/editor/blocks/TerminalBlock.jsx';
-import { Profile } from '../../../../apps/pages/app/components/editor/blocks/ProfileBlock.jsx';
-import { PageLink } from '../../../../apps/pages/app/components/editor/blocks/PageLinkBlock.jsx';
-import { Divider } from '../../../../apps/pages/app/components/editor/blocks/DividerBlock.jsx';
-import { Embed } from '../../../../apps/pages/app/components/editor/blocks/EmbedBlock.jsx';
-import { Video } from '../../../../apps/pages/app/components/editor/blocks/VideoBlock.jsx';
+import { Callout } from '../../../../apps/pages/app/components/editor/blocks/CalloutBlock.tsx';
+import { Terminal } from '../../../../apps/pages/app/components/editor/blocks/TerminalBlock.tsx';
+import { Profile } from '../../../../apps/pages/app/components/editor/blocks/ProfileBlock.tsx';
+import { PageLink } from '../../../../apps/pages/app/components/editor/blocks/PageLinkBlock.tsx';
+import { Divider } from '../../../../apps/pages/app/components/editor/blocks/DividerBlock.tsx';
+import { Embed } from '../../../../apps/pages/app/components/editor/blocks/EmbedBlock.tsx';
+import { Video } from '../../../../apps/pages/app/components/editor/blocks/VideoBlock.tsx';
 
 // Create the schema inline (same as in index.jsx but without React imports)
 const { audio, video: defaultVideo, ...filteredDefaultBlockSpecs } = defaultBlockSpecs;
@@ -137,7 +137,7 @@ async function migratePagesToBlockNote(): Promise<void> {
           console.log(`⏭️  Skipping ${page.slug} - content.json already exists`);
           skipped++;
           continue;
-        } catch (err: any) {
+        } catch (err: unknown) {
           // content.json doesn't exist, proceed with migration
           console.log(`   No content.json found, checking for index.html...`);
         }
@@ -152,8 +152,8 @@ async function migratePagesToBlockNote(): Promise<void> {
           });
           htmlContent = htmlResult!.content;
           console.log(`   ✓ Found index.html (${htmlContent.length} bytes)`);
-        } catch (err: any) {
-          console.log(`❌ No index.html found for ${page.slug}: ${err.message}`);
+        } catch (err: unknown) {
+          console.log(`❌ No index.html found for ${page.slug}: ${err instanceof Error ? err.message : String(err)}`);
           errors++;
           continue;
         }
@@ -173,8 +173,8 @@ async function migratePagesToBlockNote(): Promise<void> {
         console.log(`✅ Converted ${page.slug}`);
         converted++;
 
-      } catch (err: any) {
-        console.error(`❌ Error converting ${page.slug}:`, err.message);
+      } catch (err: unknown) {
+        console.error(`❌ Error converting ${page.slug}:`, err instanceof Error ? err.message : String(err));
         errors++;
       }
     }
@@ -192,7 +192,7 @@ async function migratePagesToBlockNote(): Promise<void> {
 
 // Run the migration
 migratePagesToBlockNote()
-  .catch((err: any) => {
+  .catch((err: unknown) => {
     console.error('Migration failed:', err);
     process.exit(1);
   });

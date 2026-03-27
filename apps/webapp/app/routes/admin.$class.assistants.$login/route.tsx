@@ -13,6 +13,20 @@ import { authClient } from '@classmoji/auth/client';
 import { getEmojiSymbol } from '@classmoji/utils';
 import type { Route } from './+types/route';
 
+interface AssignmentSummary {
+  id: string;
+  studentName: string;
+  studentLogin?: string | null;
+  assignmentTitle: string;
+  isGraded: boolean;
+  gradeEmoji?: string | null;
+}
+
+interface ModuleAssignmentsGroup {
+  name: string;
+  assignments: AssignmentSummary[];
+}
+
 export const loader = async ({ params, request }: Route.LoaderArgs) => {
   const { class: classSlug, login } = params;
 
@@ -65,7 +79,7 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
   };
 
   // Group assignments by module
-  const assignmentsByModule: Record<string, { name: string; assignments: Array<Record<string, unknown>> }> = {};
+  const assignmentsByModule: Record<string, ModuleAssignmentsGroup> = {};
   assignedGraderItems.forEach(item => {
     const repoAssignment = item.repository_assignment;
     const moduleName = repoAssignment?.repository?.module?.title || 'Uncategorized';
@@ -141,7 +155,7 @@ const AdminAssistantDrawer = ({ loaderData }: Route.ComponentProps) => {
   };
 
   const moduleCollapseItems = Object.entries(assignmentsByModule).map(([moduleId, module]) => {
-    const gradedCount = module.assignments.filter((a: any) => a.isGraded).length; // eslint-disable-line @typescript-eslint/no-explicit-any -- Prisma assignment shape
+    const gradedCount = module.assignments.filter(assignment => assignment.isGraded).length;
     const totalCount = module.assignments.length;
 
     return {
@@ -156,7 +170,7 @@ const AdminAssistantDrawer = ({ loaderData }: Route.ComponentProps) => {
       ),
       children: (
         <div className="space-y-2">
-          {module.assignments.map((assignment: any) => ( // eslint-disable-line @typescript-eslint/no-explicit-any -- Prisma assignment
+          {module.assignments.map(assignment => (
             <div
               key={assignment.id}
               className="flex items-center justify-between p-2 bg-gray-50 dark:bg-gray-800 rounded-lg"

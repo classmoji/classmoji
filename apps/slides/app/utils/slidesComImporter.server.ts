@@ -7,7 +7,7 @@
 
 import JSZip from 'jszip';
 import * as cheerio from 'cheerio';
-import prisma from '@classmoji/database';
+import getPrisma from '@classmoji/database';
 import { ContentService } from '@classmoji/content';
 import { GitHubProvider } from '@classmoji/services';
 import { getContentRepoName } from '@classmoji/utils';
@@ -34,7 +34,7 @@ function getThemeUrl(theme: string): string {
  * @param {string} title - Slide title
  * @param {Object} options - Theme options
  */
-function generateSlideHtml(slidesContent: string, title: string, options: any = {}) {
+function generateSlideHtml(slidesContent: string, title: string, options: { libCssUrl?: string | null; customThemeUrl?: string | null; bodyClasses?: string; sharedThemeName?: string | null; lightTheme?: string; darkTheme?: string; codeThemeLight?: string; codeThemeDark?: string } = {}) {
   const {
     // slides.com theme options (when importTheme is true)
     libCssUrl = null,
@@ -138,7 +138,7 @@ ${slidesContent}
  * @param {Function} [options.onProgress] - Callback for progress updates ({ type: 'step'|'done'|'error', step?: string, current?: number, total?: number, filename?: string })
  * @returns {Promise<{slideId: string, slideCount: number, imageCount: number, themeSaved?: string, cloudinaryUploads?: number}>}
  */
-export async function processZipImport({ zipFile, title, moduleId, importTheme, useSavedTheme, saveThemeAs, org, classroomSlug, classroomId, term, userId, cloudinaryVideoPaths = [], onProgress = () => {} }: { zipFile: any; title: string; moduleId?: string; importTheme: boolean; useSavedTheme?: string; saveThemeAs?: string; org: string; classroomSlug?: string; classroomId: string; term: string; userId: string; cloudinaryVideoPaths?: string[]; onProgress?: (event: any) => void }) {
+export async function processZipImport({ zipFile, title, moduleId, importTheme, useSavedTheme, saveThemeAs, org, classroomSlug, classroomId, term, userId, cloudinaryVideoPaths = [], onProgress = () => {} }: { zipFile: File | Blob; title: string; moduleId?: string | null; importTheme: boolean; useSavedTheme?: string | null; saveThemeAs?: string | null; org: string; classroomSlug?: string; classroomId: string; term: string; userId: string; cloudinaryVideoPaths?: string[]; onProgress?: (event: { type: string; step?: string; current?: number; total?: number; filename?: string; slideId?: string; message?: string }) => void }) {
   // 1. Extract ZIP
   onProgress({ type: 'step', step: 'extracting_zip' });
   const arrayBuffer = await zipFile.arrayBuffer();
@@ -157,7 +157,7 @@ export async function processZipImport({ zipFile, title, moduleId, importTheme, 
   const slug = slideTitle.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 50);
 
   // 4. Get classroom from database (org param is git org login for GitHub API)
-  const classroom = await prisma!.classroom.findUnique({
+  const classroom = await getPrisma().classroom.findUnique({
     where: { id: classroomId },
     include: { git_organization: true },
   });
@@ -179,8 +179,8 @@ export async function processZipImport({ zipFile, title, moduleId, importTheme, 
   // Build organization-like object for getContentRepoName (adapts new classroom schema)
   const repoName = getContentRepoName({
     login: classroom.git_organization.login,
-    term: classroom.term as any,
-    year: classroom.year as any,
+    term: classroom.term ?? undefined,
+    year: classroom.year ?? undefined,
   });
 
   // 6. Ensure content repo exists (org is git org login for GitHub API)
@@ -199,8 +199,9 @@ export async function processZipImport({ zipFile, title, moduleId, importTheme, 
   // Try to enable GitHub Pages (idempotent)
   try {
     await gitProvider.enableGitHubPages(org, repoName);
-  } catch (pagesError: any) {
-    console.warn(`Could not auto-enable GitHub Pages: ${pagesError.message}`);
+  } catch (pagesError: unknown) {
+    const message = pagesError instanceof Error ? pagesError.message : String(pagesError);
+    console.warn(`Could not auto-enable GitHub Pages: ${message}`);
   }
 
   // 7. Collect files for batch upload
@@ -323,11 +324,11 @@ export async function processZipImport({ zipFile, title, moduleId, importTheme, 
   }
 
   // 8. Handle theme - either use saved theme or extract from ZIP
-  let libCssUrl: any = null;
-  let customThemeUrl: any = null;
+  let libCssUrl: string | null = null;
+  let customThemeUrl: string | null = null;
   let finalBodyClasses = `reveal-viewport ${themeFont} ${themeColor}`.trim();
-  let themeSaved: any = null;
-  let sharedThemeName: any = null; // Track the shared theme name for data-theme attribute
+  let themeSaved: string | null = null;
+  let sharedThemeName: string | null = null; // Track the shared theme name for data-theme attribute
 
   if (useSavedTheme) {
     // 8a. Use existing saved theme - no lib/ extraction needed
@@ -367,7 +368,7 @@ export async function processZipImport({ zipFile, title, moduleId, importTheme, 
         bodyClasses: finalBodyClasses,
         customThemeCss: customThemeCss?.trim() || undefined,
         libFiles,
-        onProgress: ({ current, total, filename }: any) => {
+        onProgress: ({ current, total, filename }: { current: number; total: number; filename?: string }) => {
           onProgress({ type: 'step', step: 'saving_theme', current, total, filename });
         },
       });
@@ -492,7 +493,7 @@ export async function processZipImport({ zipFile, title, moduleId, importTheme, 
           }
         }
         console.log(`Injected ${notesInjected} speaker notes from SLConfig`);
-      } catch (parseErr: any) {
+      } catch (parseErr: unknown) {
         console.warn('Could not parse SLConfig for speaker notes:', parseErr instanceof Error ? parseErr.message : parseErr);
       }
     }
@@ -541,7 +542,7 @@ export async function processZipImport({ zipFile, title, moduleId, importTheme, 
 
     // Parse position from styles (look for left, top, width, height)
     /** @param {string} style @param {string} prop */
-    const parseStyleValue = (style: any, prop: any) => {
+    const parseStyleValue = (style: string, prop: string) => {
       const match = style.match(new RegExp(`${prop}\\s*:\\s*([\\d.]+)px`));
       return match ? parseFloat(match[1]) : null;
     };
@@ -592,7 +593,7 @@ export async function processZipImport({ zipFile, title, moduleId, importTheme, 
   });
 
   // 10. Create the slide database record first (needed for Cloudinary folder path)
-  const slide = await prisma!.slide.create({
+  const slide = await getPrisma().slide.create({
     data: {
       title: slideTitle,
       slug,
@@ -605,7 +606,7 @@ export async function processZipImport({ zipFile, title, moduleId, importTheme, 
 
   // Link slide to module
   if (moduleId) {
-    await prisma!.slideLink.create({
+    await getPrisma().slideLink.create({
       data: {
         slide_id: slide.id,
         module_id: moduleId,
@@ -631,9 +632,10 @@ export async function processZipImport({ zipFile, title, moduleId, importTheme, 
         videoMap.set(filename, result.optimizedUrl);
 
         console.log(`Uploaded ${filename} to Cloudinary (${(result.bytes / 1024 / 1024).toFixed(1)} MB)`);
-      } catch (cloudErr: any) {
+      } catch (cloudErr: unknown) {
         // If Cloudinary fails, fall back to GitHub
-        console.error(`Cloudinary upload failed for ${filename}, falling back to GitHub:`, cloudErr.message);
+        const message = cloudErr instanceof Error ? cloudErr.message : String(cloudErr);
+        console.error(`Cloudinary upload failed for ${filename}, falling back to GitHub:`, message);
 
         const content = buffer.toString('base64');
         const newPath = `${contentPath}/videos/${filename}`;
@@ -737,22 +739,24 @@ export async function processZipImport({ zipFile, title, moduleId, importTheme, 
         onProgress({ type: 'step', step: 'uploading_github', current, total, filename });
       },
     });
-  } catch (uploadError: any) {
+  } catch (uploadError: unknown) {
     console.log(uploadError);
     // If upload fails, clean up slide record and Cloudinary videos
-    await prisma!.slide.delete({ where: { id: slide.id } });
+    await getPrisma().slide.delete({ where: { id: slide.id } });
 
     // Also clean up any Cloudinary videos we uploaded
     if (cloudinaryUploads > 0) {
       try {
         await deleteSlideVideos(slide.id);
         console.log(`Cleaned up ${cloudinaryUploads} Cloudinary videos after failed import`);
-      } catch (cleanupErr: any) {
-        console.error('Failed to clean up Cloudinary videos:', cleanupErr.message);
+      } catch (cleanupErr: unknown) {
+        const message = cleanupErr instanceof Error ? cleanupErr.message : String(cleanupErr);
+        console.error('Failed to clean up Cloudinary videos:', message);
       }
     }
 
-    throw new Error(`Failed to upload files: ${uploadError.message}`);
+    const message = uploadError instanceof Error ? uploadError.message : String(uploadError);
+    throw new Error(`Failed to upload files: ${message}`);
   }
 
   // Count slides (top-level sections, not nested vertical stacks)

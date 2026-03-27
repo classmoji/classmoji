@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useCallback, useEffect, useRef } from 'react';
+import { createContext, useContext, useState, useCallback, useEffect, useRef, type ReactNode } from 'react';
 import { reHighlightCode } from './utils/codeBlockUtils';
 
 /**
@@ -14,14 +14,111 @@ import { reHighlightCode } from './utils/codeBlockUtils';
  * re-apply syntax highlighting to the code block.
  */
 
-const ElementSelectionContext = createContext<any>(null);
+/** Element types recognized by the property editor system */
+export type SlideElementType = 'code' | 'text' | 'image' | 'iframe' | 'slide' | 'column' | 'block' | 'sandpack' | null;
+
+/** Result of element type detection */
+interface DetectedElement {
+  type: SlideElementType;
+  element: HTMLElement | null;
+  blockElement?: HTMLElement | null;
+}
+
+/** Snippet data stored in the database */
+export interface SlideSnippet {
+  id: string;
+  name: string;
+  content: string;
+}
+
+/** CSS theme data stored in the database */
+export interface SlideCssTheme {
+  id: string;
+  name: string;
+  type: string;
+  content: string;
+}
+
+/** Custom theme with CSS URL */
+export interface SlideCustomTheme {
+  id: string;
+  name: string;
+  cssUrl?: string;
+}
+
+/** Shared theme from slides.com imports */
+export interface SlideSharedTheme {
+  id: string;
+  name: string;
+}
+
+/** Theme state returned by getThemes */
+interface ThemeState {
+  theme: string;
+  codeTheme: string;
+}
+
+/** Editor ref shape (from RevealSlides component) */
+interface EditorRef {
+  current: {
+    getRevealInstance?: () => { left: () => void; right: () => void; up: () => void; down: () => void } | null;
+    getThemes?: () => ThemeState;
+    setThemes?: (themes: Partial<ThemeState>) => void;
+  } | null;
+}
+
+/** Props for the ElementSelectionProvider */
+interface ElementSelectionProviderProps {
+  children: ReactNode;
+  editorRef: EditorRef;
+  isEditing: boolean;
+  onContentChange?: () => void;
+  onSaveContent?: () => void;
+  snippets?: SlideSnippet[];
+  onSaveSnippet?: (name: string, html: string) => void;
+  onUpdateSnippet?: (id: string, name: string, html: string) => void;
+  onDeleteSnippet?: (id: string) => void;
+  cssThemes?: SlideCssTheme[];
+  onSaveTheme?: (name: string, type: string, css: string) => void;
+  onUpdateTheme?: (id: string, name: string, type: string, css: string) => void;
+  onDeleteTheme?: (id: string) => void;
+  customThemes?: SlideCustomTheme[];
+  sharedThemes?: SlideSharedTheme[];
+}
+
+/** Value provided by the ElementSelectionContext */
+export interface ElementSelectionContextValue {
+  selectedElement: HTMLElement | null;
+  elementType: SlideElementType;
+  blockElement: HTMLElement | null;
+  activeColumn: HTMLElement | null;
+  setActiveColumn: (column: HTMLElement | null) => void;
+  selectElement: (element: HTMLElement) => void;
+  clearSelection: () => void;
+  onContentChange?: () => void;
+  onSaveContent?: () => void;
+  getThemes: () => ThemeState;
+  setTheme: (type: string, value: string) => void;
+  snippets: SlideSnippet[];
+  onSaveSnippet?: (name: string, html: string) => void;
+  onUpdateSnippet?: (id: string, name: string, html: string) => void;
+  onDeleteSnippet?: (id: string) => void;
+  cssThemes: SlideCssTheme[];
+  onSaveTheme?: (name: string, type: string, css: string) => void;
+  onUpdateTheme?: (id: string, name: string, type: string, css: string) => void;
+  onDeleteTheme?: (id: string) => void;
+  customThemes: SlideCustomTheme[];
+  sharedThemes: SlideSharedTheme[];
+}
+
+const ElementSelectionContext = createContext<ElementSelectionContextValue | null>(null);
 
 /**
  * Find the column DIV that contains an element (if any)
  * Returns the column DIV or null if not in a column
  */
-function findContainingColumn(element: any) {
-  let current = element;
+function findContainingColumn(element: HTMLElement): HTMLElement | null {
+  let current: HTMLElement | null = element;
   while (current) {
     // Check if this is a column div (direct child of section with layout class)
     if (current.tagName === 'DIV' && current.parentElement?.tagName === 'SECTION') {
@@ -41,7 +138,7 @@ function findContainingColumn(element: any) {
  * When setting a new active column: clears only current slide's columns (prevents stale state)
  * When clearing (null): clears ALL columns globally (for clean exit from edit mode)
  */
-function updateColumnActiveState(activeColumn: any) {
+function updateColumnActiveState(activeColumn: HTMLElement | null) {
   if (activeColumn) {
     // Setting a new active column - scope cleanup to current slide only
     // This prevents stale data-column-active attributes on other slides
@@ -66,20 +163,20 @@ function updateColumnActiveState(activeColumn: any) {
  * Detect the element type by walking up the DOM tree
  * Returns { type, element } or { type: null, element: null }
  */
-function detectElementType(element: any, editorContainer: any) {
-  let current = element;
-  let sectionElement: any = null;
+function detectElementType(element: HTMLElement, editorContainer: Element | null): DetectedElement {
+  let current: HTMLElement | null = element;
+  let sectionElement: HTMLElement | null = null;
 
   // FIRST PASS: Check if we're inside an sl-block or sandpack-embed
   // These should be selected as a whole, not their inner content
-  let checkEl = element;
+  let checkEl: HTMLElement | null = element;
   while (checkEl && checkEl !== editorContainer && checkEl !== document.body) {
     if (checkEl.classList?.contains('sl-block')) {
       // Check block type for specialized handling
       const blockType = checkEl.dataset?.blockType;
       if (blockType === 'sandpack') {
         // Return the sandpack-embed element inside for properties editing
-        const sandpackEmbed = checkEl.querySelector('.sandpack-embed');
+        const sandpackEmbed = checkEl.querySelector('.sandpack-embed') as HTMLElement | null;
         return { type: 'sandpack', element: sandpackEmbed || checkEl, blockElement: checkEl };
       }
       return { type: 'block', element: checkEl };
@@ -141,15 +238,15 @@ function detectElementType(element: any, editorContainer: any) {
   return { type: null, element: null };
 }
 
-export function ElementSelectionProvider({ children, editorRef, isEditing, onContentChange, onSaveContent, snippets = [], onSaveSnippet, onUpdateSnippet, onDeleteSnippet, cssThemes = [], onSaveTheme, onUpdateTheme, onDeleteTheme, customThemes = [], sharedThemes = [] }: any) {
-  const [selectedElement, setSelectedElement] = useState<any>(null);
-  const [elementType, setElementType] = useState<any>(null);
-  const [blockElement, setBlockElement] = useState<any>(null); // For sl-block wrapper when element is inside a block
-  const [activeColumn, setActiveColumn] = useState<any>(null);
-  const previousSelectionRef = useRef({ element: null, type: null });
+export function ElementSelectionProvider({ children, editorRef, isEditing, onContentChange, onSaveContent, snippets = [], onSaveSnippet, onUpdateSnippet, onDeleteSnippet, cssThemes = [], onSaveTheme, onUpdateTheme, onDeleteTheme, customThemes = [], sharedThemes = [] }: ElementSelectionProviderProps) {
+  const [selectedElement, setSelectedElement] = useState<HTMLElement | null>(null);
+  const [elementType, setElementType] = useState<SlideElementType>(null);
+  const [blockElement, setBlockElement] = useState<HTMLElement | null>(null); // For sl-block wrapper when element is inside a block
+  const [activeColumn, setActiveColumn] = useState<HTMLElement | null>(null);
+  const previousSelectionRef = useRef<{ element: HTMLElement | null; type: SlideElementType }>({ element: null, type: null });
 
   // Re-highlight code block when selection changes away from it
-  const handleSelectionChange = useCallback((newElement: any, newType: any, newBlockElement = null) => {
+  const handleSelectionChange = useCallback((newElement: HTMLElement | null, newType: SlideElementType, newBlockElement: HTMLElement | null = null) => {
     const prev = previousSelectionRef.current;
 
     // Skip if selecting the same element - prevents unnecessary re-renders
@@ -176,24 +273,25 @@ export function ElementSelectionProvider({ children, editorRef, isEditing, onCon
   }, []);
 
   // Handle clicks within the editor to detect element selection
-  const handleEditorClick = useCallback((event: any) => {
+  const handleEditorClick = useCallback((event: MouseEvent) => {
     if (!isEditing) return;
+    const target = event.target as HTMLElement;
 
     // Ignore clicks on the properties panel itself
-    if ((event.target as HTMLElement).closest('[data-properties-panel]')) return;
+    if (target.closest('[data-properties-panel]')) return;
 
     // Find the slides container as the boundary
     const slidesContainer = document.querySelector('.reveal .slides');
-    const { type, element, blockElement: detectedBlockElement } = detectElementType(event.target, slidesContainer);
+    const { type, element, blockElement: detectedBlockElement } = detectElementType(target, slidesContainer);
 
     // Also detect if click is inside a column (for active column tracking)
-    const clickedColumn = findContainingColumn(event.target);
+    const clickedColumn = findContainingColumn(target);
     if (clickedColumn !== activeColumn) {
       setActiveColumn(clickedColumn);
       updateColumnActiveState(clickedColumn);
     }
 
-    handleSelectionChange(element, type, detectedBlockElement);
+    handleSelectionChange(element, type, detectedBlockElement ?? null);
   }, [isEditing, handleSelectionChange, activeColumn]);
 
   // Clear selection when exiting edit mode
@@ -211,7 +309,7 @@ export function ElementSelectionProvider({ children, editorRef, isEditing, onCon
   // - Delete/Backspace: Remove selected element
   // - Escape: Clear selection
   // - Arrow keys: Navigate slides when nothing is selected
-  const handleKeyDown = useCallback((event: any) => {
+  const handleKeyDown = useCallback((event: KeyboardEvent) => {
     if (!isEditing) return;
 
     // ==========================================
@@ -291,7 +389,7 @@ export function ElementSelectionProvider({ children, editorRef, isEditing, onCon
     if (activeEl) {
       const tagName = activeEl.tagName;
       if (tagName === 'INPUT' || tagName === 'TEXTAREA') return;
-      if ((activeEl as any)?.isContentEditable) return;
+      if ((activeEl as HTMLElement)?.isContentEditable) return;
     }
 
     // Get the Reveal instance and navigate
@@ -317,7 +415,7 @@ export function ElementSelectionProvider({ children, editorRef, isEditing, onCon
   }, [isEditing, selectedElement, elementType, handleSelectionChange, onContentChange, editorRef]);
 
   // Handle clicks outside the slides area to clear selection
-  const handleDocumentClick = useCallback((event: any) => {
+  const handleDocumentClick = useCallback((event: MouseEvent) => {
     if (!isEditing) return;
 
     // Ignore clicks on the properties panel
@@ -338,7 +436,7 @@ export function ElementSelectionProvider({ children, editorRef, isEditing, onCon
 
     // Check if click is inside the slides area
     const slidesContainer = document.querySelector('.reveal .slides');
-    if (slidesContainer && slidesContainer.contains(event.target)) {
+    if (slidesContainer && slidesContainer.contains(event.target as Node)) {
       // Click is inside slides - let handleEditorClick handle it
       return;
     }
@@ -353,9 +451,9 @@ export function ElementSelectionProvider({ children, editorRef, isEditing, onCon
   useEffect(() => {
     if (!isEditing) return;
 
-    let editorContainer: any = null;
-    let timeoutId: any = null;
-    let handleInput: any = null;
+    let editorContainer: Element | null = null;
+    let timeoutId: ReturnType<typeof setTimeout> | null = null;
+    let handleInput: (() => void) | null = null;
 
     const setupListener = () => {
       // Find the reveal slides container in the DOM
@@ -366,7 +464,7 @@ export function ElementSelectionProvider({ children, editorRef, isEditing, onCon
         return;
       }
 
-      editorContainer.addEventListener('click', handleEditorClick);
+      editorContainer.addEventListener('click', handleEditorClick as EventListener);
 
       // Listen for input events (typing) to trigger layout recalculation
       handleInput = () => {
@@ -375,7 +473,7 @@ export function ElementSelectionProvider({ children, editorRef, isEditing, onCon
       editorContainer.addEventListener('input', handleInput);
 
       // Also listen on document for clicks outside the slides area
-      document.addEventListener('click', handleDocumentClick);
+      document.addEventListener('click', handleDocumentClick as EventListener);
 
       // Listen for keyboard navigation (arrow keys when nothing selected)
       document.addEventListener('keydown', handleKeyDown);
@@ -387,12 +485,12 @@ export function ElementSelectionProvider({ children, editorRef, isEditing, onCon
     return () => {
       if (timeoutId) clearTimeout(timeoutId);
       if (editorContainer) {
-        editorContainer.removeEventListener('click', handleEditorClick);
+        editorContainer.removeEventListener('click', handleEditorClick as EventListener);
         if (handleInput) {
           editorContainer.removeEventListener('input', handleInput);
         }
       }
-      document.removeEventListener('click', handleDocumentClick);
+      document.removeEventListener('click', handleDocumentClick as EventListener);
       document.removeEventListener('keydown', handleKeyDown);
     };
   }, [isEditing, handleEditorClick, handleDocumentClick, handleKeyDown, onContentChange]);
@@ -402,7 +500,7 @@ export function ElementSelectionProvider({ children, editorRef, isEditing, onCon
     handleSelectionChange(null, null);
   }, [handleSelectionChange]);
 
-  const selectElement = useCallback((element: any) => {
+  const selectElement = useCallback((element: HTMLElement) => {
     // Use the actual DOM container for boundary detection
     const slidesContainer = document.querySelector('.reveal .slides');
     const { type, blockElement: detectedBlockElement } = detectElementType(element, slidesContainer);
@@ -411,7 +509,7 @@ export function ElementSelectionProvider({ children, editorRef, isEditing, onCon
   }, [handleSelectionChange]);
 
   // Set active column programmatically (e.g., when adding content to a specific column)
-  const setActiveColumnElement = useCallback((column: any) => {
+  const setActiveColumnElement = useCallback((column: HTMLElement | null) => {
     setActiveColumn(column);
     updateColumnActiveState(column);
   }, []);
@@ -427,7 +525,7 @@ export function ElementSelectionProvider({ children, editorRef, isEditing, onCon
     };
   }, [editorRef]);
 
-  const setTheme = useCallback((type: any, value: any) => {
+  const setTheme = useCallback((type: string, value: string) => {
     editorRef?.current?.setThemes?.({ [type]: value });
   }, [editorRef]);
 
@@ -467,7 +565,7 @@ export function ElementSelectionProvider({ children, editorRef, isEditing, onCon
   );
 }
 
-export function useElementSelection() {
+export function useElementSelection(): ElementSelectionContextValue {
   const context = useContext(ElementSelectionContext);
   if (!context) {
     throw new Error('useElementSelection must be used within ElementSelectionProvider');

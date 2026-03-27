@@ -1,14 +1,15 @@
-import { findTeamsByUserId } from './teamMembership.service.js';
-import { findMany as findRepositories } from './repository.service.js';
-import { findByClassroomId as findEmojiMappingsByClassroomId } from './emojiMapping.service.js';
-import { findRepositoriesPerStudent } from './user.service.js';
-import * as classroomService from './classroom.service.js';
-import * as assignmentService from './assignment.service.js';
-import * as repositoryAssignmentService from './repositoryAssignment.service.js';
-import * as repositoryAssignmentGraderService from './repositoryAssignmentGrader.service.js';
+import { findTeamsByUserId } from './teamMembership.service.ts';
+import { findMany as findRepositories } from './repository.service.ts';
+import { findByClassroomId as findEmojiMappingsByClassroomId } from './emojiMapping.service.ts';
+import { findRepositoriesPerStudent } from './user.service.ts';
+import * as classroomService from './classroom.service.ts';
+import * as assignmentService from './assignment.service.ts';
+import * as repositoryAssignmentService from './repositoryAssignment.service.ts';
+import * as repositoryAssignmentGraderService from './repositoryAssignmentGrader.service.ts';
 
-import prisma from '@classmoji/database';
+import getPrisma from '@classmoji/database';
 import { calculateStudentFinalGrade } from '@classmoji/utils';
+import type { OrganizationSettings, Repository } from '@classmoji/utils';
 
 // Re-export grader progress function for convenience
 export const findAssignmentGradersProgress = repositoryAssignmentGraderService.findGradersProgress;
@@ -61,7 +62,7 @@ export const findAllAssignmentsForStudent = async (userId: string, classroomSlug
 };
 
 export const findClassroomGradingProgressPerAssignment = async (classroomId: string) => {
-  let numberOfAssignments = await prisma!.repositoryAssignment.groupBy({
+  let numberOfAssignments = await getPrisma().repositoryAssignment.groupBy({
     where: {
       assignment: {
         module: {
@@ -74,7 +75,7 @@ export const findClassroomGradingProgressPerAssignment = async (classroomId: str
     _count: true,
   });
 
-  const numExtraCreditAssignments = await prisma!.repositoryAssignment.groupBy({
+  const numExtraCreditAssignments = await getPrisma().repositoryAssignment.groupBy({
     where: {
       status: 'CLOSED',
       assignment: {
@@ -90,7 +91,7 @@ export const findClassroomGradingProgressPerAssignment = async (classroomId: str
 
   numberOfAssignments = [...numberOfAssignments, ...numExtraCreditAssignments];
 
-  let gradedAssignments = await prisma!.repositoryAssignment.groupBy({
+  let gradedAssignments = await getPrisma().repositoryAssignment.groupBy({
     where: {
       assignment: {
         module: {
@@ -106,7 +107,7 @@ export const findClassroomGradingProgressPerAssignment = async (classroomId: str
     _count: true,
   });
 
-  const extraCreditGradedAssignments = await prisma!.repositoryAssignment.groupBy({
+  const extraCreditGradedAssignments = await getPrisma().repositoryAssignment.groupBy({
     where: {
       status: 'CLOSED',
       assignment: {
@@ -158,17 +159,27 @@ export const calculateClassLeaderboard = async (classroomSlug: string) => {
 
   const settings = await classroomService.getClassroomSettingsForServer(classroom!.id);
 
-  const grades: any[] = [];
+  const grades: Array<{
+    id: string;
+    name: string | null;
+    grade: number;
+    avatar_url: string | null;
+    login: string | null;
+  }> = [];
 
   students.forEach(student => {
-    const grade = calculateStudentFinalGrade(student.repositories, emojiMappings as any, settings as any);
+    const grade = calculateStudentFinalGrade(
+      student.repositories as Repository[],
+      emojiMappings as Record<string, number>,
+      settings as OrganizationSettings
+    );
 
     grades.push({
       id: student.id,
-      name: student.name,
+      name: student.name ?? null,
       grade,
-      avatar_url: student.avatar_url,
-      login: student.login,
+      avatar_url: student.avatar_url ?? null,
+      login: student.login ?? null,
     });
   });
 

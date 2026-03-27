@@ -15,7 +15,7 @@ import { useElementSelection } from '../ElementSelectionContext';
  * - Show controls
  */
 
-export default function VideoProperties({ element }: any) {
+export default function VideoProperties({ element }: { element: HTMLVideoElement }) {
   const { onContentChange, onSaveContent } = useElementSelection();
 
   // State for all properties
@@ -38,16 +38,16 @@ export default function VideoProperties({ element }: any) {
   }, [element]);
 
   // Update URL
-  const handleUrlChange = useCallback((e: any) => {
+  const handleUrlChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     if (!element) return;
-    const newUrl = (e.target as HTMLInputElement).value;
+    const newUrl = e.target.value;
     element.src = newUrl;
     setUrl(newUrl);
     onContentChange?.();
   }, [element, onContentChange]);
 
   // Update autoplay
-  const handleAutoplayChange = useCallback((checked: any) => {
+  const handleAutoplayChange = useCallback((checked: boolean) => {
     if (!element) return;
 
     if (checked) {
@@ -62,7 +62,7 @@ export default function VideoProperties({ element }: any) {
   }, [element, onContentChange]);
 
   // Update loop
-  const handleLoopChange = useCallback((checked: any) => {
+  const handleLoopChange = useCallback((checked: boolean) => {
     if (!element) return;
 
     if (checked) {
@@ -75,7 +75,7 @@ export default function VideoProperties({ element }: any) {
   }, [element, onContentChange]);
 
   // Update muted
-  const handleMutedChange = useCallback((checked: any) => {
+  const handleMutedChange = useCallback((checked: boolean) => {
     if (!element) return;
 
     if (checked) {
@@ -89,7 +89,7 @@ export default function VideoProperties({ element }: any) {
   }, [element, onContentChange]);
 
   // Update controls
-  const handleControlsChange = useCallback((checked: any) => {
+  const handleControlsChange = useCallback((checked: boolean) => {
     if (!element) return;
 
     if (checked) {
@@ -149,9 +149,10 @@ export default function VideoProperties({ element }: any) {
           `Video uploaded to Cloudinary!${sizeMB ? ` (${sizeMB} MB)` : ''}${deletedMsg}`
         );
       }
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error('Cloudinary upload error:', err);
-      message.error(`Upload failed: ${err.message}`);
+      const errorMessage = err instanceof Error ? err.message : String(err);
+      message.error(`Upload failed: ${errorMessage}`);
     } finally {
       setUploading(false);
     }

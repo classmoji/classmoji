@@ -7,7 +7,7 @@ import { useElementSelection } from '../ElementSelectionContext';
  *
  * Provides quick actions for adding content to a column.
  */
-export default function ColumnProperties({ element }: any) {
+export default function ColumnProperties({ element }: { element: HTMLElement }) {
   const { onContentChange } = useElementSelection();
 
   // Add a paragraph to the column
@@ -20,7 +20,7 @@ export default function ColumnProperties({ element }: any) {
   }, [element, onContentChange]);
 
   // Add a heading to the column
-  const handleAddHeading = useCallback((level: any) => {
+  const handleAddHeading = useCallback((level: number) => {
     if (!element) return;
     const h = document.createElement(`h${level}`);
     h.textContent = `Heading ${level}`;

@@ -7,27 +7,41 @@ import { Modal, Checkbox, Button, message, Spin } from 'antd';
  * Shows thumbnails of images that are no longer referenced in the slide HTML.
  * User can uncheck any images they want to keep before confirming deletion.
  */
-export default function OrphanedImagesModal({ open, images, onClose, onDelete, isDeleting }: any) {
+interface OrphanedImage {
+  path: string;
+  name: string;
+  url: string;
+}
+
+interface OrphanedImagesModalProps {
+  open: boolean;
+  images: OrphanedImage[];
+  onClose: () => void;
+  onDelete: (paths: string[]) => void;
+  isDeleting: boolean;
+}
+
+export default function OrphanedImagesModal({ open, images, onClose, onDelete, isDeleting }: OrphanedImagesModalProps) {
   // Track which images are selected for deletion (all by default)
-  const [selectedPaths, setSelectedPaths] = useState<any[]>([]);
+  const [selectedPaths, setSelectedPaths] = useState<string[]>([]);
 
   // Reset selection when images change
   useEffect(() => {
     if (images?.length > 0) {
-      setSelectedPaths(images.map((img: any) => img.path));
+      setSelectedPaths(images.map((img) => img.path));
     } else {
       setSelectedPaths([]);
     }
   }, [images]);
 
-  const handleToggle = (path: any) => {
+  const handleToggle = (path: string) => {
     setSelectedPaths((prev) =>
       prev.includes(path) ? prev.filter((p) => p !== path) : [...prev, path]
     );
   };
 
   const handleSelectAll = () => {
-    setSelectedPaths(images.map((img: any) => img.path));
+    setSelectedPaths(images.map((img) => img.path));
   };
 
   const handleSelectNone = () => {
@@ -96,7 +110,7 @@ export default function OrphanedImagesModal({ open, images, onClose, onDelete, i
 
         {/* Image list */}
         <div className="max-h-80 overflow-y-auto space-y-2">
-          {images?.map((image: any) => (
+          {images?.map((image) => (
             <div
               key={image.path}
               className={`

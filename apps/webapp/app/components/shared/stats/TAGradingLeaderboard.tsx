@@ -1,7 +1,18 @@
 import { CardHeader } from '~/components';
 import { Tag, Card } from 'antd';
 
-const TAGradingLeaderboard = ({ progress }: any) => { // eslint-disable-line @typescript-eslint/no-explicit-any -- complex Prisma progress shapes from loader
+interface GradingLeaderboardItem {
+  id: string;
+  login: string;
+  name: string | null;
+  progress: number;
+}
+
+interface TAGradingLeaderboardProps {
+  progress: GradingLeaderboardItem[];
+}
+
+const TAGradingLeaderboard = ({ progress }: TAGradingLeaderboardProps) => {
   const getRankStyle = (index: number) => {
     if (index === 0) return 'bg-yellow-400 text-white';
     if (index === 1) return 'bg-gray-300 text-white';
@@ -14,7 +25,7 @@ const TAGradingLeaderboard = ({ progress }: any) => { // eslint-disable-line @ty
       <CardHeader>TA Grading Leaderboard</CardHeader>
 
       <div className="flex-1 overflow-y-auto px-2 pb-2 space-y-2">
-        {progress.map((item: any, i: any) => ( // eslint-disable-line @typescript-eslint/no-explicit-any -- Prisma progress shape
+        {progress.map((item, i) => (
           <div key={item.id} className="p-2 rounded-lg">
             <div className="flex items-center justify-between gap-2">
               {/* Rank badge */}

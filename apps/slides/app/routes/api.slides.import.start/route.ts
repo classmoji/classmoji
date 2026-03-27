@@ -14,7 +14,7 @@
  */
 
 import { randomUUID } from 'crypto';
-import prisma from '@classmoji/database';
+import getPrisma from '@classmoji/database';
 import { requireClassroomStaff } from '@classmoji/auth/server';
 import { generateTermString } from '@classmoji/utils';
 import { processZipImport } from '~/utils/slidesComImporter.server';
@@ -23,25 +23,25 @@ import { importStreamManager } from '~/utils/importStreamManager';
 // Max file size for ZIP uploads (in bytes)
 const MAX_FILE_SIZE = 150 * 1024 * 1024; // 150MB
 
-export const action = async ({ request }: any) => {
+export const action = async ({ request }: { request: Request }) => {
   const formData = await request.formData();
 
   const zipFile = formData.get('zip');
-  const title = formData.get('title');
-  const moduleId = formData.get('moduleId') || null;
-  const themeOption = formData.get('themeOption');
-  const saveThemeAs = formData.get('saveThemeAs')?.trim() || null;
-  const useSavedTheme = formData.get('useSavedTheme') || null;
-  const classroomSlug = formData.get('classroomSlug');
+  const title = formData.get('title') as string | null;
+  const moduleId = (formData.get('moduleId') as string | null) || null;
+  const themeOption = formData.get('themeOption') as string | null;
+  const saveThemeAs = (formData.get('saveThemeAs') as string | null)?.trim() || null;
+  const useSavedTheme = (formData.get('useSavedTheme') as string | null) || null;
+  const classroomSlug = formData.get('classroomSlug') as string;
 
   // Parse Cloudinary video paths
-  let cloudinaryVideoPaths = [];
+  let cloudinaryVideoPaths: string[] = [];
   try {
-    const cloudinaryVideoPathsRaw = formData.get('cloudinaryVideoPaths');
+    const cloudinaryVideoPathsRaw = formData.get('cloudinaryVideoPaths') as string | null;
     if (cloudinaryVideoPathsRaw) {
       cloudinaryVideoPaths = JSON.parse(cloudinaryVideoPathsRaw);
     }
-  } catch (e: any) {
+  } catch (e: unknown) {
     console.warn('Failed to parse cloudinaryVideoPaths:', e);
   }
 
@@ -71,14 +71,14 @@ export const action = async ({ request }: any) => {
   try {
     const auth = await requireClassroomStaff(request, classroomSlug, {
       resourceType: 'SLIDE_CONTENT',
-    } as any);
+    });
     userId = auth.userId;
-  } catch (authError: any) {
+  } catch (authError: unknown) {
     return Response.json({ error: 'Unauthorized' }, { status: 403 });
   }
 
   // Get classroom with git_organization
-  const classroom = await prisma!.classroom.findUnique({
+  const classroom = await getPrisma().classroom.findUnique({
     where: { slug: classroomSlug },
     include: { git_organization: true },
   });
@@ -92,14 +92,14 @@ export const action = async ({ request }: any) => {
     return Response.json({ error: 'Git organization not configured for this classroom' }, { status: 400 });
   }
 
-  const term = generateTermString(classroom.term as any, classroom.year as any);
+  const term = generateTermString(classroom.term ?? undefined, classroom.year ?? undefined);
 
   // Generate unique import ID for SSE routing
   // This is returned immediately while the actual slideId is created during import
   const importId = randomUUID();
 
   // Define progress callback that publishes to the stream manager
-  const onProgress = (event: any) => {
+  const onProgress = (event: { type: string; step?: string; current?: number; total?: number; filename?: string; slideId?: string; message?: string }) => {
     importStreamManager.publish(importId, event);
   };
 

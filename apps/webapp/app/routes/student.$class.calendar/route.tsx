@@ -11,6 +11,7 @@ import CourseCalendar from '~/components/features/calendar/CourseCalendar';
 import CalendarSubscriptionCard from '~/components/features/calendar/CalendarSubscriptionCard';
 import EventCard from '~/components/features/calendar/EventCard';
 import EventLinks from '~/components/features/calendar/EventLinks';
+import type { CalendarEventWithLinks } from '~/components/features/calendar/types';
 
 export const loader = async ({ request, params }: Route.LoaderArgs) => {
   const { class: classSlug } = params;
@@ -90,7 +91,7 @@ const StudentCalendar = ({ loaderData }: Route.ComponentProps) => {
   const { class: classSlug } = useParams();
   const eventsFetcher = useFetcher();
   const [viewModalOpen, setViewModalOpen] = useState(false);
-  const [selectedEvent, setSelectedEvent] = useState(null);
+  const [selectedEvent, setSelectedEvent] = useState<CalendarEventWithLinks | null>(null);
 
   // Use fetched events if available, otherwise use initial loader events
   const events = eventsFetcher.data?.events || initialEvents;
@@ -100,7 +101,7 @@ const StudentCalendar = ({ loaderData }: Route.ComponentProps) => {
     eventsFetcher.load(`?year=${year}&month=${month}`);
   };
 
-  const handleEventClick = (event: any) => { // eslint-disable-line @typescript-eslint/no-explicit-any -- calendar event shape
+  const handleEventClick = (event: CalendarEventWithLinks) => {
     setSelectedEvent(event);
     setViewModalOpen(true);
   };

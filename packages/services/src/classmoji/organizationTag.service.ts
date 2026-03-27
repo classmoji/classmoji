@@ -1,7 +1,8 @@
-import prisma from '@classmoji/database';
+import getPrisma from '@classmoji/database';
+import type { Prisma } from '@prisma/client';
 
 export const create = async (classroomId: string, name: string) => {
-  return prisma!.tag.create({
+  return getPrisma().tag.create({
     data: {
       classroom_id: classroomId,
       name,
@@ -10,20 +11,20 @@ export const create = async (classroomId: string, name: string) => {
 };
 
 const deleteTag = async (tagId: string) => {
-  return prisma!.tag.delete({
+  return getPrisma().tag.delete({
     where: { id: tagId },
   });
 };
 export { deleteTag as delete };
 
 export const findByClassroomId = async (classroomId: string) => {
-  return prisma!.tag.findMany({
+  return getPrisma().tag.findMany({
     where: { classroom_id: classroomId },
   });
 };
 
 export const findByClassroomIdAndName = async (classroomId: string, name: string) => {
-  return prisma!.tag.findUnique({
+  return getPrisma().tag.findUnique({
     where: {
       classroom_id_name: {
         classroom_id: classroomId,
@@ -34,7 +35,7 @@ export const findByClassroomIdAndName = async (classroomId: string, name: string
 };
 
 export const upsert = async (classroomId: string, name: string) => {
-  return prisma!.tag.upsert({
+  return getPrisma().tag.upsert({
     where: {
       classroom_id_name: {
         classroom_id: classroomId,
@@ -50,7 +51,7 @@ export const upsert = async (classroomId: string, name: string) => {
 };
 
 export const findTeamsByTag = async (tagId: string) => {
-  const tag = await prisma!.tag.findUnique({
+  const tag = await getPrisma().tag.findUnique({
     where: { id: tagId },
     include: {
       teams: {
@@ -63,5 +64,7 @@ export const findTeamsByTag = async (tagId: string) => {
 
   if (!tag) return [];
 
-  return tag.teams.map(({ team }: { team: any }) => team);
+  return tag.teams.map(
+    ({ team }: { team: Prisma.TeamTagGetPayload<{ include: { team: true } }>['team'] }) => team
+  );
 };

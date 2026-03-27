@@ -1,13 +1,31 @@
-import prisma from '@classmoji/database';
+import getPrisma from '@classmoji/database';
+import type { Prisma, SubscriptionTier } from '@prisma/client';
 
-export const create = async (data: any): Promise<any> => {
-  return prisma!.subscription.create({
+type SubscriptionRecord = Prisma.SubscriptionGetPayload<Record<string, never>>;
+
+type CurrentSubscription =
+  | SubscriptionRecord
+  | {
+      id: null;
+      tier: SubscriptionTier;
+      stripe_subscription_id?: null;
+      started_at?: null;
+      ends_at?: null;
+      cancelled_at?: null;
+      cancellation_reason?: null;
+      created_at?: null;
+      updated_at?: null;
+      user_id?: null;
+    };
+
+export const create = async (data: Prisma.SubscriptionUncheckedCreateInput): Promise<SubscriptionRecord> => {
+  return getPrisma().subscription.create({
     data,
   });
 };
 
-export const getCurrent = async (userId: string): Promise<any> => {
-  const subscription = await prisma!.subscription.findFirst({
+export const getCurrent = async (userId: string): Promise<CurrentSubscription> => {
+  const subscription = await getPrisma().subscription.findFirst({
     where: { user_id: userId },
     orderBy: { created_at: 'desc' },
   });
@@ -20,20 +38,32 @@ export const getCurrent = async (userId: string): Promise<any> => {
       stripe_subscription_id: null,
       started_at: null,
       ends_at: null,
+      cancelled_at: null,
+      cancellation_reason: null,
+      created_at: null,
+      updated_at: null,
+      user_id: null,
     };
   }
 
   return subscription;
 };
 
-export const findBy = async ({ where }: { where: any }): Promise<any> => {
-  return prisma!.subscription.findUnique({
+export const findBy = async ({
+  where,
+}: {
+  where: Prisma.SubscriptionWhereUniqueInput;
+}): Promise<SubscriptionRecord | null> => {
+  return getPrisma().subscription.findUnique({
     where,
   });
 };
 
-export const update = async (subscriptionId: string, data: any): Promise<any> => {
-  return prisma!.subscription.update({
+export const update = async (
+  subscriptionId: string,
+  data: Prisma.SubscriptionUpdateInput
+): Promise<SubscriptionRecord> => {
+  return getPrisma().subscription.update({
     where: {
       id: subscriptionId,
     },
@@ -41,17 +71,17 @@ export const update = async (subscriptionId: string, data: any): Promise<any> =>
   });
 };
 
-export const deleteByUserId = async (userId: string): Promise<any> => {
-  return prisma!.subscription.delete({
+export const deleteByUserId = async (userId: string): Promise<SubscriptionRecord> => {
+  return getPrisma().subscription.delete(({
     where: {
       user_id: userId,
     },
-  } as any);
+  } as unknown) as { where: Prisma.SubscriptionWhereUniqueInput });
 };
 
-export const getByClassroom = async (classroomSlug: string): Promise<any> => {
+export const getByClassroom = async (classroomSlug: string): Promise<CurrentSubscription> => {
   // organizationLogin is now classroomSlug
-  const classroom = await prisma!.classroom.findUnique({
+  const classroom = await getPrisma().classroom.findUnique({
     where: { slug: classroomSlug },
     include: {
       memberships: {

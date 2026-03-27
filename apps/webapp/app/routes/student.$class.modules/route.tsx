@@ -1,4 +1,4 @@
-import prisma from '@classmoji/database';
+import getPrisma from '@classmoji/database';
 import type { Route } from './+types/route';
 import { ClassmojiService } from '@classmoji/services';
 import { assertClassroomAccess } from '~/utils/helpers';
@@ -18,7 +18,7 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
     attemptedAction: 'view_modules',
   });
 
-  const modules = await prisma!.module.findMany({
+  const modules = await getPrisma().module.findMany({
     where: { classroom_id: classroom.id, is_published: true },
     include: {
       assignments: {

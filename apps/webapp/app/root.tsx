@@ -42,7 +42,7 @@ import isSameOrBefore from 'dayjs/plugin/isSameOrBefore';
 dayjs.extend(relativeTime);
 dayjs.extend(isSameOrBefore);
 
-import prisma from '@classmoji/database';
+import getPrisma from '@classmoji/database';
 import '@fontsource/quicksand/700.css';
 import 'react-toastify/dist/ReactToastify.css';
 import '~/styles/tailwind.css';
@@ -118,7 +118,7 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
 
   if (isImpersonating) {
     // When impersonating, fetch the impersonated user directly by their session user ID
-    user = await prisma!.user.findUnique({
+    user = await getPrisma().user.findUnique({
       where: { id: authData.userId },
       include: {
         classroom_memberships: {
@@ -149,7 +149,7 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
     // Normal flow - first try to look up user by ID if we have a valid session
     // This avoids GitHub API calls when user is already in our database
     if (authData.userId) {
-      user = await prisma!.user.findUnique({
+      user = await getPrisma().user.findUnique({
         where: { id: authData.userId },
         include: {
           classroom_memberships: {
@@ -196,7 +196,7 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
         // Fetch subscription
         const subscription = await ClassmojiService.subscription.getCurrent(authData.userId);
 
-        user = await prisma!.user.findUnique({
+        user = await getPrisma().user.findUnique({
           where: { login: githubUser.login },
           include: {
             classroom_memberships: {

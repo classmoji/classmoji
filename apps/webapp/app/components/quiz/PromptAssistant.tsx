@@ -106,7 +106,7 @@ export function PromptAssistant({
 
   useEffect(() => {
     if (!isActive && !isInitializing) {
-      initSession(formContext, exampleRepoUrl as any); // eslint-disable-line @typescript-eslint/no-explicit-any -- hook's formContext and exampleRepoUrl params are loosely typed
+      initSession(formContext, exampleRepoUrl);
     }
   }, []);
 

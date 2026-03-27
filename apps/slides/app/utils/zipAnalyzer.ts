@@ -41,7 +41,7 @@ export async function analyzeZipForVideos(file: File): Promise<VideoInfo[]> {
 
     // Get uncompressed size from ZIP metadata
     // _data.uncompressedSize is available without decompressing the file
-    const size = (zipEntry as any)._data?.uncompressedSize || 0;
+    const size = (zipEntry as any)._data?.uncompressedSize || 0; // eslint-disable-line @typescript-eslint/no-explicit-any -- JSZip internal _data property
     const filename = path.split('/').pop() || path;
 
     // Suggest Cloudinary for large files or .mov (needs transcoding)

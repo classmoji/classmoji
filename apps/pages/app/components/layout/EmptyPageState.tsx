@@ -8,9 +8,11 @@ import { IconFileText, IconPlus } from '@tabler/icons-react';
  * - canEdit: Boolean - whether user can create pages
  * - classroom: Classroom object with slug
  */
+import type { ClassroomSummary } from '~/types/pages.ts';
+
 interface EmptyPageStateProps {
   canEdit: boolean;
-  classroom: any;
+  classroom: ClassroomSummary;
 }
 
 const EmptyPageState = ({ canEdit, classroom }: EmptyPageStateProps) => {

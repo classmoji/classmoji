@@ -6,7 +6,7 @@ export const assignTokensToStudentTask = task({
   queue: {
     concurrencyLimit: 10,
   },
-  run: async (payload: { student: any; classroomId: string; amount: number; description?: string }) => {
+  run: async (payload: { student: { id: string | number }; classroomId: string; amount: number; description?: string }) => {
     const { student, classroomId, amount, description } = payload;
 
     return ClassmojiService.token.assignToStudent({

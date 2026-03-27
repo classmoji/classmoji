@@ -4,14 +4,36 @@ import { logger } from '@trigger.dev/sdk';
 import path from 'path';
 import { getGitProvider } from '@classmoji/services';
 
-// 👑👑👑👑👑👑👑👑👑👑👑👑👑👑👑👑👑👑
+type GitOrganizationLike = Parameters<typeof getGitProvider>[0] & { login: string | null };
 
-export const updateRepository = async (payload: any): Promise<{ message: string; prUrl: string; hasChanges: boolean }> => {
+export interface UpdateRepositoryPayload {
+  gitOrganization: GitOrganizationLike;
+  repoName: string;
+  prTitle: string;
+  prDescription: string;
+  token: string;
+  templateOwner: string;
+  templateRepo: string;
+}
+
+interface UpdateRepositoryResult {
+  message: string;
+  prUrl: string;
+  hasChanges: boolean;
+}
+
+export const updateRepository = async (
+  payload: UpdateRepositoryPayload
+): Promise<UpdateRepositoryResult> => {
   const { gitOrganization, repoName, prTitle, prDescription, token, templateOwner, templateRepo } =
     payload;
 
+  if (!gitOrganization.login) {
+    throw new Error('Missing Git organization login');
+  }
+
   const gitProvider = getGitProvider(gitOrganization);
-  const octokit = await (gitProvider as any).getOctokit();
+  const octokit = await gitProvider.getOctokit();
   const orgLogin = gitOrganization.login;
 
   const localPath = path.join(process.cwd(), 'repos', repoName);
@@ -30,9 +52,8 @@ export const updateRepository = async (payload: any): Promise<{ message: string;
 
     await studentGit.addConfig('user.name', 'Classmoji Bot');
     await studentGit.addConfig('user.email', 'hello@classmoji.com');
-    await studentGit.addConfig('pull.rebase', false as any);
+    await studentGit.addConfig('pull.rebase', 'false');
 
-    // Check if updates branch exists, create it if it doesn't
     const branches = await studentGit.branch();
     const updatesBranchExists =
       branches.all.includes('updates') || branches.all.includes('remotes/origin/updates');
@@ -44,7 +65,6 @@ export const updateRepository = async (payload: any): Promise<{ message: string;
       await studentGit.checkout('updates');
     }
 
-    // Add or update template remote
     try {
       await studentGit.addRemote('template', templateRepoUrl);
     } catch {
@@ -69,7 +89,7 @@ export const updateRepository = async (payload: any): Promise<{ message: string;
 
     const description = `${prDescription}\n\n---\n\n## Template Update\n\nThis PR brings the latest changes from the template repository.\n\n### ✅ To Merge\n\n1. Review the changes in the "Files changed" tab\n2. Click "Merge pull request" below\n3. If conflicts occur, resolve them in your editor`;
 
-    let prUrl;
+    let prUrl: string;
     if (existingPRs.length > 0) {
       await octokit.rest.pulls.update({
         owner: orgLogin,
@@ -98,8 +118,10 @@ export const updateRepository = async (payload: any): Promise<{ message: string;
       prUrl,
       hasChanges: true,
     };
-  } catch (error: any) {
-    logger.error('Update repository error:', error.message);
+  } catch (error: unknown) {
+    logger.error('Update repository error:', {
+      error: error instanceof Error ? error.message : String(error),
+    });
     throw error;
   } finally {
     if (fs.existsSync(localPath)) {

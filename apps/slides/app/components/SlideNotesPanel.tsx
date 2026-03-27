@@ -12,7 +12,7 @@ import ReactMarkdown from 'react-markdown';
  */
 
 // Extract notes from the current slide section
-function extractNotesFromSlide(slideElement: any) {
+function extractNotesFromSlide(slideElement: HTMLElement | null) {
   if (!slideElement) return '';
   // Use :scope to only get direct child <aside class="notes">
   // This handles nested sections (vertical slides) correctly
@@ -21,7 +21,7 @@ function extractNotesFromSlide(slideElement: any) {
 }
 
 // Update or create notes in the slide section
-function updateNotesInSlide(slideElement: any, notesContent: any) {
+function updateNotesInSlide(slideElement: HTMLElement | null, notesContent: string) {
   if (!slideElement) return;
 
   let aside = slideElement.querySelector(':scope > aside.notes');
@@ -47,15 +47,23 @@ function updateNotesInSlide(slideElement: any, notesContent: any) {
   }
 }
 
+interface SlideNotesPanelProps {
+  revealInstance: RevealApi | null;
+  isCollapsed: boolean;
+  onToggle: () => void;
+  onContentChange?: () => void;
+  readOnly?: boolean;
+}
+
 export default function SlideNotesPanel({
   revealInstance,  // Pass the Reveal.js instance directly (not a ref)
   isCollapsed,
   onToggle,
   onContentChange,
   readOnly = false,  // In read-only mode, only show markdown preview (no editing)
-}: any) {
+}: SlideNotesPanelProps) {
   const [notes, setNotes] = useState('');
-  const [currentSlide, setCurrentSlide] = useState<any>(null);
+  const [currentSlide, setCurrentSlide] = useState<HTMLElement | null>(null);
   const [isEditMode, setIsEditMode] = useState(false);
 
   // Track the current slide via Reveal.js events
@@ -84,8 +92,8 @@ export default function SlideNotesPanel({
 
   // Handle notes textarea changes
   const handleNotesChange = useCallback(
-    (e: any) => {
-      const newNotes = (e.target as HTMLInputElement).value;
+    (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+      const newNotes = e.target.value;
       setNotes(newNotes);
       updateNotesInSlide(currentSlide, newNotes);
       onContentChange?.();

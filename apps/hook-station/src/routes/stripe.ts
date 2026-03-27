@@ -1,34 +1,63 @@
+import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
+import Stripe from 'stripe';
 import { ClassmojiService } from '@classmoji/services';
 import dayjs from 'dayjs';
 
-const stripeWebhookHandlers: Record<string, (user: any, subscription: any) => Promise<void>> = {
-  'customer.subscription.created': async (user: any, subscription: any) => {
+interface BillingUser {
+  id: string;
+}
+
+interface StripeWebhookRequestBody {
+  type: string;
+  data: {
+    object: Stripe.Subscription;
+  };
+}
+
+const getCustomerId = (
+  customer: string | Stripe.Customer | Stripe.DeletedCustomer | null
+): string | null => {
+  if (!customer) {
+    return null;
+  }
+
+  return typeof customer === 'string' ? customer : customer.id;
+};
+
+const stripeWebhookHandlers: Record<
+  string,
+  (user: BillingUser | null, subscription: Stripe.Subscription) => Promise<void>
+> = {
+  'customer.subscription.created': async (user: BillingUser | null, subscription: Stripe.Subscription) => {
+    if (!user) {
+      return;
+    }
+
     try {
-      // * cancel current subscription (always exists)
-      // * this usually happens when user upgrades to a paid tier
-      // * free users do not have a Stripe subscription
       const currentSubscription = await ClassmojiService.subscription.getCurrent(user.id);
 
-      // * expire current free tier subscription (only if it exists in DB)
       if (currentSubscription?.id) {
         await ClassmojiService.subscription.update(currentSubscription.id, {
           ends_at: new Date(),
         });
       }
 
-      // * create new paid tier subscription
       await ClassmojiService.subscription.create({
         user_id: user.id,
         tier: 'PRO',
         started_at: new Date(),
         stripe_subscription_id: subscription.id,
       });
-    } catch (error: any) {
-      console.error('❌ Error in customer.subscription.created', error);
+    } catch (error: unknown) {
+      console.error('Error in customer.subscription.created', error);
     }
   },
 
-  'customer.subscription.updated': async (user: any, subscription: any) => {
+  'customer.subscription.updated': async (user: BillingUser | null, subscription: Stripe.Subscription) => {
+    if (!user || !subscription.canceled_at) {
+      return;
+    }
+
     const subscriptionUpdate = {
       cancelled_at: dayjs.unix(subscription.canceled_at).toDate(),
       cancellation_reason: subscription.cancellation_details?.reason,
@@ -36,34 +65,27 @@ const stripeWebhookHandlers: Record<string, (user: any, subscription: any) => Pr
     };
 
     try {
-      // * subscription was canceled
-      if (subscription.canceled_at) {
-        // * update current subscription
-        const currentSubscription = await ClassmojiService.subscription.getCurrent(user.id);
-
-        // * only update if subscription exists in DB
-        if (!currentSubscription?.id) return;
-
-        // * check if current subscription was created within the last like 30 seconds
-        const isNewSubscription = dayjs().diff(currentSubscription.created_at, 'seconds') < 30;
-
-        // * handle double webhook calls within 60 seconds
-        if (isNewSubscription) return;
-
-        await ClassmojiService.subscription.update(currentSubscription.id, subscriptionUpdate);
-
-        // * create new subscription with free tier
-        await ClassmojiService.subscription.create({
-          user_id: user.id,
-          tier: 'FREE',
-        });
+      const currentSubscription = await ClassmojiService.subscription.getCurrent(user.id);
+      if (!currentSubscription?.id) {
+        return;
       }
-    } catch (error: any) {
-      console.error('❌ Error in customer.subscription.updated', error);
+
+      const isNewSubscription = dayjs().diff(currentSubscription.created_at, 'seconds') < 30;
+      if (isNewSubscription) {
+        return;
+      }
+
+      await ClassmojiService.subscription.update(currentSubscription.id, subscriptionUpdate);
+      await ClassmojiService.subscription.create({
+        user_id: user.id,
+        tier: 'FREE',
+      });
+    } catch (error: unknown) {
+      console.error('Error in customer.subscription.updated', error);
     }
   },
 
-  'customer.subscription.deleted': async (_: any, subscription: any) => {
+  'customer.subscription.deleted': async (_user: BillingUser | null, subscription: Stripe.Subscription) => {
     try {
       const classmojiSubscription = await ClassmojiService.subscription.findBy({
         where: {
@@ -71,32 +93,38 @@ const stripeWebhookHandlers: Record<string, (user: any, subscription: any) => Pr
         },
       });
 
-      // * stripe immediately expires the subscription
       if (classmojiSubscription?.id) {
         await ClassmojiService.subscription.update(classmojiSubscription.id, {
           ends_at: new Date(),
         });
       }
-    } catch (error: any) {
-      console.error('❌ Error in customer.subscription.deleted', error);
+    } catch (error: unknown) {
+      console.error('Error in customer.subscription.deleted', error);
     }
   },
 };
 
-export default async function stripeRoutes(fastify: any): Promise<void> {
+export default async function stripeRoutes(fastify: FastifyInstance): Promise<void> {
   fastify.post('/stripe', {
-    preHandler: async function () {},
-    handler: async function (request: any, reply: any) {
-      const handler = stripeWebhookHandlers[request.body.type];
-      const subscription = request.body.data.object;
-      const user = await ClassmojiService.user.findBy({
-        where: {
-          stripe_customer_id: subscription.customer,
-        },
-      });
+    preHandler: async function handler(_request: FastifyRequest, _reply: FastifyReply) {},
+    handler: async function handler(request: FastifyRequest, reply: FastifyReply) {
+      const body = request.body as StripeWebhookRequestBody;
+      const handler = stripeWebhookHandlers[body.type];
+      const subscription = body.data.object;
+      const customerId = getCustomerId(subscription.customer);
+
+      const user = customerId
+        ? await ClassmojiService.user.findBy({
+            where: {
+              stripe_customer_id: customerId,
+            },
+          })
+        : null;
+
       if (handler) {
         await handler(user, subscription);
       }
+
       return reply.status(200).send({ success: true });
     },
   });

@@ -1,7 +1,18 @@
 import { Drawer, Button } from 'antd';
 import ModuleImportTable from './ModuleImportTable';
+import type { ClassroomModule, ModuleConfig } from './types';
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any -- complex Prisma module/classroom shapes from loader
+interface ModuleSelectionDrawerProps {
+  open: boolean;
+  onClose: () => void;
+  modules: ClassroomModule[];
+  selectedModules: Map<string, ModuleConfig>;
+  onModuleToggle: (moduleId: string, checked: boolean) => void;
+  onQuizToggle: (moduleId: string, checked: boolean) => void;
+  onSelectAll: () => void;
+  onDeselectAll: () => void;
+}
+
 const ModuleSelectionDrawer = ({
   open,
   onClose,
@@ -11,7 +22,7 @@ const ModuleSelectionDrawer = ({
   onQuizToggle,
   onSelectAll,
   onDeselectAll,
-}: any) => { // eslint-disable-line @typescript-eslint/no-explicit-any -- component accepts varied data shapes from different routes
+}: ModuleSelectionDrawerProps) => {
   return (
     <Drawer
       title="Select Modules to Import"

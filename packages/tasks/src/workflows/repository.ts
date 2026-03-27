@@ -6,46 +6,165 @@ dayjs.extend(isSameOrBefore);
 import { ClassmojiService, HelperService, getGitProvider, ensureClassroomTeam } from '@classmoji/services';
 import { titleToIdentifier } from '@classmoji/utils';
 import { createGithubRepositoryAssignmentTask } from './repositoryAssignment.ts';
-import { updateRepository } from '../helpers/updateRepository.ts';
-import { createRepository } from '../helpers/createRepository.ts';
+import { updateRepository, type UpdateRepositoryPayload } from '../helpers/updateRepository.ts';
+import { createRepository, type CreateRepositoryPayload } from '../helpers/createRepository.ts';
+
+type GitOrganizationLike = Parameters<typeof getGitProvider>[0] & { login: string | null };
+type StrictGitOrganizationLike = Parameters<typeof getGitProvider>[0] & { login: string };
+type ModuleType = 'INDIVIDUAL' | 'GROUP';
+
+interface ModuleAssignmentRecord {
+  id: string;
+  title: string;
+  body?: string | null;
+  description?: string | null;
+  release_at: Date | string | null;
+}
+
+interface ModuleRecord {
+  id: string;
+  title: string;
+  slug: string | null;
+  type: ModuleType;
+  template: string;
+  project_template_id: string | null;
+  assignments: ModuleAssignmentRecord[];
+}
+
+interface StudentRecord {
+  id: string;
+  login: string | null;
+}
+
+interface TeamRecord {
+  id: string;
+  slug: string;
+}
+
+interface ClassroomRecord {
+  id: string;
+  slug: string;
+  git_organization: GitOrganizationLike;
+}
+
+interface RepositoryTaskContext {
+  ctx: {
+    run: {
+      tags?: string[];
+    };
+  };
+}
+
+interface CreateRepositoriesTaskPayload {
+  logins: string[];
+  assignmentTitle: string;
+  org: string;
+  sessionId: string;
+}
+
+interface StandardCreateRepositoryTaskPayload extends Omit<CreateRepositoryPayload, 'classroom'> {
+  classroom: ClassroomRecord;
+  module: ModuleRecord;
+  student?: StudentRecord;
+  team?: TeamRecord;
+}
+
+interface LegacyCreateRepositoryTaskPayload {
+  organization: ClassroomRecord;
+  assignment: ModuleAssignmentRecord & {
+    module: ModuleRecord;
+  };
+  repoName: string;
+  templateOwner: string;
+  templateRepo: string;
+  student?: StudentRecord;
+}
+
+type CreateRepositoryTaskPayload =
+  | StandardCreateRepositoryTaskPayload
+  | LegacyCreateRepositoryTaskPayload;
+
+interface AddCollaboratorsToRepoTaskPayload {
+  module: ModuleRecord;
+  classroom: ClassroomRecord;
+  repoName: string;
+  student?: StudentRecord;
+  team?: TeamRecord;
+}
+
+interface CreateRepoInDatabaseTaskPayload extends StandardCreateRepositoryTaskPayload {
+  repoId: string;
+}
+
+interface DeleteRepositoryTaskPayload {
+  id?: string;
+  name: string;
+  gitOrganization: StrictGitOrganizationLike;
+  deleteFromGithub?: boolean;
+}
+
+interface CreateProjectForRepoTaskPayload {
+  classroom: ClassroomRecord;
+  module: ModuleRecord;
+  repoName: string;
+  repoId: string;
+  team?: TeamRecord | null;
+}
+
+interface CreateProjectsForModuleTaskPayload {
+  moduleId: string;
+  classroomSlug: string;
+}
+
+const isLegacyCreateRepositoryPayload = (
+  payload: CreateRepositoryTaskPayload
+): payload is LegacyCreateRepositoryTaskPayload => {
+  return 'organization' in payload;
+};
 
 export const createRepositoriesTask = task({
   id: 'create_repositories',
   queue: {
     concurrencyLimit: 1,
   },
-  run: async (payload: { logins: string[]; assignmentTitle: string; org: string; sessionId: string }) => {
+  run: async (payload: CreateRepositoriesTaskPayload) => {
     const { logins, assignmentTitle, org, sessionId } = payload;
 
     const module = await ClassmojiService.module.findBySlugAndTitle(org, assignmentTitle);
-
     const classroom = await ClassmojiService.classroom.findBySlug(org);
 
-    const [templateOwner, templateRepo] = module!.template.split('/');
-    const students = await ClassmojiService.classroomMembership.findUsersByRole(classroom!.id, 'STUDENT');
-    const teams = await ClassmojiService.team.findByClassroomId(classroom!.id);
+    if (!module || !classroom || !classroom.git_organization.login) {
+      throw new Error(`Unable to load module or classroom for ${org}/${assignmentTitle}`);
+    }
 
-    const gitProvider = getGitProvider(classroom!.git_organization as any);
+    const [templateOwner, templateRepo] = module.template.split('/');
+    const students: StudentRecord[] = await ClassmojiService.classroomMembership.findUsersByRole(
+      classroom.id,
+      'STUDENT'
+    );
+    const teams: TeamRecord[] = await ClassmojiService.team.findByClassroomId(classroom.id);
+
+    const gitProvider = getGitProvider(classroom.git_organization);
     const token = await gitProvider.getAccessToken();
-    const githubOrganization = await gitProvider.getOrganization(classroom!.git_organization.login);
-    const organizationGithubPlan = githubOrganization.plan.name; // github plan name
+    const githubOrganization = await gitProvider.getOrganization(classroom.git_organization.login);
+    const organizationGithubPlan = githubOrganization.plan?.name ?? 'free';
 
     // Use slug if available, otherwise generate from title
-    const moduleSlug = module!.slug || titleToIdentifier(module!.title);
+    const moduleSlug = module.slug || titleToIdentifier(module.title);
 
-    const reposData = logins.map((login: string) => {
+    const reposData = logins.map(login => {
       const repoName = `${moduleSlug}-${login}`;
-      const data: any = {
+      const data: StandardCreateRepositoryTaskPayload = {
         repoName,
-        classroom: classroom,
-        module: module,
+        classroom,
+        module,
         templateOwner,
         templateRepo,
         token,
         organizationGithubPlan,
       };
 
-      if (module!.type === 'INDIVIDUAL') {
+      if (module.type === 'INDIVIDUAL') {
         data.student = students.find(student => student.login === login);
       } else {
         data.team = teams.find(team => team.slug === login);
@@ -57,15 +176,14 @@ export const createRepositoriesTask = task({
         payload: data,
         options: {
           tags,
+          concurrencyKey: org,
         },
       };
     });
 
-    await createRepositoryTask.batchTriggerAndWait(reposData, {
-      concurrencyKey: org,
-    } as any);
+    await createRepositoryTask.batchTriggerAndWait(reposData);
 
-    await ClassmojiService.module.update(module!.id, {
+    await ClassmojiService.module.update(module.id, {
       is_published: true,
     });
   },
@@ -76,69 +194,96 @@ export const createRepositoryTask = task({
   queue: {
     concurrencyLimit: 6,
   },
-  run: async (payload: any, { ctx }: { ctx: any }) => {
-    const { classroom } = payload;
+  run: async (payload: CreateRepositoryTaskPayload, { ctx }: RepositoryTaskContext) => {
     try {
-      const repoId = await createRepository(payload);
-      // Add collaborators to repo
+      const normalizedPayload = isLegacyCreateRepositoryPayload(payload)
+        ? await (async (): Promise<StandardCreateRepositoryTaskPayload> => {
+            const classroom = payload.organization;
+            const module = payload.assignment.module;
+            const gitProvider = getGitProvider(classroom.git_organization);
+            const orgLogin = classroom.git_organization.login;
+
+            if (!orgLogin) {
+              throw new Error('Missing Git organization login');
+            }
+
+            const token = await gitProvider.getAccessToken();
+            const githubOrganization = await gitProvider.getOrganization(orgLogin);
+
+            return {
+              classroom,
+              module,
+              repoName: payload.repoName,
+              templateOwner: payload.templateOwner,
+              templateRepo: payload.templateRepo,
+              token,
+              organizationGithubPlan: githubOrganization.plan?.name ?? 'free',
+              student: payload.student,
+            };
+          })()
+        : payload;
+      const { classroom } = normalizedPayload;
+      const repoId = await createRepository(normalizedPayload);
+
       await addCollaboratorsToRepoTask.triggerAndWait(
         {
-          ...payload,
+          ...normalizedPayload,
         },
         { tags: ctx.run.tags, concurrencyKey: classroom.slug }
       );
-      // Create repo in internal database
+
       const triggerResult = await createRepoInDatabaseTask.triggerAndWait(
         {
-          ...payload,
+          ...normalizedPayload,
           repoId,
         },
         { tags: ctx.run.tags, concurrencyKey: classroom.slug }
       );
-      const studentRepo = (triggerResult as any).output;
-      // Create GitHub Project for GROUP modules with project template
-      if (payload.module.type === 'GROUP' && payload.module.project_template_id) {
+
+      if (!triggerResult.ok) {
+        throw triggerResult.error;
+      }
+
+      const studentRepo = triggerResult.output;
+
+      if (normalizedPayload.module.type === 'GROUP' && normalizedPayload.module.project_template_id) {
         await createProjectForRepoTask.triggerAndWait(
           {
             classroom,
-            module: payload.module,
-            repoName: payload.repoName,
+            module: normalizedPayload.module,
+            repoName: normalizedPayload.repoName,
             repoId: studentRepo.id,
-            team: payload.team,
+            team: normalizedPayload.team,
           },
           { tags: ctx.run.tags, concurrencyKey: classroom.slug }
         );
       }
 
-      // create assignments that should have been released.
-      // this should only run when student joined after assignment had been released
-      // or when assignment needs to be released but no repos yet
-      const filteredAssignments = payload.module.assignments.filter((assignment: any) =>
+      const filteredAssignments = normalizedPayload.module.assignments.filter(assignment =>
         dayjs(assignment.release_at).isSameOrBefore(dayjs())
       );
-      const assignmentPayloads = filteredAssignments.map((assignment: any) => {
-        return {
-          payload: {
-            assignment,
-            studentRepo,
-            repoName: payload.repoName,
-            organization: payload.classroom.git_organization,
-          },
-          options: { tags: ctx.run.tags },
-        };
-      });
+
+      const assignmentPayloads = filteredAssignments.map(assignment => ({
+        payload: {
+          assignment,
+          studentRepo,
+          repoName: normalizedPayload.repoName,
+          organization: normalizedPayload.classroom.git_organization,
+        },
+        options: { tags: ctx.run.tags, concurrencyKey: classroom.slug },
+      }));
+
       if (assignmentPayloads.length) {
-        await createGithubRepositoryAssignmentTask.batchTriggerAndWait(assignmentPayloads, {
-          concurrencyKey: classroom.slug,
-        } as any);
+        await createGithubRepositoryAssignmentTask.batchTriggerAndWait(assignmentPayloads);
+
         for (const assignmentPayload of assignmentPayloads) {
           ClassmojiService.assignment.update(assignmentPayload.payload.assignment.id, {
             is_published: true,
           });
         }
       }
-    } catch (error: any) {
-      logger.error('Error creating repository', error);
+    } catch (error: unknown) {
+      logger.error('Error creating repository', { error });
       throw error;
     }
   },
@@ -149,14 +294,22 @@ export const addCollaboratorsToRepoTask = task({
   queue: {
     concurrencyLimit: 6,
   },
-  run: async (payload: any) => {
+  run: async (payload: AddCollaboratorsToRepoTaskPayload) => {
     try {
       const { module, classroom, repoName } = payload;
       const gitOrgLogin = classroom.git_organization.login;
+
+      if (!gitOrgLogin) {
+        throw new Error('Missing Git organization login');
+      }
+
       const gitProvider = getGitProvider(classroom.git_organization);
 
-      // Add student to repo
       if (module.type === 'INDIVIDUAL') {
+        if (!payload.student?.login) {
+          throw new Error(`Missing student login for repo ${repoName}`);
+        }
+
         await gitProvider.addCollaborator(
           gitOrgLogin,
           repoName,
@@ -164,6 +317,10 @@ export const addCollaboratorsToRepoTask = task({
           'maintain'
         );
       } else {
+        if (!payload.team?.slug) {
+          throw new Error(`Missing team slug for repo ${repoName}`);
+        }
+
         await gitProvider.addTeamToRepo(
           gitOrgLogin,
           repoName,
@@ -172,7 +329,6 @@ export const addCollaboratorsToRepoTask = task({
         );
       }
 
-      // Ensure assistants team exists and add to repo (e.g., "cs101-25w-assistants")
       const team = await ensureClassroomTeam(gitProvider, gitOrgLogin, classroom, 'ASSISTANT');
       await gitProvider.addTeamToRepo(
         gitOrgLogin,
@@ -180,7 +336,7 @@ export const addCollaboratorsToRepoTask = task({
         team.slug,
         'maintain'
       );
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error('Error adding collaborator to repo', error);
       throw error;
     }
@@ -189,7 +345,7 @@ export const addCollaboratorsToRepoTask = task({
 
 export const createRepoInDatabaseTask = task({
   id: 'cf-create_repository',
-  run: async (payload: any) => {
+  run: async (payload: CreateRepoInDatabaseTaskPayload) => {
     try {
       const { module, classroom, repoName } = payload;
       const isIndividualModule = module.type === 'INDIVIDUAL';
@@ -202,7 +358,7 @@ export const createRepoInDatabaseTask = task({
         team: isIndividualModule ? null : payload.team,
         providerId: payload.repoId,
       });
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error('Error creating repository in database', error);
       throw error;
     }
@@ -214,7 +370,7 @@ export const deleteRepoTask = task({
   queue: {
     concurrencyLimit: 6,
   },
-  run: async (payload: any) => {
+  run: async (payload: DeleteRepositoryTaskPayload) => {
     return HelperService.deleteRepository(payload);
   },
 });
@@ -224,7 +380,7 @@ export const updateRepositoryTask = task({
   queue: {
     concurrencyLimit: 6,
   },
-  run: async (payload: any) => {
+  run: async (payload: UpdateRepositoryPayload) => {
     return updateRepository(payload);
   },
 });
@@ -237,21 +393,20 @@ export const createProjectForRepoTask = task({
   queue: {
     concurrencyLimit: 4,
   },
-  run: async (payload: any) => {
+  run: async (payload: CreateProjectForRepoTaskPayload) => {
     const { classroom, module, repoName, repoId, team } = payload;
 
     try {
       const gitProvider = getGitProvider(classroom.git_organization);
       const org = classroom.git_organization.login;
 
-      // Get organization node_id for project creation
-      const orgNodeId = await (gitProvider as any).getOrganizationNodeId(org);
+      if (!org || !module.project_template_id) {
+        throw new Error(`Missing project configuration for ${repoName}`);
+      }
 
-      // Use repo name as project title
+      const orgNodeId = await gitProvider.getOrganizationNodeId(org);
       const projectTitle = repoName;
-
-      // Copy project from template
-      const project = await (gitProvider as any).copyProjectFromTemplate(
+      const project = await gitProvider.copyProjectFromTemplate(
         module.project_template_id,
         orgNodeId,
         projectTitle
@@ -262,29 +417,28 @@ export const createProjectForRepoTask = task({
         projectUrl: project.url,
       });
 
-      // Update repository with project info
       await ClassmojiService.repository.update(repoId, {
         project_id: project.id,
         project_number: project.number,
       });
 
-      // Link repository to project
-      const repo = await gitProvider.getRepository(org, repoName) as any;
-      await (gitProvider as any).linkRepoToProject(project.id, repo.node_id);
-
-      // Add student team to project
-      if (team?.slug) {
-        await (gitProvider as any).addTeamToProject(project.id, org, team.slug, 'WRITER');
+      const repo = await gitProvider.getRepository(org, repoName);
+      if (!repo.node_id) {
+        throw new Error(`Repository ${repoName} is missing a node_id`);
       }
 
-      // Add assistants team to project
+      await gitProvider.linkRepoToProject(project.id, repo.node_id);
+
+      if (team?.slug) {
+        await gitProvider.addTeamToProject(project.id, org, team.slug, 'WRITER');
+      }
+
       const assistantsTeam = await ensureClassroomTeam(gitProvider, org, classroom, 'ASSISTANT');
-      await (gitProvider as any).addTeamToProject(project.id, org, assistantsTeam.slug, 'WRITER');
+      await gitProvider.addTeamToProject(project.id, org, assistantsTeam.slug, 'WRITER');
 
       return project;
-    } catch (error: any) {
-      logger.error(`Error creating project for repo ${repoName}:`, error);
-      // Don't throw - project creation is optional, don't fail the whole workflow
+    } catch (error: unknown) {
+      logger.error(`Error creating project for repo ${repoName}:`, { error });
       return null;
     }
   },
@@ -298,14 +452,22 @@ export const createProjectsForModuleTask = task({
   queue: {
     concurrencyLimit: 1,
   },
-  run: async (payload: { moduleId: string; classroomSlug: string }, { ctx }: { ctx: any }) => {
+  run: async (payload: CreateProjectsForModuleTaskPayload, { ctx }: RepositoryTaskContext) => {
     const { moduleId, classroomSlug } = payload;
 
     const module = await ClassmojiService.module.findById(moduleId);
     const classroom = await ClassmojiService.classroom.findBySlug(classroomSlug);
-    const repos = await ClassmojiService.repository.findByModule(classroomSlug, moduleId);
+    const repos: Array<{
+      id: string;
+      name: string;
+      project_id?: string | null;
+      team?: TeamRecord | null;
+    }> = await ClassmojiService.repository.findByModule(classroomSlug, moduleId);
 
-    // Filter repos that don't have projects
+    if (!module || !classroom) {
+      throw new Error(`Unable to load module or classroom for ${classroomSlug}/${moduleId}`);
+    }
+
     const reposWithoutProjects = repos.filter(repo => !repo.project_id);
 
     if (reposWithoutProjects.length === 0) {
@@ -323,12 +485,10 @@ export const createProjectsForModuleTask = task({
         repoId: repo.id,
         team: repo.team,
       },
-      options: { tags: ctx.run.tags },
+      options: { tags: ctx.run.tags, concurrencyKey: classroomSlug },
     }));
 
-    await createProjectForRepoTask.batchTriggerAndWait(payloads, {
-      concurrencyKey: classroomSlug,
-    } as any);
+    await createProjectForRepoTask.batchTriggerAndWait(payloads);
 
     return {
       created: reposWithoutProjects.length,
@@ -336,4 +496,3 @@ export const createProjectsForModuleTask = task({
     };
   },
 });
-

@@ -10,7 +10,12 @@ import { ActionTypes } from '~/constants';
 
 const { Text } = Typography;
 
-const FormAssistant = ({ close, token }: any) => { // eslint-disable-line @typescript-eslint/no-explicit-any -- token from loader may be null/undefined
+interface FormAssistantProps {
+  close: () => void;
+  token?: string | null;
+}
+
+const FormAssistant = ({ close, token }: FormAssistantProps) => {
   const { fetcher, notify } = useGlobalFetcher();
   const [form] = Form.useForm();
   const [loading, setLoading] = useState(false);

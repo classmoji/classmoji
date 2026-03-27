@@ -1,15 +1,16 @@
 import { useMemo } from 'react';
 import { useLoaderData } from 'react-router';
-import prisma from '@classmoji/database';
+import getPrisma from '@classmoji/database';
 import { assertSlideAccess } from '@classmoji/auth/server';
 import { SandpackRenderer } from '@classmoji/ui-components/sandpack';
 import RevealPresenter from '~/components/RevealPresenter';
 import { fetchContent } from '~/utils/contentProxy';
 
-export const loader = async ({ params, request }: any) => {
+export const loader = async ({ params, request }: { params: Record<string, string | undefined>; request: Request }) => {
   const { slideId } = params;
+  if (!slideId) throw new Response('Missing slideId', { status: 400 });
 
-  const slide = await prisma!.slide.findUnique({
+  const slide = await getPrisma().slide.findUnique({
     where: { id: slideId },
     include: {
       classroom: {
@@ -47,8 +48,8 @@ export const loader = async ({ params, request }: any) => {
   const contentUrl = `/content/${gitOrgLogin}/${repo}/${filePath}`;
 
   // Fetch content using shared utility (CDN first, API fallback)
-  let slideContent: any = null;
-  let contentError: any = null;
+  let slideContent: string | null = null;
+  let contentError: string | null = null;
 
   const contentResult = await fetchContent({
     org: gitOrgLogin,
@@ -57,7 +58,7 @@ export const loader = async ({ params, request }: any) => {
   });
 
   if (contentResult) {
-    slideContent = contentResult.content;
+    slideContent = contentResult.content as string;
   } else {
     contentError = 'Failed to load slide content';
   }
@@ -72,7 +73,7 @@ export const loader = async ({ params, request }: any) => {
 };
 
 export default function SlidePresenter() {
-  const { slide, contentUrl, slideContent, contentError, canPresent } = useLoaderData() as any;
+  const { slide, contentUrl, slideContent, contentError, canPresent } = useLoaderData<typeof loader>();
 
   // Extract theme from slideContent for Sandpack auto-theme detection
   // This is computed once since the content doesn't change during presentation
@@ -97,8 +98,8 @@ export default function SlidePresenter() {
         initialError={contentError}
         slideId={slide.id}
         isPresenter={isPresenter}
-        multiplexId={slide.multiplex_id}
-        multiplexSecret={slide.multiplex_secret}
+        multiplexId={slide.multiplex_id ?? undefined}
+        multiplexSecret={slide.multiplex_secret ?? undefined}
       />
       {/* Mount Sandpack components into .sandpack-embed elements */}
       <SandpackRenderer

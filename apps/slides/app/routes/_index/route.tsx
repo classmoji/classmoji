@@ -1,14 +1,14 @@
 import { useState, useEffect } from 'react';
 import { useLoaderData, Link, useFetcher } from 'react-router';
 import { Popconfirm, Modal, Input, Tooltip, Spin, message } from 'antd';
-import prisma from '@classmoji/database';
+import getPrisma from '@classmoji/database';
 import { getAuthSession } from '@classmoji/auth/server';
 import { assertSlideAccess } from '@classmoji/auth/server';
 import { ClassmojiService } from '@classmoji/services';
 import { ContentService } from '@classmoji/content';
 import { deleteSlide } from '~/utils/slideService.server';
 
-export const loader = async ({ request }: any) => {
+export const loader = async ({ request }: { request: Request }) => {
   // 1. Require authentication
   const authData = await getAuthSession(request);
   if (!authData) {
@@ -16,7 +16,7 @@ export const loader = async ({ request }: any) => {
   }
 
   // 2. Get user's classroom memberships with roles
-  const memberships = await prisma!.classroomMembership.findMany({
+  const memberships = await getPrisma().classroomMembership.findMany({
     where: { user_id: authData.userId },
     select: { classroom_id: true, role: true },
   });
@@ -53,7 +53,7 @@ export const loader = async ({ request }: any) => {
   }
 
   // 5. Fetch slides with role-based filtering
-  const recentSlides = await prisma!.slide.findMany({
+  const recentSlides = await getPrisma().slide.findMany({
     where: { OR: whereConditions },
     take: 20,
     orderBy: { updated_at: 'desc' },
@@ -79,7 +79,7 @@ export const loader = async ({ request }: any) => {
   };
 };
 
-export const action = async ({ request }: any) => {
+export const action = async ({ request }: { request: Request }) => {
   const formData = await request.formData();
   const intent = formData.get('intent');
 
@@ -87,7 +87,7 @@ export const action = async ({ request }: any) => {
   const authData = await getAuthSession(request);
 
   if (intent === 'delete') {
-    const slideId = formData.get('slideId');
+    const slideId = formData.get('slideId') as string | null;
 
     if (!slideId) {
       return { error: 'Slide ID is required' };
@@ -100,23 +100,25 @@ export const action = async ({ request }: any) => {
         slideId,
         accessType: 'edit',
       });
-    } catch (error: any) {
-      return { error: error.message || 'You do not have permission to delete this slide' };
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : 'You do not have permission to delete this slide';
+      return { error: message };
     }
 
     // Delete the slide (no theme cleanup for simple deletion)
     try {
       await deleteSlide({ slideId, deleteTheme: false });
       return { success: true, intent: 'delete', deletedSlideId: slideId };
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error('Failed to delete slide:', error);
-      return { error: error.message || 'Failed to delete slide' };
+      const message = error instanceof Error ? error.message : 'Failed to delete slide';
+      return { error: message };
     }
   }
 
   if (intent === 'rename') {
-    const slideId = formData.get('slideId');
-    const newTitle = formData.get('title');
+    const slideId = formData.get('slideId') as string | null;
+    const newTitle = formData.get('title') as string | null;
 
     if (!slideId || !newTitle) {
       return { error: 'Slide ID and title are required' };
@@ -129,12 +131,13 @@ export const action = async ({ request }: any) => {
         slideId,
         accessType: 'edit',
       });
-    } catch (error: any) {
-      return { error: error.message || 'You do not have permission to rename this slide' };
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : 'You do not have permission to rename this slide';
+      return { error: message };
     }
 
     try {
-      const slide = await prisma!.slide.update({
+      const slide = await getPrisma().slide.update({
         where: { id: slideId },
         data: { title: newTitle.trim() },
         select: { id: true, title: true, classroom_id: true },
@@ -144,14 +147,15 @@ export const action = async ({ request }: any) => {
       await ClassmojiService.contentManifest.saveManifest(slide.classroom_id);
 
       return { success: true, intent: 'rename', slide };
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error('Failed to rename slide:', error);
-      return { error: error.message || 'Failed to rename slide' };
+      const message = error instanceof Error ? error.message : 'Failed to rename slide';
+      return { error: message };
     }
   }
 
   if (intent === 'duplicate') {
-    const slideId = formData.get('slideId');
+    const slideId = formData.get('slideId') as string | null;
 
     if (!slideId) {
       return { error: 'Slide ID is required' };
@@ -164,13 +168,14 @@ export const action = async ({ request }: any) => {
         slideId,
         accessType: 'edit',
       });
-    } catch (error: any) {
-      return { error: error.message || 'You do not have permission to duplicate this slide' };
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : 'You do not have permission to duplicate this slide';
+      return { error: message };
     }
 
     try {
       // Fetch the slide with classroom and git organization info
-      const slide = await prisma!.slide.findUnique({
+      const slide = await getPrisma().slide.findUnique({
         where: { id: slideId },
         include: {
           classroom: {
@@ -230,7 +235,7 @@ export const action = async ({ request }: any) => {
       }
 
       // Create new database record
-      const newSlide = await prisma!.slide.create({
+      const newSlide = await getPrisma().slide.create({
         data: {
           title: `${slide.title} (Copy)`,
           slug: newSlug,
@@ -258,9 +263,10 @@ export const action = async ({ request }: any) => {
       await ClassmojiService.contentManifest.saveManifest(slide.classroom_id);
 
       return { success: true, intent: 'duplicate', newSlide };
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error('Failed to duplicate slide:', error);
-      return { error: error.message || 'Failed to duplicate slide' };
+      const message = error instanceof Error ? error.message : 'Failed to duplicate slide';
+      return { error: message };
     }
   }
 
@@ -268,9 +274,9 @@ export const action = async ({ request }: any) => {
 };
 
 export default function SlidesIndex() {
-  const { slides: initialSlides, webappUrl } = useLoaderData() as any;
+  const { slides: initialSlides, webappUrl } = useLoaderData<typeof loader>();
   const [slides, setSlides] = useState(initialSlides);
-  const [renameModal, setRenameModal] = useState<{ open: boolean; slide: any }>({ open: false, slide: null });
+  const [renameModal, setRenameModal] = useState<{ open: boolean; slide: { id: string; title: string } | null }>({ open: false, slide: null });
   const [renameValue, setRenameValue] = useState('');
   const [progressModal, setProgressModal] = useState<{ open: boolean; action: string | null; slideTitle: string }>({ open: false, action: null, slideTitle: '' });
   const fetcher = useFetcher();
@@ -280,18 +286,18 @@ export default function SlidesIndex() {
     if (fetcher.data?.success) {
       if (fetcher.data.intent === 'delete' && fetcher.data.deletedSlideId) {
         message.success('Slide deleted successfully');
-        setSlides((prev: any) => prev.filter((s: any) => s.id !== fetcher.data.deletedSlideId));
+        setSlides((prev) => prev.filter((s) => s.id !== fetcher.data.deletedSlideId));
         setProgressModal({ open: false, action: null, slideTitle: '' });
       } else if (fetcher.data.intent === 'rename' && fetcher.data.slide) {
         message.success('Slide renamed successfully');
-        setSlides((prev: any) => prev.map((s: any) =>
+        setSlides((prev) => prev.map((s) =>
           s.id === fetcher.data.slide.id ? { ...s, title: fetcher.data.slide.title } : s
         ));
         setRenameModal({ open: false, slide: null });
         setRenameValue('');
       } else if (fetcher.data.intent === 'duplicate' && fetcher.data.newSlide) {
         message.success('Slide duplicated successfully');
-        setSlides((prev: any) => [fetcher.data.newSlide, ...prev]);
+        setSlides((prev) => [fetcher.data.newSlide, ...prev]);
         setProgressModal({ open: false, action: null, slideTitle: '' });
       }
     } else if (fetcher.data?.error) {
@@ -300,7 +306,7 @@ export default function SlidesIndex() {
     }
   }, [fetcher.data]);
 
-  const handleDelete = (slide: any) => {
+  const handleDelete = (slide: { id: string; title: string }) => {
     setProgressModal({ open: true, action: 'delete', slideTitle: slide.title });
     fetcher.submit(
       { intent: 'delete', slideId: slide.id },
@@ -316,7 +322,7 @@ export default function SlidesIndex() {
     );
   };
 
-  const handleDuplicate = (slide: any) => {
+  const handleDuplicate = (slide: { id: string; title: string }) => {
     setProgressModal({ open: true, action: 'duplicate', slideTitle: slide.title });
     fetcher.submit(
       { intent: 'duplicate', slideId: slide.id },
@@ -324,7 +330,7 @@ export default function SlidesIndex() {
     );
   };
 
-  const openRenameModal = (slide: any) => {
+  const openRenameModal = (slide: { id: string; title: string }) => {
     setRenameModal({ open: true, slide });
     setRenameValue(slide.title);
   };
@@ -369,7 +375,7 @@ export default function SlidesIndex() {
           </div>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-            {slides.map((slide: any) => (
+            {slides.map((slide) => (
               <div
                 key={slide.id}
                 className="relative group bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 hover:border-gray-300 dark:hover:border-gray-600 transition-colors overflow-hidden"

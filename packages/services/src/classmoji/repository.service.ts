@@ -1,23 +1,33 @@
-import prisma from '@classmoji/database';
+import getPrisma from '@classmoji/database';
+import type { GitProvider, Prisma } from '@prisma/client';
 
-export const create = async (payload: any) => {
+interface RepositoryCreatePayload {
+  moduleId: string;
+  classroom: { id: string; git_organization: { provider: GitProvider | string } };
+  repoName: string;
+  student?: { id: string } | null;
+  team?: { id: string } | null;
+  providerId: string;
+}
+
+export const create = async (payload: RepositoryCreatePayload) => {
   const { moduleId, classroom, repoName, student, team, providerId } = payload;
 
-  return prisma!.repository.create({
+  return getPrisma().repository.create({
     data: {
       name: repoName,
       classroom_id: classroom.id,
       module_id: moduleId,
       team_id: team?.id,
       student_id: student?.id,
-      provider: classroom.git_organization.provider,
+      provider: classroom.git_organization.provider as GitProvider,
       provider_id: providerId,
     },
   });
 };
 
 export const findByModule = async (classroomSlug: string, moduleId: string) => {
-  const repos = await prisma!.repository.findMany({
+  const repos = await getPrisma().repository.findMany({
     where: {
       classroom: { slug: classroomSlug },
       module_id: moduleId,
@@ -49,8 +59,8 @@ export const findByModule = async (classroomSlug: string, moduleId: string) => {
   return repos;
 };
 
-export const findMany = async (query: any) => {
-  return prisma!.repository.findMany({
+export const findMany = async (query: Prisma.RepositoryWhereInput) => {
+  return getPrisma().repository.findMany({
     where: query,
     include: {
       module: true,
@@ -76,7 +86,7 @@ export const findMany = async (query: any) => {
 };
 
 export const findByName = async (classroomSlug: string, repoName: string) => {
-  return prisma!.repository.findFirst({
+  return getPrisma().repository.findFirst({
     where: {
       classroom: { slug: classroomSlug },
       name: repoName,
@@ -84,8 +94,8 @@ export const findByName = async (classroomSlug: string, repoName: string) => {
   });
 };
 
-export const find = async (query: any) => {
-  return prisma!.repository.findFirst({
+export const find = async (query: Prisma.RepositoryWhereInput) => {
+  return getPrisma().repository.findFirst({
     where: {
       ...query,
     },
@@ -93,7 +103,7 @@ export const find = async (query: any) => {
 };
 
 export const findByStudent = async (moduleId: string, userId: string) => {
-  return prisma!.repository.findFirst({
+  return getPrisma().repository.findFirst({
     where: {
       module_id: moduleId,
       student_id: userId,
@@ -107,15 +117,15 @@ export const findByStudent = async (moduleId: string, userId: string) => {
 };
 
 export const deleteById = async (repoId: string) => {
-  return prisma!.repository.delete({
+  return getPrisma().repository.delete({
     where: {
       id: repoId,
     },
   });
 };
 
-export const update = async (repoId: string, data: any) => {
-  return prisma!.repository.update({
+export const update = async (repoId: string, data: Prisma.RepositoryUpdateInput) => {
+  return getPrisma().repository.update({
     where: {
       id: repoId,
     },

@@ -1,4 +1,9 @@
-import { BlockNoteSchema, defaultBlockSpecs, createCodeBlockSpec } from '@blocknote/core';
+import {
+  BlockNoteSchema,
+  defaultBlockSpecs,
+  createCodeBlockSpec,
+  type BlockNoteEditor,
+} from '@blocknote/core';
 import { multiColumnSchema } from '@blocknote/xl-multi-column';
 import { codeBlockOptions } from '@blocknote/code-block';
 import {
@@ -49,6 +54,13 @@ export const schema = BlockNoteSchema.create({
   },
 });
 
+export type PageBlockEditor = typeof schema extends BlockNoteSchema<infer BSchema, infer ISchema, infer SSchema>
+  ? BlockNoteEditor<BSchema, ISchema, SSchema>
+  : never;
+
+export type PageBlockInsertions = Parameters<PageBlockEditor['insertBlocks']>[0];
+export type PageBlock = PageBlockInsertions[number];
+
 // Alias for compatibility
 export const createSchemaWithPages = () => schema;
 
@@ -63,7 +75,7 @@ export const customSlashMenuItems = [
     aliases: ['callout', 'highlight', 'tip'],
     group: 'Basic blocks',
     icon: <IconBulb size={18} />,
-    onItemClick: (editor: any) => {
+    onItemClick: (editor: PageBlockEditor) => {
       const currentBlock = editor.getTextCursorPosition().block;
       editor.replaceBlocks([currentBlock], [{ type: 'callout', props: { emoji: '💡' } }]);
     },
@@ -74,7 +86,7 @@ export const customSlashMenuItems = [
     aliases: ['divider', 'hr', 'separator'],
     group: 'Basic blocks',
     icon: <IconMinus size={18} />,
-    onItemClick: (editor: any) => {
+    onItemClick: (editor: PageBlockEditor) => {
       editor.insertBlocks(
         [{ type: 'divider' }],
         editor.getTextCursorPosition().block,
@@ -88,9 +100,9 @@ export const customSlashMenuItems = [
     aliases: ['page', 'link', 'reference', 'mention'],
     group: 'Basic blocks',
     icon: <IconFileText size={18} />,
-    onItemClick: (editor: any) => {
+    onItemClick: (editor: PageBlockEditor) => {
       const currentBlock = editor.getTextCursorPosition().block;
-      const newBlock = { type: 'pageLink' };
+      const newBlock = { type: 'pageLink' } as const;
 
       // Replace current block and move cursor to the new block
       editor.replaceBlocks([currentBlock.id], [newBlock]);
@@ -98,7 +110,7 @@ export const customSlashMenuItems = [
       // Focus the new block immediately after insertion
       setTimeout(() => {
         const blocks = editor.document;
-        const newBlockRef = blocks.find((b: any) => b.type === 'pageLink' && !b.props.pageId);
+        const newBlockRef = blocks.find((b: { type: string; props: Record<string, unknown> }) => b.type === 'pageLink' && !b.props.pageId);
         if (newBlockRef) {
           editor.setTextCursorPosition(newBlockRef, 'end');
         }
@@ -111,7 +123,7 @@ export const customSlashMenuItems = [
     aliases: ['embed', 'iframe', 'codepen', 'codesandbox'],
     group: 'Media',
     icon: <IconWorld size={18} />,
-    onItemClick: (editor: any) => {
+    onItemClick: (editor: PageBlockEditor) => {
       const currentBlock = editor.getTextCursorPosition().block;
       editor.replaceBlocks([currentBlock], [{ type: 'embed' }]);
     },
@@ -122,7 +134,7 @@ export const customSlashMenuItems = [
     aliases: ['video', 'youtube', 'vimeo'],
     group: 'Media',
     icon: <IconPlayerPlay size={18} />,
-    onItemClick: (editor: any) => {
+    onItemClick: (editor: PageBlockEditor) => {
       const currentBlock = editor.getTextCursorPosition().block;
       editor.replaceBlocks([currentBlock], [{ type: 'video' }]);
     },
@@ -133,7 +145,7 @@ export const customSlashMenuItems = [
     aliases: ['terminal', 'shell', 'command', 'cli'],
     group: 'Code',
     icon: <IconTerminal size={18} />,
-    onItemClick: (editor: any) => {
+    onItemClick: (editor: PageBlockEditor) => {
       editor.insertBlocks(
         [{ type: 'terminal' }],
         editor.getTextCursorPosition().block,
@@ -147,7 +159,7 @@ export const customSlashMenuItems = [
     aliases: ['profile', 'person', 'card', 'author'],
     group: 'Advanced',
     icon: <IconUserCircle size={18} />,
-    onItemClick: (editor: any) => {
+    onItemClick: (editor: PageBlockEditor) => {
       editor.insertBlocks(
         [{ type: 'profile' }],
         editor.getTextCursorPosition().block,

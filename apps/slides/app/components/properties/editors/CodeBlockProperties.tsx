@@ -44,13 +44,13 @@ const LANGUAGES = [
 /**
  * Extract language from class name (e.g., 'language-javascript' -> 'javascript')
  */
-function getLanguageFromClass(className: any) {
+function getLanguageFromClass(className: string | undefined) {
   const match = className?.match(/language-(\w+)/);
   return match ? match[1] : 'javascript';
 }
 
 
-export default function CodeBlockProperties({ element }: any) {
+export default function CodeBlockProperties({ element }: { element: HTMLElement }) {
   const { onContentChange, selectElement } = useElementSelection();
   const codeEl = element?.querySelector('code');
 
@@ -98,7 +98,7 @@ export default function CodeBlockProperties({ element }: any) {
   // because contenteditable is on the <section>, not the <code> element.
 
   // Update language class
-  const handleLanguageChange = useCallback((newLang: any) => {
+  const handleLanguageChange = useCallback((newLang: string) => {
     if (!codeEl) return;
 
     // Remove existing language class and add new one
@@ -109,7 +109,7 @@ export default function CodeBlockProperties({ element }: any) {
   }, [codeEl, onContentChange]);
 
   // Toggle line numbers
-  const handleLineNumbersChange = useCallback((e: any) => {
+  const handleLineNumbersChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     if (!element) return;
 
     if (e.target.checked) {
@@ -137,8 +137,8 @@ export default function CodeBlockProperties({ element }: any) {
             className="w-full"
             size="small"
             showSearch
-            filterOption={(input: string, option: any) =>
-              option.label.toLowerCase().includes(input.toLowerCase())
+            filterOption={(input: string, option) =>
+              (option?.label as string)?.toLowerCase().includes(input.toLowerCase()) ?? false
             }
           />
         </div>

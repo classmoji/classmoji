@@ -1,8 +1,23 @@
 import { Tag } from 'antd';
 
-const RepositoryAssignmentStatus = ({ repositoryAssignment, isDropped }: any) => { // eslint-disable-line @typescript-eslint/no-explicit-any -- accepts various Prisma repository assignment shapes
-  const hasLateHours = repositoryAssignment?.num_late_hours > 0;
-  const hasExtension = repositoryAssignment?.extension_hours > 0;
+interface RepositoryAssignmentStatusProps {
+  repositoryAssignment?: {
+    status?: 'OPEN' | 'CLOSED' | string;
+    num_late_hours?: number;
+    extension_hours?: number;
+    is_late_override?: boolean;
+  } | null;
+  isDropped?: boolean;
+}
+
+const RepositoryAssignmentStatus = ({
+  repositoryAssignment,
+  isDropped,
+}: RepositoryAssignmentStatusProps) => {
+  const lateHours = repositoryAssignment?.num_late_hours ?? 0;
+  const extensionHours = repositoryAssignment?.extension_hours ?? 0;
+  const hasLateHours = lateHours > 0;
+  const hasExtension = extensionHours > 0;
   const isLateOverride = repositoryAssignment?.is_late_override;
   const isLate = hasLateHours && !isLateOverride;
 
@@ -46,13 +61,13 @@ const RepositoryAssignmentStatus = ({ repositoryAssignment, isDropped }: any) =>
         <div className="flex flex-col gap-1 ml-2 mt-3">
           {hasExtension && (
             <p className="text-sm italic text-blue-500">
-              {repositoryAssignment.extension_hours} extension hour
-              {repositoryAssignment.extension_hours !== 1 ? 's' : ''}
+              {extensionHours} extension hour
+              {extensionHours !== 1 ? 's' : ''}
             </p>
           )}
           <p className="text-sm italic text-red-500">
-            {repositoryAssignment.num_late_hours} hour
-            {repositoryAssignment.num_late_hours !== 1 ? 's' : ''} late
+            {lateHours} hour
+            {lateHours !== 1 ? 's' : ''} late
           </p>
         </div>
       )}

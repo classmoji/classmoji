@@ -18,7 +18,7 @@ import VideoProperties from './VideoProperties';
  * - Content-specific properties based on block type
  */
 
-export default function BlockProperties({ element }: any) {
+export default function BlockProperties({ element }: { element: HTMLElement }) {
   const { onContentChange } = useElementSelection();
 
   // State for position and size
@@ -27,9 +27,9 @@ export default function BlockProperties({ element }: any) {
   const [zIndex, setZIndex] = useState(0);
 
   // Parse pixel value from style string
-  const parsePixels = useCallback((value: any) => {
+  const parsePixels = useCallback((value: string | number | null | undefined) => {
     if (!value) return 0;
-    return parseInt(value, 10) || 0;
+    return parseInt(String(value), 10) || 0;
   }, []);
 
   // Sync state from element
@@ -51,7 +51,7 @@ export default function BlockProperties({ element }: any) {
   }, [element, parsePixels]);
 
   // Update position
-  const handlePositionChange = useCallback((prop: any, value: any) => {
+  const handlePositionChange = useCallback((prop: 'left' | 'top', value: number | null) => {
     if (!element || value === null) return;
     const newValue = Math.round(value);
     element.style[prop] = `${newValue}px`;
@@ -60,7 +60,7 @@ export default function BlockProperties({ element }: any) {
   }, [element, onContentChange]);
 
   // Update size
-  const handleSizeChange = useCallback((prop: any, value: any) => {
+  const handleSizeChange = useCallback((prop: 'width' | 'height', value: number | null) => {
     if (!element || value === null) return;
     const newValue = Math.max(10, Math.round(value));
     element.style[prop] = `${newValue}px`;
@@ -76,8 +76,8 @@ export default function BlockProperties({ element }: any) {
 
     const blocks = section.querySelectorAll('.sl-block');
     let max = 0;
-    blocks.forEach((block: any) => {
-      const z = parseInt(block.style.zIndex || '0', 10);
+    blocks.forEach((block) => {
+      const z = parseInt((block as HTMLElement).style.zIndex || '0', 10);
       if (z > max) max = z;
     });
     return max;
@@ -87,7 +87,7 @@ export default function BlockProperties({ element }: any) {
   const handleBringForward = useCallback(() => {
     if (!element) return;
     const newZ = zIndex + 1;
-    element.style.zIndex = newZ;
+    element.style.zIndex = String(newZ);
     setZIndex(newZ);
     onContentChange?.();
   }, [element, zIndex, onContentChange]);
@@ -95,7 +95,7 @@ export default function BlockProperties({ element }: any) {
   const handleSendBackward = useCallback(() => {
     if (!element) return;
     const newZ = Math.max(0, zIndex - 1);
-    element.style.zIndex = newZ;
+    element.style.zIndex = String(newZ);
     setZIndex(newZ);
     onContentChange?.();
   }, [element, zIndex, onContentChange]);
@@ -104,7 +104,7 @@ export default function BlockProperties({ element }: any) {
     if (!element) return;
     const maxZ = getMaxZIndex();
     const newZ = maxZ + 1;
-    element.style.zIndex = newZ;
+    element.style.zIndex = String(newZ);
     setZIndex(newZ);
     onContentChange?.();
   }, [element, getMaxZIndex, onContentChange]);
@@ -116,15 +116,15 @@ export default function BlockProperties({ element }: any) {
 
     // Shift all other blocks up by 1
     const blocks = section.querySelectorAll('.sl-block');
-    blocks.forEach((block: any) => {
+    blocks.forEach((block) => {
       if (block !== element) {
-        const currentZ = parseInt(block.style.zIndex || '0', 10);
-        block.style.zIndex = currentZ + 1;
+        const currentZ = parseInt((block as HTMLElement).style.zIndex || '0', 10);
+        (block as HTMLElement).style.zIndex = String(currentZ + 1);
       }
     });
 
     // Set this block to 0
-    element.style.zIndex = 0;
+    element.style.zIndex = '0';
     setZIndex(0);
     onContentChange?.();
   }, [element, onContentChange]);
@@ -159,29 +159,22 @@ export default function BlockProperties({ element }: any) {
     }
   }, [element]);
 
-  // Determine which content editor to show
-  const ContentEditor = useMemo(() => {
-    if (!element) return null;
-    const blockType = element.dataset.blockType;
-
-    switch (blockType) {
-      case 'image':
-        return ImageProperties;
-      case 'code':
-        return CodeBlockProperties;
-      case 'iframe':
-        return IframeProperties;
-      case 'video':
-        return VideoProperties;
-      case 'text':
-        return TextProperties;
-      default:
-        return null;
-    }
-  }, [element]);
-
   if (!element) {
     return null;
+  }
+
+  let contentEditor: React.ReactNode = null;
+  const blockType = element.dataset.blockType;
+  if (blockType === 'image' && contentElement instanceof HTMLImageElement) {
+    contentEditor = <ImageProperties element={contentElement} />;
+  } else if (blockType === 'code' && contentElement instanceof HTMLElement) {
+    contentEditor = <CodeBlockProperties element={contentElement} />;
+  } else if (blockType === 'iframe' && contentElement instanceof HTMLIFrameElement) {
+    contentEditor = <IframeProperties element={contentElement} />;
+  } else if (blockType === 'video' && contentElement instanceof HTMLVideoElement) {
+    contentEditor = <VideoProperties element={contentElement} />;
+  } else if (blockType === 'text' && contentElement instanceof HTMLElement) {
+    contentEditor = <TextProperties element={contentElement} />;
   }
 
   return (
@@ -296,10 +289,10 @@ export default function BlockProperties({ element }: any) {
       </PropertySection>
 
       {/* Content-specific properties */}
-      {ContentEditor && contentElement && (
+      {contentEditor && (
         <>
           <div className="border-t border-gray-200 dark:border-gray-700 my-4" />
-          <ContentEditor element={contentElement} />
+          {contentEditor}
         </>
       )}
     </div>

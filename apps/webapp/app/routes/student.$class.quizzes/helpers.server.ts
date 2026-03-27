@@ -4,7 +4,15 @@
  */
 import { getGitProvider } from '@classmoji/services';
 
-export const getInstallationToken = async (gitOrganization: any) => { // eslint-disable-line @typescript-eslint/no-explicit-any -- Prisma git_organization shape varies by provider
+interface InstallationTokenOrganization {
+  provider: string;
+  github_installation_id?: string | null;
+  access_token?: string | null;
+  base_url?: string | null;
+  login?: string | null;
+}
+
+export const getInstallationToken = async (gitOrganization: InstallationTokenOrganization) => {
   const gitProvider = getGitProvider(gitOrganization);
   return gitProvider.getAccessToken();
 };

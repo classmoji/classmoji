@@ -1,9 +1,10 @@
 import { create } from 'zustand';
 import { devtools } from 'zustand/middleware';
+import type { PagesUser } from '~/types/pages.ts';
 
 interface StoreState {
-  user: any;
-  setUser: (user: any) => void;
+  user: PagesUser | null;
+  setUser: (user: PagesUser | null) => void;
 }
 
 /**
@@ -15,7 +16,7 @@ const useStore = create<StoreState>()(
   devtools((set) => ({
     // User state
     user: null,
-    setUser: (user: any) =>
+    setUser: (user: PagesUser | null) =>
       set((state: StoreState) => {
         if (state.user?.id === user?.id) return state;
         return { user };

@@ -15,9 +15,11 @@ import {
  * Page options dropdown menu.
  * Provides actions for toggling public status, changing width, and deleting the page.
  */
+import type { PageSummary, ClassroomSummary } from '~/types/pages.ts';
+
 interface PageOptionsMenuProps {
-  page: any;
-  classroom: any;
+  page: PageSummary;
+  classroom: ClassroomSummary;
   isOpen: boolean;
   onClose: () => void;
 }
@@ -25,7 +27,7 @@ interface PageOptionsMenuProps {
 const PageOptionsMenu = ({ page, classroom, isOpen, onClose }: PageOptionsMenuProps) => {
   const fetcher = useFetcher();
   const menuRef = useRef<HTMLDivElement>(null);
-  const deleteToastIdRef = useRef<any>(null);
+  const deleteToastIdRef = useRef<string | number | null>(null);
 
   const currentStatus = page.is_draft ? 'draft' : page.is_public ? 'public' : 'private';
 

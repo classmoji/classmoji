@@ -30,14 +30,14 @@ export const createExtensionTask = task({
  */
 export const updateExtensionTask = task({
   id: 'update_extension',
-  run: async (payload: { transactionId: string; status: string; student?: any; repositoryAssignment?: any }) => {
+  run: async (payload: { transactionId: string; status: string; student?: { login: string; email?: string }; repositoryAssignment?: { assignment?: { title?: string } } }) => {
     const { transactionId, status } = payload;
 
     await ClassmojiService.token.updateTransaction(transactionId, {
       status,
     });
   },
-  onSuccess: async ({ payload }: { payload: { transactionId: string; status: string; student?: any; repositoryAssignment?: any } }) => {
+  onSuccess: async ({ payload }: { payload: { transactionId: string; status: string; student?: { login: string; email?: string }; repositoryAssignment?: { assignment?: { title?: string } } } }) => {
     const { student, repositoryAssignment, status } = payload;
 
     if (!student?.email) return;

@@ -3,7 +3,8 @@
  *
  * Manages grades for RepositoryAssignments
  */
-import prisma from '@classmoji/database';
+import getPrisma from '@classmoji/database';
+import type { Prisma } from '@prisma/client';
 
 /**
  * Add a grade to a RepositoryAssignment
@@ -13,7 +14,7 @@ import prisma from '@classmoji/database';
  * @returns {Promise<Object>}
  */
 export const addGrade = async (repositoryAssignmentId: string, graderId: string, emoji: string) => {
-  return prisma!.assignmentGrade.create({
+  return getPrisma().assignmentGrade.create({
     data: {
       repository_assignment_id: repositoryAssignmentId,
       grader_id: graderId,
@@ -28,7 +29,7 @@ export const addGrade = async (repositoryAssignmentId: string, graderId: string,
  * @returns {Promise<Object>}
  */
 export const removeGrade = async (id: string) => {
-  return prisma!.assignmentGrade.delete({
+  return getPrisma().assignmentGrade.delete({
     where: { id },
   });
 };
@@ -40,7 +41,7 @@ export const removeGrade = async (id: string) => {
  * @returns {Promise<boolean>}
  */
 export const doesGradeExist = async (repositoryAssignmentId: string, emoji: string) => {
-  const grades = await prisma!.assignmentGrade.findMany({
+  const grades = await getPrisma().assignmentGrade.findMany({
     where: {
       repository_assignment_id: repositoryAssignmentId,
       emoji: emoji,
@@ -55,8 +56,8 @@ export const doesGradeExist = async (repositoryAssignmentId: string, emoji: stri
  * @param {Object} data - Data to update
  * @returns {Promise<Object>}
  */
-export const update = async (id: string, data: any) => {
-  return prisma!.assignmentGrade.update({
+export const update = async (id: string, data: Prisma.AssignmentGradeUncheckedUpdateInput) => {
+  return getPrisma().assignmentGrade.update({
     where: { id },
     data: data,
   });
@@ -68,7 +69,7 @@ export const update = async (id: string, data: any) => {
  * @returns {Promise<{count: number}>}
  */
 export const removeAllGrades = async (repositoryAssignmentId: string) => {
-  return prisma!.assignmentGrade.deleteMany({
+  return getPrisma().assignmentGrade.deleteMany({
     where: {
       repository_assignment_id: repositoryAssignmentId,
     },
@@ -81,7 +82,7 @@ export const removeAllGrades = async (repositoryAssignmentId: string) => {
  * @returns {Promise<Object[]>}
  */
 export const findByAssignmentId = async (repositoryAssignmentId: string) => {
-  return prisma!.assignmentGrade.findMany({
+  return getPrisma().assignmentGrade.findMany({
     where: {
       repository_assignment_id: repositoryAssignmentId,
     },
@@ -98,7 +99,7 @@ export const findByAssignmentId = async (repositoryAssignmentId: string) => {
  * @returns {Promise<Object|null>}
  */
 export const findById = async (id: string) => {
-  return prisma!.assignmentGrade.findUnique({
+  return getPrisma().assignmentGrade.findUnique({
     where: { id },
     include: {
       grader: true,
@@ -115,14 +116,14 @@ export const findById = async (id: string) => {
  */
 export const findOrphanedGradeEmojis = async (classroomId: string) => {
   // Get all valid emojis from the classroom's mappings
-  const validMappings = await prisma!.emojiMapping.findMany({
+  const validMappings = await getPrisma().emojiMapping.findMany({
     where: { classroom_id: classroomId },
     select: { emoji: true },
   });
   const validEmojis = validMappings.map(m => m.emoji);
 
   // Find grades in this classroom that use emojis not in the valid set
-  const grades = await prisma!.assignmentGrade.findMany({
+  const grades = await getPrisma().assignmentGrade.findMany({
     where: {
       repository_assignment: {
         assignment: {
@@ -162,7 +163,7 @@ export const remapGradeEmojis = async (classroomId: string, mappings: Array<{ ol
 
   for (const { oldEmoji, newEmoji } of mappings) {
     // Get IDs of grades to update (scoped to classroom)
-    const gradesToUpdate = await prisma!.assignmentGrade.findMany({
+    const gradesToUpdate = await getPrisma().assignmentGrade.findMany({
       where: {
         emoji: oldEmoji,
         repository_assignment: {
@@ -177,7 +178,7 @@ export const remapGradeEmojis = async (classroomId: string, mappings: Array<{ ol
     });
 
     if (gradesToUpdate.length > 0) {
-      const result = await prisma!.assignmentGrade.updateMany({
+      const result = await getPrisma().assignmentGrade.updateMany({
         where: {
           id: { in: gradesToUpdate.map(g => g.id) },
         },

@@ -20,11 +20,11 @@ const widthClasses: Record<number, string> = {
 };
 
 const PageRoute = () => {
-  const { page, classroom, content, coverImage, canEdit } = useLoaderData() as any;
-  const outletContext = useOutletContext() as any;
+  const { page, classroom, content, coverImage, canEdit } = useLoaderData<typeof import('./route.server.ts').loader>();
+  const outletContext = useOutletContext<{ isEmbedded?: boolean }>();
   const isEmbedded = outletContext?.isEmbedded || false;
   const widthClass = widthClasses[page.width] || 'max-w-4xl';
-  const editorRef = useRef<any>(null);
+  const editorRef = useRef<{ getContent: () => unknown } | null>(null);
   const fetcher = useFetcher();
   const titleFetcher = useFetcher();
 
@@ -60,7 +60,7 @@ const PageRoute = () => {
   }, [canEdit, fetcher]);
 
   // Track editor changes (mark unsaved, but don't auto-save)
-  const handleEditorChange = useCallback((document: any) => {
+  const handleEditorChange = useCallback((document: unknown) => {
     if (!canEdit) return;
 
     const currentContentStr = JSON.stringify(document);
@@ -189,8 +189,8 @@ const PageRoute = () => {
                     const input = document.createElement('input');
                     input.type = 'file';
                     input.accept = 'image/*';
-                    input.onchange = (e: any) => {
-                      const file = e.target.files?.[0];
+                    input.onchange = (e: Event) => {
+                      const file = (e.target as HTMLInputElement).files?.[0];
                       if (!file) return;
                       const formData = new FormData();
                       formData.append('intent', 'upload-header-image');

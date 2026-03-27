@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { Octokit } from '@octokit/rest';
+import type { Control, FieldValues } from 'react-hook-form';
 import { FormItem } from 'react-hook-form-antd';
 import { Select, Input, Spin } from 'antd';
 import { useDebounce } from '@uidotdev/usehooks';
@@ -25,9 +26,25 @@ const getAsyncData = async (query: string, token: string) => {
   }
 };
 
-const AsyncAutocomplete = ({ template, isPublished, setTemplate, control, token }: any) => { // eslint-disable-line @typescript-eslint/no-explicit-any -- react-hook-form control type varies by form context
+type PublicTemplateRepository = Awaited<ReturnType<typeof getAsyncData>>[number];
+
+interface AsyncAutocompleteProps {
+  template: string;
+  isPublished: boolean;
+  setTemplate: (template: string) => void;
+  control: Control<FieldValues>;
+  token: string;
+}
+
+const AsyncAutocomplete = ({
+  template,
+  isPublished,
+  setTemplate,
+  control,
+  token,
+}: AsyncAutocompleteProps) => {
   const [loading, setLoading] = useState(false);
-  const [data, setData] = useState<Array<Record<string, unknown>> | null>(null);
+  const [data, setData] = useState<PublicTemplateRepository[] | null>(null);
   const [query, setQuery] = useState('');
   const [value, setValue] = useState(template);
 
@@ -46,8 +63,7 @@ const AsyncAutocomplete = ({ template, isPublished, setTemplate, control, token 
     setLoading(true);
     try {
       const result = await getAsyncData(q, token);
-      const repos = result;
-      setData(repos as Array<Record<string, unknown>>);
+      setData(result);
     } catch (error: unknown) {
       console.error('Error fetching repositories:', error);
     } finally {
@@ -92,11 +108,11 @@ const AsyncAutocomplete = ({ template, isPublished, setTemplate, control, token 
                 )
               }
               options={(data || []).map(d => ({
-                value: d.full_name as string,
+                value: d.full_name,
                 label: (
                   <div className="flex items-center justify-between">
                     <div>
-                      <div className="font-medium">{d.full_name as string}</div>
+                      <div className="font-medium">{d.full_name}</div>
                     </div>
                     <div className="flex items-center gap-2 text-xs text-gray-400">
                       {Number(d.stargazers_count) > 0 && (

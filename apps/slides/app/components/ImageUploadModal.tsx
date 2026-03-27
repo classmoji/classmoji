@@ -1,7 +1,7 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
 import { Modal, Slider, Button, message, Spin } from 'antd';
 import { useDropzone } from 'react-dropzone';
-import ReactCrop from 'react-image-crop';
+import ReactCrop, { type Crop } from 'react-image-crop';
 import 'react-image-crop/dist/ReactCrop.css';
 import { useImageProcessor } from '~/hooks/useImageProcessor';
 
@@ -16,16 +16,30 @@ import { useImageProcessor } from '~/hooks/useImageProcessor';
  * - Format-aware processing (GIFs pass through)
  * - Real-time size preview
  */
-export default function ImageUploadModal({ open, onClose, onUpload }: any) {
-  const [file, setFile] = useState<any>(null);
-  const [preview, setPreview] = useState<any>(null);
-  const [crop, setCrop] = useState<any>(null);
-  const [completedCrop, setCompletedCrop] = useState<any>(null);
+interface ImageUploadModalProps {
+  open: boolean;
+  onClose: () => void;
+  onUpload: (file: File) => Promise<void>;
+}
+
+interface ProcessedInfo {
+  originalSize: number;
+  dimensions?: { width: number; height: number };
+  isGif?: boolean;
+  newSize?: number;
+  wasProcessed?: boolean;
+}
+
+export default function ImageUploadModal({ open, onClose, onUpload }: ImageUploadModalProps) {
+  const [file, setFile] = useState<File | null>(null);
+  const [preview, setPreview] = useState<string | null>(null);
+  const [crop, setCrop] = useState<Crop | null>(null);
+  const [completedCrop, setCompletedCrop] = useState<Crop | null>(null);
   const [quality, setQuality] = useState(85);
   const [maxWidth, setMaxWidth] = useState(1920);
   const [processing, setProcessing] = useState(false);
-  const [processedInfo, setProcessedInfo] = useState<any>(null);
-  const imgRef = useRef<any>(null);
+  const [processedInfo, setProcessedInfo] = useState<ProcessedInfo | null>(null);
+  const imgRef = useRef<HTMLImageElement>(null);
 
   const { processImage, formatFileSize, getImageDimensions } = useImageProcessor();
 
@@ -50,7 +64,7 @@ export default function ImageUploadModal({ open, onClose, onUpload }: any) {
   }, [file]);
 
   // Handle file drop
-  const onDrop = useCallback(async (acceptedFiles: any) => {
+  const onDrop = useCallback(async (acceptedFiles: File[]) => {
     const selectedFile = acceptedFiles[0];
     if (!selectedFile) return;
 
@@ -79,7 +93,7 @@ export default function ImageUploadModal({ open, onClose, onUpload }: any) {
         dimensions: dims,
         isGif: selectedFile.type === 'image/gif',
       });
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error('Failed to get image dimensions:', err);
     }
   }, [getImageDimensions]);
@@ -105,7 +119,7 @@ export default function ImageUploadModal({ open, onClose, onUpload }: any) {
 
       // Process the image (resize, crop, compress)
       const result = await processImage(file, {
-        crop: completedCrop,
+        crop: completedCrop || undefined,
         displayedWidth,
         displayedHeight,
         maxWidth,
@@ -114,11 +128,11 @@ export default function ImageUploadModal({ open, onClose, onUpload }: any) {
       });
 
       // Update processed info
-      setProcessedInfo((prev: any) => ({
+      setProcessedInfo((prev) => prev ? ({
         ...prev,
         newSize: result.newSize,
         wasProcessed: result.wasProcessed,
-      }));
+      }) : null);
 
       // Create a File object from the blob
       const processedFile = new File(
@@ -131,9 +145,10 @@ export default function ImageUploadModal({ open, onClose, onUpload }: any) {
       await onUpload(processedFile);
       message.success('Image uploaded successfully');
       onClose();
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error('Upload failed:', err);
-      message.error(`Upload failed: ${err.message}`);
+      const errorMessage = err instanceof Error ? err.message : String(err);
+      message.error(`Upload failed: ${errorMessage}`);
     } finally {
       setProcessing(false);
     }
@@ -148,7 +163,7 @@ export default function ImageUploadModal({ open, onClose, onUpload }: any) {
     { label: '3:2', value: 3 / 2 },
   ];
 
-  const [selectedAspect, setSelectedAspect] = useState<any>(undefined);
+  const [selectedAspect, setSelectedAspect] = useState<number | undefined>(undefined);
 
   const isGif = file?.type === 'image/gif';
 
@@ -253,7 +268,7 @@ export default function ImageUploadModal({ open, onClose, onUpload }: any) {
                 </div>
               ) : (
                 <ReactCrop
-                  crop={crop}
+                  crop={crop ?? undefined}
                   onChange={(c) => setCrop(c)}
                   onComplete={(c) => setCompletedCrop(c)}
                   aspect={selectedAspect}

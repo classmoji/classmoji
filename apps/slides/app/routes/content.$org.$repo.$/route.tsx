@@ -28,7 +28,18 @@
 import { fetchContent, getMimeType, isBinaryFile } from '~/utils/contentProxy';
 import { getAuthSession } from '@classmoji/auth/server';
 import { getContentRepoName } from '@classmoji/utils';
-import prisma from '@classmoji/database';
+import getPrisma from '@classmoji/database';
+
+interface ContentRouteMembership {
+  classroom?: {
+    term?: string | null;
+    year?: number | null;
+    git_organization?: {
+      login: string;
+      settings?: Record<string, string> | null;
+    } | null;
+  } | null;
+}
 
 // In-memory cache for user classroom memberships
 // Avoids DB hit on every asset request (CSS, fonts, images, etc.)
@@ -41,7 +52,7 @@ const MEMBERSHIP_CACHE_TTL = 8 * 60 * 60 * 1000; // 8 hours (matches auth token 
  * @param {string} userId
  * @returns {Promise<Array>} classroom_memberships with nested classroom and git_organization
  */
-async function getCachedMemberships(userId: any) {
+async function getCachedMemberships(userId: string) {
   const cacheKey = `memberships:${userId}`;
   const cached = membershipCache.get(cacheKey);
 
@@ -49,7 +60,7 @@ async function getCachedMemberships(userId: any) {
     return cached.data;
   }
 
-  const user = await prisma!.user.findUnique({
+  const user = await getPrisma().user.findUnique({
     where: { id: userId },
     include: {
       classroom_memberships: {
@@ -71,7 +82,7 @@ async function getCachedMemberships(userId: any) {
   return memberships;
 }
 
-export const loader = async ({ params, request }: any) => {
+export const loader = async ({ params, request }: { params: Record<string, string | undefined>; request: Request }) => {
   const { org, repo } = params;
   const path = params['*']; // Catch-all segment
   const url = new URL(request.url);
@@ -92,16 +103,16 @@ export const loader = async ({ params, request }: any) => {
     // STRICT validation: repo must EXACTLY match the content repo for a user's classroom
     // Content repo pattern: content-{org}-{term} (e.g., content-csc-25w)
     // Or explicitly set in organization.settings as any.content_repo_name
-    hasAccess = memberships.some((m: any) => {
+    hasAccess = memberships.some((m: ContentRouteMembership) => {
       const gitOrg = m.classroom?.git_organization;
       if (!gitOrg || gitOrg.login !== org) return false;
 
       // Get the expected content repo name for this classroom
       const expectedRepo = getContentRepoName({
         login: gitOrg.login,
-        term: m.classroom.term,
-        year: m.classroom.year,
-        settings: gitOrg.settings as any,
+        term: m.classroom?.term ?? undefined,
+        year: m.classroom?.year ?? undefined,
+        settings: gitOrg.settings as Record<string, string> | undefined,
       });
 
       return repo === expectedRepo; // EXACT match only
@@ -110,7 +121,7 @@ export const loader = async ({ params, request }: any) => {
 
   // Path 2: Public slide access - validate slideId points to a public slide
   if (!hasAccess && slideId) {
-    const slide = await prisma!.slide.findUnique({
+    const slide = await getPrisma().slide.findUnique({
       where: { id: slideId },
       include: {
         classroom: {
@@ -126,8 +137,8 @@ export const loader = async ({ params, request }: any) => {
         // Validate the requested repo matches the slide's content repo
         const expectedRepo = getContentRepoName({
           login: gitOrg.login,
-          term: slide.classroom.term as any,
-          year: slide.classroom.year as any,
+          term: slide.classroom.term ?? undefined,
+          year: slide.classroom.year ?? undefined,
         });
 
         if (repo === expectedRepo) {
@@ -169,7 +180,10 @@ export const loader = async ({ params, request }: any) => {
 
   // For binary content, pass the Buffer directly
   if (binary) {
-    return new Response(result.content as any, { headers });
+    const binaryContent = typeof result.content === 'string'
+      ? new TextEncoder().encode(result.content)
+      : Uint8Array.from(result.content);
+    return new Response(binaryContent.buffer, { headers });
   }
 
   return new Response(result.content as string, { headers });

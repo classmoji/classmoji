@@ -4,7 +4,17 @@ import { ActionTypes } from '~/constants';
 import { useGlobalFetcher } from '~/hooks';
 import useStore from '~/store';
 
-const LateOverrideButton = ({ repositoryAssignment }: any) => { // eslint-disable-line @typescript-eslint/no-explicit-any -- accepts Prisma RepositoryAssignment with varied included relations
+interface LateOverrideRepositoryAssignment {
+  id: string;
+  is_late: boolean;
+  is_late_override: boolean;
+}
+
+interface LateOverrideButtonProps {
+  repositoryAssignment: LateOverrideRepositoryAssignment;
+}
+
+const LateOverrideButton = ({ repositoryAssignment }: LateOverrideButtonProps) => {
   const { fetcher, notify } = useGlobalFetcher();
   const { classroom } = useStore();
 

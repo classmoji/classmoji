@@ -1,11 +1,22 @@
 import { useState, useEffect } from 'react';
 import { Select, Spin, Alert } from 'antd';
+import type { SelectProps } from 'antd';
 import { useParams } from 'react-router';
 
 /**
  * Dropdown to select a GitHub Project template from the organization
  */
-const ProjectTemplateSelect = ({ value, onChange, disabled }: any) => { // eslint-disable-line @typescript-eslint/no-explicit-any -- Ant Design Select onChange signature varies
+interface ProjectTemplateSelectProps {
+  value?: string;
+  onChange?: SelectProps<string>['onChange'];
+  disabled?: boolean;
+}
+
+const ProjectTemplateSelect = ({
+  value,
+  onChange,
+  disabled,
+}: ProjectTemplateSelectProps) => {
   const { class: classSlug } = useParams();
   const [loading, setLoading] = useState(false);
   const [projects, setProjects] = useState<Array<{ id: string; title: string; number: number }>>([]);

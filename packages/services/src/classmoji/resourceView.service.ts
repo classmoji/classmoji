@@ -1,4 +1,5 @@
-import prisma from '@classmoji/database';
+import getPrisma from '@classmoji/database';
+import type { Prisma, Role } from '@prisma/client';
 
 /**
  * Resource View Service
@@ -51,8 +52,8 @@ export async function recordView({ resourcePath, userId, classroomId, viewedAsRo
   resourcePath: string;
   userId: string;
   classroomId: string;
-  viewedAsRole?: string;
-}): Promise<any> {
+  viewedAsRole?: Role | null;
+}): Promise<Prisma.ResourceViewGetPayload<Record<string, never>> | null> {
   if (!resourcePath || !userId || !classroomId) {
     console.warn('[ResourceView] Missing required fields', {
       resourcePath,
@@ -63,7 +64,7 @@ export async function recordView({ resourcePath, userId, classroomId, viewedAsRo
   }
 
   try {
-    return await prisma!.resourceView.upsert({
+    return await getPrisma().resourceView.upsert({
       where: {
         resource_path_user_id_classroom_id: {
           resource_path: resourcePath,
@@ -81,10 +82,10 @@ export async function recordView({ resourcePath, userId, classroomId, viewedAsRo
         last_viewed_at: new Date(),
         viewed_as_role: viewedAsRole || undefined, // Only update if provided
       },
-    } as any);
-  } catch (error: any) {
+    });
+  } catch (error: unknown) {
     // Log but don't throw - this is fire-and-forget
-    console.error('[ResourceView] Failed to record view:', error.message);
+    console.error('[ResourceView] Failed to record view:', error instanceof Error ? error.message : String(error));
     return null;
   }
 }
@@ -113,12 +114,12 @@ export async function getRecentViewers({
   excludeUserId?: string | null;
   limit?: number;
   includeRoles?: boolean;
-}): Promise<any[]> {
+}): Promise<Array<ReturnType<typeof buildViewerObject>>> {
   try {
     const cutoffDate = new Date();
     cutoffDate.setDate(cutoffDate.getDate() - HISTORY_WINDOW_DAYS);
 
-    const whereClause: Record<string, any> = {
+    const whereClause: Prisma.ResourceViewWhereInput = {
       resource_path: resourcePath,
       classroom_id: classroomId,
       last_viewed_at: {
@@ -131,7 +132,7 @@ export async function getRecentViewers({
       whereClause.user_id = { not: excludeUserId };
     }
 
-    const views = await prisma!.resourceView.findMany({
+    const views = await getPrisma().resourceView.findMany({
       where: whereClause,
       include: {
         user: {
@@ -154,9 +155,9 @@ export async function getRecentViewers({
     const userRoles = await fetchUserRoles(views, classroomId, includeRoles);
 
     return views.map(view => buildViewerObject(view, userRoles, includeRoles));
-  } catch (error: any) {
+  } catch (error: unknown) {
     // Log but return empty array to prevent page crashes
-    console.error('[ResourceView] Failed to fetch recent viewers:', error.message);
+    console.error('[ResourceView] Failed to fetch recent viewers:', error instanceof Error ? error.message : String(error));
     return [];
   }
 }
@@ -164,11 +165,29 @@ export async function getRecentViewers({
 /**
  * Shared helper: fetch user roles from classroom memberships
  */
-async function fetchUserRoles(views: any[], classroomId: string, includeRoles: boolean): Promise<Record<string, string>> {
+type ResourceViewWithUser = Prisma.ResourceViewGetPayload<{
+  include: {
+    user: {
+      select: {
+        id: true;
+        name: true;
+        login: true;
+        image: true;
+        provider_id: true;
+      };
+    };
+  };
+}>;
+
+async function fetchUserRoles(
+  views: ResourceViewWithUser[],
+  classroomId: string,
+  includeRoles: boolean
+): Promise<Record<string, string>> {
   if (!includeRoles || views.length === 0) return {};
 
   const userIds = [...new Set(views.map(v => v.user.id))];
-  const memberships = await prisma!.classroomMembership.findMany({
+  const memberships = await getPrisma().classroomMembership.findMany({
     where: {
       classroom_id: classroomId,
       user_id: { in: userIds },
@@ -185,14 +204,22 @@ async function fetchUserRoles(views: any[], classroomId: string, includeRoles: b
  * Shared helper: build viewer object with avatar URL and optional role
  * Prioritizes stored viewed_as_role, falls back to membership lookup
  */
-function buildViewerObject(view: any, userRoles: Record<string, string>, includeRoles: boolean): any {
+function buildViewerObject(
+  view: ResourceViewWithUser,
+  userRoles: Record<string, string>,
+  includeRoles: boolean
+) {
   const avatar_url =
     view.user.image ||
     (view.user.provider_id
       ? `https://avatars.githubusercontent.com/u/${view.user.provider_id}?v=4`
       : null);
 
-  const viewerData: Record<string, any> = {
+  const viewerData: {
+    user: { id: string; name: string | null; login: string | null; avatar_url: string | null };
+    lastViewedAt: Date;
+    role?: string | null;
+  } = {
     user: {
       id: view.user.id,
       name: view.user.name,
@@ -235,7 +262,7 @@ export async function getRecentViewersForPaths({
   limitPerPath?: number;
   includeTotalCount?: boolean;
   includeRoles?: boolean;
-}): Promise<Map<string, any>> {
+}): Promise<Map<string, ReturnType<typeof buildViewerObject>[] | { viewers: ReturnType<typeof buildViewerObject>[]; totalCount: number }>> {
   const result = new Map();
 
   if (!resourcePaths?.length || !classroomId) {
@@ -247,7 +274,7 @@ export async function getRecentViewersForPaths({
     cutoffDate.setDate(cutoffDate.getDate() - HISTORY_WINDOW_DAYS);
 
     // Fetch all views for the given paths in one query
-    const views = await prisma!.resourceView.findMany({
+    const views = await getPrisma().resourceView.findMany({
       where: {
         resource_path: { in: resourcePaths },
         classroom_id: classroomId,
@@ -271,7 +298,7 @@ export async function getRecentViewersForPaths({
     const userRoles = await fetchUserRoles(views, classroomId, includeRoles);
 
     // Group views by resource_path, track total counts
-    const groupedViews: Record<string, any[]> = {};
+    const groupedViews: Record<string, ReturnType<typeof buildViewerObject>[]> = {};
     const totalCounts: Record<string, number> = {};
 
     for (const view of views) {
@@ -299,8 +326,8 @@ export async function getRecentViewersForPaths({
     }
 
     return result;
-  } catch (error: any) {
-    console.error('[ResourceView] Failed to fetch viewers for paths:', error.message);
+  } catch (error: unknown) {
+    console.error('[ResourceView] Failed to fetch viewers for paths:', error instanceof Error ? error.message : String(error));
     return result;
   }
 }
@@ -316,7 +343,7 @@ export async function cleanupOldViews(daysToKeep: number = HISTORY_WINDOW_DAYS):
   const cutoffDate = new Date();
   cutoffDate.setDate(cutoffDate.getDate() - daysToKeep);
 
-  const result = await prisma!.resourceView.deleteMany({
+  const result = await getPrisma().resourceView.deleteMany({
     where: {
       last_viewed_at: {
         lt: cutoffDate,

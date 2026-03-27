@@ -6,7 +6,11 @@ import { useDroppable } from '@dnd-kit/core';
  * When a slide is dropped here, it creates a new single-slide stack
  * appended to the end of the presentation.
  */
-export default function NewStackDropZone({ isActive }: any) {
+interface NewStackDropZoneProps {
+  isActive: boolean;
+}
+
+export default function NewStackDropZone({ isActive }: NewStackDropZoneProps) {
   const { isOver, setNodeRef, active } = useDroppable({
     id: 'new-stack-zone',
     data: {

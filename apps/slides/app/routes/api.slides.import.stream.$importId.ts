@@ -16,7 +16,7 @@
 import { getAuthSession } from '@classmoji/auth/server';
 import { importStreamManager } from '~/utils/importStreamManager';
 
-export async function loader({ params, request }: any) {
+export async function loader({ params, request }: { params: Record<string, string | undefined>; request: Request }) {
   const { importId } = params;
 
   // Validate importId is a UUID format
@@ -39,13 +39,13 @@ export async function loader({ params, request }: any) {
 
   // Create SSE stream
   // Store unsubscribe function for cleanup on disconnect
-  let unsubscribe: any = null;
+  let unsubscribe: (() => void) | null = null;
 
   const stream = new ReadableStream({
     start(controller) {
       const encoder = new TextEncoder();
 
-      const sendEvent = (event: any) => {
+      const sendEvent = (event: Record<string, unknown>) => {
         const data = `data: ${JSON.stringify(event)}\n\n`;
         try {
           controller.enqueue(encoder.encode(data));

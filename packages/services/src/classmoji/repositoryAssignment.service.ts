@@ -4,7 +4,18 @@
  * A RepositoryAssignment represents a student's instance of an Assignment.
  * It tracks their progress, grades, and submission status.
  */
-import prisma from '@classmoji/database';
+import getPrisma from '@classmoji/database';
+import type { GitProvider, IssueStatus, Prisma } from '@prisma/client';
+
+interface RepositoryAssignmentCreateData
+  extends Omit<Prisma.RepositoryAssignmentUncheckedCreateInput, 'provider'> {
+  provider: GitProvider | string;
+}
+
+interface RepositoryAssignmentUpdateData
+  extends Omit<Prisma.RepositoryAssignmentUpdateInput, 'status'> {
+  status?: IssueStatus | string;
+}
 
 /**
  * Find a RepositoryAssignment by ID
@@ -12,7 +23,7 @@ import prisma from '@classmoji/database';
  * @returns {Promise<Object|null>}
  */
 export const findById = async (id: string) => {
-  return prisma!.repositoryAssignment.findUnique({
+  return getPrisma().repositoryAssignment.findUnique({
     where: { id },
     include: {
       assignment: true,
@@ -38,11 +49,11 @@ export const findById = async (id: string) => {
  * @param {string} providerId - Provider-specific issue ID
  * @returns {Promise<Object|null>}
  */
-export const findByProviderId = async (provider: string, providerId: string) => {
-  return prisma!.repositoryAssignment.findUnique({
+export const findByProviderId = async (provider: GitProvider, providerId: string) => {
+  return getPrisma().repositoryAssignment.findUnique({
     where: {
       provider_provider_id: {
-        provider: provider as any,
+        provider,
         provider_id: providerId,
       },
     },
@@ -80,8 +91,8 @@ export const findByProviderId = async (provider: string, providerId: string) => 
  * @param {Object} query - Prisma where clause
  * @returns {Promise<Object|null>}
  */
-export const findFirst = async (query: any) => {
-  return prisma!.repositoryAssignment.findFirst({
+export const findFirst = async (query: Prisma.RepositoryAssignmentWhereInput) => {
+  return getPrisma().repositoryAssignment.findFirst({
     where: query,
     include: {
       assignment: true,
@@ -96,7 +107,7 @@ export const findFirst = async (query: any) => {
  * @returns {Promise<Object[]>}
  */
 export const findByClassroomId = async (classroomId: string) => {
-  return prisma!.repositoryAssignment.findMany({
+  return getPrisma().repositoryAssignment.findMany({
     where: {
       repository: {
         classroom_id: classroomId,
@@ -133,7 +144,7 @@ export const findByClassroomId = async (classroomId: string) => {
  * @returns {Promise<Object[]>}
  */
 export const findByAssignmentId = async (assignmentId: string, classroomSlug: string | null = null) => {
-  const where: any = { assignment_id: assignmentId };
+  const where: Prisma.RepositoryAssignmentWhereInput = { assignment_id: assignmentId };
 
   if (classroomSlug) {
     where.repository = {
@@ -141,7 +152,7 @@ export const findByAssignmentId = async (assignmentId: string, classroomSlug: st
     };
   }
 
-  return prisma!.repositoryAssignment.findMany({
+  return getPrisma().repositoryAssignment.findMany({
     where,
     include: {
       repository: true,
@@ -159,8 +170,8 @@ export const findByAssignmentId = async (assignmentId: string, classroomSlug: st
  * @param {Object} query - Prisma where clause
  * @returns {Promise<Object[]>}
  */
-export const findForUser = async (query: any) => {
-  return prisma!.repositoryAssignment.findMany({
+export const findForUser = async (query: Prisma.RepositoryAssignmentWhereInput) => {
+  return getPrisma().repositoryAssignment.findMany({
     where: query,
     include: {
       token_transactions: true,
@@ -201,9 +212,12 @@ export const findForUser = async (query: any) => {
  * @param {Object} data - RepositoryAssignment data
  * @returns {Promise<Object>}
  */
-export const create = async (data: any) => {
-  return prisma!.repositoryAssignment.create({
-    data,
+export const create = async (data: RepositoryAssignmentCreateData) => {
+  return getPrisma().repositoryAssignment.create({
+    data: {
+      ...data,
+      provider: data.provider as GitProvider,
+    },
     include: {
       assignment: true,
       repository: true,
@@ -217,10 +231,15 @@ export const create = async (data: any) => {
  * @param {Object} updates - Fields to update
  * @returns {Promise<Object>}
  */
-export const update = async (id: string, updates: any) => {
-  return prisma!.repositoryAssignment.update({
+export const update = async (id: string, updates: RepositoryAssignmentUpdateData) => {
+  const repositoryAssignmentData = {
+    ...updates,
+    ...(updates.status && { status: updates.status as IssueStatus }),
+  } as Prisma.RepositoryAssignmentUncheckedUpdateInput;
+
+  return getPrisma().repositoryAssignment.update({
     where: { id },
-    data: updates,
+    data: repositoryAssignmentData,
     include: {
       assignment: true,
       repository: true,
@@ -234,7 +253,7 @@ export const update = async (id: string, updates: any) => {
  * @returns {Promise<Object>}
  */
 export const deleteById = async (id: string) => {
-  return prisma!.repositoryAssignment.delete({
+  return getPrisma().repositoryAssignment.delete({
     where: { id },
   });
 };
@@ -245,7 +264,7 @@ export const deleteById = async (id: string) => {
  * @returns {Promise<number>} - Percentage graded
  */
 export const getGradingProgress = async (classroomSlug: string) => {
-  let totalNum = await prisma!.repositoryAssignment.count({
+  let totalNum = await getPrisma().repositoryAssignment.count({
     where: {
       repository: { classroom: { slug: classroomSlug } },
       assignment: { module: { is_extra_credit: false } },
@@ -253,7 +272,7 @@ export const getGradingProgress = async (classroomSlug: string) => {
   });
 
   // Count submitted extra credit
-  const numExtraCredit = await prisma!.repositoryAssignment.count({
+  const numExtraCredit = await getPrisma().repositoryAssignment.count({
     where: {
       status: 'CLOSED',
       repository: { classroom: { slug: classroomSlug } },
@@ -263,7 +282,7 @@ export const getGradingProgress = async (classroomSlug: string) => {
 
   totalNum += numExtraCredit;
 
-  let numUngraded = await prisma!.repositoryAssignment.count({
+  let numUngraded = await getPrisma().repositoryAssignment.count({
     where: {
       repository: { classroom: { slug: classroomSlug } },
       assignment: { module: { is_extra_credit: false } },
@@ -272,7 +291,7 @@ export const getGradingProgress = async (classroomSlug: string) => {
   });
 
   // Count ungraded extra credit
-  const numExtraCreditUngraded = await prisma!.repositoryAssignment.count({
+  const numExtraCreditUngraded = await getPrisma().repositoryAssignment.count({
     where: {
       status: 'CLOSED',
       repository: { classroom: { slug: classroomSlug } },
@@ -294,14 +313,14 @@ export const getGradingProgress = async (classroomSlug: string) => {
  * @returns {Promise<number>} - Percentage completed
  */
 export const getCompletionProgress = async (classroomSlug: string) => {
-  const totalNum = await prisma!.repositoryAssignment.count({
+  const totalNum = await getPrisma().repositoryAssignment.count({
     where: {
       repository: { classroom: { slug: classroomSlug } },
       assignment: { module: { is_extra_credit: false } },
     },
   });
 
-  const numCompleted = await prisma!.repositoryAssignment.count({
+  const numCompleted = await getPrisma().repositoryAssignment.count({
     where: {
       status: 'CLOSED',
       repository: { classroom: { slug: classroomSlug } },
@@ -320,22 +339,26 @@ export const getCompletionProgress = async (classroomSlug: string) => {
  * @returns {Promise<number>} - Percentage late
  */
 export const getLatePercentage = async (classroomSlug: string) => {
-  const totalNum = await prisma!.repositoryAssignment.count({
+  const totalNum = await getPrisma().repositoryAssignment.count({
     where: {
       repository: { classroom: { slug: classroomSlug } },
     },
   });
 
-  const repoAssignments = await prisma!.repositoryAssignment.findMany({
+  const repoAssignments = await getPrisma().repositoryAssignment.findMany({
     where: {
       repository: { classroom: { slug: classroomSlug } },
     },
     include: {
       assignment: true,
     },
-  });
+  }) as Array<
+    Prisma.RepositoryAssignmentGetPayload<{ include: { assignment: true } }> & {
+      is_late: boolean;
+    }
+  >;
 
-  const numLate = repoAssignments.filter((ra: any) => ra.is_late).length;
+  const numLate = repoAssignments.filter(ra => ra.is_late).length;
 
   if (totalNum === 0) return 0;
 
@@ -350,7 +373,7 @@ export const getLatePercentage = async (classroomSlug: string) => {
  * @returns {Promise<Object[]>}
  */
 export const findRecentlyClosed = async (classroomSlug: string, startDate: Date, endDate: Date) => {
-  return prisma!.repositoryAssignment.findMany({
+  return getPrisma().repositoryAssignment.findMany({
     where: {
       repository: { classroom: { slug: classroomSlug } },
       status: 'CLOSED',
@@ -371,7 +394,7 @@ export const findRecentlyClosed = async (classroomSlug: string, startDate: Date,
  * @returns {Promise<Object>}
  */
 export const close = async (id: string) => {
-  return prisma!.repositoryAssignment.update({
+  return getPrisma().repositoryAssignment.update({
     where: { id },
     data: {
       status: 'CLOSED',
@@ -386,7 +409,7 @@ export const close = async (id: string) => {
  * @returns {Promise<Object>}
  */
 export const reopen = async (id: string) => {
-  return prisma!.repositoryAssignment.update({
+  return getPrisma().repositoryAssignment.update({
     where: { id },
     data: {
       status: 'OPEN',
@@ -402,7 +425,7 @@ export const reopen = async (id: string) => {
  * @returns {Promise<Object>}
  */
 export const setLateOverride = async (id: string, override: boolean) => {
-  return prisma!.repositoryAssignment.update({
+  return getPrisma().repositoryAssignment.update({
     where: { id },
     data: { is_late_override: override },
   });
@@ -415,7 +438,7 @@ export const setLateOverride = async (id: string, override: boolean) => {
  * @returns {Promise<Object[]>}
  */
 export const findAllForStudent = async (studentId: string, classroomSlug: string) => {
-  return prisma!.repositoryAssignment.findMany({
+  return getPrisma().repositoryAssignment.findMany({
     where: {
       repository: {
         student_id: studentId,

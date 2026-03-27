@@ -1,5 +1,5 @@
 import { useLoaderData } from 'react-router';
-import prisma from '@classmoji/database';
+import getPrisma from '@classmoji/database';
 import { assertSlideAccess } from '@classmoji/auth/server';
 import SpeakerView from '~/components/SpeakerView';
 import { fetchContent } from '~/utils/contentProxy';
@@ -13,10 +13,11 @@ import { fetchContent } from '~/utils/contentProxy';
  *
  * Requires speakerNotes access (staff, or viewers when show_speaker_notes=true).
  */
-export const loader = async ({ params, request }: any) => {
+export const loader = async ({ params, request }: { params: Record<string, string | undefined>; request: Request }) => {
   const { slideId } = params;
+  if (!slideId) throw new Response('Missing slideId', { status: 400 });
 
-  const slide = await prisma!.slide.findUnique({
+  const slide = await getPrisma().slide.findUnique({
     where: { id: slideId },
     include: {
       classroom: {
@@ -50,8 +51,8 @@ export const loader = async ({ params, request }: any) => {
   const filePath = `${slide.content_path}/index.html`;
 
   // Fetch content using shared utility (CDN first, API fallback)
-  let slideContent: any = null;
-  let contentError: any = null;
+  let slideContent: string | null = null;
+  let contentError: string | null = null;
 
   const contentResult = await fetchContent({
     org: gitOrgLogin,
@@ -76,7 +77,7 @@ export const loader = async ({ params, request }: any) => {
 };
 
 export default function SlideSpeaker() {
-  const { slide, slideContent, contentError } = useLoaderData() as any;
+  const { slide, slideContent, contentError } = useLoaderData<typeof loader>();
 
   // Authorization is handled by assertSlideAccess in the loader
   // If we reach here, user has speakerNotes access
@@ -95,7 +96,7 @@ export default function SlideSpeaker() {
   return (
     <SpeakerView
       slideId={slide.id}
-      initialContent={slideContent}
+      initialContent={slideContent ?? ''}
     />
   );
 }

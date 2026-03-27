@@ -1,5 +1,59 @@
-import prisma from '@classmoji/database';
+import getPrisma from '@classmoji/database';
 import { titleToIdentifier } from '@classmoji/utils';
+import type { AssignmentType, Prisma } from '@prisma/client';
+
+interface ModuleQueryOptions {
+  includeAssignments?: boolean;
+  includePages?: boolean;
+  includeSlides?: boolean;
+  includeQuizzes?: boolean;
+}
+
+interface ModuleAssignmentInput extends Prisma.AssignmentUncheckedCreateWithoutModuleInput {
+  linkedPageIds?: string[];
+  linkedSlideIds?: string[];
+  branch?: string | null;
+  workflow_file?: string | null;
+}
+
+type ModuleCreateInput = Prisma.ModuleUncheckedCreateInput & {
+  assignments?: ModuleAssignmentInput[];
+};
+
+interface ModuleFormValues {
+  title: string;
+  type: AssignmentType;
+  template: string;
+  classroomSlug: string;
+  assignments: ModuleAssignmentInput[];
+  weight?: number | string | null;
+  tag?: string | null;
+  tokens_per_hour?: number;
+  branch?: string | null;
+}
+
+interface ModuleAssignmentUpdateInput extends Prisma.AssignmentUncheckedCreateWithoutModuleInput {
+  id?: string;
+  title: string;
+  linkedPageIds?: string[];
+  linkedSlideIds?: string[];
+  branch?: string | null;
+  workflow_file?: string | null;
+  student_deadline?: Date | string | null;
+  grader_deadline?: Date | string | null;
+  release_at?: Date | string | null;
+}
+
+type ModuleUpdateValues = {
+  id: string;
+  assignments?: ModuleAssignmentUpdateInput[];
+  assignmentsToRemove?: Array<{ id: string }>;
+  tag?: string | null;
+  weight?: number | string | null;
+  team_formation_deadline?: Date | string | null;
+  type?: AssignmentType;
+  [key: string]: unknown;
+};
 
 /**
  * Find a Module by ID
@@ -7,7 +61,7 @@ import { titleToIdentifier } from '@classmoji/utils';
  * @returns {Promise<Object|null>}
  */
 export const findById = async (id: string) => {
-  return prisma!.module.findUnique({
+  return getPrisma().module.findUnique({
     where: { id },
     include: {
       assignments: true,
@@ -24,7 +78,7 @@ export const findById = async (id: string) => {
  * @returns {Promise<Object|null>}
  */
 export const findByClassroomAndTitle = async (classroomId: string, title: string) => {
-  return prisma!.module.findUnique({
+  return getPrisma().module.findUnique({
     where: {
       classroom_id_title: {
         classroom_id: classroomId,
@@ -45,15 +99,15 @@ export const findByClassroomAndTitle = async (classroomId: string, title: string
  * @param {Object} [options] - Additional options
  * @returns {Promise<Object|null>}
  */
-export const findBySlugAndTitle = async (classroomSlug: string, title: string, options: any = {}) => {
-  const classroom = await prisma!.classroom.findUnique({
+export const findBySlugAndTitle = async (classroomSlug: string, title: string, options: ModuleQueryOptions = {}) => {
+  const classroom = await getPrisma().classroom.findUnique({
     where: { slug: classroomSlug },
     select: { id: true },
   });
 
   if (!classroom) return null;
 
-  return prisma!.module.findUnique({
+  return getPrisma().module.findUnique({
     where: {
       classroom_id_title: {
         classroom_id: classroom.id,
@@ -92,15 +146,15 @@ export const findBySlugAndTitle = async (classroomSlug: string, title: string, o
  * @param {Object} [options] - Additional options
  * @returns {Promise<Object|null>}
  */
-export const findByClassroomSlugAndModuleSlug = async (classroomSlug: string, moduleSlug: string, options: any = {}) => {
-  const classroom = await prisma!.classroom.findUnique({
+export const findByClassroomSlugAndModuleSlug = async (classroomSlug: string, moduleSlug: string, options: ModuleQueryOptions = {}) => {
+  const classroom = await getPrisma().classroom.findUnique({
     where: { slug: classroomSlug },
     select: { id: true },
   });
 
   if (!classroom) return null;
 
-  return prisma!.module.findFirst({
+  return getPrisma().module.findFirst({
     where: {
       classroom_id: classroom.id,
       slug: moduleSlug,
@@ -136,7 +190,7 @@ export const findByClassroomSlugAndModuleSlug = async (classroomSlug: string, mo
  * @returns {Promise<Object[]>}
  */
 export const findByClassroomId = async (classroomId: string) => {
-  return prisma!.module.findMany({
+  return getPrisma().module.findMany({
     where: { classroom_id: classroomId },
     include: {
       assignments: true,
@@ -152,7 +206,7 @@ export const findByClassroomId = async (classroomId: string) => {
  * @returns {Promise<Object[]>}
  */
 export const findByClassroomSlug = async (classroomSlug: string, _options?: { includeAssignments?: boolean }) => {
-  return prisma!.module.findMany({
+  return getPrisma().module.findMany({
     where: {
       classroom: { slug: classroomSlug },
     },
@@ -170,7 +224,7 @@ export const findByClassroomSlug = async (classroomSlug: string, _options?: { in
  * @returns {Promise<Object[]>}
  */
 export const findPublished = async (classroomId: string) => {
-  return prisma!.module.findMany({
+  return getPrisma().module.findMany({
     where: {
       classroom_id: classroomId,
       is_published: true,
@@ -197,14 +251,14 @@ export const findPublished = async (classroomId: string) => {
  * @param {Object[]} [data.assignments] - Assignments to create
  * @returns {Promise<Object>}
  */
-export const create = async (data: any) => {
+export const create = async (data: ModuleCreateInput) => {
   const { assignments, ...moduleData } = data;
 
   // Generate slug from title (set once, never updated)
   const slug = titleToIdentifier(moduleData.title);
 
   // Filter out non-Prisma fields from assignments and add slugs
-  const cleanedAssignments = assignments?.map((assignment: any) => {
+  const cleanedAssignments = assignments?.map((assignment: ModuleAssignmentInput) => {
     const { linkedPageIds, linkedSlideIds, branch, workflow_file, ...assignmentData } = assignment;
     return {
       ...assignmentData,
@@ -212,7 +266,7 @@ export const create = async (data: any) => {
     };
   });
 
-  return prisma!.module.create({
+  return getPrisma().module.create({
     data: {
       ...moduleData,
       slug,
@@ -235,7 +289,7 @@ export const create = async (data: any) => {
  * @param {Object} values - Form values
  * @returns {Promise<Object>}
  */
-export const createFromForm = async (values: any) => {
+export const createFromForm = async (values: ModuleFormValues) => {
   const {
     title,
     type,
@@ -248,7 +302,7 @@ export const createFromForm = async (values: any) => {
     branch,
   } = values;
 
-  const classroom = await prisma!.classroom.findUnique({
+  const classroom = await getPrisma().classroom.findUnique({
     where: { slug: classroomSlug },
   });
 
@@ -259,7 +313,7 @@ export const createFromForm = async (values: any) => {
   // Generate slug from title (set once, never updated)
   const slug = titleToIdentifier(title);
 
-  return prisma!.module.create({
+  return getPrisma().module.create({
     data: {
       title,
       slug,
@@ -269,7 +323,7 @@ export const createFromForm = async (values: any) => {
       classroom_id: classroom.id,
       ...(tag && { tag_id: tag }),
       assignments: {
-        create: assignments.map((a: any) => ({
+        create: assignments.map((a: ModuleAssignmentInput) => ({
           ...a,
           slug: titleToIdentifier(a.title),
           tokens_per_hour: tokens_per_hour || 0,
@@ -290,8 +344,8 @@ export const createFromForm = async (values: any) => {
  * @param {Object} updates - Fields to update
  * @returns {Promise<Object>}
  */
-export const update = async (id: string, updates: any) => {
-  return prisma!.module.update({
+export const update = async (id: string, updates: Prisma.ModuleUncheckedUpdateInput) => {
+  return getPrisma().module.update({
     where: { id },
     data: updates,
     include: {
@@ -306,29 +360,34 @@ export const update = async (id: string, updates: any) => {
  * @param {Object} values - Update values
  * @returns {Promise<Object>}
  */
-export const updateWithAssignments = async (values: any) => {
+export const updateWithAssignments = async (values: ModuleUpdateValues) => {
   const { id, assignments, assignmentsToRemove, tag, weight, ...updateData } = values;
 
   // Coerce module-level dates
-  if (updateData.team_formation_deadline && !(updateData.team_formation_deadline instanceof Date)) {
+  if (
+    updateData.team_formation_deadline &&
+    !(updateData.team_formation_deadline instanceof Date)
+  ) {
     updateData.team_formation_deadline = new Date(updateData.team_formation_deadline);
   }
 
+  const moduleUpdateData = {
+    ...(updateData as Prisma.ModuleUncheckedUpdateInput),
+    weight: Number(weight ?? 100),
+    ...(updateData.type === 'GROUP' && tag && { tag_id: tag }),
+  } satisfies Prisma.ModuleUncheckedUpdateInput;
+
   // Update module
-  await prisma!.module.update({
+  await getPrisma().module.update({
     where: { id },
-    data: {
-      ...updateData,
-      weight: Number(weight ?? 100),
-      ...(updateData.type === 'GROUP' && tag && { tag_id: tag }),
-    },
+    data: moduleUpdateData,
   });
 
   // Delete removed assignments
   if (assignmentsToRemove?.length) {
-    await prisma!.assignment.deleteMany({
+    await getPrisma().assignment.deleteMany({
       where: {
-        id: { in: assignmentsToRemove.map((a: any) => a.id) },
+        id: { in: assignmentsToRemove.map((a: { id: string }) => a.id) },
       },
     });
   }
@@ -345,28 +404,33 @@ export const updateWithAssignments = async (values: any) => {
         workflow_file,
         ...assignmentData
       } = assignment;
+      const assignmentMutationData = assignmentData as Prisma.AssignmentUncheckedUpdateInput;
 
       // Coerce assignment date fields to Date objects
-      for (const field of ['student_deadline', 'grader_deadline', 'release_at']) {
-        if (assignmentData[field] && !(assignmentData[field] instanceof Date)) {
-          assignmentData[field] = new Date(assignmentData[field]);
+      const dateFields = ['student_deadline', 'grader_deadline', 'release_at'] as const;
+      for (const field of dateFields) {
+        if (
+          assignmentMutationData[field] &&
+          !(assignmentMutationData[field] instanceof Date)
+        ) {
+          assignmentMutationData[field] = new Date(assignmentMutationData[field] as string | Date);
         }
       }
 
-      await prisma!.assignment.upsert({
+      await getPrisma().assignment.upsert({
         where: { id: assignmentId || crypto.randomUUID() },
-        update: assignmentData,
+        update: assignmentMutationData,
         create: {
           id: assignmentId || undefined,
-          ...assignmentData,
-          slug: titleToIdentifier(assignmentData.title),
+          ...(assignmentMutationData as Prisma.AssignmentUncheckedCreateWithoutModuleInput),
+          slug: titleToIdentifier(assignment.title),
           module_id: id,
         },
       });
     }
   }
 
-  return prisma!.module.findUnique({
+  return getPrisma().module.findUnique({
     where: { id },
     include: {
       assignments: true,
@@ -381,7 +445,7 @@ export const updateWithAssignments = async (values: any) => {
  * @returns {Promise<Object>}
  */
 export const deleteById = async (id: string) => {
-  return prisma!.module.delete({
+  return getPrisma().module.delete({
     where: { id },
   });
 };
@@ -393,7 +457,7 @@ export const deleteById = async (id: string) => {
  * @returns {Promise<Object>}
  */
 export const setPublished = async (id: string, isPublished: boolean) => {
-  return prisma!.module.update({
+  return getPrisma().module.update({
     where: { id },
     data: { is_published: isPublished },
   });
@@ -406,7 +470,7 @@ export const setPublished = async (id: string, isPublished: boolean) => {
  * @returns {Promise<Object[]>}
  */
 export const findWithStudentStatus = async (classroomId: string, studentId: string) => {
-  return prisma!.module.findMany({
+  return getPrisma().module.findMany({
     where: {
       classroom_id: classroomId,
       is_published: true,

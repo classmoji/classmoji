@@ -1,5 +1,6 @@
 import { ContentService } from '@classmoji/content';
 import { generateTermString } from '@classmoji/utils';
+import type { PageForContent } from '~/types/pages.ts';
 
 interface CoverImage {
   url: string;
@@ -8,16 +9,16 @@ interface CoverImage {
 
 interface PageContentResult {
   format: 'json' | 'html' | 'none';
-  content: any;
+  content: unknown;
   coverImage: CoverImage | null;
 }
 
 /**
  * Get the content repo name for a page's classroom.
  */
-function getRepoName(page: any): string {
-  const gitOrg = page.classroom.git_organization;
-  const term = generateTermString(page.classroom.term, page.classroom.year);
+function getRepoName(page: PageForContent): string {
+  const gitOrg = page.classroom.git_organization!;
+  const term = generateTermString(page.classroom.term ?? undefined, page.classroom.year ?? undefined);
   return `content-${gitOrg.login}-${term}`;
 }
 
@@ -28,8 +29,8 @@ function getRepoName(page: any): string {
  * @param {Object} page - Page with classroom.git_organization
  * @returns {{ format: 'json'|'html'|'none', content: Object|string|null, coverImage: { url: string, position: number }|null }}
  */
-export async function loadPageContent(page: any): Promise<PageContentResult> {
-  const gitOrg = page.classroom.git_organization;
+export async function loadPageContent(page: PageForContent): Promise<PageContentResult> {
+  const gitOrg = page.classroom.git_organization!;
   const repo = getRepoName(page);
 
   // Try JSON first (BlockNote format)
@@ -95,8 +96,8 @@ export async function loadPageContent(page: any): Promise<PageContentResult> {
  * @param {Array} blocks - BlockNote document blocks array
  * @param {{ url: string, position: number }|null} [coverImage] - Cover image metadata; omit to preserve existing
  */
-export async function savePageContent(page: any, blocks: any, coverImage: CoverImage | null | undefined = undefined): Promise<void> {
-  const gitOrg = page.classroom.git_organization;
+export async function savePageContent(page: PageForContent, blocks: unknown, coverImage: CoverImage | null | undefined = undefined): Promise<void> {
+  const gitOrg = page.classroom.git_organization!;
   const repo = getRepoName(page);
   const path = `${page.content_path}/content.json`;
 
@@ -119,7 +120,7 @@ export async function savePageContent(page: any, blocks: any, coverImage: CoverI
     }
   }
 
-  const wrapper: { blocks: any; coverImage?: CoverImage | null } = { blocks };
+  const wrapper: { blocks: unknown; coverImage?: CoverImage | null } = { blocks };
   if (coverImage !== undefined) {
     wrapper.coverImage = coverImage;
   }
@@ -140,17 +141,17 @@ export async function savePageContent(page: any, blocks: any, coverImage: CoverI
  * @param {Object} page - Page with classroom.git_organization
  * @param {{ url: string, position: number }|null} coverImage - Cover image metadata, or null to remove
  */
-export async function savePageCoverImage(page: any, coverImage: CoverImage | null): Promise<void> {
+export async function savePageCoverImage(page: PageForContent, coverImage: CoverImage | null): Promise<void> {
   const { format, content, coverImage: existingCover } = await loadPageContent(page);
 
-  let currentBlocks: any;
+  let currentBlocks: unknown;
   if (format === 'json') {
     currentBlocks = content;
   } else if (format === 'html') {
     // Migrate HTML content so we don't lose it when creating content.json
     const { migrateHtmlToBlockNote } = await import('./migration.server.ts');
     const { schema } = await import('~/components/editor/blocks/index.tsx');
-    currentBlocks = await migrateHtmlToBlockNote(content, schema);
+    currentBlocks = await migrateHtmlToBlockNote(content as string, schema);
   } else {
     currentBlocks = [{ type: 'paragraph', content: [] }];
   }
@@ -167,8 +168,8 @@ export async function savePageCoverImage(page: any, coverImage: CoverImage | nul
  * @param {File} file - Web API File from formData
  * @returns {{ url: string, path: string }}
  */
-export async function uploadPageAsset(page: any, file: any): Promise<{ url: string; path: string }> {
-  const gitOrg = page.classroom.git_organization;
+export async function uploadPageAsset(page: PageForContent, file: File): Promise<{ url: string; path: string }> {
+  const gitOrg = page.classroom.git_organization!;
   const repo = getRepoName(page);
   const assetsFolder = `${page.content_path}/assets`;
 

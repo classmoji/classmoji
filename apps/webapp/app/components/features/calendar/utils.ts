@@ -11,7 +11,7 @@ export interface CalendarEvent {
   start_time: string;
   end_time: string;
   event_type: string;
-  occurrence_date?: string;
+  occurrence_date?: string | null;
   is_deadline?: boolean;
   is_unpublished?: boolean;
   [key: string]: unknown;

@@ -5,12 +5,34 @@ import dayjs from 'dayjs';
 
 import { TextEditor, SectionHeader } from '~/components';
 import { useAssignmentStore } from './store';
+import type { AssignmentFormData, TemplateAssignment } from '~/types';
+
+interface AssignmentSettings {
+  default_tokens_per_hour: number;
+}
+
+interface LinkedContentOption {
+  id: string;
+  title: string | null;
+}
+
+interface FormAssignmentProps {
+  templateAssignments: TemplateAssignment[];
+  settings: AssignmentSettings;
+  pages?: LinkedContentOption[];
+  slides?: LinkedContentOption[];
+}
 
 const generateId = () => {
   return crypto.randomUUID();
 };
 
-const FormAssignment = ({ templateAssignments, settings, pages = [], slides = [] }: any) => { // eslint-disable-line @typescript-eslint/no-explicit-any -- complex Prisma shapes from loader (templates, pages, slides, settings)
+const FormAssignment = ({
+  templateAssignments,
+  settings,
+  pages = [],
+  slides = [],
+}: FormAssignmentProps) => {
   const { setAssignmentValue, assignment } = useAssignmentStore();
   const editorRef = useRef(null);
 
@@ -51,7 +73,7 @@ const FormAssignment = ({ templateAssignments, settings, pages = [], slides = []
                   <Select
                     className="w-full"
                     placeholder="Select a template assignment"
-                    options={templateAssignments.map((templateAssignment: any) => ({ // eslint-disable-line @typescript-eslint/no-explicit-any -- template shape
+                    options={templateAssignments.map(templateAssignment => ({
                       value: templateAssignment.body,
                       label: templateAssignment.title,
                     }))}
@@ -224,7 +246,7 @@ const FormAssignment = ({ templateAssignments, settings, pages = [], slides = []
                 ((option?.label as string) ?? '').toLowerCase().includes(input.toLowerCase())
               }
               disabled={pages.length === 0}
-              options={pages.map((page: any) => ({ // eslint-disable-line @typescript-eslint/no-explicit-any -- Prisma page
+              options={pages.map(page => ({
                 value: page.id,
                 label: page.title || 'Untitled',
               }))}
@@ -243,7 +265,7 @@ const FormAssignment = ({ templateAssignments, settings, pages = [], slides = []
                 ((option?.label as string) ?? '').toLowerCase().includes(input.toLowerCase())
               }
               disabled={slides.length === 0}
-              options={slides.map((slide: any) => ({ // eslint-disable-line @typescript-eslint/no-explicit-any -- Prisma slide
+              options={slides.map(slide => ({
                 value: slide.id,
                 label: slide.title || 'Untitled',
               }))}

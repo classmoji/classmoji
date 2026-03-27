@@ -4,8 +4,8 @@ interface ClassroomCardProps {
   classroom: {
     name?: string;
     login?: string;
-    git_organization?: { login?: string; avatar_url?: string };
-    avatar_url?: string;
+    git_organization?: { login?: string; avatar_url?: string | null };
+    avatar_url?: string | null;
   };
   role: string;
 }
@@ -61,8 +61,8 @@ const ClassroomCard = ({ classroom, role }: ClassroomCardProps) => {
 
           <div>
             <img
-              src={classroom.git_organization?.avatar_url || classroom.avatar_url}
-              alt={classroom.git_organization?.login || classroom.login}
+              src={classroom.git_organization?.avatar_url || classroom.avatar_url || undefined}
+              alt={classroom.git_organization?.login || classroom.login || 'Classroom avatar'}
               className="h-[40px] w-[40px] rounded-full border-2 border-gray-200 dark:border-gray-600 group-hover:border-gray-300 dark:group-hover:border-gray-500 transition-colors duration-200"
             />
           </div>

@@ -7,7 +7,7 @@ import { generateTermString } from '@classmoji/utils';
  * Shows a list of classrooms the user has access to,
  * so they can navigate to the right one.
  */
-export const loader = async ({ request }: any) => {
+export const loader = async ({ request }: { request: Request }) => {
   const authData = await getAuthSession(request).catch(() => null);
 
   if (!authData) {
@@ -33,7 +33,7 @@ export const loader = async ({ request }: any) => {
 };
 
 const Index = () => {
-  const { classrooms } = useLoaderData() as any;
+  const { classrooms } = useLoaderData<typeof loader>();
 
   return (
     <div className="min-h-screen bg-gray-50 dark:bg-[#191919]">
@@ -47,7 +47,7 @@ const Index = () => {
 
         {classrooms.length > 0 ? (
           <div className="space-y-2">
-            {classrooms.map((c: any) => (
+            {classrooms.map((c: { slug: string; name: string; term: string | null; year: number | null; role: string }) => (
               <a
                 key={c.slug}
                 href={`/${c.slug}`}
@@ -56,7 +56,7 @@ const Index = () => {
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
                     <span className="px-2 py-0.5 text-xs bg-green-100 dark:bg-green-900 text-green-700 dark:text-green-300 rounded uppercase">
-                      {generateTermString(c.term, c.year)}
+                      {generateTermString(c.term ?? undefined, c.year ?? undefined)}
                     </span>
                     <span className="font-medium text-gray-900 dark:text-white">
                       {c.name}

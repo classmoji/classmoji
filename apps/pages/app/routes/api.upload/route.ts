@@ -10,7 +10,7 @@ import { uploadPageAsset } from '~/utils/content.server.ts';
  * Body: FormData with 'file' and 'pageId'
  * Returns: { url, path }
  */
-export const action = async ({ request }: any) => {
+export const action = async ({ request }: { request: Request }) => {
   const formData = await request.formData();
   const file = formData.get('file');
   const pageId = formData.get('pageId');
@@ -24,7 +24,7 @@ export const action = async ({ request }: any) => {
   }
 
   // Fetch page with classroom context
-  const page = await ClassmojiService.page.findById(pageId, {
+  const page = await ClassmojiService.page.findById(pageId as string, {
     includeClassroom: true,
   });
 
@@ -38,10 +38,10 @@ export const action = async ({ request }: any) => {
   try {
     const { url, path } = await uploadPageAsset(page, file);
     return Response.json({ success: true, url, path });
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error('[upload] Failed:', error);
     return Response.json(
-      { error: error.message || 'Upload failed' },
+      { error: error instanceof Error ? error.message : 'Upload failed' },
       { status: 500 }
     );
   }

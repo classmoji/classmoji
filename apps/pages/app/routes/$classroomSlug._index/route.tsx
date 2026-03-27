@@ -7,7 +7,7 @@ import { loader as parentLoader } from '../$classroomSlug/route.tsx';
 /**
  * Index route loader: redirects to first page or shows empty state
  */
-export const loader = async ({ params, request }: any) => {
+export const loader = async ({ params, request }: { params: Record<string, string | undefined>; request: Request }) => {
   const { view, pages, classroom } = await parentLoader({ params, request });
 
   // If no pages exist
@@ -33,8 +33,8 @@ export const loader = async ({ params, request }: any) => {
 };
 
 const ClassroomIndex = () => {
-  const { showEmptyState, emptyType, view, classroom } = useLoaderData() as any;
-  const { canEdit } = useOutletContext() as any;
+  const { showEmptyState, emptyType, view, classroom } = useLoaderData<typeof loader>();
+  const { canEdit } = useOutletContext<{ canEdit: boolean }>();
 
   if (showEmptyState) {
     if (emptyType === 'select-page') {

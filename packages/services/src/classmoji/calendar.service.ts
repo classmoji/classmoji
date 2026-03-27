@@ -1,4 +1,195 @@
-import prisma from '@classmoji/database';
+import getPrisma from '@classmoji/database';
+import { Prisma } from '@prisma/client';
+import type { EventType } from '@prisma/client';
+
+type DateInput = Date | string;
+type CalendarEditScope = 'this_only' | 'this_and_future' | 'all';
+
+interface OccurrenceLink {
+  occurrence_date: Date | null;
+}
+
+interface CalendarPageLink extends OccurrenceLink {
+  page: {
+    id: string;
+    title: string;
+    is_draft: boolean;
+  } | null;
+}
+
+interface CalendarSlideLink extends OccurrenceLink {
+  slide: {
+    id: string;
+    title: string;
+    is_draft: boolean;
+  } | null;
+}
+
+interface CalendarAssignmentLink extends OccurrenceLink {
+  assignment: {
+    id: string;
+    title: string;
+    slug: string | null;
+    module: {
+      id: string;
+      title: string;
+      slug: string | null;
+    } | null;
+  } | null;
+}
+
+interface CalendarEventOverrideShape {
+  id?: string;
+  date: Date | string;
+  is_cancelled: boolean;
+  new_start_time: Date | string | null;
+  new_end_time: Date | string | null;
+  new_location: string | null;
+  new_meeting_link: string | null;
+}
+
+interface CalendarRecurrenceRule {
+  days?: string[];
+  until?: string | null;
+  [key: string]: Prisma.JsonValue | undefined;
+}
+
+interface CalendarEventWithLinks {
+  is_recurring: boolean;
+  recurrence_rule: Prisma.JsonValue | null;
+  pageLinks: CalendarPageLink[];
+  slideLinks: CalendarSlideLink[];
+  assignmentLinks: CalendarAssignmentLink[];
+  overrides?: CalendarEventOverrideShape[];
+  start_time: Date;
+  end_time: Date;
+  location: string | null;
+  meeting_link: string | null;
+  [key: string]: unknown;
+}
+
+interface CalendarExpandedEvent extends CalendarEventWithLinks {
+  pages: Array<{ page: CalendarPageLink['page'] }>;
+  slides: Array<{ slide: CalendarSlideLink['slide'] }>;
+  assignments: Array<{
+    assignment: CalendarAssignmentLink['assignment'];
+    module: NonNullable<CalendarAssignmentLink['assignment']>['module'] | undefined;
+  }>;
+  occurrence_date?: Date;
+  is_overridden?: boolean;
+  _rawPageLinks?: CalendarPageLink[];
+  _rawSlideLinks?: CalendarSlideLink[];
+  _rawAssignmentLinks?: CalendarAssignmentLink[];
+}
+
+interface CalendarDeadlineItem {
+  id: string;
+  event_type: 'DEADLINE';
+  title: string;
+  description: string;
+  start_time: Date;
+  end_time: Date;
+  is_deadline: true;
+  is_unpublished: boolean;
+  assignment_id: string;
+  module_id: string;
+  pages: unknown[];
+  slides: unknown[];
+  github_issue_url: string | null;
+}
+
+interface CalendarEventCreateData {
+  event_type: EventType;
+  title: string;
+  description?: string | null;
+  start_time: DateInput;
+  end_time: DateInput;
+  location?: string | null;
+  meeting_link?: string | null;
+  is_recurring?: boolean;
+  recurrence_rule?: Prisma.InputJsonObject | null;
+}
+
+interface CalendarEventUpdateData {
+  event_type?: EventType;
+  title?: string;
+  description?: string | null;
+  start_time?: DateInput;
+  end_time?: DateInput;
+  location?: string | null;
+  meeting_link?: string | null;
+  is_recurring?: boolean;
+  recurrence_rule?: Prisma.InputJsonObject | null;
+}
+
+interface CalendarOverrideData {
+  is_cancelled?: boolean;
+  new_start_time?: DateInput | null;
+  new_end_time?: DateInput | null;
+  new_location?: string | null;
+  new_meeting_link?: string | null;
+}
+
+interface DeadlineRepositoryAssignment {
+  provider_issue_number: number;
+  repository: {
+    name: string;
+  };
+}
+
+const isJsonObject = (
+  value: Prisma.JsonValue | Prisma.InputJsonValue | null | undefined
+): value is Prisma.JsonObject =>
+  typeof value === 'object' && value !== null && !Array.isArray(value);
+
+const getRecurrenceRule = (
+  value: Prisma.JsonValue | null | undefined
+): CalendarRecurrenceRule | null => {
+  if (!isJsonObject(value)) {
+    return null;
+  }
+
+  const days = Array.isArray(value.days)
+    ? value.days.filter((day): day is string => typeof day === 'string')
+    : undefined;
+  const until = typeof value.until === 'string' ? value.until : null;
+
+  return {
+    ...value,
+    days,
+    until,
+  };
+};
+
+const toInputJsonObject = (
+  value: Prisma.JsonValue | null | undefined
+): Prisma.InputJsonObject => {
+  if (!isJsonObject(value)) {
+    return {};
+  }
+
+  return Object.fromEntries(Object.entries(value)) as Prisma.InputJsonObject;
+};
+
+const toDate = (value: DateInput): Date => new Date(value);
+const toOptionalUpdateDate = (value: DateInput | null | undefined): Date | undefined =>
+  value ? new Date(value) : undefined;
+const toOptionalDate = (
+  value: DateInput | null | undefined,
+  nullWhenMissing: boolean = false
+): Date | null | undefined => {
+  if (value === undefined) return nullWhenMissing ? null : undefined;
+  if (value === null) return null;
+  return new Date(value);
+};
+
+const toNullableJsonInput = (
+  value: Prisma.InputJsonObject | null | undefined
+): Prisma.InputJsonValue | Prisma.NullableJsonNullValueInput | undefined => {
+  if (value === undefined) return undefined;
+  if (value === null) return Prisma.JsonNull;
+  return value;
+};
 
 const getDayName = (date: Date): string => {
   const days = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
@@ -35,7 +226,11 @@ const normalizeDate = (date: Date): Date => {
  * @param {Date} occurrenceDate - The date of the occurrence to filter for
  * @param {boolean} isRecurring - Whether the event is recurring
  */
-const filterLinksForOccurrence = (links: any[], occurrenceDate: Date, isRecurring: boolean = false): any[] => {
+const filterLinksForOccurrence = <T extends OccurrenceLink>(
+  links: T[],
+  occurrenceDate: Date,
+  isRecurring: boolean = false
+): T[] => {
   if (!links || links.length === 0) return [];
 
   const normalizedOccurrence = normalizeDate(occurrenceDate);
@@ -62,7 +257,12 @@ const filterLinksForOccurrence = (links: any[], occurrenceDate: Date, isRecurrin
  * Map raw link data to the format expected by EventLinks component
  * By default, filters out draft content (calendar links should only show published content)
  */
-const mapLinksToDisplayFormat = (pageLinks: any[], slideLinks: any[], assignmentLinks: any[], filterDrafts: boolean = true) => {
+const mapLinksToDisplayFormat = (
+  pageLinks: CalendarPageLink[],
+  slideLinks: CalendarSlideLink[],
+  assignmentLinks: CalendarAssignmentLink[],
+  filterDrafts: boolean = true
+) => {
   // Map pages (filter drafts by default)
   const pages = (pageLinks || [])
     .filter(l => !filterDrafts || !l.page?.is_draft)
@@ -89,7 +289,12 @@ const mapLinksToDisplayFormat = (pageLinks: any[], slideLinks: any[], assignment
  * @param {Date} endDate - End of date range
  * @param {boolean} includeRawLinks - Whether to include raw link data for admin UI editing
  */
-const expandRecurringEvent = (event: any, startDate: Date, endDate: Date, includeRawLinks: boolean = false): any[] => {
+const expandRecurringEvent = (
+  event: CalendarEventWithLinks,
+  startDate: Date,
+  endDate: Date,
+  includeRawLinks: boolean = false
+): CalendarExpandedEvent[] => {
   // For non-recurring events, just map links to display format
   if (!event.is_recurring || !event.recurrence_rule) {
     // Map links to display format (filter for this non-recurring event's date)
@@ -107,7 +312,7 @@ const expandRecurringEvent = (event: any, startDate: Date, endDate: Date, includ
       filteredAssignmentLinks
     );
 
-    const expandedEvent = {
+    const expandedEvent: CalendarExpandedEvent = {
       ...event,
       pages,
       slides,
@@ -125,10 +330,36 @@ const expandRecurringEvent = (event: any, startDate: Date, endDate: Date, includ
   }
 
   const occurrences = [];
-  const { days, until } = event.recurrence_rule;
+  const recurrenceRule = getRecurrenceRule(event.recurrence_rule);
+  const { days, until } = recurrenceRule ?? {};
 
   if (!days || !Array.isArray(days)) {
-    return [event];
+    const filteredPageLinks = filterLinksForOccurrence(event.pageLinks, event.start_time, false);
+    const filteredSlideLinks = filterLinksForOccurrence(event.slideLinks, event.start_time, false);
+    const filteredAssignmentLinks = filterLinksForOccurrence(
+      event.assignmentLinks,
+      event.start_time,
+      false
+    );
+    const { pages, slides, assignments } = mapLinksToDisplayFormat(
+      filteredPageLinks,
+      filteredSlideLinks,
+      filteredAssignmentLinks
+    );
+    const expandedEvent: CalendarExpandedEvent = {
+      ...event,
+      pages,
+      slides,
+      assignments,
+    };
+
+    if (includeRawLinks) {
+      expandedEvent._rawPageLinks = event.pageLinks;
+      expandedEvent._rawSlideLinks = event.slideLinks;
+      expandedEvent._rawAssignmentLinks = event.assignmentLinks;
+    }
+
+    return [expandedEvent];
   }
 
   const currentDate = new Date(event.start_time);
@@ -149,7 +380,7 @@ const expandRecurringEvent = (event: any, startDate: Date, endDate: Date, includ
     const dayName = getDayName(currentDate);
 
     if (days.includes(dayName) && currentDate >= rangeStart) {
-      const override = event.overrides?.find((o: any) => isSameDate(new Date(o.date), currentDate));
+      const override = event.overrides?.find(o => isSameDate(new Date(o.date), currentDate));
 
       if (override?.is_cancelled) {
         // Skip this occurrence
@@ -186,7 +417,7 @@ const expandRecurringEvent = (event: any, startDate: Date, endDate: Date, includ
             ? new Date(override.new_end_time)
             : new Date(occurrenceStart.getTime() + duration);
 
-          const overrideOccurrence = {
+          const overrideOccurrence: CalendarExpandedEvent = {
             ...event,
             start_time: occurrenceStart,
             end_time: occurrenceEnd,
@@ -219,7 +450,7 @@ const expandRecurringEvent = (event: any, startDate: Date, endDate: Date, includ
           );
           const occurrenceEnd = new Date(occurrenceStart.getTime() + duration);
 
-          const templateOccurrence = {
+          const templateOccurrence: CalendarExpandedEvent = {
             ...event,
             start_time: occurrenceStart,
             end_time: occurrenceEnd,
@@ -266,7 +497,7 @@ export const getClassroomCalendar = async (
   includeUnpublished: boolean = false
 ) => {
   // Get all calendar events that could appear in this range
-  const events = await prisma!.calendarEvent.findMany({
+  const events = await getPrisma().calendarEvent.findMany({
     where: {
       classroom_id: classroomId,
       OR: [
@@ -356,7 +587,7 @@ export const getClassroomCalendar = async (
  * @param {boolean} [includeUnpublished=false] - Include unpublished assignments (for admin view)
  */
 export const getDeadlinesForRange = async (classroomId: string, startDate: Date, endDate: Date, userId: string | null = null, includeUnpublished: boolean = false) => {
-  const assignments = await prisma!.assignment.findMany({
+  const assignments = await getPrisma().assignment.findMany({
     where: {
       module: {
         classroom_id: classroomId,
@@ -447,7 +678,11 @@ export const getDeadlinesForRange = async (classroomId: string, startDate: Date,
   });
 
   return assignments.map(assignment => {
-    const repoAssignment = assignment.repository_assignments?.[0] as any;
+    const repoAssignment = (
+      'repository_assignments' in assignment
+        ? assignment.repository_assignments?.[0] ?? null
+        : null
+    ) as DeadlineRepositoryAssignment | null;
     const gitOrgLogin = assignment.module.classroom?.git_organization?.login;
 
     // Build GitHub issue URL if user has a repo assignment
@@ -459,13 +694,13 @@ export const getDeadlinesForRange = async (classroomId: string, startDate: Date,
     // Flag unpublished content for admin UI styling
     const isUnpublished = !assignment.is_published || !assignment.module?.is_published;
 
-    return {
+    const deadline: CalendarDeadlineItem = {
       id: `deadline-${assignment.id}`,
       event_type: 'DEADLINE',
       title: `Due: ${assignment.title}`,
       description: assignment.module.title,
-      start_time: assignment.student_deadline,
-      end_time: assignment.student_deadline,
+      start_time: assignment.student_deadline!,
+      end_time: assignment.student_deadline!,
       is_deadline: true,
       is_unpublished: isUnpublished,
       assignment_id: assignment.id,
@@ -474,13 +709,19 @@ export const getDeadlinesForRange = async (classroomId: string, startDate: Date,
       slides: assignment.slides,
       github_issue_url,
     };
+
+    return deadline;
   });
 };
 
 /**
  * Create a new calendar event
  */
-export const createEvent = async (classroomId: string, userId: string, eventData: any) => {
+export const createEvent = async (
+  classroomId: string,
+  userId: string,
+  eventData: CalendarEventCreateData
+) => {
   const {
     event_type,
     title,
@@ -493,19 +734,19 @@ export const createEvent = async (classroomId: string, userId: string, eventData
     recurrence_rule,
   } = eventData;
 
-  return prisma!.calendarEvent.create({
+  return getPrisma().calendarEvent.create({
     data: {
       classroom_id: classroomId,
       created_by: userId,
       event_type,
       title,
       description,
-      start_time: new Date(start_time),
-      end_time: new Date(end_time),
+      start_time: toDate(start_time),
+      end_time: toDate(end_time),
       location,
       meeting_link,
       is_recurring: is_recurring || false,
-      recurrence_rule: is_recurring ? recurrence_rule : null,
+      recurrence_rule: is_recurring ? toNullableJsonInput(recurrence_rule) : Prisma.JsonNull,
     },
     include: {
       creator: {
@@ -522,7 +763,7 @@ export const createEvent = async (classroomId: string, userId: string, eventData
 /**
  * Update an existing calendar event
  */
-export const updateEvent = async (eventId: string, eventData: any) => {
+export const updateEvent = async (eventId: string, eventData: CalendarEventUpdateData) => {
   const {
     event_type,
     title,
@@ -535,18 +776,18 @@ export const updateEvent = async (eventId: string, eventData: any) => {
     recurrence_rule,
   } = eventData;
 
-  return prisma!.calendarEvent.update({
+  return getPrisma().calendarEvent.update({
     where: { id: eventId },
     data: {
       event_type,
       title,
       description,
-      start_time: start_time ? new Date(start_time) : undefined,
-      end_time: end_time ? new Date(end_time) : undefined,
+      start_time: toOptionalUpdateDate(start_time),
+      end_time: toOptionalUpdateDate(end_time),
       location,
       meeting_link,
       is_recurring,
-      recurrence_rule: is_recurring ? recurrence_rule : null,
+      recurrence_rule: is_recurring ? toNullableJsonInput(recurrence_rule) : Prisma.JsonNull,
     },
     include: {
       creator: {
@@ -565,7 +806,7 @@ export const updateEvent = async (eventId: string, eventData: any) => {
  * Delete a calendar event
  */
 export const deleteEvent = async (eventId: string) => {
-  return prisma!.calendarEvent.delete({
+  return getPrisma().calendarEvent.delete({
     where: { id: eventId },
   });
 };
@@ -577,8 +818,13 @@ export const deleteEvent = async (eventId: string) => {
  * @param {string} editScope - 'this_only', 'this_and_future', or 'all'
  * @param {Date} occurrenceDate - The date of the specific occurrence being edited
  */
-export const updateEventWithScope = async (eventId: string, eventData: any, editScope: string, occurrenceDate: Date) => {
-  const event = await prisma!.calendarEvent.findUnique({
+export const updateEventWithScope = async (
+  eventId: string,
+  eventData: CalendarEventUpdateData,
+  editScope: CalendarEditScope,
+  occurrenceDate: Date
+) => {
+  const event = await getPrisma().calendarEvent.findUnique({
     where: { id: eventId },
     include: { overrides: true },
   });
@@ -595,22 +841,22 @@ export const updateEventWithScope = async (eventId: string, eventData: any, edit
       );
 
       if (existingOverride) {
-        await prisma!.calendarEventOverride.update({
+        await getPrisma().calendarEventOverride.update({
           where: { id: existingOverride.id },
           data: {
-            new_start_time: eventData.start_time ? new Date(eventData.start_time) : null,
-            new_end_time: eventData.end_time ? new Date(eventData.end_time) : null,
+            new_start_time: toOptionalDate(eventData.start_time, true),
+            new_end_time: toOptionalDate(eventData.end_time, true),
             new_location: eventData.location,
             new_meeting_link: eventData.meeting_link,
           },
         });
       } else {
-        await prisma!.calendarEventOverride.create({
+        await getPrisma().calendarEventOverride.create({
           data: {
             event_id: eventId,
             date: occurrenceDate,
-            new_start_time: eventData.start_time ? new Date(eventData.start_time) : null,
-            new_end_time: eventData.end_time ? new Date(eventData.end_time) : null,
+            new_start_time: toOptionalDate(eventData.start_time, true),
+            new_end_time: toOptionalDate(eventData.end_time, true),
             new_location: eventData.location,
             new_meeting_link: eventData.meeting_link,
           },
@@ -626,30 +872,32 @@ export const updateEventWithScope = async (eventId: string, eventData: any, edit
       dayBeforeOccurrence.setDate(dayBeforeOccurrence.getDate() - 1);
 
       // Update original event to end before this occurrence
-      await prisma!.calendarEvent.update({
+      await getPrisma().calendarEvent.update({
         where: { id: eventId },
         data: {
           recurrence_rule: {
-            ...(event.recurrence_rule as any),
+            ...toInputJsonObject(event.recurrence_rule),
             until: dayBeforeOccurrence.toISOString(),
           },
         },
       });
 
       // Create new event starting from this occurrence
-      const newEvent = await prisma!.calendarEvent.create({
+      const newEvent = await getPrisma().calendarEvent.create({
         data: {
           classroom_id: event.classroom_id,
           created_by: event.created_by,
           event_type: eventData.event_type || event.event_type,
           title: eventData.title || event.title,
           description: eventData.description ?? event.description,
-          start_time: eventData.start_time ? new Date(eventData.start_time) : event.start_time,
-          end_time: eventData.end_time ? new Date(eventData.end_time) : event.end_time,
+          start_time: eventData.start_time ? toDate(eventData.start_time) : event.start_time,
+          end_time: eventData.end_time ? toDate(eventData.end_time) : event.end_time,
           location: eventData.location ?? event.location,
           meeting_link: eventData.meeting_link ?? event.meeting_link,
           is_recurring: eventData.is_recurring ?? event.is_recurring,
-          recurrence_rule: eventData.recurrence_rule ?? event.recurrence_rule,
+          recurrence_rule: toNullableJsonInput(
+            eventData.recurrence_rule ?? toInputJsonObject(event.recurrence_rule)
+          ),
         },
       });
 
@@ -658,18 +906,20 @@ export const updateEventWithScope = async (eventId: string, eventData: any, edit
 
     case 'all': {
       // Update the entire event template
-      return prisma!.calendarEvent.update({
+      return getPrisma().calendarEvent.update({
         where: { id: eventId },
         data: {
           event_type: eventData.event_type,
           title: eventData.title,
           description: eventData.description,
-          start_time: eventData.start_time ? new Date(eventData.start_time) : undefined,
-          end_time: eventData.end_time ? new Date(eventData.end_time) : undefined,
+          start_time: toOptionalUpdateDate(eventData.start_time),
+          end_time: toOptionalUpdateDate(eventData.end_time),
           location: eventData.location,
           meeting_link: eventData.meeting_link,
           is_recurring: eventData.is_recurring,
-          recurrence_rule: eventData.is_recurring ? eventData.recurrence_rule : null,
+          recurrence_rule: eventData.is_recurring
+            ? toNullableJsonInput(eventData.recurrence_rule)
+            : Prisma.JsonNull,
         },
       });
     }
@@ -685,8 +935,12 @@ export const updateEventWithScope = async (eventId: string, eventData: any, edit
  * @param {string} editScope - 'this_only', 'this_and_future', or 'all'
  * @param {Date} occurrenceDate - The date of the specific occurrence being deleted
  */
-export const deleteEventWithScope = async (eventId: string, editScope: string, occurrenceDate: Date) => {
-  const event = await prisma!.calendarEvent.findUnique({
+export const deleteEventWithScope = async (
+  eventId: string,
+  editScope: CalendarEditScope,
+  occurrenceDate: Date
+) => {
+  const event = await getPrisma().calendarEvent.findUnique({
     where: { id: eventId },
     include: { overrides: true },
   });
@@ -703,12 +957,12 @@ export const deleteEventWithScope = async (eventId: string, editScope: string, o
       );
 
       if (existingOverride) {
-        await prisma!.calendarEventOverride.update({
+        await getPrisma().calendarEventOverride.update({
           where: { id: existingOverride.id },
           data: { is_cancelled: true },
         });
       } else {
-        await prisma!.calendarEventOverride.create({
+        await getPrisma().calendarEventOverride.create({
           data: {
             event_id: eventId,
             date: occurrenceDate,
@@ -725,18 +979,18 @@ export const deleteEventWithScope = async (eventId: string, editScope: string, o
       dayBeforeOccurrence.setDate(dayBeforeOccurrence.getDate() - 1);
 
       // Also delete any overrides on or after this date
-      await prisma!.calendarEventOverride.deleteMany({
+      await getPrisma().calendarEventOverride.deleteMany({
         where: {
           event_id: eventId,
           date: { gte: occurrenceDate },
         },
       });
 
-      return prisma!.calendarEvent.update({
+      return getPrisma().calendarEvent.update({
         where: { id: eventId },
         data: {
           recurrence_rule: {
-            ...(event.recurrence_rule as any),
+            ...toInputJsonObject(event.recurrence_rule),
             until: dayBeforeOccurrence.toISOString(),
           },
         },
@@ -745,7 +999,7 @@ export const deleteEventWithScope = async (eventId: string, editScope: string, o
 
     case 'all': {
       // Delete the entire event (cascade will delete overrides)
-      return prisma!.calendarEvent.delete({
+      return getPrisma().calendarEvent.delete({
         where: { id: eventId },
       });
     }
@@ -759,7 +1013,7 @@ export const deleteEventWithScope = async (eventId: string, editScope: string, o
  * Get a single calendar event by ID
  */
 export const getEventById = async (eventId: string) => {
-  return prisma!.calendarEvent.findUnique({
+  return getPrisma().calendarEvent.findUnique({
     where: { id: eventId },
     include: {
       creator: {
@@ -777,17 +1031,21 @@ export const getEventById = async (eventId: string) => {
 /**
  * Create an override for a specific occurrence of a recurring event
  */
-export const createOverride = async (eventId: string, date: Date | string, overrideData: any) => {
+export const createOverride = async (
+  eventId: string,
+  date: Date | string,
+  overrideData: CalendarOverrideData
+) => {
   const { is_cancelled, new_start_time, new_end_time, new_location, new_meeting_link } =
     overrideData;
 
-  return prisma!.calendarEventOverride.create({
+  return getPrisma().calendarEventOverride.create({
     data: {
       event_id: eventId,
       date: new Date(date),
       is_cancelled: is_cancelled || false,
-      new_start_time: new_start_time ? new Date(new_start_time) : null,
-      new_end_time: new_end_time ? new Date(new_end_time) : null,
+      new_start_time: toOptionalDate(new_start_time, true),
+      new_end_time: toOptionalDate(new_end_time, true),
       new_location,
       new_meeting_link,
     },
@@ -797,16 +1055,19 @@ export const createOverride = async (eventId: string, date: Date | string, overr
 /**
  * Update an existing override
  */
-export const updateOverride = async (overrideId: string, overrideData: any) => {
+export const updateOverride = async (
+  overrideId: string,
+  overrideData: CalendarOverrideData
+) => {
   const { is_cancelled, new_start_time, new_end_time, new_location, new_meeting_link } =
     overrideData;
 
-  return prisma!.calendarEventOverride.update({
+  return getPrisma().calendarEventOverride.update({
     where: { id: overrideId },
     data: {
       is_cancelled,
-      new_start_time: new_start_time ? new Date(new_start_time) : null,
-      new_end_time: new_end_time ? new Date(new_end_time) : null,
+      new_start_time: toOptionalDate(new_start_time, true),
+      new_end_time: toOptionalDate(new_end_time, true),
       new_location,
       new_meeting_link,
     },
@@ -817,7 +1078,7 @@ export const updateOverride = async (overrideId: string, overrideData: any) => {
  * Delete an override
  */
 export const deleteOverride = async (overrideId: string) => {
-  return prisma!.calendarEventOverride.delete({
+  return getPrisma().calendarEventOverride.delete({
     where: { id: overrideId },
   });
 };
@@ -826,7 +1087,7 @@ export const deleteOverride = async (overrideId: string) => {
  * Get all events created by a specific user
  */
 export const getUserEvents = async (userId: string, classroomId: string) => {
-  return prisma!.calendarEvent.findMany({
+  return getPrisma().calendarEvent.findMany({
     where: {
       created_by: userId,
       classroom_id: classroomId,
@@ -859,19 +1120,19 @@ export const updateEventLinks = async (eventId: string, classroomId: string, lin
   // Validate all resources belong to this classroom
   const [pages, slides, assignments] = await Promise.all([
     pageIds.length > 0
-      ? prisma!.page.findMany({
+      ? getPrisma().page.findMany({
           where: { id: { in: pageIds }, classroom_id: classroomId },
           select: { id: true },
         })
       : [],
     slideIds.length > 0
-      ? prisma!.slide.findMany({
+      ? getPrisma().slide.findMany({
           where: { id: { in: slideIds }, classroom_id: classroomId },
           select: { id: true },
         })
       : [],
     assignmentIds.length > 0
-      ? prisma!.assignment.findMany({
+      ? getPrisma().assignment.findMany({
           where: { id: { in: assignmentIds }, module: { classroom_id: classroomId } },
           select: { id: true },
         })
@@ -883,7 +1144,7 @@ export const updateEventLinks = async (eventId: string, classroomId: string, lin
   const validSlideIds = slides.map(s => s.id);
   const validAssignmentIds = assignments.map(a => a.id);
 
-  return prisma!.$transaction(async tx => {
+  return getPrisma().$transaction(async tx => {
     // Delete existing links for this event/occurrence combination
     await tx.calendarEventPageLink.deleteMany({
       where: { event_id: eventId, occurrence_date: normalizedDate },

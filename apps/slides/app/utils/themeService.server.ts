@@ -7,7 +7,7 @@
 
 import { ContentService } from '@classmoji/content';
 import { GitHubProvider } from '@classmoji/services';
-import prisma from '@classmoji/database';
+import getPrisma from '@classmoji/database';
 
 const THEMES_FOLDER = '.slidesthemes';
 
@@ -36,7 +36,7 @@ export async function listSavedThemes(org: string, repoName: string) {
   try {
     // Get git organization to access installation ID
     // Query by provider + login since login alone is not unique
-    const gitOrg = await prisma!.gitOrganization.findFirst({
+    const gitOrg = await getPrisma().gitOrganization.findFirst({
       where: { provider: 'GITHUB', login: org },
     });
 
@@ -55,14 +55,14 @@ export async function listSavedThemes(org: string, repoName: string) {
 
     let contents;
     try {
-      const { data } = await (octokit as any).request('GET /repos/{owner}/{repo}/contents/{path}', {
+      const { data } = await octokit.request('GET /repos/{owner}/{repo}/contents/{path}', {
         owner: org,
         repo: repoName,
         path: THEMES_FOLDER,
       });
       contents = Array.isArray(data) ? data : [];
-    } catch (error: any) {
-      if (error.status === 404) return [];
+    } catch (error: unknown) {
+      if (error && typeof error === 'object' && 'status' in error && error.status === 404) return [];
       throw error;
     }
 
@@ -71,26 +71,27 @@ export async function listSavedThemes(org: string, repoName: string) {
     for (const item of contents) {
       if (item.type === 'dir') {
         try {
-          const { data: manifestData } = await (octokit as any).request('GET /repos/{owner}/{repo}/contents/{path}', {
+          const { data: manifestData } = await octokit.request('GET /repos/{owner}/{repo}/contents/{path}', {
             owner: org,
             repo: repoName,
             path: `${THEMES_FOLDER}/${item.name}/theme.json`,
           });
 
-          const manifest = JSON.parse(Buffer.from(manifestData.content, 'base64').toString('utf-8'));
+          const manifest = JSON.parse(Buffer.from((manifestData as { content: string }).content, 'base64').toString('utf-8'));
           themes.push({
             name: item.name,
             bodyClasses: manifest.bodyClasses || '',
           });
-        } catch (error: any) {
+        } catch (error: unknown) {
           // Skip themes without valid manifest
-          console.warn(`Skipping theme ${item.name}: ${error.message}`);
+          const message = error instanceof Error ? error.message : String(error);
+          console.warn(`Skipping theme ${item.name}: ${message}`);
         }
       }
     }
 
     return themes.sort((a, b) => a.name.localeCompare(b.name));
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error('Error listing themes:', error);
     return [];
   }
@@ -122,7 +123,7 @@ export async function saveTheme({
   bodyClasses: string;
   customThemeCss?: string;
   libFiles: Array<{ path: string; content: string; encoding: 'utf-8' | 'base64' }>;
-  onProgress?: any;
+  onProgress?: (progress: { current: number; total: number; filename?: string }) => void;
 }) {
   const themePath = `${THEMES_FOLDER}/${themeName}`;
 
@@ -180,7 +181,7 @@ export async function getThemeUrls(org: string, repoName: string, themeName: str
 
   // Get git organization to access installation ID
   // Query by provider + login since login alone is not unique
-  const gitOrg = await prisma!.gitOrganization.findFirst({
+  const gitOrg = await getPrisma().gitOrganization.findFirst({
     where: { provider: 'GITHUB', login: org },
   });
 
@@ -193,17 +194,17 @@ export async function getThemeUrls(org: string, repoName: string, themeName: str
   const octokit = await gitProvider.getOctokit();
 
   // Get manifest for body classes
-  const { data: manifestData } = await (octokit as any).request('GET /repos/{owner}/{repo}/contents/{path}', {
+  const { data: manifestData } = await octokit.request('GET /repos/{owner}/{repo}/contents/{path}', {
     owner: org,
     repo: repoName,
     path: `${themePath}/theme.json`,
   });
-  const manifest = JSON.parse(Buffer.from(manifestData.content, 'base64').toString('utf-8'));
+  const manifest = JSON.parse(Buffer.from((manifestData as { content: string }).content, 'base64').toString('utf-8'));
 
   // Check which lib CSS exists (prefer v2)
   let libCssFile = 'lib/offline-v2.css';
   try {
-    await (octokit as any).request('GET /repos/{owner}/{repo}/contents/{path}', {
+    await octokit.request('GET /repos/{owner}/{repo}/contents/{path}', {
       owner: org,
       repo: repoName,
       path: `${themePath}/lib/offline-v2.css`,
@@ -213,9 +214,9 @@ export async function getThemeUrls(org: string, repoName: string, themeName: str
   }
 
   // Check if custom theme exists
-  let customThemeUrl: any = null;
+  let customThemeUrl: string | null = null;
   try {
-    await (octokit as any).request('GET /repos/{owner}/{repo}/contents/{path}', {
+    await octokit.request('GET /repos/{owner}/{repo}/contents/{path}', {
       owner: org,
       repo: repoName,
       path: `${themePath}/custom-theme.css`,

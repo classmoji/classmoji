@@ -1,5 +1,10 @@
 interface UserThumbnailViewProps {
-  user?: any; // eslint-disable-line @typescript-eslint/no-explicit-any -- accepts various Prisma user shapes with different included relations
+  user?: {
+    avatar_url?: string | null;
+    name?: string | null;
+    login?: string | null;
+    slug?: string | null;
+  };
   truncate?: boolean;
 }
 
@@ -9,8 +14,8 @@ const UserThumbnailView = ({ user, truncate = false }: UserThumbnailViewProps) =
       {user?.avatar_url && (
         <img
           className="w-[40px] h-[40px] rounded-full flex-shrink-0"
-          src={user.avatar_url}
-          alt={user.avatar_url}
+          src={user.avatar_url ?? undefined}
+          alt={user.name ?? user.login ?? 'User avatar'}
         />
       )}
 
