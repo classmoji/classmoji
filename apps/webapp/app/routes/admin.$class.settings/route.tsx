@@ -1,5 +1,5 @@
 import { Outlet, useNavigate, useParams, useLocation } from 'react-router';
-import { Tabs, Card } from 'antd';
+import { Tabs } from 'antd';
 import {
   IconSettings,
   IconSchool,

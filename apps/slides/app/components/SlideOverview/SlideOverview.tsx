@@ -51,7 +51,7 @@ export default function SlideOverview({
   // Pass onContentChange so the hook can auto-sync after state updates
   const {
     stacks,
-    setStacks,
+    setStacks: _setStacks,
     error,
     findSlideById,
     findStackById,

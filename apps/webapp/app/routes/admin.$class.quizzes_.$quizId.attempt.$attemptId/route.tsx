@@ -13,7 +13,11 @@ export async function loader({ params, request }: Route.LoaderArgs) {
   const attemptId = params.attemptId!;
 
   // 1. Authenticate and authorize (instructors only)
-  const { userId, classroom, membership } = await assertClassroomAccess({
+  const {
+    userId: _userId,
+    classroom,
+    membership: _membership,
+  } = await assertClassroomAccess({
     request,
     classroomSlug: classSlug,
     allowedRoles: ['OWNER', 'ASSISTANT'],
@@ -57,7 +61,7 @@ export async function loader({ params, request }: Route.LoaderArgs) {
   // 8. Strip sensitive fields from attempt before sending to client
   // agent_config may contain API keys - never expose to browser
   // quiz.classroom.settings contains anthropic_api_key, openai_api_key
-  const { agent_config, ...attemptWithoutConfig } = attemptData.attempt;
+  const { agent_config: _agent_config, ...attemptWithoutConfig } = attemptData.attempt;
   const safeAttempt = {
     ...attemptWithoutConfig,
     quiz: {

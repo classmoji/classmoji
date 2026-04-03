@@ -7,7 +7,6 @@
 
 import getPrisma from '@classmoji/database';
 import { getGitProvider } from '@classmoji/services';
-import type { Octokit } from '@octokit/rest';
 import { validateFile, sanitizeFilename } from './utils/validateFile.ts';
 
 interface GitOrganizationRecord {

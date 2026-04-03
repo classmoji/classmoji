@@ -14,7 +14,7 @@ type Repository = Awaited<ReturnType<typeof ClassmojiService.repository.findByMo
 export const publishAssignment = async (
   classroomSlug: string,
   moduleId: string,
-  userId: string | null = null
+  _userId: string | null = null
 ) => {
   try {
     const sessionId = nanoid();
@@ -32,7 +32,7 @@ export const publishAssignment = async (
 
     let numReposToCreate = 0;
     let numIssuesToCreate = 0;
-    let numStudents = 0;
+    let _numStudents = 0;
 
     if (module?.type == 'INDIVIDUAL') {
       const students = await ClassmojiService.classroomMembership.findUsersByRole(
@@ -51,7 +51,7 @@ export const publishAssignment = async (
       numIssuesToCreate =
         module.assignments.filter(assignment => dayjs(assignment.release_at).isBefore(dayjs()))
           .length * studentList.length;
-      numStudents = studentList.length;
+      _numStudents = studentList.length;
 
       Tasks.createRepositoriesTask.trigger(
         {
@@ -84,7 +84,7 @@ export const publishAssignment = async (
       numIssuesToCreate =
         module.assignments.filter(assignment => dayjs(assignment.release_at).isBefore(dayjs()))
           .length * teams.length;
-      numStudents = teams.length;
+      _numStudents = teams.length;
 
       Tasks.createRepositoriesTask.trigger(
         {
@@ -122,7 +122,7 @@ export const publishAssignment = async (
 export const syncAssignment = async (
   classroomSlug: string,
   moduleId: string,
-  userId: string | null = null
+  _userId: string | null = null
 ) => {
   const classroom = await ClassmojiService.classroom.findBySlug(classroomSlug);
   const module = await ClassmojiService.module.findById(moduleId);

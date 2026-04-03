@@ -121,7 +121,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
   });
 
   const data = await request.json();
-  const { name, visibility, tags } = data;
+  const { name, visibility: _visibility, tags } = data;
 
   const gitOrgLogin = classroom.git_organization?.login;
   if (!gitOrgLogin) {

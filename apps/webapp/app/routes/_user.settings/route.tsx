@@ -5,7 +5,7 @@ import { useUser } from '~/hooks';
 
 const UserSettings = () => {
   const navigate = useNavigate();
-  const { user } = useUser();
+  const { user: _user } = useUser();
   const location = useLocation();
 
   const currentTab = location.pathname.split('/').pop() || 'general';

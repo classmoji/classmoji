@@ -1,7 +1,6 @@
 import { useParams } from 'react-router';
 import _ from 'lodash';
 import { useState } from 'react';
-import invariant from 'tiny-invariant';
 
 import { Card, Button, Drawer, Table, Select, Tag } from 'antd';
 
@@ -39,7 +38,7 @@ const AdminSingleTeamView = ({ loaderData }: Route.ComponentProps) => {
   const { students, teamMembers, tags, team } = loaderData;
   const [membersToAdd, setMembersToAdd] = useState<string[]>([]);
   const [tagsToAdd, setTagsToAdd] = useState<string[]>([]);
-  const { opened, close, open } = useRouteDrawer({});
+  const { opened: _opened, close, open } = useRouteDrawer({});
   const { slug } = useParams();
   const { fetcher, notify } = useGlobalFetcher();
 

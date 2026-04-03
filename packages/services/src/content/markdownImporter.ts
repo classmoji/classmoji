@@ -1,4 +1,5 @@
 import { marked, type MarkedOptions } from 'marked';
+// eslint-disable-next-line import/namespace
 import * as prettier from 'prettier';
 
 /**
@@ -31,6 +32,7 @@ export async function formatCodeBlocks(markdown: string): Promise<string> {
   };
 
   const formatWithParser = async (code: string, parser: string): Promise<string> => {
+    // eslint-disable-next-line import/namespace
     const formatted = await prettier.format(code, {
       parser,
       semi: true,
@@ -344,7 +346,7 @@ export function processToggleLists(markdown: string): string {
         continue;
       }
 
-      let innerContent = [];
+      const innerContent = [];
       let j = i + 1;
       let inCodeBlock = false;
 
@@ -501,7 +503,7 @@ export function convertMarkdownToHtml(markdown: string): string {
   };
 
   // Helper to escape HTML in code content
-  const escapeHtml = (text: string): string => {
+  const _escapeHtml = (text: string): string => {
     if (!text) return '';
     return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   };
@@ -670,14 +672,14 @@ export function rewriteImagePaths(html: string, imageMap: Map<string, any>): str
       `src=["']${escapedFilename}["']`,
     ];
 
-    let matched = false;
+    let _matched = false;
     for (const pattern of patterns) {
       const regex = new RegExp(pattern, 'gi');
       const beforeReplace = updatedHtml;
       updatedHtml = updatedHtml.replace(regex, `src="${imageInfo.githubUrl}"`);
 
       if (beforeReplace !== updatedHtml) {
-        matched = true;
+        _matched = true;
         break;
       }
     }

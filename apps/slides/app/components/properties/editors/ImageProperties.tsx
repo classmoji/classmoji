@@ -1,6 +1,6 @@
 import { useState, useCallback, useEffect } from 'react';
 import { Select, Input, InputNumber } from 'antd';
-import PropertySection, { PropertyRow, PropertyLabel } from '../PropertySection';
+import PropertySection, { PropertyLabel } from '../PropertySection';
 import { useElementSelection } from '../ElementSelectionContext';
 import { convertToBlock, canConvertToBlock } from '../utils/convertToBlock';
 

@@ -15,7 +15,7 @@ export const loader = async () => {
 
 const LoginCallback = () => {
   return (
-    <html>
+    <html lang="en">
       <head>
         <title>Installation Complete</title>
       </head>

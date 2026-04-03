@@ -6,7 +6,7 @@
 export default function PropertySection({
   title,
   children,
-  defaultOpen = true,
+  defaultOpen: _defaultOpen = true,
 }: {
   title: string;
   children: React.ReactNode;

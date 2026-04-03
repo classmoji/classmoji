@@ -21,7 +21,7 @@ const CalendarSubscriptionCard = ({ subscriptionUrl }: CalendarSubscriptionCardP
       setCopied(true);
       message.success('Calendar URL copied to clipboard');
       setTimeout(() => setCopied(false), 2000);
-    } catch (err: unknown) {
+    } catch (_err: unknown) {
       message.error('Failed to copy URL');
     }
   };

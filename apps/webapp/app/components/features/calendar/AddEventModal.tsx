@@ -46,7 +46,7 @@ interface AssignmentOption {
   module?: { title: string };
 }
 
-interface EventData {
+interface _EventData {
   event_type: string;
   title: string;
   description: string | null;

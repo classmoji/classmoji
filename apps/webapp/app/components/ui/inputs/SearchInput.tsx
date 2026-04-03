@@ -1,5 +1,4 @@
 import { Input } from 'antd';
-import { SearchOutlined } from '@ant-design/icons';
 import { IconSearch } from '@tabler/icons-react';
 
 interface SearchInputProps {

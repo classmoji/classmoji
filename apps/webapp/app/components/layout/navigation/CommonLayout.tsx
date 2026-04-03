@@ -46,7 +46,7 @@ const CommonLayout = ({
   menuPages = [],
   recentViewers = [],
   groupViewersByRole = false,
-  pagesUrl = 'http://localhost:7100',
+  pagesUrl: _pagesUrl = 'http://localhost:7100',
 }: CommonLayoutProps) => {
   const [collapsed, setCollapsed] = useLocalStorageState('classmoji-collapsed', {
     defaultValue: false,

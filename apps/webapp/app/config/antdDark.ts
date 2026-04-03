@@ -1,12 +1,4 @@
-import {
-  BRAND,
-  BRAND_LIGHT,
-  BRAND_DARK,
-  BRAND_TEXT,
-  PRIMARY,
-  PRIMARY_600,
-  SECONDARY,
-} from './theme.js';
+import { BRAND, BRAND_LIGHT, BRAND_DARK, BRAND_TEXT, PRIMARY } from './theme.js';
 
 const darkTheme = {
   token: {

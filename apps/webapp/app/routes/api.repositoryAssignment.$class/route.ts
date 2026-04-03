@@ -13,7 +13,7 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
 
   return namedAction(request, {
     async autograde() {
-      const { userId, classroom } = await assertClassroomAccess({
+      const { userId: _userId, classroom: _classroom } = await assertClassroomAccess({
         request,
         classroomSlug: classSlug,
         allowedRoles: ['OWNER', 'TEACHER'],
@@ -43,7 +43,7 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
     },
 
     async addGrade() {
-      const { userId, classroom } = await assertClassroomAccess({
+      const { userId: _userId, classroom } = await assertClassroomAccess({
         request,
         classroomSlug: classSlug,
         allowedRoles: ['OWNER', 'TEACHER', 'ASSISTANT'],
@@ -70,7 +70,7 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
     },
 
     async removeGrade() {
-      const { userId, classroom } = await assertClassroomAccess({
+      const { userId: _userId2, classroom } = await assertClassroomAccess({
         request,
         classroomSlug: classSlug,
         allowedRoles: ['OWNER', 'TEACHER', 'ASSISTANT'],
@@ -94,7 +94,7 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
     },
 
     async updateLateOverride() {
-      const { userId, classroom } = await assertClassroomAccess({
+      const { userId: _userId3, classroom: _classroom2 } = await assertClassroomAccess({
         request,
         classroomSlug: classSlug,
         allowedRoles: ['OWNER', 'TEACHER'],
@@ -117,7 +117,7 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
     },
 
     async updateGradeRelease() {
-      const { classroom } = await assertClassroomAccess({
+      const { classroom: _classroom3 } = await assertClassroomAccess({
         request,
         classroomSlug: classSlug,
         allowedRoles: ['OWNER', 'TEACHER'],

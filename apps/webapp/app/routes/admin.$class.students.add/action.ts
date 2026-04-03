@@ -7,7 +7,7 @@ import type { Route } from './+types/route';
 export const action = async ({ request, params }: Route.ActionArgs) => {
   const classSlug = params.class!;
 
-  const { classroom, userId } = await requireClassroomAdmin(request, classSlug, {
+  const { classroom, userId: _userId } = await requireClassroomAdmin(request, classSlug, {
     resourceType: 'STUDENT_ROSTER',
     action: 'bulk_add_students',
   });

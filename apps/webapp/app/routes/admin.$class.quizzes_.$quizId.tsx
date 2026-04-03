@@ -359,7 +359,7 @@ const QuizView = ({ loaderData }: Route.ComponentProps) => {
   const [selectedRepo, setSelectedRepo] = useState<string | null>(null);
   const [repos, setRepos] = useState<Record<string, unknown>[]>([]);
   const [loadingRepos, setLoadingRepos] = useState(false);
-  const [pendingPreviewAction, setPendingPreviewAction] = useState<string | null>(null); // 'new' or 'resume'
+  const [_pendingPreviewAction, setPendingPreviewAction] = useState<string | null>(null); // 'new' or 'resume'
 
   // Show success message when clearing attempts
   useEffect(() => {

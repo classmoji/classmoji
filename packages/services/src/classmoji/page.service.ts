@@ -20,7 +20,7 @@ interface PageQueryOptions {
  */
 export async function create(values: Prisma.PageUncheckedCreateInput) {
   // Explicitly exclude id - Prisma will auto-generate with uuid()
-  const { id, ...safeValues } = values;
+  const { id: _id, ...safeValues } = values;
 
   const page = await getPrisma().page.create({
     data: {

@@ -1,3 +1,4 @@
+// eslint-disable-next-line import/no-unresolved -- trigger.dev v3 resolved at runtime
 import { task, logger, metadata } from '@trigger.dev/sdk/v3';
 import Anthropic from '@anthropic-ai/sdk';
 

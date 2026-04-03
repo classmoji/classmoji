@@ -183,7 +183,7 @@ const AdminTokensNew = ({ loaderData }: Route.ComponentProps) => {
 export const action = async ({ params, request }: Route.ActionArgs) => {
   const { class: classSlug } = params;
 
-  const { classroom, userId } = await requireClassroomAdmin(request, classSlug!, {
+  const { classroom, userId: _userId } = await requireClassroomAdmin(request, classSlug!, {
     resourceType: 'TOKEN_GRANT',
     action: 'assign_tokens_bulk',
   });

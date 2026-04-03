@@ -1,6 +1,6 @@
 import { Card, Typography } from 'antd';
 import { QuestionCircleOutlined } from '@ant-design/icons';
-import ReactMarkdown, { type Components } from 'react-markdown';
+import ReactMarkdown from 'react-markdown';
 import rehypeHighlight from 'rehype-highlight';
 
 const { Text, Title } = Typography;

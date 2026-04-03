@@ -1060,7 +1060,7 @@ export default function SlideViewer() {
     canEdit,
     canPresent,
     canViewSpeakerNotes,
-    userRole,
+    userRole: _userRole,
   } = useLoaderData<typeof loader>();
   const [snippets, setSnippets] = useState<Array<{ id: string; name: string; content: string }>>(
     initialSnippets || []
@@ -1072,7 +1072,7 @@ export default function SlideViewer() {
   const [customThemes, setCustomThemes] = useState(initialCustomThemes || []);
   const [sharedThemes, setSharedThemes] = useState(initialSharedThemes || []);
   const [themesLoaded, setThemesLoaded] = useState(false);
-  const { user } = useUser();
+  const { user: _user } = useUser();
 
   const [isEditing, setIsEditing] = useState(false);
   const [hasChanges, setHasChanges] = useState(false);

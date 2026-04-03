@@ -53,7 +53,7 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
 
 const SingleModule = ({ loaderData }: Route.ComponentProps) => {
   const { module, repos, assistants, emojiMappings, settings, classroom } = loaderData;
-  const { fetcher, notify } = useGlobalFetcher();
+  const { fetcher, notify: _notify } = useGlobalFetcher();
   const { class: classSlug } = useParams();
   const { revalidate } = useRevalidator();
   const [viewMode, setViewMode] = useState('assignment'); // 'module' or 'assignment'

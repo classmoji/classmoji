@@ -90,7 +90,7 @@ export function useSlideStructure(revealInstance: RevealApi | null, onContentCha
         const slideIndex = newStacks[i].slides.findIndex(s => s.id === slideId);
         if (slideIndex !== -1) {
           movedSlide = newStacks[i].slides.splice(slideIndex, 1)[0];
-          sourceStackIndex = i;
+          sourceStackIndex = i; // eslint-disable-line @typescript-eslint/no-unused-vars
           break;
         }
       }

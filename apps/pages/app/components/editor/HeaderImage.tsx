@@ -15,7 +15,7 @@ interface HeaderImageProps {
   pageId: string;
 }
 
-const HeaderImage = ({ imageUrl, position, editMode, pageId }: HeaderImageProps) => {
+const HeaderImage = ({ imageUrl, position, editMode, pageId: _pageId }: HeaderImageProps) => {
   const [isHovering, setIsHovering] = useState(false);
   const [isRepositioning, setIsRepositioning] = useState(false);
   const [localPosition, setLocalPosition] = useState(position);

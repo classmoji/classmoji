@@ -57,7 +57,7 @@ const SettingsContent = ({ loaderData }: Route.ComponentProps) => {
   const repoUrl = `https://github.com/${gitOrgLogin}/${repoName}`;
 
   // Handler for customizable repo name (currently disabled in UI)
-  const handleContentRepoChange = (
+  const _handleContentRepoChange = (
     e: React.FocusEvent<HTMLInputElement> | React.KeyboardEvent<HTMLInputElement>
   ) => {
     const value = (e.target as HTMLInputElement).value;

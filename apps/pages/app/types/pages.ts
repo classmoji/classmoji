@@ -74,7 +74,6 @@ export interface ClassroomListItem {
   role: string;
 }
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any -- BlockNote block objects have dynamic prop shapes per block type
 export interface BlockLike {
   type: string;
   props?: Record<string, any>;

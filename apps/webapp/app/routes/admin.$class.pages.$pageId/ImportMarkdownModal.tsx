@@ -125,7 +125,7 @@ export default function ImportMarkdownModal({
   isImporting,
 }: ImportMarkdownModalProps) {
   const [markdownFile, setMarkdownFile] = useState<File | null>(null);
-  const [markdownContent, setMarkdownContent] = useState('');
+  const [_markdownContent, setMarkdownContent] = useState('');
   const [imageFiles, setImageFiles] = useState<File[]>([]);
   const [imageReferences, setImageReferences] = useState<ImageReference[]>([]);
   const [isExtracting, setIsExtracting] = useState(false);

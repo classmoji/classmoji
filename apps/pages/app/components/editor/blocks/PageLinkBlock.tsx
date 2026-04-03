@@ -1,7 +1,6 @@
-import React from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { createReactBlockSpec, type ReactCustomBlockRenderProps } from '@blocknote/react';
-import { IconFileText, IconArrowRight } from '@tabler/icons-react';
-import { useState, useRef, useEffect } from 'react';
+import { IconFileText } from '@tabler/icons-react';
 import { useNavigate } from 'react-router';
 
 /**
@@ -145,7 +144,12 @@ interface SelectedStateProps {
   onClickLink: (e: React.MouseEvent | React.KeyboardEvent) => void;
 }
 
-const SelectedState = ({ pageId, pageTitle, pageExists, onClickLink }: SelectedStateProps) => {
+const SelectedState = ({
+  pageId: _pageId,
+  pageTitle,
+  pageExists,
+  onClickLink,
+}: SelectedStateProps) => {
   if (!pageExists) {
     // Deleted page state
     return (
@@ -195,7 +199,7 @@ export const PageLink = createReactBlockSpec(
     content: 'none',
   },
   {
-    render: (props: PageLinkRenderProps) => {
+    render: function PageLinkRenderer(props: PageLinkRenderProps) {
       const { pageId, pageTitle } = props.block.props;
       const [isOpen, setIsOpen] = useState(!pageId);
       const [searchQuery, setSearchQuery] = useState('');

@@ -56,7 +56,7 @@ export async function loader({ params, request }: Route.LoaderArgs) {
   // Strip sensitive fields from attempt before sending to client
   // agent_config may contain API keys - never expose to browser
   // quiz.classroom.settings contains anthropic_api_key, openai_api_key
-  const { agent_config, ...attemptWithoutConfig } = attemptData.attempt;
+  const { agent_config: _agent_config, ...attemptWithoutConfig } = attemptData.attempt;
   const safeAttempt = {
     ...attemptWithoutConfig,
     quiz: {

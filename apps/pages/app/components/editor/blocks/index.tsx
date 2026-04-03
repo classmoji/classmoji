@@ -37,9 +37,9 @@ import { PageLink } from './PageLinkBlock.tsx';
  */
 // Remove audio, video, and codeBlock from default blocks
 const {
-  audio,
-  video: defaultVideo,
-  codeBlock: defaultCodeBlock,
+  audio: _audio,
+  video: _defaultVideo,
+  codeBlock: _defaultCodeBlock,
   ...filteredDefaultBlockSpecs
 } = defaultBlockSpecs;
 

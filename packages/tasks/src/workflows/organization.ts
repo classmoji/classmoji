@@ -1,11 +1,5 @@
 import { task } from '@trigger.dev/sdk';
-import {
-  ClassmojiService,
-  getGitProvider,
-  getTeamNameForClassroom,
-  ensureClassroomTeam,
-} from '@classmoji/services';
-import { sendEmailTask } from './email.ts';
+import { ClassmojiService, getGitProvider, getTeamNameForClassroom } from '@classmoji/services';
 import { createRepositoryTask } from './repository.ts';
 import invariant from 'tiny-invariant';
 

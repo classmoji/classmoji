@@ -99,7 +99,7 @@ const ModuleForm = ({ loaderData }: Route.ComponentProps) => {
 export const action = async ({ request, params }: Route.ActionArgs) => {
   const { class: classSlug } = params;
 
-  const { classroom, userId } = await requireClassroomAdmin(request, classSlug!, {
+  const { classroom, userId: _userId } = await requireClassroomAdmin(request, classSlug!, {
     resourceType: 'MODULES',
     action: 'create_module',
   });
@@ -108,7 +108,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
 
   // Extract fields that shouldn't go to Prisma
   const {
-    organization,
+    organization: _organization,
     assignmentsToRemove,
     assignments,
     tag,

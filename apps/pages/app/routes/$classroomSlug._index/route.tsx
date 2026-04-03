@@ -1,5 +1,4 @@
-import { useOutletContext, redirect } from 'react-router';
-import { useLoaderData } from 'react-router';
+import { useOutletContext, redirect, useLoaderData } from 'react-router';
 
 import EmptyPageState from '~/components/layout/EmptyPageState.tsx';
 import { loader as parentLoader } from '../$classroomSlug/route.tsx';
@@ -39,7 +38,7 @@ export const loader = async ({
 };
 
 const ClassroomIndex = () => {
-  const { showEmptyState, emptyType, view, classroom } = useLoaderData<typeof loader>();
+  const { showEmptyState, emptyType, classroom } = useLoaderData<typeof loader>();
   const { canEdit } = useOutletContext<{ canEdit: boolean }>();
 
   if (showEmptyState) {

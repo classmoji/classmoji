@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { useFetcher, Link, Outlet, useSearchParams, useNavigate } from 'react-router';
-import { Table, Tag, Button, Input, Select, Switch, Tooltip } from 'antd';
+import { Table, Button, Input, Select, Switch, Tooltip } from 'antd';
 import { IconPlus, IconEyeOff, IconLock, IconWorld, IconMenu2 } from '@tabler/icons-react';
 import { toast } from 'react-toastify';
 import { assertClassroomAccess } from '~/utils/helpers';

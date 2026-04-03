@@ -5,7 +5,7 @@ import dayjs from 'dayjs';
 
 import { TextEditor, SectionHeader } from '~/components';
 import { useAssignmentStore } from './store';
-import type { AssignmentFormData, TemplateAssignment } from '~/types';
+import type { TemplateAssignment } from '~/types';
 
 interface AssignmentSettings {
   default_tokens_per_hour: number;

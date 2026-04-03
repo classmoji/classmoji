@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Modal, Checkbox, Button, message, Spin } from 'antd';
+import { Modal, Checkbox, Button, message } from 'antd';
 
 /**
  * OrphanedImagesModal - Confirm deletion of unused images

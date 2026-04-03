@@ -141,7 +141,7 @@ export async function sendRequest(
 
   return new Promise((resolve, reject) => {
     const explorationSteps: Record<string, unknown>[] = [];
-    let timeoutHandle: ReturnType<typeof setTimeout>;
+    let timeoutHandle: ReturnType<typeof setTimeout> | undefined = undefined;
     let settled = false;
 
     const cleanup = () => {

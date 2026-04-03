@@ -9,5 +9,5 @@
       "~/*": ["./app/*"]
     }
   },
-  "include": ["app/**/*", "vite.config.js"]
+  "include": ["app/**/*", "tests/**/*", "vite.config.js"]
 }

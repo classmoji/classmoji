@@ -122,8 +122,8 @@ function getSlideStatus(slide: { is_draft: boolean; is_public: boolean }) {
   return 'private';
 }
 
-// Status badge component
-function StatusBadge({ status }: { status: 'draft' | 'private' | 'public' }) {
+// Status badge component (currently unused - kept for reference)
+function _StatusBadge({ status }: { status: 'draft' | 'private' | 'public' }) {
   const config: Record<string, { color: string; icon: typeof IconEyeOff; label: string }> = {
     draft: { color: 'default', icon: IconEyeOff, label: 'Draft' },
     private: { color: 'blue', icon: IconLock, label: 'Private' },

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useCallback, memo } from 'react';
+import { useEffect, useRef, memo } from 'react';
 
 /**
  * PageViewer — Read-only rendered page content.

@@ -130,7 +130,7 @@ const AdminAssistantDrawer = ({ loaderData }: Route.ComponentProps) => {
 
     setImpersonating(true);
     try {
-      const { data, error } = await authClient.admin.impersonateUser({
+      const { data: _data, error } = await authClient.admin.impersonateUser({
         userId: assistant.id.toString(),
       });
 

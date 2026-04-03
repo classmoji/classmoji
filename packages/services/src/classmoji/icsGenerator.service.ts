@@ -50,7 +50,7 @@ const dateToArray = (date: Date | string): DateArray => {
  * Input: { days: ['monday', 'wednesday'], until: '2025-05-15T00:00:00Z' }
  * Output: { freq: 'WEEKLY', byday: ['MO', 'WE'], until: [2025, 5, 15, 0, 0] }
  */
-const convertRecurrenceRule = (
+const _convertRecurrenceRule = (
   recurrenceRule: RecurrenceRuleInput | null | undefined
 ): { freq: 'WEEKLY'; byday: string[]; until?: number[] } | null => {
   if (!recurrenceRule || !recurrenceRule.days || !Array.isArray(recurrenceRule.days)) {
@@ -74,7 +74,7 @@ const convertRecurrenceRule = (
 /**
  * Convert a calendar event to ICS event format
  */
-const convertEventToICS = (event: CalendarEventInput, classroomSlug: string): EventAttributes => {
+const convertEventToICS = (event: CalendarEventInput, _classroomSlug: string): EventAttributes => {
   const startArray = dateToArray(event.start_time);
   const endArray = dateToArray(event.end_time);
   const baseEvent = {

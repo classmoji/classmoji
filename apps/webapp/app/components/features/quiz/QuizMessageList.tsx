@@ -1,5 +1,5 @@
 import { useRef, useEffect, useState } from 'react';
-import { Space, Avatar, Collapse, Tag, Typography, Button } from 'antd';
+import { Space, Avatar, Collapse, Typography, Button } from 'antd';
 import {
   UserOutlined,
   FileTextOutlined,
@@ -13,7 +13,6 @@ import {
 } from '@ant-design/icons';
 import ReactMarkdown from 'react-markdown';
 import rehypeHighlight from 'rehype-highlight';
-import dayjs from 'dayjs';
 import { checkForCompletion, parseQuestionComplete } from '~/utils/quizUtils';
 import QuizEvaluation, {
   type EvaluationData,
@@ -187,7 +186,6 @@ interface MarkdownElementProps {
   [key: string]: unknown;
 }
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any -- ReactMarkdown components use flexible prop types
 const createMarkdownComponents = (
   isDarkMode: boolean,
   isAssistant = true
@@ -212,9 +210,9 @@ const createMarkdownComponents = (
   code: ({
     className,
     children,
-    node,
+    _node,
     ...rest
-  }: MarkdownElementProps & { className?: string; node?: unknown }) => {
+  }: MarkdownElementProps & { className?: string; _node?: unknown }) => {
     // Check for language class (syntax-highlighted code blocks)
     const hasLanguageClass = /language-(\w+)/.test(className || '');
 
@@ -565,7 +563,7 @@ const QuizMessageList = ({
   userLogin = null,
   onQuickAction = null,
   readOnly = false,
-  showTimestamps = false,
+  showTimestamps: _showTimestamps = false,
   explorationSteps = [],
   isQuizComplete: propIsQuizComplete = false,
   evaluationData: propEvaluationData = null,
@@ -784,7 +782,7 @@ const QuizMessageList = ({
       }
     `}</style>
       <div
-        tabIndex={0} // eslint-disable-line -- Keyboard accessibility: allows scrolling with arrow keys
+      tabIndex={0} // eslint-disable-line -- Keyboard accessibility: allows scrolling with arrow keys
         role="log"
         aria-live="polite"
         aria-label="Quiz conversation"

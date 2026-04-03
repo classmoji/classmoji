@@ -5,7 +5,7 @@ import { useSyllabusBot } from '~/hooks/useSyllabusBot';
 import SyllabusBotChat from './SyllabusBotChat';
 import './styles.css';
 
-const { Text, Title } = Typography;
+const { Text } = Typography;
 
 /**
  * SyllabusBotWidget - Floating widget for the syllabus bot
@@ -34,7 +34,7 @@ const SyllabusBotWidget = ({
   const [hasInitialized, setHasInitialized] = useState(false);
 
   const {
-    conversationId,
+    conversationId: _conversationId,
     messages,
     isStreaming,
     isInitializing,
@@ -44,7 +44,7 @@ const SyllabusBotWidget = ({
     initConversation,
     sendMessage,
     askSuggestedQuestion,
-    endConversation,
+    endConversation: _endConversation,
     reset,
   } = useSyllabusBot({ classroomSlug, userRole });
 

@@ -130,10 +130,14 @@ const AssignGraders = ({ loaderData }: Route.ComponentProps) => {
 export const action = async ({ params, request }: Route.ActionArgs) => {
   const { class: classSlug } = params;
 
-  const { classroom, userId } = await requireClassroomAdmin(request, classSlug!, {
-    resourceType: 'MODULES',
-    action: 'assign_graders',
-  });
+  const { classroom: _classroom, userId: _userId } = await requireClassroomAdmin(
+    request,
+    classSlug!,
+    {
+      resourceType: 'MODULES',
+      action: 'assign_graders',
+    }
+  );
 
   const data = await request.json();
   const sessionId = nanoid();

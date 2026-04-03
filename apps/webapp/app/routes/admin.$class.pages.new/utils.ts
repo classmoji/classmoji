@@ -86,7 +86,7 @@ export async function extractZipContents(file: File | Blob) {
 }
 
 // Generate initial page content with minimal markdown
-export function generatePageTemplate(title: string) {
+export function generatePageTemplate(_title: string) {
   return `Add your content here...\n`;
 }
 

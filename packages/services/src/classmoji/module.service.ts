@@ -256,7 +256,13 @@ export const create = async (data: ModuleCreateInput) => {
 
   // Filter out non-Prisma fields from assignments and add slugs
   const cleanedAssignments = assignments?.map((assignment: ModuleAssignmentInput) => {
-    const { linkedPageIds, linkedSlideIds, branch, workflow_file, ...assignmentData } = assignment;
+    const {
+      linkedPageIds: _linkedPageIds,
+      linkedSlideIds: _linkedSlideIds,
+      branch: _branch,
+      workflow_file: _workflow_file,
+      ...assignmentData
+    } = assignment;
     return {
       ...assignmentData,
       slug: titleToIdentifier(assignmentData.title),
@@ -392,10 +398,10 @@ export const updateWithAssignments = async (values: ModuleUpdateValues) => {
       // Extract fields that shouldn't go to Prisma
       const {
         id: assignmentId,
-        linkedPageIds,
-        linkedSlideIds,
-        branch,
-        workflow_file,
+        linkedPageIds: _linkedPageIds,
+        linkedSlideIds: _linkedSlideIds,
+        branch: _branch,
+        workflow_file: _workflow_file,
         ...assignmentData
       } = assignment;
       const assignmentMutationData = assignmentData as Prisma.AssignmentUncheckedUpdateInput;

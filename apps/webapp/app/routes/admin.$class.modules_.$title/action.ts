@@ -1,6 +1,6 @@
 import { namedAction } from 'remix-utils/named-action';
 import { calculateContributions } from './helpers';
-import { HelperService, ClassmojiService } from '@classmoji/services';
+import { HelperService } from '@classmoji/services';
 import { requireClassroomAdmin } from '~/utils/routeAuth.server';
 import { ActionTypes } from '~/constants';
 import { tasks } from '@trigger.dev/sdk/v3';
@@ -9,7 +9,7 @@ import type { Route } from './+types/route';
 export const action = async ({ request, params }: Route.ActionArgs) => {
   const classSlug = params.class!;
 
-  const { classroom, userId } = await requireClassroomAdmin(request, classSlug, {
+  const { classroom, userId: _userId } = await requireClassroomAdmin(request, classSlug, {
     resourceType: 'MODULES',
     action: 'module_action',
   });

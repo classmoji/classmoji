@@ -1,12 +1,11 @@
 import { useState, useRef, useEffect } from 'react';
-import { Avatar, Button, Typography, Spin, Tag, Tooltip, Collapse } from 'antd';
+import { Avatar, Button, Spin, Tag, Tooltip, Collapse } from 'antd';
 import {
   SendOutlined,
   CheckOutlined,
   CopyOutlined,
   DeleteOutlined,
   CodeOutlined,
-  FileSearchOutlined,
   SearchOutlined,
   CloseOutlined,
   UserOutlined,
@@ -23,8 +22,6 @@ import { usePromptAssistant } from '~/hooks/usePromptAssistant';
 import { useUser } from '~/hooks';
 
 import './PromptAssistant.css';
-
-const { Text } = Typography;
 
 export interface PromptSuggestion {
   systemPrompt?: string;
@@ -197,7 +194,7 @@ export function PromptAssistant({
           </div>
         ) : messages.length === 0 ? (
           <div className="pa-empty">
-            <p>Describe the quiz you want to create and I'll help generate prompts.</p>
+            <p>Describe the quiz you want to create and I&apos;ll help generate prompts.</p>
             <div className="pa-suggestions">
               <button onClick={() => setInputValue('Create a JavaScript fundamentals quiz')}>
                 JavaScript quiz
@@ -340,7 +337,7 @@ interface SuggestionCardProps {
 
 function SuggestionCard({
   suggestion,
-  isDarkMode,
+  isDarkMode: _isDarkMode,
   onApply,
   onCopy,
   copiedField,

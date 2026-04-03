@@ -320,7 +320,7 @@ const EditEventModal = ({
 
   if (!event) return null;
 
-  const occurrenceDateFormatted = event.occurrence_date
+  const _occurrenceDateFormatted = event.occurrence_date
     ? formatFullDate(new Date(event.occurrence_date))
     : '';
 

@@ -195,7 +195,7 @@ export function handleCodeBlockEnter(
   const cursorPos = getCaretPosition(codeElement);
 
   // Find the start of the current line
-  let lineStart = text.lastIndexOf('\n', cursorPos - 1) + 1;
+  const lineStart = text.lastIndexOf('\n', cursorPos - 1) + 1;
 
   // Get the whitespace at the start of the current line
   let indent = '';

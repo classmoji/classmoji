@@ -41,7 +41,7 @@ export class GitLabProvider extends GitProvider {
    * @param {string} token - Personal access token
    * @returns {Promise<Object>} GitLab user data
    */
-  async getCurrentUser(token: string): Promise<never> {
+  async getCurrentUser(_token: string): Promise<never> {
     // TODO: GET /api/v4/user
     throw new Error('GitLabProvider.getCurrentUser() not implemented');
   }
@@ -55,7 +55,11 @@ export class GitLabProvider extends GitProvider {
    * @param {boolean} isPrivate - Whether project is private (default: true)
    * @returns {Promise<{id: string, name: string, url: string}>}
    */
-  async createRepository(group: string, name: string, isPrivate: boolean = true): Promise<never> {
+  async createRepository(
+    _group: string,
+    _name: string,
+    _isPrivate: boolean = true
+  ): Promise<never> {
     // TODO: POST /api/v4/projects with namespace_id
     throw new Error('GitLabProvider.createRepository() not implemented');
   }
@@ -70,11 +74,11 @@ export class GitLabProvider extends GitProvider {
    * @returns {Promise<{id: string, name: string, url: string}>}
    */
   async createRepositoryFromTemplate(
-    group: string,
-    name: string,
-    templateOwner: string,
-    templateRepo: string,
-    isPrivate: boolean = true
+    _group: string,
+    _name: string,
+    _templateOwner: string,
+    _templateRepo: string,
+    _isPrivate: boolean = true
   ): Promise<never> {
     // TODO: POST /api/v4/projects with import_url or fork
     throw new Error('GitLabProvider.createRepositoryFromTemplate() not implemented');
@@ -88,9 +92,9 @@ export class GitLabProvider extends GitProvider {
    * @returns {Promise<{id: string, name: string, url: string}>}
    */
   async createPublicRepository(
-    group: string,
-    name: string,
-    description: string = ''
+    _group: string,
+    _name: string,
+    _description: string = ''
   ): Promise<never> {
     // TODO: POST /api/v4/projects with visibility: 'public'
     throw new Error('GitLabProvider.createPublicRepository() not implemented');
@@ -102,7 +106,7 @@ export class GitLabProvider extends GitProvider {
    * @param {string} name - Project name
    * @returns {Promise<boolean>}
    */
-  async repositoryExists(group: string, name: string): Promise<never> {
+  async repositoryExists(_group: string, _name: string): Promise<never> {
     // TODO: GET /api/v4/projects/:id (URL-encoded group/name)
     throw new Error('GitLabProvider.repositoryExists() not implemented');
   }
@@ -112,7 +116,7 @@ export class GitLabProvider extends GitProvider {
    * @param {string} group - Group path
    * @param {string} name - Project name
    */
-  async deleteRepository(group: string, name: string): Promise<never> {
+  async deleteRepository(_group: string, _name: string): Promise<never> {
     // TODO: DELETE /api/v4/projects/:id
     throw new Error('GitLabProvider.deleteRepository() not implemented');
   }
@@ -127,9 +131,9 @@ export class GitLabProvider extends GitProvider {
    * @returns {Promise<string>} Commit SHA
    */
   async getLatestCommitSHA(
-    group: string,
-    project: string,
-    branch: string = 'main'
+    _group: string,
+    _project: string,
+    _branch: string = 'main'
   ): Promise<never> {
     // TODO: GET /api/v4/projects/:id/repository/branches/:branch
     throw new Error('GitLabProvider.getLatestCommitSHA() not implemented');
@@ -142,7 +146,12 @@ export class GitLabProvider extends GitProvider {
    * @param {string} branch - New branch name
    * @param {string} sha - Commit SHA to branch from
    */
-  async createBranch(group: string, project: string, branch: string, sha: string): Promise<never> {
+  async createBranch(
+    _group: string,
+    _project: string,
+    _branch: string,
+    _sha: string
+  ): Promise<never> {
     // TODO: POST /api/v4/projects/:id/repository/branches
     throw new Error('GitLabProvider.createBranch() not implemented');
   }
@@ -153,7 +162,7 @@ export class GitLabProvider extends GitProvider {
    * @param {string} project - Project name
    * @param {string} branch - Branch name
    */
-  async protectBranch(group: string, project: string, branch: string): Promise<never> {
+  async protectBranch(_group: string, _project: string, _branch: string): Promise<never> {
     // TODO: POST /api/v4/projects/:id/protected_branches
     throw new Error('GitLabProvider.protectBranch() not implemented');
   }
@@ -169,12 +178,12 @@ export class GitLabProvider extends GitProvider {
    * @returns {Promise<{id: number, iid: number, url: string}>}
    */
   async createPullRequest(
-    group: string,
-    project: string,
-    targetBranch: string,
-    sourceBranch: string,
-    title: string,
-    description: string
+    _group: string,
+    _project: string,
+    _targetBranch: string,
+    _sourceBranch: string,
+    _title: string,
+    _description: string
   ): Promise<never> {
     // TODO: POST /api/v4/projects/:id/merge_requests
     throw new Error('GitLabProvider.createPullRequest() not implemented');
@@ -190,9 +199,9 @@ export class GitLabProvider extends GitProvider {
    * @returns {Promise<{id: string, iid: number, url: string}>}
    */
   async createIssue(
-    group: string,
-    project: string,
-    issue: { title: string; body?: string }
+    _group: string,
+    _project: string,
+    _issue: { title: string; body?: string }
   ): Promise<never> {
     // TODO: POST /api/v4/projects/:id/issues
     throw new Error('GitLabProvider.createIssue() not implemented');
@@ -206,10 +215,10 @@ export class GitLabProvider extends GitProvider {
    * @param {string[]} assignees - Array of usernames
    */
   async addIssueAssignees(
-    group: string,
-    project: string,
-    issueIid: number,
-    assignees: string[]
+    _group: string,
+    _project: string,
+    _issueIid: number,
+    _assignees: string[]
   ): Promise<never> {
     // TODO: PUT /api/v4/projects/:id/issues/:issue_iid with assignee_ids
     throw new Error('GitLabProvider.addIssueAssignees() not implemented');
@@ -223,10 +232,10 @@ export class GitLabProvider extends GitProvider {
    * @param {string[]} assignees - Array of usernames to remove
    */
   async removeIssueAssignees(
-    group: string,
-    project: string,
-    issueIid: number,
-    assignees: string[]
+    _group: string,
+    _project: string,
+    _issueIid: number,
+    _assignees: string[]
   ): Promise<never> {
     // TODO: PUT /api/v4/projects/:id/issues/:issue_iid with updated assignee_ids
     throw new Error('GitLabProvider.removeIssueAssignees() not implemented');
@@ -239,7 +248,7 @@ export class GitLabProvider extends GitProvider {
    * @param {string} group - Group path
    * @returns {Promise<Object>}
    */
-  async getOrganization(group: string): Promise<never> {
+  async getOrganization(_group: string): Promise<never> {
     // TODO: GET /api/v4/groups/:id
     throw new Error('GitLabProvider.getOrganization() not implemented');
   }
@@ -249,7 +258,7 @@ export class GitLabProvider extends GitProvider {
    * @param {string} group - Group path
    * @returns {Promise<Object[]>}
    */
-  async getOrganizationMembers(group: string): Promise<never> {
+  async getOrganizationMembers(_group: string): Promise<never> {
     // TODO: GET /api/v4/groups/:id/members
     throw new Error('GitLabProvider.getOrganizationMembers() not implemented');
   }
@@ -259,7 +268,7 @@ export class GitLabProvider extends GitProvider {
    * @param {string} group - Group path
    * @returns {Promise<Object[]>}
    */
-  async getPendingInvitations(group: string): Promise<never> {
+  async getPendingInvitations(_group: string): Promise<never> {
     // TODO: GET /api/v4/groups/:id/invitations
     throw new Error('GitLabProvider.getPendingInvitations() not implemented');
   }
@@ -269,7 +278,7 @@ export class GitLabProvider extends GitProvider {
    * @param {string} group - Group path
    * @param {string} email - Invited user's email
    */
-  async cancelPendingInvitation(group: string, email: string): Promise<never> {
+  async cancelPendingInvitation(_group: string, _email: string): Promise<never> {
     // TODO: DELETE /api/v4/groups/:id/invitations/:email
     throw new Error('GitLabProvider.cancelPendingInvitation() not implemented');
   }
@@ -281,9 +290,9 @@ export class GitLabProvider extends GitProvider {
    * @param {number[]} subgroupIds - Array of subgroup IDs (optional)
    */
   async inviteToOrganization(
-    group: string,
-    userIdOrEmail: string,
-    subgroupIds: number[]
+    _group: string,
+    _userIdOrEmail: string,
+    _subgroupIds: number[]
   ): Promise<never> {
     // TODO: POST /api/v4/groups/:id/invitations or /members
     throw new Error('GitLabProvider.inviteToOrganization() not implemented');
@@ -294,7 +303,7 @@ export class GitLabProvider extends GitProvider {
    * @param {string} group - Group path
    * @param {string} username - GitLab username
    */
-  async removeFromOrganization(group: string, username: string): Promise<never> {
+  async removeFromOrganization(_group: string, _username: string): Promise<never> {
     // TODO: DELETE /api/v4/groups/:id/members/:user_id
     throw new Error('GitLabProvider.removeFromOrganization() not implemented');
   }
@@ -305,7 +314,7 @@ export class GitLabProvider extends GitProvider {
    * @param {string} username - GitLab username
    * @returns {Promise<boolean>}
    */
-  async isUserMemberOfOrganization(group: string, username: string): Promise<never> {
+  async isUserMemberOfOrganization(_group: string, _username: string): Promise<never> {
     // TODO: GET /api/v4/groups/:id/members/:user_id
     throw new Error('GitLabProvider.isUserMemberOfOrganization() not implemented');
   }
@@ -315,7 +324,7 @@ export class GitLabProvider extends GitProvider {
    * @param {string} username - GitLab username
    * @returns {Promise<Object>}
    */
-  async getUserByLogin(username: string): Promise<never> {
+  async getUserByLogin(_username: string): Promise<never> {
     // TODO: GET /api/v4/users?username=:username
     throw new Error('GitLabProvider.getUserByLogin() not implemented');
   }
@@ -328,7 +337,7 @@ export class GitLabProvider extends GitProvider {
    * @param {string} name - Subgroup name
    * @returns {Promise<{id: number, path: string, name: string}>}
    */
-  async createTeam(group: string, name: string): Promise<never> {
+  async createTeam(_group: string, _name: string): Promise<never> {
     // TODO: POST /api/v4/groups with parent_id
     throw new Error('GitLabProvider.createTeam() not implemented');
   }
@@ -339,7 +348,7 @@ export class GitLabProvider extends GitProvider {
    * @param {string} subgroupPath - Subgroup path
    * @returns {Promise<{id: number, path: string, name: string}>}
    */
-  async getTeam(group: string, subgroupPath: string): Promise<never> {
+  async getTeam(_group: string, _subgroupPath: string): Promise<never> {
     // TODO: GET /api/v4/groups/:id (with full path)
     throw new Error('GitLabProvider.getTeam() not implemented');
   }
@@ -349,7 +358,7 @@ export class GitLabProvider extends GitProvider {
    * @param {string} group - Group path
    * @returns {Promise<Object[]>}
    */
-  async getTeams(group: string): Promise<never> {
+  async getTeams(_group: string): Promise<never> {
     // TODO: GET /api/v4/groups/:id/subgroups
     throw new Error('GitLabProvider.getTeams() not implemented');
   }
@@ -359,7 +368,7 @@ export class GitLabProvider extends GitProvider {
    * @param {string} group - Parent group path
    * @param {string} subgroupPath - Subgroup path
    */
-  async deleteTeam(group: string, subgroupPath: string): Promise<never> {
+  async deleteTeam(_group: string, _subgroupPath: string): Promise<never> {
     // TODO: DELETE /api/v4/groups/:id
     throw new Error('GitLabProvider.deleteTeam() not implemented');
   }
@@ -370,7 +379,7 @@ export class GitLabProvider extends GitProvider {
    * @param {string} subgroupPath - Subgroup path
    * @param {string} username - GitLab username
    */
-  async addTeamMember(group: string, subgroupPath: string, username: string): Promise<never> {
+  async addTeamMember(_group: string, _subgroupPath: string, _username: string): Promise<never> {
     // TODO: POST /api/v4/groups/:id/members
     throw new Error('GitLabProvider.addTeamMember() not implemented');
   }
@@ -381,7 +390,7 @@ export class GitLabProvider extends GitProvider {
    * @param {string} subgroupPath - Subgroup path
    * @param {string} username - GitLab username
    */
-  async removeTeamMember(group: string, subgroupPath: string, username: string): Promise<never> {
+  async removeTeamMember(_group: string, _subgroupPath: string, _username: string): Promise<never> {
     // TODO: DELETE /api/v4/groups/:id/members/:user_id
     throw new Error('GitLabProvider.removeTeamMember() not implemented');
   }
@@ -394,10 +403,10 @@ export class GitLabProvider extends GitProvider {
    * @param {string} permission - Access level (guest, reporter, developer, maintainer)
    */
   async addTeamToRepo(
-    group: string,
-    project: string,
-    shareWithGroup: string,
-    permission: string
+    _group: string,
+    _project: string,
+    _shareWithGroup: string,
+    _permission: string
   ): Promise<never> {
     // TODO: POST /api/v4/projects/:id/share
     throw new Error('GitLabProvider.addTeamToRepo() not implemented');
@@ -413,10 +422,10 @@ export class GitLabProvider extends GitProvider {
    * @param {string} permission - Access level (default: maintainer)
    */
   async addCollaborator(
-    group: string,
-    project: string,
-    username: string,
-    permission: string = 'maintainer'
+    _group: string,
+    _project: string,
+    _username: string,
+    _permission: string = 'maintainer'
   ): Promise<never> {
     // TODO: POST /api/v4/projects/:id/members
     throw new Error('GitLabProvider.addCollaborator() not implemented');
@@ -431,7 +440,11 @@ export class GitLabProvider extends GitProvider {
    * @param {string} branch - Branch to serve pages from
    * @returns {Promise<{alreadyEnabled?: boolean}>}
    */
-  async enableGitHubPages(group: string, project: string, branch: string = 'main'): Promise<never> {
+  async enableGitHubPages(
+    _group: string,
+    _project: string,
+    _branch: string = 'main'
+  ): Promise<never> {
     // GitLab Pages requires CI/CD configuration, not API call
     // TODO: Check if pages job exists in .gitlab-ci.yml
     throw new Error(
@@ -447,7 +460,7 @@ export class GitLabProvider extends GitProvider {
    * @param {string} token - X-Gitlab-Token header value
    * @returns {boolean}
    */
-  verifyWebhook(payload: string, token: string): never {
+  verifyWebhook(_payload: string, _token: string): never {
     // TODO: Compare token with stored webhook secret
     throw new Error('GitLabProvider.verifyWebhook() not implemented');
   }

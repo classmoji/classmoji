@@ -18,7 +18,7 @@ export const Profile = createReactBlockSpec(
     content: 'none',
   },
   {
-    render: (props: ProfileRenderProps) => {
+    render: function ProfileRenderer(props: ProfileRenderProps) {
       const { name, title, imageUrl } = props.block.props;
       const isEditable = props.editor.isEditable;
       const [isUploading, setIsUploading] = useState(false);

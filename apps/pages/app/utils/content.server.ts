@@ -152,7 +152,7 @@ export async function savePageCoverImage(
   page: PageForContent,
   coverImage: CoverImage | null
 ): Promise<void> {
-  const { format, content, coverImage: existingCover } = await loadPageContent(page);
+  const { format, content } = await loadPageContent(page);
 
   let currentBlocks: unknown;
   if (format === 'json') {

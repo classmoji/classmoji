@@ -272,8 +272,15 @@ const App = ({ loaderData }: Route.ComponentProps) => {
   const { user, session } = loaderData;
   const { isDarkMode } = useDarkMode();
   const { pathname } = useLocation();
-  const { setClassroom, classroom, setRole, setUser, setMembership, membership, setSubscription } =
-    useStore(state => state);
+  const {
+    setClassroom,
+    classroom,
+    setRole,
+    setUser,
+    setMembership,
+    membership: _membership,
+    setSubscription,
+  } = useStore(state => state);
 
   // Sync classroom from URL and memberships (handles initial load + revalidation)
   // Extract classroom slug and role from pathname to only trigger when these actually change

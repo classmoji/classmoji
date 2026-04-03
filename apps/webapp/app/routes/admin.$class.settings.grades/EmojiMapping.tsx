@@ -1,7 +1,6 @@
 import { Input, InputNumber, Button, Table, Form, Card, Popconfirm, Alert, Select } from 'antd';
 import { toast } from 'react-toastify';
-import { useState, useRef, useEffect } from 'react';
-import { useClickAway } from '@uidotdev/usehooks';
+import { useState } from 'react';
 
 import { DeleteOutlined, WarningOutlined } from '@ant-design/icons';
 
@@ -82,7 +81,7 @@ const EmojiMapping = ({ emojiMappings, orphanedEmojis }: EmojiMappingProps) => {
   };
 
   // Cancel editing without saving
-  const cancelEditing = () => {
+  const _cancelEditing = () => {
     setEditingCell(null);
     setEditValue(null);
   };
@@ -193,7 +192,6 @@ const EmojiMapping = ({ emojiMappings, orphanedEmojis }: EmojiMappingProps) => {
         if (isEditing) {
           return (
             <InputNumber
-              autoFocus
               size="small"
               min={0}
               max={100}
@@ -238,7 +236,6 @@ const EmojiMapping = ({ emojiMappings, orphanedEmojis }: EmojiMappingProps) => {
             <div className="flex items-center justify-center gap-2">
               <img src={tokenImage} alt="token" className="w-4 h-4" />
               <InputNumber
-                autoFocus
                 size="small"
                 min={0}
                 value={editValue}
@@ -272,7 +269,6 @@ const EmojiMapping = ({ emojiMappings, orphanedEmojis }: EmojiMappingProps) => {
         if (isEditing) {
           return (
             <Input
-              autoFocus
               size="small"
               value={editValue as string}
               onChange={e => setEditValue(e.target.value)}

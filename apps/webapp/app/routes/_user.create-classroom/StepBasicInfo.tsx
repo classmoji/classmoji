@@ -44,9 +44,9 @@ const StepBasicInfo = ({ gitOrgs, slugPreview, years, githubAppName }: StepBasic
     <Spin spinning={isRefreshing} tip="Refreshing organizations...">
       <div className="space-y-4">
         <div>
-          <label className="block text-sm font-medium mb-1">
+          <p className="block text-sm font-medium mb-1">
             <span className="text-red-500">*</span> GitHub Organization
-          </label>
+          </p>
           <Controller
             name="git_org_id"
             control={control}
@@ -82,9 +82,9 @@ const StepBasicInfo = ({ gitOrgs, slugPreview, years, githubAppName }: StepBasic
         </div>
 
         <div>
-          <label className="block text-sm font-medium mb-1">
+          <p className="block text-sm font-medium mb-1">
             <span className="text-red-500">*</span> Classroom Name
-          </label>
+          </p>
           <Controller
             name="name"
             control={control}
@@ -104,9 +104,9 @@ const StepBasicInfo = ({ gitOrgs, slugPreview, years, githubAppName }: StepBasic
 
         <div className="grid grid-cols-2 gap-4">
           <div>
-            <label className="block text-sm font-medium mb-1">
+            <p className="block text-sm font-medium mb-1">
               <span className="text-red-500">*</span> Term
-            </label>
+            </p>
             <Controller
               name="term"
               control={control}
@@ -131,9 +131,9 @@ const StepBasicInfo = ({ gitOrgs, slugPreview, years, githubAppName }: StepBasic
           </div>
 
           <div>
-            <label className="block text-sm font-medium mb-1">
+            <p className="block text-sm font-medium mb-1">
               <span className="text-red-500">*</span> Year
-            </label>
+            </p>
             <Controller
               name="year"
               control={control}

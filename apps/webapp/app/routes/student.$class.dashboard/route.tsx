@@ -517,7 +517,11 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
     async purchaseExtensionHours() {
       // Use assertClassroomAccess for consistent authorization
       // OWNER/TEACHER can purchase for anyone, STUDENT only for themselves
-      const { userId, classroom, membership } = await assertClassroomAccess({
+      const {
+        userId: _userId,
+        classroom,
+        membership: _membership,
+      } = await assertClassroomAccess({
         request,
         classroomSlug: classSlug,
         allowedRoles: ['OWNER', 'TEACHER'], // Teachers/Owners can purchase for anyone

@@ -23,7 +23,7 @@ const ResourceLinks = ({
   classSlug,
   slidesUrl,
   pagesUrl,
-  rolePrefix = 'student',
+  rolePrefix: _rolePrefix = 'student',
 }: ResourceLinksProps) => {
   const hasPages = (pages?.length ?? 0) > 0;
   const hasSlides = (slides?.length ?? 0) > 0;

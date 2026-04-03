@@ -105,7 +105,7 @@ const AdminDashboard = ({ loaderData }: Route.ComponentProps) => {
             completedAssignmentsProgress,
             lateSubmissionsPercent,
             recentRepositoryAssignments,
-            modules,
+            _modules,
             gradingProgressPerAssignment,
             assistantsProgress,
           ]) => {

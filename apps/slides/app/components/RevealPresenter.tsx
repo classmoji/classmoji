@@ -73,7 +73,7 @@ export default function RevealPresenter({
   shareCode = null, // Share code for public follow links (unauthenticated)
   previewMode = false, // Preview mode: no socket, no controls (for speaker view previews)
   multiplexId,
-  multiplexSecret,
+  multiplexSecret: _multiplexSecret,
 }: RevealPresenterProps) {
   const deckRef = useRef<HTMLDivElement>(null);
   const revealRef = useRef<RevealApi | null>(null);

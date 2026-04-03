@@ -167,7 +167,7 @@ export const findRepositoriesPerStudent = async (classroom: StudentRepositoryCla
   });
 
   // 2. find team repos that students belong to
-  let studentsWithTeamRepos = await getPrisma().user.findMany({
+  const studentsWithTeamRepos = await getPrisma().user.findMany({
     where: {
       team_memberships: {
         some: {

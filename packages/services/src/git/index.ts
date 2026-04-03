@@ -22,7 +22,13 @@ export function getGitProvider(gitOrganization: {
   login?: string | null;
   gitlab_group_id?: string | null;
 }) {
-  const { provider, github_installation_id, access_token, base_url, login } = gitOrganization;
+  const {
+    provider,
+    github_installation_id,
+    access_token,
+    base_url: _base_url,
+    login,
+  } = gitOrganization;
 
   switch (provider) {
     case 'GITHUB':

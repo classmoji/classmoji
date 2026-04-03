@@ -99,7 +99,7 @@ const RevealSlides = forwardRef(function RevealSlides(
     contentUrl,
     initialContent = null, // Pre-fetched content from server (bypasses CORS)
     initialError = null, // Error from server-side fetch
-    canEdit = false,
+    canEdit: _canEdit = false,
     isEditing = false,
     onContentChange,
     onThemeChange, // Callback when themes are extracted from content

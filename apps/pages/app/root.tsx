@@ -78,7 +78,7 @@ export const loader = async ({ request }: { request: Request }) => {
   const pageViewMatch = url.pathname.match(/^\/([^/]+)\/([^/]+)$/);
 
   if (pageViewMatch) {
-    const [, classroomSlug, pageId] = pageViewMatch;
+    const [, , pageId] = pageViewMatch;
 
     try {
       // Look up the page to check if it's public

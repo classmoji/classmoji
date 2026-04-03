@@ -4,10 +4,6 @@ import useLocalStorageState from 'use-local-storage-state';
 
 import { ClassmojiService, getAuthSession } from '~/utils/db.server.ts';
 
-import AdminDashboard from '~/components/layout/AdminDashboard.tsx';
-import StudentPageList from '~/components/layout/StudentPageList.tsx';
-import PublicLanding from '~/components/layout/PublicLanding.tsx';
-import Header from '~/components/layout/Header.tsx';
 import PagesLayout from '~/components/layout/PagesLayout.tsx';
 import PagesSidebar from '~/components/layout/PagesSidebar.tsx';
 
@@ -173,7 +169,7 @@ export const action = async ({
   if (intent === 'create') {
     try {
       // Use provided title or fallback to timestamp-based unique title
-      let baseTitle = data.title?.trim() || 'Untitled Page';
+      const baseTitle = data.title?.trim() || 'Untitled Page';
       let title = baseTitle;
 
       // Check if title already exists and make it unique if needed
@@ -279,7 +275,7 @@ export const action = async ({
 };
 
 const ClassroomLayout = () => {
-  const { view, isEmbedded, classroom, pages, membership } = useLoaderData<typeof loader>();
+  const { isEmbedded, classroom, pages, membership } = useLoaderData<typeof loader>();
   const params = useParams();
   const [collapsed, setCollapsed] = useLocalStorageState('classmoji-pages-sidebar-collapsed', {
     defaultValue: false,

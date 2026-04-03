@@ -581,7 +581,7 @@ const FormModule = ({
             />
 
             <div className="mb-4">
-              <label className="block text-sm font-medium text-gray-700 mb-2">Pages</label>
+              <p className="block text-sm font-medium text-gray-700 mb-2">Pages</p>
               <Select
                 mode="multiple"
                 placeholder={pages.length > 0 ? 'Select pages to link' : 'No pages available'}
@@ -598,7 +598,7 @@ const FormModule = ({
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">Slides</label>
+              <p className="block text-sm font-medium text-gray-700 mb-2">Slides</p>
               <Select
                 mode="multiple"
                 placeholder={slides.length > 0 ? 'Select slides to link' : 'No slides available'}

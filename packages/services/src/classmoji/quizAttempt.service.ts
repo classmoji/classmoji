@@ -175,7 +175,7 @@ const buildDurationUpdate = (
   return update;
 };
 
-const getCurrentDurations = (attemptId: string) =>
+const _getCurrentDurations = (attemptId: string) =>
   getPrisma().quizAttempt.findUnique({
     where: { id: attemptId },
     select: {
@@ -213,7 +213,7 @@ export const addMessage = async (
   attemptId: string,
   role: string,
   content: string,
-  hasQuestion: boolean = false,
+  _hasQuestion: boolean = false,
   metadata: Prisma.InputJsonValue | null = null
 ) => {
   // Find or create the AIConversation for this attempt

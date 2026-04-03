@@ -13,7 +13,7 @@ interface ProfileDropdownProps {
 
 const ProfileDropdown = ({ children, placement = 'bottomRight' }: ProfileDropdownProps) => {
   const { user } = useUser();
-  const navigate = useNavigate();
+  const _navigate = useNavigate();
 
   const MenuItem = ({ label, path }: { label: string; path: string }) => (
     <Link

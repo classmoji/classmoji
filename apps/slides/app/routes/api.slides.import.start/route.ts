@@ -76,7 +76,7 @@ export const action = async ({ request }: { request: Request }) => {
       resourceType: 'SLIDE_CONTENT',
     });
     userId = auth.userId;
-  } catch (authError: unknown) {
+  } catch (_authError: unknown) {
     return Response.json({ error: 'Unauthorized' }, { status: 403 });
   }
 

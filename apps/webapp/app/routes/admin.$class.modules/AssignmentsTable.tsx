@@ -1,4 +1,4 @@
-import { Popconfirm, Table, Tag, Card } from 'antd';
+import { Popconfirm, Table, Tag } from 'antd';
 import { useNavigate, useParams } from 'react-router';
 import { IconEyeOff, IconRefresh, IconSend, IconStarFilled } from '@tabler/icons-react';
 

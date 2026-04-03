@@ -521,7 +521,7 @@ document.querySelector('h1').addEventListener('click', () => {
   }, [getCurrentSection, createSlBlock, onContentChange]);
 
   // Insert an image block (opens upload modal)
-  const [pendingBlockImage, setPendingBlockImage] = useState(false);
+  const [_pendingBlockImage, setPendingBlockImage] = useState(false);
 
   const insertImageSlBlock = useCallback(() => {
     setPendingBlockImage(true);

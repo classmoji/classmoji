@@ -34,7 +34,7 @@ export async function initializeQuizViaAgent(
   callbacks: QuizCallbacks = {}
 ) {
   const { onExplorationStep = null, onWelcomeMessage = null } = callbacks || {};
-  const isCodeAware = !!codeAwareOptions;
+  const _isCodeAware = !!codeAwareOptions;
 
   try {
     const payload: Record<string, unknown> = {

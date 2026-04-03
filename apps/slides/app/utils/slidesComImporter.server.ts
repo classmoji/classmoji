@@ -180,7 +180,7 @@ export async function processZipImport({
   useSavedTheme,
   saveThemeAs,
   org,
-  classroomSlug,
+  classroomSlug: _classroomSlug,
   classroomId,
   term,
   userId,
@@ -662,11 +662,12 @@ export async function processZipImport({
     // Try iframe styles first, fall back to parent, then to attribute, then default
     const widthAttr = $iframe.attr('width');
     const heightAttr = $iframe.attr('height');
-    let left = parseStyleValue(iframeStyle, 'left') ?? parseStyleValue(parentStyle, 'left') ?? 100;
-    let top = parseStyleValue(iframeStyle, 'top') ?? parseStyleValue(parentStyle, 'top') ?? 100;
-    let width =
+    const left =
+      parseStyleValue(iframeStyle, 'left') ?? parseStyleValue(parentStyle, 'left') ?? 100;
+    const top = parseStyleValue(iframeStyle, 'top') ?? parseStyleValue(parentStyle, 'top') ?? 100;
+    const width =
       parseStyleValue(iframeStyle, 'width') ?? (widthAttr ? parseFloat(widthAttr) : null) ?? 560;
-    let height =
+    const height =
       parseStyleValue(iframeStyle, 'height') ?? (heightAttr ? parseFloat(heightAttr) : null) ?? 315;
 
     // Create sl-block wrapper

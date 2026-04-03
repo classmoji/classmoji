@@ -113,20 +113,18 @@ export async function verifySessionOwnership({
   userId,
 }: VerifySessionOptions): Promise<VerificationResult> {
   const requestId = crypto.randomUUID();
+  const socket = await getVerificationConnection();
 
-  return new Promise(async (resolve, reject) => {
-    let socket: Socket;
+  return new Promise((resolve, reject) => {
     let settled = false;
-    let timeout: ReturnType<typeof setTimeout>;
+    let timeout: ReturnType<typeof setTimeout> | undefined = undefined;
 
     const cleanup = () => {
       if (settled) return;
       settled = true;
       clearTimeout(timeout);
-      if (socket) {
-        socket.off('message', handler);
-        socket.off('disconnect', disconnectHandler);
-      }
+      socket.off('message', handler);
+      socket.off('disconnect', disconnectHandler);
     };
 
     const handler = (message: {
@@ -146,33 +144,26 @@ export async function verifySessionOwnership({
       reject(new Error('Socket disconnected during verification'));
     };
 
-    try {
-      socket = await getVerificationConnection();
-
-      timeout = setTimeout(() => {
-        cleanup();
-        reject(new Error('Session verification timeout'));
-      }, 5000);
-
-      socket.on('message', handler);
-      socket.once('disconnect', disconnectHandler);
-
-      // Sign the payload for service authentication
-      const signedPayload = signPayload({
-        sessionId,
-        agentType,
-        userId: userId?.toString(),
-      });
-
-      socket.emit('message', {
-        type: 'VERIFY_SESSION',
-        requestId,
-        payload: signedPayload,
-      });
-    } catch (error: unknown) {
+    timeout = setTimeout(() => {
       cleanup();
-      reject(error);
-    }
+      reject(new Error('Session verification timeout'));
+    }, 5000);
+
+    socket.on('message', handler);
+    socket.once('disconnect', disconnectHandler);
+
+    // Sign the payload for service authentication
+    const signedPayload = signPayload({
+      sessionId,
+      agentType,
+      userId: userId?.toString(),
+    });
+
+    socket.emit('message', {
+      type: 'VERIFY_SESSION',
+      requestId,
+      payload: signedPayload,
+    });
   });
 }
 

@@ -269,7 +269,7 @@ const createModuleTotalColumn = (
 /**
  * Creates column definitions for all modules
  */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any -- Ant Design column types don't include all supported props like `hidden`
+
 export const createAssignmentColumns = (
   modules: ModuleData[],
   view: ViewMode,

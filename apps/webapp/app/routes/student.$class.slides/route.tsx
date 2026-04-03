@@ -1,4 +1,4 @@
-import { Table, Tag, Card } from 'antd';
+import { Table } from 'antd';
 import getPrisma from '@classmoji/database';
 import type { Route } from './+types/route';
 import { assertClassroomAccess } from '~/utils/helpers';

@@ -41,7 +41,7 @@ const StudentsTable = ({ students, query }: StudentsTableProps) => {
 
     setImpersonating(true);
     try {
-      const { data, error } = await authClient.admin.impersonateUser({
+      const { data: _data, error } = await authClient.admin.impersonateUser({
         userId: student.id.toString(),
       });
 

@@ -4,7 +4,7 @@ import { Modal, Button } from 'antd';
 
 import { useUser, useDisclosure, useGlobalFetcher } from '~/hooks';
 import { getAuthSession, clearRevokedToken } from '@classmoji/auth/server';
-import { checkAuth, groupByYearAndTerm } from '~/utils/helpers';
+import { checkAuth } from '~/utils/helpers';
 import ClassroomCard from './ClassroomCard';
 
 import {
@@ -96,7 +96,7 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
 };
 
 const SelectOrganization = ({ loaderData }: Route.ComponentProps) => {
-  const { memberships, githubAppName } = loaderData;
+  const { memberships, githubAppName: _githubAppName } = loaderData;
   const { user } = useUser();
   const { classroom, setClassroom } = useStore();
   const { fetcher, notify } = useGlobalFetcher();

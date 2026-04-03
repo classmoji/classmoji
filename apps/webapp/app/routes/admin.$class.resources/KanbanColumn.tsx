@@ -79,7 +79,7 @@ interface AssignmentSectionProps {
 
 const AssignmentSection = ({
   assignment,
-  moduleId,
+  moduleId: _moduleId,
   pages,
   slides,
   getLinkId,

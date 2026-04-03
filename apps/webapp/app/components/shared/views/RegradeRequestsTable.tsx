@@ -1,4 +1,4 @@
-import { Table, Button, Tag, Tooltip, Card } from 'antd';
+import { Table, Button, Tag, Tooltip } from 'antd';
 import { useNavigate, useParams } from 'react-router';
 import { useGlobalFetcher, useRole } from '~/hooks';
 import {
@@ -56,7 +56,7 @@ const RegradeRequestsTable = ({ requests, emojiMappings, org }: RegradeRequestsT
   const { notify, fetcher } = useGlobalFetcher();
 
   // Calculate statistics
-  const totalRequests = requests.length;
+  const _totalRequests = requests.length;
 
   const columns = [
     {

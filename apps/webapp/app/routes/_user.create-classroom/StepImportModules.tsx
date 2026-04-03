@@ -108,7 +108,7 @@ const StepImportModules = ({
           ) : (
             <>
               <div>
-                <label className="block text-sm font-medium mb-2">Select source classroom</label>
+                <p className="block text-sm font-medium mb-2">Select source classroom</p>
                 <Select
                   placeholder="Choose a classroom to import from"
                   value={sourceClassroomId}

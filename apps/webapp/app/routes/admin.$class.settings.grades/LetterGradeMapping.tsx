@@ -134,7 +134,6 @@ const LetterGradeMapping = ({ letterGradeMappings }: LetterGradeMappingProps) =>
         if (isEditing) {
           return (
             <InputNumber
-              autoFocus
               size="small"
               min={0}
               max={100}

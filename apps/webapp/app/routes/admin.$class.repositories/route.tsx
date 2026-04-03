@@ -518,7 +518,7 @@ const GithubRepositories = ({ loaderData }: Route.ComponentProps) => {
 export const action = async ({ request, params }: Route.ActionArgs) => {
   const classSlug = params.class!;
 
-  const { classroom, userId } = await requireClassroomAdmin(request, classSlug, {
+  const { classroom, userId: _userId } = await requireClassroomAdmin(request, classSlug, {
     resourceType: 'REPOSITORIES',
     action: 'manage_repositories',
   });

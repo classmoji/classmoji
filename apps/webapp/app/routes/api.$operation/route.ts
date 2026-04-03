@@ -114,20 +114,23 @@ export const action = checkAuth(async ({ request }: { request: Request }) => {
       }
 
       // Check authorization: OWNER can cancel any, STUDENT can cancel their own
-      const { userId, membership, isResourceOwner, accessGrantedVia } = await assertClassroomAccess(
-        {
-          request,
-          classroomSlug: classroom.slug,
-          allowedRoles: ['OWNER'], // OWNER can cancel any transaction
-          resourceType: 'TOKEN_TRANSACTION',
-          attemptedAction: 'cancel_transaction',
-          metadata: {
-            transaction_id: body.transaction.id,
-          },
-          resourceOwnerId: body.transaction.student_id,
-          selfAccessRoles: ['STUDENT'], // Students can cancel their own
-        }
-      );
+      const {
+        userId: _userId,
+        membership: _membership,
+        isResourceOwner,
+        accessGrantedVia: _accessGrantedVia,
+      } = await assertClassroomAccess({
+        request,
+        classroomSlug: classroom.slug,
+        allowedRoles: ['OWNER'], // OWNER can cancel any transaction
+        resourceType: 'TOKEN_TRANSACTION',
+        attemptedAction: 'cancel_transaction',
+        metadata: {
+          transaction_id: body.transaction.id,
+        },
+        resourceOwnerId: body.transaction.student_id,
+        selfAccessRoles: ['STUDENT'], // Students can cancel their own
+      });
 
       await cancelTokenTransactionHandler(body.transaction);
 

@@ -28,7 +28,7 @@ const AdminTokensLog = ({ loaderData }: Route.ComponentProps) => {
   const navigate = useNavigate();
 
   // Calculate token statistics
-  const totalTransactions = transactions.length;
+  const _totalTransactions = transactions.length;
 
   return (
     <ProTierFeature>

@@ -109,7 +109,7 @@ export default function ImageResizeHandles() {
 
       // Get the current dimensions
       const rect = selectedElement.getBoundingClientRect();
-      const computedStyle = window.getComputedStyle(selectedElement);
+      const _computedStyle = window.getComputedStyle(selectedElement);
 
       // Get natural size for aspect ratio calculations
       const imgElement = selectedElement as HTMLImageElement;

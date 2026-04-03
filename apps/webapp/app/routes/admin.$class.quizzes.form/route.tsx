@@ -35,7 +35,7 @@ export async function loader({ params, request }: Route.LoaderArgs) {
   // Dynamic import to keep server-side dependencies on the server only
   const { getExamplePrompts } = await import('@classmoji/services');
 
-  const { userId, classroom } = await assertClassroomAccess({
+  const { userId: _userId, classroom } = await assertClassroomAccess({
     request,
     classroomSlug: classSlug,
     allowedRoles: ['OWNER', 'ASSISTANT'],

@@ -1,4 +1,3 @@
-// eslint-disable-next-line import/no-unresolved
 import { Webhooks } from '@octokit/webhooks';
 import type { WebhookEvent } from '@octokit/webhooks-types';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';

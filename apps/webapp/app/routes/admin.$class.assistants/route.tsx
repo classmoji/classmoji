@@ -1,10 +1,8 @@
-import invariant from 'tiny-invariant';
 import { useNavigate, useParams, Outlet } from 'react-router';
 import { useState } from 'react';
 
-import { DeleteOutlined, EyeOutlined } from '@ant-design/icons';
 import { IconUserSearch, IconTrash } from '@tabler/icons-react';
-import { Table, Radio, Popconfirm, Modal, Tag, Card, Button } from 'antd';
+import { Table, Radio, Popconfirm, Modal, Tag } from 'antd';
 import { toast } from 'react-toastify';
 
 import { getAuthSession } from '@classmoji/auth/server';
@@ -69,7 +67,7 @@ const AdminAssistants = ({ loaderData }: Route.ComponentProps) => {
 
     setImpersonating(true);
     try {
-      const { data, error } = await authClient.admin.impersonateUser({
+      const { data: _data, error } = await authClient.admin.impersonateUser({
         userId: assistant.id.toString(),
       });
 

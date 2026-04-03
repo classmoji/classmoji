@@ -10,8 +10,13 @@ import { elementPropertyEditors } from './editors';
  * based on the type of element currently selected.
  */
 export default function PropertiesPanel() {
-  const { selectedElement, elementType, selectElement, clearSelection, onContentChange } =
-    useElementSelection();
+  const {
+    selectedElement,
+    elementType,
+    selectElement: _selectElement,
+    clearSelection,
+    onContentChange,
+  } = useElementSelection();
 
   // Select the current slide section for slide-level properties
   const handleSelectSlide = useCallback((event: React.MouseEvent) => {

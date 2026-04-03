@@ -22,7 +22,16 @@ interface TeamCreateWithMembershipAndTagPayload {
 }
 
 export const create = async (payload: TeamCreatePayload) => {
-  const { providerId, provider, name, slug, avatarUrl, privacy, classroomId, tag } = payload;
+  const {
+    providerId,
+    provider,
+    name,
+    slug,
+    avatarUrl: _avatarUrl,
+    privacy,
+    classroomId,
+    tag,
+  } = payload;
   const teamCreateData: unknown = {
     provider_id: providerId ? String(providerId) : null,
     provider: provider || null,

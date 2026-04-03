@@ -23,7 +23,7 @@ export const Terminal = createReactBlockSpec(
     content: 'none' as const,
   },
   {
-    render: (props: TerminalRenderProps) => {
+    render: function TerminalRenderer(props: TerminalRenderProps) {
       const textareaRef = useRef<HTMLTextAreaElement>(null);
       const codeRef = useRef<HTMLDivElement>(null);
       const [isFocused, setIsFocused] = useState(false);

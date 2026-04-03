@@ -70,6 +70,7 @@ export const Video = createReactBlockSpec(
             /* Populated state */
             <>
               {isDirectVideo(url) ? (
+                // eslint-disable-next-line jsx-a11y/media-has-caption -- user-uploaded content
                 <video
                   src={url}
                   controls

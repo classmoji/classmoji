@@ -107,7 +107,7 @@ export function renderContentReferenceMarkdown(
 export function processResponseReferences(
   text: string,
   references: ContentReferenceInput[] | null,
-  classroomSlug: string
+  _classroomSlug: string
 ) {
   if (!references || references.length === 0) return text;
 
@@ -115,7 +115,7 @@ export function processResponseReferences(
 
   // Remove JSON content reference objects from the text
   // They appear as: {"type":"content_reference",...}
-  const jsonRegex = /\{\"type\":\s*\"content_reference\"[^}]+\}/g;
+  const jsonRegex = /\{"type":\s*"content_reference"[^}]+\}/g;
   processedText = processedText.replace(jsonRegex, '').trim();
 
   // References are usually rendered separately in the UI,
