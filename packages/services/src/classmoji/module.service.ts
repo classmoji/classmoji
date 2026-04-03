@@ -99,7 +99,11 @@ export const findByClassroomAndTitle = async (classroomId: string, title: string
  * @param {Object} [options] - Additional options
  * @returns {Promise<Object|null>}
  */
-export const findBySlugAndTitle = async (classroomSlug: string, title: string, options: ModuleQueryOptions = {}) => {
+export const findBySlugAndTitle = async (
+  classroomSlug: string,
+  title: string,
+  options: ModuleQueryOptions = {}
+) => {
   const classroom = await getPrisma().classroom.findUnique({
     where: { slug: classroomSlug },
     select: { id: true },
@@ -115,26 +119,19 @@ export const findBySlugAndTitle = async (classroomSlug: string, title: string, o
       },
     },
     include: {
-      assignments: options.includeAssignments !== false
-        ? {
-            include: {
-              pages: options.includePages === true
-                ? { include: { page: true } }
-                : false,
-              slides: options.includeSlides === true
-                ? { include: { slide: true } }
-                : false,
-            },
-          }
-        : false,
+      assignments:
+        options.includeAssignments !== false
+          ? {
+              include: {
+                pages: options.includePages === true ? { include: { page: true } } : false,
+                slides: options.includeSlides === true ? { include: { slide: true } } : false,
+              },
+            }
+          : false,
       tag: true,
       quizzes: options.includeQuizzes === true,
-      pages: options.includePages === true
-        ? { include: { page: true } }
-        : false,
-      slides: options.includeSlides === true
-        ? { include: { slide: true } }
-        : false,
+      pages: options.includePages === true ? { include: { page: true } } : false,
+      slides: options.includeSlides === true ? { include: { slide: true } } : false,
     },
   });
 };
@@ -146,7 +143,11 @@ export const findBySlugAndTitle = async (classroomSlug: string, title: string, o
  * @param {Object} [options] - Additional options
  * @returns {Promise<Object|null>}
  */
-export const findByClassroomSlugAndModuleSlug = async (classroomSlug: string, moduleSlug: string, options: ModuleQueryOptions = {}) => {
+export const findByClassroomSlugAndModuleSlug = async (
+  classroomSlug: string,
+  moduleSlug: string,
+  options: ModuleQueryOptions = {}
+) => {
   const classroom = await getPrisma().classroom.findUnique({
     where: { slug: classroomSlug },
     select: { id: true },
@@ -160,26 +161,19 @@ export const findByClassroomSlugAndModuleSlug = async (classroomSlug: string, mo
       slug: moduleSlug,
     },
     include: {
-      assignments: options.includeAssignments !== false
-        ? {
-            include: {
-              pages: options.includePages === true
-                ? { include: { page: true } }
-                : false,
-              slides: options.includeSlides === true
-                ? { include: { slide: true } }
-                : false,
-            },
-          }
-        : false,
+      assignments:
+        options.includeAssignments !== false
+          ? {
+              include: {
+                pages: options.includePages === true ? { include: { page: true } } : false,
+                slides: options.includeSlides === true ? { include: { slide: true } } : false,
+              },
+            }
+          : false,
       tag: true,
       quizzes: options.includeQuizzes === true,
-      pages: options.includePages === true
-        ? { include: { page: true } }
-        : false,
-      slides: options.includeSlides === true
-        ? { include: { slide: true } }
-        : false,
+      pages: options.includePages === true ? { include: { page: true } } : false,
+      slides: options.includeSlides === true ? { include: { slide: true } } : false,
     },
   });
 };
@@ -205,7 +199,10 @@ export const findByClassroomId = async (classroomId: string) => {
  * @param {string} classroomSlug - Classroom slug
  * @returns {Promise<Object[]>}
  */
-export const findByClassroomSlug = async (classroomSlug: string, _options?: { includeAssignments?: boolean }) => {
+export const findByClassroomSlug = async (
+  classroomSlug: string,
+  _options?: { includeAssignments?: boolean }
+) => {
   return getPrisma().module.findMany({
     where: {
       classroom: { slug: classroomSlug },
@@ -364,10 +361,7 @@ export const updateWithAssignments = async (values: ModuleUpdateValues) => {
   const { id, assignments, assignmentsToRemove, tag, weight, ...updateData } = values;
 
   // Coerce module-level dates
-  if (
-    updateData.team_formation_deadline &&
-    !(updateData.team_formation_deadline instanceof Date)
-  ) {
+  if (updateData.team_formation_deadline && !(updateData.team_formation_deadline instanceof Date)) {
     updateData.team_formation_deadline = new Date(updateData.team_formation_deadline);
   }
 
@@ -409,10 +403,7 @@ export const updateWithAssignments = async (values: ModuleUpdateValues) => {
       // Coerce assignment date fields to Date objects
       const dateFields = ['student_deadline', 'grader_deadline', 'release_at'] as const;
       for (const field of dateFields) {
-        if (
-          assignmentMutationData[field] &&
-          !(assignmentMutationData[field] instanceof Date)
-        ) {
+        if (assignmentMutationData[field] && !(assignmentMutationData[field] instanceof Date)) {
           assignmentMutationData[field] = new Date(assignmentMutationData[field] as string | Date);
         }
       }

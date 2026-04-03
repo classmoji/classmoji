@@ -77,17 +77,14 @@ export default function SlideThumbnail({
           }}
         >
           {/* Render slide content */}
-          <div
-            className="reveal-thumbnail p-8"
-            dangerouslySetInnerHTML={{ __html: slideHtml }}
-          />
+          <div className="reveal-thumbnail p-8" dangerouslySetInnerHTML={{ __html: slideHtml }} />
         </div>
       </div>
 
       {/* Delete button overlay */}
       {showDelete && canDelete && (
         <button
-          onClick={(e) => {
+          onClick={e => {
             e.stopPropagation();
             onDelete?.();
           }}
@@ -102,7 +99,12 @@ export default function SlideThumbnail({
           title="Delete slide"
         >
           <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth={2}
+              d="M6 18L18 6M6 6l12 12"
+            />
           </svg>
         </button>
       )}
@@ -110,7 +112,8 @@ export default function SlideThumbnail({
       {/* Slide number indicator */}
       {!small && (
         <div className="absolute bottom-1 left-1 px-1.5 py-0.5 text-xs bg-black/60 text-white rounded-sm">
-          {slide.hIndex + 1}{slide.vIndex > 0 ? `.${slide.vIndex + 1}` : ''}
+          {slide.hIndex + 1}
+          {slide.vIndex > 0 ? `.${slide.vIndex + 1}` : ''}
         </div>
       )}
     </div>

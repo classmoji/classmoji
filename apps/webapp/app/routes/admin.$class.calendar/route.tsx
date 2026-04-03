@@ -54,7 +54,10 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
       true // includeUnpublished to see draft/unpublished assignments
     );
   } catch (error: unknown) {
-    console.error('Calendar service error (likely missing migration):', error instanceof Error ? error.message : error);
+    console.error(
+      'Calendar service error (likely missing migration):',
+      error instanceof Error ? error.message : error
+    );
     // Return empty events if table doesn't exist yet
     events = [];
   }
@@ -236,7 +239,10 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
       return data({ success: true });
     } catch (error: unknown) {
       console.error('Delete event error:', error);
-      return data({ success: false, error: error instanceof Error ? error.message : 'Unknown error' }, { status: 500 });
+      return data(
+        { success: false, error: error instanceof Error ? error.message : 'Unknown error' },
+        { status: 500 }
+      );
     }
   }
 
@@ -369,7 +375,10 @@ const AdminCalendar = ({ loaderData }: Route.ComponentProps) => {
     fetcher.submit(formData, { method: 'POST' });
   };
 
-  const handleDeleteEvent = (eventId: string, options: { editScope?: string; occurrenceDate?: string } | null = null) => {
+  const handleDeleteEvent = (
+    eventId: string,
+    options: { editScope?: string; occurrenceDate?: string } | null = null
+  ) => {
     const formData = new FormData();
     formData.append('intent', 'delete');
     formData.append('eventId', eventId);
@@ -520,7 +529,11 @@ const AdminCalendar = ({ loaderData }: Route.ComponentProps) => {
 
           <EditEventModal
             open={editModalOpen}
-            event={selectedEvent as Record<string, unknown> as Parameters<typeof EditEventModal>[0]['event']}
+            event={
+              selectedEvent as Record<string, unknown> as Parameters<
+                typeof EditEventModal
+              >[0]['event']
+            }
             onClose={() => {
               setEditModalOpen(false);
               setSelectedEvent(null);

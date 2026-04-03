@@ -93,7 +93,12 @@ const ModuleTable = ({ module, repos, emojiMappings, settings, org }: ModuleTabl
         },
       }}
     >
-      <Table dataSource={repos} columns={columns as Parameters<typeof Table>[0]['columns']} rowHoverable={false} pagination={false} />
+      <Table
+        dataSource={repos}
+        columns={columns as Parameters<typeof Table>[0]['columns']}
+        rowHoverable={false}
+        pagination={false}
+      />
     </ConfigProvider>
   );
 };

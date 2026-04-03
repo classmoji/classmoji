@@ -36,10 +36,11 @@ interface RepositoryAssignmentRelation extends GradeRepositoryAssignment {
   [key: string]: unknown;
 }
 
-type RepositoryWithRelations = Repository & GradeRepository & {
-  module: RepositoryModuleSummary;
-  assignments: RepositoryAssignmentRelation[];
-};
+type RepositoryWithRelations = Repository &
+  GradeRepository & {
+    module: RepositoryModuleSummary;
+    assignments: RepositoryAssignmentRelation[];
+  };
 
 interface TeamMembershipWithRepositories {
   team: {
@@ -139,9 +140,7 @@ export const deleteByLogin = async (login: string) => {
   });
 };
 
-export const findRepositoriesPerStudent = async (
-  classroom: StudentRepositoryClassroomContext
-) => {
+export const findRepositoriesPerStudent = async (classroom: StudentRepositoryClassroomContext) => {
   const includeRepos = {
     repositories: {
       include: {
@@ -234,9 +233,9 @@ export const findRepositoriesPerStudent = async (
       // RepositoryAssignments with their Assignment data
       repositoryAssignments: (repo.assignments || []).map(
         (repoAssignment: RepositoryAssignmentRelation) => ({
-        ...repoAssignment,
-        assignment_id: repoAssignment.assignment?.id,
-        // Note: 'assignment' is already included via spread from Prisma include
+          ...repoAssignment,
+          assignment_id: repoAssignment.assignment?.id,
+          // Note: 'assignment' is already included via spread from Prisma include
         })
       ),
     })),
@@ -248,23 +247,25 @@ export const findById = async (id: string, options: { includeMemberships?: boole
 
   const user = await getPrisma().user.findUnique({
     where: { id },
-    include: includeMemberships ? {
-      classroom_memberships: {
-        include: {
-          classroom: {
+    include: includeMemberships
+      ? {
+          classroom_memberships: {
             include: {
-              git_organization: true,
-              memberships: {
-                where: { role: 'OWNER' },
-              },
-              _count: {
-                select: { modules: true },
+              classroom: {
+                include: {
+                  git_organization: true,
+                  memberships: {
+                    where: { role: 'OWNER' },
+                  },
+                  _count: {
+                    select: { modules: true },
+                  },
+                },
               },
             },
           },
-        },
-      },
-    } : undefined,
+        }
+      : undefined,
   });
 
   if (!user) return null;

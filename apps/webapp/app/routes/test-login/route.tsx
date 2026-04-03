@@ -161,7 +161,9 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
     // For students, redirect to the class root so student.$class._index handles
     // the default_student_page redirect logic. For admins/assistants, go to dashboard.
     let redirectPath = '/select-organization';
-    const membershipWithClassroom = membership as typeof membership & { classroom?: { slug: string } } | null;
+    const membershipWithClassroom = membership as
+      | (typeof membership & { classroom?: { slug: string } })
+      | null;
     if (membershipWithClassroom?.classroom) {
       const pathPrefix = MEMBERSHIP_TO_PATH[membershipWithClassroom.role];
       const suffix = membershipWithClassroom.role === 'STUDENT' ? '' : '/dashboard';
@@ -177,6 +179,9 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
     });
   } catch (error: unknown) {
     console.error('Test login error:', error);
-    throw new Error('Failed to authenticate test user: ' + (error instanceof Error ? error.message : String(error)));
+    throw new Error(
+      'Failed to authenticate test user: ' +
+        (error instanceof Error ? error.message : String(error))
+    );
   }
 };

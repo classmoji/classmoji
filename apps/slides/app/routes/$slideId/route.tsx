@@ -20,7 +20,13 @@ import ImageResizeHandles from '~/components/ImageResizeHandles';
 import BlockHandles from '~/components/BlockHandles';
 
 // Loader to fetch slide metadata and content from database/GitHub
-export const loader = async ({ params, request }: { params: Record<string, string | undefined>; request: Request }) => {
+export const loader = async ({
+  params,
+  request,
+}: {
+  params: Record<string, string | undefined>;
+  request: Request;
+}) => {
   const { slideId } = params;
   if (!slideId) throw new Response('Missing slideId', { status: 400 });
   const url = new URL(request.url);
@@ -134,7 +140,13 @@ export const loader = async ({ params, request }: { params: Record<string, strin
   //
   // EXCEPTION: If the slide uses a shared theme, we pre-load just that one theme
   // so that view mode displays correctly (lazy-loading only triggers in edit mode)
-  let preloadedSharedTheme: { id: string; name: string; libCssUrl?: string; customThemeUrl?: string; bodyClasses?: string } | null = null;
+  let preloadedSharedTheme: {
+    id: string;
+    name: string;
+    libCssUrl?: string;
+    customThemeUrl?: string;
+    bodyClasses?: string;
+  } | null = null;
   if (slideContent) {
     const themeMatch = slideContent.match(/data-theme="shared:([^"]+)"/);
     if (themeMatch) {
@@ -143,7 +155,10 @@ export const loader = async ({ params, request }: { params: Record<string, strin
         const themeUrls = await getThemeUrls(gitOrgLogin, repo, themeName);
         preloadedSharedTheme = {
           id: `shared:${themeName}`,
-          name: themeName.split('-').map((w: string) => w.charAt(0).toUpperCase() + w.slice(1)).join(' '),
+          name: themeName
+            .split('-')
+            .map((w: string) => w.charAt(0).toUpperCase() + w.slice(1))
+            .join(' '),
           libCssUrl: themeUrls.libCssUrl,
           customThemeUrl: themeUrls.customThemeUrl ?? undefined,
           bodyClasses: themeUrls.bodyClasses as string,
@@ -185,7 +200,13 @@ export const loader = async ({ params, request }: { params: Record<string, strin
 };
 
 // Action to save slide content or fetch fresh content from GitHub API
-export const action = async ({ request, params }: { request: Request; params: Record<string, string | undefined> }) => {
+export const action = async ({
+  request,
+  params,
+}: {
+  request: Request;
+  params: Record<string, string | undefined>;
+}) => {
   const { slideId } = params;
   if (!slideId) return { error: 'Missing slideId' };
   const formData = await request.formData();
@@ -258,7 +279,7 @@ export const action = async ({ request, params }: { request: Request; params: Re
 
       // Detect folder-based shared themes (from slides.com imports)
       const themeFolders = themeFiles.filter(f => f.type === 'dir');
-      const sharedThemePromises = themeFolders.map(async (folder) => {
+      const sharedThemePromises = themeFolders.map(async folder => {
         try {
           const manifestResult = await ContentService.getContent({
             orgLogin: gitOrgLogin,
@@ -283,7 +304,10 @@ export const action = async ({ request, params }: { request: Request; params: Re
 
           return {
             id: `shared:${folder.name}`,
-            name: folder.name.split('-').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' '),
+            name: folder.name
+              .split('-')
+              .map(w => w.charAt(0).toUpperCase() + w.slice(1))
+              .join(' '),
             bodyClasses: manifest.bodyClasses || '',
             libCssUrl: `${baseUrl}/lib/offline-v2.css`,
             customThemeUrl,
@@ -318,7 +342,7 @@ export const action = async ({ request, params }: { request: Request; params: Re
       const themePattern = /^(.+)-(light|dark)\.css$/;
       const cssFiles = themeFiles.filter(f => f.type === 'file' && themePattern.test(f.name));
 
-      const themePromises = cssFiles.map(async (f) => {
+      const themePromises = cssFiles.map(async f => {
         try {
           const result = await ContentService.getContent({
             orgLogin: gitOrgLogin,
@@ -362,7 +386,7 @@ export const action = async ({ request, params }: { request: Request; params: Re
 
       const htmlFiles = snippetFiles.filter(f => f.type === 'file' && f.name.endsWith('.html'));
 
-      const snippetPromises = htmlFiles.map(async (f) => {
+      const snippetPromises = htmlFiles.map(async f => {
         try {
           const result = await ContentService.getContent({
             orgLogin: gitOrgLogin,
@@ -466,10 +490,11 @@ export const action = async ({ request, params }: { request: Request; params: Re
       }
 
       // Sanitize filename: lowercase, replace spaces with hyphens, remove special chars
-      const filename = String(name)
-        .toLowerCase()
-        .replace(/\s+/g, '-')
-        .replace(/[^a-z0-9-]/g, '') + '.html';
+      const filename =
+        String(name)
+          .toLowerCase()
+          .replace(/\s+/g, '-')
+          .replace(/[^a-z0-9-]/g, '') + '.html';
 
       await ContentService.put({
         orgLogin: gitOrgLogin,
@@ -506,10 +531,11 @@ export const action = async ({ request, params }: { request: Request; params: Re
       }
 
       // Generate new filename from name
-      const newFilename = String(name)
-        .toLowerCase()
-        .replace(/\s+/g, '-')
-        .replace(/[^a-z0-9-]/g, '') + '.html';
+      const newFilename =
+        String(name)
+          .toLowerCase()
+          .replace(/\s+/g, '-')
+          .replace(/[^a-z0-9-]/g, '') + '.html';
 
       const oldPath = `.slidesthemes/snippets/${id}`;
       const newPath = `.slidesthemes/snippets/${newFilename}`;
@@ -805,7 +831,13 @@ export const action = async ({ request, params }: { request: Request; params: Re
 
     // Look up shared theme URLs if needed
     /** @type {{ theme: string, codeTheme: string, libCssUrl?: string, customThemeUrl?: string | null, bodyClasses?: string }} */
-    let themeOptions: { theme: string; codeTheme: string; libCssUrl?: string; customThemeUrl?: string | null; bodyClasses?: string } = { theme, codeTheme };
+    let themeOptions: {
+      theme: string;
+      codeTheme: string;
+      libCssUrl?: string;
+      customThemeUrl?: string | null;
+      bodyClasses?: string;
+    } = { theme, codeTheme };
     if (theme.startsWith('shared:')) {
       const sharedThemeName = theme.replace('shared:', '');
       try {
@@ -870,7 +902,20 @@ export const action = async ({ request, params }: { request: Request; params: Re
 };
 
 // Built-in Reveal.js themes
-const BUILTIN_THEMES = ['black', 'white', 'league', 'beige', 'night', 'serif', 'simple', 'solarized', 'moon', 'dracula', 'sky', 'blood'];
+const BUILTIN_THEMES = [
+  'black',
+  'white',
+  'league',
+  'beige',
+  'night',
+  'serif',
+  'simple',
+  'solarized',
+  'moon',
+  'dracula',
+  'sky',
+  'blood',
+];
 
 // Generate theme stylesheet URL for built-in themes
 /** @param {string} theme */
@@ -897,7 +942,17 @@ function getBuiltinThemeUrl(theme: string) {
  * @param {string | null} [options.customThemeUrl] - Shared theme custom CSS URL
  * @param {string} [options.bodyClasses] - Body classes for shared theme
  */
-function generateSlideHtml(slidesContent: string, title: string, options: { theme?: string; codeTheme?: string; libCssUrl?: string | null; customThemeUrl?: string | null; bodyClasses?: string } = {}) {
+function generateSlideHtml(
+  slidesContent: string,
+  title: string,
+  options: {
+    theme?: string;
+    codeTheme?: string;
+    libCssUrl?: string | null;
+    customThemeUrl?: string | null;
+    bodyClasses?: string;
+  } = {}
+) {
   const {
     theme = 'white',
     codeTheme = 'github',
@@ -912,8 +967,12 @@ function generateSlideHtml(slidesContent: string, title: string, options: { them
 
   // Strip any wrapper div (e.g., <div class="slides"...> or <div class="reveal"...>)
   let cleanContent = slidesContent;
-  cleanContent = cleanContent.replace(/^<div class="slides"[^>]*>\n?/, '').replace(/\n?<\/div>$/, '');
-  cleanContent = cleanContent.replace(/^<div class="reveal"[^>]*><div class="slides"[^>]*>\n?/, '').replace(/\n?<\/div><\/div>$/, '');
+  cleanContent = cleanContent
+    .replace(/^<div class="slides"[^>]*>\n?/, '')
+    .replace(/\n?<\/div>$/, '');
+  cleanContent = cleanContent
+    .replace(/^<div class="reveal"[^>]*><div class="slides"[^>]*>\n?/, '')
+    .replace(/\n?<\/div><\/div>$/, '');
 
   // Build theme CSS links
   let themeCssLinks = '';
@@ -986,9 +1045,29 @@ ${cleanContent}
 }
 
 export default function SlideViewer() {
-  const { slide, contentUrl, slideContent, contentError, snippets: initialSnippets, cssThemes: initialCssThemes, customThemes: initialCustomThemes, sharedThemes: initialSharedThemes, webappUrl, autoEdit, returnUrl, canEdit, canPresent, canViewSpeakerNotes, userRole } = useLoaderData<typeof loader>();
-  const [snippets, setSnippets] = useState<Array<{ id: string; name: string; content: string }>>(initialSnippets || []);
-  const [cssThemes, setCssThemes] = useState<Array<{ id: string; name: string; type: string; content: string }>>(initialCssThemes || []);
+  const {
+    slide,
+    contentUrl,
+    slideContent,
+    contentError,
+    snippets: initialSnippets,
+    cssThemes: initialCssThemes,
+    customThemes: initialCustomThemes,
+    sharedThemes: initialSharedThemes,
+    webappUrl,
+    autoEdit,
+    returnUrl,
+    canEdit,
+    canPresent,
+    canViewSpeakerNotes,
+    userRole,
+  } = useLoaderData<typeof loader>();
+  const [snippets, setSnippets] = useState<Array<{ id: string; name: string; content: string }>>(
+    initialSnippets || []
+  );
+  const [cssThemes, setCssThemes] = useState<
+    Array<{ id: string; name: string; type: string; content: string }>
+  >(initialCssThemes || []);
   // Themes are now lazy-loaded when entering edit mode
   const [customThemes, setCustomThemes] = useState(initialCustomThemes || []);
   const [sharedThemes, setSharedThemes] = useState(initialSharedThemes || []);
@@ -1002,7 +1081,9 @@ export default function SlideViewer() {
   // Track editable content separately from CDN content
   const [editableContent, setEditableContent] = useState<string | null>(null);
   // Orphaned images cleanup
-  const [orphanedImages, setOrphanedImages] = useState<Array<{ path: string; name: string; url: string }>>([]);
+  const [orphanedImages, setOrphanedImages] = useState<
+    Array<{ path: string; name: string; url: string }>
+  >([]);
   const [showOrphanedModal, setShowOrphanedModal] = useState(false);
   const [isDeletingImages, setIsDeletingImages] = useState(false);
   const [showOverview, setShowOverview] = useState(false);
@@ -1019,14 +1100,8 @@ export default function SlideViewer() {
   useEffect(() => {
     if (isEditing && !themesLoaded && themeFetcher.state === 'idle') {
       // Load themes and snippets when entering edit mode
-      themeFetcher.submit(
-        { intent: 'list-themes' },
-        { method: 'POST' }
-      );
-      snippetFetcher.submit(
-        { intent: 'list-snippets' },
-        { method: 'POST' }
-      );
+      themeFetcher.submit({ intent: 'list-themes' }, { method: 'POST' });
+      snippetFetcher.submit({ intent: 'list-snippets' }, { method: 'POST' });
     }
   }, [isEditing, themesLoaded]);
 
@@ -1119,15 +1194,13 @@ export default function SlideViewer() {
       setAutoEditTriggered(true);
       // Trigger the same flow as clicking "Edit" button - fetch latest from API
       setIsLoadingLatest(true);
-      fetcher.submit(
-        { intent: 'fetch-latest' },
-        { method: 'post' }
-      );
+      fetcher.submit({ intent: 'fetch-latest' }, { method: 'post' });
     }
   }, [autoEdit, canEdit, autoEditTriggered, isEditing, fetcher]);
 
   const isSaving = fetcher.state === 'submitting' && !fetcher.formData?.get('intent');
-  const isFetchingLatest = fetcher.state === 'submitting' && fetcher.formData?.get('intent') === 'fetch-latest';
+  const isFetchingLatest =
+    fetcher.state === 'submitting' && fetcher.formData?.get('intent') === 'fetch-latest';
   const saveSuccess = fetcher.data?.success;
   const saveError = fetcher.data?.error;
 
@@ -1142,7 +1215,9 @@ export default function SlideViewer() {
       // Images were deleted
       setIsDeletingImages(false);
       if (fetcher.data.success) {
-        message.success(`Deleted ${fetcher.data.deleted} unused image${fetcher.data.deleted !== 1 ? 's' : ''}`);
+        message.success(
+          `Deleted ${fetcher.data.deleted} unused image${fetcher.data.deleted !== 1 ? 's' : ''}`
+        );
         setShowOrphanedModal(false);
         setOrphanedImages([]);
       } else if (fetcher.data.error) {
@@ -1153,7 +1228,10 @@ export default function SlideViewer() {
       if (fetcher.data.success && fetcher.data.snippet) {
         message.success(`Snippet "${fetcher.data.snippet.name}" saved!`);
         // Add the new snippet to the list
-        setSnippets((prev: Array<{ id: string; name: string; content: string }>) => [...prev, fetcher.data.snippet]);
+        setSnippets((prev: Array<{ id: string; name: string; content: string }>) => [
+          ...prev,
+          fetcher.data.snippet,
+        ]);
       } else if (fetcher.data.error) {
         message.error(`Failed to save snippet: ${fetcher.data.error}`);
       }
@@ -1163,7 +1241,7 @@ export default function SlideViewer() {
         message.success(`Snippet "${fetcher.data.snippet.name}" updated!`);
         // Replace the old snippet with the updated one
         setSnippets((prev: Array<{ id: string; name: string; content: string }>) =>
-          prev.map((s) => s.id === fetcher.data.oldId ? fetcher.data.snippet : s)
+          prev.map(s => (s.id === fetcher.data.oldId ? fetcher.data.snippet : s))
         );
       } else if (fetcher.data.error) {
         message.error(`Failed to update snippet: ${fetcher.data.error}`);
@@ -1174,7 +1252,7 @@ export default function SlideViewer() {
         message.success('Snippet deleted');
         // Remove the snippet from the list
         setSnippets((prev: Array<{ id: string; name: string; content: string }>) =>
-          prev.filter((s) => s.id !== fetcher.data.deletedId)
+          prev.filter(s => s.id !== fetcher.data.deletedId)
         );
       } else if (fetcher.data.error) {
         message.error(`Failed to delete snippet: ${fetcher.data.error}`);
@@ -1184,7 +1262,10 @@ export default function SlideViewer() {
       if (fetcher.data.success && fetcher.data.theme) {
         message.success(`CSS theme "${fetcher.data.theme.name}" saved!`);
         // Add the new theme to the list
-        setCssThemes((prev: Array<{ id: string; name: string; type: string; content: string }>) => [...prev, fetcher.data.theme]);
+        setCssThemes((prev: Array<{ id: string; name: string; type: string; content: string }>) => [
+          ...prev,
+          fetcher.data.theme,
+        ]);
       } else if (fetcher.data.error) {
         message.error(`Failed to save theme: ${fetcher.data.error}`);
       }
@@ -1194,7 +1275,7 @@ export default function SlideViewer() {
         message.success(`CSS theme "${fetcher.data.theme.name}" updated!`);
         // Replace the old theme with the updated one
         setCssThemes((prev: Array<{ id: string; name: string; type: string; content: string }>) =>
-          prev.map((t) => t.id === fetcher.data.oldId ? fetcher.data.theme : t)
+          prev.map(t => (t.id === fetcher.data.oldId ? fetcher.data.theme : t))
         );
       } else if (fetcher.data.error) {
         message.error(`Failed to update theme: ${fetcher.data.error}`);
@@ -1205,7 +1286,7 @@ export default function SlideViewer() {
         message.success('CSS theme deleted');
         // Remove the theme from the list
         setCssThemes((prev: Array<{ id: string; name: string; type: string; content: string }>) =>
-          prev.filter((t) => t.id !== fetcher.data.deletedId)
+          prev.filter(t => t.id !== fetcher.data.deletedId)
         );
       } else if (fetcher.data.error) {
         message.error(`Failed to delete theme: ${fetcher.data.error}`);
@@ -1223,23 +1304,26 @@ export default function SlideViewer() {
   }, [fetcher.data]);
 
   // Handle image upload - returns a promise that resolves with the image URL
-  const handleImageUpload = useCallback(async (file: File): Promise<string> => {
-    return new Promise<string>((resolve, reject) => {
-      const formData = new FormData();
-      formData.append('intent', 'upload-image');
-      formData.append('file', file);
+  const handleImageUpload = useCallback(
+    async (file: File): Promise<string> => {
+      return new Promise<string>((resolve, reject) => {
+        const formData = new FormData();
+        formData.append('intent', 'upload-image');
+        formData.append('file', file);
 
-      fetcher.submit(formData, {
-        method: 'post',
-        encType: 'multipart/form-data',
+        fetcher.submit(formData, {
+          method: 'post',
+          encType: 'multipart/form-data',
+        });
+
+        // We'll resolve this in the useEffect when we get the response
+        // Store the resolve/reject for later
+        window.__imageUploadResolve = resolve;
+        window.__imageUploadReject = reject;
       });
-
-      // We'll resolve this in the useEffect when we get the response
-      // Store the resolve/reject for later
-      window.__imageUploadResolve = resolve;
-      window.__imageUploadReject = reject;
-    });
-  }, [fetcher]);
+    },
+    [fetcher]
+  );
 
   // Handle image upload response
   useEffect(() => {
@@ -1274,10 +1358,7 @@ export default function SlideViewer() {
   // Enter edit mode - first fetch latest content from GitHub API
   const handleStartEditing = useCallback(() => {
     setIsLoadingLatest(true);
-    fetcher.submit(
-      { intent: 'fetch-latest' },
-      { method: 'post' }
-    );
+    fetcher.submit({ intent: 'fetch-latest' }, { method: 'post' });
   }, [fetcher]);
 
   // Save the current slide content and exit edit mode
@@ -1285,10 +1366,7 @@ export default function SlideViewer() {
     const content = revealRef.current?.getCurrentContent();
     if (!content) return;
 
-    fetcher.submit(
-      { content },
-      { method: 'post' }
-    );
+    fetcher.submit({ content }, { method: 'post' });
     setHasChanges(false);
     setIsEditing(false);
   }, [fetcher]);
@@ -1298,10 +1376,7 @@ export default function SlideViewer() {
     const content = revealRef.current?.getCurrentContent();
     if (!content) return;
 
-    fetcher.submit(
-      { content },
-      { method: 'post' }
-    );
+    fetcher.submit({ content }, { method: 'post' });
     setHasChanges(false);
     // Don't exit edit mode - user is still editing
   }, [fetcher]);
@@ -1314,16 +1389,19 @@ export default function SlideViewer() {
   }, []);
 
   // Delete selected orphaned images
-  const handleDeleteOrphanedImages = useCallback((paths: string[]) => {
-    setIsDeletingImages(true);
-    fetcher.submit(
-      {
-        intent: 'delete-images',
-        paths: JSON.stringify(paths),
-      },
-      { method: 'post' }
-    );
-  }, [fetcher]);
+  const handleDeleteOrphanedImages = useCallback(
+    (paths: string[]) => {
+      setIsDeletingImages(true);
+      fetcher.submit(
+        {
+          intent: 'delete-images',
+          paths: JSON.stringify(paths),
+        },
+        { method: 'post' }
+      );
+    },
+    [fetcher]
+  );
 
   // Close orphaned images modal without deleting
   const handleCloseOrphanedModal = useCallback(() => {
@@ -1352,55 +1430,55 @@ export default function SlideViewer() {
   // Determine which content to show
   // - When editing: use editableContent (fresh from API or after save)
   // - When viewing: use CDN content (slideContent) or editableContent if we have it
-  const displayContent = isEditing ? editableContent : (editableContent || slideContent);
+  const displayContent = isEditing ? editableContent : editableContent || slideContent;
 
   // Save a new snippet
-  const handleSaveSnippet = useCallback((name: string, content: string) => {
-    fetcher.submit(
-      { intent: 'save-snippet', name, content },
-      { method: 'post' }
-    );
-  }, [fetcher]);
+  const handleSaveSnippet = useCallback(
+    (name: string, content: string) => {
+      fetcher.submit({ intent: 'save-snippet', name, content }, { method: 'post' });
+    },
+    [fetcher]
+  );
 
   // Update an existing snippet
-  const handleUpdateSnippet = useCallback((id: string, name: string, content: string) => {
-    fetcher.submit(
-      { intent: 'update-snippet', id, name, content },
-      { method: 'post' }
-    );
-  }, [fetcher]);
+  const handleUpdateSnippet = useCallback(
+    (id: string, name: string, content: string) => {
+      fetcher.submit({ intent: 'update-snippet', id, name, content }, { method: 'post' });
+    },
+    [fetcher]
+  );
 
   // Delete a snippet
-  const handleDeleteSnippet = useCallback((id: string) => {
-    fetcher.submit(
-      { intent: 'delete-snippet', id },
-      { method: 'post' }
-    );
-  }, [fetcher]);
+  const handleDeleteSnippet = useCallback(
+    (id: string) => {
+      fetcher.submit({ intent: 'delete-snippet', id }, { method: 'post' });
+    },
+    [fetcher]
+  );
 
   // Save a new CSS theme
-  const handleSaveTheme = useCallback((name: string, type: string, content: string) => {
-    fetcher.submit(
-      { intent: 'save-theme', name, type, content },
-      { method: 'post' }
-    );
-  }, [fetcher]);
+  const handleSaveTheme = useCallback(
+    (name: string, type: string, content: string) => {
+      fetcher.submit({ intent: 'save-theme', name, type, content }, { method: 'post' });
+    },
+    [fetcher]
+  );
 
   // Update an existing CSS theme
-  const handleUpdateTheme = useCallback((id: string, name: string, type: string, content: string) => {
-    fetcher.submit(
-      { intent: 'update-theme', id, name, type, content },
-      { method: 'post' }
-    );
-  }, [fetcher]);
+  const handleUpdateTheme = useCallback(
+    (id: string, name: string, type: string, content: string) => {
+      fetcher.submit({ intent: 'update-theme', id, name, type, content }, { method: 'post' });
+    },
+    [fetcher]
+  );
 
   // Delete a CSS theme
-  const handleDeleteTheme = useCallback((id: string) => {
-    fetcher.submit(
-      { intent: 'delete-theme', id },
-      { method: 'post' }
-    );
-  }, [fetcher]);
+  const handleDeleteTheme = useCallback(
+    (id: string) => {
+      fetcher.submit({ intent: 'delete-theme', id }, { method: 'post' });
+    },
+    [fetcher]
+  );
 
   return (
     <ElementSelectionProvider
@@ -1419,128 +1497,163 @@ export default function SlideViewer() {
       customThemes={customThemes}
       sharedThemes={sharedThemes}
     >
-    <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
-      {/* Navbar - uses grid layout to center toolbar when editing */}
-      <nav className={`slides-navbar ${isEditing ? 'slides-navbar-editing' : ''}`}>
-        {/* Left section: back button + title */}
-        <div className="flex items-center gap-3 min-w-0">
-          <a
-            href={backUrl}
-            className="text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200 shrink-0"
-          >
-            <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
-              <path fillRule="evenodd" d="M9.707 16.707a1 1 0 01-1.414 0l-6-6a1 1 0 010-1.414l6-6a1 1 0 011.414 1.414L5.414 9H17a1 1 0 110 2H5.414l4.293 4.293a1 1 0 010 1.414z" clipRule="evenodd" />
-            </svg>
-          </a>
-          <h1 className="text-lg font-semibold text-gray-900 dark:text-white truncate">
-            {slide.title}
-          </h1>
-        </div>
-
-        {/* Center section: toolbar (only when editing) */}
-        {isEditing && (
-          <div className="flex items-center justify-center">
-            <SlideToolbar
-              revealInstance={revealInstance}
-              onContentChange={handleContentChange}
-              onImageUpload={handleImageUpload}
-              onOpenOverview={handleOpenOverview}
-            />
-          </div>
-        )}
-
-        {/* Right section: status + actions */}
-        <div className="flex items-center gap-2 justify-end">
-          {/* Status badges */}
-          {isEditing && (
-            <span className="px-2 py-0.5 text-xs bg-yellow-100 text-yellow-800 rounded-full">
-              {hasChanges ? 'Unsaved' : 'Editing'}
-            </span>
-          )}
-          {saveSuccess && !hasChanges && !isEditing && (
-            <span className="px-2 py-0.5 text-xs bg-green-100 text-green-800 rounded-full">
-              Saved
-            </span>
-          )}
-          {saveError && (
-            <span className="px-2 py-0.5 text-xs bg-red-100 text-red-800 rounded-full" title={saveError}>
-              Error
-            </span>
-          )}
-
-          {/* Action buttons */}
-          {canEdit && isEditing && (
-            hasChanges ? (
-              <Popconfirm
-                title="Discard changes?"
-                description="You have unsaved changes. Discard them?"
-                onConfirm={handleDoneEditing}
-                okText="Discard"
-                cancelText="Keep editing"
-                okButtonProps={{ danger: true }}
+      <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
+        {/* Navbar - uses grid layout to center toolbar when editing */}
+        <nav className={`slides-navbar ${isEditing ? 'slides-navbar-editing' : ''}`}>
+          {/* Left section: back button + title */}
+          <div className="flex items-center gap-3 min-w-0">
+            <a
+              href={backUrl}
+              className="text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200 shrink-0"
+            >
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                className="h-5 w-5"
+                viewBox="0 0 20 20"
+                fill="currentColor"
               >
+                <path
+                  fillRule="evenodd"
+                  d="M9.707 16.707a1 1 0 01-1.414 0l-6-6a1 1 0 010-1.414l6-6a1 1 0 011.414 1.414L5.414 9H17a1 1 0 110 2H5.414l4.293 4.293a1 1 0 010 1.414z"
+                  clipRule="evenodd"
+                />
+              </svg>
+            </a>
+            <h1 className="text-lg font-semibold text-gray-900 dark:text-white truncate">
+              {slide.title}
+            </h1>
+          </div>
+
+          {/* Center section: toolbar (only when editing) */}
+          {isEditing && (
+            <div className="flex items-center justify-center">
+              <SlideToolbar
+                revealInstance={revealInstance}
+                onContentChange={handleContentChange}
+                onImageUpload={handleImageUpload}
+                onOpenOverview={handleOpenOverview}
+              />
+            </div>
+          )}
+
+          {/* Right section: status + actions */}
+          <div className="flex items-center gap-2 justify-end">
+            {/* Status badges */}
+            {isEditing && (
+              <span className="px-2 py-0.5 text-xs bg-yellow-100 text-yellow-800 rounded-full">
+                {hasChanges ? 'Unsaved' : 'Editing'}
+              </span>
+            )}
+            {saveSuccess && !hasChanges && !isEditing && (
+              <span className="px-2 py-0.5 text-xs bg-green-100 text-green-800 rounded-full">
+                Saved
+              </span>
+            )}
+            {saveError && (
+              <span
+                className="px-2 py-0.5 text-xs bg-red-100 text-red-800 rounded-full"
+                title={saveError}
+              >
+                Error
+              </span>
+            )}
+
+            {/* Action buttons */}
+            {canEdit &&
+              isEditing &&
+              (hasChanges ? (
+                <Popconfirm
+                  title="Discard changes?"
+                  description="You have unsaved changes. Discard them?"
+                  onConfirm={handleDoneEditing}
+                  okText="Discard"
+                  cancelText="Keep editing"
+                  okButtonProps={{ danger: true }}
+                >
+                  <Tooltip title="Cancel editing">
+                    <button className="p-2 text-gray-700 dark:text-gray-200 bg-gray-100 dark:bg-gray-700 rounded-md hover:bg-gray-200 dark:hover:bg-gray-600">
+                      <svg
+                        className="w-5 h-5"
+                        fill="none"
+                        stroke="currentColor"
+                        viewBox="0 0 24 24"
+                      >
+                        <path
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          strokeWidth={2}
+                          d="M6 18L18 6M6 6l12 12"
+                        />
+                      </svg>
+                    </button>
+                  </Tooltip>
+                </Popconfirm>
+              ) : (
                 <Tooltip title="Cancel editing">
                   <button
+                    onClick={handleDoneEditing}
                     className="p-2 text-gray-700 dark:text-gray-200 bg-gray-100 dark:bg-gray-700 rounded-md hover:bg-gray-200 dark:hover:bg-gray-600"
                   >
                     <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        strokeWidth={2}
+                        d="M6 18L18 6M6 6l12 12"
+                      />
                     </svg>
                   </button>
                 </Tooltip>
-              </Popconfirm>
-            ) : (
-              <Tooltip title="Cancel editing">
+              ))}
+            {canEdit && isEditing && (
+              <Tooltip title={isSaving ? 'Saving...' : 'Save changes'}>
                 <button
-                  onClick={handleDoneEditing}
-                  className="p-2 text-gray-700 dark:text-gray-200 bg-gray-100 dark:bg-gray-700 rounded-md hover:bg-gray-200 dark:hover:bg-gray-600"
+                  onClick={handleSave}
+                  disabled={isSaving}
+                  className="save-button p-2 rounded-md disabled:opacity-50"
                 >
                   <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={2}
+                      d="M5 13l4 4L19 7"
+                    />
                   </svg>
                 </button>
               </Tooltip>
-            )
-          )}
-          {canEdit && isEditing && (
-            <Tooltip title={isSaving ? 'Saving...' : 'Save changes'}>
+            )}
+            {canEdit && !isEditing && (
               <button
-                onClick={handleSave}
-                disabled={isSaving}
-                className="save-button p-2 rounded-md disabled:opacity-50"
+                onClick={handleStartEditing}
+                disabled={isLoadingLatest || isFetchingLatest}
+                className="px-3 py-1.5 text-sm bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-200 rounded-md hover:bg-gray-200 dark:hover:bg-gray-600"
               >
-                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                </svg>
+                {isLoadingLatest || isFetchingLatest ? 'Loading...' : 'Edit'}
               </button>
-            </Tooltip>
-          )}
-          {canEdit && !isEditing && (
-            <button
-              onClick={handleStartEditing}
-              disabled={isLoadingLatest || isFetchingLatest}
-              className="px-3 py-1.5 text-sm bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-200 rounded-md hover:bg-gray-200 dark:hover:bg-gray-600"
-            >
-              {isLoadingLatest || isFetchingLatest ? 'Loading...' : 'Edit'}
-            </button>
-          )}
-          {/* Present button - only shown if user can present (staff only) */}
-          {canPresent && (
-            <Tooltip title="Present slideshow">
-              <a
-                href={`/${slide.id}/present`}
-                className="p-2 bg-black text-white rounded-md hover:bg-gray-800 flex items-center justify-center"
-              >
-                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
-                </svg>
-              </a>
-            </Tooltip>
-          )}
-        </div>
-      </nav>
+            )}
+            {/* Present button - only shown if user can present (staff only) */}
+            {canPresent && (
+              <Tooltip title="Present slideshow">
+                <a
+                  href={`/${slide.id}/present`}
+                  className="p-2 bg-black text-white rounded-md hover:bg-gray-800 flex items-center justify-center"
+                >
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={2}
+                      d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"
+                    />
+                  </svg>
+                </a>
+              </Tooltip>
+            )}
+          </div>
+        </nav>
 
-      {/* Main content area with optional properties sidebar */}
+        {/* Main content area with optional properties sidebar */}
         <div className={`reveal-container ${isEditing ? 'reveal-container-with-sidebar' : ''}`}>
           {/* Flex layout for slide + notes panel */}
           <div className="reveal-editor-layout">

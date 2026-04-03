@@ -258,7 +258,9 @@ export const getClassroomForUI = <
     } | null;
     [key: string]: unknown;
   } | null,
->(classroom: T) => {
+>(
+  classroom: T
+) => {
   if (!classroom) return null;
 
   const { settings, ...safeClassroom } = classroom;

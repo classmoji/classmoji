@@ -8,7 +8,18 @@
 import { useState, useCallback } from 'react';
 import { SandpackConsole } from '@codesandbox/sandpack-react';
 
-type ConsoleMethod = 'log' | 'debug' | 'info' | 'warn' | 'error' | 'table' | 'clear' | 'time' | 'timeEnd' | 'count' | 'assert';
+type ConsoleMethod =
+  | 'log'
+  | 'debug'
+  | 'info'
+  | 'warn'
+  | 'error'
+  | 'table'
+  | 'clear'
+  | 'time'
+  | 'timeEnd'
+  | 'count'
+  | 'assert';
 
 interface ConsoleLogEntry {
   id: string;
@@ -68,25 +79,11 @@ export default function CollapsibleConsole({
 
         <span className="collapsible-console-badges">
           {errorCount > 0 && (
-            <span className="console-badge console-badge-error">
-              {errorCount}
-            </span>
+            <span className="console-badge console-badge-error">{errorCount}</span>
           )}
-          {warnCount > 0 && (
-            <span className="console-badge console-badge-warn">
-              {warnCount}
-            </span>
-          )}
-          {logCount > 0 && (
-            <span className="console-badge console-badge-log">
-              {logCount}
-            </span>
-          )}
-          {totalCount === 0 && (
-            <span className="console-badge console-badge-empty">
-              No output
-            </span>
-          )}
+          {warnCount > 0 && <span className="console-badge console-badge-warn">{warnCount}</span>}
+          {logCount > 0 && <span className="console-badge console-badge-log">{logCount}</span>}
+          {totalCount === 0 && <span className="console-badge console-badge-empty">No output</span>}
         </span>
       </button>
 

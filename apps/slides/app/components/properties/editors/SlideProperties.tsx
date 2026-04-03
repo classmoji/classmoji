@@ -70,17 +70,32 @@ const builtInThemeOptions = BUILTIN_THEMES.map(t => ({
 }));
 
 export default function SlideProperties({ element }: { element: HTMLElement }) {
-  const { onContentChange, setActiveColumn, getThemes, setTheme, snippets, onSaveSnippet, onUpdateSnippet, onDeleteSnippet, cssThemes, onSaveTheme, onUpdateTheme, onDeleteTheme, customThemes = [], sharedThemes = [] } = useElementSelection();
+  const {
+    onContentChange,
+    setActiveColumn,
+    getThemes,
+    setTheme,
+    snippets,
+    onSaveSnippet,
+    onUpdateSnippet,
+    onDeleteSnippet,
+    cssThemes,
+    onSaveTheme,
+    onUpdateTheme,
+    onDeleteTheme,
+    customThemes = [],
+    sharedThemes = [],
+  } = useElementSelection();
 
   // Build theme options: shared themes FIRST, then custom CSS themes, then built-in themes
   const themeOptions = [
     // Shared themes from slides.com imports (complete theme packages)
-    ...sharedThemes.map((t) => ({
+    ...sharedThemes.map(t => ({
       label: `📦 ${t.name}`,
       value: t.id,
     })),
     // Custom CSS themes
-    ...customThemes.map((t) => ({
+    ...customThemes.map(t => ({
       label: `${t.name} ★`,
       value: t.id,
     })),
@@ -147,107 +162,123 @@ export default function SlideProperties({ element }: { element: HTMLElement }) {
   }
 
   // Update layout - automatically creates column divs when switching to multi-column
-  const handleLayoutChange = useCallback((newLayout: string) => {
-    if (!element) return;
+  const handleLayoutChange = useCallback(
+    (newLayout: string) => {
+      if (!element) return;
 
-    const previousLayout = detectLayout(element);
-    const wasMultiColumn = previousLayout !== '';
-    const isNowMultiColumn = newLayout !== '';
+      const previousLayout = detectLayout(element);
+      const wasMultiColumn = previousLayout !== '';
+      const isNowMultiColumn = newLayout !== '';
 
-    // Remove all layout classes
-    Object.values(LAYOUT_CLASSES).forEach((cls) => {
-      if (cls) element.classList.remove(cls);
-    });
+      // Remove all layout classes
+      Object.values(LAYOUT_CLASSES).forEach(cls => {
+        if (cls) element.classList.remove(cls);
+      });
 
-    // Add new layout class
-    const newClass = LAYOUT_CLASSES[newLayout as keyof typeof LAYOUT_CLASSES];
-    if (newClass) {
-      element.classList.add(newClass);
-    }
-
-    // If switching TO a multi-column layout, automatically set up columns
-    if (isNowMultiColumn && !wasMultiColumn) {
-      const expectedCount = LAYOUT_COLUMN_COUNT[newLayout as keyof typeof LAYOUT_COLUMN_COUNT] || 2;
-      const existingDivs = element.querySelectorAll(':scope > div').length;
-
-      if (existingDivs < expectedCount) {
-        // Get all existing content (non-div direct children)
-        const existingContent = Array.from(element.children).filter(
-          (child) => (child as HTMLElement).tagName !== 'DIV'
-        );
-
-        // Create first column with existing content
-        let firstColumn: HTMLDivElement;
-        if (existingContent.length > 0) {
-          firstColumn = document.createElement('div');
-          existingContent.forEach(child => firstColumn.appendChild(child as Node));
-          element.insertBefore(firstColumn, element.firstChild);
-        } else {
-          // No existing content, create empty first column
-          firstColumn = document.createElement('div');
-          element.appendChild(firstColumn);
-        }
-        firstColumn.setAttribute('data-column-label', 'Column 1');
-
-        // Create remaining empty columns
-        for (let i = 1; i < expectedCount; i++) {
-          const newCol = document.createElement('div');
-          newCol.setAttribute('data-column-label', `Column ${i + 1}`);
-          element.appendChild(newCol);
-        }
-
-        // Set the first column as active
-        setActiveColumn?.(firstColumn);
+      // Add new layout class
+      const newClass = LAYOUT_CLASSES[newLayout as keyof typeof LAYOUT_CLASSES];
+      if (newClass) {
+        element.classList.add(newClass);
       }
-    }
 
-    // Update labels on any existing columns
-    updateColumnLabels(element);
+      // If switching TO a multi-column layout, automatically set up columns
+      if (isNowMultiColumn && !wasMultiColumn) {
+        const expectedCount =
+          LAYOUT_COLUMN_COUNT[newLayout as keyof typeof LAYOUT_COLUMN_COUNT] || 2;
+        const existingDivs = element.querySelectorAll(':scope > div').length;
 
-    setLayout(newLayout);
-    onContentChange?.();
-  }, [element, onContentChange, setActiveColumn]);
+        if (existingDivs < expectedCount) {
+          // Get all existing content (non-div direct children)
+          const existingContent = Array.from(element.children).filter(
+            child => (child as HTMLElement).tagName !== 'DIV'
+          );
+
+          // Create first column with existing content
+          let firstColumn: HTMLDivElement;
+          if (existingContent.length > 0) {
+            firstColumn = document.createElement('div');
+            existingContent.forEach(child => firstColumn.appendChild(child as Node));
+            element.insertBefore(firstColumn, element.firstChild);
+          } else {
+            // No existing content, create empty first column
+            firstColumn = document.createElement('div');
+            element.appendChild(firstColumn);
+          }
+          firstColumn.setAttribute('data-column-label', 'Column 1');
+
+          // Create remaining empty columns
+          for (let i = 1; i < expectedCount; i++) {
+            const newCol = document.createElement('div');
+            newCol.setAttribute('data-column-label', `Column ${i + 1}`);
+            element.appendChild(newCol);
+          }
+
+          // Set the first column as active
+          setActiveColumn?.(firstColumn);
+        }
+      }
+
+      // Update labels on any existing columns
+      updateColumnLabels(element);
+
+      setLayout(newLayout);
+      onContentChange?.();
+    },
+    [element, onContentChange, setActiveColumn]
+  );
 
   // Update vertical alignment
-  const handleValignChange = useCallback((newValign: string) => {
-    if (!element) return;
+  const handleValignChange = useCallback(
+    (newValign: string) => {
+      if (!element) return;
 
-    if (newValign) {
-      element.dataset.verticalAlign = newValign;
-    } else {
-      delete element.dataset.verticalAlign;
-    }
+      if (newValign) {
+        element.dataset.verticalAlign = newValign;
+      } else {
+        delete element.dataset.verticalAlign;
+      }
 
-    setValign(newValign);
-    onContentChange?.();
-  }, [element, onContentChange]);
+      setValign(newValign);
+      onContentChange?.();
+    },
+    [element, onContentChange]
+  );
 
   // Toggle hidden state for slide
-  const handleHiddenChange = useCallback((checked: boolean) => {
-    if (!element) return;
+  const handleHiddenChange = useCallback(
+    (checked: boolean) => {
+      if (!element) return;
 
-    if (checked) {
-      element.dataset.hidden = 'true';
-      element.classList.add('slide-hidden');
-    } else {
-      delete element.dataset.hidden;
-      element.classList.remove('slide-hidden');
-    }
+      if (checked) {
+        element.dataset.hidden = 'true';
+        element.classList.add('slide-hidden');
+      } else {
+        delete element.dataset.hidden;
+        element.classList.remove('slide-hidden');
+      }
 
-    setIsHidden(checked);
-    onContentChange?.();
-  }, [element, onContentChange]);
+      setIsHidden(checked);
+      onContentChange?.();
+    },
+    [element, onContentChange]
+  );
 
   // Theme change handlers (single theme)
-  const handleThemeChange = useCallback((value: string) => {
-    setTheme('theme', value);
-    setCurrentTheme(value);
-  }, [setTheme]);
+  const handleThemeChange = useCallback(
+    (value: string) => {
+      setTheme('theme', value);
+      setCurrentTheme(value);
+    },
+    [setTheme]
+  );
 
-  const handleCodeThemeChange = useCallback((value: string) => {
-    setTheme('codeTheme', value);
-    setCurrentCodeTheme(value);
-  }, [setTheme]);
+  const handleCodeThemeChange = useCallback(
+    (value: string) => {
+      setTheme('codeTheme', value);
+      setCurrentCodeTheme(value);
+    },
+    [setTheme]
+  );
 
   // Save or update a snippet
   const handleSaveSnippet = useCallback(() => {
@@ -276,17 +307,23 @@ export default function SlideProperties({ element }: { element: HTMLElement }) {
   }, []);
 
   // Open modal for editing an existing snippet
-  const handleEditSnippet = useCallback((snippet: { id: string; name: string; content: string }) => {
-    setEditingSnippetId(snippet.id);
-    setSnippetName(snippet.name);
-    setSnippetHtml(snippet.content);
-    setShowSnippetModal(true);
-  }, []);
+  const handleEditSnippet = useCallback(
+    (snippet: { id: string; name: string; content: string }) => {
+      setEditingSnippetId(snippet.id);
+      setSnippetName(snippet.name);
+      setSnippetHtml(snippet.content);
+      setShowSnippetModal(true);
+    },
+    []
+  );
 
   // Delete a snippet
-  const handleDeleteSnippet = useCallback((id: string) => {
-    onDeleteSnippet?.(id);
-  }, [onDeleteSnippet]);
+  const handleDeleteSnippet = useCallback(
+    (id: string) => {
+      onDeleteSnippet?.(id);
+    },
+    [onDeleteSnippet]
+  );
 
   // Close snippet modal and reset state
   const handleCloseModal = useCallback(() => {
@@ -325,18 +362,24 @@ export default function SlideProperties({ element }: { element: HTMLElement }) {
   }, []);
 
   // Open modal for editing an existing theme
-  const handleEditTheme = useCallback((theme: { id: string; name: string; type: string; content: string }) => {
-    setEditingThemeId(theme.id);
-    setThemeName(theme.name);
-    setThemeType(theme.type as 'light' | 'dark');
-    setThemeCss(theme.content);
-    setShowThemeModal(true);
-  }, []);
+  const handleEditTheme = useCallback(
+    (theme: { id: string; name: string; type: string; content: string }) => {
+      setEditingThemeId(theme.id);
+      setThemeName(theme.name);
+      setThemeType(theme.type as 'light' | 'dark');
+      setThemeCss(theme.content);
+      setShowThemeModal(true);
+    },
+    []
+  );
 
   // Delete a theme
-  const handleDeleteTheme = useCallback((id: string) => {
-    onDeleteTheme?.(id);
-  }, [onDeleteTheme]);
+  const handleDeleteTheme = useCallback(
+    (id: string) => {
+      onDeleteTheme?.(id);
+    },
+    [onDeleteTheme]
+  );
 
   // Close theme modal and reset state
   const handleCloseThemeModal = useCallback(() => {
@@ -375,9 +418,7 @@ export default function SlideProperties({ element }: { element: HTMLElement }) {
                 Click a column to select it, then use toolbar to add content
               </p>
             ) : (
-              <p className="text-xs text-gray-400 mt-1">
-                Arrange content in columns
-              </p>
+              <p className="text-xs text-gray-400 mt-1">Arrange content in columns</p>
             )}
           </div>
 
@@ -397,11 +438,7 @@ export default function SlideProperties({ element }: { element: HTMLElement }) {
           <div>
             <div className="flex items-center justify-between">
               <PropertyLabel>Hidden Slide</PropertyLabel>
-              <Switch
-                size="small"
-                checked={isHidden}
-                onChange={handleHiddenChange}
-              />
+              <Switch size="small" checked={isHidden} onChange={handleHiddenChange} />
             </div>
             <p className="text-xs text-gray-400 mt-1">
               {isHidden
@@ -426,9 +463,7 @@ export default function SlideProperties({ element }: { element: HTMLElement }) {
               className="w-full"
               size="small"
             />
-            <p className="text-xs text-gray-400 mt-1">
-              Presentation visual theme
-            </p>
+            <p className="text-xs text-gray-400 mt-1">Presentation visual theme</p>
           </div>
 
           <div>
@@ -440,9 +475,7 @@ export default function SlideProperties({ element }: { element: HTMLElement }) {
               className="w-full"
               size="small"
             />
-            <p className="text-xs text-gray-400 mt-1">
-              Syntax highlighting for code blocks
-            </p>
+            <p className="text-xs text-gray-400 mt-1">Syntax highlighting for code blocks</p>
           </div>
         </div>
       ),
@@ -461,8 +494,18 @@ export default function SlideProperties({ element }: { element: HTMLElement }) {
                     key: 'create',
                     label: (
                       <span className="flex items-center gap-2">
-                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                        <svg
+                          className="w-4 h-4"
+                          fill="none"
+                          stroke="currentColor"
+                          viewBox="0 0 24 24"
+                        >
+                          <path
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            strokeWidth={2}
+                            d="M12 4v16m8-8H4"
+                          />
                         </svg>
                         Create New...
                       </span>
@@ -470,42 +513,62 @@ export default function SlideProperties({ element }: { element: HTMLElement }) {
                     onClick: handleCreateSnippet,
                   },
                   ...(snippets && snippets.length > 0 ? [{ type: 'divider' as const }] : []),
-                  ...(snippets || []).map((s) => ({
+                  ...(snippets || []).map(s => ({
                     key: s.id,
                     label: (
                       <div className="flex items-center justify-between w-full min-w-[180px]">
                         <span className="truncate">{s.name}</span>
                         <span className="flex items-center gap-1 ml-2">
                           <button
-                            onClick={(e) => {
+                            onClick={e => {
                               e.stopPropagation();
                               handleEditSnippet(s);
                             }}
                             className="p-1 hover:bg-gray-200 dark:hover:bg-gray-600 rounded-sm"
                             title="Edit snippet"
                           >
-                            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                            <svg
+                              className="w-3.5 h-3.5"
+                              fill="none"
+                              stroke="currentColor"
+                              viewBox="0 0 24 24"
+                            >
+                              <path
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
+                                strokeWidth={2}
+                                d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"
+                              />
                             </svg>
                           </button>
                           <Popconfirm
                             title="Delete this snippet?"
-                            onConfirm={(e) => {
+                            onConfirm={e => {
                               e?.stopPropagation();
                               handleDeleteSnippet(s.id);
                             }}
-                            onCancel={(e) => e?.stopPropagation()}
+                            onCancel={e => e?.stopPropagation()}
                             okText="Delete"
                             cancelText="Cancel"
                             placement="left"
                           >
                             <button
-                              onClick={(e) => e.stopPropagation()}
+                              onClick={e => e.stopPropagation()}
                               className="p-1 hover:bg-red-100 dark:hover:bg-red-900/30 rounded-sm text-red-600 dark:text-red-400"
                               title="Delete snippet"
                             >
-                              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                              <svg
+                                className="w-3.5 h-3.5"
+                                fill="none"
+                                stroke="currentColor"
+                                viewBox="0 0 24 24"
+                              >
+                                <path
+                                  strokeLinecap="round"
+                                  strokeLinejoin="round"
+                                  strokeWidth={2}
+                                  d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
+                                />
                               </svg>
                             </button>
                           </Popconfirm>
@@ -520,11 +583,21 @@ export default function SlideProperties({ element }: { element: HTMLElement }) {
             >
               <button className="w-full px-3 py-2 text-sm bg-blue-600 hover:bg-blue-700 text-white rounded-sm transition-colors flex items-center justify-center gap-2">
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"
+                  />
                 </svg>
                 Snippets
                 <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M19 9l-7 7-7-7"
+                  />
                 </svg>
               </button>
             </Dropdown>
@@ -544,8 +617,18 @@ export default function SlideProperties({ element }: { element: HTMLElement }) {
                     key: 'create',
                     label: (
                       <span className="flex items-center gap-2">
-                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                        <svg
+                          className="w-4 h-4"
+                          fill="none"
+                          stroke="currentColor"
+                          viewBox="0 0 24 24"
+                        >
+                          <path
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            strokeWidth={2}
+                            d="M12 4v16m8-8H4"
+                          />
                         </svg>
                         Create New...
                       </span>
@@ -553,7 +636,7 @@ export default function SlideProperties({ element }: { element: HTMLElement }) {
                     onClick: handleCreateTheme,
                   },
                   ...(cssThemes && cssThemes.length > 0 ? [{ type: 'divider' as const }] : []),
-                  ...(cssThemes || []).map((t) => ({
+                  ...(cssThemes || []).map(t => ({
                     key: t.id,
                     label: (
                       <div className="flex items-center justify-between w-full min-w-[180px]">
@@ -563,35 +646,55 @@ export default function SlideProperties({ element }: { element: HTMLElement }) {
                         </span>
                         <span className="flex items-center gap-1 ml-2">
                           <button
-                            onClick={(e) => {
+                            onClick={e => {
                               e.stopPropagation();
                               handleEditTheme(t);
                             }}
                             className="p-1 hover:bg-gray-200 dark:hover:bg-gray-600 rounded-sm"
                             title="Edit theme"
                           >
-                            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                            <svg
+                              className="w-3.5 h-3.5"
+                              fill="none"
+                              stroke="currentColor"
+                              viewBox="0 0 24 24"
+                            >
+                              <path
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
+                                strokeWidth={2}
+                                d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"
+                              />
                             </svg>
                           </button>
                           <Popconfirm
                             title="Delete this CSS theme?"
-                            onConfirm={(e) => {
+                            onConfirm={e => {
                               e?.stopPropagation();
                               handleDeleteTheme(t.id);
                             }}
-                            onCancel={(e) => e?.stopPropagation()}
+                            onCancel={e => e?.stopPropagation()}
                             okText="Delete"
                             cancelText="Cancel"
                             placement="left"
                           >
                             <button
-                              onClick={(e) => e.stopPropagation()}
+                              onClick={e => e.stopPropagation()}
                               className="p-1 hover:bg-red-100 dark:hover:bg-red-900/30 rounded-sm text-red-600 dark:text-red-400"
                               title="Delete theme"
                             >
-                              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                              <svg
+                                className="w-3.5 h-3.5"
+                                fill="none"
+                                stroke="currentColor"
+                                viewBox="0 0 24 24"
+                              >
+                                <path
+                                  strokeLinecap="round"
+                                  strokeLinejoin="round"
+                                  strokeWidth={2}
+                                  d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
+                                />
                               </svg>
                             </button>
                           </Popconfirm>
@@ -606,11 +709,21 @@ export default function SlideProperties({ element }: { element: HTMLElement }) {
             >
               <button className="w-full px-3 py-2 text-sm bg-purple-600 hover:bg-purple-700 text-white rounded-sm transition-colors flex items-center justify-center gap-2">
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 21a4 4 0 01-4-4V5a2 2 0 012-2h4a2 2 0 012 2v12a4 4 0 01-4 4zm0 0h12a2 2 0 002-2v-4a2 2 0 00-2-2h-2.343M11 7.343l1.657-1.657a2 2 0 012.828 0l2.829 2.829a2 2 0 010 2.828l-8.486 8.485M7 17h.01" />
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M7 21a4 4 0 01-4-4V5a2 2 0 012-2h4a2 2 0 012 2v12a4 4 0 01-4 4zm0 0h12a2 2 0 002-2v-4a2 2 0 00-2-2h-2.343M11 7.343l1.657-1.657a2 2 0 012.828 0l2.829 2.829a2 2 0 010 2.828l-8.486 8.485M7 17h.01"
+                  />
                 </svg>
                 CSS Themes
                 <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M19 9l-7 7-7-7"
+                  />
                 </svg>
               </button>
             </Dropdown>
@@ -648,7 +761,7 @@ export default function SlideProperties({ element }: { element: HTMLElement }) {
             <label className="block text-sm font-medium mb-1">Snippet Name</label>
             <Input
               value={snippetName}
-              onChange={(e) => setSnippetName(e.target.value)}
+              onChange={e => setSnippetName(e.target.value)}
               placeholder="e.g., Header with Logo"
             />
           </div>
@@ -656,7 +769,7 @@ export default function SlideProperties({ element }: { element: HTMLElement }) {
             <label className="block text-sm font-medium mb-1">HTML Content</label>
             <TextArea
               value={snippetHtml}
-              onChange={(e) => setSnippetHtml(e.target.value)}
+              onChange={e => setSnippetHtml(e.target.value)}
               placeholder="<div>Your HTML here...</div>"
               rows={8}
               className="font-mono text-sm"
@@ -681,7 +794,7 @@ export default function SlideProperties({ element }: { element: HTMLElement }) {
               <label className="block text-sm font-medium mb-1">Theme Name</label>
               <Input
                 value={themeName}
-                onChange={(e) => setThemeName(e.target.value)}
+                onChange={e => setThemeName(e.target.value)}
                 placeholder="e.g., Company Brand"
               />
             </div>
@@ -689,7 +802,7 @@ export default function SlideProperties({ element }: { element: HTMLElement }) {
               <label className="block text-sm font-medium mb-1">Mode</label>
               <Select
                 value={themeType}
-                onChange={(value) => setThemeType(value)}
+                onChange={value => setThemeType(value)}
                 options={[
                   { value: 'light', label: 'Light' },
                   { value: 'dark', label: 'Dark' },
@@ -702,7 +815,7 @@ export default function SlideProperties({ element }: { element: HTMLElement }) {
             <label className="block text-sm font-medium mb-1">CSS Content</label>
             <TextArea
               value={themeCss}
-              onChange={(e) => setThemeCss(e.target.value)}
+              onChange={e => setThemeCss(e.target.value)}
               placeholder={`.reveal {\n  --r-background-color: #fff;\n  --r-main-color: #333;\n}`}
               rows={12}
               className="font-mono text-sm"

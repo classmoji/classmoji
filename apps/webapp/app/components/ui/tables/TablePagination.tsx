@@ -72,7 +72,7 @@ const TablePagination = ({
           onChange={e => onPageSizeChange(Number(e.target.value))}
           className="text-sm border border-gray-300 dark:border-gray-600 rounded px-2 py-1 bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-300 focus:outline-none focus:ring-1 focus:ring-blue-500"
         >
-          {pageSizeOptions.map((size) => (
+          {pageSizeOptions.map(size => (
             <option key={size} value={size}>
               {size} per page
             </option>

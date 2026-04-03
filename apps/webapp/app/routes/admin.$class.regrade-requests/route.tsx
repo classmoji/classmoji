@@ -21,7 +21,15 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
 const AdminRegradeRequests = ({ loaderData }: Route.ComponentProps) => {
   const { requests, emojiMappings, org } = loaderData;
 
-  return <RegradeRequestsTable requests={requests as unknown as React.ComponentProps<typeof RegradeRequestsTable>['requests']} emojiMappings={emojiMappings as Record<string, unknown>} org={org} />;
+  return (
+    <RegradeRequestsTable
+      requests={
+        requests as unknown as React.ComponentProps<typeof RegradeRequestsTable>['requests']
+      }
+      emojiMappings={emojiMappings as Record<string, unknown>}
+      org={org}
+    />
+  );
 };
 
 export default AdminRegradeRequests;

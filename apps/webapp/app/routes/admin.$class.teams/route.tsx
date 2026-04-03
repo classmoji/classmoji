@@ -23,7 +23,14 @@ interface Team {
   slug: string;
   avatar_url?: string;
   tags: Array<{ id: string; tag: { name: string } }>;
-  memberships: Array<{ user: { name: string | null; login: string | null; avatar_url?: string | null; [key: string]: unknown } }>;
+  memberships: Array<{
+    user: {
+      name: string | null;
+      login: string | null;
+      avatar_url?: string | null;
+      [key: string]: unknown;
+    };
+  }>;
 }
 
 export const loader = async ({ params, request }: Route.LoaderArgs) => {
@@ -87,7 +94,9 @@ const AdminTeams = ({ loaderData }: Route.ComponentProps) => {
       key: 'members',
       width: '25%',
       render: (_: unknown, team: Team) => {
-        const users = team.memberships.map((membership: Team['memberships'][number]) => membership.user);
+        const users = team.memberships.map(
+          (membership: Team['memberships'][number]) => membership.user
+        );
         if (users.length == 0) return <span className="text-gray-500 italic">No members</span>;
         return (
           <div className="flex items-center gap-2">

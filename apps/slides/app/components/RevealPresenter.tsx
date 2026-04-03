@@ -6,12 +6,25 @@ import QRCodeOverlay from './QRCodeOverlay';
 
 // Configure marked for speaker notes (simple, safe rendering)
 marked.setOptions({
-  breaks: true,  // Convert \n to <br>
-  gfm: true,     // GitHub Flavored Markdown
+  breaks: true, // Convert \n to <br>
+  gfm: true, // GitHub Flavored Markdown
 });
 
 // Built-in Reveal.js themes
-const BUILTIN_THEMES = ['black', 'white', 'league', 'beige', 'night', 'serif', 'simple', 'solarized', 'moon', 'dracula', 'sky', 'blood'];
+const BUILTIN_THEMES = [
+  'black',
+  'white',
+  'league',
+  'beige',
+  'night',
+  'serif',
+  'simple',
+  'solarized',
+  'moon',
+  'dracula',
+  'sky',
+  'blood',
+];
 
 /**
  * Get the URL for a theme stylesheet
@@ -53,19 +66,19 @@ function getThemeUrl(theme: string) {
  */
 export default function RevealPresenter({
   contentUrl,
-  initialContent = null,  // Pre-fetched content from server (bypasses CORS)
-  initialError = null,    // Error from server-side fetch
+  initialContent = null, // Pre-fetched content from server (bypasses CORS)
+  initialError = null, // Error from server-side fetch
   slideId,
   isPresenter = false,
-  shareCode = null,       // Share code for public follow links (unauthenticated)
-  previewMode = false,    // Preview mode: no socket, no controls (for speaker view previews)
+  shareCode = null, // Share code for public follow links (unauthenticated)
+  previewMode = false, // Preview mode: no socket, no controls (for speaker view previews)
   multiplexId,
   multiplexSecret,
 }: RevealPresenterProps) {
   const deckRef = useRef<HTMLDivElement>(null);
   const revealRef = useRef<RevealApi | null>(null);
   const socketRef = useRef<ReturnType<typeof io> | null>(null);
-  const isRemoteUpdateRef = useRef(false);  // Prevent socket event loops
+  const isRemoteUpdateRef = useRef(false); // Prevent socket event loops
   const [loading, setLoading] = useState(!initialContent && !initialError);
   const [error, setError] = useState(initialError);
   const [htmlContent, setHtmlContent] = useState<string | null>(null);
@@ -104,7 +117,7 @@ export default function RevealPresenter({
       }
 
       // Load the shared theme CSS links that we extracted from HTML
-      sharedThemeLinksRef.current.forEach((link) => {
+      sharedThemeLinksRef.current.forEach(link => {
         if (!document.head.contains(link)) {
           document.head.appendChild(link);
         }
@@ -124,7 +137,7 @@ export default function RevealPresenter({
           document.body.classList.remove(...classes);
         }
         // Remove shared theme links
-        sharedThemeLinksRef.current.forEach((link) => link.remove());
+        sharedThemeLinksRef.current.forEach(link => link.remove());
       };
     }
 
@@ -221,7 +234,7 @@ export default function RevealPresenter({
       // These are the lib CSS and custom theme CSS that were embedded during save
       const headLinks = doc.querySelectorAll('head link[rel="stylesheet"]');
       const sharedLinks: HTMLLinkElement[] = [];
-      headLinks.forEach((link) => {
+      headLinks.forEach(link => {
         const href = link.getAttribute('href');
         // Include content proxy URLs (shared theme CSS) but not CDN URLs
         if (href && href.includes('/content/') && href.includes('.slidesthemes/')) {
@@ -310,11 +323,12 @@ export default function RevealPresenter({
     let mounted = true;
 
     const initReveal = async () => {
-      const [{ default: Reveal }, { default: RevealHighlight }, { default: RevealNotes }] = await Promise.all([
-        import('reveal.js'),
-        import('reveal.js/plugin/highlight/highlight'),
-        import('reveal.js/plugin/notes/notes'),
-      ]);
+      const [{ default: Reveal }, { default: RevealHighlight }, { default: RevealNotes }] =
+        await Promise.all([
+          import('reveal.js'),
+          import('reveal.js/plugin/highlight/highlight'),
+          import('reveal.js/plugin/notes/notes'),
+        ]);
 
       if (!mounted || !deckRef.current) return;
 
@@ -337,10 +351,10 @@ export default function RevealPresenter({
         controls: !previewMode,
         progress: !previewMode,
         center: true,
-        transition: previewMode ? 'none' : 'slide',  // No transitions in preview
+        transition: previewMode ? 'none' : 'slide', // No transitions in preview
         // Presentation-specific settings
-        keyboard: !previewMode,  // Disable keyboard nav in preview iframes
-        overview: false,  // Disabled in presenter mode - ESC exits directly
+        keyboard: !previewMode, // Disable keyboard nav in preview iframes
+        overview: false, // Disabled in presenter mode - ESC exits directly
         touch: !previewMode,
         loop: false,
         autoSlide: 0,
@@ -410,7 +424,7 @@ export default function RevealPresenter({
       socket.emit('join', { slideId });
     });
 
-    socket.on('connect_error', (err) => {
+    socket.on('connect_error', err => {
       console.error('[socket] Connection error:', err.message);
     });
 
@@ -420,7 +434,7 @@ export default function RevealPresenter({
     });
 
     // Handle current state for late joiners (catch-up to presenter's position)
-    socket.on('currentstate', (data) => {
+    socket.on('currentstate', data => {
       console.log('[socket] Received current state - catching up to:', data);
       const current = deck.getIndices();
       if (current.h !== data.indexh || current.v !== data.indexv) {
@@ -467,7 +481,7 @@ export default function RevealPresenter({
     }
 
     // Listen for slide changes from presenter (or other devices if bidirectional)
-    socket.on('slidechanged', (data) => {
+    socket.on('slidechanged', data => {
       const current = deck.getIndices();
       // Only navigate if different from current position
       if (current.h !== data.indexh || current.v !== data.indexv) {
@@ -480,7 +494,7 @@ export default function RevealPresenter({
       }
     });
 
-    socket.on('fragmentshown', (data) => {
+    socket.on('fragmentshown', data => {
       isRemoteUpdateRef.current = true;
       deck.slide(data.indexh, data.indexv, parseInt(data.index, 10));
       setTimeout(() => {
@@ -488,7 +502,7 @@ export default function RevealPresenter({
       }, 100);
     });
 
-    socket.on('fragmenthidden', (data) => {
+    socket.on('fragmenthidden', data => {
       isRemoteUpdateRef.current = true;
       // Navigate to the slide and let Reveal.js handle fragment state
       deck.slide(data.indexh, data.indexv);
@@ -571,7 +585,7 @@ export default function RevealPresenter({
           <div className="text-red-400 text-lg mb-2">Failed to load presentation</div>
           <p className="text-white/60">{error}</p>
           <button
-            onClick={() => window.location.href = `/${slideId}`}
+            onClick={() => (window.location.href = `/${slideId}`)}
             className="mt-4 px-4 py-2 bg-white/10 rounded-sm hover:bg-white/20"
           >
             Go Back

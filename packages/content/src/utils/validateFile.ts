@@ -15,7 +15,10 @@ export const ALLOWED_EXTENSIONS = ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.s
  * @param {number} options.size - File size in bytes
  * @returns {{ valid: boolean, error?: string }}
  */
-export function validateFile({ filename, size }: { filename: string; size: number }): { valid: boolean; error?: string } {
+export function validateFile({ filename, size }: { filename: string; size: number }): {
+  valid: boolean;
+  error?: string;
+} {
   // Check file size
   if (size > MAX_FILE_SIZE) {
     return {

@@ -20,7 +20,8 @@ const widthClasses: Record<number, string> = {
 };
 
 const PageRoute = () => {
-  const { page, classroom, content, coverImage, canEdit } = useLoaderData<typeof import('./route.server.ts').loader>();
+  const { page, classroom, content, coverImage, canEdit } =
+    useLoaderData<typeof import('./route.server.ts').loader>();
   const outletContext = useOutletContext<{ isEmbedded?: boolean }>();
   const isEmbedded = outletContext?.isEmbedded || false;
   const widthClass = widthClasses[page.width] || 'max-w-4xl';
@@ -60,15 +61,18 @@ const PageRoute = () => {
   }, [canEdit, fetcher]);
 
   // Track editor changes (mark unsaved, but don't auto-save)
-  const handleEditorChange = useCallback((document: unknown) => {
-    if (!canEdit) return;
+  const handleEditorChange = useCallback(
+    (document: unknown) => {
+      if (!canEdit) return;
 
-    const currentContentStr = JSON.stringify(document);
-    if (lastSavedContent.current === currentContentStr) return;
+      const currentContentStr = JSON.stringify(document);
+      if (lastSavedContent.current === currentContentStr) return;
 
-    setHasUnsavedChanges(true);
-    setSaveStatus('unsaved');
-  }, [canEdit]);
+      setHasUnsavedChanges(true);
+      setSaveStatus('unsaved');
+    },
+    [canEdit]
+  );
 
   useEffect(() => {
     setIsClient(true);
@@ -172,12 +176,15 @@ const PageRoute = () => {
         />
       )}
 
-      <div className={`mx-auto px-4 sm:px-6 lg:px-8 pb-16 ${widthClass} ${coverImage?.url ? 'mt-12' : 'mt-16'}`}>
+      <div
+        className={`mx-auto px-4 sm:px-6 lg:px-8 pb-16 ${widthClass} ${coverImage?.url ? 'mt-12' : 'mt-16'}`}
+      >
         <div>
           {/* "Add cover" button — always visible in edit mode when no image */}
           {!coverImage?.url && canEdit && (
             <div className="flex items-center gap-2 mb-2">
-              {fetcher.state !== 'idle' && fetcher.formData?.get('intent') === 'upload-header-image' ? (
+              {fetcher.state !== 'idle' &&
+              fetcher.formData?.get('intent') === 'upload-header-image' ? (
                 <div className="flex items-center gap-1.5 px-2 py-1 text-sm text-gray-500 dark:text-gray-400">
                   <div className="w-4 h-4 border-2 border-gray-400 border-t-transparent rounded-full animate-spin" />
                   Uploading...
@@ -220,9 +227,9 @@ const PageRoute = () => {
             <input
               type="text"
               value={titleValue}
-              onChange={(e) => setTitleValue(e.target.value)}
+              onChange={e => setTitleValue(e.target.value)}
               onBlur={saveTitle}
-              onKeyDown={(e) => {
+              onKeyDown={e => {
                 if (e.key === 'Enter') saveTitle();
                 if (e.key === 'Escape') cancelTitleEdit();
               }}
@@ -255,11 +262,13 @@ const PageRoute = () => {
             </div>
           ) : canEdit ? (
             /* Editor for instructors */
-            <Suspense fallback={
-              <div className="flex items-center justify-center py-12">
-                <div className="text-gray-500 dark:text-gray-400">Loading editor...</div>
-              </div>
-            }>
+            <Suspense
+              fallback={
+                <div className="flex items-center justify-center py-12">
+                  <div className="text-gray-500 dark:text-gray-400">Loading editor...</div>
+                </div>
+              }
+            >
               <PageEditor
                 key={page.id}
                 ref={editorRef}
@@ -271,11 +280,13 @@ const PageRoute = () => {
             </Suspense>
           ) : (
             /* Viewer for students/public */
-            <Suspense fallback={
-              <div className="flex items-center justify-center py-12">
-                <div className="text-gray-500 dark:text-gray-400">Loading content...</div>
-              </div>
-            }>
+            <Suspense
+              fallback={
+                <div className="flex items-center justify-center py-12">
+                  <div className="text-gray-500 dark:text-gray-400">Loading content...</div>
+                </div>
+              }
+            >
               <BlockNoteViewer key={page.id} content={content} darkMode={darkMode} />
             </Suspense>
           )}

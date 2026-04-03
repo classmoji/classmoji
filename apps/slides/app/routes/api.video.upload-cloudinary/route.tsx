@@ -26,10 +26,10 @@ export const action = async ({ request }: { request: Request }) => {
 
   // Validate required fields
   if (!videoUrl || !slideId) {
-    return new Response(
-      JSON.stringify({ error: 'videoUrl and slideId are required' }),
-      { status: 400, headers: { 'Content-Type': 'application/json' } }
-    );
+    return new Response(JSON.stringify({ error: 'videoUrl and slideId are required' }), {
+      status: 400,
+      headers: { 'Content-Type': 'application/json' },
+    });
   }
 
   try {
@@ -46,10 +46,10 @@ export const action = async ({ request }: { request: Request }) => {
     });
 
     if (!slide) {
-      return new Response(
-        JSON.stringify({ error: 'Slide not found' }),
-        { status: 404, headers: { 'Content-Type': 'application/json' } }
-      );
+      return new Response(JSON.stringify({ error: 'Slide not found' }), {
+        status: 404,
+        headers: { 'Content-Type': 'application/json' },
+      });
     }
 
     // Authorization: require edit permission
@@ -67,10 +67,10 @@ export const action = async ({ request }: { request: Request }) => {
 
     if (!cloudName || !apiKey || !apiSecret) {
       console.error('Cloudinary credentials not configured');
-      return new Response(
-        JSON.stringify({ error: 'Video hosting service not configured' }),
-        { status: 500, headers: { 'Content-Type': 'application/json' } }
-      );
+      return new Response(JSON.stringify({ error: 'Video hosting service not configured' }), {
+        status: 500,
+        headers: { 'Content-Type': 'application/json' },
+      });
     }
 
     cloudinary.config({
@@ -83,7 +83,8 @@ export const action = async ({ request }: { request: Request }) => {
     let uploadSource;
 
     // Check if it's a local content URL (either relative /content/... or full http://localhost.../content/...)
-    const isLocalContentUrl = videoUrl.startsWith('/content/') ||
+    const isLocalContentUrl =
+      videoUrl.startsWith('/content/') ||
       (videoUrl.includes('/content/') && videoUrl.includes('localhost'));
 
     // Store these for deletion after successful upload
@@ -135,9 +136,7 @@ export const action = async ({ request }: { request: Request }) => {
       resource_type: 'video',
       folder: `classmoji/slides/${slideId}`,
       // Auto-generate optimized versions
-      eager: [
-        { format: 'mp4', video_codec: 'h264' }
-      ],
+      eager: [{ format: 'mp4', video_codec: 'h264' }],
       eager_async: true, // Process transformations asynchronously
     });
 
@@ -146,16 +145,16 @@ export const action = async ({ request }: { request: Request }) => {
     const optimizedUrl = cloudinary.url(uploadResult.public_id, {
       resource_type: 'video',
       secure: true,
-      transformation: [
-        { quality: 'auto', fetch_format: 'auto' }
-      ]
+      transformation: [{ quality: 'auto', fetch_format: 'auto' }],
     });
 
     // Delete the original file from GitHub after successful Cloudinary upload
     let deletedOriginal = false;
     if (isLocalContentUrl && contentOrg && contentRepo && contentPath) {
       try {
-        console.log(`Deleting original video from GitHub: ${contentOrg}/${contentRepo}/${contentPath}`);
+        console.log(
+          `Deleting original video from GitHub: ${contentOrg}/${contentRepo}/${contentPath}`
+        );
         await ContentService.delete({
           orgLogin: contentOrg,
           repo: contentRepo,
@@ -199,9 +198,9 @@ export const action = async ({ request }: { request: Request }) => {
       );
     }
 
-    return new Response(
-      JSON.stringify({ error: message || 'Upload failed' }),
-      { status: 500, headers: { 'Content-Type': 'application/json' } }
-    );
+    return new Response(JSON.stringify({ error: message || 'Upload failed' }), {
+      status: 500,
+      headers: { 'Content-Type': 'application/json' },
+    });
   }
 };

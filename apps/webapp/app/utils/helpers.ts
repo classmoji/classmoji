@@ -72,7 +72,13 @@ export const removeUsers = (data: Array<{ login: string; [key: string]: unknown 
   return list.slice(0, num);
 };
 
-export const checkAuth = (method: (args: { request: Request; params: Record<string, string | undefined>; user: { userId: string; id: string; [key: string]: unknown } }) => unknown) => {
+export const checkAuth = (
+  method: (args: {
+    request: Request;
+    params: Record<string, string | undefined>;
+    user: { userId: string; id: string; [key: string]: unknown };
+  }) => unknown
+) => {
   return async (args: { request: Request; params: Record<string, string | undefined> }) => {
     const authData = await getAuthSession(args.request);
 

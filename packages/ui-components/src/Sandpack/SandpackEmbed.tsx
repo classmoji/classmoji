@@ -165,9 +165,7 @@ export default function SandpackEmbed({
   const showPreview = layout !== 'editor-only';
 
   return (
-    <div
-      className={`sandpack-embed-wrapper ${className}`}
-    >
+    <div className={`sandpack-embed-wrapper ${className}`}>
       <SandpackProvider
         template={template as SandpackPredefinedTemplate}
         theme={resolvedTheme}

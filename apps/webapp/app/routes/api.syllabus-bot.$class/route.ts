@@ -163,7 +163,10 @@ async function handleInitConversation(request: Request, classSlug: string, formD
       const accessToken = await getInstallationToken(classroom.git_organization);
       Object.assign(payload, { contentRepoName: contentRepoNameForClone, accessToken });
     } catch (error: unknown) {
-      console.warn('[syllabus-bot] Failed to get installation token:', error instanceof Error ? error.message : String(error));
+      console.warn(
+        '[syllabus-bot] Failed to get installation token:',
+        error instanceof Error ? error.message : String(error)
+      );
       // Continue without content repo - bot will still work with database tools
     }
   }
@@ -177,7 +180,16 @@ async function handleInitConversation(request: Request, classSlug: string, formD
     });
 
     // Get the ai-agent-generated conversationId from response
-    const resultPayload = (result as unknown as { payload: { conversationId: string; welcomeMessage: string; hasContentRepo: boolean; suggestedQuestions?: string[] } }).payload;
+    const resultPayload = (
+      result as unknown as {
+        payload: {
+          conversationId: string;
+          welcomeMessage: string;
+          hasContentRepo: boolean;
+          suggestedQuestions?: string[];
+        };
+      }
+    ).payload;
     const conversationId = resultPayload.conversationId;
 
     // NOW register for SSE stream (after we have the real conversationId)
@@ -241,7 +253,11 @@ async function handleSendMessage(request: Request, classSlug: string, formData: 
 
     // Publish the response to stream manager for SSE delivery
     // Use publishAssistantResponse (type: 'assistant_response') which the frontend hook expects
-    const resultPayload = (result as unknown as { payload: { content: string; references?: unknown[]; explorationSteps?: unknown[] } }).payload;
+    const resultPayload = (
+      result as unknown as {
+        payload: { content: string; references?: unknown[]; explorationSteps?: unknown[] };
+      }
+    ).payload;
     agentStreamManager.publishAssistantResponse(conversationId, {
       content: resultPayload.content,
       references: resultPayload.references,

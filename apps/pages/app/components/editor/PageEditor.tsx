@@ -56,30 +56,31 @@ interface PageEditorProps {
   onChange?: (document: unknown) => void;
 }
 
-const PageEditor = forwardRef(function PageEditor({
-  initialContent,
-  pageId,
-  darkMode,
-  onChange
-}: PageEditorProps, ref: React.Ref<{ getContent: () => unknown }>) {
+const PageEditor = forwardRef(function PageEditor(
+  { initialContent, pageId, darkMode, onChange }: PageEditorProps,
+  ref: React.Ref<{ getContent: () => unknown }>
+) {
   // Upload handler: POSTs to the page's upload action
-  const uploadFile = useCallback(async (file: File) => {
-    const formData = new FormData();
-    formData.append('file', file);
-    formData.append('pageId', pageId);
+  const uploadFile = useCallback(
+    async (file: File) => {
+      const formData = new FormData();
+      formData.append('file', file);
+      formData.append('pageId', pageId);
 
-    const response = await fetch(`/api/upload`, {
-      method: 'POST',
-      body: formData,
-    });
+      const response = await fetch(`/api/upload`, {
+        method: 'POST',
+        body: formData,
+      });
 
-    if (!response.ok) {
-      throw new Error('Upload failed');
-    }
+      if (!response.ok) {
+        throw new Error('Upload failed');
+      }
 
-    const result = await response.json();
-    return result.url;
-  }, [pageId]);
+      const result = await response.json();
+      return result.url;
+    },
+    [pageId]
+  );
 
   const typedInitialContent =
     Array.isArray(initialContent) && initialContent.length > 0
@@ -87,25 +88,30 @@ const PageEditor = forwardRef(function PageEditor({
       : undefined;
 
   // Create the BlockNote editor with multi-column drop cursor + dictionary
-  const editor = useCreateBlockNote({
-    schema,
-    initialContent: typedInitialContent,
-    uploadFile,
-    dropCursor: multiColumnDropCursor,
-    dictionary: { ...defaultLocale, multi_column: multiColumnLocales.en },
-  }, [onChange]);
+  const editor = useCreateBlockNote(
+    {
+      schema,
+      initialContent: typedInitialContent,
+      uploadFile,
+      dropCursor: multiColumnDropCursor,
+      dictionary: { ...defaultLocale, multi_column: multiColumnLocales.en },
+    },
+    [onChange]
+  );
 
   // Expose getContent() to parent via ref
-  useImperativeHandle(ref, () => ({
-    getContent: () => editor.document,
-  }), [editor]);
+  useImperativeHandle(
+    ref,
+    () => ({
+      getContent: () => editor.document,
+    }),
+    [editor]
+  );
 
   // Slash menu: default + multi-column + custom blocks
   const getAllSlashMenuItems = useMemo(() => {
     return (editor: PageBlockEditor) => {
-      const items = [
-        ...getDefaultReactSlashMenuItems(editor),
-      ];
+      const items = [...getDefaultReactSlashMenuItems(editor)];
       try {
         items.push(...getMultiColumnSlashMenuItems(editor));
       } catch (e) {
@@ -141,11 +147,20 @@ const PageEditor = forwardRef(function PageEditor({
           group: item.group,
           icon: item.icon,
           onItemClick: () => item.onItemClick(editor),
-        })),
+        }))
       );
 
       // Sort items by group to ensure blocks with same group appear together
-      const groupOrder = ['Headings', 'Basic blocks', 'Code', 'Lists', 'Media', 'Advanced', 'Subheadings', 'Others'];
+      const groupOrder = [
+        'Headings',
+        'Basic blocks',
+        'Code',
+        'Lists',
+        'Media',
+        'Advanced',
+        'Subheadings',
+        'Others',
+      ];
       filteredItems.sort((a, b) => {
         const groupA = a.group || 'Others';
         const groupB = b.group || 'Others';
@@ -253,20 +268,12 @@ const PageEditor = forwardRef(function PageEditor({
         onChange={() => onChange?.(editor.document)}
       >
         <SideMenuController
-          sideMenu={(props) => (
-            <SideMenu {...props} dragHandleMenu={CustomDragHandleMenu} />
-          )}
+          sideMenu={props => <SideMenu {...props} dragHandleMenu={CustomDragHandleMenu} />}
         />
-        <FormattingToolbarController
-          formattingToolbar={() => (
-            <FormattingToolbar />
-          )}
-        />
+        <FormattingToolbarController formattingToolbar={() => <FormattingToolbar />} />
         <SuggestionMenuController
           triggerCharacter="/"
-          getItems={async (query) =>
-            filterSuggestionItems(getAllSlashMenuItems(editor), query)
-          }
+          getItems={async query => filterSuggestionItems(getAllSlashMenuItems(editor), query)}
         />
       </BlockNoteView>
     </div>

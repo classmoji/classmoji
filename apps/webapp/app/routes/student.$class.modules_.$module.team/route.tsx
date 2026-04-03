@@ -102,7 +102,15 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
 
   // Get classroom with git organization for provider operations
   const classroomWithOrg = await ClassmojiService.classroom.findById(classroom.id);
-  const gitProvider = getGitProvider(classroomWithOrg!.git_organization as { provider: string; github_installation_id?: string; access_token?: string; base_url?: string; login?: string });
+  const gitProvider = getGitProvider(
+    classroomWithOrg!.git_organization as {
+      provider: string;
+      github_installation_id?: string;
+      access_token?: string;
+      base_url?: string;
+      login?: string;
+    }
+  );
   const orgLogin = classroomWithOrg!.git_organization.login;
 
   return namedAction(request, {
@@ -315,7 +323,7 @@ const StudentTeamPage = ({ loaderData }: Route.ComponentProps) => {
     fetcher.submit({}, { method: 'post', action: '?/leave' });
   };
 
-  const availableTeams = teams.filter((team) => {
+  const availableTeams = teams.filter(team => {
     if (userTeam && team.id === userTeam.id) return false;
     if (maxTeamSize && team.memberships.length >= maxTeamSize) return false;
     return true;
@@ -364,7 +372,7 @@ const StudentTeamPage = ({ loaderData }: Route.ComponentProps) => {
                 </Tag>
               </div>
               <div className="flex gap-3">
-                {userTeam.memberships.map((membership) => (
+                {userTeam.memberships.map(membership => (
                   <div key={membership.user_id} className="flex items-center gap-2">
                     <Avatar
                       src={`https://avatars.githubusercontent.com/u/${membership.user.provider_id}?v=4`}
@@ -472,7 +480,7 @@ const StudentTeamPage = ({ loaderData }: Route.ComponentProps) => {
                             {maxTeamSize ? `/${maxTeamSize}` : ''} members
                           </Tag>
                           <div className="flex items-center gap-2">
-                            {team.memberships.map((m) => (
+                            {team.memberships.map(m => (
                               <Avatar
                                 key={m.user_id}
                                 src={`https://avatars.githubusercontent.com/u/${m.user.provider_id}?v=4`}
@@ -510,7 +518,7 @@ const StudentTeamPage = ({ loaderData }: Route.ComponentProps) => {
       {userTeam && teams.length > 1 && (
         <Card title="All Teams" className="mt-6">
           <List
-            dataSource={teams.filter((t) => t.id !== userTeam.id)}
+            dataSource={teams.filter(t => t.id !== userTeam.id)}
             renderItem={team => (
               <List.Item>
                 <List.Item.Meta
@@ -518,11 +526,7 @@ const StudentTeamPage = ({ loaderData }: Route.ComponentProps) => {
                   title={team.name}
                   description={
                     <Tag
-                      color={
-                        maxTeamSize && team.memberships.length >= maxTeamSize
-                          ? 'red'
-                          : 'blue'
-                      }
+                      color={maxTeamSize && team.memberships.length >= maxTeamSize ? 'red' : 'blue'}
                     >
                       {team.memberships.length}
                       {maxTeamSize ? `/${maxTeamSize}` : ''} members

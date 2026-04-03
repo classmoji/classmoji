@@ -8,7 +8,9 @@ function getEmbedUrl(url: string): string {
   if (!url) return '';
 
   // YouTube
-  const ytMatch = url.match(/(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/)([a-zA-Z0-9_-]+)/);
+  const ytMatch = url.match(
+    /(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/)([a-zA-Z0-9_-]+)/
+  );
   if (ytMatch) return `https://www.youtube.com/embed/${ytMatch[1]}`;
 
   // Vimeo
@@ -33,7 +35,7 @@ export const Video = createReactBlockSpec(
     content: 'none',
   },
   {
-    render: (props) => {
+    render: props => {
       const { url, caption } = props.block.props;
       const isEditable = props.editor.isEditable;
       const embedUrl = getEmbedUrl(url);
@@ -46,7 +48,7 @@ export const Video = createReactBlockSpec(
               <IconPlayerPlay size={20} className="video-icon" />
               <input
                 value={url}
-                onChange={(e) =>
+                onChange={e =>
                   props.editor.updateBlock(props.block, {
                     props: { url: e.target.value },
                   })
@@ -107,7 +109,7 @@ export const Video = createReactBlockSpec(
               {isEditable ? (
                 <input
                   value={caption}
-                  onChange={(e) =>
+                  onChange={e =>
                     props.editor.updateBlock(props.block, {
                       props: { caption: e.target.value },
                     })

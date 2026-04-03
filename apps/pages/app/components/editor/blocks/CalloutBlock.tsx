@@ -13,7 +13,7 @@ export const Callout = createReactBlockSpec(
     content: 'inline',
   },
   {
-    render: (props) => {
+    render: props => {
       return (
         <div className="callout-block">
           <div

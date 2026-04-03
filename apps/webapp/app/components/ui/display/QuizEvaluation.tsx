@@ -43,7 +43,11 @@ interface QuizEvaluationProps {
   isDarkMode?: boolean;
 }
 
-const QuizEvaluation = ({ evaluationData, focusMetrics, isDarkMode = false }: QuizEvaluationProps) => {
+const QuizEvaluation = ({
+  evaluationData,
+  focusMetrics,
+  isDarkMode = false,
+}: QuizEvaluationProps) => {
   if (!evaluationData) return null;
 
   // Always show formative score (partial_credit_percentage) - same for everyone

@@ -62,11 +62,17 @@ const Grades = ({ loaderData }: Route.ComponentProps) => {
             resolvedMemberships,
           ]) => (
             <GradesTable
-              emojiMappings={resolvedEmojiMappings as Parameters<typeof GradesTable>[0]['emojiMappings']}
+              emojiMappings={
+                resolvedEmojiMappings as Parameters<typeof GradesTable>[0]['emojiMappings']
+              }
               modules={resolvedModules as Parameters<typeof GradesTable>[0]['modules']}
               students={resolvedStudents as Parameters<typeof GradesTable>[0]['students']}
               settings={resolvedSettings as Parameters<typeof GradesTable>[0]['settings']}
-              letterGradeMappings={resolvedLetterGradeMappings as Parameters<typeof GradesTable>[0]['letterGradeMappings']}
+              letterGradeMappings={
+                resolvedLetterGradeMappings as Parameters<
+                  typeof GradesTable
+                >[0]['letterGradeMappings']
+              }
               memberships={resolvedMemberships as Parameters<typeof GradesTable>[0]['memberships']}
             />
           )}

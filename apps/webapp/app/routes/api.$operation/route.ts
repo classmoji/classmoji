@@ -7,74 +7,76 @@ import { getAuthSession } from '@classmoji/auth/server';
 import { ClassmojiService } from '@classmoji/services';
 import { checkAuth, waitForRunCompletion, assertClassroomAccess } from '~/utils/helpers';
 
-export const loader = checkAuth(async ({ request, params }: { request: Request; params: Record<string, string | undefined> }) => {
-  const { operation } = params;
-  const { searchParams } = new URL(request.url);
-  const authData = await getAuthSession(request);
+export const loader = checkAuth(
+  async ({ request, params }: { request: Request; params: Record<string, string | undefined> }) => {
+    const { operation } = params;
+    const { searchParams } = new URL(request.url);
+    const authData = await getAuthSession(request);
 
-  switch (operation) {
-    case 'get-org-subscription': {
-      const subscription = await ClassmojiService.subscription.getByClassroom(
-        searchParams.get('orgLogin') as string
-      );
-
-      return subscription;
-    }
-    case 'get-tc-installation-token': {
-      // TODO: This method needs implementation in GitHubProvider
-      return data({ error: 'Method not implemented' }, { status: 501 });
-    }
-    case 'get-user-by-id': {
-      const userId = searchParams.get('userId');
-      const orgLogin = searchParams.get('orgLogin');
-
-      if (!userId) {
-        return data({ error: 'userId is required' }, { status: 400 });
-      }
-
-      if (!orgLogin) {
-        return data({ error: 'orgLogin is required' }, { status: 400 });
-      }
-
-      try {
-        // Verify the requesting user is an OWNER in the classroom
-        const classroom = await ClassmojiService.classroom.findBySlug(orgLogin);
-
-        if (!classroom) {
-          return data({ error: 'Classroom not found' }, { status: 404 });
-        }
-
-        const membership = await ClassmojiService.classroomMembership.findByClassroomAndUser(
-          classroom.id,
-          authData!.userId
+    switch (operation) {
+      case 'get-org-subscription': {
+        const subscription = await ClassmojiService.subscription.getByClassroom(
+          searchParams.get('orgLogin') as string
         );
 
-        if (!membership || membership.role !== 'OWNER') {
-          return data({ error: 'Unauthorized - OWNER role required' }, { status: 403 });
-        }
-
-        // Fetch the user data
-        const targetUser = await ClassmojiService.user.findById(userId);
-
-        if (!targetUser) {
-          return data({ error: 'User not found' }, { status: 404 });
-        }
-
-        // Return only safe fields (no sensitive data)
-        return {
-          id: targetUser.id,
-          name: targetUser.name,
-          login: targetUser.login,
-        };
-      } catch (error: unknown) {
-        console.error('Error fetching user by ID:', error);
-        return data({ error: 'Failed to fetch user' }, { status: 500 });
+        return subscription;
       }
+      case 'get-tc-installation-token': {
+        // TODO: This method needs implementation in GitHubProvider
+        return data({ error: 'Method not implemented' }, { status: 501 });
+      }
+      case 'get-user-by-id': {
+        const userId = searchParams.get('userId');
+        const orgLogin = searchParams.get('orgLogin');
+
+        if (!userId) {
+          return data({ error: 'userId is required' }, { status: 400 });
+        }
+
+        if (!orgLogin) {
+          return data({ error: 'orgLogin is required' }, { status: 400 });
+        }
+
+        try {
+          // Verify the requesting user is an OWNER in the classroom
+          const classroom = await ClassmojiService.classroom.findBySlug(orgLogin);
+
+          if (!classroom) {
+            return data({ error: 'Classroom not found' }, { status: 404 });
+          }
+
+          const membership = await ClassmojiService.classroomMembership.findByClassroomAndUser(
+            classroom.id,
+            authData!.userId
+          );
+
+          if (!membership || membership.role !== 'OWNER') {
+            return data({ error: 'Unauthorized - OWNER role required' }, { status: 403 });
+          }
+
+          // Fetch the user data
+          const targetUser = await ClassmojiService.user.findById(userId);
+
+          if (!targetUser) {
+            return data({ error: 'User not found' }, { status: 404 });
+          }
+
+          // Return only safe fields (no sensitive data)
+          return {
+            id: targetUser.id,
+            name: targetUser.name,
+            login: targetUser.login,
+          };
+        } catch (error: unknown) {
+          console.error('Error fetching user by ID:', error);
+          return data({ error: 'Failed to fetch user' }, { status: 500 });
+        }
+      }
+      default:
+        return data({ error: 'Invalid operation' }, { status: 400 });
     }
-    default:
-      return data({ error: 'Invalid operation' }, { status: 400 });
   }
-});
+);
 
 export const action = checkAuth(async ({ request }: { request: Request }) => {
   const body = await request.json();
@@ -184,7 +186,14 @@ export const action = checkAuth(async ({ request }: { request: Request }) => {
   });
 });
 
-const cancelTokenTransactionHandler = async (transaction: { id: string; classroom_id: string; student_id: string; amount: number; repository_assignment_id: string; hours_purchased: number }) => {
+const cancelTokenTransactionHandler = async (transaction: {
+  id: string;
+  classroom_id: string;
+  student_id: string;
+  amount: number;
+  repository_assignment_id: string;
+  hours_purchased: number;
+}) => {
   const { classroom_id, student_id, amount, repository_assignment_id, hours_purchased } =
     transaction;
 

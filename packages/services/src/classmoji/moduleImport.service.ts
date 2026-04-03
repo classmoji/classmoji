@@ -161,14 +161,14 @@ export const cloneQuiz = async (
 export const cloneModule = async (
   sourceModuleId: string,
   targetClassroomId: string,
-  options: { includeAssignments?: boolean; includeQuizzes?: boolean; stripDeadlines?: boolean } = {},
+  options: {
+    includeAssignments?: boolean;
+    includeQuizzes?: boolean;
+    stripDeadlines?: boolean;
+  } = {},
   tx: ModuleImportClient = getPrisma()
 ) => {
-  const {
-    includeAssignments = true,
-    includeQuizzes = false,
-    stripDeadlines = true,
-  } = options;
+  const { includeAssignments = true, includeQuizzes = false, stripDeadlines = true } = options;
 
   const sourceModule = await tx.module.findUnique({
     where: { id: sourceModuleId },
@@ -255,7 +255,11 @@ export const cloneModule = async (
  * @param {boolean} [options.stripDeadlines=true] - Remove deadline fields
  * @returns {Promise<Object>} - Summary of cloned items
  */
-export const cloneModulesWithRelations = async (targetClassroomId: string, moduleConfigs: Array<{ id: string; includeQuizzes?: boolean }>, options: { stripDeadlines?: boolean } = {}) => {
+export const cloneModulesWithRelations = async (
+  targetClassroomId: string,
+  moduleConfigs: Array<{ id: string; includeQuizzes?: boolean }>,
+  options: { stripDeadlines?: boolean } = {}
+) => {
   const { stripDeadlines = true } = options;
 
   return getPrisma().$transaction(async tx => {

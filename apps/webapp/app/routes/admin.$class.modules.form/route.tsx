@@ -187,7 +187,9 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
   };
 
   // Helper to sync assignment-level content links
-  const syncAssignmentContentLinks = async (assignmentsList: Array<{ id: string; linkedPageIds?: string[]; linkedSlideIds?: string[] }>) => {
+  const syncAssignmentContentLinks = async (
+    assignmentsList: Array<{ id: string; linkedPageIds?: string[]; linkedSlideIds?: string[] }>
+  ) => {
     for (const assignment of assignmentsList || []) {
       const assignmentId = assignment.id;
       const newPageIds = assignment.linkedPageIds || [];

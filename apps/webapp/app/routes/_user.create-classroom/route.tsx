@@ -29,7 +29,10 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
     authenticatedUser = data;
   } catch (error: unknown) {
     // If bad credentials, clear revoked token from cache AND database
-    if ((error as { status?: number })?.status === 401 || (error as { message?: string })?.message?.includes('Bad credentials')) {
+    if (
+      (error as { status?: number })?.status === 401 ||
+      (error as { message?: string })?.message?.includes('Bad credentials')
+    ) {
       await clearRevokedToken(authData.userId);
       return redirect('/');
     }
@@ -64,7 +67,9 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
       url: string;
       viewerCanAdminister: boolean;
     }
-    const { viewer } = await octokit.graphql<{ viewer: { organizations: { nodes: GitHubOrgNode[] } } }>(`
+    const { viewer } = await octokit.graphql<{
+      viewer: { organizations: { nodes: GitHubOrgNode[] } };
+    }>(`
       {
         viewer {
           organizations(first: 100) {
@@ -85,8 +90,8 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
 
     // Map GraphQL response to REST API format and filter to admin-only
     userOrgs = viewer.organizations.nodes
-      .filter((org) => org.viewerCanAdminister)
-      .map((org) => ({
+      .filter(org => org.viewerCanAdminister)
+      .map(org => ({
         id: org.databaseId, // GitHub's numeric ID
         node_id: org.id, // GraphQL global ID
         login: org.login,
@@ -99,7 +104,7 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
   }
 
   // Get provider IDs of user's GitHub orgs
-  const providerIds = userOrgs.map((org) => String(org.id));
+  const providerIds = userOrgs.map(org => String(org.id));
 
   // Cross-reference with our GitOrganization table - only show orgs with active GitHub App installations
   const gitOrgs = await getPrisma().gitOrganization.findMany({
@@ -121,7 +126,7 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
 
   // Enrich gitOrgs with avatar URLs from GitHub
   const gitOrgsWithAvatars = gitOrgs.map(org => {
-    const githubOrg = userOrgs.find((o) => String(o.id) === org.provider_id);
+    const githubOrg = userOrgs.find(o => String(o.id) === org.provider_id);
     return {
       ...org,
       avatar_url: githubOrg?.avatar_url || null,
@@ -206,7 +211,9 @@ const CreateClassroom = ({ loaderData }: Route.ComponentProps) => {
   // Import state
   const [importEnabled, setImportEnabled] = useState(false);
   const [sourceClassroomId, setSourceClassroomId] = useState<string | null>(null);
-  const [selectedModules, setSelectedModules] = useState(new Map<string, { includeQuizzes: boolean }>());
+  const [selectedModules, setSelectedModules] = useState(
+    new Map<string, { includeQuizzes: boolean }>()
+  );
 
   // Navigate to new classroom on success
   useEffect(() => {
@@ -270,7 +277,7 @@ const CreateClassroom = ({ loaderData }: Route.ComponentProps) => {
     );
   };
 
-  const sourceClassroom = ownedClassrooms.find((c) => c.id === sourceClassroomId);
+  const sourceClassroom = ownedClassrooms.find(c => c.id === sourceClassroomId);
 
   return (
     <div className="max-w-2xl mx-auto">

@@ -273,7 +273,7 @@ const App = ({ loaderData }: Route.ComponentProps) => {
   const { isDarkMode } = useDarkMode();
   const { pathname } = useLocation();
   const { setClassroom, classroom, setRole, setUser, setMembership, membership, setSubscription } =
-    useStore((state) => state);
+    useStore(state => state);
 
   // Sync classroom from URL and memberships (handles initial load + revalidation)
   // Extract classroom slug and role from pathname to only trigger when these actually change
@@ -296,7 +296,8 @@ const App = ({ loaderData }: Route.ComponentProps) => {
       // This allows OWNER to access /student routes without a separate STUDENT membership
       if (!membership && roleFromUrl) {
         membership = user.memberships.find(
-          (m: MembershipWithOrganization) => m.organization.login === classroomSlug && m.role === 'OWNER'
+          (m: MembershipWithOrganization) =>
+            m.organization.login === classroomSlug && m.role === 'OWNER'
         );
         // If found an OWNER membership accessing another role's route, use the URL role for display
         // but keep the OWNER membership for permissions
@@ -388,7 +389,10 @@ const App = ({ loaderData }: Route.ComponentProps) => {
                   theme="colored"
                 />
 
-                <ImpersonationBanner key={(session as Record<string, Record<string, string>>)?.session?.id} session={session} />
+                <ImpersonationBanner
+                  key={(session as Record<string, Record<string, string>>)?.session?.id}
+                  session={session}
+                />
                 <Outlet />
                 <SyllabusBotRoot />
                 <ScrollRestoration />
@@ -495,7 +499,9 @@ export function ErrorBoundary() {
               },
             } as ThemeConfig
           }
-          {...({ algorithm: isDarkMode ? theme.darkAlgorithm : theme.defaultAlgorithm } as ThemeConfig)}
+          {...({
+            algorithm: isDarkMode ? theme.darkAlgorithm : theme.defaultAlgorithm,
+          } as ThemeConfig)}
         >
           <div className="min-h-screen flex flex-col items-center justify-center bg-gray-50 dark:bg-[#0f1419] px-4">
             <div className="max-w-2xl w-full">

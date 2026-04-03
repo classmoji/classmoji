@@ -141,7 +141,9 @@ const AdminTokensNew = ({ loaderData }: Route.ComponentProps) => {
                 value: JSON.stringify(student),
               }))}
               filterOption={(input, option) => {
-                return (option as { label: string })!.label.toLowerCase().includes(input.toLowerCase());
+                return (option as { label: string })!.label
+                  .toLowerCase()
+                  .includes(input.toLowerCase());
               }}
             />
           </Form.Item>

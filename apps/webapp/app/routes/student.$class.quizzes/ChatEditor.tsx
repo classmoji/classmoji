@@ -92,7 +92,16 @@ const ChatEditor = ({ onSubmit, placeholder, loading, disabled }: ChatEditorProp
       attributes: {
         class: 'prose max-w-none focus:outline-hidden min-h-[120px] p-3',
       },
-      handleKeyDown: (view: { state: { selection: { $from: { parent: { type: { name: string } } } }; tr: { insertText: (text: string) => void } }; dispatch: (tr: unknown) => void }, event: KeyboardEvent) => {
+      handleKeyDown: (
+        view: {
+          state: {
+            selection: { $from: { parent: { type: { name: string } } } };
+            tr: { insertText: (text: string) => void };
+          };
+          dispatch: (tr: unknown) => void;
+        },
+        event: KeyboardEvent
+      ) => {
         // Handle Tab key in code blocks
         if (event.key === 'Tab') {
           const { state } = view;

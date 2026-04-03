@@ -47,14 +47,12 @@ export async function getAnthropicModels(apiKey: string | null = null): Promise<
 
     const data = (await response.json()) as AnthropicModelsResponse;
 
-
     // Filter and sort Claude models
     const claudeModels = data.data
       .filter((model: AnthropicApiModel) => model.id.startsWith('claude-'))
       .map((model: AnthropicApiModel) => {
         // Use display_name from API if available, otherwise format the ID
         const label = model.display_name || formatClaudeModelName(model.id);
-
 
         return {
           value: model.id,
@@ -123,7 +121,6 @@ function formatClaudeModelName(modelId: string): string {
     let version = '';
     let variant = '';
     let dateStr = '';
-
 
     // Try to extract date first
     const dateMatch = modelId.match(/(\d{4})(\d{2})(\d{2})$/);
@@ -198,7 +195,9 @@ function getFallbackAnthropicModels(): Model[] {
  * @param {Object} options - Options with optional API key
  * @returns {Promise<Object>} Object with anthropic model list
  */
-export async function getAllModels(options: { anthropicApiKey?: string } = {}): Promise<{ anthropic: Model[] }> {
+export async function getAllModels(
+  options: { anthropicApiKey?: string } = {}
+): Promise<{ anthropic: Model[] }> {
   const anthropicModels = await getAnthropicModels(options.anthropicApiKey ?? null);
 
   return {

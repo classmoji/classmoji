@@ -68,7 +68,11 @@ interface AssignmentSectionProps {
   moduleId: string;
   pages: Resource[];
   slides: Resource[];
-  getLinkId: (resource: Resource, targetType: string, targetId: string) => string | null | undefined;
+  getLinkId: (
+    resource: Resource,
+    targetType: string,
+    targetId: string
+  ) => string | null | undefined;
   onRemoveLink: (linkId: string, resourceType: string) => void;
   isOver: boolean;
 }
@@ -143,7 +147,11 @@ interface ModuleColumnProps {
   moduleSlides: Resource[];
   assignments: AssignmentRef[];
   getAssignmentResources: (assignmentId: string) => { pages: Resource[]; slides: Resource[] };
-  getLinkId: (resource: Resource, targetType: string, targetId: string) => string | null | undefined;
+  getLinkId: (
+    resource: Resource,
+    targetType: string,
+    targetId: string
+  ) => string | null | undefined;
   onRemoveLink: (linkId: string, resourceType: string) => void;
   isOver: boolean;
 }
@@ -189,7 +197,7 @@ const ModuleColumn = ({
           isOver={isOver}
           hasResources={moduleCount > 0}
         >
-          {modulePages.map((page) => (
+          {modulePages.map(page => (
             <KanbanCard
               key={`page-${page.id}-module-${module.id}`}
               resource={page}
@@ -199,7 +207,7 @@ const ModuleColumn = ({
               draggable={false}
             />
           ))}
-          {moduleSlides.map((slide) => (
+          {moduleSlides.map(slide => (
             <KanbanCard
               key={`slide-${slide.id}-module-${module.id}`}
               resource={slide}
@@ -262,7 +270,7 @@ const SourceColumn = ({ pages, slides }: SourceColumnProps) => {
 
       {/* Content */}
       <div className="flex-1 p-2 space-y-1.5 overflow-y-auto">
-        {pages.map((page) => (
+        {pages.map(page => (
           <KanbanCard
             key={`source-page-${page.id}`}
             resource={page}
@@ -271,7 +279,7 @@ const SourceColumn = ({ pages, slides }: SourceColumnProps) => {
             dragIdPrefix="source"
           />
         ))}
-        {slides.map((slide) => (
+        {slides.map(slide => (
           <KanbanCard
             key={`source-slide-${slide.id}`}
             resource={slide}

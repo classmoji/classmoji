@@ -30,7 +30,9 @@ const SettingsExtensions = ({ loaderData }: Route.ComponentProps) => {
   const { classroom } = loaderData;
 
   const settings = (classroom.settings ?? {}) as Record<string, unknown>;
-  const [tokensPerHour, setTokensPerHour] = useState<string>(String(settings.default_tokens_per_hour ?? ''));
+  const [tokensPerHour, setTokensPerHour] = useState<string>(
+    String(settings.default_tokens_per_hour ?? '')
+  );
 
   const { notify, fetcher } = useGlobalFetcher();
 

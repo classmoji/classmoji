@@ -1,7 +1,4 @@
-import {
-  createReactBlockSpec,
-  type ReactCustomBlockRenderProps,
-} from '@blocknote/react';
+import { createReactBlockSpec, type ReactCustomBlockRenderProps } from '@blocknote/react';
 import { useEffect, useRef, useState } from 'react';
 import { createHighlighterCore } from '@shikijs/core';
 import { createJavaScriptRegexEngine } from '@shikijs/engine-javascript';
@@ -13,7 +10,11 @@ const terminalPropSchema = {
   title: { default: '' },
 };
 
-type TerminalRenderProps = ReactCustomBlockRenderProps<'terminal', typeof terminalPropSchema, 'none'>;
+type TerminalRenderProps = ReactCustomBlockRenderProps<
+  'terminal',
+  typeof terminalPropSchema,
+  'none'
+>;
 
 export const Terminal = createReactBlockSpec(
   {
@@ -42,7 +43,7 @@ export const Terminal = createReactBlockSpec(
             langs: [bash],
             themes: [oneDarkPro],
             engine: createJavaScriptRegexEngine(),
-          }).then((highlighter) => {
+          }).then(highlighter => {
             let html = highlighter.codeToHtml(props.block.props.code, {
               lang: 'bash',
               theme: 'one-dark-pro',

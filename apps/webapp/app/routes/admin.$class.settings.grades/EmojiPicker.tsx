@@ -41,7 +41,10 @@ const EmojiPicker = ({ setEmoji, emoji }: EmojiPickerProps) => {
       </div>
 
       {isOpen && (
-        <div className="absolute top-[85px] transform z-10 shadow-lg" ref={ref as React.RefObject<HTMLDivElement>}>
+        <div
+          className="absolute top-[85px] transform z-10 shadow-lg"
+          ref={ref as React.RefObject<HTMLDivElement>}
+        >
           <Picker data={data} onEmojiSelect={handleEmojiSelect} />
         </div>
       )}

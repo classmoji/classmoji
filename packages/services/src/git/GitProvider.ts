@@ -80,20 +80,41 @@ export class GitProvider {
     throw new Error('protectBranch() must be implemented by subclass');
   }
 
-  async createPullRequest(org: string, repo: string, base: string, head: string, title: string, body: string): Promise<unknown> {
+  async createPullRequest(
+    org: string,
+    repo: string,
+    base: string,
+    head: string,
+    title: string,
+    body: string
+  ): Promise<unknown> {
     throw new Error('createPullRequest() must be implemented by subclass');
   }
 
   // ─── Issues ────────────────────────────────────────────────────────────────
-  async createIssue(org: string, repo: string, issue: { title: string; body?: string; description?: string }): Promise<GitIssue> {
+  async createIssue(
+    org: string,
+    repo: string,
+    issue: { title: string; body?: string; description?: string }
+  ): Promise<GitIssue> {
     throw new Error('createIssue() must be implemented by subclass');
   }
 
-  async addIssueAssignees(org: string, repo: string, issueNum: number, assignees: string[]): Promise<void> {
+  async addIssueAssignees(
+    org: string,
+    repo: string,
+    issueNum: number,
+    assignees: string[]
+  ): Promise<void> {
     throw new Error('addIssueAssignees() must be implemented by subclass');
   }
 
-  async removeIssueAssignees(org: string, repo: string, issueNum: number, assignees: string[]): Promise<void> {
+  async removeIssueAssignees(
+    org: string,
+    repo: string,
+    issueNum: number,
+    assignees: string[]
+  ): Promise<void> {
     throw new Error('removeIssueAssignees() must be implemented by subclass');
   }
 
@@ -106,7 +127,11 @@ export class GitProvider {
     throw new Error('getOrganizationMembers() must be implemented by subclass');
   }
 
-  async inviteToOrganization(org: string, userIdOrEmail: string, teamIds?: number[]): Promise<void> {
+  async inviteToOrganization(
+    org: string,
+    userIdOrEmail: string,
+    teamIds?: number[]
+  ): Promise<void> {
     throw new Error('inviteToOrganization() must be implemented by subclass');
   }
 
@@ -119,7 +144,10 @@ export class GitProvider {
     throw new Error('createTeam() must be implemented by subclass');
   }
 
-  async getTeam(org: string, teamSlug: string): Promise<{ id: number; slug: string; name: string }> {
+  async getTeam(
+    org: string,
+    teamSlug: string
+  ): Promise<{ id: number; slug: string; name: string }> {
     throw new Error('getTeam() must be implemented by subclass');
   }
 
@@ -131,12 +159,22 @@ export class GitProvider {
     throw new Error('removeTeamMember() must be implemented by subclass');
   }
 
-  async addTeamToRepo(org: string, repo: string, teamSlug: string, permission: string): Promise<void> {
+  async addTeamToRepo(
+    org: string,
+    repo: string,
+    teamSlug: string,
+    permission: string
+  ): Promise<void> {
     throw new Error('addTeamToRepo() must be implemented by subclass');
   }
 
   // ─── Collaborators ─────────────────────────────────────────────────────────
-  async addCollaborator(org: string, repo: string, username: string, permission = 'maintain'): Promise<void> {
+  async addCollaborator(
+    org: string,
+    repo: string,
+    username: string,
+    permission = 'maintain'
+  ): Promise<void> {
     throw new Error('addCollaborator() must be implemented by subclass');
   }
 
@@ -150,7 +188,11 @@ export class GitProvider {
     throw new Error('listOrganizationProjects() must be implemented by subclass');
   }
 
-  async copyProjectFromTemplate(templateProjectId: string, ownerId: string, title: string): Promise<GitProject> {
+  async copyProjectFromTemplate(
+    templateProjectId: string,
+    ownerId: string,
+    title: string
+  ): Promise<GitProject> {
     throw new Error('copyProjectFromTemplate() must be implemented by subclass');
   }
 
@@ -162,7 +204,12 @@ export class GitProvider {
     throw new Error('addIssueToProject() must be implemented by subclass');
   }
 
-  async addTeamToProject(projectId: string, orgLogin: string, teamSlug: string, role = 'WRITER'): Promise<void> {
+  async addTeamToProject(
+    projectId: string,
+    orgLogin: string,
+    teamSlug: string,
+    role = 'WRITER'
+  ): Promise<void> {
     throw new Error('addTeamToProject() must be implemented by subclass');
   }
 

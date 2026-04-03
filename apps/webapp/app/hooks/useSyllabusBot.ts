@@ -195,7 +195,7 @@ export function useSyllabusBot({ classroomSlug, userRole }: UseSyllabusBotOption
    */
   const askSuggestedQuestion = useCallback(
     async (question: string | SuggestedQuestion) => {
-      const text = typeof question === 'string' ? question : question.text ?? '';
+      const text = typeof question === 'string' ? question : (question.text ?? '');
       return sendMessage(text);
     },
     [sendMessage]

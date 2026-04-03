@@ -117,13 +117,17 @@ export const action = checkAuth(async ({ request }: { request: Request }) => {
   try {
     await ensureClassroomTeam(gitProvider, gitOrg.login, classroom, 'STUDENT');
   } catch (error: unknown) {
-    console.error(`Failed to create students team: ${error instanceof Error ? error.message : error}`);
+    console.error(
+      `Failed to create students team: ${error instanceof Error ? error.message : error}`
+    );
   }
 
   try {
     await ensureClassroomTeam(gitProvider, gitOrg.login, classroom, 'ASSISTANT');
   } catch (error: unknown) {
-    console.error(`Failed to create assistants team: ${error instanceof Error ? error.message : error}`);
+    console.error(
+      `Failed to create assistants team: ${error instanceof Error ? error.message : error}`
+    );
   }
 
   // Build success message

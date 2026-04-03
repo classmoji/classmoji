@@ -87,10 +87,8 @@ const isJsonObject = (
 ): value is Prisma.JsonObject =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
 
-const getJsonObjectValue = (
-  object: Prisma.JsonObject,
-  key: string
-): Prisma.JsonValue | undefined => object[key];
+const getJsonObjectValue = (object: Prisma.JsonObject, key: string): Prisma.JsonValue | undefined =>
+  object[key];
 
 const isStoredQuizQuestionResult = (value: Prisma.JsonValue): value is Prisma.JsonObject => {
   if (!isJsonObject(value)) return false;
@@ -114,14 +112,16 @@ const normalizeQuestionResults = (
 
   return value.flatMap(entry =>
     isStoredQuizQuestionResult(entry)
-      ? [{
-          question_num: getJsonObjectValue(entry, 'question_num') as number,
-          attempts: getJsonObjectValue(entry, 'attempts') as number,
-          eventually_correct: getJsonObjectValue(entry, 'eventually_correct') as boolean,
-          credit_earned: getJsonObjectValue(entry, 'credit_earned') as number,
-          emoji: getJsonObjectValue(entry, 'emoji') as string,
-          recorded_at: getJsonObjectValue(entry, 'recorded_at') as string,
-        }]
+      ? [
+          {
+            question_num: getJsonObjectValue(entry, 'question_num') as number,
+            attempts: getJsonObjectValue(entry, 'attempts') as number,
+            eventually_correct: getJsonObjectValue(entry, 'eventually_correct') as boolean,
+            credit_earned: getJsonObjectValue(entry, 'credit_earned') as number,
+            emoji: getJsonObjectValue(entry, 'emoji') as string,
+            recorded_at: getJsonObjectValue(entry, 'recorded_at') as string,
+          },
+        ]
       : []
   );
 };
@@ -405,7 +405,7 @@ export const completeAttempt = async (
     firstAttempt = calculated.first_attempt_percentage;
   } else {
     // PRIORITY 2: Fall back to LLM's completion payload (legacy/backup)
-    const completion = await findCompletionPayload(attemptId) as CompletionPayload | null;
+    const completion = (await findCompletionPayload(attemptId)) as CompletionPayload | null;
 
     if (!completion) {
       throw new Error(
@@ -563,9 +563,8 @@ export const recordModalClosed = async (
     }
 
     // Check for stale request (incoming total < current total means gap was already applied)
-    const incomingTotal = sanitizeDuration(
-      metrics?.totalDurationMs ?? metrics?.total_duration_ms
-    ) ?? 0;
+    const incomingTotal =
+      sanitizeDuration(metrics?.totalDurationMs ?? metrics?.total_duration_ms) ?? 0;
     if (incomingTotal > 0 && incomingTotal < Number(row.total_duration_ms)) {
       return {
         id: attemptId,
@@ -760,7 +759,8 @@ export const getAttemptStatsByQuiz = async (quizId: string) => {
     .map(a => a.partial_credit_percentage)
     .filter(value => value !== null && value !== undefined) as number[];
   const times = attempts.map(a => {
-    const duration = new Date(a.completed_at ?? a.started_at).getTime() - new Date(a.started_at).getTime();
+    const duration =
+      new Date(a.completed_at ?? a.started_at).getTime() - new Date(a.started_at).getTime();
     return duration / (1000 * 60); // Convert to minutes
   });
 
@@ -833,13 +833,14 @@ export const findWithMessages = async (attemptId: string) => {
   });
 
   // Format messages for UI display (lowercase roles = industry standard)
-  const messages = conversation?.messages?.map(msg => ({
-    id: msg.id,
-    role: msg.role.toLowerCase(),
-    content: msg.content,
-    metadata: msg.metadata || null, // Contains explorationSteps for code-aware quizzes
-    timestamp: msg.created_at,
-  })) || [];
+  const messages =
+    conversation?.messages?.map(msg => ({
+      id: msg.id,
+      role: msg.role.toLowerCase(),
+      content: msg.content,
+      metadata: msg.metadata || null, // Contains explorationSteps for code-aware quizzes
+      timestamp: msg.created_at,
+    })) || [];
 
   return {
     attempt,
@@ -865,16 +866,13 @@ export const incrementQuestionsAsked = async (attemptId: string) => {
   return getPrisma().quizAttempt.update({
     where: { id: attemptId }, // UUID string, no BigInt conversion needed
     data: {
-      questions_asked: ((attempt?.questions_asked ?? 0) + 1),
+      questions_asked: (attempt?.questions_asked ?? 0) + 1,
     },
   });
 };
 
 // Update agent_config field for an attempt
-export const updateAgentConfig = async (
-  attemptId: string,
-  config: Prisma.InputJsonObject
-) => {
+export const updateAgentConfig = async (attemptId: string, config: Prisma.InputJsonObject) => {
   const attempt = await getPrisma().quizAttempt.findUnique({
     where: { id: attemptId },
     select: { agent_config: true },
@@ -1002,14 +1000,17 @@ export const createNew = async (
 
   // Verify classroom access
   const quizClassroomId = quiz.classroom_id?.toString();
-  const membershipClassroomId = membership.classroom_id?.toString() ?? membership.organization_id?.toString();
+  const membershipClassroomId =
+    membership.classroom_id?.toString() ?? membership.organization_id?.toString();
   if (quizClassroomId !== membershipClassroomId) {
     throw new Error('Membership does not match quiz classroom');
   }
 
   // Check if user can create new attempt
   const isInstructor = ['OWNER', 'ASSISTANT', 'TEACHER'].includes(membership.role);
-  console.log(`[createNew] userId=${userId}, role=${membership.role}, isInstructor=${isInstructor}`);
+  console.log(
+    `[createNew] userId=${userId}, role=${membership.role}, isInstructor=${isInstructor}`
+  );
 
   // SECURITY: Check for incomplete attempts (students only)
   // Instructors (OWNER, ASSISTANT, TEACHER) can have multiple concurrent attempts for testing
@@ -1262,7 +1263,9 @@ export const initializeCodeAwareQuiz = async (
 
   // Get classroom and GitHub token
   const classroom = await findClassroomById(attempt.quiz.classroom_id);
-  const githubToken = await getInstallationToken(classroom.git_organization?.github_installation_id);
+  const githubToken = await getInstallationToken(
+    classroom.git_organization?.github_installation_id
+  );
 
   // Clone repository
   const codebasePath = await codebaseManager.cloneForAttempt(
@@ -1563,9 +1566,7 @@ export const appendQuestionResult = async (
  * @param {Array} questionResults - Array from question_results_json
  * @returns {Object} { partial_credit_percentage, first_attempt_percentage }
  */
-export const calculatePercentagesFromResults = (
-  questionResults: QuizQuestionResultInput[]
-) => {
+export const calculatePercentagesFromResults = (questionResults: QuizQuestionResultInput[]) => {
   if (!questionResults || questionResults.length === 0) {
     return { partial_credit_percentage: null, first_attempt_percentage: null };
   }

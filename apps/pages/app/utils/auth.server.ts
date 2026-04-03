@@ -22,7 +22,11 @@ interface PageAccessResult {
  * - Private pages: classroom members can view, OWNER/TEACHER can edit
  * - Public pages: anyone can view, OWNER/TEACHER can edit
  */
-export async function assertPageAccess({ request, page, accessType = 'view' }: AssertPageAccessOptions): Promise<PageAccessResult> {
+export async function assertPageAccess({
+  request,
+  page,
+  accessType = 'view',
+}: AssertPageAccessOptions): Promise<PageAccessResult> {
   const result: PageAccessResult = {
     canView: false,
     canEdit: false,

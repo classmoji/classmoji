@@ -19,11 +19,16 @@ function useToolbarOverflow(toolbarRef: React.RefObject<HTMLDivElement | null>) 
   const MAX_HIDDEN = 4;
   const getNeededSpace = (level: number) => {
     switch (level) {
-      case 1: return 150; // Insert Content
-      case 2: return 250; // Slide Management
-      case 3: return 120; // Lists
-      case 4: return 100; // Headings
-      default: return 150;
+      case 1:
+        return 150; // Insert Content
+      case 2:
+        return 250; // Slide Management
+      case 3:
+        return 120; // Lists
+      case 4:
+        return 100; // Headings
+      default:
+        return 150;
     }
   };
 
@@ -167,7 +172,7 @@ export default function SlideToolbar({
   revealInstance,
   onContentChange,
   onImageUpload,
-  onOpenOverview,   // Callback to open slide overview
+  onOpenOverview, // Callback to open slide overview
 }: SlideToolbarProps) {
   const [isImageModalOpen, setIsImageModalOpen] = useState(false);
   const [popoverOpen, setPopoverOpen] = useState(false);
@@ -178,15 +183,19 @@ export default function SlideToolbar({
 
   // Overflow detection - progressively hide groups when toolbar doesn't fit
   // Note: Themes moved to SlideProperties panel, Insert Content group was removed (only draggable blocks remain)
-  const { showSlideManagement, showLists, showHeadings, hiddenGroups } = useToolbarOverflow(toolbarRef);
+  const { showSlideManagement, showLists, showHeadings, hiddenGroups } =
+    useToolbarOverflow(toolbarRef);
   // ─────────────────────────────────────────────────────────────
   // Text Formatting (uses execCommand - still works in all browsers)
   // ─────────────────────────────────────────────────────────────
 
-  const execFormat = useCallback((command: string, value: string | null = null) => {
-    document.execCommand(command, false, value ?? undefined);
-    onContentChange?.();
-  }, [onContentChange]);
+  const execFormat = useCallback(
+    (command: string, value: string | null = null) => {
+      document.execCommand(command, false, value ?? undefined);
+      onContentChange?.();
+    },
+    [onContentChange]
+  );
 
   const formatBold = () => execFormat('bold');
   const formatItalic = () => execFormat('italic');
@@ -374,14 +383,17 @@ export default function SlideToolbar({
   }, [getCurrentSlide, revealInstance, onContentChange]);
 
   // Handle delete button click - show warning if can't delete
-  const handleDeleteClick = useCallback((e: React.MouseEvent) => {
-    if (!canDeleteSlide()) {
-      e.preventDefault();
-      e.stopPropagation();
-      message.warning('Cannot delete the only slide in the presentation');
-      return false;
-    }
-  }, [canDeleteSlide]);
+  const handleDeleteClick = useCallback(
+    (e: React.MouseEvent) => {
+      if (!canDeleteSlide()) {
+        e.preventDefault();
+        e.stopPropagation();
+        message.warning('Cannot delete the only slide in the presentation');
+        return false;
+      }
+    },
+    [canDeleteSlide]
+  );
 
   // ─────────────────────────────────────────────────────────────
   // Sandpack Code Playground
@@ -483,7 +495,9 @@ document.querySelector('h1').addEventListener('click', () => {
       return revealInstance.getCurrentSlide();
     }
     // Fallback: query DOM
-    let section = document.querySelector('section.stack.present section.present[contenteditable="true"]');
+    let section = document.querySelector(
+      'section.stack.present section.present[contenteditable="true"]'
+    );
     if (!section) {
       section = document.querySelector('section.present[contenteditable="true"]:not(.stack)');
     }
@@ -515,36 +529,39 @@ document.querySelector('h1').addEventListener('click', () => {
   }, []);
 
   // Handle image upload for sl-block
-  const handleBlockImageUploaded = useCallback(async (file: File) => {
-    if (!onImageUpload) {
-      message.error('Image upload not available');
-      setPendingBlockImage(false);
-      return;
-    }
-
-    const url = await onImageUpload(file);
-
-    requestAnimationFrame(() => {
-      const section = getCurrentSection();
-      if (!section) {
+  const handleBlockImageUploaded = useCallback(
+    async (file: File) => {
+      if (!onImageUpload) {
+        message.error('Image upload not available');
         setPendingBlockImage(false);
         return;
       }
 
-      const { block, content } = createSlBlock('image', 400, 300);
-      const img = document.createElement('img');
-      img.src = url;
-      img.alt = 'Block image';
-      img.style.width = '100%';
-      img.style.height = '100%';
-      img.style.objectFit = 'contain';
-      content.appendChild(img);
-      section.appendChild(block);
+      const url = await onImageUpload(file);
 
-      setPendingBlockImage(false);
-      onContentChange?.();
-    });
-  }, [getCurrentSection, createSlBlock, onContentChange, onImageUpload]);
+      requestAnimationFrame(() => {
+        const section = getCurrentSection();
+        if (!section) {
+          setPendingBlockImage(false);
+          return;
+        }
+
+        const { block, content } = createSlBlock('image', 400, 300);
+        const img = document.createElement('img');
+        img.src = url;
+        img.alt = 'Block image';
+        img.style.width = '100%';
+        img.style.height = '100%';
+        img.style.objectFit = 'contain';
+        content.appendChild(img);
+        section.appendChild(block);
+
+        setPendingBlockImage(false);
+        onContentChange?.();
+      });
+    },
+    [getCurrentSection, createSlBlock, onContentChange, onImageUpload]
+  );
 
   // Insert a code block
   const insertCodeSlBlock = useCallback(() => {
@@ -597,28 +614,41 @@ document.querySelector('h1').addEventListener('click', () => {
   }, [getCurrentSection, createSlBlock, onContentChange]);
 
   // Insert a snippet as an sl-block
-  const insertSnippet = useCallback((snippet: { id: string; name: string; content: string }) => {
-    requestAnimationFrame(() => {
-      const section = getCurrentSection();
-      if (!section) return;
+  const insertSnippet = useCallback(
+    (snippet: { id: string; name: string; content: string }) => {
+      requestAnimationFrame(() => {
+        const section = getCurrentSection();
+        if (!section) return;
 
-      // Default size for snippet blocks - user can resize as needed
-      const { block, content } = createSlBlock('snippet', 400, 150);
-      block.dataset.snippetId = snippet.id;
+        // Default size for snippet blocks - user can resize as needed
+        const { block, content } = createSlBlock('snippet', 400, 150);
+        block.dataset.snippetId = snippet.id;
 
-      // Insert the snippet HTML into the block content
-      content.innerHTML = snippet.content;
-      section.appendChild(block);
+        // Insert the snippet HTML into the block content
+        content.innerHTML = snippet.content;
+        section.appendChild(block);
 
-      onContentChange?.();
-    });
-  }, [getCurrentSection, createSlBlock, onContentChange]);
+        onContentChange?.();
+      });
+    },
+    [getCurrentSection, createSlBlock, onContentChange]
+  );
 
   // ─────────────────────────────────────────────────────────────
   // Toolbar Button Component
   // ─────────────────────────────────────────────────────────────
 
-  const ToolbarButton = ({ onClick, title, children, className = '' }: { onClick?: () => void; title: string; children: React.ReactNode; className?: string }) => (
+  const ToolbarButton = ({
+    onClick,
+    title,
+    children,
+    className = '',
+  }: {
+    onClick?: () => void;
+    title: string;
+    children: React.ReactNode;
+    className?: string;
+  }) => (
     <Tooltip title={title} mouseEnterDelay={0.1} mouseLeaveDelay={0}>
       <button
         onClick={onClick}
@@ -629,9 +659,7 @@ document.querySelector('h1').addEventListener('click', () => {
     </Tooltip>
   );
 
-  const Divider = () => (
-    <div className="w-px h-6 bg-gray-300 dark:bg-gray-600 mx-1" />
-  );
+  const Divider = () => <div className="w-px h-6 bg-gray-300 dark:bg-gray-600 mx-1" />;
 
   // ─────────────────────────────────────────────────────────────
   // Render Functions for Button Groups
@@ -658,10 +686,18 @@ document.querySelector('h1').addEventListener('click', () => {
   // Group 2: Headings (collapsible at very small sizes)
   const renderHeadingsGroup = (inMenu = false) => (
     <div className={inMenu ? 'flex flex-wrap items-center gap-1' : 'flex items-center gap-0.5'}>
-      <ToolbarButton onClick={formatH1} title="Heading 1">H1</ToolbarButton>
-      <ToolbarButton onClick={formatH2} title="Heading 2">H2</ToolbarButton>
-      <ToolbarButton onClick={formatH3} title="Heading 3">H3</ToolbarButton>
-      <ToolbarButton onClick={formatParagraph} title="Paragraph">P</ToolbarButton>
+      <ToolbarButton onClick={formatH1} title="Heading 1">
+        H1
+      </ToolbarButton>
+      <ToolbarButton onClick={formatH2} title="Heading 2">
+        H2
+      </ToolbarButton>
+      <ToolbarButton onClick={formatH3} title="Heading 3">
+        H3
+      </ToolbarButton>
+      <ToolbarButton onClick={formatParagraph} title="Paragraph">
+        P
+      </ToolbarButton>
     </div>
   );
 
@@ -670,12 +706,22 @@ document.querySelector('h1').addEventListener('click', () => {
     <div className={inMenu ? 'flex flex-wrap items-center gap-1' : 'flex items-center gap-0.5'}>
       <ToolbarButton onClick={insertUnorderedList} title="Bullet List">
         <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
+          <path
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            strokeWidth={2}
+            d="M4 6h16M4 12h16M4 18h16"
+          />
         </svg>
       </ToolbarButton>
       <ToolbarButton onClick={insertOrderedList} title="Numbered List">
         <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 8h10M7 12h10M7 16h10M3 8h.01M3 12h.01M3 16h.01" />
+          <path
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            strokeWidth={2}
+            d="M7 8h10M7 12h10M7 16h10M3 8h.01M3 12h.01M3 16h.01"
+          />
         </svg>
       </ToolbarButton>
     </div>
@@ -712,13 +758,23 @@ document.querySelector('h1').addEventListener('click', () => {
           }`}
         >
           <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth={2}
+              d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
+            />
           </svg>
         </button>
       </Popconfirm>
       <ToolbarButton onClick={onOpenOverview} title="Slide Overview">
         <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM14 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zM14 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z" />
+          <path
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            strokeWidth={2}
+            d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM14 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zM14 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z"
+          />
         </svg>
       </ToolbarButton>
     </div>
@@ -730,40 +786,90 @@ document.querySelector('h1').addEventListener('click', () => {
       <ToolbarButton onClick={insertTextSlBlock} title="Add text block">
         <span className="text-xs font-medium">T</span>
         <svg className="w-3 h-3 ml-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4" />
+          <path
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            strokeWidth={2}
+            d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4"
+          />
         </svg>
       </ToolbarButton>
       <ToolbarButton onClick={insertImageSlBlock} title="Add image block">
         <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+          <path
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            strokeWidth={2}
+            d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"
+          />
         </svg>
         <svg className="w-3 h-3 ml-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4" />
+          <path
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            strokeWidth={2}
+            d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4"
+          />
         </svg>
       </ToolbarButton>
       <ToolbarButton onClick={insertCodeSlBlock} title="Add code block">
         <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4" />
+          <path
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            strokeWidth={2}
+            d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4"
+          />
         </svg>
         <svg className="w-3 h-3 ml-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4" />
+          <path
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            strokeWidth={2}
+            d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4"
+          />
         </svg>
       </ToolbarButton>
       <ToolbarButton onClick={insertIframeSlBlock} title="Add iframe embed">
         <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
+          <path
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            strokeWidth={2}
+            d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"
+          />
         </svg>
         <svg className="w-3 h-3 ml-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4" />
+          <path
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            strokeWidth={2}
+            d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4"
+          />
         </svg>
       </ToolbarButton>
       <ToolbarButton onClick={insertSandpackSlBlock} title="Add code playground">
         <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" />
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+          <path
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            strokeWidth={2}
+            d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"
+          />
+          <path
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            strokeWidth={2}
+            d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
+          />
         </svg>
         <svg className="w-3 h-3 ml-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4" />
+          <path
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            strokeWidth={2}
+            d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4"
+          />
         </svg>
       </ToolbarButton>
     </div>
@@ -774,21 +880,27 @@ document.querySelector('h1').addEventListener('click', () => {
     <div className="p-3 min-w-[220px] bg-white dark:bg-gray-800 rounded-lg">
       {!showSlideManagement && (
         <>
-          <div className="text-xs font-semibold text-gray-500 dark:text-gray-400 mb-2 uppercase tracking-wide">Slide Management</div>
+          <div className="text-xs font-semibold text-gray-500 dark:text-gray-400 mb-2 uppercase tracking-wide">
+            Slide Management
+          </div>
           {renderSlideManagementGroup(true)}
           <div className="w-full h-px bg-gray-200 dark:bg-gray-600 my-3" />
         </>
       )}
       {!showLists && (
         <>
-          <div className="text-xs font-semibold text-gray-500 dark:text-gray-400 mb-2 uppercase tracking-wide">Lists</div>
+          <div className="text-xs font-semibold text-gray-500 dark:text-gray-400 mb-2 uppercase tracking-wide">
+            Lists
+          </div>
           {renderListsGroup(true)}
           {!showHeadings && <div className="w-full h-px bg-gray-200 dark:bg-gray-600 my-3" />}
         </>
       )}
       {!showHeadings && (
         <>
-          <div className="text-xs font-semibold text-gray-500 dark:text-gray-400 mb-2 uppercase tracking-wide">Headings</div>
+          <div className="text-xs font-semibold text-gray-500 dark:text-gray-400 mb-2 uppercase tracking-wide">
+            Headings
+          </div>
           {renderHeadingsGroup(true)}
         </>
       )}
@@ -798,17 +910,19 @@ document.querySelector('h1').addEventListener('click', () => {
   // Hamburger icon for overflow menu
   const HamburgerIcon = () => (
     <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
+      <path
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        strokeWidth={2}
+        d="M4 6h16M4 12h16M4 18h16"
+      />
     </svg>
   );
 
   return (
     <div className="flex items-center gap-0.5 bg-gray-100 dark:bg-gray-700 rounded-lg px-1 py-0.5">
       {/* Main toolbar content - measured for overflow detection */}
-      <div
-        ref={toolbarRef}
-        className="flex items-center gap-0.5 flex-nowrap min-w-0"
-      >
+      <div ref={toolbarRef} className="flex items-center gap-0.5 flex-nowrap min-w-0">
         {/* Insert Blocks (always visible - for absolute positioning) */}
         {renderBlocksGroup()}
 
@@ -830,10 +944,20 @@ document.querySelector('h1').addEventListener('click', () => {
               className="px-2 py-1 text-sm font-medium text-gray-700 dark:text-gray-200 hover:bg-gray-200 dark:hover:bg-gray-600 rounded-sm transition-colors flex items-center gap-1"
             >
               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"
+                />
               </svg>
               <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M19 9l-7 7-7-7"
+                />
               </svg>
             </button>
           </Dropdown>

@@ -16,19 +16,20 @@ const defaultAssignment: AssignmentFormData = {
   linkedSlideIds: [],
 };
 
-export const useAssignmentStore = create<AssignmentFormState>((set) => ({
+export const useAssignmentStore = create<AssignmentFormState>(set => ({
   assignment: defaultAssignment,
   template: '',
   templateAssignments: [],
   assignmentsToRemove: [],
 
   setAssignmentValue: (key: string, value: unknown) =>
-    set((state) => ({ assignment: { ...state.assignment, [key]: value } })),
+    set(state => ({ assignment: { ...state.assignment, [key]: value } })),
   resetAssignment: () => set({ assignment: defaultAssignment }),
   setAssignment: (assignment: AssignmentFormData) => set({ assignment }),
   setTemplate: (template: string) => set({ template }),
-  setTemplateAssignments: (templateAssignments: TemplateAssignment[]) => set({ templateAssignments }),
+  setTemplateAssignments: (templateAssignments: TemplateAssignment[]) =>
+    set({ templateAssignments }),
   addAssignmentToRemove: (assignment: AssignmentFormData) =>
-    set((state) => ({ assignmentsToRemove: [...state.assignmentsToRemove, assignment] })),
+    set(state => ({ assignmentsToRemove: [...state.assignmentsToRemove, assignment] })),
   resetAssignmentsToRemove: () => set({ assignmentsToRemove: [] }),
 }));

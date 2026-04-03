@@ -54,18 +54,24 @@ export function useSlideStructure(revealInstance: RevealApi | null, onContentCha
   }, [revealInstance]);
 
   // Find a slide by ID
-  const findSlideById = useCallback((slideId: string) => {
-    for (const stack of stacks) {
-      const slide = stack.slides.find((s) => s.id === slideId);
-      if (slide) return slide;
-    }
-    return null;
-  }, [stacks]);
+  const findSlideById = useCallback(
+    (slideId: string) => {
+      for (const stack of stacks) {
+        const slide = stack.slides.find(s => s.id === slideId);
+        if (slide) return slide;
+      }
+      return null;
+    },
+    [stacks]
+  );
 
   // Find a stack by ID
-  const findStackById = useCallback((stackId: string) => {
-    return stacks.find(s => s.id === stackId) || null;
-  }, [stacks]);
+  const findStackById = useCallback(
+    (stackId: string) => {
+      return stacks.find(s => s.id === stackId) || null;
+    },
+    [stacks]
+  );
 
   // Move a slide to a new location
   const moveSlide = useCallback((slideId: string, destination: MoveDestination) => {
@@ -73,7 +79,7 @@ export function useSlideStructure(revealInstance: RevealApi | null, onContentCha
       // Clone stacks/slides but preserve DOM element references (JSON.stringify destroys them)
       const newStacks = prevStacks.map(stack => ({
         ...stack,
-        slides: stack.slides.map((slide) => ({ ...slide })),
+        slides: stack.slides.map(slide => ({ ...slide })),
       }));
 
       // Find and remove the slide from its current location
@@ -81,7 +87,7 @@ export function useSlideStructure(revealInstance: RevealApi | null, onContentCha
       let sourceStackIndex = -1;
 
       for (let i = 0; i < newStacks.length; i++) {
-        const slideIndex = newStacks[i].slides.findIndex((s) => s.id === slideId);
+        const slideIndex = newStacks[i].slides.findIndex(s => s.id === slideId);
         if (slideIndex !== -1) {
           movedSlide = newStacks[i].slides.splice(slideIndex, 1)[0];
           sourceStackIndex = i;
@@ -138,7 +144,7 @@ export function useSlideStructure(revealInstance: RevealApi | null, onContentCha
 
       const newStacks = prevStacks.map(stack => ({
         ...stack,
-        slides: stack.slides.filter((s) => s.id !== slideId),
+        slides: stack.slides.filter(s => s.id !== slideId),
       }));
 
       // Remove empty stacks
@@ -152,13 +158,13 @@ export function useSlideStructure(revealInstance: RevealApi | null, onContentCha
       // Clone stacks/slides but preserve DOM element references
       const newStacks = prevStacks.map(stack => ({
         ...stack,
-        slides: stack.slides.map((slide) => ({ ...slide })),
+        slides: stack.slides.map(slide => ({ ...slide })),
       }));
 
       // Find and remove the slide
       let movedSlide: SlideData | null = null;
       for (let i = 0; i < newStacks.length; i++) {
-        const slideIndex = newStacks[i].slides.findIndex((s) => s.id === slideId);
+        const slideIndex = newStacks[i].slides.findIndex(s => s.id === slideId);
         if (slideIndex !== -1) {
           movedSlide = newStacks[i].slides.splice(slideIndex, 1)[0];
           break;
@@ -198,7 +204,7 @@ export function useSlideStructure(revealInstance: RevealApi | null, onContentCha
       } else {
         // Multiple slides - wrap in a section
         const wrapper = document.createElement('section');
-        stack.slides.forEach((slide) => {
+        stack.slides.forEach(slide => {
           const clone = slide.element.cloneNode(true) as HTMLElement;
           clone.setAttribute('contenteditable', 'true');
           wrapper.appendChild(clone);
@@ -229,25 +235,37 @@ export function useSlideStructure(revealInstance: RevealApi | null, onContentCha
   }, [stacks, syncToDOM, onContentChange]);
 
   // Wrapper functions that mark changes as pending sync
-  const moveSlideAndSync = useCallback((slideId: string, destination: MoveDestination) => {
-    pendingSyncRef.current = true;
-    moveSlide(slideId, destination);
-  }, [moveSlide]);
+  const moveSlideAndSync = useCallback(
+    (slideId: string, destination: MoveDestination) => {
+      pendingSyncRef.current = true;
+      moveSlide(slideId, destination);
+    },
+    [moveSlide]
+  );
 
-  const moveStackAndSync = useCallback((stackId: string, newIndex: number) => {
-    pendingSyncRef.current = true;
-    moveStack(stackId, newIndex);
-  }, [moveStack]);
+  const moveStackAndSync = useCallback(
+    (stackId: string, newIndex: number) => {
+      pendingSyncRef.current = true;
+      moveStack(stackId, newIndex);
+    },
+    [moveStack]
+  );
 
-  const deleteSlideAndSync = useCallback((slideId: string) => {
-    pendingSyncRef.current = true;
-    deleteSlide(slideId);
-  }, [deleteSlide]);
+  const deleteSlideAndSync = useCallback(
+    (slideId: string) => {
+      pendingSyncRef.current = true;
+      deleteSlide(slideId);
+    },
+    [deleteSlide]
+  );
 
-  const createStackAndSync = useCallback((slideId: string) => {
-    pendingSyncRef.current = true;
-    createStack(slideId);
-  }, [createStack]);
+  const createStackAndSync = useCallback(
+    (slideId: string) => {
+      pendingSyncRef.current = true;
+      createStack(slideId);
+    },
+    [createStack]
+  );
 
   return {
     stacks,
@@ -308,12 +326,14 @@ function parseSlideStructure(slidesContainer: HTMLElement): StackData[] {
       // Single slide (still treat as a stack with one slide)
       stacks.push({
         id: `stack-${hIndex}`,
-        slides: [{
-          id: `slide-${hIndex}-0`,
-          element: section,
-          hIndex,
-          vIndex: 0,
-        }],
+        slides: [
+          {
+            id: `slide-${hIndex}-0`,
+            element: section,
+            hIndex,
+            vIndex: 0,
+          },
+        ],
       });
     }
   });

@@ -31,8 +31,7 @@ export default defineConfig({
       aptGet({
         packages: ['bash', 'git'],
       }),
-      syncEnvVars(async (ctx) => {
-
+      syncEnvVars(async ctx => {
         // Skip sync if credentials not available (allows local dev without Infisical)
         if (!process.env.INFISICAL_CLIENT_ID || !process.env.INFISICAL_CLIENT_SECRET) {
           console.warn('[Infisical] Credentials not found, skipping secret sync.');
@@ -55,7 +54,9 @@ export default defineConfig({
           const envMap = { prod: 'prod', staging: 'sta' };
           const infisicalEnv = envMap[ctx.environment] ?? 'prod';
 
-          console.log(`[Infisical] Syncing secrets from environment: ${infisicalEnv} (Trigger.dev env: ${ctx.environment})`);
+          console.log(
+            `[Infisical] Syncing secrets from environment: ${infisicalEnv} (Trigger.dev env: ${ctx.environment})`
+          );
 
           // Fetch all secrets from Infisical
           const { secrets } = await client.secrets().listSecrets({
@@ -67,7 +68,7 @@ export default defineConfig({
           console.log(`[Infisical] Successfully fetched ${secrets.length} secrets`);
 
           // Transform to Trigger.dev format
-          const mapped = secrets.map((secret) => ({
+          const mapped = secrets.map(secret => ({
             name: secret.secretKey,
             value: secret.secretValue,
           }));

@@ -49,9 +49,7 @@ export async function countSlidesUsingTheme(gitOrgLogin: string, term: string, t
   });
 
   // Filter to slides from this git org
-  const orgSlides = slides.filter(
-    s => s.classroom?.git_organization?.login === gitOrgLogin
-  );
+  const orgSlides = slides.filter(s => s.classroom?.git_organization?.login === gitOrgLogin);
 
   const gitProvider = new GitHubProvider(gitOrg.github_installation_id, gitOrgLogin);
   const octokit = await gitProvider.getOctokit();
@@ -68,7 +66,9 @@ export async function countSlidesUsingTheme(gitOrgLogin: string, term: string, t
         path: `${slide.content_path}/index.html`,
       });
 
-      const htmlContent = Buffer.from((data as { content: string }).content, 'base64').toString('utf-8');
+      const htmlContent = Buffer.from((data as { content: string }).content, 'base64').toString(
+        'utf-8'
+      );
       const slideTheme = getSharedThemeFromHtml(htmlContent);
 
       if (slideTheme === themeName) {
@@ -120,7 +120,13 @@ export async function deleteSharedTheme(gitOrgLogin: string, term: string, theme
  * @param {boolean} [options.deleteTheme=false] - Whether to delete the shared theme
  * @returns {Promise<{success: boolean, themeName?: string, themeDeleted?: boolean, otherSlidesUsingTheme?: number}>}
  */
-export async function deleteSlide({ slideId, deleteTheme = false }: { slideId: string; deleteTheme?: boolean }) {
+export async function deleteSlide({
+  slideId,
+  deleteTheme = false,
+}: {
+  slideId: string;
+  deleteTheme?: boolean;
+}) {
   // Get the slide with classroom and git organization info
   const slide = await getPrisma().slide.findUnique({
     where: { id: slideId },
@@ -161,7 +167,9 @@ export async function deleteSlide({ slideId, deleteTheme = false }: { slideId: s
       path: `${slide.content_path}/index.html`,
     });
 
-    const htmlContent = Buffer.from((data as { content: string }).content, 'base64').toString('utf-8');
+    const htmlContent = Buffer.from((data as { content: string }).content, 'base64').toString(
+      'utf-8'
+    );
     themeName = getSharedThemeFromHtml(htmlContent);
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : String(error);
@@ -269,7 +277,9 @@ export async function getSlideDeleteInfo(slideId: string) {
       path: `${slide.content_path}/index.html`,
     });
 
-    const htmlContent = Buffer.from((data as { content: string }).content, 'base64').toString('utf-8');
+    const htmlContent = Buffer.from((data as { content: string }).content, 'base64').toString(
+      'utf-8'
+    );
     themeName = getSharedThemeFromHtml(htmlContent);
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : String(error);

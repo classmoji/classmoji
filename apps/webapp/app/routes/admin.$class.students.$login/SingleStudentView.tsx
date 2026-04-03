@@ -107,11 +107,11 @@ const SingleStudentView = (props: SingleStudentViewProps) => {
   // Build repositories array for grade calculation
   // calculateGrades expects { module, assignments } where assignments is array of repository assignments
   const repositories = effectiveAssignments
-    .map((module) => {
+    .map(module => {
       const assignments = effectiveIssuesGrouped[module.id] || [];
       return { module, assignments };
     })
-    .filter((repo) => repo.assignments.length > 0);
+    .filter(repo => repo.assignments.length > 0);
 
   const { finalNumericGrade, finalLetterGrade, rawNumericGrade, rawLetterGrade } = calculateGrades(
     repositories,
@@ -175,7 +175,10 @@ const SingleStudentView = (props: SingleStudentViewProps) => {
     },
   ];
 
-  const getRepositoryAssignmentColumns = (moduleAssignment: StudentModule, allRepositoryAssignments: StudentRepoAssignment[]) => [
+  const getRepositoryAssignmentColumns = (
+    moduleAssignment: StudentModule,
+    allRepositoryAssignments: StudentRepoAssignment[]
+  ) => [
     {
       title: 'Assignment',
       dataIndex: ['assignment', 'title'],
@@ -216,7 +219,11 @@ const SingleStudentView = (props: SingleStudentViewProps) => {
           emojiMappings as Record<string, number>
         );
 
-        const grade = applyLatePenalty(rawGrade, repositoryAssignment, settings as OrganizationSettings);
+        const grade = applyLatePenalty(
+          rawGrade,
+          repositoryAssignment,
+          settings as OrganizationSettings
+        );
 
         const getGradeColor = (grade: number) => {
           if (grade >= 90) return 'text-green-600';
@@ -261,7 +268,13 @@ const SingleStudentView = (props: SingleStudentViewProps) => {
             }
           >
             <EmojiGrader
-              repositoryAssignment={{ id: record.id, assignment_id: record.assignment_id, studentId: record.repository.student_id, grades: record.grades, repository: record.repository }}
+              repositoryAssignment={{
+                id: record.id,
+                assignment_id: record.assignment_id,
+                studentId: record.repository.student_id,
+                grades: record.grades,
+                repository: record.repository,
+              }}
               emojiMappings={emojiMappings as Record<string, unknown>}
             />
             <LateOverrideButton repositoryAssignment={record} />
@@ -274,10 +287,14 @@ const SingleStudentView = (props: SingleStudentViewProps) => {
   const expandedRowRender = (record: StudentModule) => {
     const repositoryAssignments = effectiveIssuesGrouped[record.id] || [];
 
-    const sortedRepositoryAssignments = repositoryAssignments.sort((a: StudentRepoAssignment, b: StudentRepoAssignment) => {
-      const dateDiff = new Date(a.assignment.student_deadline).getTime() - new Date(b.assignment.student_deadline).getTime();
-      return dateDiff !== 0 ? dateDiff : a.assignment.title.localeCompare(b.assignment.title);
-    });
+    const sortedRepositoryAssignments = repositoryAssignments.sort(
+      (a: StudentRepoAssignment, b: StudentRepoAssignment) => {
+        const dateDiff =
+          new Date(a.assignment.student_deadline).getTime() -
+          new Date(b.assignment.student_deadline).getTime();
+        return dateDiff !== 0 ? dateDiff : a.assignment.title.localeCompare(b.assignment.title);
+      }
+    );
 
     return (
       <Table
@@ -354,8 +371,8 @@ const SingleStudentView = (props: SingleStudentViewProps) => {
               expandedRowRender,
               rowExpandable: record => (effectiveIssuesGrouped[record.id]?.length || 0) > 0,
               defaultExpandedRowKeys: effectiveAssignments
-                .filter((m) => (effectiveIssuesGrouped[m.id]?.length || 0) > 0)
-                .map((m) => m.id),
+                .filter(m => (effectiveIssuesGrouped[m.id]?.length || 0) > 0)
+                .map(m => m.id),
             }}
             rowHoverable={false}
             pagination={false}

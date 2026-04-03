@@ -114,7 +114,9 @@ test.describe('Slides Theme Switching', () => {
 
     // Find the theme dropdown WITHIN the Presentation Themes section
     // This avoids selecting the Layout dropdown in the Slide Layout section
-    const themesSection = page.locator('.ant-collapse-item').filter({ hasText: 'Presentation Themes' });
+    const themesSection = page
+      .locator('.ant-collapse-item')
+      .filter({ hasText: 'Presentation Themes' });
     const themeSelect = themesSection.locator('.ant-select').first();
     await themeSelect.click();
     await page.waitForTimeout(300);
@@ -136,19 +138,26 @@ test.describe('Slides Theme Switching', () => {
     await expandPresentationThemes(page);
 
     // Find the theme dropdown WITHIN the Presentation Themes section
-    const themesSection = page.locator('.ant-collapse-item').filter({ hasText: 'Presentation Themes' });
+    const themesSection = page
+      .locator('.ant-collapse-item')
+      .filter({ hasText: 'Presentation Themes' });
     const themeDropdown = themesSection.locator('.ant-select').first();
     await themeDropdown.click();
     await page.waitForTimeout(200);
 
     // Select Black theme from dropdown overlay
     // Ant Design renders options in a separate portal, use the visible dropdown item selector
-    const blackOption = page.locator('.ant-select-dropdown .ant-select-item-option-content:has-text("Black")');
+    const blackOption = page.locator(
+      '.ant-select-dropdown .ant-select-item-option-content:has-text("Black")'
+    );
     await blackOption.click();
     await page.waitForTimeout(500);
 
     // Verify theme is applied by checking the dropdown now shows "Black"
-    const themeValue = await themesSection.locator('.ant-select-selection-item').first().textContent();
+    const themeValue = await themesSection
+      .locator('.ant-select-selection-item')
+      .first()
+      .textContent();
     expect(themeValue).toContain('Black');
 
     // Also verify reveal container is visible
@@ -165,18 +174,25 @@ test.describe('Slides Theme Switching', () => {
     await expandPresentationThemes(page);
 
     // Find the theme dropdown WITHIN the Presentation Themes section
-    const themesSection = page.locator('.ant-collapse-item').filter({ hasText: 'Presentation Themes' });
+    const themesSection = page
+      .locator('.ant-collapse-item')
+      .filter({ hasText: 'Presentation Themes' });
     const themeDropdown = themesSection.locator('.ant-select').first();
     await themeDropdown.click();
     await page.waitForTimeout(200);
 
     // Select White theme from dropdown overlay
-    const whiteOption = page.locator('.ant-select-dropdown .ant-select-item-option-content:has-text("White")');
+    const whiteOption = page.locator(
+      '.ant-select-dropdown .ant-select-item-option-content:has-text("White")'
+    );
     await whiteOption.click();
     await page.waitForTimeout(500);
 
     // Verify theme is applied by checking the dropdown now shows "White"
-    const themeValue = await themesSection.locator('.ant-select-selection-item').first().textContent();
+    const themeValue = await themesSection
+      .locator('.ant-select-selection-item')
+      .first()
+      .textContent();
     expect(themeValue).toContain('White');
 
     // Also verify reveal container is visible
@@ -193,7 +209,9 @@ test.describe('Slides Theme Switching', () => {
     await expandPresentationThemes(page);
 
     // Find the theme dropdown WITHIN the Presentation Themes section
-    const themesSection = page.locator('.ant-collapse-item').filter({ hasText: 'Presentation Themes' });
+    const themesSection = page
+      .locator('.ant-collapse-item')
+      .filter({ hasText: 'Presentation Themes' });
     const themeDropdown = themesSection.locator('.ant-select').first();
     await themeDropdown.click();
     await page.waitForTimeout(200);
@@ -205,17 +223,22 @@ test.describe('Slides Theme Switching', () => {
     await dropdown.waitFor({ state: 'visible' });
 
     // Scroll the dropdown to ensure Night is visible
-    await dropdown.locator('.rc-virtual-list-holder').evaluate((el) => {
+    await dropdown.locator('.rc-virtual-list-holder').evaluate(el => {
       el.scrollTop = el.scrollHeight;
     });
     await page.waitForTimeout(200);
 
-    const nightOption = page.locator('.ant-select-dropdown .ant-select-item-option-content:has-text("Night")');
+    const nightOption = page.locator(
+      '.ant-select-dropdown .ant-select-item-option-content:has-text("Night")'
+    );
     await nightOption.click();
     await page.waitForTimeout(500);
 
     // Verify theme is applied by checking the dropdown now shows "Night"
-    const themeValue = await themesSection.locator('.ant-select-selection-item').first().textContent();
+    const themeValue = await themesSection
+      .locator('.ant-select-selection-item')
+      .first()
+      .textContent();
     expect(themeValue).toContain('Night');
 
     // Also verify reveal container is visible
@@ -236,7 +259,9 @@ test.describe('Slides Theme Switching', () => {
     await expandPresentationThemes(page);
 
     // Find the Presentation Themes section
-    const themesSection = page.locator('.ant-collapse-item').filter({ hasText: 'Presentation Themes' });
+    const themesSection = page
+      .locator('.ant-collapse-item')
+      .filter({ hasText: 'Presentation Themes' });
 
     // Code Theme dropdown is the second .ant-select in the Themes section
     const codeThemeLabel = page.locator('text=Code Theme');
@@ -248,7 +273,9 @@ test.describe('Slides Theme Switching', () => {
     await page.waitForTimeout(200);
 
     // Select a different code theme from dropdown overlay
-    const githubDark = page.locator('.ant-select-dropdown .ant-select-item-option-content:has-text("GitHub Dark")');
+    const githubDark = page.locator(
+      '.ant-select-dropdown .ant-select-item-option-content:has-text("GitHub Dark")'
+    );
     if (await githubDark.isVisible()) {
       await githubDark.click();
     } else {
@@ -271,13 +298,17 @@ test.describe('Slides Theme Switching', () => {
     await expandPresentationThemes(page);
 
     // Find the theme dropdown WITHIN the Presentation Themes section
-    const themesSection = page.locator('.ant-collapse-item').filter({ hasText: 'Presentation Themes' });
+    const themesSection = page
+      .locator('.ant-collapse-item')
+      .filter({ hasText: 'Presentation Themes' });
     const themeDropdown = themesSection.locator('.ant-select').first();
     await themeDropdown.click();
     await page.waitForTimeout(200);
 
     // Select Beige theme from dropdown overlay
-    const beigeOption = page.locator('.ant-select-dropdown .ant-select-item-option-content:has-text("Beige")');
+    const beigeOption = page.locator(
+      '.ant-select-dropdown .ant-select-item-option-content:has-text("Beige")'
+    );
     await beigeOption.click();
     await page.waitForTimeout(500);
 
@@ -296,8 +327,12 @@ test.describe('Slides Theme Switching', () => {
     await expandPresentationThemes(page);
 
     // The theme dropdown should show Beige
-    const themesSectionAfterReload = page.locator('.ant-collapse-item').filter({ hasText: 'Presentation Themes' });
-    const themeDropdownValue = themesSectionAfterReload.locator('.ant-select-selection-item').first();
+    const themesSectionAfterReload = page
+      .locator('.ant-collapse-item')
+      .filter({ hasText: 'Presentation Themes' });
+    const themeDropdownValue = themesSectionAfterReload
+      .locator('.ant-select-selection-item')
+      .first();
     await expect(themeDropdownValue).toContainText('Beige');
   });
 
@@ -314,7 +349,9 @@ test.describe('Slides Theme Switching', () => {
     await expandPresentationThemes(page);
 
     // Find the theme dropdown WITHIN the Presentation Themes section
-    const themesSection = page.locator('.ant-collapse-item').filter({ hasText: 'Presentation Themes' });
+    const themesSection = page
+      .locator('.ant-collapse-item')
+      .filter({ hasText: 'Presentation Themes' });
     const themeDropdown = themesSection.locator('.ant-select').first();
     await themeDropdown.click();
     await page.waitForTimeout(200);

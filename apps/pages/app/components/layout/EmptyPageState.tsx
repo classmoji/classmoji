@@ -20,10 +20,7 @@ const EmptyPageState = ({ canEdit, classroom }: EmptyPageStateProps) => {
   const isCreating = fetcher.state !== 'idle';
 
   const handleCreatePage = () => {
-    fetcher.submit(
-      { intent: 'create' },
-      { method: 'post', action: `/${classroom.slug}` }
-    );
+    fetcher.submit({ intent: 'create' }, { method: 'post', action: `/${classroom.slug}` });
   };
 
   return (

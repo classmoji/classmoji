@@ -45,8 +45,9 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
     students: ClassmojiService.classroomMembership.findUsersByRole(classroom.id, 'STUDENT'),
     leaderbord: ClassmojiService.helper.calculateClassLeaderboard(classSlug!),
     gradingProgress: ClassmojiService.repositoryAssignment.getGradingProgress(classSlug!),
-    completedAssignmentsProgress:
-      ClassmojiService.repositoryAssignment.getCompletionProgress(classSlug!),
+    completedAssignmentsProgress: ClassmojiService.repositoryAssignment.getCompletionProgress(
+      classSlug!
+    ),
     lateSubmissionsPercent: ClassmojiService.repositoryAssignment.getLatePercentage(classSlug!),
     recentRepositoryAssignments: ClassmojiService.repositoryAssignment.findRecentlyClosed(
       classSlug!,

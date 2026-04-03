@@ -12,14 +12,12 @@ interface ProjectTemplateSelectProps {
   disabled?: boolean;
 }
 
-const ProjectTemplateSelect = ({
-  value,
-  onChange,
-  disabled,
-}: ProjectTemplateSelectProps) => {
+const ProjectTemplateSelect = ({ value, onChange, disabled }: ProjectTemplateSelectProps) => {
   const { class: classSlug } = useParams();
   const [loading, setLoading] = useState(false);
-  const [projects, setProjects] = useState<Array<{ id: string; title: string; number: number }>>([]);
+  const [projects, setProjects] = useState<Array<{ id: string; title: string; number: number }>>(
+    []
+  );
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {

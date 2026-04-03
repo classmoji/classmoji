@@ -256,7 +256,10 @@ function QuizAttemptInterface({
 
   // Periodic metrics updates - save every 30 seconds
   // Store interval/timeout refs to allow manual cleanup on completion
-  const periodicTimersRef = useRef<{ timeout: ReturnType<typeof setTimeout> | null; interval: ReturnType<typeof setInterval> | null }>({ timeout: null, interval: null });
+  const periodicTimersRef = useRef<{
+    timeout: ReturnType<typeof setTimeout> | null;
+    interval: ReturnType<typeof setInterval> | null;
+  }>({ timeout: null, interval: null });
 
   useEffect(() => {
     if (!shouldTrackTime || !attemptId) return undefined;
@@ -614,8 +617,7 @@ function QuizAttemptInterface({
     if (sending && pendingUserMessageRef.current) {
       const dbHasUserMsg = displayMessages.some(
         (m: QuizMessage) =>
-          m.role?.toLowerCase() === 'user' &&
-          m.content === pendingUserMessageRef.current
+          m.role?.toLowerCase() === 'user' && m.content === pendingUserMessageRef.current
       );
       if (!dbHasUserMsg) {
         // DB hasn't saved our message yet — append it so it stays visible

@@ -123,11 +123,15 @@ const SingleModule = ({ loaderData }: Route.ComponentProps) => {
             </Card>
 
             <AssignmentTable
-              assignment={assignment as unknown as Parameters<typeof AssignmentTable>[0]['assignment']}
+              assignment={
+                assignment as unknown as Parameters<typeof AssignmentTable>[0]['assignment']
+              }
               module={module as Parameters<typeof AssignmentTable>[0]['module']}
               repos={repos as Parameters<typeof AssignmentTable>[0]['repos']}
               assistants={assistants as Parameters<typeof AssignmentTable>[0]['assistants']}
-              emojiMappings={emojiMappings as Parameters<typeof AssignmentTable>[0]['emojiMappings']}
+              emojiMappings={
+                emojiMappings as Parameters<typeof AssignmentTable>[0]['emojiMappings']
+              }
               settings={settings as Parameters<typeof AssignmentTable>[0]['settings']}
               org={classroom.git_organization.login}
             />
@@ -154,7 +158,16 @@ const SingleModule = ({ loaderData }: Route.ComponentProps) => {
       </div>
       <Divider />
 
-      <SummaryCards module={module!} repos={repos as { project_id?: string | null; assignments?: { assignment_id: string; status: string }[]; [key: string]: unknown }[]} />
+      <SummaryCards
+        module={module!}
+        repos={
+          repos as {
+            project_id?: string | null;
+            assignments?: { assignment_id: string; status: string }[];
+            [key: string]: unknown;
+          }[]
+        }
+      />
 
       {/* View Toggle */}
       <div className="flex justify-end items-center mb-6">

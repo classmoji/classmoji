@@ -42,9 +42,7 @@ export default function ImportTab({ form, onFilesChange }: ImportTabProps) {
 
       if (acceptedFiles.length === 0) {
         if (droppedFiles.length > 0) {
-          setExtractError(
-            'Please drop a .zip, .md, or image file (.png, .jpg, .gif, .svg, .webp)'
-          );
+          setExtractError('Please drop a .zip, .md, or image file (.png, .jpg, .gif, .svg, .webp)');
         }
         return;
       }
@@ -68,7 +66,9 @@ export default function ImportTab({ form, onFilesChange }: ImportTabProps) {
           } = await extractZipContents(zipFile);
 
           const mdBlob = new Blob([content], { type: 'text/markdown' });
-          const newMdFile = new File([mdBlob], markdownFileName ?? 'content.md', { type: 'text/markdown' });
+          const newMdFile = new File([mdBlob], markdownFileName ?? 'content.md', {
+            type: 'text/markdown',
+          });
 
           setMarkdownFile(newMdFile);
           setImageReferences(extractImageReferencesClient(content));
@@ -116,9 +116,7 @@ export default function ImportTab({ form, onFilesChange }: ImportTabProps) {
           return updatedImages;
         });
       } else if (droppedImages.length > 0) {
-        setExtractError(
-          'Please drop a markdown file (.md) first, or drop it together with images'
-        );
+        setExtractError('Please drop a markdown file (.md) first, or drop it together with images');
       }
     },
   });

@@ -50,7 +50,10 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
       userId
     );
   } catch (error: unknown) {
-    console.error('Calendar service error (likely missing migration):', error instanceof Error ? error.message : error);
+    console.error(
+      'Calendar service error (likely missing migration):',
+      error instanceof Error ? error.message : error
+    );
     events = [];
   }
 
@@ -61,7 +64,7 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
   });
 
   // Build map of assignment_id -> repository assignment (with repo info)
-  const repoAssignmentsByAssignmentId: Record<string, typeof repoAssignments[number]> = {};
+  const repoAssignmentsByAssignmentId: Record<string, (typeof repoAssignments)[number]> = {};
   repoAssignments.forEach(ra => {
     repoAssignmentsByAssignmentId[ra.assignment_id] = ra;
   });

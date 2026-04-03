@@ -40,16 +40,18 @@ const StudentsScreen = ({ loaderData }: Route.ComponentProps) => {
   const [query, setQuery] = useState('');
   // Merge students and invitations into unified list
   const allStudents = useMemo(() => {
-    const inviteList = invitations.map((inv: { id: string; student_name: string; school_email: string }) => ({
-      id: inv.id,
-      name: inv.student_name,
-      email: inv.school_email,
-      school_id: null,
-      login: 'pending-invite',
-      has_accepted_invite: false,
-      avatar_url: 'https://github.com/github.png?size=460',
-      _isInvite: true,
-    }));
+    const inviteList = invitations.map(
+      (inv: { id: string; student_name: string; school_email: string }) => ({
+        id: inv.id,
+        name: inv.student_name,
+        email: inv.school_email,
+        school_id: null,
+        login: 'pending-invite',
+        has_accepted_invite: false,
+        avatar_url: 'https://github.com/github.png?size=460',
+        _isInvite: true,
+      })
+    );
     return [...students, ...inviteList];
   }, [students, invitations]);
 

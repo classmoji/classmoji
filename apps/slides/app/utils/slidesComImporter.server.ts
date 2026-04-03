@@ -12,10 +12,27 @@ import { ContentService } from '@classmoji/content';
 import { GitHubProvider } from '@classmoji/services';
 import { getContentRepoName } from '@classmoji/utils';
 import { getThemeUrls, saveTheme, generateThemeSlug } from './themeService.server.ts';
-import { uploadVideoBuffer, isCloudinaryConfigured, deleteSlideVideos } from './cloudinaryService.server.ts';
+import {
+  uploadVideoBuffer,
+  isCloudinaryConfigured,
+  deleteSlideVideos,
+} from './cloudinaryService.server.ts';
 
 // Built-in Reveal.js themes
-const BUILTIN_THEMES = ['black', 'white', 'league', 'beige', 'night', 'serif', 'simple', 'solarized', 'moon', 'dracula', 'sky', 'blood'];
+const BUILTIN_THEMES = [
+  'black',
+  'white',
+  'league',
+  'beige',
+  'night',
+  'serif',
+  'simple',
+  'solarized',
+  'moon',
+  'dracula',
+  'sky',
+  'blood',
+];
 
 /**
  * Generate theme stylesheet URL
@@ -34,7 +51,20 @@ function getThemeUrl(theme: string): string {
  * @param {string} title - Slide title
  * @param {Object} options - Theme options
  */
-function generateSlideHtml(slidesContent: string, title: string, options: { libCssUrl?: string | null; customThemeUrl?: string | null; bodyClasses?: string; sharedThemeName?: string | null; lightTheme?: string; darkTheme?: string; codeThemeLight?: string; codeThemeDark?: string } = {}) {
+function generateSlideHtml(
+  slidesContent: string,
+  title: string,
+  options: {
+    libCssUrl?: string | null;
+    customThemeUrl?: string | null;
+    bodyClasses?: string;
+    sharedThemeName?: string | null;
+    lightTheme?: string;
+    darkTheme?: string;
+    codeThemeLight?: string;
+    codeThemeDark?: string;
+  } = {}
+) {
   const {
     // slides.com theme options (when importTheme is true)
     libCssUrl = null,
@@ -56,13 +86,16 @@ function generateSlideHtml(slidesContent: string, title: string, options: { libC
   const darkThemeUrl = getThemeUrl(darkTheme);
 
   // CSS links for slides.com theme
-  const slidesComCss = useSlidesCom ? `
+  const slidesComCss = useSlidesCom
+    ? `
   <!-- slides.com full CSS (includes fonts, themes, sl-block styles) -->
   <link rel="stylesheet" href="${libCssUrl}">
-  ${customThemeUrl ? `<!-- Custom theme CSS (user customizations from slides.com) -->\n  <link rel="stylesheet" href="${customThemeUrl}">` : ''}` : '';
+  ${customThemeUrl ? `<!-- Custom theme CSS (user customizations from slides.com) -->\n  <link rel="stylesheet" href="${customThemeUrl}">` : ''}`
+    : '';
 
   // CSS links for reveal.js themes (fallback when not using slides.com theme)
-  const revealThemeCss = !useSlidesCom ? `
+  const revealThemeCss = !useSlidesCom
+    ? `
   <!-- Light mode slide theme -->
   <link rel="stylesheet" href="${lightThemeUrl}" media="(prefers-color-scheme: light)">
   <!-- Dark mode slide theme -->
@@ -74,7 +107,8 @@ function generateSlideHtml(slidesContent: string, title: string, options: { libC
   <!-- Dark mode code syntax highlighting -->
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/styles/${codeThemeDark}.min.css" media="(prefers-color-scheme: dark)">
   <!-- Fallback code theme for browsers without prefers-color-scheme support -->
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/styles/${codeThemeLight}.min.css" media="not all and (prefers-color-scheme)">` : '';
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/styles/${codeThemeLight}.min.css" media="not all and (prefers-color-scheme)">`
+    : '';
 
   return `<!DOCTYPE html>
 <html lang="en">
@@ -138,7 +172,43 @@ ${slidesContent}
  * @param {Function} [options.onProgress] - Callback for progress updates ({ type: 'step'|'done'|'error', step?: string, current?: number, total?: number, filename?: string })
  * @returns {Promise<{slideId: string, slideCount: number, imageCount: number, themeSaved?: string, cloudinaryUploads?: number}>}
  */
-export async function processZipImport({ zipFile, title, moduleId, importTheme, useSavedTheme, saveThemeAs, org, classroomSlug, classroomId, term, userId, cloudinaryVideoPaths = [], onProgress = () => {} }: { zipFile: File | Blob; title: string; moduleId?: string | null; importTheme: boolean; useSavedTheme?: string | null; saveThemeAs?: string | null; org: string; classroomSlug?: string; classroomId: string; term: string; userId: string; cloudinaryVideoPaths?: string[]; onProgress?: (event: { type: string; step?: string; current?: number; total?: number; filename?: string; slideId?: string; message?: string }) => void }) {
+export async function processZipImport({
+  zipFile,
+  title,
+  moduleId,
+  importTheme,
+  useSavedTheme,
+  saveThemeAs,
+  org,
+  classroomSlug,
+  classroomId,
+  term,
+  userId,
+  cloudinaryVideoPaths = [],
+  onProgress = () => {},
+}: {
+  zipFile: File | Blob;
+  title: string;
+  moduleId?: string | null;
+  importTheme: boolean;
+  useSavedTheme?: string | null;
+  saveThemeAs?: string | null;
+  org: string;
+  classroomSlug?: string;
+  classroomId: string;
+  term: string;
+  userId: string;
+  cloudinaryVideoPaths?: string[];
+  onProgress?: (event: {
+    type: string;
+    step?: string;
+    current?: number;
+    total?: number;
+    filename?: string;
+    slideId?: string;
+    message?: string;
+  }) => void;
+}) {
   // 1. Extract ZIP
   onProgress({ type: 'step', step: 'extracting_zip' });
   const arrayBuffer = await zipFile.arrayBuffer();
@@ -154,7 +224,11 @@ export async function processZipImport({ zipFile, title, moduleId, importTheme, 
 
   // 3. Extract title from HTML if not provided
   const slideTitle = title || $('title').text() || 'Imported Slides';
-  const slug = slideTitle.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 50);
+  const slug = slideTitle
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-|-$/g, '')
+    .slice(0, 50);
 
   // 4. Get classroom from database (org param is git org login for GitHub API)
   const classroom = await getPrisma().classroom.findUnique({
@@ -171,7 +245,10 @@ export async function processZipImport({ zipFile, title, moduleId, importTheme, 
   }
 
   // Create GitHub provider instance for this organization
-  const gitProvider = new GitHubProvider(classroom.git_organization.github_installation_id as string, org);
+  const gitProvider = new GitHubProvider(
+    classroom.git_organization.github_installation_id as string,
+    org
+  );
 
   // 5. Flat content path: slides/{slug}-{timestamp}
   const timestamp = Date.now();
@@ -205,7 +282,7 @@ export async function processZipImport({ zipFile, title, moduleId, importTheme, 
   }
 
   // 7. Collect files for batch upload
-  const files: Array<{path: string; content: string; encoding: 'utf-8' | 'base64'}> = [];
+  const files: Array<{ path: string; content: string; encoding: 'utf-8' | 'base64' }> = [];
   /** @type {Map<string, string>} Maps old image path to new absolute URL */
   const imageMap = new Map();
 
@@ -250,7 +327,9 @@ export async function processZipImport({ zipFile, title, moduleId, importTheme, 
     const isInImageFolder = filePath.includes('/') && !filePath.startsWith('lib/');
     const isVideo = videoExtensions.includes(ext as string);
     // Check for image: either has image extension, OR is in a media folder but NOT a video/css/js file
-    const isImage = imageExtensions.includes(ext as string) || (isInImageFolder && !isVideo && !filePath.endsWith('.css') && !filePath.endsWith('.js'));
+    const isImage =
+      imageExtensions.includes(ext as string) ||
+      (isInImageFolder && !isVideo && !filePath.endsWith('.css') && !filePath.endsWith('.js'));
 
     if (isImage) {
       mediaFiles.push({ filePath, file, filename, type: 'image', ext });
@@ -270,7 +349,13 @@ export async function processZipImport({ zipFile, title, moduleId, importTheme, 
 
   for (let i = 0; i < imageFiles.length; i++) {
     const { filePath, file, filename } = imageFiles[i];
-    onProgress({ type: 'step', step: 'processing_images', current: i + 1, total: imageFiles.length, filename });
+    onProgress({
+      type: 'step',
+      step: 'processing_images',
+      current: i + 1,
+      total: imageFiles.length,
+      filename,
+    });
 
     const content = await file.async('base64');
     const newPath = `${contentPath}/images/${filename}`;
@@ -297,7 +382,13 @@ export async function processZipImport({ zipFile, title, moduleId, importTheme, 
 
   for (let i = 0; i < videoFiles.length; i++) {
     const { filePath, file, filename } = videoFiles[i];
-    onProgress({ type: 'step', step: 'processing_videos', current: i + 1, total: videoFiles.length, filename });
+    onProgress({
+      type: 'step',
+      step: 'processing_videos',
+      current: i + 1,
+      total: videoFiles.length,
+      filename,
+    });
 
     // Check if this video should go to Cloudinary
     if (cloudinaryVideoSet.has(filePath) && isCloudinaryConfigured()) {
@@ -343,7 +434,7 @@ export async function processZipImport({ zipFile, title, moduleId, importTheme, 
     const customThemeCss = $('#theme-css-output').text();
 
     // Collect lib files for potential saving
-    const libFiles: Array<{path: string; content: string; encoding: 'utf-8' | 'base64'}> = [];
+    const libFiles: Array<{ path: string; content: string; encoding: 'utf-8' | 'base64' }> = [];
     for (const [filePath, file] of Object.entries(zip.files)) {
       if (filePath.startsWith('lib/') && !file.dir) {
         const content = await file.async('base64');
@@ -368,7 +459,15 @@ export async function processZipImport({ zipFile, title, moduleId, importTheme, 
         bodyClasses: finalBodyClasses,
         customThemeCss: customThemeCss?.trim() || undefined,
         libFiles,
-        onProgress: ({ current, total, filename }: { current: number; total: number; filename?: string }) => {
+        onProgress: ({
+          current,
+          total,
+          filename,
+        }: {
+          current: number;
+          total: number;
+          filename?: string;
+        }) => {
           onProgress({ type: 'step', step: 'saving_theme', current, total, filename });
         },
       });
@@ -413,30 +512,36 @@ export async function processZipImport({ zipFile, title, moduleId, importTheme, 
 
   // Process all elements with image-related attributes
   // Includes: src, data-src, data-background-image, data-video-thumb (slides.com video thumbnails), poster (HTML5 video)
-  $slides.find('[src], [data-src], [data-background-image], [data-video-thumb], [poster]').each((_, el) => {
-    const $el = $(el);
+  $slides
+    .find('[src], [data-src], [data-background-image], [data-video-thumb], [poster]')
+    .each((_, el) => {
+      const $el = $(el);
 
-    ['src', 'data-src', 'data-background-image', 'data-video-thumb', 'poster'].forEach(attr => {
-      const val = $el.attr(attr);
-      if (!val) return;
+      ['src', 'data-src', 'data-background-image', 'data-video-thumb', 'poster'].forEach(attr => {
+        const val = $el.attr(attr);
+        if (!val) return;
 
-      // Try to match the path in our image map
-      for (const [oldPath, newPath] of imageMap) {
-        // Match full path or just filename
-        if (val === oldPath || val.endsWith('/' + oldPath.split('/').pop()) || val.includes(oldPath)) {
-          // Convert data-src to src for compatibility with our viewer
-          if (attr === 'data-src') {
-            $el.attr('src', newPath);
-            $el.removeAttr('data-src');
-            $el.removeAttr('data-lazy-loaded');
-          } else {
-            $el.attr(attr, newPath);
+        // Try to match the path in our image map
+        for (const [oldPath, newPath] of imageMap) {
+          // Match full path or just filename
+          if (
+            val === oldPath ||
+            val.endsWith('/' + oldPath.split('/').pop()) ||
+            val.includes(oldPath)
+          ) {
+            // Convert data-src to src for compatibility with our viewer
+            if (attr === 'data-src') {
+              $el.attr('src', newPath);
+              $el.removeAttr('data-src');
+              $el.removeAttr('data-lazy-loaded');
+            } else {
+              $el.attr(attr, newPath);
+            }
+            break;
           }
-          break;
         }
-      }
+      });
     });
-  });
 
   // Also handle background images on sections
   $slides.find('section[data-background-image]').each((_, el) => {
@@ -445,7 +550,11 @@ export async function processZipImport({ zipFile, title, moduleId, importTheme, 
     if (!val) return;
 
     for (const [oldPath, newPath] of imageMap) {
-      if (val === oldPath || val.endsWith('/' + oldPath.split('/').pop()) || val.includes(oldPath)) {
+      if (
+        val === oldPath ||
+        val.endsWith('/' + oldPath.split('/').pop()) ||
+        val.includes(oldPath)
+      ) {
         $el.attr('data-background-image', newPath);
         break;
       }
@@ -494,7 +603,10 @@ export async function processZipImport({ zipFile, title, moduleId, importTheme, 
         }
         console.log(`Injected ${notesInjected} speaker notes from SLConfig`);
       } catch (parseErr: unknown) {
-        console.warn('Could not parse SLConfig for speaker notes:', parseErr instanceof Error ? parseErr.message : parseErr);
+        console.warn(
+          'Could not parse SLConfig for speaker notes:',
+          parseErr instanceof Error ? parseErr.message : parseErr
+        );
       }
     }
   }
@@ -552,8 +664,10 @@ export async function processZipImport({ zipFile, title, moduleId, importTheme, 
     const heightAttr = $iframe.attr('height');
     let left = parseStyleValue(iframeStyle, 'left') ?? parseStyleValue(parentStyle, 'left') ?? 100;
     let top = parseStyleValue(iframeStyle, 'top') ?? parseStyleValue(parentStyle, 'top') ?? 100;
-    let width = parseStyleValue(iframeStyle, 'width') ?? (widthAttr ? parseFloat(widthAttr) : null) ?? 560;
-    let height = parseStyleValue(iframeStyle, 'height') ?? (heightAttr ? parseFloat(heightAttr) : null) ?? 315;
+    let width =
+      parseStyleValue(iframeStyle, 'width') ?? (widthAttr ? parseFloat(widthAttr) : null) ?? 560;
+    let height =
+      parseStyleValue(iframeStyle, 'height') ?? (heightAttr ? parseFloat(heightAttr) : null) ?? 315;
 
     // Create sl-block wrapper
     const blockHtml = `
@@ -617,11 +731,22 @@ export async function processZipImport({ zipFile, title, moduleId, importTheme, 
   // 11. Upload Cloudinary videos (now that we have slideId)
   if (cloudinaryVideoQueue.length > 0) {
     console.log(`Uploading ${cloudinaryVideoQueue.length} videos to Cloudinary...`);
-    onProgress({ type: 'step', step: 'uploading_cloudinary', current: 0, total: cloudinaryVideoQueue.length });
+    onProgress({
+      type: 'step',
+      step: 'uploading_cloudinary',
+      current: 0,
+      total: cloudinaryVideoQueue.length,
+    });
 
     for (let i = 0; i < cloudinaryVideoQueue.length; i++) {
       const { filePath, filename, buffer } = cloudinaryVideoQueue[i];
-      onProgress({ type: 'step', step: 'uploading_cloudinary', current: i + 1, total: cloudinaryVideoQueue.length, filename });
+      onProgress({
+        type: 'step',
+        step: 'uploading_cloudinary',
+        current: i + 1,
+        total: cloudinaryVideoQueue.length,
+        filename,
+      });
 
       try {
         const result = await uploadVideoBuffer(buffer, slide.id, filename);
@@ -631,7 +756,9 @@ export async function processZipImport({ zipFile, title, moduleId, importTheme, 
         videoMap.set(filePath, result.optimizedUrl);
         videoMap.set(filename, result.optimizedUrl);
 
-        console.log(`Uploaded ${filename} to Cloudinary (${(result.bytes / 1024 / 1024).toFixed(1)} MB)`);
+        console.log(
+          `Uploaded ${filename} to Cloudinary (${(result.bytes / 1024 / 1024).toFixed(1)} MB)`
+        );
       } catch (cloudErr: unknown) {
         // If Cloudinary fails, fall back to GitHub
         const message = cloudErr instanceof Error ? cloudErr.message : String(cloudErr);
@@ -668,7 +795,11 @@ export async function processZipImport({ zipFile, title, moduleId, importTheme, 
 
       // Try to match local path in our video map
       for (const [oldPath, newPath] of videoMap) {
-        if (val === oldPath || val.endsWith('/' + oldPath.split('/').pop()) || val.includes(oldPath)) {
+        if (
+          val === oldPath ||
+          val.endsWith('/' + oldPath.split('/').pop()) ||
+          val.includes(oldPath)
+        ) {
           // Convert data-src to src for compatibility
           if (attr === 'data-src') {
             $video.attr('src', newPath);
@@ -709,16 +840,18 @@ export async function processZipImport({ zipFile, title, moduleId, importTheme, 
   const slidesHtml = $slides.html();
 
   // Build theme options based on whether we're using slides.com theme or fallback
-  const themeOptions = libCssUrl ? {
-    // slides.com full theme import (from saved theme or extracted)
-    libCssUrl,
-    customThemeUrl,
-    bodyClasses: finalBodyClasses,
-    sharedThemeName, // For data-theme attribute
-  } : {
-    // Fallback to reveal.js themes
-    lightTheme: 'white',
-  };
+  const themeOptions = libCssUrl
+    ? {
+        // slides.com full theme import (from saved theme or extracted)
+        libCssUrl,
+        customThemeUrl,
+        bodyClasses: finalBodyClasses,
+        sharedThemeName, // For data-theme attribute
+      }
+    : {
+        // Fallback to reveal.js themes
+        lightTheme: 'white',
+      };
 
   const fullHtml = generateSlideHtml(slidesHtml || '', slideTitle, themeOptions);
   files.push({

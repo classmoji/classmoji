@@ -36,7 +36,12 @@ import { PageLink } from './PageLinkBlock.tsx';
  * Custom blocks (7): callout, terminal, profile, divider, embed, video, pageLink
  */
 // Remove audio, video, and codeBlock from default blocks
-const { audio, video: defaultVideo, codeBlock: defaultCodeBlock, ...filteredDefaultBlockSpecs } = defaultBlockSpecs;
+const {
+  audio,
+  video: defaultVideo,
+  codeBlock: defaultCodeBlock,
+  ...filteredDefaultBlockSpecs
+} = defaultBlockSpecs;
 
 export const schema = BlockNoteSchema.create({
   blockSpecs: {
@@ -54,9 +59,10 @@ export const schema = BlockNoteSchema.create({
   },
 });
 
-export type PageBlockEditor = typeof schema extends BlockNoteSchema<infer BSchema, infer ISchema, infer SSchema>
-  ? BlockNoteEditor<BSchema, ISchema, SSchema>
-  : never;
+export type PageBlockEditor =
+  typeof schema extends BlockNoteSchema<infer BSchema, infer ISchema, infer SSchema>
+    ? BlockNoteEditor<BSchema, ISchema, SSchema>
+    : never;
 
 export type PageBlockInsertions = Parameters<PageBlockEditor['insertBlocks']>[0];
 export type PageBlock = PageBlockInsertions[number];
@@ -87,11 +93,7 @@ export const customSlashMenuItems = [
     group: 'Basic blocks',
     icon: <IconMinus size={18} />,
     onItemClick: (editor: PageBlockEditor) => {
-      editor.insertBlocks(
-        [{ type: 'divider' }],
-        editor.getTextCursorPosition().block,
-        'after'
-      );
+      editor.insertBlocks([{ type: 'divider' }], editor.getTextCursorPosition().block, 'after');
     },
   },
   {
@@ -110,7 +112,10 @@ export const customSlashMenuItems = [
       // Focus the new block immediately after insertion
       setTimeout(() => {
         const blocks = editor.document;
-        const newBlockRef = blocks.find((b: { type: string; props: Record<string, unknown> }) => b.type === 'pageLink' && !b.props.pageId);
+        const newBlockRef = blocks.find(
+          (b: { type: string; props: Record<string, unknown> }) =>
+            b.type === 'pageLink' && !b.props.pageId
+        );
         if (newBlockRef) {
           editor.setTextCursorPosition(newBlockRef, 'end');
         }
@@ -146,11 +151,7 @@ export const customSlashMenuItems = [
     group: 'Code',
     icon: <IconTerminal size={18} />,
     onItemClick: (editor: PageBlockEditor) => {
-      editor.insertBlocks(
-        [{ type: 'terminal' }],
-        editor.getTextCursorPosition().block,
-        'after'
-      );
+      editor.insertBlocks([{ type: 'terminal' }], editor.getTextCursorPosition().block, 'after');
     },
   },
   {
@@ -160,11 +161,7 @@ export const customSlashMenuItems = [
     group: 'Advanced',
     icon: <IconUserCircle size={18} />,
     onItemClick: (editor: PageBlockEditor) => {
-      editor.insertBlocks(
-        [{ type: 'profile' }],
-        editor.getTextCursorPosition().block,
-        'after'
-      );
+      editor.insertBlocks([{ type: 'profile' }], editor.getTextCursorPosition().block, 'after');
     },
   },
 ];

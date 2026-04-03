@@ -1,4 +1,10 @@
-export const getUsageData = ({ isFreeTier, isProTier }: { isFreeTier: boolean; isProTier: boolean }) => [
+export const getUsageData = ({
+  isFreeTier,
+  isProTier,
+}: {
+  isFreeTier: boolean;
+  isProTier: boolean;
+}) => [
   {
     key: 'students',
     feature: 'Students per course',

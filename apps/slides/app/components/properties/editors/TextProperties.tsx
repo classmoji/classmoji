@@ -95,102 +95,120 @@ export default function TextProperties({ element }: { element: HTMLElement }) {
   }, [element]);
 
   // Change element type (e.g., h1 → h2, h1 → p, or h1 → code block)
-  const handleElementTypeChange = useCallback((newType: string) => {
-    if (!element || element.tagName === newType) return;
+  const handleElementTypeChange = useCallback(
+    (newType: string) => {
+      if (!element || element.tagName === newType) return;
 
-    // List items can't be converted to other types (they must stay in lists)
-    if (element.tagName === 'LI') return;
+      // List items can't be converted to other types (they must stay in lists)
+      if (element.tagName === 'LI') return;
 
-    let newElement;
+      let newElement;
 
-    if (newType === 'CODE') {
-      // Special case: convert to code block (<pre><code>)
-      const pre = document.createElement('pre');
-      const code = document.createElement('code');
-      code.className = 'language-javascript';
-      code.textContent = element.textContent || '// Your code here';
-      pre.appendChild(code);
-      newElement = pre;
-    } else {
-      // Standard element conversion
-      newElement = document.createElement(newType.toLowerCase());
+      if (newType === 'CODE') {
+        // Special case: convert to code block (<pre><code>)
+        const pre = document.createElement('pre');
+        const code = document.createElement('code');
+        code.className = 'language-javascript';
+        code.textContent = element.textContent || '// Your code here';
+        pre.appendChild(code);
+        newElement = pre;
+      } else {
+        // Standard element conversion
+        newElement = document.createElement(newType.toLowerCase());
 
-      // Copy innerHTML (preserves nested content like <strong>, <em>, etc.)
-      newElement.innerHTML = element.innerHTML;
+        // Copy innerHTML (preserves nested content like <strong>, <em>, etc.)
+        newElement.innerHTML = element.innerHTML;
 
-      // Copy over styles
-      newElement.style.cssText = element.style.cssText;
+        // Copy over styles
+        newElement.style.cssText = element.style.cssText;
 
-      // Copy over any classes
-      newElement.className = element.className;
-    }
+        // Copy over any classes
+        newElement.className = element.className;
+      }
 
-    // Replace in DOM
-    element.parentNode?.replaceChild(newElement, element);
+      // Replace in DOM
+      element.parentNode?.replaceChild(newElement, element);
 
-    // Update state and selection
-    setElementType(newType);
-    selectElement(newElement);
-    onContentChange?.();
-  }, [element, selectElement, onContentChange]);
+      // Update state and selection
+      setElementType(newType);
+      selectElement(newElement);
+      onContentChange?.();
+    },
+    [element, selectElement, onContentChange]
+  );
 
   // Update alignment
-  const handleAlignmentChange = useCallback((newAlign: string) => {
-    if (!element) return;
-    element.style.textAlign = newAlign === 'left' ? '' : newAlign;
-    setAlignment(newAlign);
-    onContentChange?.();
-  }, [element, onContentChange]);
+  const handleAlignmentChange = useCallback(
+    (newAlign: string) => {
+      if (!element) return;
+      element.style.textAlign = newAlign === 'left' ? '' : newAlign;
+      setAlignment(newAlign);
+      onContentChange?.();
+    },
+    [element, onContentChange]
+  );
 
   // Update color
-  const handleColorChange = useCallback((newColor: string) => {
-    if (!element) return;
-    element.style.color = newColor === 'inherit' ? '' : newColor;
-    setColor(newColor);
-    onContentChange?.();
-  }, [element, onContentChange]);
+  const handleColorChange = useCallback(
+    (newColor: string) => {
+      if (!element) return;
+      element.style.color = newColor === 'inherit' ? '' : newColor;
+      setColor(newColor);
+      onContentChange?.();
+    },
+    [element, onContentChange]
+  );
 
   // Update font size
-  const handleFontSizeChange = useCallback((newSize: string) => {
-    if (!element) return;
-    element.style.fontSize = newSize;
-    setFontSize(newSize);
-    onContentChange?.();
-  }, [element, onContentChange]);
+  const handleFontSizeChange = useCallback(
+    (newSize: string) => {
+      if (!element) return;
+      element.style.fontSize = newSize;
+      setFontSize(newSize);
+      onContentChange?.();
+    },
+    [element, onContentChange]
+  );
 
   // Update columns (for list items - applies to parent list)
-  const handleColumnsChange = useCallback((newColumns: string) => {
-    if (!element || element.tagName !== 'LI') return;
+  const handleColumnsChange = useCallback(
+    (newColumns: string) => {
+      if (!element || element.tagName !== 'LI') return;
 
-    const parentList = element.closest('ul, ol') as HTMLElement | null;
-    if (!parentList) return;
+      const parentList = element.closest('ul, ol') as HTMLElement | null;
+      if (!parentList) return;
 
-    if (newColumns === '1') {
-      // Remove column styles
-      parentList.style.columnCount = '';
-      parentList.style.columnGap = '';
-    } else {
-      // Apply column styles
-      parentList.style.columnCount = newColumns;
-      parentList.style.columnGap = '2em';
-    }
+      if (newColumns === '1') {
+        // Remove column styles
+        parentList.style.columnCount = '';
+        parentList.style.columnGap = '';
+      } else {
+        // Apply column styles
+        parentList.style.columnCount = newColumns;
+        parentList.style.columnGap = '2em';
+      }
 
-    setColumns(newColumns);
-    onContentChange?.();
-  }, [element, onContentChange]);
+      setColumns(newColumns);
+      onContentChange?.();
+    },
+    [element, onContentChange]
+  );
 
   if (!element) {
     return null;
   }
 
   // Determine element type for display
-  const elementLabel = ({
-    H1: 'Heading 1',
-    H2: 'Heading 2',
-    H3: 'Heading 3',
-    P: 'Paragraph',
-    LI: 'List Item',
-  } as Record<string, string>)[element.tagName] || 'Text';
+  const elementLabel =
+    (
+      {
+        H1: 'Heading 1',
+        H2: 'Heading 2',
+        H3: 'Heading 3',
+        P: 'Paragraph',
+        LI: 'List Item',
+      } as Record<string, string>
+    )[element.tagName] || 'Text';
 
   // Check if element type can be changed (list items can't)
   const canChangeType = element.tagName !== 'LI';
@@ -219,7 +237,7 @@ export default function TextProperties({ element }: { element: HTMLElement }) {
         <div>
           <PropertyLabel>Alignment</PropertyLabel>
           <div className="flex gap-1">
-            {ALIGNMENTS.map((align) => (
+            {ALIGNMENTS.map(align => (
               <button
                 key={align.value}
                 onClick={() => handleAlignmentChange(align.value)}
@@ -240,7 +258,7 @@ export default function TextProperties({ element }: { element: HTMLElement }) {
         <div>
           <PropertyLabel>Color</PropertyLabel>
           <div className="flex flex-wrap gap-1">
-            {COLORS.map((c) => (
+            {COLORS.map(c => (
               <button
                 key={c.value}
                 onClick={() => handleColorChange(c.value)}
@@ -251,9 +269,10 @@ export default function TextProperties({ element }: { element: HTMLElement }) {
                 }`}
                 style={{
                   backgroundColor: c.value === 'inherit' ? 'transparent' : c.value,
-                  backgroundImage: c.value === 'inherit'
-                    ? 'linear-gradient(45deg, #ccc 25%, transparent 25%, transparent 75%, #ccc 75%), linear-gradient(45deg, #ccc 25%, transparent 25%, transparent 75%, #ccc 75%)'
-                    : 'none',
+                  backgroundImage:
+                    c.value === 'inherit'
+                      ? 'linear-gradient(45deg, #ccc 25%, transparent 25%, transparent 75%, #ccc 75%), linear-gradient(45deg, #ccc 25%, transparent 25%, transparent 75%, #ccc 75%)'
+                      : 'none',
                   backgroundSize: '8px 8px',
                   backgroundPosition: '0 0, 4px 4px',
                 }}
@@ -289,7 +308,6 @@ export default function TextProperties({ element }: { element: HTMLElement }) {
             <p className="text-xs text-gray-400 mt-1">Flows list items into columns</p>
           </div>
         )}
-
       </PropertySection>
 
       {/* Convert to draggable block */}
@@ -301,9 +319,7 @@ export default function TextProperties({ element }: { element: HTMLElement }) {
           >
             📦 Convert to Draggable Block
           </button>
-          <p className="text-xs text-gray-400 mt-1">
-            Move freely with absolute positioning
-          </p>
+          <p className="text-xs text-gray-400 mt-1">Move freely with absolute positioning</p>
         </PropertySection>
       )}
     </div>

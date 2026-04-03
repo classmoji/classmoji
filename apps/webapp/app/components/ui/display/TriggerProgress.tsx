@@ -122,14 +122,12 @@ const TriggerProgress = ({ callback, validIdentifiers, operation }: TriggerProgr
   // Calculate status counts from logs
   const statusCounts = useMemo(() => {
     const counts = { running: 0, completed: 0, failed: 0, queued: 0 };
-    logs.forEach((log) => {
+    logs.forEach(log => {
       if (['EXECUTING', 'WAITING'].includes(log.status)) {
         counts.running++;
       } else if (log.status === 'COMPLETED') {
         counts.completed++;
-      } else if (
-        ['FAILED', 'CRASHED', 'SYSTEM FAILURE', 'TIMED OUT'].includes(log.status)
-      ) {
+      } else if (['FAILED', 'CRASHED', 'SYSTEM FAILURE', 'TIMED OUT'].includes(log.status)) {
         counts.failed++;
       } else {
         counts.queued++;

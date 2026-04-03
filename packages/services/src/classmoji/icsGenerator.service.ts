@@ -59,7 +59,9 @@ const convertRecurrenceRule = (
 
   const rrule: { freq: 'WEEKLY'; byday: string[]; until?: number[] } = {
     freq: 'WEEKLY',
-    byday: recurrenceRule.days.map((day: string) => DAY_MAP[day.toLowerCase() as keyof typeof DAY_MAP]).filter(Boolean),
+    byday: recurrenceRule.days
+      .map((day: string) => DAY_MAP[day.toLowerCase() as keyof typeof DAY_MAP])
+      .filter(Boolean),
   };
 
   if (recurrenceRule.until) {
@@ -127,7 +129,10 @@ const convertEventToICS = (event: CalendarEventInput, classroomSlug: string): Ev
  * @param {string} classroomSlug - The classroom slug (for UID generation)
  * @returns {Promise<string>} The ICS file content
  */
-export const generateCalendarFeed = async (classroomId: string, classroomSlug: string = 'classroom'): Promise<string> => {
+export const generateCalendarFeed = async (
+  classroomId: string,
+  classroomSlug: string = 'classroom'
+): Promise<string> => {
   // Get date range: 30 days past to 365 days future
   const now = new Date();
   const startDate = new Date(now);
@@ -153,7 +158,9 @@ export const generateCalendarFeed = async (classroomId: string, classroomSlug: s
   }
 
   // Convert events to ICS format
-  const icsEvents = events.map(event => convertEventToICS(event as CalendarEventInput, classroomSlug));
+  const icsEvents = events.map(event =>
+    convertEventToICS(event as CalendarEventInput, classroomSlug)
+  );
 
   // Generate ICS content
   return new Promise((resolve, reject) => {
@@ -164,10 +171,7 @@ export const generateCalendarFeed = async (classroomId: string, classroomSlug: s
       } else {
         // Add custom calendar name
         const calendarName = `X-WR-CALNAME:${classroomSlug} Calendar`;
-        const icsContent = value.replace(
-          'BEGIN:VCALENDAR',
-          `BEGIN:VCALENDAR\r\n${calendarName}`
-        );
+        const icsContent = value.replace('BEGIN:VCALENDAR', `BEGIN:VCALENDAR\r\n${calendarName}`);
         resolve(icsContent);
       }
     });

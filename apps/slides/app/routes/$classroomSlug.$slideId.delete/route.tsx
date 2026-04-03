@@ -12,7 +12,13 @@ import { assertSlideAccess } from '@classmoji/auth/server';
 import { useUser } from '~/root';
 import { getSlideDeleteInfo, deleteSlide } from '~/utils/slideService.server';
 
-export const loader = async ({ params, request }: { params: Record<string, string | undefined>; request: Request }) => {
+export const loader = async ({
+  params,
+  request,
+}: {
+  params: Record<string, string | undefined>;
+  request: Request;
+}) => {
   const { classroomSlug, slideId } = params;
   if (!classroomSlug || !slideId) throw new Response('Missing parameters', { status: 400 });
 
@@ -53,14 +59,13 @@ export const loader = async ({ params, request }: { params: Record<string, strin
       term: slideInfo.slide.term,
       contentPath,
     },
-    github: repoName ? {
-      repo: repoName,
-      folder: contentPath,
-      files: [
-        `${contentPath}/index.html`,
-        `${contentPath}/images/*`,
-      ],
-    } : null,
+    github: repoName
+      ? {
+          repo: repoName,
+          folder: contentPath,
+          files: [`${contentPath}/index.html`, `${contentPath}/images/*`],
+        }
+      : null,
     classroom: {
       name: slideInfo.slide.classroom?.name,
       slug: slideInfo.slide.classroom?.slug,
@@ -72,7 +77,13 @@ export const loader = async ({ params, request }: { params: Record<string, strin
   };
 };
 
-export const action = async ({ request, params }: { request: Request; params: Record<string, string | undefined> }) => {
+export const action = async ({
+  request,
+  params,
+}: {
+  request: Request;
+  params: Record<string, string | undefined>;
+}) => {
   const { classroomSlug, slideId } = params;
   if (!classroomSlug || !slideId) return { error: 'Missing parameters' };
   const formData = await request.formData();
@@ -128,20 +139,23 @@ export default function DeleteSlidePage() {
   // Check if user has permission using classroom memberships
   // OWNER, TEACHER, and ASSISTANT can delete (ASSISTANT can delete their own slides or when team_edit is enabled)
   // Server-side auth in loader/action handles the detailed permission check
-  const membership = user?.classroom_memberships?.find((m: { classroom?: { slug: string } }) => m.classroom?.slug === classroomSlug);
-  const canDelete = membership?.role === 'OWNER' || membership?.role === 'TEACHER' || membership?.role === 'ASSISTANT';
+  const membership = user?.classroom_memberships?.find(
+    (m: { classroom?: { slug: string } }) => m.classroom?.slug === classroomSlug
+  );
+  const canDelete =
+    membership?.role === 'OWNER' ||
+    membership?.role === 'TEACHER' ||
+    membership?.role === 'ASSISTANT';
 
   if (!canDelete) {
     return (
       <div className="min-h-screen bg-gray-50 dark:bg-gray-900 flex items-center justify-center p-8">
         <div className="max-w-md text-center">
           <div className="text-4xl mb-4">🔒</div>
-          <h1 className="text-xl font-bold text-gray-900 dark:text-white mb-2">
-            Access Denied
-          </h1>
+          <h1 className="text-xl font-bold text-gray-900 dark:text-white mb-2">Access Denied</h1>
           <p className="text-gray-500 dark:text-gray-400 mb-4">
-            You do not have permission to delete slides for {classroom.name || classroomSlug}.
-            Only Owners, Teachers, and Assistants can delete slides.
+            You do not have permission to delete slides for {classroom.name || classroomSlug}. Only
+            Owners, Teachers, and Assistants can delete slides.
           </p>
           <a
             href={webappUrl}
@@ -162,9 +176,7 @@ export default function DeleteSlidePage() {
           <div className="flex items-center gap-3">
             <div className="text-2xl">⚠️</div>
             <div>
-              <h1 className="text-2xl font-bold text-red-600 dark:text-red-400">
-                Delete Slide
-              </h1>
+              <h1 className="text-2xl font-bold text-red-600 dark:text-red-400">Delete Slide</h1>
               <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
                 This action cannot be undone
               </p>
@@ -194,7 +206,8 @@ export default function DeleteSlidePage() {
             {/* Slide info */}
             <div className="mb-6">
               <p className="text-gray-700 dark:text-gray-300">
-                Are you sure you want to delete <strong className="text-gray-900 dark:text-white">{slide.title}</strong>?
+                Are you sure you want to delete{' '}
+                <strong className="text-gray-900 dark:text-white">{slide.title}</strong>?
               </p>
             </div>
 
@@ -242,15 +255,14 @@ export default function DeleteSlidePage() {
                 {otherSlidesUsingTheme > 0 ? (
                   <>
                     <p className="text-sm text-gray-600 dark:text-gray-400 mb-2">
-                      This theme is also used by {otherSlidesUsingTheme} other slide{otherSlidesUsingTheme !== 1 ? 's' : ''}:
+                      This theme is also used by {otherSlidesUsingTheme} other slide
+                      {otherSlidesUsingTheme !== 1 ? 's' : ''}:
                     </p>
                     <ul className="text-sm text-gray-500 dark:text-gray-400 list-disc list-inside mb-2">
                       {slideList.slice(0, 5).map((s: { id: string; title: string }) => (
                         <li key={s.id}>{s.title}</li>
                       ))}
-                      {slideList.length > 5 && (
-                        <li>...and {slideList.length - 5} more</li>
-                      )}
+                      {slideList.length > 5 && <li>...and {slideList.length - 5} more</li>}
                     </ul>
                     <p className="text-sm text-amber-600 dark:text-amber-400">
                       The theme will be kept since other slides are using it.

@@ -103,7 +103,9 @@ const StatsGradingProgress = ({ gradingProgress }: StatsGradingProgressProps) =>
       <CardHeader>Class Grading Progress</CardHeader>
 
       <Table
-        dataSource={data.sort((a: GradingProgressItem, b: GradingProgressItem) => b.progress - a.progress)} // Sort by progress desc
+        dataSource={data.sort(
+          (a: GradingProgressItem, b: GradingProgressItem) => b.progress - a.progress
+        )} // Sort by progress desc
         columns={columns}
         rowKey={record => record.id || record.title}
         size="small"

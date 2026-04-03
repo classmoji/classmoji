@@ -105,6 +105,9 @@ export async function saveManifest(classroomId: string): Promise<void> {
     });
   } catch (error: unknown) {
     // Log but don't fail the request if manifest save fails
-    console.error('Failed to save content manifest:', error instanceof Error ? error.message : String(error));
+    console.error(
+      'Failed to save content manifest:',
+      error instanceof Error ? error.message : String(error)
+    );
   }
 }

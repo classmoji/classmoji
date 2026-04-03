@@ -13,7 +13,13 @@ import { fetchContent } from '~/utils/contentProxy';
  *
  * Requires speakerNotes access (staff, or viewers when show_speaker_notes=true).
  */
-export const loader = async ({ params, request }: { params: Record<string, string | undefined>; request: Request }) => {
+export const loader = async ({
+  params,
+  request,
+}: {
+  params: Record<string, string | undefined>;
+  request: Request;
+}) => {
   const { slideId } = params;
   if (!slideId) throw new Response('Missing slideId', { status: 400 });
 
@@ -93,10 +99,5 @@ export default function SlideSpeaker() {
     );
   }
 
-  return (
-    <SpeakerView
-      slideId={slide.id}
-      initialContent={slideContent ?? ''}
-    />
-  );
+  return <SpeakerView slideId={slide.id} initialContent={slideContent ?? ''} />;
 }

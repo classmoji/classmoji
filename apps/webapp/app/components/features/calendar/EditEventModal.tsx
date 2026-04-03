@@ -184,12 +184,13 @@ const EditEventModal = ({
       // Initialize linked resource IDs from event's raw links
       // For recurring events, filter links for this specific occurrence
       const occurrenceDate = event.occurrence_date || event.start_time;
-      const filterLinksForOccurrence = <T extends { occurrence_date?: string | null }>(links: T[] | undefined) => {
+      const filterLinksForOccurrence = <T extends { occurrence_date?: string | null }>(
+        links: T[] | undefined
+      ) => {
         if (!links) return [];
         if (!links) return [];
         return links.filter(
-          link =>
-            !link.occurrence_date || isSameDateDay(link.occurrence_date, occurrenceDate)
+          link => !link.occurrence_date || isSameDateDay(link.occurrence_date, occurrenceDate)
         );
       };
 

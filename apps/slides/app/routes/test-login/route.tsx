@@ -96,9 +96,7 @@ export const loader = async ({ request }: { request: Request }) => {
     }
 
     if (!account?.user) {
-      throw new Error(
-        `Account found but no user associated. Database may be corrupted.`
-      );
+      throw new Error(`Account found but no user associated. Database may be corrupted.`);
     }
 
     const user = account.user;

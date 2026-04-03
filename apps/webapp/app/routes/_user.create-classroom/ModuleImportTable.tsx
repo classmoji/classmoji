@@ -19,7 +19,12 @@ interface ModuleImportTableProps {
   onQuizToggle: (moduleId: string, checked: boolean) => void;
 }
 
-const ModuleImportTable = ({ modules, selectedModules, onModuleToggle, onQuizToggle }: ModuleImportTableProps) => {
+const ModuleImportTable = ({
+  modules,
+  selectedModules,
+  onModuleToggle,
+  onQuizToggle,
+}: ModuleImportTableProps) => {
   if (!modules || modules.length === 0) {
     return <Empty description="This classroom has no modules to import" className="py-8" />;
   }

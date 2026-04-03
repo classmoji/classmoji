@@ -104,7 +104,11 @@ export function renderContentReferenceMarkdown(
  * @param {string} classroomSlug - Classroom slug for URL routing
  * @returns {string} - Text with references replaced by markdown links
  */
-export function processResponseReferences(text: string, references: ContentReferenceInput[] | null, classroomSlug: string) {
+export function processResponseReferences(
+  text: string,
+  references: ContentReferenceInput[] | null,
+  classroomSlug: string
+) {
   if (!references || references.length === 0) return text;
 
   let processedText = text;

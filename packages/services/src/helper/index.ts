@@ -123,7 +123,10 @@ class HelperService {
       graderLogin,
     ]);
 
-    return ClassmojiService.repositoryAssignmentGrader.addGraderToAssignment(repositoryAssignmentId, graderId);
+    return ClassmojiService.repositoryAssignmentGrader.addGraderToAssignment(
+      repositoryAssignmentId,
+      graderId
+    );
   }
 
   static async removeGraderFromRepositoryAssignment(
@@ -143,33 +146,44 @@ class HelperService {
       graderLogin,
     ]);
 
-    return ClassmojiService.repositoryAssignmentGrader.removeGraderFromAssignment(repositoryAssignmentId, graderId);
+    return ClassmojiService.repositoryAssignmentGrader.removeGraderFromAssignment(
+      repositoryAssignmentId,
+      graderId
+    );
   }
 
-  static async addGradeToRepositoryAssignment(
-    payload: GradeAssignmentPayload
-  ): Promise<void> {
+  static async addGradeToRepositoryAssignment(payload: GradeAssignmentPayload): Promise<void> {
     const { classroom, repositoryAssignment, graderId, grade, studentId, teamId } = payload;
     if (await ClassmojiService.assignmentGrade.doesGradeExist(repositoryAssignment.id, grade)) {
       return;
     }
 
-    const assignmentGrade = await ClassmojiService.assignmentGrade.addGrade(repositoryAssignment.id, graderId, grade);
+    const assignmentGrade = await ClassmojiService.assignmentGrade.addGrade(
+      repositoryAssignment.id,
+      graderId,
+      grade
+    );
 
     if (studentId) {
-      this.assignTokensToStudent({
-        organization: classroom,
-        repositoryAssignment,
-        grade,
-        studentId
-      }, assignmentGrade);
+      this.assignTokensToStudent(
+        {
+          organization: classroom,
+          repositoryAssignment,
+          grade,
+          studentId,
+        },
+        assignmentGrade
+      );
     } else if (teamId) {
-      this.assignTokensToTeam({
-        organization: classroom,
-        repositoryAssignment,
-        grade,
-        teamId
-      }, assignmentGrade);
+      this.assignTokensToTeam(
+        {
+          organization: classroom,
+          repositoryAssignment,
+          grade,
+          teamId,
+        },
+        assignmentGrade
+      );
     }
   }
 
@@ -179,10 +193,10 @@ class HelperService {
   ): Promise<void> {
     const { organization, repositoryAssignment, grade } = payload;
 
-    const emojiMapping = await ClassmojiService.emojiMapping.findByClassroomId(
+    const emojiMapping = (await ClassmojiService.emojiMapping.findByClassroomId(
       organization.id,
       true
-    ) as EmojiMappingWithTokens[];
+    )) as EmojiMappingWithTokens[];
     const emoji = emojiMapping.find(mapping => mapping.emoji === grade);
 
     if (!emoji) return;
@@ -210,16 +224,16 @@ class HelperService {
   ): Promise<void> {
     const { organization, repositoryAssignment, grade, teamId } = payload;
 
-    const emojiMapping = await ClassmojiService.emojiMapping.findByClassroomId(
+    const emojiMapping = (await ClassmojiService.emojiMapping.findByClassroomId(
       organization.id,
       true
-    ) as EmojiMappingWithTokens[];
+    )) as EmojiMappingWithTokens[];
     const emoji = emojiMapping.find(mapping => mapping.emoji === grade);
 
     if (!emoji) return;
 
     if (emoji.extra_tokens > 0) {
-      const team = await ClassmojiService.team.findById(teamId) as TeamWithMemberships | null;
+      const team = (await ClassmojiService.team.findById(teamId)) as TeamWithMemberships | null;
       if (!team || !team.memberships || team.memberships.length === 0) return;
 
       let firstTransaction = null;
@@ -248,9 +262,7 @@ class HelperService {
     }
   }
 
-  static async removeGradeFromRepositoryAssignment(
-    payload: RemoveGradePayload
-  ): Promise<void> {
+  static async removeGradeFromRepositoryAssignment(payload: RemoveGradePayload): Promise<void> {
     const { classroom, repositoryAssignment, grade } = payload;
 
     await ClassmojiService.assignmentGrade.removeGrade(grade.id);
@@ -272,7 +284,7 @@ class HelperService {
 
       ClassmojiService.token.assignToStudent(data);
     } else if (teamId) {
-      const team = await ClassmojiService.team.findById(teamId) as TeamWithMemberships | null;
+      const team = (await ClassmojiService.team.findById(teamId)) as TeamWithMemberships | null;
       if (!team || !team.memberships) return;
 
       for (const membership of team.memberships) {

@@ -123,7 +123,10 @@ function isImagePath(path: string): boolean {
  * @param {string|undefined} orgLogin - Organization login string (fallback)
  * @returns {Promise<Object>} - GitOrganization record
  */
-async function resolveGitOrganization(gitOrganization: GitOrganizationRecord | undefined, orgLogin: string | undefined): Promise<GitOrganizationRecord> {
+async function resolveGitOrganization(
+  gitOrganization: GitOrganizationRecord | undefined,
+  orgLogin: string | undefined
+): Promise<GitOrganizationRecord> {
   // If gitOrganization is a valid object with provider, use it directly
   if (gitOrganization?.provider) {
     return gitOrganization;
@@ -189,7 +192,10 @@ export class ContentService {
    * @param {number} [options.baseDelay=200] - Base delay in ms (doubles each retry)
    * @returns {Promise<any>} - Result from the operation
    */
-  static async #withGitRetry<T>(operation: () => Promise<T>, { maxRetries = 5, baseDelay = 200 }: { maxRetries?: number; baseDelay?: number } = {}): Promise<T> {
+  static async #withGitRetry<T>(
+    operation: () => Promise<T>,
+    { maxRetries = 5, baseDelay = 200 }: { maxRetries?: number; baseDelay?: number } = {}
+  ): Promise<T> {
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
       try {
         return await operation();
@@ -222,7 +228,19 @@ export class ContentService {
    * @param {boolean} [options.skipCache=false] - Skip cache (for write operations)
    * @returns {Promise<{ sha: string, size: number } | null>}
    */
-  static async getMeta({ gitOrganization, orgLogin, repo, path, skipCache = false }: { gitOrganization?: GitOrganizationRecord; orgLogin?: string; repo: string; path: string; skipCache?: boolean }): Promise<{ sha: string; size: number } | null> {
+  static async getMeta({
+    gitOrganization,
+    orgLogin,
+    repo,
+    path,
+    skipCache = false,
+  }: {
+    gitOrganization?: GitOrganizationRecord;
+    orgLogin?: string;
+    repo: string;
+    path: string;
+    skipCache?: boolean;
+  }): Promise<{ sha: string; size: number } | null> {
     try {
       const resolvedOrg = await resolveGitOrganization(gitOrganization, orgLogin);
 
@@ -273,7 +291,21 @@ export class ContentService {
    * @param {boolean} [options.skipCache=false] - Skip cache (for fetching latest content)
    * @returns {Promise<{ content: string, sha: string } | null>}
    */
-  static async getContent({ gitOrganization, orgLogin, repo, path, raw = false, skipCache = false }: { gitOrganization?: GitOrganizationRecord; orgLogin?: string; repo: string; path: string; raw?: boolean; skipCache?: boolean }): Promise<{ content: string; sha: string } | null> {
+  static async getContent({
+    gitOrganization,
+    orgLogin,
+    repo,
+    path,
+    raw = false,
+    skipCache = false,
+  }: {
+    gitOrganization?: GitOrganizationRecord;
+    orgLogin?: string;
+    repo: string;
+    path: string;
+    raw?: boolean;
+    skipCache?: boolean;
+  }): Promise<{ content: string; sha: string } | null> {
     try {
       const resolvedOrg = await resolveGitOrganization(gitOrganization, orgLogin);
 
@@ -331,24 +363,40 @@ export class ContentService {
    * @param {string} options.path - File path
    * @returns {Promise<{ content: string, sha: string } | null>} - content is base64-encoded
    */
-  static async getLargeContent({ gitOrganization, orgLogin, repo, path }: { gitOrganization?: GitOrganizationRecord; orgLogin?: string; repo: string; path: string }): Promise<{ content: string; sha: string } | null> {
+  static async getLargeContent({
+    gitOrganization,
+    orgLogin,
+    repo,
+    path,
+  }: {
+    gitOrganization?: GitOrganizationRecord;
+    orgLogin?: string;
+    repo: string;
+    path: string;
+  }): Promise<{ content: string; sha: string } | null> {
     try {
       const resolvedOrg = await resolveGitOrganization(gitOrganization, orgLogin);
       const octokit = await getOctokit(resolvedOrg);
 
       // Step 1: Get the file SHA from Contents API (metadata only, works for any size)
-      const { data: fileData } = await octokit.request('GET /repos/{owner}/{repo}/contents/{path}', {
-        owner: resolvedOrg.login,
-        repo,
-        path,
-      });
+      const { data: fileData } = await octokit.request(
+        'GET /repos/{owner}/{repo}/contents/{path}',
+        {
+          owner: resolvedOrg.login,
+          repo,
+          path,
+        }
+      );
 
       // Step 2: Use Git Blobs API to fetch the actual content (supports up to 100MB)
-      const { data: blobData } = await octokit.request('GET /repos/{owner}/{repo}/git/blobs/{file_sha}', {
-        owner: resolvedOrg.login,
-        repo,
-        file_sha: fileData.sha,
-      });
+      const { data: blobData } = await octokit.request(
+        'GET /repos/{owner}/{repo}/git/blobs/{file_sha}',
+        {
+          owner: resolvedOrg.login,
+          repo,
+          file_sha: fileData.sha,
+        }
+      );
 
       // Blobs API returns base64-encoded content
       return {
@@ -376,7 +424,23 @@ export class ContentService {
    * @returns {Promise<{ sha: string, commit: string }>}
    * @throws {Error} 409 Conflict if expectedSha doesn't match
    */
-  static async put({ gitOrganization, orgLogin, repo, path, content, expectedSha, message }: { gitOrganization?: GitOrganizationRecord; orgLogin?: string; repo: string; path: string; content: string; expectedSha?: string; message?: string }): Promise<{ sha: string; commit: string }> {
+  static async put({
+    gitOrganization,
+    orgLogin,
+    repo,
+    path,
+    content,
+    expectedSha,
+    message,
+  }: {
+    gitOrganization?: GitOrganizationRecord;
+    orgLogin?: string;
+    repo: string;
+    path: string;
+    content: string;
+    expectedSha?: string;
+    message?: string;
+  }): Promise<{ sha: string; commit: string }> {
     const resolvedOrg = await resolveGitOrganization(gitOrganization, orgLogin);
     const octokit = await getOctokit(resolvedOrg);
 
@@ -425,7 +489,25 @@ export class ContentService {
    * @param {string} [options.message] - Commit message
    * @returns {Promise<{ path: string, sha: string, url: string }>}
    */
-  static async upload({ gitOrganization, orgLogin, repo, file, filename, folder, branch = 'main', message }: { gitOrganization?: GitOrganizationRecord; orgLogin?: string; repo: string; file: Buffer; filename: string; folder: string; branch?: string; message?: string }): Promise<{ path: string; sha: string; url: string }> {
+  static async upload({
+    gitOrganization,
+    orgLogin,
+    repo,
+    file,
+    filename,
+    folder,
+    branch = 'main',
+    message,
+  }: {
+    gitOrganization?: GitOrganizationRecord;
+    orgLogin?: string;
+    repo: string;
+    file: Buffer;
+    filename: string;
+    folder: string;
+    branch?: string;
+    message?: string;
+  }): Promise<{ path: string; sha: string; url: string }> {
     const resolvedOrg = await resolveGitOrganization(gitOrganization, orgLogin);
 
     // Validate file
@@ -487,7 +569,21 @@ export class ContentService {
    * @param {string} [options.message] - Commit message
    * @returns {Promise<{ path: string, sha: string, url: string }>}
    */
-  static async uploadLarge({ gitOrganization, repo, file, filePath, branch = 'main', message }: { gitOrganization: GitOrganizationRecord; repo: string; file: Buffer; filePath: string; branch?: string; message?: string }): Promise<{ path: string; sha: string; url: string }> {
+  static async uploadLarge({
+    gitOrganization,
+    repo,
+    file,
+    filePath,
+    branch = 'main',
+    message,
+  }: {
+    gitOrganization: GitOrganizationRecord;
+    repo: string;
+    file: Buffer;
+    filePath: string;
+    branch?: string;
+    message?: string;
+  }): Promise<{ path: string; sha: string; url: string }> {
     const octokit = await getOctokit(gitOrganization);
 
     // Step 1: Create the blob with file content (done once, content-addressed and idempotent)
@@ -576,7 +672,19 @@ export class ContentService {
    * @param {string} [options.message] - Commit message
    * @returns {Promise<{ commit: string }>}
    */
-  static async delete({ gitOrganization, orgLogin, repo, path, message }: { gitOrganization?: GitOrganizationRecord; orgLogin?: string; repo: string; path: string; message?: string }): Promise<{ commit: string }> {
+  static async delete({
+    gitOrganization,
+    orgLogin,
+    repo,
+    path,
+    message,
+  }: {
+    gitOrganization?: GitOrganizationRecord;
+    orgLogin?: string;
+    repo: string;
+    path: string;
+    message?: string;
+  }): Promise<{ commit: string }> {
     const resolvedOrg = await resolveGitOrganization(gitOrganization, orgLogin);
     const octokit = await getOctokit(resolvedOrg);
 
@@ -610,7 +718,15 @@ export class ContentService {
    * @param {string} options.path - Path to check
    * @returns {Promise<boolean>}
    */
-  static async exists({ gitOrganization, repo, path }: { gitOrganization: GitOrganizationRecord; repo: string; path: string }): Promise<boolean> {
+  static async exists({
+    gitOrganization,
+    repo,
+    path,
+  }: {
+    gitOrganization: GitOrganizationRecord;
+    repo: string;
+    path: string;
+  }): Promise<boolean> {
     const meta = await this.getMeta({ gitOrganization, repo, path });
     return meta !== null;
   }
@@ -625,14 +741,29 @@ export class ContentService {
    * @param {boolean} [options.skipCache=false] - Skip cache
    * @returns {Promise<Array<{ name: string, path: string, type: 'file' | 'dir', sha: string }>>}
    */
-  static async listFolder({ gitOrganization, orgLogin, repo, path, skipCache = false }: { gitOrganization?: GitOrganizationRecord; orgLogin?: string; repo: string; path: string; skipCache?: boolean }): Promise<Array<{ name: string; path: string; type: 'file' | 'dir'; sha: string }>> {
+  static async listFolder({
+    gitOrganization,
+    orgLogin,
+    repo,
+    path,
+    skipCache = false,
+  }: {
+    gitOrganization?: GitOrganizationRecord;
+    orgLogin?: string;
+    repo: string;
+    path: string;
+    skipCache?: boolean;
+  }): Promise<Array<{ name: string; path: string; type: 'file' | 'dir'; sha: string }>> {
     try {
       const resolvedOrg = await resolveGitOrganization(gitOrganization, orgLogin);
 
       // Check cache first
       const cacheKey = getCacheKey(resolvedOrg.login, repo, path) + ':list';
       if (!skipCache) {
-        const cached = getCache<Array<{ name: string; path: string; type: 'file' | 'dir'; sha: string }>>(cacheKey);
+        const cached =
+          getCache<Array<{ name: string; path: string; type: 'file' | 'dir'; sha: string }>>(
+            cacheKey
+          );
         if (cached !== null) {
           return cached;
         }
@@ -682,7 +813,21 @@ export class ContentService {
    * @param {string} [options.branch] - Branch name (default: 'main')
    * @returns {Promise<Array<{ name: string, path: string, url: string }>>}
    */
-  static async findOrphanedImages({ gitOrganization, orgLogin, repo, imagesFolder, htmlContent, branch = 'main' }: { gitOrganization?: GitOrganizationRecord; orgLogin?: string; repo: string; imagesFolder: string; htmlContent: string; branch?: string }): Promise<Array<{ name: string; path: string; url: string }>> {
+  static async findOrphanedImages({
+    gitOrganization,
+    orgLogin,
+    repo,
+    imagesFolder,
+    htmlContent,
+    branch = 'main',
+  }: {
+    gitOrganization?: GitOrganizationRecord;
+    orgLogin?: string;
+    repo: string;
+    imagesFolder: string;
+    htmlContent: string;
+    branch?: string;
+  }): Promise<Array<{ name: string; path: string; url: string }>> {
     const resolvedOrg = await resolveGitOrganization(gitOrganization, orgLogin);
     // List all files in the images folder
     const files = await this.listFolder({ gitOrganization: resolvedOrg, repo, path: imagesFolder });
@@ -724,7 +869,19 @@ export class ContentService {
    * @param {string} [options.message] - Commit message
    * @returns {Promise<{ deleted: number, errors: string[] }>}
    */
-  static async deleteMultiple({ gitOrganization, orgLogin, repo, paths, message }: { gitOrganization?: GitOrganizationRecord; orgLogin?: string; repo: string; paths: string[]; message?: string }): Promise<{ deleted: number; errors: string[] }> {
+  static async deleteMultiple({
+    gitOrganization,
+    orgLogin,
+    repo,
+    paths,
+    message,
+  }: {
+    gitOrganization?: GitOrganizationRecord;
+    orgLogin?: string;
+    repo: string;
+    paths: string[];
+    message?: string;
+  }): Promise<{ deleted: number; errors: string[] }> {
     const resolvedOrg = await resolveGitOrganization(gitOrganization, orgLogin);
     let deleted = 0;
     const errors: string[] = [];
@@ -759,7 +916,27 @@ export class ContentService {
    * @param {string} [options.message] - Commit message
    * @returns {Promise<{ commit: string, filesUploaded: number }>}
    */
-  static async uploadBatch({ gitOrganization, orgLogin, repo, files, branch = 'main', message, onProgress }: { gitOrganization?: GitOrganizationRecord; orgLogin?: string; repo: string; files: Array<{ path: string; content: string; encoding?: 'utf-8' | 'base64' }>; branch?: string; message?: string; onProgress?: (progress: { current: number; total: number; filename: string | undefined }) => void }): Promise<{ commit: string; filesUploaded: number }> {
+  static async uploadBatch({
+    gitOrganization,
+    orgLogin,
+    repo,
+    files,
+    branch = 'main',
+    message,
+    onProgress,
+  }: {
+    gitOrganization?: GitOrganizationRecord;
+    orgLogin?: string;
+    repo: string;
+    files: Array<{ path: string; content: string; encoding?: 'utf-8' | 'base64' }>;
+    branch?: string;
+    message?: string;
+    onProgress?: (progress: {
+      current: number;
+      total: number;
+      filename: string | undefined;
+    }) => void;
+  }): Promise<{ commit: string; filesUploaded: number }> {
     if (!files || files.length === 0) {
       throw new Error('No files to upload');
     }
@@ -806,11 +983,14 @@ export class ContentService {
       const currentCommitSha = refData.object.sha;
 
       // Step 3: Get the tree SHA from the current commit
-      const { data: commitData } = await octokit.request('GET /repos/{owner}/{repo}/git/commits/{commit_sha}', {
-        owner: resolvedOrg.login,
-        repo,
-        commit_sha: currentCommitSha,
-      });
+      const { data: commitData } = await octokit.request(
+        'GET /repos/{owner}/{repo}/git/commits/{commit_sha}',
+        {
+          owner: resolvedOrg.login,
+          repo,
+          commit_sha: currentCommitSha,
+        }
+      );
       const baseTreeSha = commitData.tree.sha;
 
       // Step 4: Create a new tree with all blobs
@@ -871,7 +1051,21 @@ export class ContentService {
    * @param {string} [options.message] - Commit message
    * @returns {Promise<{ commit: string, filesDeleted: number }>}
    */
-  static async deleteFolder({ gitOrganization, orgLogin, repo, path, branch = 'main', message }: { gitOrganization?: GitOrganizationRecord; orgLogin?: string; repo: string; path: string; branch?: string; message?: string }): Promise<{ commit: string | null; filesDeleted: number }> {
+  static async deleteFolder({
+    gitOrganization,
+    orgLogin,
+    repo,
+    path,
+    branch = 'main',
+    message,
+  }: {
+    gitOrganization?: GitOrganizationRecord;
+    orgLogin?: string;
+    repo: string;
+    path: string;
+    branch?: string;
+    message?: string;
+  }): Promise<{ commit: string | null; filesDeleted: number }> {
     const resolvedOrg = await resolveGitOrganization(gitOrganization, orgLogin);
     const octokit = await getOctokit(resolvedOrg);
 
@@ -916,11 +1110,14 @@ export class ContentService {
       const currentCommitSha = refData.object.sha;
 
       // Step 2: Get the tree SHA from the current commit
-      const { data: commitData } = await octokit.request('GET /repos/{owner}/{repo}/git/commits/{commit_sha}', {
-        owner: resolvedOrg.login,
-        repo,
-        commit_sha: currentCommitSha,
-      });
+      const { data: commitData } = await octokit.request(
+        'GET /repos/{owner}/{repo}/git/commits/{commit_sha}',
+        {
+          owner: resolvedOrg.login,
+          repo,
+          commit_sha: currentCommitSha,
+        }
+      );
       const baseTreeSha = commitData.tree.sha;
 
       // Step 3: Create a new tree with files removed (sha: null deletes the file)
@@ -981,7 +1178,19 @@ export class ContentService {
    * @param {string} [options.message] - Commit message
    * @returns {Promise<{ copied: number }>}
    */
-  static async copyFolder({ gitOrganization, repo, sourcePath, destPath, message }: { gitOrganization: GitOrganizationRecord; repo: string; sourcePath: string; destPath: string; message?: string }): Promise<{ copied: number }> {
+  static async copyFolder({
+    gitOrganization,
+    repo,
+    sourcePath,
+    destPath,
+    message,
+  }: {
+    gitOrganization: GitOrganizationRecord;
+    repo: string;
+    sourcePath: string;
+    destPath: string;
+    message?: string;
+  }): Promise<{ copied: number }> {
     const octokit = await getOctokit(gitOrganization);
 
     // Get all files in source folder

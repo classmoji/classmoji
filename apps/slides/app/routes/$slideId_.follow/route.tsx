@@ -14,7 +14,13 @@ import { fetchContent } from '~/utils/contentProxy';
  * 2. Authenticated classroom members - can follow without shareCode
  * 3. Public links via shareCode - anyone with valid shareCode can follow
  */
-export const loader = async ({ params, request }: { params: Record<string, string | undefined>; request: Request }) => {
+export const loader = async ({
+  params,
+  request,
+}: {
+  params: Record<string, string | undefined>;
+  request: Request;
+}) => {
   const { slideId } = params;
   if (!slideId) throw new Response('Missing slideId', { status: 400 });
   const url = new URL(request.url);
@@ -95,7 +101,8 @@ export const loader = async ({ params, request }: { params: Record<string, strin
 };
 
 export default function SlideFollow() {
-  const { slide, contentUrl, slideContent, contentError, shareCode, preview } = useLoaderData<typeof loader>();
+  const { slide, contentUrl, slideContent, contentError, shareCode, preview } =
+    useLoaderData<typeof loader>();
 
   // Extract theme from slideContent for Sandpack auto-theme detection
   const currentSlideTheme = useMemo(() => {

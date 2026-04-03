@@ -22,7 +22,13 @@ interface RegradeRequest {
   id: string;
   status: 'IN_REVIEW' | 'APPROVED' | 'DENIED' | string;
   student_id: string;
-  student: { name: string | null; login: string | null; avatar_url?: string | null; image?: string | null; _count: { regrade_requests: number } };
+  student: {
+    name: string | null;
+    login: string | null;
+    avatar_url?: string | null;
+    image?: string | null;
+    _count: { regrade_requests: number };
+  };
   repository_assignment: {
     id: string;
     assignment: { title: string; [key: string]: unknown };
@@ -87,9 +93,7 @@ const RegradeRequestsTable = ({ requests, emojiMappings, org }: RegradeRequestsT
       width: '12%',
       render: (status: RegradeRequest['status']) => (
         <Tag
-          color={
-            status === 'IN_REVIEW' ? 'orange' : status === 'APPROVED' ? 'green' : 'red'
-          }
+          color={status === 'IN_REVIEW' ? 'orange' : status === 'APPROVED' ? 'green' : 'red'}
           className="font-semibold"
         >
           {status === 'IN_REVIEW' ? 'In Review' : status === 'APPROVED' ? 'Resolved' : 'Denied'}

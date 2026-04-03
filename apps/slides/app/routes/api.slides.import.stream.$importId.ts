@@ -16,7 +16,13 @@
 import { getAuthSession } from '@classmoji/auth/server';
 import { importStreamManager } from '~/utils/importStreamManager';
 
-export async function loader({ params, request }: { params: Record<string, string | undefined>; request: Request }) {
+export async function loader({
+  params,
+  request,
+}: {
+  params: Record<string, string | undefined>;
+  request: Request;
+}) {
   const { importId } = params;
 
   // Validate importId is a UUID format
@@ -63,7 +69,7 @@ export async function loader({ params, request }: { params: Record<string, strin
 
       // Subscribe to import progress events
       // importStreamManager replays buffered events for late-connecting clients
-      unsubscribe = importStreamManager.subscribe(importId, (event) => {
+      unsubscribe = importStreamManager.subscribe(importId, event => {
         sendEvent(event);
 
         // Close stream when import completes or errors
@@ -94,7 +100,7 @@ export async function loader({ params, request }: { params: Record<string, strin
     headers: {
       'Content-Type': 'text/event-stream',
       'Cache-Control': 'no-cache, no-transform',
-      'Connection': 'keep-alive',
+      Connection: 'keep-alive',
       'X-Accel-Buffering': 'no', // Disable nginx buffering
     },
   });

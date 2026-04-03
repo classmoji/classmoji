@@ -139,7 +139,11 @@ export class GitHubProvider extends GitProvider {
    * @param {boolean} isPrivate - Whether repo is private (default: true)
    * @returns {Promise<{id: string, name: string, url: string}>}
    */
-  async createRepository(org: string, name: string, isPrivate: boolean = true): Promise<{ id: string; name: string; url: string }> {
+  async createRepository(
+    org: string,
+    name: string,
+    isPrivate: boolean = true
+  ): Promise<{ id: string; name: string; url: string }> {
     const octokit = await this.#getOctokit();
     const { data } = await octokit.request('POST /orgs/{org}/repos', {
       org,
@@ -158,15 +162,24 @@ export class GitHubProvider extends GitProvider {
    * @param {boolean} isPrivate - Whether repo is private (default: true)
    * @returns {Promise<{id: string, name: string, url: string}>}
    */
-  async createRepositoryFromTemplate(org: string, name: string, templateOwner: string, templateRepo: string, isPrivate: boolean = true): Promise<{ id: string; name: string; url: string }> {
+  async createRepositoryFromTemplate(
+    org: string,
+    name: string,
+    templateOwner: string,
+    templateRepo: string,
+    isPrivate: boolean = true
+  ): Promise<{ id: string; name: string; url: string }> {
     const octokit = await this.#getOctokit();
-    const { data } = await octokit.request('POST /repos/{template_owner}/{template_repo}/generate', {
-      template_owner: templateOwner,
-      template_repo: templateRepo,
-      owner: org,
-      name,
-      private: isPrivate,
-    });
+    const { data } = await octokit.request(
+      'POST /repos/{template_owner}/{template_repo}/generate',
+      {
+        template_owner: templateOwner,
+        template_repo: templateRepo,
+        owner: org,
+        name,
+        private: isPrivate,
+      }
+    );
     return { id: String(data.id), name: data.name, url: data.html_url };
   }
 
@@ -177,7 +190,11 @@ export class GitHubProvider extends GitProvider {
    * @param {string} description - Repository description
    * @returns {Promise<{id: string, name: string, url: string}>}
    */
-  async createPublicRepository(org: string, name: string, description: string = ''): Promise<{ id: string; name: string; url: string }> {
+  async createPublicRepository(
+    org: string,
+    name: string,
+    description: string = ''
+  ): Promise<{ id: string; name: string; url: string }> {
     const octokit = await this.#getOctokit();
     const { data } = await octokit.request('POST /orgs/{org}/repos', {
       org,
@@ -195,7 +212,10 @@ export class GitHubProvider extends GitProvider {
    * @param {string} name - Repository name
    * @returns {Promise<{id: string, name: string, url: string, node_id: string}>}
    */
-  async getRepository(org: string, name: string): Promise<{ id: string; name: string; url: string; node_id: string }> {
+  async getRepository(
+    org: string,
+    name: string
+  ): Promise<{ id: string; name: string; url: string; node_id: string }> {
     const octokit = await this.#getOctokit();
     const { data } = await octokit.request('GET /repos/{owner}/{repo}', {
       owner: org,
@@ -215,7 +235,12 @@ export class GitHubProvider extends GitProvider {
       await this.getRepository(org, name);
       return true;
     } catch (error: unknown) {
-      if (error instanceof Error && 'status' in error && (error as Error & { status: number }).status === 404) return false;
+      if (
+        error instanceof Error &&
+        'status' in error &&
+        (error as Error & { status: number }).status === 404
+      )
+        return false;
       throw error;
     }
   }
@@ -304,7 +329,14 @@ export class GitHubProvider extends GitProvider {
    * @param {string} body - PR body
    * @returns {Promise<{id: number, number: number, url: string}>}
    */
-  async createPullRequest(org: string, repo: string, base: string, head: string, title: string, body: string): Promise<{ id: number; number: number; url: string }> {
+  async createPullRequest(
+    org: string,
+    repo: string,
+    base: string,
+    head: string,
+    title: string,
+    body: string
+  ): Promise<{ id: number; number: number; url: string }> {
     const octokit = await this.#getOctokit();
     const { data } = await octokit.request('POST /repos/{owner}/{repo}/pulls', {
       owner: org,
@@ -326,7 +358,11 @@ export class GitHubProvider extends GitProvider {
    * @param {{title: string, body?: string, description?: string}} issue - Issue details
    * @returns {Promise<{id: string, number: number, url: string}>}
    */
-  async createIssue(org: string, repo: string, issue: { title: string; body?: string; description?: string }): Promise<{ id: string; number: number; url: string }> {
+  async createIssue(
+    org: string,
+    repo: string,
+    issue: { title: string; body?: string; description?: string }
+  ): Promise<{ id: string; number: number; url: string }> {
     const octokit = await this.#getOctokit();
     const { data } = await octokit.request('POST /repos/{owner}/{repo}/issues', {
       owner: org,
@@ -344,7 +380,11 @@ export class GitHubProvider extends GitProvider {
    * @param {number} issueNumber - Issue number
    * @returns {Promise<{id: number, number: number, url: string, state: string}>}
    */
-  async getIssue(org: string, repo: string, issueNumber: number): Promise<{ id: number; number: number; url: string; state: string }> {
+  async getIssue(
+    org: string,
+    repo: string,
+    issueNumber: number
+  ): Promise<{ id: number; number: number; url: string; state: string }> {
     const octokit = await this.#getOctokit();
     const { data } = await octokit.request('GET /repos/{owner}/{repo}/issues/{issue_number}', {
       owner: org,
@@ -361,7 +401,12 @@ export class GitHubProvider extends GitProvider {
    * @param {number} issueNum - Issue number
    * @param {string[]} assignees - Array of usernames
    */
-  async addIssueAssignees(org: string, repo: string, issueNum: number, assignees: string[]): Promise<void> {
+  async addIssueAssignees(
+    org: string,
+    repo: string,
+    issueNum: number,
+    assignees: string[]
+  ): Promise<void> {
     const octokit = await this.#getOctokit();
     await octokit.request('POST /repos/{owner}/{repo}/issues/{issue_number}/assignees', {
       owner: org,
@@ -378,7 +423,12 @@ export class GitHubProvider extends GitProvider {
    * @param {number} issueNum - Issue number
    * @param {string[]} assignees - Array of usernames to remove
    */
-  async removeIssueAssignees(org: string, repo: string, issueNum: number, assignees: string[]): Promise<void> {
+  async removeIssueAssignees(
+    org: string,
+    repo: string,
+    issueNum: number,
+    assignees: string[]
+  ): Promise<void> {
     const octokit = await this.#getOctokit();
     await octokit.request('DELETE /repos/{owner}/{repo}/issues/{issue_number}/assignees', {
       owner: org,
@@ -442,7 +492,11 @@ export class GitHubProvider extends GitProvider {
    * @param {string} userIdOrEmail - User ID (number as string) or email
    * @param {number[]} teamIds - Array of team IDs to add user to
    */
-  async inviteToOrganization(org: string, userIdOrEmail: string | number, teamIds: number[]): Promise<void> {
+  async inviteToOrganization(
+    org: string,
+    userIdOrEmail: string | number,
+    teamIds: number[]
+  ): Promise<void> {
     const octokit = await this.#getOctokit();
     const payload: {
       org: string;
@@ -492,7 +546,12 @@ export class GitHubProvider extends GitProvider {
       });
       return true;
     } catch (error: unknown) {
-      if (error instanceof Error && 'status' in error && (error as Error & { status: number }).status === 404) return false;
+      if (
+        error instanceof Error &&
+        'status' in error &&
+        (error as Error & { status: number }).status === 404
+      )
+        return false;
       throw error;
     }
   }
@@ -516,7 +575,10 @@ export class GitHubProvider extends GitProvider {
    * @param {string} name - Team name
    * @returns {Promise<{id: number, slug: string, name: string}>}
    */
-  async createTeam(org: string, name: string): Promise<{ id: number; slug: string; name: string; node_id?: string }> {
+  async createTeam(
+    org: string,
+    name: string
+  ): Promise<{ id: number; slug: string; name: string; node_id?: string }> {
     const octokit = await this.#getOctokit();
     try {
       const { data } = await octokit.request('POST /orgs/{org}/teams', {
@@ -526,7 +588,11 @@ export class GitHubProvider extends GitProvider {
       });
       return { id: data.id, slug: data.slug, name: data.name };
     } catch (error: unknown) {
-      if (error instanceof Error && 'status' in error && (error as Error & { status: number }).status === 422) {
+      if (
+        error instanceof Error &&
+        'status' in error &&
+        (error as Error & { status: number }).status === 422
+      ) {
         // Team already exists - fetch it
         const slug = name.toLowerCase().replace(/\s+/g, '-');
         return this.getTeam(org, slug);
@@ -541,7 +607,10 @@ export class GitHubProvider extends GitProvider {
    * @param {string} teamSlug - Team slug
    * @returns {Promise<{id: number, slug: string, name: string}>}
    */
-  async getTeam(org: string, teamSlug: string): Promise<{ id: number; slug: string; name: string; node_id: string }> {
+  async getTeam(
+    org: string,
+    teamSlug: string
+  ): Promise<{ id: number; slug: string; name: string; node_id: string }> {
     const octokit = await this.#getOctokit();
     const { data } = await octokit.request('GET /orgs/{org}/teams/{team_slug}', {
       org,
@@ -611,7 +680,12 @@ export class GitHubProvider extends GitProvider {
    * @param {string} teamSlug - Team slug
    * @param {string} permission - Permission level (pull, push, admin, maintain, triage)
    */
-  async addTeamToRepo(org: string, repo: string, teamSlug: string, permission: string): Promise<void> {
+  async addTeamToRepo(
+    org: string,
+    repo: string,
+    teamSlug: string,
+    permission: string
+  ): Promise<void> {
     const octokit = await this.#getOctokit();
     await octokit.request('PUT /orgs/{org}/teams/{team_slug}/repos/{owner}/{repo}', {
       org,
@@ -631,7 +705,12 @@ export class GitHubProvider extends GitProvider {
    * @param {string} username - GitHub username
    * @param {string} permission - Permission level (default: maintain)
    */
-  async addCollaborator(org: string, repo: string, username: string, permission: string = 'maintain'): Promise<void> {
+  async addCollaborator(
+    org: string,
+    repo: string,
+    username: string,
+    permission: string = 'maintain'
+  ): Promise<void> {
     const octokit = await this.#getOctokit();
     await octokit.request('PUT /repos/{owner}/{repo}/collaborators/{username}', {
       owner: org,
@@ -650,7 +729,11 @@ export class GitHubProvider extends GitProvider {
    * @param {string} branch - Branch to serve pages from (default: main)
    * @returns {Promise<{alreadyEnabled?: boolean}>}
    */
-  async enableGitHubPages(org: string, repo: string, branch: string = 'main'): Promise<{ alreadyEnabled: boolean }> {
+  async enableGitHubPages(
+    org: string,
+    repo: string,
+    branch: string = 'main'
+  ): Promise<{ alreadyEnabled: boolean }> {
     const octokit = await this.#getOctokit();
     try {
       await octokit.request('GET /repos/{owner}/{repo}/pages', {
@@ -659,7 +742,13 @@ export class GitHubProvider extends GitProvider {
       });
       return { alreadyEnabled: true };
     } catch (error: unknown) {
-      if (!(error instanceof Error && 'status' in error && (error as Error & { status: number }).status === 404)) {
+      if (
+        !(
+          error instanceof Error &&
+          'status' in error &&
+          (error as Error & { status: number }).status === 404
+        )
+      ) {
         throw error;
       }
     }
@@ -724,7 +813,8 @@ export class GitHubProvider extends GitProvider {
           nodes: Array<{ id: string; title: string; number: number; url: string }>;
         };
       };
-    }>(`
+    }>(
+      `
       query($org: String!) {
         organization(login: $org) {
           projectsV2(first: 50, orderBy: {field: TITLE, direction: ASC}) {
@@ -737,7 +827,9 @@ export class GitHubProvider extends GitProvider {
           }
         }
       }
-    `, { org });
+    `,
+      { org }
+    );
     return result.organization.projectsV2.nodes;
   }
 
@@ -748,13 +840,18 @@ export class GitHubProvider extends GitProvider {
    * @param {string} title - Title for the new project
    * @returns {Promise<{id: string, number: number, url: string}>}
    */
-  async copyProjectFromTemplate(templateProjectId: string, ownerId: string, title: string): Promise<{ id: string; number: number; url: string }> {
+  async copyProjectFromTemplate(
+    templateProjectId: string,
+    ownerId: string,
+    title: string
+  ): Promise<{ id: string; number: number; url: string }> {
     const octokit = await this.#getOctokit();
     const result = await octokit.graphql<{
       copyProjectV2: {
         projectV2: { id: string; number: number; url: string };
       };
-    }>(`
+    }>(
+      `
       mutation($projectId: ID!, $ownerId: ID!, $title: String!) {
         copyProjectV2(input: {projectId: $projectId, ownerId: $ownerId, title: $title, includeDraftIssues: false}) {
           projectV2 {
@@ -764,11 +861,13 @@ export class GitHubProvider extends GitProvider {
           }
         }
       }
-    `, {
-      projectId: templateProjectId,
-      ownerId,
-      title,
-    });
+    `,
+      {
+        projectId: templateProjectId,
+        ownerId,
+        title,
+      }
+    );
     return result.copyProjectV2.projectV2;
   }
 
@@ -797,7 +896,8 @@ export class GitHubProvider extends GitProvider {
       addProjectV2ItemById: {
         item: { id: string };
       };
-    }>(`
+    }>(
+      `
       mutation($projectId: ID!, $contentId: ID!) {
         addProjectV2ItemById(input: {projectId: $projectId, contentId: $contentId}) {
           item {
@@ -805,7 +905,9 @@ export class GitHubProvider extends GitProvider {
           }
         }
       }
-    `, { projectId, contentId });
+    `,
+      { projectId, contentId }
+    );
 
     const itemId = addResult.addProjectV2ItemById.item.id;
 
@@ -814,7 +916,12 @@ export class GitHubProvider extends GitProvider {
 
     if (statusField && statusField.firstOptionId) {
       // Set item to first status column
-      await this.setProjectItemStatus(projectId, itemId, statusField.fieldId, statusField.firstOptionId);
+      await this.setProjectItemStatus(
+        projectId,
+        itemId,
+        statusField.fieldId,
+        statusField.firstOptionId
+      );
     }
 
     return { itemId };
@@ -825,7 +932,9 @@ export class GitHubProvider extends GitProvider {
    * @param {string} projectId - Project node_id
    * @returns {Promise<{fieldId: string, firstOptionId: string} | null>}
    */
-  async getProjectStatusField(projectId: string): Promise<{ fieldId: string; firstOptionId: string } | null> {
+  async getProjectStatusField(
+    projectId: string
+  ): Promise<{ fieldId: string; firstOptionId: string } | null> {
     const octokit = await this.#getOctokit();
 
     const result = await octokit.graphql<{
@@ -835,7 +944,8 @@ export class GitHubProvider extends GitProvider {
           options: Array<{ id: string; name: string }>;
         } | null;
       } | null;
-    }>(`
+    }>(
+      `
       query($projectId: ID!) {
         node(id: $projectId) {
           ... on ProjectV2 {
@@ -851,7 +961,9 @@ export class GitHubProvider extends GitProvider {
           }
         }
       }
-    `, { projectId });
+    `,
+      { projectId }
+    );
 
     const field = result.node?.field;
     if (!field || !field.options || field.options.length === 0) {
@@ -872,10 +984,16 @@ export class GitHubProvider extends GitProvider {
    * @param {string} optionId - Status option node_id
    * @returns {Promise<void>}
    */
-  async setProjectItemStatus(projectId: string, itemId: string, fieldId: string, optionId: string): Promise<void> {
+  async setProjectItemStatus(
+    projectId: string,
+    itemId: string,
+    fieldId: string,
+    optionId: string
+  ): Promise<void> {
     const octokit = await this.#getOctokit();
 
-    await octokit.graphql(`
+    await octokit.graphql(
+      `
       mutation($projectId: ID!, $itemId: ID!, $fieldId: ID!, $optionId: String!) {
         updateProjectV2ItemFieldValue(input: {
           projectId: $projectId,
@@ -888,7 +1006,9 @@ export class GitHubProvider extends GitProvider {
           }
         }
       }
-    `, { projectId, itemId, fieldId, optionId });
+    `,
+      { projectId, itemId, fieldId, optionId }
+    );
   }
 
   /**
@@ -899,14 +1019,20 @@ export class GitHubProvider extends GitProvider {
    * @param {string} role - ADMIN, WRITER, or READER (default: WRITER)
    * @returns {Promise<void>}
    */
-  async addTeamToProject(projectId: string, orgLogin: string, teamSlug: string, role: string = 'WRITER'): Promise<void> {
+  async addTeamToProject(
+    projectId: string,
+    orgLogin: string,
+    teamSlug: string,
+    role: string = 'WRITER'
+  ): Promise<void> {
     const octokit = await this.#getOctokit();
 
     // Get team node_id
     const team = await this.getTeam(orgLogin, teamSlug);
 
     // Add team to project using updateProjectV2Collaborators mutation
-    await octokit.graphql(`
+    await octokit.graphql(
+      `
       mutation($projectId: ID!, $teamId: ID!, $role: ProjectV2Roles!) {
         updateProjectV2Collaborators(input: {
           projectId: $projectId
@@ -915,7 +1041,9 @@ export class GitHubProvider extends GitProvider {
           collaborators { totalCount }
         }
       }
-    `, { projectId, teamId: team.node_id, role });
+    `,
+      { projectId, teamId: team.node_id, role }
+    );
   }
 
   /**
@@ -926,7 +1054,8 @@ export class GitHubProvider extends GitProvider {
    */
   async linkRepoToProject(projectId: string, repoNodeId: string): Promise<void> {
     const octokit = await this.#getOctokit();
-    await octokit.graphql(`
+    await octokit.graphql(
+      `
       mutation($projectId: ID!, $repositoryId: ID!) {
         linkProjectV2ToRepository(input: {
           projectId: $projectId
@@ -935,7 +1064,9 @@ export class GitHubProvider extends GitProvider {
           repository { id }
         }
       }
-    `, { projectId, repositoryId: repoNodeId });
+    `,
+      { projectId, repositoryId: repoNodeId }
+    );
   }
 
   /**
@@ -946,7 +1077,8 @@ export class GitHubProvider extends GitProvider {
    */
   async updateProjectTitle(projectId: string, title: string): Promise<void> {
     const octokit = await this.#getOctokit();
-    await octokit.graphql(`
+    await octokit.graphql(
+      `
       mutation($projectId: ID!, $title: String!) {
         updateProjectV2(input: {
           projectId: $projectId
@@ -955,7 +1087,9 @@ export class GitHubProvider extends GitProvider {
           projectV2 { id title }
         }
       }
-    `, { projectId, title });
+    `,
+      { projectId, title }
+    );
   }
 
   /**

@@ -4,16 +4,17 @@
 import { createCookie } from 'react-router';
 
 // Legacy cookie - no longer used but kept for reference
-const cookieOptions = process.env.NODE_ENV === 'production'
-  ? {
-    path: '/',
-    domain: '.classmoji.io',
-    secure: true,
-    sameSite: 'lax' as const,
-  }
-  : {
-    path: '/',
-  };
+const cookieOptions =
+  process.env.NODE_ENV === 'production'
+    ? {
+        path: '/',
+        domain: '.classmoji.io',
+        secure: true,
+        sameSite: 'lax' as const,
+      }
+    : {
+        path: '/',
+      };
 
 export const userCookie = createCookie('user-auth', cookieOptions);
 

@@ -11,7 +11,7 @@ export const Embed = createReactBlockSpec(
     content: 'none',
   },
   {
-    render: (props) => {
+    render: props => {
       const { url } = props.block.props;
 
       return (
@@ -22,7 +22,7 @@ export const Embed = createReactBlockSpec(
               <IconWorld size={20} className="embed-icon" />
               <input
                 value={url}
-                onChange={(e) =>
+                onChange={e =>
                   props.editor.updateBlock(props.block, {
                     props: { url: e.target.value },
                   })

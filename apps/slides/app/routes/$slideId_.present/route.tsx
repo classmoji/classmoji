@@ -6,7 +6,13 @@ import { SandpackRenderer } from '@classmoji/ui-components/sandpack';
 import RevealPresenter from '~/components/RevealPresenter';
 import { fetchContent } from '~/utils/contentProxy';
 
-export const loader = async ({ params, request }: { params: Record<string, string | undefined>; request: Request }) => {
+export const loader = async ({
+  params,
+  request,
+}: {
+  params: Record<string, string | undefined>;
+  request: Request;
+}) => {
   const { slideId } = params;
   if (!slideId) throw new Response('Missing slideId', { status: 400 });
 
@@ -73,7 +79,8 @@ export const loader = async ({ params, request }: { params: Record<string, strin
 };
 
 export default function SlidePresenter() {
-  const { slide, contentUrl, slideContent, contentError, canPresent } = useLoaderData<typeof loader>();
+  const { slide, contentUrl, slideContent, contentError, canPresent } =
+    useLoaderData<typeof loader>();
 
   // Extract theme from slideContent for Sandpack auto-theme detection
   // This is computed once since the content doesn't change during presentation

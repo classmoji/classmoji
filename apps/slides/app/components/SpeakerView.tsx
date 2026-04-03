@@ -112,10 +112,7 @@ function parseSlides(htmlContent: string): ParsedSlide[] {
  * - Navigation controls (prev/next)
  * - Real-time sync with other presenter windows
  */
-export default function SpeakerView({
-  slideId,
-  initialContent,
-}: SpeakerViewProps) {
+export default function SpeakerView({ slideId, initialContent }: SpeakerViewProps) {
   const socketRef = useRef<ReturnType<typeof io> | null>(null);
   const isRemoteUpdateRef = useRef(false);
   const startTimeRef = useRef(Date.now());
@@ -174,7 +171,7 @@ export default function SpeakerView({
       setIsConnected(false);
     });
 
-    socket.on('connect_error', (err) => {
+    socket.on('connect_error', err => {
       console.error('[speaker] Connection error:', err.message);
       setIsConnected(false);
     });
@@ -184,13 +181,13 @@ export default function SpeakerView({
     });
 
     // Handle current state for late joiners (catch-up to presenter's position)
-    socket.on('currentstate', (data) => {
+    socket.on('currentstate', data => {
       console.log('[speaker] Received current state - catching up to:', data);
       setCurrentSlide({ h: data.indexh, v: data.indexv });
     });
 
     // Listen for slide changes from other windows
-    socket.on('slidechanged', (data) => {
+    socket.on('slidechanged', data => {
       isRemoteUpdateRef.current = true;
       setCurrentSlide({ h: data.indexh, v: data.indexv });
       setTimeout(() => {
@@ -251,29 +248,32 @@ export default function SpeakerView({
   }, []);
 
   // Set end time from a time string (HH:MM format)
-  const handleSetEndTime = useCallback((timeString: string) => {
-    if (!timeString) {
-      setEndTime(null);
-      setTimeRemaining(null);
-      localStorage.removeItem(`speaker-endtime-${slideId}`);
-      return;
-    }
+  const handleSetEndTime = useCallback(
+    (timeString: string) => {
+      if (!timeString) {
+        setEndTime(null);
+        setTimeRemaining(null);
+        localStorage.removeItem(`speaker-endtime-${slideId}`);
+        return;
+      }
 
-    const [hours, minutes] = timeString.split(':').map(Number);
-    const now = new Date();
-    const endDate = new Date();
-    endDate.setHours(hours, minutes, 0, 0);
+      const [hours, minutes] = timeString.split(':').map(Number);
+      const now = new Date();
+      const endDate = new Date();
+      endDate.setHours(hours, minutes, 0, 0);
 
-    // If the time is earlier today, assume it's tomorrow
-    if (endDate <= now) {
-      endDate.setDate(endDate.getDate() + 1);
-    }
+      // If the time is earlier today, assume it's tomorrow
+      if (endDate <= now) {
+        endDate.setDate(endDate.getDate() + 1);
+      }
 
-    setEndTime(endDate);
-    setTimeRemaining(endDate.getTime() - Date.now());
-    localStorage.setItem(`speaker-endtime-${slideId}`, endDate.toISOString());
-    setShowEndTimeInput(false);
-  }, [slideId]);
+      setEndTime(endDate);
+      setTimeRemaining(endDate.getTime() - Date.now());
+      localStorage.setItem(`speaker-endtime-${slideId}`, endDate.toISOString());
+      setShowEndTimeInput(false);
+    },
+    [slideId]
+  );
 
   // Clear end time
   const clearEndTime = useCallback(() => {
@@ -284,7 +284,7 @@ export default function SpeakerView({
 
   // Zoom notes font size (0.5 to 2.0 range, 0.1 steps)
   const zoomNotesIn = useCallback(() => {
-    setNotesFontSize((prev) => {
+    setNotesFontSize(prev => {
       const newSize = Math.min(prev + 0.1, 2);
       localStorage.setItem('speaker-notes-fontsize', newSize.toString());
       return newSize;
@@ -292,7 +292,7 @@ export default function SpeakerView({
   }, []);
 
   const zoomNotesOut = useCallback(() => {
-    setNotesFontSize((prev) => {
+    setNotesFontSize(prev => {
       const newSize = Math.max(prev - 0.1, 0.5);
       localStorage.setItem('speaker-notes-fontsize', newSize.toString());
       return newSize;
@@ -447,9 +447,10 @@ export default function SpeakerView({
   }, [currentSlideData?.notes]);
 
   // Build speaker URL for phone QR
-  const speakerUrl = typeof window !== 'undefined'
-    ? `${window.location.origin}/${slideId}/speaker`
-    : `/${slideId}/speaker`;
+  const speakerUrl =
+    typeof window !== 'undefined'
+      ? `${window.location.origin}/${slideId}/speaker`
+      : `/${slideId}/speaker`;
 
   return (
     <div className="fixed inset-0 bg-gray-900 text-white flex flex-col">
@@ -486,8 +487,15 @@ export default function SpeakerView({
               <input
                 type="time"
                 className="bg-gray-700 text-white px-2 py-1 rounded text-sm border border-gray-600 focus:border-blue-500 focus:outline-none"
-                onBlur={(e) => (e.target as HTMLInputElement).value && handleSetEndTime((e.target as HTMLInputElement).value)}
-                onKeyDown={(e) => e.key === 'Enter' && (e.target as HTMLInputElement).value && handleSetEndTime((e.target as HTMLInputElement).value)}
+                onBlur={e =>
+                  (e.target as HTMLInputElement).value &&
+                  handleSetEndTime((e.target as HTMLInputElement).value)
+                }
+                onKeyDown={e =>
+                  e.key === 'Enter' &&
+                  (e.target as HTMLInputElement).value &&
+                  handleSetEndTime((e.target as HTMLInputElement).value)
+                }
                 autoFocus
               />
               <button
@@ -500,7 +508,9 @@ export default function SpeakerView({
             </div>
           ) : timeRemaining !== null ? (
             <div className="flex items-center gap-2">
-              <span className={`text-lg font-mono ${timeRemaining <= 5 * 60 * 1000 ? 'text-red-400' : timeRemaining <= 15 * 60 * 1000 ? 'text-yellow-400' : 'text-green-400'}`}>
+              <span
+                className={`text-lg font-mono ${timeRemaining <= 5 * 60 * 1000 ? 'text-red-400' : timeRemaining <= 15 * 60 * 1000 ? 'text-yellow-400' : 'text-green-400'}`}
+              >
                 <IconClockStop size={18} className="inline mr-1" />
                 {formatTimeRemaining(timeRemaining)}
               </span>
@@ -541,7 +551,9 @@ export default function SpeakerView({
                 ? 'text-blue-400 bg-blue-900/50 hover:bg-blue-900'
                 : 'text-gray-400 hover:text-white hover:bg-gray-700'
             }`}
-            title={remoteQRShowing ? 'Hide share QR on presentation' : 'Show share QR on presentation'}
+            title={
+              remoteQRShowing ? 'Hide share QR on presentation' : 'Show share QR on presentation'
+            }
           >
             <IconQrcode size={18} />
           </button>
@@ -571,7 +583,10 @@ export default function SpeakerView({
           - Wide (md+): slides on left (stacked), notes on right side-by-side */}
       <div className="flex-1 flex flex-col md:flex-row overflow-y-auto md:overflow-hidden">
         {/* Slide Previews Column - always stacked vertically */}
-        <div ref={previewContainerRef} className="flex flex-col gap-4 p-4 bg-gray-800/50 md:w-1/2 md:overflow-y-auto">
+        <div
+          ref={previewContainerRef}
+          className="flex flex-col gap-4 p-4 bg-gray-800/50 md:w-1/2 md:overflow-y-auto"
+        >
           {/* Current Slide */}
           <div>
             <div className="text-xs text-gray-400 mb-2 uppercase tracking-wide">Current</div>
@@ -683,10 +698,13 @@ export default function SpeakerView({
         {/* Left side: Slide count */}
         <div className="flex flex-col items-start min-w-[100px]">
           <div className="text-2xl font-bold font-mono">
-            {currentIndex + 1}<span className="text-gray-500">/</span>{slides.length}
+            {currentIndex + 1}
+            <span className="text-gray-500">/</span>
+            {slides.length}
           </div>
           <div className="text-xs text-gray-400">
-            Slide {currentSlide.h + 1}{navigation.stackSize > 1 ? `.${currentSlide.v + 1}` : ''}
+            Slide {currentSlide.h + 1}
+            {navigation.stackSize > 1 ? `.${currentSlide.v + 1}` : ''}
           </div>
         </div>
 
@@ -740,9 +758,7 @@ export default function SpeakerView({
               <div className="text-sm font-medium text-gray-300">
                 Stack {navigation.stackPosition}/{navigation.stackSize}
               </div>
-              <div className="text-xs text-gray-500">
-                Use ↑↓ to navigate
-              </div>
+              <div className="text-xs text-gray-500">Use ↑↓ to navigate</div>
             </>
           )}
         </div>

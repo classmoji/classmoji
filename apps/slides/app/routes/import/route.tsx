@@ -31,7 +31,9 @@ export const loader = async ({ request }: { request: Request }) => {
   const classroomSlug = url.searchParams.get('class');
 
   if (!classroomSlug) {
-    throw new Response('Missing class parameter. Please use the import button from the webapp.', { status: 400 });
+    throw new Response('Missing class parameter. Please use the import button from the webapp.', {
+      status: 400,
+    });
   }
 
   // Authorization: require OWNER or TEACHER role to import slides
@@ -85,7 +87,8 @@ export const loader = async ({ request }: { request: Request }) => {
 // and stream progress via SSE
 
 export default function ImportPage() {
-  const { classroomSlug, classroom, modules, savedThemes, webappUrl } = useLoaderData<typeof loader>();
+  const { classroomSlug, classroom, modules, savedThemes, webappUrl } =
+    useLoaderData<typeof loader>();
   const userContext = useUser();
   const user = userContext?.user;
   const navigate = useNavigate();
@@ -98,7 +101,9 @@ export default function ImportPage() {
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   // Video selection state
-  const [detectedVideos, setDetectedVideos] = useState<Array<{ path: string; filename: string; size: number; ext: string; suggestCloudinary: boolean }>>([]);
+  const [detectedVideos, setDetectedVideos] = useState<
+    Array<{ path: string; filename: string; size: number; ext: string; suggestCloudinary: boolean }>
+  >([]);
   const [showVideoModal, setShowVideoModal] = useState(false);
   const [cloudinaryVideoPaths, setCloudinaryVideoPaths] = useState<string[]>([]);
   const [analyzingVideos, setAnalyzingVideos] = useState(false);
@@ -121,7 +126,9 @@ export default function ImportPage() {
   }, [isDone, slideId, navigate]);
 
   // Check if user has permission using classroom memberships
-  const membership = user?.classroom_memberships?.find((m: { classroom?: { slug: string } }) => m.classroom?.slug === classroomSlug);
+  const membership = user?.classroom_memberships?.find(
+    (m: { classroom?: { slug: string } }) => m.classroom?.slug === classroomSlug
+  );
   const canImport = membership?.role === 'OWNER' || membership?.role === 'TEACHER';
 
   // File dropzone
@@ -139,9 +146,7 @@ export default function ImportPage() {
         if (videos.length > 0) {
           setDetectedVideos(videos);
           // Pre-select videos recommended for Cloudinary
-          const suggested = videos
-            .filter(v => v.suggestCloudinary)
-            .map(v => v.path);
+          const suggested = videos.filter(v => v.suggestCloudinary).map(v => v.path);
           setCloudinaryVideoPaths(suggested);
           setShowVideoModal(true);
         } else {
@@ -200,47 +205,50 @@ export default function ImportPage() {
   }, []);
 
   // Handle form submission - start async import with SSE progress
-  const handleSubmit = useCallback(async (e: React.FormEvent) => {
-    e.preventDefault();
-    setSubmitError(null);
-    setIsSubmitting(true);
+  const handleSubmit = useCallback(
+    async (e: React.FormEvent) => {
+      e.preventDefault();
+      setSubmitError(null);
+      setIsSubmitting(true);
 
-    try {
-      const form = formRef.current;
-      if (!form) throw new Error('Form not found');
+      try {
+        const form = formRef.current;
+        if (!form) throw new Error('Form not found');
 
-      const formData = new FormData(form);
+        const formData = new FormData(form);
 
-      // Add the selected file (dropzone doesn't put it in form automatically)
-      if (selectedFile) {
-        formData.set('zip', selectedFile);
+        // Add the selected file (dropzone doesn't put it in form automatically)
+        if (selectedFile) {
+          formData.set('zip', selectedFile);
+        }
+
+        // Add cloudinary video paths
+        formData.set('cloudinaryVideoPaths', JSON.stringify(cloudinaryVideoPaths));
+
+        // POST to the async start endpoint
+        const response = await fetch('/api/slides/import/start', {
+          method: 'POST',
+          body: formData,
+        });
+
+        const result = await response.json();
+
+        if (!response.ok) {
+          throw new Error(result.error || 'Failed to start import');
+        }
+
+        // Set importId to trigger SSE subscription
+        setImportId(result.importId);
+      } catch (err: unknown) {
+        console.error('Failed to start import:', err);
+        const errorMessage = err instanceof Error ? err.message : 'Failed to start import';
+        setSubmitError(errorMessage);
+      } finally {
+        setIsSubmitting(false);
       }
-
-      // Add cloudinary video paths
-      formData.set('cloudinaryVideoPaths', JSON.stringify(cloudinaryVideoPaths));
-
-      // POST to the async start endpoint
-      const response = await fetch('/api/slides/import/start', {
-        method: 'POST',
-        body: formData,
-      });
-
-      const result = await response.json();
-
-      if (!response.ok) {
-        throw new Error(result.error || 'Failed to start import');
-      }
-
-      // Set importId to trigger SSE subscription
-      setImportId(result.importId);
-    } catch (err: unknown) {
-      console.error('Failed to start import:', err);
-      const errorMessage = err instanceof Error ? err.message : 'Failed to start import';
-      setSubmitError(errorMessage);
-    } finally {
-      setIsSubmitting(false);
-    }
-  }, [selectedFile, cloudinaryVideoPaths]);
+    },
+    [selectedFile, cloudinaryVideoPaths]
+  );
 
   // Handle import cancellation (close modal and reset state)
   const handleImportCancel = useCallback(() => {
@@ -263,12 +271,10 @@ export default function ImportPage() {
       <div className="min-h-screen bg-gray-50 dark:bg-gray-900 flex items-center justify-center p-8">
         <div className="max-w-md text-center">
           <div className="text-4xl mb-4">🔒</div>
-          <h1 className="text-xl font-bold text-gray-900 dark:text-white mb-2">
-            Access Denied
-          </h1>
+          <h1 className="text-xl font-bold text-gray-900 dark:text-white mb-2">Access Denied</h1>
           <p className="text-gray-500 dark:text-gray-400 mb-4">
-            You do not have permission to import slides for {classroom.name || classroomSlug}.
-            Only Owners and Teachers can import slides.
+            You do not have permission to import slides for {classroom.name || classroomSlug}. Only
+            Owners and Teachers can import slides.
           </p>
           <a
             href={webappUrl}
@@ -329,11 +335,12 @@ export default function ImportPage() {
                 {...getRootProps()}
                 className={`
                   border-2 border-dashed rounded-lg p-8 text-center cursor-pointer transition-colors
-                  ${isDragActive
-                    ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/20'
-                    : selectedFile
-                      ? 'border-green-500 bg-green-50 dark:bg-green-900/20'
-                      : 'border-gray-300 dark:border-gray-600 hover:border-gray-400 dark:hover:border-gray-500'
+                  ${
+                    isDragActive
+                      ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/20'
+                      : selectedFile
+                        ? 'border-green-500 bg-green-50 dark:bg-green-900/20'
+                        : 'border-gray-300 dark:border-gray-600 hover:border-gray-400 dark:hover:border-gray-500'
                   }
                 `}
               >
@@ -349,7 +356,7 @@ export default function ImportPage() {
                     </p>
                     <button
                       type="button"
-                      onClick={(e) => {
+                      onClick={e => {
                         e.stopPropagation();
                         setSelectedFile(null);
                         setDetectedVideos([]);
@@ -386,7 +393,10 @@ export default function ImportPage() {
                 <div className="mt-3 p-3 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-md">
                   <div className="flex items-center justify-between">
                     <div className="text-sm text-blue-700 dark:text-blue-300">
-                      <span className="font-medium">{detectedVideos.length} video{detectedVideos.length !== 1 ? 's' : ''}</span> detected
+                      <span className="font-medium">
+                        {detectedVideos.length} video{detectedVideos.length !== 1 ? 's' : ''}
+                      </span>{' '}
+                      detected
                       {cloudinaryVideoPaths.length > 0 && (
                         <span className="ml-1">
                           ({cloudinaryVideoPaths.length} → Cloudinary,{' '}
@@ -437,13 +447,15 @@ export default function ImportPage() {
               <select
                 value={selectedModule?.id || ''}
                 onChange={e => {
-                  const mod = modules.find((m) => m.id === (e.target as unknown as HTMLInputElement).value);
+                  const mod = modules.find(
+                    m => m.id === (e.target as unknown as HTMLInputElement).value
+                  );
                   setSelectedModule(mod || null);
                 }}
                 className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-md dark:bg-gray-700 dark:text-white focus:ring-2 focus:ring-blue-500 focus:border-transparent"
               >
                 <option value="">No module (standalone)</option>
-                {modules.map((m) => (
+                {modules.map(m => (
                   <option key={m.id} value={m.id}>
                     {m.title}
                   </option>
@@ -468,7 +480,7 @@ export default function ImportPage() {
                       name="themeOption"
                       value="default"
                       checked={themeOption === 'default'}
-                      onChange={(e) => setThemeOption((e.target as HTMLInputElement).value)}
+                      onChange={e => setThemeOption((e.target as HTMLInputElement).value)}
                       className="mr-2"
                     />
                     <span className="text-sm text-gray-600 dark:text-gray-400">
@@ -484,7 +496,7 @@ export default function ImportPage() {
                         name="themeOption"
                         value="import"
                         checked={themeOption === 'import'}
-                        onChange={(e) => setThemeOption((e.target as HTMLInputElement).value)}
+                        onChange={e => setThemeOption((e.target as HTMLInputElement).value)}
                         className="mr-2"
                       />
                       <span className="text-sm text-gray-600 dark:text-gray-400">
@@ -497,7 +509,7 @@ export default function ImportPage() {
                           <input
                             type="checkbox"
                             checked={saveThemeName !== ''}
-                            onChange={(e) => setSaveThemeName(e.target.checked ? 'My Theme' : '')}
+                            onChange={e => setSaveThemeName(e.target.checked ? 'My Theme' : '')}
                             className="rounded-sm"
                           />
                           <span className="text-sm text-gray-500 dark:text-gray-400">
@@ -509,13 +521,15 @@ export default function ImportPage() {
                             type="text"
                             name="saveThemeAs"
                             value={saveThemeName}
-                            onChange={(e) => setSaveThemeName((e.target as HTMLInputElement).value)}
+                            onChange={e => setSaveThemeName((e.target as HTMLInputElement).value)}
                             placeholder="Theme name..."
                             className="mt-2 w-full px-3 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded-md dark:bg-gray-700 dark:text-white"
                           />
                         )}
                         <p className="mt-1 text-xs text-gray-400 dark:text-gray-500">
-                          {saveThemeName ? 'Theme will be reusable for future imports' : 'Theme will be embedded in this slide only'}
+                          {saveThemeName
+                            ? 'Theme will be reusable for future imports'
+                            : 'Theme will be embedded in this slide only'}
                         </p>
                       </div>
                     )}
@@ -530,7 +544,7 @@ export default function ImportPage() {
                           name="themeOption"
                           value="saved"
                           checked={themeOption === 'saved'}
-                          onChange={(e) => setThemeOption((e.target as HTMLInputElement).value)}
+                          onChange={e => setThemeOption((e.target as HTMLInputElement).value)}
                           className="mr-2"
                         />
                         <span className="text-sm text-gray-600 dark:text-gray-400">
@@ -545,7 +559,7 @@ export default function ImportPage() {
                             className="w-full px-3 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded-md dark:bg-gray-700 dark:text-white"
                           >
                             <option value="">Select a theme...</option>
-                            {savedThemes.map((theme) => (
+                            {savedThemes.map(theme => (
                               <option key={theme.name} value={theme.name}>
                                 {theme.name}
                               </option>

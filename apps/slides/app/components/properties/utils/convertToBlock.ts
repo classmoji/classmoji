@@ -16,7 +16,11 @@
  * @param {Function} onContentChange - Function to notify content change
  * @returns {HTMLElement|null} - The new sl-block element, or null if conversion failed
  */
-export function convertToBlock(element: HTMLElement, selectElement?: ((el: HTMLElement) => void) | null, onContentChange?: (() => void) | null) {
+export function convertToBlock(
+  element: HTMLElement,
+  selectElement?: ((el: HTMLElement) => void) | null,
+  onContentChange?: (() => void) | null
+) {
   if (!element) return null;
 
   // Don't convert elements that are already in sl-blocks
@@ -51,7 +55,11 @@ export function convertToBlock(element: HTMLElement, selectElement?: ((el: HTMLE
     blockType = 'image';
   } else if (element.tagName === 'PRE' || element.querySelector('code')) {
     blockType = 'code';
-  } else if (element.tagName === 'IFRAME' || element.querySelector('iframe') || element.classList.contains('iframe-wrapper')) {
+  } else if (
+    element.tagName === 'IFRAME' ||
+    element.querySelector('iframe') ||
+    element.classList.contains('iframe-wrapper')
+  ) {
     blockType = 'iframe';
   }
 

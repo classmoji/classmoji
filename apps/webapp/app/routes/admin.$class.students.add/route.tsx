@@ -34,7 +34,9 @@ const AddStudents = ({ loaderData }: Route.ComponentProps) => {
   const { class: classSlug } = useParams();
 
   const [inputText, setInputText] = useState('');
-  const [parsed, setParsed] = useState<{ name?: string; email?: string; error?: string }[] | null>(null);
+  const [parsed, setParsed] = useState<{ name?: string; email?: string; error?: string }[] | null>(
+    null
+  );
 
   // Create lookup set for duplicate detection
   const currentByEmail = useMemo(

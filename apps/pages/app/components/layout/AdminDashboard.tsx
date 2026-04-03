@@ -34,16 +34,14 @@ const AdminDashboard = ({ pages, classroom }: AdminDashboardProps) => {
         is_draft: value === 'draft',
         is_public: value === 'public',
       },
-      { method: 'post', encType: 'application/json' },
+      { method: 'post', encType: 'application/json' }
     );
   };
 
   return (
     <div>
       <div className="flex items-center justify-between mb-6">
-        <h1 className="text-2xl font-bold text-gray-900 dark:text-white">
-          Pages
-        </h1>
+        <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Pages</h1>
         <fetcher.Form method="post">
           <input type="hidden" name="intent" value="create" />
           <button
@@ -84,7 +82,7 @@ const AdminDashboard = ({ pages, classroom }: AdminDashboardProps) => {
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
-              {pages.map((page) => (
+              {pages.map(page => (
                 <tr key={page.id} className="hover:bg-gray-50 dark:hover:bg-gray-800/50">
                   <td className="px-4 py-3">
                     <Link
@@ -97,9 +95,13 @@ const AdminDashboard = ({ pages, classroom }: AdminDashboardProps) => {
                   <td className="px-4 py-3">
                     <select
                       value={statusValue(page)}
-                      onChange={(e) => handleStatusChange(page, e.target.value)}
+                      onChange={e => handleStatusChange(page, e.target.value)}
                       className={`text-xs font-medium rounded-full px-2 py-0.5 border-none cursor-pointer appearance-none pr-5 ${statusStyles[statusValue(page)]}`}
-                      style={{ backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 24 24'%3E%3Cpath fill='currentColor' d='M7 10l5 5 5-5z'/%3E%3C/svg%3E")`, backgroundRepeat: 'no-repeat', backgroundPosition: 'right 4px center' }}
+                      style={{
+                        backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 24 24'%3E%3Cpath fill='currentColor' d='M7 10l5 5 5-5z'/%3E%3C/svg%3E")`,
+                        backgroundRepeat: 'no-repeat',
+                        backgroundPosition: 'right 4px center',
+                      }}
                     >
                       <option value="draft">Draft</option>
                       <option value="private">Private</option>
@@ -110,7 +112,11 @@ const AdminDashboard = ({ pages, classroom }: AdminDashboardProps) => {
                     <button
                       onClick={() => {
                         fetcher.submit(
-                          { intent: 'toggle-menu', pageId: page.id, show: !page.show_in_student_menu },
+                          {
+                            intent: 'toggle-menu',
+                            pageId: page.id,
+                            show: !page.show_in_student_menu,
+                          },
                           { method: 'post', encType: 'application/json' }
                         );
                       }}

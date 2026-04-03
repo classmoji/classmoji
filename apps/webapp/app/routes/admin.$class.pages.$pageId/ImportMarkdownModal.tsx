@@ -118,7 +118,12 @@ async function extractZipContents(file: File | Blob) {
   };
 }
 
-export default function ImportMarkdownModal({ open, onCancel, onImport, isImporting }: ImportMarkdownModalProps) {
+export default function ImportMarkdownModal({
+  open,
+  onCancel,
+  onImport,
+  isImporting,
+}: ImportMarkdownModalProps) {
   const [markdownFile, setMarkdownFile] = useState<File | null>(null);
   const [markdownContent, setMarkdownContent] = useState('');
   const [imageFiles, setImageFiles] = useState<File[]>([]);
@@ -199,7 +204,9 @@ export default function ImportMarkdownModal({ open, onCancel, onImport, isImport
 
           // Create a File object for the markdown content
           const mdBlob = new Blob([content], { type: 'text/markdown' });
-          const newMdFile = new File([mdBlob], markdownFileName ?? 'content.md', { type: 'text/markdown' });
+          const newMdFile = new File([mdBlob], markdownFileName ?? 'content.md', {
+            type: 'text/markdown',
+          });
 
           setMarkdownFile(newMdFile);
           setMarkdownContent(content);

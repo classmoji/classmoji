@@ -279,7 +279,10 @@ export function extractImageReferences(markdown: string): Array<{ alt: string; p
  * Match image references in markdown to uploaded files
  * Returns a map: { originalPath -> uploadedFile }
  */
-export function matchImageReferences(markdown: string, uploadedImages: Array<{ name: string }>): Map<string, { name: string }> {
+export function matchImageReferences(
+  markdown: string,
+  uploadedImages: Array<{ name: string }>
+): Map<string, { name: string }> {
   const references = extractImageReferences(markdown);
   const imageMap = new Map();
 
@@ -288,9 +291,7 @@ export function matchImageReferences(markdown: string, uploadedImages: Array<{ n
     const refFilename = (ref.path.split('/').pop() ?? '').toLowerCase();
 
     // Find matching uploaded file (case-insensitive)
-    const matchedFile = uploadedImages.find(file =>
-      file.name.toLowerCase() === refFilename
-    );
+    const matchedFile = uploadedImages.find(file => file.name.toLowerCase() === refFilename);
 
     if (matchedFile) {
       imageMap.set(ref.path, matchedFile);
@@ -324,7 +325,8 @@ export function processToggleLists(markdown: string): string {
   let i = 0;
 
   // Common toggle emoji patterns (Notion uses these for collapsible sections)
-  const toggleEmojiPattern = /^(❓|💡|⚠️|📝|✅|❌|🔥|📌|👉|🎯|📚|🛠️|🔔|⭐|💻|🚀|👽|📦|🔧|💭|🤔|❗|ℹ️|🎨|🔍|📋|✨|🎁|🔒|🔓|⏰|📍|🏷️|📖|🔖|🗂️)/;
+  const toggleEmojiPattern =
+    /^(❓|💡|⚠️|📝|✅|❌|🔥|📌|👉|🎯|📚|🛠️|🔔|⭐|💻|🚀|👽|📦|🔧|💭|🤔|❗|ℹ️|🎨|🔍|📋|✨|🎁|🔒|🔓|⏰|📍|🏷️|📖|🔖|🗂️)/;
 
   while (i < lines.length) {
     const line = lines[i];
@@ -427,7 +429,9 @@ export function processToggleLists(markdown: string): string {
           const encodedInnerHtml = Buffer.from(innerHtml).toString('base64');
 
           // Output as details/summary (toggle format) with encoded inner content
-          result.push(`<details><summary>${toggleTitle}</summary><div data-encoded="${encodedInnerHtml}"></div></details>`);
+          result.push(
+            `<details><summary>${toggleTitle}</summary><div data-encoded="${encodedInnerHtml}"></div></details>`
+          );
           i = j;
           continue;
         }
@@ -518,7 +522,9 @@ export function convertMarkdownToHtml(markdown: string): string {
       const trimmedContent = content.replace(/\n+$/, '');
 
       const lines = decodedContent.split('\n');
-      const lineNumbers = lines.map((_: string, i: number) => `<span class="line-number">${i + 1}</span>`).join('');
+      const lineNumbers = lines
+        .map((_: string, i: number) => `<span class="line-number">${i + 1}</span>`)
+        .join('');
       const langDisplay = (langDisplayMap as Record<string, string>)[lang.toLowerCase()] || lang;
 
       return `<div class="code-block"><div class="code-header"><span class="code-lang">${langDisplay}</span></div><div class="code-body"><div class="line-numbers">${lineNumbers}</div><pre><code class="language-${lang}">${trimmedContent}</code></pre></div></div>`;
@@ -526,26 +532,25 @@ export function convertMarkdownToHtml(markdown: string): string {
   );
 
   // Also handle code blocks without a language class
-  html = html.replace(
-    /<pre><code>([\s\S]*?)<\/code><\/pre>/g,
-    (match, content) => {
-      let decodedContent = content
-        .replace(/&amp;/g, '&')
-        .replace(/&lt;/g, '<')
-        .replace(/&gt;/g, '>')
-        .replace(/&#39;/g, "'")
-        .replace(/&quot;/g, '"');
+  html = html.replace(/<pre><code>([\s\S]*?)<\/code><\/pre>/g, (match, content) => {
+    let decodedContent = content
+      .replace(/&amp;/g, '&')
+      .replace(/&lt;/g, '<')
+      .replace(/&gt;/g, '>')
+      .replace(/&#39;/g, "'")
+      .replace(/&quot;/g, '"');
 
-      // Remove trailing newlines to avoid extra empty line in line numbers
-      decodedContent = decodedContent.replace(/\n+$/, '');
-      const trimmedContent = content.replace(/\n+$/, '');
+    // Remove trailing newlines to avoid extra empty line in line numbers
+    decodedContent = decodedContent.replace(/\n+$/, '');
+    const trimmedContent = content.replace(/\n+$/, '');
 
-      const lines = decodedContent.split('\n');
-      const lineNumbers = lines.map((_: string, i: number) => `<span class="line-number">${i + 1}</span>`).join('');
+    const lines = decodedContent.split('\n');
+    const lineNumbers = lines
+      .map((_: string, i: number) => `<span class="line-number">${i + 1}</span>`)
+      .join('');
 
-      return `<div class="code-block"><div class="code-header"><span class="code-lang">Code</span></div><div class="code-body"><div class="line-numbers">${lineNumbers}</div><pre><code>${trimmedContent}</code></pre></div></div>`;
-    }
-  );
+    return `<div class="code-block"><div class="code-header"><span class="code-lang">Code</span></div><div class="code-body"><div class="line-numbers">${lineNumbers}</div><pre><code>${trimmedContent}</code></pre></div></div>`;
+  });
 
   return html;
 }
@@ -693,7 +698,12 @@ export async function processMarkdownImport(
   markdown: string,
   uploadedImages: Array<{ name: string }>,
   options: { org: string; repo: string; contentPath: string; assetsFolder: string }
-): Promise<{ html: string; imageMap: Map<string, any>; unmatchedImages: Array<{ name: string }>; missingImages: string[] }> {
+): Promise<{
+  html: string;
+  imageMap: Map<string, any>;
+  unmatchedImages: Array<{ name: string }>;
+  missingImages: string[];
+}> {
   // 0. Normalize markdown from different sources (Obsidian, etc.)
   let normalizedMarkdown = normalizeMarkdown(markdown);
 
@@ -749,7 +759,9 @@ export async function processMarkdownImport(
   const matchedFilenames = new Set(Array.from(imageMap.values()).map(f => f.name.toLowerCase()));
   const unmatchedImages = uploadedImages.filter(f => !matchedFilenames.has(f.name.toLowerCase()));
 
-  const referencedPaths = new Set(references.map(r => (r.path.split('/').pop() ?? '').toLowerCase()));
+  const referencedPaths = new Set(
+    references.map(r => (r.path.split('/').pop() ?? '').toLowerCase())
+  );
   const uploadedFilenames = new Set(uploadedImages.map(f => f.name.toLowerCase()));
   const missingImages = Array.from(referencedPaths).filter(path => !uploadedFilenames.has(path));
 

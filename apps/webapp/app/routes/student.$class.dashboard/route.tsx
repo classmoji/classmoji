@@ -116,19 +116,19 @@ const StudentDashboard = ({ loaderData }: Route.ComponentProps) => {
     switch (tab) {
       case 'current':
         return repoAssignments
-          .filter((repoAssignment) => repoAssignment.status === 'OPEN')
+          .filter(repoAssignment => repoAssignment.status === 'OPEN')
           .sort((a, b) =>
             dayjs(a.assignment.student_deadline).diff(dayjs(b.assignment.student_deadline))
           );
       case 'completed':
-        return repoAssignments.filter((repoAssignment) => repoAssignment.status === 'CLOSED');
+        return repoAssignments.filter(repoAssignment => repoAssignment.status === 'CLOSED');
       case 'all':
         return repoAssignments;
       case 'overview':
       default:
         return repoAssignments
           .filter(
-            (repoAssignment) =>
+            repoAssignment =>
               repoAssignment.status === 'OPEN' &&
               (repoAssignment.is_late ||
                 dayjs(repoAssignment.assignment.student_deadline).diff(dayjs(), 'days') <= 3)
@@ -172,7 +172,8 @@ const StudentDashboard = ({ loaderData }: Route.ComponentProps) => {
               { text: 'Submitted', value: 'CLOSED' },
             ]
           : undefined,
-      onFilter: (value: React.Key | boolean, record: RepositoryAssignment) => record.status === value,
+      onFilter: (value: React.Key | boolean, record: RepositoryAssignment) =>
+        record.status === value,
       render: (_: unknown, record: RepositoryAssignment) => {
         let color = '';
         let text = '';
@@ -333,56 +334,127 @@ const StudentDashboard = ({ loaderData }: Route.ComponentProps) => {
       <Suspense fallback={<Skeleton active />}>
         <Await resolve={data}>
           {/* Await render function: Promise.all returns heterogeneous tuple that can't be statically typed */}
-          {((resolved: unknown) => {
-            const [
-              repoAssignments,
-              emojiMappings,
-              settings,
-              letterGradeMappings,
-              membership,
-              orgEmojiMappings,
-            ] = resolved as [RepositoryAssignment[], Record<string, unknown>, Record<string, unknown>, Record<string, unknown>, Record<string, unknown>, Record<string, { emoji: string; description?: string }>];
-            const showGradesToStudents = settings.show_grades_to_students as boolean | undefined;
-            const repoAssignmentsGroupedByModule = groupByAssignment(repoAssignments as unknown as Parameters<typeof groupByAssignment>[0]) as unknown as Record<string, RepositoryAssignment[]>;
-            const repositories = Object.values(repoAssignmentsGroupedByModule).map(
-              (repoAssignmentsInModule) => {
-                const repo = repoAssignmentsInModule[0].repository;
-                const assignment = repoAssignmentsInModule[0].assignment;
-                return { ...repo, assignment, repositoryAssignments: repoAssignmentsInModule };
-              }
-            );
-            const { finalLetterGrade } = calculateGrades(
-              repositories as unknown as Parameters<typeof calculateGrades>[0],
-              emojiMappings as unknown as Parameters<typeof calculateGrades>[1],
-              settings as unknown as Parameters<typeof calculateGrades>[2],
-              letterGradeMappings as unknown as Parameters<typeof calculateGrades>[3]
-            );
+          {
+            ((resolved: unknown) => {
+              const [
+                repoAssignments,
+                emojiMappings,
+                settings,
+                letterGradeMappings,
+                membership,
+                orgEmojiMappings,
+              ] = resolved as [
+                RepositoryAssignment[],
+                Record<string, unknown>,
+                Record<string, unknown>,
+                Record<string, unknown>,
+                Record<string, unknown>,
+                Record<string, { emoji: string; description?: string }>,
+              ];
+              const showGradesToStudents = settings.show_grades_to_students as boolean | undefined;
+              const repoAssignmentsGroupedByModule = groupByAssignment(
+                repoAssignments as unknown as Parameters<typeof groupByAssignment>[0]
+              ) as unknown as Record<string, RepositoryAssignment[]>;
+              const repositories = Object.values(repoAssignmentsGroupedByModule).map(
+                repoAssignmentsInModule => {
+                  const repo = repoAssignmentsInModule[0].repository;
+                  const assignment = repoAssignmentsInModule[0].assignment;
+                  return { ...repo, assignment, repositoryAssignments: repoAssignmentsInModule };
+                }
+              );
+              const { finalLetterGrade } = calculateGrades(
+                repositories as unknown as Parameters<typeof calculateGrades>[0],
+                emojiMappings as unknown as Parameters<typeof calculateGrades>[1],
+                settings as unknown as Parameters<typeof calculateGrades>[2],
+                letterGradeMappings as unknown as Parameters<typeof calculateGrades>[3]
+              );
 
-            // Calculate counts for different categories - only OPEN assignments can be overdue
-            const currentRepoAssignments = repoAssignments.filter(
-              (ra) => ra.status === 'OPEN'
-            );
-            const overdueRepoAssignments = repoAssignments.filter(
-              (ra) =>
-                ra.status === 'OPEN' &&
-                (ra.is_late || dayjs().isAfter(dayjs(ra.assignment.student_deadline)))
-            );
-            const completedRepoAssignments = repoAssignments.filter(
-              (ra) => ra.status === 'CLOSED'
-            );
+              // Calculate counts for different categories - only OPEN assignments can be overdue
+              const currentRepoAssignments = repoAssignments.filter(ra => ra.status === 'OPEN');
+              const overdueRepoAssignments = repoAssignments.filter(
+                ra =>
+                  ra.status === 'OPEN' &&
+                  (ra.is_late || dayjs().isAfter(dayjs(ra.assignment.student_deadline)))
+              );
+              const completedRepoAssignments = repoAssignments.filter(ra => ra.status === 'CLOSED');
 
-            const tabItems = [
-              {
-                key: 'current',
-                label: `📝 Current (${currentRepoAssignments.length})`,
-                children: (
-                  <>
-                    <div className="mb-4 p-4 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg">
-                      <p className="text-blue-600 dark:text-blue-400">
-                        📚 All incomplete assignments (including overdue) sorted by deadline
-                      </p>
-                    </div>
-                    {filterRepositoryAssignments(repoAssignments, 'current').length > 0 ? (
+              const tabItems = [
+                {
+                  key: 'current',
+                  label: `📝 Current (${currentRepoAssignments.length})`,
+                  children: (
+                    <>
+                      <div className="mb-4 p-4 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg">
+                        <p className="text-blue-600 dark:text-blue-400">
+                          📚 All incomplete assignments (including overdue) sorted by deadline
+                        </p>
+                      </div>
+                      {filterRepositoryAssignments(repoAssignments, 'current').length > 0 ? (
+                        <Table
+                          columns={getColumns({ emojiMappings: orgEmojiMappings })}
+                          dataSource={filterRepositoryAssignments(repoAssignments, activeTab)}
+                          rowKey="id"
+                          rowHoverable={false}
+                          size="small"
+                          pagination={{
+                            pageSize: 50,
+                          }}
+                        />
+                      ) : (
+                        <div className="text-center py-12 text-gray-500">
+                          <div className="text-6xl mb-4">📚</div>
+                          <h3 className="text-xl font-semibold text-gray-700 mb-2">
+                            No current assignments
+                          </h3>
+                          <p>No incomplete assignments remaining</p>
+                        </div>
+                      )}
+                    </>
+                  ),
+                },
+                {
+                  key: 'completed',
+                  label: `✅ Completed (${completedRepoAssignments.length})`,
+                  children: (
+                    <>
+                      <div className="mb-4 p-4 bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded-lg">
+                        <p className="text-green-600 dark:text-green-400">
+                          🎯 Your successfully submitted assignments with grades and feedback
+                        </p>
+                      </div>
+                      {filterRepositoryAssignments(repoAssignments, 'completed').length > 0 ? (
+                        <Table
+                          columns={getColumns({ emojiMappings: orgEmojiMappings })}
+                          dataSource={filterRepositoryAssignments(repoAssignments, activeTab)}
+                          rowKey="id"
+                          rowHoverable={false}
+                          size="small"
+                          pagination={{
+                            pageSize: 50,
+                          }}
+                        />
+                      ) : (
+                        <div className="text-center py-12 text-gray-500">
+                          <div className="text-6xl mb-4">📝</div>
+                          <h3 className="text-xl font-semibold text-gray-700 mb-2">
+                            No completed assignments yet
+                          </h3>
+                          <p>Completed assignments will appear here</p>
+                        </div>
+                      )}
+                    </>
+                  ),
+                },
+                {
+                  key: 'all',
+                  label: `📋 All (${repoAssignments.length})`,
+                  children: (
+                    <>
+                      <div className="mb-4 p-4 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg">
+                        <p className="text-gray-600 dark:text-gray-400">
+                          📊 Complete list of all your assignments across all courses and statuses
+                        </p>
+                      </div>
                       <Table
                         columns={getColumns({ emojiMappings: orgEmojiMappings })}
                         dataSource={filterRepositoryAssignments(repoAssignments, activeTab)}
@@ -390,101 +462,47 @@ const StudentDashboard = ({ loaderData }: Route.ComponentProps) => {
                         rowHoverable={false}
                         size="small"
                         pagination={{
-                          pageSize: 50,
+                          pageSize: 100,
                         }}
                       />
-                    ) : (
-                      <div className="text-center py-12 text-gray-500">
-                        <div className="text-6xl mb-4">📚</div>
-                        <h3 className="text-xl font-semibold text-gray-700 mb-2">
-                          No current assignments
-                        </h3>
-                        <p>No incomplete assignments remaining</p>
-                      </div>
-                    )}
-                  </>
-                ),
-              },
-              {
-                key: 'completed',
-                label: `✅ Completed (${completedRepoAssignments.length})`,
-                children: (
-                  <>
-                    <div className="mb-4 p-4 bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded-lg">
-                      <p className="text-green-600 dark:text-green-400">
-                        🎯 Your successfully submitted assignments with grades and feedback
-                      </p>
-                    </div>
-                    {filterRepositoryAssignments(repoAssignments, 'completed').length > 0 ? (
-                      <Table
-                        columns={getColumns({ emojiMappings: orgEmojiMappings })}
-                        dataSource={filterRepositoryAssignments(repoAssignments, activeTab)}
-                        rowKey="id"
-                        rowHoverable={false}
-                        size="small"
-                        pagination={{
-                          pageSize: 50,
-                        }}
-                      />
-                    ) : (
-                      <div className="text-center py-12 text-gray-500">
-                        <div className="text-6xl mb-4">📝</div>
-                        <h3 className="text-xl font-semibold text-gray-700 mb-2">
-                          No completed assignments yet
-                        </h3>
-                        <p>Completed assignments will appear here</p>
-                      </div>
-                    )}
-                  </>
-                ),
-              },
-              {
-                key: 'all',
-                label: `📋 All (${repoAssignments.length})`,
-                children: (
-                  <>
-                    <div className="mb-4 p-4 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg">
-                      <p className="text-gray-600 dark:text-gray-400">
-                        📊 Complete list of all your assignments across all courses and statuses
-                      </p>
-                    </div>
-                    <Table
-                      columns={getColumns({ emojiMappings: orgEmojiMappings })}
-                      dataSource={filterRepositoryAssignments(repoAssignments, activeTab)}
-                      rowKey="id"
-                      rowHoverable={false}
-                      size="small"
-                      pagination={{
-                        pageSize: 100,
-                      }}
-                    />
-                  </>
-                ),
-              },
-            ];
+                    </>
+                  ),
+                },
+              ];
 
-            return (
-              <>
-                <div
-                  className={`grid gap-5 pb-6 ${
-                    !showGradesToStudents ? 'grid-cols-3' : 'grid-cols-4'
-                  }`}
-                >
-                  <StatsCard title="Total Assignments">{repoAssignments?.length}</StatsCard>
-                  <StatsCard title="Unsubmitted Assignments">
-                    {repoAssignments.filter(({ status }: { status: string }) => status == 'OPEN').length}
-                  </StatsCard>
-                  <StatsCard title="Late Assignments">{overdueRepoAssignments.length}</StatsCard>
-                  {showGradesToStudents && (
-                    <StatsCard title="Grade Estimation">
-                      {membership.letter_grade ? String(membership.letter_grade) : finalLetterGrade}
+              return (
+                <>
+                  <div
+                    className={`grid gap-5 pb-6 ${
+                      !showGradesToStudents ? 'grid-cols-3' : 'grid-cols-4'
+                    }`}
+                  >
+                    <StatsCard title="Total Assignments">{repoAssignments?.length}</StatsCard>
+                    <StatsCard title="Unsubmitted Assignments">
+                      {
+                        repoAssignments.filter(({ status }: { status: string }) => status == 'OPEN')
+                          .length
+                      }
                     </StatsCard>
-                  )}
-                </div>
-                <Tabs activeKey={activeTab} onChange={setActiveTab} items={tabItems} size="large" />
-              </>
-            );
-          }) as unknown as React.ReactNode}
+                    <StatsCard title="Late Assignments">{overdueRepoAssignments.length}</StatsCard>
+                    {showGradesToStudents && (
+                      <StatsCard title="Grade Estimation">
+                        {membership.letter_grade
+                          ? String(membership.letter_grade)
+                          : finalLetterGrade}
+                      </StatsCard>
+                    )}
+                  </div>
+                  <Tabs
+                    activeKey={activeTab}
+                    onChange={setActiveTab}
+                    items={tabItems}
+                    size="large"
+                  />
+                </>
+              );
+            }) as unknown as React.ReactNode
+          }
         </Await>
       </Suspense>
     </div>

@@ -24,15 +24,19 @@ interface SectionHeaderProps {
   className?: string;
 }
 
-const SectionHeader = ({ title, subtitle, count, size = 'lg', className = '' }: SectionHeaderProps) => (
+const SectionHeader = ({
+  title,
+  subtitle,
+  count,
+  size = 'lg',
+  className = '',
+}: SectionHeaderProps) => (
   <div className={`flex items-center gap-3 ${className}`}>
     <div
       className={`w-1 ${sizeClasses[size]} bg-primary-400 dark:bg-primary-500 rounded-full`}
     ></div>
     <div>
-      <h3
-        className={`${titleSizeClasses[size]} font-semibold text-gray-900 dark:text-gray-100`}
-      >
+      <h3 className={`${titleSizeClasses[size]} font-semibold text-gray-900 dark:text-gray-100`}>
         {title}
       </h3>
       {subtitle && (

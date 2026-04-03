@@ -12,7 +12,9 @@ const StopPropagation = ({ children }: StopPropagationProps) => {
 
   // Clone the children and add the stopProp function to their props
   const childrenWithProps = React.Children.map(children, child =>
-    React.isValidElement(child) ? React.cloneElement(child, { onClick: stopProp } as React.HTMLAttributes<HTMLElement>) : child
+    React.isValidElement(child)
+      ? React.cloneElement(child, { onClick: stopProp } as React.HTMLAttributes<HTMLElement>)
+      : child
   );
 
   return <>{childrenWithProps}</>;

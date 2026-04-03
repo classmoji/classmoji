@@ -11,7 +11,11 @@ type Classroom = NonNullable<Awaited<ReturnType<typeof ClassmojiService.classroo
 type Module = NonNullable<Awaited<ReturnType<typeof ClassmojiService.module.findById>>>;
 type Repository = Awaited<ReturnType<typeof ClassmojiService.repository.findByModule>>[number];
 
-export const publishAssignment = async (classroomSlug: string, moduleId: string, userId: string | null = null) => {
+export const publishAssignment = async (
+  classroomSlug: string,
+  moduleId: string,
+  userId: string | null = null
+) => {
   try {
     const sessionId = nanoid();
     const classroom = await ClassmojiService.classroom.findBySlug(classroomSlug);
@@ -115,7 +119,11 @@ export const publishAssignment = async (classroomSlug: string, moduleId: string,
   }
 };
 
-export const syncAssignment = async (classroomSlug: string, moduleId: string, userId: string | null = null) => {
+export const syncAssignment = async (
+  classroomSlug: string,
+  moduleId: string,
+  userId: string | null = null
+) => {
   const classroom = await ClassmojiService.classroom.findBySlug(classroomSlug);
   const module = await ClassmojiService.module.findById(moduleId);
   const sessionId = nanoid();
@@ -187,9 +195,12 @@ const syncIndividualAssignment = async (
   // 4. Find and create missing assignments
   const missingAssignments = findMissingAssignments(module, existingRepos);
 
-  const numMissingAssignments = Object.values(missingAssignments).reduce((acc: number, curr: { repos: unknown[] }) => {
-    return acc + curr.repos.length;
-  }, 0);
+  const numMissingAssignments = Object.values(missingAssignments).reduce(
+    (acc: number, curr: { repos: unknown[] }) => {
+      return acc + curr.repos.length;
+    },
+    0
+  );
 
   const numReposToCreate = studentsWithMissingRepos.length * 2; // multiply by 2 to handle gh and cf creation
   const numIssuesToCreate = 2 * numMissingAssignments;
@@ -232,9 +243,12 @@ const syncTeamAssignment = async (
 
   // 4. Find and create missing assignments
   const missingAssignments = findMissingAssignments(module, existingRepos);
-  const numMissingAssignments = Object.values(missingAssignments).reduce((acc: number, curr: { repos: unknown[] }) => {
-    return acc + curr.repos.length;
-  }, 0);
+  const numMissingAssignments = Object.values(missingAssignments).reduce(
+    (acc: number, curr: { repos: unknown[] }) => {
+      return acc + curr.repos.length;
+    },
+    0
+  );
 
   const numReposToCreate = teamsWithMissingRepos.length * 2; // multiply by 2 to handle gh and cf creation
   const numIssuesToCreate = 2 * numMissingAssignments;
@@ -291,9 +305,12 @@ const syncSelfFormedTeamAssignment = async (
 
   // Find and create missing assignments
   const missingAssignments = findMissingAssignments(module, existingRepos);
-  const numMissingAssignments = Object.values(missingAssignments).reduce((acc: number, curr: { repos: unknown[] }) => {
-    return acc + curr.repos.length;
-  }, 0);
+  const numMissingAssignments = Object.values(missingAssignments).reduce(
+    (acc: number, curr: { repos: unknown[] }) => {
+      return acc + curr.repos.length;
+    },
+    0
+  );
 
   const numReposToCreate = teamsWithMissingRepos.length * 2;
   const numIssuesToCreate = 2 * numMissingAssignments;
@@ -307,7 +324,10 @@ const syncSelfFormedTeamAssignment = async (
 };
 
 // Internal helper functions
-const findMissingAssignments = (module: Module, repos: Repository[]): Record<string, MissingAssignmentEntry> => {
+const findMissingAssignments = (
+  module: Module,
+  repos: Repository[]
+): Record<string, MissingAssignmentEntry> => {
   const keyed = _.keyBy(module.assignments, 'id');
   // Add `repos` array to each assignment entry for tracking missing assignments per repo
   const moduleAssignments = keyed as unknown as Record<string, MissingAssignmentEntry>;
@@ -324,7 +344,8 @@ const findMissingAssignments = (module: Module, repos: Repository[]): Record<str
   repos.forEach((repo: Repository) => {
     const moduleAssignmentIds = Object.keys(moduleAssignments);
 
-    const repoAssignmentIds = repo.assignments?.map((ra: { assignment_id: string }) => ra.assignment_id) || [];
+    const repoAssignmentIds =
+      repo.assignments?.map((ra: { assignment_id: string }) => ra.assignment_id) || [];
     const missingAssignmentIds = _.difference(moduleAssignmentIds, repoAssignmentIds);
 
     missingAssignmentIds.forEach(assignmentId => {
@@ -367,8 +388,12 @@ const createMissingAssignments = async (
 
   if (assignmentsData.length) {
     Tasks.createGithubRepositoryAssignmentTask.batchTrigger(
-      assignmentsData as unknown as Parameters<typeof Tasks.createGithubRepositoryAssignmentTask.batchTrigger>[0],
-      { concurrencyKey: classroom.slug } as Parameters<typeof Tasks.createGithubRepositoryAssignmentTask.batchTrigger>[1]
+      assignmentsData as unknown as Parameters<
+        typeof Tasks.createGithubRepositoryAssignmentTask.batchTrigger
+      >[0],
+      { concurrencyKey: classroom.slug } as Parameters<
+        typeof Tasks.createGithubRepositoryAssignmentTask.batchTrigger
+      >[1]
     );
 
     for (const assignment of Object.values(missingAssignments)) {

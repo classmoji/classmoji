@@ -1,11 +1,21 @@
 import { useEffect, useRef, useState, useCallback, forwardRef, useImperativeHandle } from 'react';
-import {
-  handleCodeBlockTab,
-  handleCodeBlockEnter,
-} from './properties/utils/codeBlockUtils';
+import { handleCodeBlockTab, handleCodeBlockEnter } from './properties/utils/codeBlockUtils';
 
 // Built-in Reveal.js themes (exported for use in SlideToolbar)
-export const BUILTIN_THEMES = ['black', 'white', 'league', 'beige', 'night', 'serif', 'simple', 'solarized', 'moon', 'dracula', 'sky', 'blood'];
+export const BUILTIN_THEMES = [
+  'black',
+  'white',
+  'league',
+  'beige',
+  'night',
+  'serif',
+  'simple',
+  'solarized',
+  'moon',
+  'dracula',
+  'sky',
+  'blood',
+];
 
 // Theme categories for better UX in dropdowns
 export const LIGHT_THEMES = ['white', 'beige', 'sky', 'serif', 'simple', 'solarized'];
@@ -49,7 +59,11 @@ export interface RevealSlidesHandle {
   setThemes: (newThemes: { theme?: string; codeTheme?: string }) => void;
 }
 
-function getThemeUrl(theme: string, customThemes: CustomTheme[] = [], sharedThemes: SharedTheme[] = []) {
+function getThemeUrl(
+  theme: string,
+  customThemes: CustomTheme[] = [],
+  sharedThemes: SharedTheme[] = []
+) {
   if (BUILTIN_THEMES.includes(theme)) {
     return `https://cdn.jsdelivr.net/npm/reveal.js@5.1.0/dist/theme/${theme}.css`;
   }
@@ -80,17 +94,20 @@ function getThemeUrl(theme: string, customThemes: CustomTheme[] = [], sharedThem
  *
  * Note: Reveal.js is dynamically imported to avoid SSR issues
  */
-const RevealSlides = forwardRef(function RevealSlides({
-  contentUrl,
-  initialContent = null,  // Pre-fetched content from server (bypasses CORS)
-  initialError = null,    // Error from server-side fetch
-  canEdit = false,
-  isEditing = false,
-  onContentChange,
-  onThemeChange,          // Callback when themes are extracted from content
-  customThemes = [],      // Custom themes with cssUrl for loading
-  sharedThemes = [],      // Shared themes from slides.com imports (with lib/ folder)
-}: RevealSlidesProps, ref: React.Ref<RevealSlidesHandle>) {
+const RevealSlides = forwardRef(function RevealSlides(
+  {
+    contentUrl,
+    initialContent = null, // Pre-fetched content from server (bypasses CORS)
+    initialError = null, // Error from server-side fetch
+    canEdit = false,
+    isEditing = false,
+    onContentChange,
+    onThemeChange, // Callback when themes are extracted from content
+    customThemes = [], // Custom themes with cssUrl for loading
+    sharedThemes = [], // Shared themes from slides.com imports (with lib/ folder)
+  }: RevealSlidesProps,
+  ref: React.Ref<RevealSlidesHandle>
+) {
   const deckRef = useRef<HTMLDivElement>(null);
   const revealRef = useRef<RevealApi | null>(null);
   const [loading, setLoading] = useState(!initialContent && !initialError);
@@ -157,7 +174,7 @@ const RevealSlides = forwardRef(function RevealSlides({
 
     // If this is a shared theme, also apply body classes and custom theme CSS
     if (theme.startsWith('shared:')) {
-      const sharedTheme = sharedThemes.find((t) => t.id === theme);
+      const sharedTheme = sharedThemes.find(t => t.id === theme);
       if (sharedTheme) {
         // Apply body classes (e.g., "reveal-viewport theme-font-montserrat theme-color-white-blue")
         if (sharedTheme.bodyClasses) {
@@ -240,12 +257,14 @@ const RevealSlides = forwardRef(function RevealSlides({
       const revealDiv = doc.querySelector('.reveal');
       if (revealDiv) {
         // Single theme (check data-theme first, fallback to data-theme-light for backwards compat)
-        const extractedTheme = revealDiv.getAttribute('data-theme')
-          || revealDiv.getAttribute('data-theme-light')
-          || 'white';
-        const extractedCodeTheme = revealDiv.getAttribute('data-code-theme')
-          || revealDiv.getAttribute('data-code-theme-light')
-          || 'github';
+        const extractedTheme =
+          revealDiv.getAttribute('data-theme') ||
+          revealDiv.getAttribute('data-theme-light') ||
+          'white';
+        const extractedCodeTheme =
+          revealDiv.getAttribute('data-code-theme') ||
+          revealDiv.getAttribute('data-code-theme-light') ||
+          'github';
         setTheme(extractedTheme);
         setCodeTheme(extractedCodeTheme);
         onThemeChange?.({ theme: extractedTheme, codeTheme: extractedCodeTheme });
@@ -409,7 +428,8 @@ const RevealSlides = forwardRef(function RevealSlides({
           let codeElement: HTMLElement | null = null;
           if (startNode.nodeType === Node.TEXT_NODE) {
             // Text node - check parent element
-            codeElement = (startNode.parentElement?.closest('pre code') as HTMLElement | null) ?? null;
+            codeElement =
+              (startNode.parentElement?.closest('pre code') as HTMLElement | null) ?? null;
           } else if (startNode.nodeType === Node.ELEMENT_NODE) {
             // Element node - check self or parents
             codeElement = (startNode as Element).closest('pre code') as HTMLElement | null;
@@ -462,10 +482,7 @@ const RevealSlides = forwardRef(function RevealSlides({
       const plainText = codeEl.textContent || '';
       // Escape HTML to preserve code content correctly
       // (textContent returns decoded chars like <, setting innerHTML would interpret them)
-      const escaped = plainText
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;');
+      const escaped = plainText.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
       codeEl.innerHTML = escaped;
       codeEl.classList.remove('hljs');
     });
@@ -473,48 +490,51 @@ const RevealSlides = forwardRef(function RevealSlides({
     // Clean up Sandpack sl-blocks - the entire sl-block-content needs to be rebuilt
     // When Sandpack renders, it can create text nodes and other content throughout the block
     // We rebuild the entire structure to ensure only clean HTML is saved
-    slidesClone.querySelectorAll('.sl-block[data-block-type="sandpack"]').forEach((block: Element) => {
-      const embed = block.querySelector('.sandpack-embed') as HTMLElement | null;
-      const scriptTag = embed?.querySelector('script[data-sandpack-files]');
+    slidesClone
+      .querySelectorAll('.sl-block[data-block-type="sandpack"]')
+      .forEach((block: Element) => {
+        const embed = block.querySelector('.sandpack-embed') as HTMLElement | null;
+        const scriptTag = embed?.querySelector('script[data-sandpack-files]');
 
-      // Remove invalid blocks (no sandpack-embed or no script tag)
-      // These can be created by corrupted save/load cycles
-      if (!embed || !scriptTag) {
-        block.remove();
-        return;
-      }
+        // Remove invalid blocks (no sandpack-embed or no script tag)
+        // These can be created by corrupted save/load cycles
+        if (!embed || !scriptTag) {
+          block.remove();
+          return;
+        }
 
-      // Extract the JSON content and all data attributes
-      const filesJson = scriptTag.textContent;
-      const template = embed.dataset.template || 'vanilla';
-      const theme = embed.dataset.theme || 'auto';
-      const layout = embed.dataset.layout || 'preview-right';
-      const showTabs = embed.dataset.showTabs;
-      const showLineNumbers = embed.dataset.showLineNumbers;
-      const showConsole = embed.dataset.showConsole;
-      const readOnly = embed.dataset.readOnly;
-      const editorWidth = embed.dataset.editorWidth;
+        // Extract the JSON content and all data attributes
+        const filesJson = scriptTag.textContent;
+        const template = embed.dataset.template || 'vanilla';
+        const theme = embed.dataset.theme || 'auto';
+        const layout = embed.dataset.layout || 'preview-right';
+        const showTabs = embed.dataset.showTabs;
+        const showLineNumbers = embed.dataset.showLineNumbers;
+        const showConsole = embed.dataset.showConsole;
+        const readOnly = embed.dataset.readOnly;
+        const editorWidth = embed.dataset.editorWidth;
 
-      // Rebuild sl-block-content with clean sandpack-embed
-      const contentDiv = block.querySelector('.sl-block-content');
-      if (contentDiv) {
-        // Build data attributes string
-        let dataAttrs = `data-template="${template}" data-theme="${theme}" data-layout="${layout}"`;
-        if (showTabs === 'false') dataAttrs += ' data-show-tabs="false"';
-        if (showLineNumbers === 'false') dataAttrs += ' data-show-line-numbers="false"';
-        if (showConsole === 'true') dataAttrs += ' data-show-console="true"';
-        if (readOnly === 'true') dataAttrs += ' data-read-only="true"';
-        if (editorWidth && editorWidth !== '50') dataAttrs += ` data-editor-width="${editorWidth}"`;
+        // Rebuild sl-block-content with clean sandpack-embed
+        const contentDiv = block.querySelector('.sl-block-content');
+        if (contentDiv) {
+          // Build data attributes string
+          let dataAttrs = `data-template="${template}" data-theme="${theme}" data-layout="${layout}"`;
+          if (showTabs === 'false') dataAttrs += ' data-show-tabs="false"';
+          if (showLineNumbers === 'false') dataAttrs += ' data-show-line-numbers="false"';
+          if (showConsole === 'true') dataAttrs += ' data-show-console="true"';
+          if (readOnly === 'true') dataAttrs += ' data-read-only="true"';
+          if (editorWidth && editorWidth !== '50')
+            dataAttrs += ` data-editor-width="${editorWidth}"`;
 
-        // Escape </script> in JSON to prevent innerHTML parsing issues
-        // The JSON may contain </script> tags (e.g., in HTML file content)
-        // which would prematurely close our script tag when parsed
-        const safeJson = filesJson.replace(/<\/script>/gi, '<\\/script>');
+          // Escape </script> in JSON to prevent innerHTML parsing issues
+          // The JSON may contain </script> tags (e.g., in HTML file content)
+          // which would prematurely close our script tag when parsed
+          const safeJson = filesJson.replace(/<\/script>/gi, '<\\/script>');
 
-        // Replace entire content with clean HTML
-        contentDiv.innerHTML = `<div class="sandpack-embed" ${dataAttrs}><script type="application/json" data-sandpack-files>${safeJson}</script></div>`;
-      }
-    });
+          // Replace entire content with clean HTML
+          contentDiv.innerHTML = `<div class="sandpack-embed" ${dataAttrs}><script type="application/json" data-sandpack-files>${safeJson}</script></div>`;
+        }
+      });
 
     // Remove any Reveal.js runtime classes/attributes that shouldn't be saved
     slidesClone.querySelectorAll('.present, .past, .future').forEach((el: Element) => {
@@ -548,25 +568,30 @@ const RevealSlides = forwardRef(function RevealSlides({
   }, []);
 
   // Expose methods to parent via ref
-  useImperativeHandle(ref, () => ({
-    getCurrentContent,
-    getRevealInstance: () => revealRef.current,
-    // Theme getters and setters (simplified - single theme)
-    getThemes: () => ({
-      theme,
-      codeTheme,
+  useImperativeHandle(
+    ref,
+    () => ({
+      getCurrentContent,
+      getRevealInstance: () => revealRef.current,
+      // Theme getters and setters (simplified - single theme)
+      getThemes: () => ({
+        theme,
+        codeTheme,
+      }),
+      setThemes: (newThemes: { theme?: string; codeTheme?: string }) => {
+        if (newThemes.theme) setTheme(newThemes.theme);
+        if (newThemes.codeTheme) setCodeTheme(newThemes.codeTheme);
+        // Update data attributes on the reveal div
+        if (deckRef.current) {
+          if (newThemes.theme) deckRef.current.setAttribute('data-theme', newThemes.theme);
+          if (newThemes.codeTheme)
+            deckRef.current.setAttribute('data-code-theme', newThemes.codeTheme);
+        }
+        onContentChange?.();
+      },
     }),
-    setThemes: (newThemes: { theme?: string; codeTheme?: string }) => {
-      if (newThemes.theme) setTheme(newThemes.theme);
-      if (newThemes.codeTheme) setCodeTheme(newThemes.codeTheme);
-      // Update data attributes on the reveal div
-      if (deckRef.current) {
-        if (newThemes.theme) deckRef.current.setAttribute('data-theme', newThemes.theme);
-        if (newThemes.codeTheme) deckRef.current.setAttribute('data-code-theme', newThemes.codeTheme);
-      }
-      onContentChange?.();
-    },
-  }), [getCurrentContent, theme, codeTheme, onContentChange]);
+    [getCurrentContent, theme, codeTheme, onContentChange]
+  );
 
   // SSR placeholder and loading state
   if (!isClient || loading) {
@@ -589,12 +614,7 @@ const RevealSlides = forwardRef(function RevealSlides({
   }
 
   return (
-    <div
-      className="reveal"
-      ref={deckRef}
-      data-theme={theme}
-      data-code-theme={codeTheme}
-    >
+    <div className="reveal" ref={deckRef} data-theme={theme} data-code-theme={codeTheme}>
       {/* NOTE: We render an empty .slides container here. The actual content
           is set via innerHTML in the useEffect to prevent React from
           overwriting Reveal.js's DOM modifications during slide navigation */}

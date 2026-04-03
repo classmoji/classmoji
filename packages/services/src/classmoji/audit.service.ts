@@ -2,7 +2,13 @@ import getPrisma from '@classmoji/database';
 import { Prisma, type AuditLogAction, type Role } from '@prisma/client';
 
 // Valid AuditLogAction values from Prisma schema
-const VALID_ACTIONS = ['CREATE', 'UPDATE', 'DELETE', 'ACCESS_DENIED', 'VIEW'] satisfies AuditLogAction[];
+const VALID_ACTIONS = [
+  'CREATE',
+  'UPDATE',
+  'DELETE',
+  'ACCESS_DENIED',
+  'VIEW',
+] satisfies AuditLogAction[];
 // Valid Role values from Prisma schema
 const VALID_ROLES = ['OWNER', 'TEACHER', 'STUDENT', 'ASSISTANT'];
 
@@ -27,13 +33,17 @@ export const create = async (data: AuditLogData) => {
 
   // Validate role is a valid enum value, skip if not
   if (!VALID_ROLES.includes(role)) {
-    console.warn(`Skipping audit log: invalid role "${role}", valid roles are: ${VALID_ROLES.join(', ')}`);
+    console.warn(
+      `Skipping audit log: invalid role "${role}", valid roles are: ${VALID_ROLES.join(', ')}`
+    );
     return null;
   }
 
   // Validate action is a valid enum value, skip if not
   if (!VALID_ACTIONS.includes(action)) {
-    console.warn(`Skipping audit log: invalid action "${action}", valid actions are: ${VALID_ACTIONS.join(', ')}`);
+    console.warn(
+      `Skipping audit log: invalid action "${action}", valid actions are: ${VALID_ACTIONS.join(', ')}`
+    );
     return null;
   }
 

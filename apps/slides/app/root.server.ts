@@ -29,7 +29,9 @@ export const loader = async ({ request }: { request: Request }) => {
   // Check if this is a potential slideId route (UUID pattern: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx)
   // Routes: /$slideId, /$slideId/follow, /$slideId/present, /$slideId/speaker
   // Excludes: /$classroomSlug/new, /$classroomSlug/$slideId/delete, /content/*
-  const slideIdMatch = url.pathname.match(/^\/([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})(?:\/(?:follow|present|speaker))?$/i);
+  const slideIdMatch = url.pathname.match(
+    /^\/([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})(?:\/(?:follow|present|speaker))?$/i
+  );
 
   if (slideIdMatch) {
     const potentialSlideId = slideIdMatch[1];

@@ -18,7 +18,9 @@ type CurrentSubscription =
       user_id?: null;
     };
 
-export const create = async (data: Prisma.SubscriptionUncheckedCreateInput): Promise<SubscriptionRecord> => {
+export const create = async (
+  data: Prisma.SubscriptionUncheckedCreateInput
+): Promise<SubscriptionRecord> => {
   return getPrisma().subscription.create({
     data,
   });
@@ -72,11 +74,11 @@ export const update = async (
 };
 
 export const deleteByUserId = async (userId: string): Promise<SubscriptionRecord> => {
-  return getPrisma().subscription.delete(({
+  return getPrisma().subscription.delete({
     where: {
       user_id: userId,
     },
-  } as unknown) as { where: Prisma.SubscriptionWhereUniqueInput });
+  } as unknown as { where: Prisma.SubscriptionWhereUniqueInput });
 };
 
 export const getByClassroom = async (classroomSlug: string): Promise<CurrentSubscription> => {

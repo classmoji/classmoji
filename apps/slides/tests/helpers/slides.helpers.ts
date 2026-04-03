@@ -86,11 +86,7 @@ export async function speakerView(page: Page, slideId: string): Promise<void> {
 /**
  * Navigate to follow (audience sync) mode for a slide.
  */
-export async function followSlide(
-  page: Page,
-  slideId: string,
-  shareCode?: string
-): Promise<void> {
+export async function followSlide(page: Page, slideId: string, shareCode?: string): Promise<void> {
   let url = `/${slideId}/follow`;
   if (shareCode) {
     url += `?shareCode=${shareCode}`;
@@ -115,7 +111,9 @@ export async function saveSlide(page: Page): Promise<void> {
  */
 export async function toggleEditMode(page: Page): Promise<void> {
   // Look for edit button
-  const editButton = page.locator('[data-testid="edit-button"], button:has-text("Edit"), a[href*="mode=edit"]').first();
+  const editButton = page
+    .locator('[data-testid="edit-button"], button:has-text("Edit"), a[href*="mode=edit"]')
+    .first();
   await editButton.click();
   await waitForPageLoad(page);
 }
@@ -194,7 +192,7 @@ export async function addSlideBelow(page: Page): Promise<void> {
 export async function openNotesPanel(page: Page): Promise<void> {
   // Click the notes panel header to expand if collapsed
   const notesHeader = page.locator('.slide-notes-panel-header');
-  const isCollapsed = await page.locator('.slide-notes-panel.collapsed').count() > 0;
+  const isCollapsed = (await page.locator('.slide-notes-panel.collapsed').count()) > 0;
 
   if (isCollapsed) {
     await notesHeader.click();
@@ -211,7 +209,7 @@ export async function addSpeakerNotes(page: Page, notes: string): Promise<void> 
 
   // Switch to edit mode if in preview mode
   const editButton = page.locator('.notes-mode-toggle button:has-text("Edit")');
-  if (await editButton.count() > 0) {
+  if ((await editButton.count()) > 0) {
     await editButton.click();
     await page.waitForTimeout(200);
   }
@@ -229,13 +227,13 @@ export async function getSpeakerNotes(page: Page): Promise<string> {
 
   // Check if in edit mode or preview mode
   const textarea = page.locator('.slide-notes-panel textarea');
-  if (await textarea.count() > 0) {
+  if ((await textarea.count()) > 0) {
     return await textarea.inputValue();
   }
 
   // In preview mode, get the markdown content
   const preview = page.locator('.notes-preview');
-  return await preview.textContent() || '';
+  return (await preview.textContent()) || '';
 }
 
 /**
@@ -269,8 +267,10 @@ export async function deleteSlide(
  * Check if the edit button is visible on the current page.
  */
 export async function isEditButtonVisible(page: Page): Promise<boolean> {
-  const editButton = page.locator('[data-testid="edit-button"], button:has-text("Edit"), a[href*="mode=edit"]');
-  return await editButton.count() > 0;
+  const editButton = page.locator(
+    '[data-testid="edit-button"], button:has-text("Edit"), a[href*="mode=edit"]'
+  );
+  return (await editButton.count()) > 0;
 }
 
 /**
@@ -278,7 +278,7 @@ export async function isEditButtonVisible(page: Page): Promise<boolean> {
  */
 export async function isPresentButtonVisible(page: Page): Promise<boolean> {
   const presentButton = page.locator('a[href*="/present"], [data-testid="present-button"]');
-  return await presentButton.count() > 0;
+  return (await presentButton.count()) > 0;
 }
 
 /**
@@ -287,7 +287,7 @@ export async function isPresentButtonVisible(page: Page): Promise<boolean> {
  */
 export async function areNotesVisible(page: Page): Promise<boolean> {
   const notesPanel = page.locator('.slide-notes-panel');
-  return await notesPanel.count() > 0;
+  return (await notesPanel.count()) > 0;
 }
 
 /**

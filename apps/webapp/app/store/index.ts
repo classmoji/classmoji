@@ -1,6 +1,12 @@
 import { create } from 'zustand';
 import { devtools } from 'zustand/middleware';
-import type { StoreState, AppUser, MembershipOrganization, MembershipWithOrganization, AppSubscription } from '~/types';
+import type {
+  StoreState,
+  AppUser,
+  MembershipOrganization,
+  MembershipWithOrganization,
+  AppSubscription,
+} from '~/types';
 import type { Role } from '@prisma/client';
 
 type SetState = (fn: ((state: StoreState) => Partial<StoreState>) | Partial<StoreState>) => void;

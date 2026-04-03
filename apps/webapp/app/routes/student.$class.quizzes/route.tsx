@@ -294,18 +294,14 @@ export default function StudentQuizzes({ loaderData }: Route.ComponentProps) {
 
   // Filter functions for different tabs
   const filterQuizzes = (quizzes: StudentQuiz[], tab: string) => {
-    const publishedQuizzes = quizzes.filter((q) => q.status === 'PUBLISHED');
+    const publishedQuizzes = quizzes.filter(q => q.status === 'PUBLISHED');
 
     switch (tab) {
       case 'current':
         // Current = not yet completed (available, in-progress, or overdue)
-        return publishedQuizzes.filter(
-          (q) => !q.attempts.some((a) => a.status === 'completed')
-        );
+        return publishedQuizzes.filter(q => !q.attempts.some(a => a.status === 'completed'));
       case 'completed':
-        return publishedQuizzes.filter((q) =>
-          q.attempts.some((a) => a.status === 'completed')
-        );
+        return publishedQuizzes.filter(q => q.attempts.some(a => a.status === 'completed'));
       case 'all':
       default:
         return publishedQuizzes;
@@ -544,7 +540,7 @@ export default function StudentQuizzes({ loaderData }: Route.ComponentProps) {
   ];
 
   // Calculate counts for tabs
-  const publishedQuizzes = quizzes.filter((q) => q.status === 'PUBLISHED');
+  const publishedQuizzes = quizzes.filter(q => q.status === 'PUBLISHED');
   const currentCount = filterQuizzes(quizzes, 'current').length;
   const completedCount = filterQuizzes(quizzes, 'completed').length;
 

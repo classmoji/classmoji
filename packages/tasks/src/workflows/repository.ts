@@ -3,7 +3,12 @@ import dayjs from 'dayjs';
 import isSameOrBefore from 'dayjs/plugin/isSameOrBefore.js';
 dayjs.extend(isSameOrBefore);
 
-import { ClassmojiService, HelperService, getGitProvider, ensureClassroomTeam } from '@classmoji/services';
+import {
+  ClassmojiService,
+  HelperService,
+  getGitProvider,
+  ensureClassroomTeam,
+} from '@classmoji/services';
 import { titleToIdentifier } from '@classmoji/utils';
 import { createGithubRepositoryAssignmentTask } from './repositoryAssignment.ts';
 import { updateRepository, type UpdateRepositoryPayload } from '../helpers/updateRepository.ts';
@@ -246,7 +251,10 @@ export const createRepositoryTask = task({
 
       const studentRepo = triggerResult.output;
 
-      if (normalizedPayload.module.type === 'GROUP' && normalizedPayload.module.project_template_id) {
+      if (
+        normalizedPayload.module.type === 'GROUP' &&
+        normalizedPayload.module.project_template_id
+      ) {
         await createProjectForRepoTask.triggerAndWait(
           {
             classroom,
@@ -310,32 +318,17 @@ export const addCollaboratorsToRepoTask = task({
           throw new Error(`Missing student login for repo ${repoName}`);
         }
 
-        await gitProvider.addCollaborator(
-          gitOrgLogin,
-          repoName,
-          payload.student.login,
-          'maintain'
-        );
+        await gitProvider.addCollaborator(gitOrgLogin, repoName, payload.student.login, 'maintain');
       } else {
         if (!payload.team?.slug) {
           throw new Error(`Missing team slug for repo ${repoName}`);
         }
 
-        await gitProvider.addTeamToRepo(
-          gitOrgLogin,
-          repoName,
-          payload.team.slug,
-          'maintain'
-        );
+        await gitProvider.addTeamToRepo(gitOrgLogin, repoName, payload.team.slug, 'maintain');
       }
 
       const team = await ensureClassroomTeam(gitProvider, gitOrgLogin, classroom, 'ASSISTANT');
-      await gitProvider.addTeamToRepo(
-        gitOrgLogin,
-        repoName,
-        team.slug,
-        'maintain'
-      );
+      await gitProvider.addTeamToRepo(gitOrgLogin, repoName, team.slug, 'maintain');
     } catch (error: unknown) {
       console.error('Error adding collaborator to repo', error);
       throw error;

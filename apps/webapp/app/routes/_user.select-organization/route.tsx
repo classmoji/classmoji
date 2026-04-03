@@ -69,7 +69,9 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
   if (user) {
     const typedUser = user as AppUser;
     const memberships = (typedUser.memberships ?? []) as SelectOrganizationMembership[];
-    typedUser.memberships = memberships.filter(({ organization }) => organization.is_active !== false);
+    typedUser.memberships = memberships.filter(
+      ({ organization }) => organization.is_active !== false
+    );
     const groupedMemberships = (typedUser.memberships ?? []).reduce<
       Record<string, SelectOrganizationMembership[]>
     >((groups, membership) => {
@@ -151,28 +153,34 @@ const SelectOrganization = ({ loaderData }: Route.ComponentProps) => {
             <h1 className="text-xl mb-5 dark:text-gray-200">{period}</h1>
           )}
           <div className="flex flex-wrap gap-12 items-center">
-            {membershipsByPeriod[period].map(({ organization, role, has_accepted_invite }, i: number) => {
-              const displayRole =
-                has_accepted_invite || role === 'OWNER'
-                  ? (role as SelectOrganizationCardRole)
-                  : 'PENDING INVITE';
-              return (
-                <div
-                  key={organization.id + i}
-                  className="w-[375px]"
-                  id={role.toLowerCase() + '-card'}
-                >
-                  <button
-                    className="cursor-pointer w-full"
-                    onClick={() =>
-                      onCardClick(role as SelectOrganizationCardRole, organization, has_accepted_invite)
-                    }
+            {membershipsByPeriod[period].map(
+              ({ organization, role, has_accepted_invite }, i: number) => {
+                const displayRole =
+                  has_accepted_invite || role === 'OWNER'
+                    ? (role as SelectOrganizationCardRole)
+                    : 'PENDING INVITE';
+                return (
+                  <div
+                    key={organization.id + i}
+                    className="w-[375px]"
+                    id={role.toLowerCase() + '-card'}
                   >
-                    <ClassroomCard classroom={organization} role={displayRole} />
-                  </button>
-                </div>
-              );
-            })}
+                    <button
+                      className="cursor-pointer w-full"
+                      onClick={() =>
+                        onCardClick(
+                          role as SelectOrganizationCardRole,
+                          organization,
+                          has_accepted_invite
+                        )
+                      }
+                    >
+                      <ClassroomCard classroom={organization} role={displayRole} />
+                    </button>
+                  </div>
+                );
+              }
+            )}
           </div>
         </div>
       );
@@ -227,7 +235,15 @@ export const action = checkAuth(async ({ request }: { request: Request }) => {
   }
 
   // Ensure classroom-specific team exists (e.g., "cs101-25w-students")
-  const gitProvider = getGitProvider(classroom.git_organization as { provider: string; github_installation_id?: string; access_token?: string; base_url?: string; login?: string });
+  const gitProvider = getGitProvider(
+    classroom.git_organization as {
+      provider: string;
+      github_installation_id?: string;
+      access_token?: string;
+      base_url?: string;
+      login?: string;
+    }
+  );
   const team = await ensureClassroomTeam(
     gitProvider,
     classroom.git_organization.login,

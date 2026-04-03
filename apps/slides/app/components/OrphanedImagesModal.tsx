@@ -21,27 +21,33 @@ interface OrphanedImagesModalProps {
   isDeleting: boolean;
 }
 
-export default function OrphanedImagesModal({ open, images, onClose, onDelete, isDeleting }: OrphanedImagesModalProps) {
+export default function OrphanedImagesModal({
+  open,
+  images,
+  onClose,
+  onDelete,
+  isDeleting,
+}: OrphanedImagesModalProps) {
   // Track which images are selected for deletion (all by default)
   const [selectedPaths, setSelectedPaths] = useState<string[]>([]);
 
   // Reset selection when images change
   useEffect(() => {
     if (images?.length > 0) {
-      setSelectedPaths(images.map((img) => img.path));
+      setSelectedPaths(images.map(img => img.path));
     } else {
       setSelectedPaths([]);
     }
   }, [images]);
 
   const handleToggle = (path: string) => {
-    setSelectedPaths((prev) =>
-      prev.includes(path) ? prev.filter((p) => p !== path) : [...prev, path]
+    setSelectedPaths(prev =>
+      prev.includes(path) ? prev.filter(p => p !== path) : [...prev, path]
     );
   };
 
   const handleSelectAll = () => {
-    setSelectedPaths(images.map((img) => img.path));
+    setSelectedPaths(images.map(img => img.path));
   };
 
   const handleSelectNone = () => {
@@ -110,14 +116,15 @@ export default function OrphanedImagesModal({ open, images, onClose, onDelete, i
 
         {/* Image list */}
         <div className="max-h-80 overflow-y-auto space-y-2">
-          {images?.map((image) => (
+          {images?.map(image => (
             <div
               key={image.path}
               className={`
                 flex items-center gap-3 p-2 rounded-lg border transition-colors cursor-pointer
-                ${selectedPaths.includes(image.path)
-                  ? 'border-red-300 dark:border-red-700 bg-red-50 dark:bg-red-900/20'
-                  : 'border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800'
+                ${
+                  selectedPaths.includes(image.path)
+                    ? 'border-red-300 dark:border-red-700 bg-red-50 dark:bg-red-900/20'
+                    : 'border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800'
                 }
               `}
               onClick={() => handleToggle(image.path)}
@@ -125,7 +132,7 @@ export default function OrphanedImagesModal({ open, images, onClose, onDelete, i
               <Checkbox
                 checked={selectedPaths.includes(image.path)}
                 onChange={() => handleToggle(image.path)}
-                onClick={(e) => e.stopPropagation()}
+                onClick={e => e.stopPropagation()}
               />
               {/* Thumbnail */}
               <div className="w-16 h-16 shrink-0 bg-gray-200 dark:bg-gray-700 rounded-sm overflow-hidden">
@@ -133,19 +140,15 @@ export default function OrphanedImagesModal({ open, images, onClose, onDelete, i
                   src={image.url}
                   alt={image.name}
                   className="w-full h-full object-cover"
-                  onError={(e) => {
+                  onError={e => {
                     (e.target as HTMLElement).style.display = 'none';
                   }}
                 />
               </div>
               {/* File info */}
               <div className="flex-1 min-w-0">
-                <p className="font-medium text-gray-900 dark:text-white truncate">
-                  {image.name}
-                </p>
-                <p className="text-xs text-gray-500 dark:text-gray-400 truncate">
-                  {image.path}
-                </p>
+                <p className="font-medium text-gray-900 dark:text-white truncate">{image.name}</p>
+                <p className="text-xs text-gray-500 dark:text-gray-400 truncate">{image.path}</p>
               </div>
             </div>
           ))}

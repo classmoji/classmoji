@@ -58,7 +58,9 @@ interface RepositoryAssignmentsTableProps {
   allRepositoryAssignments: RepoAssignment[];
   repositoryAssignments: RepoAssignment[];
   modules: ModuleItem[];
-  emojiMappings: Record<string, number> | { emoji: string; grade: number; [key: string]: unknown }[];
+  emojiMappings:
+    | Record<string, number>
+    | { emoji: string; grade: number; [key: string]: unknown }[];
 }
 
 const RepositoryAssignmentsTable = ({
@@ -265,7 +267,9 @@ const RepositoryAssignmentsTable = ({
   // Calculate counts for different categories
   const submittedAssignments = assignmentsList.filter((a: RepoAssignment) => a.status === 'CLOSED');
   const unsubmittedAssignments = assignmentsList.filter((a: RepoAssignment) => a.status === 'OPEN');
-  const gradedAssignments = assignmentsList.filter((a: RepoAssignment) => a.grades && a.grades.length > 0);
+  const gradedAssignments = assignmentsList.filter(
+    (a: RepoAssignment) => a.grades && a.grades.length > 0
+  );
   const ungradedAssignments = assignmentsList.filter(
     (a: RepoAssignment) => !a.grades || a.grades.length === 0
   );

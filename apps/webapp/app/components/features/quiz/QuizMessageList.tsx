@@ -15,7 +15,10 @@ import ReactMarkdown from 'react-markdown';
 import rehypeHighlight from 'rehype-highlight';
 import dayjs from 'dayjs';
 import { checkForCompletion, parseQuestionComplete } from '~/utils/quizUtils';
-import QuizEvaluation, { type EvaluationData, type FocusMetrics } from '~/components/ui/display/QuizEvaluation';
+import QuizEvaluation, {
+  type EvaluationData,
+  type FocusMetrics,
+} from '~/components/ui/display/QuizEvaluation';
 import TypingIndicator from '~/components/ui/feedback/TypingIndicator';
 import QuestionCard from './QuestionCard';
 import ProgressDivider from './ProgressDivider';
@@ -152,7 +155,10 @@ const parseQuestionCard = (content: string) => {
       remainingContent,
     };
   } catch (error: unknown) {
-    console.error('[parseQuestionCard] JSON.parse FAILED:', error instanceof Error ? error.message : String(error));
+    console.error(
+      '[parseQuestionCard] JSON.parse FAILED:',
+      error instanceof Error ? error.message : String(error)
+    );
     console.error('[parseQuestionCard] JSON string was:', jsonString?.substring(0, 200));
     return {
       hasQuestionCard: false,
@@ -182,7 +188,10 @@ interface MarkdownElementProps {
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- ReactMarkdown components use flexible prop types
-const createMarkdownComponents = (isDarkMode: boolean, isAssistant = true): Record<string, React.ComponentType<any>> => ({
+const createMarkdownComponents = (
+  isDarkMode: boolean,
+  isAssistant = true
+): Record<string, React.ComponentType<any>> => ({
   pre: ({ children, ...props }: MarkdownElementProps) => (
     <pre
       style={{
@@ -200,7 +209,12 @@ const createMarkdownComponents = (isDarkMode: boolean, isAssistant = true): Reco
       {children}
     </pre>
   ),
-  code: ({ className, children, node, ...rest }: MarkdownElementProps & { className?: string; node?: unknown }) => {
+  code: ({
+    className,
+    children,
+    node,
+    ...rest
+  }: MarkdownElementProps & { className?: string; node?: unknown }) => {
     // Check for language class (syntax-highlighted code blocks)
     const hasLanguageClass = /language-(\w+)/.test(className || '');
 
@@ -244,11 +258,19 @@ const createMarkdownComponents = (isDarkMode: boolean, isAssistant = true): Reco
       </code>
     );
   },
-  p: ({ children }: MarkdownElementProps) => <p style={{ margin: '8px 0', lineHeight: '1.6' }}>{children}</p>,
-  ul: ({ children }: MarkdownElementProps) => <ul style={{ margin: '8px 0', paddingLeft: '20px' }}>{children}</ul>,
-  ol: ({ children }: MarkdownElementProps) => <ol style={{ margin: '8px 0', paddingLeft: '20px' }}>{children}</ol>,
+  p: ({ children }: MarkdownElementProps) => (
+    <p style={{ margin: '8px 0', lineHeight: '1.6' }}>{children}</p>
+  ),
+  ul: ({ children }: MarkdownElementProps) => (
+    <ul style={{ margin: '8px 0', paddingLeft: '20px' }}>{children}</ul>
+  ),
+  ol: ({ children }: MarkdownElementProps) => (
+    <ol style={{ margin: '8px 0', paddingLeft: '20px' }}>{children}</ol>
+  ),
   li: ({ children }: MarkdownElementProps) => <li style={{ margin: '4px 0' }}>{children}</li>,
-  strong: ({ children }: MarkdownElementProps) => <strong style={{ fontWeight: 600 }}>{children}</strong>,
+  strong: ({ children }: MarkdownElementProps) => (
+    <strong style={{ fontWeight: 600 }}>{children}</strong>
+  ),
   em: ({ children }: MarkdownElementProps) => <em style={{ fontStyle: 'italic' }}>{children}</em>,
   h1: ({ children }: MarkdownElementProps) => (
     <h1 style={{ fontSize: '1.5em', fontWeight: 600, margin: '12px 0 8px' }}>{children}</h1>
@@ -553,7 +575,9 @@ const QuizMessageList = ({
   const evaluationRef = useRef<HTMLDivElement>(null);
 
   // Extract evaluation data from messages if not provided as prop
-  const [extractedEvaluationData, setExtractedEvaluationData] = useState<EvaluationData | null>(null);
+  const [extractedEvaluationData, setExtractedEvaluationData] = useState<EvaluationData | null>(
+    null
+  );
 
   useEffect(() => {
     // In read-only mode, extract evaluation data from messages
@@ -760,7 +784,7 @@ const QuizMessageList = ({
       }
     `}</style>
       <div
-      tabIndex={0} // eslint-disable-line -- Keyboard accessibility: allows scrolling with arrow keys
+        tabIndex={0} // eslint-disable-line -- Keyboard accessibility: allows scrolling with arrow keys
         role="log"
         aria-live="polite"
         aria-label="Quiz conversation"

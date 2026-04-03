@@ -51,22 +51,28 @@ export default function BlockProperties({ element }: { element: HTMLElement }) {
   }, [element, parsePixels]);
 
   // Update position
-  const handlePositionChange = useCallback((prop: 'left' | 'top', value: number | null) => {
-    if (!element || value === null) return;
-    const newValue = Math.round(value);
-    element.style[prop] = `${newValue}px`;
-    setPosition(prev => ({ ...prev, [prop]: newValue }));
-    onContentChange?.();
-  }, [element, onContentChange]);
+  const handlePositionChange = useCallback(
+    (prop: 'left' | 'top', value: number | null) => {
+      if (!element || value === null) return;
+      const newValue = Math.round(value);
+      element.style[prop] = `${newValue}px`;
+      setPosition(prev => ({ ...prev, [prop]: newValue }));
+      onContentChange?.();
+    },
+    [element, onContentChange]
+  );
 
   // Update size
-  const handleSizeChange = useCallback((prop: 'width' | 'height', value: number | null) => {
-    if (!element || value === null) return;
-    const newValue = Math.max(10, Math.round(value));
-    element.style[prop] = `${newValue}px`;
-    setSize(prev => ({ ...prev, [prop]: newValue }));
-    onContentChange?.();
-  }, [element, onContentChange]);
+  const handleSizeChange = useCallback(
+    (prop: 'width' | 'height', value: number | null) => {
+      if (!element || value === null) return;
+      const newValue = Math.max(10, Math.round(value));
+      element.style[prop] = `${newValue}px`;
+      setSize(prev => ({ ...prev, [prop]: newValue }));
+      onContentChange?.();
+    },
+    [element, onContentChange]
+  );
 
   // Get max z-index from all blocks in the current section
   const getMaxZIndex = useCallback(() => {
@@ -76,7 +82,7 @@ export default function BlockProperties({ element }: { element: HTMLElement }) {
 
     const blocks = section.querySelectorAll('.sl-block');
     let max = 0;
-    blocks.forEach((block) => {
+    blocks.forEach(block => {
       const z = parseInt((block as HTMLElement).style.zIndex || '0', 10);
       if (z > max) max = z;
     });
@@ -116,7 +122,7 @@ export default function BlockProperties({ element }: { element: HTMLElement }) {
 
     // Shift all other blocks up by 1
     const blocks = section.querySelectorAll('.sl-block');
-    blocks.forEach((block) => {
+    blocks.forEach(block => {
       if (block !== element) {
         const currentZ = parseInt((block as HTMLElement).style.zIndex || '0', 10);
         (block as HTMLElement).style.zIndex = String(currentZ + 1);
@@ -188,7 +194,7 @@ export default function BlockProperties({ element }: { element: HTMLElement }) {
               <span className="text-xs text-gray-400 block mb-1">X</span>
               <InputNumber
                 value={position.left}
-                onChange={(v) => handlePositionChange('left', v)}
+                onChange={v => handlePositionChange('left', v)}
                 size="small"
                 className="w-full"
                 addonAfter="px"
@@ -198,7 +204,7 @@ export default function BlockProperties({ element }: { element: HTMLElement }) {
               <span className="text-xs text-gray-400 block mb-1">Y</span>
               <InputNumber
                 value={position.top}
-                onChange={(v) => handlePositionChange('top', v)}
+                onChange={v => handlePositionChange('top', v)}
                 size="small"
                 className="w-full"
                 addonAfter="px"
@@ -215,7 +221,7 @@ export default function BlockProperties({ element }: { element: HTMLElement }) {
               <span className="text-xs text-gray-400 block mb-1">W</span>
               <InputNumber
                 value={size.width}
-                onChange={(v) => handleSizeChange('width', v)}
+                onChange={v => handleSizeChange('width', v)}
                 size="small"
                 min={10}
                 className="w-full"
@@ -226,7 +232,7 @@ export default function BlockProperties({ element }: { element: HTMLElement }) {
               <span className="text-xs text-gray-400 block mb-1">H</span>
               <InputNumber
                 value={size.height}
-                onChange={(v) => handleSizeChange('height', v)}
+                onChange={v => handleSizeChange('height', v)}
                 size="small"
                 min={10}
                 className="w-full"

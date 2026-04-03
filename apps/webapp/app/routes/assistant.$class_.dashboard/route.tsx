@@ -31,14 +31,21 @@ const AssistantDashboard = ({ loaderData }: Route.ComponentProps) => {
       <Suspense fallback={<Skeleton active />}>
         <Await resolve={data}>
           {(resolved: unknown) => {
-            const [assignments, repoAssignments, gradingProgress, assistantsProgress] = resolved as [
-              Array<{ repository_assignment?: { grades?: unknown[] }; [key: string]: unknown }>,
-              unknown[],
-              Array<{ id?: string; title: string; progress: number; student_deadline: string; [key: string]: unknown }>,
-              Array<{ id: string; login: string; name: string | null; progress: number }>,
-            ];
+            const [assignments, repoAssignments, gradingProgress, assistantsProgress] =
+              resolved as [
+                Array<{ repository_assignment?: { grades?: unknown[] }; [key: string]: unknown }>,
+                unknown[],
+                Array<{
+                  id?: string;
+                  title: string;
+                  progress: number;
+                  student_deadline: string;
+                  [key: string]: unknown;
+                }>,
+                Array<{ id: string; login: string; name: string | null; progress: number }>,
+              ];
             const numUngradedAssignments = assignments.filter(
-              (a) => a.repository_assignment?.grades?.length == 0
+              a => a.repository_assignment?.grades?.length == 0
             )?.length;
 
             return (

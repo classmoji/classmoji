@@ -83,7 +83,11 @@ function createPrismaClient() {
         },
         num_late_hours: {
           needs: { assignment: true, token_transactions: true, closed_at: true },
-          compute(repoAssignment: { assignment: { student_deadline: Date }; token_transactions: TokenTransaction[]; closed_at: Date | null }) {
+          compute(repoAssignment: {
+            assignment: { student_deadline: Date };
+            token_transactions: TokenTransaction[];
+            closed_at: Date | null;
+          }) {
             return calculateLateHours(
               repoAssignment.closed_at,
               repoAssignment.assignment.student_deadline,
@@ -92,8 +96,18 @@ function createPrismaClient() {
           },
         },
         is_late: {
-          needs: { assignment: true, closed_at: true, is_late_override: true, token_transactions: true },
-          compute(repoAssignment: { assignment: { student_deadline?: Date }; closed_at: Date | null; is_late_override: boolean; token_transactions: TokenTransaction[] }) {
+          needs: {
+            assignment: true,
+            closed_at: true,
+            is_late_override: true,
+            token_transactions: true,
+          },
+          compute(repoAssignment: {
+            assignment: { student_deadline?: Date };
+            closed_at: Date | null;
+            is_late_override: boolean;
+            token_transactions: TokenTransaction[];
+          }) {
             if (repoAssignment.is_late_override) return false;
 
             const studentDeadline = dayjs(repoAssignment.assignment?.student_deadline);
@@ -101,16 +115,30 @@ function createPrismaClient() {
             if (!studentDeadline.isValid()) return false;
             if (!repoAssignment.closed_at) return dayjs().isAfter(studentDeadline);
 
-            return calculateLateHours(
-              repoAssignment.closed_at,
-              studentDeadline,
-              repoAssignment.token_transactions
-            ) > 0;
+            return (
+              calculateLateHours(
+                repoAssignment.closed_at,
+                studentDeadline,
+                repoAssignment.token_transactions
+              ) > 0
+            );
           },
         },
         should_be_zero: {
-          needs: { assignment: true, closed_at: true, grades: true, status: true, is_late_override: true },
-          compute(repoAssignment: { assignment: { student_deadline?: Date }; closed_at: Date | null; grades: unknown[]; status: string; is_late_override: boolean }) {
+          needs: {
+            assignment: true,
+            closed_at: true,
+            grades: true,
+            status: true,
+            is_late_override: true,
+          },
+          compute(repoAssignment: {
+            assignment: { student_deadline?: Date };
+            closed_at: Date | null;
+            grades: unknown[];
+            status: string;
+            is_late_override: boolean;
+          }) {
             const hasDeadlinePassed = dayjs(repoAssignment.assignment?.student_deadline).isBefore(
               dayjs()
             );
@@ -168,7 +196,10 @@ if (typeof window === 'undefined') {
 }
 
 export function getPrisma(): PrismaClient {
-  if (!_prisma) throw new Error('[database] Prisma client accessed before initialization. Ensure the server has initialized before calling getPrisma().');
+  if (!_prisma)
+    throw new Error(
+      '[database] Prisma client accessed before initialization. Ensure the server has initialized before calling getPrisma().'
+    );
   return _prisma;
 }
 

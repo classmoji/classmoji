@@ -140,7 +140,9 @@ export const findUserTeamByTag = async (classroomId: string, tagId: string, user
   });
 };
 
-export const createWithMembershipAndTag = async (payload: TeamCreateWithMembershipAndTagPayload) => {
+export const createWithMembershipAndTag = async (
+  payload: TeamCreateWithMembershipAndTagPayload
+) => {
   const { name, slug, classroomId, providerId, userId, tagId } = payload;
   return getPrisma().team.create({
     data: {

@@ -39,4 +39,8 @@ export { ClassmojiService, HelperService, StripeService, MarkdownImporter };
 export { getAllModels, getAnthropicModels } from './classmoji/modelsList.ts';
 
 // Quiz prompts and examples (moved from @classmoji/llm)
-export { examplePrompts, assessmentGuidelines, getExamplePrompts } from './classmoji/quizPrompts.ts';
+export {
+  examplePrompts,
+  assessmentGuidelines,
+  getExamplePrompts,
+} from './classmoji/quizPrompts.ts';

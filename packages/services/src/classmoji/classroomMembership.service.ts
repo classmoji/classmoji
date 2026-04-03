@@ -203,10 +203,7 @@ export const update = async (
  * @param {Object} updates - Fields to update
  * @returns {Promise<Object>}
  */
-export const updateById = async (
-  id: string,
-  updates: Prisma.ClassroomMembershipUpdateInput
-) => {
+export const updateById = async (id: string, updates: Prisma.ClassroomMembershipUpdateInput) => {
   return getPrisma().classroomMembership.update({
     where: { id },
     data: updates,
@@ -248,7 +245,11 @@ export const removeById = async (id: string) => {
  * @param {string} [excludeClassroomId] - Optional classroom to exclude from count
  * @returns {Promise<number>}
  */
-export const countUserMembershipsInGitOrg = async (gitOrgId: string, userId: string, excludeClassroomId: string | null = null) => {
+export const countUserMembershipsInGitOrg = async (
+  gitOrgId: string,
+  userId: string,
+  excludeClassroomId: string | null = null
+) => {
   const where: Prisma.ClassroomMembershipWhereInput = {
     user_id: userId,
     classroom: {
@@ -271,7 +272,11 @@ export const countUserMembershipsInGitOrg = async (gitOrgId: string, userId: str
  * @param {string} classroomId - UUID of the classroom being removed from
  * @returns {Promise<boolean>}
  */
-export const shouldRemoveFromGitOrg = async (gitOrgId: string, userId: string, classroomId: string) => {
+export const shouldRemoveFromGitOrg = async (
+  gitOrgId: string,
+  userId: string,
+  classroomId: string
+) => {
   const otherMemberships = await countUserMembershipsInGitOrg(gitOrgId, userId, classroomId);
   return otherMemberships === 0;
 };
@@ -318,9 +323,7 @@ export const findUsersByRole = async (
  * @param {Object[]} memberships - Array of membership data
  * @returns {Promise<{count: number}>}
  */
-export const createMany = async (
-  memberships: Prisma.ClassroomMembershipCreateManyInput[]
-) => {
+export const createMany = async (memberships: Prisma.ClassroomMembershipCreateManyInput[]) => {
   return getPrisma().classroomMembership.createMany({
     data: memberships,
     skipDuplicates: true,
@@ -348,11 +351,7 @@ export const isMember = async (classroomId: string, userId: string) => {
  * @param {string|string[]} roles - Role or array of roles to check
  * @returns {Promise<boolean>}
  */
-export const hasRole = async (
-  classroomId: string,
-  userId: string,
-  roles: Role | Role[]
-) => {
+export const hasRole = async (classroomId: string, userId: string, roles: Role | Role[]) => {
   const roleArray = Array.isArray(roles) ? roles : [roles];
   const membership = await getPrisma().classroomMembership.findFirst({
     where: { classroom_id: classroomId, user_id: userId, role: { in: roleArray } },

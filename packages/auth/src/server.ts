@@ -1,9 +1,9 @@
-import { betterAuth } from "better-auth";
-import { prismaAdapter } from "better-auth/adapters/prisma";
-import { admin } from "better-auth/plugins";
-import getPrisma from "@classmoji/database";
-import type { Account as PrismaAccount, Role } from "@prisma/client";
-import { ClassmojiService } from "@classmoji/services";
+import { betterAuth } from 'better-auth';
+import { prismaAdapter } from 'better-auth/adapters/prisma';
+import { admin } from 'better-auth/plugins';
+import getPrisma from '@classmoji/database';
+import type { Account as PrismaAccount, Role } from '@prisma/client';
+import { ClassmojiService } from '@classmoji/services';
 
 // Use explicit secret for consistent session signing
 // Export so test-login can use the same signing mechanism
@@ -12,7 +12,7 @@ const DEV_SECRET = 'dev-secret-change-in-production-32chars!';
 if (process.env.NODE_ENV === 'production' && !process.env.BETTER_AUTH_SECRET) {
   throw new Error(
     '[SECURITY] BETTER_AUTH_SECRET environment variable is required in production. ' +
-    'This secret is used to sign session tokens. Running without it would allow session forgery.'
+      'This secret is used to sign session tokens. Running without it would allow session forgery.'
   );
 }
 
@@ -93,14 +93,23 @@ interface SlideAccessResult {
   slide: SlideForAccess;
   membership: SlideAccessMembership | null;
   userId: string | null;
-  accessGrantedVia: 'public' | 'membership' | 'role' | 'ownership' | 'team_edit' | 'shareCode' | null;
+  accessGrantedVia:
+    | 'public'
+    | 'membership'
+    | 'role'
+    | 'ownership'
+    | 'team_edit'
+    | 'shareCode'
+    | null;
   canView: boolean;
   canEdit: boolean;
   canPresent: boolean;
   canViewSpeakerNotes: boolean;
 }
 
-type ClassroomRecord = NonNullable<Awaited<ReturnType<typeof ClassmojiService.classroom.findBySlug>>>;
+type ClassroomRecord = NonNullable<
+  Awaited<ReturnType<typeof ClassmojiService.classroom.findBySlug>>
+>;
 type ClassroomMembershipRecord = Awaited<
   ReturnType<typeof ClassmojiService.classroomMembership.findByClassroomAndUser>
 >;
@@ -157,7 +166,13 @@ export function clearTokenCache(userId: string | null = null): void {
     tokenCache.delete(`token:${userId}`);
     // Also clear any session-based cache entries for this user
     for (const [key, value] of tokenCache.entries()) {
-      if (key.startsWith('session:') && typeof value.value === 'object' && value.value !== null && 'userId' in value.value && (value.value as { userId: string }).userId === userId) {
+      if (
+        key.startsWith('session:') &&
+        typeof value.value === 'object' &&
+        value.value !== null &&
+        'userId' in value.value &&
+        (value.value as { userId: string }).userId === userId
+      ) {
         tokenCache.delete(key);
       }
     }
@@ -202,7 +217,10 @@ export async function clearRevokedToken(userId: string): Promise<void> {
 // already consumed and invalidated the old token.
 const refreshLocks = new Map<string, Promise<GitHubTokenResult | null>>();
 
-async function withRefreshLock(userId: string, fn: () => Promise<GitHubTokenResult | null>): Promise<GitHubTokenResult | null> {
+async function withRefreshLock(
+  userId: string,
+  fn: () => Promise<GitHubTokenResult | null>
+): Promise<GitHubTokenResult | null> {
   // If another refresh is in flight for this user, wait for it
   const existing = refreshLocks.get(userId);
   if (existing) {
@@ -223,7 +241,9 @@ async function withRefreshLock(userId: string, fn: () => Promise<GitHubTokenResu
  * @param {Object} account - The account record from DB
  * @returns {Promise<{accessToken: string, refreshToken: string, accessTokenExpiresAt: Date, refreshTokenExpiresAt: Date} | null>}
  */
-async function refreshGitHubToken(account: Pick<PrismaAccount, 'refresh_token'>): Promise<RefreshedTokens | null> {
+async function refreshGitHubToken(
+  account: Pick<PrismaAccount, 'refresh_token'>
+): Promise<RefreshedTokens | null> {
   if (!account.refresh_token) {
     return null;
   }
@@ -246,7 +266,7 @@ async function refreshGitHubToken(account: Pick<PrismaAccount, 'refresh_token'>)
     method: 'POST',
     headers: {
       'content-type': 'application/x-www-form-urlencoded',
-      'accept': 'application/json',
+      accept: 'application/json',
     },
     body,
   });
@@ -268,9 +288,7 @@ async function refreshGitHubToken(account: Pick<PrismaAccount, 'refresh_token'>)
   return {
     accessToken: data.access_token,
     refreshToken: data.refresh_token,
-    accessTokenExpiresAt: data.expires_in
-      ? new Date(now + data.expires_in * 1000)
-      : null,
+    accessTokenExpiresAt: data.expires_in ? new Date(now + data.expires_in * 1000) : null,
     refreshTokenExpiresAt: data.refresh_token_expires_in
       ? new Date(now + data.refresh_token_expires_in * 1000)
       : null,
@@ -299,9 +317,10 @@ async function getValidGitHubToken(userId: string): Promise<GitHubTokenResult | 
     if (!account) return null;
 
     // Check if the current token is still valid (with proactive buffer)
-    const isExpired = !account.access_token
-      || !account.access_token_expires_at
-      || new Date(account.access_token_expires_at).getTime() - Date.now() < REFRESH_BUFFER_MS;
+    const isExpired =
+      !account.access_token ||
+      !account.access_token_expires_at ||
+      new Date(account.access_token_expires_at).getTime() - Date.now() < REFRESH_BUFFER_MS;
 
     if (!isExpired) {
       return { token: account.access_token as string, expiresAt: account.access_token_expires_at };
@@ -316,15 +335,26 @@ async function getValidGitHubToken(userId: string): Promise<GitHubTokenResult | 
         where: { user_id: userId, provider_id: 'github' },
         select: { access_token: true, access_token_expires_at: true },
       });
-      if (freshAccount?.access_token && freshAccount.access_token_expires_at
-          && new Date(freshAccount.access_token_expires_at) > new Date()) {
-        return { token: freshAccount.access_token as string, expiresAt: freshAccount.access_token_expires_at };
+      if (
+        freshAccount?.access_token &&
+        freshAccount.access_token_expires_at &&
+        new Date(freshAccount.access_token_expires_at) > new Date()
+      ) {
+        return {
+          token: freshAccount.access_token as string,
+          expiresAt: freshAccount.access_token_expires_at,
+        };
       }
       return null;
     }
 
     // Store the new tokens in the DB
-    const updateData: Partial<Pick<PrismaAccount, 'access_token' | 'access_token_expires_at' | 'refresh_token' | 'refresh_token_expires_at'>> = {
+    const updateData: Partial<
+      Pick<
+        PrismaAccount,
+        'access_token' | 'access_token_expires_at' | 'refresh_token' | 'refresh_token_expires_at'
+      >
+    > = {
       access_token: newTokens.accessToken,
       access_token_expires_at: newTokens.accessTokenExpiresAt,
     };
@@ -345,11 +375,11 @@ async function getValidGitHubToken(userId: string): Promise<GitHubTokenResult | 
 }
 
 export const auth = betterAuth({
-  basePath: "/api/auth",
+  basePath: '/api/auth',
   baseURL: process.env.WEBAPP_URL,
   secret: AUTH_SECRET,
   database: prismaAdapter(getPrisma(), {
-    provider: "postgresql",
+    provider: 'postgresql',
   }),
   socialProviders: {
     github: {
@@ -374,75 +404,75 @@ export const auth = betterAuth({
       enabled: true,
       maxAge: 60 * 60 * 24, // 24 hours
     },
-    modelName: "Session",
+    modelName: 'Session',
     fields: {
-      userId: "user_id",
-      expiresAt: "expires_at",
-      ipAddress: "ip_address",
-      userAgent: "user_agent",
-      createdAt: "created_at",
-      updatedAt: "updated_at",
-      impersonatedBy: "impersonated_by",
+      userId: 'user_id',
+      expiresAt: 'expires_at',
+      ipAddress: 'ip_address',
+      userAgent: 'user_agent',
+      createdAt: 'created_at',
+      updatedAt: 'updated_at',
+      impersonatedBy: 'impersonated_by',
     } as Record<string, string>,
   },
   advanced: {
     database: {
-      generateId: "uuid",
+      generateId: 'uuid',
     },
-    cookiePrefix: "classmoji",
+    cookiePrefix: 'classmoji',
     crossSubDomainCookies: {
-      enabled: process.env.NODE_ENV === "production",
-      domain: ".classmoji.io",
+      enabled: process.env.NODE_ENV === 'production',
+      domain: '.classmoji.io',
     },
   },
   // Map to your existing schema conventions
   user: {
-    modelName: "User", // Prisma model name
+    modelName: 'User', // Prisma model name
     // Tell BetterAuth about custom fields so mapProfileToUser can save them
     additionalFields: {
       login: {
-        type: "string",
+        type: 'string',
         required: false,
       },
       provider: {
-        type: "string",
+        type: 'string',
         required: false,
       },
       provider_id: {
-        type: "string",
+        type: 'string',
         required: false,
       },
     },
     fields: {
-      createdAt: "created_at",
-      updatedAt: "updated_at",
+      createdAt: 'created_at',
+      updatedAt: 'updated_at',
       // Admin plugin fields
-      banReason: "ban_reason",
-      banExpires: "ban_expires_at",
-      email: "provider_email",
+      banReason: 'ban_reason',
+      banExpires: 'ban_expires_at',
+      email: 'provider_email',
     } as Record<string, string>,
   },
   account: {
-    modelName: "Account",
+    modelName: 'Account',
     fields: {
-      userId: "user_id",
-      accountId: "account_id",
-      providerId: "provider_id",
-      accessToken: "access_token",
-      refreshToken: "refresh_token",
-      accessTokenExpiresAt: "access_token_expires_at",
-      refreshTokenExpiresAt: "refresh_token_expires_at",
-      idToken: "id_token",
-      createdAt: "created_at",
-      updatedAt: "updated_at",
+      userId: 'user_id',
+      accountId: 'account_id',
+      providerId: 'provider_id',
+      accessToken: 'access_token',
+      refreshToken: 'refresh_token',
+      accessTokenExpiresAt: 'access_token_expires_at',
+      refreshTokenExpiresAt: 'refresh_token_expires_at',
+      idToken: 'id_token',
+      createdAt: 'created_at',
+      updatedAt: 'updated_at',
     },
   },
   verification: {
-    modelName: "Verification",
+    modelName: 'Verification',
     fields: {
-      expiresAt: "expires_at",
-      createdAt: "created_at",
-      updatedAt: "updated_at",
+      expiresAt: 'expires_at',
+      createdAt: 'created_at',
+      updatedAt: 'updated_at',
     },
   },
   plugins: [
@@ -641,10 +671,12 @@ export const assertClassroomAccess = async ({
 
   // Include selfAccessRoles in the lookup so members with those roles are found
   // (e.g., a STUDENT with selfAccessRoles can still be found as a classroom member)
-  const rolesForLookup = [...new Set([
-    ...(Array.isArray(allowedRoles) ? allowedRoles : allowedRoles ? [allowedRoles] : []),
-    ...selfAccessRoles,
-  ])];
+  const rolesForLookup = [
+    ...new Set([
+      ...(Array.isArray(allowedRoles) ? allowedRoles : allowedRoles ? [allowedRoles] : []),
+      ...selfAccessRoles,
+    ]),
+  ];
   const membership = await ClassmojiService.classroomMembership.findByClassroomAndUser(
     classroom.id,
     authData.userId,
@@ -653,7 +685,8 @@ export const assertClassroomAccess = async ({
 
   // Determine access rights
   const rolesArray = Array.isArray(allowedRoles) ? allowedRoles : [allowedRoles];
-  const hasAllowedRole = !rolesArray.length || (membership?.role ? rolesArray.includes(membership.role) : false);
+  const hasAllowedRole =
+    !rolesArray.length || (membership?.role ? rolesArray.includes(membership.role) : false);
 
   // Check ownership if resourceOwnerId provided
   let isResourceOwner = false;
@@ -742,7 +775,9 @@ export const assertClassroomAccess = async ({
 
   // SECURITY: Always sanitize classroom before returning to prevent API key leakage.
   // Routes needing secrets should use ClassmojiService.classroom.getClassroomSettingsForServer()
-  const safeClassroom = ClassmojiService.classroom.getClassroomForUI(classroom) as SafeClassroomRecord;
+  const safeClassroom = ClassmojiService.classroom.getClassroomForUI(
+    classroom
+  ) as SafeClassroomRecord;
 
   return {
     userId: authData.userId,
@@ -757,7 +792,11 @@ export const assertClassroomAccess = async ({
  * Require classroom admin (OWNER) access.
  * Use for admin settings pages and privileged operations.
  */
-export async function requireClassroomAdmin(request: Request, classroomSlug: string, options: AccessOptions = {}) {
+export async function requireClassroomAdmin(
+  request: Request,
+  classroomSlug: string,
+  options: AccessOptions = {}
+) {
   return assertClassroomAccess({
     request,
     classroomSlug,
@@ -772,7 +811,11 @@ export async function requireClassroomAdmin(request: Request, classroomSlug: str
  * Require classroom staff (OWNER or TEACHER) access.
  * Use for grading, quiz management, and teaching operations.
  */
-export async function requireClassroomStaff(request: Request, classroomSlug: string, options: AccessOptions = {}) {
+export async function requireClassroomStaff(
+  request: Request,
+  classroomSlug: string,
+  options: AccessOptions = {}
+) {
   return assertClassroomAccess({
     request,
     classroomSlug,
@@ -787,7 +830,11 @@ export async function requireClassroomStaff(request: Request, classroomSlug: str
  * Require classroom teaching team (OWNER, TEACHER, or ASSISTANT) access.
  * Use for viewing grades, student data, and teaching support operations.
  */
-export async function requireClassroomTeachingTeam(request: Request, classroomSlug: string, options: AccessOptions = {}) {
+export async function requireClassroomTeachingTeam(
+  request: Request,
+  classroomSlug: string,
+  options: AccessOptions = {}
+) {
   return assertClassroomAccess({
     request,
     classroomSlug,
@@ -802,7 +849,11 @@ export async function requireClassroomTeachingTeam(request: Request, classroomSl
  * Require classroom member access (any role).
  * Use for student-facing pages that any classroom member can access.
  */
-export async function requireClassroomMember(request: Request, classroomSlug: string, options: AccessOptions = {}) {
+export async function requireClassroomMember(
+  request: Request,
+  classroomSlug: string,
+  options: AccessOptions = {}
+) {
   return assertClassroomAccess({
     request,
     classroomSlug,
@@ -817,7 +868,11 @@ export async function requireClassroomMember(request: Request, classroomSlug: st
  * Require student access (STUDENT role only).
  * Use for student-only pages where staff should use admin routes instead.
  */
-export async function requireStudentAccess(request: Request, classroomSlug: string, options: AccessOptions = {}) {
+export async function requireStudentAccess(
+  request: Request,
+  classroomSlug: string,
+  options: AccessOptions = {}
+) {
   return assertClassroomAccess({
     request,
     classroomSlug,
@@ -910,7 +965,7 @@ export async function assertSlideAccess({
     // DRAFT MODE: Only those who can edit can view
     if (canEdit) {
       canView = true;
-      accessGrantedVia = isOwnerOrTeacher ? 'role' : (isCreator ? 'ownership' : 'team_edit');
+      accessGrantedVia = isOwnerOrTeacher ? 'role' : isCreator ? 'ownership' : 'team_edit';
     }
   } else if (slide.is_public) {
     // PUBLIC: Anyone can view
@@ -929,9 +984,7 @@ export async function assertSlideAccess({
 
   // Present permission: Owner/Teacher/Assistant for non-draft slides they can view
   // For draft slides, only those who can edit can present
-  const canPresent = slide.is_draft
-    ? canEdit
-    : (isOwnerOrTeacher || isAssistant);
+  const canPresent = slide.is_draft ? canEdit : isOwnerOrTeacher || isAssistant;
 
   // Speaker notes permission:
   // - Staff (Owner/Teacher/Assistant) always have access
@@ -940,12 +993,11 @@ export async function assertSlideAccess({
   const canViewSpeakerNotes = isStaff || (slide.show_speaker_notes && canView);
 
   // Check requested access type
-  const accessDenied = (
+  const accessDenied =
     (accessType === 'view' && !canView) ||
     (accessType === 'edit' && !canEdit) ||
     (accessType === 'present' && (!canView || !canPresent)) ||
-    (accessType === 'speakerNotes' && (!canView || !canViewSpeakerNotes))
-  );
+    (accessType === 'speakerNotes' && (!canView || !canViewSpeakerNotes));
 
   if (accessDenied) {
     // Log denied access for audit (only if user is authenticated and a member)

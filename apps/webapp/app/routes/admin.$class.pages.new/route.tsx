@@ -104,7 +104,9 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
       await gitProvider.enableGitHubPages(gitOrgLogin, repoName);
     } catch (pagesError) {
       // Pages API requires special permission - log but continue
-      console.warn(`Could not auto-enable GitHub Pages: ${pagesError instanceof Error ? pagesError.message : String(pagesError)}`);
+      console.warn(
+        `Could not auto-enable GitHub Pages: ${pagesError instanceof Error ? pagesError.message : String(pagesError)}`
+      );
     }
 
     let pageHtml;
@@ -138,7 +140,11 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
 
       // Prepare files to upload
       // Content is File at runtime but processMarkdownImport types unmatchedImages loosely
-      const filesToUpload: Array<{ path: string; content: File | { name: string }; encoding: string }> = [];
+      const filesToUpload: Array<{
+        path: string;
+        content: File | { name: string };
+        encoding: string;
+      }> = [];
 
       // Add all matched images
       imageMap.forEach(imageInfo => {
@@ -167,13 +173,16 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
       });
 
       // Convert File objects to buffers
-      const uploadFiles: Array<{ path: string; content: string; encoding: 'utf-8' | 'base64' }> = await Promise.all(
-        filesToUpload.map(async file => ({
-          path: file.path,
-          content: Buffer.from(await (file.content as unknown as Blob).arrayBuffer()).toString('base64'),
-          encoding: 'base64' as const,
-        }))
-      );
+      const uploadFiles: Array<{ path: string; content: string; encoding: 'utf-8' | 'base64' }> =
+        await Promise.all(
+          filesToUpload.map(async file => ({
+            path: file.path,
+            content: Buffer.from(await (file.content as unknown as Blob).arrayBuffer()).toString(
+              'base64'
+            ),
+            encoding: 'base64' as const,
+          }))
+        );
 
       // Wrap HTML content
       const wrappedHtml = wrapHtmlContent(html, 2); // Default width
@@ -199,7 +208,9 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
           });
         } catch (uploadError) {
           console.error('Failed to upload files to GitHub:', uploadError);
-          return { error: `Failed to upload files to GitHub: ${uploadError instanceof Error ? uploadError.message : String(uploadError)}` };
+          return {
+            error: `Failed to upload files to GitHub: ${uploadError instanceof Error ? uploadError.message : String(uploadError)}`,
+          };
         }
       }
     } else {
@@ -217,7 +228,9 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
         });
       } catch (uploadError) {
         console.error('Failed to upload file to GitHub:', uploadError);
-        return { error: `Failed to upload file to GitHub: ${uploadError instanceof Error ? uploadError.message : String(uploadError)}` };
+        return {
+          error: `Failed to upload file to GitHub: ${uploadError instanceof Error ? uploadError.message : String(uploadError)}`,
+        };
       }
     }
 
@@ -266,7 +279,10 @@ export default function NewPage({ loaderData }: Route.ComponentProps) {
   const navigate = useNavigate();
   const [form] = Form.useForm();
   const [activeTab, setActiveTab] = useState('create-blank');
-  const [importFiles, setImportFiles] = useState<{ markdown: File | null; images: File[] }>({ markdown: null, images: [] });
+  const [importFiles, setImportFiles] = useState<{ markdown: File | null; images: File[] }>({
+    markdown: null,
+    images: [],
+  });
   const [batchPages, setBatchPages] = useState<BatchPage[]>([]);
 
   // Batch import progress state
@@ -328,7 +344,7 @@ export default function NewPage({ loaderData }: Route.ComponentProps) {
       const errors = [];
       for (let i = 0; i < batchPages.length; i++) {
         const page = batchPages[i];
-        setBatchProgress(prev => prev ? { ...prev, current: i + 1 } : prev);
+        setBatchProgress(prev => (prev ? { ...prev, current: i + 1 } : prev));
 
         const formData = new FormData();
         formData.append('intent', 'batch-import-single');
@@ -344,7 +360,7 @@ export default function NewPage({ loaderData }: Route.ComponentProps) {
         formData.append('markdown', mdFile);
 
         // Add images
-        page.imageFiles.forEach((file) => {
+        page.imageFiles.forEach(file => {
           formData.append('images', file);
         });
 
@@ -359,7 +375,10 @@ export default function NewPage({ loaderData }: Route.ComponentProps) {
             errors.push({ title: page.title, error: result.error });
           }
         } catch (err: unknown) {
-          errors.push({ title: page.title, error: err instanceof Error ? err.message : String(err) });
+          errors.push({
+            title: page.title,
+            error: err instanceof Error ? err.message : String(err),
+          });
         }
       }
 

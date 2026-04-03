@@ -56,11 +56,11 @@ interface SlideNotesPanelProps {
 }
 
 export default function SlideNotesPanel({
-  revealInstance,  // Pass the Reveal.js instance directly (not a ref)
+  revealInstance, // Pass the Reveal.js instance directly (not a ref)
   isCollapsed,
   onToggle,
   onContentChange,
-  readOnly = false,  // In read-only mode, only show markdown preview (no editing)
+  readOnly = false, // In read-only mode, only show markdown preview (no editing)
 }: SlideNotesPanelProps) {
   const [notes, setNotes] = useState('');
   const [currentSlide, setCurrentSlide] = useState<HTMLElement | null>(null);
@@ -112,12 +112,7 @@ export default function SlideNotesPanel({
             stroke="currentColor"
             viewBox="0 0 24 24"
           >
-            <path
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              strokeWidth={2}
-              d="M5 15l7-7 7 7"
-            />
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 15l7-7 7 7" />
           </svg>
           Speaker Notes
         </h3>
@@ -173,7 +168,9 @@ export default function SlideNotesPanel({
           )}
 
           <p className="hint">
-            Press <kbd className="px-1 py-0.5 bg-gray-200 dark:bg-gray-700 rounded-sm text-xs">S</kbd> during presentation to view notes
+            Press{' '}
+            <kbd className="px-1 py-0.5 bg-gray-200 dark:bg-gray-700 rounded-sm text-xs">S</kbd>{' '}
+            during presentation to view notes
           </p>
         </div>
       )}

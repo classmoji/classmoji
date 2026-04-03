@@ -273,7 +273,14 @@ interface MessageBubbleProps {
   copiedField: string | null;
 }
 
-function MessageBubble({ message, isDarkMode, userLogin, onApply, onCopy, copiedField }: MessageBubbleProps) {
+function MessageBubble({
+  message,
+  isDarkMode,
+  userLogin,
+  onApply,
+  onCopy,
+  copiedField,
+}: MessageBubbleProps) {
   const isUser = message.role === 'user';
   const { content, suggestions } = parseSuggestions(message.content);
 
@@ -331,7 +338,13 @@ interface SuggestionCardProps {
   copiedField: string | null;
 }
 
-function SuggestionCard({ suggestion, isDarkMode, onApply, onCopy, copiedField }: SuggestionCardProps) {
+function SuggestionCard({
+  suggestion,
+  isDarkMode,
+  onApply,
+  onCopy,
+  copiedField,
+}: SuggestionCardProps) {
   if (!suggestion?.systemPrompt && !suggestion?.rubricPrompt) return null;
 
   const extras = [
@@ -473,7 +486,11 @@ const markdownComponents = {
       {children}
     </pre>
   ),
-  code: ({ className, children, ...props }: React.HTMLAttributes<HTMLElement> & { inline?: boolean }) =>
+  code: ({
+    className,
+    children,
+    ...props
+  }: React.HTMLAttributes<HTMLElement> & { inline?: boolean }) =>
     props.inline ? (
       <code className="pa-md-code" {...props}>
         {children}
@@ -484,9 +501,15 @@ const markdownComponents = {
       </code>
     ),
   p: ({ children }: { children?: React.ReactNode }) => <p style={{ margin: 0 }}>{children}</p>,
-  ul: ({ children }: { children?: React.ReactNode }) => <ul style={{ margin: '8px 0', paddingLeft: 18 }}>{children}</ul>,
-  ol: ({ children }: { children?: React.ReactNode }) => <ol style={{ margin: '8px 0', paddingLeft: 18 }}>{children}</ol>,
-  li: ({ children }: { children?: React.ReactNode }) => <li style={{ margin: '2px 0' }}>{children}</li>,
+  ul: ({ children }: { children?: React.ReactNode }) => (
+    <ul style={{ margin: '8px 0', paddingLeft: 18 }}>{children}</ul>
+  ),
+  ol: ({ children }: { children?: React.ReactNode }) => (
+    <ol style={{ margin: '8px 0', paddingLeft: 18 }}>{children}</ol>
+  ),
+  li: ({ children }: { children?: React.ReactNode }) => (
+    <li style={{ margin: '2px 0' }}>{children}</li>
+  ),
 };
 
 export default PromptAssistant;

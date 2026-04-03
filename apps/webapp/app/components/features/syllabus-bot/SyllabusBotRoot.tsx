@@ -64,7 +64,10 @@ const SyllabusBotRoot = () => {
           setConfig(data);
         }
       } catch (err: unknown) {
-        console.warn('[SyllabusBotRoot] Failed to fetch config:', err instanceof Error ? err.message : String(err));
+        console.warn(
+          '[SyllabusBotRoot] Failed to fetch config:',
+          err instanceof Error ? err.message : String(err)
+        );
       }
     };
 

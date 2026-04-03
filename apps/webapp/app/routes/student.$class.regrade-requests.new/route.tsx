@@ -94,10 +94,12 @@ const NewRegradeRequest = ({ loaderData }: Route.ComponentProps) => {
             onChange={setAssignment}
             value={assignment}
             defaultValue={assignment}
-            options={studentAssignments.map((repoAssignment: { id: string; assignment: { title: string } }) => ({
-              label: repoAssignment.assignment.title,
-              value: repoAssignment.id,
-            }))}
+            options={studentAssignments.map(
+              (repoAssignment: { id: string; assignment: { title: string } }) => ({
+                label: repoAssignment.assignment.title,
+                value: repoAssignment.id,
+              })
+            )}
           />
         </Form.Item>
 

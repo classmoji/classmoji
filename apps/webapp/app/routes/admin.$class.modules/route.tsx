@@ -39,7 +39,17 @@ const AdminAssignments = ({ loaderData }: Route.ComponentProps) => {
   const [unenrolledStudents, setUnenrolledStudents] = useState<Array<Record<string, unknown>>>([]);
   const [selectedStudents, setSelectedStudents] = useState<Array<Record<string, unknown>>>([]);
   const [repositories, setRepositories] = useState<string[]>([]);
-  const fetcherData = fetcher!.data as { students?: Array<Record<string, unknown>>; repositories?: string[]; triggerSession?: { numReposToDelete?: number; numReposToCreate?: number; numIssuesToCreate?: number } } | undefined;
+  const fetcherData = fetcher!.data as
+    | {
+        students?: Array<Record<string, unknown>>;
+        repositories?: string[];
+        triggerSession?: {
+          numReposToDelete?: number;
+          numReposToCreate?: number;
+          numIssuesToCreate?: number;
+        };
+      }
+    | undefined;
 
   useEffect(() => {
     if (!visible) {
@@ -157,9 +167,7 @@ const AdminAssignments = ({ loaderData }: Route.ComponentProps) => {
             <p>The following students are not on the roster:</p>
             <div className="flex flex-col gap-2 mt-6">
               {(unenrolledStudents || []).map(student => {
-                const isSelected = selectedStudents.some(
-                  s => s.id === student.id
-                );
+                const isSelected = selectedStudents.some(s => s.id === student.id);
                 return (
                   <div
                     key={student.id as string}

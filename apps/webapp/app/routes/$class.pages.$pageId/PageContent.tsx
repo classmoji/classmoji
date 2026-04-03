@@ -35,7 +35,10 @@ interface PageContentProps {
   onHeadingsExtracted: (headings: ExtractedHeading[]) => void;
 }
 
-export const PageContent = memo(function PageContent({ htmlContent, onHeadingsExtracted }: PageContentProps) {
+export const PageContent = memo(function PageContent({
+  htmlContent,
+  onHeadingsExtracted,
+}: PageContentProps) {
   const contentRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -94,7 +97,11 @@ export const PageContent = memo(function PageContent({ htmlContent, onHeadingsEx
     Prism.highlightAllUnder(contentRef.current);
 
     // Add copy buttons to code blocks and terminal blocks
-    const addCopyButton = (container: Element, getCodeText: () => string | null, insertTarget: Element) => {
+    const addCopyButton = (
+      container: Element,
+      getCodeText: () => string | null,
+      insertTarget: Element
+    ) => {
       // Check if button already exists
       if (container.querySelector('.copy-code-btn')) return;
 
@@ -116,33 +123,45 @@ export const PageContent = memo(function PageContent({ htmlContent, onHeadingsEx
         transition: all 0.15s;
       `;
 
-      copyBtn.addEventListener('mouseenter', () => {
-        copyBtn.style.background = '#374151';
-        copyBtn.style.color = '#e5e7eb';
-      }, { signal });
-      copyBtn.addEventListener('mouseleave', () => {
-        copyBtn.style.background = 'transparent';
-        copyBtn.style.color = '#9ca3af';
-      }, { signal });
+      copyBtn.addEventListener(
+        'mouseenter',
+        () => {
+          copyBtn.style.background = '#374151';
+          copyBtn.style.color = '#e5e7eb';
+        },
+        { signal }
+      );
+      copyBtn.addEventListener(
+        'mouseleave',
+        () => {
+          copyBtn.style.background = 'transparent';
+          copyBtn.style.color = '#9ca3af';
+        },
+        { signal }
+      );
 
-      copyBtn.addEventListener('click', async e => {
-        e.preventDefault();
-        e.stopPropagation();
-        const text = getCodeText();
-        if (text) {
-          try {
-            await navigator.clipboard.writeText(text);
-            copyBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>`;
-            copyBtn.style.color = '#1f883d';
-            setTimeout(() => {
-              copyBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>`;
-              copyBtn.style.color = '#9ca3af';
-            }, 2000);
-          } catch (err: unknown) {
-            console.error('Failed to copy:', err);
+      copyBtn.addEventListener(
+        'click',
+        async e => {
+          e.preventDefault();
+          e.stopPropagation();
+          const text = getCodeText();
+          if (text) {
+            try {
+              await navigator.clipboard.writeText(text);
+              copyBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>`;
+              copyBtn.style.color = '#1f883d';
+              setTimeout(() => {
+                copyBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>`;
+                copyBtn.style.color = '#9ca3af';
+              }, 2000);
+            } catch (err: unknown) {
+              console.error('Failed to copy:', err);
+            }
           }
-        }
-      }, { signal });
+        },
+        { signal }
+      );
 
       insertTarget.appendChild(copyBtn);
     };

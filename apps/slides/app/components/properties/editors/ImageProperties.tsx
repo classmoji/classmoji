@@ -76,101 +76,122 @@ export default function ImageProperties({ element }: { element: HTMLImageElement
   }, [element]);
 
   // Update alt text
-  const handleAltChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    if (!element) return;
-    const newAlt = e.target.value;
-    element.alt = newAlt;
-    setAltText(newAlt);
-    onContentChange?.();
-  }, [element, onContentChange]);
+  const handleAltChange = useCallback(
+    (e: React.ChangeEvent<HTMLInputElement>) => {
+      if (!element) return;
+      const newAlt = e.target.value;
+      element.alt = newAlt;
+      setAltText(newAlt);
+      onContentChange?.();
+    },
+    [element, onContentChange]
+  );
 
   // Update width
-  const handleWidthChange = useCallback((value: number | null) => {
-    if (!element) return;
-    const newWidth = { ...width, value: value !== null ? String(value) : '' };
-    setWidth(newWidth);
+  const handleWidthChange = useCallback(
+    (value: number | null) => {
+      if (!element) return;
+      const newWidth = { ...width, value: value !== null ? String(value) : '' };
+      setWidth(newWidth);
 
-    if (newWidth.value) {
-      element.style.width = `${newWidth.value}${newWidth.unit}`;
-      // Remove HTML attribute to avoid conflicts
-      element.removeAttribute('width');
-    } else {
-      element.style.width = '';
-    }
-    onContentChange?.();
-  }, [element, width, onContentChange]);
+      if (newWidth.value) {
+        element.style.width = `${newWidth.value}${newWidth.unit}`;
+        // Remove HTML attribute to avoid conflicts
+        element.removeAttribute('width');
+      } else {
+        element.style.width = '';
+      }
+      onContentChange?.();
+    },
+    [element, width, onContentChange]
+  );
 
-  const handleWidthUnitChange = useCallback((unit: string) => {
-    if (!element) return;
-    const newWidth = { ...width, unit };
-    setWidth(newWidth);
+  const handleWidthUnitChange = useCallback(
+    (unit: string) => {
+      if (!element) return;
+      const newWidth = { ...width, unit };
+      setWidth(newWidth);
 
-    if (newWidth.value) {
-      element.style.width = `${newWidth.value}${unit}`;
-    }
-    onContentChange?.();
-  }, [element, width, onContentChange]);
+      if (newWidth.value) {
+        element.style.width = `${newWidth.value}${unit}`;
+      }
+      onContentChange?.();
+    },
+    [element, width, onContentChange]
+  );
 
   // Update height
-  const handleHeightChange = useCallback((value: number | null) => {
-    if (!element) return;
-    const newHeight = { ...height, value: value !== null ? String(value) : '' };
-    setHeight(newHeight);
+  const handleHeightChange = useCallback(
+    (value: number | null) => {
+      if (!element) return;
+      const newHeight = { ...height, value: value !== null ? String(value) : '' };
+      setHeight(newHeight);
 
-    if (newHeight.value) {
-      element.style.height = `${newHeight.value}${newHeight.unit}`;
-      element.removeAttribute('height');
-    } else {
-      element.style.height = '';
-    }
-    onContentChange?.();
-  }, [element, height, onContentChange]);
+      if (newHeight.value) {
+        element.style.height = `${newHeight.value}${newHeight.unit}`;
+        element.removeAttribute('height');
+      } else {
+        element.style.height = '';
+      }
+      onContentChange?.();
+    },
+    [element, height, onContentChange]
+  );
 
-  const handleHeightUnitChange = useCallback((unit: string) => {
-    if (!element) return;
-    const newHeight = { ...height, unit };
-    setHeight(newHeight);
+  const handleHeightUnitChange = useCallback(
+    (unit: string) => {
+      if (!element) return;
+      const newHeight = { ...height, unit };
+      setHeight(newHeight);
 
-    if (newHeight.value) {
-      element.style.height = `${newHeight.value}${unit}`;
-    }
-    onContentChange?.();
-  }, [element, height, onContentChange]);
+      if (newHeight.value) {
+        element.style.height = `${newHeight.value}${unit}`;
+      }
+      onContentChange?.();
+    },
+    [element, height, onContentChange]
+  );
 
   // Update alignment
-  const handleAlignmentChange = useCallback((newAlign: string) => {
-    if (!element) return;
+  const handleAlignmentChange = useCallback(
+    (newAlign: string) => {
+      if (!element) return;
 
-    // Clear previous alignment styles
-    element.style.display = '';
-    element.style.marginLeft = '';
-    element.style.marginRight = '';
-    element.style.float = '';
+      // Clear previous alignment styles
+      element.style.display = '';
+      element.style.marginLeft = '';
+      element.style.marginRight = '';
+      element.style.float = '';
 
-    // Apply new alignment
-    if (newAlign === 'center') {
-      element.style.display = 'block';
-      element.style.marginLeft = 'auto';
-      element.style.marginRight = 'auto';
-    } else if (newAlign === 'left') {
-      element.style.float = 'left';
-      element.style.marginRight = '1em';
-    } else if (newAlign === 'right') {
-      element.style.float = 'right';
-      element.style.marginLeft = '1em';
-    }
+      // Apply new alignment
+      if (newAlign === 'center') {
+        element.style.display = 'block';
+        element.style.marginLeft = 'auto';
+        element.style.marginRight = 'auto';
+      } else if (newAlign === 'left') {
+        element.style.float = 'left';
+        element.style.marginRight = '1em';
+      } else if (newAlign === 'right') {
+        element.style.float = 'right';
+        element.style.marginLeft = '1em';
+      }
 
-    setAlignment(newAlign);
-    onContentChange?.();
-  }, [element, onContentChange]);
+      setAlignment(newAlign);
+      onContentChange?.();
+    },
+    [element, onContentChange]
+  );
 
   // Update object fit
-  const handleObjectFitChange = useCallback((newFit: string) => {
-    if (!element) return;
-    element.style.objectFit = newFit;
-    setObjectFit(newFit);
-    onContentChange?.();
-  }, [element, onContentChange]);
+  const handleObjectFitChange = useCallback(
+    (newFit: string) => {
+      if (!element) return;
+      element.style.objectFit = newFit;
+      setObjectFit(newFit);
+      onContentChange?.();
+    },
+    [element, onContentChange]
+  );
 
   if (!element) {
     return null;
@@ -291,9 +312,7 @@ export default function ImageProperties({ element }: { element: HTMLImageElement
           >
             📦 Convert to Draggable Block
           </button>
-          <p className="text-xs text-gray-400 mt-1">
-            Move freely with absolute positioning
-          </p>
+          <p className="text-xs text-gray-400 mt-1">Move freely with absolute positioning</p>
         </PropertySection>
       )}
     </div>

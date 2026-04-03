@@ -174,7 +174,10 @@ const ModuleAccordion = ({
     key: module.id,
     label: (
       // Add id for hash anchor scrolling (e.g., /modules#module-slug)
-      <div id={module.slug ?? undefined} className="flex justify-between items-center w-full pr-4 scroll-mt-24">
+      <div
+        id={module.slug ?? undefined}
+        className="flex justify-between items-center w-full pr-4 scroll-mt-24"
+      >
         <span className="font-medium">{module.title}</span>
         <Tag color={module.type === 'INDIVIDUAL' ? 'blue' : 'purple'} bordered={false}>
           {module.type}

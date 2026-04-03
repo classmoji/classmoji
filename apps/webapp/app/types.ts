@@ -26,7 +26,8 @@ type UserInclude = {
 export type UserWithMemberships = Prisma.UserGetPayload<UserInclude>;
 
 // The classroom shape nested inside a membership (from the include above)
-export type ClassroomWithSettings = UserWithMemberships['classroom_memberships'][number]['classroom'];
+export type ClassroomWithSettings =
+  UserWithMemberships['classroom_memberships'][number]['classroom'];
 
 // The settings subset selected in the include
 export type ClassroomSettingsSubset = NonNullable<ClassroomWithSettings['settings']>;

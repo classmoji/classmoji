@@ -240,14 +240,18 @@ test.describe.skip('Slides.com Import', () => {
     await page.waitForTimeout(500);
 
     // Find the Theme dropdown within the Presentation Themes section
-    const themesSection = page.locator('.ant-collapse-item').filter({ hasText: 'Presentation Themes' });
+    const themesSection = page
+      .locator('.ant-collapse-item')
+      .filter({ hasText: 'Presentation Themes' });
     const themeDropdown = themesSection.locator('.ant-select').first();
     await themeDropdown.click();
     await page.waitForTimeout(300);
 
     // Verify our imported theme is listed (with 📦 prefix for shared themes)
     // Use Ant Design's actual dropdown item selector
-    const sharedThemeOption = page.locator(`.ant-select-dropdown .ant-select-item-option-content:has-text("${IMPORT_THEME_NAME}")`);
+    const sharedThemeOption = page.locator(
+      `.ant-select-dropdown .ant-select-item-option-content:has-text("${IMPORT_THEME_NAME}")`
+    );
 
     // The theme should be visible in the dropdown
     const themeVisible = await sharedThemeOption.isVisible().catch(() => false);
@@ -256,19 +260,23 @@ test.describe.skip('Slides.com Import', () => {
       await expect(sharedThemeOption).toBeVisible();
     } else {
       // Try looking for it with emoji prefix
-      const withEmoji = page.locator(`.ant-select-dropdown .ant-select-item-option-content:has-text("📦 ${IMPORT_THEME_NAME}")`);
+      const withEmoji = page.locator(
+        `.ant-select-dropdown .ant-select-item-option-content:has-text("📦 ${IMPORT_THEME_NAME}")`
+      );
       const emojiVisible = await withEmoji.isVisible().catch(() => false);
 
       if (emojiVisible) {
         await expect(withEmoji).toBeVisible();
       } else {
         // List available themes for debugging
-        const allThemeOptions = await page.locator('.ant-select-dropdown .ant-select-item-option-content').allTextContents();
+        const allThemeOptions = await page
+          .locator('.ant-select-dropdown .ant-select-item-option-content')
+          .allTextContents();
         console.log('Available themes:', allThemeOptions);
 
         // Check if any theme contains our import name (case-insensitive partial match)
-        const hasMatchingTheme = allThemeOptions.some(
-          (t) => t.toLowerCase().includes(IMPORT_THEME_NAME.toLowerCase().replace('e2e-import-', ''))
+        const hasMatchingTheme = allThemeOptions.some(t =>
+          t.toLowerCase().includes(IMPORT_THEME_NAME.toLowerCase().replace('e2e-import-', ''))
         );
         expect(hasMatchingTheme).toBe(true);
       }
@@ -314,7 +322,10 @@ test.describe('Import Edge Cases', () => {
 
     // Should get 403 Forbidden or see access denied message
     // The page should show access denied or redirect
-    const hasAccessDenied = await page.locator('text=Access Denied').isVisible().catch(() => false);
+    const hasAccessDenied = await page
+      .locator('text=Access Denied')
+      .isVisible()
+      .catch(() => false);
     const hasForbidden = response?.status() === 403;
 
     expect(hasAccessDenied || hasForbidden).toBe(true);

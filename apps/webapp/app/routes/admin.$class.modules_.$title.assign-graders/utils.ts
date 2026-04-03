@@ -19,7 +19,10 @@ interface GraderInfo {
   [key: string]: unknown;
 }
 
-export const assignGradersToAssignmentsHandler = async (data: AssignGradersData, sessionId: string) => {
+export const assignGradersToAssignmentsHandler = async (
+  data: AssignGradersData,
+  sessionId: string
+) => {
   const { selectedAssignmentId, method, classroomSlug } = data;
 
   const classroom = await ClassmojiService.classroom.findBySlug(classroomSlug);
@@ -30,7 +33,11 @@ export const assignGradersToAssignmentsHandler = async (data: AssignGradersData,
     classroomSlug
   );
 
-  const graderLoginList = await getGradersList({ ...data, repoAssignments: repoAssignments as unknown as Record<string, unknown>[], classroom: classroom! });
+  const graderLoginList = await getGradersList({
+    ...data,
+    repoAssignments: repoAssignments as unknown as Record<string, unknown>[],
+    classroom: classroom!,
+  });
 
   const taskPayloads = repoAssignments.map((repoAssignment, index) => {
     const { repository } = repoAssignment;
@@ -52,11 +59,9 @@ export const assignGradersToAssignmentsHandler = async (data: AssignGradersData,
       let graderMatch;
 
       if (isIndividualRepository) {
-        graderMatch = graderLoginList.find(
-          (grader) => grader.studentId === repository.student_id
-        );
+        graderMatch = graderLoginList.find(grader => grader.studentId === repository.student_id);
       } else {
-        graderMatch = graderLoginList.find((grader) => grader.teamId === repository.team_id);
+        graderMatch = graderLoginList.find(grader => grader.teamId === repository.team_id);
       }
 
       // Skip if no matching grader assignment found in template
@@ -64,19 +69,21 @@ export const assignGradersToAssignmentsHandler = async (data: AssignGradersData,
         return [];
       }
 
-      const payloads = graderMatch.graders.map(({ grader }: { grader: { id: string; login: string | null } }) => {
-        return {
-          payload: {
-            repoName: repository.name,
-            gitOrganization,
-            githubIssueNumber: repoAssignment.provider_issue_number,
-            repositoryAssignmentId: repoAssignment.id,
-            graderLogin: grader.login,
-            graderId: grader.id,
-          },
-          options: { tags: [`session_${sessionId}`] },
-        };
-      });
+      const payloads = graderMatch.graders.map(
+        ({ grader }: { grader: { id: string; login: string | null } }) => {
+          return {
+            payload: {
+              repoName: repository.name,
+              gitOrganization,
+              githubIssueNumber: repoAssignment.provider_issue_number,
+              repositoryAssignmentId: repoAssignment.id,
+              graderLogin: grader.login,
+              graderId: grader.id,
+            },
+            options: { tags: [`session_${sessionId}`] },
+          };
+        }
+      );
 
       return payloads;
     }

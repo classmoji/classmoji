@@ -53,7 +53,10 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
       true // includeUnpublished to see draft/unpublished assignments
     );
   } catch (error: unknown) {
-    console.error('Calendar service error (likely missing migration):', error instanceof Error ? error.message : error);
+    console.error(
+      'Calendar service error (likely missing migration):',
+      error instanceof Error ? error.message : error
+    );
     events = [];
   }
 
@@ -211,7 +214,10 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
       return data({ success: true });
     } catch (error: unknown) {
       console.error('Update event error:', error);
-      return data({ success: false, error: error instanceof Error ? error.message : 'Unknown error' }, { status: 500 });
+      return data(
+        { success: false, error: error instanceof Error ? error.message : 'Unknown error' },
+        { status: 500 }
+      );
     }
   }
 
@@ -250,7 +256,10 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
       return data({ success: true });
     } catch (error: unknown) {
       console.error('Delete event error:', error);
-      return data({ success: false, error: error instanceof Error ? error.message : 'Unknown error' }, { status: 500 });
+      return data(
+        { success: false, error: error instanceof Error ? error.message : 'Unknown error' },
+        { status: 500 }
+      );
     }
   }
 
@@ -359,7 +368,8 @@ const AssistantCalendar = ({ loaderData }: Route.ComponentProps) => {
         ((!e.occurrence_date && !event.occurrence_date) ||
           (e.occurrence_date &&
             event.occurrence_date &&
-            new Date(e.occurrence_date as string).getTime() === new Date(event.occurrence_date as string).getTime()));
+            new Date(e.occurrence_date as string).getTime() ===
+              new Date(event.occurrence_date as string).getTime()));
 
       if (isSameEvent) {
         return {

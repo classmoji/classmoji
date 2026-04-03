@@ -206,7 +206,14 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
 
   // Transform student data with grading strategy calculations
   const students = Array.from(studentMap.values()).map(student => {
-    interface AttemptWithScore { id: string; completed_at: string | null; started_at: string; partialCreditScore: number | null; firstAttemptScore: number | null; [key: string]: unknown; }
+    interface AttemptWithScore {
+      id: string;
+      completed_at: string | null;
+      started_at: string;
+      partialCreditScore: number | null;
+      firstAttemptScore: number | null;
+      [key: string]: unknown;
+    }
     const completedAttempts: AttemptWithScore[] = student.attempts.filter(
       (a: AttemptWithScore) => a.completed_at && a.partialCreditScore !== null
     );
@@ -268,7 +275,9 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
     const latestAttempt = sortedAttempts[0];
 
     // Calculate first-attempt score for the counting attempt
-    const countingAttempt = student.attempts.find((a: AttemptWithScore) => a.id === countingAttemptId);
+    const countingAttempt = student.attempts.find(
+      (a: AttemptWithScore) => a.id === countingAttemptId
+    );
     const firstAttemptScore = countingAttempt?.firstAttemptScore ?? null;
 
     return {
@@ -754,7 +763,8 @@ const QuizView = ({ loaderData }: Route.ComponentProps) => {
         }
         return <span className="text-gray-600">{score}%</span>;
       },
-      sorter: (a: QuizStudent, b: QuizStudent) => (a.firstAttemptScore || 0) - (b.firstAttemptScore || 0),
+      sorter: (a: QuizStudent, b: QuizStudent) =>
+        (a.firstAttemptScore || 0) - (b.firstAttemptScore || 0),
     },
     {
       title: 'Best Score',
@@ -817,7 +827,10 @@ const QuizView = ({ loaderData }: Route.ComponentProps) => {
             filterOption={(input, option) =>
               option!.label.toLowerCase().includes(input.toLowerCase())
             }
-            options={repos.map((r: Record<string, unknown>) => ({ value: r.name as string, label: r.name as string }))}
+            options={repos.map((r: Record<string, unknown>) => ({
+              value: r.name as string,
+              label: r.name as string,
+            }))}
           />
         )}
       </Modal>

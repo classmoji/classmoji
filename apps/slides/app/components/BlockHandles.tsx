@@ -72,7 +72,8 @@ export default function BlockHandles() {
     effectiveBlockElement = selectedElement.closest('.sl-block') as HTMLElement | null;
   }
 
-  const isSandpackBlock = elementType === 'sandpack' && effectiveBlockElement?.classList?.contains('sl-block');
+  const isSandpackBlock =
+    elementType === 'sandpack' && effectiveBlockElement?.classList?.contains('sl-block');
   const showHandles = isBlock || isSandpackBlock;
 
   // The actual element to drag/resize (prefer blockElement for sandpack)
@@ -164,147 +165,156 @@ export default function BlockHandles() {
   }, [updateBounds]);
 
   // Handle resize drag start
-  const handleResizeStart = useCallback((e: React.MouseEvent, handle: typeof HANDLES[number]) => {
-    e.preventDefault();
-    e.stopPropagation();
+  const handleResizeStart = useCallback(
+    (e: React.MouseEvent, handle: (typeof HANDLES)[number]) => {
+      e.preventDefault();
+      e.stopPropagation();
 
-    if (!targetElement || !bounds) return;
+      if (!targetElement || !bounds) return;
 
-    const scale = getScale();
+      const scale = getScale();
 
-    // Get current position and size from inline styles
-    const startLeft = parsePixels(targetElement.style.left);
-    const startTop = parsePixels(targetElement.style.top);
-    const startWidth = parsePixels(targetElement.style.width) || bounds.width / scale;
-    const startHeight = parsePixels(targetElement.style.height) || bounds.height / scale;
+      // Get current position and size from inline styles
+      const startLeft = parsePixels(targetElement.style.left);
+      const startTop = parsePixels(targetElement.style.top);
+      const startWidth = parsePixels(targetElement.style.width) || bounds.width / scale;
+      const startHeight = parsePixels(targetElement.style.height) || bounds.height / scale;
 
-    // CRITICAL: Disable pointer events on iframes during drag to prevent event capture
-    const iframes = targetElement.querySelectorAll('iframe');
-    iframes.forEach((iframe) => {
-      iframe.style.pointerEvents = 'none';
-    });
+      // CRITICAL: Disable pointer events on iframes during drag to prevent event capture
+      const iframes = targetElement.querySelectorAll('iframe');
+      iframes.forEach(iframe => {
+        iframe.style.pointerEvents = 'none';
+      });
 
-    dragStateRef.current = {
-      type: 'resize',
-      handle: handle.id,
-      startX: e.clientX,
-      startY: e.clientY,
-      startLeft,
-      startTop,
-      startWidth,
-      startHeight,
-      disabledIframes: iframes, // Store for cleanup
-    };
+      dragStateRef.current = {
+        type: 'resize',
+        handle: handle.id,
+        startX: e.clientX,
+        startY: e.clientY,
+        startLeft,
+        startTop,
+        startWidth,
+        startHeight,
+        disabledIframes: iframes, // Store for cleanup
+      };
 
-    setIsDragging(true);
-    setCurrentSize({ width: startWidth, height: startHeight });
+      setIsDragging(true);
+      setCurrentSize({ width: startWidth, height: startHeight });
 
-    document.addEventListener('mousemove', handleMouseMove);
-    document.addEventListener('mouseup', handleMouseUp);
-  }, [targetElement, bounds, getScale, parsePixels]);
+      document.addEventListener('mousemove', handleMouseMove);
+      document.addEventListener('mouseup', handleMouseUp);
+    },
+    [targetElement, bounds, getScale, parsePixels]
+  );
 
   // Handle move drag start
-  const handleMoveStart = useCallback((e: React.MouseEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
+  const handleMoveStart = useCallback(
+    (e: React.MouseEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
 
-    if (!targetElement || !bounds) return;
+      if (!targetElement || !bounds) return;
 
-    const startLeft = parsePixels(targetElement.style.left);
-    const startTop = parsePixels(targetElement.style.top);
+      const startLeft = parsePixels(targetElement.style.left);
+      const startTop = parsePixels(targetElement.style.top);
 
-    // CRITICAL: Disable pointer events on iframes during drag to prevent event capture
-    // Iframes can steal mousemove/mouseup events, causing drag to fail
-    const iframes = targetElement.querySelectorAll('iframe');
-    iframes.forEach((iframe) => {
-      iframe.style.pointerEvents = 'none';
-    });
+      // CRITICAL: Disable pointer events on iframes during drag to prevent event capture
+      // Iframes can steal mousemove/mouseup events, causing drag to fail
+      const iframes = targetElement.querySelectorAll('iframe');
+      iframes.forEach(iframe => {
+        iframe.style.pointerEvents = 'none';
+      });
 
-    dragStateRef.current = {
-      type: 'move',
-      handle: '',
-      startX: e.clientX,
-      startY: e.clientY,
-      startLeft,
-      startTop,
-      startWidth: 0,
-      startHeight: 0,
-      disabledIframes: iframes, // Store for cleanup
-    };
+      dragStateRef.current = {
+        type: 'move',
+        handle: '',
+        startX: e.clientX,
+        startY: e.clientY,
+        startLeft,
+        startTop,
+        startWidth: 0,
+        startHeight: 0,
+        disabledIframes: iframes, // Store for cleanup
+      };
 
-    setIsMoving(true);
-    setCurrentPosition({ left: startLeft, top: startTop });
+      setIsMoving(true);
+      setCurrentPosition({ left: startLeft, top: startTop });
 
-    document.addEventListener('mousemove', handleMouseMove);
-    document.addEventListener('mouseup', handleMouseUp);
-  }, [targetElement, bounds, parsePixels]);
+      document.addEventListener('mousemove', handleMouseMove);
+      document.addEventListener('mouseup', handleMouseUp);
+    },
+    [targetElement, bounds, parsePixels]
+  );
 
   // Handle mouse move during drag
-  const handleMouseMove = useCallback((e: MouseEvent) => {
-    if (!dragStateRef.current || !targetElement) return;
+  const handleMouseMove = useCallback(
+    (e: MouseEvent) => {
+      if (!dragStateRef.current || !targetElement) return;
 
-    const scale = getScale();
-    const state = dragStateRef.current;
+      const scale = getScale();
+      const state = dragStateRef.current;
 
-    // Convert screen deltas to slide coordinate deltas
-    const deltaX = (e.clientX - state.startX) / scale;
-    const deltaY = (e.clientY - state.startY) / scale;
+      // Convert screen deltas to slide coordinate deltas
+      const deltaX = (e.clientX - state.startX) / scale;
+      const deltaY = (e.clientY - state.startY) / scale;
 
-    if (state.type === 'move') {
-      // Moving the block
-      const newLeft = Math.round(state.startLeft + deltaX);
-      const newTop = Math.round(state.startTop + deltaY);
+      if (state.type === 'move') {
+        // Moving the block
+        const newLeft = Math.round(state.startLeft + deltaX);
+        const newTop = Math.round(state.startTop + deltaY);
 
-      targetElement.style.left = `${newLeft}px`;
-      targetElement.style.top = `${newTop}px`;
+        targetElement.style.left = `${newLeft}px`;
+        targetElement.style.top = `${newTop}px`;
 
-      setCurrentPosition({ left: newLeft, top: newTop });
-    } else if (state.type === 'resize') {
-      // Resizing the block
-      let newWidth = state.startWidth;
-      let newHeight = state.startHeight;
-      let newLeft = state.startLeft;
-      let newTop = state.startTop;
+        setCurrentPosition({ left: newLeft, top: newTop });
+      } else if (state.type === 'resize') {
+        // Resizing the block
+        let newWidth = state.startWidth;
+        let newHeight = state.startHeight;
+        let newLeft = state.startLeft;
+        let newTop = state.startTop;
 
-      const { handle } = state;
+        const { handle } = state;
 
-      // Calculate new dimensions based on handle
-      if (handle.includes('e')) {
-        newWidth = Math.max(50, state.startWidth + deltaX);
-      }
-      if (handle.includes('w')) {
-        newWidth = Math.max(50, state.startWidth - deltaX);
-        newLeft = state.startLeft + (state.startWidth - newWidth);
-      }
-      if (handle.includes('s')) {
-        newHeight = Math.max(30, state.startHeight + deltaY);
-      }
-      if (handle.includes('n')) {
-        newHeight = Math.max(30, state.startHeight - deltaY);
-        newTop = state.startTop + (state.startHeight - newHeight);
-      }
-
-      // Apply shift for aspect ratio lock on corner handles
-      if (e.shiftKey && handle.length === 2) {
-        const aspectRatio = state.startWidth / state.startHeight;
-        if (handle.includes('e') || handle.includes('w')) {
-          newHeight = newWidth / aspectRatio;
-        } else {
-          newWidth = newHeight * aspectRatio;
+        // Calculate new dimensions based on handle
+        if (handle.includes('e')) {
+          newWidth = Math.max(50, state.startWidth + deltaX);
         }
+        if (handle.includes('w')) {
+          newWidth = Math.max(50, state.startWidth - deltaX);
+          newLeft = state.startLeft + (state.startWidth - newWidth);
+        }
+        if (handle.includes('s')) {
+          newHeight = Math.max(30, state.startHeight + deltaY);
+        }
+        if (handle.includes('n')) {
+          newHeight = Math.max(30, state.startHeight - deltaY);
+          newTop = state.startTop + (state.startHeight - newHeight);
+        }
+
+        // Apply shift for aspect ratio lock on corner handles
+        if (e.shiftKey && handle.length === 2) {
+          const aspectRatio = state.startWidth / state.startHeight;
+          if (handle.includes('e') || handle.includes('w')) {
+            newHeight = newWidth / aspectRatio;
+          } else {
+            newWidth = newHeight * aspectRatio;
+          }
+        }
+
+        targetElement.style.width = `${Math.round(newWidth)}px`;
+        targetElement.style.height = `${Math.round(newHeight)}px`;
+        targetElement.style.left = `${Math.round(newLeft)}px`;
+        targetElement.style.top = `${Math.round(newTop)}px`;
+
+        setCurrentSize({ width: Math.round(newWidth), height: Math.round(newHeight) });
+        setCurrentPosition({ left: Math.round(newLeft), top: Math.round(newTop) });
       }
 
-      targetElement.style.width = `${Math.round(newWidth)}px`;
-      targetElement.style.height = `${Math.round(newHeight)}px`;
-      targetElement.style.left = `${Math.round(newLeft)}px`;
-      targetElement.style.top = `${Math.round(newTop)}px`;
-
-      setCurrentSize({ width: Math.round(newWidth), height: Math.round(newHeight) });
-      setCurrentPosition({ left: Math.round(newLeft), top: Math.round(newTop) });
-    }
-
-    updateBounds();
-  }, [targetElement, getScale, updateBounds]);
+      updateBounds();
+    },
+    [targetElement, getScale, updateBounds]
+  );
 
   // Handle mouse up - end drag
   const handleMouseUp = useCallback(() => {
@@ -372,7 +382,7 @@ export default function BlockHandles() {
 
     // Re-enable pointer events on iframes
     if (dragStateRef.current?.disabledIframes) {
-      dragStateRef.current.disabledIframes.forEach((iframe) => {
+      dragStateRef.current.disabledIframes.forEach(iframe => {
         iframe.style.pointerEvents = '';
       });
     }
@@ -394,44 +404,47 @@ export default function BlockHandles() {
   }, [handleMouseMove, handleMouseUp]);
 
   // Handle double-click to enter edit mode
-  const handleDoubleClick = useCallback((e: React.MouseEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
+  const handleDoubleClick = useCallback(
+    (e: React.MouseEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
 
-    if (!targetElement) return;
+      if (!targetElement) return;
 
-    // For sandpack blocks, enter code editing mode (allow clicks through to Sandpack editor)
-    if (isSandpackBlock) {
-      setIsEditingCode(true);
-      targetElement.classList.add('editing-code');
-      // CRITICAL: Disable contentEditable on the block to prevent slide's contentEditable
-      // from capturing keyboard input meant for the Sandpack code editor
-      targetElement.contentEditable = 'false';
-      // Also disable on the sandpack-embed inside
-      const sandpackEmbed = targetElement.querySelector('.sandpack-embed') as HTMLElement | null;
-      if (sandpackEmbed) {
-        sandpackEmbed.contentEditable = 'false';
+      // For sandpack blocks, enter code editing mode (allow clicks through to Sandpack editor)
+      if (isSandpackBlock) {
+        setIsEditingCode(true);
+        targetElement.classList.add('editing-code');
+        // CRITICAL: Disable contentEditable on the block to prevent slide's contentEditable
+        // from capturing keyboard input meant for the Sandpack code editor
+        targetElement.contentEditable = 'false';
+        // Also disable on the sandpack-embed inside
+        const sandpackEmbed = targetElement.querySelector('.sandpack-embed') as HTMLElement | null;
+        if (sandpackEmbed) {
+          sandpackEmbed.contentEditable = 'false';
+        }
+        return;
       }
-      return;
-    }
 
-    // Enter edit mode - make content editable
-    targetElement.classList.remove('selected');
-    targetElement.classList.add('editing');
+      // Enter edit mode - make content editable
+      targetElement.classList.remove('selected');
+      targetElement.classList.add('editing');
 
-    const content = targetElement.querySelector('.sl-block-content') as HTMLElement | null;
-    if (content) {
-      content.contentEditable = 'true';
-      content.focus();
+      const content = targetElement.querySelector('.sl-block-content') as HTMLElement | null;
+      if (content) {
+        content.contentEditable = 'true';
+        content.focus();
 
-      // Select all content for easy editing
-      const range = document.createRange();
-      range.selectNodeContents(content);
-      const selection = window.getSelection();
-      selection!.removeAllRanges();
-      selection!.addRange(range);
-    }
-  }, [targetElement, isSandpackBlock]);
+        // Select all content for easy editing
+        const range = document.createRange();
+        range.selectNodeContents(content);
+        const selection = window.getSelection();
+        selection!.removeAllRanges();
+        selection!.addRange(range);
+      }
+    },
+    [targetElement, isSandpackBlock]
+  );
 
   // Exit code editing mode when clicking outside the Sandpack block
   useEffect(() => {
@@ -532,25 +545,24 @@ export default function BlockHandles() {
       )}
 
       {/* Resize handles - hidden when editing code */}
-      {!isEditingCode && HANDLES.map((handle) => (
-        <div
-          key={handle.id}
-          className={`block-resize-handle block-resize-handle-${handle.id}`}
-          style={{
-            cursor: handle.cursor,
-            borderRadius: handle.id.length === 2 ? '2px' : '50%',
-            left: handle.x * bounds.width - HANDLE_SIZE / 2,
-            top: handle.y * bounds.height - HANDLE_SIZE / 2,
-          }}
-          onMouseDown={(e) => handleResizeStart(e, handle)}
-        />
-      ))}
+      {!isEditingCode &&
+        HANDLES.map(handle => (
+          <div
+            key={handle.id}
+            className={`block-resize-handle block-resize-handle-${handle.id}`}
+            style={{
+              cursor: handle.cursor,
+              borderRadius: handle.id.length === 2 ? '2px' : '50%',
+              left: handle.x * bounds.width - HANDLE_SIZE / 2,
+              top: handle.y * bounds.height - HANDLE_SIZE / 2,
+            }}
+            onMouseDown={e => handleResizeStart(e, handle)}
+          />
+        ))}
 
       {/* Code editing indicator */}
       {isEditingCode && (
-        <div className="block-editing-indicator">
-          Editing Code • Click outside to finish
-        </div>
+        <div className="block-editing-indicator">Editing Code • Click outside to finish</div>
       )}
 
       {/* Position indicator during move */}

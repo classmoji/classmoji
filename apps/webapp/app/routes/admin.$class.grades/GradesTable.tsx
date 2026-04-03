@@ -88,7 +88,10 @@ const GradesTable = (props: GradesTableProps) => {
     });
   }, [students, searchQuery]);
 
-  const handleUpdateLetterGrade = (membershipId: string | number, letterGrade: string | number | null | undefined) => {
+  const handleUpdateLetterGrade = (
+    membershipId: string | number,
+    letterGrade: string | number | null | undefined
+  ) => {
     fetcher!.submit(
       { membership_id: String(membershipId), letter_grade: String(letterGrade ?? '') },
       {
@@ -173,7 +176,10 @@ const GradesTable = (props: GradesTableProps) => {
   // Calculate scroll width dynamically based on visible columns
   const scrollX = useMemo(() => {
     const baseWidth = 170 + 100; // Student + Actions (fixed columns)
-    const gradeColumnsWidth = studentGradeColumns.reduce((sum: number, col) => sum + (Number(col.width) || 150), 0);
+    const gradeColumnsWidth = studentGradeColumns.reduce(
+      (sum: number, col) => sum + (Number(col.width) || 150),
+      0
+    );
     const cols = assignmentColumns ?? [];
     const assignmentColumnsWidth = cols.reduce((sum: number, module) => {
       const mod = module as { width?: number; children?: Array<{ width?: number }> };
@@ -204,7 +210,7 @@ const GradesTable = (props: GradesTableProps) => {
     const validFinalGrades = finalNumericGrades.filter((g: number) => g >= 0);
 
     return (
-      <Table.Summary {...{ fixed: true, className: 'bg-yellow-50' } as Record<string, unknown>}>
+      <Table.Summary {...({ fixed: true, className: 'bg-yellow-50' } as Record<string, unknown>)}>
         <Table.Summary.Row>
           <Table.Summary.Cell index={-1}></Table.Summary.Cell>
           <Table.Summary.Cell index={0}></Table.Summary.Cell>
@@ -308,7 +314,11 @@ const GradesTable = (props: GradesTableProps) => {
             >
               <Table
                 dataSource={filteredStudents}
-                columns={columns.filter(col => !(col as Record<string, unknown>).hidden) as TableProps<Student>['columns']}
+                columns={
+                  columns.filter(
+                    col => !(col as Record<string, unknown>).hidden
+                  ) as TableProps<Student>['columns']
+                }
                 rowHoverable={true}
                 size="small"
                 bordered={true}
@@ -344,7 +354,7 @@ const GradesTable = (props: GradesTableProps) => {
         style={{ right: 24, bottom: 94, width: 56, height: 56 }}
         icon={<IconSettings size={28} className="relative -left-[3.75px]" />}
         className="grades-float-button"
-        {...{ position: 'topLeft' } as Record<string, unknown>}
+        {...({ position: 'topLeft' } as Record<string, unknown>)}
       >
         <GradeSettings
           letterGradeMappings={letterGradeMappings}

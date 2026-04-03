@@ -161,9 +161,7 @@ const getRecurrenceRule = (
   };
 };
 
-const toInputJsonObject = (
-  value: Prisma.JsonValue | null | undefined
-): Prisma.InputJsonObject => {
+const toInputJsonObject = (value: Prisma.JsonValue | null | undefined): Prisma.InputJsonObject => {
   if (!isJsonObject(value)) {
     return {};
   }
@@ -403,7 +401,8 @@ const expandRecurringEvent = (
 
         if (override) {
           // Use override times/location
-          const duration = new Date(event.end_time).getTime() - new Date(event.start_time).getTime();
+          const duration =
+            new Date(event.end_time).getTime() - new Date(event.start_time).getTime();
           const occurrenceStart = override.new_start_time
             ? new Date(override.new_start_time)
             : new Date(
@@ -440,7 +439,8 @@ const expandRecurringEvent = (
           occurrences.push(overrideOccurrence);
         } else {
           // Use template times for this date
-          const duration = new Date(event.end_time).getTime() - new Date(event.start_time).getTime();
+          const duration =
+            new Date(event.end_time).getTime() - new Date(event.start_time).getTime();
           const occurrenceStart = new Date(
             currentDate.getFullYear(),
             currentDate.getMonth(),
@@ -568,7 +568,13 @@ export const getClassroomCalendar = async (
   );
 
   // Get deadlines from Assignments (pass userId to include GitHub issue links)
-  const deadlines = await getDeadlinesForRange(classroomId, startDate, endDate, userId, includeUnpublished);
+  const deadlines = await getDeadlinesForRange(
+    classroomId,
+    startDate,
+    endDate,
+    userId,
+    includeUnpublished
+  );
 
   // Combine and sort by start time
   const allEvents = [...expandedEvents, ...deadlines].sort(
@@ -586,7 +592,13 @@ export const getClassroomCalendar = async (
  * @param {string} [userId] - Optional user ID to include their GitHub issue links
  * @param {boolean} [includeUnpublished=false] - Include unpublished assignments (for admin view)
  */
-export const getDeadlinesForRange = async (classroomId: string, startDate: Date, endDate: Date, userId: string | null = null, includeUnpublished: boolean = false) => {
+export const getDeadlinesForRange = async (
+  classroomId: string,
+  startDate: Date,
+  endDate: Date,
+  userId: string | null = null,
+  includeUnpublished: boolean = false
+) => {
   const assignments = await getPrisma().assignment.findMany({
     where: {
       module: {
@@ -633,13 +645,15 @@ export const getDeadlinesForRange = async (classroomId: string, startDate: Date,
       },
       slides: {
         // Only filter out drafts if not including unpublished content
-        ...(includeUnpublished ? {} : {
-          where: {
-            slide: {
-              is_draft: false,
-            },
-          },
-        }),
+        ...(includeUnpublished
+          ? {}
+          : {
+              where: {
+                slide: {
+                  is_draft: false,
+                },
+              },
+            }),
         include: {
           slide: {
             select: {
@@ -680,7 +694,7 @@ export const getDeadlinesForRange = async (classroomId: string, startDate: Date,
   return assignments.map(assignment => {
     const repoAssignment = (
       'repository_assignments' in assignment
-        ? assignment.repository_assignments?.[0] ?? null
+        ? (assignment.repository_assignments?.[0] ?? null)
         : null
     ) as DeadlineRepositoryAssignment | null;
     const gitOrgLogin = assignment.module.classroom?.git_organization?.login;
@@ -1055,10 +1069,7 @@ export const createOverride = async (
 /**
  * Update an existing override
  */
-export const updateOverride = async (
-  overrideId: string,
-  overrideData: CalendarOverrideData
-) => {
+export const updateOverride = async (overrideId: string, overrideData: CalendarOverrideData) => {
   const { is_cancelled, new_start_time, new_end_time, new_location, new_meeting_link } =
     overrideData;
 
@@ -1109,7 +1120,12 @@ export const getUserEvents = async (userId: string, classroomId: string) => {
  * @param {object} linkData - Object containing pageIds, slideIds, assignmentIds arrays
  * @param {Date|null} occurrenceDate - For recurring events, the specific occurrence date
  */
-export const updateEventLinks = async (eventId: string, classroomId: string, linkData: { pageIds?: string[]; slideIds?: string[]; assignmentIds?: string[] }, occurrenceDate: Date | null = null) => {
+export const updateEventLinks = async (
+  eventId: string,
+  classroomId: string,
+  linkData: { pageIds?: string[]; slideIds?: string[]; assignmentIds?: string[] },
+  occurrenceDate: Date | null = null
+) => {
   const { pageIds = [], slideIds = [], assignmentIds = [] } = linkData;
 
   // Normalize occurrence_date for storage (date-only, no time)

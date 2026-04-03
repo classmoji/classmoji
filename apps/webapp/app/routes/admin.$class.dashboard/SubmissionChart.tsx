@@ -26,12 +26,20 @@ const SubmissionChart = ({ recentRepositoryAssignments }: SubmissionChartProps) 
   const data = lastDays
     .map(day => ({
       name: day.format('MMM D'),
-      count: recentRepositoryAssignments.filter((ra) => dayjs(ra.closed_at).isSame(day, 'day'))
+      count: recentRepositoryAssignments.filter(ra => dayjs(ra.closed_at).isSame(day, 'day'))
         .length,
     }))
     .reverse();
 
-  const CustomTooltip = ({ active, payload, label }: { active?: boolean; payload?: { value: number }[]; label?: string }) => {
+  const CustomTooltip = ({
+    active,
+    payload,
+    label,
+  }: {
+    active?: boolean;
+    payload?: { value: number }[];
+    label?: string;
+  }) => {
     if (active && payload && payload.length) {
       return (
         <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-lg p-3">

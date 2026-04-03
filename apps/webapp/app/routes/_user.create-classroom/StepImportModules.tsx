@@ -117,14 +117,20 @@ const StepImportModules = ({
                   showSearch
                   optionFilterProp="children"
                   filterOption={(input, option) =>
-                    (option as unknown as { children: string })!.children.toLowerCase().includes(input.toLowerCase())
+                    (option as unknown as { children: string })!.children
+                      .toLowerCase()
+                      .includes(input.toLowerCase())
                   }
                 >
                   {ownedClassrooms.map(classroom => (
                     <Select.Option key={classroom.id} value={classroom.id}>
                       <div className="flex items-center gap-2">
-                        {(classroom.git_organization as { avatar_url?: string } | null)?.avatar_url && (
-                          <Avatar src={(classroom.git_organization as { avatar_url: string }).avatar_url} size={16} />
+                        {(classroom.git_organization as { avatar_url?: string } | null)
+                          ?.avatar_url && (
+                          <Avatar
+                            src={(classroom.git_organization as { avatar_url: string }).avatar_url}
+                            size={16}
+                          />
                         )}
                         <span>{classroom.name}</span>
                         <span className="text-gray-400">

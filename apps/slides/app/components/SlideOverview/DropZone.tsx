@@ -46,11 +46,7 @@ export default function DropZone({
 
   if (!showDropZone) {
     // Return a minimal spacer when not dragging
-    return (
-      <div
-        className={isVertical ? 'h-2' : 'w-3 shrink-0'}
-      />
-    );
+    return <div className={isVertical ? 'h-2' : 'w-3 shrink-0'} />;
   }
 
   // Stack gaps are wider and more prominent
@@ -60,20 +56,22 @@ export default function DropZone({
     <div
       ref={setNodeRef}
       className={`
-        ${isVertical
-          ? 'h-8 w-full my-1'
-          : isStackGap
-            ? 'w-16 min-h-[120px] h-full mx-1 shrink-0 self-stretch'
-            : 'w-8 min-h-[80px] shrink-0'
+        ${
+          isVertical
+            ? 'h-8 w-full my-1'
+            : isStackGap
+              ? 'w-16 min-h-[120px] h-full mx-1 shrink-0 self-stretch'
+              : 'w-8 min-h-[80px] shrink-0'
         }
         flex items-center justify-center
         transition-all duration-200
         rounded-lg
-        ${canAccept
-          ? isOver
-            ? 'bg-blue-500/30 border-2 border-blue-500 border-dashed'
-            : 'bg-gray-700/50 border-2 border-gray-500 border-dashed hover:bg-gray-600/50'
-          : 'opacity-20'
+        ${
+          canAccept
+            ? isOver
+              ? 'bg-blue-500/30 border-2 border-blue-500 border-dashed'
+              : 'bg-gray-700/50 border-2 border-gray-500 border-dashed hover:bg-gray-600/50'
+            : 'opacity-20'
         }
       `}
     >
@@ -93,12 +91,7 @@ export default function DropZone({
             stroke="currentColor"
             viewBox="0 0 24 24"
           >
-            <path
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              strokeWidth={2}
-              d="M12 4v16m8-8H4"
-            />
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
           </svg>
         ) : canAccept ? (
           // Line indicator when not hovering

@@ -41,7 +41,8 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
       },
     });
 
-    const sessionId = (authData as { session?: { session?: { id?: string } } })?.session?.session?.id;
+    const sessionId = (authData as { session?: { session?: { id?: string } } })?.session?.session
+      ?.id;
     if (sessionId) {
       await getPrisma().session.updateMany({
         where: { id: sessionId },

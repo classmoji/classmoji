@@ -30,4 +30,14 @@ export const elementPropertyEditors = {
   sandpack: SandpackProperties,
 };
 
-export { CodeBlockProperties, TextProperties, ImageProperties, SlideProperties, ColumnProperties, IframeProperties, VideoProperties, BlockProperties, SandpackProperties };
+export {
+  CodeBlockProperties,
+  TextProperties,
+  ImageProperties,
+  SlideProperties,
+  ColumnProperties,
+  IframeProperties,
+  VideoProperties,
+  BlockProperties,
+  SandpackProperties,
+};

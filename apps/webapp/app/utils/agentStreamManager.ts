@@ -197,7 +197,10 @@ class AgentStreamManager extends EventEmitter {
    * Publish error event
    */
   publishError(sessionId: string, error: Error | string) {
-    this.publishEvent(sessionId, { type: 'error', data: { error: typeof error === 'string' ? error : error.message } });
+    this.publishEvent(sessionId, {
+      type: 'error',
+      data: { error: typeof error === 'string' ? error : error.message },
+    });
   }
 
   /**

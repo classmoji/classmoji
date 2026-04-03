@@ -30,7 +30,7 @@ const UserThumbnailView = ({ user, truncate = false }: UserThumbnailViewProps) =
           <div className="text-mist dark:text-gray-500 text-xs flex gap-6">
             <div
               className={`text-xs ${truncate ? 'truncate' : ''}`}
-              title={truncate ? (user?.login || user?.slug) ?? undefined : undefined}
+              title={truncate ? ((user?.login || user?.slug) ?? undefined) : undefined}
             >
               @{user?.login || user?.slug}
             </div>

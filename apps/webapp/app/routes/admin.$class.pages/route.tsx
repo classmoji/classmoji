@@ -167,7 +167,9 @@ export default function AdminPages({ loaderData }: Route.ComponentProps) {
 
   // Helper to get first linked module title
   const getLinkedModuleTitle = (page: PageRecord) => {
-    const moduleLink = page.links?.find((link: { module?: { title: string } | null }) => link.module);
+    const moduleLink = page.links?.find(
+      (link: { module?: { title: string } | null }) => link.module
+    );
     return moduleLink?.module?.title || null;
   };
 
@@ -220,7 +222,8 @@ export default function AdminPages({ loaderData }: Route.ComponentProps) {
       width: 120,
       render: (_: unknown, record: PageRecord) => {
         const rawData = pageViewers[`pages/${record.id}`] || { viewers: [], totalCount: 0 };
-        const viewerData = 'viewers' in rawData ? rawData : { viewers: rawData, totalCount: rawData.length };
+        const viewerData =
+          'viewers' in rawData ? rawData : { viewers: rawData, totalCount: rawData.length };
         return (
           <RecentViewers
             viewers={viewerData.viewers}

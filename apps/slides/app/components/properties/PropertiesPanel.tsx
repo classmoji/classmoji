@@ -10,7 +10,8 @@ import { elementPropertyEditors } from './editors';
  * based on the type of element currently selected.
  */
 export default function PropertiesPanel() {
-  const { selectedElement, elementType, selectElement, clearSelection, onContentChange } = useElementSelection();
+  const { selectedElement, elementType, selectElement, clearSelection, onContentChange } =
+    useElementSelection();
 
   // Select the current slide section for slide-level properties
   const handleSelectSlide = useCallback((event: React.MouseEvent) => {
@@ -72,9 +73,7 @@ export default function PropertiesPanel() {
     >
       <div className="p-4">
         {/* Header */}
-        <h2 className="text-sm font-semibold text-gray-900 dark:text-white mb-4">
-          Properties
-        </h2>
+        <h2 className="text-sm font-semibold text-gray-900 dark:text-white mb-4">Properties</h2>
 
         {/* Quick access: Slide Settings button */}
         {!isSlideSelected && (
@@ -83,8 +82,18 @@ export default function PropertiesPanel() {
             className="w-full mb-4 px-3 py-2 text-sm text-left bg-gray-50 dark:bg-gray-700 hover:bg-gray-100 dark:hover:bg-gray-600 rounded-lg border border-gray-200 dark:border-gray-600 transition-colors"
           >
             <div className="flex items-center gap-2">
-              <svg className="w-4 h-4 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 5a1 1 0 011-1h14a1 1 0 011 1v2a1 1 0 01-1 1H5a1 1 0 01-1-1V5zM4 13a1 1 0 011-1h6a1 1 0 011 1v6a1 1 0 01-1 1H5a1 1 0 01-1-1v-6zM16 13a1 1 0 011-1h2a1 1 0 011 1v6a1 1 0 01-1 1h-2a1 1 0 01-1-1v-6z" />
+              <svg
+                className="w-4 h-4 text-gray-500"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M4 5a1 1 0 011-1h14a1 1 0 011 1v2a1 1 0 01-1 1H5a1 1 0 01-1-1V5zM4 13a1 1 0 011-1h6a1 1 0 011 1v6a1 1 0 01-1 1H5a1 1 0 01-1-1v-6zM16 13a1 1 0 011-1h2a1 1 0 011 1v6a1 1 0 01-1 1h-2a1 1 0 01-1-1v-6z"
+                />
               </svg>
               <span className="text-gray-700 dark:text-gray-200">Slide Layout & Settings</span>
             </div>
@@ -143,12 +152,7 @@ function EmptyState() {
   return (
     <div className="text-center py-8">
       <div className="text-gray-400 dark:text-gray-500 mb-2">
-        <svg
-          className="w-12 h-12 mx-auto"
-          fill="none"
-          stroke="currentColor"
-          viewBox="0 0 24 24"
-        >
+        <svg className="w-12 h-12 mx-auto" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path
             strokeLinecap="round"
             strokeLinejoin="round"

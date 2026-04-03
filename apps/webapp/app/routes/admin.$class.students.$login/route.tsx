@@ -87,7 +87,7 @@ const StudentView = ({ loaderData }: Route.ComponentProps) => {
             backgroundColor: isDarkMode ? '#1f2937' : '#f9f9f9',
           },
         }}
-        {...{ headerClassName: 'p-0' } as Record<string, unknown>}
+        {...({ headerClassName: 'p-0' } as Record<string, unknown>)}
         onClose={close}
         open={opened}
         width={width}

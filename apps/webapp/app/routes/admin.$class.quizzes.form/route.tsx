@@ -100,7 +100,12 @@ function QuizFormDrawer({ loaderData }: Route.ComponentProps) {
   const formContext = useMemo(() => {
     const values = form.getFieldsValue();
     const linkedModule = assignments?.find(
-      (a: { id: string; title?: string; template?: string; issues?: Array<{ title: string; body: string }> }) => a.id?.toString() === values.moduleId?.toString()
+      (a: {
+        id: string;
+        title?: string;
+        template?: string;
+        issues?: Array<{ title: string; body: string }>;
+      }) => a.id?.toString() === values.moduleId?.toString()
     );
 
     return {
@@ -113,7 +118,9 @@ function QuizFormDrawer({ loaderData }: Route.ComponentProps) {
         ? {
             title: linkedModule.title,
             template: linkedModule.template,
-            issues: (linkedModule as { issues?: Array<{ title: string; body: string }> }).issues?.map((i) => ({
+            issues: (
+              linkedModule as { issues?: Array<{ title: string; body: string }> }
+            ).issues?.map(i => ({
               title: i.title,
               description: i.body,
             })),
@@ -144,7 +151,10 @@ function QuizFormDrawer({ loaderData }: Route.ComponentProps) {
     ) {
       form.setFieldValue('questionCount', suggestion.questionCount);
     }
-    if (suggestion?.difficultyLevel && ['Beginner', 'Intermediate', 'Advanced'].includes(suggestion.difficultyLevel)) {
+    if (
+      suggestion?.difficultyLevel &&
+      ['Beginner', 'Intermediate', 'Advanced'].includes(suggestion.difficultyLevel)
+    ) {
       form.setFieldValue('difficultyLevel', suggestion.difficultyLevel);
     }
   };
@@ -173,7 +183,9 @@ function QuizFormDrawer({ loaderData }: Route.ComponentProps) {
   }, [fetcher.state, fetcher.data, navigate, classSlug, close]);
 
   const handleExampleSelect = (exampleName: string) => {
-    const example = examplePrompts.find((e: { name: string; systemPrompt: string; rubricPrompt: string }) => e.name === exampleName);
+    const example = examplePrompts.find(
+      (e: { name: string; systemPrompt: string; rubricPrompt: string }) => e.name === exampleName
+    );
     if (example) {
       form.setFieldsValue({
         systemPrompt: example.systemPrompt,

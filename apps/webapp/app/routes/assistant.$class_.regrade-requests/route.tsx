@@ -9,7 +9,9 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
   const requests = await ClassmojiService.regradeRequest.findMany({
     classroom_id: classroom.id,
   });
-  const emojiMappings = await ClassmojiService.emojiMapping.findByClassroomId(classroom.id) as Record<string, number>;
+  const emojiMappings = (await ClassmojiService.emojiMapping.findByClassroomId(
+    classroom.id
+  )) as Record<string, number>;
   return { requests, emojiMappings, org: classroom.git_organization?.login };
 };
 

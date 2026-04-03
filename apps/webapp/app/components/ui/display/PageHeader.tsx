@@ -7,7 +7,9 @@ interface PageHeaderProps {
 }
 
 const PageHeader = ({ title, routeName, children }: PageHeaderProps) => {
-  const IconComponent = (routes as Record<string, { icon: React.ComponentType<{ className?: string }> }>)[routeName].icon;
+  const IconComponent = (
+    routes as Record<string, { icon: React.ComponentType<{ className?: string }> }>
+  )[routeName].icon;
 
   return (
     <div className="flex items-center justify-between">

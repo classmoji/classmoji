@@ -43,7 +43,13 @@ const SettingsGeneral = ({ loaderData }: Route.ComponentProps) => {
 
   return (
     <div className="w-2/3 space-y-6">
-      <ProfileSection organization={{ name: classroom.name, term: classroom.term ?? '', year: String(classroom.year ?? '') }} />
+      <ProfileSection
+        organization={{
+          name: classroom.name,
+          term: classroom.term ?? '',
+          year: String(classroom.year ?? ''),
+        }}
+      />
       <DefaultPageSection
         currentDefault={classroom.settings?.default_student_page || 'dashboard'}
         menuPages={menuPages}

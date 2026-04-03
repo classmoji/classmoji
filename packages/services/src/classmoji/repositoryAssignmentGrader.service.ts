@@ -60,10 +60,7 @@ export const findGradersProgress = async (classroomId: string) => {
       progress[login].completed += 1;
     }
 
-    progress[login].progress =
-      (progress[login].completed /
-        progress[login].total) *
-      100;
+    progress[login].progress = (progress[login].completed / progress[login].total) * 100;
   });
 
   const sortedProgress = Object.values(progress).sort((a, b) => b.progress - a.progress);
@@ -92,7 +89,10 @@ export const addGraderToAssignment = async (repositoryAssignmentId: string, grad
  * @param {string} graderId - UUID of the grader User
  * @returns {Promise<Object>}
  */
-export const removeGraderFromAssignment = async (repositoryAssignmentId: string, graderId: string) => {
+export const removeGraderFromAssignment = async (
+  repositoryAssignmentId: string,
+  graderId: string
+) => {
   return getPrisma().repositoryAssignmentGrader.delete({
     where: {
       repository_assignment_id_grader_id: {

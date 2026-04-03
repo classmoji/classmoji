@@ -24,7 +24,11 @@ interface ActiveCard {
   resourceType: string;
 }
 
-export const useResourcesBoard = (modules: ResourceModule[], pages: Resource[], slides: Resource[]) => {
+export const useResourcesBoard = (
+  modules: ResourceModule[],
+  pages: Resource[],
+  slides: Resource[]
+) => {
   const [activeCard, setActiveCard] = useState<ActiveCard | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [showPages, setShowPages] = useState(true);
@@ -34,28 +38,24 @@ export const useResourcesBoard = (modules: ResourceModule[], pages: Resource[], 
   const allPages = useMemo(() => {
     if (!showPages) return [];
     if (!searchQuery) return pages;
-    return pages.filter((page) =>
-      page.title.toLowerCase().includes(searchQuery.toLowerCase())
-    );
+    return pages.filter(page => page.title.toLowerCase().includes(searchQuery.toLowerCase()));
   }, [pages, searchQuery, showPages]);
 
   const allSlides = useMemo(() => {
     if (!showSlides) return [];
     if (!searchQuery) return slides;
-    return slides.filter((slide) =>
-      slide.title.toLowerCase().includes(searchQuery.toLowerCase())
-    );
+    return slides.filter(slide => slide.title.toLowerCase().includes(searchQuery.toLowerCase()));
   }, [slides, searchQuery, showSlides]);
 
   // Get resources linked to a specific module
   const getModuleResources = useCallback(
     (moduleId: string) => {
-      const modulePages = allPages.filter((page) =>
-        page.links?.some((link) => link.module_id === moduleId && !link.assignment_id)
+      const modulePages = allPages.filter(page =>
+        page.links?.some(link => link.module_id === moduleId && !link.assignment_id)
       );
 
-      const moduleSlides = allSlides.filter((slide) =>
-        slide.links?.some((link) => link.module_id === moduleId && !link.assignment_id)
+      const moduleSlides = allSlides.filter(slide =>
+        slide.links?.some(link => link.module_id === moduleId && !link.assignment_id)
       );
 
       return { pages: modulePages, slides: moduleSlides };
@@ -66,12 +66,12 @@ export const useResourcesBoard = (modules: ResourceModule[], pages: Resource[], 
   // Get resources linked to a specific assignment
   const getAssignmentResources = useCallback(
     (assignmentId: string) => {
-      const assignmentPages = allPages.filter((page) =>
-        page.links?.some((link) => link.assignment_id === assignmentId)
+      const assignmentPages = allPages.filter(page =>
+        page.links?.some(link => link.assignment_id === assignmentId)
       );
 
-      const assignmentSlides = allSlides.filter((slide) =>
-        slide.links?.some((link) => link.assignment_id === assignmentId)
+      const assignmentSlides = allSlides.filter(slide =>
+        slide.links?.some(link => link.assignment_id === assignmentId)
       );
 
       return { pages: assignmentPages, slides: assignmentSlides };
@@ -82,7 +82,7 @@ export const useResourcesBoard = (modules: ResourceModule[], pages: Resource[], 
   // Check if a resource is already linked to a target
   const isLinked = useCallback(
     (resource: Resource, _resourceType: string, targetType: string, targetId: string) => {
-      return resource.links?.some((link) =>
+      return resource.links?.some(link =>
         targetType === 'module'
           ? link.module_id === targetId && !link.assignment_id
           : link.assignment_id === targetId
@@ -93,7 +93,7 @@ export const useResourcesBoard = (modules: ResourceModule[], pages: Resource[], 
 
   // Get link ID for a resource in a specific target
   const getLinkId = useCallback((resource: Resource, targetType: string, targetId: string) => {
-    const link = resource.links?.find((link) =>
+    const link = resource.links?.find(link =>
       targetType === 'module'
         ? link.module_id === targetId && !link.assignment_id
         : link.assignment_id === targetId

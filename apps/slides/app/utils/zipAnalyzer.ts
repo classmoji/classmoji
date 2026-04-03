@@ -79,7 +79,5 @@ export function formatFileSize(bytes: number): string {
  * Get total size of selected videos
  */
 export function getTotalSelectedSize(videos: VideoInfo[], selectedPaths: Set<string>): number {
-  return videos
-    .filter(v => selectedPaths.has(v.path))
-    .reduce((sum, v) => sum + v.size, 0);
+  return videos.filter(v => selectedPaths.has(v.path)).reduce((sum, v) => sum + v.size, 0);
 }

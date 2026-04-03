@@ -1,4 +1,12 @@
-import { DndContext, DragOverlay, PointerSensor, useSensor, useSensors, type DragStartEvent, type DragEndEvent } from '@dnd-kit/core';
+import {
+  DndContext,
+  DragOverlay,
+  PointerSensor,
+  useSensor,
+  useSensors,
+  type DragStartEvent,
+  type DragEndEvent,
+} from '@dnd-kit/core';
 import { useFetcher, useRevalidator } from 'react-router';
 import { Input, Switch } from 'antd';
 import { IconSearch, IconFile, IconPresentation } from '@tabler/icons-react';
@@ -56,7 +64,10 @@ const ResourcesKanban = ({ modules, pages, slides }: ResourcesKanbanProps) => {
   );
 
   const handleDragStart = (event: DragStartEvent) => {
-    const { resource, resourceType } = event.active.data.current as { resource: Resource; resourceType: string };
+    const { resource, resourceType } = event.active.data.current as {
+      resource: Resource;
+      resourceType: string;
+    };
     setActiveCard({ resource, resourceType });
   };
 
@@ -66,7 +77,10 @@ const ResourcesKanban = ({ modules, pages, slides }: ResourcesKanbanProps) => {
 
     if (!over) return;
 
-    const { resource, resourceType } = active.data.current as { resource: Resource; resourceType: string };
+    const { resource, resourceType } = active.data.current as {
+      resource: Resource;
+      resourceType: string;
+    };
     const { targetType, targetId } = over.data.current || {};
 
     if (!targetType || !targetId) return;

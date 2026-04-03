@@ -7,7 +7,10 @@ interface RepoAssignmentWithModule {
   assignment: { id: string; module_id?: string };
 }
 
-export const openRepositoryAssignmentInGithub = (org: string, repositoryAssignment: RepoAssignmentForGithub) =>
+export const openRepositoryAssignmentInGithub = (
+  org: string,
+  repositoryAssignment: RepoAssignmentForGithub
+) =>
   window.open(
     `https://github.com/${org}/${repositoryAssignment.repository?.name}/issues/${repositoryAssignment.provider_issue_number}`,
     '_blank'

@@ -1,10 +1,6 @@
 import React from 'react';
 import { SideMenuExtension } from '@blocknote/core/extensions';
-import {
-  useBlockNoteEditor,
-  useComponentsContext,
-  useExtensionState,
-} from '@blocknote/react';
+import { useBlockNoteEditor, useComponentsContext, useExtensionState } from '@blocknote/react';
 import { IconReplace, IconPhotoOff } from '@tabler/icons-react';
 
 /**
@@ -18,7 +14,7 @@ export function ReplaceUrlItem({ children }: { children: React.ReactNode }) {
   const Components = useComponentsContext();
 
   const block = useExtensionState(SideMenuExtension, {
-    selector: (state) => state?.block,
+    selector: state => state?.block,
   });
 
   if (!block) return null;
@@ -51,7 +47,7 @@ export function RemoveProfileImageItem({ children }: { children: React.ReactNode
   const Components = useComponentsContext();
 
   const block = useExtensionState(SideMenuExtension, {
-    selector: (state) => state?.block,
+    selector: state => state?.block,
   });
 
   if (!block) return null;

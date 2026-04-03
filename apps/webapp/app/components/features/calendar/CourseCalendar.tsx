@@ -45,7 +45,13 @@ interface DraggableEventProps {
   style?: React.CSSProperties;
 }
 
-const DraggableEvent = ({ event, children, disabled, className = '', style = {} }: DraggableEventProps) => {
+const DraggableEvent = ({
+  event,
+  children,
+  disabled,
+  className = '',
+  style = {},
+}: DraggableEventProps) => {
   // For recurring events, include occurrence_date in ID to make each occurrence unique
   const eventId = event.occurrence_date
     ? `event-${event.id}-${new Date(event.occurrence_date).toISOString().split('T')[0]}`

@@ -7,7 +7,13 @@ import { loader as parentLoader } from '../$classroomSlug/route.tsx';
 /**
  * Index route loader: redirects to first page or shows empty state
  */
-export const loader = async ({ params, request }: { params: Record<string, string | undefined>; request: Request }) => {
+export const loader = async ({
+  params,
+  request,
+}: {
+  params: Record<string, string | undefined>;
+  request: Request;
+}) => {
   const { view, pages, classroom } = await parentLoader({ params, request });
 
   // If no pages exist

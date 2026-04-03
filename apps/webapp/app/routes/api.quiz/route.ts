@@ -304,7 +304,8 @@ export async function action({ request }: Route.ActionArgs) {
     // Impersonating admins can interact with quiz attempts on behalf of students
     const { getAuthSession } = await import('@classmoji/auth/server');
     const authData = await getAuthSession(request);
-    const isImpersonating = !!(authData as { session?: { session?: { impersonatedBy?: string } } })?.session?.session?.impersonatedBy;
+    const isImpersonating = !!(authData as { session?: { session?: { impersonatedBy?: string } } })
+      ?.session?.session?.impersonatedBy;
 
     switch (data._action) {
       case 'startQuiz': {
@@ -387,7 +388,9 @@ export async function action({ request }: Route.ActionArgs) {
                   // Re-fetch the attempt to get the latest agent_config
                   // (may have been updated by a concurrent call that saved instructorRepoName)
                   const freshAttempt = await ClassmojiService.quizAttempt.findById(attempt.id);
-                  const agentConfig = (freshAttempt as Record<string, unknown>)?.agent_config as Record<string, unknown> | undefined;
+                  const agentConfig = (freshAttempt as Record<string, unknown>)?.agent_config as
+                    | Record<string, unknown>
+                    | undefined;
                   if (agentConfig?.instructorRepoName) {
                     repoName = agentConfig.instructorRepoName as string;
                   } else {
@@ -449,9 +452,10 @@ export async function action({ request }: Route.ActionArgs) {
                 console.error('[startQuiz] Quiz-agent initialization failed:', error);
 
                 // Fallback to standard LLM
-                const fallbackMessage = (error instanceof Error && error.message?.includes('No repository found'))
-                  ? `Welcome to your quiz! This assignment doesn't have a linked repository. Let's discuss the concepts. Ready to begin?`
-                  : `Welcome! I'm having trouble accessing your code right now, but we can still proceed. Let's discuss the concepts. Ready to begin?`;
+                const fallbackMessage =
+                  error instanceof Error && error.message?.includes('No repository found')
+                    ? `Welcome to your quiz! This assignment doesn't have a linked repository. Let's discuss the concepts. Ready to begin?`
+                    : `Welcome! I'm having trouble accessing your code right now, but we can still proceed. Let's discuss the concepts. Ready to begin?`;
 
                 await ClassmojiService.aiConversation.addMessage(
                   attempt.id,
@@ -932,10 +936,16 @@ export async function action({ request }: Route.ActionArgs) {
           });
         } catch (error: unknown) {
           console.error('[restartQuiz] Error:', error);
-          return new Response(JSON.stringify({ success: false, message: error instanceof Error ? error.message : String(error) }), {
-            status: 500,
-            headers: { 'Content-Type': 'application/json' },
-          });
+          return new Response(
+            JSON.stringify({
+              success: false,
+              message: error instanceof Error ? error.message : String(error),
+            }),
+            {
+              status: 500,
+              headers: { 'Content-Type': 'application/json' },
+            }
+          );
         }
       }
 
@@ -947,9 +957,12 @@ export async function action({ request }: Route.ActionArgs) {
     }
   } catch (error: unknown) {
     console.error('API Quiz action error:', error);
-    return new Response(JSON.stringify({ error: error instanceof Error ? error.message : String(error) }), {
-      status: 500,
-      headers: { 'Content-Type': 'application/json' },
-    });
+    return new Response(
+      JSON.stringify({ error: error instanceof Error ? error.message : String(error) }),
+      {
+        status: 500,
+        headers: { 'Content-Type': 'application/json' },
+      }
+    );
   }
 }

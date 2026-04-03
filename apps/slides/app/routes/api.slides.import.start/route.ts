@@ -59,7 +59,10 @@ export const action = async ({ request }: { request: Request }) => {
 
   if (zipFile.size > MAX_FILE_SIZE) {
     const maxMB = MAX_FILE_SIZE / 1024 / 1024;
-    return Response.json({ error: `ZIP file is too large. Maximum size is ${maxMB}MB.` }, { status: 400 });
+    return Response.json(
+      { error: `ZIP file is too large. Maximum size is ${maxMB}MB.` },
+      { status: 400 }
+    );
   }
 
   if (!zipFile.name.endsWith('.zip') && zipFile.type !== 'application/zip') {
@@ -89,7 +92,10 @@ export const action = async ({ request }: { request: Request }) => {
 
   const gitOrgLogin = classroom.git_organization?.login;
   if (!gitOrgLogin) {
-    return Response.json({ error: 'Git organization not configured for this classroom' }, { status: 400 });
+    return Response.json(
+      { error: 'Git organization not configured for this classroom' },
+      { status: 400 }
+    );
   }
 
   const term = generateTermString(classroom.term ?? undefined, classroom.year ?? undefined);
@@ -99,7 +105,15 @@ export const action = async ({ request }: { request: Request }) => {
   const importId = randomUUID();
 
   // Define progress callback that publishes to the stream manager
-  const onProgress = (event: { type: string; step?: string; current?: number; total?: number; filename?: string; slideId?: string; message?: string }) => {
+  const onProgress = (event: {
+    type: string;
+    step?: string;
+    current?: number;
+    total?: number;
+    filename?: string;
+    slideId?: string;
+    message?: string;
+  }) => {
     importStreamManager.publish(importId, event);
   };
 
@@ -118,7 +132,7 @@ export const action = async ({ request }: { request: Request }) => {
     userId,
     cloudinaryVideoPaths,
     onProgress,
-  }).catch((err) => {
+  }).catch(err => {
     console.error('[import.start] Import failed:', err);
     importStreamManager.publish(importId, {
       type: 'error',

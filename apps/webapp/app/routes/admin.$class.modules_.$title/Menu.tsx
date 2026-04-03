@@ -28,14 +28,11 @@ const Menu = ({ module, assistants }: MenuProps) => {
       return;
     }
 
-    fetcher!.submit(
-      JSON.stringify({ module }),
-      {
-        method: 'post',
-        action: `/admin/${classSlug}/modules/${moduleTitle}?action=calculateContributions`,
-        encType: 'application/json',
-      }
-    );
+    fetcher!.submit(JSON.stringify({ module }), {
+      method: 'post',
+      action: `/admin/${classSlug}/modules/${moduleTitle}?action=calculateContributions`,
+      encType: 'application/json',
+    });
   };
 
   const items = [
@@ -92,7 +89,10 @@ const Menu = ({ module, assistants }: MenuProps) => {
   ];
 
   return (
-    <Dropdown menu={{ items: items.filter(Boolean) as Array<{ key: string; label: React.ReactNode }> }} placement="bottomLeft">
+    <Dropdown
+      menu={{ items: items.filter(Boolean) as Array<{ key: string; label: React.ReactNode }> }}
+      placement="bottomLeft"
+    >
       <Button>Actions</Button>
     </Dropdown>
   );

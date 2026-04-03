@@ -173,7 +173,9 @@ export default function SandpackRenderer({
           // Container not ready yet, retry after a short delay
           retryTimeout = setTimeout(setupObserver, 100);
         } else {
-          console.warn(`SandpackRenderer: Container not found for selector "${containerSelector}" after ${maxRetries} retries`);
+          console.warn(
+            `SandpackRenderer: Container not found for selector "${containerSelector}" after ${maxRetries} retries`
+          );
         }
         return;
       }

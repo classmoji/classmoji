@@ -62,7 +62,9 @@ export default function BatchImportTab({ term, onPagesChange }: BatchImportTabPr
           });
         } catch (err: unknown) {
           console.error(`Failed to extract ${zipFile.name}:`, err);
-          setExtractError(`Failed to extract ${zipFile.name}: ${err instanceof Error ? err.message : String(err)}`);
+          setExtractError(
+            `Failed to extract ${zipFile.name}: ${err instanceof Error ? err.message : String(err)}`
+          );
         }
       }
 

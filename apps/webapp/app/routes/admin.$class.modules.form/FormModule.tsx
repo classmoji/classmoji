@@ -135,7 +135,9 @@ const FormModule = ({
     return module?.pages?.map((link: { page?: PageRef }) => link.page?.id).filter(Boolean) || [];
   });
   const [linkedSlideIds, setLinkedSlideIds] = useState(() => {
-    return module?.slides?.map((link: { slide?: SlideRef }) => link.slide?.id).filter(Boolean) || [];
+    return (
+      module?.slides?.map((link: { slide?: SlideRef }) => link.slide?.id).filter(Boolean) || []
+    );
   });
 
   const updateFormDefaultValues = {
@@ -160,8 +162,11 @@ const FormModule = ({
         student_deadline: assignment.student_deadline ? dayjs(assignment.student_deadline) : null,
         grader_deadline: assignment.grader_deadline ? dayjs(assignment.grader_deadline) : null,
         release_at: assignment.release_at ? dayjs(assignment.release_at) : null,
-        linkedPageIds: assignment.pages?.map((link: { page?: PageRef }) => link.page?.id).filter(Boolean) || [],
-        linkedSlideIds: assignment.slides?.map((link: { slide?: SlideRef }) => link.slide?.id).filter(Boolean) || [],
+        linkedPageIds:
+          assignment.pages?.map((link: { page?: PageRef }) => link.page?.id).filter(Boolean) || [],
+        linkedSlideIds:
+          assignment.slides?.map((link: { slide?: SlideRef }) => link.slide?.id).filter(Boolean) ||
+          [],
       };
     }),
     organization: classroom?.slug,
@@ -261,18 +266,20 @@ const FormModule = ({
     }
 
     if (Array.isArray(serialized.assignments) && serialized.assignments.length) {
-      serialized.assignments = (serialized.assignments as Array<Record<string, unknown>>).map((assignment) => ({
-        ...assignment,
-        student_deadline: dayjs.isDayjs(assignment.student_deadline)
-          ? assignment.student_deadline.toISOString()
-          : assignment.student_deadline,
-        grader_deadline: dayjs.isDayjs(assignment.grader_deadline)
-          ? assignment.grader_deadline.toISOString()
-          : assignment.grader_deadline,
-        release_at: dayjs.isDayjs(assignment.release_at)
-          ? assignment.release_at.toISOString()
-          : assignment.release_at,
-      }));
+      serialized.assignments = (serialized.assignments as Array<Record<string, unknown>>).map(
+        assignment => ({
+          ...assignment,
+          student_deadline: dayjs.isDayjs(assignment.student_deadline)
+            ? assignment.student_deadline.toISOString()
+            : assignment.student_deadline,
+          grader_deadline: dayjs.isDayjs(assignment.grader_deadline)
+            ? assignment.grader_deadline.toISOString()
+            : assignment.grader_deadline,
+          release_at: dayjs.isDayjs(assignment.release_at)
+            ? assignment.release_at.toISOString()
+            : assignment.release_at,
+        })
+      );
     }
 
     return serialized;
@@ -556,7 +563,9 @@ const FormModule = ({
             </FormItem>
 
             <AssignmentsTable
-              assignments={(assignments || []) as Parameters<typeof AssignmentsTable>[0]['assignments']}
+              assignments={
+                (assignments || []) as Parameters<typeof AssignmentsTable>[0]['assignments']
+              }
               setValue={setValue as Parameters<typeof AssignmentsTable>[0]['setValue']}
               openAssignmentModal={openIssueModal}
             />
@@ -639,13 +648,18 @@ const FormModule = ({
                   if (!assignment.title.length)
                     return toast.error('Please fill in the assignment title.');
 
-                  const doesAssignmentExist = (assignments || []).find((a: { id?: string | number | null }) => a.id === assignment.id);
+                  const doesAssignmentExist = (assignments || []).find(
+                    (a: { id?: string | number | null }) => a.id === assignment.id
+                  );
                   let currAssignments = [...(assignments || [])];
 
                   if (doesAssignmentExist)
                     currAssignments = currAssignments.filter(a => a.id !== assignment.id);
 
-                  const newList = _.uniq([...currAssignments, assignment as typeof currAssignments[number]]);
+                  const newList = _.uniq([
+                    ...currAssignments,
+                    assignment as (typeof currAssignments)[number],
+                  ]);
                   setValue('assignments', newList, {
                     shouldValidate: true,
                   });
@@ -661,7 +675,9 @@ const FormModule = ({
         >
           <FormAssignment
             templateAssignments={templateAssignments}
-            settings={classroom.settings as { default_tokens_per_hour: number; [key: string]: unknown }}
+            settings={
+              classroom.settings as { default_tokens_per_hour: number; [key: string]: unknown }
+            }
             pages={pages as { id: string; title: string | null }[]}
             slides={slides as { id: string; title: string | null }[]}
           />

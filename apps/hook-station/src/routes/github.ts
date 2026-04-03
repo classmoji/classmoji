@@ -16,12 +16,21 @@ const githubWebhookHandlers: Record<string, (data: WebhookEvent) => Promise<void
   },
 
   member_added: async (data: WebhookEvent) => {
-    await Tasks.memberAddedHandlerTask.trigger(data as unknown as Parameters<typeof Tasks.memberAddedHandlerTask.trigger>[0]);
+    await Tasks.memberAddedHandlerTask.trigger(
+      data as unknown as Parameters<typeof Tasks.memberAddedHandlerTask.trigger>[0]
+    );
   },
 
   created: async (data: WebhookEvent) => {
-    if (!('repository' in data) && !('issues' in data) && 'installation' in data && data.installation) {
-      await Tasks.newInstallationHandlerTask.trigger(data as unknown as Parameters<typeof Tasks.newInstallationHandlerTask.trigger>[0]);
+    if (
+      !('repository' in data) &&
+      !('issues' in data) &&
+      'installation' in data &&
+      data.installation
+    ) {
+      await Tasks.newInstallationHandlerTask.trigger(
+        data as unknown as Parameters<typeof Tasks.newInstallationHandlerTask.trigger>[0]
+      );
     }
   },
 
@@ -30,8 +39,15 @@ const githubWebhookHandlers: Record<string, (data: WebhookEvent) => Promise<void
       await Tasks.repositoryAssignmentDeletedHandlerTask.trigger(data);
     }
 
-    if ('installation' in data && data.installation && !('issue' in data) && !('repository' in data)) {
-      await Tasks.appUninstalledHandlerTask.trigger(data as unknown as Parameters<typeof Tasks.appUninstalledHandlerTask.trigger>[0]);
+    if (
+      'installation' in data &&
+      data.installation &&
+      !('issue' in data) &&
+      !('repository' in data)
+    ) {
+      await Tasks.appUninstalledHandlerTask.trigger(
+        data as unknown as Parameters<typeof Tasks.appUninstalledHandlerTask.trigger>[0]
+      );
     }
   },
 };

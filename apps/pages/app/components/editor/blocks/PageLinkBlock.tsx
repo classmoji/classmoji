@@ -1,8 +1,5 @@
 import React from 'react';
-import {
-  createReactBlockSpec,
-  type ReactCustomBlockRenderProps,
-} from '@blocknote/react';
+import { createReactBlockSpec, type ReactCustomBlockRenderProps } from '@blocknote/react';
 import { IconFileText, IconArrowRight } from '@tabler/icons-react';
 import { useState, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router';
@@ -33,8 +30,15 @@ interface PageLinkDropdownProps {
   isLoading: boolean;
 }
 
-const PageLinkDropdown = ({ pages, searchQuery, onSelect, onClose, dropdownRef, isLoading }: PageLinkDropdownProps) => {
-  const filteredPages = pages.filter((page) =>
+const PageLinkDropdown = ({
+  pages,
+  searchQuery,
+  onSelect,
+  onClose,
+  dropdownRef,
+  isLoading,
+}: PageLinkDropdownProps) => {
+  const filteredPages = pages.filter(page =>
     page.title.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
@@ -58,7 +62,7 @@ const PageLinkDropdown = ({ pages, searchQuery, onSelect, onClose, dropdownRef, 
         ) : filteredPages.length === 0 ? (
           <div className="page-link-no-results">No pages found</div>
         ) : (
-          filteredPages.map((page) => (
+          filteredPages.map(page => (
             <button
               key={page.id}
               onClick={() => onSelect(page)}
@@ -90,7 +94,17 @@ interface EmptyStateProps {
   isLoading: boolean;
 }
 
-const EmptyState = ({ searchQuery, setSearchQuery, isOpen, setIsOpen, filteredPages, onSelectPage, inputRef, dropdownRef, isLoading }: EmptyStateProps) => {
+const EmptyState = ({
+  searchQuery,
+  setSearchQuery,
+  isOpen,
+  setIsOpen,
+  filteredPages,
+  onSelectPage,
+  inputRef,
+  dropdownRef,
+  isLoading,
+}: EmptyStateProps) => {
   return (
     <div className="page-link-empty" contentEditable={false}>
       <div className="page-link-input-wrapper">
@@ -98,9 +112,9 @@ const EmptyState = ({ searchQuery, setSearchQuery, isOpen, setIsOpen, filteredPa
         <input
           ref={inputRef}
           value={searchQuery}
-          onChange={(e) => setSearchQuery(e.target.value)}
+          onChange={e => setSearchQuery(e.target.value)}
           onFocus={() => setIsOpen(true)}
-          placeholder={isLoading ? "Loading pages..." : "Link to page..."}
+          placeholder={isLoading ? 'Loading pages...' : 'Link to page...'}
           className="page-link-input"
           autoFocus
           disabled={isLoading}
@@ -137,9 +151,7 @@ const SelectedState = ({ pageId, pageTitle, pageExists, onClickLink }: SelectedS
     return (
       <div className="page-link-display page-link-deleted" contentEditable={false}>
         <IconFileText size={16} className="page-link-display-icon" />
-        <span className="page-link-title page-link-deleted-text">
-          {pageTitle} (deleted)
-        </span>
+        <span className="page-link-title page-link-deleted-text">{pageTitle} (deleted)</span>
       </div>
     );
   }
@@ -152,7 +164,7 @@ const SelectedState = ({ pageId, pageTitle, pageExists, onClickLink }: SelectedS
       onClick={onClickLink}
       role="button"
       tabIndex={0}
-      onKeyDown={(e) => {
+      onKeyDown={e => {
         if (e.key === 'Enter' || e.key === ' ') {
           e.preventDefault();
           onClickLink(e);
@@ -170,7 +182,11 @@ const pageLinkPropSchema = {
   pageTitle: { default: '' },
 };
 
-type PageLinkRenderProps = ReactCustomBlockRenderProps<'pageLink', typeof pageLinkPropSchema, 'none'>;
+type PageLinkRenderProps = ReactCustomBlockRenderProps<
+  'pageLink',
+  typeof pageLinkPropSchema,
+  'none'
+>;
 
 export const PageLink = createReactBlockSpec(
   {

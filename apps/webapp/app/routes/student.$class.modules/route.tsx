@@ -5,7 +5,9 @@ import { assertClassroomAccess } from '~/utils/helpers';
 import { PageHeader } from '~/components';
 import ModuleAccordion from './ModuleAccordion';
 
-type UserTeamResult = NonNullable<Awaited<ReturnType<typeof ClassmojiService.team.findUserTeamByTag>>>;
+type UserTeamResult = NonNullable<
+  Awaited<ReturnType<typeof ClassmojiService.team.findUserTeamByTag>>
+>;
 
 export const loader = async ({ params, request }: Route.LoaderArgs) => {
   const classSlug = params.class!;
@@ -64,7 +66,7 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
     classSlug
   );
 
-  const repoAssignmentsByAssignmentId: Record<string, typeof repoAssignments[number]> = {};
+  const repoAssignmentsByAssignmentId: Record<string, (typeof repoAssignments)[number]> = {};
   repoAssignments.forEach(ra => {
     repoAssignmentsByAssignmentId[ra.assignment_id] = ra;
   });

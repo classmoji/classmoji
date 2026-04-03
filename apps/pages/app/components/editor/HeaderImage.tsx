@@ -40,22 +40,25 @@ const HeaderImage = ({ imageUrl, position, editMode, pageId }: HeaderImageProps)
     containerRef,
   });
 
-  const handleFileSelect = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
+  const handleFileSelect = useCallback(
+    (e: React.ChangeEvent<HTMLInputElement>) => {
+      const file = e.target.files?.[0];
+      if (!file) return;
 
-    const formData = new FormData();
-    formData.append('intent', 'upload-header-image');
-    formData.append('file', file);
+      const formData = new FormData();
+      formData.append('intent', 'upload-header-image');
+      formData.append('file', file);
 
-    fetcher.submit(formData, {
-      method: 'POST',
-      encType: 'multipart/form-data',
-    });
+      fetcher.submit(formData, {
+        method: 'POST',
+        encType: 'multipart/form-data',
+      });
 
-    // Reset input so same file can be re-selected
-    if (fileInputRef.current) fileInputRef.current.value = '';
-  }, [fetcher]);
+      // Reset input so same file can be re-selected
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    },
+    [fetcher]
+  );
 
   const handleStartReposition = useCallback(() => {
     positionBeforeReposition.current = localPosition;
@@ -66,7 +69,7 @@ const HeaderImage = ({ imageUrl, position, editMode, pageId }: HeaderImageProps)
     setIsRepositioning(false);
     fetcher.submit(
       { intent: 'set-header-image', url: imageUrl, position: localPosition },
-      { method: 'POST', encType: 'application/json' },
+      { method: 'POST', encType: 'application/json' }
     );
   }, [fetcher, imageUrl, localPosition]);
 
@@ -78,7 +81,7 @@ const HeaderImage = ({ imageUrl, position, editMode, pageId }: HeaderImageProps)
   const handleRemove = useCallback(() => {
     fetcher.submit(
       { intent: 'set-header-image', url: null, position: 50 },
-      { method: 'POST', encType: 'application/json' },
+      { method: 'POST', encType: 'application/json' }
     );
   }, [fetcher]);
 
@@ -168,18 +171,10 @@ const HeaderImage = ({ imageUrl, position, editMode, pageId }: HeaderImageProps)
             Drag image to reposition
           </span>
           <div className="flex gap-2 pointer-events-auto">
-            <button
-              type="button"
-              onClick={handleSavePosition}
-              className="header-image-btn"
-            >
+            <button type="button" onClick={handleSavePosition} className="header-image-btn">
               Save position
             </button>
-            <button
-              type="button"
-              onClick={handleCancelReposition}
-              className="header-image-btn"
-            >
+            <button type="button" onClick={handleCancelReposition} className="header-image-btn">
               Cancel
             </button>
           </div>
@@ -189,25 +184,13 @@ const HeaderImage = ({ imageUrl, position, editMode, pageId }: HeaderImageProps)
       {/* Hover controls (edit mode, not repositioning) */}
       {editMode && isHovering && !isRepositioning && !isBusy && (
         <div className="absolute inset-0 bg-black/10 flex items-center justify-center gap-2 z-10">
-          <button
-            type="button"
-            onClick={handleChangeCover}
-            className="header-image-btn"
-          >
+          <button type="button" onClick={handleChangeCover} className="header-image-btn">
             Change cover
           </button>
-          <button
-            type="button"
-            onClick={handleStartReposition}
-            className="header-image-btn"
-          >
+          <button type="button" onClick={handleStartReposition} className="header-image-btn">
             Reposition
           </button>
-          <button
-            type="button"
-            onClick={handleRemove}
-            className="header-image-btn"
-          >
+          <button type="button" onClick={handleRemove} className="header-image-btn">
             Remove
           </button>
         </div>

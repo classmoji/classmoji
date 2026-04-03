@@ -117,7 +117,10 @@ const AdminSingleTeamView = ({ loaderData }: Route.ComponentProps) => {
       dataIndex: 'name',
       width: '80%',
       key: 'name',
-      render: (_: unknown, student: { name: string | null; login: string | null; [key: string]: unknown }) => {
+      render: (
+        _: unknown,
+        student: { name: string | null; login: string | null; [key: string]: unknown }
+      ) => {
         return <UserThumbnailView user={student} />;
       },
     },

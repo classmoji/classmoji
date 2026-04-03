@@ -97,8 +97,9 @@ export async function reHighlightCode(codeElement: HTMLElement) {
   hljs.registerLanguage('swift', swift.default);
 
   // Get the language from the class (e.g., "language-javascript")
-  const languageClass = (Array.from(codeElement.classList) as string[])
-    .find((cls: string) => cls.startsWith('language-'));
+  const languageClass = (Array.from(codeElement.classList) as string[]).find((cls: string) =>
+    cls.startsWith('language-')
+  );
   const language = languageClass ? languageClass.replace('language-', '') : null;
 
   // Get plain text content
@@ -124,7 +125,11 @@ export async function reHighlightCode(codeElement: HTMLElement) {
  * @param {HTMLElement} codeElement - The <code> element
  * @param {Function} onContentChange - Callback when content changes
  */
-export function handleCodeBlockTab(event: KeyboardEvent, codeElement: HTMLElement, onContentChange?: (() => void) | null) {
+export function handleCodeBlockTab(
+  event: KeyboardEvent,
+  codeElement: HTMLElement,
+  onContentChange?: (() => void) | null
+) {
   if (event.key !== 'Tab') return;
 
   event.preventDefault();
@@ -171,7 +176,11 @@ export function handleCodeBlockTab(event: KeyboardEvent, codeElement: HTMLElemen
  * @param {HTMLElement} codeElement - The <code> element
  * @param {Function} onContentChange - Callback when content changes
  */
-export function handleCodeBlockEnter(event: KeyboardEvent, codeElement: HTMLElement, onContentChange?: (() => void) | null) {
+export function handleCodeBlockEnter(
+  event: KeyboardEvent,
+  codeElement: HTMLElement,
+  onContentChange?: (() => void) | null
+) {
   if (event.key !== 'Enter') return;
 
   event.preventDefault();

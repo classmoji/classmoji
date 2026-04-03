@@ -12,7 +12,12 @@ export { default as SandpackRenderer } from './SandpackRenderer.tsx';
 export { default as SandpackBlock } from './SandpackBlock.tsx';
 export { default as CollapsibleConsole } from './CollapsibleConsole.tsx';
 export { default as useSandpackSync } from './useSandpackSync.ts';
-export { parseFromHtml, serializeToHtml, updateFilesInElement, createSandpackElement } from './utils.ts';
+export {
+  parseFromHtml,
+  serializeToHtml,
+  updateFilesInElement,
+  createSandpackElement,
+} from './utils.ts';
 export {
   SANDPACK_TEMPLATES,
   SANDPACK_THEMES,

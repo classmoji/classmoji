@@ -7,7 +7,14 @@ interface GradeStudent {
   user: { school_id: string; name: string; login: string };
   numeric_grade: string;
   letter_grade: string;
-  repos: Record<string, { name: string; repositoryAssignments?: Array<{ title: string; grade?: string }>; issues?: Array<{ title: string; grade?: string }> }>;
+  repos: Record<
+    string,
+    {
+      name: string;
+      repositoryAssignments?: Array<{ title: string; grade?: string }>;
+      issues?: Array<{ title: string; grade?: string }>;
+    }
+  >;
 }
 
 interface GradeAssignment {
@@ -16,7 +23,11 @@ interface GradeAssignment {
   issues?: Array<{ title: string }>;
 }
 
-export const exportToCsv = (students: GradeStudent[], assignments: GradeAssignment[], filename: string) => {
+export const exportToCsv = (
+  students: GradeStudent[],
+  assignments: GradeAssignment[],
+  filename: string
+) => {
   const headersRows = getHeaders(assignments);
   const studentsRows = getStudentRows(students, assignments);
 
@@ -41,18 +52,18 @@ const getStudentRows = (students: GradeStudent[], assignments: GradeAssignment[]
         'title'
       );
       const repos = student.repos;
-      const repo = Object.values(repos).find(r =>
-        r.name.includes(assignment.title)
-      );
+      const repo = Object.values(repos).find(r => r.name.includes(assignment.title));
 
       if (!repo) {
-        (assignment.repositoryAssignments || assignment.issues)?.forEach(() => studentRow.push('X'));
+        (assignment.repositoryAssignments || assignment.issues)?.forEach(() =>
+          studentRow.push('X')
+        );
         return;
       } else {
         repositoryAssignments.forEach(repoAssignment => {
-          const repoAssignmentGrade = (
-            repo.repositoryAssignments || repo.issues
-          )?.find((ra) => ra.title === repoAssignment.title);
+          const repoAssignmentGrade = (repo.repositoryAssignments || repo.issues)?.find(
+            ra => ra.title === repoAssignment.title
+          );
 
           studentRow.push(repoAssignmentGrade?.grade || 'X');
         });

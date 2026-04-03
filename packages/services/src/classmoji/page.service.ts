@@ -59,22 +59,24 @@ export async function findById(pageId: string, options: PageQueryOptions = {}) {
   const page = await getPrisma().page.findUnique({
     where: { id: pageId },
     include: {
-      classroom: options.includeClassroom ?? true
-        ? {
-            include: {
-              git_organization: true,
-            },
-          }
-        : false,
+      classroom:
+        (options.includeClassroom ?? true)
+          ? {
+              include: {
+                git_organization: true,
+              },
+            }
+          : false,
       creator: options.includeCreator ?? false,
-      links: options.includeLinks ?? false
-        ? {
-            include: {
-              module: true,
-              assignment: true,
-            },
-          }
-        : false,
+      links:
+        (options.includeLinks ?? false)
+          ? {
+              include: {
+                module: true,
+                assignment: true,
+              },
+            }
+          : false,
     },
   });
 
@@ -90,22 +92,24 @@ export async function findByClassroomId(classroomId: string, options: PageQueryO
       classroom_id: classroomId,
     },
     include: {
-      classroom: options.includeClassroom ?? false
-        ? {
-            include: {
-              git_organization: true,
-            },
-          }
-        : false,
+      classroom:
+        (options.includeClassroom ?? false)
+          ? {
+              include: {
+                git_organization: true,
+              },
+            }
+          : false,
       creator: options.includeCreator ?? true,
-      links: options.includeLinks ?? false
-        ? {
-            include: {
-              module: true,
-              assignment: true,
-            },
-          }
-        : false,
+      links:
+        (options.includeLinks ?? false)
+          ? {
+              include: {
+                module: true,
+                assignment: true,
+              },
+            }
+          : false,
     },
     orderBy: {
       created_at: 'desc',
@@ -174,7 +178,14 @@ export async function findByAssignment(assignmentId: string) {
 /**
  * Link a page to a module or assignment
  */
-export async function linkPage(pageId: string, { moduleId, assignmentId, order = 0 }: { moduleId?: string; assignmentId?: string; order?: number }) {
+export async function linkPage(
+  pageId: string,
+  {
+    moduleId,
+    assignmentId,
+    order = 0,
+  }: { moduleId?: string; assignmentId?: string; order?: number }
+) {
   const link = await getPrisma().pageLink.create({
     data: {
       page_id: pageId,
@@ -195,7 +206,10 @@ export async function linkPage(pageId: string, { moduleId, assignmentId, order =
 /**
  * Unlink a page from a module or assignment
  */
-export async function unlinkPage(pageId: string, { moduleId, assignmentId }: { moduleId?: string; assignmentId?: string }) {
+export async function unlinkPage(
+  pageId: string,
+  { moduleId, assignmentId }: { moduleId?: string; assignmentId?: string }
+) {
   const link = await getPrisma().pageLink.deleteMany({
     where: {
       page_id: pageId,
@@ -212,10 +226,7 @@ export async function unlinkPage(pageId: string, { moduleId, assignmentId }: { m
  */
 export async function update(
   pageId: string,
-  updates: Pick<
-    Prisma.PageUncheckedUpdateInput,
-    'title' | 'content_path' | 'show_in_student_menu'
-  >
+  updates: Pick<Prisma.PageUncheckedUpdateInput, 'title' | 'content_path' | 'show_in_student_menu'>
 ) {
   const page = await getPrisma().page.update({
     where: { id: pageId },
@@ -280,7 +291,10 @@ export async function deletePage(pageId: string) {
 
   // Delete from GitHub if configured
   if (gitOrgLogin && page.content_path) {
-    const term = generateTermString(page.classroom.term ?? undefined, page.classroom.year ?? undefined);
+    const term = generateTermString(
+      page.classroom.term ?? undefined,
+      page.classroom.year ?? undefined
+    );
     const repoName = `content-${gitOrgLogin}-${term}`;
 
     try {
@@ -325,22 +339,24 @@ export async function findByContentPath(
       content_path: contentPath,
     },
     include: {
-      classroom: options.includeClassroom ?? true
-        ? {
-            include: {
-              git_organization: true,
-            },
-          }
-        : false,
+      classroom:
+        (options.includeClassroom ?? true)
+          ? {
+              include: {
+                git_organization: true,
+              },
+            }
+          : false,
       creator: options.includeCreator ?? false,
-      links: options.includeLinks ?? false
-        ? {
-            include: {
-              module: true,
-              assignment: true,
-            },
-          }
-        : false,
+      links:
+        (options.includeLinks ?? false)
+          ? {
+              include: {
+                module: true,
+                assignment: true,
+              },
+            }
+          : false,
     },
   });
 
@@ -373,8 +389,8 @@ export async function findForStudentMenu(classroomId: string) {
       is_draft: false, // Only show published pages
     },
     orderBy: [
-      { menu_order: 'asc' },  // Null values go last
-      { title: 'asc' },       // Then alphabetically
+      { menu_order: 'asc' }, // Null values go last
+      { title: 'asc' }, // Then alphabetically
     ],
     select: {
       id: true,

@@ -54,7 +54,9 @@ async function fetchOrgRepositories(
     // If searching, use GitHub's search API which supports name filtering
     if (search) {
       const searchQuery = `org:${gitOrgLogin} ${search} in:name`;
-      const response = await octokit.graphql<{ search: { nodes: { name: string }[]; repositoryCount: number } }>(
+      const response = await octokit.graphql<{
+        search: { nodes: { name: string }[]; repositoryCount: number };
+      }>(
         `
           query ($query: String!, $first: Int!, $after: String) {
             search(query: $query, type: REPOSITORY, first: $first, after: $after) {
@@ -134,7 +136,15 @@ async function fetchOrgRepositories(
     }
 
     // Now fetch the actual page
-    const response = await octokit.graphql<{ organization: { repositories: { nodes: { name: string }[]; totalCount: number; pageInfo: { endCursor: string; hasNextPage: boolean } } } }>(
+    const response = await octokit.graphql<{
+      organization: {
+        repositories: {
+          nodes: { name: string }[];
+          totalCount: number;
+          pageInfo: { endCursor: string; hasNextPage: boolean };
+        };
+      };
+    }>(
       `
         query ($org: String!, $first: Int!, $after: String) {
           organization(login: $org) {
@@ -165,7 +175,11 @@ async function fetchOrgRepositories(
     };
   } catch (error: unknown) {
     console.error('Failed to fetch repositories:', error);
-    return { repositories: [], totalCount: 0, error: error instanceof Error ? error.message : String(error) };
+    return {
+      repositories: [],
+      totalCount: 0,
+      error: error instanceof Error ? error.message : String(error),
+    };
   }
 }
 

@@ -81,7 +81,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
         console.error('[upload-image action] Authorization failed:', authError);
         return Response.json(
           {
-            error: (authError instanceof Error ? authError.message : 'Unauthorized to upload images'),
+            error: authError instanceof Error ? authError.message : 'Unauthorized to upload images',
             intent: 'upload-image',
           },
           { status: 403 }
@@ -99,7 +99,10 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
 
       const pageData = page as unknown as PageWithClassroom;
       const gitOrg = pageData.classroom.git_organization;
-      const term = generateTermString(pageData.classroom.term, pageData.classroom.year ?? undefined);
+      const term = generateTermString(
+        pageData.classroom.term,
+        pageData.classroom.year ?? undefined
+      );
       const repo = `content-${gitOrg.login}-${term}`;
       const assetsFolder = `${page.content_path}/assets`;
 
@@ -154,7 +157,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
         console.log(authError);
         return Response.json(
           {
-            error: (authError instanceof Error ? authError.message : 'Unauthorized to upload files'),
+            error: authError instanceof Error ? authError.message : 'Unauthorized to upload files',
             intent: 'upload-file',
           },
           { status: 403 }
@@ -171,7 +174,10 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
 
       const pageData = page as unknown as PageWithClassroom;
       const gitOrg = pageData.classroom.git_organization;
-      const term = generateTermString(pageData.classroom.term, pageData.classroom.year ?? undefined);
+      const term = generateTermString(
+        pageData.classroom.term,
+        pageData.classroom.year ?? undefined
+      );
       const repo = `content-${gitOrg.login}-${term}`;
       const assetsFolder = `${page.content_path}/assets`;
 
@@ -219,7 +225,10 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
       return redirect(`/admin/${classSlug}/pages?deleted=true`);
     } catch (error: unknown) {
       console.error('Failed to delete page:', error);
-      return { error: error instanceof Error ? error.message : 'Failed to delete page', intent: 'delete' };
+      return {
+        error: error instanceof Error ? error.message : 'Failed to delete page',
+        intent: 'delete',
+      };
     }
   }
 
@@ -244,7 +253,10 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
       return { success: true, intent: 'update-width' };
     } catch (error: unknown) {
       console.error('Failed to update page width:', error);
-      return { error: error instanceof Error ? error.message : 'Failed to update page width', intent: 'update-width' };
+      return {
+        error: error instanceof Error ? error.message : 'Failed to update page width',
+        intent: 'update-width',
+      };
     }
   }
 
@@ -289,7 +301,10 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
       return { success: true, intent: 'togglePublic' };
     } catch (error: unknown) {
       console.error('Failed to toggle public:', error);
-      return { error: error instanceof Error ? error.message : 'Failed to toggle public', intent: 'togglePublic' };
+      return {
+        error: error instanceof Error ? error.message : 'Failed to toggle public',
+        intent: 'togglePublic',
+      };
     }
   }
 
@@ -327,7 +342,10 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
 
       const pageData = page as unknown as PageWithClassroom;
       const gitOrg = pageData.classroom.git_organization;
-      const term = generateTermString(pageData.classroom.term, pageData.classroom.year ?? undefined);
+      const term = generateTermString(
+        pageData.classroom.term,
+        pageData.classroom.year ?? undefined
+      );
       const repo = `content-${gitOrg.login}-${term}`;
 
       // Upload header image to content repo (in page folder, not assets)
@@ -356,7 +374,10 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
     } catch (error: unknown) {
       console.error('[upload-header-image action] Upload failed:', error);
       return Response.json(
-        { error: error instanceof Error ? error.message : 'Failed to upload header image', intent: 'upload-header-image' },
+        {
+          error: error instanceof Error ? error.message : 'Failed to upload header image',
+          intent: 'upload-header-image',
+        },
         { status: 500 }
       );
     }
@@ -390,7 +411,10 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
     } catch (error: unknown) {
       console.error('[set-header-image action] Failed:', error);
       return Response.json(
-        { error: error instanceof Error ? error.message : 'Failed to set header image', intent: 'set-header-image' },
+        {
+          error: error instanceof Error ? error.message : 'Failed to set header image',
+          intent: 'set-header-image',
+        },
         { status: 500 }
       );
     }
@@ -435,7 +459,10 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
 
       const pageData = page as unknown as PageWithClassroom;
       const gitOrg = pageData.classroom.git_organization;
-      const term = generateTermString(pageData.classroom.term, pageData.classroom.year ?? undefined);
+      const term = generateTermString(
+        pageData.classroom.term,
+        pageData.classroom.year ?? undefined
+      );
       const repo = `content-${gitOrg.login}-${term}`;
       const assetsFolder = `${page.content_path}/assets`;
 
@@ -469,7 +496,11 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
       );
 
       // Upload images to GitHub (if any)
-      const filesToUpload: Array<{ path: string; content: File | { name: string }; encoding: string }> = [];
+      const filesToUpload: Array<{
+        path: string;
+        content: File | { name: string };
+        encoding: string;
+      }> = [];
 
       // Add all matched images
       imageMap.forEach(imageInfo => {
@@ -498,13 +529,16 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
       });
 
       // Convert File objects to buffers
-      const uploadFiles: Array<{ path: string; content: string; encoding: 'utf-8' | 'base64' }> = await Promise.all(
-        filesToUpload.map(async file => ({
-          path: file.path,
-          content: Buffer.from(await (file.content as unknown as Blob).arrayBuffer()).toString('base64'),
-          encoding: 'base64' as const,
-        }))
-      );
+      const uploadFiles: Array<{ path: string; content: string; encoding: 'utf-8' | 'base64' }> =
+        await Promise.all(
+          filesToUpload.map(async file => ({
+            path: file.path,
+            content: Buffer.from(await (file.content as unknown as Blob).arrayBuffer()).toString(
+              'base64'
+            ),
+            encoding: 'base64' as const,
+          }))
+        );
 
       // Add HTML content
       const wrappedHtml = wrapHtmlContent(html, page.width);
@@ -580,7 +614,10 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
 
     const savePageData = page as unknown as PageWithClassroom;
     const gitOrg = savePageData.classroom.git_organization;
-    const term = generateTermString(savePageData.classroom.term, savePageData.classroom.year ?? undefined);
+    const term = generateTermString(
+      savePageData.classroom.term,
+      savePageData.classroom.year ?? undefined
+    );
     const repo = `content-${gitOrg.login}-${term}`;
     const filePath = `${page.content_path}/index.html`;
 

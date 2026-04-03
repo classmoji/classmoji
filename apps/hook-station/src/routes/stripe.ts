@@ -28,7 +28,10 @@ const stripeWebhookHandlers: Record<
   string,
   (user: BillingUser | null, subscription: Stripe.Subscription) => Promise<void>
 > = {
-  'customer.subscription.created': async (user: BillingUser | null, subscription: Stripe.Subscription) => {
+  'customer.subscription.created': async (
+    user: BillingUser | null,
+    subscription: Stripe.Subscription
+  ) => {
     if (!user) {
       return;
     }
@@ -53,7 +56,10 @@ const stripeWebhookHandlers: Record<
     }
   },
 
-  'customer.subscription.updated': async (user: BillingUser | null, subscription: Stripe.Subscription) => {
+  'customer.subscription.updated': async (
+    user: BillingUser | null,
+    subscription: Stripe.Subscription
+  ) => {
     if (!user || !subscription.canceled_at) {
       return;
     }
@@ -85,7 +91,10 @@ const stripeWebhookHandlers: Record<
     }
   },
 
-  'customer.subscription.deleted': async (_user: BillingUser | null, subscription: Stripe.Subscription) => {
+  'customer.subscription.deleted': async (
+    _user: BillingUser | null,
+    subscription: Stripe.Subscription
+  ) => {
     try {
       const classmojiSubscription = await ClassmojiService.subscription.findBy({
         where: {

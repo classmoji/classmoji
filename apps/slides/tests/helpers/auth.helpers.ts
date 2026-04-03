@@ -1,6 +1,13 @@
 import { Page } from '@playwright/test';
 
-export type TestRole = 'owner' | 'admin' | 'instructor' | 'teacher' | 'assistant' | 'ta' | 'student';
+export type TestRole =
+  | 'owner'
+  | 'admin'
+  | 'instructor'
+  | 'teacher'
+  | 'assistant'
+  | 'ta'
+  | 'student';
 
 /**
  * Login as a specific role using the test-login route.
@@ -10,15 +17,11 @@ export type TestRole = 'owner' | 'admin' | 'instructor' | 'teacher' | 'assistant
  * @param role - Role to login as
  * @param redirectTo - Optional path to redirect after login
  */
-export async function loginAs(
-  page: Page,
-  role: TestRole,
-  redirectTo: string = '/'
-): Promise<void> {
+export async function loginAs(page: Page, role: TestRole, redirectTo: string = '/'): Promise<void> {
   const loginUrl = `/test-login?role=${role}&redirect=${encodeURIComponent(redirectTo)}`;
   await page.goto(loginUrl);
   // Wait for the redirect to complete
-  await page.waitForURL((url) => !url.pathname.includes('test-login'));
+  await page.waitForURL(url => !url.pathname.includes('test-login'));
 }
 
 /**
@@ -35,7 +38,7 @@ export async function logout(page: Page): Promise<void> {
  */
 export async function isLoggedIn(page: Page): Promise<boolean> {
   const cookies = await page.context().cookies();
-  return cookies.some((cookie) => cookie.name === 'classmoji.session_token');
+  return cookies.some(cookie => cookie.name === 'classmoji.session_token');
 }
 
 /**
@@ -43,6 +46,6 @@ export async function isLoggedIn(page: Page): Promise<boolean> {
  */
 export async function getSessionToken(page: Page): Promise<string | null> {
   const cookies = await page.context().cookies();
-  const sessionCookie = cookies.find((cookie) => cookie.name === 'classmoji.session_token');
+  const sessionCookie = cookies.find(cookie => cookie.name === 'classmoji.session_token');
   return sessionCookie?.value || null;
 }

@@ -44,7 +44,11 @@ export function isCloudinaryConfigured(): boolean {
 /**
  * Upload a video buffer to Cloudinary with transcoding
  */
-export async function uploadVideoBuffer(buffer: Buffer, slideId: string, filename: string): Promise<{ optimizedUrl: string; publicId: string; bytes: number }> {
+export async function uploadVideoBuffer(
+  buffer: Buffer,
+  slideId: string,
+  filename: string
+): Promise<{ optimizedUrl: string; publicId: string; bytes: number }> {
   const cld = configureCloudinary();
 
   // Convert buffer to base64 data URI
@@ -85,7 +89,9 @@ export async function uploadVideoBuffer(buffer: Buffer, slideId: string, filenam
  *
  * Uses folder-based deletion since videos are stored in `classmoji/slides/{slideId}/`
  */
-export async function deleteSlideVideos(slideId: string): Promise<{ deleted: boolean; error?: string }> {
+export async function deleteSlideVideos(
+  slideId: string
+): Promise<{ deleted: boolean; error?: string }> {
   if (!isCloudinaryConfigured()) {
     return { deleted: false, error: 'Cloudinary not configured' };
   }

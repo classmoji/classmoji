@@ -19,7 +19,7 @@ interface SlideOverviewProps {
   onNavigate?: (stackIndex: number, slideIndex: number) => void;
 }
 
-const customCollisionDetection: CollisionDetection = (args) => {
+const customCollisionDetection: CollisionDetection = args => {
   // First try pointer within - most precise
   const pointerCollisions = pointerWithin(args);
   if (pointerCollisions.length > 0) {
@@ -28,7 +28,7 @@ const customCollisionDetection: CollisionDetection = (args) => {
 
   // Fall back to rect intersection for cases where pointer detection fails
   return rectIntersection(args);
-}
+};
 
 /**
  * SlideOverview - Full-screen slide management view
@@ -86,52 +86,61 @@ export default function SlideOverview({
   // Handle drag end
   // Note: syncToDOM and onContentChange are now called automatically by useSlideStructure
   // after state updates, so we just need to call the move functions
-  const handleDragEnd = useCallback((event: DragEndEvent) => {
-    const { active, over } = event;
+  const handleDragEnd = useCallback(
+    (event: DragEndEvent) => {
+      const { active, over } = event;
 
-    setActiveId(null);
-    setActiveType(null);
+      setActiveId(null);
+      setActiveType(null);
 
-    if (!over) return;
+      if (!over) return;
 
-    const activeData = active.data.current as Record<string, unknown> | undefined;
-    const overData = over.data.current as Record<string, unknown> | undefined;
+      const activeData = active.data.current as Record<string, unknown> | undefined;
+      const overData = over.data.current as Record<string, unknown> | undefined;
 
-    // Determine what was dragged and where
-    if (activeData?.type === 'stack') {
-      // Dragging a stack - can only drop between stacks
-      if (overData?.type === 'stack-gap') {
-        moveStack(active.id as string, overData.index as number);
+      // Determine what was dragged and where
+      if (activeData?.type === 'stack') {
+        // Dragging a stack - can only drop between stacks
+        if (overData?.type === 'stack-gap') {
+          moveStack(active.id as string, overData.index as number);
+        }
+      } else {
+        // Dragging a slide
+        if (overData?.type === 'stack-gap') {
+          // Drop between stacks - creates new single-slide stack
+          moveSlide(active.id as string, { type: 'new-stack', index: overData.index as number });
+        } else if (overData?.type === 'slide-gap') {
+          // Drop between slides in a stack
+          moveSlide(active.id as string, {
+            type: 'into-stack',
+            stackId: overData.stackId as string,
+            index: overData.index as number,
+          });
+        } else if (overData?.type === 'new-stack-zone') {
+          // Drop in "new stack" zone - creates new stack at end
+          createStack(active.id as string);
+        }
       }
-    } else {
-      // Dragging a slide
-      if (overData?.type === 'stack-gap') {
-        // Drop between stacks - creates new single-slide stack
-        moveSlide(active.id as string, { type: 'new-stack', index: overData.index as number });
-      } else if (overData?.type === 'slide-gap') {
-        // Drop between slides in a stack
-        moveSlide(active.id as string, {
-          type: 'into-stack',
-          stackId: overData.stackId as string,
-          index: overData.index as number,
-        });
-      } else if (overData?.type === 'new-stack-zone') {
-        // Drop in "new stack" zone - creates new stack at end
-        createStack(active.id as string);
-      }
-    }
-  }, [moveSlide, moveStack, createStack]);
+    },
+    [moveSlide, moveStack, createStack]
+  );
 
   // Handle click on a slide thumbnail - navigate and close
-  const handleSlideClick = useCallback((slideId: string, stackIndex: number, slideIndex: number) => {
-    onNavigate?.(stackIndex, slideIndex);
-    onClose?.();
-  }, [onNavigate, onClose]);
+  const handleSlideClick = useCallback(
+    (slideId: string, stackIndex: number, slideIndex: number) => {
+      onNavigate?.(stackIndex, slideIndex);
+      onClose?.();
+    },
+    [onNavigate, onClose]
+  );
 
   // Handle delete slide - sync is automatic via useSlideStructure
-  const handleDeleteSlide = useCallback((slideId: string) => {
-    deleteSlide(slideId);
-  }, [deleteSlide]);
+  const handleDeleteSlide = useCallback(
+    (slideId: string) => {
+      deleteSlide(slideId);
+    },
+    [deleteSlide]
+  );
 
   // Handle escape key to close
   useEffect(() => {
@@ -155,7 +164,12 @@ export default function SlideOverview({
           title="Close (Esc)"
         >
           <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth={2}
+              d="M6 18L18 6M6 6l12 12"
+            />
           </svg>
         </button>
       </div>
@@ -206,10 +220,7 @@ export default function SlideOverview({
         <DragOverlay>
           {activeSlide && activeType === 'slide' && (
             <div className="opacity-80 rotate-3">
-              <SlideThumbnail
-                slide={activeSlide}
-                isDragging
-              />
+              <SlideThumbnail slide={activeSlide} isDragging />
             </div>
           )}
           {activeStack && activeType === 'stack' && (

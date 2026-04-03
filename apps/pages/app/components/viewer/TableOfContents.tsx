@@ -22,7 +22,7 @@ const TableOfContents = ({ headings }: TableOfContentsProps) => {
     if (!headings || headings.length === 0) return;
 
     const observer = new IntersectionObserver(
-      (entries) => {
+      entries => {
         // Find the first visible heading
         for (const entry of entries) {
           if (entry.isIntersecting) {
@@ -65,7 +65,7 @@ const TableOfContents = ({ headings }: TableOfContentsProps) => {
           href={`#${id}`}
           data-depth={level}
           className={activeId === id ? 'active' : ''}
-          onClick={(e) => {
+          onClick={e => {
             e.preventDefault();
             scrollToHeading(id);
           }}

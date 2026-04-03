@@ -82,7 +82,10 @@ const AdminNewTeam = ({ loaderData }: Route.ComponentProps) => {
 
           <Form.Item label="Tag">
             <Select
-              options={tags.map((tag: { name: string; id: string }) => ({ label: tag.name, value: tag.id }))}
+              options={tags.map((tag: { name: string; id: string }) => ({
+                label: tag.name,
+                value: tag.id,
+              }))}
               mode="multiple"
               onChange={setTagsList}
               allowClear
@@ -97,14 +100,8 @@ const AdminNewTeam = ({ loaderData }: Route.ComponentProps) => {
               onChange={e => setVisibility(e.target.value)}
               className="flex flex-col gap-2"
             >
-              <Radio
-                value="secret"
-              >
-                Secret - can only be seen by its members.
-              </Radio>
-              <Radio
-                value="closed"
-              >
+              <Radio value="secret">Secret - can only be seen by its members.</Radio>
+              <Radio value="closed">
                 Visible - can be seen by every member of this organization.
               </Radio>
             </Radio.Group>
@@ -166,10 +163,13 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
       // Need to refetch with graphql because the GitHub API doesn't have avatarUrl
       // for team in the return response for some reason
       const octokit = await (gitProvider as GitHubProvider).getOctokit();
-      const teamQuery = await octokit.graphql<{ organization: { team: { avatarUrl: string } } }>(GetTeamAvatarQuery, {
-        org: gitOrgLogin,
-        slug: githubTeam.slug,
-      });
+      const teamQuery = await octokit.graphql<{ organization: { team: { avatarUrl: string } } }>(
+        GetTeamAvatarQuery,
+        {
+          org: gitOrgLogin,
+          slug: githubTeam.slug,
+        }
+      );
 
       const team = await ClassmojiService.team.create({
         providerId: githubTeam.id,

@@ -34,7 +34,7 @@ const DefaultPageSection = ({ currentDefault, menuPages }: DefaultPageSectionPro
   const pageOptions = [
     { value: 'dashboard', label: 'Dashboard' },
     { value: 'modules', label: 'Modules' },
-    ...menuPages.map((page) => ({
+    ...menuPages.map(page => ({
       value: `page:${page.id}`,
       label: page.title,
     })),

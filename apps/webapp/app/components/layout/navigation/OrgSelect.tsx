@@ -66,7 +66,10 @@ const OrgSelect = ({ memberships }: OrgSelectProps) => {
               </div>
 
               <Tag
-                color={(roleSettings as Record<string, { path: string; color: string }>)[membership.role]?.color || 'default'}
+                color={
+                  (roleSettings as Record<string, { path: string; color: string }>)[membership.role]
+                    ?.color || 'default'
+                }
                 className="ml-2 shrink-0 font-semibold text-xs"
               >
                 {membership.role}
@@ -106,7 +109,11 @@ const OrgSelect = ({ memberships }: OrgSelectProps) => {
               </div>
 
               <Tag
-                color={(roleSettings as Record<string, { path: string; color: string }>)[membershipOption.role]?.color || 'default'}
+                color={
+                  (roleSettings as Record<string, { path: string; color: string }>)[
+                    membershipOption.role
+                  ]?.color || 'default'
+                }
                 className="shrink-0 font-semibold text-xs"
               >
                 {membershipOption.role}

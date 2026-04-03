@@ -20,7 +20,9 @@ export default function VideoProperties({ element }: { element: HTMLVideoElement
 
   // State for all properties
   const [url, setUrl] = useState(() => element?.src || '');
-  const [autoplay, setAutoplay] = useState(() => element?.hasAttribute('autoplay') || element?.hasAttribute('data-autoplay'));
+  const [autoplay, setAutoplay] = useState(
+    () => element?.hasAttribute('autoplay') || element?.hasAttribute('data-autoplay')
+  );
   const [loop, setLoop] = useState(() => element?.hasAttribute('loop'));
   const [muted, setMuted] = useState(() => element?.hasAttribute('muted'));
   const [controls, setControls] = useState(() => element?.hasAttribute('controls'));
@@ -38,68 +40,83 @@ export default function VideoProperties({ element }: { element: HTMLVideoElement
   }, [element]);
 
   // Update URL
-  const handleUrlChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    if (!element) return;
-    const newUrl = e.target.value;
-    element.src = newUrl;
-    setUrl(newUrl);
-    onContentChange?.();
-  }, [element, onContentChange]);
+  const handleUrlChange = useCallback(
+    (e: React.ChangeEvent<HTMLInputElement>) => {
+      if (!element) return;
+      const newUrl = e.target.value;
+      element.src = newUrl;
+      setUrl(newUrl);
+      onContentChange?.();
+    },
+    [element, onContentChange]
+  );
 
   // Update autoplay
-  const handleAutoplayChange = useCallback((checked: boolean) => {
-    if (!element) return;
+  const handleAutoplayChange = useCallback(
+    (checked: boolean) => {
+      if (!element) return;
 
-    if (checked) {
-      element.setAttribute('autoplay', '');
-      element.setAttribute('data-autoplay', ''); // Reveal.js uses this
-    } else {
-      element.removeAttribute('autoplay');
-      element.removeAttribute('data-autoplay');
-    }
-    setAutoplay(checked);
-    onContentChange?.();
-  }, [element, onContentChange]);
+      if (checked) {
+        element.setAttribute('autoplay', '');
+        element.setAttribute('data-autoplay', ''); // Reveal.js uses this
+      } else {
+        element.removeAttribute('autoplay');
+        element.removeAttribute('data-autoplay');
+      }
+      setAutoplay(checked);
+      onContentChange?.();
+    },
+    [element, onContentChange]
+  );
 
   // Update loop
-  const handleLoopChange = useCallback((checked: boolean) => {
-    if (!element) return;
+  const handleLoopChange = useCallback(
+    (checked: boolean) => {
+      if (!element) return;
 
-    if (checked) {
-      element.setAttribute('loop', '');
-    } else {
-      element.removeAttribute('loop');
-    }
-    setLoop(checked);
-    onContentChange?.();
-  }, [element, onContentChange]);
+      if (checked) {
+        element.setAttribute('loop', '');
+      } else {
+        element.removeAttribute('loop');
+      }
+      setLoop(checked);
+      onContentChange?.();
+    },
+    [element, onContentChange]
+  );
 
   // Update muted
-  const handleMutedChange = useCallback((checked: boolean) => {
-    if (!element) return;
+  const handleMutedChange = useCallback(
+    (checked: boolean) => {
+      if (!element) return;
 
-    if (checked) {
-      element.setAttribute('muted', '');
-    } else {
-      element.removeAttribute('muted');
-    }
-    element.muted = checked; // Also set the property for immediate effect
-    setMuted(checked);
-    onContentChange?.();
-  }, [element, onContentChange]);
+      if (checked) {
+        element.setAttribute('muted', '');
+      } else {
+        element.removeAttribute('muted');
+      }
+      element.muted = checked; // Also set the property for immediate effect
+      setMuted(checked);
+      onContentChange?.();
+    },
+    [element, onContentChange]
+  );
 
   // Update controls
-  const handleControlsChange = useCallback((checked: boolean) => {
-    if (!element) return;
+  const handleControlsChange = useCallback(
+    (checked: boolean) => {
+      if (!element) return;
 
-    if (checked) {
-      element.setAttribute('controls', '');
-    } else {
-      element.removeAttribute('controls');
-    }
-    setControls(checked);
-    onContentChange?.();
-  }, [element, onContentChange]);
+      if (checked) {
+        element.setAttribute('controls', '');
+      } else {
+        element.removeAttribute('controls');
+      }
+      setControls(checked);
+      onContentChange?.();
+    },
+    [element, onContentChange]
+  );
 
   // Upload to Cloudinary for optimized CDN delivery
   const handleUploadToCloudinary = useCallback(async () => {
@@ -192,16 +209,18 @@ export default function VideoProperties({ element }: { element: HTMLVideoElement
               <CheckCircleOutlined />
               <span>Hosted on Cloudinary CDN</span>
             </div>
-          ) : url && (
-            <Button
-              icon={<CloudUploadOutlined />}
-              onClick={handleUploadToCloudinary}
-              loading={uploading}
-              size="small"
-              className="w-full mt-2"
-            >
-              {uploading ? 'Uploading...' : 'Upload to Cloudinary'}
-            </Button>
+          ) : (
+            url && (
+              <Button
+                icon={<CloudUploadOutlined />}
+                onClick={handleUploadToCloudinary}
+                loading={uploading}
+                size="small"
+                className="w-full mt-2"
+              >
+                {uploading ? 'Uploading...' : 'Upload to Cloudinary'}
+              </Button>
+            )
           )}
           {!isCloudinaryUrl && url && (
             <p className="text-xs text-gray-400 mt-1">
@@ -212,11 +231,7 @@ export default function VideoProperties({ element }: { element: HTMLVideoElement
 
         {/* Autoplay */}
         <PropertyRow label="Autoplay">
-          <Switch
-            checked={autoplay}
-            onChange={handleAutoplayChange}
-            size="small"
-          />
+          <Switch checked={autoplay} onChange={handleAutoplayChange} size="small" />
         </PropertyRow>
         {autoplay && !muted && (
           <p className="text-xs text-amber-500 -mt-2 ml-1">
@@ -226,34 +241,23 @@ export default function VideoProperties({ element }: { element: HTMLVideoElement
 
         {/* Loop */}
         <PropertyRow label="Loop">
-          <Switch
-            checked={loop}
-            onChange={handleLoopChange}
-            size="small"
-          />
+          <Switch checked={loop} onChange={handleLoopChange} size="small" />
         </PropertyRow>
 
         {/* Muted */}
         <PropertyRow label="Muted">
-          <Switch
-            checked={muted}
-            onChange={handleMutedChange}
-            size="small"
-          />
+          <Switch checked={muted} onChange={handleMutedChange} size="small" />
         </PropertyRow>
 
         {/* Controls */}
         <PropertyRow label="Show Controls">
-          <Switch
-            checked={controls}
-            onChange={handleControlsChange}
-            size="small"
-          />
+          <Switch checked={controls} onChange={handleControlsChange} size="small" />
         </PropertyRow>
       </PropertySection>
 
       <p className="text-xs text-gray-500 dark:text-gray-400 mt-3 px-1">
-        Supported formats: MP4, WebM, Ogg. Upload to Cloudinary to auto-convert unsupported formats like .mov.
+        Supported formats: MP4, WebM, Ogg. Upload to Cloudinary to auto-convert unsupported formats
+        like .mov.
       </p>
     </div>
   );

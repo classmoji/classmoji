@@ -27,16 +27,24 @@ import { ContentService } from '@classmoji/content';
  * @param {boolean} [options.binary=false] - If true, returns Buffer instead of string
  * @returns {Promise<{content: string | Buffer, source: 'cdn' | 'api' | 'blob'} | null>}
  */
-export async function fetchContent({ org, repo, path, binary = false }: { org: string; repo: string; path: string; binary?: boolean }): Promise<{ content: string | Buffer; source: 'cdn' | 'api' | 'blob' } | null> {
+export async function fetchContent({
+  org,
+  repo,
+  path,
+  binary = false,
+}: {
+  org: string;
+  repo: string;
+  path: string;
+  binary?: boolean;
+}): Promise<{ content: string | Buffer; source: 'cdn' | 'api' | 'blob' } | null> {
   // Try GitHub Pages CDN first (may fail from some cloud providers due to IP blocking)
   const cdnUrl = `https://${org}.github.io/${repo}/${path}`;
 
   try {
     const response = await fetch(cdnUrl);
     if (response.ok) {
-      const content = binary
-        ? Buffer.from(await response.arrayBuffer())
-        : await response.text();
+      const content = binary ? Buffer.from(await response.arrayBuffer()) : await response.text();
       return { content, source: 'cdn' };
     }
     // CDN returned error (404, 500, etc.) - fall through to API
@@ -58,9 +66,7 @@ export async function fetchContent({ org, repo, path, binary = false }: { org: s
     if (result?.content) {
       // For binary files: ContentService returns raw base64, decode to Buffer
       // For text files: ContentService returns decoded UTF-8 string
-      const content = binary
-        ? Buffer.from(result.content, 'base64')
-        : result.content;
+      const content = binary ? Buffer.from(result.content, 'base64') : result.content;
       return { content, source: 'api' };
     }
   } catch (apiErr: unknown) {
@@ -102,12 +108,12 @@ export function detectMimeFromMagicBytes(content: Buffer): string | null {
 
   // Check magic bytes for common image formats
   // JPEG: FF D8 FF
-  if (content[0] === 0xFF && content[1] === 0xD8 && content[2] === 0xFF) {
+  if (content[0] === 0xff && content[1] === 0xd8 && content[2] === 0xff) {
     return 'image/jpeg';
   }
 
   // PNG: 89 50 4E 47 (‰PNG)
-  if (content[0] === 0x89 && content[1] === 0x50 && content[2] === 0x4E && content[3] === 0x47) {
+  if (content[0] === 0x89 && content[1] === 0x50 && content[2] === 0x4e && content[3] === 0x47) {
     return 'image/png';
   }
 
@@ -117,8 +123,17 @@ export function detectMimeFromMagicBytes(content: Buffer): string | null {
   }
 
   // WebP: 52 49 46 46 ... 57 45 42 50 (RIFF...WEBP)
-  if (content[0] === 0x52 && content[1] === 0x49 && content[2] === 0x46 && content[3] === 0x46 &&
-      content.length >= 12 && content[8] === 0x57 && content[9] === 0x45 && content[10] === 0x42 && content[11] === 0x50) {
+  if (
+    content[0] === 0x52 &&
+    content[1] === 0x49 &&
+    content[2] === 0x46 &&
+    content[3] === 0x46 &&
+    content.length >= 12 &&
+    content[8] === 0x57 &&
+    content[9] === 0x45 &&
+    content[10] === 0x42 &&
+    content[11] === 0x50
+  ) {
     return 'image/webp';
   }
 
@@ -203,11 +218,29 @@ export function isBinaryFile(path: string): boolean {
   const ext = hasExtension ? filename.split('.').pop()?.toLowerCase() : null;
 
   const binaryExtensions = [
-    'woff', 'woff2', 'ttf', 'otf', 'eot',
-    'png', 'jpg', 'jpeg', 'gif', 'webp', 'ico',
-    'pdf', 'zip',
-    'mp4', 'webm', 'mov', 'ogg', 'm4v',  // Videos
-    'mp3', 'wav', 'm4a', 'aac', 'flac',  // Audio
+    'woff',
+    'woff2',
+    'ttf',
+    'otf',
+    'eot',
+    'png',
+    'jpg',
+    'jpeg',
+    'gif',
+    'webp',
+    'ico',
+    'pdf',
+    'zip',
+    'mp4',
+    'webm',
+    'mov',
+    'ogg',
+    'm4v', // Videos
+    'mp3',
+    'wav',
+    'm4a',
+    'aac',
+    'flac', // Audio
   ];
 
   // Files with known binary extensions

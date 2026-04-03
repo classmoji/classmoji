@@ -14,7 +14,14 @@ import { GitLabProvider } from './GitLabProvider.ts';
  * @param {string} [gitOrganization.login] - Organization login (optional)
  * @returns {GitProvider} - A concrete provider instance
  */
-export function getGitProvider(gitOrganization: { provider: string; github_installation_id?: string | null; access_token?: string | null; base_url?: string | null; login?: string | null; gitlab_group_id?: string | null }) {
+export function getGitProvider(gitOrganization: {
+  provider: string;
+  github_installation_id?: string | null;
+  access_token?: string | null;
+  base_url?: string | null;
+  login?: string | null;
+  gitlab_group_id?: string | null;
+}) {
   const { provider, github_installation_id, access_token, base_url, login } = gitOrganization;
 
   switch (provider) {
@@ -109,7 +116,12 @@ export function getTeamNameForClassroom(classroom: { slug: string }, role: strin
  * @param {'STUDENT' | 'ASSISTANT'} role - Role to create team for
  * @returns {Promise<{id: number, slug: string, name: string}>} Team object
  */
-export async function ensureClassroomTeam(gitProvider: GitProvider, orgLogin: string, classroom: { slug: string }, role: string) {
+export async function ensureClassroomTeam(
+  gitProvider: GitProvider,
+  orgLogin: string,
+  classroom: { slug: string },
+  role: string
+) {
   const teamName = getTeamNameForClassroom(classroom, role);
 
   console.log('teamName', teamName);

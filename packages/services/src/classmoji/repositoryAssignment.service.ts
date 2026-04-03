@@ -7,13 +7,17 @@
 import getPrisma from '@classmoji/database';
 import type { GitProvider, IssueStatus, Prisma } from '@prisma/client';
 
-interface RepositoryAssignmentCreateData
-  extends Omit<Prisma.RepositoryAssignmentUncheckedCreateInput, 'provider'> {
+interface RepositoryAssignmentCreateData extends Omit<
+  Prisma.RepositoryAssignmentUncheckedCreateInput,
+  'provider'
+> {
   provider: GitProvider | string;
 }
 
-interface RepositoryAssignmentUpdateData
-  extends Omit<Prisma.RepositoryAssignmentUpdateInput, 'status'> {
+interface RepositoryAssignmentUpdateData extends Omit<
+  Prisma.RepositoryAssignmentUpdateInput,
+  'status'
+> {
   status?: IssueStatus | string;
 }
 
@@ -143,7 +147,10 @@ export const findByClassroomId = async (classroomId: string) => {
  * @param {string} [classroomSlug] - Optional classroom slug filter
  * @returns {Promise<Object[]>}
  */
-export const findByAssignmentId = async (assignmentId: string, classroomSlug: string | null = null) => {
+export const findByAssignmentId = async (
+  assignmentId: string,
+  classroomSlug: string | null = null
+) => {
   const where: Prisma.RepositoryAssignmentWhereInput = { assignment_id: assignmentId };
 
   if (classroomSlug) {
@@ -345,14 +352,14 @@ export const getLatePercentage = async (classroomSlug: string) => {
     },
   });
 
-  const repoAssignments = await getPrisma().repositoryAssignment.findMany({
+  const repoAssignments = (await getPrisma().repositoryAssignment.findMany({
     where: {
       repository: { classroom: { slug: classroomSlug } },
     },
     include: {
       assignment: true,
     },
-  }) as Array<
+  })) as Array<
     Prisma.RepositoryAssignmentGetPayload<{ include: { assignment: true } }> & {
       is_late: boolean;
     }

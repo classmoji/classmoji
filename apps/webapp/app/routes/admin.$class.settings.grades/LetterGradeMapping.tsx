@@ -175,7 +175,9 @@ const LetterGradeMapping = ({ letterGradeMappings }: LetterGradeMappingProps) =>
   ];
 
   const sortedMappings =
-    letterGradeMappings?.sort((a: LetterGradeMap, b: LetterGradeMap) => b.min_grade - a.min_grade) || [];
+    letterGradeMappings?.sort(
+      (a: LetterGradeMap, b: LetterGradeMap) => b.min_grade - a.min_grade
+    ) || [];
 
   return (
     <SettingSection

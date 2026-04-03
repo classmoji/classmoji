@@ -46,7 +46,10 @@ function parseCssBackgroundColors(html: string): Record<number, string> {
  */
 type PageBlockSchema = PageBlockEditor['schema'];
 
-export async function migrateHtmlToBlockNote(html: string, schema: PageBlockSchema): Promise<BlockLike[]> {
+export async function migrateHtmlToBlockNote(
+  html: string,
+  schema: PageBlockSchema
+): Promise<BlockLike[]> {
   // Extract body content from full HTML document
   let bodyHtml = extractBodyContent(html);
 
@@ -108,7 +111,10 @@ export async function migrateHtmlToBlockNote(html: string, schema: PageBlockSche
  * @param {Object} cssBackgroundColors - Map of heading level to background color
  * @returns {Array} Processed blocks with custom block types
  */
-function postProcessBlocks(blocks: BlockLike[], cssBackgroundColors: Record<number, string> = {}): BlockLike[] {
+function postProcessBlocks(
+  blocks: BlockLike[],
+  cssBackgroundColors: Record<number, string> = {}
+): BlockLike[] {
   const result = [];
 
   for (let i = 0; i < blocks.length; i++) {
@@ -127,9 +133,11 @@ function postProcessBlocks(blocks: BlockLike[], cssBackgroundColors: Record<numb
       // Check if next block is code OR another spurious paragraph followed by code
       const nextIsCode = nextBlock.type === 'codeBlock' || nextBlock.type === 'terminal';
       const nextNextBlock = i + 2 < blocks.length ? blocks[i + 2] : null;
-      const nextIsSuspiciousParagraph = nextBlock.type === 'paragraph' &&
-                                       /^(?:[a-z]+(?:[\s\n]+\d+)?|\d+)$/i.test(getBlockTextContent(nextBlock).trim());
-      const nextNextIsCode = nextNextBlock && (nextNextBlock.type === 'codeBlock' || nextNextBlock.type === 'terminal');
+      const nextIsSuspiciousParagraph =
+        nextBlock.type === 'paragraph' &&
+        /^(?:[a-z]+(?:[\s\n]+\d+)?|\d+)$/i.test(getBlockTextContent(nextBlock).trim());
+      const nextNextIsCode =
+        nextNextBlock && (nextNextBlock.type === 'codeBlock' || nextNextBlock.type === 'terminal');
 
       if (matchesPattern && (nextIsCode || (nextIsSuspiciousParagraph && nextNextIsCode))) {
         // Skip this spurious header paragraph
@@ -166,8 +174,8 @@ function postProcessBlocks(blocks: BlockLike[], cssBackgroundColors: Record<numb
           type: 'terminal',
           props: {
             title: language === 'powershell' ? 'powershell' : 'Terminal',
-            code: code
-          }
+            code: code,
+          },
         });
         continue;
       }
@@ -182,7 +190,10 @@ function postProcessBlocks(blocks: BlockLike[], cssBackgroundColors: Record<numb
         if (text.startsWith('IMAGE_EMBED:::')) {
           const imageUrl = text.substring('IMAGE_EMBED:::'.length).trim();
           if (imageUrl) {
-            result.push({ type: 'image', props: { url: imageUrl, caption: '', previewWidth: 512 } });
+            result.push({
+              type: 'image',
+              props: { url: imageUrl, caption: '', previewWidth: 512 },
+            });
             // Preserve any nested children (e.g., indented sub-items under this list item)
             if (block.children && block.children.length > 0) {
               const processedChildren = postProcessBlocks(block.children, cssBackgroundColors);
@@ -209,7 +220,7 @@ function postProcessBlocks(blocks: BlockLike[], cssBackgroundColors: Record<numb
       if (videoUrl) {
         result.push({
           type: 'video',
-          props: { url: videoUrl, caption: '' }
+          props: { url: videoUrl, caption: '' },
         });
         continue;
       }
@@ -221,7 +232,7 @@ function postProcessBlocks(blocks: BlockLike[], cssBackgroundColors: Record<numb
       if (imageUrl) {
         result.push({
           type: 'image',
-          props: { url: imageUrl, caption: '', previewWidth: 512 }
+          props: { url: imageUrl, caption: '', previewWidth: 512 },
         });
         continue;
       }
@@ -230,14 +241,15 @@ function postProcessBlocks(blocks: BlockLike[], cssBackgroundColors: Record<numb
     // 2. Terminal/powershell paragraph followed by code block pattern
     if (i + 1 < blocks.length) {
       const nextBlock = blocks[i + 1];
-      const isTerminalBlock = textContent.toLowerCase().includes('terminal') ||
-                             textContent.toLowerCase().includes('powershell');
+      const isTerminalBlock =
+        textContent.toLowerCase().includes('terminal') ||
+        textContent.toLowerCase().includes('powershell');
 
       if (isTerminalBlock && nextBlock.type === 'codeBlock') {
         const code = getBlockTextContent(nextBlock);
         result.push({
           type: 'terminal',
-          props: { title: textContent, code }
+          props: { title: textContent, code },
         });
         i++;
         continue;
@@ -275,8 +287,8 @@ function postProcessBlocks(blocks: BlockLike[], cssBackgroundColors: Record<numb
           type: 'terminal',
           props: {
             title,
-            code: decodeHtmlEntities(code)
-          }
+            code: decodeHtmlEntities(code),
+          },
         });
         blockHandled = true;
         break;
@@ -296,8 +308,8 @@ function postProcessBlocks(blocks: BlockLike[], cssBackgroundColors: Record<numb
             type: 'terminal',
             props: {
               title: codeLangMatch[1],
-              code: decodeHtmlEntities(code)
-            }
+              code: decodeHtmlEntities(code),
+            },
           });
           blockHandled = true;
           break;
@@ -307,7 +319,11 @@ function postProcessBlocks(blocks: BlockLike[], cssBackgroundColors: Record<numb
         const terminalMatch = html.match(/Terminal|powershell/i);
         const codeBlockIndex = html.indexOf('class="code-block"');
 
-        if (terminalMatch && terminalMatch.index !== undefined && terminalMatch.index < codeBlockIndex) {
+        if (
+          terminalMatch &&
+          terminalMatch.index !== undefined &&
+          terminalMatch.index < codeBlockIndex
+        ) {
           // Extract Terminal/powershell title if present (text before keyword or use keyword as title)
           const beforeTerminal = html.substring(0, terminalMatch.index);
           const titleMatch = beforeTerminal.match(/>([^<]+)<[^>]*$/);
@@ -317,8 +333,8 @@ function postProcessBlocks(blocks: BlockLike[], cssBackgroundColors: Record<numb
             type: 'terminal',
             props: {
               title,
-              code: decodeHtmlEntities(code)
-            }
+              code: decodeHtmlEntities(code),
+            },
           });
           blockHandled = true;
           break;
@@ -331,7 +347,7 @@ function postProcessBlocks(blocks: BlockLike[], cssBackgroundColors: Record<numb
         result.push({
           type: 'codeBlock',
           props: { language },
-          content: [{ type: 'text', text: decodeHtmlEntities(code), styles: {} }]
+          content: [{ type: 'text', text: decodeHtmlEntities(code), styles: {} }],
         });
         blockHandled = true;
         break;
@@ -349,7 +365,7 @@ function postProcessBlocks(blocks: BlockLike[], cssBackgroundColors: Record<numb
         result.push({
           type: 'callout',
           props: { emoji },
-          content: text ? [{ type: 'text', text, styles: {} }] : []
+          content: text ? [{ type: 'text', text, styles: {} }] : [],
         });
         blockHandled = true;
         break;
@@ -368,13 +384,13 @@ function postProcessBlocks(blocks: BlockLike[], cssBackgroundColors: Record<numb
           warning: '⚠️',
           error: '🚨',
           success: '✅',
-          note: '📌'
+          note: '📌',
         };
 
         result.push({
           type: 'callout',
           props: { emoji: emojiMap[alertType] || '💡' },
-          content: content ? [{ type: 'text', text: content, styles: {} }] : []
+          content: content ? [{ type: 'text', text: content, styles: {} }] : [],
         });
         blockHandled = true;
         break;
@@ -392,8 +408,8 @@ function postProcessBlocks(blocks: BlockLike[], cssBackgroundColors: Record<numb
           type: 'terminal',
           props: {
             title,
-            code: decodeHtmlEntities(tree)
-          }
+            code: decodeHtmlEntities(tree),
+          },
         });
         blockHandled = true;
         break;
@@ -423,9 +439,9 @@ function postProcessBlocks(blocks: BlockLike[], cssBackgroundColors: Record<numb
         result.push({
           type: 'codeBlock',
           props: {
-            language: 'diff'
+            language: 'diff',
           },
-          content: [{ type: 'text', text: decodeHtmlEntities(code), styles: {} }]
+          content: [{ type: 'text', text: decodeHtmlEntities(code), styles: {} }],
         });
         blockHandled = true;
         break;
@@ -457,16 +473,16 @@ function mapColorToBlockNote(color: string): string {
   // Direct color name mapping
   const colorMap: Record<string, string> = {
     // Standard HTML color names
-    'red': 'red',
-    'orange': 'orange',
-    'yellow': 'yellow',
-    'green': 'green',
-    'blue': 'blue',
-    'purple': 'purple',
-    'pink': 'pink',
-    'gray': 'gray',
-    'grey': 'gray',
-    'brown': 'brown',
+    red: 'red',
+    orange: 'orange',
+    yellow: 'yellow',
+    green: 'green',
+    blue: 'blue',
+    purple: 'purple',
+    pink: 'pink',
+    gray: 'gray',
+    grey: 'gray',
+    brown: 'brown',
 
     // Common hex values
     '#ff0000': 'red',
@@ -528,7 +544,7 @@ function decodeHtmlEntities(text: string): string {
     '&gt;': '>',
     '&amp;': '&',
     '&quot;': '"',
-    '&#39;': "'"
+    '&#39;': "'",
   };
 
   return text.replace(/&[^;]+;/g, (match: string) => entities[match] || match);
@@ -540,8 +556,8 @@ function decodeHtmlEntities(text: string): string {
 function getBlockTextContent(block: BlockLike): string {
   if (!block.content || !Array.isArray(block.content)) return '';
   return block.content
-    .filter((item) => item.type === 'text')
-    .map((item) => item.text || '')
+    .filter(item => item.type === 'text')
+    .map(item => item.text || '')
     .join('');
 }
 

@@ -5,11 +5,7 @@ import {
   getDroppedRepositoryAssignments,
   isRepositoryAssignmentDropped,
 } from '@classmoji/utils';
-import type {
-  RepositoryAssignment,
-  OrganizationSettings,
-  GradeEntry,
-} from '@classmoji/utils';
+import type { RepositoryAssignment, OrganizationSettings, GradeEntry } from '@classmoji/utils';
 import { EmojisDisplay, GradeBadge } from '~/components';
 import { Tag, Tooltip } from 'antd';
 import type { TableProps } from 'antd';
@@ -163,13 +159,15 @@ const createRepositoryAssignmentColumns = (
       );
 
       // Check if this assignment is dropped for this student
-      const dropped = repoAssignment ? isRepositoryAssignmentDropped(
-        repoAssignment.id,
-        repository.assignments,
-        emojiMappings,
-        settings,
-        repository.module
-      ) : false;
+      const dropped = repoAssignment
+        ? isRepositoryAssignmentDropped(
+            repoAssignment.id,
+            repository.assignments,
+            emojiMappings,
+            settings,
+            repository.module
+          )
+        : false;
 
       return renderGradeCell(repoAssignment, view, emojiMappings, settings, dropped);
     },
@@ -302,7 +300,9 @@ export const createAssignmentColumns = (
         hidden: false,
         ellipsis: true,
         width: 140,
-        children: showAssignments ? [...assignmentColumns, ...(totalColumn ? [totalColumn] : [])] : [],
+        children: showAssignments
+          ? [...assignmentColumns, ...(totalColumn ? [totalColumn] : [])]
+          : [],
         sorter: (a: StudentRecord, b: StudentRecord) => {
           const repoA = a.repositories.find(repo => repo.module_id === module.id);
           const repoB = b.repositories.find(repo => repo.module_id === module.id);
@@ -329,7 +329,8 @@ export const createAssignmentColumns = (
           }
 
           if (view === 'Emoji') {
-            const allGrades = repository.assignments?.flatMap((a: GradeRepoAssignment) => a.grades || []) || [];
+            const allGrades =
+              repository.assignments?.flatMap((a: GradeRepoAssignment) => a.grades || []) || [];
             if (allGrades.length === 0) {
               return <span className="text-gray-500 italic">None</span>;
             }

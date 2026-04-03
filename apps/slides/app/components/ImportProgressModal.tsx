@@ -115,7 +115,12 @@ interface ImportProgressModalProps {
   onRetry: () => void;
 }
 
-function getStepStatus(stepKey: string, currentStep: string | undefined, isDone: boolean, hasError: boolean): 'completed' | 'active' | 'error' | 'pending' {
+function getStepStatus(
+  stepKey: string,
+  currentStep: string | undefined,
+  isDone: boolean,
+  hasError: boolean
+): 'completed' | 'active' | 'error' | 'pending' {
   if (hasError) {
     // Find if error occurred at or after this step
     const errorIndex = currentStep ? STEP_ORDER.indexOf(currentStep) : -1;
@@ -160,13 +165,15 @@ function StepItem({ stepKey, status, progress }: StepItemProps) {
       `}
     >
       {/* Status icon */}
-      <div className={`
+      <div
+        className={`
         flex-shrink-0 w-6 h-6 flex items-center justify-center
         ${isCompleted ? 'text-green-500' : ''}
         ${isActive ? 'text-blue-500' : ''}
         ${isError ? 'text-red-500' : ''}
         ${isPending ? 'text-gray-400' : ''}
-      `}>
+      `}
+      >
         {isCompleted && <CheckCircleOutlined />}
         {isActive && <LoadingOutlined spin />}
         {isError && <CloseCircleOutlined />}
@@ -175,13 +182,15 @@ function StepItem({ stepKey, status, progress }: StepItemProps) {
 
       {/* Step content */}
       <div className="flex-1 min-w-0">
-        <div className={`
+        <div
+          className={`
           text-sm font-medium
           ${isCompleted ? 'text-gray-500 dark:text-gray-400' : ''}
           ${isActive ? 'text-gray-900 dark:text-white' : ''}
           ${isError ? 'text-red-600 dark:text-red-400' : ''}
           ${isPending ? 'text-gray-400 dark:text-gray-500' : ''}
-        `}>
+        `}
+        >
           {config.label}
           {showProgress && progress && (
             <span className="ml-2 font-normal text-gray-500 dark:text-gray-400">
@@ -228,13 +237,17 @@ export default function ImportProgressModal({
 
   // Filter steps to only show relevant ones
   // (e.g., skip video steps if no videos)
-  const visibleSteps = STEP_ORDER.filter((stepKey) => {
+  const visibleSteps = STEP_ORDER.filter(stepKey => {
     // Always show if it's the current step or completed
     const status = getStepStatus(stepKey, currentStep, isDone, !!error);
     if (status !== 'pending') return true;
 
     // Skip video/cloudinary/theme steps if we're past images and never saw them
-    if (stepKey === 'processing_videos' || stepKey === 'uploading_cloudinary' || stepKey === 'saving_theme') {
+    if (
+      stepKey === 'processing_videos' ||
+      stepKey === 'uploading_cloudinary' ||
+      stepKey === 'saving_theme'
+    ) {
       const imageIndex = STEP_ORDER.indexOf('processing_images');
       const currentIndex = currentStep ? STEP_ORDER.indexOf(currentStep) : -1;
       // If we're past images and this step was never active, skip it
@@ -263,11 +276,7 @@ export default function ImportProgressModal({
               <LoadingOutlined spin className="text-blue-500" />
             )}
             <span>
-              {isDone
-                ? 'Import Complete'
-                : error
-                  ? 'Import Failed'
-                  : 'Importing Slides...'}
+              {isDone ? 'Import Complete' : error ? 'Import Failed' : 'Importing Slides...'}
             </span>
           </div>
         }
@@ -276,60 +285,60 @@ export default function ImportProgressModal({
         maskClosable={false}
         width={480}
         footer={
-        error
-          ? [
-              <Button key="cancel" onClick={onCancel}>
-                Cancel
-              </Button>,
-              <Button key="retry" type="primary" onClick={onRetry}>
-                Try Again
-              </Button>,
-            ]
-          : isDone
-            ? null // No footer when done - will auto-navigate
-            : [
-                <Button key="cancel" onClick={onCancel} disabled={isConnected}>
+          error
+            ? [
+                <Button key="cancel" onClick={onCancel}>
                   Cancel
                 </Button>,
+                <Button key="retry" type="primary" onClick={onRetry}>
+                  Try Again
+                </Button>,
               ]
-      }
-    >
-      <div className="space-y-1">
-        {/* Connection status */}
-        {!isConnected && !isDone && !error && (
-          <div className="text-sm text-gray-500 dark:text-gray-400 flex items-center gap-2 mb-4">
-            <LoadingOutlined spin />
-            Connecting to import stream...
-          </div>
-        )}
+            : isDone
+              ? null // No footer when done - will auto-navigate
+              : [
+                  <Button key="cancel" onClick={onCancel} disabled={isConnected}>
+                    Cancel
+                  </Button>,
+                ]
+        }
+      >
+        <div className="space-y-1">
+          {/* Connection status */}
+          {!isConnected && !isDone && !error && (
+            <div className="text-sm text-gray-500 dark:text-gray-400 flex items-center gap-2 mb-4">
+              <LoadingOutlined spin />
+              Connecting to import stream...
+            </div>
+          )}
 
-        {/* Step list */}
-        {visibleSteps.map((stepKey) => (
-          <StepItem
-            key={stepKey}
-            stepKey={stepKey}
-            status={getStepStatus(stepKey, currentStep, isDone, !!error)}
-            progress={currentStep === stepKey ? progress : null}
-          />
-        ))}
+          {/* Step list */}
+          {visibleSteps.map(stepKey => (
+            <StepItem
+              key={stepKey}
+              stepKey={stepKey}
+              status={getStepStatus(stepKey, currentStep, isDone, !!error)}
+              progress={currentStep === stepKey ? progress : null}
+            />
+          ))}
 
-        {/* Error message */}
-        {error && (
-          <div className="mt-4 p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-md">
-            <p className="text-sm text-red-600 dark:text-red-400">{error}</p>
-          </div>
-        )}
+          {/* Error message */}
+          {error && (
+            <div className="mt-4 p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-md">
+              <p className="text-sm text-red-600 dark:text-red-400">{error}</p>
+            </div>
+          )}
 
-        {/* Success message */}
-        {isDone && (
-          <div className="mt-4 p-3 bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded-md">
-            <p className="text-sm text-green-600 dark:text-green-400">
-              Slides imported successfully! Redirecting to editor...
-            </p>
-          </div>
-        )}
-      </div>
-    </Modal>
+          {/* Success message */}
+          {isDone && (
+            <div className="mt-4 p-3 bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded-md">
+              <p className="text-sm text-green-600 dark:text-green-400">
+                Slides imported successfully! Redirecting to editor...
+              </p>
+            </div>
+          )}
+        </div>
+      </Modal>
     </ConfigProvider>
   );
 }

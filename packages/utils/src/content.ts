@@ -14,7 +14,10 @@ interface Organization {
 /**
  * Generate term string from term enum and year (e.g., Winter 2025 -> "25w")
  */
-export function generateTermString(term: string | undefined, year: number | undefined): string | null {
+export function generateTermString(
+  term: string | undefined,
+  year: number | undefined
+): string | null {
   if (!term || !year) return null;
   const termMap: Record<string, string> = { Winter: 'w', Spring: 's', Summer: 'u', Fall: 'f' };
   const yearShort = String(year).slice(-2);

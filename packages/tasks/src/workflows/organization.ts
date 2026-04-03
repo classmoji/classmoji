@@ -1,5 +1,10 @@
 import { task } from '@trigger.dev/sdk';
-import { ClassmojiService, getGitProvider, getTeamNameForClassroom, ensureClassroomTeam } from '@classmoji/services';
+import {
+  ClassmojiService,
+  getGitProvider,
+  getTeamNameForClassroom,
+  ensureClassroomTeam,
+} from '@classmoji/services';
 import { sendEmailTask } from './email.ts';
 import { createRepositoryTask } from './repository.ts';
 import invariant from 'tiny-invariant';
@@ -62,21 +67,23 @@ export const memberAddedHandlerTask = task({
     );
 
     if (relevantMemberships.length === 0) {
-      console.log(`[member_added] No memberships found for user ${user.login} in git org ${gitOrganization.login}`);
+      console.log(
+        `[member_added] No memberships found for user ${user.login} in git org ${gitOrganization.login}`
+      );
       return;
     }
 
     // Update all relevant memberships
     for (const membership of relevantMemberships) {
-      await ClassmojiService.classroomMembership.update(
-        membership.classroom_id,
-        user.id,
-        { has_accepted_invite: true }
-      );
+      await ClassmojiService.classroomMembership.update(membership.classroom_id, user.id, {
+        has_accepted_invite: true,
+      });
 
       // Create existing assignments for new students
       if (membership.role === 'STUDENT') {
-        const modules = await ClassmojiService.module.findByClassroomSlug(membership.classroom.slug);
+        const modules = await ClassmojiService.module.findByClassroomSlug(
+          membership.classroom.slug
+        );
         const assignments = modules.flatMap(module =>
           module.assignments
             .filter(a => a.is_published === true && 'type' in a && a.type === 'INDIVIDUAL')
@@ -135,7 +142,9 @@ export const removeUserFromOrganizationTask = task({
         await gitProvider.removeTeamMember(orgLogin, teamSlug, user.login);
       } catch (error: unknown) {
         // Team might not exist or user not in team - log but continue
-        console.log(`[remove_user] Could not remove ${user.login} from team ${teamSlug}: ${error instanceof Error ? error.message : String(error)}`);
+        console.log(
+          `[remove_user] Could not remove ${user.login} from team ${teamSlug}: ${error instanceof Error ? error.message : String(error)}`
+        );
       }
 
       // Step 2: Check if user has other classroom memberships in this GitHub org
@@ -149,7 +158,9 @@ export const removeUserFromOrganizationTask = task({
       if (shouldRemoveFromOrg) {
         await gitProvider.removeFromOrganization(orgLogin, user.login);
       } else {
-        console.log(`[remove_user] User ${user.login} has other classroom memberships in ${orgLogin}, keeping in org`);
+        console.log(
+          `[remove_user] User ${user.login} has other classroom memberships in ${orgLogin}, keeping in org`
+        );
       }
     }
 

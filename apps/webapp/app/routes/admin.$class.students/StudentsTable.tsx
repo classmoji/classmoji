@@ -77,7 +77,9 @@ const StudentsTable = ({ students, query }: StudentsTableProps) => {
       // Remove student membership
       notify(ActionTypes.REMOVE_USER, 'Removing student...');
       fetcher!.submit(
-        { user: { id: student.id, login: student.login, name: student.name, email: student.email } },
+        {
+          user: { id: student.id, login: student.login, name: student.name, email: student.email },
+        },
         {
           method: 'post',
           action: '?/removeStudent',

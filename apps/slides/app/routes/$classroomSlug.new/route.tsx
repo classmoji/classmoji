@@ -15,7 +15,13 @@ import { useUser } from '~/root';
 import { generateTermString } from '@classmoji/utils';
 import { generateSlideTemplate } from '~/utils/slideHelpers.server';
 
-export const loader = async ({ params, request }: { params: Record<string, string | undefined>; request: Request }) => {
+export const loader = async ({
+  params,
+  request,
+}: {
+  params: Record<string, string | undefined>;
+  request: Request;
+}) => {
   const { classroomSlug } = params;
   if (!classroomSlug) throw new Response('Missing classroomSlug', { status: 400 });
 
@@ -55,7 +61,13 @@ export const loader = async ({ params, request }: { params: Record<string, strin
   };
 };
 
-export const action = async ({ request, params }: { request: Request; params: Record<string, string | undefined> }) => {
+export const action = async ({
+  request,
+  params,
+}: {
+  request: Request;
+  params: Record<string, string | undefined>;
+}) => {
   const { classroomSlug } = params;
   if (!classroomSlug) return { error: 'Missing classroomSlug' };
   const formData = await request.formData();
@@ -176,11 +188,21 @@ export default function CreateSlidePage() {
 
   // Check if user has permission using classroom memberships
   // OWNER, TEACHER, and ASSISTANT can all create slides
-  const membership = user?.classroom_memberships?.find((m: { classroom?: { slug: string } }) => m.classroom?.slug === classroomSlug);
-  const canCreate = membership?.role === 'OWNER' || membership?.role === 'TEACHER' || membership?.role === 'ASSISTANT';
+  const membership = user?.classroom_memberships?.find(
+    (m: { classroom?: { slug: string } }) => m.classroom?.slug === classroomSlug
+  );
+  const canCreate =
+    membership?.role === 'OWNER' ||
+    membership?.role === 'TEACHER' ||
+    membership?.role === 'ASSISTANT';
 
   // Format term for display (e.g., "25w" -> "Winter 2025")
-  const termDisplayMap: Record<string, string> = { w: 'Winter', s: 'Spring', u: 'Summer', f: 'Fall' };
+  const termDisplayMap: Record<string, string> = {
+    w: 'Winter',
+    s: 'Spring',
+    u: 'Summer',
+    f: 'Fall',
+  };
   const termYear = term ? `20${term.slice(0, 2)}` : '';
   const termSeason = term ? termDisplayMap[term.slice(2)] : '';
   const termDisplay = term ? `${termSeason} ${termYear}` : '';

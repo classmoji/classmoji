@@ -18,7 +18,13 @@ import PagesSidebar from '~/components/layout/PagesSidebar.tsx';
  * - Student/Assistant → StudentPageList (published pages)
  * - Unauthenticated → PublicLanding (public pages only) or redirect
  */
-export const loader = async ({ params, request }: { params: Record<string, string | undefined>; request: Request }) => {
+export const loader = async ({
+  params,
+  request,
+}: {
+  params: Record<string, string | undefined>;
+  request: Request;
+}) => {
   const { classroomSlug } = params;
 
   // Check if embedded (hide sidebar server-side to prevent flash)
@@ -31,7 +37,13 @@ export const loader = async ({ params, request }: { params: Record<string, strin
   if (!classroomRaw) {
     throw new Response('Classroom not found', { status: 404 });
   }
-  const classroom = classroomRaw as typeof classroomRaw & { avatar_url?: string; git_organization?: typeof classroomRaw.git_organization & { repo?: string; avatar_url?: string } };
+  const classroom = classroomRaw as typeof classroomRaw & {
+    avatar_url?: string;
+    git_organization?: typeof classroomRaw.git_organization & {
+      repo?: string;
+      avatar_url?: string;
+    };
+  };
 
   // Try to get auth (nullable for public access)
   let authData = null;
@@ -89,13 +101,15 @@ export const loader = async ({ params, request }: { params: Record<string, strin
       name: classroom.name,
       slug: classroom.slug,
       avatar_url: classroom.avatar_url,
-      git_organization: classroom.git_organization ? {
-        login: classroom.git_organization.login,
-        repo: classroom.git_organization.repo,
-        avatar_url: classroom.git_organization.avatar_url,
-      } : null,
+      git_organization: classroom.git_organization
+        ? {
+            login: classroom.git_organization.login,
+            repo: classroom.git_organization.repo,
+            avatar_url: classroom.git_organization.avatar_url,
+          }
+        : null,
     },
-    pages: pages.map((p) => ({
+    pages: pages.map(p => ({
       id: p.id,
       title: p.title,
       slug: p.slug,
@@ -113,7 +127,13 @@ export const loader = async ({ params, request }: { params: Record<string, strin
 /**
  * Actions for admin dashboard.
  */
-export const action = async ({ params, request }: { params: Record<string, string | undefined>; request: Request }) => {
+export const action = async ({
+  params,
+  request,
+}: {
+  params: Record<string, string | undefined>;
+  request: Request;
+}) => {
   const { classroomSlug } = params;
 
   // All actions require staff access
@@ -167,10 +187,11 @@ export const action = async ({ params, request }: { params: Record<string, strin
       }
 
       // Generate slug from title
-      const baseSlug = title
-        .toLowerCase()
-        .replace(/[^a-z0-9]+/g, '-')
-        .replace(/^-+|-+$/g, '') || 'page';
+      const baseSlug =
+        title
+          .toLowerCase()
+          .replace(/[^a-z0-9]+/g, '-')
+          .replace(/^-+|-+$/g, '') || 'page';
 
       // Ensure slug is unique too
       let slug = baseSlug;
@@ -190,7 +211,10 @@ export const action = async ({ params, request }: { params: Record<string, strin
       });
       return redirect(`/${classroomSlug}/${page.id}`);
     } catch (error: unknown) {
-      return Response.json({ error: error instanceof Error ? error.message : 'Unknown error' }, { status: 500 });
+      return Response.json(
+        { error: error instanceof Error ? error.message : 'Unknown error' },
+        { status: 500 }
+      );
     }
   }
 
@@ -212,7 +236,10 @@ export const action = async ({ params, request }: { params: Record<string, strin
       // Return redirect instead of JSON response
       return redirect(`/${classroomSlug}`);
     } catch (error: unknown) {
-      return Response.json({ error: error instanceof Error ? error.message : 'Unknown error' }, { status: 500 });
+      return Response.json(
+        { error: error instanceof Error ? error.message : 'Unknown error' },
+        { status: 500 }
+      );
     }
   }
 
@@ -224,7 +251,10 @@ export const action = async ({ params, request }: { params: Record<string, strin
       });
       return Response.json({ success: true });
     } catch (error: unknown) {
-      return Response.json({ error: error instanceof Error ? error.message : 'Unknown error' }, { status: 500 });
+      return Response.json(
+        { error: error instanceof Error ? error.message : 'Unknown error' },
+        { status: 500 }
+      );
     }
   }
 
@@ -238,7 +268,10 @@ export const action = async ({ params, request }: { params: Record<string, strin
       await ClassmojiService.page.quickUpdate(data.pageId, updates);
       return Response.json({ success: true });
     } catch (error: unknown) {
-      return Response.json({ error: error instanceof Error ? error.message : 'Unknown error' }, { status: 500 });
+      return Response.json(
+        { error: error instanceof Error ? error.message : 'Unknown error' },
+        { status: 500 }
+      );
     }
   }
 
@@ -261,7 +294,7 @@ const ClassroomLayout = () => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key === 'b') {
         e.preventDefault();
-        setCollapsed((prev) => !prev);
+        setCollapsed(prev => !prev);
       }
     };
 

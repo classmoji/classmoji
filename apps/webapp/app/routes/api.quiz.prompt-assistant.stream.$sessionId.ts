@@ -162,24 +162,29 @@ export async function loader({ params, request }: LoaderFunctionArgs) {
       });
 
       // Subscribe to events for this session (using unified method)
-      unsubscribe = agentStreamManager.subscribeToSession(sessionId, (event: { type: string; data: unknown }) => {
-        sendEvent(event);
+      unsubscribe = agentStreamManager.subscribeToSession(
+        sessionId,
+        (event: { type: string; data: unknown }) => {
+          sendEvent(event);
 
-        // Close stream when done
-        if (event.type === 'done' || event.type === 'error') {
-          setTimeout(() => {
-            try {
-              controller.close();
-            } catch {
-              // Already closed
-            }
-            if (unsubscribe) {
-              unsubscribe();
-              console.log(`[prompt-assistant-stream] Cleaned up listener for session ${sessionId}`);
-            }
-          }, 100);
+          // Close stream when done
+          if (event.type === 'done' || event.type === 'error') {
+            setTimeout(() => {
+              try {
+                controller.close();
+              } catch {
+                // Already closed
+              }
+              if (unsubscribe) {
+                unsubscribe();
+                console.log(
+                  `[prompt-assistant-stream] Cleaned up listener for session ${sessionId}`
+                );
+              }
+            }, 100);
+          }
         }
-      });
+      );
 
       console.log(`[prompt-assistant-stream] Subscribed to session ${sessionId}`);
     },

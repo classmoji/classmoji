@@ -82,7 +82,13 @@ async function getCachedMemberships(userId: string) {
   return memberships;
 }
 
-export const loader = async ({ params, request }: { params: Record<string, string | undefined>; request: Request }) => {
+export const loader = async ({
+  params,
+  request,
+}: {
+  params: Record<string, string | undefined>;
+  request: Request;
+}) => {
   const { org, repo } = params;
   const path = params['*']; // Catch-all segment
   const url = new URL(request.url);
@@ -168,7 +174,7 @@ export const loader = async ({ params, request }: { params: Record<string, strin
   }
 
   // Get MIME type - pass content for magic byte detection on extensionless files
-  const mimeType = getMimeType(path, binary ? result.content as Buffer : undefined);
+  const mimeType = getMimeType(path, binary ? (result.content as Buffer) : undefined);
 
   // Set cache headers - assets are versioned by path (hash-based filenames)
   // so they can be cached aggressively. 1 hour browser + CDN caching.
@@ -180,9 +186,10 @@ export const loader = async ({ params, request }: { params: Record<string, strin
 
   // For binary content, pass the Buffer directly
   if (binary) {
-    const binaryContent = typeof result.content === 'string'
-      ? new TextEncoder().encode(result.content)
-      : Uint8Array.from(result.content);
+    const binaryContent =
+      typeof result.content === 'string'
+        ? new TextEncoder().encode(result.content)
+        : Uint8Array.from(result.content);
     return new Response(binaryContent.buffer, { headers });
   }
 

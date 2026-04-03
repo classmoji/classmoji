@@ -18,7 +18,10 @@ interface PageContentResult {
  */
 function getRepoName(page: PageForContent): string {
   const gitOrg = page.classroom.git_organization!;
-  const term = generateTermString(page.classroom.term ?? undefined, page.classroom.year ?? undefined);
+  const term = generateTermString(
+    page.classroom.term ?? undefined,
+    page.classroom.year ?? undefined
+  );
   return `content-${gitOrg.login}-${term}`;
 }
 
@@ -96,7 +99,11 @@ export async function loadPageContent(page: PageForContent): Promise<PageContent
  * @param {Array} blocks - BlockNote document blocks array
  * @param {{ url: string, position: number }|null} [coverImage] - Cover image metadata; omit to preserve existing
  */
-export async function savePageContent(page: PageForContent, blocks: unknown, coverImage: CoverImage | null | undefined = undefined): Promise<void> {
+export async function savePageContent(
+  page: PageForContent,
+  blocks: unknown,
+  coverImage: CoverImage | null | undefined = undefined
+): Promise<void> {
   const gitOrg = page.classroom.git_organization!;
   const repo = getRepoName(page);
   const path = `${page.content_path}/content.json`;
@@ -141,7 +148,10 @@ export async function savePageContent(page: PageForContent, blocks: unknown, cov
  * @param {Object} page - Page with classroom.git_organization
  * @param {{ url: string, position: number }|null} coverImage - Cover image metadata, or null to remove
  */
-export async function savePageCoverImage(page: PageForContent, coverImage: CoverImage | null): Promise<void> {
+export async function savePageCoverImage(
+  page: PageForContent,
+  coverImage: CoverImage | null
+): Promise<void> {
   const { format, content, coverImage: existingCover } = await loadPageContent(page);
 
   let currentBlocks: unknown;
@@ -168,7 +178,10 @@ export async function savePageCoverImage(page: PageForContent, coverImage: Cover
  * @param {File} file - Web API File from formData
  * @returns {{ url: string, path: string }}
  */
-export async function uploadPageAsset(page: PageForContent, file: File): Promise<{ url: string; path: string }> {
+export async function uploadPageAsset(
+  page: PageForContent,
+  file: File
+): Promise<{ url: string; path: string }> {
   const gitOrg = page.classroom.git_organization!;
   const repo = getRepoName(page);
   const assetsFolder = `${page.content_path}/assets`;

@@ -76,7 +76,10 @@ async function handleInitSession(request: Request, formData: FormData) {
   try {
     formContext = JSON.parse(formContextJson || '{}');
   } catch (error: unknown) {
-    console.warn('[prompt-assistant] Failed to parse formContext:', error instanceof Error ? error.message : String(error));
+    console.warn(
+      '[prompt-assistant] Failed to parse formContext:',
+      error instanceof Error ? error.message : String(error)
+    );
   }
 
   // Build payload for ai-agent (no sessionId - ai-agent generates it)
@@ -99,7 +102,10 @@ async function handleInitSession(request: Request, formData: FormData) {
         Object.assign(payload, { orgLogin: repoInfo.owner, repoName: repoInfo.repo, accessToken });
       }
     } catch (error: unknown) {
-      console.warn('[prompt-assistant] Failed to parse example repo URL:', error instanceof Error ? error.message : String(error));
+      console.warn(
+        '[prompt-assistant] Failed to parse example repo URL:',
+        error instanceof Error ? error.message : String(error)
+      );
     }
   }
 
@@ -112,7 +118,11 @@ async function handleInitSession(request: Request, formData: FormData) {
     });
 
     // Get the ai-agent-generated sessionId from response
-    const resultPayload = (result as unknown as { payload: { sessionId: string; message: string; hasCodeExploration?: boolean } }).payload;
+    const resultPayload = (
+      result as unknown as {
+        payload: { sessionId: string; message: string; hasCodeExploration?: boolean };
+      }
+    ).payload;
     const sessionId = resultPayload.sessionId;
 
     // NOW register for SSE stream (after we have the real sessionId)
@@ -175,7 +185,11 @@ async function handleSendMessage(request: Request, formData: FormData) {
     );
 
     // Publish the response to stream manager for SSE delivery
-    const resultPayload = (result as unknown as { payload: { content: string; suggestions?: string[]; explorationSteps?: unknown[] } }).payload;
+    const resultPayload = (
+      result as unknown as {
+        payload: { content: string; suggestions?: string[]; explorationSteps?: unknown[] };
+      }
+    ).payload;
     agentStreamManager.publishMessageReady(sessionId, {
       content: resultPayload.content,
       suggestions: resultPayload.suggestions,

@@ -34,7 +34,9 @@ export async function loader({ params, request }: Route.LoaderArgs) {
   }
 
   // 4. Verify ownership (students can only view their own attempts)
-  const isInstructor = membership ? ['OWNER', 'ASSISTANT', 'TEACHER'].includes(membership.role) : false;
+  const isInstructor = membership
+    ? ['OWNER', 'ASSISTANT', 'TEACHER'].includes(membership.role)
+    : false;
   if (!isInstructor && attemptData.attempt.user_id.toString() !== userId.toString()) {
     throw new Response('Unauthorized', { status: 403 });
   }

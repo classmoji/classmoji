@@ -107,7 +107,11 @@ interface VerificationResult {
   error?: string;
 }
 
-export async function verifySessionOwnership({ sessionId, agentType, userId }: VerifySessionOptions): Promise<VerificationResult> {
+export async function verifySessionOwnership({
+  sessionId,
+  agentType,
+  userId,
+}: VerifySessionOptions): Promise<VerificationResult> {
   const requestId = crypto.randomUUID();
 
   return new Promise(async (resolve, reject) => {
@@ -125,7 +129,11 @@ export async function verifySessionOwnership({ sessionId, agentType, userId }: V
       }
     };
 
-    const handler = (message: { type: string; requestId?: string; payload: VerificationResult }) => {
+    const handler = (message: {
+      type: string;
+      requestId?: string;
+      payload: VerificationResult;
+    }) => {
       // Filter by requestId for proper correlation
       if (message.type === 'SESSION_VERIFIED' && message.requestId === requestId) {
         cleanup();

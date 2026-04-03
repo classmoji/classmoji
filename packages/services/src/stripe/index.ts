@@ -7,7 +7,15 @@ const stripe = (): Stripe => {
 };
 
 class StripeService {
-  static async createCheckoutSession({ priceId, userId, customerId }: { priceId: string; userId: string; customerId: string }): Promise<Stripe.Checkout.Session> {
+  static async createCheckoutSession({
+    priceId,
+    userId,
+    customerId,
+  }: {
+    priceId: string;
+    userId: string;
+    customerId: string;
+  }): Promise<Stripe.Checkout.Session> {
     const session = await stripe().checkout.sessions.create({
       mode: 'subscription',
       customer: customerId,
@@ -33,7 +41,9 @@ class StripeService {
     return session;
   }
 
-  static async createBillingPortalSession(customerId: string): Promise<Stripe.BillingPortal.Session> {
+  static async createBillingPortalSession(
+    customerId: string
+  ): Promise<Stripe.BillingPortal.Session> {
     const session = await stripe().billingPortal.sessions.create({
       customer: customerId,
       return_url: `${process.env.WEBAPP_URL}/settings/billing`,
@@ -55,7 +65,15 @@ class StripeService {
     return event;
   }
 
-  static async createCustomer({ name, email, userId }: { name: string; email: string; userId: string }): Promise<Stripe.Customer> {
+  static async createCustomer({
+    name,
+    email,
+    userId,
+  }: {
+    name: string;
+    email: string;
+    userId: string;
+  }): Promise<Stripe.Customer> {
     const customer = await stripe().customers.create({
       name,
       email,

@@ -31,7 +31,15 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
   return { githubOrganization, gitOrgLogin };
 };
 
-const Section = ({ title, subtitle, children }: { title: string; subtitle: string; children: React.ReactNode }) => (
+const Section = ({
+  title,
+  subtitle,
+  children,
+}: {
+  title: string;
+  subtitle: string;
+  children: React.ReactNode;
+}) => (
   <div className="flex items-start gap-4">
     <div className="">
       <h1 className="font-bold mb-1">{title}</h1>
@@ -81,9 +89,7 @@ const SettingsRepos = ({ loaderData }: Route.ComponentProps) => {
           />
           {githubOrganization.default_repository_permission && (
             <Alert
-              message={
-                permissionExplanations[githubOrganization.default_repository_permission]
-              }
+              message={permissionExplanations[githubOrganization.default_repository_permission]}
               type="warning"
               showIcon={true}
               style={{ marginTop: '10px' }}
@@ -128,7 +134,11 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
 
   const data = await request.json();
   const gitProvider = getGitProvider(classroom.git_organization);
-  await (gitProvider as { updateOrganization: (login: string, data: Record<string, unknown>) => Promise<void> }).updateOrganization(gitOrgLogin, data);
+  await (
+    gitProvider as {
+      updateOrganization: (login: string, data: Record<string, unknown>) => Promise<void>;
+    }
+  ).updateOrganization(gitOrgLogin, data);
 
   return {
     success: 'Permissions updated',

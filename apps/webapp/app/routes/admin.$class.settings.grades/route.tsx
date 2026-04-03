@@ -34,9 +34,24 @@ const SettingsGrading = ({ loaderData }: Route.ComponentProps) => {
 
   return (
     <div className="">
-      <GradingSettingsOptions settings={settings as unknown as React.ComponentProps<typeof GradingSettingsOptions>['settings']} />
+      <GradingSettingsOptions
+        settings={
+          settings as unknown as React.ComponentProps<typeof GradingSettingsOptions>['settings']
+        }
+      />
       <Divider />
-      <EmojiMapping emojiMappings={emojiMappings as unknown as Array<{ emoji: string; grade: number; extra_tokens: number; description: string; [key: string]: unknown }>} orphanedEmojis={orphanedEmojis} />
+      <EmojiMapping
+        emojiMappings={
+          emojiMappings as unknown as Array<{
+            emoji: string;
+            grade: number;
+            extra_tokens: number;
+            description: string;
+            [key: string]: unknown;
+          }>
+        }
+        orphanedEmojis={orphanedEmojis}
+      />
       <Divider />
       <LetterGradeMapping letterGradeMappings={letterGradeMappings} />
     </div>

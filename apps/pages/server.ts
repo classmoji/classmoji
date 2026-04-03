@@ -39,7 +39,6 @@ if (isDev) {
       next(error);
     }
   });
-
 } else {
   // ═══════════════════════════════════════════════════════════════════════════
   // PRODUCTION: Serve pre-built assets

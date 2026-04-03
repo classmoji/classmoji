@@ -78,7 +78,9 @@ const EmojiGrader = ({ repositoryAssignment, emojiMappings }: EmojiGraderProps) 
       studentId: assignmentWithoutCircular.studentId ?? null,
       teamId: assignmentWithoutCircular.teamId ?? null,
     };
-    const gradeToRemove = repositoryAssignment.grades?.find((grade: Grade) => grade.emoji === emoji);
+    const gradeToRemove = repositoryAssignment.grades?.find(
+      (grade: Grade) => grade.emoji === emoji
+    );
 
     fetcher!.submit(
       {

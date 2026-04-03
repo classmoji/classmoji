@@ -45,15 +45,12 @@ const BlockNoteViewer = ({ content, darkMode }: BlockNoteViewerProps) => {
     <MantineProvider
       theme={{
         fontFamily: 'Noto Sans, -apple-system, BlinkMacSystemFont, sans-serif',
-        fontFamilyMonospace: 'JetBrains Mono, SFMono-Regular, Consolas, Liberation Mono, Menlo, monospace',
+        fontFamilyMonospace:
+          'JetBrains Mono, SFMono-Regular, Consolas, Liberation Mono, Menlo, monospace',
       }}
     >
       <div className="page-editor">
-        <BlockNoteView
-          editor={editor}
-          editable={false}
-          theme={darkMode ? 'dark' : 'light'}
-        />
+        <BlockNoteView editor={editor} editable={false} theme={darkMode ? 'dark' : 'light'} />
       </div>
     </MantineProvider>
   );

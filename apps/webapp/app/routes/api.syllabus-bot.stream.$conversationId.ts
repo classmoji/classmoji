@@ -103,26 +103,29 @@ export async function loader({ params, request }: LoaderFunctionArgs) {
       });
 
       // Subscribe to events for this conversation
-      unsubscribe = agentStreamManager.subscribeToSession(conversationId, (event: { type: string; data: unknown }) => {
-        sendEvent(event);
+      unsubscribe = agentStreamManager.subscribeToSession(
+        conversationId,
+        (event: { type: string; data: unknown }) => {
+          sendEvent(event);
 
-        // Close stream when done
-        if (event.type === 'done' || event.type === 'error') {
-          setTimeout(() => {
-            try {
-              controller.close();
-            } catch {
-              // Already closed
-            }
-            if (unsubscribe) {
-              unsubscribe();
-              console.log(
-                `[syllabus-bot-stream] Cleaned up listener for conversation ${conversationId}`
-              );
-            }
-          }, 100);
+          // Close stream when done
+          if (event.type === 'done' || event.type === 'error') {
+            setTimeout(() => {
+              try {
+                controller.close();
+              } catch {
+                // Already closed
+              }
+              if (unsubscribe) {
+                unsubscribe();
+                console.log(
+                  `[syllabus-bot-stream] Cleaned up listener for conversation ${conversationId}`
+                );
+              }
+            }, 100);
+          }
         }
-      });
+      );
 
       console.log(`[syllabus-bot-stream] Subscribed to conversation ${conversationId}`);
     },

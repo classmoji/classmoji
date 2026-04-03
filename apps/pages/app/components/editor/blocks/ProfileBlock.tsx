@@ -1,7 +1,4 @@
-import {
-  createReactBlockSpec,
-  type ReactCustomBlockRenderProps,
-} from '@blocknote/react';
+import { createReactBlockSpec, type ReactCustomBlockRenderProps } from '@blocknote/react';
 import { useState, useRef } from 'react';
 import { IconCamera } from '@tabler/icons-react';
 
@@ -79,11 +76,7 @@ export const Profile = createReactBlockSpec(
               />
             ) : (
               <div className="profile-avatar-placeholder">
-                {isUploading ? (
-                  <span className="profile-avatar-spinner">⟳</span>
-                ) : (
-                  '👤'
-                )}
+                {isUploading ? <span className="profile-avatar-spinner">⟳</span> : '👤'}
               </div>
             )}
 
@@ -108,7 +101,7 @@ export const Profile = createReactBlockSpec(
               <>
                 <input
                   value={name}
-                  onChange={(e) =>
+                  onChange={e =>
                     props.editor.updateBlock(props.block, {
                       props: { name: e.target.value },
                     })
@@ -118,7 +111,7 @@ export const Profile = createReactBlockSpec(
                 />
                 <input
                   value={title}
-                  onChange={(e) =>
+                  onChange={e =>
                     props.editor.updateBlock(props.block, {
                       props: { title: e.target.value },
                     })
@@ -133,7 +126,6 @@ export const Profile = createReactBlockSpec(
                 {title && <div className="profile-display-title">{title}</div>}
               </>
             )}
-
           </div>
         </div>
       );

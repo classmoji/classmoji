@@ -127,11 +127,16 @@ export const findClassroomGradingProgressPerAssignment = async (classroomId: str
   gradedAssignments = [...gradedAssignments, ...extraCreditGradedAssignments];
 
   // find percentage of graded assignments for each assignment
-  const progressPerAssignment = numberOfAssignments.reduce((acc: Record<string, number>, assignment) => {
-    const numGraded = gradedAssignments.find(i => i.assignment_id === assignment.assignment_id)?._count;
-    acc[assignment.assignment_id] = ((numGraded ?? 0) / assignment._count) * 100 || 0;
-    return acc;
-  }, {});
+  const progressPerAssignment = numberOfAssignments.reduce(
+    (acc: Record<string, number>, assignment) => {
+      const numGraded = gradedAssignments.find(
+        i => i.assignment_id === assignment.assignment_id
+      )?._count;
+      acc[assignment.assignment_id] = ((numGraded ?? 0) / assignment._count) * 100 || 0;
+      return acc;
+    },
+    {}
+  );
 
   const classroomAssignments = await assignmentService.findByClassroomId(classroomId);
 

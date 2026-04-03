@@ -15,7 +15,9 @@ import { useEffect, useRef, useCallback, memo } from 'react';
  */
 interface PageViewerProps {
   htmlContent: string;
-  onHeadingsExtracted?: (headings: Array<{ id: string; text: string | null; level: number }>) => void;
+  onHeadingsExtracted?: (
+    headings: Array<{ id: string; text: string | null; level: number }>
+  ) => void;
 }
 
 const PageViewer = memo(function PageViewer({ htmlContent, onHeadingsExtracted }: PageViewerProps) {
@@ -48,7 +50,7 @@ const PageViewer = memo(function PageViewer({ htmlContent, onHeadingsExtracted }
     }
 
     // Add copy buttons to code blocks
-    contentRef.current.querySelectorAll('pre').forEach((pre) => {
+    contentRef.current.querySelectorAll('pre').forEach(pre => {
       if (pre.querySelector('.code-copy-btn')) return;
 
       const btn = document.createElement('button');
@@ -58,7 +60,9 @@ const PageViewer = memo(function PageViewer({ htmlContent, onHeadingsExtracted }
         const code = pre.querySelector('code')?.textContent || pre.textContent;
         navigator.clipboard.writeText(code).then(() => {
           btn.textContent = 'Copied!';
-          setTimeout(() => { btn.textContent = 'Copy'; }, 2000);
+          setTimeout(() => {
+            btn.textContent = 'Copy';
+          }, 2000);
         });
       });
       pre.style.position = 'relative';
@@ -66,7 +70,7 @@ const PageViewer = memo(function PageViewer({ htmlContent, onHeadingsExtracted }
     });
 
     // Make external links open in new tab
-    contentRef.current.querySelectorAll('a').forEach((link) => {
+    contentRef.current.querySelectorAll('a').forEach(link => {
       if (link.hostname !== window.location.hostname) {
         link.setAttribute('target', '_blank');
         link.setAttribute('rel', 'noopener noreferrer');
@@ -74,8 +78,8 @@ const PageViewer = memo(function PageViewer({ htmlContent, onHeadingsExtracted }
     });
 
     // Syntax highlighting via highlight.js
-    import('highlight.js/lib/common').then((hljs) => {
-      contentRef.current?.querySelectorAll('pre code').forEach((block) => {
+    import('highlight.js/lib/common').then(hljs => {
+      contentRef.current?.querySelectorAll('pre code').forEach(block => {
         hljs.default.highlightElement(block as HTMLElement);
       });
     });

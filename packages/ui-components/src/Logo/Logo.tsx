@@ -39,7 +39,9 @@ interface LogoIconProps {
  */
 export const LogoIcon = ({ size = 'md', className = '' }: LogoIconProps): React.JSX.Element => {
   const isCustomSize = typeof size === 'number';
-  const sizeClasses = isCustomSize ? '' : SIZE_CLASSES[size as SizeKey]?.icon || SIZE_CLASSES.md.icon;
+  const sizeClasses = isCustomSize
+    ? ''
+    : SIZE_CLASSES[size as SizeKey]?.icon || SIZE_CLASSES.md.icon;
 
   const customStyles = isCustomSize
     ? {
@@ -69,12 +71,19 @@ interface LogoProps {
 /**
  * Logo - Full Classmoji branding with icon and/or text
  */
-export const Logo = ({ variant = 'full', size = 'md', theme = 'light', className = '' }: LogoProps): React.JSX.Element => {
+export const Logo = ({
+  variant = 'full',
+  size = 'md',
+  theme = 'light',
+  className = '',
+}: LogoProps): React.JSX.Element => {
   const isCustomSize = typeof size === 'number';
   const showIcon = variant === 'full' || variant === 'icon';
   const showText = variant === 'full' || variant === 'text';
 
-  const textSizeClass = isCustomSize ? '' : SIZE_CLASSES[size as SizeKey]?.text || SIZE_CLASSES.md.text;
+  const textSizeClass = isCustomSize
+    ? ''
+    : SIZE_CLASSES[size as SizeKey]?.text || SIZE_CLASSES.md.text;
   const customTextSize = isCustomSize ? { fontSize: `${Math.round(size * 0.7)}px` } : {};
 
   const gapClass = showIcon && showText ? 'gap-1.5' : '';

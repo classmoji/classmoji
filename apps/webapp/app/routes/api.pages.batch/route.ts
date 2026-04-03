@@ -55,7 +55,9 @@ export const action = async ({ request }: Route.ActionArgs) => {
     try {
       await gitProvider.enableGitHubPages(gitOrgLogin, repoName);
     } catch (pagesError) {
-      console.warn(`Could not auto-enable GitHub Pages: ${pagesError instanceof Error ? pagesError.message : String(pagesError)}`);
+      console.warn(
+        `Could not auto-enable GitHub Pages: ${pagesError instanceof Error ? pagesError.message : String(pagesError)}`
+      );
     }
 
     return Response.json({ initialized: true, repoName });
@@ -125,13 +127,14 @@ export const action = async ({ request }: Route.ActionArgs) => {
       });
 
       // Convert File objects to buffers
-      const uploadFiles: Array<{ path: string; content: string; encoding: 'base64' | 'utf-8' }> = await Promise.all(
-        filesToUpload.map(async file => ({
-          path: file.path,
-          content: Buffer.from(await file.content.arrayBuffer()).toString('base64'),
-          encoding: 'base64' as const,
-        }))
-      );
+      const uploadFiles: Array<{ path: string; content: string; encoding: 'base64' | 'utf-8' }> =
+        await Promise.all(
+          filesToUpload.map(async file => ({
+            path: file.path,
+            content: Buffer.from(await file.content.arrayBuffer()).toString('base64'),
+            encoding: 'base64' as const,
+          }))
+        );
 
       // Wrap HTML content
       const wrappedHtml = wrapHtmlContent(html, 2);

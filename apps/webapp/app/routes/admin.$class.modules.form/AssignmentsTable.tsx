@@ -23,7 +23,11 @@ interface AssignmentsTableProps {
   openAssignmentModal: () => void;
 }
 
-const AssignmentsTable = ({ assignments, setValue, openAssignmentModal }: AssignmentsTableProps) => {
+const AssignmentsTable = ({
+  assignments,
+  setValue,
+  openAssignmentModal,
+}: AssignmentsTableProps) => {
   const { addAssignmentToRemove, setAssignment } = useAssignmentStore();
 
   const removeAssignment = (id: string | number | null) => {
@@ -139,7 +143,9 @@ const AssignmentsTable = ({ assignments, setValue, openAssignmentModal }: Assign
       className="mt-4"
       columns={columns}
       dataSource={(assignments || []).sort(
-        (a, b) => new Date(String(a.student_deadline || 0)).getTime() - new Date(String(b.student_deadline || 0)).getTime()
+        (a, b) =>
+          new Date(String(a.student_deadline || 0)).getTime() -
+          new Date(String(b.student_deadline || 0)).getTime()
       )}
       rowHoverable={false}
       size="small"

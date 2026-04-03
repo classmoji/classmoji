@@ -48,7 +48,12 @@ export function normalizePath(pathname: string): string {
  * @param {string} [params.viewedAsRole] - The role/view used (OWNER, STUDENT, etc.)
  * @returns {Promise<Object|null>} - The created/updated record or null on error
  */
-export async function recordView({ resourcePath, userId, classroomId, viewedAsRole }: {
+export async function recordView({
+  resourcePath,
+  userId,
+  classroomId,
+  viewedAsRole,
+}: {
   resourcePath: string;
   userId: string;
   classroomId: string;
@@ -85,7 +90,10 @@ export async function recordView({ resourcePath, userId, classroomId, viewedAsRo
     });
   } catch (error: unknown) {
     // Log but don't throw - this is fire-and-forget
-    console.error('[ResourceView] Failed to record view:', error instanceof Error ? error.message : String(error));
+    console.error(
+      '[ResourceView] Failed to record view:',
+      error instanceof Error ? error.message : String(error)
+    );
     return null;
   }
 }
@@ -157,7 +165,10 @@ export async function getRecentViewers({
     return views.map(view => buildViewerObject(view, userRoles, includeRoles));
   } catch (error: unknown) {
     // Log but return empty array to prevent page crashes
-    console.error('[ResourceView] Failed to fetch recent viewers:', error instanceof Error ? error.message : String(error));
+    console.error(
+      '[ResourceView] Failed to fetch recent viewers:',
+      error instanceof Error ? error.message : String(error)
+    );
     return [];
   }
 }
@@ -262,7 +273,13 @@ export async function getRecentViewersForPaths({
   limitPerPath?: number;
   includeTotalCount?: boolean;
   includeRoles?: boolean;
-}): Promise<Map<string, ReturnType<typeof buildViewerObject>[] | { viewers: ReturnType<typeof buildViewerObject>[]; totalCount: number }>> {
+}): Promise<
+  Map<
+    string,
+    | ReturnType<typeof buildViewerObject>[]
+    | { viewers: ReturnType<typeof buildViewerObject>[]; totalCount: number }
+  >
+> {
   const result = new Map();
 
   if (!resourcePaths?.length || !classroomId) {
@@ -327,7 +344,10 @@ export async function getRecentViewersForPaths({
 
     return result;
   } catch (error: unknown) {
-    console.error('[ResourceView] Failed to fetch viewers for paths:', error instanceof Error ? error.message : String(error));
+    console.error(
+      '[ResourceView] Failed to fetch viewers for paths:',
+      error instanceof Error ? error.message : String(error)
+    );
     return result;
   }
 }

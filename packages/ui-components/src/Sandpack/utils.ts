@@ -115,7 +115,11 @@ export function serializeToHtml(config: SerializeConfig): string {
   if (options.showLineNumbers === false) attrs.push('data-show-line-numbers="false"');
   if (options.showConsole === true) attrs.push('data-show-console="true"');
   if (options.readOnly === true) attrs.push('data-read-only="true"');
-  if (options.visibleFiles && Array.isArray(options.visibleFiles) && options.visibleFiles.length > 0) {
+  if (
+    options.visibleFiles &&
+    Array.isArray(options.visibleFiles) &&
+    options.visibleFiles.length > 0
+  ) {
     attrs.push(`data-visible-files='${JSON.stringify(options.visibleFiles)}'`);
   }
 

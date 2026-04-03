@@ -149,7 +149,7 @@ const FormAssistant = ({ close, token }: FormAssistantProps) => {
           placeholder="github-username"
           prefix={<IconBrandGithubCopilot size={16} />}
           onChange={handleGitHubLoginChange}
-          {...{ loading: verifying } as Record<string, unknown>}
+          {...({ loading: verifying } as Record<string, unknown>)}
         />
       </Form.Item>
 

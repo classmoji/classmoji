@@ -39,11 +39,11 @@ interface StoreState {
  * where context identity changes break the provider/consumer link
  */
 const useStore = create<StoreState>()(
-  devtools((set) => ({
+  devtools(set => ({
     // User state
     user: null,
     setUser: (user: SlideUser | null) =>
-      set((state) => {
+      set(state => {
         if (state.user?.id === user?.id) return state;
         return { user };
       }),

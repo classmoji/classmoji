@@ -49,11 +49,17 @@ const SettingsContent = ({ loaderData }: Route.ComponentProps) => {
 
   // Generate repo name and URL for display
   const gitOrgLogin = organization.git_organization?.login || classSlug || '';
-  const repoName = generateSuggestedRepoName(gitOrgLogin, String(organization.term ?? ''), organization.year ?? 0);
+  const repoName = generateSuggestedRepoName(
+    gitOrgLogin,
+    String(organization.term ?? ''),
+    organization.year ?? 0
+  );
   const repoUrl = `https://github.com/${gitOrgLogin}/${repoName}`;
 
   // Handler for customizable repo name (currently disabled in UI)
-  const handleContentRepoChange = (e: React.FocusEvent<HTMLInputElement> | React.KeyboardEvent<HTMLInputElement>) => {
+  const handleContentRepoChange = (
+    e: React.FocusEvent<HTMLInputElement> | React.KeyboardEvent<HTMLInputElement>
+  ) => {
     const value = (e.target as HTMLInputElement).value;
     notify(ActionTypes.SAVE_CONTENT_SETTINGS, 'Saving content repository...');
 

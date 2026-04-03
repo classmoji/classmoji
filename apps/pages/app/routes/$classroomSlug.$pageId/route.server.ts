@@ -1,5 +1,10 @@
 import { ClassmojiService, getAuthSession } from '~/utils/db.server.ts';
-import { loadPageContent, savePageContent, savePageCoverImage, uploadPageAsset } from '~/utils/content.server.ts';
+import {
+  loadPageContent,
+  savePageContent,
+  savePageCoverImage,
+  uploadPageAsset,
+} from '~/utils/content.server.ts';
 import { migrateHtmlToBlockNote } from '~/utils/migration.server.ts';
 import { schema } from '~/components/editor/blocks/index.tsx';
 import type { PageForContent } from '~/types/pages.ts';
@@ -9,7 +14,13 @@ import type { PageForContent } from '~/types/pages.ts';
  *
  * GET /:classroomSlug/:pageId — Public/Student viewer (no edit mode)
  */
-export const loader = async ({ params, request }: { params: Record<string, string | undefined>; request: Request }) => {
+export const loader = async ({
+  params,
+  request,
+}: {
+  params: Record<string, string | undefined>;
+  request: Request;
+}) => {
   const classroomSlug = params.classroomSlug!;
   const pageId = params.pageId!;
 
@@ -71,12 +82,17 @@ export const loader = async ({ params, request }: { params: Record<string, strin
   }
 
   // Cover image: prefer JSON metadata, fall back to DB columns (legacy pages)
-  const coverImage = jsonCoverImage || (page.header_image_url
-    ? { url: page.header_image_url, position: page.header_image_position ?? 50 }
-    : null);
+  const coverImage =
+    jsonCoverImage ||
+    (page.header_image_url
+      ? { url: page.header_image_url, position: page.header_image_position ?? 50 }
+      : null);
 
   // Build GitHub repo info for link
-  const gitOrg = (page.classroom as Record<string, unknown>).git_organization as { login?: string; avatar_url?: string } | null;
+  const gitOrg = (page.classroom as Record<string, unknown>).git_organization as {
+    login?: string;
+    avatar_url?: string;
+  } | null;
   const term = page.classroom.term;
   const year = page.classroom.year;
 
@@ -106,11 +122,13 @@ export const loader = async ({ params, request }: { params: Record<string, strin
       name: page.classroom.name,
       slug: page.classroom.slug,
       avatar_url: (page.classroom as Record<string, unknown>).avatar_url as string | undefined,
-      git_organization: gitOrg ? {
-        login: gitOrg.login,
-        repo: repoName,
-        avatar_url: gitOrg.avatar_url,
-      } : null,
+      git_organization: gitOrg
+        ? {
+            login: gitOrg.login,
+            repo: repoName,
+            avatar_url: gitOrg.avatar_url,
+          }
+        : null,
     },
     content: viewerContent,
     coverImage,
@@ -122,7 +140,13 @@ export const loader = async ({ params, request }: { params: Record<string, strin
 /**
  * Actions for page mutations (edit mode only).
  */
-export const action = async ({ params, request }: { params: Record<string, string | undefined>; request: Request }) => {
+export const action = async ({
+  params,
+  request,
+}: {
+  params: Record<string, string | undefined>;
+  request: Request;
+}) => {
   const pageId = params.pageId!;
 
   const page = await ClassmojiService.page.findById(pageId, {
@@ -173,7 +197,10 @@ export const action = async ({ params, request }: { params: Record<string, strin
       return Response.json({ success: true });
     } catch (error: unknown) {
       console.error('Failed to save page:', error);
-      return Response.json({ error: error instanceof Error ? error.message : 'Unknown error' }, { status: 500 });
+      return Response.json(
+        { error: error instanceof Error ? error.message : 'Unknown error' },
+        { status: 500 }
+      );
     }
   }
 
@@ -185,7 +212,10 @@ export const action = async ({ params, request }: { params: Record<string, strin
       });
       return Response.json({ success: true });
     } catch (error: unknown) {
-      return Response.json({ error: error instanceof Error ? error.message : 'Unknown error' }, { status: 500 });
+      return Response.json(
+        { error: error instanceof Error ? error.message : 'Unknown error' },
+        { status: 500 }
+      );
     }
   }
 
@@ -197,14 +227,20 @@ export const action = async ({ params, request }: { params: Record<string, strin
       });
       return Response.json({ success: true });
     } catch (error: unknown) {
-      return Response.json({ error: error instanceof Error ? error.message : 'Unknown error' }, { status: 500 });
+      return Response.json(
+        { error: error instanceof Error ? error.message : 'Unknown error' },
+        { status: 500 }
+      );
     }
   }
 
   if (intent === 'set-header-image') {
     try {
       const coverImage = data.url
-        ? { url: data.url as string, position: typeof data.position === 'number' ? data.position : 50 }
+        ? {
+            url: data.url as string,
+            position: typeof data.position === 'number' ? data.position : 50,
+          }
         : null;
       await savePageCoverImage(actionPage, coverImage);
       await ClassmojiService.page.quickUpdate(pageId, {
@@ -212,7 +248,10 @@ export const action = async ({ params, request }: { params: Record<string, strin
       });
       return Response.json({ success: true });
     } catch (error: unknown) {
-      return Response.json({ error: error instanceof Error ? error.message : 'Unknown error' }, { status: 500 });
+      return Response.json(
+        { error: error instanceof Error ? error.message : 'Unknown error' },
+        { status: 500 }
+      );
     }
   }
 
@@ -230,7 +269,10 @@ export const action = async ({ params, request }: { params: Record<string, strin
       return Response.json({ success: true, url });
     } catch (error: unknown) {
       console.error('Failed to upload header image:', error);
-      return Response.json({ error: error instanceof Error ? error.message : 'Unknown error' }, { status: 500 });
+      return Response.json(
+        { error: error instanceof Error ? error.message : 'Unknown error' },
+        { status: 500 }
+      );
     }
   }
 

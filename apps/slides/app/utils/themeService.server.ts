@@ -32,7 +32,6 @@ function getBaseUrl(org: string, repoName: string): string {
  * @returns {Promise<Array<{name: string, bodyClasses: string}>>}
  */
 export async function listSavedThemes(org: string, repoName: string) {
-
   try {
     // Get git organization to access installation ID
     // Query by provider + login since login alone is not unique
@@ -62,7 +61,8 @@ export async function listSavedThemes(org: string, repoName: string) {
       });
       contents = Array.isArray(data) ? data : [];
     } catch (error: unknown) {
-      if (error && typeof error === 'object' && 'status' in error && error.status === 404) return [];
+      if (error && typeof error === 'object' && 'status' in error && error.status === 404)
+        return [];
       throw error;
     }
 
@@ -71,13 +71,18 @@ export async function listSavedThemes(org: string, repoName: string) {
     for (const item of contents) {
       if (item.type === 'dir') {
         try {
-          const { data: manifestData } = await octokit.request('GET /repos/{owner}/{repo}/contents/{path}', {
-            owner: org,
-            repo: repoName,
-            path: `${THEMES_FOLDER}/${item.name}/theme.json`,
-          });
+          const { data: manifestData } = await octokit.request(
+            'GET /repos/{owner}/{repo}/contents/{path}',
+            {
+              owner: org,
+              repo: repoName,
+              path: `${THEMES_FOLDER}/${item.name}/theme.json`,
+            }
+          );
 
-          const manifest = JSON.parse(Buffer.from((manifestData as { content: string }).content, 'base64').toString('utf-8'));
+          const manifest = JSON.parse(
+            Buffer.from((manifestData as { content: string }).content, 'base64').toString('utf-8')
+          );
           themes.push({
             name: item.name,
             bodyClasses: manifest.bodyClasses || '',
@@ -194,12 +199,17 @@ export async function getThemeUrls(org: string, repoName: string, themeName: str
   const octokit = await gitProvider.getOctokit();
 
   // Get manifest for body classes
-  const { data: manifestData } = await octokit.request('GET /repos/{owner}/{repo}/contents/{path}', {
-    owner: org,
-    repo: repoName,
-    path: `${themePath}/theme.json`,
-  });
-  const manifest = JSON.parse(Buffer.from((manifestData as { content: string }).content, 'base64').toString('utf-8'));
+  const { data: manifestData } = await octokit.request(
+    'GET /repos/{owner}/{repo}/contents/{path}',
+    {
+      owner: org,
+      repo: repoName,
+      path: `${themePath}/theme.json`,
+    }
+  );
+  const manifest = JSON.parse(
+    Buffer.from((manifestData as { content: string }).content, 'base64').toString('utf-8')
+  );
 
   // Check which lib CSS exists (prefer v2)
   let libCssFile = 'lib/offline-v2.css';
@@ -240,7 +250,11 @@ export async function getThemeUrls(org: string, repoName: string, themeName: str
  * @param {string} themeName - Theme name to check
  * @returns {Promise<boolean>}
  */
-export async function themeExists(org: string, repoName: string, themeName: string): Promise<boolean> {
+export async function themeExists(
+  org: string,
+  repoName: string,
+  themeName: string
+): Promise<boolean> {
   const themes = await listSavedThemes(org, repoName);
   return themes.some(t => t.name === themeName);
 }

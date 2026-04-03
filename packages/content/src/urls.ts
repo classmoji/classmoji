@@ -13,7 +13,15 @@
  * @param {string} options.path - Path to file within repo
  * @returns {string} GitHub Pages URL
  */
-export function getContentUrl({ org, repo, path }: { org: string; repo: string; path: string }): string {
+export function getContentUrl({
+  org,
+  repo,
+  path,
+}: {
+  org: string;
+  repo: string;
+  path: string;
+}): string {
   // GitHub Pages URL format: https://{org}.github.io/{repo}/{path}
   const cleanPath = path.startsWith('/') ? path.slice(1) : path;
   return `https://${org}.github.io/${repo}/${cleanPath}`;
@@ -28,7 +36,17 @@ export function getContentUrl({ org, repo, path }: { org: string; repo: string; 
  * @param {string} [options.filename] - Specific file (default: index.html)
  * @returns {string} GitHub Pages URL for the slide
  */
-export function getSlideContentUrl({ orgLogin, term, contentPath, filename = 'index.html' }: { orgLogin: string; term: string; contentPath: string; filename?: string }): string {
+export function getSlideContentUrl({
+  orgLogin,
+  term,
+  contentPath,
+  filename = 'index.html',
+}: {
+  orgLogin: string;
+  term: string;
+  contentPath: string;
+  filename?: string;
+}): string {
   const repo = `content-${orgLogin}-${term}`;
   const path = filename ? `${contentPath}/${filename}` : contentPath;
   return getContentUrl({ org: orgLogin, repo, path });
@@ -44,7 +62,17 @@ export function getSlideContentUrl({ orgLogin, term, contentPath, filename = 'in
  * @param {string} [options.branch] - Branch name (default: main)
  * @returns {string} GitHub raw content URL
  */
-export function getRawContentUrl({ org, repo, path, branch = 'main' }: { org: string; repo: string; path: string; branch?: string }): string {
+export function getRawContentUrl({
+  org,
+  repo,
+  path,
+  branch = 'main',
+}: {
+  org: string;
+  repo: string;
+  path: string;
+  branch?: string;
+}): string {
   const cleanPath = path.startsWith('/') ? path.slice(1) : path;
   return `https://raw.githubusercontent.com/${org}/${repo}/${branch}/${cleanPath}`;
 }

@@ -18,7 +18,12 @@ class CodebaseManager {
     this.activeSessions = new Map();
   }
 
-  async cloneForAttempt(attemptId: string, orgLogin: string, repoName: string, accessToken: string): Promise<string> {
+  async cloneForAttempt(
+    attemptId: string,
+    orgLogin: string,
+    repoName: string,
+    accessToken: string
+  ): Promise<string> {
     const codebasePath = path.join(this.codebasesDir, `attempt-${attemptId}`);
 
     // Return if already cloned
@@ -40,7 +45,7 @@ class CodebaseManager {
       path: codebasePath,
       createdAt: new Date(),
       repoName,
-      orgLogin
+      orgLogin,
     });
 
     // Auto-cleanup after 2 hours

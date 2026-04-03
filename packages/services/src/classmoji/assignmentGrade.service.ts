@@ -158,7 +158,10 @@ export const findOrphanedGradeEmojis = async (classroomId: string) => {
  * @param {Array<{oldEmoji: string, newEmoji: string}>} mappings - Array of emoji remappings
  * @returns {Promise<{totalRemapped: number}>}
  */
-export const remapGradeEmojis = async (classroomId: string, mappings: Array<{ oldEmoji: string; newEmoji: string }>) => {
+export const remapGradeEmojis = async (
+  classroomId: string,
+  mappings: Array<{ oldEmoji: string; newEmoji: string }>
+) => {
   let totalRemapped = 0;
 
   for (const { oldEmoji, newEmoji } of mappings) {

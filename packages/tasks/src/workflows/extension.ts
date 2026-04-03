@@ -8,8 +8,16 @@ import { sendEmailTask } from './email.ts';
  */
 export const createExtensionTask = task({
   id: 'request_extension',
-  run: async (payload: { studentId: string; repositoryAssignmentId: string; classroomId: string; hours: number; tokensPerHour: number; description?: string }) => {
-    const { studentId, repositoryAssignmentId, classroomId, hours, tokensPerHour, description } = payload;
+  run: async (payload: {
+    studentId: string;
+    repositoryAssignmentId: string;
+    classroomId: string;
+    hours: number;
+    tokensPerHour: number;
+    description?: string;
+  }) => {
+    const { studentId, repositoryAssignmentId, classroomId, hours, tokensPerHour, description } =
+      payload;
 
     // Calculate token cost (negative amount for spending)
     const tokenCost = hours * tokensPerHour;
@@ -30,14 +38,28 @@ export const createExtensionTask = task({
  */
 export const updateExtensionTask = task({
   id: 'update_extension',
-  run: async (payload: { transactionId: string; status: string; student?: { login: string; email?: string }; repositoryAssignment?: { assignment?: { title?: string } } }) => {
+  run: async (payload: {
+    transactionId: string;
+    status: string;
+    student?: { login: string; email?: string };
+    repositoryAssignment?: { assignment?: { title?: string } };
+  }) => {
     const { transactionId, status } = payload;
 
     await ClassmojiService.token.updateTransaction(transactionId, {
       status,
     });
   },
-  onSuccess: async ({ payload }: { payload: { transactionId: string; status: string; student?: { login: string; email?: string }; repositoryAssignment?: { assignment?: { title?: string } } } }) => {
+  onSuccess: async ({
+    payload,
+  }: {
+    payload: {
+      transactionId: string;
+      status: string;
+      student?: { login: string; email?: string };
+      repositoryAssignment?: { assignment?: { title?: string } };
+    };
+  }) => {
     const { student, repositoryAssignment, status } = payload;
 
     if (!student?.email) return;

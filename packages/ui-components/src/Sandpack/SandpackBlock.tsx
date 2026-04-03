@@ -41,12 +41,18 @@ interface SandpackBlockProps {
 /**
  * SandpackBlock component for block editors
  */
-export default function SandpackBlock({ block, onChange, isSelected = false, slideTheme }: SandpackBlockProps) {
+export default function SandpackBlock({
+  block,
+  onChange,
+  isSelected = false,
+  slideTheme,
+}: SandpackBlockProps) {
   const data = block.data || {};
   const template = data.template ?? 'vanilla';
   const theme = data.theme ?? 'auto';
   const layout = data.layout ?? 'preview-right';
-  const files: Record<string, string> = data.files ?? DEFAULT_FILES[template] ?? DEFAULT_FILES['vanilla'];
+  const files: Record<string, string> =
+    data.files ?? DEFAULT_FILES[template] ?? DEFAULT_FILES['vanilla'];
   const options = data.options ?? {};
 
   // Handle file changes from Sandpack

@@ -34,7 +34,9 @@ export default function IframeProperties({ element }: { element: HTMLIFrameEleme
   const [title, setTitle] = useState(() => element?.title || '');
   const [width, setWidth] = useState(() => parseSize(element?.style.width || element?.width));
   const [height, setHeight] = useState(() => parseSize(element?.style.height || element?.height));
-  const [allowFullscreen, setAllowFullscreen] = useState(() => element?.hasAttribute('allowfullscreen'));
+  const [allowFullscreen, setAllowFullscreen] = useState(() =>
+    element?.hasAttribute('allowfullscreen')
+  );
   const [sandbox, setSandbox] = useState(() => element?.getAttribute('sandbox') || '');
 
   // Parse size value (could be "300px", "50%", or just "300")
@@ -60,111 +62,135 @@ export default function IframeProperties({ element }: { element: HTMLIFrameEleme
   }, [element]);
 
   // Update URL
-  const handleUrlChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    if (!element) return;
-    const newUrl = e.target.value;
-    element.src = newUrl;
-    setUrl(newUrl);
+  const handleUrlChange = useCallback(
+    (e: React.ChangeEvent<HTMLInputElement>) => {
+      if (!element) return;
+      const newUrl = e.target.value;
+      element.src = newUrl;
+      setUrl(newUrl);
 
-    // Remove placeholder styling from wrapper when a real URL is set
-    const wrapper = element.closest('.iframe-wrapper') as HTMLElement | null;
-    if (wrapper) {
-      if (newUrl && newUrl !== 'about:blank') {
-        wrapper.removeAttribute('data-iframe-placeholder');
-      } else {
-        wrapper.setAttribute('data-iframe-placeholder', 'true');
+      // Remove placeholder styling from wrapper when a real URL is set
+      const wrapper = element.closest('.iframe-wrapper') as HTMLElement | null;
+      if (wrapper) {
+        if (newUrl && newUrl !== 'about:blank') {
+          wrapper.removeAttribute('data-iframe-placeholder');
+        } else {
+          wrapper.setAttribute('data-iframe-placeholder', 'true');
+        }
       }
-    }
 
-    onContentChange?.();
-  }, [element, onContentChange]);
+      onContentChange?.();
+    },
+    [element, onContentChange]
+  );
 
   // Update title
-  const handleTitleChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    if (!element) return;
-    const newTitle = e.target.value;
-    element.title = newTitle;
-    setTitle(newTitle);
-    onContentChange?.();
-  }, [element, onContentChange]);
+  const handleTitleChange = useCallback(
+    (e: React.ChangeEvent<HTMLInputElement>) => {
+      if (!element) return;
+      const newTitle = e.target.value;
+      element.title = newTitle;
+      setTitle(newTitle);
+      onContentChange?.();
+    },
+    [element, onContentChange]
+  );
 
   // Update width
-  const handleWidthChange = useCallback((value: number | null) => {
-    if (!element) return;
-    const newWidth = { ...width, value: value !== null ? String(value) : '' };
-    setWidth(newWidth);
+  const handleWidthChange = useCallback(
+    (value: number | null) => {
+      if (!element) return;
+      const newWidth = { ...width, value: value !== null ? String(value) : '' };
+      setWidth(newWidth);
 
-    if (newWidth.value) {
-      element.style.width = `${newWidth.value}${newWidth.unit}`;
-      element.removeAttribute('width');
-    } else {
-      element.style.width = '';
-    }
-    onContentChange?.();
-  }, [element, width, onContentChange]);
+      if (newWidth.value) {
+        element.style.width = `${newWidth.value}${newWidth.unit}`;
+        element.removeAttribute('width');
+      } else {
+        element.style.width = '';
+      }
+      onContentChange?.();
+    },
+    [element, width, onContentChange]
+  );
 
-  const handleWidthUnitChange = useCallback((unit: string) => {
-    if (!element) return;
-    const newWidth = { ...width, unit };
-    setWidth(newWidth);
+  const handleWidthUnitChange = useCallback(
+    (unit: string) => {
+      if (!element) return;
+      const newWidth = { ...width, unit };
+      setWidth(newWidth);
 
-    if (newWidth.value) {
-      element.style.width = `${newWidth.value}${unit}`;
-    }
-    onContentChange?.();
-  }, [element, width, onContentChange]);
+      if (newWidth.value) {
+        element.style.width = `${newWidth.value}${unit}`;
+      }
+      onContentChange?.();
+    },
+    [element, width, onContentChange]
+  );
 
   // Update height
-  const handleHeightChange = useCallback((value: number | null) => {
-    if (!element) return;
-    const newHeight = { ...height, value: value !== null ? String(value) : '' };
-    setHeight(newHeight);
+  const handleHeightChange = useCallback(
+    (value: number | null) => {
+      if (!element) return;
+      const newHeight = { ...height, value: value !== null ? String(value) : '' };
+      setHeight(newHeight);
 
-    if (newHeight.value) {
-      element.style.height = `${newHeight.value}${newHeight.unit}`;
-      element.removeAttribute('height');
-    } else {
-      element.style.height = '';
-    }
-    onContentChange?.();
-  }, [element, height, onContentChange]);
+      if (newHeight.value) {
+        element.style.height = `${newHeight.value}${newHeight.unit}`;
+        element.removeAttribute('height');
+      } else {
+        element.style.height = '';
+      }
+      onContentChange?.();
+    },
+    [element, height, onContentChange]
+  );
 
-  const handleHeightUnitChange = useCallback((unit: string) => {
-    if (!element) return;
-    const newHeight = { ...height, unit };
-    setHeight(newHeight);
+  const handleHeightUnitChange = useCallback(
+    (unit: string) => {
+      if (!element) return;
+      const newHeight = { ...height, unit };
+      setHeight(newHeight);
 
-    if (newHeight.value) {
-      element.style.height = `${newHeight.value}${unit}`;
-    }
-    onContentChange?.();
-  }, [element, height, onContentChange]);
+      if (newHeight.value) {
+        element.style.height = `${newHeight.value}${unit}`;
+      }
+      onContentChange?.();
+    },
+    [element, height, onContentChange]
+  );
 
   // Update allowfullscreen
-  const handleAllowFullscreenChange = useCallback((checked: boolean) => {
-    if (!element) return;
+  const handleAllowFullscreenChange = useCallback(
+    (checked: boolean) => {
+      if (!element) return;
 
-    if (checked) {
-      element.setAttribute('allowfullscreen', '');
-    } else {
-      element.removeAttribute('allowfullscreen');
-    }
-    setAllowFullscreen(checked);
-    onContentChange?.();
-  }, [element, onContentChange]);
+      if (checked) {
+        element.setAttribute('allowfullscreen', '');
+      } else {
+        element.removeAttribute('allowfullscreen');
+      }
+      setAllowFullscreen(checked);
+      onContentChange?.();
+    },
+    [element, onContentChange]
+  );
 
   // Update sandbox
-  const handleSandboxChange = useCallback((newSandbox: string) => {
-    if (!element) return;
+  const handleSandboxChange = useCallback(
+    (newSandbox: string) => {
+      if (!element) return;
 
-    if (newSandbox) {
-      element.setAttribute('sandbox', newSandbox);
-    } else {
-      element.removeAttribute('sandbox');
-    }
-    setSandbox(newSandbox);
-    onContentChange?.();
-  }, [element, onContentChange]);
+      if (newSandbox) {
+        element.setAttribute('sandbox', newSandbox);
+      } else {
+        element.removeAttribute('sandbox');
+      }
+      setSandbox(newSandbox);
+      onContentChange?.();
+    },
+    [element, onContentChange]
+  );
 
   if (!element) {
     return null;
@@ -252,11 +278,7 @@ export default function IframeProperties({ element }: { element: HTMLIFrameEleme
 
         {/* Allow Fullscreen */}
         <PropertyRow label="Allow Fullscreen">
-          <Switch
-            checked={allowFullscreen}
-            onChange={handleAllowFullscreenChange}
-            size="small"
-          />
+          <Switch checked={allowFullscreen} onChange={handleAllowFullscreenChange} size="small" />
         </PropertyRow>
 
         {/* Sandbox */}
@@ -286,9 +308,7 @@ export default function IframeProperties({ element }: { element: HTMLIFrameEleme
           >
             📦 Convert to Draggable Block
           </button>
-          <p className="text-xs text-gray-400 mt-1">
-            Move freely with absolute positioning
-          </p>
+          <p className="text-xs text-gray-400 mt-1">Move freely with absolute positioning</p>
         </PropertySection>
       )}
     </div>

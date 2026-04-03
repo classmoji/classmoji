@@ -68,11 +68,7 @@ export default function SlideGrid({
     );
   });
 
-  return (
-    <div className="flex items-stretch gap-0 overflow-x-auto pb-4">
-      {items}
-    </div>
-  );
+  return <div className="flex items-stretch gap-0 overflow-x-auto pb-4">{items}</div>;
 }
 
 /**
@@ -98,12 +94,7 @@ function DraggableStack({
   canDelete,
 }: DraggableStackProps) {
   // Stack is draggable via the handle
-  const {
-    attributes,
-    listeners,
-    setNodeRef,
-    isDragging,
-  } = useDraggable({
+  const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
     id: stack.id,
     data: { type: 'stack' },
   });
@@ -127,7 +118,7 @@ function DraggableStack({
         title="Drag to reorder stack"
       >
         <svg className="w-5 h-5 text-gray-400" fill="currentColor" viewBox="0 0 20 20">
-          <path d="M7 2a2 2 0 1 0 0 4 2 2 0 0 0 0-4zM7 8a2 2 0 1 0 0 4 2 2 0 0 0 0-4zM7 14a2 2 0 1 0 0 4 2 2 0 0 0 0-4zM13 2a2 2 0 1 0 0 4 2 2 0 0 0 0-4zM13 8a2 2 0 1 0 0 4 2 2 0 0 0 0-4zM13 14a2 2 0 1 0 0 4 2 2 0 0 0 0-4z"/>
+          <path d="M7 2a2 2 0 1 0 0 4 2 2 0 0 0 0-4zM7 8a2 2 0 1 0 0 4 2 2 0 0 0 0-4zM7 14a2 2 0 1 0 0 4 2 2 0 0 0 0-4zM13 2a2 2 0 1 0 0 4 2 2 0 0 0 0-4zM13 8a2 2 0 1 0 0 4 2 2 0 0 0 0-4zM13 14a2 2 0 1 0 0 4 2 2 0 0 0 0-4z" />
         </svg>
       </div>
 
@@ -196,12 +187,7 @@ function DraggableSlide({
   canDelete,
   isInStack,
 }: DraggableSlideProps) {
-  const {
-    attributes,
-    listeners,
-    setNodeRef,
-    isDragging,
-  } = useDraggable({
+  const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
     id: slide.id,
     data: { type: 'slide' },
   });

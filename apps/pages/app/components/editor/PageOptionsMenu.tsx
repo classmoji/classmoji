@@ -129,18 +129,37 @@ const PageOptionsMenu = ({ page, classroom, isOpen, onClose }: PageOptionsMenuPr
       <div className="py-1">
         {/* Page Status */}
         <div className="px-4 py-1.5">
-          <span className="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Status</span>
+          <span className="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+            Status
+          </span>
         </div>
         {[
-          { value: 'draft', label: 'Draft', icon: IconPencil, description: 'Only you and teachers can see' },
-          { value: 'private', label: 'Private', icon: IconLock, description: 'Classroom members only' },
-          { value: 'public', label: 'Public', icon: IconWorld, description: 'Anyone with the link' },
+          {
+            value: 'draft',
+            label: 'Draft',
+            icon: IconPencil,
+            description: 'Only you and teachers can see',
+          },
+          {
+            value: 'private',
+            label: 'Private',
+            icon: IconLock,
+            description: 'Classroom members only',
+          },
+          {
+            value: 'public',
+            label: 'Public',
+            icon: IconWorld,
+            description: 'Anyone with the link',
+          },
         ].map(({ value, label, icon: Icon, description }) => (
           <button
             key={value}
             onClick={() => handleStatusChange(value)}
             className={`w-full px-4 py-2 text-left text-sm hover:bg-gray-100 dark:hover:bg-gray-700 flex items-center gap-2 ${
-              currentStatus === value ? 'text-yellow-600 dark:text-yellow-400' : 'text-gray-700 dark:text-gray-300'
+              currentStatus === value
+                ? 'text-yellow-600 dark:text-yellow-400'
+                : 'text-gray-700 dark:text-gray-300'
             }`}
           >
             <Icon size={16} />
@@ -163,7 +182,11 @@ const PageOptionsMenu = ({ page, classroom, isOpen, onClose }: PageOptionsMenuPr
             size={16}
             className={page.width === 1 ? 'text-yellow-600' : 'text-gray-700 dark:text-gray-300'}
           />
-          <span className={page.width === 1 ? 'font-medium text-yellow-600' : 'text-gray-700 dark:text-gray-300'}>
+          <span
+            className={
+              page.width === 1 ? 'font-medium text-yellow-600' : 'text-gray-700 dark:text-gray-300'
+            }
+          >
             Narrow
           </span>
         </button>
@@ -175,7 +198,11 @@ const PageOptionsMenu = ({ page, classroom, isOpen, onClose }: PageOptionsMenuPr
             size={16}
             className={page.width === 2 ? 'text-yellow-600' : 'text-gray-700 dark:text-gray-300'}
           />
-          <span className={page.width === 2 ? 'font-medium text-yellow-600' : 'text-gray-700 dark:text-gray-300'}>
+          <span
+            className={
+              page.width === 2 ? 'font-medium text-yellow-600' : 'text-gray-700 dark:text-gray-300'
+            }
+          >
             Default
           </span>
         </button>
@@ -187,7 +214,11 @@ const PageOptionsMenu = ({ page, classroom, isOpen, onClose }: PageOptionsMenuPr
             size={16}
             className={page.width === 3 ? 'text-yellow-600' : 'text-gray-700 dark:text-gray-300'}
           />
-          <span className={page.width === 3 ? 'font-medium text-yellow-600' : 'text-gray-700 dark:text-gray-300'}>
+          <span
+            className={
+              page.width === 3 ? 'font-medium text-yellow-600' : 'text-gray-700 dark:text-gray-300'
+            }
+          >
             Wide
           </span>
         </button>
@@ -199,7 +230,11 @@ const PageOptionsMenu = ({ page, classroom, isOpen, onClose }: PageOptionsMenuPr
             size={16}
             className={page.width === 4 ? 'text-yellow-600' : 'text-gray-700 dark:text-gray-300'}
           />
-          <span className={page.width === 4 ? 'font-medium text-yellow-600' : 'text-gray-700 dark:text-gray-300'}>
+          <span
+            className={
+              page.width === 4 ? 'font-medium text-yellow-600' : 'text-gray-700 dark:text-gray-300'
+            }
+          >
             Extra Wide
           </span>
         </button>

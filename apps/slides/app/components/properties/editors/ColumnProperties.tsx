@@ -20,13 +20,16 @@ export default function ColumnProperties({ element }: { element: HTMLElement }) 
   }, [element, onContentChange]);
 
   // Add a heading to the column
-  const handleAddHeading = useCallback((level: number) => {
-    if (!element) return;
-    const h = document.createElement(`h${level}`);
-    h.textContent = `Heading ${level}`;
-    element.appendChild(h);
-    onContentChange?.();
-  }, [element, onContentChange]);
+  const handleAddHeading = useCallback(
+    (level: number) => {
+      if (!element) return;
+      const h = document.createElement(`h${level}`);
+      h.textContent = `Heading ${level}`;
+      element.appendChild(h);
+      onContentChange?.();
+    },
+    [element, onContentChange]
+  );
 
   // Add a bullet list to the column
   const handleAddList = useCallback(() => {
@@ -82,12 +85,8 @@ export default function ColumnProperties({ element }: { element: HTMLElement }) 
 
       <PropertySection title="Tips">
         <div className="text-xs text-gray-500 dark:text-gray-400 space-y-2">
-          <p>
-            You can also type directly in the column - just click inside and start typing.
-          </p>
-          <p>
-            Use the toolbar buttons to format text or add code blocks.
-          </p>
+          <p>You can also type directly in the column - just click inside and start typing.</p>
+          <p>Use the toolbar buttons to format text or add code blocks.</p>
         </div>
       </PropertySection>
     </div>

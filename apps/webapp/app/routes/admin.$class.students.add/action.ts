@@ -12,8 +12,8 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
     action: 'bulk_add_students',
   });
 
-  const data = await request.json() as { students: Array<{ email: string; name?: string }> };
-  const emails = data.students.map((s) => s.email.toLowerCase());
+  const data = (await request.json()) as { students: Array<{ email: string; name?: string }> };
+  const emails = data.students.map(s => s.email.toLowerCase());
 
   // Find users who already exist on the platform
   const existingUsers = await getPrisma().user.findMany({

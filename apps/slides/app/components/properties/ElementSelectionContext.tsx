@@ -1,4 +1,12 @@
-import { createContext, useContext, useState, useCallback, useEffect, useRef, type ReactNode } from 'react';
+import {
+  createContext,
+  useContext,
+  useState,
+  useCallback,
+  useEffect,
+  useRef,
+  type ReactNode,
+} from 'react';
 import { reHighlightCode } from './utils/codeBlockUtils';
 
 /**
@@ -15,7 +23,16 @@ import { reHighlightCode } from './utils/codeBlockUtils';
  */
 
 /** Element types recognized by the property editor system */
-export type SlideElementType = 'code' | 'text' | 'image' | 'iframe' | 'slide' | 'column' | 'block' | 'sandpack' | null;
+export type SlideElementType =
+  | 'code'
+  | 'text'
+  | 'image'
+  | 'iframe'
+  | 'slide'
+  | 'column'
+  | 'block'
+  | 'sandpack'
+  | null;
 
 /** Result of element type detection */
 interface DetectedElement {
@@ -61,7 +78,12 @@ interface ThemeState {
 /** Editor ref shape (from RevealSlides component) */
 interface EditorRef {
   current: {
-    getRevealInstance?: () => { left: () => void; right: () => void; up: () => void; down: () => void } | null;
+    getRevealInstance?: () => {
+      left: () => void;
+      right: () => void;
+      up: () => void;
+      down: () => void;
+    } | null;
     getThemes?: () => ThemeState;
     setThemes?: (themes: Partial<ThemeState>) => void;
   } | null;
@@ -142,8 +164,9 @@ function updateColumnActiveState(activeColumn: HTMLElement | null) {
   if (activeColumn) {
     // Setting a new active column - scope cleanup to current slide only
     // This prevents stale data-column-active attributes on other slides
-    const currentSlide = document.querySelector('section.stack.present section.present[contenteditable="true"]')
-      || document.querySelector('section.present[contenteditable="true"]:not(.stack)');
+    const currentSlide =
+      document.querySelector('section.stack.present section.present[contenteditable="true"]') ||
+      document.querySelector('section.present[contenteditable="true"]:not(.stack)');
 
     if (currentSlide) {
       currentSlide.querySelectorAll('[data-column-active]').forEach(col => {
@@ -238,61 +261,94 @@ function detectElementType(element: HTMLElement, editorContainer: Element | null
   return { type: null, element: null };
 }
 
-export function ElementSelectionProvider({ children, editorRef, isEditing, onContentChange, onSaveContent, snippets = [], onSaveSnippet, onUpdateSnippet, onDeleteSnippet, cssThemes = [], onSaveTheme, onUpdateTheme, onDeleteTheme, customThemes = [], sharedThemes = [] }: ElementSelectionProviderProps) {
+export function ElementSelectionProvider({
+  children,
+  editorRef,
+  isEditing,
+  onContentChange,
+  onSaveContent,
+  snippets = [],
+  onSaveSnippet,
+  onUpdateSnippet,
+  onDeleteSnippet,
+  cssThemes = [],
+  onSaveTheme,
+  onUpdateTheme,
+  onDeleteTheme,
+  customThemes = [],
+  sharedThemes = [],
+}: ElementSelectionProviderProps) {
   const [selectedElement, setSelectedElement] = useState<HTMLElement | null>(null);
   const [elementType, setElementType] = useState<SlideElementType>(null);
   const [blockElement, setBlockElement] = useState<HTMLElement | null>(null); // For sl-block wrapper when element is inside a block
   const [activeColumn, setActiveColumn] = useState<HTMLElement | null>(null);
-  const previousSelectionRef = useRef<{ element: HTMLElement | null; type: SlideElementType }>({ element: null, type: null });
+  const previousSelectionRef = useRef<{ element: HTMLElement | null; type: SlideElementType }>({
+    element: null,
+    type: null,
+  });
 
   // Re-highlight code block when selection changes away from it
-  const handleSelectionChange = useCallback((newElement: HTMLElement | null, newType: SlideElementType, newBlockElement: HTMLElement | null = null) => {
-    const prev = previousSelectionRef.current;
+  const handleSelectionChange = useCallback(
+    (
+      newElement: HTMLElement | null,
+      newType: SlideElementType,
+      newBlockElement: HTMLElement | null = null
+    ) => {
+      const prev = previousSelectionRef.current;
 
-    // Skip if selecting the same element - prevents unnecessary re-renders
-    // which can cause flickering and cursor issues in code blocks
-    if (prev.element === newElement && prev.type === newType) {
-      return;
-    }
-
-    // If we're leaving a code block, re-highlight it
-    if (prev.type === 'code' && prev.element && prev.element !== newElement) {
-      const codeEl = (prev.element as HTMLElement)?.querySelector('code');
-      if (codeEl) {
-        reHighlightCode(codeEl);
+      // Skip if selecting the same element - prevents unnecessary re-renders
+      // which can cause flickering and cursor issues in code blocks
+      if (prev.element === newElement && prev.type === newType) {
+        return;
       }
-    }
 
-    // Update state
-    setSelectedElement(newElement);
-    setElementType(newType);
-    setBlockElement(newBlockElement);
+      // If we're leaving a code block, re-highlight it
+      if (prev.type === 'code' && prev.element && prev.element !== newElement) {
+        const codeEl = (prev.element as HTMLElement)?.querySelector('code');
+        if (codeEl) {
+          reHighlightCode(codeEl);
+        }
+      }
 
-    // Store for next comparison
-    previousSelectionRef.current = { element: newElement, type: newType };
-  }, []);
+      // Update state
+      setSelectedElement(newElement);
+      setElementType(newType);
+      setBlockElement(newBlockElement);
+
+      // Store for next comparison
+      previousSelectionRef.current = { element: newElement, type: newType };
+    },
+    []
+  );
 
   // Handle clicks within the editor to detect element selection
-  const handleEditorClick = useCallback((event: MouseEvent) => {
-    if (!isEditing) return;
-    const target = event.target as HTMLElement;
+  const handleEditorClick = useCallback(
+    (event: MouseEvent) => {
+      if (!isEditing) return;
+      const target = event.target as HTMLElement;
 
-    // Ignore clicks on the properties panel itself
-    if (target.closest('[data-properties-panel]')) return;
+      // Ignore clicks on the properties panel itself
+      if (target.closest('[data-properties-panel]')) return;
 
-    // Find the slides container as the boundary
-    const slidesContainer = document.querySelector('.reveal .slides');
-    const { type, element, blockElement: detectedBlockElement } = detectElementType(target, slidesContainer);
+      // Find the slides container as the boundary
+      const slidesContainer = document.querySelector('.reveal .slides');
+      const {
+        type,
+        element,
+        blockElement: detectedBlockElement,
+      } = detectElementType(target, slidesContainer);
 
-    // Also detect if click is inside a column (for active column tracking)
-    const clickedColumn = findContainingColumn(target);
-    if (clickedColumn !== activeColumn) {
-      setActiveColumn(clickedColumn);
-      updateColumnActiveState(clickedColumn);
-    }
+      // Also detect if click is inside a column (for active column tracking)
+      const clickedColumn = findContainingColumn(target);
+      if (clickedColumn !== activeColumn) {
+        setActiveColumn(clickedColumn);
+        updateColumnActiveState(clickedColumn);
+      }
 
-    handleSelectionChange(element, type, detectedBlockElement ?? null);
-  }, [isEditing, handleSelectionChange, activeColumn]);
+      handleSelectionChange(element, type, detectedBlockElement ?? null);
+    },
+    [isEditing, handleSelectionChange, activeColumn]
+  );
 
   // Clear selection when exiting edit mode
   useEffect(() => {
@@ -309,141 +365,147 @@ export function ElementSelectionProvider({ children, editorRef, isEditing, onCon
   // - Delete/Backspace: Remove selected element
   // - Escape: Clear selection
   // - Arrow keys: Navigate slides when nothing is selected
-  const handleKeyDown = useCallback((event: KeyboardEvent) => {
-    if (!isEditing) return;
+  const handleKeyDown = useCallback(
+    (event: KeyboardEvent) => {
+      if (!isEditing) return;
 
-    // ==========================================
-    // DELETE/BACKSPACE - Remove selected element
-    // ==========================================
-    if ((event.key === 'Delete' || event.key === 'Backspace') && selectedElement) {
-      const activeEl = /** @type {HTMLElement | null} */ (document.activeElement);
+      // ==========================================
+      // DELETE/BACKSPACE - Remove selected element
+      // ==========================================
+      if ((event.key === 'Delete' || event.key === 'Backspace') && selectedElement) {
+        const activeEl = /** @type {HTMLElement | null} */ document.activeElement;
 
-      // Don't delete if focus is in an INPUT or TEXTAREA (form fields)
-      if (activeEl?.tagName === 'INPUT' || activeEl?.tagName === 'TEXTAREA') {
-        return;
-      }
+        // Don't delete if focus is in an INPUT or TEXTAREA (form fields)
+        if (activeEl?.tagName === 'INPUT' || activeEl?.tagName === 'TEXTAREA') {
+          return;
+        }
 
-      // For text elements (H1, P, LI, etc.), let the browser handle Delete normally
-      // so users can edit text content
-      if (elementType === 'text') return;
+        // For text elements (H1, P, LI, etc.), let the browser handle Delete normally
+        // so users can edit text content
+        if (elementType === 'text') return;
 
-      // If focus is inside the selected element, user is editing - don't delete the element
-      // This handles: clicking on title to edit, double-clicking blocks to edit content, etc.
-      if (selectedElement.contains(activeEl)) {
-        return;
-      }
+        // If focus is inside the selected element, user is editing - don't delete the element
+        // This handles: clicking on title to edit, double-clicking blocks to edit content, etc.
+        if (selectedElement.contains(activeEl)) {
+          return;
+        }
 
-      // ALSO: If activeEl is a contentEditable that contains the selected element,
-      // and the caret is inside the selected element, don't delete.
-      // In contentEditable, clicking on text makes the contentEditable root the activeElement,
-      // but the caret may be inside our selected element.
-      if ((activeEl as HTMLElement)?.isContentEditable && activeEl?.contains(selectedElement)) {
-        // Check if the browser's text selection/caret is inside the selected element
-        const selection = window.getSelection();
-        if (selection && selection.anchorNode) {
-          // anchorNode is the text node or element where the caret is
-          if (selectedElement.contains(selection.anchorNode)) {
-            return;
+        // ALSO: If activeEl is a contentEditable that contains the selected element,
+        // and the caret is inside the selected element, don't delete.
+        // In contentEditable, clicking on text makes the contentEditable root the activeElement,
+        // but the caret may be inside our selected element.
+        if ((activeEl as HTMLElement)?.isContentEditable && activeEl?.contains(selectedElement)) {
+          // Check if the browser's text selection/caret is inside the selected element
+          const selection = window.getSelection();
+          if (selection && selection.anchorNode) {
+            // anchorNode is the text node or element where the caret is
+            if (selectedElement.contains(selection.anchorNode)) {
+              return;
+            }
           }
         }
+
+        // Don't delete the slide itself or columns (too destructive)
+        if (elementType === 'slide' || elementType === 'column') return;
+
+        // Prevent the browser from deleting text elsewhere
+        event.preventDefault();
+        event.stopPropagation();
+
+        // Remove the element from DOM
+        selectedElement.remove();
+
+        // Clear selection
+        handleSelectionChange(null, null);
+
+        // Notify of content change (triggers save)
+        onContentChange?.();
+        return;
       }
 
-      // Don't delete the slide itself or columns (too destructive)
-      if (elementType === 'slide' || elementType === 'column') return;
+      // ==========================================
+      // ESCAPE - Clear selection
+      // ==========================================
+      if (event.key === 'Escape' && selectedElement) {
+        handleSelectionChange(null, null);
+        return;
+      }
 
-      // Prevent the browser from deleting text elsewhere
+      // ==========================================
+      // ARROW KEYS - Navigate slides
+      // ==========================================
+      // Only handle arrow keys from here
+      if (!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(event.key)) return;
+
+      // Don't navigate if an element is selected (user might be editing text)
+      // Allow navigation only when nothing is selected (properties panel is empty)
+      if (selectedElement) return;
+
+      // Don't intercept if focus is in an input, textarea, or contenteditable
+      const activeEl = /** @type {HTMLElement | null} */ document.activeElement;
+      if (activeEl) {
+        const tagName = activeEl.tagName;
+        if (tagName === 'INPUT' || tagName === 'TEXTAREA') return;
+        if ((activeEl as HTMLElement)?.isContentEditable) return;
+      }
+
+      // Get the Reveal instance and navigate
+      const revealInstance = editorRef?.current?.getRevealInstance?.();
+      if (!revealInstance) return;
+
       event.preventDefault();
-      event.stopPropagation();
 
-      // Remove the element from DOM
-      selectedElement.remove();
-
-      // Clear selection
-      handleSelectionChange(null, null);
-
-      // Notify of content change (triggers save)
-      onContentChange?.();
-      return;
-    }
-
-    // ==========================================
-    // ESCAPE - Clear selection
-    // ==========================================
-    if (event.key === 'Escape' && selectedElement) {
-      handleSelectionChange(null, null);
-      return;
-    }
-
-    // ==========================================
-    // ARROW KEYS - Navigate slides
-    // ==========================================
-    // Only handle arrow keys from here
-    if (!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(event.key)) return;
-
-    // Don't navigate if an element is selected (user might be editing text)
-    // Allow navigation only when nothing is selected (properties panel is empty)
-    if (selectedElement) return;
-
-    // Don't intercept if focus is in an input, textarea, or contenteditable
-    const activeEl = /** @type {HTMLElement | null} */ (document.activeElement);
-    if (activeEl) {
-      const tagName = activeEl.tagName;
-      if (tagName === 'INPUT' || tagName === 'TEXTAREA') return;
-      if ((activeEl as HTMLElement)?.isContentEditable) return;
-    }
-
-    // Get the Reveal instance and navigate
-    const revealInstance = editorRef?.current?.getRevealInstance?.();
-    if (!revealInstance) return;
-
-    event.preventDefault();
-
-    switch (event.key) {
-      case 'ArrowLeft':
-        revealInstance.left();
-        break;
-      case 'ArrowRight':
-        revealInstance.right();
-        break;
-      case 'ArrowUp':
-        revealInstance.up();
-        break;
-      case 'ArrowDown':
-        revealInstance.down();
-        break;
-    }
-  }, [isEditing, selectedElement, elementType, handleSelectionChange, onContentChange, editorRef]);
+      switch (event.key) {
+        case 'ArrowLeft':
+          revealInstance.left();
+          break;
+        case 'ArrowRight':
+          revealInstance.right();
+          break;
+        case 'ArrowUp':
+          revealInstance.up();
+          break;
+        case 'ArrowDown':
+          revealInstance.down();
+          break;
+      }
+    },
+    [isEditing, selectedElement, elementType, handleSelectionChange, onContentChange, editorRef]
+  );
 
   // Handle clicks outside the slides area to clear selection
-  const handleDocumentClick = useCallback((event: MouseEvent) => {
-    if (!isEditing) return;
+  const handleDocumentClick = useCallback(
+    (event: MouseEvent) => {
+      if (!isEditing) return;
 
-    // Ignore clicks on the properties panel
-    if ((event.target as HTMLElement).closest('[data-properties-panel]')) return;
+      // Ignore clicks on the properties panel
+      if ((event.target as HTMLElement).closest('[data-properties-panel]')) return;
 
-    // Ignore clicks on the toolbar/navbar
-    if ((event.target as HTMLElement).closest('nav')) return;
+      // Ignore clicks on the toolbar/navbar
+      if ((event.target as HTMLElement).closest('nav')) return;
 
-    // Ignore clicks on Ant Design dropdowns/popups (rendered in portals at body level)
-    if ((event.target as HTMLElement).closest('.ant-select-dropdown')) return;
-    if ((event.target as HTMLElement).closest('.ant-dropdown')) return;
-    if ((event.target as HTMLElement).closest('.ant-popover')) return;
-    if ((event.target as HTMLElement).closest('.ant-modal')) return;
+      // Ignore clicks on Ant Design dropdowns/popups (rendered in portals at body level)
+      if ((event.target as HTMLElement).closest('.ant-select-dropdown')) return;
+      if ((event.target as HTMLElement).closest('.ant-dropdown')) return;
+      if ((event.target as HTMLElement).closest('.ant-popover')) return;
+      if ((event.target as HTMLElement).closest('.ant-modal')) return;
 
-    // Ignore clicks on block resize overlay (trash button, resize handles, etc.)
-    if ((event.target as HTMLElement).closest('.block-resize-overlay')) return;
-    if ((event.target as HTMLElement).closest('.image-resize-overlay')) return;
+      // Ignore clicks on block resize overlay (trash button, resize handles, etc.)
+      if ((event.target as HTMLElement).closest('.block-resize-overlay')) return;
+      if ((event.target as HTMLElement).closest('.image-resize-overlay')) return;
 
-    // Check if click is inside the slides area
-    const slidesContainer = document.querySelector('.reveal .slides');
-    if (slidesContainer && slidesContainer.contains(event.target as Node)) {
-      // Click is inside slides - let handleEditorClick handle it
-      return;
-    }
+      // Check if click is inside the slides area
+      const slidesContainer = document.querySelector('.reveal .slides');
+      if (slidesContainer && slidesContainer.contains(event.target as Node)) {
+        // Click is inside slides - let handleEditorClick handle it
+        return;
+      }
 
-    // Click is outside slides area - clear selection
-    handleSelectionChange(null, null);
-  }, [isEditing, handleSelectionChange]);
+      // Click is outside slides area - clear selection
+      handleSelectionChange(null, null);
+    },
+    [isEditing, handleSelectionChange]
+  );
 
   // Set up click listener on the editor
   // Note: editorRef is a component ref, so we query for the actual reveal container
@@ -500,13 +562,19 @@ export function ElementSelectionProvider({ children, editorRef, isEditing, onCon
     handleSelectionChange(null, null);
   }, [handleSelectionChange]);
 
-  const selectElement = useCallback((element: HTMLElement) => {
-    // Use the actual DOM container for boundary detection
-    const slidesContainer = document.querySelector('.reveal .slides');
-    const { type, blockElement: detectedBlockElement } = detectElementType(element, slidesContainer);
-    // Use handleSelectionChange to properly update all state including previousSelectionRef
-    handleSelectionChange(element, type, detectedBlockElement);
-  }, [handleSelectionChange]);
+  const selectElement = useCallback(
+    (element: HTMLElement) => {
+      // Use the actual DOM container for boundary detection
+      const slidesContainer = document.querySelector('.reveal .slides');
+      const { type, blockElement: detectedBlockElement } = detectElementType(
+        element,
+        slidesContainer
+      );
+      // Use handleSelectionChange to properly update all state including previousSelectionRef
+      handleSelectionChange(element, type, detectedBlockElement);
+    },
+    [handleSelectionChange]
+  );
 
   // Set active column programmatically (e.g., when adding content to a specific column)
   const setActiveColumnElement = useCallback((column: HTMLElement | null) => {
@@ -525,9 +593,12 @@ export function ElementSelectionProvider({ children, editorRef, isEditing, onCon
     };
   }, [editorRef]);
 
-  const setTheme = useCallback((type: string, value: string) => {
-    editorRef?.current?.setThemes?.({ [type]: value });
-  }, [editorRef]);
+  const setTheme = useCallback(
+    (type: string, value: string) => {
+      editorRef?.current?.setThemes?.({ [type]: value });
+    },
+    [editorRef]
+  );
 
   const value = {
     selectedElement,
@@ -559,9 +630,7 @@ export function ElementSelectionProvider({ children, editorRef, isEditing, onCon
   };
 
   return (
-    <ElementSelectionContext.Provider value={value}>
-      {children}
-    </ElementSelectionContext.Provider>
+    <ElementSelectionContext.Provider value={value}>{children}</ElementSelectionContext.Provider>
   );
 }
 

@@ -6,7 +6,9 @@ import type { Prisma } from '@prisma/client';
  * @param {Object[]} invites - Array of { school_email, student_id, classroom_id }
  * @returns {Promise<{count: number}>}
  */
-export const createManyInvites = async (invites: { school_email: string; student_id?: string; classroom_id: string }[]): Promise<{ count: number }> => {
+export const createManyInvites = async (
+  invites: { school_email: string; student_id?: string; classroom_id: string }[]
+): Promise<{ count: number }> => {
   const inviteData: unknown = invites;
   // TODO: narrow further once classroom invite input shape is aligned with the generated Prisma schema.
   return getPrisma().classroomInvite.createMany({

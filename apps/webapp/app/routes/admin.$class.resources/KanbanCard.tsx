@@ -2,7 +2,12 @@ import { useDraggable } from '@dnd-kit/core';
 import { IconFile, IconPresentation, IconX, IconLinkOff } from '@tabler/icons-react';
 
 interface KanbanCardProps {
-  resource: { id: string; title: string; links?: Array<{ id: string; module_id: string | null; assignment_id: string | null }> ; [key: string]: unknown };
+  resource: {
+    id: string;
+    title: string;
+    links?: Array<{ id: string; module_id: string | null; assignment_id: string | null }>;
+    [key: string]: unknown;
+  };
   resourceType: string;
   linkId?: string | null;
   onRemove?: ((linkId: string, resourceType: string) => void) | null;
@@ -66,10 +71,7 @@ const KanbanCard = ({
       <span className="truncate flex-1 text-gray-700 dark:text-gray-200">{resource.title}</span>
       {isUnlinked && (
         <span title="Not linked to any module or assignment">
-          <IconLinkOff
-            size={14}
-            className="text-gray-400 flex-shrink-0"
-          />
+          <IconLinkOff size={14} className="text-gray-400 flex-shrink-0" />
         </span>
       )}
       {onRemove && linkId && (

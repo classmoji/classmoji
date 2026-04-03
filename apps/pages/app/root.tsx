@@ -207,8 +207,10 @@ const App = () => {
       <body className="bg-white dark:bg-[#191919]" suppressHydrationWarning>
         <MantineProvider
           theme={{
-            fontFamily: "'Noto Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif",
-            fontFamilyMonospace: "'JetBrains Mono', 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace",
+            fontFamily:
+              "'Noto Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif",
+            fontFamilyMonospace:
+              "'JetBrains Mono', 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace",
           }}
         >
           <ToastContainer

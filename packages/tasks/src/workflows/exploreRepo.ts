@@ -20,7 +20,12 @@ const GITHUB_API = 'https://api.github.com';
  * @param {number} maxRetries - Max retry attempts (default 3)
  * @returns {Promise<Response>} Successful fetch response
  */
-async function githubFetch(url: string, headers: Record<string, string>, label: string, maxRetries: number = 3): Promise<Response> {
+async function githubFetch(
+  url: string,
+  headers: Record<string, string>,
+  label: string,
+  maxRetries: number = 3
+): Promise<Response> {
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     const res = await fetch(url, { headers });
 
@@ -36,8 +41,12 @@ async function githubFetch(url: string, headers: Record<string, string>, label: 
       const waitMs = retryAfter
         ? parseInt(retryAfter, 10) * 1000
         : Math.min(1000 * Math.pow(2, attempt) + Math.random() * 500, 30000);
-      console.log(`[explore-repo] ${label}: ${res.status} rate limited, retrying in ${Math.round(waitMs)}ms (attempt ${attempt + 1}/${maxRetries})`);
-      logger.warn(`${label}: rate limited (${res.status}), waiting ${Math.round(waitMs)}ms before retry ${attempt + 1}`);
+      console.log(
+        `[explore-repo] ${label}: ${res.status} rate limited, retrying in ${Math.round(waitMs)}ms (attempt ${attempt + 1}/${maxRetries})`
+      );
+      logger.warn(
+        `${label}: rate limited (${res.status}), waiting ${Math.round(waitMs)}ms before retry ${attempt + 1}`
+      );
       await new Promise(resolve => setTimeout(resolve, waitMs));
       continue;
     }
@@ -64,7 +73,11 @@ const GITHUB_HEADERS = (token: string): Record<string, string> => ({
  * @param {string} token - GitHub installation access token
  * @returns {Promise<Array<{path: string, size: number, type: string}>>}
  */
-async function fetchRepoTree(owner: string, repo: string, token: string): Promise<Array<{ path: string; size: number; type: string }>> {
+async function fetchRepoTree(
+  owner: string,
+  repo: string,
+  token: string
+): Promise<Array<{ path: string; size: number; type: string }>> {
   const url = `${GITHUB_API}/repos/${owner}/${repo}/git/trees/HEAD?recursive=1`;
   const res = await githubFetch(url, GITHUB_HEADERS(token), `GitHub tree API (${owner}/${repo})`);
 
@@ -89,8 +102,16 @@ async function fetchRepoTree(owner: string, repo: string, token: string): Promis
  * @param {string} token - GitHub installation access token
  * @returns {Promise<string>} File content as text
  */
-async function fetchFileContent(owner: string, repo: string, path: string, token: string): Promise<string> {
-  const encodedPath = path.split('/').map(segment => encodeURIComponent(segment)).join('/');
+async function fetchFileContent(
+  owner: string,
+  repo: string,
+  path: string,
+  token: string
+): Promise<string> {
+  const encodedPath = path
+    .split('/')
+    .map(segment => encodeURIComponent(segment))
+    .join('/');
   const url = `${GITHUB_API}/repos/${owner}/${repo}/contents/${encodedPath}`;
   const res = await githubFetch(url, GITHUB_HEADERS(token), `GitHub contents (${path})`);
 
@@ -115,13 +136,19 @@ async function fetchFileContent(owner: string, repo: string, path: string, token
  * @param {number} concurrency - Max parallel requests (default 3)
  * @returns {Promise<Array<{path: string, content: string, error?: string}>>}
  */
-async function fetchMultipleFiles(owner: string, repo: string, paths: string[], token: string, concurrency: number = 3): Promise<Array<{ path: string; content: string; error?: string }>> {
+async function fetchMultipleFiles(
+  owner: string,
+  repo: string,
+  paths: string[],
+  token: string,
+  concurrency: number = 3
+): Promise<Array<{ path: string; content: string; error?: string }>> {
   const results = [];
   // Process in batches for concurrency control
   for (let i = 0; i < paths.length; i += concurrency) {
     const batch = paths.slice(i, i + concurrency);
     const batchResults = await Promise.allSettled(
-      batch.map(async (path) => {
+      batch.map(async path => {
         const content = await fetchFileContent(owner, repo, path, token);
         return { path, content };
       })
@@ -165,9 +192,7 @@ function formatTreeForLLM(tree: Array<{ path: string; size: number; type: string
     /\.(png|jpg|jpeg|gif|ico|svg|woff|woff2|ttf|eot|mp4|webm)$/i,
   ];
 
-  const filtered = tree.filter(entry =>
-    !ignorePatterns.some(pattern => pattern.test(entry.path))
-  );
+  const filtered = tree.filter(entry => !ignorePatterns.some(pattern => pattern.test(entry.path)));
 
   // Cap at 500 files to keep context manageable
   const capped = filtered.slice(0, 500);
@@ -197,27 +222,37 @@ function formatTreeForLLM(tree: Array<{ path: string; size: number; type: string
  * @param {string|null} specificQuestion - Specific student question
  * @returns {Promise<string[]>} Array of file paths to read
  */
-async function pickRelevantFiles(client: Anthropic, model: string, treeListing: string, focusArea: string, depth: string, previousFindings: string[], specificQuestion: string | null, previouslyReadFiles: string[] = []): Promise<string[]> {
+async function pickRelevantFiles(
+  client: Anthropic,
+  model: string,
+  treeListing: string,
+  focusArea: string,
+  depth: string,
+  previousFindings: string[],
+  specificQuestion: string | null,
+  previouslyReadFiles: string[] = []
+): Promise<string[]> {
   const maxFiles = depth === 'shallow' ? 2 : depth === 'focused' ? 4 : 6;
 
-  const previousContext = previousFindings.length > 0
-    ? `\nPreviously explored topics (avoid these): ${previousFindings.join(', ')}`
-    : '';
+  const previousContext =
+    previousFindings.length > 0
+      ? `\nPreviously explored topics (avoid these): ${previousFindings.join(', ')}`
+      : '';
 
-  const questionContext = specificQuestion
-    ? `\nStudent asked: "${specificQuestion}"`
-    : '';
+  const questionContext = specificQuestion ? `\nStudent asked: "${specificQuestion}"` : '';
 
-  const previousFilesContext = previouslyReadFiles.length > 0
-    ? `\nFor context, these files were already read in earlier explorations: ${previouslyReadFiles.join(', ')}`
-    : '';
+  const previousFilesContext =
+    previouslyReadFiles.length > 0
+      ? `\nFor context, these files were already read in earlier explorations: ${previouslyReadFiles.join(', ')}`
+      : '';
 
   const response = await client.messages.create({
     model,
     max_tokens: 1024,
-    messages: [{
-      role: 'user',
-      content: `You are a code exploration assistant. Given a repository file tree and a focus area, pick the ${maxFiles} most relevant files to read.
+    messages: [
+      {
+        role: 'user',
+        content: `You are a code exploration assistant. Given a repository file tree and a focus area, pick the ${maxFiles} most relevant files to read.
 
 FOCUS AREA: ${focusArea === 'initial' ? 'Get an overview of the project: framework, structure, main components, key patterns' : focusArea}
 ${previousContext}${previousFilesContext}${questionContext}
@@ -236,7 +271,8 @@ RULES:
 
 Respond with ONLY a JSON array of file paths, nothing else. Example:
 ["src/App.jsx", "src/utils.js", "src/hooks/useAuth.js"]`,
-    }],
+      },
+    ],
   });
 
   const firstBlock = response.content[0];
@@ -263,33 +299,45 @@ Respond with ONLY a JSON array of file paths, nothing else. Example:
  * @param {string} treeListing - Formatted tree listing (for context)
  * @returns {Promise<string>} Markdown analysis
  */
-async function synthesizeFindings(client: Anthropic, model: string, files: Array<{ path: string; content: string; error?: string }>, focusArea: string, previousFindings: string[], specificQuestion: string | null, treeListing: string): Promise<string> {
-  const previousContext = previousFindings.length > 0
-    ? `\nPreviously explored topics (summarize NEW findings only): ${previousFindings.join(', ')}`
-    : '';
+async function synthesizeFindings(
+  client: Anthropic,
+  model: string,
+  files: Array<{ path: string; content: string; error?: string }>,
+  focusArea: string,
+  previousFindings: string[],
+  specificQuestion: string | null,
+  treeListing: string
+): Promise<string> {
+  const previousContext =
+    previousFindings.length > 0
+      ? `\nPreviously explored topics (summarize NEW findings only): ${previousFindings.join(', ')}`
+      : '';
 
   const questionContext = specificQuestion
     ? `\nStudent's specific question: "${specificQuestion}"`
     : '';
 
   // Build file contents section, truncating large files
-  const fileContents = files.map(f => {
-    const content = f.error
-      ? `(Error reading file: ${f.error})`
-      : f.content.length > 8000
-        ? f.content.slice(0, 8000) + '\n... (truncated)'
-        : f.content;
-    return `### ${f.path}\n\`\`\`\n${content}\n\`\`\``;
-  }).join('\n\n');
+  const fileContents = files
+    .map(f => {
+      const content = f.error
+        ? `(Error reading file: ${f.error})`
+        : f.content.length > 8000
+          ? f.content.slice(0, 8000) + '\n... (truncated)'
+          : f.content;
+      return `### ${f.path}\n\`\`\`\n${content}\n\`\`\``;
+    })
+    .join('\n\n');
 
   const isInitial = focusArea === 'initial';
 
   const response = await client.messages.create({
     model,
     max_tokens: 2048,
-    messages: [{
-      role: 'user',
-      content: `You are a code exploration assistant analyzing a student's repository. Provide a structured summary of what you found.
+    messages: [
+      {
+        role: 'user',
+        content: `You are a code exploration assistant analyzing a student's repository. Provide a structured summary of what you found.
 
 FOCUS AREA: ${isInitial ? 'Initial project overview' : focusArea}
 ${previousContext}${questionContext}
@@ -303,11 +351,15 @@ ${fileContents}
 Respond with a JSON object in this exact format:
 {
   "focus_area": "${focusArea}",
-  ${isInitial ? `"project_structure": {
+  ${
+    isInitial
+      ? `"project_structure": {
     "entry_points": ["src/index.js"],
     "key_directories": ["src/components"],
     "config_files": ["package.json"]
-  },` : ''}
+  },`
+      : ''
+  }
   "relevant_files": [
     {
       "path": "src/Example.jsx",
@@ -334,7 +386,8 @@ RULES:
 - If there's a specific question, make sure the analysis addresses it
 
 Respond with ONLY the JSON object, no other text.`,
-    }],
+      },
+    ],
   });
 
   const firstBlock = response.content[0];
@@ -381,8 +434,12 @@ export const exploreRepoTask = task({
     } = payload;
 
     const model = explorationModel || 'claude-haiku-4-5-20251001';
-    console.log(`[explore-repo] Starting: ${owner}/${repo} — focus: ${focusArea}, depth: ${depth}, model: ${model}`);
-    logger.info(`Exploring ${owner}/${repo} — focus: ${focusArea}, depth: ${depth}, model: ${model}`);
+    console.log(
+      `[explore-repo] Starting: ${owner}/${repo} — focus: ${focusArea}, depth: ${depth}, model: ${model}`
+    );
+    logger.info(
+      `Exploring ${owner}/${repo} — focus: ${focusArea}, depth: ${depth}, model: ${model}`
+    );
 
     // Initialize Anthropic client using env var (set in Trigger.dev config, NOT passed in payload)
     const anthropicApiKey = process.env.ANTHROPIC_API_KEY;
@@ -395,7 +452,9 @@ export const exploreRepoTask = task({
     console.log(`[explore-repo] Step 1: Fetching repo tree...`);
     logger.info('Fetching repository structure...');
     metadata.set('currentStep', 'Fetching repository structure');
-    metadata.set('steps', [{ action: 'Fetching repository structure', toolName: 'github_tree', timestamp: Date.now() }]);
+    metadata.set('steps', [
+      { action: 'Fetching repository structure', toolName: 'github_tree', timestamp: Date.now() },
+    ]);
     await metadata.flush();
 
     const tree = await fetchRepoTree(owner, repo, accessToken);
@@ -408,13 +467,26 @@ export const exploreRepoTask = task({
     console.log(`[explore-repo] Step 2: Asking Haiku to pick relevant files...`);
     logger.info('Analyzing repository structure...');
     metadata.set('currentStep', 'Analyzing repository structure');
-    metadata.append('steps', { action: `Analyzing ${tree.length} files`, toolName: 'analyze_structure', timestamp: Date.now() });
+    metadata.append('steps', {
+      action: `Analyzing ${tree.length} files`,
+      toolName: 'analyze_structure',
+      timestamp: Date.now(),
+    });
     await metadata.flush();
 
     const filePaths = await pickRelevantFiles(
-      client, model, treeListing, focusArea, depth, previousFindings, specificQuestion, previouslyReadFiles
+      client,
+      model,
+      treeListing,
+      focusArea,
+      depth,
+      previousFindings,
+      specificQuestion,
+      previouslyReadFiles
     );
-    console.log(`[explore-repo] Step 2 done: picked ${filePaths.length} files: ${filePaths.join(', ')}`);
+    console.log(
+      `[explore-repo] Step 2 done: picked ${filePaths.length} files: ${filePaths.join(', ')}`
+    );
     logger.info(`Selected ${filePaths.length} files to read: ${filePaths.join(', ')}`);
 
     // Step 3: Fetch file contents in parallel (~100ms each)
@@ -422,7 +494,12 @@ export const exploreRepoTask = task({
     console.log(`[explore-repo] Step 3: Fetching file contents...`);
     logger.info('Reading selected files...');
     for (const filePath of filePaths) {
-      metadata.append('steps', { action: `Reading: ./${filePath}`, toolName: 'github_read', toolInput: { path: filePath }, timestamp: Date.now() });
+      metadata.append('steps', {
+        action: `Reading: ./${filePath}`,
+        toolName: 'github_read',
+        toolInput: { path: filePath },
+        timestamp: Date.now(),
+      });
     }
     metadata.set('currentStep', `Reading ${filePaths.length} files`);
     await metadata.flush();
@@ -437,11 +514,22 @@ export const exploreRepoTask = task({
     console.log(`[explore-repo] Step 4: Synthesizing findings with Haiku...`);
     logger.info('Synthesizing exploration findings...');
     metadata.set('currentStep', 'Analyzing code patterns');
-    metadata.append('steps', { action: 'Analyzing code patterns', toolName: 'synthesize', toolInput: { focus_area: focusArea }, timestamp: Date.now() });
+    metadata.append('steps', {
+      action: 'Analyzing code patterns',
+      toolName: 'synthesize',
+      toolInput: { focus_area: focusArea },
+      timestamp: Date.now(),
+    });
     await metadata.flush();
 
     const findingsJson = await synthesizeFindings(
-      client, model, files, focusArea, previousFindings, specificQuestion, treeListing
+      client,
+      model,
+      files,
+      focusArea,
+      previousFindings,
+      specificQuestion,
+      treeListing
     );
 
     console.log(`[explore-repo] Done! Findings length: ${findingsJson?.length} chars`);

@@ -66,7 +66,13 @@ interface Repo {
   name: string;
   student_id: string | null;
   team_id: string | null;
-  student?: { avatar_url?: string | null; name?: string | null; login?: string | null; slug?: string | null; [key: string]: unknown } | null;
+  student?: {
+    avatar_url?: string | null;
+    name?: string | null;
+    login?: string | null;
+    slug?: string | null;
+    [key: string]: unknown;
+  } | null;
   team?: { avatar_url: string; name: string; slug: string; [key: string]: unknown } | null;
   assignments?: RepoAssignmentEntry[];
   project_number?: number | null;
@@ -105,17 +111,20 @@ const AssignmentTable = ({
   const isIndividualAssignment = module?.type === 'INDIVIDUAL';
 
   const getRepoAssignment = (repo: Repo) => {
-    return repo.assignments?.find((a) => a.assignment_id === assignment.id);
+    return repo.assignments?.find(a => a.assignment_id === assignment.id);
   };
 
-  const graderHandler = (graderLogin: string, assignmentObj: AssignmentDef, record: Repo, action: string) => {
-    const repoAssignment = record.assignments?.find(
-      (a) => a.assignment_id === assignmentObj.id
-    );
+  const graderHandler = (
+    graderLogin: string,
+    assignmentObj: AssignmentDef,
+    record: Repo,
+    action: string
+  ) => {
+    const repoAssignment = record.assignments?.find(a => a.assignment_id === assignmentObj.id);
     if (!repoAssignment) return;
     const { provider_issue_number, id: repoAssignmentId } = repoAssignment;
     const repoName = record.name;
-    const graderId = assistants.find((a) => a.login === graderLogin)!.id;
+    const graderId = assistants.find(a => a.login === graderLogin)!.id;
 
     const input = {
       repoName,
@@ -184,17 +193,17 @@ const AssignmentTable = ({
         };
       },
       render: (_: unknown, record: Repo) => {
-        const repoAssignment = record.assignments?.find(
-          (a) => a.assignment_id === assignment.id
-        );
+        const repoAssignment = record.assignments?.find(a => a.assignment_id === assignment.id);
         if (!repoAssignment) return null;
 
         return (
           <div className="pl-4 pt-1.5">
             <MultiSelect
-              defaultValue={repoAssignment?.graders?.map((g) => g.grader.login).filter((v): v is string => v != null)}
+              defaultValue={repoAssignment?.graders
+                ?.map(g => g.grader.login)
+                .filter((v): v is string => v != null)}
               options={assistants
-                .map((a) => ({
+                .map(a => ({
                   label: a.name || '',
                   value: a.login || '',
                 }))
@@ -263,12 +272,30 @@ const AssignmentTable = ({
             )}
             <TableActionButtons
               onView={() => {
-                openRepositoryAssignmentInGithub(org, repoAssignment as { repository: { name: string; [key: string]: unknown }; provider_issue_number: number; [key: string]: unknown });
+                openRepositoryAssignmentInGithub(
+                  org,
+                  repoAssignment as {
+                    repository: { name: string; [key: string]: unknown };
+                    provider_issue_number: number;
+                    [key: string]: unknown;
+                  }
+                );
               }}
               hideViewText
             >
-              <EmojiGrader repositoryAssignment={repoAssignment as Parameters<typeof EmojiGrader>[0]['repositoryAssignment']} emojiMappings={emojiMappings} />
-              <LateOverrideButton repositoryAssignment={repoAssignment as unknown as Parameters<typeof LateOverrideButton>[0]['repositoryAssignment']} />
+              <EmojiGrader
+                repositoryAssignment={
+                  repoAssignment as Parameters<typeof EmojiGrader>[0]['repositoryAssignment']
+                }
+                emojiMappings={emojiMappings}
+              />
+              <LateOverrideButton
+                repositoryAssignment={
+                  repoAssignment as unknown as Parameters<
+                    typeof LateOverrideButton
+                  >[0]['repositoryAssignment']
+                }
+              />
             </TableActionButtons>
           </div>
         );

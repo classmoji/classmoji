@@ -129,7 +129,9 @@ export const createGithubRepositoryAssignmentTask = task({
     const organization = payload.organization || payload.classroom?.git_organization;
 
     if (!organization?.login) {
-      throw new Error('Missing organization in payload - expected organization or classroom.git_organization');
+      throw new Error(
+        'Missing organization in payload - expected organization or classroom.git_organization'
+      );
     }
 
     const gitProvider = getGitProvider(organization);
@@ -287,10 +289,8 @@ export const dailyRepositoryAssignmentsReleaseTask = schedules.task({
         let logins: string[] = [];
 
         if (module.type === 'INDIVIDUAL') {
-          const students: StudentRecord[] = await ClassmojiService.classroomMembership.findUsersByRole(
-            classroom.id,
-            'STUDENT'
-          );
+          const students: StudentRecord[] =
+            await ClassmojiService.classroomMembership.findUsersByRole(classroom.id, 'STUDENT');
 
           logins = students
             .map((user: StudentRecord) => user.login || '')

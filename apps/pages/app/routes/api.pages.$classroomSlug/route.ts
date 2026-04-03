@@ -4,7 +4,13 @@ import { ClassmojiService, getAuthSession } from '~/utils/db.server.ts';
  * GET /api/pages/:classroomSlug
  * Returns list of pages for the classroom, filtered by user role
  */
-export const loader = async ({ params, request }: { params: Record<string, string | undefined>; request: Request }) => {
+export const loader = async ({
+  params,
+  request,
+}: {
+  params: Record<string, string | undefined>;
+  request: Request;
+}) => {
   const classroomSlug = params.classroomSlug!;
 
   // Fetch classroom
@@ -57,7 +63,7 @@ export const loader = async ({ params, request }: { params: Record<string, strin
   }
 
   return Response.json({
-    pages: pages.map((p) => ({
+    pages: pages.map(p => ({
       id: p.id,
       title: p.title,
       slug: p.slug,

@@ -3,15 +3,21 @@
  *
  * Groups related properties together with a title header.
  */
-export default function PropertySection({ title, children, defaultOpen = true }: { title: string; children: React.ReactNode; defaultOpen?: boolean }) {
+export default function PropertySection({
+  title,
+  children,
+  defaultOpen = true,
+}: {
+  title: string;
+  children: React.ReactNode;
+  defaultOpen?: boolean;
+}) {
   return (
     <div className="border-b border-gray-200 dark:border-gray-700 pb-4 mb-4 last:border-b-0 last:pb-0 last:mb-0">
       <h3 className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-3">
         {title}
       </h3>
-      <div className="space-y-3">
-        {children}
-      </div>
+      <div className="space-y-3">{children}</div>
     </div>
   );
 }
@@ -22,12 +28,8 @@ export default function PropertySection({ title, children, defaultOpen = true }:
 export function PropertyRow({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div className="flex items-center justify-between">
-      <label className="text-sm text-gray-700 dark:text-gray-300">
-        {label}
-      </label>
-      <div className="shrink-0">
-        {children}
-      </div>
+      <label className="text-sm text-gray-700 dark:text-gray-300">{label}</label>
+      <div className="shrink-0">{children}</div>
     </div>
   );
 }
@@ -37,8 +39,6 @@ export function PropertyRow({ label, children }: { label: string; children: Reac
  */
 export function PropertyLabel({ children }: { children: React.ReactNode }) {
   return (
-    <label className="block text-sm text-gray-700 dark:text-gray-300 mb-1.5">
-      {children}
-    </label>
+    <label className="block text-sm text-gray-700 dark:text-gray-300 mb-1.5">{children}</label>
   );
 }

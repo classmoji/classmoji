@@ -68,7 +68,11 @@ const GradeComment = ({ loaderData }: Route.ComponentProps) => {
       okText="Save"
     >
       <div className="py-4">
-        <UserThumbnailView user={student as { avatar_url?: string | null; name?: string | null; login?: string | null }} />
+        <UserThumbnailView
+          user={
+            student as { avatar_url?: string | null; name?: string | null; login?: string | null }
+          }
+        />
       </div>
       <p className="pb-4 text-gray-500 text-[13px]">
         You can provide comments on <span className=" underline text-[13px]">{student?.name}</span>

@@ -64,39 +64,42 @@ export default function ImageUploadModal({ open, onClose, onUpload }: ImageUploa
   }, [file]);
 
   // Handle file drop
-  const onDrop = useCallback(async (acceptedFiles: File[]) => {
-    const selectedFile = acceptedFiles[0];
-    if (!selectedFile) return;
+  const onDrop = useCallback(
+    async (acceptedFiles: File[]) => {
+      const selectedFile = acceptedFiles[0];
+      if (!selectedFile) return;
 
-    // Validate file type
-    if (!selectedFile.type.startsWith('image/')) {
-      message.error('Please select an image file');
-      return;
-    }
+      // Validate file type
+      if (!selectedFile.type.startsWith('image/')) {
+        message.error('Please select an image file');
+        return;
+      }
 
-    // Check file size (max 100MB for Git Blobs API)
-    const MAX_SIZE = 100 * 1024 * 1024;
-    if (selectedFile.size > MAX_SIZE) {
-      message.error('File too large. Maximum size is 100MB');
-      return;
-    }
+      // Check file size (max 100MB for Git Blobs API)
+      const MAX_SIZE = 100 * 1024 * 1024;
+      if (selectedFile.size > MAX_SIZE) {
+        message.error('File too large. Maximum size is 100MB');
+        return;
+      }
 
-    setFile(selectedFile);
-    setCrop(null);
-    setCompletedCrop(null);
+      setFile(selectedFile);
+      setCrop(null);
+      setCompletedCrop(null);
 
-    // Get and display dimensions
-    try {
-      const dims = await getImageDimensions(selectedFile);
-      setProcessedInfo({
-        originalSize: selectedFile.size,
-        dimensions: dims,
-        isGif: selectedFile.type === 'image/gif',
-      });
-    } catch (err: unknown) {
-      console.error('Failed to get image dimensions:', err);
-    }
-  }, [getImageDimensions]);
+      // Get and display dimensions
+      try {
+        const dims = await getImageDimensions(selectedFile);
+        setProcessedInfo({
+          originalSize: selectedFile.size,
+          dimensions: dims,
+          isGif: selectedFile.type === 'image/gif',
+        });
+      } catch (err: unknown) {
+        console.error('Failed to get image dimensions:', err);
+      }
+    },
+    [getImageDimensions]
+  );
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     onDrop,
@@ -128,11 +131,15 @@ export default function ImageUploadModal({ open, onClose, onUpload }: ImageUploa
       });
 
       // Update processed info
-      setProcessedInfo((prev) => prev ? ({
-        ...prev,
-        newSize: result.newSize,
-        wasProcessed: result.wasProcessed,
-      }) : null);
+      setProcessedInfo(prev =>
+        prev
+          ? {
+              ...prev,
+              newSize: result.newSize,
+              wasProcessed: result.wasProcessed,
+            }
+          : null
+      );
 
       // Create a File object from the blob
       const processedFile = new File(
@@ -196,9 +203,10 @@ export default function ImageUploadModal({ open, onClose, onUpload }: ImageUploa
             className={`
               border-2 border-dashed rounded-lg p-8 text-center cursor-pointer
               transition-colors
-              ${isDragActive
-                ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/20'
-                : 'border-gray-300 dark:border-gray-600 hover:border-gray-400 dark:hover:border-gray-500'
+              ${
+                isDragActive
+                  ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/20'
+                  : 'border-gray-300 dark:border-gray-600 hover:border-gray-400 dark:hover:border-gray-500'
               }
             `}
           >
@@ -234,9 +242,7 @@ export default function ImageUploadModal({ open, onClose, onUpload }: ImageUploa
           <div className="space-y-4">
             {/* File info */}
             <div className="flex items-center justify-between text-sm">
-              <span className="font-medium text-gray-700 dark:text-gray-300">
-                {file.name}
-              </span>
+              <span className="font-medium text-gray-700 dark:text-gray-300">{file.name}</span>
               <div className="flex items-center gap-4 text-gray-500 dark:text-gray-400">
                 {processedInfo?.dimensions && (
                   <span>
@@ -257,11 +263,7 @@ export default function ImageUploadModal({ open, onClose, onUpload }: ImageUploa
               {isGif ? (
                 // GIFs: Just show preview, no crop (would lose animation)
                 <div className="text-center">
-                  <img
-                    src={preview}
-                    alt="Preview"
-                    className="max-w-full max-h-80 mx-auto"
-                  />
+                  <img src={preview} alt="Preview" className="max-w-full max-h-80 mx-auto" />
                   <p className="mt-2 text-sm text-amber-600 dark:text-amber-400">
                     GIFs cannot be cropped or resized (would lose animation)
                   </p>
@@ -269,8 +271,8 @@ export default function ImageUploadModal({ open, onClose, onUpload }: ImageUploa
               ) : (
                 <ReactCrop
                   crop={crop ?? undefined}
-                  onChange={(c) => setCrop(c)}
-                  onComplete={(c) => setCompletedCrop(c)}
+                  onChange={c => setCrop(c)}
+                  onComplete={c => setCompletedCrop(c)}
                   aspect={selectedAspect}
                 >
                   <img
@@ -287,7 +289,7 @@ export default function ImageUploadModal({ open, onClose, onUpload }: ImageUploa
             {!isGif && (
               <div className="flex items-center gap-2">
                 <span className="text-sm text-gray-600 dark:text-gray-400">Crop:</span>
-                {aspectPresets.map((preset) => (
+                {aspectPresets.map(preset => (
                   <button
                     key={preset.label}
                     onClick={() => {
@@ -296,9 +298,10 @@ export default function ImageUploadModal({ open, onClose, onUpload }: ImageUploa
                     }}
                     className={`
                       px-2 py-1 text-xs rounded
-                      ${selectedAspect === preset.value
-                        ? 'bg-blue-500 text-white'
-                        : 'bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-300 dark:hover:bg-gray-600'
+                      ${
+                        selectedAspect === preset.value
+                          ? 'bg-blue-500 text-white'
+                          : 'bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-300 dark:hover:bg-gray-600'
                       }
                     `}
                   >
@@ -326,24 +329,13 @@ export default function ImageUploadModal({ open, onClose, onUpload }: ImageUploa
                   <label className="block text-sm text-gray-600 dark:text-gray-400 mb-1">
                     Quality: {quality}%
                   </label>
-                  <Slider
-                    min={10}
-                    max={100}
-                    value={quality}
-                    onChange={setQuality}
-                  />
+                  <Slider min={10} max={100} value={quality} onChange={setQuality} />
                 </div>
                 <div>
                   <label className="block text-sm text-gray-600 dark:text-gray-400 mb-1">
                     Max Width: {maxWidth}px
                   </label>
-                  <Slider
-                    min={320}
-                    max={3840}
-                    step={160}
-                    value={maxWidth}
-                    onChange={setMaxWidth}
-                  />
+                  <Slider min={320} max={3840} step={160} value={maxWidth} onChange={setMaxWidth} />
                 </div>
               </div>
             )}

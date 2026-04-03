@@ -2,7 +2,11 @@ import { task } from '@trigger.dev/sdk';
 import getPrisma from '@classmoji/database';
 
 interface InstallationPayload {
-  installation: { id: number; account: { id: number; login: string; [key: string]: unknown }; [key: string]: unknown };
+  installation: {
+    id: number;
+    account: { id: number; login: string; [key: string]: unknown };
+    [key: string]: unknown;
+  };
   [key: string]: unknown;
 }
 

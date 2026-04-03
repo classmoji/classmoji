@@ -45,7 +45,10 @@ interface AssignmentGradeEntry {
   repositoryAssignmentId: string;
 }
 
-export const calculateLetterGrade = (numericGrade: number, letterGradeMapping: LetterGradeMappingEntry[]): string => {
+export const calculateLetterGrade = (
+  numericGrade: number,
+  letterGradeMapping: LetterGradeMappingEntry[]
+): string => {
   for (const grade of letterGradeMapping) {
     if (numericGrade >= grade.min_grade) {
       return grade.letter_grade;
@@ -98,7 +101,10 @@ export const calculateStudentFinalGrade = (
  * Find the optimal set of repository assignments to keep when dropping N lowest.
  * Tries all possible combinations and returns the set that maximizes the weighted grade.
  */
-const findOptimalRepositoryAssignmentsToKeep = (repositoryAssignmentGrades: AssignmentGradeEntry[], dropCount: number): AssignmentGradeEntry[] => {
+const findOptimalRepositoryAssignmentsToKeep = (
+  repositoryAssignmentGrades: AssignmentGradeEntry[],
+  dropCount: number
+): AssignmentGradeEntry[] => {
   const n = repositoryAssignmentGrades.length;
   const keepCount = n - dropCount;
 
@@ -204,7 +210,10 @@ export const calculateRepositoryGrade = (
   return Math.round((grade / totalWeight) * 100 * 10) / 10;
 };
 
-export const calculateNumericGrade = (emojis: string[], emojiToNumberMap: Record<string, number>): number => {
+export const calculateNumericGrade = (
+  emojis: string[],
+  emojiToNumberMap: Record<string, number>
+): number => {
   if (emojis.length === 0) {
     return 0;
   }
@@ -220,9 +229,14 @@ export const calculateNumericGrade = (emojis: string[], emojiToNumberMap: Record
  * num_late_hours already accounts for extension hours, so no additional
  * adjustment is needed here.
  */
-export const applyLatePenalty = (numericGrade: number, repoAssignment: RepositoryAssignment, settings: OrganizationSettings): number => {
+export const applyLatePenalty = (
+  numericGrade: number,
+  repoAssignment: RepositoryAssignment,
+  settings: OrganizationSettings
+): number => {
   if ((repoAssignment.num_late_hours ?? 0) > 0 && repoAssignment.is_late_override == false) {
-    const latePenalty = (repoAssignment.num_late_hours ?? 0) * settings.late_penalty_points_per_hour;
+    const latePenalty =
+      (repoAssignment.num_late_hours ?? 0) * settings.late_penalty_points_per_hour;
     return Math.max(0, numericGrade - latePenalty);
   }
   return numericGrade;
@@ -237,7 +251,10 @@ export const gradeToEmoji = (score: number, emojiGrades: Record<string, number>)
   }, Object.keys(emojiGrades)[0]);
 };
 
-export const convertEmojiToNumber = (emoji: string, emojiToNumberMap: Record<string, number>): number => {
+export const convertEmojiToNumber = (
+  emoji: string,
+  emojiToNumberMap: Record<string, number>
+): number => {
   return emojiToNumberMap[emoji];
 };
 
@@ -299,8 +316,13 @@ export const getDroppedRepositoryAssignments = (
 
   if (assignmentGrades.length <= module.drop_lowest_count) return [];
 
-  const assignmentsToKeep = findOptimalRepositoryAssignmentsToKeep(assignmentGrades, module.drop_lowest_count);
-  const keptAssignmentIds = new Set(assignmentsToKeep.map(({ repositoryAssignmentId }) => repositoryAssignmentId));
+  const assignmentsToKeep = findOptimalRepositoryAssignmentsToKeep(
+    assignmentGrades,
+    module.drop_lowest_count
+  );
+  const keptAssignmentIds = new Set(
+    assignmentsToKeep.map(({ repositoryAssignmentId }) => repositoryAssignmentId)
+  );
 
   return assignmentGrades
     .filter(({ repositoryAssignmentId }) => !keptAssignmentIds.has(repositoryAssignmentId))
@@ -317,6 +339,11 @@ export const isRepositoryAssignmentDropped = (
   settings: OrganizationSettings,
   module: Module
 ): boolean => {
-  const droppedRepositoryAssignmentIds = getDroppedRepositoryAssignments(allRepositoryAssignments, emojiToNumberMap, settings, module);
+  const droppedRepositoryAssignmentIds = getDroppedRepositoryAssignments(
+    allRepositoryAssignments,
+    emojiToNumberMap,
+    settings,
+    module
+  );
   return droppedRepositoryAssignmentIds.includes(repositoryAssignmentId);
 };

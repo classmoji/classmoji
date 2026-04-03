@@ -119,7 +119,11 @@ interface AgentResponse {
   payload: Record<string, unknown>;
 }
 
-export async function sendRequest(type: string, payload: Record<string, unknown>, options: SendRequestOptions = {}): Promise<AgentResponse> {
+export async function sendRequest(
+  type: string,
+  payload: Record<string, unknown>,
+  options: SendRequestOptions = {}
+): Promise<AgentResponse> {
   const {
     timeout = 30000,
     responseTypes = [],
@@ -148,7 +152,17 @@ export async function sendRequest(type: string, payload: Record<string, unknown>
     };
 
     // Create a unique handler for this request
-    const messageHandler = (msg: { type: string; requestId?: string; payload: Record<string, unknown> & { sessionId?: string; attemptId?: string; conversationId?: string; step?: Record<string, unknown>; error?: string } }) => {
+    const messageHandler = (msg: {
+      type: string;
+      requestId?: string;
+      payload: Record<string, unknown> & {
+        sessionId?: string;
+        attemptId?: string;
+        conversationId?: string;
+        step?: Record<string, unknown>;
+        error?: string;
+      };
+    }) => {
       // SECURITY: Filter by requestId (primary) or sessionId (fallback for legacy)
       // This prevents receiving another user's response
       const matchesRequest = msg.requestId === requestId;

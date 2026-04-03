@@ -103,7 +103,15 @@ const ViewerRow = ({ user, lastViewedAt }: { user: ViewerUser; lastViewedAt: str
  * @param {number} props.totalCount - Total number of viewers (may exceed viewers.length)
  * @param {boolean} props.groupByRole - If true, group viewers by role category (for admin views)
  */
-const RecentViewers = ({ viewers = [], totalCount = 0, groupByRole = false }: { viewers?: Viewer[]; totalCount?: number; groupByRole?: boolean }) => {
+const RecentViewers = ({
+  viewers = [],
+  totalCount = 0,
+  groupByRole = false,
+}: {
+  viewers?: Viewer[];
+  totalCount?: number;
+  groupByRole?: boolean;
+}) => {
   if (!viewers || viewers.length === 0) {
     return null;
   }
@@ -113,12 +121,15 @@ const RecentViewers = ({ viewers = [], totalCount = 0, groupByRole = false }: { 
 
   // Group viewers by role category if enabled
   const groupedViewers = groupByRole
-    ? viewers.reduce<Record<RoleCategoryKey, Viewer[]>>((acc, viewer) => {
-        const category = getRoleCategory(viewer.role || '');
-        if (!acc[category]) acc[category] = [];
-        acc[category].push(viewer);
-        return acc;
-      }, {} as Record<RoleCategoryKey, Viewer[]>)
+    ? viewers.reduce<Record<RoleCategoryKey, Viewer[]>>(
+        (acc, viewer) => {
+          const category = getRoleCategory(viewer.role || '');
+          if (!acc[category]) acc[category] = [];
+          acc[category].push(viewer);
+          return acc;
+        },
+        {} as Record<RoleCategoryKey, Viewer[]>
+      )
     : null;
 
   // Dropdown content - grouped or flat list
@@ -187,8 +198,7 @@ const RecentViewers = ({ viewers = [], totalCount = 0, groupByRole = false }: { 
                 className="border-2 border-white dark:border-gray-900 shadow-sm hover:z-10 transition-transform hover:scale-110"
                 style={{ zIndex: displayViewers.length - index }}
               >
-                {!user.avatar_url &&
-                  (user.name?.[0] || user.login?.[0] || '?')}
+                {!user.avatar_url && (user.name?.[0] || user.login?.[0] || '?')}
               </Avatar>
             </Tooltip>
           ))}

@@ -49,7 +49,6 @@ function getLanguageFromClass(className: string | undefined) {
   return match ? match[1] : 'javascript';
 }
 
-
 export default function CodeBlockProperties({ element }: { element: HTMLElement }) {
   const { onContentChange, selectElement } = useElementSelection();
   const codeEl = element?.querySelector('code');
@@ -98,28 +97,34 @@ export default function CodeBlockProperties({ element }: { element: HTMLElement 
   // because contenteditable is on the <section>, not the <code> element.
 
   // Update language class
-  const handleLanguageChange = useCallback((newLang: string) => {
-    if (!codeEl) return;
+  const handleLanguageChange = useCallback(
+    (newLang: string) => {
+      if (!codeEl) return;
 
-    // Remove existing language class and add new one
-    codeEl.className = codeEl.className.replace(/language-\w+/, '');
-    codeEl.classList.add(`language-${newLang}`);
-    setLanguage(newLang);
-    onContentChange?.();
-  }, [codeEl, onContentChange]);
+      // Remove existing language class and add new one
+      codeEl.className = codeEl.className.replace(/language-\w+/, '');
+      codeEl.classList.add(`language-${newLang}`);
+      setLanguage(newLang);
+      onContentChange?.();
+    },
+    [codeEl, onContentChange]
+  );
 
   // Toggle line numbers
-  const handleLineNumbersChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    if (!element) return;
+  const handleLineNumbersChange = useCallback(
+    (e: React.ChangeEvent<HTMLInputElement>) => {
+      if (!element) return;
 
-    if (e.target.checked) {
-      element.setAttribute('data-line-numbers', '');
-    } else {
-      element.removeAttribute('data-line-numbers');
-    }
-    setShowLineNumbers(e.target.checked);
-    onContentChange?.();
-  }, [element, onContentChange]);
+      if (e.target.checked) {
+        element.setAttribute('data-line-numbers', '');
+      } else {
+        element.removeAttribute('data-line-numbers');
+      }
+      setShowLineNumbers(e.target.checked);
+      onContentChange?.();
+    },
+    [element, onContentChange]
+  );
 
   if (!element || !codeEl) {
     return null;
@@ -166,9 +171,7 @@ export default function CodeBlockProperties({ element }: { element: HTMLElement 
           >
             📦 Convert to Draggable Block
           </button>
-          <p className="text-xs text-gray-400 mt-1">
-            Move freely with absolute positioning
-          </p>
+          <p className="text-xs text-gray-400 mt-1">Move freely with absolute positioning</p>
         </PropertySection>
       )}
     </div>

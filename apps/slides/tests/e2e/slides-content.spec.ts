@@ -74,7 +74,9 @@ test.describe('Slides Content & Styling', () => {
     await page.waitForTimeout(200);
 
     // Verify H1 element exists in the current slide
-    await expect(page.locator('section.present[contenteditable="true"] h1')).toContainText('Test H1 Heading');
+    await expect(page.locator('section.present[contenteditable="true"] h1')).toContainText(
+      'Test H1 Heading'
+    );
   });
 
   test('can insert H2 heading', async ({ page }) => {
@@ -103,7 +105,9 @@ test.describe('Slides Content & Styling', () => {
     // Verify H2 element exists in current slide
     // Note: New slides have a default "New Slide" h2 title, so we look for the last h2
     // which is the one we just created
-    await expect(page.locator('section.present[contenteditable="true"] h2').last()).toContainText('Test H2 Subheading');
+    await expect(page.locator('section.present[contenteditable="true"] h2').last()).toContainText(
+      'Test H2 Subheading'
+    );
   });
 
   test('can insert H3 heading', async ({ page }) => {
@@ -130,7 +134,9 @@ test.describe('Slides Content & Styling', () => {
     await page.waitForTimeout(200);
 
     // Verify H3 element exists in current slide
-    await expect(page.locator('section.present[contenteditable="true"] h3')).toContainText('Test H3 Section');
+    await expect(page.locator('section.present[contenteditable="true"] h3')).toContainText(
+      'Test H3 Section'
+    );
   });
 
   // ─────────────────────────────────────────────────────────────
@@ -166,7 +172,9 @@ test.describe('Slides Content & Styling', () => {
 
     // Verify paragraph element exists in current slide
     // Use .first() since there may be multiple p elements (our typed content + existing slide content)
-    await expect(page.locator('section.present[contenteditable="true"] p').first()).toContainText('test paragraph text');
+    await expect(page.locator('section.present[contenteditable="true"] p').first()).toContainText(
+      'test paragraph text'
+    );
   });
 
   // ─────────────────────────────────────────────────────────────
@@ -201,14 +209,18 @@ test.describe('Slides Content & Styling', () => {
 
     // Verify bold is applied - check for semantic elements OR computed style
     // The editor may use <strong>, <b>, or CSS font-weight
-    const boldElement = page.locator('section.present[contenteditable="true"] strong, section.present[contenteditable="true"] b').first();
-    const hasBoldElement = await boldElement.count() > 0;
+    const boldElement = page
+      .locator(
+        'section.present[contenteditable="true"] strong, section.present[contenteditable="true"] b'
+      )
+      .first();
+    const hasBoldElement = (await boldElement.count()) > 0;
 
     if (hasBoldElement) {
       await expect(boldElement).toBeVisible();
     } else {
       // Check if bold is applied via CSS (spans with font-weight)
-      const isBold = await slideContent.evaluate((el) => {
+      const isBold = await slideContent.evaluate(el => {
         const text = el.querySelector('p, span, div');
         if (text) {
           const style = window.getComputedStyle(text);
@@ -247,14 +259,18 @@ test.describe('Slides Content & Styling', () => {
     await page.waitForTimeout(300);
 
     // Verify italic is applied - check for semantic elements OR computed style
-    const italicElement = page.locator('section.present[contenteditable="true"] em, section.present[contenteditable="true"] i').first();
-    const hasItalicElement = await italicElement.count() > 0;
+    const italicElement = page
+      .locator(
+        'section.present[contenteditable="true"] em, section.present[contenteditable="true"] i'
+      )
+      .first();
+    const hasItalicElement = (await italicElement.count()) > 0;
 
     if (hasItalicElement) {
       await expect(italicElement).toBeVisible();
     } else {
       // Check if italic is applied via CSS
-      const isItalic = await slideContent.evaluate((el) => {
+      const isItalic = await slideContent.evaluate(el => {
         const text = el.querySelector('p, span, div');
         if (text) {
           const style = window.getComputedStyle(text);
@@ -294,13 +310,13 @@ test.describe('Slides Content & Styling', () => {
 
     // Verify underline is applied - check for semantic elements OR computed style
     const underlineElement = page.locator('section.present[contenteditable="true"] u').first();
-    const hasUnderlineElement = await underlineElement.count() > 0;
+    const hasUnderlineElement = (await underlineElement.count()) > 0;
 
     if (hasUnderlineElement) {
       await expect(underlineElement).toBeVisible();
     } else {
       // Check if underline is applied via CSS
-      const hasUnderline = await slideContent.evaluate((el) => {
+      const hasUnderline = await slideContent.evaluate(el => {
         const text = el.querySelector('p, span, div');
         if (text) {
           const style = window.getComputedStyle(text);
@@ -339,14 +355,18 @@ test.describe('Slides Content & Styling', () => {
     await page.waitForTimeout(300);
 
     // Verify strikethrough is applied - check for semantic elements OR computed style
-    const strikethroughElement = page.locator('section.present[contenteditable="true"] s, section.present[contenteditable="true"] del, section.present[contenteditable="true"] strike').first();
-    const hasStrikethroughElement = await strikethroughElement.count() > 0;
+    const strikethroughElement = page
+      .locator(
+        'section.present[contenteditable="true"] s, section.present[contenteditable="true"] del, section.present[contenteditable="true"] strike'
+      )
+      .first();
+    const hasStrikethroughElement = (await strikethroughElement.count()) > 0;
 
     if (hasStrikethroughElement) {
       await expect(strikethroughElement).toBeVisible();
     } else {
       // Check if strikethrough is applied via CSS
-      const hasStrikethrough = await slideContent.evaluate((el) => {
+      const hasStrikethrough = await slideContent.evaluate(el => {
         const text = el.querySelector('p, span, div');
         if (text) {
           const style = window.getComputedStyle(text);

@@ -13,7 +13,12 @@ export function useQuizFocusMetrics({
   attemptId,
   initialTotalMs = 0,
   initialUnfocusedMs = 0,
-}: { isActive: boolean; attemptId: unknown; initialTotalMs?: number; initialUnfocusedMs?: number }) {
+}: {
+  isActive: boolean;
+  attemptId: unknown;
+  initialTotalMs?: number;
+  initialUnfocusedMs?: number;
+}) {
   const baseTotalRef = useRef(sanitizeInputValue(initialTotalMs));
   const baseUnfocusedRef = useRef(sanitizeInputValue(initialUnfocusedMs));
   const sessionStartRef = useRef<number | null>(null);

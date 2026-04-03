@@ -51,7 +51,7 @@ const EmojiMapping = ({ emojiMappings, orphanedEmojis }: EmojiMappingProps) => {
 
   // Handle inline cell update
   const handleCellUpdate = (emojiKey: string, field: string, value: string | number | null) => {
-    const mapping = emojiMappings.find((m) => m.emoji === emojiKey);
+    const mapping = emojiMappings.find(m => m.emoji === emojiKey);
     if (!mapping) return;
 
     fetcher!.submit(
@@ -72,7 +72,11 @@ const EmojiMapping = ({ emojiMappings, orphanedEmojis }: EmojiMappingProps) => {
   };
 
   // Start editing a cell
-  const startEditing = (emojiKey: string, field: EditingCell['field'], currentValue: string | number | null) => {
+  const startEditing = (
+    emojiKey: string,
+    field: EditingCell['field'],
+    currentValue: string | number | null
+  ) => {
     setEditingCell({ emoji: emojiKey, field });
     setEditValue(currentValue);
   };
@@ -185,8 +189,7 @@ const EmojiMapping = ({ emojiMappings, orphanedEmojis }: EmojiMappingProps) => {
       key: 'grade',
       width: '15%',
       render: (grade: number, record: EmojiMappingRecord) => {
-        const isEditing =
-          editingCell?.emoji === record.emoji && editingCell?.field === 'grade';
+        const isEditing = editingCell?.emoji === record.emoji && editingCell?.field === 'grade';
         if (isEditing) {
           return (
             <InputNumber
@@ -229,8 +232,7 @@ const EmojiMapping = ({ emojiMappings, orphanedEmojis }: EmojiMappingProps) => {
       width: '15%',
       render: (_: number, record: EmojiMappingRecord) => {
         const isEditing =
-          editingCell?.emoji === record.emoji &&
-          editingCell?.field === 'extra_tokens';
+          editingCell?.emoji === record.emoji && editingCell?.field === 'extra_tokens';
         if (isEditing) {
           return (
             <div className="flex items-center justify-center gap-2">
@@ -266,8 +268,7 @@ const EmojiMapping = ({ emojiMappings, orphanedEmojis }: EmojiMappingProps) => {
       key: 'description',
       render: (description: string, record: EmojiMappingRecord) => {
         const isEditing =
-          editingCell?.emoji === record.emoji &&
-          editingCell?.field === 'description';
+          editingCell?.emoji === record.emoji && editingCell?.field === 'description';
         if (isEditing) {
           return (
             <Input
@@ -340,7 +341,7 @@ const EmojiMapping = ({ emojiMappings, orphanedEmojis }: EmojiMappingProps) => {
                       className="w-48"
                       value={remapSelections[oldEmoji]}
                       onChange={value => handleRemapSelection(oldEmoji, value)}
-                      options={emojiMappings?.map((m) => ({
+                      options={emojiMappings?.map(m => ({
                         value: m.emoji,
                         label: (
                           <div className="flex items-center gap-2">

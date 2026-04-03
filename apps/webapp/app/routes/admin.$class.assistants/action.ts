@@ -41,7 +41,9 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
   return namedAction(request, {
     async createAssistant() {
       try {
-        const classroom = await ClassmojiService.classroom.findBySlug(classSlug) as AssistantClassroom | null;
+        const classroom = (await ClassmojiService.classroom.findBySlug(
+          classSlug
+        )) as AssistantClassroom | null;
         await addAssistantHandler({ assistant: data, classroom: classroom! });
 
         return {

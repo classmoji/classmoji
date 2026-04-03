@@ -233,7 +233,8 @@ const AdminAssistantDrawer = ({ loaderData }: Route.ComponentProps) => {
             <div className="flex items-center gap-4">
               <img
                 src={
-                  (assistant as Record<string, unknown>).avatar_url as string || `https://avatars.githubusercontent.com/${assistant.login}`
+                  ((assistant as Record<string, unknown>).avatar_url as string) ||
+                  `https://avatars.githubusercontent.com/${assistant.login}`
                 }
                 alt={assistant.name!}
                 className="w-16 h-16 rounded-full ring-2 ring-gray-200 dark:ring-gray-700"

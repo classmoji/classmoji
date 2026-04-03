@@ -5,7 +5,9 @@ import { useRouteLoaderData } from 'react-router';
  * Returns role-based access flags.
  */
 export function usePageAccess() {
-  const rootData = useRouteLoaderData('root') as { user: import('~/types/pages.ts').PagesUser | null } | undefined;
+  const rootData = useRouteLoaderData('root') as
+    | { user: import('~/types/pages.ts').PagesUser | null }
+    | undefined;
 
   if (!rootData?.user) {
     return {

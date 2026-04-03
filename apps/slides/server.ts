@@ -58,9 +58,10 @@ const httpServer = createServer(app);
 // ─────────────────────────────────────────────────────────────────────────────
 const io = new SocketServer(httpServer, {
   cors: {
-    origin: process.env.NODE_ENV === 'development'
-      ? ['http://localhost:6500', 'http://localhost:3000']
-      : [process.env.SLIDES_URL, process.env.WEBAPP_URL].filter(Boolean) as string[],
+    origin:
+      process.env.NODE_ENV === 'development'
+        ? ['http://localhost:6500', 'http://localhost:3000']
+        : ([process.env.SLIDES_URL, process.env.WEBAPP_URL].filter(Boolean) as string[]),
     credentials: true,
   },
 });
@@ -146,7 +147,7 @@ multiplex.use(async (socket, next) => {
   }
 });
 
-multiplex.on('connection', (socket) => {
+multiplex.on('connection', socket => {
   const data = socket.data as SocketData;
   console.log(`[multiplex] ${data.user?.login || 'anonymous'} connected`);
 
@@ -175,11 +176,13 @@ multiplex.on('connection', (socket) => {
       } else if (data.user) {
         // Authenticated user - verify classroom membership
         const membership = data.user.classroom_memberships.find(
-          (m) => String(m.classroom?.id) === String(slide.classroom_id)
+          m => String(m.classroom?.id) === String(slide.classroom_id)
         );
 
         if (!membership) {
-          console.log(`[multiplex] User ${data.user.login} not a member of classroom ${slide.classroom_id}`);
+          console.log(
+            `[multiplex] User ${data.user.login} not a member of classroom ${slide.classroom_id}`
+          );
           return;
         }
 
@@ -192,12 +195,16 @@ multiplex.on('connection', (socket) => {
       socket.join(slideId);
       data.slideId = slideId;
 
-      console.log(`[multiplex] ${data.user?.login || 'anonymous'} joined ${slideId} (canBroadcast: ${data.canBroadcast})`);
+      console.log(
+        `[multiplex] ${data.user?.login || 'anonymous'} joined ${slideId} (canBroadcast: ${data.canBroadcast})`
+      );
 
       // Send current slide position to late joiner (catch-up)
       const currentState = roomStates.get(slideId);
       if (currentState) {
-        console.log(`[multiplex] Sending current state to late joiner: h=${currentState.indexh}, v=${currentState.indexv}`);
+        console.log(
+          `[multiplex] Sending current state to late joiner: h=${currentState.indexh}, v=${currentState.indexv}`
+        );
         socket.emit('currentstate', currentState);
       }
 
@@ -297,7 +304,6 @@ if (isDev) {
       next(error);
     }
   });
-
 } else {
   // ═══════════════════════════════════════════════════════════════════════════
   // PRODUCTION: Serve pre-built assets

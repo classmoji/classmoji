@@ -1,10 +1,5 @@
 import getPrisma from '@classmoji/database';
-import type {
-  Prisma,
-  QuizGradingStrategy,
-  QuizStatus,
-  Role,
-} from '@prisma/client';
+import type { Prisma, QuizGradingStrategy, QuizStatus, Role } from '@prisma/client';
 
 interface QuizCreateInput {
   name: string;
@@ -95,10 +90,15 @@ export const update = async (quizId: string, data: QuizUpdateInput) => {
     updateData.due_date = data.dueDate ? new Date(data.dueDate) : null;
   if (data.status !== undefined) updateData.status = data.status;
   if (data.weight !== undefined) updateData.weight = parseInt(String(data.weight), 10);
-  if (data.questionCount !== undefined) updateData.question_count = Math.min(20, Math.max(1, parseInt(String(data.questionCount), 10) || 5));
+  if (data.questionCount !== undefined)
+    updateData.question_count = Math.min(
+      20,
+      Math.max(1, parseInt(String(data.questionCount), 10) || 5)
+    );
   if (data.includeCodeContext !== undefined)
     updateData.include_code_context = data.includeCodeContext;
-  if (data.maxAttempts !== undefined) updateData.max_attempts = parseInt(String(data.maxAttempts), 10);
+  if (data.maxAttempts !== undefined)
+    updateData.max_attempts = parseInt(String(data.maxAttempts), 10);
   if (data.gradingStrategy !== undefined) updateData.grading_strategy = data.gradingStrategy;
 
   return getPrisma().quiz.update({
@@ -154,8 +154,7 @@ export const getQuizzesByOrganization = async (
     throw new Error('Unauthorized classroom quiz access');
   }
 
-  const membershipClassroomId =
-    membership.classroom_id?.toString() ?? null;
+  const membershipClassroomId = membership.classroom_id?.toString() ?? null;
   if (membershipClassroomId && membershipClassroomId !== classroomId.toString()) {
     throw new Error('Membership does not match classroom');
   }

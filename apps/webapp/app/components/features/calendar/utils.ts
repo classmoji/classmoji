@@ -338,7 +338,9 @@ export const getRecurrenceText = (recurrenceRule: RecurrenceRule | null) => {
     saturday: 'Sat',
   };
 
-  const dayNames = days.map((d: string) => (dayLabels as Record<string, string>)[d] || d).join(', ');
+  const dayNames = days
+    .map((d: string) => (dayLabels as Record<string, string>)[d] || d)
+    .join(', ');
   const untilDate = until ? formatFullDate(new Date(until)) : '';
 
   return `Repeats ${dayNames}${untilDate ? ` until ${untilDate}` : ''}`;

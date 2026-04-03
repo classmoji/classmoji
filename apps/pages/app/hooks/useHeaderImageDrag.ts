@@ -32,18 +32,22 @@ const useHeaderImageDrag = ({
     }
   }, [position]);
 
-  const clamp = (val: number, min: number, max: number): number => Math.min(Math.max(val, min), max);
+  const clamp = (val: number, min: number, max: number): number =>
+    Math.min(Math.max(val, min), max);
 
-  const handleMove = useCallback((clientY: number) => {
-    if (!draggingRef.current || !containerRef.current) return;
-    const containerHeight = containerRef.current.offsetHeight;
-    if (containerHeight === 0) return;
+  const handleMove = useCallback(
+    (clientY: number) => {
+      if (!draggingRef.current || !containerRef.current) return;
+      const containerHeight = containerRef.current.offsetHeight;
+      if (containerHeight === 0) return;
 
-    const deltaY = clientY - startYRef.current;
-    // Drag UP (negative delta) → increase position → reveal bottom of image
-    const newPosition = startPositionRef.current - (deltaY / containerHeight) * 100;
-    onPositionChange(clamp(Math.round(newPosition), 0, 100));
-  }, [containerRef, onPositionChange]);
+      const deltaY = clientY - startYRef.current;
+      // Drag UP (negative delta) → increase position → reveal bottom of image
+      const newPosition = startPositionRef.current - (deltaY / containerHeight) * 100;
+      onPositionChange(clamp(Math.round(newPosition), 0, 100));
+    },
+    [containerRef, onPositionChange]
+  );
 
   const handleEnd = useCallback(() => {
     if (!draggingRef.current) return;
@@ -83,24 +87,30 @@ const useHeaderImageDrag = ({
     };
   }, [enabled, handleMove, handleEnd]);
 
-  const handleMouseDown = useCallback((e: React.MouseEvent) => {
-    if (!enabled) return;
-    e.preventDefault();
-    draggingRef.current = true;
-    startYRef.current = e.clientY;
-    startPositionRef.current = position;
-    document.body.style.cursor = 'ns-resize';
-    document.body.style.userSelect = 'none';
-  }, [enabled, position]);
+  const handleMouseDown = useCallback(
+    (e: React.MouseEvent) => {
+      if (!enabled) return;
+      e.preventDefault();
+      draggingRef.current = true;
+      startYRef.current = e.clientY;
+      startPositionRef.current = position;
+      document.body.style.cursor = 'ns-resize';
+      document.body.style.userSelect = 'none';
+    },
+    [enabled, position]
+  );
 
-  const handleTouchStart = useCallback((e: React.TouchEvent) => {
-    if (!enabled) return;
-    draggingRef.current = true;
-    startYRef.current = e.touches[0].clientY;
-    startPositionRef.current = position;
-    document.body.style.cursor = 'ns-resize';
-    document.body.style.userSelect = 'none';
-  }, [enabled, position]);
+  const handleTouchStart = useCallback(
+    (e: React.TouchEvent) => {
+      if (!enabled) return;
+      draggingRef.current = true;
+      startYRef.current = e.touches[0].clientY;
+      startPositionRef.current = position;
+      document.body.style.cursor = 'ns-resize';
+      document.body.style.userSelect = 'none';
+    },
+    [enabled, position]
+  );
 
   return { handleMouseDown, handleTouchStart };
 };

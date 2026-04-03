@@ -27,7 +27,11 @@ interface UnsplashPhoto {
 interface HeaderImageModalProps {
   open: boolean;
   onCancel: () => void;
-  onSave: (data: { url: string | null; position: number; photographer?: { name: string; link: string } | null }) => void;
+  onSave: (data: {
+    url: string | null;
+    position: number;
+    photographer?: { name: string; link: string } | null;
+  }) => void;
   currentImageUrl?: string | null;
   currentPosition?: number;
   hasUnsplash?: boolean;

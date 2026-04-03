@@ -54,7 +54,9 @@ export const updateExtension = async (data: UpdateExtensionInput) => {
 
     // Validate that balance won't go negative
     if (newBalance < 0) {
-      throw new Error(`Insufficient token balance. Current balance: ${studentBalance}, attempting to spend: ${Math.abs(data.amount)}`);
+      throw new Error(
+        `Insufficient token balance. Current balance: ${studentBalance}, attempting to spend: ${Math.abs(data.amount)}`
+      );
     }
 
     return tx.tokenTransaction.create({
@@ -113,10 +115,7 @@ export const assignToStudent = async (data: AssignToStudentInput) => {
   });
 };
 
-export const updateTransaction = async (
-  id: string,
-  data: Record<string, unknown>
-) => {
+export const updateTransaction = async (id: string, data: Record<string, unknown>) => {
   return getPrisma().tokenTransaction.update({
     where: { id },
     data: data as Prisma.TokenTransactionUncheckedUpdateInput,

@@ -26,9 +26,7 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
     }
 
     const gitProvider = getGitProvider(classroom.git_organization);
-    const projects = await gitProvider.listOrganizationProjects(
-      classroom.git_organization.login
-    );
+    const projects = await gitProvider.listOrganizationProjects(classroom.git_organization.login);
 
     return Response.json({ projects });
   } catch (error: unknown) {

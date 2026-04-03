@@ -224,7 +224,10 @@ export default function AdminQuizzes({ loaderData }: Route.ComponentProps) {
     );
   };
 
-  const handleUpdateWeight = (quizId: string | number, weight: string | number | null | undefined) => {
+  const handleUpdateWeight = (
+    quizId: string | number,
+    weight: string | number | null | undefined
+  ) => {
     fetcher.submit(
       {
         _action: 'updateWeight',
@@ -251,10 +254,16 @@ export default function AdminQuizzes({ loaderData }: Route.ComponentProps) {
   };
 
   const totalWeight = quizzes
-    .filter((q) => (q.status as string) !== 'ARCHIVED')
+    .filter(q => (q.status as string) !== 'ARCHIVED')
     .reduce((acc: number, q) => acc + q.weight, 0);
 
-  const ActionButton = ({ icon: Icon, tooltip, color = 'gray', onClick, popconfirmProps }: ActionButtonProps) => {
+  const ActionButton = ({
+    icon: Icon,
+    tooltip,
+    color = 'gray',
+    onClick,
+    popconfirmProps,
+  }: ActionButtonProps) => {
     const button = (
       <Button
         type="text"

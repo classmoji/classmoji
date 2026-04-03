@@ -100,110 +100,116 @@ export default function ImageResizeHandles() {
   }, [updateBounds]);
 
   // Handle mouse down on a resize handle
-  const handleMouseDown = useCallback((e: React.MouseEvent, handle: typeof HANDLES[number]) => {
-    e.preventDefault();
-    e.stopPropagation();
+  const handleMouseDown = useCallback(
+    (e: React.MouseEvent, handle: (typeof HANDLES)[number]) => {
+      e.preventDefault();
+      e.stopPropagation();
 
-    if (!selectedElement || !bounds) return;
+      if (!selectedElement || !bounds) return;
 
-    // Get the current dimensions
-    const rect = selectedElement.getBoundingClientRect();
-    const computedStyle = window.getComputedStyle(selectedElement);
+      // Get the current dimensions
+      const rect = selectedElement.getBoundingClientRect();
+      const computedStyle = window.getComputedStyle(selectedElement);
 
-    // Get natural size for aspect ratio calculations
-    const imgElement = selectedElement as HTMLImageElement;
-    const naturalWidth = imgElement.naturalWidth || rect.width;
-    const naturalHeight = imgElement.naturalHeight || rect.height;
-    const aspectRatio = naturalWidth / naturalHeight;
+      // Get natural size for aspect ratio calculations
+      const imgElement = selectedElement as HTMLImageElement;
+      const naturalWidth = imgElement.naturalWidth || rect.width;
+      const naturalHeight = imgElement.naturalHeight || rect.height;
+      const aspectRatio = naturalWidth / naturalHeight;
 
-    // Store initial state for dragging
-    dragStateRef.current = {
-      handle: handle.id,
-      startX: e.clientX,
-      startY: e.clientY,
-      startWidth: rect.width,
-      startHeight: rect.height,
-      aspectRatio,
-      // Get the parent element's bounds to calculate relative positioning
-      parentRect: selectedElement.parentElement?.getBoundingClientRect(),
-    };
+      // Store initial state for dragging
+      dragStateRef.current = {
+        handle: handle.id,
+        startX: e.clientX,
+        startY: e.clientY,
+        startWidth: rect.width,
+        startHeight: rect.height,
+        aspectRatio,
+        // Get the parent element's bounds to calculate relative positioning
+        parentRect: selectedElement.parentElement?.getBoundingClientRect(),
+      };
 
-    setIsDragging(true);
+      setIsDragging(true);
 
-    // Add document-level listeners for dragging
-    document.addEventListener('mousemove', handleMouseMove);
-    document.addEventListener('mouseup', handleMouseUp);
-  }, [selectedElement, bounds]);
+      // Add document-level listeners for dragging
+      document.addEventListener('mousemove', handleMouseMove);
+      document.addEventListener('mouseup', handleMouseUp);
+    },
+    [selectedElement, bounds]
+  );
 
   // Handle mouse move during drag
-  const handleMouseMove = useCallback((e: MouseEvent) => {
-    if (!dragStateRef.current || !selectedElement) return;
+  const handleMouseMove = useCallback(
+    (e: MouseEvent) => {
+      if (!dragStateRef.current || !selectedElement) return;
 
-    const { handle, startX, startY, startWidth, startHeight, aspectRatio } = dragStateRef.current;
+      const { handle, startX, startY, startWidth, startHeight, aspectRatio } = dragStateRef.current;
 
-    // CRITICAL: Get Reveal.js scale factor to convert screen pixels to slide coordinates
-    // Without this, dragging feels "floaty" - moving too fast or slow depending on zoom
-    const scale = window.Reveal?.getScale() || 1;
+      // CRITICAL: Get Reveal.js scale factor to convert screen pixels to slide coordinates
+      // Without this, dragging feels "floaty" - moving too fast or slow depending on zoom
+      const scale = window.Reveal?.getScale() || 1;
 
-    // Convert screen pixel deltas to slide coordinate deltas
-    const deltaX = (e.clientX - startX) / scale;
-    const deltaY = (e.clientY - startY) / scale;
+      // Convert screen pixel deltas to slide coordinate deltas
+      const deltaX = (e.clientX - startX) / scale;
+      const deltaY = (e.clientY - startY) / scale;
 
-    let newWidth = startWidth;
-    let newHeight = startHeight;
+      let newWidth = startWidth;
+      let newHeight = startHeight;
 
-    // Calculate new dimensions based on which handle is being dragged
-    switch (handle) {
-      case 'e':
-        newWidth = Math.max(50, startWidth + deltaX);
-        break;
-      case 'w':
-        newWidth = Math.max(50, startWidth - deltaX);
-        break;
-      case 's':
-        newHeight = Math.max(50, startHeight + deltaY);
-        break;
-      case 'n':
-        newHeight = Math.max(50, startHeight - deltaY);
-        break;
-      case 'se':
-        newWidth = Math.max(50, startWidth + deltaX);
-        newHeight = Math.max(50, startHeight + deltaY);
-        // Maintain aspect ratio if shift is held
-        if (e.shiftKey) {
-          newHeight = newWidth / aspectRatio;
-        }
-        break;
-      case 'sw':
-        newWidth = Math.max(50, startWidth - deltaX);
-        newHeight = Math.max(50, startHeight + deltaY);
-        if (e.shiftKey) {
-          newHeight = newWidth / aspectRatio;
-        }
-        break;
-      case 'ne':
-        newWidth = Math.max(50, startWidth + deltaX);
-        newHeight = Math.max(50, startHeight - deltaY);
-        if (e.shiftKey) {
-          newHeight = newWidth / aspectRatio;
-        }
-        break;
-      case 'nw':
-        newWidth = Math.max(50, startWidth - deltaX);
-        newHeight = Math.max(50, startHeight - deltaY);
-        if (e.shiftKey) {
-          newHeight = newWidth / aspectRatio;
-        }
-        break;
-    }
+      // Calculate new dimensions based on which handle is being dragged
+      switch (handle) {
+        case 'e':
+          newWidth = Math.max(50, startWidth + deltaX);
+          break;
+        case 'w':
+          newWidth = Math.max(50, startWidth - deltaX);
+          break;
+        case 's':
+          newHeight = Math.max(50, startHeight + deltaY);
+          break;
+        case 'n':
+          newHeight = Math.max(50, startHeight - deltaY);
+          break;
+        case 'se':
+          newWidth = Math.max(50, startWidth + deltaX);
+          newHeight = Math.max(50, startHeight + deltaY);
+          // Maintain aspect ratio if shift is held
+          if (e.shiftKey) {
+            newHeight = newWidth / aspectRatio;
+          }
+          break;
+        case 'sw':
+          newWidth = Math.max(50, startWidth - deltaX);
+          newHeight = Math.max(50, startHeight + deltaY);
+          if (e.shiftKey) {
+            newHeight = newWidth / aspectRatio;
+          }
+          break;
+        case 'ne':
+          newWidth = Math.max(50, startWidth + deltaX);
+          newHeight = Math.max(50, startHeight - deltaY);
+          if (e.shiftKey) {
+            newHeight = newWidth / aspectRatio;
+          }
+          break;
+        case 'nw':
+          newWidth = Math.max(50, startWidth - deltaX);
+          newHeight = Math.max(50, startHeight - deltaY);
+          if (e.shiftKey) {
+            newHeight = newWidth / aspectRatio;
+          }
+          break;
+      }
 
-    // Apply the new dimensions directly to the image
-    selectedElement.style.width = `${Math.round(newWidth)}px`;
-    selectedElement.style.height = `${Math.round(newHeight)}px`;
+      // Apply the new dimensions directly to the image
+      selectedElement.style.width = `${Math.round(newWidth)}px`;
+      selectedElement.style.height = `${Math.round(newHeight)}px`;
 
-    // Update bounds for visual feedback
-    updateBounds();
-  }, [selectedElement, updateBounds]);
+      // Update bounds for visual feedback
+      updateBounds();
+    },
+    [selectedElement, updateBounds]
+  );
 
   // Handle mouse up - end drag
   const handleMouseUp = useCallback(() => {
@@ -258,7 +264,7 @@ export default function ImageResizeHandles() {
       />
 
       {/* Resize handles */}
-      {HANDLES.map((handle) => (
+      {HANDLES.map(handle => (
         <div
           key={handle.id}
           className={`image-resize-handle image-resize-handle-${handle.id}`}
@@ -277,7 +283,7 @@ export default function ImageResizeHandles() {
             // Add shadow for visibility
             boxShadow: '0 1px 3px rgba(0,0,0,0.2)',
           }}
-          onMouseDown={(e) => handleMouseDown(e, handle)}
+          onMouseDown={e => handleMouseDown(e, handle)}
         />
       ))}
 

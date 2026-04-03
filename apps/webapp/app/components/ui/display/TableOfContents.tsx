@@ -84,7 +84,8 @@ interface UseActiveHeadingOptions {
 }
 
 export const useActiveHeading = (headings: Heading[], options: UseActiveHeadingOptions = {}) => {
-  const { getElement = (id: string) => document.querySelector(`[data-block-id="${id}"]`) } = options;
+  const { getElement = (id: string) => document.querySelector(`[data-block-id="${id}"]`) } =
+    options;
 
   const [activeId, setActiveId] = useState(headings[0]?.id || null);
 
@@ -92,7 +93,9 @@ export const useActiveHeading = (headings: Heading[], options: UseActiveHeadingO
     if (headings.length === 0) return;
 
     const handleScroll = () => {
-      const headingElements = headings.map((h: Heading) => getElement(h.id)).filter((el): el is Element => el !== null);
+      const headingElements = headings
+        .map((h: Heading) => getElement(h.id))
+        .filter((el): el is Element => el !== null);
 
       if (headingElements.length === 0) return;
 

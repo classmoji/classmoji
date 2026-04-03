@@ -46,9 +46,10 @@ const Header = ({
   };
 
   // Build GitHub URL
-  const githubUrl = classroom.git_organization && page?.content_path
-    ? `https://github.com/${classroom.git_organization.login}/${classroom.git_organization.repo}/blob/main/${page.content_path}/content.json`
-    : null;
+  const githubUrl =
+    classroom.git_organization && page?.content_path
+      ? `https://github.com/${classroom.git_organization.login}/${classroom.git_organization.repo}/blob/main/${page.content_path}/content.json`
+      : null;
 
   return (
     <header className="sticky top-0 z-40 bg-white dark:bg-[#191919] w-full">
@@ -116,11 +117,7 @@ const Header = ({
                   className="p-1.5 text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-800 rounded"
                   title={isFullscreen ? 'Exit fullscreen' : 'Fullscreen'}
                 >
-                  {isFullscreen ? (
-                    <IconMinimize size={18} />
-                  ) : (
-                    <IconMaximize size={18} />
-                  )}
+                  {isFullscreen ? <IconMinimize size={18} /> : <IconMaximize size={18} />}
                 </button>
 
                 {/* Options menu (instructors only) */}
