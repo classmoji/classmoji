@@ -4,7 +4,7 @@ import type { ReactNode } from 'react';
 export interface BreadcrumbProps {
   classroomSlug: string;
   classroomHue?: number;
-  trail: ReactNode[];
+  trail: string[];
   action?: ReactNode;
 }
 
@@ -42,7 +42,7 @@ export function Breadcrumb({
       />
       <span style={{ color: 'var(--ink-1)', fontWeight: 500 }}>{classroomSlug}</span>
       {trail.map((t, i) => (
-        <Fragment key={i}>
+        <Fragment key={`${i}-${t}`}>
           <span style={{ color: 'var(--ink-4)' }}>/</span>
           <span
             style={{

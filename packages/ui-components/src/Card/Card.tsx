@@ -1,3 +1,4 @@
+import { forwardRef } from 'react';
 import type { HTMLAttributes, ReactNode, CSSProperties } from 'react';
 
 export interface CardProps extends HTMLAttributes<HTMLDivElement> {
@@ -7,12 +8,22 @@ export interface CardProps extends HTMLAttributes<HTMLDivElement> {
   padding?: number | string;
 }
 
-export function Card({ children, className, padding, style, ...rest }: CardProps) {
+export const Card = forwardRef<HTMLDivElement, CardProps>(function Card(
+  { children, className, padding, style, ...rest },
+  ref,
+) {
   const mergedStyle: CSSProperties | undefined =
     padding !== undefined ? { padding, ...style } : style;
   return (
-    <div className={className ? `card ${className}` : 'card'} style={mergedStyle} {...rest}>
+    <div
+      ref={ref}
+      className={className ? `card ${className}` : 'card'}
+      style={mergedStyle}
+      {...rest}
+    >
       {children}
     </div>
   );
-}
+});
+
+Card.displayName = 'Card';

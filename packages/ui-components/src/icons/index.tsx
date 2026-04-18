@@ -159,7 +159,8 @@ export function IconArrowR({ size = DEFAULT_SIZE, strokeWidth = DEFAULT_STROKE, 
   );
 }
 
-export function IconGithub({ size = DEFAULT_SIZE, ...rest }: AnyIconProps) {
+export function IconGithub({ size = DEFAULT_SIZE, strokeWidth: _strokeWidth, ...rest }: AnyIconProps) {
+  void _strokeWidth;
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" fill="currentColor" {...rest}>
       <path d="M12 2a10 10 0 0 0-3.16 19.49c.5.09.68-.22.68-.48v-1.69c-2.78.6-3.37-1.34-3.37-1.34-.46-1.16-1.11-1.47-1.11-1.47-.91-.62.07-.6.07-.6 1 .07 1.53 1.03 1.53 1.03.89 1.53 2.34 1.09 2.91.83.09-.65.35-1.09.63-1.34-2.22-.25-4.56-1.11-4.56-4.94 0-1.09.39-1.98 1.03-2.68-.1-.25-.45-1.27.1-2.65 0 0 .84-.27 2.75 1.02a9.56 9.56 0 0 1 5 0c1.91-1.29 2.75-1.02 2.75-1.02.55 1.38.2 2.4.1 2.65.64.7 1.03 1.59 1.03 2.68 0 3.84-2.34 4.68-4.57 4.93.36.31.68.92.68 1.85v2.74c0 .27.18.58.69.48A10 10 0 0 0 12 2z" />
@@ -246,7 +247,8 @@ export function IconTerminal({ size = DEFAULT_SIZE, strokeWidth = DEFAULT_STROKE
   );
 }
 
-export function IconDot({ size = DEFAULT_SIZE, ...rest }: AnyIconProps) {
+export function IconDot({ size = DEFAULT_SIZE, strokeWidth: _strokeWidth, ...rest }: AnyIconProps) {
+  void _strokeWidth;
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" fill="currentColor" {...rest}>
       <circle cx="12" cy="12" r="3" />
@@ -262,7 +264,8 @@ export function IconX({ size = DEFAULT_SIZE, strokeWidth = DEFAULT_STROKE, ...re
   );
 }
 
-export function IconLogo({ size = 24, ...rest }: AnyIconProps) {
+export function IconLogo({ size = 24, strokeWidth: _strokeWidth, ...rest }: AnyIconProps) {
+  void _strokeWidth;
   return (
     <svg width={size} height={size} viewBox="0 0 32 32" fill="none" {...rest}>
       <path d="M16 7c3 0 5 2 5 2s-1-3.5-3-4.5 1-2 1-2-3 0-5 2.5C12 2.5 9 2.5 9 2.5s2 1 1 2-3 1.5-3 4.5c0 0 2-2 5-2 0 0-5 3.5-5 10 0 7 5 11 9 11s9-4 9-11c0-6.5-5-10-5-10z" fill="oklch(62% 0.19 285)" />

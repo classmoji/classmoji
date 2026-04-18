@@ -1,3 +1,4 @@
+import { forwardRef } from 'react';
 import type { CSSProperties, HTMLAttributes } from 'react';
 
 export interface AvatarProps extends Omit<HTMLAttributes<HTMLSpanElement>, 'children'> {
@@ -12,16 +13,10 @@ export interface AvatarProps extends Omit<HTMLAttributes<HTMLSpanElement>, 'chil
 const DEFAULT_HUE = 285;
 const DEFAULT_SIZE = 24;
 
-export function Avatar({
-  initials,
-  hue = DEFAULT_HUE,
-  size = DEFAULT_SIZE,
-  src,
-  alt,
-  className,
-  style,
-  ...rest
-}: AvatarProps) {
+export const Avatar = forwardRef<HTMLSpanElement, AvatarProps>(function Avatar(
+  { initials, hue = DEFAULT_HUE, size = DEFAULT_SIZE, src, alt, className, style, ...rest },
+  ref,
+) {
   const baseStyle: CSSProperties = {
     background: `linear-gradient(135deg, oklch(82% 0.09 ${hue}), oklch(60% 0.18 ${hue}))`,
     width: size,
@@ -35,6 +30,7 @@ export function Avatar({
   if (src) {
     return (
       <span
+        ref={ref}
         className={classes}
         style={{ ...baseStyle, overflow: 'hidden', padding: 0 }}
         {...rest}
@@ -49,8 +45,10 @@ export function Avatar({
   }
 
   return (
-    <span className={classes} style={baseStyle} {...rest}>
+    <span ref={ref} className={classes} style={baseStyle} {...rest}>
       {initials ?? ''}
     </span>
   );
-}
+});
+
+Avatar.displayName = 'Avatar';

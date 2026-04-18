@@ -1,3 +1,4 @@
+import { forwardRef } from 'react';
 import type { ButtonHTMLAttributes, ReactNode } from 'react';
 
 export interface IconButtonProps extends Omit<ButtonHTMLAttributes<HTMLButtonElement>, 'title'> {
@@ -9,11 +10,16 @@ export interface IconButtonProps extends Omit<ButtonHTMLAttributes<HTMLButtonEle
 /**
  * Ghost-styled icon button for topbar utilities (GitHub, bell, settings, etc.).
  */
-export function IconButton({ label, icon, className, ...rest }: IconButtonProps) {
+export const IconButton = forwardRef<HTMLButtonElement, IconButtonProps>(function IconButton(
+  { label, icon, className, ...rest },
+  ref,
+) {
   const classes = ['btn', 'btn-ghost', className].filter(Boolean).join(' ');
   return (
-    <button className={classes} title={label} aria-label={label} {...rest}>
+    <button ref={ref} className={classes} title={label} aria-label={label} {...rest}>
       {icon}
     </button>
   );
-}
+});
+
+IconButton.displayName = 'IconButton';

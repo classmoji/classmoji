@@ -29,6 +29,7 @@ export function EmojiScale({ grades, picked, onPick }: EmojiScaleProps) {
         return (
           <button
             key={g.emoji}
+            type="button"
             onClick={() => onPick(g)}
             style={{
               display: 'flex',
