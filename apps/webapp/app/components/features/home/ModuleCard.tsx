@@ -9,7 +9,8 @@ export interface ModuleCardItem {
 }
 
 export interface ModuleCardData {
-  number: number | string;
+  // TODO: Module schema has no integer index; show when one lands
+  number: string | number | null;
   name: string;
   assignmentCount: number;
   weeks: string;
@@ -44,7 +45,9 @@ export function ModuleCard({
   const pct = Math.max(0, Math.min(100, Math.round(m.pct)));
   return (
     <div className="card" style={{ padding: 22 }}>
-      <div className="caps" style={{ marginBottom: 6 }}>Module #{m.number}</div>
+      <div className="caps" style={{ marginBottom: 6 }}>
+        {m.number != null ? `Module #${m.number}` : 'Current module'}
+      </div>
       <h2
         className="display"
         style={{ margin: 0, fontSize: 24, fontWeight: 500, letterSpacing: -0.4 }}

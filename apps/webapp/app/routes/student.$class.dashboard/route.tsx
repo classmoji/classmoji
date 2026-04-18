@@ -1,5 +1,5 @@
 import { Await } from 'react-router';
-import React, { Suspense } from 'react';
+import { Suspense } from 'react';
 import { namedAction } from 'remix-utils/named-action';
 import dayjs from 'dayjs';
 import type { Route } from './+types/route';
@@ -66,7 +66,13 @@ interface LoaderQuiz {
 
 // --- Loader ----------------------------------------------------------------
 
-export const loader = async ({ params, request }: Route.LoaderArgs) => {
+export const loader = async ({
+  params,
+  request,
+}: Route.LoaderArgs): Promise<{
+  classSlug: string;
+  data: Promise<[LoaderRepoAssignment[], LoaderQuiz[]]>;
+}> => {
   const classSlug = params.class!;
 
   const { userId, classroom, membership } = await assertClassroomAccess({
@@ -80,8 +86,12 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
   const dataPromise = Promise.all([
     ClassmojiService.repositoryAssignment.findForUser({
       repository: { student_id: userId, classroom_id: classroom.id },
-    }),
-    ClassmojiService.quiz.getQuizzesForStudent(classroom.id, userId, membership),
+    }) as unknown as Promise<LoaderRepoAssignment[]>,
+    ClassmojiService.quiz.getQuizzesForStudent(
+      classroom.id,
+      userId,
+      membership,
+    ) as unknown as Promise<LoaderQuiz[]>,
   ]);
 
   return {
@@ -179,14 +189,15 @@ function deriveCurrentModule(
   const weekday = now.day();
   const diffFromMon = (weekday + 6) % 7;
   const monday = now.subtract(diffFromMon, 'day').startOf('day');
-  const nextMonday = monday.add(7, 'day');
 
   const items: ModuleCardItem[] = inModule
     .filter(ra => {
       const d = ra.assignment.student_deadline
         ? dayjs(ra.assignment.student_deadline)
         : null;
-      return d && d.isAfter(monday) && d.isBefore(nextMonday);
+      if (!d) return false;
+      const dayOffset = d.startOf('day').diff(monday, 'day');
+      return dayOffset >= 0 && dayOffset < 7;
     })
     .sort((a, b) =>
       dayjs(a.assignment.student_deadline!).diff(dayjs(b.assignment.student_deadline!)),
@@ -200,7 +211,8 @@ function deriveCurrentModule(
 
   return {
     module: {
-      number: moduleId.slice(0, 4),
+      // TODO: Module schema has no integer index; show when one lands
+      number: null,
       name: moduleTitle,
       assignmentCount: total,
       weeks: '—',
@@ -266,77 +278,71 @@ const StudentDashboard = ({ loaderData }: Route.ComponentProps) => {
       <PageHeader title="Dashboard" routeName="dashboard" />
       <Suspense fallback={null}>
         <Await resolve={data}>
-          {
-            ((resolved: unknown) => {
-              const [rawRepoAssignments, rawQuizzes] = resolved as [
-                LoaderRepoAssignment[],
-                LoaderQuiz[],
-              ];
-              const repoAssignments = rawRepoAssignments ?? [];
-              const quizzes = rawQuizzes ?? [];
+          {([rawRepoAssignments, rawQuizzes]) => {
+            const repoAssignments = rawRepoAssignments ?? [];
+            const quizzes = rawQuizzes ?? [];
 
-              const weekDays = buildWeekDays();
-              const weekEvents = bucketWeekEvents(repoAssignments, quizzes);
-              const currentQuiz = deriveCurrentQuiz(quizzes);
-              const { module: currentModule, moduleId } = deriveCurrentModule(
-                repoAssignments,
-              );
-              const repo = deriveRepo(repoAssignments);
+            const weekDays = buildWeekDays();
+            const weekEvents = bucketWeekEvents(repoAssignments, quizzes);
+            const currentQuiz = deriveCurrentQuiz(quizzes);
+            const { module: currentModule, moduleId } = deriveCurrentModule(
+              repoAssignments,
+            );
+            const repo = deriveRepo(repoAssignments);
 
-              const quizHref = currentQuiz
-                ? `/student/${classSlug}/quizzes/${currentQuiz.id}`
-                : undefined;
+            const quizHref = currentQuiz
+              ? `/student/${classSlug}/quizzes/${currentQuiz.id}`
+              : undefined;
 
-              const tokens: TokenStripData = {
-                balance: tokenBalance ?? 0,
-                earned: 0,
-                spent: 0,
-              };
+            const tokens: TokenStripData = {
+              balance: tokenBalance ?? 0,
+              earned: 0,
+              spent: 0,
+            };
 
-              return (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-                  <QuizBanner
-                    quiz={currentQuiz}
-                    allTasksHref={`/student/${classSlug}/quizzes`}
+            return (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+                <QuizBanner
+                  quiz={currentQuiz}
+                  allTasksHref={`/student/${classSlug}/quizzes`}
+                />
+                <WeekStrip days={weekDays} events={weekEvents} />
+                <div
+                  style={{
+                    display: 'grid',
+                    gridTemplateColumns: '1.2fr 1fr',
+                    gap: 16,
+                  }}
+                >
+                  <ModuleCard
+                    module={currentModule}
+                    viewModuleHref={
+                      moduleId
+                        ? `/student/${classSlug}/modules/${moduleId}`
+                        : `/student/${classSlug}/modules`
+                    }
+                    primaryActionHref={quizHref}
+                    primaryActionLabel={
+                      currentQuiz ? `Go to ${currentQuiz.title}` : undefined
+                    }
                   />
-                  <WeekStrip days={weekDays} events={weekEvents} />
                   <div
                     style={{
-                      display: 'grid',
-                      gridTemplateColumns: '1.2fr 1fr',
+                      display: 'flex',
+                      flexDirection: 'column',
                       gap: 16,
                     }}
                   >
-                    <ModuleCard
-                      module={currentModule}
-                      viewModuleHref={
-                        moduleId
-                          ? `/student/${classSlug}/modules/${moduleId}`
-                          : `/student/${classSlug}/modules`
-                      }
-                      primaryActionHref={quizHref}
-                      primaryActionLabel={
-                        currentQuiz ? `Go to ${currentQuiz.title}` : undefined
-                      }
+                    <RepoCard repo={repo} />
+                    <TokenStrip
+                      tokens={tokens}
+                      tokensHref={`/student/${classSlug}/tokens`}
                     />
-                    <div
-                      style={{
-                        display: 'flex',
-                        flexDirection: 'column',
-                        gap: 16,
-                      }}
-                    >
-                      <RepoCard repo={repo} />
-                      <TokenStrip
-                        tokens={tokens}
-                        tokensHref={`/student/${classSlug}/tokens`}
-                      />
-                    </div>
                   </div>
                 </div>
-              );
-            }) as unknown as React.ReactNode
-          }
+              </div>
+            );
+          }}
         </Await>
       </Suspense>
     </div>
