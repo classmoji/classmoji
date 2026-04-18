@@ -22,9 +22,9 @@ export function AppBar({ user }: AppBarProps) {
         zIndex: 10,
         display: 'flex',
         alignItems: 'center',
-        gap: 14,
-        padding: '0 20px',
-        height: 48,
+        gap: 18,
+        padding: '0 28px',
+        height: 60,
         borderBottom: '1px solid var(--line)',
         background: 'var(--bg-1)',
       }}
@@ -33,13 +33,13 @@ export function AppBar({ user }: AppBarProps) {
         style={{
           display: 'flex',
           alignItems: 'center',
-          gap: 8,
+          gap: 10,
           fontWeight: 600,
-          fontSize: 14,
+          fontSize: 17,
           letterSpacing: '-0.01em',
         }}
       >
-        <Logo size={22} variant="icon" />
+        <Logo size={28} variant="icon" />
         classmoji
       </span>
 
@@ -47,9 +47,9 @@ export function AppBar({ user }: AppBarProps) {
         <button
           type="button"
           style={{
-            padding: '4px 10px',
-            borderRadius: 5,
-            fontSize: 12.5,
+            padding: '6px 14px',
+            borderRadius: 6,
+            fontSize: 13.5,
             fontWeight: 600,
             color: 'var(--ink-0)',
             background: 'transparent',
@@ -62,9 +62,9 @@ export function AppBar({ user }: AppBarProps) {
         <button
           type="button"
           style={{
-            padding: '4px 10px',
-            borderRadius: 5,
-            fontSize: 12.5,
+            padding: '6px 14px',
+            borderRadius: 6,
+            fontSize: 13.5,
             fontWeight: 500,
             color: 'var(--ink-2)',
             background: 'transparent',
@@ -77,9 +77,9 @@ export function AppBar({ user }: AppBarProps) {
         <button
           type="button"
           style={{
-            padding: '4px 10px',
-            borderRadius: 5,
-            fontSize: 12.5,
+            padding: '6px 14px',
+            borderRadius: 6,
+            fontSize: 13.5,
             fontWeight: 500,
             color: 'var(--ink-2)',
             background: 'transparent',
@@ -94,20 +94,20 @@ export function AppBar({ user }: AppBarProps) {
       <div
         style={{
           flex: 1,
-          maxWidth: 440,
+          maxWidth: 480,
           display: 'flex',
           alignItems: 'center',
-          gap: 8,
-          height: 30,
-          padding: '0 10px',
+          gap: 10,
+          height: 36,
+          padding: '0 12px',
           border: '1px solid var(--line-2)',
-          borderRadius: 6,
+          borderRadius: 8,
           background: 'var(--bg-0)',
           color: 'var(--ink-3)',
-          fontSize: 12.5,
+          fontSize: 13.5,
         }}
       >
-        <IconSearch size={14} />
+        <IconSearch size={16} />
         <span>Search classes, assignments, students…</span>
         <kbd
           style={{
@@ -129,9 +129,9 @@ export function AppBar({ user }: AppBarProps) {
         type="button"
         title="What's new"
         style={{
-          width: 30,
-          height: 30,
-          borderRadius: 6,
+          width: 36,
+          height: 36,
+          borderRadius: 8,
           display: 'grid',
           placeItems: 'center',
           color: 'var(--ink-2)',
@@ -140,15 +140,15 @@ export function AppBar({ user }: AppBarProps) {
           cursor: 'pointer',
         }}
       >
-        <IconSupport size={14} />
+        <IconSupport size={16} />
       </button>
       <button
         type="button"
         title="Notifications"
         style={{
-          width: 30,
-          height: 30,
-          borderRadius: 6,
+          width: 36,
+          height: 36,
+          borderRadius: 8,
           display: 'grid',
           placeItems: 'center',
           color: 'var(--ink-2)',
@@ -158,7 +158,7 @@ export function AppBar({ user }: AppBarProps) {
           position: 'relative',
         }}
       >
-        <IconBell size={14} />
+        <IconBell size={16} />
         <span
           style={{
             position: 'absolute',
@@ -178,12 +178,12 @@ export function AppBar({ user }: AppBarProps) {
           style={{
             display: 'flex',
             alignItems: 'center',
-            gap: 6,
-            padding: '2px 6px 2px 2px',
-            borderRadius: 20,
+            gap: 8,
+            padding: '3px 10px 3px 3px',
+            borderRadius: 24,
             border: '1px solid var(--line)',
             background: 'var(--bg-1)',
-            fontSize: 12,
+            fontSize: 13,
             cursor: 'pointer',
           }}
         >
@@ -191,27 +191,27 @@ export function AppBar({ user }: AppBarProps) {
             <img
               src={user.avatar_url}
               alt={user?.name ?? user?.login ?? 'User'}
-              style={{ width: 22, height: 22, borderRadius: '50%' }}
+              style={{ width: 28, height: 28, borderRadius: '50%' }}
             />
           ) : (
             <span
               style={{
-                width: 22,
-                height: 22,
+                width: 28,
+                height: 28,
                 borderRadius: '50%',
                 background:
                   'linear-gradient(135deg, oklch(80% 0.1 310), oklch(60% 0.18 310))',
                 color: 'white',
                 display: 'grid',
                 placeItems: 'center',
-                fontSize: 10,
+                fontSize: 12,
                 fontWeight: 600,
               }}
             >
               {initials}
             </span>
           )}
-          <IconChevron size={12} />
+          <IconChevron size={13} />
         </button>
       </ProfileDropdown>
     </header>

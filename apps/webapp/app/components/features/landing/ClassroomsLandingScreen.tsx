@@ -118,15 +118,15 @@ export function ClassroomsLandingScreen({
           <div style={{ flex: 1 }}>
             <h1
               style={{
-                fontSize: 20,
+                fontSize: 28,
                 fontWeight: 600,
-                letterSpacing: '-0.01em',
+                letterSpacing: '-0.02em',
                 margin: 0,
               }}
             >
               Your classes
             </h1>
-            <div style={{ fontSize: 13, color: 'var(--ink-2)', marginTop: 2 }}>
+            <div style={{ fontSize: 14, color: 'var(--ink-2)', marginTop: 4 }}>
               <span className="num" style={{ color: 'var(--ink-1)' }}>
                 {counts.all}
               </span>{' '}
