@@ -43,7 +43,6 @@ dayjs.extend(relativeTime);
 dayjs.extend(isSameOrBefore);
 
 import getPrisma from '@classmoji/database';
-import '@fontsource/quicksand/700.css';
 import 'react-toastify/dist/ReactToastify.css';
 import '~/styles/tailwind.css';
 import '~/styles/global.css';
