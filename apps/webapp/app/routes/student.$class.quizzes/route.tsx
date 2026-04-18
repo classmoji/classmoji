@@ -1,5 +1,6 @@
 import { Outlet, useLocation } from 'react-router';
 import dayjs from 'dayjs';
+import { gradeToEmoji, getEmojiSymbol } from '@classmoji/utils';
 import type { Route } from './+types/route';
 import { assertClassroomAccess } from '~/utils/helpers';
 import {
@@ -64,9 +65,10 @@ export async function loader({ params, request }: Route.LoaderArgs) {
     throw new Response('Quizzes are currently disabled for this classroom', { status: 403 });
   }
 
-  const [quizzes, user] = await Promise.all([
+  const [quizzes, user, emojiMappings] = await Promise.all([
     ClassmojiService.quiz.getQuizzesForStudent(classroom.id, userId, membership),
     ClassmojiService.user.findById(userId),
+    ClassmojiService.emojiMapping.findByClassroomId(classroom.id),
   ]);
 
   const transformedQuizzes = quizzes.map(quiz => {
@@ -100,6 +102,7 @@ export async function loader({ params, request }: Route.LoaderArgs) {
     userLogin: user?.login || null,
     userRole: membership?.role || null,
     quizzes: transformedQuizzes,
+    emojiMappings: emojiMappings as Record<string, number>,
   };
 }
 
@@ -109,7 +112,10 @@ function formatDue(due: string | Date | null | undefined): string {
   return d.isValid() ? d.format('MMM D') : '';
 }
 
-function deriveStudentState(quiz: StudentQuiz): {
+function deriveStudentState(
+  quiz: StudentQuiz,
+  emojiMappings: Record<string, number>
+): {
   state: AssignmentState;
   pct?: number | null;
   emoji?: string | null;
@@ -117,7 +123,12 @@ function deriveStudentState(quiz: StudentQuiz): {
   const completed = quiz.attempts.find(a => a.status === 'completed');
   if (completed) {
     const pct = quiz.attemptsSummary?.currentScore ?? completed.partialCreditScore ?? null;
-    return { state: 'graded', pct, emoji: scoreToEmoji(pct) };
+    const hasMappings = emojiMappings && Object.keys(emojiMappings).length > 0;
+    const emoji =
+      pct !== null && pct !== undefined && hasMappings
+        ? getEmojiSymbol(gradeToEmoji(pct, emojiMappings))
+        : null;
+    return { state: 'graded', pct, emoji };
   }
   const due = quiz.dueDate ? dayjs(quiz.dueDate) : null;
   if (due && due.isValid() && due.isAfter(dayjs().add(2, 'day'))) {
@@ -126,16 +137,8 @@ function deriveStudentState(quiz: StudentQuiz): {
   return { state: 'open' };
 }
 
-function scoreToEmoji(pct: number | null | undefined): string {
-  if (pct === null || pct === undefined) return '📝';
-  if (pct >= 90) return '🤩';
-  if (pct >= 75) return '😊';
-  if (pct >= 50) return '😐';
-  return '😕';
-}
-
 export default function StudentQuizzes({ loaderData }: Route.ComponentProps) {
-  const { quizzes: rawQuizzes, org } = loaderData;
+  const { quizzes: rawQuizzes, org, emojiMappings } = loaderData;
   const quizzes = rawQuizzes as unknown as StudentQuiz[];
   const location = useLocation();
   const rolePrefix = location.pathname.split('/')[1] || 'student';
@@ -143,7 +146,7 @@ export default function StudentQuizzes({ loaderData }: Route.ComponentProps) {
   const published = quizzes.filter(q => q.status === 'PUBLISHED');
 
   const rows: AssignmentRowData[] = published.map(q => {
-    const { state, pct, emoji } = deriveStudentState(q);
+    const { state, pct, emoji } = deriveStudentState(q, emojiMappings ?? {});
     return {
       id: String(q.id),
       slug: String(q.id),
