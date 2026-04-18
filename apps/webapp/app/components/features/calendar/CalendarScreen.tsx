@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react';
 import { Link } from 'react-router';
 import { IconChevron, IconChevronR } from '@classmoji/ui-components';
 import type { CalendarEvent, CalendarEventKind } from './CalendarEvent';
@@ -12,6 +13,13 @@ interface CalendarScreenProps {
   onPrev?: () => void;
   onNext?: () => void;
   onToday?: () => void;
+  /** Slot on the right of the header (e.g., admin "Add event" button). */
+  headerActions?: ReactNode;
+  /**
+   * When provided, event chips become buttons that invoke this callback.
+   * Otherwise chips render as `<Link>` to `ev.href` (or plain `<div>` if no href).
+   */
+  onEventClick?: (event: CalendarEvent) => void;
 }
 
 const WEEKDAY_LABELS = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'];
@@ -62,6 +70,8 @@ export function CalendarScreen({
   onPrev,
   onNext,
   onToday,
+  headerActions,
+  onEventClick,
 }: CalendarScreenProps) {
   const firstOfMonth = new Date(year, month, 1);
   const startDow = firstOfMonth.getDay();
@@ -82,6 +92,7 @@ export function CalendarScreen({
           {MONTH_LABELS[month]} {year}
         </h1>
         <div style={{ flex: 1 }} />
+        {headerActions}
         <button type="button" className="btn" onClick={onToday}>
           Today
         </button>
@@ -207,10 +218,30 @@ export function CalendarScreen({
                       display: 'block',
                       textDecoration: 'none',
                     } as const;
+                    if (onEventClick) {
+                      return (
+                        <button
+                          key={`${ev.id ?? ev.title}-${ei}`}
+                          type="button"
+                          className="truncate"
+                          style={{
+                            ...chipStyle,
+                            textAlign: 'left',
+                            border: 'none',
+                            cursor: 'pointer',
+                            width: '100%',
+                          }}
+                          title={ev.title}
+                          onClick={() => onEventClick(ev)}
+                        >
+                          {ev.title}
+                        </button>
+                      );
+                    }
                     if (ev.href) {
                       return (
                         <Link
-                          key={`${ev.title}-${ei}`}
+                          key={`${ev.id ?? ev.title}-${ei}`}
                           to={ev.href}
                           className="truncate"
                           style={chipStyle}
@@ -222,7 +253,7 @@ export function CalendarScreen({
                     }
                     return (
                       <div
-                        key={`${ev.title}-${ei}`}
+                        key={`${ev.id ?? ev.title}-${ei}`}
                         className="truncate"
                         style={chipStyle}
                         title={ev.title}

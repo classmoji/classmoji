@@ -7,6 +7,7 @@ interface RawCalendarEventLike {
   event_type?: string;
   occurrence_date?: string | Date | null;
   is_deadline?: boolean;
+  is_recurring?: boolean;
   assignments?: Array<{
     assignment?: { id?: string; title?: string; slug?: string | null } | null;
     module?: { slug?: string | null } | null;
@@ -79,10 +80,13 @@ export function mapClassroomCalendarToEvents(
     if (Number.isNaN(d.getTime())) continue;
 
     result.push({
+      id: raw.id,
       date: formatLocalDate(d),
       kind: kindFromEvent(raw),
       title: raw.title ?? 'Untitled',
       href: hrefForEvent(raw, opts),
+      isRecurring: Boolean(raw.is_recurring),
+      isDeadline: Boolean(raw.is_deadline),
     });
   }
   return result;
