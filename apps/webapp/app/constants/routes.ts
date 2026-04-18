@@ -45,7 +45,6 @@ export const sidebarSections = {
     STUDENT: ['modules', 'quizzes', 'regrade-requests', 'tokens', 'syllabus'],
     OWNER: [
       'quizzes',
-      'grading',
       'modules',
       'pages',
       'slides',
