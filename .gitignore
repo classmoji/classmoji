@@ -19,3 +19,4 @@ apps/slides/build/
 # Cloned student repositories
 packages/tasks/repos/
 apps/pages/build
+*.tsbuildinfo
