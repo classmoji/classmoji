@@ -1,16 +1,78 @@
 @import 'tailwindcss' reference;
-@import url('https://fonts.googleapis.com/css2?family=Noto+Sans:ital,wght@0,100..900;1,100..900&display=swap');
-@import url('https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,100..1000;1,9..40,100..1000&display=swap');
-@import url('https://fonts.googleapis.com/css2?family=DM+Mono:ital,wght@0,300;0,400;0,500;1,300;1,400;1,500&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
+
+/* ============ CLASSMOJI DESIGN TOKENS ============ */
+/* Raw CSS variables — referenced by Tailwind @theme entries in tailwind.css
+   and by the design-system utility classes below. */
+:root {
+  /* Neutrals — cool, developer-tool grays (slate-family) */
+  --bg-0: #fbfbfc;              /* page base */
+  --bg-1: #ffffff;              /* card */
+  --bg-2: #f4f5f7;              /* sidebar */
+  --bg-3: #eceef1;              /* subtle wells */
+  --bg-ink: #1f1f23;
+
+  --line: #e4e6ea;
+  --line-2: #d0d4da;
+  --line-strong: #b0b6be;
+
+  --ink-0: #14151a;             /* primary text */
+  --ink-1: #2b2d35;
+  --ink-2: #5b5f69;             /* secondary */
+  --ink-3: #868994;             /* tertiary */
+  --ink-4: #b4b7be;             /* disabled / hint */
+
+  /* Accents — developer-tool orange primary, restrained.
+     The `violet` token name is preserved from the design bundle for continuity. */
+  --violet: #e24329;            /* primary (reused token for continuity) */
+  --violet-soft: #fdecea;
+  --violet-ink: #8a2a16;
+
+  --mint: oklch(78% 0.12 155);
+  --mint-soft: oklch(94% 0.05 155);
+  --mint-ink: oklch(38% 0.10 155);
+
+  --peach: oklch(80% 0.11 40);
+  --peach-soft: oklch(95% 0.04 40);
+  --peach-ink: oklch(45% 0.12 40);
+
+  --sky: oklch(78% 0.09 230);
+  --sky-soft: oklch(95% 0.03 230);
+  --sky-ink: oklch(42% 0.12 230);
+
+  --rose: oklch(72% 0.15 20);
+  --rose-soft: oklch(95% 0.03 20);
+  --rose-ink: oklch(48% 0.15 20);
+
+  --amber: oklch(82% 0.13 80);
+  --amber-soft: oklch(96% 0.04 80);
+  --amber-ink: oklch(45% 0.12 80);
+
+  /* Shadows — very soft, layered */
+  --shadow-sm: 0 1px 2px rgba(10, 10, 10, 0.04);
+  --shadow-md: 0 1px 2px rgba(10, 10, 10, 0.04), 0 6px 20px -6px rgba(10, 10, 10, 0.08);
+  --shadow-lg: 0 1px 2px rgba(10, 10, 10, 0.04), 0 20px 50px -12px rgba(10, 10, 10, 0.14);
+  --shadow-pop: 0 1px 2px rgba(10, 10, 10, 0.06), 0 30px 60px -15px rgba(80, 50, 180, 0.18);
+
+  /* Radii — sharper, developer-tool style */
+  --r-sm: 4px;
+  --r-md: 6px;
+  --r-lg: 8px;
+  --r-xl: 8px;
+  --r-2xl: 10px;
+
+  --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, Monaco, Consolas, monospace;
+  --font-display: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+}
 
 * {
   box-sizing: border-box;
-  font-family: 'Noto Sans', sans-serif;
+  font-family: 'Inter', sans-serif;
 }
 
 body {
-  font-size: 13.5px;
-
+  font-size: 13px;
 }
 
 
@@ -30,7 +92,7 @@ label {
 }
 
 .font-header {
-  font-family: 'Noto Sans', sans-serif !important;
+  font-family: 'Inter', sans-serif !important;
 }
 
 
@@ -236,115 +298,28 @@ label {
   border-color: rgba(20, 83, 45, 0.7); /* green-900/70 */
 }
 
-/* Stat card styles */
-.stat-card {
-  @apply bg-yellow-50 rounded-lg p-4 text-center;
-}
-
-.dark .stat-card {
-  background-color: rgba(217, 119, 6, 0.2); /* yellow-900/20 */
-}
-
-.stat-card-value {
-  @apply text-2xl font-bold text-yellow-600;
-}
-
-.dark .stat-card-value {
-  @apply text-yellow-400;
-}
-
-.stat-card-label {
-  @apply text-sm text-gray-600;
-}
-
-.dark .stat-card-label {
-  @apply text-gray-400;
-}
-
-/* Reduce Ant Design Card padding */
-.ant-card-body {
-  padding: 16px !important;
-}
-
-/* Dark mode for Ant Design Table */
-.dark .ant-table {
-  background: transparent;
-  color: #e5e7eb; /* gray-200 */
-}
-
-.dark .ant-table-thead > tr > th {
-  background-color: #1f2937 !important; /* gray-800 */
-  color: #e5e7eb !important; /* gray-200 */
-  border-bottom-color: #374151 !important; /* gray-700 */
-}
-
-.dark .ant-table-tbody > tr > td {
-  background-color: #111827; /* gray-900 - opaque background needed for fixed columns */
-  border-bottom-color: #374151; /* gray-700 */
-}
-
-.dark .ant-table-tbody > tr:hover > td {
-  background-color: #1f2937 !important; /* gray-800 */
-}
-
-/* Fixed columns need opaque backgrounds to prevent content bleeding through */
-.dark .ant-table-cell-fix-left,
-.dark .ant-table-cell-fix-right {
-  background-color: #111827 !important; /* gray-900 */
-}
-
-.dark .ant-table-thead .ant-table-cell-fix-left,
-.dark .ant-table-thead .ant-table-cell-fix-right {
-  background-color: #1f2937 !important; /* gray-800 - match header */
-}
-
-.dark .ant-table-tbody > tr:hover .ant-table-cell-fix-left,
-.dark .ant-table-tbody > tr:hover .ant-table-cell-fix-right {
-  background-color: #1f2937 !important; /* gray-800 - match hover */
-}
-
-.dark .ant-table-pagination .ant-pagination-item {
-  background-color: #1f2937; /* gray-800 */
-  border-color: #374151; /* gray-700 */
-}
-
-.dark .ant-table-pagination .ant-pagination-item a {
-  color: #e5e7eb; /* gray-200 */
-}
-
-.dark .ant-table-pagination .ant-pagination-item-active {
-  border-color: #1f883d; /* primary-500 */
-}
-
-.dark .ant-table-pagination .ant-pagination-prev button,
-.dark .ant-table-pagination .ant-pagination-next button {
-  color: #9ca3af; /* gray-400 */
-}
-
-.dark .ant-table-pagination .ant-pagination-disabled button {
-  color: #4b5563; /* gray-600 */
-}
-
 /* ============================================
-   Toast Notifications - Apple Theme Colors
+   Toast Notifications
    ============================================ */
+/* Semantic colors preserved: green=success, red=error — keeping these green/red
+   (not the new orange primary) since semantic meaning beats palette unity here. */
 
-/* Success Toast - Apple Green 🍏 */
+/* Success Toast */
 .Toastify__toast--success {
-  background-color: #1f883d !important; /* PRIMARY_500 */
+  background-color: #1f883d !important;
 }
 
 .Toastify__toast--success .Toastify__progress-bar {
-  background-color: #e6f4ea !important; /* PRIMARY_50 */
+  background-color: #e6f4ea !important;
 }
 
-/* Error Toast - Apple Red 🍎 */
+/* Error Toast */
 .Toastify__toast--error {
-  background-color: #ef4444 !important; /* SECONDARY_500 */
+  background-color: #ef4444 !important;
 }
 
 .Toastify__toast--error .Toastify__progress-bar {
-  background-color: #fee2e2 !important; /* SECONDARY_100 */
+  background-color: #fee2e2 !important;
 }
 
 /* Info Toast - keep blue but ensure visibility */
@@ -388,22 +363,160 @@ label {
   opacity: 1;
 }
 
-/* Fix for Ant Design tabs layout */
-.ant-tabs-nav-list {
-  display: flex !important;
-  flex-direction: row !important;
+
+/* ============================================
+   Design-system utility classes
+   Ported from /tmp/classmoji-redesign/classmoji/project/styles.css
+   ============================================ */
+
+/* Scrollbars */
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: rgba(10, 10, 10, 0.08);
+  border-radius: 10px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(10, 10, 10, 0.16);
+  background-clip: padding-box;
+  border: 2px solid transparent;
 }
 
-.ant-tabs-tab {
-  display: inline-flex !important;
-  white-space: nowrap !important;
-  font-size: 14px !important;
+/* Focus */
+:focus-visible {
+  outline: 2px solid var(--violet);
+  outline-offset: 2px;
+  border-radius: 4px;
 }
 
-/* Ensure tab labels are inline */
-.ant-tabs-tab-btn {
-  display: inline-flex !important;
-  align-items: center !important;
+/* Type helpers */
+.mono { font-family: var(--font-mono); font-feature-settings: 'zero'; }
+.display { font-family: var(--font-display); font-feature-settings: 'ss01'; letter-spacing: -0.01em; }
+.caps {
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--ink-3);
 }
 
+/* Developer-tool: labels and metadata */
+.meta { font-size: 12px; color: var(--ink-2); }
+.num { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
 
+/* Utility: truncate */
+.truncate {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Card — flat, sharp corners, no shadow */
+.card {
+  background: var(--bg-1);
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  box-shadow: none;
+}
+
+/* Chip — label-style, no uppercase */
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 8px;
+  border-radius: 99px;
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
+  font-family: var(--font-sans);
+  border: 1px solid transparent;
+  line-height: 1.5;
+}
+
+.chip-quiz  { background: var(--mint-soft);   color: var(--mint-ink);   border-color: oklch(88% 0.05 155); }
+.chip-asgn  { background: var(--peach-soft);  color: var(--peach-ink);  border-color: oklch(88% 0.05 40); }
+.chip-mod   { background: var(--violet-soft); color: var(--violet-ink); border-color: oklch(88% 0.04 20); }
+.chip-lab   { background: var(--sky-soft);    color: var(--sky-ink);    border-color: oklch(88% 0.04 230); }
+.chip-late  { background: var(--rose-soft);   color: var(--rose-ink);   border-color: oklch(88% 0.04 20); }
+.chip-ghost { background: var(--bg-3);        color: var(--ink-2);      border-color: var(--line); }
+
+/* Buttons — flat, bordered, developer-tool */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: var(--r-md);
+  font-size: 13px;
+  font-weight: 400;
+  border: 1px solid var(--line-2);
+  background: var(--bg-1);
+  color: var(--ink-0);
+  transition: background 100ms, border-color 100ms;
+  cursor: pointer;
+  white-space: nowrap;
+  line-height: 1;
+  min-height: 30px;
+}
+.btn:hover { background: var(--bg-3); border-color: var(--line-strong); }
+.btn:active { background: var(--line); }
+
+.btn-primary {
+  background: var(--violet);
+  color: white;
+  border: 1px solid #c2371f;
+  font-weight: 500;
+}
+.btn-primary:hover { background: #c2371f; border-color: #a02a14; }
+
+.btn-ghost { border: 1px solid transparent; background: transparent; }
+.btn-ghost:hover { background: rgba(10, 10, 10, 0.04); }
+
+/* Avatar — circular, developer-tool */
+.avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  font-size: 10px;
+  font-weight: 600;
+  font-family: var(--font-sans);
+  letter-spacing: 0;
+  color: white;
+}
+
+/* Row hover */
+.row-hover { transition: background 100ms; border-radius: 8px; }
+.row-hover:hover { background: rgba(10, 10, 10, 0.035); }
+
+/* Dot */
+.dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  display: inline-block;
+  flex-shrink: 0;
+}
+
+/* Reveal panel animation */
+.reveal-enter { animation: reveal 280ms cubic-bezier(0.2, 0.8, 0.2, 1) both; }
+@keyframes reveal {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.spin { animation: spin 1s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+.pulse-dot { animation: pulseDot 1.4s ease-in-out infinite; }
+@keyframes pulseDot {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50%      { opacity: 0.3; transform: scale(0.7); }
+}

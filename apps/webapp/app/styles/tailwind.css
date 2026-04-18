@@ -5,36 +5,82 @@
   --color-iron: #d0d7de;
   --color-white: #ffffff;
   --color-lightGray: #f9f9f9;
-/*
-   * Primary Color - Apple Green 🍏
-   */
-  --color-primary: #21883d;
-  --color-primary-50: #e6f4ea;
-  --color-primary-100: #21883d;
-  --color-primary-200: #21883d;
-  --color-primary-300: #21883d;
-  --color-primary-400: #21883d;
-  --color-primary-500: #21883d;
-  --color-primary-600: #21883d;
-  --color-primary-700: #21883d;
-  --color-primary-800: #1a6e31;
-  --color-primary-900: #145526;
 
   /*
-   * Secondary Color - Apple Red 🍎
-   * For accents and highlights
+   * Primary Color - GitLab-style orange
    */
-  --color-secondary: #ef4444;
-  --color-secondary-50: #fef2f2;
-  --color-secondary-100: #fee2e2;
-  --color-secondary-200: #fecaca;
-  --color-secondary-300: #fca5a5;
-  --color-secondary-400: #f87171;
-  --color-secondary-500: #ef4444;
-  --color-secondary-600: #dc2626;
-  --color-secondary-700: #b91c1c;
-  --color-secondary-800: #991b1b;
-  --color-secondary-900: #7f1d1d;
+  --color-primary: #e24329;
+  --color-primary-50: #fdecea;
+  --color-primary-100: #fbd6d0;
+  --color-primary-200: #f3a596;
+  --color-primary-300: #eb7b67;
+  --color-primary-400: #e85a41;
+  --color-primary-500: #e24329;
+  --color-primary-600: #c2371f;
+  --color-primary-700: #a02a14;
+  --color-primary-800: #7a1f0e;
+  --color-primary-900: #571509;
+
+  /*
+   * Secondary Color — same scale as primary so existing secondary-* utilities
+   * keep working visually until they're migrated in later phases.
+   */
+  --color-secondary: #e24329;
+  --color-secondary-50: #fdecea;
+  --color-secondary-100: #fbd6d0;
+  --color-secondary-200: #f3a596;
+  --color-secondary-300: #eb7b67;
+  --color-secondary-400: #e85a41;
+  --color-secondary-500: #e24329;
+  --color-secondary-600: #c2371f;
+  --color-secondary-700: #a02a14;
+  --color-secondary-800: #7a1f0e;
+  --color-secondary-900: #571509;
+
+  /*
+   * Neutral surface tokens — reference the raw CSS vars defined in global.css :root
+   * so every utility like `bg-bg-0`, `bg-bg-1`, `text-ink-2` etc. is generated.
+   */
+  --color-bg-0: var(--bg-0);
+  --color-bg-1: var(--bg-1);
+  --color-bg-2: var(--bg-2);
+  --color-bg-3: var(--bg-3);
+  --color-bg-ink: var(--bg-ink);
+
+  --color-ink-0: var(--ink-0);
+  --color-ink-1: var(--ink-1);
+  --color-ink-2: var(--ink-2);
+  --color-ink-3: var(--ink-3);
+  --color-ink-4: var(--ink-4);
+
+  --color-line: var(--line);
+  --color-line-2: var(--line-2);
+  --color-line-strong: var(--line-strong);
+
+  /* Accent palettes — exposed as Tailwind utilities (bg-mint, text-peach-ink, etc.) */
+  --color-violet: var(--violet);
+  --color-violet-soft: var(--violet-soft);
+  --color-violet-ink: var(--violet-ink);
+
+  --color-mint: var(--mint);
+  --color-mint-soft: var(--mint-soft);
+  --color-mint-ink: var(--mint-ink);
+
+  --color-peach: var(--peach);
+  --color-peach-soft: var(--peach-soft);
+  --color-peach-ink: var(--peach-ink);
+
+  --color-sky: var(--sky);
+  --color-sky-soft: var(--sky-soft);
+  --color-sky-ink: var(--sky-ink);
+
+  --color-rose: var(--rose);
+  --color-rose-soft: var(--rose-soft);
+  --color-rose-ink: var(--rose-ink);
+
+  --color-amber: var(--amber);
+  --color-amber-soft: var(--amber-soft);
+  --color-amber-ink: var(--amber-ink);
 
   /* Adjusted text sizes */
   --text-xs: 0.6875rem;   /* 11px */
@@ -51,37 +97,13 @@
   --text-8xl: 5rem;       /* 80px */
   --text-9xl: 6.5rem;     /* 104px */
 
-  /* Font families */
-  --font-quicksand: 'Quicksand', sans-serif;
+  /* Font families — GitLab-style developer tool stack */
+  --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, Monaco, Consolas, monospace;
+  --font-display: 'Inter', -apple-system, sans-serif;
 }
 
 @variant dark (&:where(.dark, .dark *));
-
-/* Override Ant Design component styles to allow Tailwind utilities to take precedence */
-/* Place outside @layer to ensure highest specificity */
-.ant-layout-header {
-  background: transparent;
-  padding: 0;
-}
-
-/* Allow Tailwind color classes to override Tag colors */
-.ant-tag[class*="bg-"] {
-  background-color: inherit;
-  border-color: transparent;
-}
-
-.ant-tag[class*="text-"] {
-  color: inherit;
-}
-
-/* Allow Tailwind classes on other common Ant Design components */
-.ant-btn[class*="bg-"] {
-  background-color: inherit;
-}
-
-.ant-btn[class*="text-"] {
-  color: inherit;
-}
 
 /*
   The default border color has changed to `currentcolor` in Tailwind CSS v4,
@@ -104,4 +126,3 @@
     background-color: white;
   }
 }
-
