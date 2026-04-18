@@ -297,7 +297,7 @@ const StudentDashboard = ({ loaderData }: Route.ComponentProps) => {
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
                   <QuizBanner
                     quiz={currentQuiz}
-                    allTasksHref={`/student/${classSlug}/assignments`}
+                    allTasksHref={`/student/${classSlug}/quizzes`}
                   />
                   <WeekStrip days={weekDays} events={weekEvents} />
                   <div
