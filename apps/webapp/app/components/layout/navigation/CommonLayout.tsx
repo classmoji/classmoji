@@ -390,10 +390,17 @@ const CommonLayout = ({
     return true;
   };
 
+  // First path segment after `/:role/:class` — used for active-link matching.
+  const activeSegment = useMemo(() => {
+    const parts = pathname.split('/').filter(Boolean);
+    return parts[2] ?? '';
+  }, [pathname]);
+
   const renderNavLink = (item: RouteLike, key: string) => {
+    const itemSegment = item.link.replace(/^\//, '').split('/')[0];
     const active =
-      (pathname.includes(item.link) && !pathname.includes('settings')) ||
-      (item.link.includes('setting') && pathname.includes('settings'));
+      itemSegment === activeSegment ||
+      (itemSegment === 'dashboard' && activeSegment === '');
     const isDemoClassroom = Number(classroom?.id) === DEMO_ORG_ID;
     if (item.isProTier && !isProTier && !isDemoClassroom) return null;
     if (item.link === '/quizzes' && !isProTier && !isDemoClassroom) return null;
@@ -455,12 +462,25 @@ const CommonLayout = ({
     // parts[0]=role, parts[1]=class, rest are feature segments
     const rest = parts.slice(2);
     if (rest.length === 0) return [] as string[];
-    // Map known keys to labels via routes; fall back to titlecase.
     const labels: string[] = [];
-    const first = rest[0];
-    const routeMatch = Object.values(routes).find(r => r.link === `/${first}`);
-    if (routeMatch) labels.push(routeMatch.label);
-    else labels.push(first.charAt(0).toUpperCase() + first.slice(1).replace(/-/g, ' '));
+    const isIdSegment = (seg: string): boolean =>
+      /^[0-9a-f-]{8,}$/i.test(seg) || /^\d+$/.test(seg) || /^[a-z]_[A-Za-z0-9]+$/.test(seg);
+    const titlecase = (seg: string): string =>
+      seg
+        .replace(/-/g, ' ')
+        .split(' ')
+        .filter(Boolean)
+        .map(w => w.charAt(0).toUpperCase() + w.slice(1))
+        .join(' ');
+    for (const seg of rest) {
+      const routeMatch = Object.values(routes).find(r => r.link === `/${seg}`);
+      if (routeMatch) {
+        labels.push(routeMatch.label);
+        continue;
+      }
+      if (isIdSegment(seg)) continue;
+      labels.push(titlecase(seg));
+    }
     return labels;
   }, [pathname]);
 
