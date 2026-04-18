@@ -1,46 +1,27 @@
-import { useFetcher, useNavigate, useParams, Outlet } from 'react-router';
-import { Table, Button, Typography, Tag, Space, Tooltip, Popconfirm } from 'antd';
-import { IconSend, IconPlus, IconBook, IconCalendar, IconTrash } from '@tabler/icons-react';
-import { TableActionButtons, EditableCell, PageHeader } from '~/components';
+import { useNavigate, useParams, Outlet } from 'react-router';
+import dayjs from 'dayjs';
+import { Button, IconPlus } from '@classmoji/ui-components';
 import { ClassmojiService } from '@classmoji/services';
 import { namedAction } from 'remix-utils/named-action';
 import { assertClassroomAccess } from '~/utils/helpers';
+import {
+  AssignmentsScreen,
+  type AssignmentRowData,
+  type AssignmentState,
+} from '~/components/features/assignments';
 import type { Route } from './+types/route';
-import type React from 'react';
-import type { TablerIconsProps } from '@tabler/icons-react';
-
-const { Text } = Typography;
 
 interface AdminQuiz {
   id: string;
   name: string;
   moduleId: string | null;
   moduleTitle: string;
-  systemPrompt: string | null;
-  rubricPrompt: string | null;
-  subject: string;
-  difficultyLevel: string;
   dueDate: string | Date | null;
   status: string;
   weight: number;
-  questionCount: number;
-  maxAttempts: number;
-  gradingStrategy: string;
-  includeCodeContext: boolean;
   attemptsCount: number;
   avgScore: number | null;
-  attemptStatus: string | null;
-  score: number | null;
-  userAttempt: Record<string, unknown> | null;
   [key: string]: unknown;
-}
-
-interface ActionButtonProps {
-  icon: React.ComponentType<TablerIconsProps>;
-  tooltip: string;
-  color?: string;
-  onClick?: () => void;
-  popconfirmProps?: Record<string, unknown>;
 }
 
 export async function loader({ params, request }: Route.LoaderArgs) {
@@ -54,25 +35,20 @@ export async function loader({ params, request }: Route.LoaderArgs) {
     attemptedAction: 'view_admin_quizzes',
   });
 
-  // Get classroom settings
   const settings = await ClassmojiService.classroom.getClassroomSettingsForServer(classroom.id);
 
-  // Check if quizzes are enabled for this classroom
   if (settings?.quizzes_enabled === false) {
     throw new Response('Quizzes are currently disabled for this classroom', { status: 403 });
   }
 
   const user = await ClassmojiService.user.findById(userId);
 
-  // Get all quizzes for admin (including drafts)
   const quizzesWithAttempts = await ClassmojiService.quiz.findByClassroom(classroom.id, membership);
 
-  // Transform quizzes for frontend compatibility
   const transformedQuizzes = quizzesWithAttempts.map(quiz => {
-    // Find admin's attempt for preview functionality
     const adminAttempt = quiz.attempts?.find(a => String(a.user_id) === String(userId));
-    let attemptStatus = null;
-    let score = null;
+    let attemptStatus: string | null = null;
+    let score: number | null = null;
 
     if (adminAttempt) {
       if (adminAttempt.completed_at) {
@@ -87,7 +63,7 @@ export async function loader({ params, request }: Route.LoaderArgs) {
     }
 
     return {
-      id: quiz.id, // Already a string UUID
+      id: quiz.id,
       name: quiz.name,
       moduleId: quiz.module_id?.toString() || null,
       moduleTitle: quiz.module?.title || 'Unlinked',
@@ -104,7 +80,6 @@ export async function loader({ params, request }: Route.LoaderArgs) {
       includeCodeContext: quiz.include_code_context || false,
       attemptsCount: quiz.attemptsCount,
       avgScore: quiz.avgScore,
-      // Include admin's attempt data for preview
       attemptStatus,
       score,
       userAttempt: adminAttempt || null,
@@ -135,7 +110,6 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
     },
   });
 
-  // Create FormData with the action from the JSON
   const formData = new FormData();
   if (data._action) {
     formData.append('_action', data._action);
@@ -207,293 +181,52 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
   });
 };
 
+function formatDue(due: string | Date | null | undefined): string {
+  if (!due) return '';
+  const d = dayjs(due);
+  return d.isValid() ? d.format('MMM D') : '';
+}
+
+function deriveAdminState(quiz: AdminQuiz): AssignmentState {
+  if (quiz.status === 'DRAFT') return 'draft';
+  if (quiz.status === 'ARCHIVED') return 'closed';
+  const due = quiz.dueDate ? dayjs(quiz.dueDate) : null;
+  if (due && due.isValid() && due.isAfter(dayjs().add(2, 'day'))) return 'upcoming';
+  return 'open';
+}
+
 export default function AdminQuizzes({ loaderData }: Route.ComponentProps) {
-  const { quizzes } = loaderData;
-  const fetcher = useFetcher();
+  const { quizzes, org } = loaderData;
   const navigate = useNavigate();
   const { class: classSlug } = useParams();
 
-  const handleEditQuiz = (quiz: AdminQuiz) => {
-    navigate(`/admin/${classSlug}/quizzes/form?quizId=${quiz.id}`);
-  };
-
-  const handleDeleteQuiz = (quizId: string) => {
-    fetcher.submit(
-      { _action: 'deleteQuiz', id: quizId },
-      { method: 'POST', encType: 'application/json' }
-    );
-  };
-
-  const handleUpdateWeight = (
-    quizId: string | number,
-    weight: string | number | null | undefined
-  ) => {
-    fetcher.submit(
-      {
-        _action: 'updateWeight',
-        id: String(quizId),
-        weight: Number(weight ?? 0),
-      },
-      { method: 'POST', encType: 'application/json' }
-    );
-  };
-
-  const handlePublishQuiz = (quizId: string) => {
-    fetcher.submit(
-      { _action: 'publishQuiz', id: quizId },
-      { method: 'POST', encType: 'application/json' }
-    );
-  };
-
-  const handleClearMyAttempts = () => {
-    fetcher.submit({ _action: 'clearMyAttempts' }, { method: 'POST', encType: 'application/json' });
-  };
-
-  const handleViewQuiz = (quiz: AdminQuiz) => {
-    navigate(`/admin/${classSlug}/quizzes/${quiz.id}`);
-  };
-
-  const totalWeight = quizzes
-    .filter(q => (q.status as string) !== 'ARCHIVED')
-    .reduce((acc: number, q) => acc + q.weight, 0);
-
-  const ActionButton = ({
-    icon: Icon,
-    tooltip,
-    color = 'gray',
-    onClick,
-    popconfirmProps,
-  }: ActionButtonProps) => {
-    const button = (
-      <Button
-        type="text"
-        icon={<Icon size={16} />}
-        onClick={onClick}
-        className={`hover:bg-${color}-50`}
-        style={{ color: `var(--${color}-500)` }}
-        size="small"
-      />
-    );
-
-    if (popconfirmProps) {
-      return (
-        <Popconfirm {...popconfirmProps} title={popconfirmProps.title as string}>
-          <Tooltip title={tooltip}>{button}</Tooltip>
-        </Popconfirm>
-      );
-    }
-
-    return <Tooltip title={tooltip}>{button}</Tooltip>;
-  };
-
-  const columns = [
-    {
-      title: 'Quiz Name',
-      dataIndex: 'name',
-      key: 'name',
-      width: '25%',
-      sorter: (a: AdminQuiz, b: AdminQuiz) => a.name.localeCompare(b.name),
-      render: (name: string) => (
-        <span className="font-medium text-gray-800 dark:text-gray-200">{name}</span>
-      ),
-    },
-    {
-      title: 'Module',
-      dataIndex: 'moduleTitle',
-      key: 'module',
-      width: '20%',
-      sorter: (a: AdminQuiz, b: AdminQuiz) => a.moduleTitle.localeCompare(b.moduleTitle),
-      render: (title: string) => (
-        <Space>
-          <IconBook size={17} className="text-gray-400" />
-          <Text type="secondary">{title}</Text>
-        </Space>
-      ),
-    },
-    {
-      title: 'Weight (%)',
-      key: 'weight',
-      width: '10%',
-      sorter: (a: AdminQuiz, b: AdminQuiz) => a.weight - b.weight,
-      render: (quiz: AdminQuiz) => (
-        <EditableCell
-          record={quiz}
-          dataIndex="weight"
-          onUpdate={handleUpdateWeight}
-          format="number"
-        />
-      ),
-    },
-    {
-      title: 'Due Date',
-      dataIndex: 'dueDate',
-      key: 'dueDate',
-      width: '15%',
-      sorter: (a: AdminQuiz, b: AdminQuiz) => {
-        if (!a.dueDate) return 1;
-        if (!b.dueDate) return -1;
-        return new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime();
-      },
-      render: (dueDate: string | null) =>
-        dueDate ? (
-          <Space>
-            <IconCalendar size={17} className="text-gray-400" />
-            <Text>{new Date(dueDate).toLocaleDateString()}</Text>
-          </Space>
-        ) : (
-          <Text type="secondary">No due date</Text>
-        ),
-    },
-    {
-      title: 'Status',
-      dataIndex: 'status',
-      key: 'status',
-      width: '10%',
-      sorter: (a: AdminQuiz, b: AdminQuiz) => a.status.localeCompare(b.status),
-      render: (status: string) => {
-        const statusConfig: Record<string, { color: string; text: string }> = {
-          PUBLISHED: { color: 'green', text: 'Published' },
-          DRAFT: { color: 'orange', text: 'Draft' },
-          ARCHIVED: { color: 'default', text: 'Archived' },
-        };
-        const config = statusConfig[status] || statusConfig.DRAFT;
-        return (
-          <Tag color={config.color} className="font-semibold">
-            {config.text}
-          </Tag>
-        );
-      },
-    },
-    {
-      title: 'Attempts',
-      key: 'attempts',
-      width: '10%',
-      render: (_: unknown, record: AdminQuiz) =>
-        record.status === 'PUBLISHED' ? (
-          <Space direction="vertical" size={0}>
-            <Text>{record.attemptsCount} attempts</Text>
-            {record.avgScore !== null && (
-              <Text type="secondary" style={{ fontSize: 12 }}>
-                Avg: {record.avgScore}%
-              </Text>
-            )}
-          </Space>
-        ) : (
-          <Text type="secondary">-</Text>
-        ),
-    },
-    {
-      title: 'Actions',
-      key: 'actions',
-      render: (_: unknown, record: AdminQuiz) => (
-        <TableActionButtons
-          onView={() => handleViewQuiz(record)}
-          onEdit={() => handleEditQuiz(record)}
-          onDelete={() => handleDeleteQuiz(record.id)}
-        >
-          {record.status === 'DRAFT' && (
-            <ActionButton
-              icon={IconSend}
-              tooltip="Publish Quiz"
-              color="green"
-              popconfirmProps={{
-                title: 'Publish Quiz',
-                description: 'This will make the quiz available to all students.',
-                onConfirm: (e?: React.MouseEvent) => {
-                  e?.stopPropagation();
-                  handlePublishQuiz(record.id);
-                },
-                okText: 'Publish',
-                cancelText: 'Cancel',
-              }}
-            />
-          )}
-        </TableActionButtons>
-      ),
-    },
-  ];
+  const rows: AssignmentRowData[] = (quizzes as AdminQuiz[]).map(q => ({
+    id: String(q.id),
+    slug: String(q.id),
+    href: `/admin/${classSlug || org}/quizzes/${q.id}`,
+    kind: 'QUIZ',
+    title: q.name,
+    mod: q.moduleTitle === 'Unlinked' ? '' : q.moduleTitle,
+    due: formatDue(q.dueDate),
+    state: deriveAdminState(q),
+  }));
 
   return (
     <div>
-      {/* Outlet renders child routes (preview drawer) */}
       <Outlet />
-
-      <div className=" flex justify-between items-start">
-        <PageHeader title="Quiz Management" routeName="quizzes" />
-
-        <Space>
-          <Popconfirm
-            title="Clear All My Attempts"
-            description="This will delete all your quiz attempts across all quizzes. This cannot be undone."
-            onConfirm={handleClearMyAttempts}
-            okText="Clear All"
-            okButtonProps={{ danger: true }}
-            cancelText="Cancel"
-          >
-            <Button icon={<IconTrash size={16} />}>Clear My Attempts</Button>
-          </Popconfirm>
-
+      <AssignmentsScreen
+        title="Quiz management"
+        assignments={rows}
+        headerActions={
           <Button
-            type="primary"
-            icon={<IconPlus size={16} />}
-            onClick={() => navigate(`/admin/${classSlug}/quizzes/form`)}
+            variant="primary"
+            onClick={() => navigate(`/admin/${classSlug || org}/quizzes/form`)}
           >
-            New Quiz
+            <IconPlus size={14} /> New quiz
           </Button>
-        </Space>
-      </div>
-
-      <div className="space-y-6">
-        <div className="mt-4">
-          <Table
-            columns={columns}
-            dataSource={quizzes as readonly AdminQuiz[]}
-            rowKey={record => record.id}
-            rowHoverable={false}
-            size="middle"
-            pagination={{
-              pageSize: 25,
-              showSizeChanger: true,
-              showTotal: (total, range) => `${range[0]}-${range[1]} of ${total} quizzes`,
-            }}
-            summary={() => (
-              <Table.Summary.Row>
-                <Table.Summary.Cell index={0} className="font-semibold">
-                  Total
-                </Table.Summary.Cell>
-                <Table.Summary.Cell index={1}></Table.Summary.Cell>
-                <Table.Summary.Cell index={2} className="font-bold">
-                  <span
-                    className={
-                      totalWeight === 100
-                        ? 'text-green-600'
-                        : totalWeight > 100
-                          ? 'text-red-600'
-                          : 'text-orange-600'
-                    }
-                  >
-                    {totalWeight}%
-                  </span>
-                </Table.Summary.Cell>
-                <Table.Summary.Cell index={3}></Table.Summary.Cell>
-                <Table.Summary.Cell index={4}></Table.Summary.Cell>
-                <Table.Summary.Cell index={5}></Table.Summary.Cell>
-                <Table.Summary.Cell index={6}></Table.Summary.Cell>
-              </Table.Summary.Row>
-            )}
-            locale={{
-              emptyText: (
-                <div className="text-center py-8 text-gray-500">
-                  <div className="text-4xl mb-2">🤖</div>
-                  <div>No quizzes created yet</div>
-                  <div className="text-sm">Create your first AI-powered quiz to get started!</div>
-                </div>
-              ),
-            }}
-            className="rounded-lg"
-          />
-        </div>
-      </div>
+        }
+        emptyState="No quizzes yet. Create your first one!"
+      />
     </div>
   );
 }
