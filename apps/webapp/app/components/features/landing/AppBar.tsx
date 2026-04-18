@@ -39,7 +39,7 @@ export function AppBar({ user }: AppBarProps) {
           letterSpacing: '-0.01em',
         }}
       >
-        <Logo size={22} />
+        <Logo size={22} variant="icon" />
         classmoji
       </span>
 
