@@ -138,6 +138,7 @@ export function AppBar({ user }: AppBarProps) {
           background: 'transparent',
           border: 'none',
           cursor: 'pointer',
+          marginLeft: 'auto',
         }}
       >
         <IconSupport size={16} />
