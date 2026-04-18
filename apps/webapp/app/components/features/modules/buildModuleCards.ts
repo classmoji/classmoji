@@ -77,7 +77,7 @@ export function buildModuleCards(
       pct,
       done,
       total,
-      href: `/${options.rolePrefix}/${options.classSlug}/modules/${slug}`,
+      href: `/${options.rolePrefix}/${options.classSlug}/modules/${options.rolePrefix === 'admin' ? encodeURIComponent(m.title) : slug}`,
     };
   });
 }
