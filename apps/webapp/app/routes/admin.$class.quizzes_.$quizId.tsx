@@ -19,6 +19,8 @@ import { TrophyOutlined, PlayCircleOutlined, ClearOutlined } from '@ant-design/i
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
 import { PageHeader, UserThumbnailView, GradeBadge, SectionHeader } from '~/components';
+import { AssignmentHeaderCard } from '~/components/features/assignment';
+import type { AssignmentHeaderData } from '~/components/features/assignment';
 import { formatDuration, checkForCompletion } from '~/utils/quizUtils';
 import { namedAction } from 'remix-utils/named-action';
 
@@ -79,6 +81,44 @@ interface StatCardProps {
   icon?: React.ComponentType<{ size: number; className: string }>;
   color?: string;
 }
+
+// Build AssignmentHeaderCard data from a Quiz record.
+interface QuizForHeader {
+  name: string;
+  weight?: number | null;
+  due_date?: string | Date | null;
+  module?: { title?: string | null } | null;
+  include_code_context?: boolean;
+  difficulty_level?: string | null;
+  subject?: string | null;
+  question_count?: number | null;
+}
+const buildQuizHeader = (quiz: QuizForHeader): AssignmentHeaderData => {
+  let due = '';
+  let dueRelative = '';
+  if (quiz.due_date) {
+    const d = dayjs(quiz.due_date);
+    due = d.format('MMM D, h:mm A');
+    dueRelative = d.fromNow();
+  }
+  const descParts: string[] = [];
+  if (quiz.subject) descParts.push(quiz.subject);
+  if (quiz.difficulty_level) descParts.push(`Difficulty: \`${quiz.difficulty_level}\``);
+  if (quiz.question_count) descParts.push(`${quiz.question_count} questions`);
+  if (quiz.include_code_context) descParts.push('code-aware');
+  return {
+    kind: 'QUIZ',
+    module: quiz.module?.title ?? undefined,
+    weightNote: quiz.weight ? `· ${quiz.weight}% of grade` : undefined,
+    due,
+    dueRelative,
+    title: quiz.name,
+    description: descParts.length ? descParts.join(' · ') : undefined,
+    githubUrl: null,
+    repoUrl: null,
+    extensionCost: null,
+  };
+};
 
 // Helper function to find evaluation data in attempt messages
 const getEvaluationData = (attempt: Pick<QuizAttempt, 'messages'>) => {
@@ -873,6 +913,8 @@ const QuizView = ({ loaderData }: Route.ComponentProps) => {
       </PageHeader>
 
       <div className="space-y-6">
+        <AssignmentHeaderCard header={buildQuizHeader(quiz)} />
+
         <Card>
           <SectionHeader
             title="Quiz Statistics"
