@@ -1,7 +1,8 @@
 import getPrisma from '@classmoji/database';
+import { ClassmojiService } from '@classmoji/services';
 import { gradeToEmoji, getEmojiSymbol } from '@classmoji/utils';
 import { hashHue, getInitials } from '~/utils/hue';
-import type { RosterStudent } from '~/components/features/roster';
+import type { RosterStudent, RosterInvite } from '~/components/features/roster';
 
 /**
  * Aggregates roster rows for the OWNER's redesigned `/admin/:class/students` screen.
@@ -12,16 +13,15 @@ import type { RosterStudent } from '~/components/features/roster';
  *   - tokens: latest token-transaction balance for this classroom
  *   - focus: mean pct_focused across the student's completed quiz attempts
  *
- * Returns rows sorted alphabetically by name (matching the underlying membership
- * query). Kept in a single query batch per student via Promise.all.
+ * Also returns pending classroom invitations so admins can see/revoke them.
  */
 export const loadRosterScreenData = async (
   classroomId: string,
   classroomSlug: string
-): Promise<RosterStudent[]> => {
+): Promise<{ students: RosterStudent[]; invitations: RosterInvite[] }> => {
   const prisma = getPrisma();
 
-  const [memberships, emojiMappings] = await Promise.all([
+  const [memberships, emojiMappings, invites] = await Promise.all([
     prisma.classroomMembership.findMany({
       where: { classroom_id: classroomId, role: 'STUDENT' },
       include: { user: true },
@@ -31,6 +31,7 @@ export const loadRosterScreenData = async (
       where: { classroom_id: classroomId },
       orderBy: { grade: 'desc' },
     }),
+    ClassmojiService.classroomInvite.findInvitesByClassroomId(classroomId),
   ]);
 
   const emojiToNumber: Record<string, number> = {};
@@ -144,5 +145,14 @@ export const loadRosterScreenData = async (
     })
   );
 
-  return rows;
+  const invitations: RosterInvite[] = invites.map((inv) => ({
+    id: inv.id,
+    email: inv.school_email,
+    initials: getInitials(null, inv.school_email),
+    hue: hashHue(inv.id),
+    invitedAt:
+      inv.created_at instanceof Date ? inv.created_at.toISOString() : String(inv.created_at),
+  }));
+
+  return { students: rows, invitations };
 };

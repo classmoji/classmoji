@@ -1,7 +1,17 @@
-import { Link } from 'react-router';
-import { Avatar, IconChevronR } from '@classmoji/ui-components';
+import { useFetcher, Link } from 'react-router';
+import { Avatar, Chip, IconChevronR } from '@classmoji/ui-components';
 
 export const ROSTER_GRID_TEMPLATE = '36px 1.4fr 100px 120px 100px 90px 30px';
+export const ROSTER_INVITE_GRID_TEMPLATE = '36px 1.4fr 1fr 90px 30px';
+
+export interface RosterInvite {
+  id: string;
+  email: string;
+  initials: string;
+  hue: number;
+  /** ISO date string. */
+  invitedAt: string;
+}
 
 export interface RosterStudent {
   id: string;
@@ -78,3 +88,69 @@ export function RosterRow({ student, last }: RosterRowProps) {
 }
 
 export default RosterRow;
+
+interface RosterInviteRowProps {
+  invite: RosterInvite;
+  actionUrl: string;
+  last?: boolean;
+}
+
+const formatInvitedAt = (iso: string): string => {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '—';
+  return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+};
+
+export function RosterInviteRow({ invite, actionUrl, last }: RosterInviteRowProps) {
+  const { id, email, initials, hue, invitedAt } = invite;
+  const fetcher = useFetcher();
+  const isRevoking = fetcher.state !== 'idle';
+
+  const handleRevoke = () => {
+    if (isRevoking) return;
+    if (typeof window !== 'undefined') {
+      const confirmed = window.confirm(`Revoke invitation for ${email}?`);
+      if (!confirmed) return;
+    }
+    fetcher.submit(
+      { inviteId: id },
+      {
+        method: 'post',
+        action: `${actionUrl}?/revokeInvite`,
+        encType: 'application/json',
+      }
+    );
+  };
+
+  return (
+    <div
+      style={{
+        display: 'grid',
+        gridTemplateColumns: ROSTER_INVITE_GRID_TEMPLATE,
+        gap: 16,
+        padding: '12px 18px',
+        alignItems: 'center',
+        borderBottom: last ? 'none' : '1px solid var(--line)',
+      }}
+    >
+      <Avatar initials={initials} hue={hue} size={28} />
+      <span style={{ fontSize: 13.5, fontWeight: 500, color: 'var(--ink-1)' }}>{email}</span>
+      <span>
+        <Chip variant="ghost">Pending</Chip>
+      </span>
+      <span className="mono" style={{ fontSize: 12, color: 'var(--ink-3)' }}>
+        {formatInvitedAt(invitedAt)}
+      </span>
+      <button
+        type="button"
+        className="btn btn-ghost"
+        onClick={handleRevoke}
+        disabled={isRevoking}
+        aria-label={`Revoke invitation for ${email}`}
+        style={{ padding: '4px 8px', fontSize: 12 }}
+      >
+        {isRevoking ? '…' : 'Revoke'}
+      </button>
+    </div>
+  );
+}

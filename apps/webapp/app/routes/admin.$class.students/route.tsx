@@ -18,13 +18,13 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
     action: 'view_roster',
   });
 
-  const students = await loadRosterScreenData(classroom.id, classSlug);
+  const { students, invitations } = await loadRosterScreenData(classroom.id, classSlug);
 
-  return { students };
+  return { students, invitations };
 };
 
 const StudentsScreen = ({ loaderData }: Route.ComponentProps) => {
-  const { students } = loaderData;
+  const { students, invitations } = loaderData;
   const { class: classSlug } = useParams();
   const navigate = useNavigate();
 
@@ -33,6 +33,8 @@ const StudentsScreen = ({ loaderData }: Route.ComponentProps) => {
       <Outlet />
       <RosterScreen
         students={students}
+        invitations={invitations}
+        revokeActionUrl={`/admin/${classSlug}/students`}
         onAddStudents={() => navigate(`/admin/${classSlug}/students/add`)}
       />
     </>
