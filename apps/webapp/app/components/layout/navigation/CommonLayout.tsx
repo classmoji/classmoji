@@ -4,7 +4,7 @@ import {
   Avatar,
   Breadcrumb,
   IconButton,
-  IconLogo,
+  Logo,
   IconChevron,
   IconCheck,
   IconPlus,
@@ -549,8 +549,7 @@ const CommonLayout = ({
             color: 'var(--ink-0)',
           }}
         >
-          <IconLogo size={22} />
-          <span style={{ fontSize: 15, fontWeight: 600, letterSpacing: -0.2 }}>classmoji</span>
+          <Logo size={28} variant="full" />
         </Link>
 
         {/* User */}
