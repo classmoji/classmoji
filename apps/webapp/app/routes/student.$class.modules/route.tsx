@@ -2,8 +2,7 @@ import getPrisma from '@classmoji/database';
 import type { Route } from './+types/route';
 import { ClassmojiService } from '@classmoji/services';
 import { assertClassroomAccess } from '~/utils/helpers';
-import { PageHeader } from '~/components';
-import ModuleAccordion from './ModuleAccordion';
+import { ModulesScreen, buildModuleCards } from '~/components/features/modules';
 
 type UserTeamResult = NonNullable<
   Awaited<ReturnType<typeof ClassmojiService.team.findUserTeamByTag>>
@@ -71,50 +70,35 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
     repoAssignmentsByAssignmentId[ra.assignment_id] = ra;
   });
 
+  const moduleCards = buildModuleCards(
+    modules.map(m => ({
+      id: m.id,
+      title: m.title,
+      slug: m.slug,
+      assignments: m.assignments.map(a => ({
+        id: a.id,
+        student_deadline: a.student_deadline,
+      })),
+    })),
+    {
+      rolePrefix: 'student',
+      classSlug,
+      classroomStart: null,
+      isAssignmentDone: assignmentId => {
+        const ra = repoAssignmentsByAssignmentId[assignmentId];
+        return !!ra && ra.status === 'CLOSED';
+      },
+    }
+  );
+
   return {
-    modules,
-    repoAssignmentsByAssignmentId,
-    userTeamsByModuleSlug,
-    slidesUrl: process.env.SLIDES_URL || 'http://localhost:6500',
-    pagesUrl: process.env.PAGES_URL || 'http://localhost:7100',
-    classSlug,
+    moduleCards,
   };
 };
 
 const StudentModules = ({ loaderData }: Route.ComponentProps) => {
-  const {
-    modules,
-    repoAssignmentsByAssignmentId,
-    userTeamsByModuleSlug,
-    slidesUrl,
-    pagesUrl,
-    classSlug,
-  } = loaderData;
-
-  return (
-    <div>
-      <PageHeader title="Modules" routeName="modules" />
-
-      {modules.length === 0 ? (
-        <div className="text-center py-12 text-gray-500">
-          <div className="text-6xl mb-4">📚</div>
-          <h3 className="text-xl font-semibold text-gray-700 dark:text-gray-300 mb-2">
-            No modules available
-          </h3>
-          <p className="dark:text-gray-400">Modules will appear here once published</p>
-        </div>
-      ) : (
-        <ModuleAccordion
-          modules={modules}
-          repoAssignmentsByAssignmentId={repoAssignmentsByAssignmentId}
-          userTeamsByModuleSlug={userTeamsByModuleSlug}
-          classSlug={classSlug}
-          slidesUrl={slidesUrl}
-          pagesUrl={pagesUrl}
-        />
-      )}
-    </div>
-  );
+  const { moduleCards } = loaderData;
+  return <ModulesScreen modules={moduleCards} />;
 };
 
 export default StudentModules;
