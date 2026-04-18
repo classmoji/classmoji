@@ -1,16 +1,24 @@
-import { Avatar, Tooltip } from 'antd';
-import { Link, useParams, useLocation, useRouteLoaderData } from 'react-router';
-import { useEffect } from 'react';
-import { IconLayoutSidebarLeftCollapse, IconFileText } from '@tabler/icons-react';
-import useLocalStorageState from 'use-local-storage-state';
-import { Logo } from '@classmoji/ui-components';
+import { Link, useNavigate, useParams, useLocation, useRouteLoaderData } from 'react-router';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import {
+  Avatar,
+  Breadcrumb,
+  IconButton,
+  IconLogo,
+  IconChevron,
+  IconCheck,
+  IconPlus,
+  IconGithub,
+  IconFile,
+  IconDocs,
+  IconSupport,
+} from '@classmoji/ui-components';
 import { ProTierFeature, RequireRole, RecentViewers } from '~/components';
 import { useRoleSettings, useSubscription, useRole } from '~/hooks';
-import { routes, routeCategories, DEMO_ORG_ID } from '~/constants';
-import OrgSelect from './OrgSelect';
+import { routes, sidebarSections, DEMO_ORG_ID } from '~/constants';
+import { roleSettings } from '~/constants/roleSettings';
 import useStore from '~/store';
 import tokenImage from '~/assets/images/token.png';
-import githubLogo from '~/assets/images/github_logo.svg';
 import ProfileDropdown from '../../features/profile/ProfileDropdown';
 import type { AppUser, MembershipWithOrganization } from '~/types';
 
@@ -25,7 +33,7 @@ interface Viewer {
   role?: string | null;
 }
 
-interface NavItem {
+interface RouteLike {
   link: string;
   label: string;
   icon: React.ComponentType<{ size?: number; strokeWidth?: number; className?: string }>;
@@ -41,6 +49,302 @@ interface CommonLayoutProps {
   pagesUrl?: string;
 }
 
+const SIDEBAR_WIDTH = 220;
+
+// Deterministic hue in [0, 360) from a string — used for per-classroom accent.
+const hashHue = (value: string | number | null | undefined): number => {
+  if (value === null || value === undefined) return 285;
+  const str = String(value);
+  let h = 0;
+  for (let i = 0; i < str.length; i++) h = (h * 31 + str.charCodeAt(i)) >>> 0;
+  return h % 360;
+};
+
+const getInitials = (name?: string | null, login?: string | null): string => {
+  const source = (name && name.trim()) || login || '';
+  if (!source) return '?';
+  const parts = source.split(/\s+/).filter(Boolean);
+  if (parts.length >= 2) return (parts[0][0] + parts[1][0]).toUpperCase();
+  return source.slice(0, 2).toUpperCase();
+};
+
+// Class pill square — renders the digits of a classroom slug/name (e.g. "67").
+const ClassSquare = ({ klass, size = 24 }: { klass: { name: string }; size?: number }) => {
+  const digits = (klass.name || '').replace(/[^0-9]/g, '').slice(0, 2) || '??';
+  const hue = hashHue(klass.name);
+  return (
+    <span
+      style={{
+        width: size,
+        height: size,
+        borderRadius: Math.max(6, Math.round(size / 3.4)),
+        background: `linear-gradient(135deg, oklch(80% 0.11 ${hue}), oklch(65% 0.18 ${hue}))`,
+        display: 'grid',
+        placeItems: 'center',
+        color: 'white',
+        fontSize: Math.round(size * 0.46),
+        fontWeight: 700,
+        fontFamily: 'var(--font-mono)',
+        flexShrink: 0,
+      }}
+    >
+      {digits}
+    </span>
+  );
+};
+
+interface SidebarNavItemProps {
+  icon: React.ReactNode;
+  label: string;
+  to?: string;
+  active?: boolean;
+  onClick?: () => void;
+  badge?: string | number;
+  accent?: string;
+  external?: boolean;
+}
+
+const SidebarNavItem = ({
+  icon,
+  label,
+  to,
+  active,
+  onClick,
+  badge,
+  accent,
+  external,
+}: SidebarNavItemProps) => {
+  const style: React.CSSProperties = {
+    width: '100%',
+    display: 'flex',
+    alignItems: 'center',
+    gap: 10,
+    padding: '7px 10px',
+    borderRadius: 9,
+    background: active ? 'white' : 'transparent',
+    border: active ? '1px solid var(--line)' : '1px solid transparent',
+    boxShadow: active ? 'var(--shadow-sm)' : 'none',
+    color: active ? 'var(--ink-0)' : 'var(--ink-2)',
+    fontSize: 13.5,
+    fontWeight: active ? 600 : 500,
+    textAlign: 'left',
+    cursor: 'pointer',
+    transition: 'background 100ms',
+  };
+
+  const body = (
+    <>
+      <span
+        style={{
+          color: accent || (active ? 'var(--ink-0)' : 'var(--ink-3)'),
+          display: 'flex',
+        }}
+      >
+        {icon}
+      </span>
+      <span style={{ flex: 1 }}>{label}</span>
+      {badge != null && (
+        <span
+          style={{
+            fontSize: 10.5,
+            fontWeight: 600,
+            background: 'var(--violet-soft)',
+            color: 'var(--violet-ink)',
+            padding: '2px 6px',
+            borderRadius: 6,
+            fontFamily: 'var(--font-mono)',
+          }}
+        >
+          {badge}
+        </span>
+      )}
+    </>
+  );
+
+  if (to && !external) {
+    return (
+      <Link to={to} style={{ ...style, textDecoration: 'none' }} data-active={active || undefined}>
+        {body}
+      </Link>
+    );
+  }
+
+  return (
+    <button type="button" onClick={onClick} style={style}>
+      {body}
+    </button>
+  );
+};
+
+interface ClassPillProps {
+  classroom: { name: string; slug?: string; subtitle?: string } | null;
+  memberships: MembershipWithOrganization[];
+  currentMembershipId: string | number | null;
+}
+
+const ClassPill = ({ classroom, memberships, currentMembershipId }: ClassPillProps) => {
+  const [open, setOpen] = useState(false);
+  const navigate = useNavigate();
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDocClick = (e: MouseEvent) => {
+      if (!containerRef.current?.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener('mousedown', onDocClick);
+    return () => document.removeEventListener('mousedown', onDocClick);
+  }, [open]);
+
+  if (!classroom) return null;
+
+  const displayName = classroom.name || classroom.slug || 'Classroom';
+  const subtitle = classroom.subtitle || classroom.slug || '';
+
+  const handleSelect = (m: MembershipWithOrganization) => {
+    setOpen(false);
+    const settings = (roleSettings as Record<string, { path: string }>)[m.role];
+    if (!settings?.path) return;
+    const suffix = m.role === 'STUDENT' ? '' : '/dashboard';
+    navigate(`${settings.path}/${m.organization.login}${suffix}`);
+  };
+
+  const sortedMemberships = [...memberships].sort((a, b) =>
+    (a.organization.name || '').localeCompare(b.organization.name || '')
+  );
+
+  return (
+    <div ref={containerRef} style={{ marginBottom: 14, position: 'relative' }}>
+      <button
+        type="button"
+        onClick={() => setOpen(v => !v)}
+        style={{
+          width: '100%',
+          display: 'flex',
+          alignItems: 'center',
+          gap: 10,
+          padding: '10px 12px',
+          borderRadius: 12,
+          background: 'white',
+          border: '1px solid var(--line)',
+          boxShadow: 'var(--shadow-sm)',
+          textAlign: 'left',
+          cursor: 'pointer',
+        }}
+      >
+        <ClassSquare klass={{ name: displayName }} size={24} />
+        <span style={{ flex: 1, minWidth: 0 }}>
+          <div
+            style={{ fontSize: 13, fontWeight: 600, color: 'var(--ink-0)' }}
+            className="truncate"
+          >
+            {displayName}
+          </div>
+          <div style={{ fontSize: 11, color: 'var(--ink-3)' }} className="truncate">
+            {subtitle}
+          </div>
+        </span>
+        <span
+          style={{
+            color: 'var(--ink-3)',
+            transform: open ? 'rotate(180deg)' : '',
+            transition: 'transform 160ms',
+            display: 'flex',
+          }}
+        >
+          <IconChevron size={14} />
+        </span>
+      </button>
+
+      {open && (
+        <div
+          className="reveal-enter"
+          style={{
+            position: 'absolute',
+            top: 'calc(100% + 4px)',
+            left: 0,
+            right: 0,
+            background: 'white',
+            border: '1px solid var(--line)',
+            borderRadius: 12,
+            boxShadow: 'var(--shadow-lg)',
+            padding: 4,
+            zIndex: 40,
+          }}
+        >
+          {sortedMemberships.map(m => {
+            const isCurrent = String(m.id) === String(currentMembershipId);
+            const orgName = m.organization.name || m.organization.login;
+            const term =
+              m.organization.term && m.organization.year
+                ? `${m.organization.term} ${m.organization.year}`
+                : '';
+            return (
+              <button
+                key={m.id}
+                type="button"
+                className="row-hover"
+                onClick={() => handleSelect(m)}
+                style={{
+                  width: '100%',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 10,
+                  padding: '8px 10px',
+                  textAlign: 'left',
+                  borderRadius: 8,
+                  cursor: 'pointer',
+                  background: 'transparent',
+                  border: 'none',
+                }}
+              >
+                <ClassSquare klass={{ name: orgName }} size={20} />
+                <span style={{ flex: 1, minWidth: 0 }}>
+                  <div
+                    style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--ink-0)' }}
+                    className="truncate"
+                  >
+                    {orgName}
+                  </div>
+                  {term && (
+                    <div style={{ fontSize: 11, color: 'var(--ink-3)' }} className="truncate">
+                      {term}
+                    </div>
+                  )}
+                </span>
+                {isCurrent && (
+                  <span style={{ color: 'var(--ink-2)', display: 'flex' }}>
+                    <IconCheck size={14} />
+                  </span>
+                )}
+              </button>
+            );
+          })}
+          <div style={{ borderTop: '1px solid var(--line)', margin: '4px 0' }} />
+          <Link
+            to="/select-organization"
+            className="row-hover"
+            style={{
+              width: '100%',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 10,
+              padding: '8px 10px',
+              color: 'var(--ink-2)',
+              borderRadius: 8,
+              fontSize: 12.5,
+              textDecoration: 'none',
+            }}
+            onClick={() => setOpen(false)}
+          >
+            <IconPlus size={14} /> Join classroom
+          </Link>
+        </div>
+      )}
+    </div>
+  );
+};
+
 const CommonLayout = ({
   children,
   menuPages = [],
@@ -48,16 +352,12 @@ const CommonLayout = ({
   groupViewersByRole = false,
   pagesUrl: _pagesUrl = 'http://localhost:7100',
 }: CommonLayoutProps) => {
-  const [collapsed, setCollapsed] = useLocalStorageState('classmoji-collapsed', {
-    defaultValue: false,
-  });
-  const { classroom } = useStore();
+  const { classroom, membership, tokenBalance } = useStore();
   const params = useParams();
-
   const location = useLocation();
   const { pathname } = location;
   const { role } = useRole();
-  const roleSettings = useRoleSettings();
+  const roleSettingsForRole = useRoleSettings();
   const rootData = useRouteLoaderData('root') as
     | {
         user?: AppUser | null;
@@ -67,24 +367,122 @@ const CommonLayout = ({
     | undefined;
   const { user, memberships = [], aiAgentAvailable = false } = rootData ?? {};
   const { isProTier } = useSubscription();
-  const { tokenBalance } = useStore();
 
-  useEffect(() => {
-    const handle = (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && e.key === 'b') {
-        e.preventDefault();
-        setCollapsed(!collapsed);
-      }
-    };
-    window.addEventListener('keydown', handle);
-    return () => window.removeEventListener('keydown', handle);
-  }, [collapsed, setCollapsed]);
+  const basePath = roleSettingsForRole?.path ?? '';
+  const classParam = params.class ?? '';
+  const classroomHue = useMemo(
+    () => hashHue(classroom?.name || classroom?.login || classroom?.id),
+    [classroom?.name, classroom?.login, classroom?.id]
+  );
+  const classroomDisplaySlug =
+    (classroom as { slug?: string } | null | undefined)?.slug || classParam || classroom?.name || '';
 
-  const siderWidth = collapsed ? 64 : 200;
+  // Access gate — mirrors previous logic.
+  const hasAccessToItem = (item: RouteLike | undefined): item is RouteLike => {
+    if (!item) return false;
+    if (!item.roles || !role || !item.roles.includes(role)) return false;
+    const isDemoClassroom = Number(classroom?.id) === DEMO_ORG_ID;
+    if (item.isProTier && !isProTier && !isDemoClassroom) return false;
+    if (item.link === '/quizzes' && !isProTier && !isDemoClassroom) return false;
+    if (item.link === '/quizzes' && classroom?.settings?.quizzes_enabled === false) return false;
+    if (item.link === '/quizzes' && !aiAgentAvailable) return false;
+    if (item.link === '/slides' && classroom?.settings?.slides_enabled === false) return false;
+    return true;
+  };
+
+  const renderNavLink = (item: RouteLike, key: string) => {
+    const active =
+      (pathname.includes(item.link) && !pathname.includes('settings')) ||
+      (item.link.includes('setting') && pathname.includes('settings'));
+    const isDemoClassroom = Number(classroom?.id) === DEMO_ORG_ID;
+    if (item.isProTier && !isProTier && !isDemoClassroom) return null;
+    if (item.link === '/quizzes' && !isProTier && !isDemoClassroom) return null;
+    if (item.link === '/quizzes' && classroom?.settings?.quizzes_enabled === false) return null;
+    if (item.link === '/quizzes' && !aiAgentAvailable) return null;
+    if (item.link === '/slides' && classroom?.settings?.slides_enabled === false) return null;
+
+    const IconComp = item.icon;
+    const to = `${basePath}/${classParam}${item.link}`;
+
+    return (
+      <RequireRole roles={item.roles} key={key}>
+        <SidebarNavItem
+          icon={<IconComp size={16} />}
+          label={item.label}
+          to={to}
+          active={active}
+        />
+      </RequireRole>
+    );
+  };
+
+  const renderGroup = (keys: readonly string[], prefix: string) => {
+    const nodes: React.ReactNode[] = [];
+    keys.forEach((k, i) => {
+      const item = routes[k];
+      if (!hasAccessToItem(item)) return;
+      const node = renderNavLink(item, `${prefix}-${i}`);
+      if (node) nodes.push(node);
+    });
+    return nodes;
+  };
+
+  const topKeys = role
+    ? (sidebarSections.top as Record<string, readonly string[]>)[role] ?? []
+    : [];
+  const courseKeys = role
+    ? (sidebarSections.course as Record<string, readonly string[]>)[role] ?? []
+    : [];
+
+  // Menu pages — for students/assistants, shown below course nav.
+  const renderMenuPages = () => {
+    if (!menuPages || menuPages.length === 0) return null;
+    if (role !== 'STUDENT' && role !== 'ASSISTANT') return null;
+    return menuPages.map(page => (
+      <SidebarNavItem
+        key={page.id}
+        icon={<IconFile size={16} />}
+        label={page.title}
+        to={`${basePath}/${classParam}/pages/${page.id}`}
+        active={pathname.includes(`/pages/${page.id}`)}
+      />
+    ));
+  };
+
+  // Trail: derive from pathname segments after `/:role/:class`.
+  const trail = useMemo(() => {
+    const parts = pathname.split('/').filter(Boolean);
+    // parts[0]=role, parts[1]=class, rest are feature segments
+    const rest = parts.slice(2);
+    if (rest.length === 0) return [] as string[];
+    // Map known keys to labels via routes; fall back to titlecase.
+    const labels: string[] = [];
+    const first = rest[0];
+    const routeMatch = Object.values(routes).find(r => r.link === `/${first}`);
+    if (routeMatch) labels.push(routeMatch.label);
+    else labels.push(first.charAt(0).toUpperCase() + first.slice(1).replace(/-/g, ' '));
+    return labels;
+  }, [pathname]);
+
+  const userInitials = getInitials(user?.name, user?.login);
+  const userHue = hashHue(user?.id ?? user?.login ?? 'user');
+
+  const handleStubClick = (label: string) => {
+    // eslint-disable-next-line no-console
+    console.warn(`[classmoji] "${label}" link is a stub — not implemented yet.`);
+  };
+
+  const handleGithubClick = () => {
+    const login = classroom?.git_organization?.login;
+    if (!login) return;
+    window.open(`https://github.com/orgs/${login}/repositories`, '_blank');
+  };
 
   const TokenSection = () => (
     <div className="flex items-center justify-between gap-2">
-      <span className="text-sm font-medium text-gray-600 dark:text-gray-400">Available Tokens</span>
+      <span className="text-sm font-medium text-gray-600 dark:text-gray-400">
+        Available Tokens
+      </span>
       <div className="flex items-center gap-2 bg-primary-50 dark:bg-primary-900/20 rounded-full px-3 py-1 shadow-xs border border-primary-200 dark:border-primary-800/50">
         <img src={tokenImage} alt="token" className="h-5 w-5" />
         <span className="text-lg font-bold text-primary-900 dark:text-primary-400">
@@ -94,298 +492,230 @@ const CommonLayout = ({
     </div>
   );
 
-  const renderNavItem = (item: NavItem, key: string) => {
-    const active =
-      (pathname.includes(item.link) && !pathname.includes('settings')) ||
-      (item.link.includes('setting') && pathname.includes('settings'));
-
-    const isDemoClassroom = Number(classroom?.id) === DEMO_ORG_ID;
-
-    if (item.isProTier && !isProTier && isDemoClassroom === false) return null;
-    if (item.link === '/quizzes' && !isProTier && isDemoClassroom === false) return null;
-    if (item.link === '/quizzes' && classroom?.settings?.quizzes_enabled === false) return null;
-    if (item.link === '/quizzes' && !aiAgentAvailable) return null;
-
-    // Hide slides if disabled in classroom settings
-    if (item.link === '/slides' && classroom?.settings?.slides_enabled === false) return null;
-
-    return (
-      <RequireRole roles={item.roles} key={key}>
-        <Link
-          to={`${roleSettings?.path}/${params.class}${item.link}`}
-          prefetch={item.label === 'Dashboard' ? 'render' : 'intent'}
-          className={`
-            group flex items-center gap-3 rounded-lg transition-all duration-150
-            ${collapsed ? 'justify-center p-3 mx-2' : 'px-3 py-[7px] mx-2'}
-            ${
-              active
-                ? 'bg-primary-50 dark:bg-primary-900/30 text-primary-700 dark:text-primary-400 font-semibold'
-                : 'text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800'
-            }
-          `}
-          data-active={active || undefined}
-        >
-          {collapsed ? (
-            <Tooltip title={item.label} placement="right">
-              <div className="flex flex-col items-center">
-                <item.icon
-                  size={20}
-                  strokeWidth={1.75}
-                  className={active ? 'text-primary-700 dark:text-primary-400' : ''}
-                />
-                {isDemoClassroom && item.isProTier && (
-                  <span className="text-[10px] text-amber-600 dark:text-amber-400 mt-0.5">Pro</span>
-                )}
-              </div>
-            </Tooltip>
-          ) : (
-            <>
-              <item.icon
-                size={20}
-                strokeWidth={1.75}
-                className={`shrink-0 ${active ? 'text-primary-700 dark:text-primary-400' : ''}`}
-              />
-              <span className="flex-1">{item.label}</span>
-              {isDemoClassroom && item.isProTier && (
-                <span className="text-xs text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-900/30 px-1.5 py-0.5 rounded-sm">
-                  Pro
-                </span>
-              )}
-            </>
-          )}
-        </Link>
-      </RequireRole>
-    );
-  };
-
-  // Helper to check if user has access to a route item
-  const hasAccessToItem = (item: NavItem) => {
-    if (!item) return false;
-    if (!item.roles || !role || !item.roles.includes(role)) return false;
-
-    const isDemoClassroom = Number(classroom?.id) === DEMO_ORG_ID;
-    if (item.isProTier && !isProTier && !isDemoClassroom) return false;
-    if (item.link === '/quizzes' && !isProTier && !isDemoClassroom) return false;
-    if (item.link === '/quizzes' && classroom?.settings?.quizzes_enabled === false) return false;
-    if (item.link === '/quizzes' && !aiAgentAvailable) return false;
-
-    return true;
-  };
-
-  // Render dynamic menu pages for students and assistants
-  const renderMenuPages = () => {
-    if (!menuPages || menuPages.length === 0) return null;
-    if (role !== 'STUDENT' && role !== 'ASSISTANT') return null;
-
-    const menuPageItems = menuPages.map((page: MenuPage) => {
-      return (
-        <Link
-          key={page.id}
-          to={`${roleSettings?.path}/${params.class}/pages/${page.id}`}
-          className={`
-            group flex items-center gap-3 rounded-lg transition-all duration-150 w-full
-            ${collapsed ? 'justify-center p-3 mx-2' : 'px-3 py-[7px] mx-2'}
-            text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800
-          `}
-        >
-          {collapsed ? (
-            <Tooltip title={page.title} placement="right">
-              <IconFileText size={20} strokeWidth={1.75} />
-            </Tooltip>
-          ) : (
-            <>
-              <IconFileText size={20} strokeWidth={1.75} className="shrink-0" />
-              <span className="flex-1 truncate">{page.title}</span>
-            </>
-          )}
-        </Link>
-      );
-    });
-
-    return (
-      <div key="menu-pages" className={collapsed ? '' : 'pt-5'}>
-        {!collapsed && (
-          <div className="px-4 mb-3">
-            <h4 className="text-[11px] font-bold text-gray-400 dark:text-gray-500 uppercase tracking-wider">
-              Pages
-            </h4>
-          </div>
-        )}
-        <div className="space-y-0.5">{menuPageItems}</div>
-      </div>
-    );
-  };
-
-  const tabs = [
-    // Dashboard (uncategorized)
-    renderNavItem(routes.dashboard, 'dashboard'),
-
-    // Calendar (directly under dashboard)
-    renderNavItem(routes.calendar, 'calendar'),
-
-    // Render categorized sections
-    ...Object.entries(routeCategories).map(([categoryKey, category]) => {
-      // First filter to only items the user has access to
-      const accessibleItems = category.items
-        .map(routeKey => (routes as Record<string, (typeof routes)[keyof typeof routes]>)[routeKey])
-        .filter(hasAccessToItem);
-
-      // If no accessible items, don't render the category at all
-      if (accessibleItems.length === 0) return null;
-
-      const categoryItems = accessibleItems.map((item, index) =>
-        renderNavItem(item, `${categoryKey}-${index}`)
-      );
-
-      return (
-        <div key={categoryKey} className={collapsed ? '' : 'pt-5'}>
-          {/* Category Header - only show when expanded */}
-          {!collapsed && (
-            <div className="px-4 mb-3">
-              <h4 className="text-[11px] font-bold text-gray-400 dark:text-gray-500 uppercase tracking-wider">
-                {category.label}
-              </h4>
-            </div>
-          )}
-          <div className="space-y-0.5">{categoryItems}</div>
-        </div>
-      );
-    }),
-
-    // Add dynamic menu pages after Assessment category (for students only)
-    renderMenuPages(),
-  ];
+  const topbarAction = (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+      {recentViewers?.length > 0 && (
+        <>
+          <RecentViewers viewers={recentViewers} groupByRole={groupViewersByRole} />
+          <div style={{ height: 20, width: 1, background: 'var(--line)' }} />
+        </>
+      )}
+      <ProTierFeature>
+        <RequireRole roles={['STUDENT']}>
+          <>
+            <TokenSection />
+            <div style={{ height: 20, width: 1, background: 'var(--line)' }} />
+          </>
+        </RequireRole>
+      </ProTierFeature>
+      {classroom?.git_organization?.login && (
+        <IconButton
+          label="View on GitHub"
+          icon={<IconGithub size={16} />}
+          onClick={handleGithubClick}
+        />
+      )}
+    </div>
+  );
 
   return (
-    <div className="flex h-screen bg-gray-50 dark:bg-gray-900">
-      {/* Fixed Sidebar */}
-      <div
-        className="fixed top-0 left-0 h-full bg-lightGray dark:bg-gray-900 border-r border-gray-200 dark:border-gray-800 z-30 transition-all duration-300 ease-in-out flex flex-col"
-        style={{ width: siderWidth }}
+    <div style={{ display: 'flex', minHeight: '100vh', background: 'var(--bg-1)' }}>
+      {/* Sidebar */}
+      <aside
+        style={{
+          width: SIDEBAR_WIDTH,
+          flexShrink: 0,
+          background: 'var(--bg-2)',
+          borderRight: '1px solid var(--line)',
+          display: 'flex',
+          flexDirection: 'column',
+          padding: '12px 10px',
+          height: '100vh',
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          zIndex: 30,
+        }}
       >
-        {/* Sidebar Header */}
-        <div
-          className={`flex items-center ${collapsed ? 'justify-center' : 'justify-start'} h-[53px] px-4 py-3 border-b border-gray-200 dark:border-gray-800`}
+        {/* Brand */}
+        <Link
+          to="/select-organization"
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+            padding: '4px 6px 14px',
+            textDecoration: 'none',
+            color: 'var(--ink-0)',
+          }}
         >
-          <Link to="/select-organization" className="flex items-center">
-            {collapsed ? <Logo size={32} variant="icon" /> : <Logo size={32} variant="full" />}
-          </Link>
+          <IconLogo size={22} />
+          <span style={{ fontSize: 15, fontWeight: 600, letterSpacing: -0.2 }}>classmoji</span>
+        </Link>
+
+        {/* User */}
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 10,
+            padding: '8px 8px',
+            marginBottom: 10,
+          }}
+        >
+          <Avatar
+            initials={userInitials}
+            hue={userHue}
+            size={32}
+            src={user?.avatar_url ?? undefined}
+          />
+          <span style={{ minWidth: 0, flex: 1 }}>
+            <div
+              style={{ fontSize: 13, fontWeight: 600, color: 'var(--ink-0)' }}
+              className="truncate"
+            >
+              {user?.name || user?.login}
+            </div>
+            <div
+              style={{
+                fontSize: 11,
+                color: 'var(--ink-3)',
+                textTransform: 'capitalize',
+              }}
+            >
+              {role ? role.toLowerCase() : ''}
+            </div>
+          </span>
         </div>
 
-        {/* Navigation */}
-        <nav className="flex-1 overflow-y-auto py-2">
-          <div className="space-y-0.5">{tabs}</div>
+        {/* Class switcher */}
+        <ClassPill
+          classroom={
+            classroom
+              ? {
+                  name: classroom.name || classroom.login || '',
+                  slug: (classroom as { slug?: string }).slug || classroom.login,
+                  subtitle:
+                    classroom.term && classroom.year
+                      ? `${classroom.term} ${classroom.year}`
+                      : classroom.login,
+                }
+              : null
+          }
+          memberships={memberships}
+          currentMembershipId={membership?.id ?? null}
+        />
+
+        {/* Scrollable nav area */}
+        <div style={{ flex: 1, overflowY: 'auto', minHeight: 0 }}>
+          {/* Top group */}
+          <nav style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+            {renderGroup(topKeys, 'top')}
+          </nav>
+
+          {/* Course section */}
+          {courseKeys.length > 0 && (
+            <>
+              <div
+                className="caps"
+                style={{ marginTop: 16, padding: '0 10px 6px' }}
+              >
+                {classroomDisplaySlug}
+              </div>
+              <nav style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                {renderGroup(courseKeys, 'course')}
+                {renderMenuPages()}
+              </nav>
+            </>
+          )}
+        </div>
+
+        {/* Footer nav */}
+        <nav
+          style={{
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 2,
+            paddingTop: 8,
+            borderTop: '1px solid var(--line)',
+            marginTop: 8,
+          }}
+        >
+          {renderGroup(sidebarSections.footer, 'footer')}
+          <SidebarNavItem
+            icon={<IconDocs size={16} />}
+            label="Docs"
+            onClick={() => handleStubClick('Docs')}
+          />
+          <SidebarNavItem
+            icon={<IconSupport size={16} />}
+            label="Support"
+            onClick={() => handleStubClick('Support')}
+          />
         </nav>
 
-        {/* User Profile Section */}
-        <div className="p-3 border-t border-gray-100 dark:border-gray-800">
+        {/* Profile dropdown trigger */}
+        <div style={{ paddingTop: 8 }}>
           <ProfileDropdown placement="topRight">
             <div
-              className={`
-                flex items-center gap-3 p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800
-                transition-colors cursor-pointer
-                ${collapsed ? 'justify-center' : ''}
-              `}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 10,
+                padding: '8px',
+                borderRadius: 9,
+                cursor: 'pointer',
+              }}
+              className="row-hover"
             >
               <Avatar
-                src={user?.avatar_url}
-                size={32}
-                className="bg-gray-100 dark:bg-gray-800 shrink-0"
-                shape="circle"
+                initials={userInitials}
+                hue={userHue}
+                size={24}
+                src={user?.avatar_url ?? undefined}
               />
-              {!collapsed && (
-                <div className="min-w-0 flex-1">
-                  <p className="font-medium text-sm text-gray-900 dark:text-gray-100 truncate">
-                    {user?.name}
-                  </p>
-                  <p className="text-gray-500 dark:text-gray-400 text-xs truncate">
-                    @{user?.login}
-                  </p>
+              <span style={{ minWidth: 0, flex: 1 }}>
+                <div
+                  style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--ink-1)' }}
+                  className="truncate"
+                >
+                  {user?.login ? `@${user.login}` : user?.name}
                 </div>
-              )}
+              </span>
+              <IconChevron size={12} />
             </div>
           </ProfileDropdown>
         </div>
-      </div>
+      </aside>
 
-      {/* Main Content Area */}
+      {/* Main column */}
       <div
-        className="flex-1 flex flex-col transition-all duration-300 ease-in-out min-w-0"
-        style={{ marginLeft: siderWidth }}
+        style={{
+          marginLeft: SIDEBAR_WIDTH,
+          flex: 1,
+          display: 'flex',
+          flexDirection: 'column',
+          minWidth: 0,
+        }}
       >
-        {/* Fixed Header */}
-        <div
-          className="fixed right-0 h-[53px] bg-white dark:bg-gray-900 border-b border-gray-200 dark:border-gray-800 z-20"
-          style={{
-            marginLeft: siderWidth,
-            width: `calc(100% - ${siderWidth}px)`,
-            transition: 'margin-left 300ms ease-in-out, width 300ms ease-in-out',
-          }}
-        >
-          <div className="flex justify-between items-center px-1 h-full">
-            <button
-              onClick={() => setCollapsed(!collapsed)}
-              className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors"
-              aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-            >
-              <IconLayoutSidebarLeftCollapse
-                size={20}
-                className={`text-gray-700 dark:text-gray-300 transition-all duration-300 ${
-                  collapsed ? 'rotate-180' : ''
-                }`}
-              />
-            </button>
-            <div className="flex items-center gap-4">
-              {recentViewers?.length > 0 && (
-                <>
-                  <RecentViewers viewers={recentViewers} groupByRole={groupViewersByRole} />
-                  <div className="h-6 w-px bg-gray-200 dark:bg-gray-700" />
-                </>
-              )}
-              <ProTierFeature>
-                <RequireRole roles={['STUDENT']}>
-                  <>
-                    <TokenSection />
-                    <div className="h-6 w-px bg-gray-200 dark:bg-gray-700" />
-                  </>
-                </RequireRole>
-              </ProTierFeature>
-              <div className="flex items-center gap-2">
-                <Tooltip title="View on GitHub">
-                  <button
-                    className="p-2 rounded-lg hover:bg-primary-50 dark:hover:bg-primary-900/20 transition-colors border border-gray-200 dark:border-gray-700 hover:border-primary-300 dark:hover:border-primary-800 cursor-pointer"
-                    onClick={() =>
-                      window.open(
-                        `https://github.com/orgs/${classroom?.git_organization?.login}/repositories`,
-                        '_blank'
-                      )
-                    }
-                  >
-                    <img src={githubLogo} alt="GitHub" className="w-[18px] h-[18px] dark:invert" />
-                  </button>
-                </Tooltip>
-                <div className="h-6 w-px bg-gray-200 dark:bg-gray-700" />
-                <OrgSelect memberships={memberships} />
-              </div>
-            </div>
-          </div>
-        </div>
+        {/* Breadcrumb topbar */}
+        <Breadcrumb
+          classroomSlug={classroomDisplaySlug}
+          classroomHue={classroomHue}
+          trail={trail}
+          action={topbarAction}
+        />
 
         {/* Content */}
-        <div className="flex-1 bg-white dark:bg-gray-900 pt-11 overflow-auto relative min-w-0">
+        <div
+          className="flex-1 bg-white dark:bg-gray-900 overflow-auto relative min-w-0"
+          style={{ flex: 1 }}
+        >
           <div className={pathname.includes('/pages/') ? 'min-h-full' : 'px-8 py-6 min-h-full'}>
             {children}
           </div>
         </div>
       </div>
-
-      {/* Mobile Overlay */}
-      {!collapsed && (
-        <button
-          className="fixed inset-0 bg-black/50 z-20 lg:hidden"
-          onClick={() => setCollapsed(true)}
-        />
-      )}
     </div>
   );
 };
