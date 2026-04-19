@@ -1,5 +1,4 @@
 @import 'tailwindcss' reference;
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Instrument+Serif:ital@0;1&display=swap');
 
 /* ============ CLASSMOJI DESIGN TOKENS ============ */
 /* Raw CSS variables — referenced by Tailwind @theme entries in tailwind.css
