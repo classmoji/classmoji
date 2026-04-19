@@ -1,6 +1,11 @@
+import { useState } from 'react';
 import { IconPeople } from '@classmoji/ui-components';
 import { GradingStatCard } from './GradingStatCard';
 import { GradingQueueRow, type GradingQueueItem } from './GradingQueueRow';
+import {
+  GitHubStatsPanel,
+  type GitHubStatsSnapshot,
+} from '~/components/features/analytics';
 
 export interface GradingStats {
   graded: number;
@@ -10,14 +15,44 @@ export interface GradingStats {
   focusAvg: number | null;
 }
 
+export interface SubmissionAnalyticsEntry {
+  deadline: string | null;
+  snapshot: GitHubStatsSnapshot | null;
+}
+
 interface GradingScreenProps {
   stats: GradingStats;
   queue: GradingQueueItem[];
+  /** Per-submission analytics keyed by repository_assignment_id. */
+  analytics?: Record<string, SubmissionAnalyticsEntry>;
+  /**
+   * Trigger a refresh for a given repository_assignment_id. When provided,
+   * the detail panel will show a working Refresh button.
+   */
+  onRefreshSubmission?: (repositoryAssignmentId: string) => void;
+  /** Repository-assignment id currently being refreshed, if any. */
+  refreshingSubmissionId?: string | null;
   onOpenSubmission?: (id: string) => void;
 }
 
-export function GradingScreen({ stats, queue, onOpenSubmission }: GradingScreenProps) {
+export function GradingScreen({
+  stats,
+  queue,
+  analytics,
+  onRefreshSubmission,
+  refreshingSubmissionId,
+  onOpenSubmission,
+}: GradingScreenProps) {
   const focusValue = stats.focusAvg === null ? '—' : `${stats.focusAvg}%`;
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+
+  const handleRowClick = (id: string) => {
+    setSelectedId(prev => (prev === id ? null : id));
+    onOpenSubmission?.(id);
+  };
+
+  const selected = selectedId ? (analytics?.[selectedId] ?? null) : null;
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
@@ -71,11 +106,27 @@ export function GradingScreen({ stats, queue, onOpenSubmission }: GradingScreenP
               key={q.id}
               item={q}
               last={i === queue.length - 1}
-              onClick={onOpenSubmission}
+              onClick={handleRowClick}
             />
           ))
         )}
       </div>
+
+      {/* Selected submission detail */}
+      {selectedId && selected && (
+        <div data-testid="submission-detail">
+          <GitHubStatsPanel
+            snapshot={selected.snapshot}
+            deadline={selected.deadline}
+            onRefresh={
+              onRefreshSubmission
+                ? () => onRefreshSubmission(selectedId)
+                : undefined
+            }
+            refreshing={refreshingSubmissionId === selectedId}
+          />
+        </div>
+      )}
     </div>
   );
 }

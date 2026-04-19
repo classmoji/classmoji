@@ -53,3 +53,13 @@ export type {
   PRSummary,
   SnapshotPayload,
 } from './classmoji/repoAnalytics.types.ts';
+
+// Repo analytics flag heuristics (pure, client-safe)
+export {
+  lateCommitRatio,
+  isMegaCommit,
+  commitMessageQuality,
+  averageCommitQuality,
+  busFactor,
+  dumpAndRun,
+} from './classmoji/repoAnalytics.flags.ts';

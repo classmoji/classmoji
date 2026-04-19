@@ -3,6 +3,7 @@ import { ReloadOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import StatsCard from '~/components/shared/stats/StatsCard';
 import CommitTimeline, { type CommitRecord } from './CommitTimeline';
+import Anomalies from './Anomalies';
 
 export type ContributorRecord = {
   login: string;
@@ -214,7 +215,15 @@ const GitHubStatsPanel = ({
         <CommitTimeline commits={commits} deadline={deadline} />
       </div>
 
-      {/* TODO Task 11: <Anomalies /> */}
+      <Anomalies
+        snapshot={{
+          commits,
+          contributors,
+          total_additions,
+          total_deletions,
+        }}
+        deadline={deadline}
+      />
 
       {/* Language breakdown */}
       {Object.keys(languages).length > 0 && (

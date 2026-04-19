@@ -3,12 +3,28 @@ import relativeTime from 'dayjs/plugin/relativeTime';
 import getPrisma from '@classmoji/database';
 import { hashHue, getInitials } from '~/utils/hue';
 import type { GradingQueueItem, GradingStats } from '~/components/features/grading';
+import type { GitHubStatsSnapshot } from '~/components/features/analytics';
+import type {
+  CommitRecord,
+  ContributorRecord,
+  LanguagesMap,
+  PRSummary,
+} from '@classmoji/services';
 
 dayjs.extend(relativeTime);
+
+export interface SubmissionAnalytics {
+  /** ISO string of the grader deadline for this submission's assignment. */
+  deadline: string | null;
+  /** Latest analytics snapshot, or null when none has been captured yet. */
+  snapshot: GitHubStatsSnapshot | null;
+}
 
 export interface GradingScreenData {
   stats: GradingStats;
   queue: GradingQueueItem[];
+  /** Map of repository_assignment_id → analytics payload (deadline + snapshot). */
+  analytics: Record<string, SubmissionAnalytics>;
 }
 
 /**
@@ -98,11 +114,45 @@ export const loadGradingScreenData = async (
           team: { select: { id: true, name: true, slug: true } },
         },
       },
+      analytics_snapshot: true,
     },
   });
 
   const now = dayjs();
+  const analytics: Record<string, SubmissionAnalytics> = {};
   const queue: GradingQueueItem[] = queueRaw.map(ra => {
+    const snap = ra.analytics_snapshot;
+    analytics[ra.id] = {
+      deadline: ra.assignment.grader_deadline
+        ? new Date(ra.assignment.grader_deadline).toISOString()
+        : null,
+      snapshot: snap
+        ? {
+            total_commits: snap.total_commits,
+            total_additions: snap.total_additions,
+            total_deletions: snap.total_deletions,
+            first_commit_at: snap.first_commit_at
+              ? new Date(snap.first_commit_at).toISOString()
+              : null,
+            last_commit_at: snap.last_commit_at
+              ? new Date(snap.last_commit_at).toISOString()
+              : null,
+            fetched_at: new Date(snap.fetched_at).toISOString(),
+            stale: snap.stale,
+            error: snap.error,
+            commits: (snap.commits as unknown as CommitRecord[]) ?? [],
+            contributors:
+              (snap.contributors as unknown as ContributorRecord[]) ?? [],
+            languages: (snap.languages as unknown as LanguagesMap) ?? {},
+            pr_summary: (snap.pr_summary as unknown as PRSummary) ?? {
+              open: 0,
+              merged: 0,
+              closed: 0,
+            },
+          }
+        : null,
+    };
+
     const student = ra.repository.student;
     const team = ra.repository.team;
     const displayName = student?.name || student?.login || team?.name || team?.slug || 'Unknown';
@@ -140,5 +190,6 @@ export const loadGradingScreenData = async (
       focusAvg,
     },
     queue,
+    analytics,
   };
 };
