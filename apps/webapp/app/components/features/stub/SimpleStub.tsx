@@ -12,18 +12,10 @@ export interface SimpleStubProps {
 
 export function SimpleStub({ title, body }: SimpleStubProps) {
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-      <h1
-        className="display"
-        style={{ margin: 0, fontSize: 28, fontWeight: 500, letterSpacing: -0.4 }}
-      >
-        {title}
-      </h1>
-      <div
-        className="card"
-        style={{ padding: 24, color: 'var(--ink-2)', fontSize: 13.5, lineHeight: 1.6 }}
-      >
-        {body}
+    <div className="flex flex-col gap-3.5">
+      <h1 className="display m-0 text-[28px] font-medium tracking-[-0.4px] text-ink-1">{title}</h1>
+      <div className="panel">
+        <div className="panel-body text-[13.5px] leading-[1.6] text-ink-2">{body}</div>
       </div>
     </div>
   );
