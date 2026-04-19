@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import { useDarkMode } from '~/hooks';
+import { BACKGROUNDS, type BackgroundKey } from '~/hooks/useDarkMode';
 
 // Pastel-redesign Tweaks FAB: lets the signed-in user flip between light/dark
 // theme and pick from 12 accent presets (or a custom hex). Persists choice via
@@ -80,7 +81,7 @@ const CloseIcon = () => (
 );
 
 const TweaksPanel = () => {
-  const { theme, accent, setTheme, setAccent } = useDarkMode();
+  const { theme, accent, background, setTheme, setAccent, setBackground } = useDarkMode();
   const [open, setOpen] = useState(false);
   const panelRef = useRef<HTMLDivElement>(null);
   const fabRef = useRef<HTMLButtonElement>(null);
@@ -176,6 +177,42 @@ const TweaksPanel = () => {
                   aria-label={`Accent ${a.name}`}
                   aria-pressed={isActive}
                 />
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Background presets */}
+        <div className="tw-row">
+          <div className="tw-label">Background</div>
+          <div className="tw-bgs">
+            {BACKGROUNDS.map(bg => {
+              const stops = bg.key === 'accent'
+                ? {
+                    s1: accent,
+                    s2: accent,
+                    s3a: accent,
+                    s3b: accent,
+                    s3c: accent,
+                  }
+                : theme === 'dark' ? bg.dark : bg.light;
+              const preview = bg.key === 'accent'
+                ? `radial-gradient(60% 80% at 80% 10%, ${accent}40 0%, transparent 65%), radial-gradient(60% 80% at 10% 100%, ${accent}26 0%, transparent 60%), linear-gradient(160deg, ${accent}18 0%, ${accent}0a 100%)`
+                : `radial-gradient(60% 80% at 80% 10%, ${stops.s1} 0%, transparent 65%), radial-gradient(60% 80% at 10% 100%, ${stops.s2} 0%, transparent 60%), linear-gradient(160deg, ${stops.s3a} 0%, ${stops.s3b} 55%, ${stops.s3c} 100%)`;
+              const isActive = background === bg.key;
+              return (
+                <button
+                  type="button"
+                  key={bg.key}
+                  className={`tw-bg ${isActive ? 'active' : ''}`}
+                  style={{ ['--bg-preview' as string]: preview } as CSSProperties}
+                  title={bg.name}
+                  onClick={() => setBackground(bg.key as BackgroundKey)}
+                  aria-label={`Background ${bg.name}`}
+                  aria-pressed={isActive}
+                >
+                  <span className="tw-bg-name">{bg.name}</span>
+                </button>
               );
             })}
           </div>

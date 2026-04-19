@@ -611,6 +611,8 @@ label {
   line-height: 1.35;
   cursor: pointer;
   transition: filter 100ms, transform 100ms;
+  position: relative;
+  z-index: 2;
 }
 .evt:hover { filter: brightness(1.04); }
 html.dark .evt:hover,
@@ -618,11 +620,11 @@ html[data-theme="dark"] .evt:hover { filter: brightness(1.15); }
 .evt .evt-title { font-weight: 500; color: inherit; }
 .evt .evt-time  { font-size: 11px; opacity: 0.8; margin-top: 1px; }
 
-.evt-lect { background: var(--sky-bg);   color: var(--sky-ink);   border-color: var(--sky-bord); }
-.evt-quiz { background: var(--mint-bg);  color: var(--mint-ink);  border-color: var(--mint-bord); }
-.evt-asgn { background: var(--peach-bg); color: var(--peach-ink); border-color: var(--peach-bord); }
-.evt-proj { background: var(--rose-bg);  color: var(--rose-ink);  border-color: var(--rose-bord); }
-.evt-oh   { background: var(--mint-bg);  color: var(--mint-ink);  border-color: var(--mint-bord); }
+.evt-lect,
+.evt-quiz,
+.evt-asgn,
+.evt-proj,
+.evt-oh { background: var(--accent-soft); color: var(--accent-ink); border-color: var(--accent-soft-2); }
 
 /* Buttons — flat 8px radius */
 .btn {
@@ -792,6 +794,47 @@ html[data-theme="dark"] .bar .fill.done { background: #4fd47d; }
 }
 .tw-swatch:hover { transform: scale(1.08); }
 .tw-swatch.active { border-color: var(--ink-0); transform: scale(1.08); }
+
+.tw-bgs {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 6px;
+}
+.tw-bg {
+  position: relative;
+  aspect-ratio: 1.15;
+  border-radius: 9px;
+  border: 1.5px solid var(--line-2);
+  background: var(--bg-preview);
+  cursor: pointer;
+  overflow: hidden;
+  padding: 0;
+  transition: transform 120ms, border-color 120ms, box-shadow 120ms;
+}
+.tw-bg:hover {
+  transform: translateY(-1px);
+  border-color: var(--line-strong);
+}
+.tw-bg.active {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-soft-2);
+}
+.tw-bg .tw-bg-name {
+  position: absolute;
+  left: 0; right: 0; bottom: 0;
+  padding: 3px 6px;
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  color: var(--ink-1);
+  text-align: center;
+  background: linear-gradient(
+    to top,
+    color-mix(in srgb, var(--panel) 85%, transparent),
+    color-mix(in srgb, var(--panel) 0%, transparent)
+  );
+  backdrop-filter: blur(2px);
+}
 
 .tw-segment {
   display: grid; grid-template-columns: 1fr 1fr;

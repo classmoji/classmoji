@@ -1,5 +1,5 @@
-import { Divider, Tabs, Switch, Card, Tag } from 'antd';
-import { IconFileText, IconList, IconTable } from '@tabler/icons-react';
+import { Divider, Tabs, Switch, Card, Tag, Tooltip, Modal, Button } from 'antd';
+import { IconFileText, IconList, IconTable, IconCircleFilled } from '@tabler/icons-react';
 import { useParams, useRevalidator, Outlet } from 'react-router';
 import { useState } from 'react';
 
@@ -72,17 +72,58 @@ const SingleModule = ({ loaderData }: Route.ComponentProps) => {
     );
   };
 
-  const tabItems = (module!.assignments as ModuleAssignmentSummary[])
-    .sort((a, b) => {
-      // First sort by deadline
-      const aTime = a.student_deadline ? new Date(a.student_deadline).getTime() : 0;
-      const bTime = b.student_deadline ? new Date(b.student_deadline).getTime() : 0;
-      if (aTime !== bTime) {
-        return aTime - bTime;
+  const submitPublish = (assignmentId: string, isPublished: boolean) => {
+    fetcher!.submit(
+      { assignment_id: assignmentId },
+      {
+        method: 'post',
+        action: `?/${isPublished ? 'unpublishAssignment' : 'publishAssignment'}`,
+        encType: 'application/json',
       }
-      // Then sort by title
-      return a.title.localeCompare(b.title);
-    })
+    );
+  };
+
+  const confirmPublishToggle = (assignment: ModuleAssignmentSummary) => {
+    if (assignment.is_published) {
+      Modal.confirm({
+        title: `Unpublish "${assignment.title}"?`,
+        content:
+          'Students will no longer see this assignment. Existing repositories are kept and you can republish at any time.',
+        okText: 'Unpublish',
+        okButtonProps: { danger: true },
+        cancelText: 'Cancel',
+        onOk: () => submitPublish(assignment.id, true),
+      });
+    } else {
+      Modal.confirm({
+        title: `Publish "${assignment.title}"?`,
+        content:
+          'This will make the assignment available to students and create repositories if needed.',
+        okText: 'Publish',
+        cancelText: 'Cancel',
+        onOk: () => submitPublish(assignment.id, false),
+      });
+    }
+  };
+
+  const sortedAssignments = (module!.assignments as ModuleAssignmentSummary[]).slice().sort((a, b) => {
+    // First sort by deadline
+    const aTime = a.student_deadline ? new Date(a.student_deadline).getTime() : 0;
+    const bTime = b.student_deadline ? new Date(b.student_deadline).getTime() : 0;
+    if (aTime !== bTime) {
+      return aTime - bTime;
+    }
+    // Then sort by title
+    return a.title.localeCompare(b.title);
+  });
+
+  const [activeAssignmentId, setActiveAssignmentId] = useState<string | undefined>(
+    sortedAssignments[0]?.id
+  );
+  const activeAssignment =
+    sortedAssignments.find(a => a.id === activeAssignmentId) ?? sortedAssignments[0];
+
+  const tabItems = sortedAssignments
     .map(assignment => {
       return {
         key: assignment.id,
@@ -220,7 +261,43 @@ const SingleModule = ({ loaderData }: Route.ComponentProps) => {
       </div>
 
       {viewMode === 'assignment' ? (
-        <Tabs items={tabItems} />
+        <Tabs
+          items={tabItems}
+          activeKey={activeAssignmentId}
+          onChange={setActiveAssignmentId}
+          tabBarExtraContent={
+            activeAssignment ? (
+              <Tooltip
+                title={
+                  activeAssignment.is_published
+                    ? 'Click to unpublish this assignment'
+                    : 'Click to publish this assignment'
+                }
+              >
+                <Button
+                  size="small"
+                  onClick={() => confirmPublishToggle(activeAssignment)}
+                  icon={
+                    <IconCircleFilled
+                      size={8}
+                      style={{
+                        color: activeAssignment.is_published ? '#16a34a' : '#f59e0b',
+                      }}
+                    />
+                  }
+                  style={{
+                    borderColor: activeAssignment.is_published ? '#86efac' : '#fcd34d',
+                    backgroundColor: activeAssignment.is_published ? '#f0fdf4' : '#fffbeb',
+                    color: activeAssignment.is_published ? '#166534' : '#92400e',
+                    fontWeight: 500,
+                  }}
+                >
+                  {activeAssignment.is_published ? 'Published' : 'Draft'}
+                </Button>
+              </Tooltip>
+            ) : null
+          }
+        />
       ) : (
         <ModuleTable
           module={module as Parameters<typeof ModuleTable>[0]['module']}

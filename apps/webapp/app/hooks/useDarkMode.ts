@@ -10,10 +10,120 @@ export type ThemeMode = 'light' | 'dark';
 export interface TweaksState {
   theme: ThemeMode;
   accent: string;
+  background: BackgroundKey;
 }
 
 const STORAGE_KEY = 'cm-tweaks';
-const DEFAULT_TWEAKS: TweaksState = { theme: 'light', accent: '#6d5efc' };
+const DEFAULT_TWEAKS: TweaksState = { theme: 'light', accent: '#6d5efc', background: 'default' };
+
+// Background presets override `--bg-stop-*` on :root. Each preset provides a
+// light and dark 5-stop variant so the gradient harmonises with the theme.
+// Keep tints soft so panels/cards (which use --paper/--panel) still read as
+// the primary surface.
+export type BackgroundKey =
+  | 'default'
+  | 'aurora'
+  | 'mint'
+  | 'peach'
+  | 'slate'
+  | 'dusk'
+  | 'accent';
+
+interface BgStops {
+  s1: string; s2: string; s3a: string; s3b: string; s3c: string;
+  // Surface tints — cover the body gradient on pages that paint their own bg
+  // via `bg-bg-0` / `--paper`. We intentionally keep --panel (cards) alone so
+  // cards stay crisp against the tinted paper.
+  paper: string; paper2: string; sidebar: string;
+}
+
+export interface BackgroundPreset {
+  key: BackgroundKey;
+  name: string;
+  light: BgStops;
+  dark: BgStops;
+}
+
+export const BACKGROUNDS: BackgroundPreset[] = [
+  {
+    key: 'default', name: 'Default',
+    light: { s1: '#f3f6ff', s2: '#dce6fa', s3a: '#e6ecf8', s3b: '#eef2fb', s3c: '#e3ebfa',
+             paper: '#eaf0fb', paper2: '#dfe7f6', sidebar: '#ffffff' },
+    dark:  { s1: '#1a1f32', s2: '#0a0d17', s3a: '#0c0f1a', s3b: '#11152a', s3c: '#090b14',
+             paper: '#0e1016', paper2: '#151824', sidebar: '#121521' },
+  },
+  {
+    key: 'aurora', name: 'Aurora',
+    light: { s1: '#ffc9dd', s2: '#b9c9ff', s3a: '#e4d4ff', s3b: '#dce5ff', s3c: '#ffcedd',
+             paper: '#fbeaf2', paper2: '#f0e3fa', sidebar: '#fdf4f8' },
+    dark:  { s1: '#3a1a44', s2: '#0e0a26', s3a: '#17102c', s3b: '#241a44', s3c: '#0e0a22',
+             paper: '#170f1e', paper2: '#1e1530', sidebar: '#1a1226' },
+  },
+  {
+    key: 'mint', name: 'Mint',
+    light: { s1: '#b9e7cc', s2: '#a8dec1', s3a: '#cfe8d8', s3b: '#dcecdf', s3c: '#b7d9c4',
+             paper: '#e8f3ec', paper2: '#d9ebe1', sidebar: '#f2f8f4' },
+    dark:  { s1: '#123629', s2: '#061510', s3a: '#0c2118', s3b: '#102c22', s3c: '#04100b',
+             paper: '#0a1812', paper2: '#0e2119', sidebar: '#0c1b14' },
+  },
+  {
+    key: 'peach', name: 'Peach',
+    light: { s1: '#ffcea1', s2: '#ffb589', s3a: '#ffdcbd', s3b: '#ffe4cc', s3c: '#ffc395',
+             paper: '#fcebd8', paper2: '#f6dcbf', sidebar: '#fdf3e7' },
+    dark:  { s1: '#3b1f12', s2: '#160b07', s3a: '#1e1109', s3b: '#26160d', s3c: '#0f0805',
+             paper: '#1a110a', paper2: '#261a10', sidebar: '#1d140c' },
+  },
+  {
+    key: 'slate', name: 'Slate',
+    light: { s1: '#d6dce6', s2: '#c3cbd9', s3a: '#d0d7e1', s3b: '#dde2eb', s3c: '#c6ccd8',
+             paper: '#edf0f5', paper2: '#e0e5ee', sidebar: '#f5f7fa' },
+    dark:  { s1: '#21252f', s2: '#0a0c14', s3a: '#10131c', s3b: '#171a24', s3c: '#0a0b10',
+             paper: '#0f1117', paper2: '#161a22', sidebar: '#111319' },
+  },
+  {
+    key: 'dusk', name: 'Dusk',
+    light: { s1: '#b4c3f0', s2: '#8fa3db', s3a: '#bcc7e7', s3b: '#c9d2ed', s3c: '#9dadd8',
+             paper: '#dfe6f7', paper2: '#ced8ef', sidebar: '#ecf0fa' },
+    dark:  { s1: '#232a5a', s2: '#050825', s3a: '#0a1030', s3b: '#121a40', s3c: '#050720',
+             paper: '#0c1029', paper2: '#131838', sidebar: '#0e1330' },
+  },
+  // `accent` is computed at apply-time from the current accent color.
+  {
+    key: 'accent', name: 'Accent',
+    light: { s1: '', s2: '', s3a: '', s3b: '', s3c: '', paper: '', paper2: '', sidebar: '' },
+    dark:  { s1: '', s2: '', s3a: '', s3b: '', s3c: '', paper: '', paper2: '', sidebar: '' },
+  },
+];
+
+function getBackgroundStops(key: BackgroundKey, theme: ThemeMode, accent: string): BgStops {
+  if (key === 'accent') {
+    // Derive a gentle tint from the accent for both modes.
+    if (theme === 'light') {
+      return {
+        s1: mix(accent, '#ffffff', 0.65),
+        s2: mix(accent, '#ffffff', 0.55),
+        s3a: mix(accent, '#ffffff', 0.78),
+        s3b: mix(accent, '#ffffff', 0.86),
+        s3c: mix(accent, '#ffffff', 0.72),
+        paper: mix(accent, '#ffffff', 0.88),
+        paper2: mix(accent, '#ffffff', 0.80),
+        sidebar: mix(accent, '#ffffff', 0.94),
+      };
+    }
+    return {
+      s1: mix(accent, '#000000', 0.62),
+      s2: mix(accent, '#000000', 0.88),
+      s3a: mix(accent, '#000000', 0.84),
+      s3b: mix(accent, '#000000', 0.76),
+      s3c: mix(accent, '#000000', 0.92),
+      paper: mix(accent, '#000000', 0.90),
+      paper2: mix(accent, '#000000', 0.84),
+      sidebar: mix(accent, '#000000', 0.88),
+    };
+  }
+  const preset = BACKGROUNDS.find(b => b.key === key) ?? BACKGROUNDS[0];
+  return theme === 'dark' ? preset.dark : preset.light;
+}
 
 interface AccentTints {
   hex: string;
@@ -78,7 +188,7 @@ function deriveDarkTints(hex: string): { soft: string; soft2: string; ink: strin
   };
 }
 
-export function applyTweaks({ theme, accent }: TweaksState): void {
+export function applyTweaks({ theme, accent, background }: TweaksState): void {
   if (typeof document === 'undefined') return;
   const root = document.documentElement;
   root.setAttribute('data-theme', theme);
@@ -99,6 +209,29 @@ export function applyTweaks({ theme, accent }: TweaksState): void {
     style.setProperty('--accent-soft-2', dark.soft2);
     style.setProperty('--accent-ink', dark.ink);
   }
+
+  if (background === 'default') {
+    // Let stylesheet defaults drive both gradient and surfaces.
+    style.removeProperty('--bg-stop-1');
+    style.removeProperty('--bg-stop-2');
+    style.removeProperty('--bg-stop-3a');
+    style.removeProperty('--bg-stop-3b');
+    style.removeProperty('--bg-stop-3c');
+    style.removeProperty('--paper');
+    style.removeProperty('--paper-2');
+    style.removeProperty('--sidebar');
+  } else {
+    const stops = getBackgroundStops(background, theme, accent);
+    style.setProperty('--bg-stop-1', stops.s1);
+    style.setProperty('--bg-stop-2', stops.s2);
+    style.setProperty('--bg-stop-3a', stops.s3a);
+    style.setProperty('--bg-stop-3b', stops.s3b);
+    style.setProperty('--bg-stop-3c', stops.s3c);
+    style.setProperty('--paper', stops.paper);
+    style.setProperty('--paper-2', stops.paper2);
+    style.setProperty('--sidebar', stops.sidebar);
+  }
+  root.setAttribute('data-bg', background);
 }
 
 function readStored(): TweaksState {
@@ -108,9 +241,14 @@ function readStored(): TweaksState {
     if (!raw) return DEFAULT_TWEAKS;
     const parsed = JSON.parse(raw) as Partial<TweaksState> | null;
     if (!parsed || typeof parsed !== 'object') return DEFAULT_TWEAKS;
+    const validBg: BackgroundKey[] = ['default', 'aurora', 'mint', 'peach', 'slate', 'dusk', 'accent'];
+    const bg = validBg.includes(parsed.background as BackgroundKey)
+      ? (parsed.background as BackgroundKey)
+      : DEFAULT_TWEAKS.background;
     return {
       theme: parsed.theme === 'dark' ? 'dark' : 'light',
       accent: typeof parsed.accent === 'string' ? parsed.accent : DEFAULT_TWEAKS.accent,
+      background: bg,
     };
   } catch {
     return DEFAULT_TWEAKS;
@@ -130,13 +268,21 @@ interface UseDarkModeReturn {
   isDarkMode: boolean;
   theme: ThemeMode;
   accent: string;
+  background: BackgroundKey;
   setTheme: (t: ThemeMode) => void;
   setAccent: (hex: string) => void;
+  setBackground: (key: BackgroundKey) => void;
 }
+
+// Module-level pub/sub so every `useDarkMode` instance shares state. Without
+// this the Tweaks panel's setTheme would update its own useState but leave
+// the root App's ConfigProvider with stale `isDarkMode`, leaving AntD cards
+// rendered in dark theme after the user flipped to light.
+const listeners = new Set<(s: TweaksState) => void>();
 
 const useDarkMode = (): UseDarkModeReturn => {
   // Initialize from localStorage so SSR -> hydration matches the boot script.
-  const [tweaks, setTweaks] = useState<TweaksState>(() => readStored());
+  const [tweaks, setTweaksState] = useState<TweaksState>(() => readStored());
 
   // Apply tweaks on mount and whenever they change.
   useEffect(() => {
@@ -144,30 +290,59 @@ const useDarkMode = (): UseDarkModeReturn => {
     persist(tweaks);
   }, [tweaks]);
 
+  // Subscribe to updates from other hook instances in the same tab.
+  useEffect(() => {
+    listeners.add(setTweaksState);
+    return () => {
+      listeners.delete(setTweaksState);
+    };
+  }, []);
+
   // Sync across tabs.
   useEffect(() => {
     if (typeof window === 'undefined') return;
     const handler = (e: StorageEvent) => {
       if (e.key !== STORAGE_KEY) return;
-      setTweaks(readStored());
+      const next = readStored();
+      listeners.forEach(l => l(next));
     };
     window.addEventListener('storage', handler);
     return () => window.removeEventListener('storage', handler);
   }, []);
 
-  const setTheme = useCallback((t: ThemeMode) => {
-    setTweaks(prev => (prev.theme === t ? prev : { ...prev, theme: t }));
+  const update = useCallback((updater: (prev: TweaksState) => TweaksState) => {
+    setTweaksState(prev => {
+      const next = updater(prev);
+      if (next === prev) return prev;
+      listeners.forEach(l => {
+        if (l !== setTweaksState) l(next);
+      });
+      return next;
+    });
   }, []);
-  const setAccent = useCallback((hex: string) => {
-    setTweaks(prev => (prev.accent === hex ? prev : { ...prev, accent: hex }));
-  }, []);
+
+  const setTheme = useCallback(
+    (t: ThemeMode) => update(prev => (prev.theme === t ? prev : { ...prev, theme: t })),
+    [update]
+  );
+  const setAccent = useCallback(
+    (hex: string) => update(prev => (prev.accent === hex ? prev : { ...prev, accent: hex })),
+    [update]
+  );
+  const setBackground = useCallback(
+    (key: BackgroundKey) =>
+      update(prev => (prev.background === key ? prev : { ...prev, background: key })),
+    [update]
+  );
 
   return {
     isDarkMode: tweaks.theme === 'dark',
     theme: tweaks.theme,
     accent: tweaks.accent,
+    background: tweaks.background,
     setTheme,
     setAccent,
+    setBackground,
   };
 };
 

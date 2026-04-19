@@ -369,6 +369,20 @@ const App = ({ loaderData }: Route.ComponentProps) => {
                   if (theme === 'dark') root.classList.add('dark');
                   var accent = (saved && typeof saved.accent === 'string') ? saved.accent : '#6d5efc';
                   root.style.setProperty('--accent', accent);
+                  var bgKey = (saved && typeof saved.background === 'string') ? saved.background : 'default';
+                  var PRESETS = {
+                    aurora: { light: ['#ffc9dd','#b9c9ff','#e4d4ff','#dce5ff','#ffcedd','#fbeaf2','#f0e3fa','#fdf4f8'], dark: ['#3a1a44','#0e0a26','#17102c','#241a44','#0e0a22','#170f1e','#1e1530','#1a1226'] },
+                    mint:   { light: ['#b9e7cc','#a8dec1','#cfe8d8','#dcecdf','#b7d9c4','#e8f3ec','#d9ebe1','#f2f8f4'], dark: ['#123629','#061510','#0c2118','#102c22','#04100b','#0a1812','#0e2119','#0c1b14'] },
+                    peach:  { light: ['#ffcea1','#ffb589','#ffdcbd','#ffe4cc','#ffc395','#fcebd8','#f6dcbf','#fdf3e7'], dark: ['#3b1f12','#160b07','#1e1109','#26160d','#0f0805','#1a110a','#261a10','#1d140c'] },
+                    slate:  { light: ['#d6dce6','#c3cbd9','#d0d7e1','#dde2eb','#c6ccd8','#edf0f5','#e0e5ee','#f5f7fa'], dark: ['#21252f','#0a0c14','#10131c','#171a24','#0a0b10','#0f1117','#161a22','#111319'] },
+                    dusk:   { light: ['#b4c3f0','#8fa3db','#bcc7e7','#c9d2ed','#9dadd8','#dfe6f7','#ced8ef','#ecf0fa'], dark: ['#232a5a','#050825','#0a1030','#121a40','#050720','#0c1029','#131838','#0e1330'] }
+                  };
+                  var keys = ['--bg-stop-1','--bg-stop-2','--bg-stop-3a','--bg-stop-3b','--bg-stop-3c','--paper','--paper-2','--sidebar'];
+                  if (PRESETS[bgKey]) {
+                    var arr = PRESETS[bgKey][theme === 'dark' ? 'dark' : 'light'];
+                    for (var i = 0; i < 8; i++) root.style.setProperty(keys[i], arr[i]);
+                  }
+                  root.setAttribute('data-bg', bgKey);
                 } catch (error) { /* noop */ }
               })();
             `,

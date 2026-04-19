@@ -314,10 +314,10 @@ export function CalendarScreen({
       >
         {(
           [
-            ['Lecture', 'var(--sky-ink)'],
-            ['Quiz', 'var(--mint-ink)'],
-            ['Assignment', 'var(--amber-ink)'],
-            ['Project', 'var(--rose-ink)'],
+            ['Lecture', 'var(--accent)'],
+            ['Quiz', 'var(--accent)'],
+            ['Assignment', 'var(--accent)'],
+            ['Project', 'var(--accent)'],
           ] as Array<[string, string]>
         ).map(([label, color]) => (
           <span
@@ -362,6 +362,56 @@ interface WeekViewProps {
   onEventClick?: (event: CalendarEvent) => void;
 }
 
+// Assign each timed event a lane so overlapping events render side-by-side
+// instead of stacking. Classic sweep: within a cluster of mutually
+// overlapping events, each event takes the lowest lane not in use at its
+// start time; the cluster's `columns` is the max lane count reached.
+function computeLaneLayout(events: CalendarEvent[]): Map<CalendarEvent, { lane: number; columns: number }> {
+  const result = new Map<CalendarEvent, { lane: number; columns: number }>();
+  const sorted = [...events].sort((a, b) => {
+    const sa = a.startMinutes ?? 0;
+    const sb = b.startMinutes ?? 0;
+    if (sa !== sb) return sa - sb;
+    return (b.durationMinutes ?? 0) - (a.durationMinutes ?? 0);
+  });
+
+  let cluster: CalendarEvent[] = [];
+  let clusterEnd = -Infinity;
+  const flushCluster = () => {
+    if (cluster.length === 0) return;
+    const lanes: number[] = []; // lanes[i] = end-minute of event currently occupying lane i
+    const assigned = new Map<CalendarEvent, number>();
+    for (const ev of cluster) {
+      const start = ev.startMinutes ?? 0;
+      const end = start + (ev.durationMinutes ?? 0);
+      let lane = lanes.findIndex((laneEnd) => laneEnd <= start);
+      if (lane === -1) {
+        lane = lanes.length;
+        lanes.push(end);
+      } else {
+        lanes[lane] = end;
+      }
+      assigned.set(ev, lane);
+    }
+    const columns = lanes.length;
+    for (const ev of cluster) {
+      result.set(ev, { lane: assigned.get(ev)!, columns });
+    }
+    cluster = [];
+    clusterEnd = -Infinity;
+  };
+
+  for (const ev of sorted) {
+    const start = ev.startMinutes ?? 0;
+    const end = start + (ev.durationMinutes ?? 0);
+    if (start >= clusterEnd) flushCluster();
+    cluster.push(ev);
+    clusterEnd = Math.max(clusterEnd, end);
+  }
+  flushCluster();
+  return result;
+}
+
 function WeekView({ weekDays, grouped, hours, todayStr, onEventClick }: WeekViewProps) {
   // All-day / undated events per day (no startMinutes)
   const allDayByCol = weekDays.map((d) => {
@@ -373,6 +423,8 @@ function WeekView({ weekDays, grouped, hours, todayStr, onEventClick }: WeekView
     const dateStr = formatLocalDate(d);
     return (grouped[dateStr] ?? []).filter((ev) => ev.startMinutes !== undefined);
   });
+
+  const laneByCol = timedByCol.map((list) => computeLaneLayout(list));
 
   const hasAllDay = allDayByCol.some((list) => list.length > 0);
 
@@ -484,6 +536,11 @@ function WeekView({ weekDays, grouped, hours, todayStr, onEventClick }: WeekView
                     const dur = ev.durationMinutes ?? 60;
                     const top = (minuteOffset / 60) * HOUR_HEIGHT + 4;
                     const height = Math.max(28, (dur / 60) * HOUR_HEIGHT - 6);
+                    const layout = laneByCol[i].get(ev) ?? { lane: 0, columns: 1 };
+                    // Each lane gets an equal slice of the column's inner
+                    // width, separated by a 2px gutter for visual distinction.
+                    const widthExpr = `calc((100% - 8px - ${(layout.columns - 1) * 2}px) / ${layout.columns})`;
+                    const leftExpr = `calc(4px + ${layout.lane} * ((100% - 8px - ${(layout.columns - 1) * 2}px) / ${layout.columns} + 2px))`;
                     return (
                       <EventChip
                         key={`${ev.id ?? ev.title}-${ei}`}
@@ -491,11 +548,15 @@ function WeekView({ weekDays, grouped, hours, todayStr, onEventClick }: WeekView
                         onEventClick={onEventClick}
                         style={{
                           position: 'absolute',
-                          left: 4,
-                          right: 4,
+                          left: leftExpr,
+                          width: widthExpr,
                           top,
                           height,
                           overflow: 'hidden',
+                          boxShadow:
+                            layout.columns > 1
+                              ? '0 0 0 1px var(--panel), 0 1px 2px rgba(20,10,40,0.08)'
+                              : undefined,
                         }}
                       />
                     );
