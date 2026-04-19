@@ -397,19 +397,6 @@ const StudentModuleDetail = ({ loaderData }: Route.ComponentProps) => {
 
   return (
     <div className="flex flex-col gap-3">
-      {/* Breadcrumb / back */}
-      <div className="text-[12.5px]" style={{ color: 'var(--ink-3)' }}>
-        <Link
-          to={`/student/${classSlug}/modules`}
-          className="no-underline hover:underline"
-          style={{ color: 'var(--ink-2)' }}
-        >
-          Modules
-        </Link>
-        <span className="mx-1.5">/</span>
-        <span style={{ color: 'var(--ink-1)' }}>{module.title}</span>
-      </div>
-
       {module.team_formation_mode === 'SELF_FORMED' && (
         <TeamFormationBanner module={module} userTeam={userTeam} classSlug={classSlug} />
       )}

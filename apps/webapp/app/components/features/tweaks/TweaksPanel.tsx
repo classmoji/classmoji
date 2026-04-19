@@ -116,25 +116,25 @@ const TweaksPanel = () => {
         {/* Theme mode */}
         <div className="tw-row">
           <div className="tw-label">Appearance</div>
-          <div className="tw-segment">
-            <div
+          <div className="tw-segment" role="radiogroup" aria-label="Appearance">
+            <button
+              type="button"
               className={`tw-seg-btn ${theme === 'light' ? 'active' : ''}`}
               onClick={() => setTheme('light')}
-              role="button"
-              tabIndex={0}
-              onKeyDown={e => (e.key === 'Enter' || e.key === ' ') && setTheme('light')}
+              role="radio"
+              aria-checked={theme === 'light'}
             >
               <SunIcon /> Light
-            </div>
-            <div
+            </button>
+            <button
+              type="button"
               className={`tw-seg-btn ${theme === 'dark' ? 'active' : ''}`}
               onClick={() => setTheme('dark')}
-              role="button"
-              tabIndex={0}
-              onKeyDown={e => (e.key === 'Enter' || e.key === ' ') && setTheme('dark')}
+              role="radio"
+              aria-checked={theme === 'dark'}
             >
               <MoonIcon /> Dark
-            </div>
+            </button>
           </div>
         </div>
 
@@ -145,16 +145,15 @@ const TweaksPanel = () => {
             {ACCENTS.map(a => {
               const isActive = !isCustom && accent.toLowerCase() === a.hex.toLowerCase();
               return (
-                <div
+                <button
+                  type="button"
                   key={a.hex}
                   className={`tw-swatch ${isActive ? 'active' : ''}`}
                   style={{ ['--sw' as string]: a.hex } as CSSProperties}
                   title={a.name}
                   onClick={() => setAccent(a.hex)}
-                  role="button"
-                  tabIndex={0}
                   aria-label={`Accent ${a.name}`}
-                  onKeyDown={e => (e.key === 'Enter' || e.key === ' ') && setAccent(a.hex)}
+                  aria-pressed={isActive}
                 />
               );
             })}

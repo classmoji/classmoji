@@ -8,7 +8,7 @@
  * 1. This file (for JS/Ant Design)
  * 2. tailwind.css @theme section (for Tailwind classes)
  *
- * Current: Apple Green 🍏
+ * Current: Pastel Violet
  */
 
 // ============================================
@@ -56,7 +56,7 @@ export const BRAND = PRIMARY;
 export const BRAND_LIGHT = PRIMARY_LIGHT;
 export const BRAND_DARK = PRIMARY_DARK;
 export const BRAND_BG = PRIMARY_BG;
-export const BRAND_TEXT = '#000000';
+export const BRAND_TEXT = '#ffffff';
 export const SIDEBAR_ACTIVE_BG = PRIMARY_100;
 export const SIDEBAR_ACTIVE_TEXT = PRIMARY_700;
 
