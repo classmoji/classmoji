@@ -26,9 +26,6 @@ import {
   type TermSection,
 } from '~/components/features/landing';
 
-type SelectOrganizationRole = keyof typeof roleSettings;
-type SelectOrganizationCardRole = SelectOrganizationRole | 'TEACHER';
-
 interface SelectOrganizationMembership extends MembershipWithOrganization {
   has_accepted_invite: boolean;
   organization: MembershipOrganization & {
@@ -150,7 +147,7 @@ function buildLandingClasses(
       org.settings?.updated_at ?? (org as { updated_at?: Date | string | null }).updated_at;
 
     return {
-      id: org.id,
+      id: `${org.id}:${m.role}`,
       name: org.name ?? orgLogin,
       subtitle: '', // TODO: wire description if Classroom gets one
       slug: `@${gitLogin}/${orgLogin}`,
@@ -242,20 +239,21 @@ const SelectOrganization = ({ loaderData }: Route.ComponentProps) => {
   };
 
   const onOpenClass = (c: LandingClass) => {
-    const membership = memberList.find(m => m.organization.id === c.organization.id);
-    if (!membership) return;
-    const role = membership.role as SelectOrganizationCardRole;
-    const resolvedRole = role === 'TEACHER' ? 'OWNER' : role;
-    if (membership.has_accepted_invite || resolvedRole === 'OWNER') {
-      const suffix = resolvedRole === 'STUDENT' ? '' : '/dashboard';
-      navigate(
-        `${roleSettings[resolvedRole as SelectOrganizationRole].path}/${membership.organization.login}${suffix}`
+    // Use the card's own role — looking up membership by org id is ambiguous
+    // when a user has multiple memberships for the same classroom (e.g. OWNER
+    // + STUDENT in a dev sandbox), and would always pick the first match.
+    if (c.role === 'PENDING INVITE') {
+      const membership = memberList.find(
+        m => m.organization.id === c.organization.id && !m.has_accepted_invite
       );
-    } else {
+      if (!membership) return;
       setPendingClassroom(membership.organization);
       setClassroom(membership.organization);
       show();
+      return;
     }
+    const suffix = c.role === 'STUDENT' ? '' : '/dashboard';
+    navigate(`${roleSettings[c.role].path}/${c.organization.login}${suffix}`);
   };
 
   return (
