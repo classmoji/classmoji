@@ -74,7 +74,7 @@ const GradeComment = ({ loaderData }: Route.ComponentProps) => {
           }
         />
       </div>
-      <p className="pb-4 text-gray-500 text-[13px]">
+      <p className="pb-4 text-ink-2 text-[13px]">
         You can provide comments on <span className=" underline text-[13px]">{student?.name}</span>
         &rsquo;s performance
       </p>

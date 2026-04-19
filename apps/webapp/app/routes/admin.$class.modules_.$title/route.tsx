@@ -106,16 +106,16 @@ const SingleModule = ({ loaderData }: Route.ComponentProps) => {
                 </div>
               }
             >
-              <p className="text-gray-600">
+              <p className="text-ink-2">
                 {assignment.grades_released ? (
                   <>
-                    Students <span className="text-green-600 font-medium">can see</span> their
+                    Students <span className="text-mint-ink font-medium">can see</span> their
                     grades for this assignment
                   </>
                 ) : (
                   <>
                     Grades are{' '}
-                    <span className="text-red-600 font-medium">hidden from students</span> until
+                    <span className="text-rose-ink font-medium">hidden from students</span> until
                     released
                   </>
                 )}
@@ -144,10 +144,10 @@ const SingleModule = ({ loaderData }: Route.ComponentProps) => {
     <>
       <div className="flex justify-between items-center ">
         <div className="flex items-center gap-2 mt-4">
-          <IconFileText className="text-black dark:text-gray-200" />
+          <IconFileText className="text-black dark:text-ink-1" />
           <div className="flex items-center gap-2">
-            <span className="text-2xl font-bold text-black dark:text-gray-200">Modules / </span>{' '}
-            <span className="text-2xl text-black dark:text-gray-200">{`${module!.title}`}</span>
+            <span className="text-2xl font-bold text-black dark:text-ink-1">Modules / </span>{' '}
+            <span className="text-2xl text-black dark:text-ink-1">{`${module!.title}`}</span>
           </div>
         </div>
 
@@ -172,20 +172,20 @@ const SingleModule = ({ loaderData }: Route.ComponentProps) => {
       {/* View Toggle */}
       <div className="flex justify-end items-center mb-6">
         <div className="flex items-center gap-4">
-          <span className="text-sm font-medium text-gray-600 dark:text-gray-400">View:</span>
-          <div className="flex items-center gap-3 bg-gray-50 dark:bg-gray-800 rounded-lg p-2 border border-gray-200 dark:border-gray-700">
+          <span className="text-sm font-medium text-ink-2 dark:text-ink-3">View:</span>
+          <div className="flex items-center gap-3 bg-paper dark:bg-panel rounded-lg p-2 border border-line dark:border-line">
             <div className="flex items-center gap-2">
               <IconTable
                 size={18}
                 className={
-                  viewMode === 'module' ? 'text-yellow-600 dark:text-yellow-400' : 'text-gray-400'
+                  viewMode === 'module' ? 'text-amber-ink dark:text-yellow-400' : 'text-ink-3'
                 }
               />
               <span
                 className={`text-sm font-medium ${
                   viewMode === 'module'
-                    ? 'text-yellow-600 dark:text-yellow-400'
-                    : 'text-gray-600 dark:text-gray-400'
+                    ? 'text-amber-ink dark:text-yellow-400'
+                    : 'text-ink-2 dark:text-ink-3'
                 }`}
               >
                 Module
@@ -201,15 +201,15 @@ const SingleModule = ({ loaderData }: Route.ComponentProps) => {
                 size={18}
                 className={
                   viewMode === 'assignment'
-                    ? 'text-yellow-600 dark:text-yellow-400'
-                    : 'text-gray-400'
+                    ? 'text-amber-ink dark:text-yellow-400'
+                    : 'text-ink-3'
                 }
               />
               <span
                 className={`text-sm font-medium ${
                   viewMode === 'assignment'
-                    ? 'text-yellow-600 dark:text-yellow-400'
-                    : 'text-gray-600 dark:text-gray-400'
+                    ? 'text-amber-ink dark:text-yellow-400'
+                    : 'text-ink-2 dark:text-ink-3'
                 }`}
               >
                 Assignments

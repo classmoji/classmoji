@@ -66,7 +66,7 @@ const ProjectTemplateSelect = ({ value, onChange, disabled }: ProjectTemplateSel
         label: (
           <div className="flex items-center justify-between">
             <span>{p.title}</span>
-            <span className="text-gray-400 text-xs ml-2">#{p.number}</span>
+            <span className="text-ink-3 text-xs ml-2">#{p.number}</span>
           </div>
         ),
         title: p.title, // Store title for later use

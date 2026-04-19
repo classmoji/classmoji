@@ -180,21 +180,21 @@ export default function HeaderImageModal({
             {...getRootProps()}
             className={`
               border-2 border-dashed rounded-lg p-8 text-center cursor-pointer transition-colors
-              ${isDragActive ? 'border-blue-500 bg-blue-50' : 'border-gray-300 hover:border-gray-400'}
+              ${isDragActive ? 'border-blue-500 bg-sky-bg' : 'border-line hover:border-gray-400'}
               ${isUploading ? 'opacity-50 cursor-not-allowed' : ''}
             `}
           >
             <input {...getInputProps()} />
             {isUploading ? (
-              <div className="flex flex-col items-center gap-2 text-gray-500">
+              <div className="flex flex-col items-center gap-2 text-ink-2">
                 <Spin />
                 <span>Uploading...</span>
               </div>
             ) : (
-              <div className="flex flex-col items-center gap-2 text-gray-500">
+              <div className="flex flex-col items-center gap-2 text-ink-2">
                 <IconPhoto size={32} />
                 <span>Drop an image here, or click to select</span>
-                <span className="text-xs text-gray-400">PNG, JPG, GIF, WebP</span>
+                <span className="text-xs text-ink-3">PNG, JPG, GIF, WebP</span>
               </div>
             )}
           </div>
@@ -222,7 +222,7 @@ export default function HeaderImageModal({
               value={searchQuery}
               onChange={e => setSearchQuery(e.target.value)}
               onPressEnter={handleUnsplashSearch}
-              prefix={<IconSearch size={16} className="text-gray-400" />}
+              prefix={<IconSearch size={16} className="text-ink-3" />}
             />
             <Button onClick={handleUnsplashSearch} loading={isSearching}>
               Search
@@ -263,7 +263,7 @@ export default function HeaderImageModal({
           ) : searchQuery && !isSearching ? (
             <Empty description="No photos found" />
           ) : (
-            <div className="text-center py-8 text-gray-400">
+            <div className="text-center py-8 text-ink-3">
               <IconBrandUnsplash size={32} className="mx-auto mb-2 opacity-50" />
               <p>Search for free photos from Unsplash</p>
             </div>
@@ -271,7 +271,7 @@ export default function HeaderImageModal({
 
           {/* Attribution for selected photo */}
           {selectedPhoto && (
-            <div className="text-xs text-gray-500 text-center">
+            <div className="text-xs text-ink-2 text-center">
               Photo by{' '}
               <a
                 href={`${selectedPhoto!.photographer.link}?utm_source=classmoji&utm_medium=referral`}
@@ -319,7 +319,7 @@ export default function HeaderImageModal({
             Use
           </Button>
         </div>
-        <p className="text-xs text-gray-400">
+        <p className="text-xs text-ink-3">
           Enter the URL of an image. Make sure you have permission to use the image.
         </p>
       </div>
@@ -355,9 +355,9 @@ export default function HeaderImageModal({
       {/* Preview section */}
       {imageUrl && !previewError && (
         <div className="mt-4 space-y-3">
-          <div className="text-sm font-medium text-gray-700">Preview</div>
+          <div className="text-sm font-medium text-ink-1">Preview</div>
           <div
-            className="w-full aspect-[4/1] rounded-lg overflow-hidden bg-gray-100"
+            className="w-full aspect-[4/1] rounded-lg overflow-hidden bg-paper-2"
             style={{
               backgroundImage: `url(${imageUrl})`,
               backgroundSize: 'cover',
@@ -375,7 +375,7 @@ export default function HeaderImageModal({
 
           {/* Position slider */}
           <div className="flex items-center gap-3">
-            <span className="text-sm text-gray-500 w-24">Position</span>
+            <span className="text-sm text-ink-2 w-24">Position</span>
             <Slider
               className="flex-1"
               min={0}
@@ -389,7 +389,7 @@ export default function HeaderImageModal({
       )}
 
       {previewError && imageUrl && (
-        <div className="mt-4 p-4 bg-red-50 text-red-600 rounded-lg text-sm">
+        <div className="mt-4 p-4 bg-rose-bg text-rose-ink rounded-lg text-sm">
           Failed to load image. Please check the URL and try again.
         </div>
       )}

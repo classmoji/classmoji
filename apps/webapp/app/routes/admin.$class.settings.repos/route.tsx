@@ -44,7 +44,7 @@ const Section = ({
   <div className="flex items-start gap-4">
     <div className="">
       <h1 className="font-bold mb-1">{title}</h1>
-      <p className="text-gray-600 text-sm w-[400px]">{subtitle}</p>
+      <p className="text-ink-2 text-sm w-[400px]">{subtitle}</p>
     </div>
     {children}
   </div>

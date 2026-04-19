@@ -114,7 +114,7 @@ const AsyncAutocomplete = ({
                     <div>
                       <div className="font-medium">{d.full_name}</div>
                     </div>
-                    <div className="flex items-center gap-2 text-xs text-gray-400">
+                    <div className="flex items-center gap-2 text-xs text-ink-3">
                       {Number(d.stargazers_count) > 0 && (
                         <span>⭐{String(d.stargazers_count)}</span>
                       )}
