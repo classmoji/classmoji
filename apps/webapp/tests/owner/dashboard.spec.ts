@@ -19,32 +19,46 @@ test.describe('Owner Dashboard', () => {
     await expect(page.getByRole('heading', { name: 'Dashboard' })).toBeVisible();
   });
 
-  test('displays all stat cards', async ({ authenticatedPage: page }) => {
-    // Check for all 4 main stat cards (using exact match to avoid conflicts)
-    await expect(page.getByText('Number of Students', { exact: true })).toBeVisible();
-    await expect(page.getByText('Submitted Assignments', { exact: true })).toBeVisible();
-    await expect(page.getByText('Late Submissions', { exact: true })).toBeVisible();
-    // "Grading Progress" appears multiple times, use the stat card specific selector
-    await expect(page.locator('.recharts-wrapper').first()).toBeVisible();
+  test('displays all four owner stat cards', async ({ authenticatedPage: page }) => {
+    await expect(page.getByText('Active Students', { exact: true })).toBeVisible();
+    await expect(page.getByText('Median Grade', { exact: true })).toBeVisible();
+    await expect(page.getByText('Grading SLA', { exact: true })).toBeVisible();
+    await expect(page.getByText('At-Risk Count', { exact: true })).toBeVisible();
   });
 
   test('displays submission history chart', async ({ authenticatedPage: page }) => {
     await expect(page.getByText('Submission History')).toBeVisible();
     // Recharts renders a wrapper with this class
-    await expect(page.locator('.recharts-wrapper')).toBeVisible();
+    await expect(page.locator('.recharts-wrapper').first()).toBeVisible();
   });
 
-  test('displays leaderboards', async ({ authenticatedPage: page }) => {
-    await expect(page.getByText('Top Students')).toBeVisible();
-    await expect(page.getByText('Bottom Students')).toBeVisible();
+  test('displays assignment heatmap', async ({ authenticatedPage: page }) => {
+    await expect(page.getByTestId('assignment-heatmap')).toBeVisible();
+    await expect(page.getByText('Assignment Health')).toBeVisible();
   });
 
-  test('displays grading progress table', async ({ authenticatedPage: page }) => {
-    await expect(page.getByText('Class Grading Progress')).toBeVisible();
+  test('displays TA operations table', async ({ authenticatedPage: page }) => {
+    await expect(page.getByTestId('ta-ops-table')).toBeVisible();
+    await expect(page.getByText('TA Operations')).toBeVisible();
   });
 
-  test('displays TA leaderboard', async ({ authenticatedPage: page }) => {
-    await expect(page.getByText('TA Grading Leaderboard')).toBeVisible();
+  test('displays at-risk students panel', async ({ authenticatedPage: page }) => {
+    await expect(page.getByTestId('at-risk-students')).toBeVisible();
+    await expect(page.getByText('At-Risk Students')).toBeVisible();
+    await expect(page.getByTestId('at-risk-count')).toBeVisible();
+  });
+
+  test('displays quiz analytics panel', async ({ authenticatedPage: page }) => {
+    await expect(page.getByTestId('quiz-analytics')).toBeVisible();
+    await expect(page.getByText('Quiz Analytics')).toBeVisible();
+    await expect(page.getByTestId('avg-focus-pct')).toBeVisible();
+  });
+
+  test('displays deadline pressure timeline', async ({ authenticatedPage: page }) => {
+    await expect(page.getByTestId('deadline-pressure')).toBeVisible();
+    await expect(page.getByText(/Deadline Pressure/)).toBeVisible();
+    // 7 dots for the 7-day window
+    await expect(page.getByTestId('deadline-dot')).toHaveCount(7);
   });
 });
 

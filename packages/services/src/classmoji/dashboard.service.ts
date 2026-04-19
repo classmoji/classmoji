@@ -87,11 +87,19 @@ async function loadClassroomEmojiMap(classroomId: string): Promise<Map<string, n
 // 1. Cohort overview
 // ---------------------------------------------------------------------------
 
+export interface AtRiskStudent {
+  userId: string;
+  name: string | null;
+  login: string;
+  missedDeadlines: number;
+}
+
 export interface CohortOverview {
   activeStudents: number;
   inactiveStudents: number;
   medianGrade: number | null;
   atRiskCount: number;
+  atRiskStudents: AtRiskStudent[];
 }
 
 export async function cohortOverview(classroomId: string): Promise<CohortOverview> {
@@ -107,7 +115,13 @@ export async function cohortOverview(classroomId: string): Promise<CohortOvervie
   const totalStudents = studentIds.length;
 
   if (totalStudents === 0) {
-    return { activeStudents: 0, inactiveStudents: 0, medianGrade: null, atRiskCount: 0 };
+    return {
+      activeStudents: 0,
+      inactiveStudents: 0,
+      medianGrade: null,
+      atRiskCount: 0,
+      atRiskStudents: [],
+    };
   }
 
   // Active = has quiz attempt in 14d OR repo with last_commit_at in 14d
@@ -175,11 +189,41 @@ export async function cohortOverview(classroomId: string): Promise<CohortOvervie
     missedCountByStudent.set(sid, (missedCountByStudent.get(sid) ?? 0) + 1);
   }
   let atRiskCount = 0;
-  for (const count of missedCountByStudent.values()) {
-    if (count >= 2) atRiskCount += 1;
+  const atRiskIds: string[] = [];
+  for (const [sid, count] of missedCountByStudent.entries()) {
+    if (count >= 2) {
+      atRiskCount += 1;
+      atRiskIds.push(sid);
+    }
   }
 
-  return { activeStudents, inactiveStudents, medianGrade, atRiskCount };
+  // Load top-10 at-risk student profiles, ordered by missed-deadline count desc.
+  const topAtRiskIds = atRiskIds
+    .map((id) => ({ id, count: missedCountByStudent.get(id) ?? 0 }))
+    .sort((a, b) => b.count - a.count)
+    .slice(0, 10);
+  const atRiskProfiles =
+    topAtRiskIds.length > 0
+      ? await prisma.user.findMany({
+          where: { id: { in: topAtRiskIds.map((x) => x.id) } },
+          select: { id: true, name: true, login: true },
+        })
+      : [];
+  const profileById = new Map(atRiskProfiles.map((p) => [p.id, p]));
+  const atRiskStudents: AtRiskStudent[] = topAtRiskIds
+    .map(({ id, count }) => {
+      const p = profileById.get(id);
+      if (!p) return null;
+      return {
+        userId: p.id,
+        name: p.name,
+        login: p.login ?? '',
+        missedDeadlines: count,
+      };
+    })
+    .filter((v): v is AtRiskStudent => v !== null);
+
+  return { activeStudents, inactiveStudents, medianGrade, atRiskCount, atRiskStudents };
 }
 
 // ---------------------------------------------------------------------------
