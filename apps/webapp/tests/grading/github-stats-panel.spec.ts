@@ -45,4 +45,25 @@ test.describe('GitHubStatsPanel (component smoke)', () => {
     await expect(page.getByTestId('pr-summary')).toContainText('12 merged');
     await expect(page.getByTestId('pr-summary')).toContainText('1 closed');
   });
+
+  test('renders the contributor breakdown with two pies', async ({ page }) => {
+    await expect(page.getByTestId('contributor-breakdown')).toBeVisible();
+    // Two PieCharts → two `.recharts-pie` elements
+    await expect(page.locator('.recharts-pie')).toHaveCount(2);
+  });
+
+  test('renders the stacked contributor bar chart', async ({ page }) => {
+    await expect(page.getByTestId('contributor-stacked-bar')).toBeVisible();
+    // At least one bar rectangle renders in the stacked chart
+    await expect(
+      page.locator('[data-testid="contributor-stacked-bar"] .recharts-bar-rectangle').first(),
+    ).toBeVisible();
+  });
+
+  test('renders the unmatched GitHub logins section', async ({ page }) => {
+    await expect(page.getByText('Unmatched GitHub logins')).toBeVisible();
+    // alice has a user_id → only bob and carol are unmatched
+    await expect(page.getByTestId('unmatched-row-bob')).toBeVisible();
+    await expect(page.getByTestId('unmatched-row-carol')).toBeVisible();
+  });
 });

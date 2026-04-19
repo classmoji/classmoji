@@ -89,7 +89,7 @@ export const loader = async (): Promise<LoaderData> => {
       },
     ],
     contributors: [
-      { login: 'alice', user_id: null, commits: 2, additions: 150, deletions: 5 },
+      { login: 'alice', user_id: 'user_alice', commits: 2, additions: 150, deletions: 5 },
       { login: 'bob', user_id: null, commits: 2, additions: 220, deletions: 50 },
       { login: 'carol', user_id: null, commits: 1, additions: 967, deletions: 201 },
     ],

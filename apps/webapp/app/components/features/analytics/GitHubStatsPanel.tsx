@@ -4,6 +4,7 @@ import dayjs from 'dayjs';
 import StatsCard from '~/components/shared/stats/StatsCard';
 import CommitTimeline, { type CommitRecord } from './CommitTimeline';
 import Anomalies from './Anomalies';
+import ContributorBreakdown from './ContributorBreakdown';
 
 export type ContributorRecord = {
   login: string;
@@ -224,6 +225,17 @@ const GitHubStatsPanel = ({
         }}
         deadline={deadline}
       />
+
+      {/* Contributor breakdown (only when >1 contributor) */}
+      {contributors.length > 1 && (
+        <ContributorBreakdown
+          commits={commits}
+          contributors={contributors}
+          unmatched={contributors
+            .filter(c => !c.user_id)
+            .map(c => ({ login: c.login, commits: c.commits }))}
+        />
+      )}
 
       {/* Language breakdown */}
       {Object.keys(languages).length > 0 && (
