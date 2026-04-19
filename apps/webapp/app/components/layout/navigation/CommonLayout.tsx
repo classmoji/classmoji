@@ -68,9 +68,13 @@ const getInitials = (name?: string | null, login?: string | null): string => {
   return source.slice(0, 2).toUpperCase();
 };
 
-// Class pill square — renders the digits of a classroom slug/name (e.g. "67").
+// Class pill square — prefers digits in the name (e.g. "67"); falls back to
+// the first two letters when there are none (e.g. "Dev" → "DE").
 const ClassSquare = ({ klass, size = 24 }: { klass: { name: string }; size?: number }) => {
-  const digits = (klass.name || '').replace(/[^0-9]/g, '').slice(0, 2) || '??';
+  const name = klass.name || '';
+  const digits = name.replace(/[^0-9]/g, '').slice(0, 2);
+  const letters = name.replace(/[^A-Za-z]/g, '').slice(0, 2).toUpperCase();
+  const label = digits || letters || '??';
   const hue = hashHue(klass.name);
   return (
     <span
@@ -88,7 +92,7 @@ const ClassSquare = ({ klass, size = 24 }: { klass: { name: string }; size?: num
         flexShrink: 0,
       }}
     >
-      {digits}
+      {label}
     </span>
   );
 };
