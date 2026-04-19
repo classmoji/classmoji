@@ -485,25 +485,25 @@ export function ErrorBoundary() {
             {
               token: isDarkMode
                 ? {
-                    colorPrimary: '#1f883d',
+                    colorPrimary: '#6d5efc',
                     colorText: '#e5e7eb',
                     colorBgContainer: '#1f2937',
                   }
                 : {
-                    colorPrimary: '#1f883d',
+                    colorPrimary: '#6d5efc',
                     colorText: '#374151',
                   },
               components: {
                 Button: isDarkMode
                   ? {
-                      colorBgContainer: '#1f883d',
+                      colorBgContainer: '#6d5efc',
                       colorText: '#ffffff',
-                      colorBgContainerHover: '#1a7f37',
+                      colorBgContainerHover: '#5a4cf0',
                     }
                   : {
-                      colorBgContainer: '#1f883d',
+                      colorBgContainer: '#6d5efc',
                       colorText: '#ffffff',
-                      colorBgContainerHover: '#1a7f37',
+                      colorBgContainerHover: '#5a4cf0',
                     },
                 Result: isDarkMode
                   ? {
