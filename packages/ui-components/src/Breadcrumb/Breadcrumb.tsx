@@ -20,34 +20,33 @@ export function Breadcrumb({
 }: BreadcrumbProps) {
   return (
     <div
+      className="crumbs"
       style={{
         display: 'flex',
         alignItems: 'center',
-        padding: '10px 20px',
-        fontSize: 13,
+        padding: '14px 22px 10px',
+        fontSize: 12.5,
         color: 'var(--ink-2)',
-        gap: 8,
-        borderBottom: '1px solid var(--line)',
-        background: 'var(--bg-1)',
-        minHeight: 44,
+        gap: 6,
       }}
     >
       <span
         style={{
-          width: 10,
-          height: 10,
+          width: 6,
+          height: 6,
           borderRadius: '50%',
-          background: `linear-gradient(135deg, oklch(80% 0.11 ${classroomHue}), oklch(58% 0.18 ${classroomHue}))`,
+          background: 'var(--accent)',
         }}
+        aria-hidden="true"
       />
-      <span style={{ color: 'var(--ink-1)', fontWeight: 500 }}>{classroomSlug}</span>
+      <span style={{ color: 'var(--ink-2)' }}>{classroomSlug}</span>
       {trail.map((t, i) => (
         <Fragment key={`${i}-${t}`}>
           <span style={{ color: 'var(--ink-4)' }}>/</span>
           <span
             style={{
               color: i === trail.length - 1 ? 'var(--ink-0)' : 'var(--ink-2)',
-              fontWeight: i === trail.length - 1 ? 600 : 500,
+              fontWeight: i === trail.length - 1 ? 600 : 400,
             }}
           >
             {t}

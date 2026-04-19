@@ -665,15 +665,15 @@ const CommonLayout = ({
           action={topbarAction}
         />
 
-        {/* Content */}
-        <div
-          className="flex-1 bg-white dark:bg-gray-900 overflow-auto relative min-w-0"
-          style={{ flex: 1 }}
+        {/* Content — transparent so body gradient shows through */}
+        <main
+          className="main flex-1 overflow-auto relative min-w-0"
+          style={{ flex: 1, background: 'transparent' }}
         >
-          <div className={pathname.includes('/pages/') ? 'min-h-full' : 'px-8 py-6 min-h-full'}>
+          <div className={pathname.includes('/pages/') ? 'min-h-full' : 'px-6 pb-10 min-h-full'}>
             {children}
           </div>
-        </div>
+        </main>
       </div>
     </div>
   );
