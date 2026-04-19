@@ -45,6 +45,7 @@ const AssistantGrading = ({ loaderData }: Route.ComponentProps) => {
       stats={grading.stats}
       queue={grading.queue}
       analytics={grading.analytics}
+      students={grading.students}
       onRefreshSubmission={handleRefresh}
       refreshingSubmissionId={refreshingId}
     />

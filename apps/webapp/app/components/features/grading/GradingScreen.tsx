@@ -5,6 +5,7 @@ import { GradingQueueRow, type GradingQueueItem } from './GradingQueueRow';
 import {
   GitHubStatsPanel,
   type GitHubStatsSnapshot,
+  type EligibleStudent,
 } from '~/components/features/analytics';
 
 export interface GradingStats {
@@ -18,6 +19,8 @@ export interface GradingStats {
 export interface SubmissionAnalyticsEntry {
   deadline: string | null;
   snapshot: GitHubStatsSnapshot | null;
+  /** Repository.id — forwarded to ContributorBreakdown for link-to-student. */
+  repositoryId?: string;
 }
 
 interface GradingScreenProps {
@@ -33,6 +36,8 @@ interface GradingScreenProps {
   /** Repository-assignment id currently being refreshed, if any. */
   refreshingSubmissionId?: string | null;
   onOpenSubmission?: (id: string) => void;
+  /** Classroom students eligible to be linked to unmatched contributors. */
+  students?: EligibleStudent[];
 }
 
 export function GradingScreen({
@@ -42,6 +47,7 @@ export function GradingScreen({
   onRefreshSubmission,
   refreshingSubmissionId,
   onOpenSubmission,
+  students,
 }: GradingScreenProps) {
   const focusValue = stats.focusAvg === null ? '—' : `${stats.focusAvg}%`;
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -126,6 +132,8 @@ export function GradingScreen({
                 : undefined
             }
             refreshing={refreshingSubmissionId === selectedId}
+            repositoryId={selected.repositoryId}
+            students={students}
           />
         </div>
       )}

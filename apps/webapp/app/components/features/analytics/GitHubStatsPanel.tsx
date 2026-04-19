@@ -4,7 +4,9 @@ import dayjs from 'dayjs';
 import StatsCard from '~/components/shared/stats/StatsCard';
 import CommitTimeline, { type CommitRecord } from './CommitTimeline';
 import Anomalies from './Anomalies';
-import ContributorBreakdown from './ContributorBreakdown';
+import ContributorBreakdown, {
+  type EligibleStudent,
+} from './ContributorBreakdown';
 
 export type ContributorRecord = {
   login: string;
@@ -36,6 +38,10 @@ export interface GitHubStatsPanelProps {
   deadline: string | null;
   onRefresh?: () => void;
   refreshing?: boolean;
+  /** Repository.id — forwarded to ContributorBreakdown for link-to-student. */
+  repositoryId?: string;
+  /** Classroom members eligible to be linked. */
+  students?: EligibleStudent[];
 }
 
 function formatNumber(n: number): string {
@@ -104,6 +110,8 @@ const GitHubStatsPanel = ({
   deadline,
   onRefresh,
   refreshing = false,
+  repositoryId,
+  students,
 }: GitHubStatsPanelProps) => {
   if (!snapshot) {
     return (
@@ -227,13 +235,15 @@ const GitHubStatsPanel = ({
       />
 
       {/* Contributor breakdown (only when >1 contributor) */}
-      {contributors.length > 1 && (
+      {contributors.length > 1 && repositoryId && (
         <ContributorBreakdown
           commits={commits}
           contributors={contributors}
           unmatched={contributors
             .filter(c => !c.user_id)
             .map(c => ({ login: c.login, commits: c.commits }))}
+          repositoryId={repositoryId}
+          students={students ?? []}
         />
       )}
 

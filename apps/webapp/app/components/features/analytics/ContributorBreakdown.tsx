@@ -1,4 +1,6 @@
-import { Button } from 'antd';
+import { useEffect, useMemo, useState } from 'react';
+import { useFetcher, useRevalidator } from 'react-router';
+import { Button, Input, Modal } from 'antd';
 import {
   ResponsiveContainer,
   PieChart,
@@ -20,11 +22,24 @@ import { useDarkMode } from '~/hooks';
 import type { CommitRecord } from './CommitTimeline';
 import type { ContributorRecord } from './GitHubStatsPanel';
 
+export interface EligibleStudent {
+  id: string;
+  login: string | null;
+  name: string | null;
+}
+
 export interface ContributorBreakdownProps {
   commits: CommitRecord[];
   contributors: ContributorRecord[];
   unmatched: Array<{ login: string; commits: number }>;
+  /** Repository.id — used to POST to /api/repos/:id/contributor-link. */
+  repositoryId: string;
+  /** Classroom members eligible to be linked. */
+  students: EligibleStudent[];
+  /** Deprecated. Modal is rendered inline; kept for backwards compatibility. */
   onRequestLink?: (login: string) => void;
+  /** Called after a successful link upsert (in addition to revalidator). */
+  onLinkSuccess?: () => void;
 }
 
 /**
@@ -45,9 +60,50 @@ const ContributorBreakdown = ({
   commits,
   contributors,
   unmatched,
+  repositoryId,
+  students,
   onRequestLink,
+  onLinkSuccess,
 }: ContributorBreakdownProps) => {
   const { isDarkMode } = useDarkMode();
+  const fetcher = useFetcher<{ linked?: boolean; error?: string }>();
+  const { revalidate } = useRevalidator();
+
+  const [linkTarget, setLinkTarget] = useState<string | null>(null);
+  const [search, setSearch] = useState('');
+
+  const filteredStudents = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return students;
+    return students.filter(s => {
+      const haystack = `${s.name ?? ''} ${s.login ?? ''}`.toLowerCase();
+      return haystack.includes(q);
+    });
+  }, [search, students]);
+
+  const submitting = fetcher.state !== 'idle';
+
+  // Close modal and revalidate when link fetcher succeeds.
+  useEffect(() => {
+    if (fetcher.state === 'idle' && fetcher.data?.linked) {
+      setLinkTarget(null);
+      setSearch('');
+      revalidate();
+      onLinkSuccess?.();
+    }
+  }, [fetcher.state, fetcher.data, revalidate, onLinkSuccess]);
+
+  const handleLink = (studentId: string) => {
+    if (!linkTarget) return;
+    fetcher.submit(
+      { github_login: linkTarget, user_id: studentId },
+      {
+        method: 'POST',
+        action: `/api/repos/${repositoryId}/contributor-link`,
+        encType: 'application/json',
+      }
+    );
+  };
 
   if (!commits || commits.length === 0) return null;
   if (!contributors || contributors.length <= 1) return null;
@@ -195,6 +251,78 @@ const ContributorBreakdown = ({
         </div>
       </div>
 
+      {/* Link-to-student modal */}
+      <Modal
+        open={linkTarget !== null}
+        onCancel={() => {
+          if (!submitting) {
+            setLinkTarget(null);
+            setSearch('');
+          }
+        }}
+        footer={null}
+        title={
+          linkTarget ? `Link GitHub user ${linkTarget} to a student` : undefined
+        }
+        destroyOnClose
+        data-testid="link-contributor-modal"
+      >
+        <div className="space-y-3">
+          <Input
+            placeholder="Search by name or GitHub login"
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+            allowClear
+            data-testid="link-contributor-search"
+          />
+          {fetcher.data?.error && (
+            <div
+              className="text-xs text-red-600 dark:text-red-400"
+              data-testid="link-contributor-error"
+            >
+              {fetcher.data.error}
+            </div>
+          )}
+          <div
+            className="max-h-72 overflow-y-auto rounded-lg border border-gray-100 dark:border-gray-700 divide-y divide-gray-100 dark:divide-gray-700"
+            data-testid="link-contributor-student-list"
+          >
+            {filteredStudents.length === 0 ? (
+              <div className="px-3 py-4 text-sm text-gray-500 dark:text-gray-400 text-center">
+                No students match.
+              </div>
+            ) : (
+              filteredStudents.map(s => (
+                <div
+                  key={s.id}
+                  className="flex items-center justify-between px-3 py-2 text-sm"
+                  data-testid={`link-student-row-${s.id}`}
+                >
+                  <div className="min-w-0">
+                    <div className="font-medium text-gray-800 dark:text-gray-100 truncate">
+                      {s.name ?? s.login ?? 'Unknown student'}
+                    </div>
+                    {s.login && (
+                      <div className="text-xs text-gray-500 dark:text-gray-400 truncate">
+                        @{s.login}
+                      </div>
+                    )}
+                  </div>
+                  <Button
+                    size="small"
+                    type="primary"
+                    loading={submitting}
+                    onClick={() => handleLink(s.id)}
+                  >
+                    Link
+                  </Button>
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+      </Modal>
+
       {/* Unmatched contributors */}
       {unmatched.length > 0 && (
         <div data-testid="unmatched-contributors">
@@ -222,8 +350,11 @@ const ContributorBreakdown = ({
                 </div>
                 <Button
                   size="small"
-                  onClick={() => onRequestLink?.(u.login)}
-                  disabled={!onRequestLink}
+                  onClick={() => {
+                    setLinkTarget(u.login);
+                    onRequestLink?.(u.login);
+                  }}
+                  data-testid={`link-student-${u.login}`}
                 >
                   Link to student
                 </Button>

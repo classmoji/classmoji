@@ -25,7 +25,14 @@ const AdminDashboard = ({ loaderData }: Route.ComponentProps) => {
 
   // TODO: Phase 4d - wire `onOpenSubmission` to the admin assignment detail route
   // once it exists. Today there is no canonical admin single-submission route.
-  return <GradingScreen stats={grading.stats} queue={grading.queue} />;
+  return (
+    <GradingScreen
+      stats={grading.stats}
+      queue={grading.queue}
+      analytics={grading.analytics}
+      students={grading.students}
+    />
+  );
 };
 
 export default AdminDashboard;

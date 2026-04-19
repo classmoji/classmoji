@@ -274,6 +274,61 @@ export async function refreshOne(
 }
 
 // ---------------------------------------------------------------------------
+// Manual contributor → user linking
+// ---------------------------------------------------------------------------
+
+/**
+ * Upsert a `RepositoryContributorLink` for the given `(repository_id, github_login)`.
+ * Passing `userId: null` unlinks (records the mapping with no user). When a
+ * `userId` is supplied, the user MUST be a member of the classroom that owns
+ * the repo — otherwise this throws.
+ *
+ * Callers: the API route backing ContributorBreakdown's "Link to student"
+ * modal. The stored link is consumed by `buildLoginToUserIdMap` on the next
+ * refresh, so newly-linked contributors are attributed correctly.
+ */
+export async function linkContributor(
+  repositoryId: string,
+  githubLogin: string,
+  userId: string | null
+): Promise<void> {
+  const prisma = getPrisma();
+
+  const repo = await prisma.repository.findUnique({
+    where: { id: repositoryId },
+    select: { id: true, classroom_id: true },
+  });
+  if (!repo) throw new Error(`Repository ${repositoryId} not found`);
+
+  if (userId) {
+    const membership = await prisma.classroomMembership.findFirst({
+      where: { classroom_id: repo.classroom_id, user_id: userId },
+      select: { id: true },
+    });
+    if (!membership) {
+      throw new Error(
+        `User ${userId} is not a member of the classroom that owns this repository`
+      );
+    }
+  }
+
+  await prisma.repositoryContributorLink.upsert({
+    where: {
+      repository_id_github_login: {
+        repository_id: repositoryId,
+        github_login: githubLogin,
+      },
+    },
+    create: {
+      repository_id: repositoryId,
+      github_login: githubLogin,
+      user_id: userId,
+    },
+    update: { user_id: userId },
+  });
+}
+
+// ---------------------------------------------------------------------------
 // Cron helper
 // ---------------------------------------------------------------------------
 

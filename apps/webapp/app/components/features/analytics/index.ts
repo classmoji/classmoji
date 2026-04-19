@@ -12,4 +12,7 @@ export type { AnomaliesProps } from './Anomalies';
 export { default as QueueAnomalyChips } from './QueueAnomalyChips';
 export type { QueueAnomalyChipsProps } from './QueueAnomalyChips';
 export { default as ContributorBreakdown, loginToColor } from './ContributorBreakdown';
-export type { ContributorBreakdownProps } from './ContributorBreakdown';
+export type {
+  ContributorBreakdownProps,
+  EligibleStudent,
+} from './ContributorBreakdown';

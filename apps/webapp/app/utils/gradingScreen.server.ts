@@ -18,6 +18,14 @@ export interface SubmissionAnalytics {
   deadline: string | null;
   /** Latest analytics snapshot, or null when none has been captured yet. */
   snapshot: GitHubStatsSnapshot | null;
+  /** Repository.id — used by ContributorBreakdown's link-to-student modal. */
+  repositoryId: string;
+}
+
+export interface EligibleStudentRow {
+  id: string;
+  login: string | null;
+  name: string | null;
 }
 
 export interface GradingScreenData {
@@ -25,6 +33,8 @@ export interface GradingScreenData {
   queue: GradingQueueItem[];
   /** Map of repository_assignment_id → analytics payload (deadline + snapshot). */
   analytics: Record<string, SubmissionAnalytics>;
+  /** Classroom members (students) eligible to be linked to unmatched GH logins. */
+  students: EligibleStudentRow[];
 }
 
 /**
@@ -123,6 +133,7 @@ export const loadGradingScreenData = async (
   const queue: GradingQueueItem[] = queueRaw.map(ra => {
     const snap = ra.analytics_snapshot;
     analytics[ra.id] = {
+      repositoryId: ra.repository.id,
       deadline: ra.assignment.grader_deadline
         ? new Date(ra.assignment.grader_deadline).toISOString()
         : null,
@@ -182,6 +193,24 @@ export const loadGradingScreenData = async (
   // Avoid unused-param warning while keeping API flexible for future slug-based queries.
   void classroomSlug;
 
+  // Eligible link targets: classroom members with STUDENT role. Ordered by
+  // display name / login so the modal list is consistent.
+  const memberships = await prisma.classroomMembership.findMany({
+    where: { classroom_id: classroomId, role: 'STUDENT' },
+    include: { user: { select: { id: true, name: true, login: true } } },
+  });
+  const students: EligibleStudentRow[] = memberships
+    .map(m => ({
+      id: m.user.id,
+      name: m.user.name ?? null,
+      login: m.user.login ?? null,
+    }))
+    .sort((a, b) => {
+      const an = (a.name ?? a.login ?? '').toLowerCase();
+      const bn = (b.name ?? b.login ?? '').toLowerCase();
+      return an.localeCompare(bn);
+    });
+
   return {
     stats: {
       graded: gradedCount,
@@ -191,5 +220,6 @@ export const loadGradingScreenData = async (
     },
     queue,
     analytics,
+    students,
   };
 };

@@ -56,6 +56,34 @@ test.describe('Grading queue — GitHubStatsPanel mount', () => {
     expect(hasPopulated || hasEmpty).toBeTruthy();
   });
 
+  test('opens link-to-student modal for an unmatched contributor', async ({
+    authenticatedPage: page,
+  }) => {
+    const rows = page.locator('button.row-hover');
+    const count = await rows.count();
+    test.skip(count === 0, 'No pending submissions in seed.');
+
+    await rows.first().click();
+
+    // The populated panel is only present when a snapshot exists; the
+    // ContributorBreakdown only mounts when there are >1 contributors AND
+    // the panel has a repositoryId. Seed fixtures are not guaranteed to
+    // reach that state, so skip gracefully when the unmatched row is not
+    // rendered.
+    const linkButton = page
+      .getByTestId(/^link-student-/)
+      .first();
+    const hasLink = (await linkButton.count()) > 0;
+    test.skip(
+      !hasLink,
+      'No unmatched contributor row in fixtures — modal smoke skipped.'
+    );
+
+    await linkButton.click();
+    await expect(page.getByTestId('link-contributor-modal')).toBeVisible();
+    await expect(page.getByTestId('link-contributor-search')).toBeVisible();
+  });
+
   test('queue rows show anomaly chips without expansion when flags fire', async ({
     authenticatedPage: page,
   }) => {
