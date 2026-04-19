@@ -32,29 +32,25 @@ export interface RouteEntry {
 
 /**
  * Sidebar grouping per redesign (Phase 3).
- * Groups align to design bundle `shell.jsx` — a top group, a course group,
- * and a footer. Role-aware lists; each string is a key into `routes` below.
+ * Groups align to design bundle `shell.jsx` — a top group, two labeled sections
+ * (Coursework / Reference) and a footer. Role-aware; each string is a key into
+ * `routes` below.
  */
 export const sidebarSections = {
   top: {
-    STUDENT: ['dashboard', 'calendar', 'tasks'],
-    OWNER: ['dashboard', 'calendar', 'students'],
+    STUDENT: ['dashboard', 'calendar'],
+    OWNER: ['dashboard', 'calendar'],
     ASSISTANT: ['dashboard', 'calendar'],
   },
-  course: {
-    STUDENT: ['modules', 'quizzes', 'regrade-requests', 'tokens', 'syllabus'],
-    OWNER: [
-      'quizzes',
-      'modules',
-      'pages',
-      'slides',
-      'tokens',
-      'syllabus',
-      'teams',
-      'assistants',
-      'repositories',
-    ],
-    ASSISTANT: ['quizzes', 'grading', 'modules', 'regrade-requests'],
+  coursework: {
+    STUDENT: ['modules', 'quizzes', 'tasks', 'regrade-requests'],
+    OWNER: ['modules', 'quizzes', 'pages', 'slides', 'grades'],
+    ASSISTANT: ['modules', 'quizzes', 'grading', 'regrade-requests'],
+  },
+  reference: {
+    STUDENT: ['tokens', 'syllabus'],
+    OWNER: ['students', 'assistants', 'teams', 'tokens', 'syllabus', 'repositories'],
+    ASSISTANT: ['students', 'syllabus'],
   },
   footer: ['settings'],
 } as const;
@@ -62,8 +58,19 @@ export const sidebarSections = {
 /**
  * @deprecated Retained as a compatibility alias for any external importers.
  * Use `sidebarSections` instead — the new schema is role-aware.
+ *
+ * Provides a flat `course` derived from `coursework + reference` per role for
+ * backwards compatibility with callers that read the old shape.
  */
-export const routeCategories = sidebarSections;
+export const routeCategories = {
+  top: sidebarSections.top,
+  course: {
+    STUDENT: [...sidebarSections.coursework.STUDENT, ...sidebarSections.reference.STUDENT],
+    OWNER: [...sidebarSections.coursework.OWNER, ...sidebarSections.reference.OWNER],
+    ASSISTANT: [...sidebarSections.coursework.ASSISTANT, ...sidebarSections.reference.ASSISTANT],
+  },
+  footer: sidebarSections.footer,
+} as const;
 
 /**
  * Defines the routes and their corresponding details.

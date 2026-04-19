@@ -100,7 +100,6 @@ interface SidebarNavItemProps {
   active?: boolean;
   onClick?: () => void;
   badge?: string | number;
-  accent?: string;
   external?: boolean;
 }
 
@@ -111,37 +110,12 @@ const SidebarNavItem = ({
   active,
   onClick,
   badge,
-  accent,
   external,
 }: SidebarNavItemProps) => {
-  const style: React.CSSProperties = {
-    width: '100%',
-    display: 'flex',
-    alignItems: 'center',
-    gap: 10,
-    padding: '7px 10px',
-    borderRadius: 9,
-    background: active ? 'white' : 'transparent',
-    border: active ? '1px solid var(--line)' : '1px solid transparent',
-    boxShadow: active ? 'var(--shadow-sm)' : 'none',
-    color: active ? 'var(--ink-0)' : 'var(--ink-2)',
-    fontSize: 13.5,
-    fontWeight: active ? 600 : 500,
-    textAlign: 'left',
-    cursor: 'pointer',
-    transition: 'background 100ms',
-  };
-
+  const className = active ? 'active' : '';
   const body = (
     <>
-      <span
-        style={{
-          color: accent || (active ? 'var(--ink-0)' : 'var(--ink-3)'),
-          display: 'flex',
-        }}
-      >
-        {icon}
-      </span>
+      {icon}
       <span style={{ flex: 1 }}>{label}</span>
       {badge != null && (
         <span
@@ -161,18 +135,27 @@ const SidebarNavItem = ({
     </>
   );
 
-  if (to && !external) {
+  if (to && external) {
     return (
-      <Link to={to} style={{ ...style, textDecoration: 'none' }} data-active={active || undefined}>
+      <a href={to} className={className} target="_blank" rel="noopener noreferrer">
+        {body}
+      </a>
+    );
+  }
+
+  if (to) {
+    return (
+      <Link to={to} className={className} data-active={active || undefined}>
         {body}
       </Link>
     );
   }
 
   return (
-    <button type="button" onClick={onClick} style={style}>
+    // eslint-disable-next-line jsx-a11y/anchor-is-valid
+    <a className={className} onClick={onClick} role="button" tabIndex={0}>
       {body}
-    </button>
+    </a>
   );
 };
 
@@ -214,39 +197,21 @@ const ClassPill = ({ classroom, memberships, currentMembershipId }: ClassPillPro
   );
 
   return (
-    <div ref={containerRef} style={{ marginBottom: 14, position: 'relative' }}>
+    <div ref={containerRef} style={{ position: 'relative' }}>
       <button
         type="button"
         onClick={() => setOpen(v => !v)}
-        style={{
-          width: '100%',
-          display: 'flex',
-          alignItems: 'center',
-          gap: 10,
-          padding: '10px 12px',
-          borderRadius: 12,
-          background: 'white',
-          border: '1px solid var(--line)',
-          boxShadow: 'var(--shadow-sm)',
-          textAlign: 'left',
-          cursor: 'pointer',
-        }}
+        className="class-switch"
+        style={{ width: '100%', textAlign: 'left' }}
       >
         <ClassSquare klass={{ name: displayName }} size={24} />
         <span style={{ flex: 1, minWidth: 0 }}>
-          <div
-            style={{ fontSize: 13, fontWeight: 600, color: 'var(--ink-0)' }}
-            className="truncate"
-          >
-            {displayName}
-          </div>
-          <div style={{ fontSize: 11, color: 'var(--ink-3)' }} className="truncate">
-            {subtitle}
-          </div>
+          <div className="cs-name truncate">{displayName}</div>
+          <div className="cs-sub truncate">{subtitle}</div>
         </span>
         <span
+          className="cs-chev"
           style={{
-            color: 'var(--ink-3)',
             transform: open ? 'rotate(180deg)' : '',
             transition: 'transform 160ms',
             display: 'flex',
@@ -437,8 +402,11 @@ const CommonLayout = ({
   const topKeys = role
     ? (sidebarSections.top as Record<string, readonly string[]>)[role] ?? []
     : [];
-  const courseKeys = role
-    ? (sidebarSections.course as Record<string, readonly string[]>)[role] ?? []
+  const courseworkKeys = role
+    ? (sidebarSections.coursework as Record<string, readonly string[]>)[role] ?? []
+    : [];
+  const referenceKeys = role
+    ? (sidebarSections.reference as Record<string, readonly string[]>)[role] ?? []
     : [];
 
   // Menu pages — for students/assistants, shown below course nav.
@@ -486,11 +454,6 @@ const CommonLayout = ({
 
   const userInitials = getInitials(user?.name, user?.login);
   const userHue = hashHue(user?.id ?? user?.login ?? 'user');
-
-  const handleStubClick = (label: string) => {
-    // eslint-disable-next-line no-console
-    console.warn(`[classmoji] "${label}" link is a stub — not implemented yet.`);
-  };
 
   const handleGithubClick = () => {
     const login = classroom?.git_organization?.login;
@@ -542,14 +505,10 @@ const CommonLayout = ({
     <div style={{ display: 'flex', minHeight: '100vh', background: 'var(--bg-1)' }}>
       {/* Sidebar */}
       <aside
+        className="sidebar"
         style={{
           width: SIDEBAR_WIDTH,
           flexShrink: 0,
-          background: 'var(--bg-2)',
-          borderRight: '1px solid var(--line)',
-          display: 'flex',
-          flexDirection: 'column',
-          padding: '12px 10px',
           height: '100vh',
           position: 'fixed',
           top: 0,
@@ -558,51 +517,31 @@ const CommonLayout = ({
         }}
       >
         {/* Brand */}
-        <Link
-          to="/select-organization"
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 8,
-            padding: '4px 6px 14px',
-            textDecoration: 'none',
-            color: 'var(--ink-0)',
-          }}
-        >
-          <Logo size={28} variant="full" />
-        </Link>
+        <div className="brand">
+          <Link
+            to="/select-organization"
+            style={{ display: 'flex', alignItems: 'center', textDecoration: 'none', color: 'var(--ink-0)' }}
+          >
+            <Logo size={26} variant="full" />
+          </Link>
+        </div>
 
-        {/* User */}
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 10,
-            padding: '8px 8px',
-            marginBottom: 10,
-          }}
-        >
-          <Avatar
-            initials={userInitials}
-            hue={userHue}
-            size={32}
-            src={user?.avatar_url ?? undefined}
-          />
+        {/* User card */}
+        <div className="user-card">
+          {user?.avatar_url ? (
+            <Avatar
+              initials={userInitials}
+              hue={userHue}
+              size={34}
+              src={user.avatar_url}
+            />
+          ) : (
+            <span className="av">{userInitials}</span>
+          )}
           <span style={{ minWidth: 0, flex: 1 }}>
-            <div
-              style={{ fontSize: 13, fontWeight: 600, color: 'var(--ink-0)' }}
-              className="truncate"
-            >
-              {user?.name || user?.login}
-            </div>
-            <div
-              style={{
-                fontSize: 11,
-                color: 'var(--ink-3)',
-                textTransform: 'capitalize',
-              }}
-            >
-              {role ? role.toLowerCase() : ''}
+            <div className="name truncate">{user?.name || user?.login}</div>
+            <div className="role" style={{ textTransform: 'capitalize' }}>
+              {role ? role.toLowerCase() : 'Member'}
             </div>
           </span>
         </div>
@@ -628,82 +567,84 @@ const CommonLayout = ({
         {/* Scrollable nav area */}
         <div style={{ flex: 1, overflowY: 'auto', minHeight: 0 }}>
           {/* Top group */}
-          <nav style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-            {renderGroup(topKeys, 'top')}
-          </nav>
+          {topKeys.length > 0 && (
+            <nav className="nav">{renderGroup(topKeys, 'top')}</nav>
+          )}
 
-          {/* Course section */}
-          {courseKeys.length > 0 && (
+          {/* Coursework section */}
+          {courseworkKeys.length > 0 && (
             <>
-              <div
-                className="caps"
-                style={{ marginTop: 16, padding: '0 10px 6px' }}
-              >
-                {classroomDisplaySlug}
+              <div className="nav-section">
+                <span className="caps">Coursework</span>
               </div>
-              <nav style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                {renderGroup(courseKeys, 'course')}
+              <nav className="nav">
+                {renderGroup(courseworkKeys, 'coursework')}
                 {renderMenuPages()}
               </nav>
+            </>
+          )}
+
+          {/* Reference section */}
+          {referenceKeys.length > 0 && (
+            <>
+              <div className="nav-section">
+                <span className="caps">Reference</span>
+              </div>
+              <nav className="nav">{renderGroup(referenceKeys, 'reference')}</nav>
             </>
           )}
         </div>
 
         {/* Footer nav */}
-        <nav
-          style={{
-            display: 'flex',
-            flexDirection: 'column',
-            gap: 2,
-            paddingTop: 8,
-            borderTop: '1px solid var(--line)',
-            marginTop: 8,
-          }}
-        >
-          {renderGroup(sidebarSections.footer, 'footer')}
-          <SidebarNavItem
-            icon={<IconDocs size={16} />}
-            label="Docs"
-            onClick={() => handleStubClick('Docs')}
-          />
-          <SidebarNavItem
-            icon={<IconSupport size={16} />}
-            label="Support"
-            onClick={() => handleStubClick('Support')}
-          />
-        </nav>
+        <div className="sidebar-foot">
+          <nav className="nav">
+            {renderGroup(sidebarSections.footer, 'footer')}
+            <SidebarNavItem
+              icon={<IconDocs size={16} />}
+              label="Docs"
+              to="https://docs.classmoji.dev"
+              external
+            />
+            <SidebarNavItem
+              icon={<IconSupport size={16} />}
+              label="Support"
+              to="mailto:support@classmoji.dev"
+              external
+            />
+          </nav>
 
-        {/* Profile dropdown trigger */}
-        <div style={{ paddingTop: 8 }}>
-          <ProfileDropdown placement="topRight">
-            <div
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: 10,
-                padding: '8px',
-                borderRadius: 9,
-                cursor: 'pointer',
-              }}
-              className="row-hover"
-            >
-              <Avatar
-                initials={userInitials}
-                hue={userHue}
-                size={24}
-                src={user?.avatar_url ?? undefined}
-              />
-              <span style={{ minWidth: 0, flex: 1 }}>
-                <div
-                  style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--ink-1)' }}
-                  className="truncate"
-                >
-                  {user?.login ? `@${user.login}` : user?.name}
-                </div>
-              </span>
-              <IconChevron size={12} />
-            </div>
-          </ProfileDropdown>
+          {/* Profile dropdown trigger */}
+          <div style={{ paddingTop: 6 }}>
+            <ProfileDropdown placement="topRight">
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 10,
+                  padding: '8px',
+                  borderRadius: 9,
+                  cursor: 'pointer',
+                }}
+                className="row-hover"
+              >
+                <Avatar
+                  initials={userInitials}
+                  hue={userHue}
+                  size={24}
+                  src={user?.avatar_url ?? undefined}
+                />
+                <span style={{ minWidth: 0, flex: 1 }}>
+                  <div
+                    style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--ink-1)' }}
+                    className="truncate"
+                  >
+                    {user?.login ? `@${user.login}` : user?.name}
+                  </div>
+                </span>
+                <IconChevron size={12} />
+              </div>
+            </ProfileDropdown>
+          </div>
         </div>
       </aside>
 
