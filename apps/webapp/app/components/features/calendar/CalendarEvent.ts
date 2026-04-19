@@ -13,4 +13,10 @@ export interface CalendarEvent {
   isRecurring?: boolean;
   /** True when backed by an assignment deadline (read-only). */
   isDeadline?: boolean;
+  /** Minutes since local midnight when the event starts (omitted for date-only entries). */
+  startMinutes?: number;
+  /** Duration in minutes; defaults to 60 when omitted. */
+  durationMinutes?: number;
+  /** Optional secondary line shown under the title (e.g., room or "Due"). */
+  subtitle?: string;
 }

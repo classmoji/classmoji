@@ -4,6 +4,8 @@ interface RawCalendarEventLike {
   id?: string;
   title?: string;
   start_time: string | Date;
+  end_time?: string | Date | null;
+  location?: string | null;
   event_type?: string;
   occurrence_date?: string | Date | null;
   is_deadline?: boolean;
@@ -79,6 +81,18 @@ export function mapClassroomCalendarToEvents(
     const d = sourceDate instanceof Date ? sourceDate : new Date(sourceDate);
     if (Number.isNaN(d.getTime())) continue;
 
+    const startMinutes = raw.is_deadline
+      ? undefined
+      : d.getHours() * 60 + d.getMinutes();
+    let durationMinutes: number | undefined;
+    if (!raw.is_deadline && raw.end_time) {
+      const end = raw.end_time instanceof Date ? raw.end_time : new Date(raw.end_time);
+      if (!Number.isNaN(end.getTime())) {
+        const diff = Math.round((end.getTime() - d.getTime()) / 60000);
+        if (diff > 0) durationMinutes = diff;
+      }
+    }
+
     result.push({
       id: raw.id,
       date: formatLocalDate(d),
@@ -87,6 +101,9 @@ export function mapClassroomCalendarToEvents(
       href: hrefForEvent(raw, opts),
       isRecurring: Boolean(raw.is_recurring),
       isDeadline: Boolean(raw.is_deadline),
+      startMinutes,
+      durationMinutes,
+      subtitle: raw.location ?? undefined,
     });
   }
   return result;
