@@ -33,6 +33,13 @@ test.describe('Assistant Dashboard', () => {
   test('displays TA leaderboard', async ({ authenticatedPage: page }) => {
     await expect(page.getByText('TA Grading Leaderboard')).toBeVisible();
   });
+
+  test('displays TA cockpit panels', async ({ authenticatedPage: page }) => {
+    await expect(page.getByText('My Day')).toBeVisible();
+    await expect(page.getByText('Grading Streak')).toBeVisible();
+    await expect(page.getByText(/Throughput \(7d\)/)).toBeVisible();
+    await expect(page.getByText('My Grades vs. Class')).toBeVisible();
+  });
 });
 
 test.describe('Assistant Navigation', () => {
