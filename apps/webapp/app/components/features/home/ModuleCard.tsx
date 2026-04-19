@@ -1,5 +1,4 @@
 import { Link } from 'react-router';
-import { Chip, IconArrowR, IconCheck } from '@classmoji/ui-components';
 
 export interface ModuleCardItem {
   kind: 'QUIZ' | 'ASGN';
@@ -21,135 +20,95 @@ export interface ModuleCardData {
 interface ModuleCardProps {
   module: ModuleCardData | null;
   viewModuleHref: string;
-  primaryActionHref?: string;
-  primaryActionLabel?: string;
+  assignmentsHref?: string;
+  lecturesHref?: string;
 }
 
 export function ModuleCard({
   module,
   viewModuleHref,
-  primaryActionHref,
-  primaryActionLabel,
+  assignmentsHref,
+  lecturesHref,
 }: ModuleCardProps) {
   if (!module) {
     return (
-      <div className="card" style={{ padding: 22 }}>
-        <div className="caps" style={{ marginBottom: 6 }}>Current module</div>
-        <div style={{ color: 'var(--ink-2)', fontSize: 13 }}>
-          No active module right now.
+      <div className="panel flex flex-col">
+        <div className="px-[18px] pt-4 pb-3">
+          <div className="caps text-[10px]">Current module</div>
+          <div className="mt-1 text-[16px] font-semibold">No active module</div>
+          <div className="mt-0.5 text-[12.5px] text-ink-2">
+            You don&apos;t have any open modules right now.
+          </div>
         </div>
       </div>
     );
   }
   const m = module;
   const pct = Math.max(0, Math.min(100, Math.round(m.pct)));
+  const subtitle = `${m.assignmentCount} assignment${m.assignmentCount === 1 ? '' : 's'} · ${pct}%`;
+
   return (
-    <div className="card" style={{ padding: 22 }}>
-      <div className="caps" style={{ marginBottom: 6 }}>
-        {m.number != null ? `Module #${m.number}` : 'Current module'}
-      </div>
-      <h2
-        className="display"
-        style={{ margin: 0, fontSize: 24, fontWeight: 500, letterSpacing: -0.4 }}
-      >
-        {m.name}
-      </h2>
-      <div style={{ color: 'var(--ink-2)', fontSize: 12.5, marginTop: 3 }}>
-        {m.assignmentCount} assignments · Weeks {m.weeks}
+    <div className="panel flex flex-col">
+      <div className="px-[18px] pt-4 pb-3">
+        <div className="caps text-[10px]">
+          {m.number != null ? `Module #${m.number}` : 'Current module'}
+        </div>
+        <div className="mt-1 text-[16px] font-semibold">{m.name}</div>
+        <div className="mt-0.5 text-[12.5px] text-ink-2">{subtitle}</div>
       </div>
 
-      {/* Progress */}
-      <div style={{ marginTop: 16 }}>
-        <div
-          style={{
-            height: 6,
-            borderRadius: 99,
-            background: 'var(--bg-3)',
-            overflow: 'hidden',
-            position: 'relative',
-          }}
-        >
-          <div
-            style={{
-              height: '100%',
-              width: `${pct}%`,
-              background:
-                'linear-gradient(90deg, oklch(78% 0.12 285), oklch(62% 0.19 285))',
-              borderRadius: 99,
-            }}
-          />
-        </div>
-        <div
-          style={{ display: 'flex', justifyContent: 'space-between', marginTop: 6 }}
-        >
-          <span style={{ fontSize: 11, color: 'var(--ink-3)' }}>Progress</span>
-          <span
-            style={{ fontSize: 11, fontWeight: 600, color: 'var(--ink-1)' }}
-            className="mono"
-          >
-            {pct}%
-          </span>
-        </div>
-      </div>
-
-      {/* This week list */}
       {m.items.length > 0 && (
         <>
-          <div className="caps" style={{ marginTop: 20, marginBottom: 6 }}>
-            This week
-          </div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 0 }}>
-            {m.items.map((it, i) => (
-              <div
-                key={i}
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 10,
-                  padding: '10px 2px',
-                  borderBottom:
-                    i < m.items.length - 1 ? '1px solid var(--line)' : 'none',
-                }}
-              >
-                <Chip variant={it.kind === 'QUIZ' ? 'quiz' : 'asgn'}>{it.kind}</Chip>
-                <span style={{ flex: 1, fontSize: 13.5, fontWeight: 500 }}>
-                  {it.title}
-                </span>
-                <span
-                  style={{ fontSize: 12, color: 'var(--ink-3)' }}
-                  className="mono"
+          <div className="sep" />
+          <div className="px-[18px] pt-2.5 pb-1.5">
+            <div className="caps text-[10px] mb-1.5">This week</div>
+            {m.items.map((it, i) => {
+              const dueLike = it.date.toLowerCase().startsWith('due');
+              return (
+                <div
+                  key={i}
+                  className={`grid items-center gap-2.5 py-[9px] px-0.5 ${
+                    i === 0 ? '' : 'border-t border-line-cool'
+                  }`}
+                  style={{ gridTemplateColumns: '60px 1fr auto' }}
                 >
-                  {it.date}
-                </span>
-                {it.done && (
-                  <span style={{ color: 'oklch(60% 0.15 155)' }}>
-                    <IconCheck size={14} />
+                  <span
+                    className={`chip ${it.kind === 'QUIZ' ? 'chip-quiz' : 'chip-asgn'}`}
+                  >
+                    {it.kind}
                   </span>
-                )}
-              </div>
-            ))}
+                  <span className="text-[13px] truncate">
+                    {it.title}
+                    {it.done ? ' ✓' : ''}
+                  </span>
+                  <span
+                    className={`text-xs ${dueLike ? 'text-ink-1' : 'text-ink-3'}`}
+                  >
+                    {it.date}
+                  </span>
+                </div>
+              );
+            })}
           </div>
         </>
       )}
 
-      {/* Actions */}
-      <div style={{ display: 'flex', gap: 8, marginTop: 16 }}>
-        <Link
-          to={viewModuleHref}
-          className="btn"
-          style={{ flex: '0 0 auto', textDecoration: 'none' }}
-        >
-          View module
-        </Link>
-        {primaryActionHref && primaryActionLabel && (
-          <Link
-            to={primaryActionHref}
-            className="btn btn-primary"
-            style={{ flex: 1, textDecoration: 'none' }}
-          >
-            {primaryActionLabel} <IconArrowR size={14} />
+      <div className="sep" />
+      <div className="flex items-center gap-2 px-3.5 py-2.5">
+        {assignmentsHref && (
+          <Link to={assignmentsHref} className="btn btn-sm no-underline">
+            Assignments
           </Link>
         )}
+        {lecturesHref && (
+          <Link to={lecturesHref} className="btn btn-sm no-underline">
+            Lectures
+          </Link>
+        )}
+        <div className="flex-1" />
+        <Link to={viewModuleHref} className="btn btn-sm no-underline">
+          View module →
+        </Link>
       </div>
     </div>
   );

@@ -6,7 +6,6 @@ import type { Route } from './+types/route';
 import { ClassmojiService } from '@classmoji/services';
 import useStore from '~/store';
 import { assertClassroomAccess } from '~/utils/helpers';
-import { PageHeader } from '~/components';
 import {
   QuizBanner,
   WeekStrip,
@@ -274,78 +273,71 @@ const StudentDashboard = ({ loaderData }: Route.ComponentProps) => {
   const { tokenBalance } = useStore();
 
   return (
-    <div>
-      <PageHeader title="Dashboard" routeName="dashboard" />
-      <Suspense fallback={null}>
-        <Await resolve={data}>
-          {([rawRepoAssignments, rawQuizzes]) => {
-            const repoAssignments = rawRepoAssignments ?? [];
-            const quizzes = rawQuizzes ?? [];
+    <Suspense fallback={null}>
+      <Await resolve={data}>
+        {([rawRepoAssignments, rawQuizzes]) => {
+          const repoAssignments = rawRepoAssignments ?? [];
+          const quizzes = rawQuizzes ?? [];
 
-            const weekDays = buildWeekDays();
-            const weekEvents = bucketWeekEvents(repoAssignments, quizzes);
-            const currentQuiz = deriveCurrentQuiz(quizzes);
-            const { module: currentModule, moduleId } = deriveCurrentModule(
-              repoAssignments,
-            );
-            const repo = deriveRepo(repoAssignments);
+          const weekDays = buildWeekDays();
+          const weekEvents = bucketWeekEvents(repoAssignments, quizzes);
+          const currentQuiz = deriveCurrentQuiz(quizzes);
+          const { module: currentModule, moduleId } = deriveCurrentModule(
+            repoAssignments,
+          );
+          const repo = deriveRepo(repoAssignments);
 
-            const quizHref = currentQuiz
-              ? `/student/${classSlug}/quizzes/${currentQuiz.id}`
-              : undefined;
+          const now = dayjs();
+          const weekday = now.day();
+          const monday = now.subtract((weekday + 6) % 7, 'day').startOf('day');
+          const sunday = monday.add(6, 'day');
+          const weekLabel =
+            monday.month() === sunday.month()
+              ? `${monday.format('MMMM')} ${monday.format('D')}–${sunday.format('D')}`
+              : `${monday.format('MMM D')} – ${sunday.format('MMM D')}`;
 
-            const tokens: TokenStripData = {
-              balance: tokenBalance ?? 0,
-              earned: 0,
-              spent: 0,
-            };
+          const tokens: TokenStripData = {
+            balance: tokenBalance ?? 0,
+            earned: 0,
+            spent: 0,
+          };
 
-            return (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-                <QuizBanner
-                  quiz={currentQuiz}
-                  allTasksHref={`/student/${classSlug}/quizzes`}
+          return (
+            <div className="flex flex-col gap-3">
+              <QuizBanner
+                quiz={currentQuiz}
+                allTasksHref={`/student/${classSlug}/quizzes`}
+              />
+              <WeekStrip
+                days={weekDays}
+                events={weekEvents}
+                weekLabel={weekLabel}
+                calendarHref={`/student/${classSlug}/calendar`}
+              />
+              <div className="grid grid-cols-1 md:grid-cols-[1.2fr_1fr] gap-3">
+                <ModuleCard
+                  module={currentModule}
+                  viewModuleHref={
+                    moduleId
+                      ? `/student/${classSlug}/modules/${moduleId}`
+                      : `/student/${classSlug}/modules`
+                  }
+                  assignmentsHref={`/student/${classSlug}/assignments`}
+                  lecturesHref={`/student/${classSlug}/lectures`}
                 />
-                <WeekStrip days={weekDays} events={weekEvents} />
-                <div
-                  style={{
-                    display: 'grid',
-                    gridTemplateColumns: '1.2fr 1fr',
-                    gap: 16,
-                  }}
-                >
-                  <ModuleCard
-                    module={currentModule}
-                    viewModuleHref={
-                      moduleId
-                        ? `/student/${classSlug}/modules/${moduleId}`
-                        : `/student/${classSlug}/modules`
-                    }
-                    primaryActionHref={quizHref}
-                    primaryActionLabel={
-                      currentQuiz ? `Go to ${currentQuiz.title}` : undefined
-                    }
+                <div className="flex flex-col gap-3">
+                  <RepoCard repo={repo} />
+                  <TokenStrip
+                    tokens={tokens}
+                    tokensHref={`/student/${classSlug}/tokens`}
                   />
-                  <div
-                    style={{
-                      display: 'flex',
-                      flexDirection: 'column',
-                      gap: 16,
-                    }}
-                  >
-                    <RepoCard repo={repo} />
-                    <TokenStrip
-                      tokens={tokens}
-                      tokensHref={`/student/${classSlug}/tokens`}
-                    />
-                  </div>
                 </div>
               </div>
-            );
-          }}
-        </Await>
-      </Suspense>
-    </div>
+            </div>
+          );
+        }}
+      </Await>
+    </Suspense>
   );
 };
 

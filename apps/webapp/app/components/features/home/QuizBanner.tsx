@@ -1,5 +1,5 @@
 import { Link } from 'react-router';
-import { Chip, IconArrowR } from '@classmoji/ui-components';
+import { IconArrowR } from '@classmoji/ui-components';
 
 export interface QuizBannerQuiz {
   id: string;
@@ -14,25 +14,35 @@ interface QuizBannerProps {
 }
 
 export function QuizBanner({ quiz, allTasksHref }: QuizBannerProps) {
-  if (!quiz) return null;
+  if (!quiz) {
+    return (
+      <div className="panel flex items-center gap-3 px-4 py-3">
+        <span className="chip chip-quiz">QUIZ</span>
+        <span className="text-[13.5px] font-medium text-ink-2">
+          No upcoming quizzes
+        </span>
+        <div className="flex-1" />
+        <Link
+          to={allTasksHref}
+          className="btn btn-sm btn-ghost text-ink-2 no-underline"
+        >
+          View all tasks <IconArrowR size={12} />
+        </Link>
+      </div>
+    );
+  }
+
   return (
-    <div
-      className="card"
-      style={{
-        padding: '14px 18px',
-        display: 'flex',
-        alignItems: 'center',
-        gap: 14,
-        borderColor: 'oklch(90% 0.04 155)',
-        background: 'linear-gradient(180deg, oklch(99% 0.01 155), white 40%)',
-      }}
-    >
-      <Chip variant="quiz">Quiz</Chip>
-      <span style={{ fontSize: 15, fontWeight: 600 }}>{quiz.title}</span>
-      <div style={{ flex: 1 }} />
-      <span style={{ fontSize: 12.5, color: 'var(--ink-2)' }}>{quiz.dueText}</span>
-      <Link to={allTasksHref} className="btn" style={{ textDecoration: 'none' }}>
-        View all tasks <IconArrowR size={14} />
+    <div className="panel flex items-center gap-3 px-4 py-3">
+      <span className="chip chip-quiz">QUIZ</span>
+      <span className="text-[13.5px] font-medium">{quiz.title}</span>
+      <span className="text-[12.5px] text-ink-2">{quiz.dueText}</span>
+      <div className="flex-1" />
+      <Link
+        to={allTasksHref}
+        className="btn btn-sm btn-ghost text-ink-2 no-underline"
+      >
+        View all tasks <IconArrowR size={12} />
       </Link>
     </div>
   );
