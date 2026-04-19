@@ -1,4 +1,5 @@
 import { Link } from 'react-router';
+import { IconLock } from '@tabler/icons-react';
 import type { ModuleCard } from './modulesTypes';
 
 interface ModuleCardItemProps {
@@ -6,60 +7,95 @@ interface ModuleCardItemProps {
 }
 
 export function ModuleCardItem({ module: m }: ModuleCardItemProps) {
-  const numberLabel = m.number < 10 ? `0${m.number}` : String(m.number);
-  const barBackground =
-    m.pct >= 100
-      ? 'linear-gradient(90deg, oklch(78% 0.12 155), oklch(62% 0.17 155))'
-      : 'linear-gradient(90deg, oklch(78% 0.12 285), oklch(62% 0.19 285))';
+  const isLocked = m.state === 'lock';
+  const isDone = m.state === 'done';
 
-  return (
-    <Link
-      to={m.href}
-      className="card"
+  const fillStyle: React.CSSProperties = {
+    width: `${Math.max(0, Math.min(100, m.pct))}%`,
+  };
+  if (isDone) {
+    fillStyle.background = '#2f9b55';
+  } else if (isLocked) {
+    fillStyle.background = 'var(--ink-4)';
+  }
+  // else default to var(--accent) from .bar .fill
+
+  const pctColor = isDone
+    ? '#2f9b55'
+    : isLocked
+      ? 'var(--ink-3)'
+      : 'var(--accent-ink)';
+
+  const content = (
+    <div
+      className="panel"
       style={{
-        padding: 20,
-        textDecoration: 'none',
-        color: 'inherit',
-        display: 'block',
+        padding: '14px 18px 16px',
+        opacity: isLocked ? 0.75 : 1,
+        cursor: isLocked ? 'default' : 'pointer',
       }}
     >
-      <div style={{ display: 'flex', alignItems: 'baseline', gap: 10 }}>
-        <span
-          className="display"
-          style={{
-            fontSize: 48,
-            fontWeight: 400,
-            color: 'var(--ink-4)',
-            letterSpacing: -2,
-            lineHeight: 1,
-          }}
-        >
-          {numberLabel}
-        </span>
-        <div style={{ minWidth: 0, flex: 1 }}>
-          <div style={{ fontSize: 16, fontWeight: 600 }}>{m.name}</div>
-          <div className="mono" style={{ fontSize: 12, color: 'var(--ink-3)' }}>
-            Weeks {m.weeks} · {m.done}/{m.total} complete
+      {/* Header row */}
+      <div className="flex items-start gap-3">
+        <div className="flex-1 min-w-0">
+          <div className="caps">Module #{m.number}</div>
+          <div className="mt-[3px] text-[16px] font-semibold leading-snug">{m.name}</div>
+          <div className="mt-0.5 text-[12.5px]" style={{ color: 'var(--ink-2)' }}>
+            {m.subtitle}
           </div>
         </div>
+        <div className="text-[12px] whitespace-nowrap" style={{ color: 'var(--ink-3)' }}>
+          {m.weeks}
+        </div>
       </div>
-      <div
-        style={{
-          height: 6,
-          background: 'var(--bg-3)',
-          borderRadius: 99,
-          marginTop: 16,
-          overflow: 'hidden',
-        }}
-      >
+
+      {/* Progress bar row */}
+      <div className="flex items-center gap-3 mt-[14px]">
+        <div className="bar flex-1">
+          <div className={`fill${isDone ? ' done' : ''}`} style={fillStyle} />
+        </div>
         <div
-          style={{
-            width: `${Math.max(0, Math.min(100, m.pct))}%`,
-            height: '100%',
-            background: barBackground,
-          }}
-        />
+          className="num text-[11.5px] font-semibold tabular-nums"
+          style={{ color: pctColor }}
+        >
+          {m.pct}%
+        </div>
       </div>
+
+      {/* Status row */}
+      <div className="flex flex-col md:flex-row md:items-center gap-2 md:gap-2.5 mt-2.5">
+        <div className="flex items-center gap-2.5 min-w-0">
+          {isDone && <span className="chip chip-done">Completed</span>}
+          {m.state === 'prog' && <span className="chip chip-inprog">In progress</span>}
+          {isLocked && (
+            <span className="chip chip-locked inline-flex items-center gap-1">
+              <IconLock size={11} stroke={2} /> Locked
+            </span>
+          )}
+          <span
+            className="text-[12px] truncate"
+            style={{ color: 'var(--ink-2)' }}
+          >
+            {m.meta}
+          </span>
+        </div>
+        <div className="flex-1 hidden md:block" />
+        {m.timestamp && (
+          <span className="text-[11.5px]" style={{ color: 'var(--ink-3)' }}>
+            {m.timestamp}
+          </span>
+        )}
+      </div>
+    </div>
+  );
+
+  if (isLocked) {
+    return <div className="block no-underline text-current">{content}</div>;
+  }
+
+  return (
+    <Link to={m.href} className="block no-underline text-current">
+      {content}
     </Link>
   );
 }

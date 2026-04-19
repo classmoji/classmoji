@@ -19,24 +19,23 @@ export function ModulesScreen({
   emptyState,
 }: ModulesScreenProps) {
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+    <div className="flex flex-col gap-3.5">
+      <div className="flex items-center gap-2.5">
         <h1
-          className="display"
-          style={{ margin: 0, fontSize: 28, fontWeight: 500, letterSpacing: -0.4 }}
+          className="display m-0"
+          style={{ fontSize: 28, fontWeight: 500, letterSpacing: -0.4 }}
         >
           {title}
         </h1>
-        <div style={{ flex: 1 }} />
+        <div className="flex-1" />
         {headerActions}
       </div>
 
       {modules.length === 0 ? (
         <div
-          className="card"
+          className="panel text-center"
           style={{
             padding: '28px 18px',
-            textAlign: 'center',
             color: 'var(--ink-3)',
             fontSize: 13,
           }}
@@ -44,13 +43,7 @@ export function ModulesScreen({
           {emptyState ?? 'No modules available yet.'}
         </div>
       ) : (
-        <div
-          style={{
-            display: 'grid',
-            gridTemplateColumns: 'repeat(2, 1fr)',
-            gap: 14,
-          }}
-        >
+        <div className="reveal-enter flex flex-col gap-2.5">
           {modules.map(m => (
             <ModuleCardItem key={m.id} module={m} />
           ))}

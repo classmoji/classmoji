@@ -75,10 +75,13 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
       id: m.id,
       title: m.title,
       slug: m.slug,
+      updated_at: m.updated_at,
       assignments: m.assignments.map(a => ({
         id: a.id,
         student_deadline: a.student_deadline,
       })),
+      pages: m.pages,
+      slides: m.slides,
     })),
     {
       rolePrefix: 'student',
