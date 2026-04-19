@@ -152,10 +152,9 @@ const SidebarNavItem = ({
   }
 
   return (
-    // eslint-disable-next-line jsx-a11y/anchor-is-valid
-    <a className={className} onClick={onClick} role="button" tabIndex={0}>
+    <button type="button" className={className} onClick={onClick}>
       {body}
-    </a>
+    </button>
   );
 };
 
@@ -229,7 +228,7 @@ const ClassPill = ({ classroom, memberships, currentMembershipId }: ClassPillPro
             top: 'calc(100% + 4px)',
             left: 0,
             right: 0,
-            background: 'white',
+            background: 'var(--panel)',
             border: '1px solid var(--line)',
             borderRadius: 12,
             boxShadow: 'var(--shadow-lg)',

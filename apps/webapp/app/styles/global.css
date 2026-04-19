@@ -489,10 +489,10 @@ label {
 }
 .user-card .av {
   width: 34px; height: 34px; border-radius: 50%;
-  background: linear-gradient(135deg, #f8c9c4, #e9a097);
-  color: #7a2c1c; display: grid; place-items: center;
+  background: linear-gradient(135deg, var(--accent-soft), var(--accent-soft-2));
+  color: var(--accent-ink); display: grid; place-items: center;
   font-size: 11px; font-weight: 600;
-  border: 1px solid rgba(0,0,0,0.04);
+  border: 1px solid var(--line);
 }
 .user-card .name { font-size: 13.5px; font-weight: 500; color: var(--ink-0); line-height: 1.2; }
 .user-card .role { font-size: 11.5px; color: var(--ink-3); }
@@ -519,7 +519,7 @@ label {
 .nav {
   display: flex; flex-direction: column; gap: 1px;
 }
-.nav a {
+.nav a, .nav button {
   display: flex; align-items: center; gap: 10px;
   padding: 7px 10px;
   border-radius: 8px;
@@ -527,9 +527,14 @@ label {
   color: var(--ink-1);
   cursor: pointer;
   text-decoration: none;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: 0;
   transition: background 100ms, color 100ms;
 }
-.nav a:hover { background: var(--nav-hover); }
+.nav a:hover, .nav button:hover { background: var(--nav-hover); }
+.nav a:focus-visible, .nav button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .nav a.active { background: var(--accent-soft); color: var(--accent-ink); font-weight: 600; }
 .nav a svg { width: 16px; height: 16px; color: var(--ink-2); flex-shrink: 0; }
 .nav a.active svg { color: var(--accent-ink); }
