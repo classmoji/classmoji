@@ -7,35 +7,24 @@
   --color-lightGray: #f9f9f9;
 
   /*
-   * Primary Color - GitLab-style orange
+   * Primary Color — mapped to accent token (set by Tweaks panel).
    */
-  --color-primary: #e24329;
-  --color-primary-50: #fdecea;
-  --color-primary-100: #fbd6d0;
-  --color-primary-200: #f3a596;
-  --color-primary-300: #eb7b67;
-  --color-primary-400: #e85a41;
-  --color-primary-500: #e24329;
-  --color-primary-600: #c2371f;
-  --color-primary-700: #a02a14;
-  --color-primary-800: #7a1f0e;
-  --color-primary-900: #571509;
+  --color-primary: var(--accent);
+  --color-primary-50: var(--accent-soft);
+  --color-primary-100: var(--accent-soft-2);
+  --color-primary-500: var(--accent);
+  --color-primary-600: var(--accent-hover);
+  --color-primary-700: var(--accent-ink);
 
   /*
-   * Secondary Color — same scale as primary so existing secondary-* utilities
-   * keep working visually until they're migrated in later phases.
+   * Secondary Color — same accent mapping.
    */
-  --color-secondary: #e24329;
-  --color-secondary-50: #fdecea;
-  --color-secondary-100: #fbd6d0;
-  --color-secondary-200: #f3a596;
-  --color-secondary-300: #eb7b67;
-  --color-secondary-400: #e85a41;
-  --color-secondary-500: #e24329;
-  --color-secondary-600: #c2371f;
-  --color-secondary-700: #a02a14;
-  --color-secondary-800: #7a1f0e;
-  --color-secondary-900: #571509;
+  --color-secondary: var(--accent);
+  --color-secondary-50: var(--accent-soft);
+  --color-secondary-100: var(--accent-soft-2);
+  --color-secondary-500: var(--accent);
+  --color-secondary-600: var(--accent-hover);
+  --color-secondary-700: var(--accent-ink);
 
   /*
    * Neutral surface tokens — reference the raw CSS vars defined in global.css :root
@@ -56,6 +45,21 @@
   --color-line: var(--line);
   --color-line-2: var(--line-2);
   --color-line-strong: var(--line-strong);
+  --color-line-cool: var(--line-cool);
+
+  /* Pastel surface tokens */
+  --color-paper: var(--paper);
+  --color-panel: var(--panel);
+  --color-panel-hover: var(--panel-hover);
+  --color-sidebar: var(--sidebar);
+  --color-nav-hover: var(--nav-hover);
+
+  /* Accent (driven by Tweaks panel) */
+  --color-accent: var(--accent);
+  --color-accent-hover: var(--accent-hover);
+  --color-accent-soft: var(--accent-soft);
+  --color-accent-soft-2: var(--accent-soft-2);
+  --color-accent-ink: var(--accent-ink);
 
   /* Accent palettes — exposed as Tailwind utilities (bg-mint, text-peach-ink, etc.) */
   --color-violet: var(--violet);
@@ -65,22 +69,36 @@
   --color-mint: var(--mint);
   --color-mint-soft: var(--mint-soft);
   --color-mint-ink: var(--mint-ink);
+  --color-mint-bg: var(--mint-bg);
+  --color-mint-bord: var(--mint-bord);
 
   --color-peach: var(--peach);
   --color-peach-soft: var(--peach-soft);
   --color-peach-ink: var(--peach-ink);
+  --color-peach-bg: var(--peach-bg);
+  --color-peach-bord: var(--peach-bord);
 
   --color-sky: var(--sky);
   --color-sky-soft: var(--sky-soft);
   --color-sky-ink: var(--sky-ink);
+  --color-sky-bg: var(--sky-bg);
+  --color-sky-bord: var(--sky-bord);
+
+  --color-lilac-bg: var(--lilac-bg);
+  --color-lilac-bord: var(--lilac-bord);
+  --color-lilac-ink: var(--lilac-ink);
 
   --color-rose: var(--rose);
   --color-rose-soft: var(--rose-soft);
   --color-rose-ink: var(--rose-ink);
+  --color-rose-bg: var(--rose-bg);
+  --color-rose-bord: var(--rose-bord);
 
   --color-amber: var(--amber);
   --color-amber-soft: var(--amber-soft);
   --color-amber-ink: var(--amber-ink);
+  --color-amber-bg: var(--amber-bg);
+  --color-amber-bord: var(--amber-bord);
 
   /* Adjusted text sizes */
   --text-xs: 0.6875rem;   /* 11px */
@@ -100,7 +118,7 @@
   /* Font families — GitLab-style developer tool stack */
   --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
   --font-mono: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, Monaco, Consolas, monospace;
-  --font-display: 'Inter', -apple-system, sans-serif;
+  --font-display: 'Instrument Serif', 'Cormorant Garamond', Georgia, serif;
 }
 
 @variant dark (&:where(.dark, .dark *));
