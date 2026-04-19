@@ -565,6 +565,7 @@ html[data-theme="dark"] .evt:hover { filter: brightness(1.15); }
   min-height: 32px;
 }
 .btn:hover { background: var(--panel-hover); border-color: var(--line-strong); }
+.btn:active { background: var(--line); }
 
 .btn-primary {
   background: var(--accent); color: #fff;
@@ -599,7 +600,7 @@ html[data-theme="dark"] .bar .fill.done { background: #4fd47d; }
   font-size: 10.5px; font-weight: 600;
   font-family: var(--font-sans);
   letter-spacing: 0;
-  color: #3a2b1a;
+  color: #ffffff;
   flex-shrink: 0;
 }
 
