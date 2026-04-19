@@ -707,3 +707,147 @@ html[data-theme="dark"] .bar .fill.done { background: #4fd47d; }
   0%, 100% { opacity: 1; transform: scale(1); }
   50%      { opacity: 0.3; transform: scale(0.7); }
 }
+
+/* ============================================================
+   Tweaks FAB + Panel (accent + theme picker)
+   ============================================================ */
+.tweaks-fab {
+  position: fixed;
+  bottom: 20px;
+  right: 20px;
+  z-index: 1000;
+  width: 44px; height: 44px;
+  border-radius: 50%;
+  background: var(--panel);
+  border: 1px solid var(--line-2);
+  box-shadow: var(--shadow-float);
+  display: grid; place-items: center;
+  color: var(--ink-1);
+  cursor: pointer;
+  transition: transform 120ms, border-color 120ms;
+}
+.tweaks-fab:hover { transform: scale(1.05); border-color: var(--accent); }
+.tweaks-fab svg { width: 18px; height: 18px; }
+
+.tweaks-panel {
+  position: fixed;
+  bottom: 76px;
+  right: 20px;
+  z-index: 1000;
+  width: 300px;
+  background: var(--panel);
+  border: 1px solid var(--line-2);
+  border-radius: 14px;
+  box-shadow: var(--shadow-float);
+  overflow: hidden;
+  animation: tweaks-in 180ms cubic-bezier(0.2,0.8,0.2,1);
+}
+@keyframes tweaks-in {
+  from { opacity: 0; transform: translateY(8px) scale(0.98); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+.tweaks-head {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--line-cool);
+}
+.tweaks-head .t-title {
+  font-family: var(--font-display);
+  font-size: 17px;
+  color: var(--ink-0);
+}
+.tweaks-head .t-close {
+  color: var(--ink-3);
+  padding: 4px;
+  border-radius: 6px;
+  display: grid; place-items: center;
+}
+.tweaks-head .t-close:hover { background: var(--nav-hover); color: var(--ink-0); }
+.tweaks-body { padding: 14px 14px 16px; display: flex; flex-direction: column; gap: 16px; }
+
+.tw-row .tw-label {
+  font-size: 11px; font-weight: 600; letter-spacing: 0.06em;
+  text-transform: uppercase; color: var(--ink-3);
+  margin-bottom: 8px;
+}
+.tw-swatches {
+  display: grid; grid-template-columns: repeat(6, 1fr);
+  gap: 8px;
+}
+.tw-swatch {
+  aspect-ratio: 1;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  background: var(--sw);
+  cursor: pointer;
+  position: relative;
+  transition: transform 120ms, border-color 120ms;
+}
+.tw-swatch::after {
+  content: '';
+  position: absolute; inset: 2px;
+  border-radius: 50%;
+  border: 2px solid var(--panel);
+  pointer-events: none;
+}
+.tw-swatch:hover { transform: scale(1.08); }
+.tw-swatch.active { border-color: var(--ink-0); transform: scale(1.08); }
+
+.tw-segment {
+  display: grid; grid-template-columns: 1fr 1fr;
+  padding: 3px;
+  background: var(--nav-hover);
+  border-radius: 10px;
+  gap: 2px;
+}
+.tw-seg-btn {
+  display: flex; align-items: center; justify-content: center; gap: 6px;
+  padding: 7px 10px;
+  border-radius: 7px;
+  font-size: 12.5px;
+  color: var(--ink-2);
+  cursor: pointer;
+  transition: background 100ms, color 100ms;
+}
+.tw-seg-btn svg { width: 14px; height: 14px; }
+.tw-seg-btn.active {
+  background: var(--panel);
+  color: var(--ink-0);
+  box-shadow: 0 1px 2px rgba(0,0,0,0.06);
+  font-weight: 500;
+}
+
+.tw-custom {
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 10px;
+  border: 1px dashed var(--line-2);
+  border-radius: 10px;
+}
+.tw-custom input[type="color"] {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 28px; height: 28px;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  background: none;
+  padding: 0;
+}
+.tw-custom input[type="color"]::-webkit-color-swatch-wrapper { padding: 0; }
+.tw-custom input[type="color"]::-webkit-color-swatch { border: 1px solid var(--line-2); border-radius: 6px; }
+.tw-custom .tw-custom-label {
+  font-size: 12.5px; color: var(--ink-2); flex: 1;
+}
+.tw-custom .tw-hex {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--ink-1);
+  text-transform: uppercase;
+}
+
+.tw-foot {
+  font-size: 11px; color: var(--ink-3);
+  padding: 10px 14px;
+  border-top: 1px solid var(--line-cool);
+  background: var(--panel-tint);
+}

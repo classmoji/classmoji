@@ -36,6 +36,7 @@ import { FetcherContext, UserContext } from '~/contexts';
 import RenderErrorBoundary from './components/ErrorBoundary';
 import { SyllabusBotRoot } from './components/features/syllabus-bot';
 import ImpersonationBanner from './components/features/admin/ImpersonationBanner';
+import TweaksPanel from './components/features/tweaks/TweaksPanel';
 
 import relativeTime from 'dayjs/plugin/relativeTime';
 import isSameOrBefore from 'dayjs/plugin/isSameOrBefore';
@@ -355,11 +356,20 @@ const App = ({ loaderData }: Route.ComponentProps) => {
             __html: `
               (function() {
                 try {
-                  var isDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-                  if (isDark) {
-                    document.documentElement.classList.add('dark');
+                  var root = document.documentElement;
+                  var saved = null;
+                  try { saved = JSON.parse(localStorage.getItem('cm-tweaks') || 'null'); } catch (e) {}
+                  var theme;
+                  if (saved && (saved.theme === 'light' || saved.theme === 'dark')) {
+                    theme = saved.theme;
+                  } else {
+                    theme = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
                   }
-                } catch (error: unknown) { console.log(error); }
+                  root.setAttribute('data-theme', theme);
+                  if (theme === 'dark') root.classList.add('dark');
+                  var accent = (saved && typeof saved.accent === 'string') ? saved.accent : '#6d5efc';
+                  root.style.setProperty('--accent', accent);
+                } catch (error) { /* noop */ }
               })();
             `,
           }}
@@ -400,6 +410,7 @@ const App = ({ loaderData }: Route.ComponentProps) => {
                   session={session}
                 />
                 <Outlet />
+                <TweaksPanel />
                 <SyllabusBotRoot />
                 <ScrollRestoration />
                 <Scripts />
