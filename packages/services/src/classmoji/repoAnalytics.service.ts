@@ -332,6 +332,160 @@ export async function linkContributor(
 // Cron helper
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Team aggregation
+// ---------------------------------------------------------------------------
+
+/**
+ * Shape of a stored snapshot row plus its associated repository name/id — the
+ * subset we expose to the Team Contributions view. Keeps `repoAnalytics.types`
+ * Prisma-free; we redeclare here rather than importing Prisma types.
+ */
+export type TeamRepoSnapshot = {
+  repository_id: string;
+  repository_name: string;
+  repository_assignment_id: string;
+  fetched_at: string;
+  stale: boolean;
+  error: string | null;
+  total_commits: number;
+  total_additions: number;
+  total_deletions: number;
+  first_commit_at: string | null;
+  last_commit_at: string | null;
+  commits: CommitRecord[];
+  contributors: ContributorRecord[];
+  languages: LanguagesMap;
+  pr_summary: PRSummary;
+};
+
+export type TeamAggregate = {
+  commits: CommitRecord[];
+  contributors: ContributorRecord[];
+  total_additions: number;
+  total_deletions: number;
+  snapshotsByRepoId: Record<string, TeamRepoSnapshot>;
+};
+
+/**
+ * Aggregate the latest analytics snapshot across every repository owned by a
+ * team. For each repo we pick its most recent `RepoAnalyticsSnapshot` (ordered
+ * by `fetched_at`) and merge:
+ *   - `commits` via simple concatenation
+ *   - `contributors` summed by `login` (commits/additions/deletions); `user_id`
+ *     preserved from the first snapshot that had one.
+ *
+ * Returns `null` when the team owns no repositories with any snapshots.
+ */
+export async function aggregateForTeam(teamId: string): Promise<TeamAggregate | null> {
+  const prisma = getPrisma();
+
+  const repos = await prisma.repository.findMany({
+    where: { team_id: teamId },
+    select: {
+      id: true,
+      name: true,
+      assignments: {
+        select: {
+          id: true,
+          analytics_snapshot: true,
+        },
+      },
+    },
+  });
+
+  if (repos.length === 0) return null;
+
+  const snapshotsByRepoId: Record<string, TeamRepoSnapshot> = {};
+  const commits: CommitRecord[] = [];
+  const contributorMap = new Map<string, ContributorRecord>();
+  let totalAdditions = 0;
+  let totalDeletions = 0;
+
+  for (const repo of repos) {
+    // Pick the latest snapshot across this repo's RepositoryAssignments.
+    let latestSnapshot:
+      | (NonNullable<typeof repo.assignments[number]['analytics_snapshot']> & {
+          repository_assignment_id: string;
+        })
+      | null = null;
+
+    for (const ra of repo.assignments) {
+      const snap = ra.analytics_snapshot;
+      if (!snap) continue;
+      if (
+        !latestSnapshot ||
+        new Date(snap.fetched_at).getTime() > new Date(latestSnapshot.fetched_at).getTime()
+      ) {
+        latestSnapshot = { ...snap, repository_assignment_id: ra.id };
+      }
+    }
+
+    if (!latestSnapshot) continue;
+
+    const repoCommits = (latestSnapshot.commits ?? []) as unknown as CommitRecord[];
+    const repoContribs = (latestSnapshot.contributors ?? []) as unknown as ContributorRecord[];
+    const repoLangs = (latestSnapshot.languages ?? {}) as unknown as LanguagesMap;
+    const repoPr = (latestSnapshot.pr_summary ?? {
+      open: 0,
+      merged: 0,
+      closed: 0,
+    }) as unknown as PRSummary;
+
+    snapshotsByRepoId[repo.id] = {
+      repository_id: repo.id,
+      repository_name: repo.name,
+      repository_assignment_id: latestSnapshot.repository_assignment_id,
+      fetched_at: latestSnapshot.fetched_at.toISOString(),
+      stale: latestSnapshot.stale,
+      error: latestSnapshot.error,
+      total_commits: latestSnapshot.total_commits,
+      total_additions: latestSnapshot.total_additions,
+      total_deletions: latestSnapshot.total_deletions,
+      first_commit_at: latestSnapshot.first_commit_at
+        ? latestSnapshot.first_commit_at.toISOString()
+        : null,
+      last_commit_at: latestSnapshot.last_commit_at
+        ? latestSnapshot.last_commit_at.toISOString()
+        : null,
+      commits: repoCommits,
+      contributors: repoContribs,
+      languages: repoLangs,
+      pr_summary: repoPr,
+    };
+
+    commits.push(...repoCommits);
+    totalAdditions += latestSnapshot.total_additions;
+    totalDeletions += latestSnapshot.total_deletions;
+
+    for (const c of repoContribs) {
+      const existing = contributorMap.get(c.login);
+      if (existing) {
+        existing.commits += c.commits;
+        existing.additions += c.additions;
+        existing.deletions += c.deletions;
+        if (!existing.user_id && c.user_id) existing.user_id = c.user_id;
+      } else {
+        contributorMap.set(c.login, { ...c });
+      }
+    }
+  }
+
+  if (Object.keys(snapshotsByRepoId).length === 0) return null;
+
+  const contributors = Array.from(contributorMap.values()).sort(
+    (a, b) => b.commits - a.commits
+  );
+
+  return {
+    commits,
+    contributors,
+    total_additions: totalAdditions,
+    total_deletions: totalDeletions,
+    snapshotsByRepoId,
+  };
+}
+
 /**
  * Return RepositoryAssignment IDs for assignments whose `student_deadline` is
  * within the last {@link ACTIVE_WINDOW_DAYS} days or in the future. Used by

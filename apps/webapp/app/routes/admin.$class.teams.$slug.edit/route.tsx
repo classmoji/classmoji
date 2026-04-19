@@ -1,8 +1,9 @@
-import { useParams } from 'react-router';
+import { useNavigate, useParams } from 'react-router';
 import _ from 'lodash';
 import { useState } from 'react';
 
 import { Card, Button, Drawer, Table, Select, Tag } from 'antd';
+import { BarChartOutlined } from '@ant-design/icons';
 
 import { useRouteDrawer, useGlobalFetcher } from '~/hooks';
 import { ClassmojiService } from '@classmoji/services';
@@ -39,7 +40,8 @@ const AdminSingleTeamView = ({ loaderData }: Route.ComponentProps) => {
   const [membersToAdd, setMembersToAdd] = useState<string[]>([]);
   const [tagsToAdd, setTagsToAdd] = useState<string[]>([]);
   const { opened: _opened, close, open } = useRouteDrawer({});
-  const { slug } = useParams();
+  const { class: classSlug, slug } = useParams();
+  const navigate = useNavigate();
   const { fetcher, notify } = useGlobalFetcher();
 
   const onAddStudents = () => {
@@ -133,7 +135,26 @@ const AdminSingleTeamView = ({ loaderData }: Route.ComponentProps) => {
   ];
 
   return (
-    <Drawer onClose={close} title={`@${slug}`} open={Boolean(open)} width="50%">
+    <Drawer
+      onClose={close}
+      title={
+        <div className="flex items-center justify-between w-full pr-6">
+          <span>@{slug}</span>
+          <Button
+            size="small"
+            icon={<BarChartOutlined />}
+            onClick={() =>
+              navigate(`/admin/${classSlug}/teams/${slug}/contributions`)
+            }
+            data-testid="team-contributions-tab-link"
+          >
+            Contributions
+          </Button>
+        </div>
+      }
+      open={Boolean(open)}
+      width="50%"
+    >
       <p className="pb-2 font-semibold text-xl">Tags</p>
 
       <Card className="mb-8 ">

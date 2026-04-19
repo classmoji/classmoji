@@ -1,5 +1,6 @@
 import { Outlet, useNavigate } from 'react-router';
-import { Table, Tag } from 'antd';
+import { Button, Table, Tag } from 'antd';
+import { BarChartOutlined } from '@ant-design/icons';
 import { useState } from 'react';
 
 import {
@@ -112,10 +113,20 @@ const AdminTeams = ({ loaderData }: Route.ComponentProps) => {
       width: '20%',
       render: (_: unknown, team: Team) => {
         return (
-          <TableActionButtons
-            onView={() => navigate(`./${team.slug}/edit`)}
-            onDelete={() => onDeleteTeam(team)}
-          />
+          <div className="flex items-center gap-1">
+            <Button
+              size="small"
+              type="text"
+              icon={<BarChartOutlined />}
+              onClick={() => navigate(`./${team.slug}/contributions`)}
+              data-testid={`team-contributions-link-${team.slug}`}
+              title="Contributions"
+            />
+            <TableActionButtons
+              onView={() => navigate(`./${team.slug}/edit`)}
+              onDelete={() => onDeleteTeam(team)}
+            />
+          </div>
         );
       },
     },
