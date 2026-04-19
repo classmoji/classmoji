@@ -66,6 +66,18 @@ export function deriveAccent(hex: string): AccentTints {
   };
 }
 
+// Dark-mode tint derivation — analogous to the bundle's hardcoded violet-dark
+// pair (`--accent-soft: #23204a`, `--accent-ink: #b7b0ff`). Mixing with black
+// gives the muted dark "soft" surfaces; mixing with white gives the pastel
+// "ink" used for text on dark panels.
+function deriveDarkTints(hex: string): { soft: string; soft2: string; ink: string } {
+  return {
+    soft: mix(hex, '#000000', 0.78),
+    soft2: mix(hex, '#000000', 0.65),
+    ink: mix(hex, '#ffffff', 0.5),
+  };
+}
+
 export function applyTweaks({ theme, accent }: TweaksState): void {
   if (typeof document === 'undefined') return;
   const root = document.documentElement;
@@ -82,10 +94,10 @@ export function applyTweaks({ theme, accent }: TweaksState): void {
     style.setProperty('--accent-soft-2', a.soft2);
     style.setProperty('--accent-ink', a.ink);
   } else {
-    // Dark mode: let CSS theme tokens (html.dark) handle these tints
-    style.removeProperty('--accent-soft');
-    style.removeProperty('--accent-soft-2');
-    style.removeProperty('--accent-ink');
+    const dark = deriveDarkTints(a.hex);
+    style.setProperty('--accent-soft', dark.soft);
+    style.setProperty('--accent-soft-2', dark.soft2);
+    style.setProperty('--accent-ink', dark.ink);
   }
 }
 
