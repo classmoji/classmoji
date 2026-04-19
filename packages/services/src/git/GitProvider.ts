@@ -88,6 +88,23 @@ export class GitProvider {
     throw new Error('listCommits() must be implemented by subclass');
   }
 
+  /**
+   * Get the GitHub contributor statistics (weekly additions/deletions per author).
+   * GitHub returns 202 while the stats cache warms; implementations should surface that
+   * as `{ pending: true }` so callers can retry later.
+   * @param {string} org - Organization login
+   * @param {string} repo - Repository name
+   * @returns {Promise<{ pending: true } | ContributorRecord[]>}
+   */
+  async getContributorStats(
+    _org: string,
+    _repo: string
+  ): Promise<
+    { pending: true } | import('../classmoji/repoAnalytics.types.ts').ContributorRecord[]
+  > {
+    throw new Error('getContributorStats() must be implemented by subclass');
+  }
+
   async createBranch(org: string, repo: string, branch: string, sha: string): Promise<void> {
     throw new Error('createBranch() must be implemented by subclass');
   }

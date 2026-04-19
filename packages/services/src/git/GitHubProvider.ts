@@ -3,7 +3,10 @@ import { createAppAuth } from '@octokit/auth-app';
 import { createHmac, timingSafeEqual } from 'crypto';
 import jwt from 'jsonwebtoken';
 import { GitProvider } from './GitProvider.ts';
-import type { CommitRecord } from '../classmoji/repoAnalytics.types.ts';
+import type {
+  CommitRecord,
+  ContributorRecord,
+} from '../classmoji/repoAnalytics.types.ts';
 
 import dotenv from 'dotenv';
 dotenv.config();
@@ -329,6 +332,36 @@ export class GitHubProvider extends GitProvider {
       }
     }
     return commits;
+  }
+
+  /**
+   * Fetch GitHub's contributor stats (weekly additions/deletions per author).
+   * GitHub returns HTTP 202 while the stats cache is warming; we surface that as
+   * `{ pending: true }` so callers can retry later instead of falsely reporting zero contributors.
+   * @param {string} org - Organization login
+   * @param {string} repo - Repository name
+   * @returns {Promise<{ pending: true } | ContributorRecord[]>}
+   */
+  async getContributorStats(
+    org: string,
+    repo: string
+  ): Promise<{ pending: true } | ContributorRecord[]> {
+    const octokit = await this.#getOctokit();
+    const res = await octokit.request('GET /repos/{owner}/{repo}/stats/contributors', {
+      owner: org,
+      repo,
+    });
+    if (res.status === 202) return { pending: true };
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    return ((res.data as any[]) ?? []).map((row: any) => ({
+      login: row.author?.login ?? 'unknown',
+      user_id: null,
+      commits: row.total,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      additions: (row.weeks ?? []).reduce((s: number, w: any) => s + (w.a ?? 0), 0),
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      deletions: (row.weeks ?? []).reduce((s: number, w: any) => s + (w.d ?? 0), 0),
+    }));
   }
 
   /**

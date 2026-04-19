@@ -1,5 +1,8 @@
 import { GitProvider } from './GitProvider.ts';
-import type { CommitRecord } from '../classmoji/repoAnalytics.types.ts';
+import type {
+  CommitRecord,
+  ContributorRecord,
+} from '../classmoji/repoAnalytics.types.ts';
 
 /**
  * GitLab adapter - implements GitProvider interface.
@@ -155,6 +158,21 @@ export class GitLabProvider extends GitProvider {
     // TODO: GET /api/v4/projects/:id/repository/commits
     throw new Error('GitLabProvider.listCommits() not implemented');
   }
+
+  /**
+   * Get contributor statistics for a GitLab project.
+   * @param {string} group - Group path
+   * @param {string} project - Project name
+   * @returns {Promise<{ pending: true } | ContributorRecord[]>}
+   */
+  async getContributorStats(
+    _group: string,
+    _project: string
+  ): Promise<{ pending: true } | ContributorRecord[]> {
+    // TODO: GET /api/v4/projects/:id/repository/contributors
+    throw new Error('GitLabProvider.getContributorStats() not implemented');
+  }
+
 
   /**
    * Create a new branch
