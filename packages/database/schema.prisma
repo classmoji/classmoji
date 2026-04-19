@@ -478,12 +478,14 @@ model RepoAnalyticsSnapshot {
   total_deletions          Int      @default(0)
   first_commit_at          DateTime?
   last_commit_at           DateTime?
-  commits                  Json
-  contributors             Json
-  languages                Json
-  pr_summary               Json
+  commits                  Json     @default("[]")
+  contributors             Json     @default("[]")
+  languages                Json     @default("{}")
+  pr_summary               Json     @default("{}")
   stale                    Boolean  @default(false)
   error                    String?
+  created_at               DateTime @default(now())
+  updated_at               DateTime @default(now()) @updatedAt
 
   @@index([fetched_at])
   @@map("repo_analytics_snapshots")

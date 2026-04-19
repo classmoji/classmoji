@@ -1,0 +1,7 @@
+-- AlterTable
+ALTER TABLE "repo_analytics_snapshots" ADD COLUMN     "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ADD COLUMN     "updated_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ALTER COLUMN "commits" SET DEFAULT '[]',
+ALTER COLUMN "contributors" SET DEFAULT '[]',
+ALTER COLUMN "languages" SET DEFAULT '{}',
+ALTER COLUMN "pr_summary" SET DEFAULT '{}';
