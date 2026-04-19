@@ -6,6 +6,8 @@ import {
   averageCommitQuality,
   busFactor,
   dumpAndRun,
+  aggregateByContributor,
+  commitsPerDayByContributor,
 } from '../repoAnalytics.flags.ts';
 import type {
   CommitRecord,
@@ -169,5 +171,99 @@ describe('dumpAndRun', () => {
       commit({ sha: 'early', ts: '2025-12-01T00:00:00Z' }),
     ];
     expect(dumpAndRun(cs, deadline)).toBe(false);
+  });
+});
+
+describe('aggregateByContributor', () => {
+  it('returns empty array when no commits', () => {
+    expect(aggregateByContributor([])).toEqual([]);
+  });
+  it('aggregates commits from 2 authors and sorts descending by commits', () => {
+    const cs = [
+      commit({ sha: '1', author_login: 'alice' }),
+      commit({ sha: '2', author_login: 'bob' }),
+      commit({ sha: '3', author_login: 'alice' }),
+    ];
+    const rows = aggregateByContributor(cs);
+    expect(rows).toHaveLength(2);
+    expect(rows[0]!.login).toBe('alice');
+    expect(rows[0]!.commits).toBe(2);
+    expect(rows[1]!.login).toBe('bob');
+    expect(rows[1]!.commits).toBe(1);
+  });
+  it('buckets commits with null author_login under "unknown"', () => {
+    const cs = [
+      commit({ sha: '1', author_login: null }),
+      commit({ sha: '2', author_login: 'alice' }),
+      commit({ sha: '3', author_login: null }),
+    ];
+    const rows = aggregateByContributor(cs);
+    const unknown = rows.find((r) => r.login === 'unknown');
+    expect(unknown).toBeDefined();
+    expect(unknown!.commits).toBe(2);
+  });
+  it('sums additions and deletions per contributor', () => {
+    const cs = [
+      commit({ sha: '1', author_login: 'alice', additions: 10, deletions: 1 }),
+      commit({ sha: '2', author_login: 'alice', additions: 5, deletions: 2 }),
+      commit({ sha: '3', author_login: 'bob', additions: 3, deletions: 4 }),
+    ];
+    const rows = aggregateByContributor(cs);
+    const alice = rows.find((r) => r.login === 'alice')!;
+    const bob = rows.find((r) => r.login === 'bob')!;
+    expect(alice.additions).toBe(15);
+    expect(alice.deletions).toBe(3);
+    expect(bob.additions).toBe(3);
+    expect(bob.deletions).toBe(4);
+  });
+});
+
+describe('commitsPerDayByContributor', () => {
+  it('returns empty when no commits', () => {
+    expect(commitsPerDayByContributor([])).toEqual([]);
+  });
+  it('buckets by UTC day and stacks by contributor', () => {
+    const cs = [
+      commit({ sha: '1', author_login: 'alice', ts: '2026-04-15T10:00:00Z' }),
+      commit({ sha: '2', author_login: 'bob', ts: '2026-04-15T23:00:00Z' }),
+      commit({ sha: '3', author_login: 'alice', ts: '2026-04-16T01:00:00Z' }),
+    ];
+    const rows = commitsPerDayByContributor(cs);
+    expect(rows).toEqual([
+      { day: '2026-04-15', alice: 1, bob: 1 },
+      { day: '2026-04-16', alice: 1, bob: 0 },
+    ]);
+  });
+  it('fills intermediate days with zeros', () => {
+    const cs = [
+      commit({ sha: '1', author_login: 'alice', ts: '2026-04-15T00:00:00Z' }),
+      commit({ sha: '2', author_login: 'bob', ts: '2026-04-18T00:00:00Z' }),
+    ];
+    const rows = commitsPerDayByContributor(cs);
+    expect(rows.map((r) => r.day)).toEqual([
+      '2026-04-15',
+      '2026-04-16',
+      '2026-04-17',
+      '2026-04-18',
+    ]);
+    expect(rows[0]).toEqual({ day: '2026-04-15', alice: 1, bob: 0 });
+    expect(rows[1]).toEqual({ day: '2026-04-16', alice: 0, bob: 0 });
+    expect(rows[2]).toEqual({ day: '2026-04-17', alice: 0, bob: 0 });
+    expect(rows[3]).toEqual({ day: '2026-04-18', alice: 0, bob: 1 });
+  });
+  it('uses UTC date portion (slice 0,10) of ts', () => {
+    // 23:59Z on the 15th stays on the 15th even though many local tz would roll.
+    const cs = [
+      commit({ sha: '1', author_login: 'alice', ts: '2026-04-15T23:59:00Z' }),
+    ];
+    const rows = commitsPerDayByContributor(cs);
+    expect(rows).toEqual([{ day: '2026-04-15', alice: 1 }]);
+  });
+  it('buckets null author_login under "unknown"', () => {
+    const cs = [
+      commit({ sha: '1', author_login: null, ts: '2026-04-15T10:00:00Z' }),
+    ];
+    const rows = commitsPerDayByContributor(cs);
+    expect(rows).toEqual([{ day: '2026-04-15', unknown: 1 }]);
   });
 });

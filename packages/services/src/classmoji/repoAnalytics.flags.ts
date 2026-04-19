@@ -99,3 +99,99 @@ export function dumpAndRun(
   const TWENTY_FOUR_H = 24 * 60 * 60 * 1000;
   return msBefore < TWENTY_FOUR_H;
 }
+
+/**
+ * Aggregate commits by contributor login.
+ * Returns rows sorted descending by commit count.
+ * Commits with null author_login are bucketed under 'unknown'.
+ */
+export function aggregateByContributor(commits: CommitRecord[]): Array<{
+  login: string;
+  commits: number;
+  additions: number;
+  deletions: number;
+}> {
+  const acc = new Map<
+    string,
+    { login: string; commits: number; additions: number; deletions: number }
+  >();
+  for (const c of commits) {
+    const login = c.author_login ?? 'unknown';
+    const existing = acc.get(login);
+    if (existing) {
+      existing.commits += 1;
+      existing.additions += c.additions;
+      existing.deletions += c.deletions;
+    } else {
+      acc.set(login, {
+        login,
+        commits: 1,
+        additions: c.additions,
+        deletions: c.deletions,
+      });
+    }
+  }
+  return Array.from(acc.values()).sort((a, b) => b.commits - a.commits);
+}
+
+/**
+ * Per-day buckets stacked by contributor. Returns rows suitable for a
+ * Recharts stacked BarChart: `{ day: '2026-04-15', alice: 2, bob: 1, ... }`.
+ * - One row per UTC day between first and last commit (inclusive).
+ * - Missing authors in a day are filled with 0.
+ * - Day bucketing uses the ISO date slice (0,10) of `ts`.
+ * - Returns [] when no commits.
+ */
+export function commitsPerDayByContributor(
+  commits: CommitRecord[],
+): Array<{ day: string } & Record<string, number>> {
+  if (!commits.length) return [];
+
+  const logins = new Set<string>();
+  const counts = new Map<string, Map<string, number>>(); // day -> login -> count
+  let minDay = '9999-99-99';
+  let maxDay = '0000-00-00';
+
+  for (const c of commits) {
+    const day = c.ts.slice(0, 10);
+    const login = c.author_login ?? 'unknown';
+    logins.add(login);
+    if (day < minDay) minDay = day;
+    if (day > maxDay) maxDay = day;
+    let dayMap = counts.get(day);
+    if (!dayMap) {
+      dayMap = new Map<string, number>();
+      counts.set(day, dayMap);
+    }
+    dayMap.set(login, (dayMap.get(login) ?? 0) + 1);
+  }
+
+  // Iterate UTC days between minDay and maxDay.
+  const toMs = (d: string): number => {
+    const [y, m, dd] = d.split('-').map(Number) as [number, number, number];
+    return Date.UTC(y, m - 1, dd);
+  };
+  const fromMs = (ms: number): string => {
+    const d = new Date(ms);
+    const y = d.getUTCFullYear();
+    const m = String(d.getUTCMonth() + 1).padStart(2, '0');
+    const dd = String(d.getUTCDate()).padStart(2, '0');
+    return `${y}-${m}-${dd}`;
+  };
+
+  const startMs = toMs(minDay);
+  const endMs = toMs(maxDay);
+  const DAY_MS = 86400000;
+
+  const rows: Array<{ day: string } & Record<string, number>> = [];
+  for (let ms = startMs; ms <= endMs; ms += DAY_MS) {
+    const day = fromMs(ms);
+    const dayMap = counts.get(day);
+    const row: Record<string, string | number> = { day };
+    for (const login of logins) {
+      row[login] = dayMap?.get(login) ?? 0;
+    }
+    rows.push(row as { day: string } & Record<string, number>);
+  }
+  return rows;
+}

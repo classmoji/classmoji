@@ -62,4 +62,6 @@ export {
   averageCommitQuality,
   busFactor,
   dumpAndRun,
+  aggregateByContributor,
+  commitsPerDayByContributor,
 } from './classmoji/repoAnalytics.flags.ts';
