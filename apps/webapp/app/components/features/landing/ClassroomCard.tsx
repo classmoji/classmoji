@@ -42,7 +42,7 @@ export function ClassroomCard({ c, onOpen }: ClassroomCardProps) {
       }}
       onMouseEnter={e => {
         e.currentTarget.style.borderColor = 'var(--line-strong)';
-        e.currentTarget.style.background = '#fff';
+        e.currentTarget.style.background = 'var(--panel-hover)';
       }}
       onMouseLeave={e => {
         e.currentTarget.style.borderColor = 'var(--line)';
