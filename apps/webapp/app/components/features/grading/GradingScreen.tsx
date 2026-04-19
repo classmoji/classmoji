@@ -107,6 +107,8 @@ export function GradingScreen({
               item={q}
               last={i === queue.length - 1}
               onClick={handleRowClick}
+              snapshot={analytics?.[q.id]?.snapshot ?? null}
+              deadline={analytics?.[q.id]?.deadline ?? null}
             />
           ))
         )}

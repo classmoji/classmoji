@@ -9,3 +9,5 @@ export { default as CommitTimeline, bucketCommitsByDay } from './CommitTimeline'
 export type { CommitTimelineProps, CommitRecord } from './CommitTimeline';
 export { default as Anomalies } from './Anomalies';
 export type { AnomaliesProps } from './Anomalies';
+export { default as QueueAnomalyChips } from './QueueAnomalyChips';
+export type { QueueAnomalyChipsProps } from './QueueAnomalyChips';

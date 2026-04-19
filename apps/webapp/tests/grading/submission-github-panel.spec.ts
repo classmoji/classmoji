@@ -55,4 +55,27 @@ test.describe('Grading queue — GitHubStatsPanel mount', () => {
 
     expect(hasPopulated || hasEmpty).toBeTruthy();
   });
+
+  test('queue rows show anomaly chips without expansion when flags fire', async ({
+    authenticatedPage: page,
+  }) => {
+    const rows = page.locator('button.row-hover');
+    const count = await rows.count();
+    test.skip(count === 0, 'No pending submissions in seed.');
+
+    // The chip strip only renders when a row has an analytics snapshot that
+    // triggers at least one of the high-signal heuristics (late commits,
+    // dump-and-run, bus factor). Seed data is not guaranteed to contain
+    // such a submission, so we conditionally assert.
+    const chips = page.getByTestId('queue-anomaly-chips');
+    const chipCount = await chips.count();
+    test.skip(
+      chipCount === 0,
+      'No flagged submissions in seed — queue chips not asserted.'
+    );
+
+    // Chips should be visible on the list itself, no expansion required.
+    await expect(chips.first()).toBeVisible();
+    await expect(page.getByTestId('submission-detail')).toHaveCount(0);
+  });
 });

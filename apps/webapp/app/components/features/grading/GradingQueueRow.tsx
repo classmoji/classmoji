@@ -1,4 +1,8 @@
 import { IconChevronR } from '@classmoji/ui-components';
+import {
+  QueueAnomalyChips,
+  type GitHubStatsSnapshot,
+} from '~/components/features/analytics';
 
 export interface GradingQueueItem {
   id: string;
@@ -16,9 +20,19 @@ interface GradingQueueRowProps {
   item: GradingQueueItem;
   last?: boolean;
   onClick?: (id: string) => void;
+  /** Optional analytics snapshot for this submission. */
+  snapshot?: GitHubStatsSnapshot | null;
+  /** ISO-8601 grader deadline, if any. */
+  deadline?: string | null;
 }
 
-export function GradingQueueRow({ item, last, onClick }: GradingQueueRowProps) {
+export function GradingQueueRow({
+  item,
+  last,
+  onClick,
+  snapshot,
+  deadline,
+}: GradingQueueRowProps) {
   const late = item.lateHours && item.lateHours > 0 ? item.lateHours : 0;
   return (
     <button
@@ -53,7 +67,15 @@ export function GradingQueueRow({ item, last, onClick }: GradingQueueRowProps) {
       >
         {item.initials}
       </span>
-      <span style={{ fontSize: 14, fontWeight: 500 }}>{item.name}</span>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 0 }}>
+        <span style={{ fontSize: 14, fontWeight: 500 }}>{item.name}</span>
+        {snapshot ? (
+          <QueueAnomalyChips
+            snapshot={snapshot}
+            deadline={deadline ?? null}
+          />
+        ) : null}
+      </div>
       <span style={{ fontSize: 13, color: 'var(--ink-2)' }}>{item.assignment}</span>
       <span
         className="mono"
