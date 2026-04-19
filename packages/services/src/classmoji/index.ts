@@ -32,6 +32,7 @@ import * as classroomInviteService from './classroomInvite.service.ts';
 import * as contentManifestService from './contentManifest.service.ts';
 import * as resourceViewService from './resourceView.service.ts';
 import * as repoAnalyticsService from './repoAnalytics.service.ts';
+import * as dashboardService from './dashboard.service.ts';
 
 const ClassmojiService = {
   // All services namespaced for consistency
@@ -66,6 +67,7 @@ const ClassmojiService = {
   contentManifest: contentManifestService,
   resourceView: resourceViewService,
   repoAnalytics: repoAnalyticsService,
+  dashboard: dashboardService,
   // Alias for AI conversation functions (delegates to quizAttempt)
   aiConversation: {
     addMessage: quizAttemptService.addMessage,
@@ -107,4 +109,5 @@ export {
   contentManifestService,
   resourceViewService,
   repoAnalyticsService,
+  dashboardService,
 };
