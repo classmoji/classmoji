@@ -44,3 +44,12 @@ export {
   assessmentGuidelines,
   getExamplePrompts,
 } from './classmoji/quizPrompts.ts';
+
+// Repo analytics snapshot payload types
+export type {
+  CommitRecord,
+  ContributorRecord,
+  LanguagesMap,
+  PRSummary,
+  SnapshotPayload,
+} from './classmoji/repoAnalytics.types.ts';
