@@ -1,4 +1,4 @@
-import { useState, type CSSProperties } from 'react';
+import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import { useDarkMode } from '~/hooks';
 
 // Pastel-redesign Tweaks FAB: lets the signed-in user flip between light/dark
@@ -82,25 +82,46 @@ const CloseIcon = () => (
 const TweaksPanel = () => {
   const { theme, accent, setTheme, setAccent } = useDarkMode();
   const [open, setOpen] = useState(false);
+  const panelRef = useRef<HTMLDivElement>(null);
+  const fabRef = useRef<HTMLButtonElement>(null);
+
+  // Click-outside + Escape close the panel.
+  useEffect(() => {
+    if (!open) return;
+    const onPointer = (e: MouseEvent) => {
+      const target = e.target as Node;
+      if (panelRef.current?.contains(target)) return;
+      if (fabRef.current?.contains(target)) return;
+      setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setOpen(false);
+    };
+    document.addEventListener('mousedown', onPointer);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onPointer);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [open]);
 
   const isCustom = !ACCENTS.some(a => a.hex.toLowerCase() === accent.toLowerCase());
 
-  if (!open) {
-    return (
+  return (
+    <>
       <button
+        ref={fabRef}
         type="button"
         className="tweaks-fab"
-        onClick={() => setOpen(true)}
-        aria-label="Open Tweaks"
+        onClick={() => setOpen(v => !v)}
+        aria-label={open ? 'Close Tweaks' : 'Open Tweaks'}
+        aria-expanded={open}
         title="Tweaks"
       >
         <SparklesIcon />
       </button>
-    );
-  }
-
-  return (
-    <div className="tweaks-panel" role="dialog" aria-label="Tweaks">
+      {open && (
+    <div ref={panelRef} className="tweaks-panel" role="dialog" aria-label="Tweaks">
       <div className="tweaks-head">
         <div className="t-title">Tweaks</div>
         <button
@@ -174,6 +195,8 @@ const TweaksPanel = () => {
       </div>
       <div className="tw-foot">Saved automatically.</div>
     </div>
+      )}
+    </>
   );
 };
 
