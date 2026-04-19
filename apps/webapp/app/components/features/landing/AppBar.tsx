@@ -55,19 +55,7 @@ export function AppBar({ user }: AppBarProps) {
     >
       {/* Left group: brand + primary nav */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 22 }}>
-        <span
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 10,
-            fontWeight: 600,
-            fontSize: 17,
-            letterSpacing: '-0.01em',
-          }}
-        >
-          <Logo size={28} variant="icon" />
-          classmoji
-        </span>
+        <Logo variant="full" size={24} theme="current" />
 
         <nav style={{ display: 'flex', gap: 2 }}>
           <button type="button" style={tabBtn(true)}>
