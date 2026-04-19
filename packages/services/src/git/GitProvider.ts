@@ -72,6 +72,22 @@ export class GitProvider {
     throw new Error('getLatestCommitSHA() must be implemented by subclass');
   }
 
+  /**
+   * List commits for a repository, optionally filtered by branch and a since timestamp.
+   * Returns a normalized CommitRecord[] with per-commit additions/deletions.
+   * @param {string} org - Organization login
+   * @param {string} repo - Repository name
+   * @param {{since?: string, branch?: string}} [opts] - Optional filters
+   * @returns {Promise<CommitRecord[]>}
+   */
+  async listCommits(
+    _org: string,
+    _repo: string,
+    _opts?: { since?: string; branch?: string }
+  ): Promise<import('../classmoji/repoAnalytics.types.ts').CommitRecord[]> {
+    throw new Error('listCommits() must be implemented by subclass');
+  }
+
   async createBranch(org: string, repo: string, branch: string, sha: string): Promise<void> {
     throw new Error('createBranch() must be implemented by subclass');
   }

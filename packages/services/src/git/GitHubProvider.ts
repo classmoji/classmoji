@@ -3,6 +3,7 @@ import { createAppAuth } from '@octokit/auth-app';
 import { createHmac, timingSafeEqual } from 'crypto';
 import jwt from 'jsonwebtoken';
 import { GitProvider } from './GitProvider.ts';
+import type { CommitRecord } from '../classmoji/repoAnalytics.types.ts';
 
 import dotenv from 'dotenv';
 dotenv.config();
@@ -55,6 +56,12 @@ export class GitHubProvider extends GitProvider {
    * @returns {Promise<Octokit>}
    */
   async #getOctokit(): Promise<Octokit> {
+    // Support dependency injection (used by tests): if an Octokit instance has
+    // been attached to the provider, prefer it over the cached/App-auth client.
+    if (this._octokit) {
+      return this._octokit;
+    }
+
     const cacheKey = this.installationId;
     const cached = GitHubProvider.#installationCache.get(cacheKey);
 
@@ -275,6 +282,53 @@ export class GitHubProvider extends GitProvider {
       branch,
     });
     return data.commit.sha;
+  }
+
+  /**
+   * List commits for a repository and return them as normalized CommitRecord[].
+   * Paginates through all commits, then fetches each commit individually to
+   * collect `stats.additions` / `stats.deletions` (the list endpoint omits them).
+   * @param {string} org - Organization login
+   * @param {string} repo - Repository name
+   * @param {{since?: string, branch?: string}} [opts] - Optional filters
+   *   `since` is an ISO 8601 timestamp; `branch` selects which ref to walk.
+   * @returns {Promise<CommitRecord[]>}
+   */
+  async listCommits(
+    org: string,
+    repo: string,
+    opts: { since?: string; branch?: string } = {}
+  ): Promise<CommitRecord[]> {
+    const octokit = await this.#getOctokit();
+    const commits: CommitRecord[] = [];
+    for await (const { data } of octokit.paginate.iterator(octokit.rest.repos.listCommits, {
+      owner: org,
+      repo,
+      sha: opts.branch,
+      since: opts.since,
+      per_page: 100,
+    })) {
+      for (const c of data) {
+        // listCommits omits stats; fetch each commit for additions/deletions.
+        const { data: full } = await octokit.rest.repos.getCommit({
+          owner: org,
+          repo,
+          ref: c.sha,
+        });
+        commits.push({
+          sha: c.sha,
+          author_login: c.author?.login ?? null,
+          author_email: c.commit.author?.email ?? null,
+          author_user_id: null,
+          ts: c.commit.author?.date ?? new Date().toISOString(),
+          message: c.commit.message ?? '',
+          additions: full.stats?.additions ?? 0,
+          deletions: full.stats?.deletions ?? 0,
+          parents: (c.parents ?? []).map((p: { sha: string }) => p.sha),
+        });
+      }
+    }
+    return commits;
   }
 
   /**

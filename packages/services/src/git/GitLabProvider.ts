@@ -1,4 +1,5 @@
 import { GitProvider } from './GitProvider.ts';
+import type { CommitRecord } from '../classmoji/repoAnalytics.types.ts';
 
 /**
  * GitLab adapter - implements GitProvider interface.
@@ -137,6 +138,22 @@ export class GitLabProvider extends GitProvider {
   ): Promise<never> {
     // TODO: GET /api/v4/projects/:id/repository/branches/:branch
     throw new Error('GitLabProvider.getLatestCommitSHA() not implemented');
+  }
+
+  /**
+   * List commits for a project, normalized to CommitRecord[]
+   * @param {string} group - Group path
+   * @param {string} project - Project name
+   * @param {{since?: string, branch?: string}} [opts] - Optional filters
+   * @returns {Promise<CommitRecord[]>}
+   */
+  async listCommits(
+    _group: string,
+    _project: string,
+    _opts?: { since?: string; branch?: string }
+  ): Promise<CommitRecord[]> {
+    // TODO: GET /api/v4/projects/:id/repository/commits
+    throw new Error('GitLabProvider.listCommits() not implemented');
   }
 
   /**
