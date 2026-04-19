@@ -6,6 +6,8 @@ import { GitProvider } from './GitProvider.ts';
 import type {
   CommitRecord,
   ContributorRecord,
+  LanguagesMap,
+  PRSummary,
 } from '../classmoji/repoAnalytics.types.ts';
 
 import dotenv from 'dotenv';
@@ -362,6 +364,46 @@ export class GitHubProvider extends GitProvider {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       deletions: (row.weeks ?? []).reduce((s: number, w: any) => s + (w.d ?? 0), 0),
     }));
+  }
+
+  /**
+   * Get the byte-count breakdown of languages detected by GitHub linguist.
+   * @param {string} org - Organization login
+   * @param {string} repo - Repository name
+   * @returns {Promise<LanguagesMap>}
+   */
+  async getLanguages(org: string, repo: string): Promise<LanguagesMap> {
+    const octokit = await this.#getOctokit();
+    const { data } = await octokit.rest.repos.listLanguages({ owner: org, repo });
+    return data ?? {};
+  }
+
+  /**
+   * Summarize pull requests into `{ open, merged, closed }` counts.
+   * Uses a single page of up to 100 PRs in all states — sufficient for dashboard summaries;
+   * paginate later if we need full history.
+   * @param {string} org - Organization login
+   * @param {string} repo - Repository name
+   * @returns {Promise<PRSummary>}
+   */
+  async listPulls(org: string, repo: string): Promise<PRSummary> {
+    const octokit = await this.#getOctokit();
+    const { data } = await octokit.rest.pulls.list({
+      owner: org,
+      repo,
+      state: 'all',
+      per_page: 100,
+    });
+    return data.reduce<PRSummary>(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (acc, pr: any) => {
+        if (pr.state === 'open') acc.open += 1;
+        else if (pr.merged_at) acc.merged += 1;
+        else acc.closed += 1;
+        return acc;
+      },
+      { open: 0, merged: 0, closed: 0 }
+    );
   }
 
   /**

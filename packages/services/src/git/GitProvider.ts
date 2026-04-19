@@ -105,6 +105,32 @@ export class GitProvider {
     throw new Error('getContributorStats() must be implemented by subclass');
   }
 
+  /**
+   * Get the byte-count breakdown of languages detected in the repository.
+   * @param {string} org - Organization login
+   * @param {string} repo - Repository name
+   * @returns {Promise<LanguagesMap>}
+   */
+  async getLanguages(
+    _org: string,
+    _repo: string
+  ): Promise<import('../classmoji/repoAnalytics.types.ts').LanguagesMap> {
+    throw new Error('getLanguages() must be implemented by subclass');
+  }
+
+  /**
+   * Summarize pull requests into `{ open, merged, closed }` counts.
+   * @param {string} org - Organization login
+   * @param {string} repo - Repository name
+   * @returns {Promise<PRSummary>}
+   */
+  async listPulls(
+    _org: string,
+    _repo: string
+  ): Promise<import('../classmoji/repoAnalytics.types.ts').PRSummary> {
+    throw new Error('listPulls() must be implemented by subclass');
+  }
+
   async createBranch(org: string, repo: string, branch: string, sha: string): Promise<void> {
     throw new Error('createBranch() must be implemented by subclass');
   }

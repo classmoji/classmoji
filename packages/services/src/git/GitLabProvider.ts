@@ -2,6 +2,8 @@ import { GitProvider } from './GitProvider.ts';
 import type {
   CommitRecord,
   ContributorRecord,
+  LanguagesMap,
+  PRSummary,
 } from '../classmoji/repoAnalytics.types.ts';
 
 /**
@@ -171,6 +173,28 @@ export class GitLabProvider extends GitProvider {
   ): Promise<{ pending: true } | ContributorRecord[]> {
     // TODO: GET /api/v4/projects/:id/repository/contributors
     throw new Error('GitLabProvider.getContributorStats() not implemented');
+  }
+
+  /**
+   * Get the language breakdown of a GitLab project.
+   * @param {string} group - Group path
+   * @param {string} project - Project name
+   * @returns {Promise<LanguagesMap>}
+   */
+  async getLanguages(_group: string, _project: string): Promise<LanguagesMap> {
+    // TODO: GET /api/v4/projects/:id/languages
+    throw new Error('GitLabProvider.getLanguages() not implemented');
+  }
+
+  /**
+   * Summarize merge requests into `{ open, merged, closed }` counts.
+   * @param {string} group - Group path
+   * @param {string} project - Project name
+   * @returns {Promise<PRSummary>}
+   */
+  async listPulls(_group: string, _project: string): Promise<PRSummary> {
+    // TODO: GET /api/v4/projects/:id/merge_requests?state=all
+    throw new Error('GitLabProvider.listPulls() not implemented');
   }
 
 
