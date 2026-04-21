@@ -236,7 +236,113 @@ export async function overdueQueue(
 }
 
 // ---------------------------------------------------------------------------
-// 4. Personal grade distribution
+// 4. Personal daily totals — today / week / median-SLA / backlog
+// ---------------------------------------------------------------------------
+
+export interface PersonalDailyTotals {
+  todayGraded: number;
+  weekGraded: number;
+  /** Median hours between RA.closed_at and grade.created_at over last 30d. */
+  medianSlaHours: number | null;
+  /** Count of OPEN RAs this TA is assigned on that have no grades yet. */
+  backlogCount: number;
+}
+
+function median(values: number[]): number | null {
+  if (values.length === 0) return null;
+  const sorted = [...values].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2 === 0
+    ? (sorted[mid - 1] + sorted[mid]) / 2
+    : sorted[mid];
+}
+
+export async function personalDailyTotals(
+  userId: string,
+  classroomId: string,
+): Promise<PersonalDailyTotals> {
+  const prisma = getPrisma();
+  const now = new Date();
+  const startOfTodayUtc = new Date(
+    Date.UTC(
+      now.getUTCFullYear(),
+      now.getUTCMonth(),
+      now.getUTCDate(),
+      0,
+      0,
+      0,
+      0,
+    ),
+  );
+  const weekAgo = new Date(now.getTime() - 7 * MS_PER_DAY);
+  const thirtyDaysAgo = new Date(now.getTime() - 30 * MS_PER_DAY);
+
+  const classroomScopedRA = {
+    repository_assignment: {
+      repository: { classroom_id: classroomId },
+    },
+  } as const;
+
+  const [todayGraded, weekGraded, slaGrades, backlogCount] = await Promise.all([
+    prisma.assignmentGrade.count({
+      where: {
+        grader_id: userId,
+        created_at: { gte: startOfTodayUtc },
+        ...classroomScopedRA,
+      },
+    }),
+    prisma.assignmentGrade.count({
+      where: {
+        grader_id: userId,
+        created_at: { gte: weekAgo },
+        ...classroomScopedRA,
+      },
+    }),
+    prisma.assignmentGrade.findMany({
+      where: {
+        grader_id: userId,
+        created_at: { gte: thirtyDaysAgo },
+        repository_assignment: {
+          repository: { classroom_id: classroomId },
+          closed_at: { not: null },
+        },
+      },
+      select: {
+        created_at: true,
+        repository_assignment: { select: { closed_at: true } },
+      },
+    }),
+    prisma.repositoryAssignmentGrader.count({
+      where: {
+        grader_id: userId,
+        repository_assignment: {
+          repository: { classroom_id: classroomId },
+          grades: { none: {} },
+        },
+      },
+    }),
+  ]);
+
+  const slaHours: number[] = [];
+  for (const g of slaGrades) {
+    const closedAt = g.repository_assignment.closed_at;
+    if (!closedAt) continue;
+    const diffMs = g.created_at.getTime() - closedAt.getTime();
+    if (diffMs < 0) continue;
+    slaHours.push(diffMs / (60 * 60 * 1000));
+  }
+  const medianHours = median(slaHours);
+
+  return {
+    todayGraded,
+    weekGraded,
+    medianSlaHours: medianHours === null ? null : Math.round(medianHours),
+    backlogCount,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// 5. Personal grade distribution
 // ---------------------------------------------------------------------------
 
 export interface PersonalGradeDistribution {

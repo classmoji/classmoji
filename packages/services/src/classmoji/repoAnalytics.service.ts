@@ -486,6 +486,139 @@ export async function aggregateForTeam(teamId: string): Promise<TeamAggregate | 
   };
 }
 
+// ---------------------------------------------------------------------------
+// Classroom-wide repo health
+// ---------------------------------------------------------------------------
+
+export interface ClassroomRepoHealthRepo {
+  name: string;
+  langs: Record<string, number>;
+  commits: number;
+  fetchedAt: string;
+  status: 'fresh' | 'stale';
+}
+
+export interface ClassroomRepoUnmatchedContributor {
+  login: string;
+  repo: string;
+  commits: number;
+  firstSeen: string;
+}
+
+export interface ClassroomRepoHealth {
+  repos: ClassroomRepoHealthRepo[];
+  unmatched: ClassroomRepoUnmatchedContributor[];
+  /** ISO timestamp of the next 4h boundary from "now" (UTC). */
+  nextScheduledAt: string;
+  autoRefreshEvery: '4h';
+}
+
+/**
+ * Classroom-wide repo analytics overview for the admin Repo Health page.
+ * Returns all latest snapshots, a list of GitHub logins that appear in
+ * contributor payloads but are not linked to a classroom user, and a
+ * human-readable "next scheduled refresh" timestamp anchored to 4h boundaries.
+ */
+export async function classroomRepoHealth(
+  classroomId: string,
+): Promise<ClassroomRepoHealth> {
+  const prisma = getPrisma();
+
+  const reposRaw = await prisma.repository.findMany({
+    where: { classroom_id: classroomId },
+    select: {
+      id: true,
+      name: true,
+      assignments: {
+        select: {
+          id: true,
+          analytics_snapshot: {
+            select: {
+              fetched_at: true,
+              stale: true,
+              total_commits: true,
+              languages: true,
+              contributors: true,
+            },
+          },
+        },
+      },
+      contributor_links: { select: { github_login: true, user_id: true } },
+    },
+  });
+
+  const repos: ClassroomRepoHealthRepo[] = [];
+  const unmatched: ClassroomRepoUnmatchedContributor[] = [];
+
+  for (const r of reposRaw) {
+    // Latest snapshot across this repo's assignments.
+    let latest: {
+      fetched_at: Date;
+      stale: boolean;
+      total_commits: number;
+      languages: unknown;
+      contributors: unknown;
+    } | null = null;
+    for (const a of r.assignments) {
+      const s = a.analytics_snapshot;
+      if (!s) continue;
+      if (!latest || s.fetched_at.getTime() > latest.fetched_at.getTime()) {
+        latest = s;
+      }
+    }
+    if (!latest) continue;
+
+    const langs = (latest.languages ?? {}) as Record<string, number>;
+    repos.push({
+      name: r.name,
+      langs,
+      commits: latest.total_commits,
+      fetchedAt: latest.fetched_at.toISOString(),
+      status: latest.stale ? 'stale' : 'fresh',
+    });
+
+    // Unmatched contributors: appear in payload, are not linked (by membership
+    // login match already baked into user_id), and have no manual link row.
+    const linkedLogins = new Set(
+      r.contributor_links
+        .filter((l) => l.user_id !== null)
+        .map((l) => l.github_login),
+    );
+    const rawContribs = (latest.contributors ?? []) as Array<{
+      login: string;
+      user_id: string | null;
+      commits: number;
+    }>;
+    for (const c of rawContribs) {
+      if (!c || !c.login) continue;
+      if (c.user_id) continue;
+      if (linkedLogins.has(c.login)) continue;
+      unmatched.push({
+        login: c.login,
+        repo: r.name,
+        commits: c.commits,
+        firstSeen: latest.fetched_at.toISOString(),
+      });
+    }
+  }
+
+  repos.sort((a, b) => a.name.localeCompare(b.name));
+  unmatched.sort((a, b) => b.commits - a.commits);
+
+  // Next scheduled at = next 4h boundary in UTC.
+  const now = new Date();
+  const FOUR_H = 4 * 60 * 60 * 1000;
+  const nextMs = Math.ceil(now.getTime() / FOUR_H) * FOUR_H;
+  const nextScheduledAt = new Date(nextMs).toISOString();
+
+  return {
+    repos,
+    unmatched,
+    nextScheduledAt,
+    autoRefreshEvery: '4h',
+  };
+}
+
 /**
  * Return RepositoryAssignment IDs for assignments whose `student_deadline` is
  * within the last {@link ACTIVE_WINDOW_DAYS} days or in the future. Used by

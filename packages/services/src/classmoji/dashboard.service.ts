@@ -100,6 +100,39 @@ export interface CohortOverview {
   medianGrade: number | null;
   atRiskCount: number;
   atRiskStudents: AtRiskStudent[];
+  activeStudentsSeries: number[];
+  submissionRateSeries: number[];
+  slaSeriesHours: number[];
+  atRiskSeries: number[];
+}
+
+/**
+ * Build N weekly bin cutoffs [start, end) ending at `now`, oldest→newest.
+ */
+function buildWeeklyBins(
+  now: Date,
+  weeks: number,
+): Array<{ start: Date; end: Date }> {
+  const weekMs = 7 * 24 * 60 * 60 * 1000;
+  const bins: Array<{ start: Date; end: Date }> = [];
+  const endAnchor = now.getTime();
+  for (let i = weeks - 1; i >= 0; i--) {
+    const end = new Date(endAnchor - i * weekMs);
+    const start = new Date(end.getTime() - weekMs);
+    bins.push({ start, end });
+  }
+  return bins;
+}
+
+function bucketIndex(
+  ts: Date,
+  bins: Array<{ start: Date; end: Date }>,
+): number {
+  const t = ts.getTime();
+  for (let i = 0; i < bins.length; i++) {
+    if (t >= bins[i].start.getTime() && t < bins[i].end.getTime()) return i;
+  }
+  return -1;
 }
 
 export async function cohortOverview(classroomId: string): Promise<CohortOverview> {
@@ -115,12 +148,17 @@ export async function cohortOverview(classroomId: string): Promise<CohortOvervie
   const totalStudents = studentIds.length;
 
   if (totalStudents === 0) {
+    const empty = new Array<number>(12).fill(0);
     return {
       activeStudents: 0,
       inactiveStudents: 0,
       medianGrade: null,
       atRiskCount: 0,
       atRiskStudents: [],
+      activeStudentsSeries: empty,
+      submissionRateSeries: empty,
+      slaSeriesHours: empty,
+      atRiskSeries: empty,
     };
   }
 
@@ -223,7 +261,133 @@ export async function cohortOverview(classroomId: string): Promise<CohortOvervie
     })
     .filter((v): v is AtRiskStudent => v !== null);
 
-  return { activeStudents, inactiveStudents, medianGrade, atRiskCount, atRiskStudents };
+  // -------- Weekly series (last 12 weeks, oldest→newest) ----------------
+  const WEEKS = 12;
+  const bins = buildWeeklyBins(now, WEEKS);
+  const earliest = bins[0].start;
+
+  const [weeklyQuizAttempts, weeklySnapshots, weeklyClosed, weeklyGrades, pastDueOpen] =
+    await Promise.all([
+      prisma.quizAttempt.findMany({
+        where: {
+          user_id: { in: studentIds },
+          quiz: { classroom_id: classroomId },
+          started_at: { gte: earliest, lte: now },
+        },
+        select: { user_id: true, started_at: true },
+      }),
+      prisma.repoAnalyticsSnapshot.findMany({
+        where: {
+          repository_assignment: {
+            repository: { classroom_id: classroomId, student_id: { in: studentIds } },
+          },
+          last_commit_at: { gte: earliest, lte: now },
+        },
+        select: {
+          last_commit_at: true,
+          repository_assignment: { select: { repository: { select: { student_id: true } } } },
+        },
+      }),
+      prisma.repositoryAssignment.findMany({
+        where: {
+          repository: { classroom_id: classroomId, student_id: { in: studentIds } },
+          closed_at: { gte: earliest, lte: now },
+        },
+        select: { closed_at: true },
+      }),
+      prisma.assignmentGrade.findMany({
+        where: {
+          repository_assignment: {
+            repository: { classroom_id: classroomId, student_id: { in: studentIds } },
+          },
+          created_at: { gte: earliest, lte: now },
+        },
+        select: {
+          created_at: true,
+          repository_assignment: { select: { closed_at: true } },
+        },
+      }),
+      prisma.repositoryAssignment.findMany({
+        where: {
+          repository: { classroom_id: classroomId, student_id: { in: studentIds } },
+          assignment: { student_deadline: { lt: now, gte: earliest } },
+          status: 'OPEN',
+          grades: { none: {} },
+        },
+        select: {
+          repository: { select: { student_id: true } },
+          assignment: { select: { student_deadline: true } },
+        },
+      }),
+    ]);
+
+  const activeSetsPerBin: Array<Set<string>> = Array.from({ length: WEEKS }, () => new Set());
+  for (const qa of weeklyQuizAttempts) {
+    if (!qa.started_at) continue;
+    const idx = bucketIndex(qa.started_at, bins);
+    if (idx >= 0) activeSetsPerBin[idx].add(qa.user_id);
+  }
+  for (const s of weeklySnapshots) {
+    if (!s.last_commit_at) continue;
+    const sid = s.repository_assignment.repository.student_id;
+    if (!sid) continue;
+    const idx = bucketIndex(s.last_commit_at, bins);
+    if (idx >= 0) activeSetsPerBin[idx].add(sid);
+  }
+  const activeStudentsSeries = activeSetsPerBin.map((s) => s.size);
+
+  const closedCountPerBin = new Array<number>(WEEKS).fill(0);
+  for (const c of weeklyClosed) {
+    if (!c.closed_at) continue;
+    const idx = bucketIndex(c.closed_at, bins);
+    if (idx >= 0) closedCountPerBin[idx] += 1;
+  }
+  const submissionRateSeries = closedCountPerBin.map((n) =>
+    totalStudents > 0 ? Math.min(1, n / totalStudents) : 0,
+  );
+
+  const ttgPerBin: Array<number[]> = Array.from({ length: WEEKS }, () => []);
+  for (const g of weeklyGrades) {
+    const closed = g.repository_assignment.closed_at;
+    if (!closed) continue;
+    const idx = bucketIndex(g.created_at, bins);
+    if (idx < 0) continue;
+    const hours = (g.created_at.getTime() - closed.getTime()) / 3_600_000;
+    if (hours >= 0) ttgPerBin[idx].push(hours);
+  }
+  const slaSeriesHours = ttgPerBin.map((arr) => {
+    const m = computeGradeMedian(arr);
+    return m ?? 0;
+  });
+
+  // At-risk series approximation: for each week-end, count students with >=2
+  // past-due assignments (deadline <= weekEnd) that remain OPEN/ungraded today.
+  const atRiskSeries = bins.map((bin) => {
+    const byStudent = new Map<string, number>();
+    for (const r of pastDueOpen) {
+      const sid = r.repository.student_id;
+      const dl = r.assignment.student_deadline;
+      if (!sid || !dl) continue;
+      if (dl.getTime() <= bin.end.getTime()) {
+        byStudent.set(sid, (byStudent.get(sid) ?? 0) + 1);
+      }
+    }
+    let count = 0;
+    for (const c of byStudent.values()) if (c >= 2) count += 1;
+    return count;
+  });
+
+  return {
+    activeStudents,
+    inactiveStudents,
+    medianGrade,
+    atRiskCount,
+    atRiskStudents,
+    activeStudentsSeries,
+    submissionRateSeries,
+    slaSeriesHours,
+    atRiskSeries,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -237,6 +401,18 @@ export interface AssignmentHealthRow {
   medianGrade: number | null;
   medianTimeToGradeHours: number | null;
   regradeRate: number;
+}
+
+export interface AssignmentHealthWithCountsRow extends AssignmentHealthRow {
+  submitted: number;
+  graded: number;
+  total: number;
+  lateCount: number;
+  deadline: string | null;
+  moduleTitle: string;
+  weight: number;
+  /** Module.type (AssignmentType). Used by the UI as a short label. */
+  kind: string;
 }
 
 export async function assignmentHealth(
@@ -302,6 +478,99 @@ export async function assignmentHealth(
       medianGrade,
       medianTimeToGradeHours,
       regradeRate,
+    };
+  });
+}
+
+/**
+ * Extended variant of {@link assignmentHealth} surfacing raw submission/grade
+ * counts and module metadata for the admin assignments index page. Each row
+ * also carries a `deadline` (ISO) and `lateCount` (closed_at > student_deadline).
+ */
+export async function assignmentHealthWithCounts(
+  classroomId: string,
+): Promise<AssignmentHealthWithCountsRow[]> {
+  const prisma = getPrisma();
+
+  const [assignments, studentCountRow, emojiMap] = await Promise.all([
+    prisma.assignment.findMany({
+      where: { module: { classroom_id: classroomId } },
+      select: {
+        id: true,
+        title: true,
+        weight: true,
+        student_deadline: true,
+        module: { select: { id: true, title: true, type: true } },
+        repository_assignments: {
+          select: {
+            id: true,
+            closed_at: true,
+            status: true,
+            repository: { select: { student_id: true } },
+            grades: {
+              select: { emoji: true, created_at: true },
+              orderBy: { created_at: 'asc' },
+            },
+            regrade_requests: { select: { id: true } },
+          },
+        },
+      },
+      orderBy: [
+        { student_deadline: { sort: 'asc', nulls: 'last' } },
+        { title: 'asc' },
+      ],
+    }),
+    prisma.classroomMembership.count({
+      where: { classroom_id: classroomId, role: 'STUDENT' },
+    }),
+    loadClassroomEmojiMap(classroomId),
+  ]);
+
+  const enrolled = studentCountRow || 0;
+
+  return assignments.map((a) => {
+    const ras = a.repository_assignments;
+    const submitted = ras.filter((r) => r.closed_at !== null).length;
+    const graded = ras.filter((r) => r.grades.length > 0).length;
+    const total = Math.max(ras.length, enrolled);
+    const submissionRate = enrolled > 0 ? submitted / enrolled : 0;
+
+    const gradeValues: number[] = [];
+    const ttgPairs: Array<{ submittedAt: Date | null; gradedAt: Date | null }> = [];
+    let regradeHavers = 0;
+    let lateCount = 0;
+    for (const r of ras) {
+      if (r.grades.length > 0) {
+        const first = r.grades[0]!;
+        const g = emojiToGrade(first.emoji, emojiMap);
+        if (g !== null) gradeValues.push(g);
+        ttgPairs.push({ submittedAt: r.closed_at, gradedAt: first.created_at });
+      }
+      if (r.regrade_requests.length > 0) regradeHavers += 1;
+      if (a.student_deadline && r.closed_at && r.closed_at > a.student_deadline) {
+        lateCount += 1;
+      }
+    }
+
+    const medianGrade = computeGradeMedian(gradeValues);
+    const medianTimeToGradeHours = computeMedianTimeToGradeHours(ttgPairs);
+    const regradeRate = ras.length > 0 ? regradeHavers / ras.length : 0;
+
+    return {
+      assignmentId: a.id,
+      title: a.title,
+      submissionRate,
+      medianGrade,
+      medianTimeToGradeHours,
+      regradeRate,
+      submitted,
+      graded,
+      total,
+      lateCount,
+      deadline: a.student_deadline ? a.student_deadline.toISOString() : null,
+      moduleTitle: a.module.title,
+      weight: a.weight,
+      kind: a.module.type,
     };
   });
 }

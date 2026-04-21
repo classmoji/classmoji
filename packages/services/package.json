@@ -10,7 +10,8 @@
     "format:check": "prettier --check \"**/*.{js,jsx,ts,tsx,json,md}\""
   },
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./flags": "./src/classmoji/repoAnalytics.flags.ts"
   },
   "dependencies": {
     "@classmoji/database": "*",
