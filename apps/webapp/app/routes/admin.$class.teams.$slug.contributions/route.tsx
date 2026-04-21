@@ -5,12 +5,16 @@ import dayjs from 'dayjs';
 
 import {
   aggregateForTeam,
+  busFactor,
   ClassmojiService,
   type TeamRepoSnapshot,
 } from '@classmoji/services';
 import {
   Anomalies,
+  BraidTimeline,
+  BusFactorGauge,
   ContributorBreakdown,
+  ContributorPies,
   type CommitRecord as UICommitRecord,
   type ContributorRecord as UIContributorRecord,
   type EligibleStudent,
@@ -145,6 +149,55 @@ const TeamContributionsView = ({ loaderData }: Route.ComponentProps) => {
         </Card>
       ) : (
         <div className="space-y-6" data-testid="team-contributions-body">
+          {/* Overview: pies + bus factor + braid */}
+          <Card data-testid="team-contributions-overview">
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+              <div className="lg:col-span-1">
+                <ContributorPies
+                  contributors={
+                    aggregate.contributors as unknown as UIContributorRecord[]
+                  }
+                />
+              </div>
+              <div className="lg:col-span-1 flex items-center justify-center">
+                {(() => {
+                  const bus = busFactor(
+                    aggregate.contributors as unknown as UIContributorRecord[],
+                  );
+                  // Bus factor count = contributors NOT in the top-share holder
+                  // only makes sense when >1; approximate as "contributors with
+                  // at least 10% share" to mirror the design's integer count.
+                  const total = aggregate.contributors.length;
+                  const totalCommits = aggregate.contributors.reduce(
+                    (s, c) => s + c.commits,
+                    0,
+                  );
+                  let bf = 1;
+                  if (total > 0 && totalCommits > 0) {
+                    const share10 = aggregate.contributors.filter(
+                      (c) => c.commits / totalCommits >= 0.1,
+                    ).length;
+                    bf = Math.max(1, share10);
+                    // If the top contributor holds >70%, bus factor is 1
+                    if (bus && bus.share > 0.7) bf = 1;
+                  }
+                  return (
+                    <BusFactorGauge busFactor={bf} totalContributors={total} />
+                  );
+                })()}
+              </div>
+              <div className="lg:col-span-1">
+                <BraidTimeline
+                  commits={aggregate.commits as unknown as UICommitRecord[]}
+                  contributors={
+                    aggregate.contributors as unknown as UIContributorRecord[]
+                  }
+                  deadline={null}
+                />
+              </div>
+            </div>
+          </Card>
+
           <Card>
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
               <StatsCard title="Repositories">
