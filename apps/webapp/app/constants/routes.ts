@@ -43,13 +43,13 @@ export const sidebarSections = {
     ASSISTANT: ['dashboard', 'calendar'],
   },
   coursework: {
-    STUDENT: ['modules', 'quizzes', 'tasks', 'regrade-requests'],
-    OWNER: ['modules', 'quizzes', 'pages', 'slides', 'grades'],
+    STUDENT: ['modules', 'student-assignments', 'regrade-requests'],
+    OWNER: ['modules', 'assignments', 'quizzes', 'pages', 'slides', 'grading', 'grades'],
     ASSISTANT: ['modules', 'quizzes', 'grading', 'regrade-requests'],
   },
   reference: {
-    STUDENT: ['tokens', 'syllabus'],
-    OWNER: ['students', 'assistants', 'teams', 'tokens', 'syllabus', 'repositories'],
+    STUDENT: ['people', 'tokens', 'syllabus', 'grading-policy'],
+    OWNER: ['students', 'assistants', 'teams', 'tokens', 'syllabus', 'repositories', 'repo-health'],
     ASSISTANT: ['students', 'syllabus'],
   },
   footer: ['settings'],
@@ -97,6 +97,30 @@ export const routes: Record<string, RouteEntry> = {
     roles: ['STUDENT'],
   },
 
+  'student-assignments': {
+    link: '/tasks',
+    label: 'Assignments',
+    icon: IconCheckSquare as IconComponent,
+    roles: ['STUDENT'],
+    category: 'assessment',
+  },
+
+  people: {
+    link: '/people',
+    label: 'People',
+    icon: IconPeople as IconComponent,
+    roles: ['STUDENT'],
+    category: 'people',
+  },
+
+  'grading-policy': {
+    link: '/grading-policy',
+    label: 'Grading Policy',
+    icon: IconBook as IconComponent,
+    roles: ['STUDENT'],
+    category: 'reference',
+  },
+
   // Content
   modules: {
     link: '/modules',
@@ -132,6 +156,14 @@ export const routes: Record<string, RouteEntry> = {
     icon: IconBook as IconComponent,
     roles: ['OWNER', 'ASSISTANT', 'STUDENT'],
     category: 'content',
+  },
+
+  assignments: {
+    link: '/assignments',
+    label: 'Assignment Health',
+    icon: IconCheckSquare as IconComponent,
+    roles: ['OWNER'],
+    category: 'assessment',
   },
 
   // Assessment
@@ -195,6 +227,13 @@ export const routes: Record<string, RouteEntry> = {
   repositories: {
     link: '/repositories',
     label: 'Repositories',
+    icon: IconGithub as IconComponent,
+    roles: ['OWNER'],
+    category: 'integrations',
+  },
+  'repo-health': {
+    link: '/repo-health',
+    label: 'Repo Health',
     icon: IconGithub as IconComponent,
     roles: ['OWNER'],
     category: 'integrations',
