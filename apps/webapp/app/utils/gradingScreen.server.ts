@@ -28,11 +28,35 @@ export interface EligibleStudentRow {
   name: string | null;
 }
 
+/**
+ * Per-submission metadata needed to grade + override from the queue detail.
+ * Shape matches what `EmojiGrader` + `LateOverrideButton` already consume.
+ */
+export interface SubmissionGradingInfo {
+  repositoryAssignmentId: string;
+  assignmentId: string;
+  studentId: string | null;
+  teamId: string | null;
+  repoName: string | null;
+  isLate: boolean;
+  isLateOverride: boolean;
+  grades: Array<{
+    id: string;
+    emoji: string;
+    grader: { name: string | null } | null;
+    token_transaction: { amount: number } | null;
+  }>;
+}
+
 export interface GradingScreenData {
   stats: GradingStats;
   queue: GradingQueueItem[];
   /** Map of repository_assignment_id → analytics payload (deadline + snapshot). */
   analytics: Record<string, SubmissionAnalytics>;
+  /** Map of repository_assignment_id → grading info (for EmojiGrader + override). */
+  grading: Record<string, SubmissionGradingInfo>;
+  /** Classroom emoji→grade map passed to EmojiGrader. */
+  emojiMappings: Record<string, number>;
   /** Classroom members (students) eligible to be linked to unmatched GH logins. */
   students: EligibleStudentRow[];
 }
@@ -106,22 +130,32 @@ export const loadGradingScreenData = async (
     }
   }
 
-  // Queue: up to 20 CLOSED repo-assignments with no grades, most recently closed.
+  // Queue: up to 40 CLOSED repo-assignments, most recently closed.
+  // Keep the pending ones (no grades) up top; include some already-graded rows
+  // so owners can review/override without leaving the queue.
   const queueRaw = await prisma.repositoryAssignment.findMany({
     where: {
       status: 'CLOSED',
       repository: { classroom_id: classroomId },
-      grades: { none: {} },
     },
-    orderBy: { closed_at: 'desc' },
-    take: 20,
+    orderBy: [{ closed_at: 'desc' }],
+    take: 40,
     include: {
       assignment: { select: { id: true, title: true, grader_deadline: true } },
       repository: {
         select: {
           id: true,
+          name: true,
           student: { select: { id: true, name: true, login: true } },
           team: { select: { id: true, name: true, slug: true } },
+        },
+      },
+      grades: {
+        select: {
+          id: true,
+          emoji: true,
+          grader: { select: { name: true } },
+          token_transaction: { select: { amount: true } },
         },
       },
       analytics_snapshot: true,
@@ -130,6 +164,7 @@ export const loadGradingScreenData = async (
 
   const now = dayjs();
   const analytics: Record<string, SubmissionAnalytics> = {};
+  const grading: Record<string, SubmissionGradingInfo> = {};
   const queue: GradingQueueItem[] = queueRaw.map(ra => {
     const snap = ra.analytics_snapshot;
     analytics[ra.id] = {
@@ -166,6 +201,27 @@ export const loadGradingScreenData = async (
 
     const student = ra.repository.student;
     const team = ra.repository.team;
+    const isLate =
+      ra.assignment.grader_deadline && ra.closed_at
+        ? dayjs(ra.closed_at).isAfter(dayjs(ra.assignment.grader_deadline))
+        : false;
+    grading[ra.id] = {
+      repositoryAssignmentId: ra.id,
+      assignmentId: ra.assignment.id,
+      studentId: student?.id ?? null,
+      teamId: team?.id ?? null,
+      repoName: ra.repository.name ?? null,
+      isLate,
+      isLateOverride: ra.is_late_override,
+      grades: ra.grades.map(g => ({
+        id: g.id,
+        emoji: g.emoji,
+        grader: g.grader ? { name: g.grader.name } : null,
+        token_transaction: g.token_transaction
+          ? { amount: g.token_transaction.amount }
+          : null,
+      })),
+    };
     const displayName = student?.name || student?.login || team?.name || team?.slug || 'Unknown';
     const fallback = student?.login || team?.slug || ra.id;
     const idForHue = student?.id || team?.id || ra.id;
@@ -192,6 +248,14 @@ export const loadGradingScreenData = async (
 
   // Avoid unused-param warning while keeping API flexible for future slug-based queries.
   void classroomSlug;
+
+  // Emoji → grade mapping for the classroom; used by the in-queue EmojiGrader.
+  const mappings = await prisma.emojiMapping.findMany({
+    where: { classroom_id: classroomId },
+    select: { emoji: true, grade: true },
+  });
+  const emojiMappings: Record<string, number> = {};
+  for (const m of mappings) emojiMappings[m.emoji] = m.grade;
 
   // Eligible link targets: classroom members with STUDENT role. Ordered by
   // display name / login so the modal list is consistent.
@@ -220,6 +284,8 @@ export const loadGradingScreenData = async (
     },
     queue,
     analytics,
+    grading,
+    emojiMappings,
     students,
   };
 };

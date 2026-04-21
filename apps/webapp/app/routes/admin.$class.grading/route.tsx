@@ -1,20 +1,22 @@
 import { useEffect } from 'react';
 import { useFetcher, useRevalidator } from 'react-router';
 import type { Route } from './+types/route';
-import { requireClassroomTeachingTeam } from '~/utils/routeAuth.server';
+import { requireClassroomAdmin } from '~/utils/routeAuth.server';
 import { loadGradingScreenData } from '~/utils/gradingScreen.server';
 import { GradingScreen } from '~/components/features/grading';
 
 export const loader = async ({ request, params }: Route.LoaderArgs) => {
   const { class: classSlug } = params;
-  const { classroom } = await requireClassroomTeachingTeam(request, classSlug!);
+  const { classroom } = await requireClassroomAdmin(request, classSlug!, {
+    resourceType: 'GRADES',
+    action: 'view_grading_queue',
+  });
 
   const grading = await loadGradingScreenData(classroom.id, classSlug!);
-
   return { grading };
 };
 
-const AssistantGrading = ({ loaderData }: Route.ComponentProps) => {
+const OwnerGrading = ({ loaderData }: Route.ComponentProps) => {
   const { grading } = loaderData;
   const fetcher = useFetcher();
   const { revalidate } = useRevalidator();
@@ -22,7 +24,7 @@ const AssistantGrading = ({ loaderData }: Route.ComponentProps) => {
   const refreshing = fetcher.state !== 'idle';
   const refreshingId =
     refreshing && fetcher.formAction
-      ? fetcher.formAction.match(/\/api\/repos\/([^/]+)\/refresh/)?.[1] ?? null
+      ? (fetcher.formAction.match(/\/api\/repos\/([^/]+)\/refresh/)?.[1] ?? null)
       : null;
 
   const handleRefresh = (repositoryAssignmentId: string) => {
@@ -32,10 +34,12 @@ const AssistantGrading = ({ loaderData }: Route.ComponentProps) => {
     });
   };
 
-  // When the fetcher returns success, revalidate so the loader picks up
-  // the fresh snapshot (the Trigger.dev workflow writes to the DB).
   useEffect(() => {
-    if (fetcher.state === 'idle' && fetcher.data && (fetcher.data as { enqueued?: boolean }).enqueued) {
+    if (
+      fetcher.state === 'idle' &&
+      fetcher.data &&
+      (fetcher.data as { enqueued?: boolean }).enqueued
+    ) {
       revalidate();
     }
   }, [fetcher.state, fetcher.data, revalidate]);
@@ -54,8 +58,6 @@ const AssistantGrading = ({ loaderData }: Route.ComponentProps) => {
   );
 };
 
-export const action = () => {
-  return { message: 'Success' };
-};
+export const action = () => ({ message: 'Success' });
 
-export default AssistantGrading;
+export default OwnerGrading;
