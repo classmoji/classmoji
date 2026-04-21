@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { Link } from 'react-router';
+import { Link, useFetcher, useRevalidator } from 'react-router';
 import dayjs from 'dayjs';
 import { IconChevronRight } from '@tabler/icons-react';
 import type { Route } from './+types/route';
@@ -11,6 +11,12 @@ import { assertClassroomAccess } from '~/utils/helpers';
 type TaskKind = 'asgn' | 'quiz';
 type TaskStatus = 'open' | 'submitted' | 'late' | 'done' | 'upcoming' | 'locked';
 
+interface GradeChip {
+  emoji: string;
+  graderName: string | null;
+  grade: number | null;
+}
+
 interface Task {
   id: string;
   kind: TaskKind;
@@ -19,21 +25,34 @@ interface Task {
   status: TaskStatus;
   moduleTitle?: string;
   href: string;
+  // Richer metadata used to render grade chips + action buttons.
+  repositoryAssignmentId?: string;
+  assignmentId?: string;
+  grades?: GradeChip[];
+  isLate?: boolean;
+  isLateOverride?: boolean;
+  tokensPerHour?: number;
 }
 
 interface LoaderRepoAssignment {
   id: string;
   status: string;
   provider_issue_number?: number | null;
+  is_late_override?: boolean;
   assignment: {
     id: string;
     title: string;
     student_deadline: string | Date | null;
+    tokens_per_hour?: number | null;
   };
   repository: {
     name: string;
-    module: { id: string; title: string } | null;
+    module: { id: string; title: string; slug: string | null } | null;
   };
+  grades?: Array<{
+    emoji: string;
+    grader?: { name?: string | null } | null;
+  }>;
 }
 
 interface LoaderQuiz {
@@ -58,13 +77,22 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
     attemptedAction: 'view_tasks',
   });
 
-  const [rawRepoAssignments, rawQuizzes] = (await Promise.all([
+  const [rawRepoAssignments, rawQuizzes, rawEmojiMappings, balance] = (await Promise.all([
     ClassmojiService.repositoryAssignment.findForUser({
       repository: { student_id: userId, classroom_id: classroom.id },
     }),
     ClassmojiService.quiz.getQuizzesForStudent(classroom.id, userId, membership),
-  ])) as unknown as [LoaderRepoAssignment[], LoaderQuiz[]];
+    // findByClassroomId (default) returns Record<emoji, grade>, not an array.
+    ClassmojiService.emojiMapping.findByClassroomId(classroom.id),
+    ClassmojiService.token.getBalance(classroom.id, userId),
+  ])) as unknown as [
+    LoaderRepoAssignment[],
+    LoaderQuiz[],
+    Record<string, number>,
+    number,
+  ];
 
+  const emojiGrade = new Map<string, number>(Object.entries(rawEmojiMappings ?? {}));
   const now = dayjs();
   const tasks: Task[] = [];
 
@@ -79,6 +107,14 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
     else if (due && dayjs(due).diff(now, 'day') > 7) status = 'upcoming';
     else status = 'open';
 
+    const grades: GradeChip[] = (ra.grades ?? []).map(g => ({
+      emoji: g.emoji,
+      graderName: g.grader?.name ?? null,
+      grade: emojiGrade.get(g.emoji) ?? null,
+    }));
+    const isLate = Boolean(due && dayjs(due).isBefore(now));
+    const isLateOverride = Boolean(ra.is_late_override);
+
     tasks.push({
       id: `asgn-${ra.id}`,
       kind: 'asgn',
@@ -86,7 +122,15 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
       dueAt: due,
       status,
       moduleTitle: ra.repository.module?.title,
-      href: `/student/${classSlug}/assignments/${ra.assignment.id}`,
+      href: ra.repository.module?.slug
+        ? `/student/${classSlug}/modules/${ra.repository.module.slug}`
+        : `/student/${classSlug}/modules`,
+      repositoryAssignmentId: ra.id,
+      assignmentId: ra.assignment.id,
+      grades,
+      isLate,
+      isLateOverride,
+      tokensPerHour: ra.assignment.tokens_per_hour ?? 0,
     });
   }
 
@@ -111,7 +155,7 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
     });
   }
 
-  return { classSlug, tasks };
+  return { classSlug, tasks, tokenBalance: balance };
 };
 
 // --- Helpers ---------------------------------------------------------------
@@ -174,9 +218,40 @@ function relativeDue(dueAt: Date | null, now = dayjs()): string {
 // --- Component -------------------------------------------------------------
 
 const StudentTasks = ({ loaderData }: Route.ComponentProps) => {
-  const { tasks } = loaderData;
+  const { tasks, tokenBalance, classSlug } = loaderData;
   const [statusFilter, setStatusFilter] = useState<'all' | TaskStatus>('all');
   const [typeFilter, setTypeFilter] = useState<'all' | TaskKind>('all');
+  const fetcher = useFetcher();
+  const { revalidate } = useRevalidator();
+
+  const onBuyExtension = (repositoryAssignmentId: string, tokensPerHour: number) => {
+    if (tokensPerHour <= 0) return;
+    const hoursRaw = window.prompt(
+      `How many hours of extension? Costs ${tokensPerHour} token${
+        tokensPerHour === 1 ? '' : 's'
+      } per hour. You have ${tokenBalance} token${tokenBalance === 1 ? '' : 's'}.`,
+      '24'
+    );
+    if (!hoursRaw) return;
+    const hours = Number(hoursRaw);
+    if (!Number.isFinite(hours) || hours <= 0) return;
+    const cost = Math.round(hours * tokensPerHour);
+    if (cost > tokenBalance) {
+      window.alert(
+        `You need ${cost} tokens but only have ${tokenBalance}. Earn more tokens or reduce the hours.`
+      );
+      return;
+    }
+    fetcher.submit(
+      { repository_assignment_id: repositoryAssignmentId, hours },
+      {
+        method: 'POST',
+        action: `/student/${classSlug}/tasks/buy-extension`,
+        encType: 'application/json',
+      }
+    );
+    setTimeout(() => revalidate(), 400);
+  };
 
   const filtered = useMemo(() => {
     return tasks.filter(t => {
@@ -207,6 +282,17 @@ const StudentTasks = ({ loaderData }: Route.ComponentProps) => {
 
   return (
     <div className="grid grid-cols-1 md:grid-cols-[220px_1fr] gap-4">
+      {/* Token balance pill */}
+      <div className="md:col-span-2 flex items-center justify-between">
+        <h1 className="text-2xl font-semibold tracking-tight text-gray-900 dark:text-gray-100">
+          Assignments
+        </h1>
+        <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-amber-50 dark:bg-amber-900/20 border border-amber-200/70 dark:border-amber-800/50 text-[12.5px] text-amber-900 dark:text-amber-200">
+          <span aria-hidden>🪙</span>
+          <span className="font-mono font-medium">{tokenBalance}</span>
+          <span>tokens</span>
+        </div>
+      </div>
       {/* Filter sidebar */}
       <aside className="panel md:sticky md:top-4 self-start p-4 flex flex-col gap-4">
         <div className="flex flex-col gap-2">
@@ -260,7 +346,13 @@ const StudentTasks = ({ loaderData }: Route.ComponentProps) => {
                   <div key={bucket} className="flex flex-col">
                     <div className="caps pt-2 pb-1.5">{BUCKET_LABEL[bucket]}</div>
                     {items.map(t => (
-                      <TaskRow key={t.id} task={t} />
+                      <TaskRow
+                        key={t.id}
+                        task={t}
+                        classSlug={classSlug}
+                        tokenBalance={tokenBalance}
+                        onBuyExtension={onBuyExtension}
+                      />
                     ))}
                   </div>
                 );
@@ -314,25 +406,48 @@ function FilterChip({
   );
 }
 
-function TaskRow({ task }: { task: Task }) {
+function TaskRow({
+  task,
+  classSlug,
+  tokenBalance,
+  onBuyExtension,
+}: {
+  task: Task;
+  classSlug: string;
+  tokenBalance: number;
+  onBuyExtension: (repositoryAssignmentId: string, tokensPerHour: number) => void;
+}) {
   const status = STATUS_CHIP[task.status];
-  const subline = [task.moduleTitle, relativeDue(task.dueAt)]
-    .filter(Boolean)
-    .join(' · ');
+  const subline = [task.moduleTitle, relativeDue(task.dueAt)].filter(Boolean).join(' · ');
+  const hasGrade = (task.grades?.length ?? 0) > 0;
+  const canBuyExtension =
+    task.kind === 'asgn' &&
+    !hasGrade &&
+    task.isLate &&
+    !task.isLateOverride &&
+    (task.tokensPerHour ?? 0) > 0 &&
+    tokenBalance > 0 &&
+    Boolean(task.repositoryAssignmentId);
+  const canResubmit = task.kind === 'asgn' && task.repositoryAssignmentId;
 
   return (
-    <Link
-      to={task.href}
-      className="row-hover grid items-center gap-3 px-2 py-2.5"
+    <div
+      className="grid items-center gap-3 px-2 py-2.5"
       style={{
-        gridTemplateColumns: 'auto 1fr auto auto',
+        gridTemplateColumns: '80px 1fr auto auto',
         borderTop: '1px solid var(--line-cool)',
       }}
     >
-      <span className={`chip ${task.kind === 'quiz' ? 'chip-quiz' : 'chip-asgn'}`}>
-        {task.kind === 'quiz' ? 'Quiz' : 'Asgn'}
-      </span>
-      <div className="flex flex-col min-w-0">
+      <Link
+        to={task.href}
+        className="flex items-center gap-2 row-hover"
+        style={{ textDecoration: 'none' }}
+      >
+        <span className={`chip ${task.kind === 'quiz' ? 'chip-quiz' : 'chip-asgn'}`}>
+          {task.kind === 'quiz' ? 'Quiz' : 'Asgn'}
+        </span>
+      </Link>
+      <Link to={task.href} className="flex flex-col min-w-0" style={{ textDecoration: 'none' }}>
         <span
           className="truncate"
           style={{ fontSize: '13.5px', fontWeight: 500, color: 'var(--ink-1)' }}
@@ -342,10 +457,61 @@ function TaskRow({ task }: { task: Task }) {
         <span className="text-xs truncate" style={{ color: 'var(--ink-3)' }}>
           {subline}
         </span>
+        {hasGrade && (
+          <span className="flex flex-wrap items-center gap-1.5 mt-1">
+            {task.grades!.map((g, i) => (
+              <span
+                key={i}
+                title={g.graderName ? `by ${g.graderName}` : undefined}
+                className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-amber-50 dark:bg-amber-900/20 border border-amber-200/70 dark:border-amber-800/50 text-[12px] text-amber-900 dark:text-amber-200"
+              >
+                <span>{g.emoji}</span>
+                {g.grade !== null && (
+                  <span className="font-mono text-[11px] text-amber-800 dark:text-amber-300">
+                    {g.grade}
+                  </span>
+                )}
+                {g.graderName && (
+                  <span className="text-[10.5px] text-amber-800/80 dark:text-amber-300/80">
+                    · {g.graderName}
+                  </span>
+                )}
+              </span>
+            ))}
+            {task.isLateOverride && (
+              <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-green-50 dark:bg-green-900/20 border border-green-200/70 dark:border-green-800/50 text-[11px] text-green-900 dark:text-green-200">
+                🛡 Late waived
+              </span>
+            )}
+          </span>
+        )}
+      </Link>
+      <div className="flex items-center gap-1.5">
+        {canResubmit && (
+          <Link
+            to={`/student/${classSlug}/regrade-requests/new`}
+            state={{ assignment: { id: task.repositoryAssignmentId } }}
+            className="px-2 py-1 rounded-md text-[11.5px] border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 hover:bg-gray-50 dark:hover:bg-gray-800 text-gray-700 dark:text-gray-200"
+          >
+            Request resubmit
+          </Link>
+        )}
+        {canBuyExtension && (
+          <button
+            type="button"
+            onClick={() => onBuyExtension(task.repositoryAssignmentId!, task.tokensPerHour ?? 0)}
+            className="px-2 py-1 rounded-md text-[11.5px] bg-amber-500 hover:bg-amber-600 text-white dark:bg-amber-600 dark:hover:bg-amber-500"
+            title={`Spend ${task.tokensPerHour} tokens/hour to waive the late flag`}
+          >
+            Use tokens · waive late
+          </button>
+        )}
       </div>
-      <span className={`chip ${status.className}`}>{status.label}</span>
-      <IconChevronRight size={16} style={{ color: 'var(--ink-3)' }} />
-    </Link>
+      <div className="flex items-center gap-2">
+        <span className={`chip ${status.className}`}>{status.label}</span>
+        <IconChevronRight size={16} style={{ color: 'var(--ink-3)' }} />
+      </div>
+    </div>
   );
 }
 
