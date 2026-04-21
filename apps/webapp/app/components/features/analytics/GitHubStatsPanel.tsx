@@ -7,6 +7,9 @@ import Anomalies from './Anomalies';
 import ContributorBreakdown, {
   type EligibleStudent,
 } from './ContributorBreakdown';
+import HeuristicsChips from './HeuristicsChips';
+import ChangedFilesList, { type ChangedFile } from './ChangedFilesList';
+import PullRequestPills from './PullRequestPills';
 
 export type ContributorRecord = {
   login: string;
@@ -31,6 +34,8 @@ export type GitHubStatsSnapshot = {
   contributors: ContributorRecord[];
   languages: Record<string, number>;
   pr_summary: PRSummary;
+  /** Optional per-file changes. Not populated by the server today. */
+  files?: ChangedFile[];
 };
 
 export interface GitHubStatsPanelProps {
@@ -42,6 +47,8 @@ export interface GitHubStatsPanelProps {
   repositoryId?: string;
   /** Classroom members eligible to be linked. */
   students?: EligibleStudent[];
+  /** Focus percentage (0-100) from quiz focus tracking. Optional. */
+  focusPct?: number | null;
 }
 
 function formatNumber(n: number): string {
@@ -112,6 +119,7 @@ const GitHubStatsPanel = ({
   refreshing = false,
   repositoryId,
   students,
+  focusPct,
 }: GitHubStatsPanelProps) => {
   if (!snapshot) {
     return (
@@ -224,6 +232,16 @@ const GitHubStatsPanel = ({
         <CommitTimeline commits={commits} deadline={deadline} />
       </div>
 
+      <HeuristicsChips
+        snapshot={{
+          commits,
+          contributors,
+          total_additions,
+          total_deletions,
+        }}
+        focusPct={focusPct ?? null}
+      />
+
       <Anomalies
         snapshot={{
           commits,
@@ -233,6 +251,9 @@ const GitHubStatsPanel = ({
         }}
         deadline={deadline}
       />
+
+      {/* Per-file changes (empty-state renders when absent) */}
+      <ChangedFilesList files={snapshot.files} />
 
       {/* Contributor breakdown (only when >1 contributor) */}
       {contributors.length > 1 && repositoryId && (
@@ -255,12 +276,8 @@ const GitHubStatsPanel = ({
       )}
 
       {/* PR summary */}
-      <div
-        className="text-sm text-gray-600 dark:text-gray-300"
-        data-testid="pr-summary"
-      >
-        <span className="font-semibold text-gray-800 dark:text-gray-100">PRs:</span>{' '}
-        {pr_summary.open} open · {pr_summary.merged} merged · {pr_summary.closed} closed
+      <div data-testid="pr-summary">
+        <PullRequestPills pr_summary={pr_summary} />
       </div>
     </Card>
   );

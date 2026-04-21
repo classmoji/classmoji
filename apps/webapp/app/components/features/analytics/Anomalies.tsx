@@ -5,7 +5,7 @@ import {
   averageCommitQuality,
   busFactor,
   dumpAndRun,
-} from '@classmoji/services';
+} from '@classmoji/services/flags';
 import type { CommitRecord } from './CommitTimeline';
 import type { ContributorRecord } from './GitHubStatsPanel';
 

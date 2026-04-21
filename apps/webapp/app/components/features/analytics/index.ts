@@ -16,3 +16,15 @@ export type {
   ContributorBreakdownProps,
   EligibleStudent,
 } from './ContributorBreakdown';
+export { default as HeuristicsChips } from './HeuristicsChips';
+export type { HeuristicsChipsProps } from './HeuristicsChips';
+export { default as ChangedFilesList } from './ChangedFilesList';
+export type { ChangedFilesListProps, ChangedFile } from './ChangedFilesList';
+export { default as PullRequestPills } from './PullRequestPills';
+export type { PullRequestPillsProps } from './PullRequestPills';
+export { default as BusFactorGauge } from './BusFactorGauge';
+export type { BusFactorGaugeProps } from './BusFactorGauge';
+export { default as ContributorPies } from './ContributorPies';
+export type { ContributorPiesProps } from './ContributorPies';
+export { default as BraidTimeline } from './BraidTimeline';
+export type { BraidTimelineProps } from './BraidTimeline';

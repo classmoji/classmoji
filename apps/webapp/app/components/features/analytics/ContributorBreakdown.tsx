@@ -17,7 +17,7 @@ import {
 import {
   aggregateByContributor,
   commitsPerDayByContributor,
-} from '@classmoji/services';
+} from '@classmoji/services/flags';
 import { useDarkMode } from '~/hooks';
 import type { CommitRecord } from './CommitTimeline';
 import type { ContributorRecord } from './GitHubStatsPanel';
