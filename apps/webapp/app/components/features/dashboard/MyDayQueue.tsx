@@ -1,5 +1,6 @@
 import { Card, Empty, Tag } from 'antd';
 import { CardHeader } from '~/components';
+import UserAvatar from '~/components/shared/UserAvatar';
 
 export interface MyDayQueueRow {
   repositoryAssignmentId: string;
@@ -41,17 +42,12 @@ const MyDayQueue = ({ queue }: MyDayQueueProps) => {
                 className="flex items-center gap-3 py-2 min-w-0"
                 data-testid="my-day-row"
               >
-                {row.studentLogin ? (
-                  <img
-                    src={`https://github.com/${row.studentLogin}.png`}
-                    alt={displayName}
-                    className="w-8 h-8 rounded-full ring-1 ring-gray-200 dark:ring-gray-700 flex-shrink-0"
-                  />
-                ) : (
-                  <div className="w-8 h-8 rounded-full bg-gray-200 dark:bg-gray-700 flex items-center justify-center text-[11px] font-semibold text-gray-600 dark:text-gray-300 flex-shrink-0">
-                    {displayName.slice(0, 1).toUpperCase()}
-                  </div>
-                )}
+                <UserAvatar
+                  login={row.studentLogin}
+                  name={row.studentName}
+                  seed={row.repositoryAssignmentId}
+                  size={32}
+                />
                 <div className="min-w-0 flex-1">
                   <div className="text-sm text-gray-900 dark:text-gray-100 truncate">
                     {displayName}

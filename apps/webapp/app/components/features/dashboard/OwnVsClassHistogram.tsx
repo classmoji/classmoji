@@ -10,6 +10,7 @@ import {
   Legend,
 } from 'recharts';
 import { CardHeader } from '~/components';
+import { useDarkMode } from '~/hooks';
 
 export interface GradeBucket {
   bucket: string;
@@ -21,7 +22,10 @@ interface OwnVsClassHistogramProps {
   classroom: GradeBucket[];
 }
 
-const YOURS_COLOR = '#8b5cf6';
+// Class distribution stays a neutral gray so the two bar series never collide
+// visually regardless of the user's accent choice. "Yours" is resolved at
+// render time from the live accent (Recharts doesn't reliably resolve
+// `var(--accent)` in SVG fill attributes).
 const CLASS_COLOR = '#94a3b8';
 
 function normalize(rows: GradeBucket[]): Map<string, number> {
@@ -34,6 +38,7 @@ function normalize(rows: GradeBucket[]): Map<string, number> {
 }
 
 const OwnVsClassHistogram = ({ yours, classroom }: OwnVsClassHistogramProps) => {
+  const { accent } = useDarkMode();
   const yoursMap = normalize(yours);
   const classMap = normalize(classroom);
   // Preserve order from `classroom` buckets (canonical), fall back to yours.
@@ -85,7 +90,7 @@ const OwnVsClassHistogram = ({ yours, classroom }: OwnVsClassHistogramProps) => 
                 wrapperStyle={{ fontSize: 12 }}
                 formatter={(v: string) => (v === 'yours' ? 'Yours' : 'Classroom')}
               />
-              <Bar dataKey="yours" fill={YOURS_COLOR} radius={[2, 2, 0, 0]} />
+              <Bar dataKey="yours" fill={accent} radius={[2, 2, 0, 0]} />
               <Bar dataKey="classroom" fill={CLASS_COLOR} radius={[2, 2, 0, 0]} />
             </BarChart>
           </ResponsiveContainer>

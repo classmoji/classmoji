@@ -13,5 +13,8 @@ export type { MyDayQueueRow } from './MyDayQueue';
 export { default as ThroughputSparkline } from './ThroughputSparkline';
 export type { ThroughputPoint } from './ThroughputSparkline';
 export { default as StreakBadge } from './StreakBadge';
+export { default as MyDayHeader } from './MyDayHeader';
 export { default as OwnVsClassHistogram } from './OwnVsClassHistogram';
 export type { GradeBucket } from './OwnVsClassHistogram';
+export { default as KpiTile } from './KpiTile';
+export { default as AnimatedCounter } from './AnimatedCounter';

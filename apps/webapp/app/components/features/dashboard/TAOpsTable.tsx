@@ -1,6 +1,7 @@
 import { Card, Table } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { CardHeader } from '~/components';
+import UserAvatar from '~/components/shared/UserAvatar';
 
 export interface TaOpsRow {
   taId: string;
@@ -23,17 +24,7 @@ const TAOpsTable = ({ rows }: TAOpsTableProps) => {
       key: 'ta',
       render: (_, r) => (
         <div className="flex items-center gap-2 min-w-0">
-          {r.login ? (
-            <img
-              src={`https://github.com/${r.login}.png`}
-              alt={r.name || r.login}
-              className="w-7 h-7 rounded-full ring-1 ring-gray-200 dark:ring-gray-700 flex-shrink-0"
-            />
-          ) : (
-            <div className="w-7 h-7 rounded-full bg-gray-200 dark:bg-gray-700 flex items-center justify-center text-[11px] font-semibold text-gray-600 dark:text-gray-300">
-              {(r.name || r.login || '?').slice(0, 1).toUpperCase()}
-            </div>
-          )}
+          <UserAvatar login={r.login} name={r.name} seed={r.taId} size={28} />
           <div className="min-w-0">
             <div className="text-sm text-gray-900 dark:text-gray-100 truncate">
               {r.name || r.login || 'Unknown'}

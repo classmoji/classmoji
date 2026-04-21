@@ -9,6 +9,7 @@ import {
   ThroughputSparkline,
   StreakBadge,
   OwnVsClassHistogram,
+  MyDayHeader,
 } from '~/components/features/dashboard';
 import type {
   MyDayQueueRow,
@@ -32,6 +33,8 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
       ClassmojiService.taDashboard.gradingStreak(userId, classroom.id),
       ClassmojiService.taDashboard.overdueQueue(userId, classroom.id),
       ClassmojiService.taDashboard.personalGradeDistribution(userId, classroom.id),
+      ClassmojiService.taDashboard.personalDailyTotals(userId, classroom.id),
+      ClassmojiService.user.findById(userId),
     ]),
   };
 };
@@ -53,6 +56,8 @@ const AssistantDashboard = ({ loaderData }: Route.ComponentProps) => {
               streak,
               overdue,
               distribution,
+              dailyTotals,
+              currentUser,
             ] = resolved as [
               Array<{ repository_assignment?: { grades?: unknown[] }; [key: string]: unknown }>,
               unknown[],
@@ -68,13 +73,31 @@ const AssistantDashboard = ({ loaderData }: Route.ComponentProps) => {
               { days: number; lastGradedAt: string | null },
               MyDayQueueRow[],
               { yours: GradeBucket[]; classroom: GradeBucket[] },
+              {
+                todayGraded: number;
+                weekGraded: number;
+                medianSlaHours: number | null;
+                backlogCount: number;
+              },
+              { name: string | null; login: string | null } | null,
             ];
             const numUngradedAssignments = assignments.filter(
               a => a.repository_assignment?.grades?.length == 0
             )?.length;
 
+            const displayName = currentUser?.name || currentUser?.login || 'there';
+
             return (
               <>
+                <MyDayHeader
+                  name={displayName}
+                  queueCount={overdue.length}
+                  medianSlaHours={dailyTotals.medianSlaHours}
+                  streakDays={streak.days}
+                  todayGraded={dailyTotals.todayGraded}
+                  weekGraded={dailyTotals.weekGraded}
+                  backlog={dailyTotals.backlogCount}
+                />
                 <div className="grid grid-cols-1 lg:grid-cols-4 gap-4">
                   <div className="lg:col-span-2">
                     <MyDayQueue queue={overdue} />

@@ -1,7 +1,9 @@
+import { useId } from 'react';
 import { Card } from 'antd';
 import dayjs from 'dayjs';
 import { ResponsiveContainer, AreaChart, Area, Tooltip } from 'recharts';
 import { CardHeader } from '~/components';
+import { useDarkMode } from '~/hooks';
 
 export interface ThroughputPoint {
   date: string; // YYYY-MM-DD
@@ -11,8 +13,6 @@ export interface ThroughputPoint {
 interface ThroughputSparklineProps {
   data: ThroughputPoint[];
 }
-
-const ACCENT = '#8b5cf6';
 
 interface TooltipPayloadItem {
   payload?: ThroughputPoint;
@@ -38,6 +38,8 @@ const SparkTooltip = ({
 
 const ThroughputSparkline = ({ data }: ThroughputSparklineProps) => {
   const total = data.reduce((sum, d) => sum + d.count, 0);
+  const { accent } = useDarkMode();
+  const gradientId = useId();
   return (
     <Card className="h-full" data-testid="throughput-sparkline">
       <CardHeader>Throughput (7d)</CardHeader>
@@ -48,18 +50,18 @@ const ThroughputSparkline = ({ data }: ThroughputSparklineProps) => {
         <ResponsiveContainer width="100%" height="100%">
           <AreaChart data={data} margin={{ top: 4, right: 0, bottom: 0, left: 0 }}>
             <defs>
-              <linearGradient id="throughputFill" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="0%" stopColor={ACCENT} stopOpacity={0.35} />
-                <stop offset="100%" stopColor={ACCENT} stopOpacity={0} />
+              <linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor={accent} stopOpacity={0.35} />
+                <stop offset="100%" stopColor={accent} stopOpacity={0} />
               </linearGradient>
             </defs>
-            <Tooltip content={<SparkTooltip />} cursor={{ stroke: ACCENT, strokeOpacity: 0.3 }} />
+            <Tooltip content={<SparkTooltip />} cursor={{ stroke: accent, strokeOpacity: 0.3 }} />
             <Area
               type="monotone"
               dataKey="count"
-              stroke={ACCENT}
+              stroke={accent}
               strokeWidth={2}
-              fill="url(#throughputFill)"
+              fill={`url(#${gradientId})`}
               isAnimationActive={false}
             />
           </AreaChart>

@@ -4,13 +4,13 @@ import { Card, Skeleton } from 'antd';
 
 import { ClassmojiService } from '@classmoji/services';
 import { requireClassroomAdmin } from '~/utils/routeAuth.server';
-import { StatsCard } from '~/components';
 import {
   AssignmentHeatmap,
   TAOpsTable,
   AtRiskStudents,
   QuizAnalytics,
   DeadlinePressure,
+  KpiTile,
 } from '~/components/features/dashboard';
 import type { AssignmentHealthRow } from '~/components/features/dashboard';
 import type { TaOpsRow } from '~/components/features/dashboard';
@@ -26,6 +26,10 @@ interface CohortOverviewShape {
   medianGrade: number | null;
   atRiskCount: number;
   atRiskStudents: AtRiskStudent[];
+  activeStudentsSeries: number[];
+  submissionRateSeries: number[];
+  slaSeriesHours: number[];
+  atRiskSeries: number[];
 }
 
 export const loader = async ({ params, request }: Route.LoaderArgs) => {
@@ -112,16 +116,61 @@ const AdminDashboard = ({ loaderData }: Route.ComponentProps) => {
                 CohortOverviewShape,
                 number | null,
               ];
+              const subRate = cohortData.submissionRateSeries;
+              const latestSubRate = subRate.length > 0 ? subRate[subRate.length - 1] : 0;
+              const sla = cohortData.slaSeriesHours;
+              const slaFirst = sla.length > 0 ? sla[0] : 0;
+              const slaLast = sla.length > 0 ? sla[sla.length - 1] : 0;
+              const slaImproved = slaLast < slaFirst;
+              const slaDeltaAbs = Math.abs(slaLast - slaFirst);
+              const atRisk = cohortData.atRiskSeries;
+              const atRiskPrev = atRisk.length >= 2 ? atRisk[atRisk.length - 2] : 0;
+              const atRiskLast = atRisk.length > 0 ? atRisk[atRisk.length - 1] : 0;
+              const atRiskDiff = atRiskLast - atRiskPrev;
               return (
                 <>
-                  <StatsCard title="Active Students">{cohortData.activeStudents}</StatsCard>
-                  <StatsCard title="Median Grade">
-                    {cohortData.medianGrade === null ? '—' : cohortData.medianGrade.toFixed(1)}
-                  </StatsCard>
-                  <StatsCard title="Grading SLA">
-                    {slaHours === null ? '—' : `${slaHours.toFixed(1)}h`}
-                  </StatsCard>
-                  <StatsCard title="At-Risk Count">{cohortData.atRiskCount}</StatsCard>
+                  <KpiTile
+                    label="Active Students"
+                    value={cohortData.activeStudents}
+                    sub="Past 14 days"
+                    series={cohortData.activeStudentsSeries}
+                  />
+                  <KpiTile
+                    label="Avg Submission Rate"
+                    value={Math.round(latestSubRate * 100)}
+                    suffix="%"
+                    sub="Latest week"
+                    series={cohortData.submissionRateSeries.map((v) => v * 100)}
+                  />
+                  <KpiTile
+                    label="Grading SLA"
+                    value={slaHours === null ? '—' : Number(slaHours.toFixed(1))}
+                    suffix={slaHours === null ? '' : 'h'}
+                    sub="Median time-to-grade"
+                    delta={
+                      sla.length >= 2 && slaDeltaAbs > 0.05
+                        ? {
+                            text: `${slaImproved ? '−' : '+'}${slaDeltaAbs.toFixed(1)}h`,
+                            dir: slaImproved ? 'up' : 'down',
+                          }
+                        : undefined
+                    }
+                    series={cohortData.slaSeriesHours}
+                  />
+                  <KpiTile
+                    label="Risk Students"
+                    value={cohortData.atRiskCount}
+                    sub="≥2 missed deadlines"
+                    delta={
+                      atRiskDiff !== 0
+                        ? {
+                            text: `${atRiskDiff > 0 ? '+' : ''}${atRiskDiff} this week`,
+                            dir: atRiskDiff > 0 ? 'down' : 'up',
+                          }
+                        : undefined
+                    }
+                    series={cohortData.atRiskSeries}
+                  />
                 </>
               );
             }}
