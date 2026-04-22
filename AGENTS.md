@@ -151,3 +151,30 @@ Tracks student engagement via `total_duration_ms`, `unfocused_duration_ms`, and 
 - Don't run `npm run dev` to test, it will already be running.
 - **Test frontend changes** using Claude-in-Chrome browser tools. After making changes, open the affected page and verify both visual rendering and functionality.
 - When working on the webapp, use the `react-router-framework-mode` skill if available for React Router conventions and patterns.
+
+## Analytics (TA & Owner Dashboards)
+
+Repo analytics power the owner dashboard, TA cockpit, and per-submission anomaly chips. Design doc: `docs/plans/2026-04-19-ta-owner-analytics-design.md`.
+
+### Storage
+- `repo_analytics_snapshots` — one row per `repository_assignment_id`. Holds raw JSON blobs (commits, contributors, languages, pulls) plus denormalized aggregates for fast reads.
+- `repository_contributor_links` — maps GitHub logins to enrolled users when autodetect (by linked `github_username`) fails. Populated by TAs through the grading UI.
+
+### Refresh cadence
+- On-demand: `POST /api/repos/:id/refresh` enqueues a Trigger.dev run of `refresh-repo-analytics`.
+- Scheduled: `refresh-repo-analytics-all` fans out over every active assignment every 6h.
+- GitHub returns `202 Accepted` for cold contributor stats; the task auto-reschedules itself in 60s until stats are ready.
+
+### Service entry points (`@classmoji/services`)
+- `ClassmojiService.repoAnalytics.*` — `refreshOne`, `listActiveAssignmentIds`, snapshot reads, contributor linking.
+- `ClassmojiService.dashboard.*` — owner-level aggregates (cohort KPIs, bus-factor rollups).
+- `ClassmojiService.taDashboard.*` — TA-scoped personal queue + assignment rollups.
+
+### UI entry points
+- Owner dashboard: `admin.$class.dashboard`
+- TA cockpit: `assistant.$class_.dashboard`
+- Per-submission anomaly panel: assistant grading view (`assistant.$class_.assignments.$id.submissions.$submissionId`)
+
+### Pattern notes
+- Heuristics (`lateCommitRatio`, `busFactor`, `copyPasteRisk`, etc.) are pure functions in `packages/services/src/classmoji/repoAnalytics.flags.ts`. Safe to import in client bundles — they never touch Prisma or `process`.
+- Backfill: `cd packages/database && npm run backfill:repo-analytics` (or `--inline` for local dev without Trigger.dev).

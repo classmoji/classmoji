@@ -282,7 +282,7 @@ const RepositoriesTable = ({
       key: 'name',
       width: '70%',
       render: (name: string) => (
-        <span className="font-medium text-gray-800 dark:text-gray-200">{name}</span>
+        <span className="font-medium text-ink-0 dark:text-ink-1">{name}</span>
       ),
     },
     {
@@ -329,12 +329,12 @@ const RepositoriesTable = ({
 
       {/* Search Results Summary */}
       {search && (
-        <div className="mb-4 pb-4 border-b border-gray-200 dark:border-gray-700">
-          <p className="text-sm text-gray-600 dark:text-gray-400">
+        <div className="mb-4 pb-4 border-b border-line dark:border-line">
+          <p className="text-sm text-ink-2 dark:text-ink-3">
             {totalCount} repositor{totalCount !== 1 ? 'ies' : 'y'} found
             <span className="ml-1">
               for &quot;
-              <span className="font-medium text-gray-900 dark:text-gray-200">{search}</span>&quot;
+              <span className="font-medium text-ink-0 dark:text-ink-1">{search}</span>&quot;
             </span>
           </p>
         </div>
@@ -380,13 +380,13 @@ const RepositoriesTable = ({
         }}
         locale={{
           emptyText: search ? (
-            <div className="text-center py-8 text-gray-500">
+            <div className="text-center py-8 text-ink-2">
               <div className="text-4xl mb-2">🔍</div>
               <div>No repositories found matching &quot;{search}&quot;</div>
               <div className="text-sm">Try adjusting your search terms</div>
             </div>
           ) : (
-            <div className="text-center py-8 text-gray-500">
+            <div className="text-center py-8 text-ink-2">
               <div className="text-4xl mb-2">📁</div>
               <div>No repositories found</div>
               <div className="text-sm">Refresh to load repositories from GitHub</div>

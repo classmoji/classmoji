@@ -72,6 +72,65 @@ export class GitProvider {
     throw new Error('getLatestCommitSHA() must be implemented by subclass');
   }
 
+  /**
+   * List commits for a repository, optionally filtered by branch and a since timestamp.
+   * Returns a normalized CommitRecord[] with per-commit additions/deletions.
+   * @param {string} org - Organization login
+   * @param {string} repo - Repository name
+   * @param {{since?: string, branch?: string}} [opts] - Optional filters
+   * @returns {Promise<CommitRecord[]>}
+   */
+  async listCommits(
+    _org: string,
+    _repo: string,
+    _opts?: { since?: string; branch?: string }
+  ): Promise<import('../classmoji/repoAnalytics.types.ts').CommitRecord[]> {
+    throw new Error('listCommits() must be implemented by subclass');
+  }
+
+  /**
+   * Get the GitHub contributor statistics (weekly additions/deletions per author).
+   * GitHub returns 202 while the stats cache warms; implementations should surface that
+   * as `{ pending: true }` so callers can retry later.
+   * @param {string} org - Organization login
+   * @param {string} repo - Repository name
+   * @returns {Promise<{ pending: true } | ContributorRecord[]>}
+   */
+  async getContributorStats(
+    _org: string,
+    _repo: string
+  ): Promise<
+    { pending: true } | import('../classmoji/repoAnalytics.types.ts').ContributorRecord[]
+  > {
+    throw new Error('getContributorStats() must be implemented by subclass');
+  }
+
+  /**
+   * Get the byte-count breakdown of languages detected in the repository.
+   * @param {string} org - Organization login
+   * @param {string} repo - Repository name
+   * @returns {Promise<LanguagesMap>}
+   */
+  async getLanguages(
+    _org: string,
+    _repo: string
+  ): Promise<import('../classmoji/repoAnalytics.types.ts').LanguagesMap> {
+    throw new Error('getLanguages() must be implemented by subclass');
+  }
+
+  /**
+   * Summarize pull requests into `{ open, merged, closed }` counts.
+   * @param {string} org - Organization login
+   * @param {string} repo - Repository name
+   * @returns {Promise<PRSummary>}
+   */
+  async listPulls(
+    _org: string,
+    _repo: string
+  ): Promise<import('../classmoji/repoAnalytics.types.ts').PRSummary> {
+    throw new Error('listPulls() must be implemented by subclass');
+  }
+
   async createBranch(org: string, repo: string, branch: string, sha: string): Promise<void> {
     throw new Error('createBranch() must be implemented by subclass');
   }

@@ -128,7 +128,7 @@ const SingleStudentView = (props: SingleStudentViewProps) => {
       render: (title: string) => (
         <div className="flex items-center gap-2">
           <div className="w-1 h-4 bg-primary dark:bg-primary rounded-full"></div>
-          <span className="font-medium text-gray-900 dark:text-gray-100">{title}</span>
+          <span className="font-medium text-ink-0 dark:text-ink-0">{title}</span>
         </div>
       ),
     },
@@ -147,7 +147,7 @@ const SingleStudentView = (props: SingleStudentViewProps) => {
       dataIndex: 'weight',
       key: 'weight',
       render: (weight: number) => (
-        <span className="font-medium text-gray-900 dark:text-gray-100">{weight}%</span>
+        <span className="font-medium text-ink-0 dark:text-ink-0">{weight}%</span>
       ),
     },
     {
@@ -166,11 +166,11 @@ const SingleStudentView = (props: SingleStudentViewProps) => {
 
         if (module.is_extra_credit) {
           return (
-            <span className="font-bold text-green-600">+ {(grade * module.weight) / 100}</span>
+            <span className="font-bold text-mint-ink">+ {(grade * module.weight) / 100}</span>
           );
         }
 
-        return <span className="font-bold text-gray-900">{grade}</span>;
+        return <span className="font-bold text-ink-0">{grade}</span>;
       },
     },
   ];
@@ -185,7 +185,7 @@ const SingleStudentView = (props: SingleStudentViewProps) => {
       key: 'assignment',
       width: '20%',
       render: (title: string) => (
-        <span className="font-medium text-gray-800 dark:text-gray-200">{title}</span>
+        <span className="font-medium text-ink-0 dark:text-ink-1">{title}</span>
       ),
     },
     {
@@ -194,7 +194,7 @@ const SingleStudentView = (props: SingleStudentViewProps) => {
       key: 'weight',
       width: '10%',
       render: (weight: number) => (
-        <span className="font-medium text-gray-900 dark:text-gray-100">{weight}%</span>
+        <span className="font-medium text-ink-0 dark:text-ink-0">{weight}%</span>
       ),
     },
     {
@@ -203,7 +203,7 @@ const SingleStudentView = (props: SingleStudentViewProps) => {
       dataIndex: ['grades'],
       width: '10%',
       render: (grades: StudentGrade[]) => {
-        if (!grades.length) return <span className="text-gray-500 italic">No grades yet</span>;
+        if (!grades.length) return <span className="text-ink-2 italic">No grades yet</span>;
         return <EmojisDisplay grades={grades} />;
       },
     },
@@ -213,7 +213,7 @@ const SingleStudentView = (props: SingleStudentViewProps) => {
       dataIndex: ['grades'],
       width: '10%',
       render: (grades: StudentGrade[], repositoryAssignment: StudentRepoAssignment) => {
-        if (!grades.length) return <span className="text-gray-500 italic">No grades yet</span>;
+        if (!grades.length) return <span className="text-ink-2 italic">No grades yet</span>;
         const rawGrade = calculateNumericGrade(
           grades.map(({ emoji }) => emoji),
           emojiMappings as Record<string, number>
@@ -226,10 +226,10 @@ const SingleStudentView = (props: SingleStudentViewProps) => {
         );
 
         const getGradeColor = (grade: number) => {
-          if (grade >= 90) return 'text-green-600';
-          if (grade >= 80) return 'text-yellow-600';
+          if (grade >= 90) return 'text-mint-ink';
+          if (grade >= 80) return 'text-amber-ink';
           if (grade >= 70) return 'text-orange-600';
-          return 'text-red-600';
+          return 'text-rose-ink';
         };
 
         return <span className={`font-bold ${getGradeColor(grade)}`}>{grade}</span>;
@@ -327,9 +327,9 @@ const SingleStudentView = (props: SingleStudentViewProps) => {
             </div>
 
             <div className="flex flex-col items-center gap-2 text-center">
-              <h1 className="font-bold text-xl text-gray-900">{student?.name}</h1>
-              <h3 className="text-gray-600 font-medium">@{student?.login}</h3>
-              <h3 className="text-sm text-gray-500 bg-gray-100 px-3 py-1 rounded-full">
+              <h1 className="font-bold text-xl text-ink-0">{student?.name}</h1>
+              <h3 className="text-ink-2 font-medium">@{student?.login}</h3>
+              <h3 className="text-sm text-ink-2 bg-paper-2 px-3 py-1 rounded-full">
                 ID: {student?.school_id}
               </h3>
             </div>
@@ -361,7 +361,7 @@ const SingleStudentView = (props: SingleStudentViewProps) => {
         <Card className="shadow-xs">
           <div className="flex items-center gap-3 mb-6">
             <div className="w-1 h-6 bg-primary dark:bg-primary rounded-full"></div>
-            <h2 className="text-xl font-bold text-gray-900">Module Overview</h2>
+            <h2 className="text-xl font-bold text-ink-0">Module Overview</h2>
           </div>
           <Table
             columns={assignmentColumns}

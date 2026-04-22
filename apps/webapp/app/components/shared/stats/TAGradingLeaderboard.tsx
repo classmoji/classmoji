@@ -1,5 +1,6 @@
 import { CardHeader } from '~/components';
 import { Tag, Card } from 'antd';
+import UserAvatar from '~/components/shared/UserAvatar';
 
 interface GradingLeaderboardItem {
   id: string;
@@ -38,11 +39,7 @@ const TAGradingLeaderboard = ({ progress }: TAGradingLeaderboardProps) => {
               </div>
 
               <div className="flex items-center gap-2 min-w-0 flex-1">
-                <img
-                  src={`https://github.com/${item.login}.png`}
-                  alt={item.name || 'User avatar'}
-                  className="w-8 h-8 rounded-full ring-1 ring-gray-200 flex-shrink-0"
-                />
+                <UserAvatar login={item.login} name={item.name} seed={item.id} size={32} />
                 <div className="min-w-0 flex-1">
                   <p
                     className="font-medium text-gray-800 text-xs truncate"

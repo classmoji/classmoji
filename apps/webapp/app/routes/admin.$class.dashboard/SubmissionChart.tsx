@@ -9,15 +9,38 @@ import {
   ResponsiveContainer,
 } from 'recharts';
 import dayjs from 'dayjs';
+import { useMemo } from 'react';
 import { useDarkMode } from '~/hooks';
-import theme from '~/config/theme';
+
+/**
+ * Mix a hex color with white (positive `amt`) or black (negative). Used to
+ * derive hover/active bar shades from the live accent without plumbing the
+ * --accent-hover / --accent-ink CSS variables through Recharts (which
+ * sanitizes its fill/stroke props and won't resolve `var(...)`).
+ */
+function mix(hex: string, amt: number): string {
+  const v = hex.replace('#', '');
+  if (v.length !== 6) return hex;
+  const r = parseInt(v.slice(0, 2), 16);
+  const g = parseInt(v.slice(2, 4), 16);
+  const b = parseInt(v.slice(4, 6), 16);
+  const target = amt >= 0 ? 255 : 0;
+  const k = Math.abs(amt);
+  const to = (c: number) => Math.round(c + (target - c) * k);
+  const hx = (n: number) => n.toString(16).padStart(2, '0');
+  return `#${hx(to(r))}${hx(to(g))}${hx(to(b))}`;
+}
 
 interface SubmissionChartProps {
   recentRepositoryAssignments: { closed_at?: string | Date }[];
 }
 
 const SubmissionChart = ({ recentRepositoryAssignments }: SubmissionChartProps) => {
-  const { isDarkMode } = useDarkMode();
+  const { isDarkMode, accent } = useDarkMode();
+  // Recharts sanitizes color values and doesn't resolve `var(--accent)` on
+  // SVG attributes reliably, so resolve the accent at the React layer.
+  const activeFill = useMemo(() => mix(accent, 0.15), [accent]);
+  const activeStroke = useMemo(() => mix(accent, -0.25), [accent]);
   const lastDays = [];
   for (let i = 0; i < 10; i++) {
     lastDays.push(dayjs().subtract(i, 'day'));
@@ -42,8 +65,8 @@ const SubmissionChart = ({ recentRepositoryAssignments }: SubmissionChartProps) 
   }) => {
     if (active && payload && payload.length) {
       return (
-        <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-lg p-3">
-          <p className="text-gray-700 dark:text-gray-300 font-medium">{`${label}`}</p>
+        <div className="bg-panel dark:bg-panel border border-line dark:border-line rounded-lg shadow-lg p-3">
+          <p className="text-ink-1 dark:text-ink-3 font-medium">{`${label}`}</p>
           <p className="text-primary-600 dark:text-primary-400 font-semibold">
             {`${payload[0].value} submission${payload[0].value !== 1 ? 's' : ''}`}
           </p>
@@ -87,10 +110,10 @@ const SubmissionChart = ({ recentRepositoryAssignments }: SubmissionChartProps) 
         <Tooltip content={<CustomTooltip />} />
         <Bar
           dataKey="count"
-          fill={theme.PRIMARY}
+          fill={accent}
           radius={[4, 4, 0, 0]}
           activeBar={
-            <Rectangle fill={theme.PRIMARY_600} stroke={theme.PRIMARY_700} strokeWidth={1} />
+            <Rectangle fill={activeFill} stroke={activeStroke} strokeWidth={1} />
           }
         />
       </BarChart>

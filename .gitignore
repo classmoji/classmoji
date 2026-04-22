@@ -19,3 +19,10 @@ apps/slides/build/
 # Cloned student repositories
 packages/tasks/repos/
 apps/pages/build
+*.tsbuildinfo
+
+# Playwright MCP debug artifacts
+.playwright-mcp/
+
+# Loose screenshot debug captures in repo root
+/*.png

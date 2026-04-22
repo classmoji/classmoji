@@ -1,4 +1,10 @@
 import { GitProvider } from './GitProvider.ts';
+import type {
+  CommitRecord,
+  ContributorRecord,
+  LanguagesMap,
+  PRSummary,
+} from '../classmoji/repoAnalytics.types.ts';
 
 /**
  * GitLab adapter - implements GitProvider interface.
@@ -138,6 +144,59 @@ export class GitLabProvider extends GitProvider {
     // TODO: GET /api/v4/projects/:id/repository/branches/:branch
     throw new Error('GitLabProvider.getLatestCommitSHA() not implemented');
   }
+
+  /**
+   * List commits for a project, normalized to CommitRecord[]
+   * @param {string} group - Group path
+   * @param {string} project - Project name
+   * @param {{since?: string, branch?: string}} [opts] - Optional filters
+   * @returns {Promise<CommitRecord[]>}
+   */
+  async listCommits(
+    _group: string,
+    _project: string,
+    _opts?: { since?: string; branch?: string }
+  ): Promise<CommitRecord[]> {
+    // TODO: GET /api/v4/projects/:id/repository/commits
+    throw new Error('GitLabProvider.listCommits() not implemented');
+  }
+
+  /**
+   * Get contributor statistics for a GitLab project.
+   * @param {string} group - Group path
+   * @param {string} project - Project name
+   * @returns {Promise<{ pending: true } | ContributorRecord[]>}
+   */
+  async getContributorStats(
+    _group: string,
+    _project: string
+  ): Promise<{ pending: true } | ContributorRecord[]> {
+    // TODO: GET /api/v4/projects/:id/repository/contributors
+    throw new Error('GitLabProvider.getContributorStats() not implemented');
+  }
+
+  /**
+   * Get the language breakdown of a GitLab project.
+   * @param {string} group - Group path
+   * @param {string} project - Project name
+   * @returns {Promise<LanguagesMap>}
+   */
+  async getLanguages(_group: string, _project: string): Promise<LanguagesMap> {
+    // TODO: GET /api/v4/projects/:id/languages
+    throw new Error('GitLabProvider.getLanguages() not implemented');
+  }
+
+  /**
+   * Summarize merge requests into `{ open, merged, closed }` counts.
+   * @param {string} group - Group path
+   * @param {string} project - Project name
+   * @returns {Promise<PRSummary>}
+   */
+  async listPulls(_group: string, _project: string): Promise<PRSummary> {
+    // TODO: GET /api/v4/projects/:id/merge_requests?state=all
+    throw new Error('GitLabProvider.listPulls() not implemented');
+  }
+
 
   /**
    * Create a new branch

@@ -117,7 +117,7 @@ export default function BatchImportTab({ term, onPagesChange }: BatchImportTabPr
       render: (_: unknown, record: ImportedPage) => (
         <button
           onClick={() => removePage(record.id)}
-          className="text-gray-400 hover:text-red-500 transition-colors"
+          className="text-ink-3 hover:text-red-500 transition-colors"
           title="Remove"
         >
           <DeleteOutlined />
@@ -133,35 +133,35 @@ export default function BatchImportTab({ term, onPagesChange }: BatchImportTabPr
         {...getRootProps()}
         className={`border-2 border-dashed rounded-lg p-8 text-center cursor-pointer transition-colors ${
           isDragActive
-            ? 'border-blue-500 bg-blue-50'
+            ? 'border-blue-500 bg-sky-bg'
             : pages.length > 0
-              ? 'border-green-500 bg-green-50'
+              ? 'border-green-500 bg-mint-bg'
               : extractError
-                ? 'border-red-500 bg-red-50'
-                : 'border-gray-300 hover:border-gray-400'
+                ? 'border-red-500 bg-rose-bg'
+                : 'border-line hover:border-gray-400'
         }`}
       >
         <input {...getInputProps()} />
         {isExtracting ? (
           <div className="flex flex-col items-center gap-2">
-            <LoadingOutlined className="text-3xl text-blue-600" />
-            <p className="text-blue-700 font-medium">Extracting ZIP files...</p>
+            <LoadingOutlined className="text-3xl text-sky-ink" />
+            <p className="text-sky-ink font-medium">Extracting ZIP files...</p>
           </div>
         ) : pages.length > 0 ? (
           <div className="flex flex-col items-center gap-2">
-            <CheckCircleOutlined className="text-3xl text-green-600" />
-            <p className="text-green-700 font-medium">
+            <CheckCircleOutlined className="text-3xl text-mint-ink" />
+            <p className="text-mint-ink font-medium">
               {pages.length} page{pages.length !== 1 ? 's' : ''} ready to import
             </p>
-            <p className="text-xs text-gray-500">Drop more ZIP files to add</p>
+            <p className="text-xs text-ink-2">Drop more ZIP files to add</p>
           </div>
         ) : (
           <div>
-            <FileZipOutlined className="text-4xl text-gray-400 mb-3" />
-            <p className="text-gray-600 font-medium">
+            <FileZipOutlined className="text-4xl text-ink-3 mb-3" />
+            <p className="text-ink-2 font-medium">
               {isDragActive ? 'Drop ZIP files here' : 'Drop ZIP files here (multiple allowed)'}
             </p>
-            <p className="text-sm text-gray-500 mt-1">
+            <p className="text-sm text-ink-2 mt-1">
               Each ZIP should contain at least one markdown file; images are optional.
             </p>
           </div>
@@ -176,7 +176,7 @@ export default function BatchImportTab({ term, onPagesChange }: BatchImportTabPr
       {pages.length > 0 && (
         <div>
           <div className="flex items-center justify-between mb-2">
-            <h4 className="text-sm font-medium text-gray-700">Detected Pages ({pages.length})</h4>
+            <h4 className="text-sm font-medium text-ink-1">Detected Pages ({pages.length})</h4>
           </div>
           <Table
             dataSource={pages}

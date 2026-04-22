@@ -1,39 +1,56 @@
+import { useEffect } from 'react';
+import { useFetcher, useRevalidator } from 'react-router';
 import type { Route } from './+types/route';
-import { ClassmojiService } from '@classmoji/services';
 import { requireClassroomTeachingTeam } from '~/utils/routeAuth.server';
-import { PageHeader } from '~/components';
-import RepositoryAssignmentsTable from './RepositoryAssignmentsTable';
+import { loadGradingScreenData } from '~/utils/gradingScreen.server';
+import { GradingScreen } from '~/components/features/grading';
 
 export const loader = async ({ request, params }: Route.LoaderArgs) => {
   const { class: classSlug } = params;
-  const { userId, classroom } = await requireClassroomTeachingTeam(request, classSlug!);
-  const assignedGraderItems =
-    await ClassmojiService.repositoryAssignmentGrader.findAssignedByGrader(userId, classroom.id);
-  const myRepositoryAssignments = assignedGraderItems.map(item => item.repository_assignment);
-  const modules = await ClassmojiService.module.findByClassroomSlug(classSlug!);
+  const { classroom } = await requireClassroomTeachingTeam(request, classSlug!);
 
-  const allRepositoryAssignments = await ClassmojiService.repositoryAssignment.findByClassroomId(
-    classroom.id
-  );
+  const grading = await loadGradingScreenData(classroom.id, classSlug!);
 
-  const emojiMappings = await ClassmojiService.emojiMapping.findByClassroomId(classroom.id);
-
-  return { allRepositoryAssignments, myRepositoryAssignments, modules, emojiMappings };
+  return { grading };
 };
 
 const AssistantGrading = ({ loaderData }: Route.ComponentProps) => {
-  const { myRepositoryAssignments, modules, allRepositoryAssignments, emojiMappings } = loaderData;
+  const { grading } = loaderData;
+  const fetcher = useFetcher();
+  const { revalidate } = useRevalidator();
+
+  const refreshing = fetcher.state !== 'idle';
+  const refreshingId =
+    refreshing && fetcher.formAction
+      ? fetcher.formAction.match(/\/api\/repos\/([^/]+)\/refresh/)?.[1] ?? null
+      : null;
+
+  const handleRefresh = (repositoryAssignmentId: string) => {
+    fetcher.submit(null, {
+      method: 'POST',
+      action: `/api/repos/${repositoryAssignmentId}/refresh`,
+    });
+  };
+
+  // When the fetcher returns success, revalidate so the loader picks up
+  // the fresh snapshot (the Trigger.dev workflow writes to the DB).
+  useEffect(() => {
+    if (fetcher.state === 'idle' && fetcher.data && (fetcher.data as { enqueued?: boolean }).enqueued) {
+      revalidate();
+    }
+  }, [fetcher.state, fetcher.data, revalidate]);
 
   return (
-    <div>
-      <PageHeader title="Grading" routeName="grading" />
-      <RepositoryAssignmentsTable
-        allRepositoryAssignments={allRepositoryAssignments}
-        repositoryAssignments={myRepositoryAssignments}
-        modules={modules}
-        emojiMappings={emojiMappings}
-      />
-    </div>
+    <GradingScreen
+      stats={grading.stats}
+      queue={grading.queue}
+      analytics={grading.analytics}
+      grading={grading.grading}
+      emojiMappings={grading.emojiMappings}
+      students={grading.students}
+      onRefreshSubmission={handleRefresh}
+      refreshingSubmissionId={refreshingId}
+    />
   );
 };
 

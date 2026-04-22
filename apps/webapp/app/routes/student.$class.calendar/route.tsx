@@ -1,17 +1,12 @@
-import { useState } from 'react';
-import { Modal } from 'antd';
 import invariant from 'tiny-invariant';
-import { data, useFetcher, useParams } from 'react-router';
+import { data, useSearchParams } from 'react-router';
 import type { Route } from './+types/route';
-import { PageHeader } from '~/components';
 import { ClassmojiService } from '@classmoji/services';
 import { assertClassroomAccess } from '~/utils/helpers';
 import { buildCalendarUrl, getCalendarDateRange } from '~/utils/calendar.server';
-import CourseCalendar from '~/components/features/calendar/CourseCalendar';
-import CalendarSubscriptionCard from '~/components/features/calendar/CalendarSubscriptionCard';
-import EventCard from '~/components/features/calendar/EventCard';
-import EventLinks from '~/components/features/calendar/EventLinks';
-import type { CalendarEventWithLinks } from '~/components/features/calendar/types';
+import { CalendarScreen } from '~/components/features/calendar';
+import type { CalendarEvent } from '~/components/features/calendar';
+import { mapClassroomCalendarToEvents } from '~/components/features/calendar/mapToCalendarEvents';
 
 export const loader = async ({ request, params }: Route.LoaderArgs) => {
   const { class: classSlug } = params;
@@ -25,25 +20,21 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
     attemptedAction: 'view',
   });
 
-  // findBySlug already includes git_organization
   const classroom = await ClassmojiService.classroom.findBySlug(classSlug);
 
-  // Check for date params in URL (for fetching specific month)
   const url = new URL(request.url);
   const yearParam = url.searchParams.get('year');
   const monthParam = url.searchParams.get('month');
 
   const today = new Date();
-  const year = yearParam ? parseInt(yearParam) : today.getFullYear();
-  const month = monthParam ? parseInt(monthParam) : today.getMonth();
+  const year = yearParam ? parseInt(yearParam, 10) : today.getFullYear();
+  const month = monthParam ? parseInt(monthParam, 10) : today.getMonth();
 
   const { start, end } = getCalendarDateRange(year, month);
 
-  let events: Awaited<ReturnType<typeof ClassmojiService.calendar.getClassroomCalendar>> = [];
+  let rawEvents: Awaited<ReturnType<typeof ClassmojiService.calendar.getClassroomCalendar>> = [];
   try {
-    // Pass userId to include GitHub issue links for deadlines
-    // Don't include raw links for students (includeRawLinks=false by default)
-    events = await ClassmojiService.calendar.getClassroomCalendar(
+    rawEvents = await ClassmojiService.calendar.getClassroomCalendar(
       classroom!.id,
       start,
       end,
@@ -54,100 +45,50 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
       'Calendar service error (likely missing migration):',
       error instanceof Error ? error.message : error
     );
-    events = [];
+    rawEvents = [];
   }
 
-  // Get user's repository assignments for assignment link navigation
-  // This allows linking directly to GitHub issues for assignments
-  const repoAssignments = await ClassmojiService.repositoryAssignment.findForUser({
-    repository: { student_id: userId, classroom_id: classroom!.id },
+  const events: CalendarEvent[] = mapClassroomCalendarToEvents(rawEvents, {
+    classSlug,
+    rolePrefix: 'student',
   });
 
-  // Build map of assignment_id -> repository assignment (with repo info)
-  const repoAssignmentsByAssignmentId: Record<string, (typeof repoAssignments)[number]> = {};
-  repoAssignments.forEach(ra => {
-    repoAssignmentsByAssignmentId[ra.assignment_id] = ra;
-  });
-
-  // Build subscription URL
-  const subscriptionUrl = buildCalendarUrl(classSlug);
+  const subscribeUrl = buildCalendarUrl(classSlug);
 
   return data({
+    year,
+    month,
     events,
-    subscriptionUrl,
-    slidesUrl: process.env.SLIDES_URL || 'http://localhost:6500',
-    pagesUrl: process.env.PAGES_URL || 'http://localhost:7100',
-    gitOrgLogin: classroom!.git_organization?.login || null,
-    repoAssignmentsByAssignmentId,
+    subscribeUrl,
   });
 };
 
 const StudentCalendar = ({ loaderData }: Route.ComponentProps) => {
-  const {
-    events: initialEvents,
-    subscriptionUrl,
-    slidesUrl,
-    pagesUrl,
-    gitOrgLogin,
-    repoAssignmentsByAssignmentId,
-  } = loaderData;
-  const { class: classSlug } = useParams();
-  const eventsFetcher = useFetcher();
-  const [viewModalOpen, setViewModalOpen] = useState(false);
-  const [selectedEvent, setSelectedEvent] = useState<CalendarEventWithLinks | null>(null);
+  const { year, month, events, subscribeUrl } = loaderData;
+  const [searchParams, setSearchParams] = useSearchParams();
 
-  // Use fetched events if available, otherwise use initial loader events
-  const events = eventsFetcher.data?.events || initialEvents;
-
-  // Handle month navigation - fetch new events
-  const handleMonthChange = (year: number, month: number) => {
-    eventsFetcher.load(`?year=${year}&month=${month}`);
-  };
-
-  const handleEventClick = (event: CalendarEventWithLinks) => {
-    setSelectedEvent(event);
-    setViewModalOpen(true);
+  const goToMonth = (y: number, m: number) => {
+    // Normalize month (handles -1 / 12 rollover)
+    const date = new Date(y, m, 1);
+    const nextParams = new URLSearchParams(searchParams);
+    nextParams.set('year', String(date.getFullYear()));
+    nextParams.set('month', String(date.getMonth()));
+    setSearchParams(nextParams, { preventScrollReset: true });
   };
 
   return (
-    <div>
-      <PageHeader title="Calendar" routeName="calendar">
-        <CalendarSubscriptionCard subscriptionUrl={subscriptionUrl} />
-      </PageHeader>
-
-      <CourseCalendar
-        events={events}
-        onEventClick={handleEventClick}
-        onEventDrop={null}
-        onMonthChange={handleMonthChange}
-        showCreator={true}
-      />
-
-      <Modal
-        title="Event Details"
-        open={viewModalOpen}
-        onCancel={() => {
-          setViewModalOpen(false);
-          setSelectedEvent(null);
-        }}
-        footer={null}
-      >
-        {selectedEvent && (
-          <>
-            <EventCard event={selectedEvent} showCreator={true} compact={false} />
-            <EventLinks
-              event={selectedEvent}
-              classSlug={classSlug}
-              rolePrefix="student"
-              slidesUrl={slidesUrl}
-              pagesUrl={pagesUrl}
-              gitOrgLogin={gitOrgLogin}
-              repoAssignmentsByAssignmentId={repoAssignmentsByAssignmentId}
-            />
-          </>
-        )}
-      </Modal>
-    </div>
+    <CalendarScreen
+      year={year}
+      month={month}
+      events={events}
+      subscribeUrl={subscribeUrl}
+      onPrev={() => goToMonth(year, month - 1)}
+      onNext={() => goToMonth(year, month + 1)}
+      onToday={() => {
+        const today = new Date();
+        goToMonth(today.getFullYear(), today.getMonth());
+      }}
+    />
   );
 };
 

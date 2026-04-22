@@ -3,6 +3,12 @@ import { createAppAuth } from '@octokit/auth-app';
 import { createHmac, timingSafeEqual } from 'crypto';
 import jwt from 'jsonwebtoken';
 import { GitProvider } from './GitProvider.ts';
+import type {
+  CommitRecord,
+  ContributorRecord,
+  LanguagesMap,
+  PRSummary,
+} from '../classmoji/repoAnalytics.types.ts';
 
 import dotenv from 'dotenv';
 dotenv.config();
@@ -55,6 +61,12 @@ export class GitHubProvider extends GitProvider {
    * @returns {Promise<Octokit>}
    */
   async #getOctokit(): Promise<Octokit> {
+    // Support dependency injection (used by tests): if an Octokit instance has
+    // been attached to the provider, prefer it over the cached/App-auth client.
+    if (this._octokit) {
+      return this._octokit;
+    }
+
     const cacheKey = this.installationId;
     const cached = GitHubProvider.#installationCache.get(cacheKey);
 
@@ -275,6 +287,123 @@ export class GitHubProvider extends GitProvider {
       branch,
     });
     return data.commit.sha;
+  }
+
+  /**
+   * List commits for a repository and return them as normalized CommitRecord[].
+   * Paginates through all commits, then fetches each commit individually to
+   * collect `stats.additions` / `stats.deletions` (the list endpoint omits them).
+   * @param {string} org - Organization login
+   * @param {string} repo - Repository name
+   * @param {{since?: string, branch?: string}} [opts] - Optional filters
+   *   `since` is an ISO 8601 timestamp; `branch` selects which ref to walk.
+   * @returns {Promise<CommitRecord[]>}
+   */
+  async listCommits(
+    org: string,
+    repo: string,
+    opts: { since?: string; branch?: string } = {}
+  ): Promise<CommitRecord[]> {
+    const octokit = await this.#getOctokit();
+    const commits: CommitRecord[] = [];
+    for await (const { data } of octokit.paginate.iterator(octokit.rest.repos.listCommits, {
+      owner: org,
+      repo,
+      sha: opts.branch,
+      since: opts.since,
+      per_page: 100,
+    })) {
+      for (const c of data) {
+        // listCommits omits stats; fetch each commit for additions/deletions.
+        const { data: full } = await octokit.rest.repos.getCommit({
+          owner: org,
+          repo,
+          ref: c.sha,
+        });
+        commits.push({
+          sha: c.sha,
+          author_login: c.author?.login ?? null,
+          author_email: c.commit.author?.email ?? null,
+          author_user_id: null,
+          ts: c.commit.author?.date ?? new Date().toISOString(),
+          message: c.commit.message ?? '',
+          additions: full.stats?.additions ?? 0,
+          deletions: full.stats?.deletions ?? 0,
+          parents: (c.parents ?? []).map((p: { sha: string }) => p.sha),
+        });
+      }
+    }
+    return commits;
+  }
+
+  /**
+   * Fetch GitHub's contributor stats (weekly additions/deletions per author).
+   * GitHub returns HTTP 202 while the stats cache is warming; we surface that as
+   * `{ pending: true }` so callers can retry later instead of falsely reporting zero contributors.
+   * @param {string} org - Organization login
+   * @param {string} repo - Repository name
+   * @returns {Promise<{ pending: true } | ContributorRecord[]>}
+   */
+  async getContributorStats(
+    org: string,
+    repo: string
+  ): Promise<{ pending: true } | ContributorRecord[]> {
+    const octokit = await this.#getOctokit();
+    const res = await octokit.request('GET /repos/{owner}/{repo}/stats/contributors', {
+      owner: org,
+      repo,
+    });
+    if (res.status === 202) return { pending: true };
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    return ((res.data as any[]) ?? []).map((row: any) => ({
+      login: row.author?.login ?? 'unknown',
+      user_id: null,
+      commits: row.total,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      additions: (row.weeks ?? []).reduce((s: number, w: any) => s + (w.a ?? 0), 0),
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      deletions: (row.weeks ?? []).reduce((s: number, w: any) => s + (w.d ?? 0), 0),
+    }));
+  }
+
+  /**
+   * Get the byte-count breakdown of languages detected by GitHub linguist.
+   * @param {string} org - Organization login
+   * @param {string} repo - Repository name
+   * @returns {Promise<LanguagesMap>}
+   */
+  async getLanguages(org: string, repo: string): Promise<LanguagesMap> {
+    const octokit = await this.#getOctokit();
+    const { data } = await octokit.rest.repos.listLanguages({ owner: org, repo });
+    return data ?? {};
+  }
+
+  /**
+   * Summarize pull requests into `{ open, merged, closed }` counts.
+   * Uses a single page of up to 100 PRs in all states — sufficient for dashboard summaries;
+   * paginate later if we need full history.
+   * @param {string} org - Organization login
+   * @param {string} repo - Repository name
+   * @returns {Promise<PRSummary>}
+   */
+  async listPulls(org: string, repo: string): Promise<PRSummary> {
+    const octokit = await this.#getOctokit();
+    const { data } = await octokit.rest.pulls.list({
+      owner: org,
+      repo,
+      state: 'all',
+      per_page: 100,
+    });
+    return data.reduce<PRSummary>(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (acc, pr: any) => {
+        if (pr.state === 'open') acc.open += 1;
+        else if (pr.merged_at) acc.merged += 1;
+        else acc.closed += 1;
+        return acc;
+      },
+      { open: 0, merged: 0, closed: 0 }
+    );
   }
 
   /**

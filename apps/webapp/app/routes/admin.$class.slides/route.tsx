@@ -158,7 +158,7 @@ export default function SlidesAdmin({ loaderData }: Route.ComponentProps) {
           href={`${slidesUrl}/${record.id}`}
           target="_blank"
           rel="noopener noreferrer"
-          className="font-medium !text-gray-600 dark:text-gray-100 hover:text-blue-600 dark:hover:text-blue-400"
+          className="font-medium !text-ink-2 dark:text-ink-0 hover:text-sky-ink dark:hover:text-blue-400"
         >
           {title}
         </a>
@@ -278,7 +278,7 @@ export default function SlidesAdmin({ loaderData }: Route.ComponentProps) {
             href={`${slidesUrl}/${record.id}/present`}
             target="_blank"
             rel="noopener noreferrer"
-            className="flex items-center gap-1 !text-gray-600 hover:text-gray-800 no-underline cursor-pointer"
+            className="flex items-center gap-1 !text-ink-2 hover:text-ink-0 no-underline cursor-pointer"
           >
             <IconPresentation size={17} />
             <span>Present</span>
@@ -326,7 +326,7 @@ export default function SlidesAdmin({ loaderData }: Route.ComponentProps) {
             }}
             locale={{
               emptyText: (
-                <div className="text-center py-8 text-gray-500">
+                <div className="text-center py-8 text-ink-2">
                   <div className="text-4xl mb-2">🎞️</div>
                   <div>No slides created yet</div>
                   <div className="text-sm">Create your first slide deck to get started!</div>

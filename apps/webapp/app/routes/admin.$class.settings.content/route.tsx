@@ -1,3 +1,4 @@
+// TODO: Phase 5 — final restyle to match new design system
 import { useParams } from 'react-router';
 import { Form, Switch } from 'antd';
 import { IconInfoCircle, IconExternalLink } from '@tabler/icons-react';
@@ -121,7 +122,7 @@ const SettingsContent = ({ loaderData }: Route.ComponentProps) => {
           href={repoUrl}
           target="_blank"
           rel="noopener noreferrer"
-          className="inline-flex items-center gap-2 text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300"
+          className="inline-flex items-center gap-2 text-sky-ink hover:text-sky-ink dark:text-blue-400 dark:hover:text-blue-300"
         >
           <span className="font-mono text-sm">{repoName}</span>
           <IconExternalLink size={16} />
@@ -176,19 +177,19 @@ const SettingsContent = ({ loaderData }: Route.ComponentProps) => {
           </Form.Item>
 
           {settings.syllabus_bot_enabled && (
-            <div className="mt-4 p-4 bg-gray-100 dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700">
+            <div className="mt-4 p-4 bg-paper-2 dark:bg-panel rounded-lg border border-line dark:border-line">
               <div className="flex items-center gap-2 mb-3">
-                <IconInfoCircle size={16} className="text-gray-500 dark:text-gray-400" />
-                <span className="font-medium text-gray-900 dark:text-gray-100">
+                <IconInfoCircle size={16} className="text-ink-2 dark:text-ink-3" />
+                <span className="font-medium text-ink-0 dark:text-ink-0">
                   About the Syllabus Bot
                 </span>
               </div>
-              <div className="space-y-2 text-sm text-gray-600 dark:text-gray-300">
+              <div className="space-y-2 text-sm text-ink-2 dark:text-ink-3">
                 <p>
                   When enabled, students will see a floating chat button on student pages. They can
                   ask questions about:
                 </p>
-                <ul className="list-disc list-inside ml-2 space-y-1 text-gray-500 dark:text-gray-400">
+                <ul className="list-disc list-inside ml-2 space-y-1 text-ink-2 dark:text-ink-3">
                   <li>Due dates and deadlines</li>
                   <li>Grading policies and rubrics</li>
                   <li>Course schedule and topics</li>
@@ -196,11 +197,11 @@ const SettingsContent = ({ loaderData }: Route.ComponentProps) => {
                   <li>Office hours and contact information</li>
                 </ul>
                 <p className="mt-3">
-                  <span className="font-medium text-gray-700 dark:text-gray-200">
+                  <span className="font-medium text-ink-1 dark:text-ink-1">
                     Customization:
                   </span>{' '}
                   Add a{' '}
-                  <code className="bg-gray-200 dark:bg-gray-700 px-1.5 py-0.5 rounded text-gray-700 dark:text-gray-300">
+                  <code className="bg-line dark:bg-paper-2 px-1.5 py-0.5 rounded text-ink-1 dark:text-ink-3">
                     bot-context/
                   </code>{' '}
                   folder to your content repository with additional context files (e.g., FAQ,

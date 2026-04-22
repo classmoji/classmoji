@@ -83,7 +83,7 @@ const NewRegradeRequest = ({ loaderData }: Route.ComponentProps) => {
     >
       <Alert message="Explain your resubmit request below." type="info" showIcon banner />
 
-      <p className="my-4 text-[13px] text-gray-500">
+      <p className="my-4 text-[13px] text-ink-2">
         If you want to resubmit your assignment, you can use this form to contact the TA
         responsible. Make sure to review your course resubmit policy before submitting.
       </p>

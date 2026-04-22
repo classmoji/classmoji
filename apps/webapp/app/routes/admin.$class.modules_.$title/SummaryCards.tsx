@@ -9,10 +9,10 @@ interface CardProps {
 }
 
 const Card = ({ title, children, icon }: CardProps) => (
-  <div className="bg-white dark:bg-gray-800 p-6 rounded-lg border border-gray-200 dark:border-gray-700 shadow-xs">
+  <div className="bg-panel dark:bg-panel p-6 rounded-lg border border-line dark:border-line shadow-xs">
     <div className="flex items-center gap-2 mb-2">
       {icon}
-      <h3 className="text-lg font-semibold text-gray-800 dark:text-gray-200">{title}</h3>
+      <h3 className="text-lg font-semibold text-ink-0 dark:text-ink-1">{title}</h3>
     </div>
     <div className="space-y-2">{children}</div>
   </div>
@@ -25,8 +25,8 @@ interface StatItemProps {
 
 const StatItem = ({ label, value }: StatItemProps) => (
   <div className="flex justify-between">
-    <span className="text-gray-600 dark:text-gray-400">{label}:</span>
-    <span className="font-medium text-gray-900 dark:text-gray-100">{value}</span>
+    <span className="text-ink-2 dark:text-ink-3">{label}:</span>
+    <span className="font-medium text-ink-0 dark:text-ink-0">{value}</span>
   </div>
 );
 
@@ -120,7 +120,7 @@ const SummaryCards = ({ module, repos }: SummaryCardsProps) => {
       {showProjectsCard && (
         <Card
           title="GitHub Projects"
-          icon={<IconBrandGithub size={20} className="text-gray-600 dark:text-gray-400" />}
+          icon={<IconBrandGithub size={20} className="text-ink-2 dark:text-ink-3" />}
         >
           <StatItem label="Repos with Projects" value={`${reposWithProjects} / ${repos.length}`} />
           <Progress
@@ -140,7 +140,7 @@ const SummaryCards = ({ module, repos }: SummaryCardsProps) => {
             </Button>
           )}
           {reposWithProjects === repos.length && repos.length > 0 && (
-            <p className="text-green-600 text-sm mt-2">All repos have projects</p>
+            <p className="text-mint-ink text-sm mt-2">All repos have projects</p>
           )}
         </Card>
       )}

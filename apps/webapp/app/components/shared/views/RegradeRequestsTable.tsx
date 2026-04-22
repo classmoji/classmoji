@@ -74,7 +74,7 @@ const RegradeRequestsTable = ({ requests, emojiMappings, org }: RegradeRequestsT
       width: '10%',
       hidden: role === 'STUDENT',
       render: (student: RegradeRequest['student']) => (
-        <span className="font-semibold text-gray-700">{student._count.regrade_requests}</span>
+        <span className="font-semibold text-ink-1">{student._count.regrade_requests}</span>
       ),
     },
     {
@@ -83,7 +83,7 @@ const RegradeRequestsTable = ({ requests, emojiMappings, org }: RegradeRequestsT
       key: 'assignment',
       width: role === 'STUDENT' ? '25%' : '20%',
       render: (title: string) => (
-        <div className="truncate font-medium text-gray-800 dark:text-gray-200">{title}</div>
+        <div className="truncate font-medium text-ink-0 dark:text-ink-1">{title}</div>
       ),
     },
     {
@@ -130,13 +130,13 @@ const RegradeRequestsTable = ({ requests, emojiMappings, org }: RegradeRequestsT
       key: 'student_comment',
       width: role === 'STUDENT' ? '30%' : '20%',
       render: (comment: string | null) => (
-        <div className="text-gray-700 max-w-xs">
+        <div className="text-ink-1 max-w-xs">
           {comment ? (
             <Tooltip title={comment}>
               <div className="truncate">{comment}</div>
             </Tooltip>
           ) : (
-            <span className="text-gray-400 italic">No comment</span>
+            <span className="text-ink-3 italic">No comment</span>
           )}
         </div>
       ),
@@ -172,7 +172,7 @@ const RegradeRequestsTable = ({ requests, emojiMappings, org }: RegradeRequestsT
               <Button
                 type="text"
                 icon={<IconCheck size={16} />}
-                className="text-green-600 hover:text-green-700 hover:bg-green-50"
+                className="text-mint-ink hover:text-mint-ink hover:bg-mint-bg"
                 size="small"
                 onClick={() => {
                   notify('UPDATE_REGRADE_REQUEST', 'Updating regrade request...');
@@ -230,7 +230,7 @@ const RegradeRequestsTable = ({ requests, emojiMappings, org }: RegradeRequestsT
           }}
           locale={{
             emptyText: (
-              <div className="text-center py-8 text-gray-500">
+              <div className="text-center py-8 text-ink-2">
                 <div className="text-4xl mb-2">📝</div>
                 <div>No regrade requests yet</div>
                 <div className="text-sm">
