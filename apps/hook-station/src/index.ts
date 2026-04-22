@@ -1,9 +1,17 @@
 import Fastify, { type FastifyReply, type FastifyRequest } from 'fastify';
+import fastifyRawBody from 'fastify-raw-body';
 import githubRoutes from './routes/github.ts';
 import stripeRoutes from './routes/stripe.ts';
 
 const fastify = Fastify({
   logger: true,
+});
+
+await fastify.register(fastifyRawBody, {
+  field: 'rawBody',
+  global: false,
+  encoding: 'utf8',
+  runFirst: true,
 });
 
 fastify.get('/', async function handler(_request: FastifyRequest, reply: FastifyReply) {

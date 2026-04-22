@@ -1,6 +1,9 @@
 import { defineConfig, devices } from '@playwright/test';
 import * as fs from 'fs';
 import * as path from 'path';
+import { fileURLToPath } from 'url';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 /**
  * Read base URL from .dev-context file
@@ -17,7 +20,7 @@ function getBaseURL(): string {
   } catch {
     // File doesn't exist or couldn't be read
   }
-  return 'http://localhost:6550'; // Default slides port
+  return 'http://localhost:6500'; // Default slides port
 }
 
 /**

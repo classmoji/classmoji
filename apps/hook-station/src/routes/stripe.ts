@@ -1,17 +1,10 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import Stripe from 'stripe';
-import { ClassmojiService } from '@classmoji/services';
+import { ClassmojiService, StripeService } from '@classmoji/services';
 import dayjs from 'dayjs';
 
 interface BillingUser {
   id: string;
-}
-
-interface StripeWebhookRequestBody {
-  type: string;
-  data: {
-    object: Stripe.Subscription;
-  };
 }
 
 const getCustomerId = (
@@ -115,11 +108,29 @@ const stripeWebhookHandlers: Record<
 
 export default async function stripeRoutes(fastify: FastifyInstance): Promise<void> {
   fastify.post('/stripe', {
-    preHandler: async function handler(_request: FastifyRequest, _reply: FastifyReply) {},
+    config: { rawBody: true },
     handler: async function handler(request: FastifyRequest, reply: FastifyReply) {
-      const body = request.body as StripeWebhookRequestBody;
-      const handler = stripeWebhookHandlers[body.type];
-      const subscription = body.data.object;
+      const signature = request.headers['stripe-signature'];
+      const rawBody = (request as FastifyRequest & { rawBody?: string }).rawBody;
+
+      if (typeof signature !== 'string' || !rawBody) {
+        return reply.status(401).send('Unauthorized');
+      }
+
+      let event: Stripe.Event;
+      try {
+        event = StripeService.constructWebhookEvent(rawBody, signature);
+      } catch (err: unknown) {
+        request.log.warn({ err }, 'Stripe webhook signature verification failed');
+        return reply.status(401).send('Unauthorized');
+      }
+
+      const handler = stripeWebhookHandlers[event.type];
+      if (!handler) {
+        return reply.status(200).send({ success: true });
+      }
+
+      const subscription = event.data.object as Stripe.Subscription;
       const customerId = getCustomerId(subscription.customer);
 
       const user = customerId
@@ -130,9 +141,7 @@ export default async function stripeRoutes(fastify: FastifyInstance): Promise<vo
           })
         : null;
 
-      if (handler) {
-        await handler(user, subscription);
-      }
+      await handler(user, subscription);
 
       return reply.status(200).send({ success: true });
     },
