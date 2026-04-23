@@ -63,8 +63,11 @@ export async function loadPageContent(page: PageForContent): Promise<PageContent
         coverImage: null,
       };
     }
-  } catch {
-    // JSON not found, try HTML
+  } catch (err) {
+    console.error(
+      `[loadPageContent] JSON fetch failed for ${repo}/${page.content_path}/content.json:`,
+      err
+    );
   }
 
   // Fallback: HTML (legacy format)
@@ -82,8 +85,11 @@ export async function loadPageContent(page: PageForContent): Promise<PageContent
         coverImage: null,
       };
     }
-  } catch {
-    // HTML not found either
+  } catch (err) {
+    console.error(
+      `[loadPageContent] HTML fetch failed for ${repo}/${page.content_path}/index.html:`,
+      err
+    );
   }
 
   return { format: 'none', content: null, coverImage: null };
