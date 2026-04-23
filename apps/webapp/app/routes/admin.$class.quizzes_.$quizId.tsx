@@ -18,9 +18,7 @@ import { IconEye, IconArrowLeft, IconClock, IconTrophy, IconChartBar } from '@ta
 import { TrophyOutlined, PlayCircleOutlined, ClearOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
-import { UserThumbnailView, GradeBadge, SectionHeader } from '~/components';
-import { AssignmentHeaderCard } from '~/components/features/assignment';
-import type { AssignmentHeaderData } from '~/components/features/assignment';
+import { PageHeader, UserThumbnailView, GradeBadge, SectionHeader } from '~/components';
 import { formatDuration, checkForCompletion } from '~/utils/quizUtils';
 import { namedAction } from 'remix-utils/named-action';
 
@@ -81,44 +79,6 @@ interface StatCardProps {
   icon?: React.ComponentType<{ size: number; className: string }>;
   color?: string;
 }
-
-// Build AssignmentHeaderCard data from a Quiz record.
-interface QuizForHeader {
-  name: string;
-  weight?: number | null;
-  due_date?: string | Date | null;
-  module?: { title?: string | null } | null;
-  include_code_context?: boolean;
-  difficulty_level?: string | null;
-  subject?: string | null;
-  question_count?: number | null;
-}
-const buildQuizHeader = (quiz: QuizForHeader): AssignmentHeaderData => {
-  let due = '';
-  let dueRelative = '';
-  if (quiz.due_date) {
-    const d = dayjs(quiz.due_date);
-    due = d.format('MMM D, h:mm A');
-    dueRelative = d.fromNow();
-  }
-  const descParts: string[] = [];
-  if (quiz.subject) descParts.push(quiz.subject);
-  if (quiz.difficulty_level) descParts.push(`Difficulty: \`${quiz.difficulty_level}\``);
-  if (quiz.question_count) descParts.push(`${quiz.question_count} questions`);
-  if (quiz.include_code_context) descParts.push('code-aware');
-  return {
-    kind: 'QUIZ',
-    module: quiz.module?.title ?? undefined,
-    weightNote: quiz.weight ? `· ${quiz.weight}% of grade` : undefined,
-    due,
-    dueRelative,
-    title: quiz.name,
-    description: descParts.length ? descParts.join(' · ') : undefined,
-    githubUrl: null,
-    repoUrl: null,
-    extensionCost: null,
-  };
-};
 
 // Helper function to find evaluation data in attempt messages
 const getEvaluationData = (attempt: Pick<QuizAttempt, 'messages'>) => {
@@ -585,15 +545,15 @@ const QuizView = ({ loaderData }: Route.ComponentProps) => {
 
   const StatCard = ({ value, label, icon: Icon, color = 'blue' }: StatCardProps) => {
     const colorClasses: Record<string, string> = {
-      blue: 'bg-sky-bg text-sky-ink',
-      green: 'bg-mint-bg text-mint-ink',
-      yellow: 'bg-amber-bg text-amber-ink',
+      blue: 'bg-blue-50 text-blue-600',
+      green: 'bg-green-50 text-green-600',
+      yellow: 'bg-yellow-50 text-yellow-600',
       purple: 'bg-purple-50 text-purple-600',
-      red: 'bg-rose-bg text-rose-ink',
+      red: 'bg-red-50 text-red-600',
     };
 
-    const bgColor = colorClasses[color]?.split(' ')[0] || 'bg-sky-bg';
-    const textColor = colorClasses[color]?.split(' ')[1] || 'text-sky-ink';
+    const bgColor = colorClasses[color]?.split(' ')[0] || 'bg-blue-50';
+    const textColor = colorClasses[color]?.split(' ')[1] || 'text-blue-600';
 
     return (
       <div className={`${bgColor} rounded-lg p-4 text-center`}>
@@ -603,7 +563,7 @@ const QuizView = ({ loaderData }: Route.ComponentProps) => {
           </div>
         )}
         <div className={`text-2xl font-bold ${textColor}`}>{value}</div>
-        <div className="text-sm text-ink-2">{label}</div>
+        <div className="text-sm text-gray-600">{label}</div>
       </div>
     );
   };
@@ -658,7 +618,7 @@ const QuizView = ({ loaderData }: Route.ComponentProps) => {
       dataIndex: 'partialCreditScore',
       render: (score: number | null) => {
         if (score === null || score === undefined) {
-          return <span className="text-ink-3 italic">Pending</span>;
+          return <span className="text-gray-400 italic">Pending</span>;
         }
         return <GradeBadge grade={score} />;
       },
@@ -673,12 +633,12 @@ const QuizView = ({ loaderData }: Route.ComponentProps) => {
       dataIndex: 'firstAttemptScore',
       render: (score: number | null, record: QuizAttempt) => {
         if (record.completed_at === null) {
-          return <span className="text-ink-3 italic text-xs">-</span>;
+          return <span className="text-gray-400 italic text-xs">-</span>;
         }
         if (score === null || score === undefined) {
-          return <span className="text-ink-3 italic text-xs">N/A</span>;
+          return <span className="text-gray-400 italic text-xs">N/A</span>;
         }
-        return <span className="text-ink-2 text-xs">{score}%</span>;
+        return <span className="text-gray-600 text-xs">{score}%</span>;
       },
     },
     {
@@ -687,14 +647,14 @@ const QuizView = ({ loaderData }: Route.ComponentProps) => {
       dataIndex: 'focusMetrics',
       render: (focusMetrics: FocusMetrics | null, record: QuizAttempt) => {
         if (!record.completed_at) {
-          return <span className="text-ink-3 italic">In progress</span>;
+          return <span className="text-gray-400 italic">In progress</span>;
         }
         if (!focusMetrics || !focusMetrics.totalMs) {
-          return <span className="text-ink-3 italic">N/A</span>;
+          return <span className="text-gray-400 italic">N/A</span>;
         }
         return (
           <Tooltip title={`Focused: ${focusMetrics.percentage}%`}>
-            <span className="text-ink-2">{formatDuration(focusMetrics.totalMs)}</span>
+            <span className="text-gray-600">{formatDuration(focusMetrics.totalMs)}</span>
           </Tooltip>
         );
       },
@@ -705,11 +665,11 @@ const QuizView = ({ loaderData }: Route.ComponentProps) => {
       dataIndex: 'completed_at',
       render: (completed_at: string | null) => {
         if (!completed_at) {
-          return <span className="text-ink-3 italic">Not completed</span>;
+          return <span className="text-gray-400 italic">Not completed</span>;
         }
         return (
           <Tooltip title={dayjs(completed_at).format('MMM D, YYYY h:mm A')}>
-            <span className="text-ink-2">{dayjs(completed_at).fromNow()}</span>
+            <span className="text-gray-600">{dayjs(completed_at).fromNow()}</span>
           </Tooltip>
         );
       },
@@ -781,7 +741,7 @@ const QuizView = ({ loaderData }: Route.ComponentProps) => {
       dataIndex: 'currentScore',
       render: (score: number | null) => {
         if (score === null) {
-          return <span className="text-ink-3 italic">No score</span>;
+          return <span className="text-gray-400 italic">No score</span>;
         }
         return <GradeBadge grade={score} />;
       },
@@ -799,9 +759,9 @@ const QuizView = ({ loaderData }: Route.ComponentProps) => {
         // For now, show N/A since we don't have this data yet in the query
         // This will be populated when quiz attempts include first_attempt_percentage
         if (score === null || score === undefined) {
-          return <span className="text-ink-3 italic text-xs">N/A</span>;
+          return <span className="text-gray-400 italic text-xs">N/A</span>;
         }
-        return <span className="text-ink-2">{score}%</span>;
+        return <span className="text-gray-600">{score}%</span>;
       },
       sorter: (a: QuizStudent, b: QuizStudent) =>
         (a.firstAttemptScore || 0) - (b.firstAttemptScore || 0),
@@ -812,7 +772,7 @@ const QuizView = ({ loaderData }: Route.ComponentProps) => {
       dataIndex: 'bestScore',
       render: (score: number | null) => {
         if (score === null) {
-          return <span className="text-ink-3 italic">N/A</span>;
+          return <span className="text-gray-400 italic">N/A</span>;
         }
         return <GradeBadge grade={score} />;
       },
@@ -824,7 +784,7 @@ const QuizView = ({ loaderData }: Route.ComponentProps) => {
       dataIndex: 'latestAttempt',
       render: (latestAttempt: string) => (
         <Tooltip title={dayjs(latestAttempt).format('MMM D, YYYY h:mm A')}>
-          <span className="text-ink-2">{dayjs(latestAttempt).fromNow()}</span>
+          <span className="text-gray-600">{dayjs(latestAttempt).fromNow()}</span>
         </Tooltip>
       ),
       sorter: (a: QuizStudent, b: QuizStudent) =>
@@ -850,7 +810,7 @@ const QuizView = ({ loaderData }: Route.ComponentProps) => {
         okText="Start Preview"
         okButtonProps={{ disabled: !selectedRepo }}
       >
-        <p className="mb-4 text-ink-2">
+        <p className="mb-4 text-gray-600">
           Select a repository to use for testing this code-aware quiz:
         </p>
         {loadingRepos ? (
@@ -875,44 +835,44 @@ const QuizView = ({ loaderData }: Route.ComponentProps) => {
         )}
       </Modal>
 
-      <div className="panel-head">
-        <div className="flex items-center gap-3">
-          <Button
-            type="text"
-            className="text-ink-2! hover:text-ink-0! dark:text-ink-0! dark:hover:text-white!"
-            icon={<IconArrowLeft size={20} />}
-            onClick={() => navigate(`/admin/${classSlug}/quizzes`)}
-            aria-label="Back to quizzes"
-          />
-          <span className="text-lg font-medium text-ink-0">Quiz: {quiz.name}</span>
-        </div>
-        <div className="ml-auto">
-          <Space>
-            {adminAttempt && (
-              <Tooltip title="Clear all your preview attempts for this quiz">
-                <Button
-                  icon={<ClearOutlined />}
-                  onClick={handleClearMyAttempts}
-                  loading={
-                    fetcher.state !== 'idle' && fetcher.formData?.get('_action') === 'clearMyAttempts'
-                  }
-                >
-                  Clear My Attempts
-                </Button>
-              </Tooltip>
-            )}
-            <Tooltip title="Preview this quiz as a student">
-              <Button type="primary" icon={<PlayCircleOutlined />} onClick={handlePreviewQuiz}>
-                Preview Quiz
+      <PageHeader
+        routeName="quizzes"
+        title={
+          <div className="flex items-center gap-3">
+            <Button
+              type="text"
+              className="text-gray-600! hover:text-gray-900! dark:text-gray-100! dark:hover:text-white!"
+              icon={<IconArrowLeft size={20} />}
+              onClick={() => navigate(`/admin/${classSlug}/quizzes`)}
+              aria-label="Back to quizzes"
+            />
+            <span>Quiz: {quiz.name}</span>
+          </div>
+        }
+      >
+        <Space>
+          {adminAttempt && (
+            <Tooltip title="Clear all your preview attempts for this quiz">
+              <Button
+                icon={<ClearOutlined />}
+                onClick={handleClearMyAttempts}
+                loading={
+                  fetcher.state !== 'idle' && fetcher.formData?.get('_action') === 'clearMyAttempts'
+                }
+              >
+                Clear My Attempts
               </Button>
             </Tooltip>
-          </Space>
-        </div>
-      </div>
+          )}
+          <Tooltip title="Preview this quiz as a student">
+            <Button type="primary" icon={<PlayCircleOutlined />} onClick={handlePreviewQuiz}>
+              Preview Quiz
+            </Button>
+          </Tooltip>
+        </Space>
+      </PageHeader>
 
       <div className="space-y-6">
-        <AssignmentHeaderCard header={buildQuizHeader(quiz)} />
-
         <Card>
           <SectionHeader
             title="Quiz Statistics"

@@ -77,7 +77,7 @@ const AdminTeams = ({ loaderData }: Route.ComponentProps) => {
       key: 'tags',
       width: '25%',
       render: (tags: Team['tags']) => {
-        if (tags.length == 0) return <span className="text-ink-2 italic">No tags</span>;
+        if (tags.length == 0) return <span className="text-gray-500 italic">No tags</span>;
 
         const list = tags.map((tag: Team['tags'][number]) => (
           <Tag key={tag.id} color="blue" className="mb-1">
@@ -97,11 +97,11 @@ const AdminTeams = ({ loaderData }: Route.ComponentProps) => {
         const users = team.memberships.map(
           (membership: Team['memberships'][number]) => membership.user
         );
-        if (users.length == 0) return <span className="text-ink-2 italic">No members</span>;
+        if (users.length == 0) return <span className="text-gray-500 italic">No members</span>;
         return (
           <div className="flex items-center gap-2">
             <AvatarGroup users={users} />
-            <span className="text-sm text-ink-2">({users.length})</span>
+            <span className="text-sm text-gray-600">({users.length})</span>
           </div>
         );
       },
@@ -158,13 +158,13 @@ const AdminTeams = ({ loaderData }: Route.ComponentProps) => {
           size="middle"
           locale={{
             emptyText: query ? (
-              <div className="text-center py-8 text-ink-2">
+              <div className="text-center py-8 text-gray-500">
                 <div className="text-4xl mb-2">🔍</div>
                 <div>No teams found matching &quot;{query}&quot;</div>
                 <div className="text-sm">Try adjusting your search terms</div>
               </div>
             ) : (
-              <div className="text-center py-8 text-ink-2">
+              <div className="text-center py-8 text-gray-500">
                 <div className="text-4xl mb-2">👥</div>
                 <div>No teams created yet</div>
                 <div className="text-sm">Create your first team to get started!</div>

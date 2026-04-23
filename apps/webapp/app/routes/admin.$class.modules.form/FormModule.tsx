@@ -423,7 +423,7 @@ const FormModule = ({
                 <Checkbox checked={isExtraCredit}>
                   <span className="text-sm">
                     This is an{' '}
-                    <span className="font-semibold text-mint-ink text-sm">extra credit</span>{' '}
+                    <span className="font-semibold text-green-600 text-sm">extra credit</span>{' '}
                     module
                   </span>
                 </Checkbox>
@@ -481,7 +481,7 @@ const FormModule = ({
               </div>
 
               {/* GitHub Project Template */}
-              <div className="mt-4 pt-4 border-t border-line dark:border-line">
+              <div className="mt-4 pt-4 border-t border-gray-200 dark:border-gray-700">
                 <SectionHeader
                   title="GitHub Project"
                   subtitle="Optionally create a GitHub Project board for each team"
@@ -581,7 +581,7 @@ const FormModule = ({
             />
 
             <div className="mb-4">
-              <p className="block text-sm font-medium text-ink-1 mb-2">Pages</p>
+              <p className="block text-sm font-medium text-gray-700 mb-2">Pages</p>
               <Select
                 mode="multiple"
                 placeholder={pages.length > 0 ? 'Select pages to link' : 'No pages available'}
@@ -598,7 +598,7 @@ const FormModule = ({
             </div>
 
             <div>
-              <p className="block text-sm font-medium text-ink-1 mb-2">Slides</p>
+              <p className="block text-sm font-medium text-gray-700 mb-2">Slides</p>
               <Select
                 mode="multiple"
                 placeholder={slides.length > 0 ? 'Select slides to link' : 'No slides available'}
@@ -684,7 +684,7 @@ const FormModule = ({
         </Drawer>
 
         {/* Form Actions */}
-        <div className="flex justify-end gap-3 pt-6 border-t border-line">
+        <div className="flex justify-end gap-3 pt-6 border-t border-gray-200">
           <Button onClick={close}>Cancel</Button>
 
           <Button type="primary" htmlType="submit">

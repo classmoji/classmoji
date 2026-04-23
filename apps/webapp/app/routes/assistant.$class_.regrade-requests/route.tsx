@@ -1,4 +1,3 @@
-// TODO: Phase 5 final restyle
 import type { Route } from './+types/route';
 import { RegradeRequestsTable } from '~/components';
 import { ClassmojiService } from '@classmoji/services';

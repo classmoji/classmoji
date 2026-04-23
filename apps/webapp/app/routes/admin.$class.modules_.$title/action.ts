@@ -1,6 +1,6 @@
 import { namedAction } from 'remix-utils/named-action';
 import { calculateContributions } from './helpers';
-import { ClassmojiService, HelperService } from '@classmoji/services';
+import { HelperService } from '@classmoji/services';
 import { requireClassroomAdmin } from '~/utils/routeAuth.server';
 import { ActionTypes } from '~/constants';
 import { tasks } from '@trigger.dev/sdk/v3';
@@ -65,16 +65,6 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
         action: ActionTypes.REMOVE_GRADER,
         success: 'Grader removed',
       };
-    },
-
-    async publishAssignment() {
-      await ClassmojiService.assignment.update(data.assignment_id, { is_published: true });
-      return { success: 'Assignment published' };
-    },
-
-    async unpublishAssignment() {
-      await ClassmojiService.assignment.update(data.assignment_id, { is_published: false });
-      return { success: 'Assignment unpublished' };
     },
 
     async createProjects() {

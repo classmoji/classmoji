@@ -186,7 +186,7 @@ const AdminAssistants = ({ loaderData }: Route.ComponentProps) => {
                     handleImpersonate(assistant);
                   }
                 }}
-                className={`flex items-center gap-1 text-ink-2 hover:text-ink-0 cursor-pointer ${impersonating ? 'opacity-50' : ''}`}
+                className={`flex items-center gap-1 text-gray-600 hover:text-gray-800 cursor-pointer ${impersonating ? 'opacity-50' : ''}`}
               >
                 <IconUserSearch size={17} />
                 <span>View as</span>
@@ -201,7 +201,7 @@ const AdminAssistants = ({ loaderData }: Route.ComponentProps) => {
                 okText="Remove"
                 cancelText="Cancel"
               >
-                <div className="flex items-center gap-1 text-rose-ink cursor-pointer hover:text-rose-ink">
+                <div className="flex items-center gap-1 text-red-600 cursor-pointer hover:text-red-700">
                   <IconTrash size={17} />
                   <span>Remove</span>
                 </div>
@@ -256,13 +256,13 @@ const AdminAssistants = ({ loaderData }: Route.ComponentProps) => {
               size="middle"
               locale={{
                 emptyText: query ? (
-                  <div className="text-center py-8 text-ink-2">
+                  <div className="text-center py-8 text-gray-500">
                     <div className="text-4xl mb-2">🔍</div>
                     <div>No assistants found matching &ldquo;{query}&rdquo;</div>
                     <div className="text-sm">Try adjusting your search terms</div>
                   </div>
                 ) : (
-                  <div className="text-center py-8 text-ink-2">
+                  <div className="text-center py-8 text-gray-500">
                     <div className="text-4xl mb-2">👨‍🏫</div>
                     <div>No assistants added yet</div>
                     <div className="text-sm">Add your first teaching assistant to get started!</div>

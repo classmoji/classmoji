@@ -8,31 +8,31 @@
  * 1. This file (for JS/Ant Design)
  * 2. tailwind.css @theme section (for Tailwind classes)
  *
- * Current: Pastel Violet
+ * Current: Apple Green 🍏
  */
 
 // ============================================
-// PRIMARY COLOR - Pastel Violet (Classmoji accent)
+// PRIMARY COLOR - Apple Green 🍏
 // ============================================
-export const PRIMARY_50 = '#ece9ff';
-export const PRIMARY_100 = '#dedaff';
-export const PRIMARY_200 = '#c8c0ff';
-export const PRIMARY_300 = '#a89cff';
-export const PRIMARY_400 = '#8a7afd';
-export const PRIMARY_500 = '#6d5efc';
-export const PRIMARY_600 = '#5a4cf0';
-export const PRIMARY_700 = '#4a3fbb';
-export const PRIMARY_800 = '#3a3197';
-export const PRIMARY_900 = '#2a2470';
+export const PRIMARY_50 = '#e6f4ea';
+export const PRIMARY_100 = '#1f883d';
+export const PRIMARY_200 = '#1f883d';
+export const PRIMARY_300 = '#1f883d';
+export const PRIMARY_400 = '#1f883d';
+export const PRIMARY_500 = '#1f883d';
+export const PRIMARY_600 = '#1f883d';
+export const PRIMARY_700 = '#1f883d';
+export const PRIMARY_800 = '#1f883d';
+export const PRIMARY_900 = '#1f883d';
 
 // ============================================
-// SECONDARY COLOR PALETTE - Pastel Rose
+// SECONDARY COLOR PALETTE - Apple Red 🍎
 // ============================================
-export const SECONDARY_50 = '#fde5ea';
-export const SECONDARY_100 = '#f5c5d0';
-export const SECONDARY_400 = '#e89bb0';
-export const SECONDARY_500 = '#d36a85';
-export const SECONDARY_600 = '#9a1f3a';
+export const SECONDARY_50 = '#fef2f2';
+export const SECONDARY_100 = '#fee2e2';
+export const SECONDARY_400 = '#f87171';
+export const SECONDARY_500 = '#ef4444';
+export const SECONDARY_600 = '#dc2626';
 
 // Legacy BRAND aliases (for backwards compatibility)
 export const BRAND_50 = PRIMARY_50;
@@ -56,7 +56,7 @@ export const BRAND = PRIMARY;
 export const BRAND_LIGHT = PRIMARY_LIGHT;
 export const BRAND_DARK = PRIMARY_DARK;
 export const BRAND_BG = PRIMARY_BG;
-export const BRAND_TEXT = '#ffffff';
+export const BRAND_TEXT = '#000000';
 export const SIDEBAR_ACTIVE_BG = PRIMARY_100;
 export const SIDEBAR_ACTIVE_TEXT = PRIMARY_700;
 

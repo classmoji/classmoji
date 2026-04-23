@@ -36,7 +36,6 @@ import { FetcherContext, UserContext } from '~/contexts';
 import RenderErrorBoundary from './components/ErrorBoundary';
 import { SyllabusBotRoot } from './components/features/syllabus-bot';
 import ImpersonationBanner from './components/features/admin/ImpersonationBanner';
-import TweaksPanel from './components/features/tweaks/TweaksPanel';
 
 import relativeTime from 'dayjs/plugin/relativeTime';
 import isSameOrBefore from 'dayjs/plugin/isSameOrBefore';
@@ -44,6 +43,7 @@ dayjs.extend(relativeTime);
 dayjs.extend(isSameOrBefore);
 
 import getPrisma from '@classmoji/database';
+import '@fontsource/quicksand/700.css';
 import 'react-toastify/dist/ReactToastify.css';
 import '~/styles/tailwind.css';
 import '~/styles/global.css';
@@ -346,7 +346,7 @@ const App = ({ loaderData }: Route.ComponentProps) => {
         <link rel="preconnect" href="https://fonts.googleapis.com" />
         <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
         <link
-          href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Instrument+Serif:ital@0;1&display=swap"
+          href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:ital,wght@0,100..800;1,100..800&display=swap"
           rel="stylesheet"
         />
         <Meta />
@@ -356,34 +356,11 @@ const App = ({ loaderData }: Route.ComponentProps) => {
             __html: `
               (function() {
                 try {
-                  var root = document.documentElement;
-                  var saved = null;
-                  try { saved = JSON.parse(localStorage.getItem('cm-tweaks') || 'null'); } catch (e) {}
-                  var theme;
-                  if (saved && (saved.theme === 'light' || saved.theme === 'dark')) {
-                    theme = saved.theme;
-                  } else {
-                    theme = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+                  var isDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+                  if (isDark) {
+                    document.documentElement.classList.add('dark');
                   }
-                  root.setAttribute('data-theme', theme);
-                  if (theme === 'dark') root.classList.add('dark');
-                  var accent = (saved && typeof saved.accent === 'string') ? saved.accent : '#6d5efc';
-                  root.style.setProperty('--accent', accent);
-                  var bgKey = (saved && typeof saved.background === 'string') ? saved.background : 'default';
-                  var PRESETS = {
-                    aurora: { light: ['#ffc9dd','#b9c9ff','#e4d4ff','#dce5ff','#ffcedd','#fbeaf2','#f0e3fa','#fdf4f8'], dark: ['#3a1a44','#0e0a26','#17102c','#241a44','#0e0a22','#170f1e','#1e1530','#1a1226'] },
-                    mint:   { light: ['#b9e7cc','#a8dec1','#cfe8d8','#dcecdf','#b7d9c4','#e8f3ec','#d9ebe1','#f2f8f4'], dark: ['#123629','#061510','#0c2118','#102c22','#04100b','#0a1812','#0e2119','#0c1b14'] },
-                    peach:  { light: ['#ffcea1','#ffb589','#ffdcbd','#ffe4cc','#ffc395','#fcebd8','#f6dcbf','#fdf3e7'], dark: ['#3b1f12','#160b07','#1e1109','#26160d','#0f0805','#1a110a','#261a10','#1d140c'] },
-                    slate:  { light: ['#d6dce6','#c3cbd9','#d0d7e1','#dde2eb','#c6ccd8','#edf0f5','#e0e5ee','#f5f7fa'], dark: ['#21252f','#0a0c14','#10131c','#171a24','#0a0b10','#0f1117','#161a22','#111319'] },
-                    dusk:   { light: ['#b4c3f0','#8fa3db','#bcc7e7','#c9d2ed','#9dadd8','#dfe6f7','#ced8ef','#ecf0fa'], dark: ['#232a5a','#050825','#0a1030','#121a40','#050720','#0c1029','#131838','#0e1330'] }
-                  };
-                  var keys = ['--bg-stop-1','--bg-stop-2','--bg-stop-3a','--bg-stop-3b','--bg-stop-3c','--paper','--paper-2','--sidebar'];
-                  if (PRESETS[bgKey]) {
-                    var arr = PRESETS[bgKey][theme === 'dark' ? 'dark' : 'light'];
-                    for (var i = 0; i < 8; i++) root.style.setProperty(keys[i], arr[i]);
-                  }
-                  root.setAttribute('data-bg', bgKey);
-                } catch (error) { /* noop */ }
+                } catch (error: unknown) { console.log(error); }
               })();
             `,
           }}
@@ -424,7 +401,6 @@ const App = ({ loaderData }: Route.ComponentProps) => {
                   session={session}
                 />
                 <Outlet />
-                <TweaksPanel />
                 <SyllabusBotRoot />
                 <ScrollRestoration />
                 <Scripts />
@@ -499,25 +475,25 @@ export function ErrorBoundary() {
             {
               token: isDarkMode
                 ? {
-                    colorPrimary: '#6d5efc',
+                    colorPrimary: '#1f883d',
                     colorText: '#e5e7eb',
                     colorBgContainer: '#1f2937',
                   }
                 : {
-                    colorPrimary: '#6d5efc',
+                    colorPrimary: '#1f883d',
                     colorText: '#374151',
                   },
               components: {
                 Button: isDarkMode
                   ? {
-                      colorBgContainer: '#6d5efc',
+                      colorBgContainer: '#1f883d',
                       colorText: '#ffffff',
-                      colorBgContainerHover: '#5a4cf0',
+                      colorBgContainerHover: '#1a7f37',
                     }
                   : {
-                      colorBgContainer: '#6d5efc',
+                      colorBgContainer: '#1f883d',
                       colorText: '#ffffff',
-                      colorBgContainerHover: '#5a4cf0',
+                      colorBgContainerHover: '#1a7f37',
                     },
                 Result: isDarkMode
                   ? {
@@ -552,10 +528,10 @@ export function ErrorBoundary() {
                     />
                   </svg>
                 </div>
-                <h1 className="display text-3xl text-ink-0 mb-2">
+                <h1 className="text-2xl font-semibold text-gray-900 dark:text-gray-100 mb-2">
                   Something went wrong
                 </h1>
-                <p className="text-ink-2">
+                <p className="text-gray-600 dark:text-gray-400">
                   {errorMessage ||
                     'We encountered an unexpected error. Our team has been notified and is working on a fix.'}
                 </p>
@@ -564,13 +540,13 @@ export function ErrorBoundary() {
               <div className="flex flex-col sm:flex-row gap-3 justify-center">
                 <button
                   onClick={() => (window.location.href = '/')}
-                  className="btn"
+                  className="px-5 py-2.5 text-sm font-medium rounded-lg border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-800 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
                 >
                   Back to Home
                 </button>
                 <button
                   onClick={() => window.location.reload()}
-                  className="btn btn-primary"
+                  className="px-5 py-2.5 text-sm font-medium rounded-lg bg-gray-900 dark:bg-primary text-white dark:text-gray-900 hover:bg-gray-800 dark:hover:bg-primary-400 transition-colors"
                 >
                   Try Again
                 </button>

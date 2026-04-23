@@ -524,12 +524,12 @@ export default function NewPage({ loaderData }: Route.ComponentProps) {
             </div>
             {batchProgress ? (
               <>
-                <p className="text-ink-0 font-semibold text-center text-lg">
+                <p className="text-gray-800 font-semibold text-center text-lg">
                   {getProgressMessage()}
                 </p>
                 <div className="flex flex-col items-center gap-2 w-full">
                   {/* Progress bar */}
-                  <div className="w-full bg-line rounded-full h-2">
+                  <div className="w-full bg-gray-200 rounded-full h-2">
                     <div
                       className="h-2 rounded-full transition-all duration-500 ease-out"
                       style={{
@@ -538,13 +538,13 @@ export default function NewPage({ loaderData }: Route.ComponentProps) {
                       }}
                     />
                   </div>
-                  <p className="text-ink-2 text-sm">
+                  <p className="text-gray-500 text-sm">
                     Page {batchProgress.current} of {batchProgress.total}
                   </p>
                 </div>
               </>
             ) : (
-              <p className="text-ink-1 font-medium">Creating page...</p>
+              <p className="text-gray-700 font-medium">Creating page...</p>
             )}
           </div>
         </div>

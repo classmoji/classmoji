@@ -3,9 +3,11 @@ import { Button, Modal, Checkbox } from 'antd';
 import { useState, useEffect } from 'react';
 import { IconCopyX, IconLink } from '@tabler/icons-react';
 
+import AssignmentTable from './AssignmentsTable';
 import {
   SearchInput,
   ButtonNew,
+  PageHeader,
   RequireRole,
   TriggerProgress,
   UserThumbnailView,
@@ -13,7 +15,6 @@ import {
 import { useGlobalFetcher, useDisclosure } from '~/hooks';
 import { ClassmojiService } from '@classmoji/services';
 import { requireClassroomAdmin } from '~/utils/routeAuth.server';
-import { ModulesScreen, buildModuleCards } from '~/components/features/modules';
 import type { Route } from './+types/route';
 
 export const loader = async ({ params, request }: Route.LoaderArgs) => {
@@ -25,13 +26,13 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
   });
 
   const modules = await ClassmojiService.module.findByClassroomSlug(classSlug!);
-  return { modules, classSlug: classSlug! };
+  return { modules };
 };
 
-const AdminModules = ({ loaderData }: Route.ComponentProps) => {
+const AdminAssignments = ({ loaderData }: Route.ComponentProps) => {
   const { pathname } = useLocation();
   const { class: classSlug } = useParams();
-  const { modules, classSlug: loaderClassSlug } = loaderData;
+  const { modules } = loaderData;
   const { fetcher } = useGlobalFetcher();
   const [query, setQuery] = useState('');
   const { show, close, visible } = useDisclosure();
@@ -105,30 +106,33 @@ const AdminModules = ({ loaderData }: Route.ComponentProps) => {
     );
   };
 
-  const filtered = modules.filter((module: { title: string }) =>
-    module.title.toLowerCase().includes(query.toLowerCase())
-  );
-
-  const moduleCards = buildModuleCards(
-    filtered.map((m: { id: string; title: string; slug: string | null; assignments?: Array<{ id: string; student_deadline?: Date | string | null }> }) => ({
-      id: m.id,
-      title: m.title,
-      slug: m.slug,
-      assignments: (m.assignments ?? []).map(a => ({
-        id: a.id,
-        student_deadline: a.student_deadline ?? null,
-      })),
-    })),
-    {
-      rolePrefix: 'admin',
-      classSlug: loaderClassSlug,
-      classroomStart: null,
-    }
-  );
-
   return (
     <div className="relative">
       <Outlet />
+      <div className="flex justify-between items-start">
+        <PageHeader title="Modules" routeName="modules" />
+
+        <RequireRole roles={['OWNER']}>
+          <div className="flex gap-3">
+            <SearchInput query={query} setQuery={setQuery} placeholder="Search by title" />
+
+            <Button
+              icon={<IconCopyX size={16} />}
+              onClick={() => {
+                findUnenrolledStudents();
+              }}
+            >
+              Cleanup repos
+            </Button>
+            <NavLink to={`/admin/${classSlug}/resources`}>
+              <Button icon={<IconLink size={16} />}>Link Resources</Button>
+            </NavLink>
+            <NavLink to={`${pathname}/form`}>
+              <ButtonNew>New module</ButtonNew>
+            </NavLink>
+          </div>
+        </RequireRole>
+      </div>
 
       <Modal
         open={visible}
@@ -159,6 +163,7 @@ const AdminModules = ({ loaderData }: Route.ComponentProps) => {
       >
         {fetcher!.state === 'idle' && (
           <>
+            {' '}
             <p>The following students are not on the roster:</p>
             <div className="flex flex-col gap-2 mt-6">
               {(unenrolledStudents || []).map(student => {
@@ -187,53 +192,35 @@ const AdminModules = ({ loaderData }: Route.ComponentProps) => {
           </>
         )}
       </Modal>
+      <>
+        {fetcherData?.triggerSession?.numReposToDelete && (
+          <TriggerProgress operation="DELETE_REPOS" validIdentifiers={['delete_repository']} />
+        )}
 
-      {fetcherData?.triggerSession?.numReposToDelete && (
-        <TriggerProgress operation="DELETE_REPOS" validIdentifiers={['delete_repository']} />
-      )}
+        {(fetcherData?.triggerSession?.numReposToCreate ||
+          fetcherData?.triggerSession?.numIssuesToCreate) && (
+          <TriggerProgress
+            operation="PUBLISH_OR_SYNC_ASSIGNMENT"
+            validIdentifiers={[
+              'gh-create_repository',
+              'cf-create_repository',
+              'gh-create_issue',
+              'cf-create_issue',
+              'gh-add_collaborator_to_repo',
+            ]}
+          />
+        )}
 
-      {(fetcherData?.triggerSession?.numReposToCreate ||
-        fetcherData?.triggerSession?.numIssuesToCreate) && (
-        <TriggerProgress
-          operation="PUBLISH_OR_SYNC_ASSIGNMENT"
-          validIdentifiers={[
-            'gh-create_repository',
-            'cf-create_repository',
-            'gh-create_issue',
-            'cf-create_issue',
-            'gh-add_collaborator_to_repo',
-          ]}
+        <AssignmentTable
+          assignments={modules.filter((module: { title: string }) =>
+            module.title.toLowerCase().includes(query.toLowerCase())
+          )}
         />
-      )}
-
-      <ModulesScreen
-        modules={moduleCards}
-        headerActions={
-          <RequireRole roles={['OWNER']}>
-            <div className="flex gap-3">
-              <SearchInput query={query} setQuery={setQuery} placeholder="Search by title" />
-              <Button
-                icon={<IconCopyX size={16} />}
-                onClick={() => {
-                  findUnenrolledStudents();
-                }}
-              >
-                Cleanup repos
-              </Button>
-              <NavLink to={`/admin/${classSlug}/resources`}>
-                <Button icon={<IconLink size={16} />}>Link Resources</Button>
-              </NavLink>
-              <NavLink to={`${pathname}/form`}>
-                <ButtonNew>New module</ButtonNew>
-              </NavLink>
-            </div>
-          </RequireRole>
-        }
-      />
+      </>
     </div>
   );
 };
 
 export { action } from './action';
 
-export default AdminModules;
+export default AdminAssignments;

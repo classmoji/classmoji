@@ -1,5 +1,5 @@
-import { Divider, Tabs, Switch, Card, Tag, Tooltip, Modal, Button } from 'antd';
-import { IconFileText, IconList, IconTable, IconCircleFilled } from '@tabler/icons-react';
+import { Divider, Tabs, Switch, Card, Tag } from 'antd';
+import { IconFileText, IconList, IconTable } from '@tabler/icons-react';
 import { useParams, useRevalidator, Outlet } from 'react-router';
 import { useState } from 'react';
 
@@ -72,58 +72,17 @@ const SingleModule = ({ loaderData }: Route.ComponentProps) => {
     );
   };
 
-  const submitPublish = (assignmentId: string, isPublished: boolean) => {
-    fetcher!.submit(
-      { assignment_id: assignmentId },
-      {
-        method: 'post',
-        action: `?/${isPublished ? 'unpublishAssignment' : 'publishAssignment'}`,
-        encType: 'application/json',
+  const tabItems = (module!.assignments as ModuleAssignmentSummary[])
+    .sort((a, b) => {
+      // First sort by deadline
+      const aTime = a.student_deadline ? new Date(a.student_deadline).getTime() : 0;
+      const bTime = b.student_deadline ? new Date(b.student_deadline).getTime() : 0;
+      if (aTime !== bTime) {
+        return aTime - bTime;
       }
-    );
-  };
-
-  const confirmPublishToggle = (assignment: ModuleAssignmentSummary) => {
-    if (assignment.is_published) {
-      Modal.confirm({
-        title: `Unpublish "${assignment.title}"?`,
-        content:
-          'Students will no longer see this assignment. Existing repositories are kept and you can republish at any time.',
-        okText: 'Unpublish',
-        okButtonProps: { danger: true },
-        cancelText: 'Cancel',
-        onOk: () => submitPublish(assignment.id, true),
-      });
-    } else {
-      Modal.confirm({
-        title: `Publish "${assignment.title}"?`,
-        content:
-          'This will make the assignment available to students and create repositories if needed.',
-        okText: 'Publish',
-        cancelText: 'Cancel',
-        onOk: () => submitPublish(assignment.id, false),
-      });
-    }
-  };
-
-  const sortedAssignments = (module!.assignments as ModuleAssignmentSummary[]).slice().sort((a, b) => {
-    // First sort by deadline
-    const aTime = a.student_deadline ? new Date(a.student_deadline).getTime() : 0;
-    const bTime = b.student_deadline ? new Date(b.student_deadline).getTime() : 0;
-    if (aTime !== bTime) {
-      return aTime - bTime;
-    }
-    // Then sort by title
-    return a.title.localeCompare(b.title);
-  });
-
-  const [activeAssignmentId, setActiveAssignmentId] = useState<string | undefined>(
-    sortedAssignments[0]?.id
-  );
-  const activeAssignment =
-    sortedAssignments.find(a => a.id === activeAssignmentId) ?? sortedAssignments[0];
-
-  const tabItems = sortedAssignments
+      // Then sort by title
+      return a.title.localeCompare(b.title);
+    })
     .map(assignment => {
       return {
         key: assignment.id,
@@ -147,16 +106,16 @@ const SingleModule = ({ loaderData }: Route.ComponentProps) => {
                 </div>
               }
             >
-              <p className="text-ink-2">
+              <p className="text-gray-600">
                 {assignment.grades_released ? (
                   <>
-                    Students <span className="text-mint-ink font-medium">can see</span> their
+                    Students <span className="text-green-600 font-medium">can see</span> their
                     grades for this assignment
                   </>
                 ) : (
                   <>
                     Grades are{' '}
-                    <span className="text-rose-ink font-medium">hidden from students</span> until
+                    <span className="text-red-600 font-medium">hidden from students</span> until
                     released
                   </>
                 )}
@@ -185,10 +144,10 @@ const SingleModule = ({ loaderData }: Route.ComponentProps) => {
     <>
       <div className="flex justify-between items-center ">
         <div className="flex items-center gap-2 mt-4">
-          <IconFileText className="text-black dark:text-ink-1" />
+          <IconFileText className="text-black dark:text-gray-200" />
           <div className="flex items-center gap-2">
-            <span className="text-2xl font-bold text-black dark:text-ink-1">Modules / </span>{' '}
-            <span className="text-2xl text-black dark:text-ink-1">{`${module!.title}`}</span>
+            <span className="text-2xl font-bold text-black dark:text-gray-200">Modules / </span>{' '}
+            <span className="text-2xl text-black dark:text-gray-200">{`${module!.title}`}</span>
           </div>
         </div>
 
@@ -213,20 +172,20 @@ const SingleModule = ({ loaderData }: Route.ComponentProps) => {
       {/* View Toggle */}
       <div className="flex justify-end items-center mb-6">
         <div className="flex items-center gap-4">
-          <span className="text-sm font-medium text-ink-2 dark:text-ink-3">View:</span>
-          <div className="flex items-center gap-3 bg-paper dark:bg-panel rounded-lg p-2 border border-line dark:border-line">
+          <span className="text-sm font-medium text-gray-600 dark:text-gray-400">View:</span>
+          <div className="flex items-center gap-3 bg-gray-50 dark:bg-gray-800 rounded-lg p-2 border border-gray-200 dark:border-gray-700">
             <div className="flex items-center gap-2">
               <IconTable
                 size={18}
                 className={
-                  viewMode === 'module' ? 'text-amber-ink dark:text-yellow-400' : 'text-ink-3'
+                  viewMode === 'module' ? 'text-yellow-600 dark:text-yellow-400' : 'text-gray-400'
                 }
               />
               <span
                 className={`text-sm font-medium ${
                   viewMode === 'module'
-                    ? 'text-amber-ink dark:text-yellow-400'
-                    : 'text-ink-2 dark:text-ink-3'
+                    ? 'text-yellow-600 dark:text-yellow-400'
+                    : 'text-gray-600 dark:text-gray-400'
                 }`}
               >
                 Module
@@ -242,15 +201,15 @@ const SingleModule = ({ loaderData }: Route.ComponentProps) => {
                 size={18}
                 className={
                   viewMode === 'assignment'
-                    ? 'text-amber-ink dark:text-yellow-400'
-                    : 'text-ink-3'
+                    ? 'text-yellow-600 dark:text-yellow-400'
+                    : 'text-gray-400'
                 }
               />
               <span
                 className={`text-sm font-medium ${
                   viewMode === 'assignment'
-                    ? 'text-amber-ink dark:text-yellow-400'
-                    : 'text-ink-2 dark:text-ink-3'
+                    ? 'text-yellow-600 dark:text-yellow-400'
+                    : 'text-gray-600 dark:text-gray-400'
                 }`}
               >
                 Assignments
@@ -261,43 +220,7 @@ const SingleModule = ({ loaderData }: Route.ComponentProps) => {
       </div>
 
       {viewMode === 'assignment' ? (
-        <Tabs
-          items={tabItems}
-          activeKey={activeAssignmentId}
-          onChange={setActiveAssignmentId}
-          tabBarExtraContent={
-            activeAssignment ? (
-              <Tooltip
-                title={
-                  activeAssignment.is_published
-                    ? 'Click to unpublish this assignment'
-                    : 'Click to publish this assignment'
-                }
-              >
-                <Button
-                  size="small"
-                  onClick={() => confirmPublishToggle(activeAssignment)}
-                  icon={
-                    <IconCircleFilled
-                      size={8}
-                      style={{
-                        color: activeAssignment.is_published ? '#16a34a' : '#f59e0b',
-                      }}
-                    />
-                  }
-                  style={{
-                    borderColor: activeAssignment.is_published ? '#86efac' : '#fcd34d',
-                    backgroundColor: activeAssignment.is_published ? '#f0fdf4' : '#fffbeb',
-                    color: activeAssignment.is_published ? '#166534' : '#92400e',
-                    fontWeight: 500,
-                  }}
-                >
-                  {activeAssignment.is_published ? 'Published' : 'Draft'}
-                </Button>
-              </Tooltip>
-            ) : null
-          }
-        />
+        <Tabs items={tabItems} />
       ) : (
         <ModuleTable
           module={module as Parameters<typeof ModuleTable>[0]['module']}
