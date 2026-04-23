@@ -1,40 +1,23 @@
 import type { Route } from './+types/route';
-import { ClassmojiService } from '@classmoji/services';
 import { requireClassroomTeachingTeam } from '~/utils/routeAuth.server';
-import { PageHeader } from '~/components';
-import RepositoryAssignmentsTable from './RepositoryAssignmentsTable';
+import { loadGradingScreenData } from '~/utils/gradingScreen.server';
+import { GradingScreen } from '~/components/features/grading';
 
 export const loader = async ({ request, params }: Route.LoaderArgs) => {
   const { class: classSlug } = params;
-  const { userId, classroom } = await requireClassroomTeachingTeam(request, classSlug!);
-  const assignedGraderItems =
-    await ClassmojiService.repositoryAssignmentGrader.findAssignedByGrader(userId, classroom.id);
-  const myRepositoryAssignments = assignedGraderItems.map(item => item.repository_assignment);
-  const modules = await ClassmojiService.module.findByClassroomSlug(classSlug!);
+  const { classroom } = await requireClassroomTeachingTeam(request, classSlug!);
 
-  const allRepositoryAssignments = await ClassmojiService.repositoryAssignment.findByClassroomId(
-    classroom.id
-  );
+  const grading = await loadGradingScreenData(classroom.id, classSlug!);
 
-  const emojiMappings = await ClassmojiService.emojiMapping.findByClassroomId(classroom.id);
-
-  return { allRepositoryAssignments, myRepositoryAssignments, modules, emojiMappings };
+  return { grading };
 };
 
 const AssistantGrading = ({ loaderData }: Route.ComponentProps) => {
-  const { myRepositoryAssignments, modules, allRepositoryAssignments, emojiMappings } = loaderData;
+  const { grading } = loaderData;
 
-  return (
-    <div>
-      <PageHeader title="Grading" routeName="grading" />
-      <RepositoryAssignmentsTable
-        allRepositoryAssignments={allRepositoryAssignments}
-        repositoryAssignments={myRepositoryAssignments}
-        modules={modules}
-        emojiMappings={emojiMappings}
-      />
-    </div>
-  );
+  // TODO: Phase 4d - wire `onOpenSubmission` to the admin/assistant assignment
+  // detail route once it exists.
+  return <GradingScreen stats={grading.stats} queue={grading.queue} />;
 };
 
 export const action = () => {

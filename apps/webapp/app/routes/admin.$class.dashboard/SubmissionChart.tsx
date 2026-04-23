@@ -42,8 +42,8 @@ const SubmissionChart = ({ recentRepositoryAssignments }: SubmissionChartProps) 
   }) => {
     if (active && payload && payload.length) {
       return (
-        <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-lg p-3">
-          <p className="text-gray-700 dark:text-gray-300 font-medium">{`${label}`}</p>
+        <div className="bg-panel dark:bg-panel border border-line dark:border-line rounded-lg shadow-lg p-3">
+          <p className="text-ink-1 dark:text-ink-3 font-medium">{`${label}`}</p>
           <p className="text-primary-600 dark:text-primary-400 font-semibold">
             {`${payload[0].value} submission${payload[0].value !== 1 ? 's' : ''}`}
           </p>

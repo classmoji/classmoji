@@ -77,8 +77,8 @@ export const createStudentGradeColumns = (
       render: (student: StudentRecord) => {
         const membership = memberships.find((m: Membership) => m.user_id === student.id);
         return (
-          <div className="max-w-xs truncate text-gray-700">
-            {membership?.comment || <span className="italic text-gray-400">No comment</span>}
+          <div className="max-w-xs truncate text-ink-1">
+            {membership?.comment || <span className="italic text-ink-3">No comment</span>}
           </div>
         );
       },

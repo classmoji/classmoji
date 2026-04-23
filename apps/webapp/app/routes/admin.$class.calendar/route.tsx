@@ -1,22 +1,19 @@
-import { useState, useEffect } from 'react';
-import { Button, Modal } from 'antd';
-import { PlusOutlined } from '@ant-design/icons';
+import { useEffect, useState } from 'react';
 import invariant from 'tiny-invariant';
-import { data, useFetcher, useParams } from 'react-router';
+import { data, useFetcher, useParams, useSearchParams } from 'react-router';
 import { toast } from 'react-toastify';
-import { PageHeader } from '~/components';
+import type { Route } from './+types/route';
 import { ClassmojiService } from '@classmoji/services';
 import getPrisma from '@classmoji/database';
 import { assertClassroomAccess } from '~/utils/helpers';
 import { buildCalendarUrl, getCalendarDateRange } from '~/utils/calendar.server';
-import type { Route } from './+types/route';
-import CourseCalendar from '~/components/features/calendar/CourseCalendar';
-import type { CalendarEvent } from '~/components/features/calendar/utils';
-import CalendarSubscriptionCard from '~/components/features/calendar/CalendarSubscriptionCard';
+import { CalendarScreen } from '~/components/features/calendar';
+import type { CalendarEvent } from '~/components/features/calendar';
+import { mapClassroomCalendarToEvents } from '~/components/features/calendar/mapToCalendarEvents';
 import AddEventModal from '~/components/features/calendar/AddEventModal';
-import EditEventModal, { type EventFormData } from '~/components/features/calendar/EditEventModal';
-import EventCard from '~/components/features/calendar/EventCard';
-import EventLinks from '~/components/features/calendar/EventLinks';
+import EditEventModal, {
+  type EventFormData,
+} from '~/components/features/calendar/EditEventModal';
 
 export const loader = async ({ request, params }: Route.LoaderArgs) => {
   const { class: classSlug } = params;
@@ -30,39 +27,39 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
     attemptedAction: 'view',
   });
 
-  // Check for date params in URL (for fetching specific month)
   const url = new URL(request.url);
   const yearParam = url.searchParams.get('year');
   const monthParam = url.searchParams.get('month');
 
-  // Use requested month or default to current month
   const today = new Date();
-  const year = yearParam ? parseInt(yearParam) : today.getFullYear();
-  const month = monthParam ? parseInt(monthParam) : today.getMonth();
+  const year = yearParam ? parseInt(yearParam, 10) : today.getFullYear();
+  const month = monthParam ? parseInt(monthParam, 10) : today.getMonth();
 
   const { start, end } = getCalendarDateRange(year, month);
 
-  let events: Awaited<ReturnType<typeof ClassmojiService.calendar.getClassroomCalendar>> = [];
+  let rawEvents: Awaited<ReturnType<typeof ClassmojiService.calendar.getClassroomCalendar>> = [];
   try {
-    // Pass includeRawLinks=true for admin UI editing, includeUnpublished=true to see draft assignments
-    events = await ClassmojiService.calendar.getClassroomCalendar(
+    rawEvents = await ClassmojiService.calendar.getClassroomCalendar(
       classroom.id,
       start,
       end,
-      null, // userId not needed for admin
+      null,
       true, // includeRawLinks for editing UI
-      true // includeUnpublished to see draft/unpublished assignments
+      true // includeUnpublished so draft content still shows
     );
   } catch (error: unknown) {
     console.error(
       'Calendar service error (likely missing migration):',
       error instanceof Error ? error.message : error
     );
-    // Return empty events if table doesn't exist yet
-    events = [];
+    rawEvents = [];
   }
 
-  // Fetch available resources for linking (all published content)
+  const events: CalendarEvent[] = mapClassroomCalendarToEvents(rawEvents, {
+    classSlug,
+    rolePrefix: 'admin',
+  });
+
   const [pages, slides, assignments] = await Promise.all([
     getPrisma().page.findMany({
       where: { classroom_id: classroom.id, is_draft: false },
@@ -83,19 +80,17 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
 
   const role = membership!.role;
   const isAdmin = ['OWNER', 'TEACHER'].includes(role);
-
-  // Build subscription URL
-  const subscriptionUrl = buildCalendarUrl(classSlug);
+  const subscribeUrl = buildCalendarUrl(classSlug);
 
   return data({
+    year,
+    month,
     events,
+    rawEvents,
+    subscribeUrl,
     userId,
-    role,
     isAdmin,
     canEdit: ['OWNER', 'TEACHER', 'ASSISTANT'].includes(role),
-    currentYear: year,
-    currentMonth: month,
-    subscriptionUrl,
     slidesUrl: process.env.SLIDES_URL || 'http://localhost:6500',
     pagesUrl: process.env.PAGES_URL || 'http://localhost:7100',
     pages,
@@ -127,7 +122,6 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
 
     const newEvent = await ClassmojiService.calendar.createEvent(classroom.id, userId, createData);
 
-    // If links were provided (non-recurring events only), add them
     const hasLinks = linkedPageIds?.length || linkedSlideIds?.length || linkedAssignmentIds?.length;
     if (hasLinks) {
       await ClassmojiService.calendar.updateEventLinks(
@@ -139,7 +133,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
           assignmentIds: linkedAssignmentIds || [],
         },
         null
-      ); // null occurrence_date for non-recurring events
+      );
     }
 
     return data({ success: true });
@@ -151,7 +145,6 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
 
     const event = await ClassmojiService.calendar.getEventById(eventId);
 
-    // OWNER/TEACHER can edit any event, ASSISTANT can only edit their own
     if (!isAdmin && String(event!.created_by) !== String(userId)) {
       return data(
         { success: false, error: 'Unauthorized - you can only edit your own events' },
@@ -159,7 +152,6 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
       );
     }
 
-    // Handle edit scope for recurring events
     const {
       editScope,
       occurrenceDate,
@@ -171,27 +163,25 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
 
     if (editScope && occurrenceDate) {
       await ClassmojiService.calendar.updateEventWithScope(
-        eventId as string,
+        eventId,
         updateData,
         editScope,
         new Date(occurrenceDate)
       );
     } else {
-      await ClassmojiService.calendar.updateEvent(eventId as string, updateData);
+      await ClassmojiService.calendar.updateEvent(eventId, updateData);
     }
 
-    // Handle resource links update (only allowed with 'this_only' scope for recurring events)
     const hasLinkUpdates =
       linkedPageIds !== undefined ||
       linkedSlideIds !== undefined ||
       linkedAssignmentIds !== undefined;
     if (hasLinkUpdates) {
-      // For recurring events, only allow link updates with 'this_only' scope
       const linkOccurrenceDate =
         editScope === 'this_only' && occurrenceDate ? new Date(occurrenceDate) : null;
 
       await ClassmojiService.calendar.updateEventLinks(
-        eventId as string,
+        eventId,
         classroom.id,
         {
           pageIds: linkedPageIds || [],
@@ -217,7 +207,6 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
         return data({ success: false, error: 'Event not found' }, { status: 404 });
       }
 
-      // OWNER/TEACHER can delete any event, ASSISTANT can only delete their own
       if (!isAdmin && String(event.created_by) !== String(userId)) {
         return data(
           { success: false, error: 'Unauthorized - you can only delete your own events' },
@@ -225,15 +214,14 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
         );
       }
 
-      // Handle delete scope for recurring events
       if (options?.editScope && options?.occurrenceDate) {
         await ClassmojiService.calendar.deleteEventWithScope(
-          eventId as string,
+          eventId,
           options.editScope,
           new Date(options.occurrenceDate)
         );
       } else {
-        await ClassmojiService.calendar.deleteEvent(eventId as string);
+        await ClassmojiService.calendar.deleteEvent(eventId);
       }
 
       return data({ success: true });
@@ -247,7 +235,6 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
   }
 
   if (intent === 'update_deadline') {
-    // Only OWNER and TEACHER can move deadlines (not ASSISTANT)
     if (!isAdmin) {
       return data(
         { success: false, error: 'Unauthorized - only teachers can move deadlines' },
@@ -258,14 +245,12 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
     const assignmentId = formData.get('assignmentId') as string;
     const newDeadline = formData.get('newDeadline') as string;
 
-    // Validate the assignment exists and belongs to this classroom
     const assignment = await ClassmojiService.assignment.findById(assignmentId);
 
     if (!assignment) {
       return data({ success: false, error: 'Assignment not found' }, { status: 404 });
     }
 
-    // Verify assignment belongs to this classroom (through its module)
     if (assignment.module.classroom_id !== classroom.id) {
       return data(
         { success: false, error: 'Assignment does not belong to this classroom' },
@@ -273,8 +258,8 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
       );
     }
 
-    await ClassmojiService.assignment.update(assignmentId as string, {
-      student_deadline: new Date(newDeadline as string),
+    await ClassmojiService.assignment.update(assignmentId, {
+      student_deadline: new Date(newDeadline),
     });
 
     return data({ success: true });
@@ -283,244 +268,140 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
   throw new Response('Invalid intent', { status: 400 });
 };
 
-// CalendarEvent type used locally - compatible with EditEventModal's CalendarEvent
-interface CalendarEventLocal {
-  id: string;
-  title: string;
-  event_type: string;
-  start_time: string;
-  end_time: string;
-  location?: string | null;
-  meeting_link?: string | null;
-  description?: string | null;
-  recurrence_rule?: string | { days?: string[]; until?: string | null } | null;
-  created_by: number | string;
-  is_recurring?: boolean;
-  is_deadline?: boolean;
-  occurrence_date?: string | null;
-  [key: string]: unknown;
-}
-
 const AdminCalendar = ({ loaderData }: Route.ComponentProps) => {
   const {
-    events: initialEvents,
+    year,
+    month,
+    events,
+    rawEvents,
+    subscribeUrl,
     userId,
-    canEdit,
     isAdmin,
-    subscriptionUrl,
+    canEdit,
     slidesUrl,
     pagesUrl,
     pages,
     slides,
     assignments,
   } = loaderData;
+  const [searchParams, setSearchParams] = useSearchParams();
+  const fetcher = useFetcher<{ success?: boolean; error?: string }>();
+
+  const [addOpen, setAddOpen] = useState(false);
+  const [editOpen, setEditOpen] = useState(false);
+  const [selectedRaw, setSelectedRaw] = useState<Record<string, unknown> | null>(null);
+
   const { class: classSlug } = useParams();
-  const fetcher = useFetcher();
-  const eventsFetcher = useFetcher();
-
-  const [addModalOpen, setAddModalOpen] = useState(false);
-  const [editModalOpen, setEditModalOpen] = useState(false);
-  const [selectedEvent, setSelectedEvent] = useState<CalendarEvent | null>(null);
-  const [viewModalOpen, setViewModalOpen] = useState(false);
-  const [optimisticEvents, setOptimisticEvents] = useState<CalendarEventLocal[] | null>(null);
-
-  // Track current view month/year for refreshing after mutations
-  const today = new Date();
-  const [currentViewYear, setCurrentViewYear] = useState(today.getFullYear());
-  const [currentViewMonth, setCurrentViewMonth] = useState(today.getMonth());
-
-  // Use optimistic events if available, then fetched, then initial loader events
-  const events = optimisticEvents || eventsFetcher.data?.events || initialEvents;
 
   const loading = fetcher.state !== 'idle';
 
-  // Handle month navigation - fetch new events
-  const handleMonthChange = (year: number, month: number) => {
-    setCurrentViewYear(year);
-    setCurrentViewMonth(month);
-    eventsFetcher.load(`?year=${year}&month=${month}`);
+  const goToMonth = (y: number, m: number) => {
+    const date = new Date(y, m, 1);
+    const nextParams = new URLSearchParams(searchParams);
+    nextParams.set('year', String(date.getFullYear()));
+    nextParams.set('month', String(date.getMonth()));
+    setSearchParams(nextParams, { preventScrollReset: true });
   };
 
-  // Close modals and show toast when fetcher completes
   useEffect(() => {
     if (fetcher.state === 'idle' && fetcher.data) {
       if (fetcher.data.success) {
-        setOptimisticEvents(null); // Clear optimistic state, let fresh data take over
-        setAddModalOpen(false);
-        setEditModalOpen(false);
-        setSelectedEvent(null);
-        // Refresh events for current view month after mutation
-        eventsFetcher.load(`?year=${currentViewYear}&month=${currentViewMonth}`);
+        setAddOpen(false);
+        setEditOpen(false);
+        setSelectedRaw(null);
       } else if (fetcher.data.error) {
-        setOptimisticEvents(null); // Revert on error
         toast.error(fetcher.data.error);
       }
     }
   }, [fetcher.data, fetcher.state]);
 
-  const handleAddEvent = (eventData: Record<string, unknown>) => {
-    const formData = new FormData();
-    formData.append('intent', 'create');
-    formData.append('eventData', JSON.stringify(eventData));
-
-    fetcher.submit(formData, { method: 'POST' });
-  };
-
-  const handleUpdateEvent = (eventData: EventFormData) => {
-    const formData = new FormData();
-    formData.append('intent', 'update');
-    formData.append('eventId', selectedEvent!.id!);
-    formData.append('eventData', JSON.stringify(eventData));
-
-    fetcher.submit(formData, { method: 'POST' });
-  };
-
-  const handleDeleteEvent = (
-    eventId: string,
-    options: { editScope?: string; occurrenceDate?: string } | null = null
-  ) => {
-    const formData = new FormData();
-    formData.append('intent', 'delete');
-    formData.append('eventId', eventId);
-    if (options) {
-      formData.append('deleteOptions', JSON.stringify(options));
-    }
-
-    fetcher.submit(formData, { method: 'POST' });
-  };
-
-  const handleEventDrop = (event: CalendarEvent, newStartTime: Date, newEndTime: Date) => {
-    // OWNER/TEACHER can drag any event, others can only drag their own
-    const canDragEvent = isAdmin || Number(event.created_by) === Number(userId);
-
-    if (!canDragEvent) {
-      toast.error('You can only move your own events');
+  const handleEventClick = (ev: CalendarEvent) => {
+    if (!canEdit || ev.isDeadline || !ev.id) return;
+    // Find matching raw event (same id, and same occurrence if recurring)
+    const raw = (rawEvents as Array<Record<string, unknown>>).find((r) => {
+      if (r.id !== ev.id) return false;
+      if (ev.isRecurring) {
+        const occ = r.occurrence_date;
+        if (!occ) return false;
+        const d = occ instanceof Date ? occ : new Date(occ as string);
+        const dateStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(
+          d.getDate()
+        ).padStart(2, '0')}`;
+        return dateStr === ev.date;
+      }
+      return true;
+    });
+    if (!raw) return;
+    const ownerId = Number(raw.created_by);
+    const canEditEvent = isAdmin || ownerId === Number(userId);
+    if (!canEditEvent) {
+      toast.error('You can only edit your own events');
       return;
     }
-
-    // Optimistically update events immediately for smooth UI
-    const updatedEvents = events.map((e: CalendarEventLocal) => {
-      const isSameEvent =
-        e.id === event.id &&
-        ((!e.occurrence_date && !event.occurrence_date) ||
-          (e.occurrence_date &&
-            event.occurrence_date &&
-            new Date(e.occurrence_date).getTime() === new Date(event.occurrence_date).getTime()));
-
-      if (isSameEvent) {
-        return {
-          ...e,
-          start_time: newStartTime.toISOString(),
-          end_time: newEndTime.toISOString(),
-        };
-      }
-      return e;
-    });
-    setOptimisticEvents(updatedEvents);
-
-    const eventData = {
-      title: event.title,
-      event_type: event.event_type,
-      start_time: newStartTime.toISOString(),
-      end_time: newEndTime.toISOString(),
-      location: event.location,
-      meeting_link: event.meeting_link,
-      description: event.description,
-      recurrence_rule: event.recurrence_rule,
-    };
-
-    // For recurring event occurrences, only move this single occurrence
-    const eventPayload: Record<string, unknown> = { ...eventData };
-    if (event.is_recurring && event.occurrence_date) {
-      eventPayload.editScope = 'this_only';
-      eventPayload.occurrenceDate = event.occurrence_date;
-    }
-
-    const formData = new FormData();
-    formData.append('intent', 'update');
-    formData.append('eventId', event.id!);
-    formData.append('eventData', JSON.stringify(eventPayload));
-
-    fetcher.submit(formData, { method: 'POST' });
+    setSelectedRaw(raw);
+    setEditOpen(true);
   };
 
-  const handleDeadlineDrop = (deadline: CalendarEvent, newDateTime: Date) => {
-    // Extract assignment ID from deadline event ID (format: 'deadline-{assignment.id}')
-    const assignmentId = deadline.id!.replace('deadline-', '');
-
-    // Optimistically update events immediately for smooth UI
-    const updatedEvents = events.map((e: CalendarEventLocal) => {
-      if (e.id === deadline.id) {
-        return {
-          ...e,
-          start_time: newDateTime.toISOString(),
-          end_time: newDateTime.toISOString(),
-        };
-      }
-      return e;
-    });
-    setOptimisticEvents(updatedEvents);
-
-    const formData = new FormData();
-    formData.append('intent', 'update_deadline');
-    formData.append('assignmentId', assignmentId);
-    formData.append('newDeadline', newDateTime.toISOString());
-
-    fetcher.submit(formData, { method: 'POST' });
+  const handleAdd = (eventData: Record<string, unknown>) => {
+    const fd = new FormData();
+    fd.append('intent', 'create');
+    fd.append('eventData', JSON.stringify(eventData));
+    fetcher.submit(fd, { method: 'POST' });
   };
 
-  const handleEventClick = (event: CalendarEvent) => {
-    // Convert both to numbers for comparison (handle string/number mismatch)
-    const eventOwnerId = Number(event.created_by);
-    const currentUserId = Number(userId);
+  const handleUpdate = async (eventData: EventFormData) => {
+    if (!selectedRaw?.id) return;
+    const fd = new FormData();
+    fd.append('intent', 'update');
+    fd.append('eventId', String(selectedRaw.id));
+    fd.append('eventData', JSON.stringify(eventData));
+    fetcher.submit(fd, { method: 'POST' });
+  };
 
-    // OWNER/TEACHER can edit any event, others can only edit their own
-    const canEditEvent = isAdmin || eventOwnerId === currentUserId;
-
-    if (event.is_deadline) {
-      // Deadlines are read-only, just show info
-      setSelectedEvent(event);
-      setViewModalOpen(true);
-    } else if (canEdit && canEditEvent) {
-      // User can edit this event
-      setSelectedEvent(event);
-      setEditModalOpen(true);
-    } else {
-      // Just view the event
-      setSelectedEvent(event);
-      setViewModalOpen(true);
-    }
+  const handleDelete = async (
+    id: string,
+    options?: Record<string, unknown>
+  ) => {
+    const fd = new FormData();
+    fd.append('intent', 'delete');
+    fd.append('eventId', id);
+    if (options) fd.append('deleteOptions', JSON.stringify(options));
+    fetcher.submit(fd, { method: 'POST' });
   };
 
   return (
-    <div>
-      <PageHeader title="Calendar" routeName="calendar">
-        <div className="flex gap-2">
-          <CalendarSubscriptionCard subscriptionUrl={subscriptionUrl} />
-          {canEdit && (
-            <Button type="primary" icon={<PlusOutlined />} onClick={() => setAddModalOpen(true)}>
-              Add Event
-            </Button>
-          )}
-        </div>
-      </PageHeader>
-
-      <CourseCalendar
+    <>
+      <CalendarScreen
+        year={year}
+        month={month}
         events={events}
-        onEventClick={handleEventClick}
-        onEventDrop={canEdit ? handleEventDrop : null}
-        onDeadlineDrop={isAdmin ? handleDeadlineDrop : null}
-        canDragDeadlines={isAdmin}
-        onMonthChange={handleMonthChange}
-        showCreator={true}
+        subscribeUrl={subscribeUrl}
+        onPrev={() => goToMonth(year, month - 1)}
+        onNext={() => goToMonth(year, month + 1)}
+        onToday={() => {
+          const today = new Date();
+          goToMonth(today.getFullYear(), today.getMonth());
+        }}
+        onEventClick={canEdit ? handleEventClick : undefined}
+        headerActions={
+          canEdit ? (
+            <button
+              type="button"
+              className="btn cm-btn-primary"
+              onClick={() => setAddOpen(true)}
+            >
+              + Add event
+            </button>
+          ) : null
+        }
       />
 
       {canEdit && (
         <>
           <AddEventModal
-            open={addModalOpen}
-            onClose={() => setAddModalOpen(false)}
-            onSubmit={handleAddEvent}
+            open={addOpen}
+            onClose={() => setAddOpen(false)}
+            onSubmit={handleAdd}
             loading={loading}
             pages={pages}
             slides={slides}
@@ -528,20 +409,21 @@ const AdminCalendar = ({ loaderData }: Route.ComponentProps) => {
           />
 
           <EditEventModal
-            open={editModalOpen}
+            open={editOpen}
             event={
-              selectedEvent as Record<string, unknown> as Parameters<
+              selectedRaw as Record<string, unknown> as Parameters<
                 typeof EditEventModal
               >[0]['event']
             }
             onClose={() => {
-              setEditModalOpen(false);
-              setSelectedEvent(null);
+              setEditOpen(false);
+              setSelectedRaw(null);
             }}
-            onSubmit={handleUpdateEvent as Parameters<typeof EditEventModal>[0]['onSubmit']}
-            onDelete={handleDeleteEvent as Parameters<typeof EditEventModal>[0]['onDelete']}
+            onSubmit={handleUpdate as Parameters<typeof EditEventModal>[0]['onSubmit']}
+            onDelete={handleDelete as Parameters<typeof EditEventModal>[0]['onDelete']}
             loading={loading}
             classSlug={classSlug!}
+            rolePrefix="admin"
             slidesUrl={slidesUrl}
             pagesUrl={pagesUrl}
             pages={pages}
@@ -550,30 +432,7 @@ const AdminCalendar = ({ loaderData }: Route.ComponentProps) => {
           />
         </>
       )}
-
-      <Modal
-        title="Event Details"
-        open={viewModalOpen}
-        onCancel={() => {
-          setViewModalOpen(false);
-          setSelectedEvent(null);
-        }}
-        footer={null}
-      >
-        {selectedEvent && (
-          <>
-            <EventCard event={selectedEvent} showCreator={true} compact={false} />
-            <EventLinks
-              event={selectedEvent}
-              classSlug={classSlug}
-              rolePrefix="admin"
-              slidesUrl={slidesUrl}
-              pagesUrl={pagesUrl}
-            />
-          </>
-        )}
-      </Modal>
-    </div>
+    </>
   );
 };
 

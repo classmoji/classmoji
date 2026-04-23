@@ -3,20 +3,20 @@ import { BRAND, BRAND_LIGHT, BRAND_BG, PRIMARY, PRIMARY_600 } from './theme.js';
 const theme = {
   token: {
     colorPrimary: PRIMARY,
-    colorTextBase: '#374151', // Softer dark gray text
+    colorTextBase: '#2b2d35', // ink-1
     colorBgSolidActive: BRAND,
+    colorBorder: '#dfe4ee', // line
+    borderRadius: 8,
   },
   components: {
     Button: {
       algorithm: true,
-      // Primary button styling (green background, white text)
       colorPrimary: PRIMARY,
       colorPrimaryHover: PRIMARY_600,
       colorTextLightSolid: '#ffffff',
-      // Default button styling
-      defaultBg: '#F7F8FA',
-      defaultColor: '#000000',
-      defaultBorderColor: '#D2D9E0',
+      defaultBg: '#ffffff',
+      defaultColor: '#14151a',
+      defaultBorderColor: '#c9d0de',
       // Remove box shadow
       primaryShadow: 'none',
       defaultShadow: 'none',

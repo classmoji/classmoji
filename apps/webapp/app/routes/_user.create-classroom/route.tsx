@@ -1,7 +1,7 @@
 import { redirect, useNavigate } from 'react-router';
 import { useState, useEffect } from 'react';
 import { useForm, FormProvider } from 'react-hook-form';
-import { Button, Card, Alert, Steps } from 'antd';
+import { Button, Alert, Steps } from 'antd';
 
 import { getAuthSession, clearRevokedToken } from '@classmoji/auth/server';
 import { useGlobalFetcher, useGitHubAppInstallPopup } from '~/hooks';
@@ -281,7 +281,7 @@ const CreateClassroom = ({ loaderData }: Route.ComponentProps) => {
 
   return (
     <div className="max-w-2xl mx-auto">
-      <h1 className="text-2xl font-bold mb-6 dark:text-gray-100">Create New Classroom</h1>
+      <h1 className="display text-3xl text-ink-0 mb-6">Create New Classroom</h1>
 
       {gitOrgs.length === 0 ? (
         <>
@@ -307,7 +307,8 @@ const CreateClassroom = ({ loaderData }: Route.ComponentProps) => {
           />
         </>
       ) : (
-        <Card>
+        <div className="panel">
+          <div className="panel-body">
           <Steps current={currentStep} items={STEPS} style={{ marginBottom: 24 }} size="small" />
 
           <FormProvider {...methods}>
@@ -365,7 +366,8 @@ const CreateClassroom = ({ loaderData }: Route.ComponentProps) => {
               </div>
             </div>
           </FormProvider>
-        </Card>
+          </div>
+        </div>
       )}
 
       {gitOrgs.length > 0 && (

@@ -3,104 +3,142 @@
  */
 
 import {
-  IconLayoutDashboard,
-  IconFileText,
-  IconUsers,
-  IconUserCheck,
-  IconSettings,
-  IconUsersGroup,
-  IconNumber,
-  IconBrandGithub,
-  IconCoin,
-  IconRotate,
-  IconRobot,
-  IconPresentation,
-  IconBook,
+  IconHome,
   IconCalendar,
-  IconLink,
-  IconChecklist,
-} from '@tabler/icons-react';
+  IconCheckSquare,
+  IconModule,
+  IconFile,
+  IconArrowRotate,
+  IconCoin,
+  IconBook,
+  IconSettings,
+  IconPeople,
+  IconDiamond,
+  IconGithub,
+  IconSparkle,
+} from '@classmoji/ui-components';
+
+type IconComponent = React.ComponentType<{ size?: number; strokeWidth?: number; className?: string }>;
+
+export interface RouteEntry {
+  link: string;
+  label: string;
+  icon: IconComponent;
+  roles: string[];
+  isProTier?: boolean;
+  tiers?: string[];
+  category?: string;
+}
 
 /**
- * Route categories for organized navigation
+ * Sidebar grouping per redesign (Phase 3).
+ * Groups align to design bundle `shell.jsx` — a top group, two labeled sections
+ * (Coursework / Reference) and a footer. Role-aware; each string is a key into
+ * `routes` below.
+ */
+export const sidebarSections = {
+  top: {
+    STUDENT: ['dashboard', 'calendar'],
+    OWNER: ['dashboard', 'calendar'],
+    ASSISTANT: ['dashboard', 'calendar'],
+  },
+  coursework: {
+    STUDENT: ['modules', 'quizzes', 'tasks', 'regrade-requests'],
+    OWNER: ['modules', 'quizzes', 'pages', 'slides', 'grades'],
+    ASSISTANT: ['modules', 'quizzes', 'grading', 'regrade-requests'],
+  },
+  reference: {
+    STUDENT: ['tokens', 'syllabus'],
+    OWNER: ['students', 'assistants', 'teams', 'tokens', 'syllabus', 'repositories'],
+    ASSISTANT: ['students', 'syllabus'],
+  },
+  footer: ['settings'],
+} as const;
+
+/**
+ * @deprecated Retained as a compatibility alias for any external importers.
+ * Use `sidebarSections` instead — the new schema is role-aware.
+ *
+ * Provides a flat `course` derived from `coursework + reference` per role for
+ * backwards compatibility with callers that read the old shape.
  */
 export const routeCategories = {
-  content: {
-    label: 'Content',
-    items: ['modules', 'slides', 'pages', 'quizzes'],
+  top: sidebarSections.top,
+  course: {
+    STUDENT: [...sidebarSections.coursework.STUDENT, ...sidebarSections.reference.STUDENT],
+    OWNER: [...sidebarSections.coursework.OWNER, ...sidebarSections.reference.OWNER],
+    ASSISTANT: [...sidebarSections.coursework.ASSISTANT, ...sidebarSections.reference.ASSISTANT],
   },
-  assessment: {
-    label: 'Assessment',
-    items: ['grades', 'grading', 'regrade-requests', 'tokens'],
-  },
-  people: {
-    label: 'People',
-    items: ['students', 'teams', 'assistants'],
-  },
-  integrations: {
-    label: 'Integrations',
-    items: ['repositories'],
-  },
-  settings: {
-    label: 'Settings',
-    items: ['settings'],
-  },
-};
+  footer: sidebarSections.footer,
+} as const;
 
 /**
  * Defines the routes and their corresponding details.
  */
-export const routes = {
+export const routes: Record<string, RouteEntry> = {
   dashboard: {
     link: '/dashboard',
     label: 'Dashboard',
-    icon: IconLayoutDashboard,
+    icon: IconHome as IconComponent,
     roles: ['OWNER', 'ASSISTANT', 'STUDENT'],
   },
 
-  // Calendar - shown under dashboard
   calendar: {
     link: '/calendar',
     label: 'Calendar',
-    icon: IconCalendar,
+    icon: IconCalendar as IconComponent,
     roles: ['OWNER', 'TEACHER', 'ASSISTANT', 'STUDENT'],
+  },
+
+  tasks: {
+    link: '/tasks',
+    label: 'Tasks',
+    icon: IconCheckSquare as IconComponent,
+    roles: ['STUDENT'],
   },
 
   // Content
   modules: {
     link: '/modules',
     label: 'Modules',
-    icon: IconFileText,
+    icon: IconModule as IconComponent,
     roles: ['OWNER', 'ASSISTANT', 'STUDENT'],
     category: 'content',
   },
   slides: {
     link: '/slides',
     label: 'Slides',
-    icon: IconPresentation,
+    icon: IconFile as IconComponent,
     roles: ['OWNER', 'TEACHER', 'ASSISTANT', 'STUDENT'],
     category: 'content',
   },
   pages: {
     link: '/pages',
     label: 'Pages',
-    icon: IconBook,
+    icon: IconBook as IconComponent,
     roles: ['OWNER', 'TEACHER'],
     category: 'content',
   },
   resources: {
     link: '/resources',
     label: 'Link Resources',
-    icon: IconLink,
+    icon: IconFile as IconComponent,
     roles: ['OWNER', 'TEACHER'],
+    category: 'content',
+  },
+  syllabus: {
+    link: '/syllabus',
+    label: 'Syllabus',
+    icon: IconBook as IconComponent,
+    roles: ['OWNER', 'ASSISTANT', 'STUDENT'],
     category: 'content',
   },
 
   // Assessment
   quizzes: {
     link: '/quizzes',
-    label: 'Quizzes',
-    icon: IconRobot,
+    label: 'Assignments',
+    icon: IconFile as IconComponent,
     roles: ['OWNER', 'STUDENT', 'ASSISTANT'],
     isProTier: true,
     category: 'assessment',
@@ -108,21 +146,21 @@ export const routes = {
   grades: {
     link: '/grades',
     label: 'Grades',
-    icon: IconNumber,
+    icon: IconDiamond as IconComponent,
     roles: ['OWNER'],
     category: 'assessment',
   },
   grading: {
     link: '/grading',
     label: 'Grading',
-    icon: IconChecklist,
-    roles: ['ASSISTANT'],
+    icon: IconSparkle as IconComponent,
+    roles: ['OWNER', 'ASSISTANT'],
     category: 'assessment',
   },
   'regrade-requests': {
     link: '/regrade-requests',
     label: 'Resubmits',
-    icon: IconRotate,
+    icon: IconArrowRotate as IconComponent,
     roles: ['OWNER', 'ASSISTANT', 'STUDENT'],
     category: 'assessment',
   },
@@ -130,15 +168,15 @@ export const routes = {
   // People
   students: {
     link: '/students',
-    label: 'Students',
-    icon: IconUsers,
+    label: 'Roster',
+    icon: IconPeople as IconComponent,
     roles: ['OWNER'],
     category: 'people',
   },
   teams: {
     link: '/teams',
     label: 'Teams',
-    icon: IconUsersGroup,
+    icon: IconPeople as IconComponent,
     roles: ['OWNER'],
     tiers: ['PRO'],
     isProTier: true,
@@ -147,7 +185,7 @@ export const routes = {
   assistants: {
     link: '/assistants',
     label: 'Assistants',
-    icon: IconUserCheck,
+    icon: IconPeople as IconComponent,
     roles: ['OWNER'],
     isProTier: true,
     category: 'people',
@@ -157,16 +195,16 @@ export const routes = {
   repositories: {
     link: '/repositories',
     label: 'Repositories',
-    icon: IconBrandGithub,
+    icon: IconGithub as IconComponent,
     roles: ['OWNER'],
     category: 'integrations',
   },
 
-  // Assessment (continued)
+  // Tokens (assessment)
   tokens: {
     link: '/tokens',
     label: 'Tokens',
-    icon: IconCoin,
+    icon: IconCoin as IconComponent,
     roles: ['OWNER', 'STUDENT'],
     isProTier: true,
     category: 'assessment',
@@ -176,7 +214,7 @@ export const routes = {
   settings: {
     link: '/settings/general',
     label: 'Class Settings',
-    icon: IconSettings,
+    icon: IconSettings as IconComponent,
     roles: ['OWNER'],
     category: 'settings',
   },

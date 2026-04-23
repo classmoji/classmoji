@@ -129,9 +129,9 @@ const ResourcesKanban = ({ modules, pages, slides }: ResourcesKanbanProps) => {
   return (
     <div className="flex-1 flex flex-col h-full overflow-hidden">
       {/* Filters */}
-      <div className="flex items-center gap-4 px-4 py-3 border-b border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800">
+      <div className="flex items-center gap-4 px-4 py-3 border-b border-line dark:border-line bg-panel dark:bg-panel">
         <Input
-          prefix={<IconSearch size={16} className="text-gray-400" />}
+          prefix={<IconSearch size={16} className="text-ink-3" />}
           placeholder="Search resources..."
           value={searchQuery}
           onChange={e => setSearchQuery(e.target.value)}
@@ -140,13 +140,13 @@ const ResourcesKanban = ({ modules, pages, slides }: ResourcesKanbanProps) => {
         />
         <div className="flex items-center gap-2">
           <Switch size="small" checked={showPages} onChange={setShowPages} />
-          <IconFile size={16} className="text-gray-500 dark:text-gray-400" />
-          <span className="text-sm text-gray-600 dark:text-gray-300">Pages</span>
+          <IconFile size={16} className="text-ink-2 dark:text-ink-3" />
+          <span className="text-sm text-ink-2 dark:text-ink-3">Pages</span>
         </div>
         <div className="flex items-center gap-2">
           <Switch size="small" checked={showSlides} onChange={setShowSlides} />
-          <IconPresentation size={16} className="text-gray-500 dark:text-gray-400" />
-          <span className="text-sm text-gray-600 dark:text-gray-300">Slides</span>
+          <IconPresentation size={16} className="text-ink-2 dark:text-ink-3" />
+          <span className="text-sm text-ink-2 dark:text-ink-3">Slides</span>
         </div>
       </div>
 
@@ -159,7 +159,7 @@ const ResourcesKanban = ({ modules, pages, slides }: ResourcesKanbanProps) => {
       >
         <div className="flex-1 flex overflow-hidden">
           {/* Fixed source column */}
-          <div className="flex-shrink-0 p-4 border-r border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900 overflow-y-auto">
+          <div className="flex-shrink-0 p-4 border-r border-line dark:border-line bg-paper dark:bg-paper overflow-y-auto">
             <SourceColumn pages={allPages} slides={allSlides} />
           </div>
 
@@ -182,7 +182,7 @@ const ResourcesKanban = ({ modules, pages, slides }: ResourcesKanbanProps) => {
               );
             })}
             {modules.length === 0 && (
-              <div className="flex items-center justify-center flex-1 text-gray-400 dark:text-gray-500">
+              <div className="flex items-center justify-center flex-1 text-ink-3 dark:text-ink-2">
                 No modules available. Create a module first.
               </div>
             )}

@@ -47,7 +47,7 @@ const ModuleSelectionDrawer = ({
         onModuleToggle={onModuleToggle}
         onQuizToggle={onQuizToggle}
       />
-      <div className="mt-4 text-sm text-gray-500">
+      <div className="mt-4 text-sm text-ink-2">
         {selectedModules.size > 0 ? (
           <span>
             {selectedModules.size} module{selectedModules.size !== 1 ? 's' : ''} selected

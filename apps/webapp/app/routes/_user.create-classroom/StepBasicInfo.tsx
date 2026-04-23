@@ -65,7 +65,7 @@ const StepBasicInfo = ({ gitOrgs, slugPreview, years, githubAppName }: StepBasic
                       <Avatar src={org.avatar_url} size={20} />
                       <span>{org.login}</span>
                       {org.classrooms.length > 0 && (
-                        <span className="text-gray-400">
+                        <span className="text-ink-3">
                           ({org.classrooms.length} classroom{org.classrooms.length !== 1 ? 's' : ''}
                           )
                         </span>
@@ -160,7 +160,7 @@ const StepBasicInfo = ({ gitOrgs, slugPreview, years, githubAppName }: StepBasic
         </div>
 
         {slugPreview && (
-          <div className="text-sm text-gray-600 dark:text-gray-300">
+          <div className="text-sm text-ink-2 dark:text-ink-3">
             Slug:{' '}
             <code className="bg-yellow-100 dark:bg-yellow-900/30 text-yellow-800 dark:text-yellow-200 px-2 py-1 rounded">
               {slugPreview}
