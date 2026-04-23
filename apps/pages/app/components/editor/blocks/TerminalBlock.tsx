@@ -23,6 +23,18 @@ export const Terminal = createReactBlockSpec(
     content: 'none' as const,
   },
   {
+    toExternalHTML: function TerminalExternalHTML(props: TerminalRenderProps) {
+      const code = props.block.props.code || '';
+      const title = props.block.props.title || '';
+      return (
+        <div className="terminal-block">
+          {title && <div className="terminal-title">{title}</div>}
+          <pre>
+            <code className="language-bash">{code}</code>
+          </pre>
+        </div>
+      );
+    },
     render: function TerminalRenderer(props: TerminalRenderProps) {
       const textareaRef = useRef<HTMLTextAreaElement>(null);
       const codeRef = useRef<HTMLDivElement>(null);

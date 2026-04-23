@@ -346,8 +346,13 @@ export class ContentService {
       return result;
     } catch (error: unknown) {
       if (hasStatus(error, 404)) {
+        const e = error as ErrorWithStatus & { request?: { url?: string }; message?: string };
+        console.warn(
+          `[ContentService.getContent] 404 for ${repo}/${path} url=${e.request?.url ?? '?'} msg=${e.message ?? '?'}`
+        );
         return null;
       }
+      console.error(`[ContentService.getContent] error for ${repo}/${path}:`, error);
       throw error;
     }
   }

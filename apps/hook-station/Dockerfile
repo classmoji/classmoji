@@ -35,4 +35,4 @@ ENV PORT=8080
 ENV HOST=0.0.0.0
 ENV NODE_ENV=production
 
-CMD ["node", "apps/hook-station/src/index.js"]
+CMD ["node", "--experimental-strip-types", "apps/hook-station/src/index.ts"]
