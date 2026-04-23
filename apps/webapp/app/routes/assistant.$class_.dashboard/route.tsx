@@ -3,7 +3,7 @@ import { Await } from 'react-router';
 import { Skeleton } from 'antd';
 
 import type { Route } from './+types/route';
-import { StatsCard, StatsGradingProgress, TAGradingLeaderboard } from '~/components';
+import { PageHeader, StatsCard, StatsGradingProgress, TAGradingLeaderboard } from '~/components';
 import { ClassmojiService } from '@classmoji/services';
 import { requireClassroomTeachingTeam } from '~/utils/routeAuth.server';
 
@@ -26,6 +26,8 @@ const AssistantDashboard = ({ loaderData }: Route.ComponentProps) => {
 
   return (
     <div>
+      <PageHeader title="Dashboard" routeName="dashboard" />
+
       <Suspense fallback={<Skeleton active />}>
         <Await resolve={data}>
           {(resolved: unknown) => {

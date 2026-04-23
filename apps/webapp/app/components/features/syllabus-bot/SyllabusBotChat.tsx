@@ -451,7 +451,7 @@ const SyllabusBotChat = ({
             transition: 'border-color 0.15s',
             minHeight: '46px',
           }}
-          onFocus={e => ((e.target as HTMLTextAreaElement).style.borderColor = '#6d5efc')}
+          onFocus={e => ((e.target as HTMLTextAreaElement).style.borderColor = '#1f883d')}
           onBlur={e =>
             ((e.target as HTMLTextAreaElement).style.borderColor = isDarkMode
               ? '#374151'

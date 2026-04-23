@@ -158,7 +158,7 @@ const GradesTable = (props: GradesTableProps) => {
               }}
             >
               <button
-                className="cursor-pointer hover:text-sky-ink"
+                className="cursor-pointer hover:text-blue-600"
                 onClick={() => {
                   navigate(`/admin/${classSlug}/grades/${student.login}`);
                 }}
@@ -210,16 +210,16 @@ const GradesTable = (props: GradesTableProps) => {
     const validFinalGrades = finalNumericGrades.filter((g: number) => g >= 0);
 
     return (
-      <Table.Summary {...({ fixed: true, className: 'bg-amber-bg' } as Record<string, unknown>)}>
+      <Table.Summary {...({ fixed: true, className: 'bg-yellow-50' } as Record<string, unknown>)}>
         <Table.Summary.Row>
           <Table.Summary.Cell index={-1}></Table.Summary.Cell>
           <Table.Summary.Cell index={0}></Table.Summary.Cell>
           <Table.Summary.Cell index={1}></Table.Summary.Cell>
           <Table.Summary.Cell index={2}></Table.Summary.Cell>
           <Table.Summary.Cell index={3}>
-            <div className="font-semibold text-ink-0">
+            <div className="font-semibold text-gray-900">
               <div>Final Grade (Individual)</div>
-              <div className="flex gap-3 text-sm font-normal text-ink-2 mt-1">
+              <div className="flex gap-3 text-sm font-normal text-gray-600 mt-1">
                 <span>
                   Mean:{' '}
                   {validIndividualGrades.length > 0
@@ -236,9 +236,9 @@ const GradesTable = (props: GradesTableProps) => {
             </div>
           </Table.Summary.Cell>
           <Table.Summary.Cell index={4}>
-            <div className="font-semibold text-ink-0">
+            <div className="font-semibold text-gray-900">
               <div>Final Grade</div>
-              <div className="flex gap-3 text-sm font-normal text-ink-2 mt-1">
+              <div className="flex gap-3 text-sm font-normal text-gray-600 mt-1">
                 <span>
                   Mean: {validFinalGrades.length > 0 ? mean(validFinalGrades).toFixed(1) : 'N/A'}
                 </span>
@@ -278,7 +278,7 @@ const GradesTable = (props: GradesTableProps) => {
         <div className="flex items-center justify-between gap-4 mb-4">
           <div className="flex items-center gap-3">
             {searchQuery && (
-              <span className="text-sm text-ink-2 bg-paper-2 px-3 py-1 rounded-full">
+              <span className="text-sm text-gray-500 bg-gray-100 px-3 py-1 rounded-full">
                 {filteredStudents.length} of {students.length}
               </span>
             )}
@@ -292,11 +292,11 @@ const GradesTable = (props: GradesTableProps) => {
         </div>
 
         {searchQuery && filteredStudents.length === 0 ? (
-          <div className="text-center py-12 text-ink-2">
+          <div className="text-center py-12 text-gray-500">
             <div className="text-4xl mb-2">🔍</div>
             <div className="text-lg mb-1">No students found</div>
             <div className="text-sm">
-              No results for <span className="font-medium text-ink-0 italic">{searchQuery}</span>
+              No results for <span className="font-medium text-gray-900 italic">{searchQuery}</span>
             </div>
             <div className="text-sm mt-1">Try adjusting your search terms</div>
           </div>
@@ -333,7 +333,7 @@ const GradesTable = (props: GradesTableProps) => {
                 summary={summary}
                 locale={{
                   emptyText: (
-                    <div className="text-center py-8 text-ink-2">
+                    <div className="text-center py-8 text-gray-500">
                       <div className="text-4xl mb-2">📊</div>
                       <div>No student grades available</div>
                       <div className="text-sm">

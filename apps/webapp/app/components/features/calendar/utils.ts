@@ -115,15 +115,37 @@ export const addWeeks = (date: DateInput, weeks: number) => {
 /**
  * Get color class for event type
  */
-export const getEventTypeColor = (_eventType: string) => {
-  return 'bg-accent-soft border-accent-soft-2';
+export const getEventTypeColor = (eventType: string) => {
+  const colors: Record<string, string> = {
+    OFFICE_HOURS: 'bg-violet-50 dark:bg-violet-900/20 border-violet-200 dark:border-violet-700',
+    LECTURE: 'bg-sky-50 dark:bg-sky-900/20 border-sky-200 dark:border-sky-700',
+    LAB: 'bg-teal-50 dark:bg-teal-900/20 border-teal-200 dark:border-teal-700',
+    SECTION: 'bg-teal-50 dark:bg-teal-900/20 border-teal-200 dark:border-teal-700',
+    ASSESSMENT: 'bg-amber-50 dark:bg-amber-900/20 border-amber-200 dark:border-amber-700',
+    REVIEW_SESSION: 'bg-orange-50 dark:bg-orange-900/20 border-orange-200 dark:border-orange-700',
+    HOLIDAY: 'bg-gray-50 dark:bg-gray-900/20 border-gray-200 dark:border-gray-700',
+    DEADLINE: 'bg-rose-50 dark:bg-rose-900/20 border-rose-200 dark:border-rose-700',
+    OTHER: 'bg-gray-50 dark:bg-gray-900/20 border-gray-200 dark:border-gray-700',
+  };
+  return colors[eventType] || colors.OTHER;
 };
 
 /**
  * Get text color class for event type
  */
-export const getEventTypeTextColor = (_eventType: string) => {
-  return 'text-accent-ink';
+export const getEventTypeTextColor = (eventType: string) => {
+  const colors: Record<string, string> = {
+    OFFICE_HOURS: 'text-violet-700 dark:text-violet-300',
+    LECTURE: 'text-sky-700 dark:text-sky-300',
+    LAB: 'text-teal-700 dark:text-teal-300',
+    SECTION: 'text-teal-700 dark:text-teal-300',
+    ASSESSMENT: 'text-amber-700 dark:text-amber-300',
+    REVIEW_SESSION: 'text-orange-700 dark:text-orange-300',
+    HOLIDAY: 'text-gray-700 dark:text-gray-300',
+    DEADLINE: 'text-rose-700 dark:text-rose-300',
+    OTHER: 'text-gray-700 dark:text-gray-300',
+  };
+  return colors[eventType] || colors.OTHER;
 };
 
 /**
@@ -422,27 +444,71 @@ export const isCurrentMonth = (date: DateInput, referenceDate: DateInput) => {
 /**
  * Get Notion-style left border color for event type
  */
-export const getEventTypeBorderColor = (_eventType: string) => {
-  return 'border-l-accent';
+export const getEventTypeBorderColor = (eventType: string) => {
+  const colors: Record<string, string> = {
+    OFFICE_HOURS: 'border-l-violet-500',
+    LECTURE: 'border-l-sky-500',
+    LAB: 'border-l-teal-500',
+    SECTION: 'border-l-teal-600',
+    ASSESSMENT: 'border-l-amber-500',
+    REVIEW_SESSION: 'border-l-orange-500',
+    HOLIDAY: 'border-l-gray-400',
+    DEADLINE: 'border-l-rose-500',
+    OTHER: 'border-l-gray-400',
+  };
+  return colors[eventType] || colors.OTHER;
 };
 
 /**
  * Get dot color for event type (for month view compact display)
  */
-export const getEventTypeDotColor = (_eventType: string) => {
-  return 'bg-accent';
+export const getEventTypeDotColor = (eventType: string) => {
+  const colors: Record<string, string> = {
+    OFFICE_HOURS: 'bg-violet-500',
+    LECTURE: 'bg-sky-500',
+    LAB: 'bg-teal-500',
+    SECTION: 'bg-teal-600',
+    ASSESSMENT: 'bg-amber-500',
+    REVIEW_SESSION: 'bg-orange-500',
+    HOLIDAY: 'bg-gray-400',
+    DEADLINE: 'bg-rose-500',
+    OTHER: 'bg-gray-400',
+  };
+  return colors[eventType] || colors.OTHER;
 };
 
 /**
  * Get light background color for event type (for month view event badges)
  */
-export const getEventTypeLightBg = (_eventType: string) => {
-  return 'bg-accent-soft';
+export const getEventTypeLightBg = (eventType: string) => {
+  const colors: Record<string, string> = {
+    OFFICE_HOURS: 'bg-violet-100 dark:bg-violet-900/30',
+    LECTURE: 'bg-sky-100 dark:bg-sky-900/30',
+    LAB: 'bg-teal-100 dark:bg-teal-900/30',
+    SECTION: 'bg-teal-100 dark:bg-teal-900/30',
+    ASSESSMENT: 'bg-amber-100 dark:bg-amber-900/30',
+    REVIEW_SESSION: 'bg-orange-100 dark:bg-orange-900/30',
+    HOLIDAY: 'bg-gray-100 dark:bg-gray-800/50',
+    DEADLINE: 'bg-rose-100 dark:bg-rose-900/30',
+    OTHER: 'bg-gray-100 dark:bg-gray-800/50',
+  };
+  return colors[eventType] || colors.OTHER;
 };
 
 /**
  * Get dark text color for event type (for month view event badges)
  */
-export const getEventTypeDarkText = (_eventType: string) => {
-  return 'text-accent-ink';
+export const getEventTypeDarkText = (eventType: string) => {
+  const colors: Record<string, string> = {
+    OFFICE_HOURS: 'text-violet-800 dark:text-violet-200',
+    LECTURE: 'text-sky-800 dark:text-sky-200',
+    LAB: 'text-teal-800 dark:text-teal-200',
+    SECTION: 'text-teal-800 dark:text-teal-200',
+    ASSESSMENT: 'text-amber-800 dark:text-amber-200',
+    REVIEW_SESSION: 'text-orange-800 dark:text-orange-200',
+    HOLIDAY: 'text-gray-700 dark:text-gray-300',
+    DEADLINE: 'text-rose-800 dark:text-rose-200',
+    OTHER: 'text-gray-700 dark:text-gray-300',
+  };
+  return colors[eventType] || colors.OTHER;
 };

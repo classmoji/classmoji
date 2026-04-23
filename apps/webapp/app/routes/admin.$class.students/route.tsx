@@ -1,13 +1,17 @@
 import { Outlet, useNavigate, useParams } from 'react-router';
 import { namedAction } from 'remix-utils/named-action';
+import invariant from 'tiny-invariant';
 import { tasks } from '@trigger.dev/sdk';
+import { useState, useMemo } from 'react';
+import { Button } from 'antd';
+import { PlusCircleOutlined } from '@ant-design/icons';
 
 import { ClassmojiService } from '@classmoji/services';
+import StudentsTable from './StudentsTable';
 import { ActionTypes } from '~/constants';
 import { waitForRunCompletion } from '~/utils/helpers';
 import { requireClassroomAdmin } from '~/utils/routeAuth.server';
-import { loadRosterScreenData } from '~/utils/rosterScreen.server';
-import { RosterScreen } from '~/components/features/roster';
+import { PageHeader, RequireRole, SearchInput } from '~/components';
 import type { Route } from './+types/route';
 
 export const loader = async ({ params, request }: Route.LoaderArgs) => {
@@ -18,25 +22,78 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
     action: 'view_roster',
   });
 
-  const { students, invitations } = await loadRosterScreenData(classroom.id, classSlug);
+  const students = await ClassmojiService.classroomMembership.findUsersByRole(
+    classroom.id,
+    'STUDENT'
+  );
+  invariant(students, 'Error fetching students');
 
-  return { students, invitations };
+  const invitations = await ClassmojiService.classroomInvite.findInvitesByClassroomId(classroom.id);
+
+  return { students, classroom, invitations };
 };
 
 const StudentsScreen = ({ loaderData }: Route.ComponentProps) => {
-  const { students, invitations } = loaderData;
+  const { students, classroom, invitations } = loaderData;
   const { class: classSlug } = useParams();
   const navigate = useNavigate();
+  const [query, setQuery] = useState('');
+  // Merge students and invitations into unified list
+  const allStudents = useMemo(() => {
+    const inviteList = invitations.map(
+      (inv: { id: string; student_name: string; school_email: string }) => ({
+        id: inv.id,
+        name: inv.student_name,
+        email: inv.school_email,
+        school_id: null,
+        login: 'pending-invite',
+        has_accepted_invite: false,
+        avatar_url: 'https://github.com/github.png?size=460',
+        _isInvite: true,
+      })
+    );
+    return [...students, ...inviteList];
+  }, [students, invitations]);
+
+  const filteredStudents = !query
+    ? allStudents
+    : allStudents.filter(student => {
+        const q = query.toLowerCase();
+        return (
+          student.name?.toLowerCase().includes(q) ||
+          student.login?.toLowerCase().includes(q) ||
+          student.email?.toLowerCase().includes(q) ||
+          (student as Record<string, unknown>).provider_email?.toString().toLowerCase().includes(q)
+        );
+      });
 
   return (
     <>
       <Outlet />
-      <RosterScreen
-        students={students}
-        invitations={invitations}
-        revokeActionUrl={`/admin/${classSlug}/students`}
-        onAddStudents={() => navigate(`/admin/${classSlug}/students/add`)}
-      />
+      <div className="flex justify-between items-center">
+        <PageHeader title="Students" routeName="students" />
+
+        <div className="flex gap-4">
+          <SearchInput
+            query={query}
+            setQuery={setQuery}
+            placeholder="Search by name or login..."
+            className="w-64"
+          />
+
+          <RequireRole roles={['OWNER']}>
+            <Button
+              icon={<PlusCircleOutlined />}
+              onClick={() => navigate(`/admin/${classSlug}/students/add`)}
+              type="primary"
+            >
+              Add Students
+            </Button>
+          </RequireRole>
+        </div>
+      </div>
+
+      <StudentsTable students={filteredStudents} classroom={classroom} query={query} />
     </>
   );
 };

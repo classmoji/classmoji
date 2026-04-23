@@ -88,10 +88,10 @@ const StepImportModules = ({
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between p-4 bg-paper  rounded-lg">
+      <div className="flex items-center justify-between p-4 bg-gray-50 dark:bg-gray-800 rounded-lg">
         <div>
           <div className="font-medium">Import from existing classroom</div>
-          <div className="text-sm text-ink-2">
+          <div className="text-sm text-gray-500">
             Copy modules and assignments from another classroom you own
           </div>
         </div>
@@ -133,10 +133,10 @@ const StepImportModules = ({
                           />
                         )}
                         <span>{classroom.name}</span>
-                        <span className="text-ink-3">
+                        <span className="text-gray-400">
                           ({classroom.term} {classroom.year})
                         </span>
-                        <span className="text-ink-3 ml-auto">
+                        <span className="text-gray-400 ml-auto">
                           {classroom.modules?.length || 0} modules
                         </span>
                       </div>
@@ -146,7 +146,7 @@ const StepImportModules = ({
               </div>
 
               {sourceClassroomId && (
-                <div className="p-4 border border-line dark:border-line rounded-lg">
+                <div className="p-4 border border-gray-200 dark:border-gray-700 rounded-lg">
                   <div className="flex items-center justify-between mb-3">
                     <span className="font-medium">Modules to Import</span>
                     <Button
@@ -186,7 +186,7 @@ const StepImportModules = ({
                       )}
                     </div>
                   ) : (
-                    <div className="text-ink-2 text-sm">
+                    <div className="text-gray-500 text-sm">
                       No modules selected.{' '}
                       <button
                         type="button"
@@ -199,7 +199,7 @@ const StepImportModules = ({
                   )}
 
                   {selectedModules.size > 0 && (
-                    <div className="mt-3 text-xs text-ink-2">
+                    <div className="mt-3 text-xs text-gray-500">
                       Deadlines will be removed. Modules and quizzes will start unpublished.
                     </div>
                   )}

@@ -35,9 +35,9 @@ const UserSettings = () => {
 
   return (
     <>
-      <div className="flex items-center gap-2 mt-2 mb-6">
-        <IconSettings className="text-ink-0" />
-        <h1 className="display text-3xl text-ink-0">Account Settings</h1>
+      <div className="flex items-center gap-2 mt-2 mb-4">
+        <IconSettings className="text-black dark:text-gray-100" />
+        <h1 className="text-2xl font-bold text-black dark:text-gray-100">Account Settings</h1>
       </div>
 
       <Tabs

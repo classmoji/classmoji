@@ -47,7 +47,7 @@ const ModuleImportTable = ({
       render: (title: string, record: ImportModule) => (
         <div>
           <div className="font-medium">{title}</div>
-          <div className="text-xs text-ink-2">{record.template}</div>
+          <div className="text-xs text-gray-500">{record.template}</div>
         </div>
       ),
     },
@@ -97,7 +97,7 @@ const ModuleImportTable = ({
       rowKey="id"
       pagination={false}
       size="small"
-      className="border border-line dark:border-line rounded-lg"
+      className="border border-gray-200 dark:border-gray-700 rounded-lg"
     />
   );
 };

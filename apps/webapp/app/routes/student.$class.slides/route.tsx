@@ -2,7 +2,7 @@ import { Table } from 'antd';
 import getPrisma from '@classmoji/database';
 import type { Route } from './+types/route';
 import { assertClassroomAccess } from '~/utils/helpers';
-import { TableActionButtons } from '~/components';
+import { PageHeader, TableActionButtons } from '~/components';
 
 export const loader = async ({ request, params }: Route.LoaderArgs) => {
   const { class: classSlug } = params;
@@ -39,14 +39,14 @@ export default function StudentSlides({ loaderData }: Route.ComponentProps) {
       title: 'Title',
       dataIndex: 'title',
       key: 'title',
-      render: (title: string) => <p className="font-medium text-ink-1">{title}</p>,
+      render: (title: string) => <p className="font-medium">{title}</p>,
     },
     {
       title: 'Module',
       dataIndex: 'module',
       key: 'module',
       render: (module: string | null) =>
-        module || <span className="text-ink-3">—</span>,
+        module || <span className="text-gray-400 dark:text-gray-500">—</span>,
     },
     {
       title: 'Actions',
@@ -58,32 +58,29 @@ export default function StudentSlides({ loaderData }: Route.ComponentProps) {
   ];
 
   return (
-    <div className="panel">
-      <div className="panel-head">
-        <h2 className="display m-0 text-[20px] font-medium text-ink-1">Slides</h2>
-      </div>
-      <div className="panel-body">
-        <Table
-          columns={columns}
-          dataSource={slides}
-          rowKey="id"
-          rowHoverable={false}
-          size="middle"
-          pagination={{
-            pageSize: 25,
-            showSizeChanger: true,
-            showTotal: (total, range) => `${range[0]}-${range[1]} of ${total} slides`,
-          }}
-          locale={{
-            emptyText: (
-              <div className="text-center py-8 text-ink-2">
-                <div className="text-4xl mb-2">🎞️</div>
-                <div>No slides available yet</div>
-              </div>
-            ),
-          }}
-        />
-      </div>
+    <div>
+      <PageHeader title="Slides" routeName="slides" />
+
+      <Table
+        columns={columns}
+        dataSource={slides}
+        rowKey="id"
+        rowHoverable={false}
+        size="middle"
+        pagination={{
+          pageSize: 25,
+          showSizeChanger: true,
+          showTotal: (total, range) => `${range[0]}-${range[1]} of ${total} slides`,
+        }}
+        locale={{
+          emptyText: (
+            <div className="text-center py-8 text-gray-500">
+              <div className="text-4xl mb-2">🎞️</div>
+              <div>No slides available yet</div>
+            </div>
+          ),
+        }}
+      />
     </div>
   );
 }
