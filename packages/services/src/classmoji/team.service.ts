@@ -111,6 +111,42 @@ export const findById = async (teamId: string) => {
   });
 };
 
+export const findByIdWithRepositories = async (teamId: string) => {
+  return getPrisma().team.findUnique({
+    where: { id: teamId },
+    include: {
+      repositories: true,
+    },
+  });
+};
+
+interface RepoRename {
+  id: string;
+  name: string;
+}
+
+export const renameAndRepos = async (payload: {
+  teamId: string;
+  newName: string;
+  newSlug: string;
+  repoRenames: RepoRename[];
+}) => {
+  const { teamId, newName, newSlug, repoRenames } = payload;
+  const prisma = getPrisma();
+  return prisma.$transaction([
+    prisma.team.update({
+      where: { id: teamId },
+      data: { name: newName, slug: newSlug },
+    }),
+    ...repoRenames.map(r =>
+      prisma.repository.update({
+        where: { id: r.id },
+        data: { name: r.name },
+      })
+    ),
+  ]);
+};
+
 export const findByTagId = async (classroomId: string, tagId: string) => {
   return getPrisma().team.findMany({
     where: {
