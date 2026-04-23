@@ -48,7 +48,7 @@ async function buildTokenTransactionMap(userMap) {
 async function main() {
   // Load users to map old GitHub ID -> new UUID
   const users = await prisma.user.findMany({ select: { id: true, provider_id: true } });
-  const userMap = new Map(users.map((u) => [u.provider_id, u.id]));
+  const userMap = new Map(users.map(u => [u.provider_id, u.id]));
   console.log(`Loaded ${userMap.size} users for mapping`);
 
   // Build token transaction mapping

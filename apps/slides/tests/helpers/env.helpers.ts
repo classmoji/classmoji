@@ -1,5 +1,8 @@
 import * as fs from 'fs';
 import * as path from 'path';
+import { fileURLToPath } from 'url';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 /**
  * Read the .dev-context file to get the current dev port for a service.
@@ -30,7 +33,7 @@ export function getDevPort(service: 'slides' | 'webapp' | 'api'): string | null 
  * Get the slides base URL from .dev-context or use default.
  */
 export function getSlidesBaseURL(): string {
-  return getDevPort('slides') || 'http://localhost:6550';
+  return getDevPort('slides') || 'http://localhost:6500';
 }
 
 /**

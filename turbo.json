@@ -23,7 +23,8 @@
     },
     "web:build": {},
     "web:dev": {
-      "persistent": true
+      "persistent": true,
+      "cache": false
     },
     "web:start": {
       "dependsOn": ["^db:generate"]
@@ -31,22 +32,27 @@
     "trigger:deploy": {},
     "trigger:deploy:staging": {},
     "trigger:dev": {
-      "persistent": true
+      "persistent": true,
+      "cache": false
     },
     "hook:stripe": {
-      "persistent": true
+      "persistent": true,
+      "cache": false
     },
     "hook:github": {
-      "persistent": true
+      "persistent": true,
+      "cache": false
     },
     "hook:dev": {
-      "persistent": true
+      "persistent": true,
+      "cache": false
     },
     "hook:start": {
       "dependsOn": ["^db:generate"]
     },
     "dev": {
-      "persistent": true
+      "persistent": true,
+      "cache": false
     },
     "start": {
       "dependsOn": ["^db:generate"]
@@ -90,6 +96,10 @@
     "web:test:ui": {
       "cache": false,
       "persistent": true
+    },
+    "typecheck": {
+      "dependsOn": ["^typecheck"],
+      "outputs": []
     }
   },
   "globalEnv": [
@@ -105,6 +115,7 @@
     "GITHUB_INSTRUCTOR_TOKEN",
     "GITHUB_TA_TOKEN",
     "GITHUB_STUDENT_TOKEN",
+    "SETUP_GITHUB_APP",
     "DATABASE_URL",
     "REDIS_URL",
     "EMAIL",

@@ -97,7 +97,9 @@ async function main() {
     });
 
     await prisma.classroomMembership.upsert({
-      where: { classroom_id_user_id_role: { classroom_id: classroom.id, user_id: user.id, role: u.role } },
+      where: {
+        classroom_id_user_id_role: { classroom_id: classroom.id, user_id: user.id, role: u.role },
+      },
       update: {},
       create: {
         classroom_id: classroom.id,
@@ -144,8 +146,8 @@ async function main() {
 
   // ── Emoji Grade Scale ───────────────────────────────────────────────────
   const emojiMappings = [
-    { emoji: '🔴', grade: 50,  description: 'Needs Work' },
-    { emoji: '🟡', grade: 75,  description: 'Getting There' },
+    { emoji: '🔴', grade: 50, description: 'Needs Work' },
+    { emoji: '🟡', grade: 75, description: 'Getting There' },
     { emoji: '🟢', grade: 100, description: 'Great Work' },
     { emoji: '⭐', grade: 110, description: 'Outstanding' },
   ];
@@ -163,11 +165,13 @@ async function main() {
     { letter_grade: 'B', min_grade: 80 },
     { letter_grade: 'C', min_grade: 70 },
     { letter_grade: 'D', min_grade: 60 },
-    { letter_grade: 'F', min_grade: 0  },
+    { letter_grade: 'F', min_grade: 0 },
   ];
   for (const lg of letterGrades) {
     await prisma.letterGradeMapping.upsert({
-      where: { classroom_id_letter_grade: { classroom_id: classroom.id, letter_grade: lg.letter_grade } },
+      where: {
+        classroom_id_letter_grade: { classroom_id: classroom.id, letter_grade: lg.letter_grade },
+      },
       update: {},
       create: { classroom_id: classroom.id, ...lg },
     });
@@ -184,7 +188,9 @@ async function main() {
     const gradeValue = emojiMappings.find(m => m.emoji === emoji).grade;
 
     const repo = await prisma.repository.upsert({
-      where: { provider_provider_id: { provider: 'GITHUB', provider_id: `fake-repo-${student.login}` } },
+      where: {
+        provider_provider_id: { provider: 'GITHUB', provider_id: `fake-repo-${student.login}` },
+      },
       update: {},
       create: {
         classroom_id: classroom.id,
@@ -197,7 +203,9 @@ async function main() {
     });
 
     const repoAssignment = await prisma.repositoryAssignment.upsert({
-      where: { provider_provider_id: { provider: 'GITHUB', provider_id: `fake-issue-${student.login}` } },
+      where: {
+        provider_provider_id: { provider: 'GITHUB', provider_id: `fake-issue-${student.login}` },
+      },
       update: {},
       create: {
         repository_id: repo.id,
@@ -236,7 +244,9 @@ async function main() {
 
     // Part 2: submitted but ungraded — fills the TA grading queue
     await prisma.repositoryAssignment.upsert({
-      where: { provider_provider_id: { provider: 'GITHUB', provider_id: `fake-issue-p2-${student.login}` } },
+      where: {
+        provider_provider_id: { provider: 'GITHUB', provider_id: `fake-issue-p2-${student.login}` },
+      },
       update: {},
       create: {
         repository_id: repo.id,
@@ -251,9 +261,9 @@ async function main() {
 
   // ── Calendar Events ─────────────────────────────────────────────────────
   const calendarDefs = [
-    { title: 'Week 1 Lecture',  event_type: 'LECTURE',      offsetDays: 1, location: 'Room 101' },
-    { title: 'Week 1 Lab',      event_type: 'LAB',           offsetDays: 2, location: 'Room 101' },
-    { title: 'TA Office Hours', event_type: 'OFFICE_HOURS',  offsetDays: 3, location: 'Online'   },
+    { title: 'Week 1 Lecture', event_type: 'LECTURE', offsetDays: 1, location: 'Room 101' },
+    { title: 'Week 1 Lab', event_type: 'LAB', offsetDays: 2, location: 'Room 101' },
+    { title: 'TA Office Hours', event_type: 'OFFICE_HOURS', offsetDays: 3, location: 'Online' },
   ];
   for (const ev of calendarDefs) {
     const existing = await prisma.calendarEvent.findFirst({
@@ -316,5 +326,5 @@ main()
   .catch(async e => {
     console.error(e);
     await prisma.$disconnect();
-    process.exit(1);
+    process.exit(1); // eslint-disable-line no-process-exit
   });

@@ -6,13 +6,7 @@
  */
 
 // Authentication helpers
-export {
-  loginAs,
-  logout,
-  isLoggedIn,
-  getSessionToken,
-  type TestRole,
-} from './auth.helpers';
+export { loginAs, logout, isLoggedIn, getSessionToken, type TestRole } from './auth.helpers';
 
 // Environment helpers
 export {

@@ -2,8 +2,9 @@
   "name": "@classmoji/hook-station",
   "type": "module",
   "scripts": {
-    "hook:dev": "nodemon src/index.js",
-    "hook:start": "node src/index.js",
+    "typecheck": "tsc --noEmit",
+    "hook:dev": "node --watch --experimental-strip-types src/index.ts",
+    "hook:start": "node --experimental-strip-types src/index.ts",
     "hook:github": "smee -u https://smee.io/MSiPH2YxKmpkTOIT -p 4000 --path /webhooks/callback/github",
     "hook:stripe": "smee -u https://smee.io/znFMW9h7HS2xTWu -p 4000 --path /webhooks/callback/stripe",
     "lint": "eslint .",
@@ -20,6 +21,7 @@
     "fastify-raw-body": "^5.0.0"
   },
   "devDependencies": {
-    "nodemon": "^3.1.7"
+    "nodemon": "^3.1.7",
+    "stripe": "^18.5.0"
   }
 }

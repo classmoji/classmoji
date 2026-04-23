@@ -1,0 +1,692 @@
+[     160ms] Unexpected token ':'
+[ 1680601ms] Unexpected token ':'
+[ 1917608ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://localhost:3000/:0
+[ 1951702ms] Unexpected token ':'
+[ 2049714ms] Unexpected token ':'
+[ 2054654ms] Unexpected token ':'
+[ 2153777ms] Unexpected token ':'
+[ 2291047ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://localhost:3000/app/components/ErrorBoundary.tsx?t=1774405816399:0
+[ 2291048ms] [ERROR] [hmr] Failed to reload /app/components/ErrorBoundary.tsx. This could be due to syntax errors or importing non-existent modules. (see errors above) @ http://localhost:3000/@vite/client:175
+[ 2291057ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://localhost:3000/:0
+[ 2315635ms] Unexpected token ':'
+[ 2765040ms] Error: [react-router:hmr] No module update found for route routes/_user.select-organization
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[ 2781400ms] Error: [react-router:hmr] No module update found for route routes/_user.select-organization
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[ 2868990ms] Error: [react-router:hmr] No module update found for route routes/_user.select-organization
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[ 2871567ms] Error: [react-router:hmr] No module update found for route routes/_user.select-organization
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[ 2875397ms] Error: [react-router:hmr] No module update found for route routes/_user.select-organization
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[ 2884124ms] Error: [react-router:hmr] No module update found for route routes/_user.select-organization
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[ 2888766ms] Error: [react-router:hmr] No module update found for route routes/_user.select-organization
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[ 2900512ms] Error: [react-router:hmr] No module update found for route routes/_user.select-organization
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[ 2902827ms] Error: [react-router:hmr] No module update found for route routes/_user.select-organization
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[ 2907060ms] Error: [react-router:hmr] No module update found for route routes/_user.select-organization
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[ 2911901ms] Error: [react-router:hmr] No module update found for route routes/_user.select-organization
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[ 2924359ms] Unexpected token ':'
+[ 2927340ms] Unexpected token ':'
+[ 2931916ms] Unexpected token ':'
+[ 2935151ms] Unexpected token ':'
+[ 2939393ms] Unexpected token ':'
+[ 2943899ms] Unexpected token ':'
+[ 2950485ms] Unexpected token ':'
+[ 2953653ms] Unexpected token ':'
+[ 2957121ms] Unexpected token ':'
+[ 2961709ms] Unexpected token ':'
+[ 2964314ms] Unexpected token ':'
+[ 2967425ms] Unexpected token ':'
+[ 2970178ms] Error: [react-router:hmr] No module update found for route routes/student.$class.pages_.$pageId
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[ 2977355ms] Unexpected token ':'
+[ 2980370ms] Unexpected token ':'
+[ 2982787ms] Unexpected token ':'
+[ 2989208ms] Unexpected token ':'
+[ 2990767ms] Unexpected token ':'
+[ 2993255ms] Unexpected token ':'
+[ 2998137ms] Unexpected token ':'
+[ 3000756ms] Unexpected token ':'
+[ 3004892ms] Unexpected token ':'
+[ 3006686ms] Unexpected token ':'
+[ 3010713ms] Unexpected token ':'
+[ 3013062ms] Unexpected token ':'
+[ 3017941ms] Unexpected token ':'
+[ 3023163ms] Unexpected token ':'
+[ 3025529ms] Unexpected token ':'
+[ 3028544ms] Unexpected token ':'
+[ 3031870ms] Unexpected token ':'
+[ 3032547ms] Unexpected token ':'
+[ 3035934ms] Unexpected token ':'
+[ 3040099ms] Unexpected token ':'
+[ 3042619ms] Unexpected token ':'
+[ 3046480ms] Unexpected token ':'
+[ 3048154ms] Unexpected token ':'
+[ 3058011ms] Unexpected token ':'
+[ 3062153ms] Unexpected token ':'
+[ 3066864ms] Unexpected token ':'
+[ 3070865ms] Unexpected token ':'
+[ 3073700ms] Unexpected token ':'
+[ 3077563ms] Unexpected token ':'
+[ 3081237ms] Unexpected token ':'
+[ 3083740ms] Unexpected token ':'
+[ 3094403ms] Unexpected token ':'
+[ 3096789ms] Unexpected token ':'
+[ 3099238ms] Unexpected token ':'
+[ 3103682ms] Unexpected token ':'
+[ 3107641ms] Unexpected token ':'
+[ 3110319ms] Unexpected token ':'
+[ 3117054ms] Unexpected token ':'
+[ 3126913ms] Unexpected token ':'
+[ 3136222ms] Unexpected token ':'
+[ 3141539ms] Unexpected token ':'
+[ 3142571ms] Unexpected token ':'
+[ 3143828ms] Unexpected token ':'
+[ 3147797ms] Unexpected token ':'
+[ 3151145ms] Unexpected token ':'
+[ 3155444ms] Unexpected token ':'
+[ 3160678ms] Unexpected token ':'
+[ 3164564ms] Unexpected token ':'
+[ 3169697ms] Unexpected token ':'
+[ 3175274ms] Unexpected token ':'
+[ 3180110ms] Unexpected token ':'
+[ 3182698ms] Unexpected token ':'
+[ 3190443ms] Error: [react-router:hmr] No module update found for route routes/admin.$class.resources
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[ 3203601ms] Unexpected token ':'
+[ 3207078ms] Unexpected token ':'
+[ 3214327ms] Unexpected token ':'
+[ 3217638ms] Unexpected token ':'
+[ 3225446ms] Unexpected token ':'
+[ 3238062ms] Unexpected token ':'
+[ 3244156ms] Unexpected token ':'
+[ 3256544ms] Unexpected token ':'
+[ 3262780ms] Unexpected token ':'
+[ 3264939ms] Unexpected token ':'
+[ 3270800ms] Unexpected token ':'
+[ 3282495ms] Unexpected token ':'
+[ 3288940ms] Unexpected token ':'
+[ 3295544ms] Unexpected token ':'
+[ 3302636ms] Unexpected token ':'
+[ 3305529ms] Unexpected token ':'
+[ 3334386ms] Unexpected token ':'
+[ 3354229ms] Unexpected token ':'
+[ 3373352ms] Unexpected token ':'
+[ 3378879ms] Unexpected token ':'
+[ 3385249ms] Unexpected token ':'
+[ 3413254ms] Unexpected token ':'
+[ 3424283ms] Unexpected token ':'
+[ 3426566ms] Unexpected token ':'
+[ 3462640ms] Unexpected token ':'
+[ 3516659ms] Unexpected token ':'
+[ 3521095ms] Unexpected token ':'
+[ 3560089ms] Unexpected token ':'
+[ 3563548ms] Unexpected token ':'
+[ 3566902ms] Unexpected token ':'
+[ 3570996ms] Unexpected token ':'
+[ 3579981ms] Unexpected token ':'
+[ 3583188ms] Unexpected token ':'
+[ 3586821ms] Unexpected token ':'
+[ 3595150ms] Unexpected token ':'
+[ 3598039ms] Unexpected token ':'
+[ 3601472ms] Unexpected token ':'
+[ 3605442ms] Unexpected token ':'
+[ 3610389ms] Unexpected token ':'
+[ 3612843ms] Unexpected token ':'
+[ 3615630ms] Unexpected token ':'
+[ 3620138ms] Unexpected token ':'
+[ 3625440ms] Unexpected token ':'
+[ 3628510ms] Unexpected token ':'
+[ 3631491ms] Unexpected token ':'
+[ 3634852ms] Unexpected token ':'
+[ 3637656ms] Unexpected token ':'
+[ 3641475ms] Unexpected token ':'
+[ 3644107ms] Unexpected token ':'
+[ 3650079ms] Unexpected token ':'
+[ 3652513ms] Unexpected token ':'
+[ 3655134ms] Unexpected token ':'
+[ 3693009ms] Unexpected token ':'
+[ 3702546ms] Unexpected token ':'
+[ 3707452ms] Unexpected token ':'
+[ 3716463ms] Unexpected token ':'
+[ 3722224ms] Unexpected token ':'
+[ 3736047ms] Unexpected token ':'
+[ 3754523ms] Unexpected token ':'
+[ 3760990ms] Unexpected token ':'
+[ 3766614ms] Unexpected token ':'
+[ 3769865ms] Unexpected token ':'
+[ 3797826ms] Unexpected token ':'
+[ 3804115ms] Unexpected token ':'
+[11661798ms] Error: [react-router:hmr] No module update found for route routes/admin.$class.slides
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[11661849ms] Error: [react-router:hmr] No module update found for route routes/admin.$class.slides
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[11662446ms] Unexpected token ':'
+[11837973ms] Unexpected token ':'
+[11847028ms] Unexpected token ':'
+[11849177ms] Unexpected token ':'
+[11863166ms] Unexpected token ':'
+[11878442ms] Unexpected token ':'
+[11881537ms] Unexpected token ':'
+[11884611ms] Unexpected token ':'
+[11888511ms] Unexpected token ':'
+[11894973ms] Unexpected token ':'
+[11898836ms] Unexpected token ':'
+[11913253ms] Unexpected token ':'
+[12033031ms] Unexpected token ':'
+[12079766ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://localhost:3000/app/components/ErrorBoundary.tsx?t=1774415605184:0
+[12079767ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://localhost:3000/app/components/features/admin/ImpersonationBanner.tsx?t=1774415605184:0
+[12079767ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://localhost:3000/app/components/features/editor/text-editor/index.tsx?t=1774415605186:0
+[12079767ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://localhost:3000/app/components/features/grading/EmojiGrader.tsx?t=1774415605187:0
+[12079773ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://localhost:3000/:0
+[12105140ms] Unexpected token ':'
+[12128961ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://localhost:3000/app/components/ErrorBoundary.tsx?t=1774415654287:0
+[12128962ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://localhost:3000/app/components/features/admin/ImpersonationBanner.tsx?t=1774415654288:0
+[12128962ms] [ERROR] [hmr] Failed to reload /app/components/ErrorBoundary.tsx. This could be due to syntax errors or importing non-existent modules. (see errors above) @ http://localhost:3000/@vite/client:175
+[12128962ms] [ERROR] [hmr] Failed to reload /app/components/features/admin/ImpersonationBanner.tsx. This could be due to syntax errors or importing non-existent modules. (see errors above) @ http://localhost:3000/@vite/client:175
+[12128962ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://localhost:3000/app/components/features/editor/text-editor/index.tsx?t=1774415654289:0
+[12128962ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://localhost:3000/app/components/features/grading/EmojiGrader.tsx?t=1774415654290:0
+[12128962ms] [ERROR] [hmr] Failed to reload /app/components/features/editor/text-editor/index.tsx. This could be due to syntax errors or importing non-existent modules. (see errors above) @ http://localhost:3000/@vite/client:175
+[12128962ms] [ERROR] [hmr] Failed to reload /app/components/features/grading/EmojiGrader.tsx. This could be due to syntax errors or importing non-existent modules. (see errors above) @ http://localhost:3000/@vite/client:175
+[12128985ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://localhost:3000/app/components/features/grading/EmojisDisplay.tsx?t=1774415654290:0
+[12128985ms] [ERROR] [hmr] Failed to reload /app/components/features/grading/EmojisDisplay.tsx. This could be due to syntax errors or importing non-existent modules. (see errors above) @ http://localhost:3000/@vite/client:175
+[12128998ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://localhost:3000/:0
+[12172165ms] Unexpected token ':'
+[12326407ms] Unexpected token ':'
+[12332097ms] Unexpected token ':'
+[12336802ms] Unexpected token ':'
+[12340345ms] Unexpected token ':'
+[12343889ms] Unexpected token ':'
+[12346824ms] Unexpected token ':'
+[12453281ms] Unexpected token ':'
+[12457713ms] Unexpected token ':'
+[12460610ms] Unexpected token ':'
+[12464538ms] Unexpected token ':'
+[12468151ms] Unexpected token ':'
+[12561247ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://localhost:3000/:0
+[12580751ms] Unexpected token ':'
+[12594887ms] Error: [react-router:hmr] No module update found for route routes/admin.$class.quizzes_.$quizId
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[12752005ms] Unexpected token ':'
+[12754328ms] Unexpected token ':'
+[12757358ms] Unexpected token ':'
+[12762658ms] Unexpected token ':'
+[12770594ms] Unexpected token ':'
+[12777273ms] Unexpected token ':'
+[12784679ms] Unexpected token ':'
+[12789055ms] Unexpected token ':'
+[12807122ms] Unexpected token ':'
+[13436812ms] Unexpected token ':'
+[13461148ms] Error: [react-router:hmr] No module update found for route routes/student.$class.dashboard
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[13465481ms] Error: [react-router:hmr] No module update found for route routes/student.$class.dashboard
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[13469146ms] Error: [react-router:hmr] No module update found for route routes/student.$class.dashboard
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[13482014ms] Error: [react-router:hmr] No module update found for route routes/student.$class.dashboard
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[13487582ms] Error: [react-router:hmr] No module update found for route routes/student.$class.dashboard
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[13493027ms] Error: [react-router:hmr] No module update found for route routes/student.$class.dashboard
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[13502383ms] Error: [react-router:hmr] No module update found for route routes/student.$class.dashboard
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[13510227ms] Error: [react-router:hmr] No module update found for route routes/student.$class.dashboard
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[13513951ms] Error: [react-router:hmr] No module update found for route routes/student.$class.dashboard
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[13521041ms] Error: [react-router:hmr] No module update found for route routes/student.$class.dashboard
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[13529571ms] Error: [react-router:hmr] No module update found for route routes/student.$class.dashboard
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[13534081ms] Error: [react-router:hmr] No module update found for route routes/student.$class.dashboard
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[13542084ms] Error: [react-router:hmr] No module update found for route routes/student.$class.dashboard
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[13545986ms] Error: [react-router:hmr] No module update found for route routes/student.$class.dashboard
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[13548914ms] Error: [react-router:hmr] No module update found for route routes/student.$class.dashboard
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[13552458ms] Error: [react-router:hmr] No module update found for route routes/student.$class.dashboard
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[13556167ms] Error: [react-router:hmr] No module update found for route routes/student.$class.dashboard
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[13558873ms] Error: [react-router:hmr] No module update found for route routes/student.$class.dashboard
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[13565760ms] Error: [react-router:hmr] No module update found for route routes/student.$class.dashboard
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[13572752ms] Error: [react-router:hmr] No module update found for route routes/student.$class.dashboard
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[13576256ms] Error: [react-router:hmr] No module update found for route routes/student.$class.dashboard
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[13579876ms] Error: [react-router:hmr] No module update found for route routes/student.$class.dashboard
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[13583211ms] Error: [react-router:hmr] No module update found for route routes/student.$class.dashboard
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[13586923ms] Error: [react-router:hmr] No module update found for route routes/student.$class.dashboard
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[13592122ms] Error: [react-router:hmr] No module update found for route routes/student.$class.dashboard
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[13598229ms] Error: [react-router:hmr] No module update found for route routes/student.$class.dashboard
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[13602289ms] Error: [react-router:hmr] No module update found for route routes/student.$class.dashboard
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[13605732ms] Error: [react-router:hmr] No module update found for route routes/student.$class.dashboard
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[13613258ms] Error: [react-router:hmr] No module update found for route routes/student.$class.dashboard
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[13617958ms] Error: [react-router:hmr] No module update found for route routes/student.$class.dashboard
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[13624054ms] Error: [react-router:hmr] No module update found for route routes/student.$class.dashboard
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[13706108ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://localhost:3000/app/components/ErrorBoundary.tsx?t=1774417231033:0
+[13706111ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://localhost:3000/:0
+[13724748ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://localhost:3000/:0
+[13955375ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://localhost:3000/:0
+[13962506ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://localhost:3000/:0
+[13969941ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://localhost:3000/:0
+[13975409ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://localhost:3000/:0
+[13983034ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://localhost:3000/:0
+[14013661ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://localhost:3000/:0
+[14037706ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://localhost:3000/:0
+[14053832ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://localhost:3000/:0
+[14081814ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://localhost:3000/:0
+[14100687ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://localhost:3000/:0
+[14110241ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://localhost:3000/:0
+[14123514ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://localhost:3000/:0
+[14132548ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://localhost:3000/:0
+[14141972ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://localhost:3000/:0
+[14148002ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://localhost:3000/:0
+[14157054ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://localhost:3000/:0
+[14165507ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://localhost:3000/:0
+[14177543ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://localhost:3000/:0
+[14231897ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://localhost:3000/:0
+[14249435ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://localhost:3000/:0
+[14309850ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://localhost:3000/:0
+[14323937ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://localhost:3000/:0
+[14338970ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://localhost:3000/:0
+[14353802ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://localhost:3000/:0
+[14362595ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://localhost:3000/:0
+[14377416ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://localhost:3000/:0
+[14402956ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://localhost:3000/:0
+[14409002ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://localhost:3000/:0
+[14422746ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://localhost:3000/:0
+[14438434ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://localhost:3000/:0
+[14446050ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://localhost:3000/:0
+[14458063ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://localhost:3000/:0
+[14570143ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://localhost:3000/:0
+[14581006ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://localhost:3000/:0
+[14595296ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://localhost:3000/:0
+[14684393ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://localhost:3000/:0
+[14722001ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://localhost:3000/:0
+[14732441ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://localhost:3000/:0
+[14745490ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://localhost:3000/:0
+[14748724ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://localhost:3000/:0
+[14761545ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://localhost:3000/:0
+[14773761ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://localhost:3000/:0
+[14781463ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://localhost:3000/:0
+[14793790ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://localhost:3000/:0
+[14804138ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://localhost:3000/:0
+[14856319ms] Unexpected token ':'
+[14875491ms] Unexpected token ':'
+[15008953ms] Unexpected token ':'
+[15052841ms] Unexpected token ':'
+[15056954ms] Unexpected token ':'
+[15061071ms] Unexpected token ':'
+[15067746ms] Unexpected token ':'
+[15404053ms] Unexpected token ':'
+[15415981ms] Unexpected token ':'
+[15422639ms] Unexpected token ':'
+[15833798ms] Error: [react-router:hmr] No module update found for route routes/student.$class.quizzes
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[15836361ms] Error: [react-router:hmr] No module update found for route routes/student.$class.quizzes
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[15839614ms] Error: [react-router:hmr] No module update found for route routes/student.$class.quizzes
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[15846845ms] Error: [react-router:hmr] No module update found for route routes/student.$class.quizzes
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[15849286ms] Error: [react-router:hmr] No module update found for route routes/student.$class.quizzes
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[15852760ms] Error: [react-router:hmr] No module update found for route routes/student.$class.quizzes
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[15855145ms] Error: [react-router:hmr] No module update found for route routes/student.$class.quizzes
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[15858009ms] Error: [react-router:hmr] No module update found for route routes/student.$class.quizzes
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[15861593ms] Error: [react-router:hmr] No module update found for route routes/student.$class.quizzes
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[15866519ms] Error: [react-router:hmr] No module update found for route routes/student.$class.quizzes
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[15869256ms] Error: [react-router:hmr] No module update found for route routes/student.$class.quizzes
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[15871863ms] Error: [react-router:hmr] No module update found for route routes/student.$class.quizzes
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[15876563ms] Error: [react-router:hmr] No module update found for route routes/student.$class.quizzes
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[15879119ms] Error: [react-router:hmr] No module update found for route routes/student.$class.quizzes
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[15886939ms] Error: [react-router:hmr] No module update found for route routes/student.$class.quizzes
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[15889124ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://localhost:3000/:0
+[15890456ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://localhost:3000/:0
+[15891777ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://localhost:3000/:0
+[15894280ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://localhost:3000/:0
+[15896688ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://localhost:3000/:0
+[15900638ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://localhost:3000/:0
+[15904119ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://localhost:3000/:0
+[15907352ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://localhost:3000/:0
+[15910131ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://localhost:3000/:0
+[15913116ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://localhost:3000/:0
+[15913278ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://localhost:3000/:0
+[15915717ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://localhost:3000/:0
+[15918214ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://localhost:3000/:0
+[15919214ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://localhost:3000/:0
+[15920467ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://localhost:3000/:0
+[15922498ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://localhost:3000/:0
+[15924740ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://localhost:3000/:0
+[15926600ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://localhost:3000/:0
+[15927797ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://localhost:3000/:0
+[15929323ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://localhost:3000/:0
+[15930464ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://localhost:3000/:0
+[15931962ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://localhost:3000/:0
+[15932815ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://localhost:3000/:0
+[15935291ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://localhost:3000/:0
+[15938013ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://localhost:3000/:0
+[15941119ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://localhost:3000/:0
+[15943543ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://localhost:3000/:0
+[15945525ms] Unexpected token ':'
+[16188687ms] Error: [react-router:hmr] No module update found for route routes/student.$class.quizzes
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[16232889ms] Error: [react-router:hmr] No module update found for route routes/student.$class.quizzes
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[16236807ms] Error: [react-router:hmr] No module update found for route routes/student.$class.quizzes
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[16244060ms] Error: [react-router:hmr] No module update found for route routes/student.$class.quizzes
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[16247547ms] Error: [react-router:hmr] No module update found for route routes/student.$class.quizzes
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[16249864ms] Error: [react-router:hmr] No module update found for route routes/student.$class.quizzes
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[16260329ms] Error: [react-router:hmr] No module update found for route routes/student.$class.quizzes
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[16264132ms] Error: [react-router:hmr] No module update found for route routes/student.$class.quizzes
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[16267431ms] Error: [react-router:hmr] No module update found for route routes/student.$class.quizzes
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[16272374ms] Error: [react-router:hmr] No module update found for route routes/student.$class.quizzes
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[16367834ms] Error: [react-router:hmr] No module update found for route routes/student.$class.quizzes
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[16390090ms] Error: [react-router:hmr] No module update found for route routes/student.$class.quizzes
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[16393185ms] Error: [react-router:hmr] No module update found for route routes/student.$class.quizzes
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[16397082ms] Error: [react-router:hmr] No module update found for route routes/student.$class.quizzes
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[16414458ms] Error: [react-router:hmr] No module update found for route routes/student.$class.quizzes
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[16426869ms] Error: [react-router:hmr] No module update found for route routes/student.$class.quizzes
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[16993870ms] Unexpected token ':'
+[17001863ms] Unexpected token ':'
+[17018013ms] Unexpected token ':'
+[17021351ms] Unexpected token ':'
+[17026393ms] Unexpected token ':'
+[17030134ms] Unexpected token ':'
+[17034017ms] Unexpected token ':'
+[17514596ms] Unexpected token ':'
+[17519390ms] Unexpected token ':'
+[17524594ms] Unexpected token ':'
+[17529770ms] Unexpected token ':'
+[17533964ms] Unexpected token ':'
+[17539759ms] Unexpected token ':'
+[17543009ms] Unexpected token ':'
+[17560991ms] Unexpected token ':'
+[17820237ms] Error: [react-router:hmr] No module update found for route routes/admin.$class.repositories
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[17823717ms] Error: [react-router:hmr] No module update found for route routes/admin.$class.repositories
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[17826101ms] Error: [react-router:hmr] No module update found for route routes/admin.$class.repositories
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[17829260ms] Error: [react-router:hmr] No module update found for route routes/admin.$class.repositories
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[17833201ms] Error: [react-router:hmr] No module update found for route routes/admin.$class.repositories
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[17835678ms] Error: [react-router:hmr] No module update found for route routes/admin.$class.repositories
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[17838164ms] Error: [react-router:hmr] No module update found for route routes/admin.$class.repositories
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[17843042ms] Error: [react-router:hmr] No module update found for route routes/admin.$class.repositories
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[17845646ms] Error: [react-router:hmr] No module update found for route routes/admin.$class.repositories
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[17848172ms] Error: [react-router:hmr] No module update found for route routes/admin.$class.repositories
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[18023979ms] Unexpected token ':'
+[18027175ms] Unexpected token ':'
+[18031062ms] Unexpected token ':'
+[18039446ms] Unexpected token ':'
+[18043500ms] Unexpected token ':'
+[18046022ms] Unexpected token ':'
+[18050354ms] Unexpected token ':'
+[18121668ms] Unexpected token ':'
+[18126993ms] Unexpected token ':'
+[18129698ms] Unexpected token ':'
+[18132524ms] Unexpected token ':'
+[18164386ms] Error: [react-router:hmr] No module update found for route routes/admin.$class.teams
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[18168381ms] Error: [react-router:hmr] No module update found for route routes/admin.$class.teams
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[18174714ms] Error: [react-router:hmr] No module update found for route routes/admin.$class.teams
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[18177759ms] Error: [react-router:hmr] No module update found for route routes/admin.$class.teams
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[18182635ms] Error: [react-router:hmr] No module update found for route routes/admin.$class.teams
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[18186212ms] Error: [react-router:hmr] No module update found for route routes/admin.$class.teams
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[18190799ms] Error: [react-router:hmr] No module update found for route routes/admin.$class.teams
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[18194747ms] Error: [react-router:hmr] No module update found for route routes/admin.$class.teams
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[18197857ms] Error: [react-router:hmr] No module update found for route routes/admin.$class.teams
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[18199662ms] Error: [react-router:hmr] No module update found for route routes/admin.$class.teams
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[18201549ms] Error: [react-router:hmr] No module update found for route routes/admin.$class.teams
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[18202536ms] Error: [react-router:hmr] No module update found for route routes/admin.$class.teams
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[18204739ms] Error: [react-router:hmr] No module update found for route routes/admin.$class.teams
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[18205019ms] Error: [react-router:hmr] No module update found for route routes/admin.$class.teams
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[18208408ms] Error: [react-router:hmr] No module update found for route routes/admin.$class.teams
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[18213178ms] Error: [react-router:hmr] No module update found for route routes/admin.$class.teams
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[18218337ms] Error: [react-router:hmr] No module update found for route routes/admin.$class.teams
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[18221014ms] Error: [react-router:hmr] No module update found for route routes/admin.$class.teams
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[18232897ms] Error: [react-router:hmr] No module update found for route routes/admin.$class.teams
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[18236189ms] Error: [react-router:hmr] No module update found for route routes/admin.$class.teams
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[18238167ms] Error: [react-router:hmr] No module update found for route routes/admin.$class.teams
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[18244632ms] Error: [react-router:hmr] No module update found for route routes/admin.$class.teams
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[18261946ms] Error: [react-router:hmr] No module update found for route routes/admin.$class.teams
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[18274196ms] Error: [react-router:hmr] No module update found for route routes/admin.$class.teams
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[18278687ms] Error: [react-router:hmr] No module update found for route routes/admin.$class.teams
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[18282535ms] Error: [react-router:hmr] No module update found for route routes/admin.$class.teams
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[18293289ms] Error: [react-router:hmr] No module update found for route routes/admin.$class.teams
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[18300779ms] Error: [react-router:hmr] No module update found for route routes/admin.$class.teams
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[18315202ms] Error: [react-router:hmr] No module update found for route routes/admin.$class.teams
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[18419193ms] Unexpected token ':'
+[18621472ms] Unexpected token ':'
+[18725058ms] Unexpected token ':'
+[18982035ms] Error: [react-router:hmr] No module update found for route routes/_user.select-organization
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[18991888ms] Error: [react-router:hmr] No module update found for route routes/_user.select-organization
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[19012864ms] Error: [react-router:hmr] No module update found for route routes/_user.select-organization
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[19019434ms] Unexpected token ':'
+[19021822ms] Unexpected token ':'
+[19024809ms] Unexpected token ':'
+[19029841ms] Unexpected token ':'
+[19033895ms] Unexpected token ':'
+[19041044ms] Unexpected token ':'
+[19044063ms] Unexpected token ':'
+[19047093ms] Unexpected token ':'
+[19053091ms] Unexpected token ':'
+[19057034ms] Unexpected token ':'
+[19060875ms] Unexpected token ':'
+[19073979ms] Error: [react-router:hmr] No module update found for route routes/admin.$class.tokens.new
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[19074095ms] Error: [react-router:hmr] No module update found for route routes/admin.$class.tokens.new
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[19081988ms] Error: [react-router:hmr] No module update found for route routes/admin.$class.tokens.new
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[19110585ms] Error: [react-router:hmr] No module update found for route routes/admin.$class.tokens.new
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[19116459ms] Error: [react-router:hmr] No module update found for route routes/admin.$class.tokens.new
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[19123331ms] Error: [react-router:hmr] No module update found for route routes/admin.$class.tokens.new
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[19132488ms] Error: [react-router:hmr] No module update found for route routes/admin.$class.tokens.new
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[19132581ms] Error: [react-router:hmr] No module update found for route routes/admin.$class.tokens.new
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[19136676ms] Error: [react-router:hmr] No module update found for route routes/admin.$class.tokens.new
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[19140041ms] Error: [react-router:hmr] No module update found for route routes/admin.$class.tokens.new
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[19142706ms] Error: [react-router:hmr] No module update found for route routes/admin.$class.tokens.new
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[19143174ms] Error: [react-router:hmr] No module update found for route routes/admin.$class.tokens.new
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[19145899ms] Error: [react-router:hmr] No module update found for route routes/admin.$class.tokens.new
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[19149745ms] Error: [react-router:hmr] No module update found for route routes/admin.$class.tokens.new
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[19152711ms] Error: [react-router:hmr] No module update found for route routes/admin.$class.tokens.new
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[19155939ms] Error: [react-router:hmr] No module update found for route routes/admin.$class.tokens.new
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[19162371ms] Error: [react-router:hmr] No module update found for route routes/admin.$class.tokens.new
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[19169524ms] Error: [react-router:hmr] No module update found for route routes/admin.$class.tokens.new
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[19172945ms] Error: [react-router:hmr] No module update found for route routes/admin.$class.tokens.new
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[19205582ms] Error: [react-router:hmr] No module update found for route routes/admin.$class.tokens.new
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[19208572ms] Error: [react-router:hmr] No module update found for route routes/admin.$class.tokens.new
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[19223605ms] Error: [react-router:hmr] No module update found for route routes/admin.$class.tokens.new
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[19259564ms] Error: [react-router:hmr] No module update found for route routes/admin.$class.tokens.new
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[19267797ms] Error: [react-router:hmr] No module update found for route routes/admin.$class.tokens.new
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[19271098ms] Error: [react-router:hmr] No module update found for route routes/admin.$class.tokens.new
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[19273956ms] Error: [react-router:hmr] No module update found for route routes/admin.$class.tokens.new
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[19277572ms] Error: [react-router:hmr] No module update found for route routes/admin.$class.tokens.new
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[19280341ms] Error: [react-router:hmr] No module update found for route routes/admin.$class.tokens.new
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[19284667ms] Error: [react-router:hmr] No module update found for route routes/admin.$class.tokens.new
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[19321623ms] Error: [react-router:hmr] No module update found for route routes/admin.$class.tokens.new
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[19369635ms] Error: [react-router:hmr] No module update found for route routes/admin.$class.tokens.new
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[19378169ms] Error: [react-router:hmr] No module update found for route routes/admin.$class.tokens.new
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[19391172ms] Error: [react-router:hmr] No module update found for route routes/admin.$class.tokens.new
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[19394450ms] Error: [react-router:hmr] No module update found for route routes/admin.$class.tokens.new
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[19397636ms] Error: [react-router:hmr] No module update found for route routes/admin.$class.tokens.new
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[19414035ms] Error: [react-router:hmr] No module update found for route routes/admin.$class.tokens.new
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[19417590ms] Error: [react-router:hmr] No module update found for route routes/admin.$class.tokens.new
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[19420940ms] Error: [react-router:hmr] No module update found for route routes/admin.$class.tokens.new
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[19424970ms] Error: [react-router:hmr] No module update found for route routes/admin.$class.tokens.new
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[19436425ms] Error: [react-router:hmr] No module update found for route routes/admin.$class.tokens.new
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[19443888ms] Error: [react-router:hmr] No module update found for route routes/admin.$class.tokens.new
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[19444169ms] Error: [react-router:hmr] No module update found for route routes/admin.$class.tokens.new
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[19444271ms] Error: [react-router:hmr] No module update found for route routes/admin.$class.tokens.new
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[19451005ms] Error: [react-router:hmr] No module update found for route routes/admin.$class.tokens.new
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[19506070ms] Error: [react-router:hmr] No module update found for route routes/admin.$class.tokens.new
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[19514441ms] Unexpected token ':'
+[19517452ms] Unexpected token ':'
+[19524403ms] Unexpected token ':'
+[19555599ms] Unexpected token ':'
+[19562254ms] Unexpected token ':'
+[19702339ms] Unexpected token ':'
+[19705547ms] Unexpected token ':'
+[19712416ms] Unexpected token ':'
+[19715741ms] Unexpected token ':'
+[19857090ms] Error: [react-router:hmr] No module update found for route routes/admin.$class.calendar
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[19875103ms] Error: [react-router:hmr] No module update found for route routes/admin.$class.calendar
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[19920845ms] Error: [react-router:hmr] No module update found for route routes/admin.$class.calendar
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[19927329ms] Error: [react-router:hmr] No module update found for route routes/admin.$class.calendar
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[20127814ms] Error: [react-router:hmr] No module update found for route routes/admin.$class.calendar
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[20140499ms] Error: [react-router:hmr] No module update found for route routes/admin.$class.calendar
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[20145842ms] Error: [react-router:hmr] No module update found for route routes/admin.$class.calendar
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[20149015ms] Error: [react-router:hmr] No module update found for route routes/admin.$class.calendar
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[20170251ms] Error: [react-router:hmr] No module update found for route routes/admin.$class.calendar
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[20177728ms] Error: [react-router:hmr] No module update found for route routes/admin.$class.calendar
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[20183270ms] Error: [react-router:hmr] No module update found for route routes/admin.$class.calendar
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[35166466ms] Error: [react-router:hmr] No module update found for route routes/admin.$class.calendar
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[35197483ms] Error: [react-router:hmr] No module update found for route routes/admin.$class.calendar
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[35210031ms] Error: [react-router:hmr] No module update found for route routes/admin.$class.calendar
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[35293838ms] Error: [react-router:hmr] No module update found for route routes/admin.$class.calendar
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[35300876ms] Error: [react-router:hmr] No module update found for route routes/admin.$class.calendar
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15
+[35339465ms] Error: [react-router:hmr] No module update found for route routes/admin.$class.calendar
+    at http://localhost:3000/@id/__x00__virtual:react-router/hmr-runtime:476:15

@@ -5,6 +5,9 @@ export default [
   ...nodeConfig,
   ...typescriptConfig,
   {
+    ignores: ['src/scripts/**'],
+  },
+  {
     rules: {
       'no-sync': 'off',
     },

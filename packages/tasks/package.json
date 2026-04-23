@@ -2,9 +2,10 @@
   "name": "@classmoji/tasks",
   "type": "module",
   "exports": {
-    ".": "./src/index.js"
+    ".": "./src/index.ts"
   },
   "scripts": {
+    "typecheck": "tsc --noEmit",
     "trigger:dev": "npx trigger.dev@4.4.0 dev",
     "trigger:login": "npx trigger.dev@4.4.0 login",
     "trigger:deploy": "npx trigger.dev@4.4.0 deploy --push",
@@ -29,5 +30,8 @@
   },
   "trigger.dev": {
     "endpointId": "classflow-ahnN"
+  },
+  "devDependencies": {
+    "@types/nodemailer": "^7.0.11"
   }
 }

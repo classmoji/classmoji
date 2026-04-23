@@ -245,9 +245,11 @@ test.describe('Slides Authorization E2E', () => {
     await waitForReveal(page);
 
     // Should see edit controls (save button)
-    await expect(page.locator('button[title="Save changes"], button:has-text("Save")')).toBeVisible({ timeout: 5000 }).catch(() => {
-      // Save button might be a checkmark icon
-    });
+    await expect(page.locator('button[title="Save changes"], button:has-text("Save")'))
+      .toBeVisible({ timeout: 5000 })
+      .catch(() => {
+        // Save button might be a checkmark icon
+      });
   });
 
   test('3.4 assistant can present their own slide', async ({ page }) => {
@@ -329,9 +331,9 @@ test.describe('Security Edge Cases', () => {
     await page.goto('/nonexistent-slide-id');
 
     // Verify we see an error page (slide not accessible) or login page
-    const hasErrorPage = await page.locator('text=Something went wrong').count() > 0;
-    const hasLoginUI = await page.locator('text=Development Login').count() > 0;
-    const hasNotFound = await page.locator('text=Not found').count() > 0;
+    const hasErrorPage = (await page.locator('text=Something went wrong').count()) > 0;
+    const hasLoginUI = (await page.locator('text=Development Login').count()) > 0;
+    const hasNotFound = (await page.locator('text=Not found').count()) > 0;
 
     // Unauthenticated users should see either an error page, not found, or login redirect
     expect(hasErrorPage || hasLoginUI || hasNotFound).toBe(true);

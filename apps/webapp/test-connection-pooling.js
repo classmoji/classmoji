@@ -23,7 +23,7 @@ async function testConnectionPooling() {
     // Test 1: Initialize quiz (should create connection)
     console.log('\n1️⃣ Initializing quiz...');
     console.log('   Expected: "Creating new connection"');
-    const initResult = await initializeCodeAwareQuizViaAgent(
+    await initializeCodeAwareQuizViaAgent(
       attemptId,
       userId,
       assignmentId,
@@ -44,7 +44,7 @@ async function testConnectionPooling() {
     // Test 2: Send message (should reuse connection)
     console.log('\n2️⃣ Sending first message...');
     console.log('   Expected: NO "Creating new connection"');
-    const response1 = await sendMessageToAgent(attemptId, 'Test message 1');
+    await sendMessageToAgent(attemptId, 'Test message 1');
     console.log('   ✅ First message sent');
 
     // Wait a bit
@@ -53,7 +53,7 @@ async function testConnectionPooling() {
     // Test 3: Send another message (should still reuse)
     console.log('\n3️⃣ Sending second message...');
     console.log('   Expected: NO "Creating new connection"');
-    const response2 = await sendMessageToAgent(attemptId, 'Test message 2');
+    await sendMessageToAgent(attemptId, 'Test message 2');
     console.log('   ✅ Second message sent');
 
     // Wait a bit
