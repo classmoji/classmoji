@@ -325,14 +325,14 @@ export const createAssignmentColumns = (
           const repository = student.repositories.find(repo => repo.module_id === module.id);
 
           if (!repository) {
-            return <span className="text-ink-2 italic">None</span>;
+            return <span className="text-gray-500 italic">None</span>;
           }
 
           if (view === 'Emoji') {
             const allGrades =
               repository.assignments?.flatMap((a: GradeRepoAssignment) => a.grades || []) || [];
             if (allGrades.length === 0) {
-              return <span className="text-ink-2 italic">None</span>;
+              return <span className="text-gray-500 italic">None</span>;
             }
             return <EmojisDisplay grades={allGrades} />;
           }
@@ -353,7 +353,7 @@ export const createAssignmentColumns = (
           return (
             <span className="font-medium">
               {module.is_extra_credit ? (
-                <span className="text-mint-ink">+{grade.toFixed(1)}</span>
+                <span className="text-green-600">+{grade.toFixed(1)}</span>
               ) : (
                 <GradeBadge grade={grade} />
               )}

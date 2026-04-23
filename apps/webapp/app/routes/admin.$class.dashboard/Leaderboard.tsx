@@ -22,7 +22,7 @@ const StudentList = ({ students, title, isTop = false }: StudentListProps) => (
       {students.map((student, index) => (
         <div
           key={student.id}
-          className="flex items-center justify-between p-2 rounded-lg hover:bg-paper dark:hover:bg-gray-800 transition-colors duration-200"
+          className="flex items-center justify-between p-2 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors duration-200"
         >
           <div className="flex items-center gap-2 min-w-0 flex-1">
             {isTop && index < 3 && (
@@ -44,14 +44,14 @@ const StudentList = ({ students, title, isTop = false }: StudentListProps) => (
           <Tag
             className={`font-medium border-0 ${
               student.grade < 0
-                ? 'bg-paper-2 dark:bg-panel text-ink-2 dark:text-ink-3'
+                ? 'bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-400'
                 : student.grade >= 90
-                  ? 'bg-mint-bg dark:bg-green-900/30 text-mint-ink dark:text-green-400'
+                  ? 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400'
                   : student.grade >= 80
-                    ? 'bg-amber-bg dark:bg-yellow-900/30 text-amber-ink dark:text-yellow-400'
+                    ? 'bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-400'
                     : student.grade >= 70
                       ? 'bg-orange-100 dark:bg-orange-900/30 text-orange-700 dark:text-orange-400'
-                      : 'bg-rose-bg dark:bg-red-900/30 text-rose-ink dark:text-red-400'
+                      : 'bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400'
             }`}
           >
             {student.grade < 0 ? '--' : student.grade.toFixed(1)}

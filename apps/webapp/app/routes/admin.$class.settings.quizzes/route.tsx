@@ -1,4 +1,3 @@
-// TODO: Phase 5 — final restyle to match new design system
 import {} from 'react';
 import { useParams } from 'react-router';
 import {
@@ -201,7 +200,7 @@ const SettingsQuizzes = ({ loaderData }: Route.ComponentProps) => {
             usingSystemDefaults ? (
               <Badge
                 count={
-                  <span className="px-3 py-1 bg-sky-bg text-sky-ink rounded-full text-sm">
+                  <span className="px-3 py-1 bg-blue-100 text-blue-700 rounded-full text-sm">
                     Using System Environment Variables
                   </span>
                 }
@@ -209,7 +208,7 @@ const SettingsQuizzes = ({ loaderData }: Route.ComponentProps) => {
             ) : (
               <Badge
                 count={
-                  <span className="px-3 py-1 bg-mint-bg text-mint-ink rounded-full text-sm">
+                  <span className="px-3 py-1 bg-green-100 text-green-700 rounded-full text-sm">
                     Using Organization API Key
                   </span>
                 }

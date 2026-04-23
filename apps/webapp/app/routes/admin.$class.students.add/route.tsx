@@ -99,12 +99,12 @@ const AddStudents = ({ loaderData }: Route.ComponentProps) => {
     {
       title: 'Name',
       dataIndex: 'name',
-      render: (name: string) => <span className="font-medium text-ink-0">{name || '-'}</span>,
+      render: (name: string) => <span className="font-medium text-gray-800">{name || '-'}</span>,
     },
     {
       title: 'Email',
       dataIndex: 'email',
-      render: (email: string) => <span className="text-ink-2">{email || '-'}</span>,
+      render: (email: string) => <span className="text-gray-600">{email || '-'}</span>,
     },
   ];
 
@@ -143,8 +143,8 @@ const AddStudents = ({ loaderData }: Route.ComponentProps) => {
       title={
         <div className="flex items-center gap-3">
           <div>
-            <h2 className="text-xl font-semibold text-ink-0">Add Students</h2>
-            <p className="text-sm text-ink-2 font-normal">Bulk add students to your class</p>
+            <h2 className="text-xl font-semibold text-gray-900">Add Students</h2>
+            <p className="text-sm text-gray-600 font-normal">Bulk add students to your class</p>
           </div>
         </div>
       }
@@ -204,7 +204,7 @@ const AddStudents = ({ loaderData }: Route.ComponentProps) => {
                   size="small"
                   rowKey="key"
                   pagination={false}
-                  rowClassName="bg-mint-bg"
+                  rowClassName="bg-green-50"
                 />
               </Card>
             )}
@@ -224,7 +224,7 @@ const AddStudents = ({ loaderData }: Route.ComponentProps) => {
                   size="small"
                   rowKey="key"
                   pagination={false}
-                  rowClassName="bg-paper opacity-60"
+                  rowClassName="bg-gray-50 opacity-60"
                   className="mt-4"
                 />
               </Card>

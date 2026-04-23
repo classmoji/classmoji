@@ -1,4 +1,3 @@
-// TODO: Phase 5 — final restyle to match new design system
 import { Button, Modal } from 'antd';
 
 import { namedAction } from 'remix-utils/named-action';

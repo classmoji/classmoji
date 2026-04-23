@@ -91,7 +91,7 @@ const StudentView = ({ loaderData }: Route.ComponentProps) => {
         onClose={close}
         open={opened}
         width={width}
-        closeIcon={<IconX className="text-ink-1 dark:text-ink-3" size={18} />}
+        closeIcon={<IconX className="text-gray-700 dark:text-gray-300" size={18} />}
         footer={
           <div className="flex justify-end  py-2">
             <Button onClick={close}>Close</Button>

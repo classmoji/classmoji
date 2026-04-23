@@ -1,4 +1,4 @@
-import { Button, Table, Spin } from 'antd';
+import { Card, Button, Table, Spin } from 'antd';
 import { IconCrown, IconArrowRight, IconExternalLink } from '@tabler/icons-react';
 import { useFetcher, useLocation } from 'react-router';
 import { useEffect, useState, useRef } from 'react';
@@ -112,20 +112,13 @@ const SettingsSubscription = ({ loaderData }: Route.ComponentProps) => {
       <div className="space-y-6">
         {/* Upgrade Banner for Free Users */}
         {isFreeTier && (
-          <div
-            className="rounded-xl border p-6"
-            style={{
-              background:
-                'linear-gradient(135deg, var(--accent-soft) 0%, var(--lilac-bg) 100%)',
-              borderColor: 'var(--accent-soft-2)',
-            }}
-          >
-            <div className="flex items-center justify-between gap-4">
+          <div className="bg-linear-to-r from-yellow-50 to-orange-50 dark:from-yellow-900/20 dark:to-orange-900/20 border border-yellow-200 dark:border-yellow-800 rounded-lg p-6">
+            <div className="flex items-center justify-between">
               <div>
-                <h3 className="display text-xl text-ink-0 mb-2">
+                <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-2">
                   Unleash the full power of Classmoji
                 </h3>
-                <p className="text-ink-2">
+                <p className="text-gray-600 dark:text-gray-400">
                   Get unlimited students, courses, TA management, team projects, and so much more.
                 </p>
               </div>
@@ -134,12 +127,14 @@ const SettingsSubscription = ({ loaderData }: Route.ComponentProps) => {
                   Upgrade Plan
                 </Button>
                 <div className="text-right">
-                  <p className="text-sm text-ink-2 mb-1">Want to learn more?</p>
+                  <p className="text-sm text-gray-600 dark:text-gray-400 mb-1">
+                    Want to learn more?
+                  </p>
                   <Button
                     type="text"
                     size="small"
                     icon={<IconExternalLink size={14} />}
-                    className="text-ink-1! hover:text-ink-0! p-0 h-auto"
+                    className="text-gray-700 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100 p-0 h-auto"
                   >
                     Book a demo
                   </Button>
@@ -154,18 +149,20 @@ const SettingsSubscription = ({ loaderData }: Route.ComponentProps) => {
           {/* Current Plan */}
           <InfoCard title="Current plan">
             <div className="flex items-center justify-between">
-              <div className="flex items-center gap-3">
+              <div className="flex items-center gap-3 mb-4">
                 <div
                   className={`w-10 h-10 rounded-lg flex items-center justify-center ${
-                    isProTier ? 'bg-accent-soft' : 'bg-paper'
+                    isProTier ? 'bg-secondary' : 'bg-gray-100 dark:bg-gray-700'
                   }`}
                 >
                   <IconCrown
-                    className={`w-5 h-5 ${isProTier ? 'text-accent-ink' : 'text-ink-3'}`}
+                    className={`w-5 h-5 ${
+                      isProTier ? 'text-black' : 'text-gray-400 dark:text-gray-500'
+                    }`}
                   />
                 </div>
                 <div>
-                  <h2 className="display text-xl text-ink-0">
+                  <h2 className="text-xl font-bold text-gray-900 dark:text-gray-100">
                     {isFreeTier ? 'Free' : 'Pro'}
                   </h2>
                 </div>
@@ -184,7 +181,7 @@ const SettingsSubscription = ({ loaderData }: Route.ComponentProps) => {
 
           {/* Price */}
           <InfoCard title="Price">
-            <p className="display text-2xl text-ink-0">
+            <p className="text-2xl font-bold text-gray-900 dark:text-gray-100">
               {isFreeTier || isVIP ? '$0.00' : '$29.00'} / month
             </p>
           </InfoCard>
@@ -192,8 +189,10 @@ const SettingsSubscription = ({ loaderData }: Route.ComponentProps) => {
           {/* Subscription Renews */}
           <InfoCard title="Subscription renews on">
             <p
-              className={`display text-2xl ${
-                classmojiSubscription.cancelled_at ? 'text-red-500' : 'text-ink-0'
+              className={`text-2xl font-bold ${
+                classmojiSubscription.cancelled_at
+                  ? 'text-red-500'
+                  : 'text-gray-900 dark:text-gray-100'
               }`}
             >
               {nextBillingDate}
@@ -202,11 +201,10 @@ const SettingsSubscription = ({ loaderData }: Route.ComponentProps) => {
         </div>
 
         {/* Current Usage Table */}
-        <div className="panel">
-          <div className="panel-head">
-            <h3 className="display text-lg text-ink-0">Current usage</h3>
-          </div>
-          <div className="panel-body">
+        <Card className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700">
+          <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-6">
+            Current usage
+          </h3>
           <Table
             dataSource={usageData}
             pagination={false}
@@ -221,10 +219,10 @@ const SettingsSubscription = ({ loaderData }: Route.ComponentProps) => {
                 width: '33%',
                 render: (text, record) => (
                   <div className="flex items-center gap-2">
-                    <span className="text-ink-0 font-medium">{text}</span>
+                    <span className="text-gray-900 dark:text-gray-100 font-medium">{text}</span>
                     {record.feature === 'Students per course' && (
-                      <div className="w-4 h-4 rounded-full bg-paper-2 flex items-center justify-center">
-                        <span className="text-xs text-ink-2">?</span>
+                      <div className="w-4 h-4 rounded-full bg-gray-200 dark:bg-gray-600 flex items-center justify-center">
+                        <span className="text-xs text-gray-600 dark:text-gray-300">?</span>
                       </div>
                     )}
                   </div>
@@ -240,7 +238,7 @@ const SettingsSubscription = ({ loaderData }: Route.ComponentProps) => {
                     {!record.available ? (
                       <span>❌</span>
                     ) : (
-                      <span className="text-ink-0 font-medium">{text}</span>
+                      <span className="text-gray-900 font-medium">{text}</span>
                     )}
                   </div>
                 ),
@@ -251,15 +249,14 @@ const SettingsSubscription = ({ loaderData }: Route.ComponentProps) => {
                 key: 'used',
                 width: '33%',
                 render: (text, record) => (
-                  <span className="text-ink-0 font-medium">
+                  <span className="text-gray-900 font-medium">
                     {!record.available ? '-' : text}
                   </span>
                 ),
               },
             ]}
           />
-          </div>
-        </div>
+        </Card>
       </div>
     </>
   );

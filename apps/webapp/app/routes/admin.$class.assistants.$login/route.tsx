@@ -173,11 +173,11 @@ const AdminAssistantDrawer = ({ loaderData }: Route.ComponentProps) => {
           {module.assignments.map(assignment => (
             <div
               key={assignment.id}
-              className="flex items-center justify-between p-2 bg-paper dark:bg-panel rounded-lg"
+              className="flex items-center justify-between p-2 bg-gray-50 dark:bg-gray-800 rounded-lg"
             >
               <div className="flex-1 min-w-0">
                 <p className="font-medium text-sm truncate">{assignment.studentName}</p>
-                <p className="text-xs text-ink-2 truncate">{assignment.assignmentTitle}</p>
+                <p className="text-xs text-gray-500 truncate">{assignment.assignmentTitle}</p>
               </div>
               <div className="flex items-center gap-2 ml-2">
                 {assignment.isGraded ? (
@@ -220,7 +220,7 @@ const AdminAssistantDrawer = ({ loaderData }: Route.ComponentProps) => {
         onClose={close}
         open={opened}
         width={width}
-        closeIcon={<IconX className="text-ink-1 dark:text-ink-3" size={18} />}
+        closeIcon={<IconX className="text-gray-700 dark:text-gray-300" size={18} />}
         footer={
           <div className="flex justify-end py-2">
             <Button onClick={close}>Close</Button>
@@ -241,7 +241,7 @@ const AdminAssistantDrawer = ({ loaderData }: Route.ComponentProps) => {
               />
               <div>
                 <h3 className="text-lg font-semibold">{assistant.name}</h3>
-                <p className="text-ink-2">@{assistant.login}</p>
+                <p className="text-gray-500">@{assistant.login}</p>
                 <div className="flex gap-2 mt-2">
                   {membership?.has_accepted_invite !== false ? (
                     <Tag color="green">Active</Tag>
@@ -270,7 +270,7 @@ const AdminAssistantDrawer = ({ loaderData }: Route.ComponentProps) => {
           <StatsCard title="Total Assigned">{stats.total}</StatsCard>
           <StatsCard title="Completed">{stats.completed}</StatsCard>
           <Card className="text-center">
-            <p className="text-sm text-ink-2 mb-2">Progress</p>
+            <p className="text-sm text-gray-500 mb-2">Progress</p>
             <Progress
               type="circle"
               percent={Math.round(stats.progress)}

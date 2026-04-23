@@ -210,7 +210,7 @@ export default function AdminPages({ loaderData }: Route.ComponentProps) {
       render: (title: string, record: PageRecord) => (
         <Link
           to={`/admin/${classSlug}/pages/${record.id}`}
-          className="font-medium !text-ink-2 dark:text-ink-0 hover:text-ink-0 dark:hover:text-gray-100"
+          className="font-medium !text-gray-600 dark:text-gray-100 hover:text-gray-900 dark:hover:text-gray-100"
         >
           {title}
         </Link>
@@ -360,13 +360,13 @@ export default function AdminPages({ loaderData }: Route.ComponentProps) {
             }}
             locale={{
               emptyText: searchText ? (
-                <div className="text-center py-8 text-ink-2">
+                <div className="text-center py-8 text-gray-500">
                   <div className="text-4xl mb-2">🔍</div>
                   <div>No pages found matching &quot;{searchText}&quot;</div>
                   <div className="text-sm">Try adjusting your search terms</div>
                 </div>
               ) : (
-                <div className="text-center py-8 text-ink-2">
+                <div className="text-center py-8 text-gray-500">
                   <div className="text-4xl mb-2">📄</div>
                   <div>No pages created yet</div>
                   <div className="text-sm">Create your first page to get started!</div>

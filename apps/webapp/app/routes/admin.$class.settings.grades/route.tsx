@@ -1,7 +1,11 @@
+import { Divider } from 'antd';
+
 import { action } from './action';
 import { ClassmojiService } from '@classmoji/services';
 import { requireClassroomAdmin } from '~/utils/routeAuth.server';
-import { EmojiGradeEditor, type EmojiGradeRecord } from '~/components/features/settings';
+import EmojiMapping from './EmojiMapping';
+import LetterGradeMapping from './LetterGradeMapping';
+import GradingSettingsOptions from './GradingSettingsOptions';
 import type { Route } from './+types/route';
 
 export const loader = async ({ params, request }: Route.LoaderArgs) => {
@@ -13,22 +17,43 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
   });
 
   const emojiMappings = await ClassmojiService.emojiMapping.findByClassroomId(classroom.id, true);
+  const letterGradeMappings = await ClassmojiService.letterGradeMapping.findByClassroomId(
+    classroom.id
+  );
+  const orphanedEmojis = await ClassmojiService.assignmentGrade.findOrphanedGradeEmojis(
+    classroom.id
+  );
 
-  return { emojiMappings };
+  const settings = await ClassmojiService.classroom.getClassroomSettingsForServer(classroom.id);
+
+  return { emojiMappings, letterGradeMappings, orphanedEmojis, settings };
 };
 
 const SettingsGrading = ({ loaderData }: Route.ComponentProps) => {
-  const { emojiMappings } = loaderData;
+  const { emojiMappings, letterGradeMappings, orphanedEmojis, settings } = loaderData;
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-      <h2
-        className="display"
-        style={{ margin: 0, fontSize: 22, fontWeight: 500, letterSpacing: -0.3 }}
-      >
-        Emoji grades
-      </h2>
-      <EmojiGradeEditor emojiMappings={emojiMappings as unknown as EmojiGradeRecord[]} />
+    <div className="">
+      <GradingSettingsOptions
+        settings={
+          settings as unknown as React.ComponentProps<typeof GradingSettingsOptions>['settings']
+        }
+      />
+      <Divider />
+      <EmojiMapping
+        emojiMappings={
+          emojiMappings as unknown as Array<{
+            emoji: string;
+            grade: number;
+            extra_tokens: number;
+            description: string;
+            [key: string]: unknown;
+          }>
+        }
+        orphanedEmojis={orphanedEmojis}
+      />
+      <Divider />
+      <LetterGradeMapping letterGradeMappings={letterGradeMappings} />
     </div>
   );
 };

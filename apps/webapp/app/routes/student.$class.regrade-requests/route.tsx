@@ -1,4 +1,3 @@
-// TODO: Phase 5 final restyle
 import { Outlet } from 'react-router';
 
 import type { Route } from './+types/route';

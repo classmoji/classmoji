@@ -55,7 +55,7 @@ const DefaultPageSection = ({ currentDefault, menuPages }: DefaultPageSectionPro
           />
         </Form.Item>
 
-        <p className="text-sm text-ink-2 mb-4">
+        <p className="text-sm text-gray-500 mb-4">
           Students will be automatically redirected to this page when they navigate to your course.
           {menuPages.length === 0 && (
             <span className="block mt-2 text-amber-600">

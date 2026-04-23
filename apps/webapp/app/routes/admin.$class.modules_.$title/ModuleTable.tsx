@@ -42,12 +42,12 @@ const ModuleTable = ({ module, repos, emojiMappings, settings, org }: ModuleTabl
             repo.student ? (
               <UserThumbnailView user={repo.student} />
             ) : (
-              <span className="text-ink-3">No student</span>
+              <span className="text-gray-400">No student</span>
             )
           ) : repo.team ? (
             <TeamThumbnailView team={repo.team} />
           ) : (
-            <span className="text-ink-3">No team</span>
+            <span className="text-gray-400">No team</span>
           )}
         </>
       ),
