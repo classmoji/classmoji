@@ -212,6 +212,7 @@ model User {
   calendar_events               CalendarEvent[]
   ai_conversations              AIConversation[]
   resource_views                ResourceView[]
+  contributor_links             RepositoryContributorLink[]
 
   @@unique([provider, provider_id])
   @@index([provider, login])
@@ -431,6 +432,7 @@ model Repository {
   student     User?                  @relation("StudentRepositories", fields: [student_id], references: [id], onDelete: Cascade)
   team        Team?                  @relation(fields: [team_id], references: [id], onDelete: Cascade)
   assignments RepositoryAssignment[]
+  contributor_links RepositoryContributorLink[]
 
   @@unique([provider, provider_id])
   @@index([classroom_id])
@@ -458,11 +460,50 @@ model RepositoryAssignment {
   graders            RepositoryAssignmentGrader[]
   regrade_requests   RegradeRequest[]
   token_transactions TokenTransaction[]
+  analytics_snapshot RepoAnalyticsSnapshot?
 
   @@unique([provider, provider_id])
   @@index([repository_id])
   @@index([assignment_id])
   @@map("repository_assignments")
+}
+
+model RepoAnalyticsSnapshot {
+  id                       String   @id @default(uuid())
+  repository_assignment_id String   @unique
+  repository_assignment    RepositoryAssignment @relation(fields: [repository_assignment_id], references: [id], onDelete: Cascade)
+  fetched_at               DateTime
+  default_branch           String?
+  total_commits            Int      @default(0)
+  total_additions          Int      @default(0)
+  total_deletions          Int      @default(0)
+  first_commit_at          DateTime?
+  last_commit_at           DateTime?
+  commits                  Json     @default("[]")
+  contributors             Json     @default("[]")
+  languages                Json     @default("{}")
+  pr_summary               Json     @default("{}")
+  stale                    Boolean  @default(false)
+  error                    String?
+  created_at               DateTime @default(now())
+  updated_at               DateTime @default(now()) @updatedAt
+
+  @@index([fetched_at])
+  @@map("repo_analytics_snapshots")
+}
+
+model RepositoryContributorLink {
+  id            String   @id @default(uuid())
+  repository_id String
+  repository    Repository @relation(fields: [repository_id], references: [id], onDelete: Cascade)
+  github_login  String
+  user_id       String?
+  user          User?    @relation(fields: [user_id], references: [id], onDelete: SetNull)
+  created_at    DateTime @default(now())
+
+  @@unique([repository_id, github_login])
+  @@index([user_id])
+  @@map("repository_contributor_links")
 }
 
 // ============================================================================

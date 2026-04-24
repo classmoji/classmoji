@@ -1,4 +1,10 @@
 import { GitProvider } from './GitProvider.ts';
+import type {
+  CommitRecord,
+  ContributorRecord,
+  LanguagesMap,
+  PRSummary,
+} from '../classmoji/repoAnalytics.types.ts';
 
 /**
  * GitLab adapter - implements GitProvider interface.
@@ -137,6 +143,29 @@ export class GitLabProvider extends GitProvider {
   ): Promise<never> {
     // TODO: GET /api/v4/projects/:id/repository/branches/:branch
     throw new Error('GitLabProvider.getLatestCommitSHA() not implemented');
+  }
+
+  async listCommits(
+    _group: string,
+    _project: string,
+    _opts?: { since?: string; branch?: string }
+  ): Promise<CommitRecord[]> {
+    throw new Error('GitLabProvider.listCommits() not implemented');
+  }
+
+  async getContributorStats(
+    _group: string,
+    _project: string
+  ): Promise<{ pending: true } | ContributorRecord[]> {
+    throw new Error('GitLabProvider.getContributorStats() not implemented');
+  }
+
+  async getLanguages(_group: string, _project: string): Promise<LanguagesMap> {
+    throw new Error('GitLabProvider.getLanguages() not implemented');
+  }
+
+  async listPulls(_group: string, _project: string): Promise<PRSummary> {
+    throw new Error('GitLabProvider.listPulls() not implemented');
   }
 
   /**

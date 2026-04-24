@@ -3,13 +3,15 @@
   "type": "module",
   "scripts": {
     "typecheck": "tsc --noEmit",
+    "test": "vitest run",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "format": "prettier --write \"**/*.{js,jsx,ts,tsx,json,md}\"",
     "format:check": "prettier --check \"**/*.{js,jsx,ts,tsx,json,md}\""
   },
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./flags": "./src/classmoji/repoAnalytics.flags.ts"
   },
   "dependencies": {
     "@classmoji/database": "*",
@@ -21,5 +23,8 @@
     "octokit": "^3.1.2",
     "prettier": "^3.6.2",
     "simple-git": "^3.27.0"
+  },
+  "devDependencies": {
+    "vitest": "^4.1.4"
   }
 }

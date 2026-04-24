@@ -80,6 +80,37 @@ export class GitProvider {
     throw new Error('getLatestCommitSHA() must be implemented by subclass');
   }
 
+  async listCommits(
+    _org: string,
+    _repo: string,
+    _opts?: { since?: string; branch?: string }
+  ): Promise<import('../classmoji/repoAnalytics.types.ts').CommitRecord[]> {
+    throw new Error('listCommits() must be implemented by subclass');
+  }
+
+  async getContributorStats(
+    _org: string,
+    _repo: string
+  ): Promise<
+    { pending: true } | import('../classmoji/repoAnalytics.types.ts').ContributorRecord[]
+  > {
+    throw new Error('getContributorStats() must be implemented by subclass');
+  }
+
+  async getLanguages(
+    _org: string,
+    _repo: string
+  ): Promise<import('../classmoji/repoAnalytics.types.ts').LanguagesMap> {
+    throw new Error('getLanguages() must be implemented by subclass');
+  }
+
+  async listPulls(
+    _org: string,
+    _repo: string
+  ): Promise<import('../classmoji/repoAnalytics.types.ts').PRSummary> {
+    throw new Error('listPulls() must be implemented by subclass');
+  }
+
   async createBranch(org: string, repo: string, branch: string, sha: string): Promise<void> {
     throw new Error('createBranch() must be implemented by subclass');
   }
