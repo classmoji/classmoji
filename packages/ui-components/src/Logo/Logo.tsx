@@ -3,30 +3,16 @@
  */
 
 import React from 'react';
+import logoPixel from '../assets/logo-pixel.png';
 
 type SizeKey = 'xs' | 'sm' | 'md' | 'lg' | 'xl';
 
-const SIZE_CLASSES: Record<SizeKey, { icon: string; text: string }> = {
-  xs: {
-    icon: 'w-5 h-5 text-[12px]',
-    text: 'text-sm',
-  },
-  sm: {
-    icon: 'w-7 h-7 text-[17px]',
-    text: 'text-xl',
-  },
-  md: {
-    icon: 'w-10 h-10 text-2xl',
-    text: 'text-[28px]',
-  },
-  lg: {
-    icon: 'w-14 h-14 text-[34px]',
-    text: 'text-[38px]',
-  },
-  xl: {
-    icon: 'w-[72px] h-[72px] text-[43px]',
-    text: 'text-5xl',
-  },
+const SIZE_HEIGHTS: Record<SizeKey, number> = {
+  xs: 16,
+  sm: 22,
+  md: 32,
+  lg: 44,
+  xl: 64,
 };
 
 interface LogoIconProps {
@@ -35,29 +21,18 @@ interface LogoIconProps {
 }
 
 /**
- * LogoIcon - Just the apple emoji
+ * LogoIcon - Just the apple emoji (kept for backward compat)
  */
 export const LogoIcon = ({ size = 'md', className = '' }: LogoIconProps): React.JSX.Element => {
-  const isCustomSize = typeof size === 'number';
-  const sizeClasses = isCustomSize
-    ? ''
-    : SIZE_CLASSES[size as SizeKey]?.icon || SIZE_CLASSES.md.icon;
-
-  const customStyles = isCustomSize
-    ? {
-        fontSize: `${size * 0.75}px`,
-      }
-    : {};
-
+  const resolvedHeight = typeof size === 'number' ? size : SIZE_HEIGHTS[size];
   return (
-    <div
-      style={customStyles}
-      className={`inline-flex items-center justify-center leading-none shrink-0 ${sizeClasses} ${className}`}
-      role="img"
-      aria-label="Classmoji icon"
-    >
-      🍎
-    </div>
+    <img
+      src={logoPixel}
+      alt="Classmoji"
+      style={{ height: resolvedHeight, width: 'auto', objectFit: 'contain' }}
+      className={`inline-block shrink-0 select-none ${className}`}
+      draggable={false}
+    />
   );
 };
 
@@ -69,57 +44,28 @@ interface LogoProps {
 }
 
 /**
- * Logo - Full Classmoji branding with icon and/or text
+ * Logo - Classmoji pixel-art brand mark.
+ * Uses the raster logo asset so the pixel glyphs stay crisp across sizes.
  */
 export const Logo = ({
-  variant = 'full',
+  variant: _variant = 'full',
   size = 'md',
-  theme = 'light',
+  theme: _theme = 'light',
   className = '',
 }: LogoProps): React.JSX.Element => {
-  const isCustomSize = typeof size === 'number';
-  const iconOnly = variant === 'icon';
-
-  const textSizeClass = isCustomSize
-    ? ''
-    : SIZE_CLASSES[size as SizeKey]?.text || SIZE_CLASSES.md.text;
-  const customTextSize = isCustomSize ? { fontSize: `${Math.round(size * 0.7)}px` } : {};
-
-  const themeClass =
-    theme === 'current'
-      ? 'text-current'
-      : theme === 'dark'
-        ? 'text-white'
-        : 'text-[#1a1a1a] dark:text-white';
-
+  const resolvedHeight = typeof size === 'number' ? size : SIZE_HEIGHTS[size];
   return (
-    <div
-      className={`inline-flex items-center ${className}`}
-      role="img"
-      aria-label="Classmoji"
-    >
-      {iconOnly ? (
-        <LogoIcon size={size} />
-      ) : (
-        <span
-          style={{
-            ...customTextSize,
-            fontFamily: 'Noto Sans, sans-serif',
-            fontWeight: 800,
-          }}
-          className={`leading-none lowercase select-none ${textSizeClass} ${themeClass}`}
-        >
-          classm
-          <span
-            aria-hidden="true"
-            className="inline-block align-[-0.12em] mx-[0.02em]"
-            style={{ fontSize: '0.95em' }}
-          >
-            🍎
-          </span>
-          ji
-        </span>
-      )}
-    </div>
+    <img
+      src={logoPixel}
+      alt="Classmoji"
+      style={{
+        height: resolvedHeight,
+        width: 'auto',
+        objectFit: 'contain',
+        imageRendering: 'pixelated',
+      }}
+      className={`inline-block shrink-0 select-none ${className}`}
+      draggable={false}
+    />
   );
 };
