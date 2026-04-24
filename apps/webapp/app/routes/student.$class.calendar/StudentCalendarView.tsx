@@ -155,10 +155,9 @@ const StudentCalendarView = ({ events, onEventClick, onMonthChange }: StudentCal
                 </span>
                 <span
                   className={`mt-2 flex items-center justify-center w-8 h-8 rounded-full text-sm font-semibold ${
-                    isDayToday
-                      ? 'bg-[#858A92] text-white'
-                      : 'text-gray-800 dark:text-gray-200'
+                    isDayToday ? 'text-white' : 'text-gray-800 dark:text-gray-200'
                   }`}
+                  style={isDayToday ? { backgroundColor: 'var(--accent)' } : undefined}
                 >
                   {d.getDate()}
                 </span>
@@ -300,8 +299,11 @@ const StudentCalendarView = ({ events, onEventClick, onMonthChange }: StudentCal
                     className="absolute left-0 right-0 pointer-events-none z-20 flex items-center"
                     style={{ top: `${timeLineTop}px` }}
                   >
-                    <div className="w-2 h-2 rounded-full bg-rose-500 -ml-1 shrink-0" />
-                    <div className="flex-1 h-px bg-rose-500" />
+                    <div
+                      className="w-2 h-2 rounded-full -ml-1 shrink-0"
+                      style={{ backgroundColor: 'var(--accent)' }}
+                    />
+                    <div className="flex-1 h-px" style={{ backgroundColor: 'var(--accent)' }} />
                   </div>
                 )}
               </div>
@@ -351,11 +353,12 @@ const StudentCalendarView = ({ events, onEventClick, onMonthChange }: StudentCal
                       <span
                         className={`inline-flex items-center justify-center w-7 h-7 rounded-full text-xs font-semibold ${
                           isDayToday
-                            ? 'bg-[#858A92] text-white'
+                            ? 'text-white'
                             : inMonth
                               ? 'text-gray-800 dark:text-gray-200'
                               : 'text-gray-400 dark:text-gray-600'
                         }`}
+                        style={isDayToday ? { backgroundColor: 'var(--accent)' } : undefined}
                       >
                         {date.getDate()}
                       </span>

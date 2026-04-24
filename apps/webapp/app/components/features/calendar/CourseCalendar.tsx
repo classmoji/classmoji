@@ -490,7 +490,7 @@ const CourseCalendar = ({
                 top: `${(currentTime.getHours() + currentTime.getMinutes() / 60 - 8) * 4}rem`,
               }}
             >
-              <div className="h-px bg-red-200/50 dark:bg-red-400/20" />
+              <div className="h-px opacity-30" style={{ backgroundColor: 'var(--accent)' }} />
             </div>
           )}
           <div className="grid" style={{ gridTemplateColumns: '4rem 1fr 1fr 1fr 1fr 1fr 1fr 1fr' }}>
@@ -513,7 +513,10 @@ const CourseCalendar = ({
                     transform: 'translateY(-50%)',
                   }}
                 >
-                  <div className="bg-red-500 text-white text-xs font-medium px-1 py-0.5 rounded-full text-center">
+                  <div
+                    className="text-white text-xs font-medium px-1 py-0.5 rounded-full text-center"
+                    style={{ backgroundColor: 'var(--accent)' }}
+                  >
                     {currentTime.getHours() % 12 || 12}:
                     {String(currentTime.getMinutes()).padStart(2, '0')}
                   </div>
@@ -603,8 +606,11 @@ const CourseCalendar = ({
                         transform: 'translateY(-50%)',
                       }}
                     >
-                      <div className="w-3 h-3 bg-red-500 rounded-full -ml-1.5 shrink-0" />
-                      <div className="flex-1 h-0.5 bg-red-500" />
+                      <div
+                        className="w-3 h-3 rounded-full -ml-1.5 shrink-0"
+                        style={{ backgroundColor: 'var(--accent)' }}
+                      />
+                      <div className="flex-1 h-0.5" style={{ backgroundColor: 'var(--accent)' }} />
                     </div>
                   )}
                 </div>

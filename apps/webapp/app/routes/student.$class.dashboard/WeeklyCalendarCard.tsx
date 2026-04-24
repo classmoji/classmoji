@@ -99,10 +99,9 @@ const WeeklyCalendarCard = ({ events, weekStart, classSlug }: WeeklyCalendarCard
                 </span>
                 <span
                   className={`flex items-center justify-center w-7 h-7 rounded-full text-sm font-semibold mt-1 ${
-                    isTodayDate
-                      ? 'bg-[#858A92] text-white'
-                      : 'text-gray-800 dark:text-gray-200'
+                    isTodayDate ? 'text-white' : 'text-gray-800 dark:text-gray-200'
                   }`}
+                  style={isTodayDate ? { backgroundColor: 'var(--accent)' } : undefined}
                 >
                   {day.date()}
                 </span>
