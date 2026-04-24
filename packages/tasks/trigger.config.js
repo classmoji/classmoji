@@ -6,7 +6,7 @@ import { aptGet, syncEnvVars } from '@trigger.dev/build/extensions/core';
 import { InfisicalSDK } from '@infisical/sdk';
 
 export default defineConfig({
-  project: 'proj_ijxcrutouxchmrbjmkkk',
+  project: process.env.TRIGGER_PROJECT_ID || 'proj_ijxcrutouxchmrbjmkkk',
   runtime: 'node',
   logLevel: 'log',
   machine: 'small-2x',
