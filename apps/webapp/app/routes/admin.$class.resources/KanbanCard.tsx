@@ -58,7 +58,7 @@ const KanbanCard = ({
       className={`
         group flex items-center gap-2 px-3 py-2 rounded-md border border-l-[3px] text-sm
         ${colorClasses}
-        border-gray-200 dark:border-gray-700
+        border-gray-200 dark:border-neutral-700
         hover:border-gray-300 dark:hover:border-gray-600
         hover:shadow-sm
         transition-all duration-150
@@ -80,7 +80,7 @@ const KanbanCard = ({
             e.stopPropagation();
             onRemove(linkId, resourceType);
           }}
-          className="opacity-0 group-hover:opacity-100 p-0.5 rounded hover:bg-gray-100 dark:hover:bg-gray-700 transition-opacity"
+          className="opacity-0 group-hover:opacity-100 p-0.5 rounded hover:bg-gray-100 dark:hover:bg-neutral-700 transition-opacity"
         >
           <IconX size={14} className="text-gray-400 hover:text-red-500" />
         </button>

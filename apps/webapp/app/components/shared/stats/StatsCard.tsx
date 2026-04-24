@@ -10,7 +10,7 @@ const StatsCard = ({ title, children, icon }: StatsCardProps) => {
   const Icon = icon!;
 
   return (
-    <Card className="hover:shadow-lg transition-all duration-200 shadow-sm border border-gray-100 dark:border-gray-700 hover:border-primary-200 dark:hover:border-primary-900/50 border-t-2 border-t-primary">
+    <Card className="hover:shadow-lg transition-all duration-200 shadow-sm border border-gray-100 dark:border-neutral-700 hover:border-primary-200 dark:hover:border-primary-900/50 border-t-2 border-t-primary">
       <div className="flex justify-between items-start gap-4">
         <div className="flex-1 min-w-0">
           <div className="text-xs uppercase tracking-wide text-gray-500 dark:text-gray-400 font-semibold mb-2">

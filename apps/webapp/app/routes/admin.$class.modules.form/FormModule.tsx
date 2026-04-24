@@ -13,17 +13,15 @@ import {
   Input,
   Button,
   Tooltip,
-  Drawer,
+  Modal,
   Alert,
   Checkbox,
   Card,
   DatePicker,
 } from 'antd';
 import { zodResolver } from '@hookform/resolvers/zod';
-import { DevTool } from '@hookform/devtools';
 import { PlusOutlined } from '@ant-design/icons';
 import { useDisclosure } from '@mantine/hooks';
-import { useWindowSize } from '@uidotdev/usehooks';
 
 import AsyncAutocomplete from './AsyncAutocomplete';
 import ProjectTemplateSelect from './ProjectTemplateSelect';
@@ -128,7 +126,6 @@ const FormModule = ({
   const revalidator = useRevalidator();
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [opened, { open: openIssueModal, close: closeIssueModal }] = useDisclosure();
-  const { width } = useWindowSize();
 
   // State for module-level linked pages and slides
   const [linkedPageIds, setLinkedPageIds] = useState(() => {
@@ -481,7 +478,7 @@ const FormModule = ({
               </div>
 
               {/* GitHub Project Template */}
-              <div className="mt-4 pt-4 border-t border-gray-200 dark:border-gray-700">
+              <div className="mt-4 pt-4 border-t border-gray-200 dark:border-neutral-700">
                 <SectionHeader
                   title="GitHub Project"
                   subtitle="Optionally create a GitHub Project board for each team"
@@ -616,83 +613,149 @@ const FormModule = ({
           </Card>
         </div>
 
-        {/* Drawer for adding/editing issues */}
-        <Drawer
+        {/* Modal for adding/editing assignments (nested on top of module modal) */}
+        <Modal
           open={opened}
-          width={Math.min(width! * 0.6, 800)}
-          placement="right"
-          onClose={() => {
+          onCancel={() => {
             closeIssueModal();
             resetAssignment();
           }}
-          title={
-            <div className="flex items-center gap-3">
-              <div className="w-1 h-5 bg-primary-400 rounded-full"></div>
-              <span>Add or Update Assignment</span>
-            </div>
-          }
-          destroyOnClose={true}
-          footer={
-            <div className="flex justify-end gap-3">
-              <Button
-                onClick={() => {
-                  closeIssueModal();
-                  resetAssignment();
-                }}
-              >
-                Cancel
-              </Button>
-              <Button
-                type="primary"
-                onClick={() => {
-                  if (!assignment.title.length)
-                    return toast.error('Please fill in the assignment title.');
-
-                  const doesAssignmentExist = (assignments || []).find(
-                    (a: { id?: string | number | null }) => a.id === assignment.id
-                  );
-                  let currAssignments = [...(assignments || [])];
-
-                  if (doesAssignmentExist)
-                    currAssignments = currAssignments.filter(a => a.id !== assignment.id);
-
-                  const newList = _.uniq([
-                    ...currAssignments,
-                    assignment as (typeof currAssignments)[number],
-                  ]);
-                  setValue('assignments', newList, {
-                    shouldValidate: true,
-                  });
-
-                  closeIssueModal();
-                  resetAssignment();
-                }}
-              >
-                Save Assignment
-              </Button>
-            </div>
-          }
+          title={null}
+          footer={null}
+          width={600}
+          centered
+          closable={false}
+          maskClosable={false}
+          styles={{
+            mask: { backgroundColor: 'rgba(15, 23, 42, 0.35)' },
+            content: {
+              padding: 0,
+              borderRadius: 16,
+              overflow: 'hidden',
+              boxShadow:
+                '0 24px 48px -12px rgba(15, 23, 42, 0.25), 0 0 0 1px rgba(0, 0, 0, 0.04)',
+            },
+            body: { padding: 0 },
+            header: { display: 'none' },
+            footer: { display: 'none' },
+          }}
         >
-          <FormAssignment
-            templateAssignments={templateAssignments}
-            settings={
-              classroom.settings as { default_tokens_per_hour: number; [key: string]: unknown }
-            }
-            pages={pages as { id: string; title: string | null }[]}
-            slides={slides as { id: string; title: string | null }[]}
-          />
-        </Drawer>
+          {(() => {
+            const isEditingAssignment = Boolean(
+              assignment?.id &&
+                (assignments || []).some(
+                  (a: { id?: string | number | null }) => a.id === assignment.id
+                )
+            );
+            return (
+              <>
+                {/* Gmail-style header */}
+                <div className="flex items-center justify-between gap-3 px-5 py-3 bg-stone-50 dark:bg-neutral-800/60 border-b border-stone-200 dark:border-neutral-800">
+                  <div className="flex flex-col">
+                    <span className="text-sm font-semibold text-gray-900 dark:text-gray-100">
+                      {isEditingAssignment ? 'Edit assignment' : 'New assignment'}
+                    </span>
+                    <span className="text-[11px] font-normal text-gray-500 dark:text-gray-400">
+                      Set title, deadline, weight, and any linked resources.
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      closeIssueModal();
+                      resetAssignment();
+                    }}
+                    aria-label="Close"
+                    className="p-1 rounded hover:bg-stone-200 dark:hover:bg-neutral-700 text-gray-500 dark:text-gray-400 transition-colors"
+                  >
+                    <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
+                      <path
+                        d="M4 4l8 8M12 4l-8 8"
+                        stroke="currentColor"
+                        strokeWidth="1.5"
+                        strokeLinecap="round"
+                      />
+                    </svg>
+                  </button>
+                </div>
+
+                {/* Body */}
+                <div className="max-h-[70vh] overflow-y-auto px-5 py-4">
+                  <FormAssignment
+                    templateAssignments={templateAssignments}
+                    settings={
+                      classroom.settings as {
+                        default_tokens_per_hour: number;
+                        [key: string]: unknown;
+                      }
+                    }
+                    pages={pages as { id: string; title: string | null }[]}
+                    slides={slides as { id: string; title: string | null }[]}
+                  />
+                </div>
+
+                {/* Footer */}
+                <div className="flex items-center justify-end gap-2 px-5 py-3 border-t border-stone-200 dark:border-neutral-800 bg-stone-50/60 dark:bg-neutral-800/40">
+                  <Button
+                    type="text"
+                    onClick={() => {
+                      closeIssueModal();
+                      resetAssignment();
+                    }}
+                  >
+                    Discard
+                  </Button>
+                  <Button
+                    type="primary"
+                    style={{ backgroundColor: '#619462', borderColor: '#619462' }}
+                    onClick={() => {
+                      if (!assignment.title.length)
+                        return toast.error('Please fill in the assignment title.');
+
+                      const doesAssignmentExist = (assignments || []).find(
+                        (a: { id?: string | number | null }) => a.id === assignment.id
+                      );
+                      let currAssignments = [...(assignments || [])];
+
+                      if (doesAssignmentExist)
+                        currAssignments = currAssignments.filter(
+                          a => a.id !== assignment.id
+                        );
+
+                      const newList = _.uniq([
+                        ...currAssignments,
+                        assignment as (typeof currAssignments)[number],
+                      ]);
+                      setValue('assignments', newList, {
+                        shouldValidate: true,
+                      });
+
+                      closeIssueModal();
+                      resetAssignment();
+                    }}
+                  >
+                    {isEditingAssignment ? 'Save changes' : 'Add assignment'}
+                  </Button>
+                </div>
+              </>
+            );
+          })()}
+        </Modal>
 
         {/* Form Actions */}
-        <div className="flex justify-end gap-3 pt-6 border-t border-gray-200">
-          <Button onClick={close}>Cancel</Button>
-
-          <Button type="primary" htmlType="submit">
+        <div className="flex justify-end gap-2 pt-5 mt-5 border-t border-stone-200 dark:border-neutral-800">
+          <Button onClick={close} type="text">
+            Discard
+          </Button>
+          <Button
+            type="primary"
+            htmlType="submit"
+            style={{ backgroundColor: '#619462', borderColor: '#619462' }}
+          >
             {isNew ? 'Create module' : 'Update module'}
           </Button>
         </div>
 
-        <DevTool control={control} />
       </Form>
     </div>
   );

@@ -127,7 +127,7 @@ const StepReview = ({
                 {totalQuizzes}
               </Tag>
             </div>
-            <div className="pt-2 border-t border-gray-200 dark:border-gray-700 text-sm text-gray-500">
+            <div className="pt-2 border-t border-gray-200 dark:border-neutral-700 text-sm text-gray-500">
               All deadlines will be cleared. Modules and quizzes will start unpublished.
             </div>
           </div>

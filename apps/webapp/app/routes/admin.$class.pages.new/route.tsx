@@ -12,6 +12,7 @@ import ImportTab from './ImportTab';
 import CreateBlankTab from './CreateBlankTab';
 import BatchImportTab from './BatchImportTab';
 import { generateTermString } from '@classmoji/utils';
+import { useRouteDrawer } from '~/hooks';
 import { generatePageTemplate } from './utils';
 import type { Route } from './+types/route';
 
@@ -277,6 +278,7 @@ export default function NewPage({ loaderData }: Route.ComponentProps) {
   const { term, classroom } = loaderData;
   const fetcher = useFetcher();
   const navigate = useNavigate();
+  const { opened, close } = useRouteDrawer({});
   const [form] = Form.useForm();
   const [activeTab, setActiveTab] = useState('create-blank');
   const [importFiles, setImportFiles] = useState<{ markdown: File | null; images: File[] }>({
@@ -452,13 +454,48 @@ export default function NewPage({ loaderData }: Route.ComponentProps) {
 
   return (
     <Modal
-      title="New Page"
-      open={true}
-      onCancel={() => navigate(`/admin/${classroom.slug}/pages`)}
+      open={opened}
+      onCancel={close}
+      title={null}
       footer={null}
       width={700}
-      closable={!isCreating}
+      centered
+      closable={false}
+      maskClosable={!isCreating}
+      styles={{
+        content: { padding: 0, borderRadius: 16, overflow: 'hidden' },
+        body: { padding: 0 },
+        header: { display: 'none' },
+        footer: { display: 'none' },
+      }}
     >
+      {/* Gmail-style header */}
+      <div className="flex items-center justify-between gap-3 px-5 py-3 bg-stone-50 dark:bg-neutral-800/60 border-b border-stone-200 dark:border-neutral-800">
+        <div className="flex flex-col">
+          <span className="text-sm font-semibold text-gray-900 dark:text-gray-100">New page</span>
+          <span className="text-[11px] font-normal text-gray-500 dark:text-gray-400">
+            Create a blank page, import from markdown, or batch import.
+          </span>
+        </div>
+        <button
+          type="button"
+          onClick={close}
+          aria-label="Close"
+          disabled={isCreating}
+          className="p-1 rounded hover:bg-stone-200 dark:hover:bg-neutral-700 text-gray-500 dark:text-gray-400 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+        >
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
+            <path
+              d="M4 4l8 8M12 4l-8 8"
+              stroke="currentColor"
+              strokeWidth="1.5"
+              strokeLinecap="round"
+            />
+          </svg>
+        </button>
+      </div>
+
+      <div className="max-h-[75vh] overflow-y-auto px-6 py-5">
       {/* Show form when not loading */}
       {!isCreating && (
         <>
@@ -476,7 +513,7 @@ export default function NewPage({ loaderData }: Route.ComponentProps) {
             <Tabs activeKey={activeTab} onChange={setActiveTab} items={tabItems} />
 
             <div className="flex justify-end gap-3 mt-6 items-center">
-              <Button type="default" onClick={() => navigate(`/admin/${classroom.slug}/pages`)}>
+              <Button type="default" onClick={close}>
                 Cancel
               </Button>
               <Button
@@ -549,6 +586,7 @@ export default function NewPage({ loaderData }: Route.ComponentProps) {
           </div>
         </div>
       )}
+      </div>
     </Modal>
   );
 }

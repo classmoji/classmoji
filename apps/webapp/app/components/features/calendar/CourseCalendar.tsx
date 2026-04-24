@@ -268,9 +268,9 @@ const CourseCalendar = ({
     }
 
     return (
-      <div className="bg-white dark:bg-gray-900 rounded-lg border border-gray-200 dark:border-gray-700">
+      <div>
         {/* Header - Days of week */}
-        <div className="grid grid-cols-7 border-b border-gray-200 dark:border-gray-700">
+        <div className="grid grid-cols-7 border-b border-stone-200 dark:border-neutral-800">
           {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map(day => (
             <div
               key={day}
@@ -286,7 +286,7 @@ const CourseCalendar = ({
           {weeks.map((week, weekIdx) => (
             <div
               key={weekIdx}
-              className="grid grid-cols-7 border-b border-gray-200 dark:border-gray-700 last:border-b-0"
+              className="grid grid-cols-7 border-b border-gray-200 dark:border-neutral-700 last:border-b-0"
             >
               {week.map((date, dayIdx) => {
                 const dayEvents = getEventsForDate(date);
@@ -298,9 +298,9 @@ const CourseCalendar = ({
                   <DroppableCell
                     key={dayIdx}
                     id={dropId}
-                    className={`min-h-[120px] p-2 border-r border-gray-200 dark:border-gray-700 last:border-r-0 transition-colors overflow-hidden ${
-                      onCellClick ? 'cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-800/50' : ''
-                    } ${!isInCurrentMonth ? 'bg-gray-50/50 dark:bg-gray-900/50' : ''}`}
+                    className={`min-h-[120px] p-2 border-r border-gray-200 dark:border-neutral-700 last:border-r-0 transition-colors overflow-hidden ${
+                      onCellClick ? 'cursor-pointer hover:bg-gray-50 dark:hover:bg-neutral-800/50' : ''
+                    } ${!isInCurrentMonth ? 'bg-gray-50/50 dark:bg-neutral-900/50' : ''}`}
                     onClick={() => onCellClick?.(date)}
                   >
                     {/* Date number */}
@@ -383,20 +383,19 @@ const CourseCalendar = ({
     };
 
     return (
-      <div className="bg-white dark:bg-gray-900 rounded-lg border border-gray-200 dark:border-gray-700 overflow-hidden">
+      <div>
         {/* Header */}
         <div
-          className="grid border-b border-gray-200 dark:border-gray-700"
+          className="grid border-b border-stone-200 dark:border-neutral-800"
           style={{ gridTemplateColumns: '4rem 1fr 1fr 1fr 1fr 1fr 1fr 1fr' }}
         >
-          <div className="p-2 border-r border-gray-200 dark:border-gray-700" />
+          <div className="p-2 border-r border-gray-200 dark:border-neutral-700" />
           {dates.map((date, idx) => {
             const isTodayDate = isToday(date);
-            const isWeekend = date.getDay() === 0 || date.getDay() === 6;
             return (
               <div
                 key={idx}
-                className={`p-3 border-r border-gray-200 dark:border-gray-700 last:border-r-0 text-center ${isWeekend ? 'bg-gray-100/70 dark:bg-gray-800/40' : ''}`}
+                className="p-3 border-r border-gray-200 dark:border-neutral-700 last:border-r-0 text-center"
               >
                 <div
                   className={`text-xs font-medium uppercase tracking-wider ${isTodayDate ? 'text-secondary' : 'text-gray-500 dark:text-gray-400'}`}
@@ -417,22 +416,21 @@ const CourseCalendar = ({
 
         {/* All-day / Deadlines row */}
         <div
-          className="grid border-b border-gray-200 dark:border-gray-700"
+          className="grid border-b border-gray-200 dark:border-neutral-700"
           style={{ gridTemplateColumns: '4rem 1fr 1fr 1fr 1fr 1fr 1fr 1fr' }}
         >
-          <div className="px-1 py-1.5 border-r border-gray-200 dark:border-gray-700 text-xs text-gray-500 dark:text-gray-400 bg-gray-50/50 dark:bg-gray-800/30">
+          <div className="px-1 py-1.5 border-r border-gray-200 dark:border-neutral-700 text-xs text-gray-500 dark:text-gray-400 bg-gray-50/50 dark:bg-neutral-800/30">
             All day
           </div>
           {dates.map((date, dayIdx) => {
             const dayEvents = getEventsForDate(date);
             const allDayEvents = dayEvents.filter(isAllDayOrOutsideHours);
-            const isWeekend = date.getDay() === 0 || date.getDay() === 6;
             const allDayDropId = `month-${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
             return (
               <DroppableCell
                 key={dayIdx}
                 id={allDayDropId}
-                className={`px-1 py-1 border-r border-gray-200 dark:border-gray-700 last:border-r-0 min-h-[2rem] overflow-hidden ${isWeekend ? 'bg-gray-100 dark:bg-gray-800/50' : 'bg-gray-50/50 dark:bg-gray-800/30'}`}
+                className="px-1 py-1 border-r border-gray-200 dark:border-neutral-700 last:border-r-0 min-h-[2rem] overflow-hidden bg-gray-50/50 dark:bg-neutral-800/30"
               >
                 <div className="space-y-0.5">
                   {allDayEvents.slice(0, 3).map((event, idx) => (
@@ -497,11 +495,11 @@ const CourseCalendar = ({
           )}
           <div className="grid" style={{ gridTemplateColumns: '4rem 1fr 1fr 1fr 1fr 1fr 1fr 1fr' }}>
             {/* Time column */}
-            <div className="border-r border-gray-200 dark:border-gray-700 relative">
+            <div className="border-r border-gray-200 dark:border-neutral-700 relative">
               {timeSlots.map(hour => (
                 <div
                   key={hour}
-                  className="h-16 px-1 py-1 text-xs text-gray-500 dark:text-gray-400 border-b border-gray-200 dark:border-gray-700 text-right"
+                  className="h-16 px-1 py-1 text-xs text-gray-500 dark:text-gray-400 border-b border-gray-200 dark:border-neutral-700 text-right"
                 >
                   {hour < 12 ? `${hour} AM` : hour === 12 ? '12 PM' : `${hour - 12} PM`}
                 </div>
@@ -526,11 +524,10 @@ const CourseCalendar = ({
             {/* Day columns */}
             {dates.map((date, dayIdx) => {
               const dayEvents = getEventsForDate(date);
-              const isWeekend = date.getDay() === 0 || date.getDay() === 6;
               return (
                 <div
                   key={dayIdx}
-                  className={`border-r border-gray-200 dark:border-gray-700 last:border-r-0 relative ${isWeekend ? 'bg-gray-100/60 dark:bg-gray-800/40' : ''}`}
+                  className="border-r border-gray-200 dark:border-neutral-700 last:border-r-0 relative"
                 >
                   {timeSlots.map(hour => {
                     const dropId = `week-${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}-${String(hour).padStart(2, '0')}`;
@@ -538,7 +535,7 @@ const CourseCalendar = ({
                       <DroppableCell
                         key={hour}
                         id={dropId}
-                        className={`h-16 border-b border-gray-200 dark:border-gray-700 cursor-pointer transition-colors hover:bg-gray-100 dark:hover:bg-gray-800/50`}
+                        className={`h-16 border-b border-gray-200 dark:border-neutral-700 cursor-pointer transition-colors hover:bg-gray-100 dark:hover:bg-neutral-800/50`}
                         onClick={() => {
                           const cellDate = new Date(date);
                           cellDate.setHours(hour, 0, 0, 0);
@@ -640,101 +637,77 @@ const CourseCalendar = ({
       onDragEnd={handleDragEnd}
       onDragCancel={handleDragCancel}
     >
-      <div className="space-y-3">
-        {/* Unified toolbar */}
-        <div className="flex items-center justify-between bg-white dark:bg-gray-900 rounded-lg border border-gray-200 dark:border-gray-700 px-3 py-2">
-          {/* Left: Navigation */}
-          <div className="flex items-center gap-1">
+      <section className="rounded-2xl bg-white dark:bg-neutral-900 ring-1 ring-stone-200 dark:ring-neutral-800 overflow-hidden min-h-[calc(100vh-10rem)]">
+        {/* Header: nav + range label + view toggle */}
+        <header className="flex flex-wrap items-center justify-between gap-3 px-5 sm:px-6 pt-5 sm:pt-6 pb-4">
+          <div className="flex items-center gap-2">
             <button
+              type="button"
               onClick={handlePrevious}
-              className="p-1.5 rounded-md text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors"
+              aria-label="Previous"
+              className="p-1.5 rounded-full text-gray-500 hover:text-gray-900 dark:text-gray-400 dark:hover:text-gray-100 hover:bg-stone-100 dark:hover:bg-neutral-800 transition-colors"
             >
               <IconChevronLeft size={18} />
             </button>
             <button
+              type="button"
               onClick={handleToday}
-              className="px-2.5 py-1 text-sm font-medium text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-md transition-colors"
+              className="px-2.5 py-1 text-xs font-medium text-gray-600 dark:text-gray-300 rounded-full hover:bg-stone-100 dark:hover:bg-neutral-800 transition-colors"
             >
               Today
             </button>
             <button
+              type="button"
               onClick={handleNext}
-              className="p-1.5 rounded-md text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors"
+              aria-label="Next"
+              className="p-1.5 rounded-full text-gray-500 hover:text-gray-900 dark:text-gray-400 dark:hover:text-gray-100 hover:bg-stone-100 dark:hover:bg-neutral-800 transition-colors"
             >
               <IconChevronRight size={18} />
             </button>
-
-            <div className="ml-3 text-base font-semibold text-gray-900 dark:text-gray-100">
+            <h2 className="ml-2 text-base sm:text-lg font-semibold text-gray-900 dark:text-gray-100 tracking-tight">
               {getMonthName(currentDate)} {getYear(currentDate)}
               {view === 'week' && (
                 <span className="ml-2 text-sm font-normal text-gray-500 dark:text-gray-400">
                   {getWeekRangeText()}
                 </span>
               )}
-            </div>
+            </h2>
           </div>
 
-          {/* Center: Filters */}
-          <div className="hidden md:flex items-center gap-1">
-            {EVENT_TYPES.map(type => {
-              const isActive = selectedTypes.length === 0 || selectedTypes.includes(type);
-              return (
-                <button
-                  key={type}
-                  onClick={() => {
-                    if (selectedTypes.includes(type)) {
-                      setSelectedTypes(selectedTypes.filter(t => t !== type));
-                    } else {
-                      setSelectedTypes([...selectedTypes, type]);
-                    }
-                  }}
-                  className={`inline-flex items-center gap-1.5 px-2 py-1 rounded-md text-xs font-medium transition-all ${
-                    isActive
-                      ? 'text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800'
-                      : 'text-gray-400 dark:text-gray-600 hover:text-gray-500 dark:hover:text-gray-500'
-                  }`}
-                >
-                  <span
-                    className={`w-2 h-2 rounded-full ${getEventTypeDotColor(type)} ${!isActive ? 'opacity-30' : ''}`}
-                  />
-                  {getEventTypeLabel(type)}
-                </button>
-              );
-            })}
-          </div>
-
-          {/* Right: View toggle */}
-          <div className="flex items-center bg-gray-100 dark:bg-gray-800 rounded-md p-0.5">
+          <div className="flex items-center bg-stone-100 dark:bg-neutral-800 rounded-full p-0.5">
             <button
-              onClick={() => setView('month')}
-              className={`px-3 py-1 text-xs font-medium rounded transition-all ${
-                view === 'month'
-                  ? 'bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 shadow-sm'
-                  : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300'
-              }`}
-            >
-              Month
-            </button>
-            <button
+              type="button"
               onClick={() => setView('week')}
-              className={`px-3 py-1 text-xs font-medium rounded transition-all ${
+              className={`px-3.5 py-1 text-xs font-medium rounded-full transition-all ${
                 view === 'week'
-                  ? 'bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 shadow-sm'
-                  : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300'
+                  ? 'bg-white dark:bg-neutral-700 text-gray-900 dark:text-gray-100 shadow-sm'
+                  : 'text-gray-500 dark:text-gray-400'
               }`}
             >
               Week
             </button>
+            <button
+              type="button"
+              onClick={() => setView('month')}
+              className={`px-3.5 py-1 text-xs font-medium rounded-full transition-all ${
+                view === 'month'
+                  ? 'bg-white dark:bg-neutral-700 text-gray-900 dark:text-gray-100 shadow-sm'
+                  : 'text-gray-500 dark:text-gray-400'
+              }`}
+            >
+              Month
+            </button>
           </div>
-        </div>
+        </header>
 
-        {/* Mobile filters (shown below toolbar on small screens) */}
-        <div className="md:hidden flex items-center gap-1 overflow-x-auto pb-1">
+        {/* Event type filters */}
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-2 px-5 sm:px-6 pb-3 text-xs text-gray-600 dark:text-gray-300">
           {EVENT_TYPES.map(type => {
             const isActive = selectedTypes.length === 0 || selectedTypes.includes(type);
             return (
               <button
                 key={type}
+                type="button"
                 onClick={() => {
                   if (selectedTypes.includes(type)) {
                     setSelectedTypes(selectedTypes.filter(t => t !== type));
@@ -742,24 +715,21 @@ const CourseCalendar = ({
                     setSelectedTypes([...selectedTypes, type]);
                   }
                 }}
-                className={`inline-flex items-center gap-1.5 px-2 py-1 rounded-md text-xs font-medium whitespace-nowrap transition-all ${
-                  isActive
-                    ? 'text-gray-700 dark:text-gray-300 bg-gray-100 dark:bg-gray-800'
-                    : 'text-gray-400 dark:text-gray-600'
+                className={`inline-flex items-center gap-1.5 transition-opacity ${
+                  isActive ? '' : 'opacity-40'
                 }`}
               >
-                <span
-                  className={`w-2 h-2 rounded-full ${getEventTypeDotColor(type)} ${!isActive ? 'opacity-30' : ''}`}
-                />
+                <span className={`w-2 h-2 rounded-full ${getEventTypeDotColor(type)}`} />
                 {getEventTypeLabel(type)}
               </button>
             );
           })}
         </div>
 
-        {/* Calendar view */}
-        {view === 'month' ? renderMonthView() : renderWeekView()}
-      </div>
+        <div className="border-t border-stone-200 dark:border-neutral-800 overflow-x-auto">
+          {view === 'month' ? renderMonthView() : renderWeekView()}
+        </div>
+      </section>
 
       <DragOverlay
         dropAnimation={{

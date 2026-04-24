@@ -9,7 +9,7 @@ interface CardProps {
 }
 
 const Card = ({ title, children, icon }: CardProps) => (
-  <div className="bg-white dark:bg-gray-800 p-6 rounded-lg border border-gray-200 dark:border-gray-700 shadow-xs">
+  <div className="bg-white dark:bg-neutral-800 p-6 rounded-lg border border-gray-200 dark:border-neutral-700 shadow-xs">
     <div className="flex items-center gap-2 mb-2">
       {icon}
       <h3 className="text-lg font-semibold text-gray-800 dark:text-gray-200">{title}</h3>

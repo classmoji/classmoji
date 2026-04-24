@@ -173,7 +173,7 @@ const SingleModule = ({ loaderData }: Route.ComponentProps) => {
       <div className="flex justify-end items-center mb-6">
         <div className="flex items-center gap-4">
           <span className="text-sm font-medium text-gray-600 dark:text-gray-400">View:</span>
-          <div className="flex items-center gap-3 bg-gray-50 dark:bg-gray-800 rounded-lg p-2 border border-gray-200 dark:border-gray-700">
+          <div className="flex items-center gap-3 bg-gray-50 dark:bg-neutral-800 rounded-lg p-2 border border-gray-200 dark:border-neutral-700">
             <div className="flex items-center gap-2">
               <IconTable
                 size={18}

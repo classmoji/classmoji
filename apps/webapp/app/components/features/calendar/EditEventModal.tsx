@@ -326,10 +326,24 @@ const EditEventModal = ({
 
   return (
     <Drawer
-      title="Edit Calendar Event"
+      title={
+        <div className="flex flex-col">
+          <span className="text-base font-semibold text-gray-900 dark:text-gray-100">
+            Edit event
+          </span>
+          <span className="text-xs font-normal text-gray-500 dark:text-gray-400">
+            Update details, reschedule, or delete this event.
+          </span>
+        </div>
+      }
       open={open}
       onClose={handleCancel}
-      width={600}
+      width={560}
+      styles={{
+        header: { borderBottom: '1px solid rgb(231 229 228)' },
+        body: { padding: '20px 24px 32px 24px' },
+        footer: { borderTop: '1px solid rgb(231 229 228)', padding: '12px 24px' },
+      }}
       footer={
         <div className="flex items-center justify-between">
           <Button
@@ -339,14 +353,19 @@ const EditEventModal = ({
             loading={loading}
             onClick={handleDelete}
           >
-            Delete Event
+            Delete
           </Button>
           <Space>
             <Button onClick={handleCancel} type="default">
               Cancel
             </Button>
-            <Button type="primary" loading={loading} onClick={handleSubmit}>
-              Save Changes
+            <Button
+              type="primary"
+              loading={loading}
+              onClick={handleSubmit}
+              style={{ backgroundColor: '#619462', borderColor: '#619462' }}
+            >
+              Save changes
             </Button>
           </Space>
         </div>

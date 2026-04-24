@@ -1,11 +1,16 @@
-import { PageHeader, TableActionButtons, TriggerProgress, SearchInput } from '~/components';
+import { TableActionButtons, TriggerProgress } from '~/components';
 
 import { useParams, Await, useSearchParams, useRevalidator } from 'react-router';
 import { useState, useEffect, Suspense, useCallback } from 'react';
-import { Table, Button, Alert, Skeleton } from 'antd';
+import { Table, Button, Skeleton, Input } from 'antd';
 import { namedAction } from 'remix-utils/named-action';
 import { tasks } from '@trigger.dev/sdk';
-import { IconRefresh, IconTrash } from '@tabler/icons-react';
+import {
+  IconRefresh,
+  IconTrash,
+  IconSearch,
+  IconAlertTriangle,
+} from '@tabler/icons-react';
 import dayjs from 'dayjs';
 import { useDebounce } from '@uidotdev/usehooks';
 
@@ -329,7 +334,7 @@ const RepositoriesTable = ({
 
       {/* Search Results Summary */}
       {search && (
-        <div className="mb-4 pb-4 border-b border-gray-200 dark:border-gray-700">
+        <div className="mb-4 pb-4 border-b border-gray-200 dark:border-neutral-700">
           <p className="text-sm text-gray-600 dark:text-gray-400">
             {totalCount} repositor{totalCount !== 1 ? 'ies' : 'y'} found
             <span className="ml-1">
@@ -340,15 +345,30 @@ const RepositoriesTable = ({
         </div>
       )}
 
-      {/* Error Alert */}
+      {/* Error state */}
       {error && (
-        <Alert
-          type="error"
-          message="Failed to load repositories"
-          description={error}
-          showIcon
-          className="mb-4"
-        />
+        <div className="mb-4 rounded-xl bg-rose-50/70 dark:bg-rose-900/20 ring-1 ring-rose-200 dark:ring-rose-800/60 p-4 flex items-start gap-3">
+          <div className="shrink-0 mt-0.5 text-rose-600 dark:text-rose-300">
+            <IconAlertTriangle size={18} strokeWidth={2} />
+          </div>
+          <div className="min-w-0 flex-1">
+            <p className="text-sm font-semibold text-rose-800 dark:text-rose-100">
+              Couldn’t load repositories from GitHub
+            </p>
+            <p className="mt-1 text-sm text-rose-700/90 dark:text-rose-200/90">
+              The GitHub App may not be installed for this organization, or its access has expired.
+              Try reinstalling the app, then hit refresh.
+            </p>
+            <details className="mt-2 text-xs text-rose-700/80 dark:text-rose-200/80">
+              <summary className="cursor-pointer select-none hover:text-rose-900 dark:hover:text-rose-100">
+                Technical details
+              </summary>
+              <code className="mt-1 block font-mono text-[11px] leading-relaxed break-all text-rose-800/80 dark:text-rose-100/80">
+                {error}
+              </code>
+            </details>
+          </div>
+        </div>
       )}
 
       {/* Last Refresh Info */}
@@ -381,14 +401,12 @@ const RepositoriesTable = ({
         locale={{
           emptyText: search ? (
             <div className="text-center py-8 text-gray-500">
-              <div className="text-4xl mb-2">🔍</div>
-              <div>No repositories found matching &quot;{search}&quot;</div>
+              <div className="font-medium">No repositories found matching &quot;{search}&quot;</div>
               <div className="text-sm">Try adjusting your search terms</div>
             </div>
           ) : (
             <div className="text-center py-8 text-gray-500">
-              <div className="text-4xl mb-2">📁</div>
-              <div>No repositories found</div>
+              <div className="font-medium">No repositories found</div>
               <div className="text-sm">Refresh to load repositories from GitHub</div>
             </div>
           ),
@@ -464,9 +482,19 @@ const GithubRepositories = ({ loaderData }: Route.ComponentProps) => {
   const isLoading = state === 'loading' || deleteLoading;
 
   return (
-    <div className="space-y-6">
-      <PageHeader title="GitHub Repositories" routeName="repositories">
-        <div className="flex items-center gap-3">
+    <div className="min-h-full">
+      <div className="flex items-center justify-between gap-3 mt-2 mb-4 flex-wrap">
+        <h1 className="text-base font-semibold text-gray-600 dark:text-gray-400">
+          GitHub Repositories
+        </h1>
+        <div className="flex items-center gap-2">
+          <Input
+            placeholder="Search repositories..."
+            prefix={<IconSearch size={16} />}
+            value={localSearch}
+            onChange={e => handleSearchChange(e.target.value)}
+            style={{ width: 260 }}
+          />
           <Button
             icon={<IconRefresh size={16} />}
             type="primary"
@@ -476,16 +504,6 @@ const GithubRepositories = ({ loaderData }: Route.ComponentProps) => {
             Refresh
           </Button>
         </div>
-      </PageHeader>
-
-      {/* Search Input - always visible */}
-      <div className="flex items-center justify-between gap-4 mb-4">
-        <SearchInput
-          query={localSearch}
-          setQuery={handleSearchChange}
-          placeholder="Search repositories..."
-          className="w-64"
-        />
       </div>
 
       <TriggerProgress
@@ -496,21 +514,23 @@ const GithubRepositories = ({ loaderData }: Route.ComponentProps) => {
         }}
       />
 
-      <Suspense fallback={<RepositoriesTableSkeleton />}>
-        <Await resolve={repositoriesPromise}>
-          {resolvedData => (
-            <RepositoriesTable
-              data={resolvedData}
-              gitOrgLogin={gitOrgLogin}
-              page={page}
-              pageSize={pageSize}
-              search={search}
-              onDelete={deleteSingleRepository}
-              loading={isLoading}
-            />
-          )}
-        </Await>
-      </Suspense>
+      <div className="rounded-2xl overflow-hidden bg-white dark:bg-neutral-900 min-h-[calc(100vh-10rem)] p-5 sm:p-6">
+        <Suspense fallback={<RepositoriesTableSkeleton />}>
+          <Await resolve={repositoriesPromise}>
+            {resolvedData => (
+              <RepositoriesTable
+                data={resolvedData}
+                gitOrgLogin={gitOrgLogin}
+                page={page}
+                pageSize={pageSize}
+                search={search}
+                onDelete={deleteSingleRepository}
+                loading={isLoading}
+              />
+            )}
+          </Await>
+        </Suspense>
+      </div>
     </div>
   );
 };

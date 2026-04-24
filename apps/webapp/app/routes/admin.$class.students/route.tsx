@@ -11,7 +11,7 @@ import StudentsTable from './StudentsTable';
 import { ActionTypes } from '~/constants';
 import { waitForRunCompletion } from '~/utils/helpers';
 import { requireClassroomAdmin } from '~/utils/routeAuth.server';
-import { PageHeader, RequireRole, SearchInput } from '~/components';
+import { RequireRole, SearchInput } from '~/components';
 import type { Route } from './+types/route';
 
 export const loader = async ({ params, request }: Route.LoaderArgs) => {
@@ -68,12 +68,12 @@ const StudentsScreen = ({ loaderData }: Route.ComponentProps) => {
       });
 
   return (
-    <>
+    <div className="min-h-full relative">
       <Outlet />
-      <div className="flex justify-between items-center">
-        <PageHeader title="Students" routeName="students" />
+      <div className="flex items-center justify-between gap-3 mt-2 mb-4">
+        <h1 className="text-base font-semibold text-gray-600 dark:text-gray-400">Students</h1>
 
-        <div className="flex gap-4">
+        <div className="flex gap-3">
           <SearchInput
             query={query}
             setQuery={setQuery}
@@ -94,7 +94,7 @@ const StudentsScreen = ({ loaderData }: Route.ComponentProps) => {
       </div>
 
       <StudentsTable students={filteredStudents} classroom={classroom} query={query} />
-    </>
+    </div>
   );
 };
 

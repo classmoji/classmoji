@@ -20,9 +20,9 @@ const ClassroomCard = ({ classroom, role }: ClassroomCardProps) => {
       case 'STUDENT':
         return 'text-green-700 bg-green-50 border-green-200 hover:bg-green-100 dark:text-green-300 dark:bg-green-900/20 dark:border-green-800 dark:hover:bg-green-900/30';
       case 'PENDING INVITE':
-        return 'text-gray-600 bg-gray-50 border-gray-200 hover:bg-gray-100 dark:text-gray-400 dark:bg-gray-800 dark:border-gray-700 dark:hover:bg-gray-700';
+        return 'text-gray-600 bg-gray-50 border-gray-200 hover:bg-gray-100 dark:text-gray-400 dark:bg-neutral-800 dark:border-neutral-700 dark:hover:bg-neutral-700';
       default:
-        return 'text-gray-600 bg-gray-50 border-gray-200 hover:bg-gray-100 dark:text-gray-400 dark:bg-gray-800 dark:border-gray-700 dark:hover:bg-gray-700';
+        return 'text-gray-600 bg-gray-50 border-gray-200 hover:bg-gray-100 dark:text-gray-400 dark:bg-neutral-800 dark:border-neutral-700 dark:hover:bg-neutral-700';
     }
   };
 
@@ -41,7 +41,7 @@ const ClassroomCard = ({ classroom, role }: ClassroomCardProps) => {
         duration: 0.2,
       }}
     >
-      <div className="shadow-md hover:shadow-xl border border-gray-200 dark:border-gray-700 rounded-lg transition-shadow duration-200 group bg-white dark:bg-gray-800">
+      <div className="shadow-md hover:shadow-xl border border-gray-200 dark:border-neutral-700 rounded-lg transition-shadow duration-200 group bg-white dark:bg-neutral-800">
         <div className="h-[6px] bg-primary rounded-t-lg" />
         <div className="text-slate-800 dark:text-slate-200 flex justify-between p-4 h-[110px]">
           <div className="flex flex-col justify-start gap-2">

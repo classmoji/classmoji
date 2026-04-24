@@ -7,7 +7,6 @@ import AssignmentTable from './AssignmentsTable';
 import {
   SearchInput,
   ButtonNew,
-  PageHeader,
   RequireRole,
   TriggerProgress,
   UserThumbnailView,
@@ -107,14 +106,19 @@ const AdminAssignments = ({ loaderData }: Route.ComponentProps) => {
   };
 
   return (
-    <div className="relative">
+    <div className="min-h-full relative">
       <Outlet />
-      <div className="flex justify-between items-start">
-        <PageHeader title="Modules" routeName="modules" />
+      <div className="flex items-center justify-between gap-3 mt-2 mb-4">
+        <h1 className="text-base font-semibold text-gray-600 dark:text-gray-400">Modules</h1>
 
         <RequireRole roles={['OWNER']}>
-          <div className="flex gap-3">
-            <SearchInput query={query} setQuery={setQuery} placeholder="Search by title" />
+          <div className="flex items-center gap-3">
+            <SearchInput
+              query={query}
+              setQuery={setQuery}
+              placeholder="Search by title"
+              className=""
+            />
 
             <Button
               icon={<IconCopyX size={16} />}

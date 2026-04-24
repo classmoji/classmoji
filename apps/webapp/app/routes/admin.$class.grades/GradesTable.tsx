@@ -1,11 +1,10 @@
 import { useState, useMemo } from 'react';
-import { Table, Checkbox, ConfigProvider, Radio, FloatButton, Card } from 'antd';
-import { IconSettings, IconMessagePlus } from '@tabler/icons-react';
+import { Table, Checkbox, ConfigProvider, Segmented, Popover, Input } from 'antd';
+import { IconInfoCircle, IconMessagePlus, IconSearch } from '@tabler/icons-react';
 import { useParams, useNavigate } from 'react-router';
 import { mean, median } from 'simple-statistics';
-import './styles.css';
 
-import { PageHeader, UserThumbnailView, TableActionButtons, SearchInput } from '~/components';
+import { UserThumbnailView, TableActionButtons } from '~/components';
 import GradeSettings from './GradeSettings';
 import { createAssignmentColumns } from './columns/assignmentColumns';
 import { createStudentGradeColumns } from './columns/studentGradeColumns';
@@ -256,41 +255,77 @@ const GradesTable = (props: GradesTableProps) => {
   };
 
   return (
-    <div className="space-y-6 min-w-0">
-      <PageHeader title="Grades" routeName="grades">
+    <div className="min-h-full min-w-0">
+      <div className="flex items-center justify-between gap-3 mt-2 mb-4 flex-wrap">
         <div className="flex items-center gap-3">
+          <h1 className="text-base font-semibold text-gray-600 dark:text-gray-400">Grades</h1>
+          {searchQuery && (
+            <span className="text-xs text-gray-500 dark:text-gray-400 bg-stone-100 dark:bg-neutral-800 px-2.5 py-1 rounded-full">
+              {filteredStudents.length} of {students.length}
+            </span>
+          )}
+        </div>
+        <div className="flex items-center gap-3 flex-wrap">
           <Checkbox checked={showIssues} onChange={() => setShowIssues(!showIssues)}>
             Show Assignments
           </Checkbox>
           <Checkbox checked={showComments} onChange={() => setShowComments(!showComments)}>
             Show Comments
           </Checkbox>
-          <div className="h-[30px] w-[1px] bg-gray-300" />
-          <Radio.Group value={view} onChange={e => setView(e.target.value)} size="small">
-            <Radio.Button value="Emoji">🎨 Emoji</Radio.Button>
-            <Radio.Button value="Numeric">🔢 Numeric</Radio.Button>
-          </Radio.Group>
-        </div>
-      </PageHeader>
-
-      {/* Grades Table */}
-      <Card className="shadow-sm overflow-x-auto">
-        <div className="flex items-center justify-between gap-4 mb-4">
-          <div className="flex items-center gap-3">
-            {searchQuery && (
-              <span className="text-sm text-gray-500 bg-gray-100 px-3 py-1 rounded-full">
-                {filteredStudents.length} of {students.length}
-              </span>
-            )}
+          <div className="h-6 w-px bg-stone-200 dark:bg-neutral-700" />
+          <div className="flex items-center gap-1.5">
+            <ConfigProvider
+              theme={{
+                token: {
+                  borderRadius: 6,
+                },
+                components: {
+                  Segmented: {
+                    borderRadius: 6,
+                    borderRadiusSM: 4,
+                    itemSelectedBg: '#ffffff',
+                    itemSelectedColor: '#1f2937',
+                    trackPadding: 3,
+                  },
+                },
+              }}
+            >
+              <Segmented
+                value={view}
+                onChange={val => setView(val as string)}
+                options={['Emoji', 'Numeric']}
+              />
+            </ConfigProvider>
+            <Popover
+              trigger="click"
+              placement="bottomRight"
+              content={
+                <GradeSettings
+                  letterGradeMappings={letterGradeMappings}
+                  changeLetterGradeMapping={changeLetterGradeMapping}
+                />
+              }
+            >
+              <button
+                type="button"
+                aria-label="Letter grade scale"
+                className="flex items-center justify-center text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200 cursor-pointer"
+              >
+                <IconInfoCircle size={18} />
+              </button>
+            </Popover>
           </div>
-          <SearchInput
-            query={searchQuery}
-            setQuery={setSearchQuery}
+          <Input
             placeholder="Search by name, username, or email..."
-            className="w-80"
+            prefix={<IconSearch size={16} />}
+            value={searchQuery}
+            onChange={e => setSearchQuery(e.target.value)}
+            style={{ width: 320 }}
           />
         </div>
+      </div>
 
+      <div className="rounded-2xl overflow-hidden bg-white dark:bg-neutral-900 min-h-[calc(100vh-10rem)] p-5 sm:p-6">
         {searchQuery && filteredStudents.length === 0 ? (
           <div className="text-center py-12 text-gray-500">
             <div className="text-4xl mb-2">🔍</div>
@@ -347,20 +382,8 @@ const GradesTable = (props: GradesTableProps) => {
             </ConfigProvider>
           </div>
         )}
-      </Card>
+      </div>
 
-      <FloatButton.Group
-        trigger="hover"
-        style={{ right: 24, bottom: 94, width: 56, height: 56 }}
-        icon={<IconSettings size={28} className="relative -left-[3.75px]" />}
-        className="grades-float-button"
-        {...({ position: 'topLeft' } as Record<string, unknown>)}
-      >
-        <GradeSettings
-          letterGradeMappings={letterGradeMappings}
-          changeLetterGradeMapping={changeLetterGradeMapping}
-        />
-      </FloatButton.Group>
     </div>
   );
 };

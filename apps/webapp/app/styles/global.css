@@ -8,6 +8,10 @@
   font-family: 'Noto Sans', sans-serif;
 }
 
+html {
+  scrollbar-gutter: stable;
+}
+
 body {
   font-size: 13.5px;
 
@@ -326,66 +330,169 @@ label {
 }
 
 /* ============================================
-   Toast Notifications - Apple Theme Colors
+   Toast Notifications — Google snackbar style
    ============================================ */
 
-/* Success Toast - Apple Green 🍏 */
-.Toastify__toast--success {
-  background-color: #1f883d !important; /* PRIMARY_500 */
+.Toastify__toast-container {
+  width: auto !important;
+  min-width: 288px;
+  max-width: 560px;
+  padding: 0 !important;
 }
 
-.Toastify__toast--success .Toastify__progress-bar {
-  background-color: #e6f4ea !important; /* PRIMARY_50 */
+.Toastify__toast-container--bottom-center {
+  bottom: 32px !important;
+  left: 50% !important;
+  transform: translateX(-50%) !important;
 }
 
-/* Error Toast - Apple Red 🍎 */
+/* Fade transition — graceful opacity in/out */
+@keyframes toast-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes toast-fade-out {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+
+.toast-fade-in {
+  animation: toast-fade-in 220ms ease-out both;
+}
+
+.toast-fade-out {
+  animation: toast-fade-out 180ms ease-in both;
+}
+
+.Toastify__toast {
+  background-color: #323232 !important;
+  color: #ffffff !important;
+  border: none !important;
+  border-radius: 8px !important;
+  box-shadow:
+    0 3px 5px -1px rgba(0, 0, 0, 0.2),
+    0 6px 10px 0 rgba(0, 0, 0, 0.14),
+    0 1px 18px 0 rgba(0, 0, 0, 0.12) !important;
+  padding: 0 8px 0 16px !important;
+  min-height: 48px !important;
+  font-family: 'Noto Sans', sans-serif !important;
+  font-size: 14px !important;
+  line-height: 20px !important;
+  font-weight: 400 !important;
+  align-items: center !important;
+}
+
+.Toastify__toast-body {
+  padding: 12px 0 !important;
+  margin: 0 !important;
+  align-items: center !important;
+  gap: 0 !important;
+  color: #ffffff !important;
+  font-weight: 400 !important;
+  flex: 1 1 auto;
+}
+
+.Toastify__toast-body > div:last-child {
+  flex: 1 1 auto;
+  color: rgba(255, 255, 255, 0.95);
+}
+
+/* Hide built-in type icon — Gmail snackbars have no icon */
+.Toastify__toast-icon {
+  display: none !important;
+}
+
+/* Loading spinner — white on dark */
+.Toastify__spinner {
+  border-color: rgba(255, 255, 255, 0.2) !important;
+  border-right-color: #ffffff !important;
+  width: 16px !important;
+  height: 16px !important;
+  margin-inline-end: 12px !important;
+  display: inline-block !important;
+}
+
+/* Close button: subtle white X, sits inside the pill */
+.Toastify__close-button {
+  color: rgba(255, 255, 255, 0.7) !important;
+  opacity: 1 !important;
+  align-self: center !important;
+  padding: 6px !important;
+  margin-left: 8px;
+  border-radius: 4px;
+  transition:
+    color 120ms ease,
+    background-color 120ms ease;
+}
+
+.Toastify__close-button:hover {
+  color: #ffffff !important;
+  background-color: rgba(255, 255, 255, 0.08);
+}
+
+.Toastify__close-button > svg {
+  width: 16px;
+  height: 16px;
+}
+
+/* No colored accent, no progress bar chrome */
+.Toastify__progress-bar {
+  display: none !important;
+}
+
+/* Subtle emphasis on error toasts (muted, not screaming red) */
 .Toastify__toast--error {
-  background-color: #ef4444 !important; /* SECONDARY_500 */
+  background-color: #3a2424 !important;
+  box-shadow:
+    0 3px 5px -1px rgba(0, 0, 0, 0.25),
+    0 6px 10px 0 rgba(0, 0, 0, 0.18),
+    0 0 0 1px rgba(239, 68, 68, 0.35) !important;
 }
 
-.Toastify__toast--error .Toastify__progress-bar {
-  background-color: #fee2e2 !important; /* SECONDARY_100 */
+/* ----- Dark mode: invert to white card with dark text ----- */
+.dark .Toastify__toast {
+  background-color: #ffffff !important;
+  color: #1f1f1f !important;
+  box-shadow:
+    0 3px 5px -1px rgba(0, 0, 0, 0.4),
+    0 6px 10px 0 rgba(0, 0, 0, 0.3),
+    0 1px 18px 0 rgba(0, 0, 0, 0.2) !important;
 }
 
-/* Info Toast - keep blue but ensure visibility */
-.Toastify__toast--info {
-  background-color: #3b82f6 !important; /* blue-500 */
+.dark .Toastify__toast-body,
+.dark .Toastify__toast-body > div:last-child {
+  color: #1f1f1f !important;
 }
 
-/* Warning Toast - orange */
-.Toastify__toast--warning {
-  background-color: #f59e0b !important; /* amber-500 */
+.dark .Toastify__close-button {
+  color: rgba(31, 31, 31, 0.6) !important;
 }
 
-/* Loading/Default Toast - blue (same as info) */
-.Toastify__toast--default {
-  background-color: #3b82f6 !important; /* blue-500 */
+.dark .Toastify__close-button:hover {
+  color: #1f1f1f !important;
+  background-color: rgba(0, 0, 0, 0.06);
 }
 
-/* Ensure toast text is always readable */
-.Toastify__toast--success,
-.Toastify__toast--error,
-.Toastify__toast--info,
-.Toastify__toast--warning,
-.Toastify__toast--default {
-  color: #ffffff !important;
+.dark .Toastify__spinner {
+  border-color: rgba(31, 31, 31, 0.15) !important;
+  border-right-color: #1f1f1f !important;
 }
 
-.Toastify__toast--success .Toastify__close-button,
-.Toastify__toast--error .Toastify__close-button,
-.Toastify__toast--info .Toastify__close-button,
-.Toastify__toast--warning .Toastify__close-button,
-.Toastify__toast--default .Toastify__close-button {
-  color: #ffffff !important;
-  opacity: 0.8;
-}
-
-.Toastify__toast--success .Toastify__close-button:hover,
-.Toastify__toast--error .Toastify__close-button:hover,
-.Toastify__toast--info .Toastify__close-button:hover,
-.Toastify__toast--warning .Toastify__close-button:hover,
-.Toastify__toast--default .Toastify__close-button:hover {
-  opacity: 1;
+.dark .Toastify__toast--error {
+  background-color: #ffffff !important;
+  box-shadow:
+    0 3px 5px -1px rgba(0, 0, 0, 0.4),
+    0 6px 10px 0 rgba(0, 0, 0, 0.3),
+    0 0 0 1px rgba(239, 68, 68, 0.4) !important;
 }
 
 /* Fix for Ant Design tabs layout */

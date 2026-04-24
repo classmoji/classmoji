@@ -78,15 +78,13 @@ export const Logo = ({
   className = '',
 }: LogoProps): React.JSX.Element => {
   const isCustomSize = typeof size === 'number';
-  const showIcon = variant === 'full' || variant === 'icon';
-  const showText = variant === 'full' || variant === 'text';
+  const iconOnly = variant === 'icon';
 
   const textSizeClass = isCustomSize
     ? ''
     : SIZE_CLASSES[size as SizeKey]?.text || SIZE_CLASSES.md.text;
   const customTextSize = isCustomSize ? { fontSize: `${Math.round(size * 0.7)}px` } : {};
 
-  const gapClass = showIcon && showText ? 'gap-1.5' : '';
   const themeClass =
     theme === 'current'
       ? 'text-current'
@@ -96,12 +94,13 @@ export const Logo = ({
 
   return (
     <div
-      className={`inline-flex items-center ${gapClass} ${className}`}
+      className={`inline-flex items-center ${className}`}
       role="img"
       aria-label="Classmoji"
     >
-      {showIcon && <LogoIcon size={size} />}
-      {showText && (
+      {iconOnly ? (
+        <LogoIcon size={size} />
+      ) : (
         <span
           style={{
             ...customTextSize,
@@ -110,7 +109,15 @@ export const Logo = ({
           }}
           className={`leading-none lowercase select-none ${textSizeClass} ${themeClass}`}
         >
-          classmoji
+          classm
+          <span
+            aria-hidden="true"
+            className="inline-block align-[-0.12em] mx-[0.02em]"
+            style={{ fontSize: '0.95em' }}
+          >
+            🍎
+          </span>
+          ji
         </span>
       )}
     </div>

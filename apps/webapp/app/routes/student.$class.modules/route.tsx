@@ -2,7 +2,6 @@ import getPrisma from '@classmoji/database';
 import type { Route } from './+types/route';
 import { ClassmojiService } from '@classmoji/services';
 import { assertClassroomAccess } from '~/utils/helpers';
-import { PageHeader } from '~/components';
 import ModuleAccordion from './ModuleAccordion';
 
 type UserTeamResult = NonNullable<
@@ -41,8 +40,12 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
         include: { slide: true },
         orderBy: { order: 'asc' },
       },
+      quizzes: {
+        where: { status: 'PUBLISHED' },
+        select: { id: true, name: true },
+      },
     },
-    orderBy: { created_at: 'desc' },
+    orderBy: { created_at: 'asc' },
   });
 
   // For self-formed team modules, check if user has a team
@@ -92,16 +95,19 @@ const StudentModules = ({ loaderData }: Route.ComponentProps) => {
   } = loaderData;
 
   return (
-    <div>
-      <PageHeader title="Modules" routeName="modules" />
+    <div className="min-h-full">
+      <h1 className="mt-2 mb-4 text-base font-semibold text-gray-600 dark:text-gray-400">
+        Modules
+      </h1>
 
       {modules.length === 0 ? (
-        <div className="text-center py-12 text-gray-500">
-          <div className="text-6xl mb-4">📚</div>
-          <h3 className="text-xl font-semibold text-gray-700 dark:text-gray-300 mb-2">
-            No modules available
+        <div className="rounded-2xl bg-white dark:bg-neutral-900 ring-1 ring-stone-200 dark:ring-neutral-800 p-8 text-center">
+          <h3 className="text-base font-semibold text-gray-800 dark:text-gray-200">
+            No published modules yet
           </h3>
-          <p className="dark:text-gray-400">Modules will appear here once published</p>
+          <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
+            Modules will appear here once your instructor publishes them.
+          </p>
         </div>
       ) : (
         <ModuleAccordion

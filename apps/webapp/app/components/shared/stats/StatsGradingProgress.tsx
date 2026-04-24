@@ -1,7 +1,4 @@
-import { Progress, Table, Card } from 'antd';
 import dayjs from 'dayjs';
-import { CardHeader } from '~/components';
-import theme from '~/config/theme';
 
 interface GradingProgressItem {
   id?: string;
@@ -13,110 +10,99 @@ interface GradingProgressItem {
 
 interface StatsGradingProgressProps {
   gradingProgress: GradingProgressItem[];
+  bare?: boolean;
 }
 
-const StatsGradingProgress = ({ gradingProgress }: StatsGradingProgressProps) => {
-  const columns = [
-    {
-      title: 'Assignment',
-      dataIndex: 'title',
-      width: '40%',
-      render: (title: string) => (
-        <div className="flex items-center gap-2">
-          <div className="w-1 h-4 bg-primary rounded-full"></div>
-          <span className="font-medium text-gray-800 dark:text-gray-200">{title}</span>
-        </div>
-      ),
-    },
-    {
-      title: 'Progress',
-      dataIndex: 'progress',
-      render: (progress: number) => {
-        const getProgressColor = (value: number) => {
-          if (value >= 90) return theme.PRIMARY; // primary green
-          if (value >= 70) return '#fbbf24'; // yellow
-          if (value >= 50) return '#f97316'; // orange
-          return '#ef4444'; // red
-        };
+const statusForPct = (pct: number) => {
+  if (pct >= 100) {
+    return {
+      label: 'Done',
+      className:
+        'bg-[#619462]/15 text-[#3f6a40] dark:bg-[#619462]/20 dark:text-[#9BC39C]',
+    };
+  }
+  if (pct > 0) {
+    return {
+      label: 'In progress',
+      className:
+        'bg-[#D4A289]/15 text-[#8a5b3a] dark:bg-[#D4A289]/20 dark:text-[#E8C4AC]',
+    };
+  }
+  return {
+    label: 'Not started',
+    className: 'bg-stone-100 text-gray-600 dark:bg-neutral-800 dark:text-gray-300',
+  };
+};
 
-        return (
-          <div className="flex items-center gap-3">
-            <Progress
-              percent={Math.round(progress)}
-              showInfo={false}
-              strokeColor={getProgressColor(progress)}
-              trailColor="#f1f5f9"
-              size="small"
-              className="flex-1"
-            />
-            <span
-              className={`text-sm font-semibold min-w-12 ${
-                progress >= 90
-                  ? 'text-green-600'
-                  : progress >= 70
-                    ? 'text-yellow-600'
-                    : progress >= 50
-                      ? 'text-orange-600'
-                      : 'text-red-600'
-              }`}
-            >
-              {progress.toFixed(0)}%
-            </span>
+const StatsGradingProgress = ({ gradingProgress, bare = false }: StatsGradingProgressProps) => {
+  const rows = gradingProgress
+    .filter(a => dayjs().isAfter(dayjs(a.student_deadline)))
+    .sort((a, b) => b.progress - a.progress);
+
+  const body = (
+    <>
+      {!bare && (
+        <h3 className="text-base font-semibold text-gray-900 dark:text-gray-100 mb-4">
+          Grading progress
+        </h3>
+      )}
+      {rows.length === 0 ? (
+        <p className="text-sm text-gray-500 dark:text-gray-400">
+          No past-deadline assignments yet.
+        </p>
+      ) : (
+        <>
+          <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,1.5fr)_auto] gap-4 text-[11px] font-semibold tracking-[0.08em] uppercase text-gray-400 dark:text-gray-500 pb-2 border-b border-stone-200/70 dark:border-neutral-800">
+            <span>Assignment</span>
+            <span>Progress</span>
+            <span className="text-right">Status</span>
           </div>
-        );
-      },
-    },
-    {
-      title: 'Status',
-      dataIndex: 'progress',
-      width: '20%',
-      render: (progress: number) => (
-        <span
-          className={`px-2 py-1 text-xs font-medium rounded-full ${
-            progress >= 90
-              ? 'bg-green-100 text-green-700'
-              : progress >= 70
-                ? 'bg-yellow-100 text-yellow-700'
-                : progress >= 50
-                  ? 'bg-orange-100 text-orange-700'
-                  : 'bg-red-100 text-red-700'
-          }`}
-        >
-          {progress >= 90
-            ? 'Complete'
-            : progress >= 70
-              ? 'Nearly Done'
-              : progress >= 50
-                ? 'In Progress'
-                : 'Behind'}
-        </span>
-      ),
-    },
-  ];
+          <ul className="divide-y divide-stone-200/70 dark:divide-gray-800">
+            {rows.slice(0, 5).map(a => {
+              const pct = Math.round(a.progress);
+              const status = statusForPct(pct);
+              return (
+                <li
+                  key={a.id ?? a.title}
+                  className="grid grid-cols-[minmax(0,1fr)_minmax(0,1.5fr)_auto] gap-4 items-center py-2"
+                >
+                  <span className="text-sm text-gray-800 dark:text-gray-200 truncate">
+                    {a.title}
+                  </span>
+                  <div className="flex items-center gap-3">
+                    <div className="flex-1 h-1.5 rounded-full bg-stone-100 dark:bg-neutral-800 overflow-hidden">
+                      <div
+                        className="h-full rounded-full"
+                        style={{
+                          width: `${pct}%`,
+                          backgroundColor: pct >= 100 ? '#619462' : '#758CA0',
+                        }}
+                      />
+                    </div>
+                    <span className="text-xs font-medium text-gray-600 dark:text-gray-300 tabular-nums min-w-[36px] text-right">
+                      {pct}%
+                    </span>
+                  </div>
+                  <span
+                    className={`justify-self-end inline-flex items-center text-[10px] font-semibold px-2 py-0.5 rounded-full ${status.className}`}
+                  >
+                    {status.label}
+                  </span>
+                </li>
+              );
+            })}
+          </ul>
+        </>
+      )}
+    </>
+  );
 
-  const data = gradingProgress.filter((assignment: GradingProgressItem) => {
-    return dayjs().isAfter(dayjs(assignment.student_deadline));
-  });
+  if (bare) return body;
 
   return (
-    <Card className="h-full shadow-xs">
-      <CardHeader>Class Grading Progress</CardHeader>
-
-      <Table
-        dataSource={data.sort(
-          (a: GradingProgressItem, b: GradingProgressItem) => b.progress - a.progress
-        )} // Sort by progress desc
-        columns={columns}
-        rowKey={record => record.id || record.title}
-        size="small"
-        pagination={{
-          pageSize: 5,
-          showSizeChanger: false,
-          showQuickJumper: false,
-          size: 'small',
-        }}
-      />
-    </Card>
+    <section className="rounded-2xl bg-white dark:bg-neutral-900 ring-1 ring-stone-200 dark:ring-neutral-800 p-5 sm:p-6 h-full flex flex-col">
+      {body}
+    </section>
   );
 };
 

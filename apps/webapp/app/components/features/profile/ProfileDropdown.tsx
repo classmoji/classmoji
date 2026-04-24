@@ -18,7 +18,7 @@ const ProfileDropdown = ({ children, placement = 'bottomRight' }: ProfileDropdow
   const MenuItem = ({ label, path }: { label: string; path: string }) => (
     <Link
       to={path}
-      className="block w-full text-sm text-gray-700 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-md py-1.5 px-2.5 no-underline transition-colors"
+      className="block w-full text-sm text-gray-700 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100 hover:bg-gray-100 dark:hover:bg-neutral-700 rounded-md py-1.5 px-2.5 no-underline transition-colors"
     >
       {label}
     </Link>
@@ -26,7 +26,7 @@ const ProfileDropdown = ({ children, placement = 'bottomRight' }: ProfileDropdow
 
   const dropdownContent = (
     <div className="w-[220px]">
-      <div className="flex items-center gap-2.5 px-3 py-2.5 border-b border-gray-200 dark:border-gray-700">
+      <div className="flex items-center gap-2.5 px-3 py-2.5 border-b border-gray-200 dark:border-neutral-700">
         <Avatar
           src={user?.avatar_url}
           className="border border-gray-300 dark:border-gray-600 flex-shrink-0"
@@ -45,7 +45,7 @@ const ProfileDropdown = ({ children, placement = 'bottomRight' }: ProfileDropdow
         <MenuItem label="Usage & Billing" path="/settings/billing" />
       </div>
 
-      <div className="border-t border-gray-200 dark:border-gray-700 p-1.5">
+      <div className="border-t border-gray-200 dark:border-neutral-700 p-1.5">
         <button
           className="block w-full text-left text-sm text-red-600 dark:text-red-400 hover:text-red-700 dark:hover:text-red-300 hover:bg-red-100 dark:hover:bg-red-900/30 rounded-md py-1.5 px-2.5 transition-colors cursor-pointer"
           onClick={async () => {

@@ -1,5 +1,11 @@
 import { Card, Button, Table, Spin } from 'antd';
-import { IconCrown, IconArrowRight, IconExternalLink } from '@tabler/icons-react';
+import {
+  IconCrown,
+  IconArrowRight,
+  IconExternalLink,
+  IconCheck,
+  IconX,
+} from '@tabler/icons-react';
 import { useFetcher, useLocation } from 'react-router';
 import { useEffect, useState, useRef } from 'react';
 import { namedAction } from 'remix-utils/named-action';
@@ -152,7 +158,7 @@ const SettingsSubscription = ({ loaderData }: Route.ComponentProps) => {
               <div className="flex items-center gap-3 mb-4">
                 <div
                   className={`w-10 h-10 rounded-lg flex items-center justify-center ${
-                    isProTier ? 'bg-secondary' : 'bg-gray-100 dark:bg-gray-700'
+                    isProTier ? 'bg-secondary' : 'bg-gray-100 dark:bg-neutral-700'
                   }`}
                 >
                   <IconCrown
@@ -201,7 +207,7 @@ const SettingsSubscription = ({ loaderData }: Route.ComponentProps) => {
         </div>
 
         {/* Current Usage Table */}
-        <Card className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700">
+        <Card className="bg-white dark:bg-neutral-800 border border-gray-200 dark:border-neutral-700">
           <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-6">
             Current usage
           </h3>
@@ -233,26 +239,34 @@ const SettingsSubscription = ({ loaderData }: Route.ComponentProps) => {
                 dataIndex: 'allowed',
                 key: 'allowed',
                 width: '33%',
-                render: (text, record) => (
-                  <div className="flex items-center">
-                    {!record.available ? (
-                      <span>❌</span>
-                    ) : (
-                      <span className="text-gray-900 font-medium">{text}</span>
-                    )}
-                  </div>
-                ),
+                render: value => {
+                  if (value === true) {
+                    return <IconCheck size={18} className="text-green-600 dark:text-green-500" />;
+                  }
+                  if (value === false) {
+                    return <IconX size={18} className="text-red-600 dark:text-red-500" />;
+                  }
+                  return (
+                    <span className="text-gray-900 dark:text-gray-100 font-medium">{value}</span>
+                  );
+                },
               },
               {
                 title: 'USED',
                 dataIndex: 'used',
                 key: 'used',
                 width: '33%',
-                render: (text, record) => (
-                  <span className="text-gray-900 font-medium">
-                    {!record.available ? '-' : text}
-                  </span>
-                ),
+                render: value => {
+                  if (value === true) {
+                    return <IconCheck size={18} className="text-green-600 dark:text-green-500" />;
+                  }
+                  if (value === null || value === false) {
+                    return <span className="text-gray-500 dark:text-gray-400">-</span>;
+                  }
+                  return (
+                    <span className="text-gray-900 dark:text-gray-100 font-medium">{value}</span>
+                  );
+                },
               },
             ]}
           />

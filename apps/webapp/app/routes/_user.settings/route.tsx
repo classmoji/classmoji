@@ -1,54 +1,58 @@
-import { Tabs } from 'antd';
 import { Outlet, useNavigate, useLocation } from 'react-router';
-import { IconSettings, IconUser, IconCreditCard } from '@tabler/icons-react';
-import { useUser } from '~/hooks';
+
+interface TabDef {
+  key: string;
+  label: string;
+}
+
+const ALL_TABS: TabDef[] = [
+  { key: 'general', label: 'General' },
+  { key: 'billing', label: 'Billing' },
+];
 
 const UserSettings = () => {
   const navigate = useNavigate();
-  const { user: _user } = useUser();
   const location = useLocation();
 
   const currentTab = location.pathname.split('/').pop() || 'general';
 
-  const items = [
-    {
-      key: 'general',
-      label: (
-        <span className="inline-flex items-center gap-2">
-          <IconUser size={16} />
-          <span>General</span>
-        </span>
-      ),
-      children: <Outlet />,
-    },
-    {
-      key: 'billing',
-      label: (
-        <span className="inline-flex items-center gap-2">
-          <IconCreditCard size={16} />
-          <span>Billing</span>
-        </span>
-      ),
-      children: <Outlet />,
-    },
-  ];
-
   return (
-    <>
-      <div className="flex items-center gap-2 mt-2 mb-4">
-        <IconSettings className="text-black dark:text-gray-100" />
-        <h1 className="text-2xl font-bold text-black dark:text-gray-100">Account Settings</h1>
-      </div>
+    <div className="min-h-full flex flex-col">
+      <h1 className="mt-2 mb-4 text-base font-semibold text-gray-600 dark:text-gray-400">
+        Account Settings
+      </h1>
 
-      <Tabs
-        items={items}
-        activeKey={currentTab}
-        onChange={tabKey => {
-          const path = `/settings/${tabKey}`;
-          navigate(path);
-        }}
-      />
-    </>
+      <div className="flex-1 flex flex-col">
+        <div className="flex -mb-px relative overflow-x-auto">
+          {ALL_TABS.map((tab, idx) => {
+            const isActive = tab.key === currentTab;
+            const baseZ = ALL_TABS.length - idx;
+            const zStyle = { zIndex: isActive ? 40 : baseZ };
+            return (
+              <button
+                key={tab.key}
+                type="button"
+                onClick={() => navigate(`/settings/${tab.key}`)}
+                style={zStyle}
+                className={`relative px-4 py-2 text-sm font-medium rounded-t-2xl border whitespace-nowrap transition-colors ${
+                  idx > 0 ? '-ml-2' : ''
+                } ${
+                  isActive
+                    ? 'bg-white dark:bg-neutral-900 text-gray-900 dark:text-gray-100 border-stone-200 dark:border-neutral-800 border-b-transparent'
+                    : 'bg-stone-100 dark:bg-neutral-800 text-gray-500 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200 border-stone-200 dark:border-neutral-700'
+                }`}
+              >
+                {tab.label}
+              </button>
+            );
+          })}
+        </div>
+
+        <section className="flex-1 rounded-2xl rounded-tl-none bg-white dark:bg-neutral-900 border border-stone-200 dark:border-neutral-800 min-h-[calc(100vh-10rem)] p-5 sm:p-6 overflow-auto">
+          <Outlet />
+        </section>
+      </div>
+    </div>
   );
 };
 

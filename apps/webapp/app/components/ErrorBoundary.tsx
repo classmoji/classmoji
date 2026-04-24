@@ -22,7 +22,7 @@ function ErrorFallback({ error, resetErrorBoundary }: FallbackProps) {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-gray-900">
+    <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-neutral-900">
       <Result
         icon={<IconAlertTriangle size={72} className="text-red-500" />}
         status="error"
@@ -47,7 +47,7 @@ function ErrorFallback({ error, resetErrorBoundary }: FallbackProps) {
               <summary className="text-sm font-medium text-gray-700 dark:text-gray-300">
                 Error Details (Development Only)
               </summary>
-              <pre className="mt-2 p-4 bg-gray-100 dark:bg-gray-800 rounded-md text-xs overflow-auto max-h-96">
+              <pre className="mt-2 p-4 bg-gray-100 dark:bg-neutral-800 rounded-md text-xs overflow-auto max-h-96">
                 <code className="text-red-600 dark:text-red-400">
                   {String(getErrorStack(error) ?? '')}
                 </code>

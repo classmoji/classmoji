@@ -19,6 +19,7 @@ import {
   IconCalendar,
   IconLink,
   IconChecklist,
+  IconClipboardList,
 } from '@tabler/icons-react';
 
 /**
@@ -27,7 +28,7 @@ import {
 export const routeCategories = {
   content: {
     label: 'Content',
-    items: ['modules', 'slides', 'pages', 'quizzes'],
+    items: ['modules', 'assignments', 'slides', 'pages', 'quizzes'],
   },
   assessment: {
     label: 'Assessment',
@@ -72,6 +73,13 @@ export const routes = {
     label: 'Modules',
     icon: IconFileText,
     roles: ['OWNER', 'ASSISTANT', 'STUDENT'],
+    category: 'content',
+  },
+  assignments: {
+    link: '/assignments',
+    label: 'Assignments',
+    icon: IconClipboardList,
+    roles: ['STUDENT'],
     category: 'content',
   },
   slides: {

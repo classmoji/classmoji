@@ -1,7 +1,6 @@
 import type { Route } from './+types/route';
 import { ClassmojiService } from '@classmoji/services';
 import { requireClassroomTeachingTeam } from '~/utils/routeAuth.server';
-import { PageHeader } from '~/components';
 import RepositoryAssignmentsTable from './RepositoryAssignmentsTable';
 
 export const loader = async ({ request, params }: Route.LoaderArgs) => {
@@ -25,8 +24,7 @@ const AssistantGrading = ({ loaderData }: Route.ComponentProps) => {
   const { myRepositoryAssignments, modules, allRepositoryAssignments, emojiMappings } = loaderData;
 
   return (
-    <div>
-      <PageHeader title="Grading" routeName="grading" />
+    <div className="min-h-full">
       <RepositoryAssignmentsTable
         allRepositoryAssignments={allRepositoryAssignments}
         repositoryAssignments={myRepositoryAssignments}

@@ -17,18 +17,41 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
     attemptedAction: 'view',
   });
 
-  const gitOrgLogin = classroom.git_organization?.login;
+  const gitOrgLogin = classroom.git_organization?.login ?? null;
   if (!gitOrgLogin) {
-    throw new Response('Git organization not configured', { status: 400 });
+    return {
+      githubOrganization: null,
+      gitOrgLogin: null,
+      error: 'This classroom is not connected to a GitHub organization.',
+    };
   }
 
   if (!classroom.git_organization?.github_installation_id) {
-    throw new Response('GitHub App not installed for this organization', { status: 400 });
+    return {
+      githubOrganization: null,
+      gitOrgLogin,
+      error: `The Classmoji GitHub App isn't installed on "${gitOrgLogin}". Install it to manage repository settings.`,
+    };
   }
 
-  const gitProvider = getGitProvider(classroom.git_organization);
-  const githubOrganization = await gitProvider.getOrganization(gitOrgLogin);
-  return { githubOrganization, gitOrgLogin };
+  try {
+    const gitProvider = getGitProvider(classroom.git_organization);
+    const githubOrganization = await gitProvider.getOrganization(gitOrgLogin);
+    return { githubOrganization, gitOrgLogin, error: null };
+  } catch (err: unknown) {
+    const status =
+      err && typeof err === 'object' && 'status' in err ? Number((err as { status: unknown }).status) : null;
+    const msg = err instanceof Error ? err.message : 'Unknown error';
+    console.error('Failed to load GitHub org for repo settings:', msg);
+    return {
+      githubOrganization: null,
+      gitOrgLogin,
+      error:
+        status === 404
+          ? `GitHub couldn't find the "${gitOrgLogin}" organization or the Classmoji App installation. The App may have been uninstalled or the org renamed.`
+          : `Couldn't reach GitHub to load repository settings (${msg}).`,
+    };
+  }
 };
 
 const Section = ({
@@ -50,8 +73,16 @@ const Section = ({
 );
 
 const SettingsRepos = ({ loaderData }: Route.ComponentProps) => {
-  const { githubOrganization } = loaderData;
+  const { githubOrganization, error } = loaderData;
   const { fetcher, notify } = useNotifiedFetcher();
+
+  if (error || !githubOrganization) {
+    return (
+      <div className="pt-4">
+        <Alert message={error ?? 'Repository settings unavailable.'} type="warning" showIcon />
+      </div>
+    );
+  }
 
   const updateOrganization = async (updates: Record<string, unknown>) => {
     notify('UPDATE_MEMBER_PERMISSIONS', 'Updating permissions...');

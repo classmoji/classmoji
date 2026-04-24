@@ -1,4 +1,4 @@
-import { Drawer } from 'antd';
+import { Modal } from 'antd';
 import { namedAction } from 'remix-utils/named-action';
 
 import { getAuthSession } from '@classmoji/auth/server';
@@ -75,24 +75,66 @@ const ModuleForm = ({ loaderData }: Route.ComponentProps) => {
   const { opened, close } = useRouteDrawer({});
 
   return (
-    <Drawer
+    <Modal
       open={opened}
-      onClose={close}
-      title={isNew ? `Let's create your module.` : 'Edit module'}
-      width="100%"
+      onCancel={close}
+      title={null}
+      footer={null}
+      width={760}
+      centered
+      closable={false}
+      maskClosable
+      styles={{
+        content: { padding: 0, borderRadius: 16, overflow: 'hidden' },
+        body: { padding: 0 },
+        header: { display: 'none' },
+        footer: { display: 'none' },
+      }}
     >
-      <FormModule
-        token={token!}
-        module={module as Parameters<typeof FormModule>[0]['module']}
-        isNew={isNew}
-        close={close}
-        tags={tags}
-        classroom={classroom as Parameters<typeof FormModule>[0]['classroom']}
-        pages={pages}
-        slides={slides}
-        hasReposWithProjects={hasReposWithProjects}
-      />
-    </Drawer>
+      {/* Gmail-style header */}
+      <div className="flex items-center justify-between gap-3 px-5 py-3 bg-stone-50 dark:bg-neutral-800/60 border-b border-stone-200 dark:border-neutral-800">
+        <div className="flex flex-col">
+          <span className="text-sm font-semibold text-gray-900 dark:text-gray-100">
+            {isNew ? 'New module' : 'Edit module'}
+          </span>
+          <span className="text-[11px] font-normal text-gray-500 dark:text-gray-400">
+            {isNew
+              ? 'Set up the module, its assignments, and linked resources.'
+              : 'Update module details, assignments, and linked resources.'}
+          </span>
+        </div>
+        <button
+          type="button"
+          onClick={close}
+          aria-label="Close"
+          className="p-1 rounded hover:bg-stone-200 dark:hover:bg-neutral-700 text-gray-500 dark:text-gray-400 transition-colors"
+        >
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
+            <path
+              d="M4 4l8 8M12 4l-8 8"
+              stroke="currentColor"
+              strokeWidth="1.5"
+              strokeLinecap="round"
+            />
+          </svg>
+        </button>
+      </div>
+
+      {/* Body (form handles its own Cancel / Save footer) */}
+      <div className="max-h-[75vh] overflow-y-auto px-6 py-5">
+        <FormModule
+          token={token!}
+          module={module as Parameters<typeof FormModule>[0]['module']}
+          isNew={isNew}
+          close={close}
+          tags={tags}
+          classroom={classroom as Parameters<typeof FormModule>[0]['classroom']}
+          pages={pages}
+          slides={slides}
+          hasReposWithProjects={hasReposWithProjects}
+        />
+      </div>
+    </Modal>
   );
 };
 

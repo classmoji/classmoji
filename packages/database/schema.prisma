@@ -312,6 +312,7 @@ model ClassroomSettings {
   code_aware_model             String?
   content_repo_name            String?
   default_student_page         String   @default("dashboard")
+  theme                        String   @default("stone")
   created_at                   DateTime @default(now())
   updated_at                   DateTime @default(now()) @updatedAt
 

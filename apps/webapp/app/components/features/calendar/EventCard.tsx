@@ -110,7 +110,7 @@ const EventCard = ({ event, onClick, showCreator = false, compact = false }: Eve
               )}
 
               {event.is_recurring && (
-                <span className="text-xs px-2 py-0.5 rounded-full bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400">
+                <span className="text-xs px-2 py-0.5 rounded-full bg-gray-100 dark:bg-neutral-700 text-gray-600 dark:text-gray-400">
                   Recurring
                 </span>
               )}
@@ -130,7 +130,7 @@ const EventCard = ({ event, onClick, showCreator = false, compact = false }: Eve
 
             {/* Creator */}
             {showCreator && event.creator && (
-              <div className="text-xs text-gray-500 dark:text-gray-500 pt-1 border-t border-gray-100 dark:border-gray-700">
+              <div className="text-xs text-gray-500 dark:text-gray-500 pt-1 border-t border-gray-100 dark:border-neutral-700">
                 Created by {event.creator.name || event.creator.login}
               </div>
             )}

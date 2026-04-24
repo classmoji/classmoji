@@ -43,7 +43,7 @@ const Index = ({ loaderData }: Route.ComponentProps) => {
   // In development, show quick login buttons for each role
   if (isDev) {
     return (
-      <div className="flex flex-col items-center justify-center h-screen bg-lightGray dark:bg-gray-900 gap-4">
+      <div className="flex flex-col items-center justify-center h-screen bg-lightGray dark:bg-neutral-900 gap-4">
         {setupBanner}
         <div className="text-gray-500 dark:text-gray-400 text-sm mb-2">Development Login</div>
 

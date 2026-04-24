@@ -63,7 +63,7 @@ const TableOfContents = ({
             {isHovered && (
               <div
                 className={`absolute ${position === 'right' ? 'right-full mr-3' : 'left-full ml-3'}
-                  whitespace-nowrap px-2 py-1 text-xs bg-gray-900 dark:bg-gray-700 text-white rounded
+                  whitespace-nowrap px-2 py-1 text-xs bg-gray-900 dark:bg-neutral-700 text-white rounded
                   opacity-0 group-hover:opacity-100 transition-opacity duration-150 pointer-events-none`}
               >
                 {heading.text || `Heading ${heading.level}`}
