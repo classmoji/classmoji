@@ -1,4 +1,5 @@
-import { Switch, Table } from 'antd';
+import { Switch, Table, Tooltip } from 'antd';
+import { Link, useParams } from 'react-router';
 import { useEffect, useMemo, useState } from 'react';
 import {
   IconCircleCheck,
@@ -8,6 +9,7 @@ import {
   IconClipboardList,
   IconClockExclamation,
   IconListDetails,
+  IconChartBar,
 } from '@tabler/icons-react';
 import { openRepositoryAssignmentInGithub } from '~/utils/helpers.client';
 import { emojis } from '@classmoji/utils';
@@ -145,6 +147,8 @@ const RepositoryAssignmentsTable = ({
   const [showMyAssignments, setShowMyAssignments] = useState(true);
   const [active, setActive] = useState<TabKey>('overview');
   const { classroom } = useStore();
+  const params = useParams();
+  const classSlug = params.class as string | undefined;
 
   const base = showMyAssignments ? repositoryAssignments : allRepositoryAssignments;
   const searched = useMemo(() => {
@@ -339,6 +343,16 @@ const RepositoryAssignmentsTable = ({
             }}
             emojiMappings={emojiMappings as Record<string, unknown>}
           />
+          {classSlug ? (
+            <Tooltip title="Submission analytics">
+              <Link
+                to={`/assistant/${classSlug}/submissions/${repoAssignment.id}`}
+                className="inline-flex items-center justify-center h-7 w-7 rounded text-gray-500 hover:text-primary-600 dark:text-gray-400 dark:hover:text-primary-400"
+              >
+                <IconChartBar size={16} />
+              </Link>
+            </Tooltip>
+          ) : null}
         </TableActionButtons>
       ),
     },
