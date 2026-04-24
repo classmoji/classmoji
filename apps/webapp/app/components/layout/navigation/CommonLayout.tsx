@@ -416,7 +416,7 @@ const CommonLayout = ({
 
       {/* Main Content Area */}
       <div
-        className="flex-1 flex flex-col transition-all duration-300 ease-in-out min-w-0 lg:ml-[calc(var(--sider-width)+0.5rem)]"
+        className="flex-1 flex flex-col transition-all duration-300 ease-in-out min-w-0 lg:ml-[calc(var(--sider-width)+1.5rem)]"
         style={{ '--sider-width': `${siderWidth}px` } as React.CSSProperties}
       >
         {/* Mobile-only hamburger (when sidebar is closed) */}
@@ -442,6 +442,8 @@ const CommonLayout = ({
             pathname.includes('/settings') ||
             pathname.includes('/students') ||
             pathname.includes('/grading') ||
+            pathname.includes('/repo-health') ||
+            pathname.includes('/submissions/') ||
             pathname.match(/\/pages(\/|$)/) ||
             pathname.match(/\/grades(\/|$)/) ||
             pathname.match(/\/repositories(\/|$)/)

@@ -10,6 +10,13 @@ import { requireClassroomAdmin } from '~/utils/routeAuth.server';
 import SubmissionChart from './SubmissionChart';
 import Leaderboard from './Leaderboard';
 import GradingTabsCard from './GradingTabsCard';
+import {
+  AssignmentHeatmap,
+  TAOpsTable,
+  AtRiskStudents,
+  QuizAnalytics,
+  DeadlinePressure,
+} from '~/components/features/dashboard';
 import type { Route } from './+types/route';
 
 export const loader = async ({ params, request }: Route.LoaderArgs) => {
@@ -76,8 +83,17 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
     lateRepoAssignments: lateRepoAssignmentsPromise,
   };
 
+  const analyticsPromise = Promise.all([
+    ClassmojiService.dashboard.assignmentHealth(classroom.id),
+    ClassmojiService.dashboard.taOps(classroom.id),
+    ClassmojiService.dashboard.cohortOverview(classroom.id),
+    ClassmojiService.dashboard.quizAnalytics(classroom.id),
+    ClassmojiService.dashboard.deadlinePressure(classroom.id),
+  ]).catch(() => null);
+
   return {
     data: Promise.all(Object.values(promises)),
+    analytics: analyticsPromise,
     githubOrganization,
   };
 };
@@ -143,7 +159,7 @@ const RingChart = ({ pct, color }: { pct: number; color: string }) => {
 };
 
 const AdminDashboard = ({ loaderData }: Route.ComponentProps) => {
-  const { data, githubOrganization } = loaderData;
+  const { data, analytics, githubOrganization } = loaderData;
   const { class: classSlug } = useParams();
   const [bannerDismissed, setBannerDismissed] = useState(false);
 
@@ -252,6 +268,33 @@ const AdminDashboard = ({ loaderData }: Route.ComponentProps) => {
                   gradingProgress={gradingProgressPerAssignment}
                   assistantsProgress={assistantsProgress}
                 />
+              </>
+            );
+          }}
+        </Await>
+      </Suspense>
+
+      <Suspense fallback={<Skeleton active paragraph={{ rows: 6 }} />}>
+        <Await resolve={analytics} errorElement={null}>
+          {(result) => {
+            if (!result) return null;
+            const [assignments, taOps, cohort, quiz, deadlines] = result;
+            return (
+              <>
+                <AssignmentHeatmap rows={assignments} />
+
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                  <TAOpsTable rows={taOps} />
+                  <AtRiskStudents
+                    atRiskCount={cohort.atRiskCount}
+                    students={cohort.atRiskStudents}
+                  />
+                </div>
+
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                  <QuizAnalytics data={quiz} />
+                  <DeadlinePressure buckets={deadlines} />
+                </div>
               </>
             );
           }}

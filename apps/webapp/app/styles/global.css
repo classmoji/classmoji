@@ -715,6 +715,18 @@ html[data-theme="dark"] .bar .fill.done { background: #4fd47d; }
   50%      { opacity: 0.3; transform: scale(0.7); }
 }
 
+/* Inline analytics drawer — smooth reveal for the expanded grading row. */
+@keyframes fadeSlideIn {
+  from { opacity: 0; transform: translateY(-6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.analytics-expanded-row > td {
+  background-color: transparent !important;
+}
+.analytics-expanded-row > td > .ant-table-expanded-row-fixed {
+  padding: 0 16px 12px 16px;
+}
+
 /* ============================================================
    Tweaks FAB + Panel (accent + theme picker)
    ============================================================ */

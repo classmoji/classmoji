@@ -20,6 +20,7 @@ import {
   IconLink,
   IconChecklist,
   IconClipboardList,
+  IconHeartRateMonitor,
 } from '@tabler/icons-react';
 
 /**
@@ -40,7 +41,7 @@ export const routeCategories = {
   },
   integrations: {
     label: 'Integrations',
-    items: ['repositories'],
+    items: ['repositories', 'repo-health'],
   },
   settings: {
     label: 'Settings',
@@ -166,6 +167,13 @@ export const routes = {
     link: '/repositories',
     label: 'Repositories',
     icon: IconBrandGithub,
+    roles: ['OWNER'],
+    category: 'integrations',
+  },
+  'repo-health': {
+    link: '/repo-health',
+    label: 'Repo Health',
+    icon: IconHeartRateMonitor,
     roles: ['OWNER'],
     category: 'integrations',
   },

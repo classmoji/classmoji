@@ -1,5 +1,6 @@
-import { Switch, Table } from 'antd';
-import { useEffect, useMemo, useState } from 'react';
+import { Switch, Table, Tooltip, Skeleton, Alert } from 'antd';
+import { useParams } from 'react-router';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   IconCircleCheck,
   IconFileCheck,
@@ -8,7 +9,14 @@ import {
   IconClipboardList,
   IconClockExclamation,
   IconListDetails,
+  IconChartBar,
+  IconChevronDown,
 } from '@tabler/icons-react';
+import {
+  GitHubStatsPanel,
+  type GitHubStatsSnapshot,
+  type EligibleStudent,
+} from '~/components/features/analytics';
 import { openRepositoryAssignmentInGithub } from '~/utils/helpers.client';
 import { emojis } from '@classmoji/utils';
 import dayjs from 'dayjs';
@@ -145,6 +153,94 @@ const RepositoryAssignmentsTable = ({
   const [showMyAssignments, setShowMyAssignments] = useState(true);
   const [active, setActive] = useState<TabKey>('overview');
   const { classroom } = useStore();
+  const params = useParams();
+  const classSlug = params.class as string | undefined;
+
+  // Inline GitHub-analytics drawer — row-level lazy load + cache.
+  type AnalyticsData = {
+    snapshot: GitHubStatsSnapshot | null;
+    deadline: string | null;
+    repositoryId: string;
+    students: EligibleStudent[];
+  };
+  type CacheEntry =
+    | { status: 'loading' }
+    | { status: 'error'; message: string }
+    | { status: 'ready'; data: AnalyticsData; refreshing?: boolean };
+
+  const [expandedKeys, setExpandedKeys] = useState<string[]>([]);
+  const [analyticsCache, setAnalyticsCache] = useState<Record<string, CacheEntry>>({});
+
+  const loadAnalytics = useCallback(async (repoAssignmentId: string) => {
+    setAnalyticsCache(prev => {
+      if (prev[repoAssignmentId]?.status === 'ready') return prev;
+      return { ...prev, [repoAssignmentId]: { status: 'loading' } };
+    });
+    try {
+      const res = await fetch(`/api/repos/${repoAssignmentId}/analytics`);
+      if (!res.ok) {
+        throw new Error((await res.text()) || `Failed (${res.status})`);
+      }
+      const data = (await res.json()) as AnalyticsData;
+      setAnalyticsCache(prev => ({
+        ...prev,
+        [repoAssignmentId]: { status: 'ready', data },
+      }));
+    } catch (err) {
+      setAnalyticsCache(prev => ({
+        ...prev,
+        [repoAssignmentId]: {
+          status: 'error',
+          message: err instanceof Error ? err.message : String(err),
+        },
+      }));
+    }
+  }, []);
+
+  const refreshAnalytics = useCallback(
+    async (repoAssignmentId: string) => {
+      setAnalyticsCache(prev => {
+        const entry = prev[repoAssignmentId];
+        if (!entry || entry.status !== 'ready') return prev;
+        return {
+          ...prev,
+          [repoAssignmentId]: { ...entry, refreshing: true },
+        };
+      });
+      try {
+        const res = await fetch(`/api/repos/${repoAssignmentId}/refresh`, {
+          method: 'POST',
+        });
+        if (!res.ok) throw new Error((await res.text()) || `Failed (${res.status})`);
+        // Give the trigger workflow a moment, then re-read the snapshot.
+        setTimeout(() => {
+          void loadAnalytics(repoAssignmentId);
+        }, 1200);
+      } catch (err) {
+        setAnalyticsCache(prev => ({
+          ...prev,
+          [repoAssignmentId]: {
+            status: 'error',
+            message: err instanceof Error ? err.message : String(err),
+          },
+        }));
+      }
+    },
+    [loadAnalytics],
+  );
+
+  const toggleAnalytics = useCallback(
+    (repoAssignmentId: string) => {
+      setExpandedKeys(prev => {
+        const isOpen = prev.includes(repoAssignmentId);
+        if (!isOpen) void loadAnalytics(repoAssignmentId);
+        return isOpen
+          ? prev.filter(k => k !== repoAssignmentId)
+          : [...prev, repoAssignmentId];
+      });
+    },
+    [loadAnalytics],
+  );
 
   const base = showMyAssignments ? repositoryAssignments : allRepositoryAssignments;
   const searched = useMemo(() => {
@@ -339,6 +435,43 @@ const RepositoryAssignmentsTable = ({
             }}
             emojiMappings={emojiMappings as Record<string, unknown>}
           />
+          {classSlug ? (
+            (() => {
+              const isOpen = expandedKeys.includes(repoAssignment.id);
+              return (
+                <Tooltip title={isOpen ? 'Hide analytics' : 'Show analytics'}>
+                  <button
+                    type="button"
+                    aria-expanded={isOpen}
+                    onClick={event => {
+                      event.stopPropagation();
+                      toggleAnalytics(repoAssignment.id);
+                    }}
+                    className={`inline-flex items-center justify-center h-7 w-7 rounded-md transition-all duration-200 ease-out ${
+                      isOpen
+                        ? 'bg-primary-50 text-primary-600 ring-1 ring-primary-200 dark:bg-primary-900/30 dark:text-primary-300 dark:ring-primary-800/60'
+                        : 'text-gray-500 hover:text-primary-600 hover:bg-gray-100 dark:text-gray-400 dark:hover:text-primary-300 dark:hover:bg-neutral-800'
+                    }`}
+                  >
+                    <span className="relative inline-block w-4 h-4">
+                      <IconChartBar
+                        size={16}
+                        className={`absolute inset-0 transition-all duration-200 ease-out ${
+                          isOpen ? 'opacity-0 -rotate-90 scale-75' : 'opacity-100 rotate-0 scale-100'
+                        }`}
+                      />
+                      <IconChevronDown
+                        size={16}
+                        className={`absolute inset-0 transition-all duration-200 ease-out ${
+                          isOpen ? 'opacity-100 rotate-0 scale-100' : 'opacity-0 rotate-90 scale-75'
+                        }`}
+                      />
+                    </span>
+                  </button>
+                </Tooltip>
+              );
+            })()
+          ) : null}
         </TableActionButtons>
       ),
     },
@@ -439,6 +572,40 @@ const RepositoryAssignmentsTable = ({
               showQuickJumper: true,
               pageSizeOptions: ['10', '15', '25', '50'],
               showTotal: (total, range) => `${range[0]}-${range[1]} of ${total}`,
+            }}
+            expandable={{
+              expandedRowKeys: expandedKeys,
+              showExpandColumn: false,
+              expandedRowClassName: () => 'analytics-expanded-row',
+              expandedRowRender: (record: RepoAssignment) => {
+                const entry = analyticsCache[record.id];
+                return (
+                  <div className="px-1 py-2 animate-[fadeSlideIn_240ms_cubic-bezier(0.22,1,0.36,1)_both]">
+                    {!entry || entry.status === 'loading' ? (
+                      <div className="py-4">
+                        <Skeleton active paragraph={{ rows: 4 }} />
+                      </div>
+                    ) : entry.status === 'error' ? (
+                      <Alert
+                        type="error"
+                        showIcon
+                        message="Couldn't load analytics"
+                        description={entry.message}
+                        closable
+                      />
+                    ) : (
+                      <GitHubStatsPanel
+                        snapshot={entry.data.snapshot}
+                        deadline={entry.data.deadline}
+                        repositoryId={entry.data.repositoryId}
+                        students={entry.data.students}
+                        refreshing={Boolean(entry.refreshing)}
+                        onRefresh={() => refreshAnalytics(record.id)}
+                      />
+                    )}
+                  </div>
+                );
+              },
             }}
           />
         )}
