@@ -281,44 +281,19 @@ const AdminDashboard = ({ loaderData }: Route.ComponentProps) => {
             const [assignments, taOps, cohort, quiz, deadlines] = result;
             return (
               <>
-                <section className="rounded-2xl bg-white dark:bg-neutral-900 ring-1 ring-stone-200 dark:ring-neutral-800 p-4 sm:p-5">
-                  <h3 className="text-sm font-semibold text-gray-900 dark:text-gray-100 mb-3">
-                    Assignment health
-                  </h3>
-                  <AssignmentHeatmap rows={assignments} />
-                </section>
+                <AssignmentHeatmap rows={assignments} />
 
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-                  <section className="rounded-2xl bg-white dark:bg-neutral-900 ring-1 ring-stone-200 dark:ring-neutral-800 p-4 sm:p-5">
-                    <h3 className="text-sm font-semibold text-gray-900 dark:text-gray-100 mb-3">
-                      TA operations
-                    </h3>
-                    <TAOpsTable rows={taOps} />
-                  </section>
-                  <section className="rounded-2xl bg-white dark:bg-neutral-900 ring-1 ring-stone-200 dark:ring-neutral-800 p-4 sm:p-5">
-                    <h3 className="text-sm font-semibold text-gray-900 dark:text-gray-100 mb-3">
-                      At-risk students
-                    </h3>
-                    <AtRiskStudents
-                      atRiskCount={cohort.atRiskCount}
-                      students={cohort.atRiskStudents}
-                    />
-                  </section>
+                  <TAOpsTable rows={taOps} />
+                  <AtRiskStudents
+                    atRiskCount={cohort.atRiskCount}
+                    students={cohort.atRiskStudents}
+                  />
                 </div>
 
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-                  <section className="rounded-2xl bg-white dark:bg-neutral-900 ring-1 ring-stone-200 dark:ring-neutral-800 p-4 sm:p-5">
-                    <h3 className="text-sm font-semibold text-gray-900 dark:text-gray-100 mb-3">
-                      Quiz analytics
-                    </h3>
-                    <QuizAnalytics data={quiz} />
-                  </section>
-                  <section className="rounded-2xl bg-white dark:bg-neutral-900 ring-1 ring-stone-200 dark:ring-neutral-800 p-4 sm:p-5">
-                    <h3 className="text-sm font-semibold text-gray-900 dark:text-gray-100 mb-3">
-                      Deadline pressure
-                    </h3>
-                    <DeadlinePressure buckets={deadlines} />
-                  </section>
+                  <QuizAnalytics data={quiz} />
+                  <DeadlinePressure buckets={deadlines} />
                 </div>
               </>
             );
