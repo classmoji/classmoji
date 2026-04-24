@@ -6,10 +6,23 @@ import type { Route } from './+types/route';
 import { ClassmojiService } from '@classmoji/services';
 import { requireClassroomTeachingTeam } from '~/utils/routeAuth.server';
 import GradingTabsCard from '../admin.$class.dashboard/GradingTabsCard';
+import {
+  MyDayQueue,
+  ThroughputSparkline,
+  StreakBadge,
+  OwnVsClassHistogram,
+} from '~/components/features/dashboard';
 
 export const loader = async ({ request, params }: Route.LoaderArgs) => {
   const { class: classSlug } = params;
   const { userId, classroom } = await requireClassroomTeachingTeam(request, classSlug!);
+
+  const cockpitPromise = Promise.all([
+    ClassmojiService.taDashboard.overdueQueue(userId, classroom.id),
+    ClassmojiService.taDashboard.personalThroughput(userId, classroom.id),
+    ClassmojiService.taDashboard.gradingStreak(userId, classroom.id),
+    ClassmojiService.taDashboard.personalGradeDistribution(userId, classroom.id),
+  ]).catch(() => null);
 
   return {
     data: Promise.all([
@@ -18,6 +31,7 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
       ClassmojiService.helper.findClassroomGradingProgressPerAssignment(classroom.id),
       ClassmojiService.repositoryAssignmentGrader.findGradersProgress(classroom.id),
     ]),
+    cockpit: cockpitPromise,
   };
 };
 
@@ -48,7 +62,7 @@ const StatItem = ({ label, value, subtitle, valueColor }: StatItemProps) => (
 );
 
 const AssistantDashboard = ({ loaderData }: Route.ComponentProps) => {
-  const { data } = loaderData;
+  const { data, cockpit } = loaderData;
 
   return (
     <div className="min-h-full flex flex-col gap-4">
@@ -110,6 +124,36 @@ const AssistantDashboard = ({ loaderData }: Route.ComponentProps) => {
                   gradingProgress={gradingProgress}
                   assistantsProgress={assistantsProgress}
                 />
+              </>
+            );
+          }}
+        </Await>
+      </Suspense>
+
+      <Suspense fallback={<Skeleton active paragraph={{ rows: 4 }} />}>
+        <Await resolve={cockpit} errorElement={null}>
+          {(result) => {
+            if (!result) return null;
+            const [queue, throughput, streak, distribution] = result;
+            return (
+              <>
+                <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+                  <div className="lg:col-span-2">
+                    <MyDayQueue queue={queue} />
+                  </div>
+                  <StreakBadge
+                    days={streak.days}
+                    lastGradedAt={streak.lastGradedAt}
+                  />
+                </div>
+
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                  <ThroughputSparkline data={throughput} />
+                  <OwnVsClassHistogram
+                    yours={distribution.yours}
+                    classroom={distribution.classroom}
+                  />
+                </div>
               </>
             );
           }}
