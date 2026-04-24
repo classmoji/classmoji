@@ -69,9 +69,12 @@ const CommonLayout = ({
   const { user, memberships = [], aiAgentAvailable = false } = rootData ?? {};
   const { isProTier } = useSubscription();
   const { tokenBalance } = useStore();
-  const { isDarkMode } = useDarkMode();
+  const { isDarkMode, background: tweaksBackground } = useDarkMode();
   const themeColors = getThemeByKey(classroom?.settings?.theme);
   const themeBackground = isDarkMode ? themeColors.darkBackground : themeColors.background;
+  // When a non-default personal background preset is picked, let the preset's
+  // paper/sidebar CSS vars drive the shell so the choice is visible.
+  const tweaksBgActive = tweaksBackground !== 'default';
 
   useEffect(() => {
     const handle = (e: KeyboardEvent) => {
@@ -103,6 +106,7 @@ const CommonLayout = ({
   );
 
   const renderNavItem = (item: NavItem, key: string) => {
+    const to = `${roleSettings?.path}/${params.class}${item.link}`;
     const active =
       (pathname.includes(item.link) && !pathname.includes('settings')) ||
       (item.link.includes('setting') && pathname.includes('settings'));
@@ -120,17 +124,22 @@ const CommonLayout = ({
     return (
       <RequireRole roles={item.roles} key={key}>
         <Link
-          to={`${roleSettings?.path}/${params.class}${item.link}`}
+          to={to}
           prefetch={item.label === 'Dashboard' ? 'render' : 'intent'}
           className={`
             group flex items-center gap-2.5 rounded-md transition-colors duration-150
             ${collapsed ? 'justify-center p-2 mx-1.5' : 'px-2 py-1.5 mx-1.5'}
             ${
               active
-                ? 'bg-gray-100 dark:bg-neutral-800 text-gray-900 dark:text-gray-100'
+                ? ''
                 : 'text-gray-700 dark:text-gray-300 hover:bg-gray-100/70 dark:hover:bg-neutral-800/60'
             }
           `}
+          style={
+            active
+              ? { backgroundColor: 'var(--accent-soft)', color: 'var(--accent-ink)' }
+              : undefined
+          }
           data-active={active || undefined}
         >
           {collapsed ? (
@@ -257,13 +266,26 @@ const CommonLayout = ({
   ];
 
   return (
-    <div className="flex h-screen p-2" style={{ backgroundColor: themeBackground }}>
+    <div
+      className="flex h-screen p-2"
+      style={{
+        backgroundColor: tweaksBgActive ? 'var(--paper)' : themeBackground,
+        backgroundImage: tweaksBgActive
+          ? 'radial-gradient(1200px 800px at 85% -10%, var(--bg-stop-1) 0%, transparent 60%), radial-gradient(900px 700px at -10% 110%, var(--bg-stop-2) 0%, transparent 55%), linear-gradient(175deg, var(--bg-stop-3a) 0%, var(--bg-stop-3b) 55%, var(--bg-stop-3c) 100%)'
+          : undefined,
+      }}
+    >
       {/* Floating Sidebar */}
       <div
-        className={`fixed top-7 left-5 bottom-7 bg-white dark:bg-neutral-900 rounded-2xl ring-1 ring-stone-200 dark:ring-neutral-800 z-30 transition-transform duration-300 ease-in-out flex flex-col overflow-hidden lg:translate-x-0 ${
+        className={`fixed top-7 left-5 bottom-7 ${
+          tweaksBgActive ? '' : 'bg-white dark:bg-neutral-900'
+        } rounded-2xl ring-1 ring-stone-200 dark:ring-neutral-800 z-30 transition-transform duration-300 ease-in-out flex flex-col overflow-hidden lg:translate-x-0 ${
           mobileOpen ? 'translate-x-0' : '-translate-x-[110%]'
         }`}
-        style={{ width: siderWidth }}
+        style={{
+          width: siderWidth,
+          ...(tweaksBgActive ? { backgroundColor: 'var(--sidebar)' } : {}),
+        }}
       >
         {/* Sidebar Header — Logo + collapse toggle */}
         <div
@@ -272,7 +294,11 @@ const CommonLayout = ({
           }`}
         >
           <Link to="/select-organization" className="flex items-center">
-            {collapsed ? <Logo size={32} variant="icon" /> : <Logo size={32} variant="full" />}
+            {collapsed ? (
+              <Logo size={32} variant="icon" theme={isDarkMode ? 'dark' : 'light'} />
+            ) : (
+              <Logo size={32} variant="full" theme={isDarkMode ? 'dark' : 'light'} />
+            )}
           </Link>
           <Tooltip
             title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
