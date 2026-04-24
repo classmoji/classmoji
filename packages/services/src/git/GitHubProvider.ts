@@ -258,6 +258,28 @@ export class GitHubProvider extends GitProvider {
     });
   }
 
+  /**
+   * Rename a repository. GitHub auto-redirects the old URL for a grace period,
+   * but users with local clones should update their remotes.
+   * @param {string} org - Organization login
+   * @param {string} currentName - Current repository name
+   * @param {{ name: string }} patch - New name
+   * @returns {Promise<{ name: string }>}
+   */
+  async updateRepo(
+    org: string,
+    currentName: string,
+    patch: { name: string }
+  ): Promise<{ name: string }> {
+    const octokit = await this.#getOctokit();
+    const { data } = await octokit.request('PATCH /repos/{owner}/{repo}', {
+      owner: org,
+      repo: currentName,
+      name: patch.name,
+    });
+    return { name: data.name };
+  }
+
   // ─── Branches & PRs ────────────────────────────────────────────────────────
 
   /**
@@ -628,6 +650,28 @@ export class GitHubProvider extends GitProvider {
     const octokit = await this.#getOctokit();
     const { data } = await octokit.request('GET /orgs/{org}/teams', { org });
     return data;
+  }
+
+  /**
+   * Update a team. GitHub regenerates the slug from the new name server-side,
+   * and the response contains the authoritative new slug.
+   * @param {string} org - Organization login
+   * @param {string} currentSlug - Current team slug
+   * @param {{ name: string }} patch - New name
+   * @returns {Promise<{ id: number; slug: string; name: string; node_id: string }>}
+   */
+  async updateTeam(
+    org: string,
+    currentSlug: string,
+    patch: { name: string }
+  ): Promise<{ id: number; slug: string; name: string; node_id: string }> {
+    const octokit = await this.#getOctokit();
+    const { data } = await octokit.request('PATCH /orgs/{org}/teams/{team_slug}', {
+      org,
+      team_slug: currentSlug,
+      name: patch.name,
+    });
+    return { id: data.id, slug: data.slug, name: data.name, node_id: data.node_id };
   }
 
   /**

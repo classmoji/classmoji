@@ -67,6 +67,14 @@ export class GitProvider {
     throw new Error('deleteRepository() must be implemented by subclass');
   }
 
+  async updateRepo(
+    org: string,
+    currentName: string,
+    patch: { name: string }
+  ): Promise<{ name: string }> {
+    throw new Error('updateRepo() must be implemented by subclass');
+  }
+
   // ─── Branches & PRs ────────────────────────────────────────────────────────
   async getLatestCommitSHA(org: string, repo: string, branch?: string): Promise<string> {
     throw new Error('getLatestCommitSHA() must be implemented by subclass');
@@ -149,6 +157,14 @@ export class GitProvider {
     teamSlug: string
   ): Promise<{ id: number; slug: string; name: string }> {
     throw new Error('getTeam() must be implemented by subclass');
+  }
+
+  async updateTeam(
+    org: string,
+    currentSlug: string,
+    patch: { name: string }
+  ): Promise<{ id: number; slug: string; name: string }> {
+    throw new Error('updateTeam() must be implemented by subclass');
   }
 
   async addTeamMember(org: string, teamSlug: string, username: string): Promise<void> {
