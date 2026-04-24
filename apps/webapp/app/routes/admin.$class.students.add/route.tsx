@@ -228,7 +228,7 @@ const AddStudents = ({ loaderData }: Route.ComponentProps) => {
       <div className="px-5 pt-4 pb-4 space-y-4">
         <SectionHeader
           title="Paste student information"
-          subtitle="One student per line — name, email"
+          subtitle="One student per line"
           size="sm"
         />
 

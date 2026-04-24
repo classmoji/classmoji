@@ -45,6 +45,11 @@ const theme = {
       optionActiveBg: '#f9fafb',
       optionSelectedFontWeight: 600,
     },
+    Input: {
+      hoverBorderColor: '#d1d5db',
+      activeBorderColor: '#9ca3af',
+      activeShadow: 'none',
+    },
     FloatButton: {
       colorPrimary: BRAND,
       colorBgElevated: BRAND,

@@ -1,5 +1,5 @@
 import { useState, useMemo } from 'react';
-import { Table, Checkbox, ConfigProvider, Radio, Popover, Input } from 'antd';
+import { Table, Checkbox, ConfigProvider, Segmented, Popover, Input } from 'antd';
 import { IconInfoCircle, IconMessagePlus, IconSearch } from '@tabler/icons-react';
 import { useParams, useNavigate } from 'react-router';
 import { mean, median } from 'simple-statistics';
@@ -274,10 +274,28 @@ const GradesTable = (props: GradesTableProps) => {
           </Checkbox>
           <div className="h-6 w-px bg-stone-200 dark:bg-neutral-700" />
           <div className="flex items-center gap-1.5">
-            <Radio.Group value={view} onChange={e => setView(e.target.value)}>
-              <Radio.Button value="Emoji">Emoji</Radio.Button>
-              <Radio.Button value="Numeric">Numeric</Radio.Button>
-            </Radio.Group>
+            <ConfigProvider
+              theme={{
+                token: {
+                  borderRadius: 6,
+                },
+                components: {
+                  Segmented: {
+                    borderRadius: 6,
+                    borderRadiusSM: 4,
+                    itemSelectedBg: '#ffffff',
+                    itemSelectedColor: '#1f2937',
+                    trackPadding: 3,
+                  },
+                },
+              }}
+            >
+              <Segmented
+                value={view}
+                onChange={val => setView(val as string)}
+                options={['Emoji', 'Numeric']}
+              />
+            </ConfigProvider>
             <Popover
               trigger="click"
               placement="bottomRight"

@@ -109,7 +109,8 @@ const darkTheme = {
       colorTextDisabled: '#525252',
       addonBg: '#171717',
       hoverBorderColor: '#525252',
-      activeBorderColor: BRAND,
+      activeBorderColor: '#737373',
+      activeShadow: 'none',
     },
     Modal: {
       contentBg: '#262626',
