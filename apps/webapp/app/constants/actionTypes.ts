@@ -18,6 +18,7 @@ export const ActionTypes = {
 
   SAVE_TEAM: 'save-team',
   DELETE_TEAM: 'delete-team',
+  RENAME_TEAM: 'rename-team',
   ADD_TEAM_MEMBER: 'add-team-member',
   REMOVE_TEAM_MEMBER: 'remove-team-member',
 
