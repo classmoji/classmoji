@@ -1,3 +1,4 @@
+import type { CSSProperties } from 'react';
 import { Outlet, useNavigate, useParams, useLocation } from 'react-router';
 
 import { ProTierFeature } from '~/components';
@@ -42,23 +43,27 @@ const OrgSettings = () => {
             const isActive = tab.key === currentTab;
             const baseZ = visibleTabs.length - idx;
             const zStyle = { zIndex: isActive ? 40 : baseZ };
-            const activeTextColor = tab.danger
-              ? 'text-red-600 dark:text-red-400'
-              : 'text-gray-900 dark:text-gray-100';
             const inactiveTextColor = tab.danger
               ? 'text-red-500/80 dark:text-red-400/80 hover:text-red-600 dark:hover:text-red-400'
               : 'text-gray-500 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200';
+            const activeStyle: CSSProperties = isActive
+              ? tab.danger
+                ? { ...zStyle }
+                : { ...zStyle, color: 'var(--accent)', borderTopColor: 'var(--accent)' }
+              : zStyle;
             return (
               <button
                 key={tab.key}
                 type="button"
                 onClick={() => navigate(`/admin/${classSlug}/settings/${tab.key}`)}
-                style={zStyle}
+                style={activeStyle}
                 className={`relative px-4 py-2 text-sm font-medium rounded-t-2xl border whitespace-nowrap transition-colors ${
                   idx > 0 ? '-ml-2' : ''
                 } ${
                   isActive
-                    ? `bg-white dark:bg-neutral-900 ${activeTextColor} border-stone-200 dark:border-neutral-800 border-b-transparent`
+                    ? `bg-white dark:bg-neutral-900 ${
+                        tab.danger ? 'text-red-600 dark:text-red-400' : ''
+                      } border-stone-200 dark:border-neutral-800 border-b-transparent`
                     : `bg-stone-100 dark:bg-neutral-800 ${inactiveTextColor} border-stone-200 dark:border-neutral-700`
                 }`}
               >

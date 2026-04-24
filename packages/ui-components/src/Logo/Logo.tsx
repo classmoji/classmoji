@@ -4,6 +4,7 @@
 
 import React from 'react';
 import logoPixel from '../assets/logo-pixel.png';
+import logoPixelDark from '../assets/logo-pixel-dark.png';
 
 type SizeKey = 'xs' | 'sm' | 'md' | 'lg' | 'xl';
 
@@ -50,13 +51,21 @@ interface LogoProps {
 export const Logo = ({
   variant: _variant = 'full',
   size = 'md',
-  theme: _theme = 'light',
+  theme = 'light',
   className = '',
 }: LogoProps): React.JSX.Element => {
   const resolvedHeight = typeof size === 'number' ? size : SIZE_HEIGHTS[size];
+  // `theme="current"` reads the `dark` class on <html> at render time so a
+  // single caller doesn't have to know which mode it's in. Tailwind doesn't
+  // scan this package, so we can't rely on `dark:` variants here.
+  const isDark =
+    theme === 'dark' ||
+    (theme === 'current' &&
+      typeof document !== 'undefined' &&
+      document.documentElement.classList.contains('dark'));
   return (
     <img
-      src={logoPixel}
+      src={isDark ? logoPixelDark : logoPixel}
       alt="Classmoji"
       style={{
         height: resolvedHeight,
