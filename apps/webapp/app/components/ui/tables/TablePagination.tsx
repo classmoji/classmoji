@@ -62,7 +62,7 @@ const TablePagination = ({
   if (totalItems === 0) return null;
 
   return (
-    <div className="flex items-center justify-between px-4 py-3 bg-gray-50 dark:bg-gray-800/50 border-t border-gray-200 dark:border-gray-700">
+    <div className="flex items-center justify-between px-4 py-3 bg-gray-50 dark:bg-neutral-800/50 border-t border-gray-200 dark:border-neutral-700">
       <div className="flex items-center gap-3">
         <span className="text-sm text-gray-700 dark:text-gray-300">
           {startItem}-{endItem} of {totalItems}
@@ -70,7 +70,7 @@ const TablePagination = ({
         <select
           value={pageSize}
           onChange={e => onPageSizeChange(Number(e.target.value))}
-          className="text-sm border border-gray-300 dark:border-gray-600 rounded px-2 py-1 bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-300 focus:outline-none focus:ring-1 focus:ring-blue-500"
+          className="text-sm border border-gray-300 dark:border-gray-600 rounded px-2 py-1 bg-white dark:bg-neutral-800 text-gray-700 dark:text-gray-300 focus:outline-none focus:ring-1 focus:ring-blue-500"
         >
           {pageSizeOptions.map(size => (
             <option key={size} value={size}>
@@ -84,7 +84,7 @@ const TablePagination = ({
         <button
           onClick={() => onPageChange(pageIndex - 1)}
           disabled={!canPreviousPage}
-          className="p-1.5 border border-gray-300 dark:border-gray-600 rounded hover:bg-gray-100 dark:hover:bg-gray-800 disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-transparent"
+          className="p-1.5 border border-gray-300 dark:border-gray-600 rounded hover:bg-gray-100 dark:hover:bg-neutral-800 disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-transparent"
           title="Previous page"
         >
           <IconChevronLeft size={16} className="text-gray-600 dark:text-gray-400" />
@@ -109,7 +109,7 @@ const TablePagination = ({
               className={`min-w-[32px] px-2 py-1 text-sm border border-gray-300 dark:border-gray-600 rounded ${
                 page === pageIndex
                   ? 'bg-blue-600 text-white border-blue-600'
-                  : 'text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800'
+                  : 'text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-neutral-800'
               }`}
             >
               {(page as number) + 1}
@@ -120,7 +120,7 @@ const TablePagination = ({
         <button
           onClick={() => onPageChange(pageIndex + 1)}
           disabled={!canNextPage}
-          className="p-1.5 border border-gray-300 dark:border-gray-600 rounded hover:bg-gray-100 dark:hover:bg-gray-800 disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-transparent"
+          className="p-1.5 border border-gray-300 dark:border-gray-600 rounded hover:bg-gray-100 dark:hover:bg-neutral-800 disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-transparent"
           title="Next page"
         >
           <IconChevronRight size={16} className="text-gray-600 dark:text-gray-400" />

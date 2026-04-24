@@ -1,76 +1,94 @@
-import { CardHeader } from '~/components';
-import { Tag, Card } from 'antd';
-
 interface GradingLeaderboardItem {
   id: string;
   login: string;
   name: string | null;
   progress: number;
+  gradedCount?: number;
+  gradedThisWeek?: number;
 }
 
 interface TAGradingLeaderboardProps {
   progress: GradingLeaderboardItem[];
+  bare?: boolean;
 }
 
-const TAGradingLeaderboard = ({ progress }: TAGradingLeaderboardProps) => {
-  const getRankStyle = (index: number) => {
-    if (index === 0) return 'bg-yellow-400 text-white';
-    if (index === 1) return 'bg-gray-300 text-white';
-    if (index === 2) return 'bg-amber-600 text-white';
-    return 'bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300';
-  };
+const initialsFor = (name: string | null, login: string) => {
+  const base = (name || login || '?').trim();
+  const parts = base.split(/\s+/);
+  return ((parts[0]?.[0] || '?') + (parts[1]?.[0] || '')).toUpperCase();
+};
+
+const avatarTintFor = (i: number) => {
+  const tints = [
+    'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300',
+    'bg-sky-100 text-sky-700 dark:bg-sky-900/30 dark:text-sky-300',
+    'bg-violet-100 text-violet-700 dark:bg-violet-900/30 dark:text-violet-300',
+    'bg-rose-100 text-rose-700 dark:bg-rose-900/30 dark:text-rose-300',
+    'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300',
+  ];
+  return tints[i % tints.length];
+};
+
+const TAGradingLeaderboard = ({ progress, bare = false }: TAGradingLeaderboardProps) => {
+  const sorted = [...progress].sort((a, b) => {
+    const aCount = a.gradedCount ?? a.progress;
+    const bCount = b.gradedCount ?? b.progress;
+    return bCount - aCount;
+  });
+
+  const body = (
+    <>
+      {!bare && (
+        <h3 className="text-base font-semibold text-gray-900 dark:text-gray-100 mb-4">
+          TA grading
+        </h3>
+      )}
+      {sorted.length === 0 ? (
+        <p className="text-sm text-gray-500 dark:text-gray-400">No TAs assigned yet.</p>
+      ) : (
+        <ul className="flex flex-col gap-2">
+          {sorted.map((item, i) => {
+            const total = item.gradedCount ?? Math.round(item.progress);
+            const thisWeek = item.gradedThisWeek;
+            return (
+              <li key={item.id} className="flex items-center gap-3">
+                <span
+                  className={`inline-flex items-center justify-center w-9 h-9 rounded-lg shrink-0 text-xs font-semibold ${avatarTintFor(i)}`}
+                >
+                  {initialsFor(item.name, item.login)}
+                </span>
+                <div className="min-w-0 flex-1">
+                  <div className="text-sm font-medium text-gray-900 dark:text-gray-100 truncate">
+                    {item.name || item.login}
+                  </div>
+                  {thisWeek !== undefined && (
+                    <div className="text-xs text-gray-500 dark:text-gray-400">
+                      {thisWeek} graded this week
+                    </div>
+                  )}
+                </div>
+                <div className="shrink-0 text-right">
+                  <div className="text-lg font-semibold text-gray-900 dark:text-gray-100 tabular-nums leading-none">
+                    {total}
+                  </div>
+                  <div className="text-[10px] uppercase tracking-[0.08em] text-gray-400 dark:text-gray-500 mt-0.5">
+                    {item.gradedCount !== undefined ? 'total' : '%'}
+                  </div>
+                </div>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </>
+  );
+
+  if (bare) return body;
 
   return (
-    <Card className="h-[68vh] overflow-hidden flex flex-col shadow-xs">
-      <CardHeader>TA Grading Leaderboard</CardHeader>
-
-      <div className="flex-1 overflow-y-auto px-2 pb-2 space-y-2">
-        {progress.map((item, i) => (
-          <div key={item.id} className="p-2 rounded-lg">
-            <div className="flex items-center justify-between gap-2">
-              {/* Rank badge */}
-              <div
-                className={`w-5 h-5 rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0 ${getRankStyle(
-                  i
-                )}`}
-              >
-                {i + 1}
-              </div>
-
-              <div className="flex items-center gap-2 min-w-0 flex-1">
-                <img
-                  src={`https://github.com/${item.login}.png`}
-                  alt={item.name || 'User avatar'}
-                  className="w-8 h-8 rounded-full ring-1 ring-gray-200 flex-shrink-0"
-                />
-                <div className="min-w-0 flex-1">
-                  <p
-                    className="font-medium text-gray-800 text-xs truncate"
-                    title={item.name || 'Unknown'}
-                  >
-                    {item.name ? item.name.split(' ')[0] : 'Unknown'}
-                  </p>
-                </div>
-              </div>
-
-              <Tag
-                className={`font-medium border-0 ${
-                  item.progress >= 90
-                    ? 'bg-green-100 text-green-700'
-                    : item.progress >= 75
-                      ? 'bg-yellow-100 text-yellow-700'
-                      : item.progress >= 50
-                        ? 'bg-orange-100 text-orange-700'
-                        : 'bg-red-100 text-red-700'
-                }`}
-              >
-                {item.progress.toFixed(0)}%
-              </Tag>
-            </div>
-          </div>
-        ))}
-      </div>
-    </Card>
+    <section className="rounded-2xl bg-white dark:bg-neutral-900 ring-1 ring-stone-200 dark:ring-neutral-800 p-5 sm:p-6 h-full">
+      {body}
+    </section>
   );
 };
 

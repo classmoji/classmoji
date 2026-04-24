@@ -1,4 +1,4 @@
-import { Select, Avatar, Tag } from 'antd';
+import { Select, Avatar } from 'antd';
 import { useNavigate } from 'react-router';
 import useStore from '~/store';
 import { roleSettings } from '~/constants/roleSettings';
@@ -13,27 +13,58 @@ type OrgSelectOption = {
   label: string;
 } & MembershipWithOrganization;
 
+const roleLabel = (role: string) => {
+  const map: Record<string, string> = {
+    OWNER: 'Owner',
+    TEACHER: 'Teacher',
+    ASSISTANT: 'Assistant',
+    STUDENT: 'Student',
+  };
+  return map[role] ?? role.charAt(0) + role.slice(1).toLowerCase();
+};
+
+const termAbbreviation = (term?: string | null, year?: number | null) => {
+  if (!term || !year) return null;
+  const prefix: Record<string, string> = {
+    FALL: 'F',
+    WINTER: 'W',
+    SPRING: 'S',
+    SUMMER: 'X',
+  };
+  const p = prefix[term];
+  if (!p) return null;
+  return `${p}${String(year).slice(-2)}`;
+};
+
+
 const OrgSelect = ({ memberships }: OrgSelectProps) => {
   const { membership } = useStore();
   const navigate = useNavigate();
 
   return (
-    <div className="flex items-center gap-0 max-w-[450px] min-w-[280px]">
+    <div className="w-full">
       <Select
         placeholder="Select classroom"
         variant="borderless"
-        className="w-full bg-transparent hover:bg-gray-50 dark:hover:bg-gray-800/50 rounded-lg transition-colors"
+        className="w-full bg-transparent hover:bg-gray-50 dark:hover:bg-neutral-800/50 rounded-md transition-colors"
+        popupMatchSelectWidth={true}
         styles={{
           popup: {
             root: {
-              minWidth: '360px',
-              padding: '12px 8px',
+              padding: '2px',
               msOverflowStyle: 'none',
               scrollbarWidth: 'none',
+              boxShadow: 'none',
+              border: '1px solid rgb(231 229 228)',
+              borderRadius: '6px',
             },
           },
         }}
-        classNames={{ popup: { root: '[&::-webkit-scrollbar]:hidden' } }}
+        classNames={{
+          popup: {
+            root: '[&::-webkit-scrollbar]:hidden [&_.ant-select-item-option-selected]:!bg-transparent [&_.ant-select-item-option-active]:!bg-transparent',
+          },
+        }}
         options={memberships
           ?.sort((a, b) => a.organization.name?.localeCompare(b.organization.name))
           .map(m => ({
@@ -44,36 +75,20 @@ const OrgSelect = ({ memberships }: OrgSelectProps) => {
         labelInValue={true}
         labelRender={() => {
           if (!membership) return null;
-
+          const term = termAbbreviation(
+            membership.organization.term,
+            membership.organization.year
+          );
           return (
-            <div className="flex items-center gap-3 justify-between py-1.5 px-2">
-              <div className="flex items-center gap-3 flex-1 min-w-0">
-                <Avatar
-                  src={membership.organization.avatar_url}
-                  size={32}
-                  className="border-2 border-gray-300 dark:border-gray-600 shrink-0 shadow-sm"
-                />
-                <div className="flex flex-col min-w-0">
-                  <div className="text-sm font-semibold text-gray-900 dark:text-gray-100 truncate">
-                    {membership.organization.name}
-                  </div>
-                  {membership.organization.term && (
-                    <div className="text-xs text-gray-500 dark:text-gray-400">
-                      {membership.organization.term} {membership.organization.year}
-                    </div>
-                  )}
-                </div>
-              </div>
-
-              <Tag
-                color={
-                  (roleSettings as Record<string, { path: string; color: string }>)[membership.role]
-                    ?.color || 'default'
-                }
-                className="ml-2 shrink-0 font-semibold text-xs"
-              >
-                {membership.role}
-              </Tag>
+            <div className="min-w-0 px-1 flex items-baseline gap-1.5">
+              <span className="text-sm font-semibold text-gray-900 dark:text-gray-100 truncate">
+                {membership.organization.name}
+              </span>
+              {term && (
+                <span className="text-xs font-medium text-gray-400 dark:text-gray-500 shrink-0">
+                  {term}
+                </span>
+              )}
             </div>
           );
         }}
@@ -81,7 +96,7 @@ const OrgSelect = ({ memberships }: OrgSelectProps) => {
           const membershipOption = data as OrgSelectOption;
           return (
             <button
-              className="flex justify-between w-full items-center gap-3 p-3.5 hover:bg-gray-50 dark:hover:bg-gray-800/50 rounded-lg cursor-pointer transition-all duration-150 hover:shadow-sm border border-transparent hover:border-primary-200 dark:hover:border-primary-900/30"
+              className="flex w-full items-center gap-2 px-1.5 py-1.5 hover:bg-stone-50 dark:hover:bg-neutral-800/60 rounded-md cursor-pointer transition-colors text-left"
               onClick={() => {
                 // Students go to class root (student.$class._index handles default page)
                 const suffix = membershipOption.role === 'STUDENT' ? '' : '/dashboard';
@@ -90,34 +105,32 @@ const OrgSelect = ({ memberships }: OrgSelectProps) => {
                 );
               }}
             >
-              <div className="flex items-center gap-3 flex-1 min-w-0">
-                <Avatar
-                  src={membershipOption.organization.avatar_url}
-                  size={40}
-                  className="border-2 border-gray-200 dark:border-gray-600 shrink-0 shadow-sm"
-                />
-                <div className="text-sm text-gray-800 dark:text-gray-200 truncate flex flex-col items-start gap-1">
-                  <div className="font-semibold text-gray-900 dark:text-gray-100">
+              <Avatar
+                src={membershipOption.organization.avatar_url}
+                size={22}
+                className="shrink-0"
+              />
+              <div className="min-w-0 flex-1">
+                <div className="flex items-baseline gap-1.5 min-w-0">
+                  <div className="font-medium text-[13px] text-gray-900 dark:text-gray-100 truncate leading-tight">
                     {membershipOption.organization.name}
                   </div>
-                  {membershipOption.organization.term && (
-                    <div className="text-xs text-gray-500 dark:text-gray-400">
-                      {membershipOption.organization.term} {membershipOption.organization.year}
-                    </div>
-                  )}
+                  {(() => {
+                    const term = termAbbreviation(
+                      membershipOption.organization.term,
+                      membershipOption.organization.year
+                    );
+                    return term ? (
+                      <span className="text-[11px] font-medium text-gray-400 dark:text-gray-500 shrink-0">
+                        {term}
+                      </span>
+                    ) : null;
+                  })()}
+                </div>
+                <div className="text-[11px] text-gray-500 dark:text-gray-400 truncate leading-tight">
+                  {roleLabel(membershipOption.role)}
                 </div>
               </div>
-
-              <Tag
-                color={
-                  (roleSettings as Record<string, { path: string; color: string }>)[
-                    membershipOption.role
-                  ]?.color || 'default'
-                }
-                className="shrink-0 font-semibold text-xs"
-              >
-                {membershipOption.role}
-              </Tag>
             </button>
           );
         }}

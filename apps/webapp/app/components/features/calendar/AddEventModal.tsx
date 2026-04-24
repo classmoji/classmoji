@@ -1,33 +1,38 @@
 import { useState } from 'react';
 import {
-  Drawer,
+  Modal,
   Form,
   Input,
   Select,
   DatePicker,
   TimePicker,
   Checkbox,
-  Space,
   Button,
-  Alert,
 } from 'antd';
-import { LinkOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
-import { getEventTypeLabel } from './utils';
+import {
+  IconInfoCircle,
+  IconCalendarEvent,
+  IconClock,
+  IconMapPin,
+  IconVideo,
+  IconRepeat,
+  IconLink,
+} from '@tabler/icons-react';
+import { getEventTypeDotColor, getEventTypeLabel } from './utils';
 
 const { TextArea } = Input;
-const { Option } = Select;
 
 const ALL_EVENT_TYPES = ['OFFICE_HOURS', 'LECTURE', 'LAB', 'ASSESSMENT'];
 
 const DAYS_OF_WEEK = [
-  { value: 'monday', label: 'Monday' },
-  { value: 'tuesday', label: 'Tuesday' },
-  { value: 'wednesday', label: 'Wednesday' },
-  { value: 'thursday', label: 'Thursday' },
-  { value: 'friday', label: 'Friday' },
-  { value: 'saturday', label: 'Saturday' },
-  { value: 'sunday', label: 'Sunday' },
+  { value: 'monday', label: 'Mon' },
+  { value: 'tuesday', label: 'Tue' },
+  { value: 'wednesday', label: 'Wed' },
+  { value: 'thursday', label: 'Thu' },
+  { value: 'friday', label: 'Fri' },
+  { value: 'saturday', label: 'Sat' },
+  { value: 'sunday', label: 'Sun' },
 ];
 
 interface PageOption {
@@ -46,21 +51,6 @@ interface AssignmentOption {
   module?: { title: string };
 }
 
-interface _EventData {
-  event_type: string;
-  title: string;
-  description: string | null;
-  start_time: string;
-  end_time: string;
-  location: string | null;
-  meeting_link: string | null;
-  is_recurring: boolean;
-  recurrence_rule: { days: string[]; until: string | null } | null;
-  linkedPageIds?: string[];
-  linkedSlideIds?: string[];
-  linkedAssignmentIds?: string[];
-}
-
 interface AddEventModalProps {
   open: boolean;
   onClose: () => void;
@@ -71,6 +61,23 @@ interface AddEventModalProps {
   slides?: SlideOption[];
   assignments?: AssignmentOption[];
 }
+
+const InlineRow = ({
+  icon: Icon,
+  children,
+}: {
+  icon: React.ComponentType<{ size?: number; className?: string; strokeWidth?: number }>;
+  children: React.ReactNode;
+}) => (
+  <div className="flex items-start gap-3 py-1.5">
+    <Icon
+      size={18}
+      strokeWidth={1.75}
+      className="shrink-0 mt-2.5 text-gray-400 dark:text-gray-500"
+    />
+    <div className="flex-1 min-w-0">{children}</div>
+  </div>
+);
 
 const AddEventModal = ({
   open,
@@ -86,10 +93,17 @@ const AddEventModal = ({
   const [form] = Form.useForm();
   const [isRecurring, setIsRecurring] = useState(false);
 
-  // State for linked resources
   const [linkedPageIds, setLinkedPageIds] = useState<string[]>([]);
   const [linkedSlideIds, setLinkedSlideIds] = useState<string[]>([]);
   const [linkedAssignmentIds, setLinkedAssignmentIds] = useState<string[]>([]);
+
+  const resetAll = () => {
+    form.resetFields();
+    setIsRecurring(false);
+    setLinkedPageIds([]);
+    setLinkedSlideIds([]);
+    setLinkedAssignmentIds([]);
+  };
 
   const handleSubmit = async () => {
     try {
@@ -121,8 +135,6 @@ const AddEventModal = ({
                 : null,
             }
           : null,
-        // Include linked resources only for non-recurring events
-        // For recurring events, links should be added per-occurrence after creation
         ...(isRecurring
           ? {}
           : {
@@ -133,216 +145,276 @@ const AddEventModal = ({
       };
 
       await onSubmit(eventData);
-      form.resetFields();
-      setIsRecurring(false);
-      setLinkedPageIds([]);
-      setLinkedSlideIds([]);
-      setLinkedAssignmentIds([]);
+      resetAll();
     } catch (error: unknown) {
       console.error('Form validation failed:', error);
     }
   };
 
   const handleCancel = () => {
-    form.resetFields();
-    setIsRecurring(false);
-    setLinkedPageIds([]);
-    setLinkedSlideIds([]);
-    setLinkedAssignmentIds([]);
+    resetAll();
     onClose();
   };
 
+  const hasLinks = pages.length > 0 || slides.length > 0 || assignments.length > 0;
+
   return (
-    <Drawer
-      title="Add Calendar Event"
+    <Modal
       open={open}
-      onClose={handleCancel}
-      width={600}
-      footer={
-        <div className="flex items-center justify-end">
-          <Space>
-            <Button onClick={handleCancel} type="default">
-              Cancel
-            </Button>
-            <Button type="primary" loading={loading} onClick={handleSubmit}>
-              Create Event
-            </Button>
-          </Space>
-        </div>
-      }
+      onCancel={handleCancel}
+      title={null}
+      footer={null}
+      width={560}
+      centered
+      closable={false}
+      maskClosable
+      styles={{
+        content: { padding: 0, borderRadius: 16, overflow: 'hidden' },
+        body: { padding: 0 },
+        header: { display: 'none' },
+        footer: { display: 'none' },
+      }}
     >
       <Form
         form={form}
         layout="vertical"
+        requiredMark={false}
         initialValues={{
-          event_type: 'OFFICE_HOURS',
+          event_type: eventTypes[0] ?? 'OFFICE_HOURS',
           date: dayjs(),
           start_time: dayjs(),
           end_time: dayjs().add(1, 'hour'),
         }}
       >
-        <Form.Item
-          name="event_type"
-          label="Event Type"
-          rules={[{ required: true, message: 'Please select an event type' }]}
-        >
-          <Select disabled={eventTypes.length === 1}>
-            {eventTypes.map((type: string) => (
-              <Option key={type} value={type}>
-                {getEventTypeLabel(type)}
-              </Option>
-            ))}
-          </Select>
-        </Form.Item>
-
-        <Form.Item
-          name="title"
-          label="Title"
-          rules={[{ required: true, message: 'Please enter a title' }]}
-        >
-          <Input placeholder="e.g., Prof. Smith Office Hours" />
-        </Form.Item>
-
-        <Form.Item name="description" label="Description">
-          <TextArea rows={3} placeholder="Optional description" />
-        </Form.Item>
-
-        <Space className="w-full" direction="vertical">
-          <Form.Item
-            name="date"
-            label="Date"
-            rules={[{ required: true, message: 'Please select a date' }]}
-            className="mb-2"
+        {/* Gmail-style header */}
+        <div className="flex items-center justify-between gap-3 px-5 py-3 bg-stone-50 dark:bg-neutral-800/60 border-b border-stone-200 dark:border-neutral-800">
+          <span className="text-sm font-semibold text-gray-900 dark:text-gray-100">
+            New event
+          </span>
+          <button
+            type="button"
+            onClick={handleCancel}
+            aria-label="Close"
+            className="p-1 rounded hover:bg-stone-200 dark:hover:bg-neutral-700 text-gray-500 dark:text-gray-400 transition-colors"
           >
-            <DatePicker className="w-full" />
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
+              <path
+                d="M4 4l8 8M12 4l-8 8"
+                stroke="currentColor"
+                strokeWidth="1.5"
+                strokeLinecap="round"
+              />
+            </svg>
+          </button>
+        </div>
+
+        {/* Body */}
+        <div className="px-5 pt-4 pb-2 max-h-[70vh] overflow-y-auto">
+          {/* Big title field — Gmail "Subject" style */}
+          <Form.Item
+            name="title"
+            rules={[{ required: true, message: 'Please enter a title' }]}
+            className="!mb-3"
+          >
+            <Input
+              variant="borderless"
+              placeholder="Add title"
+              className="!text-lg !font-semibold !px-0"
+              style={{ paddingLeft: 0, paddingRight: 0 }}
+            />
           </Form.Item>
 
-          <div className="grid grid-cols-2 gap-4">
+          <div className="h-px bg-stone-200 dark:bg-neutral-800" />
+
+          <InlineRow icon={IconCalendarEvent}>
             <Form.Item
-              name="start_time"
-              label="Start Time"
-              rules={[{ required: true, message: 'Required' }]}
+              name="event_type"
+              rules={[{ required: true, message: 'Please select an event type' }]}
+              className="!mb-0"
             >
-              <TimePicker format="h:mm A" use12Hours className="w-full" />
-            </Form.Item>
-
-            <Form.Item
-              name="end_time"
-              label="End Time"
-              rules={[{ required: true, message: 'Required' }]}
-            >
-              <TimePicker format="h:mm A" use12Hours className="w-full" />
-            </Form.Item>
-          </div>
-        </Space>
-
-        <Form.Item name="location" label="Location">
-          <Input placeholder="e.g., Office 123, Building A" />
-        </Form.Item>
-
-        <Form.Item name="meeting_link" label="Meeting Link">
-          <Input placeholder="e.g., https://zoom.us/j/..." />
-        </Form.Item>
-
-        <Form.Item>
-          <Checkbox checked={isRecurring} onChange={e => setIsRecurring(e.target.checked)}>
-            Recurring Event
-          </Checkbox>
-        </Form.Item>
-
-        {isRecurring && (
-          <>
-            <Form.Item
-              name="recurrence_days"
-              label="Repeat On"
-              rules={[{ required: true, message: 'Please select at least one day' }]}
-            >
-              <Checkbox.Group options={DAYS_OF_WEEK} />
-            </Form.Item>
-
-            <Form.Item
-              name="recurrence_until"
-              label="Repeat Until"
-              rules={[{ required: true, message: 'Please select an end date' }]}
-            >
-              <DatePicker className="w-full" />
-            </Form.Item>
-          </>
-        )}
-
-        {/* Resource Links Section */}
-        {(pages.length > 0 || slides.length > 0 || assignments.length > 0) && (
-          <div className="border-t pt-4 mt-4">
-            <div className="flex items-center gap-2 mb-3">
-              <LinkOutlined className="text-gray-500" />
-              <span className="font-medium">Linked Resources</span>
-            </div>
-
-            {isRecurring ? (
-              <Alert
-                type="info"
-                message="For recurring events, add resource links to specific dates by editing individual occurrences after creation."
-                className="mb-3"
-                showIcon
+              <Select
+                variant="borderless"
+                disabled={eventTypes.length === 1}
+                options={eventTypes.map(type => ({
+                  value: type,
+                  label: (
+                    <span className="inline-flex items-center gap-2">
+                      <span className={`w-2 h-2 rounded-full ${getEventTypeDotColor(type)}`} />
+                      {getEventTypeLabel(type)}
+                    </span>
+                  ),
+                }))}
               />
-            ) : (
-              <>
-                {pages.length > 0 && (
-                  <Form.Item label="Pages">
-                    <Select
-                      mode="multiple"
-                      placeholder="Select pages to link"
-                      value={linkedPageIds}
-                      onChange={setLinkedPageIds}
-                      options={pages.map((p: PageOption) => ({
-                        value: p.id,
-                        label: p.title,
-                      }))}
-                      optionFilterProp="label"
-                      allowClear
-                    />
-                  </Form.Item>
-                )}
+            </Form.Item>
+          </InlineRow>
 
-                {slides.length > 0 && (
-                  <Form.Item label="Slides">
-                    <Select
-                      mode="multiple"
-                      placeholder="Select slide decks to link"
-                      value={linkedSlideIds}
-                      onChange={setLinkedSlideIds}
-                      options={slides.map((s: SlideOption) => ({
-                        value: s.id,
-                        label: s.title,
-                      }))}
-                      optionFilterProp="label"
-                      allowClear
-                    />
-                  </Form.Item>
-                )}
+          <InlineRow icon={IconClock}>
+            <div className="grid grid-cols-[1fr_auto_auto] gap-2 items-center">
+              <Form.Item
+                name="date"
+                rules={[{ required: true, message: 'Required' }]}
+                className="!mb-0"
+              >
+                <DatePicker variant="borderless" className="w-full" />
+              </Form.Item>
+              <Form.Item
+                name="start_time"
+                rules={[{ required: true, message: 'Required' }]}
+                className="!mb-0"
+              >
+                <TimePicker
+                  variant="borderless"
+                  format="h:mm A"
+                  use12Hours
+                  className="w-28"
+                />
+              </Form.Item>
+              <Form.Item
+                name="end_time"
+                rules={[{ required: true, message: 'Required' }]}
+                className="!mb-0"
+              >
+                <TimePicker
+                  variant="borderless"
+                  format="h:mm A"
+                  use12Hours
+                  className="w-28"
+                />
+              </Form.Item>
+            </div>
+          </InlineRow>
 
-                {assignments.length > 0 && (
-                  <Form.Item label="Assignments">
-                    <Select
-                      mode="multiple"
-                      placeholder="Select assignments to link"
-                      value={linkedAssignmentIds}
-                      onChange={setLinkedAssignmentIds}
-                      options={assignments.map((a: AssignmentOption) => ({
-                        value: a.id,
-                        label: `${a.module?.title}: ${a.title}`,
-                      }))}
-                      optionFilterProp="label"
-                      allowClear
-                    />
-                  </Form.Item>
-                )}
-              </>
+          <InlineRow icon={IconRepeat}>
+            <Checkbox
+              checked={isRecurring}
+              onChange={e => setIsRecurring(e.target.checked)}
+              className="!mt-2"
+            >
+              <span className="text-sm">Repeat</span>
+            </Checkbox>
+            {isRecurring && (
+              <div className="mt-2 rounded-lg bg-stone-50 dark:bg-neutral-800/40 border border-stone-200 dark:border-neutral-800 px-3 py-3 space-y-3">
+                <Form.Item
+                  name="recurrence_days"
+                  label="Repeat on"
+                  rules={[{ required: true, message: 'Please select at least one day' }]}
+                  className="!mb-0"
+                >
+                  <Checkbox.Group options={DAYS_OF_WEEK} />
+                </Form.Item>
+                <Form.Item
+                  name="recurrence_until"
+                  label="Repeat until"
+                  rules={[{ required: true, message: 'Please select an end date' }]}
+                  className="!mb-0"
+                >
+                  <DatePicker className="w-full" />
+                </Form.Item>
+              </div>
             )}
-          </div>
-        )}
+          </InlineRow>
+
+          <InlineRow icon={IconMapPin}>
+            <Form.Item name="location" className="!mb-0 !mt-1">
+              <Input variant="borderless" placeholder="Add location" className="!px-0" />
+            </Form.Item>
+          </InlineRow>
+
+          <InlineRow icon={IconVideo}>
+            <Form.Item name="meeting_link" className="!mb-0 !mt-1">
+              <Input variant="borderless" placeholder="Add meeting link" className="!px-0" />
+            </Form.Item>
+          </InlineRow>
+
+          <InlineRow icon={IconInfoCircle}>
+            <Form.Item name="description" className="!mb-0 !mt-1">
+              <TextArea
+                variant="borderless"
+                autoSize={{ minRows: 1, maxRows: 4 }}
+                placeholder="Add description"
+                className="!px-0"
+              />
+            </Form.Item>
+          </InlineRow>
+
+          {hasLinks && (
+            <>
+              <div className="h-px bg-stone-200 dark:bg-neutral-800 my-2" />
+
+              <InlineRow icon={IconLink}>
+                {isRecurring ? (
+                  <div className="flex items-start gap-2 rounded-lg bg-[#FEF3EC] dark:bg-amber-900/20 border border-[#F4D8C5] dark:border-amber-800/40 px-3 py-2 text-xs text-[#8a5b3a] dark:text-amber-200">
+                    <IconInfoCircle size={14} className="shrink-0 mt-0.5" />
+                    <div>
+                      For recurring events, link resources to individual dates after creation.
+                    </div>
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    {pages.length > 0 && (
+                      <Select
+                        mode="multiple"
+                        placeholder="Link pages"
+                        value={linkedPageIds}
+                        onChange={setLinkedPageIds}
+                        options={pages.map(p => ({ value: p.id, label: p.title }))}
+                        optionFilterProp="label"
+                        allowClear
+                        className="w-full"
+                      />
+                    )}
+                    {slides.length > 0 && (
+                      <Select
+                        mode="multiple"
+                        placeholder="Link slide decks"
+                        value={linkedSlideIds}
+                        onChange={setLinkedSlideIds}
+                        options={slides.map(s => ({ value: s.id, label: s.title }))}
+                        optionFilterProp="label"
+                        allowClear
+                        className="w-full"
+                      />
+                    )}
+                    {assignments.length > 0 && (
+                      <Select
+                        mode="multiple"
+                        placeholder="Link assignments"
+                        value={linkedAssignmentIds}
+                        onChange={setLinkedAssignmentIds}
+                        options={assignments.map(a => ({
+                          value: a.id,
+                          label: a.module?.title
+                            ? `${a.module.title}: ${a.title}`
+                            : a.title,
+                        }))}
+                        optionFilterProp="label"
+                        allowClear
+                        className="w-full"
+                      />
+                    )}
+                  </div>
+                )}
+              </InlineRow>
+            </>
+          )}
+        </div>
+
+        {/* Footer */}
+        <div className="flex items-center justify-end gap-2 px-5 py-3 border-t border-stone-200 dark:border-neutral-800 bg-stone-50/60 dark:bg-neutral-800/40">
+          <Button onClick={handleCancel} type="text">
+            Discard
+          </Button>
+          <Button
+            type="primary"
+            loading={loading}
+            onClick={handleSubmit}
+            style={{ backgroundColor: '#619462', borderColor: '#619462' }}
+          >
+            Save
+          </Button>
+        </div>
       </Form>
-    </Drawer>
+    </Modal>
   );
 };
 

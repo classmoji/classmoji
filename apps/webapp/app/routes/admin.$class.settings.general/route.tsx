@@ -7,6 +7,7 @@ import { ActionTypes } from '~/constants';
 import { useGlobalFetcher } from '~/hooks';
 import ProfileSection from './ProfileSection';
 import DefaultPageSection from './DefaultPageSection';
+import ThemeSection from './ThemeSection';
 import { assertClassroomAccess } from '~/utils/helpers';
 import type { Route } from './+types/route';
 
@@ -54,6 +55,7 @@ const SettingsGeneral = ({ loaderData }: Route.ComponentProps) => {
         currentDefault={classroom.settings?.default_student_page || 'dashboard'}
         menuPages={menuPages}
       />
+      <ThemeSection currentTheme={classroom.settings?.theme || 'stone'} />
       <SettingSection
         title="Features"
         description="Enable or disable optional features for this classroom."
@@ -112,6 +114,16 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
       return {
         success: 'Default page updated',
         action: ActionTypes.SAVE_DEFAULT_PAGE,
+      };
+    },
+
+    async saveTheme() {
+      await ClassmojiService.classroom.updateSettings(classroom.id, {
+        theme: data.theme,
+      });
+      return {
+        success: 'Theme updated',
+        action: ActionTypes.SAVE_THEME,
       };
     },
   });

@@ -1,4 +1,3 @@
-import { Button, Tag } from 'antd';
 import dayjs from 'dayjs';
 import { IconBrandGithub } from '@tabler/icons-react';
 import { EmojisDisplay } from '~/components';
@@ -42,14 +41,20 @@ interface AssignmentCardProps {
   rolePrefix?: string;
 }
 
-const getStatusDisplay = (repoAssignment?: AssignmentCardRepositoryAssignment | null) => {
-  if (!repoAssignment) {
-    return null;
-  }
+const getStatusPill = (repoAssignment?: AssignmentCardRepositoryAssignment | null) => {
+  if (!repoAssignment) return null;
   if (repoAssignment.status === 'CLOSED') {
-    return { color: 'green', text: 'Submitted' };
+    return {
+      label: 'Submitted',
+      className:
+        'bg-[#619462]/15 text-[#3f6a40] dark:bg-[#619462]/20 dark:text-[#9BC39C]',
+    };
   }
-  return { color: 'red', text: 'Not Submitted' };
+  return {
+    label: 'Not submitted',
+    className:
+      'bg-[#D4A289]/15 text-[#8a5b3a] dark:bg-[#D4A289]/20 dark:text-[#E8C4AC]',
+  };
 };
 
 const AssignmentCard = ({
@@ -60,7 +65,7 @@ const AssignmentCard = ({
   pagesUrl,
   rolePrefix = 'student',
 }: AssignmentCardProps) => {
-  const status = getStatusDisplay(repoAssignment);
+  const statusPill = getStatusPill(repoAssignment);
   const showGrades = assignment.grades_released && (repoAssignment?.grades?.length ?? 0) > 0;
 
   const githubIssueUrl = repoAssignment?.repository?.classroom?.git_organization?.login
@@ -68,15 +73,19 @@ const AssignmentCard = ({
     : null;
 
   return (
-    <div className="bg-gray-50 dark:bg-gray-800 rounded-lg p-4 mb-3">
-      <div className="flex justify-between items-start">
-        <div className="flex-1">
-          <div className="flex items-center gap-2">
-            <h4 className="font-medium text-gray-900 dark:text-gray-100">{assignment.title}</h4>
-            {status && (
-              <Tag color={status.color} bordered={false}>
-                {status.text}
-              </Tag>
+    <div className="bg-stone-50 dark:bg-neutral-800/60 rounded-lg p-4 mb-3">
+      <div className="flex justify-between items-start gap-3">
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 flex-wrap">
+            <h4 className="font-medium text-gray-900 dark:text-gray-100">
+              {assignment.title}
+            </h4>
+            {statusPill && (
+              <span
+                className={`inline-flex items-center text-[10px] font-semibold px-2 py-0.5 rounded-full ${statusPill.className}`}
+              >
+                {statusPill.label}
+              </span>
             )}
           </div>
           <ResourceLinks
@@ -88,25 +97,25 @@ const AssignmentCard = ({
             rolePrefix={rolePrefix}
           />
         </div>
-        <div className="flex flex-col items-end gap-2 text-sm">
-          <div className="flex items-center gap-4">
-            {showGrades && <EmojisDisplay grades={repoAssignment?.grades} />}
-            {assignment.student_deadline && (
-              <span className="text-gray-500 dark:text-gray-400">
-                {dayjs(assignment.student_deadline).format('MMM D, YYYY')}
-              </span>
-            )}
-          </div>
+
+        <div className="flex items-center gap-3 shrink-0 text-sm">
+          {assignment.student_deadline && (
+            <span className="text-gray-500 dark:text-gray-400 whitespace-nowrap">
+              {dayjs(assignment.student_deadline).format('MMM D, YYYY')}
+            </span>
+          )}
+          {showGrades && <EmojisDisplay grades={repoAssignment?.grades} />}
           {githubIssueUrl && (
-            <Button
-              type="primary"
-              icon={<IconBrandGithub size={16} />}
+            <a
               href={githubIssueUrl}
               target="_blank"
-              rel="noopener noreferrer"
+              rel="noreferrer"
+              title="View GitHub issue"
+              aria-label="View GitHub issue"
+              className="inline-flex items-center justify-center w-7 h-7 rounded-md text-gray-500 hover:text-gray-900 dark:text-gray-400 dark:hover:text-gray-100 hover:bg-stone-100 dark:hover:bg-neutral-700 transition-colors"
             >
-              View Issue
-            </Button>
+              <IconBrandGithub size={16} />
+            </a>
           )}
         </div>
       </div>

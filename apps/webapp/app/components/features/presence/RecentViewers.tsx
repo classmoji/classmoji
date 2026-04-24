@@ -134,10 +134,10 @@ const RecentViewers = ({
 
   // Dropdown content - grouped or flat list
   const dropdownContent = (
-    <div className="bg-white dark:bg-gray-800 rounded-lg shadow-lg border border-gray-200 dark:border-gray-700 p-3 min-w-[280px] max-h-[70vh] overflow-y-auto">
+    <div className="bg-white dark:bg-neutral-800 rounded-lg shadow-lg border border-gray-200 dark:border-neutral-700 p-3 min-w-[280px] max-h-[70vh] overflow-y-auto">
       <div className="text-[10px] font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-3 flex items-center justify-between">
         <span>Last viewed by</span>
-        <span className="bg-gray-100 dark:bg-gray-700 px-1.5 py-0.5 rounded text-[10px] font-medium">
+        <span className="bg-gray-100 dark:bg-neutral-700 px-1.5 py-0.5 rounded text-[10px] font-medium">
           {displayTotal} {displayTotal === 1 ? 'viewer' : 'viewers'}
         </span>
       </div>
@@ -205,7 +205,7 @@ const RecentViewers = ({
           {additionalCount > 0 && (
             <Avatar
               size={28}
-              className="border-2 border-white dark:border-gray-900 bg-gray-200 dark:bg-gray-700 text-gray-600 dark:text-gray-300 text-xs font-medium"
+              className="border-2 border-white dark:border-gray-900 bg-gray-200 dark:bg-neutral-700 text-gray-600 dark:text-gray-300 text-xs font-medium"
               style={{ zIndex: 0 }}
             >
               +{additionalCount}

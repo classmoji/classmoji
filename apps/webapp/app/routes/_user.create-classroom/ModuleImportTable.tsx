@@ -97,7 +97,7 @@ const ModuleImportTable = ({
       rowKey="id"
       pagination={false}
       size="small"
-      className="border border-gray-200 dark:border-gray-700 rounded-lg"
+      className="border border-gray-200 dark:border-neutral-700 rounded-lg"
     />
   );
 };

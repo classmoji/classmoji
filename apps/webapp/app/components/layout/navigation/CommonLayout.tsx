@@ -1,12 +1,12 @@
 import { Avatar, Tooltip } from 'antd';
 import { Link, useParams, useLocation, useRouteLoaderData } from 'react-router';
-import { useEffect } from 'react';
-import { IconLayoutSidebarLeftCollapse, IconFileText } from '@tabler/icons-react';
+import { useEffect, useState } from 'react';
+import { IconFileText, IconMenu2 } from '@tabler/icons-react';
 import useLocalStorageState from 'use-local-storage-state';
 import { Logo } from '@classmoji/ui-components';
 import { ProTierFeature, RequireRole, RecentViewers } from '~/components';
-import { useRoleSettings, useSubscription, useRole } from '~/hooks';
-import { routes, routeCategories, DEMO_ORG_ID } from '~/constants';
+import { useRoleSettings, useSubscription, useRole, useDarkMode } from '~/hooks';
+import { routes, routeCategories, DEMO_ORG_ID, getThemeByKey } from '~/constants';
 import OrgSelect from './OrgSelect';
 import useStore from '~/store';
 import tokenImage from '~/assets/images/token.png';
@@ -51,6 +51,7 @@ const CommonLayout = ({
   const [collapsed, setCollapsed] = useLocalStorageState('classmoji-collapsed', {
     defaultValue: false,
   });
+  const [mobileOpen, setMobileOpen] = useState(false);
   const { classroom } = useStore();
   const params = useParams();
 
@@ -68,6 +69,9 @@ const CommonLayout = ({
   const { user, memberships = [], aiAgentAvailable = false } = rootData ?? {};
   const { isProTier } = useSubscription();
   const { tokenBalance } = useStore();
+  const { isDarkMode } = useDarkMode();
+  const themeColors = getThemeByKey(classroom?.settings?.theme);
+  const themeBackground = isDarkMode ? themeColors.darkBackground : themeColors.background;
 
   useEffect(() => {
     const handle = (e: KeyboardEvent) => {
@@ -80,7 +84,11 @@ const CommonLayout = ({
     return () => window.removeEventListener('keydown', handle);
   }, [collapsed, setCollapsed]);
 
-  const siderWidth = collapsed ? 64 : 200;
+  useEffect(() => {
+    setMobileOpen(false);
+  }, [pathname]);
+
+  const siderWidth = collapsed ? 64 : 240;
 
   const TokenSection = () => (
     <div className="flex items-center justify-between gap-2">
@@ -115,12 +123,12 @@ const CommonLayout = ({
           to={`${roleSettings?.path}/${params.class}${item.link}`}
           prefetch={item.label === 'Dashboard' ? 'render' : 'intent'}
           className={`
-            group flex items-center gap-3 rounded-lg transition-all duration-150
-            ${collapsed ? 'justify-center p-3 mx-2' : 'px-3 py-[7px] mx-2'}
+            group flex items-center gap-2.5 rounded-md transition-colors duration-150
+            ${collapsed ? 'justify-center p-2 mx-1.5' : 'px-2 py-1.5 mx-1.5'}
             ${
               active
-                ? 'bg-primary-50 dark:bg-primary-900/30 text-primary-700 dark:text-primary-400 font-semibold'
-                : 'text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800'
+                ? 'bg-gray-100 dark:bg-neutral-800 text-gray-900 dark:text-gray-100'
+                : 'text-gray-700 dark:text-gray-300 hover:bg-gray-100/70 dark:hover:bg-neutral-800/60'
             }
           `}
           data-active={active || undefined}
@@ -128,11 +136,7 @@ const CommonLayout = ({
           {collapsed ? (
             <Tooltip title={item.label} placement="right">
               <div className="flex flex-col items-center">
-                <item.icon
-                  size={20}
-                  strokeWidth={1.75}
-                  className={active ? 'text-primary-700 dark:text-primary-400' : ''}
-                />
+                <item.icon size={20} strokeWidth={1.75} />
                 {isDemoClassroom && item.isProTier && (
                   <span className="text-[10px] text-amber-600 dark:text-amber-400 mt-0.5">Pro</span>
                 )}
@@ -140,11 +144,7 @@ const CommonLayout = ({
             </Tooltip>
           ) : (
             <>
-              <item.icon
-                size={20}
-                strokeWidth={1.75}
-                className={`shrink-0 ${active ? 'text-primary-700 dark:text-primary-400' : ''}`}
-              />
+              <item.icon size={20} strokeWidth={1.75} className="shrink-0" />
               <span className="flex-1">{item.label}</span>
               {isDemoClassroom && item.isProTier && (
                 <span className="text-xs text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-900/30 px-1.5 py-0.5 rounded-sm">
@@ -183,9 +183,9 @@ const CommonLayout = ({
           key={page.id}
           to={`${roleSettings?.path}/${params.class}/pages/${page.id}`}
           className={`
-            group flex items-center gap-3 rounded-lg transition-all duration-150 w-full
-            ${collapsed ? 'justify-center p-3 mx-2' : 'px-3 py-[7px] mx-2'}
-            text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800
+            group flex items-center gap-2.5 rounded-md transition-colors duration-150 w-full
+            ${collapsed ? 'justify-center p-2 mx-1.5' : 'px-2 py-1.5 mx-1.5'}
+            text-gray-700 dark:text-gray-300 hover:bg-gray-100/70 dark:hover:bg-neutral-800/60
           `}
         >
           {collapsed ? (
@@ -203,7 +203,7 @@ const CommonLayout = ({
     });
 
     return (
-      <div key="menu-pages" className={collapsed ? '' : 'pt-5'}>
+      <div key="menu-pages" className={collapsed ? '' : 'pt-7'}>
         {!collapsed && (
           <div className="px-4 mb-3">
             <h4 className="text-[11px] font-bold text-gray-400 dark:text-gray-500 uppercase tracking-wider">
@@ -211,7 +211,7 @@ const CommonLayout = ({
             </h4>
           </div>
         )}
-        <div className="space-y-0.5">{menuPageItems}</div>
+        <div className="space-y-1">{menuPageItems}</div>
       </div>
     );
   };
@@ -238,7 +238,7 @@ const CommonLayout = ({
       );
 
       return (
-        <div key={categoryKey} className={collapsed ? '' : 'pt-5'}>
+        <div key={categoryKey} className={collapsed ? '' : 'pt-7'}>
           {/* Category Header - only show when expanded */}
           {!collapsed && (
             <div className="px-4 mb-3">
@@ -247,7 +247,7 @@ const CommonLayout = ({
               </h4>
             </div>
           )}
-          <div className="space-y-0.5">{categoryItems}</div>
+          <div className="space-y-1">{categoryItems}</div>
         </div>
       );
     }),
@@ -257,133 +257,190 @@ const CommonLayout = ({
   ];
 
   return (
-    <div className="flex h-screen bg-gray-50 dark:bg-gray-900">
-      {/* Fixed Sidebar */}
+    <div className="flex h-screen p-2" style={{ backgroundColor: themeBackground }}>
+      {/* Floating Sidebar */}
       <div
-        className="fixed top-0 left-0 h-full bg-lightGray dark:bg-gray-900 border-r border-gray-200 dark:border-gray-800 z-30 transition-all duration-300 ease-in-out flex flex-col"
+        className={`fixed top-7 left-5 bottom-7 bg-white dark:bg-neutral-900 rounded-2xl ring-1 ring-stone-200 dark:ring-neutral-800 z-30 transition-transform duration-300 ease-in-out flex flex-col overflow-hidden lg:translate-x-0 ${
+          mobileOpen ? 'translate-x-0' : '-translate-x-[110%]'
+        }`}
         style={{ width: siderWidth }}
       >
-        {/* Sidebar Header */}
+        {/* Sidebar Header — Logo + collapse toggle */}
         <div
-          className={`flex items-center ${collapsed ? 'justify-center' : 'justify-start'} h-[53px] px-4 py-3 border-b border-gray-200 dark:border-gray-800`}
+          className={`flex items-center px-4 py-3 shrink-0 ${
+            collapsed ? 'flex-col gap-2' : 'justify-between gap-2 h-[53px]'
+          }`}
         >
           <Link to="/select-organization" className="flex items-center">
             {collapsed ? <Logo size={32} variant="icon" /> : <Logo size={32} variant="full" />}
           </Link>
+          <Tooltip
+            title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+            placement={collapsed ? 'right' : 'bottom'}
+          >
+            <button
+              type="button"
+              onClick={() => setCollapsed(!collapsed)}
+              aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+              className="hidden lg:inline-flex p-1.5 rounded-md text-gray-500 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200 hover:bg-gray-100 dark:hover:bg-neutral-800 transition-colors"
+            >
+              <svg
+                width="18"
+                height="18"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.75"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                className={collapsed ? 'scale-x-[-1]' : ''}
+              >
+                <path d="M4 6 L20 6" />
+                <path d="M4 12 L13 12" />
+                <path d="M16 9 L19 12 L16 15" />
+                <path d="M4 18 L20 18" />
+              </svg>
+            </button>
+          </Tooltip>
         </div>
 
+        {/* Class selector */}
+        {!collapsed && memberships.length > 0 && (
+          <div className="px-3 pb-3 shrink-0">
+            <div className="rounded-md border border-stone-200 dark:border-neutral-700 hover:border-stone-300 dark:hover:border-gray-600 transition-colors">
+              <OrgSelect memberships={memberships} />
+            </div>
+          </div>
+        )}
+
+        {/* Token chip (student + pro tier) */}
+        {!collapsed && (
+          <ProTierFeature>
+            <RequireRole roles={['STUDENT']}>
+              <div className="px-3 pb-3 shrink-0">
+                <TokenSection />
+              </div>
+            </RequireRole>
+          </ProTierFeature>
+        )}
+
+        {/* Recent viewers */}
+        {!collapsed && recentViewers?.length > 0 && (
+          <>
+            <div className="mx-4 h-px bg-stone-200 dark:bg-neutral-800 shrink-0" />
+            <div className="px-3 pb-3 pt-3 shrink-0">
+              <RecentViewers viewers={recentViewers} groupByRole={groupViewersByRole} />
+            </div>
+          </>
+        )}
+
         {/* Navigation */}
+        <div className="mx-4 h-px bg-stone-200 dark:bg-neutral-800 shrink-0" />
         <nav className="flex-1 overflow-y-auto py-2">
-          <div className="space-y-0.5">{tabs}</div>
+          <div className="space-y-1">{tabs}</div>
         </nav>
 
-        {/* User Profile Section */}
-        <div className="p-3 border-t border-gray-100 dark:border-gray-800">
-          <ProfileDropdown placement="topRight">
-            <div
-              className={`
-                flex items-center gap-3 p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800
-                transition-colors cursor-pointer
-                ${collapsed ? 'justify-center' : ''}
-              `}
+        {/* Bottom row: profile + GitHub + collapse */}
+        <div className="mx-4 h-px bg-stone-200 dark:bg-neutral-800 shrink-0" />
+        <div
+          className={`px-2 py-2 shrink-0 flex items-center gap-1 ${collapsed ? 'flex-col' : ''}`}
+        >
+          <ProfileDropdown placement="topLeft">
+            <button
+              type="button"
+              className={`flex items-center gap-2.5 p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-neutral-800 transition-colors text-left min-w-0 ${collapsed ? 'justify-center' : 'flex-1'}`}
             >
               <Avatar
                 src={user?.avatar_url}
                 size={32}
-                className="bg-gray-100 dark:bg-gray-800 shrink-0"
-                shape="circle"
-              />
+                className="bg-pink-100 text-pink-700 dark:bg-pink-900/30 dark:text-pink-300 shrink-0 font-semibold"
+              >
+                {user?.name?.[0]?.toUpperCase() ?? '?'}
+              </Avatar>
               {!collapsed && (
                 <div className="min-w-0 flex-1">
-                  <p className="font-medium text-sm text-gray-900 dark:text-gray-100 truncate">
+                  <div className="font-semibold text-sm text-gray-900 dark:text-gray-100 truncate leading-tight">
                     {user?.name}
-                  </p>
-                  <p className="text-gray-500 dark:text-gray-400 text-xs truncate">
-                    @{user?.login}
-                  </p>
+                  </div>
+                  <div className="text-xs text-gray-500 dark:text-gray-400 capitalize truncate leading-tight">
+                    {role ? role.toLowerCase() : ''}
+                  </div>
                 </div>
               )}
-            </div>
+            </button>
           </ProfileDropdown>
+          {classroom?.git_organization?.login && (
+            <Tooltip title="View on GitHub">
+              <button
+                type="button"
+                className="p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-neutral-800 transition-colors shrink-0"
+                onClick={() =>
+                  window.open(
+                    `https://github.com/orgs/${classroom.git_organization?.login}/repositories`,
+                    '_blank'
+                  )
+                }
+              >
+                <img src={githubLogo} alt="GitHub" className="w-[16px] h-[16px] dark:invert" />
+              </button>
+            </Tooltip>
+          )}
         </div>
       </div>
 
       {/* Main Content Area */}
       <div
-        className="flex-1 flex flex-col transition-all duration-300 ease-in-out min-w-0"
-        style={{ marginLeft: siderWidth }}
+        className="flex-1 flex flex-col transition-all duration-300 ease-in-out min-w-0 lg:ml-[calc(var(--sider-width)+0.5rem)]"
+        style={{ '--sider-width': `${siderWidth}px` } as React.CSSProperties}
       >
-        {/* Fixed Header */}
-        <div
-          className="fixed right-0 h-[53px] bg-white dark:bg-gray-900 border-b border-gray-200 dark:border-gray-800 z-20"
-          style={{
-            marginLeft: siderWidth,
-            width: `calc(100% - ${siderWidth}px)`,
-            transition: 'margin-left 300ms ease-in-out, width 300ms ease-in-out',
-          }}
-        >
-          <div className="flex justify-between items-center px-1 h-full">
-            <button
-              onClick={() => setCollapsed(!collapsed)}
-              className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors"
-              aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-            >
-              <IconLayoutSidebarLeftCollapse
-                size={20}
-                className={`text-gray-700 dark:text-gray-300 transition-all duration-300 ${
-                  collapsed ? 'rotate-180' : ''
-                }`}
-              />
-            </button>
-            <div className="flex items-center gap-4">
-              {recentViewers?.length > 0 && (
-                <>
-                  <RecentViewers viewers={recentViewers} groupByRole={groupViewersByRole} />
-                  <div className="h-6 w-px bg-gray-200 dark:bg-gray-700" />
-                </>
-              )}
-              <ProTierFeature>
-                <RequireRole roles={['STUDENT']}>
-                  <>
-                    <TokenSection />
-                    <div className="h-6 w-px bg-gray-200 dark:bg-gray-700" />
-                  </>
-                </RequireRole>
-              </ProTierFeature>
-              <div className="flex items-center gap-2">
-                <Tooltip title="View on GitHub">
-                  <button
-                    className="p-2 rounded-lg hover:bg-primary-50 dark:hover:bg-primary-900/20 transition-colors border border-gray-200 dark:border-gray-700 hover:border-primary-300 dark:hover:border-primary-800 cursor-pointer"
-                    onClick={() =>
-                      window.open(
-                        `https://github.com/orgs/${classroom?.git_organization?.login}/repositories`,
-                        '_blank'
-                      )
-                    }
-                  >
-                    <img src={githubLogo} alt="GitHub" className="w-[18px] h-[18px] dark:invert" />
-                  </button>
-                </Tooltip>
-                <div className="h-6 w-px bg-gray-200 dark:bg-gray-700" />
-                <OrgSelect memberships={memberships} />
-              </div>
-            </div>
-          </div>
-        </div>
+        {/* Mobile-only hamburger (when sidebar is closed) */}
+        {!mobileOpen && (
+          <button
+            type="button"
+            onClick={() => setMobileOpen(true)}
+            aria-label="Open menu"
+            className="fixed top-4 left-4 z-40 p-1 lg:hidden"
+          >
+            <IconMenu2 size={24} className="text-gray-800 dark:text-gray-200" strokeWidth={1.75} />
+          </button>
+        )}
 
-        {/* Content */}
-        <div className="flex-1 bg-white dark:bg-gray-900 pt-11 overflow-auto relative min-w-0">
-          <div className={pathname.includes('/pages/') ? 'min-h-full' : 'px-8 py-6 min-h-full'}>
+        {/* Content area — bare canvas on dashboard, floating white card elsewhere */}
+        <div
+          className={`flex-1 overflow-auto relative min-w-0 ${
+            pathname.includes('/dashboard') ||
+            pathname.includes('/modules') ||
+            pathname.includes('/calendar') ||
+            pathname.includes('/assignments') ||
+            pathname.includes('/regrade-requests') ||
+            pathname.includes('/settings') ||
+            pathname.includes('/students') ||
+            pathname.includes('/grading') ||
+            pathname.match(/\/pages(\/|$)/) ||
+            pathname.match(/\/grades(\/|$)/) ||
+            pathname.match(/\/repositories(\/|$)/)
+              ? ''
+              : 'bg-white dark:bg-neutral-900 rounded-2xl ring-1 ring-stone-200 dark:ring-neutral-800'
+          }`}
+        >
+          <div
+            className={
+              pathname.includes('/pages/') && !pathname.endsWith('/pages/new')
+                ? 'min-h-full'
+                : 'px-4 pt-14 pb-4 sm:px-6 lg:px-8 lg:pt-6 lg:pb-6 min-h-full'
+            }
+          >
             {children}
           </div>
         </div>
       </div>
 
       {/* Mobile Overlay */}
-      {!collapsed && (
+      {mobileOpen && (
         <button
           className="fixed inset-0 bg-black/50 z-20 lg:hidden"
-          onClick={() => setCollapsed(true)}
+          onClick={() => setMobileOpen(false)}
+          aria-label="Close menu"
         />
       )}
     </div>

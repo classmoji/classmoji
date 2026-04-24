@@ -14,7 +14,7 @@ import axios from 'axios';
 
 import React, { useEffect } from 'react';
 import dayjs from 'dayjs';
-import { ToastContainer } from 'react-toastify';
+import { ToastContainer, cssTransition } from 'react-toastify';
 import { ConfigProvider, theme } from 'antd';
 import { IconMoodSad } from '@tabler/icons-react';
 import { auth as triggerAuth } from '@trigger.dev/sdk';
@@ -49,6 +49,13 @@ import '~/styles/tailwind.css';
 import '~/styles/global.css';
 
 React.useLayoutEffect = React.useEffect;
+
+const ToastFade = cssTransition({
+  enter: 'toast-fade-in',
+  exit: 'toast-fade-out',
+  collapse: true,
+  collapseDuration: 220,
+});
 
 export const meta = () => {
   return [{ title: 'Classmoji' }];
@@ -130,6 +137,7 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
                   select: {
                     quizzes_enabled: true,
                     slides_enabled: true,
+                    theme: true,
                     updated_at: true,
                   },
                 },
@@ -161,6 +169,7 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
                     select: {
                       quizzes_enabled: true,
                       slides_enabled: true,
+                      theme: true,
                       updated_at: true,
                     },
                   },
@@ -208,6 +217,7 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
                       select: {
                         quizzes_enabled: true,
                         slides_enabled: true,
+                        theme: true,
                         updated_at: true,
                       },
                     },
@@ -385,15 +395,17 @@ const App = ({ loaderData }: Route.ComponentProps) => {
             <UserContext.Provider value={{ user }}>
               <FetcherContext.Provider value={{ fetcher, notify }}>
                 <ToastContainer
-                  position="top-center"
-                  autoClose={3000}
+                  position="bottom-center"
+                  autoClose={4000}
                   hideProgressBar
                   newestOnTop={false}
-                  closeOnClick
+                  closeOnClick={false}
                   pauseOnFocusLoss
-                  draggable
+                  draggable={false}
                   pauseOnHover
-                  theme="colored"
+                  icon={false}
+                  theme="light"
+                  transition={ToastFade}
                 />
 
                 <ImpersonationBanner
@@ -540,7 +552,7 @@ export function ErrorBoundary() {
               <div className="flex flex-col sm:flex-row gap-3 justify-center">
                 <button
                   onClick={() => (window.location.href = '/')}
-                  className="px-5 py-2.5 text-sm font-medium rounded-lg border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-800 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
+                  className="px-5 py-2.5 text-sm font-medium rounded-lg border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 bg-white dark:bg-neutral-800 hover:bg-gray-50 dark:hover:bg-neutral-700 transition-colors"
                 >
                   Back to Home
                 </button>
@@ -554,7 +566,7 @@ export function ErrorBoundary() {
 
               {isDevelopment && !!error && (
                 <div className="mt-8" key="dev-error">
-                  <pre className="p-4 bg-gray-900 dark:bg-gray-950 rounded-lg text-xs overflow-auto max-h-80 border border-gray-200 dark:border-gray-800">
+                  <pre className="p-4 bg-gray-900 dark:bg-neutral-950 rounded-lg text-xs overflow-auto max-h-80 border border-gray-200 dark:border-neutral-800">
                     <code className="text-red-400">
                       {errorStatus
                         ? `Response ${errorStatus}: ${errorMessage}`

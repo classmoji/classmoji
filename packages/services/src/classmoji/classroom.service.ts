@@ -22,6 +22,7 @@ const SAFE_SETTINGS_FIELDS = [
   'show_grades_to_students',
   'default_student_page',
   'recent_viewers_enabled',
+  'theme',
 ];
 
 /**

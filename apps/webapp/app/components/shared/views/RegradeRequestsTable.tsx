@@ -4,7 +4,6 @@ import { useGlobalFetcher, useRole } from '~/hooks';
 import {
   Emoji,
   EmojiGrader,
-  PageHeader,
   TableActionButtons,
   UserThumbnailView,
   EmojisDisplay,
@@ -203,8 +202,11 @@ const RegradeRequestsTable = ({ requests, emojiMappings, org }: RegradeRequestsT
   ];
 
   return (
-    <>
-      <PageHeader title="Resubmit Requests" routeName="regrade-requests">
+    <div className="min-h-full">
+      <div className="flex items-center justify-between gap-3 mt-2 mb-4">
+        <h1 className="text-base font-semibold text-gray-600 dark:text-gray-400">
+          Resubmit Requests
+        </h1>
         {role === 'STUDENT' && (
           <Button
             onClick={() => navigate(`/student/${classSlug}/regrade-requests/new`)}
@@ -213,10 +215,9 @@ const RegradeRequestsTable = ({ requests, emojiMappings, org }: RegradeRequestsT
             Request Resubmit
           </Button>
         )}
-      </PageHeader>
+      </div>
 
-      <div className="space-y-6">
-        {/* Requests Table */}
+      <div className="rounded-2xl overflow-hidden bg-white dark:bg-neutral-900 min-h-[calc(100vh-10rem)] p-5 sm:p-6">
         <Table
           dataSource={requests}
           columns={columns.filter(col => !col.hidden)}
@@ -230,21 +231,19 @@ const RegradeRequestsTable = ({ requests, emojiMappings, org }: RegradeRequestsT
           }}
           locale={{
             emptyText: (
-              <div className="text-center py-8 text-gray-500">
-                <div className="text-4xl mb-2">📝</div>
-                <div>No regrade requests yet</div>
+              <div className="text-center py-12 text-gray-500">
+                <div className="font-medium">No regrade requests yet</div>
                 <div className="text-sm">
                   {role === 'STUDENT'
-                    ? 'Submit your first request to get started!'
+                    ? 'Submit your first request to get started.'
                     : "Students haven't submitted any requests yet."}
                 </div>
               </div>
             ),
           }}
-          className="rounded-lg"
         />
       </div>
-    </>
+    </div>
   );
 };
 

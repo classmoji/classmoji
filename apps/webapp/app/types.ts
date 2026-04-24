@@ -12,6 +12,7 @@ type UserInclude = {
               select: {
                 quizzes_enabled: true;
                 slides_enabled: true;
+                theme: true;
                 updated_at: true;
               };
             };

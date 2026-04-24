@@ -200,7 +200,7 @@ const StudentsTable = ({ students, query }: StudentsTableProps) => {
   ];
 
   return (
-    <div className="mt-4">
+    <div className="rounded-2xl bg-white dark:bg-neutral-900 ring-1 ring-stone-200 dark:ring-neutral-800 p-5 sm:p-6 min-h-[calc(100vh-10rem)]">
       <Table
         columns={columns}
         dataSource={students}
@@ -215,20 +215,17 @@ const StudentsTable = ({ students, query }: StudentsTableProps) => {
         }}
         locale={{
           emptyText: query ? (
-            <div className="text-center py-8 text-gray-500">
-              <div className="text-4xl mb-2">🔍</div>
-              <div>No students found matching &apos;{query}&apos;</div>
-              <div className="text-sm">Try adjusting your search terms</div>
+            <div className="text-center py-8 text-gray-500 dark:text-gray-400">
+              <div className="font-medium">No students found matching &apos;{query}&apos;</div>
+              <div className="text-sm">Try adjusting your search terms.</div>
             </div>
           ) : (
-            <div className="text-center py-8 text-gray-500">
-              <div className="text-4xl mb-2">👨‍🎓</div>
-              <div>No students enrolled yet</div>
-              <div className="text-sm">Add your first student to get started!</div>
+            <div className="text-center py-8 text-gray-500 dark:text-gray-400">
+              <div className="font-medium">No students enrolled yet</div>
+              <div className="text-sm">Add your first student to get started.</div>
             </div>
           ),
         }}
-        className="rounded-lg"
       />
     </div>
   );

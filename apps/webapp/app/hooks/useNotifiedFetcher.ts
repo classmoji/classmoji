@@ -45,7 +45,7 @@ export const useNotifiedFetcher = () => {
     }
   }, [fetcher.state, fetcher.data]);
 
-  const notify = (action: string, message?: string, position: ToastPosition = 'top-center') => {
+  const notify = (action: string, message?: string, position: ToastPosition = 'bottom-center') => {
     if (toastIds.current.has(action)) {
       dismissToast(action);
     }

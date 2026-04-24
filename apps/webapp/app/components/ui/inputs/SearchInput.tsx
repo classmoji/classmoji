@@ -9,11 +9,17 @@ interface SearchInputProps {
   className?: string;
 }
 
-const SearchInput = ({ query, setQuery, placeholder, width = '350px' }: SearchInputProps) => {
+const SearchInput = ({
+  query,
+  setQuery,
+  placeholder,
+  width,
+  className = 'mb-6',
+}: SearchInputProps) => {
   return (
     <Input
-      className={`mb-6`}
-      style={{ width: width }}
+      className={className}
+      style={width ? { width } : undefined}
       prefix={<IconSearch size={16} />}
       placeholder={placeholder}
       onChange={e => setQuery(e.target.value)}

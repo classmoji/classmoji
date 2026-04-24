@@ -123,9 +123,9 @@ export const getEventTypeColor = (eventType: string) => {
     SECTION: 'bg-teal-50 dark:bg-teal-900/20 border-teal-200 dark:border-teal-700',
     ASSESSMENT: 'bg-amber-50 dark:bg-amber-900/20 border-amber-200 dark:border-amber-700',
     REVIEW_SESSION: 'bg-orange-50 dark:bg-orange-900/20 border-orange-200 dark:border-orange-700',
-    HOLIDAY: 'bg-gray-50 dark:bg-gray-900/20 border-gray-200 dark:border-gray-700',
+    HOLIDAY: 'bg-gray-50 dark:bg-neutral-900/20 border-gray-200 dark:border-neutral-700',
     DEADLINE: 'bg-rose-50 dark:bg-rose-900/20 border-rose-200 dark:border-rose-700',
-    OTHER: 'bg-gray-50 dark:bg-gray-900/20 border-gray-200 dark:border-gray-700',
+    OTHER: 'bg-gray-50 dark:bg-neutral-900/20 border-gray-200 dark:border-neutral-700',
   };
   return colors[eventType] || colors.OTHER;
 };
@@ -488,9 +488,9 @@ export const getEventTypeLightBg = (eventType: string) => {
     SECTION: 'bg-teal-100 dark:bg-teal-900/30',
     ASSESSMENT: 'bg-amber-100 dark:bg-amber-900/30',
     REVIEW_SESSION: 'bg-orange-100 dark:bg-orange-900/30',
-    HOLIDAY: 'bg-gray-100 dark:bg-gray-800/50',
+    HOLIDAY: 'bg-gray-100 dark:bg-neutral-800/50',
     DEADLINE: 'bg-rose-100 dark:bg-rose-900/30',
-    OTHER: 'bg-gray-100 dark:bg-gray-800/50',
+    OTHER: 'bg-gray-100 dark:bg-neutral-800/50',
   };
   return colors[eventType] || colors.OTHER;
 };

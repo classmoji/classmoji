@@ -7,7 +7,7 @@ interface SignInPageProps {
 
 const SignInPage = ({ handleGitHubLogin }: SignInPageProps) => {
   return (
-    <div className="min-h-screen dark:bg-gray-950 flex flex-col">
+    <div className="min-h-screen dark:bg-neutral-950 flex flex-col">
       {/* Main content */}
       <main className="flex-1 flex items-center justify-center px-4">
         <div className="w-64">

@@ -48,7 +48,7 @@ const DropZone = ({ id, targetType, targetId, isOver, children, hasResources }: 
           className={`
           flex items-center justify-center h-12 border border-dashed rounded-md
           text-xs text-gray-400 dark:text-gray-500
-          ${isActive ? 'border-primary bg-primary/5' : 'border-gray-200 dark:border-gray-700'}
+          ${isActive ? 'border-primary bg-primary/5' : 'border-gray-200 dark:border-neutral-700'}
         `}
         >
           {isActive ? 'Drop here' : 'Drop resources'}
@@ -90,10 +90,10 @@ const AssignmentSection = ({
   const count = pages.length + slides.length;
 
   return (
-    <div className="border-t border-gray-100 dark:border-gray-700">
+    <div className="border-t border-gray-100 dark:border-neutral-700">
       <button
         onClick={() => setExpanded(!expanded)}
-        className="w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors"
+        className="w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-gray-50 dark:hover:bg-neutral-700/50 transition-colors"
       >
         {expanded ? (
           <IconChevronDown size={14} className="text-gray-400" />
@@ -103,7 +103,7 @@ const AssignmentSection = ({
         <span className="flex-1 text-sm text-gray-600 dark:text-gray-300 truncate">
           {assignment.title}
         </span>
-        <span className="text-xs text-gray-400 bg-gray-100 dark:bg-gray-700 px-1.5 py-0.5 rounded">
+        <span className="text-xs text-gray-400 bg-gray-100 dark:bg-neutral-700 px-1.5 py-0.5 rounded">
           {count}
         </span>
       </button>
@@ -173,14 +173,14 @@ const ModuleColumn = ({
   }, moduleCount);
 
   return (
-    <div className="flex flex-col flex-shrink-0 min-w-[300px] max-w-[340px] bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 shadow-sm">
+    <div className="flex flex-col flex-shrink-0 min-w-[300px] max-w-[340px] bg-white dark:bg-neutral-800 rounded-lg border border-gray-200 dark:border-neutral-700 shadow-sm">
       {/* Module Header */}
-      <div className="px-4 py-3 border-b border-gray-100 dark:border-gray-700 flex items-center gap-2">
+      <div className="px-4 py-3 border-b border-gray-100 dark:border-neutral-700 flex items-center gap-2">
         <IconFolder size={18} className="text-gray-500 dark:text-gray-400" />
         <span className="flex-1 font-medium text-gray-800 dark:text-gray-200 truncate">
           {module.title}
         </span>
-        <span className="text-xs text-gray-400 bg-gray-100 dark:bg-gray-700 px-2 py-0.5 rounded-full">
+        <span className="text-xs text-gray-400 bg-gray-100 dark:bg-neutral-700 px-2 py-0.5 rounded-full">
           {totalCount}
         </span>
       </div>
@@ -259,11 +259,11 @@ const SourceColumn = ({ pages, slides }: SourceColumnProps) => {
   const count = pages.length + slides.length;
 
   return (
-    <div className="flex flex-col w-[280px] min-w-[280px] bg-gray-50 dark:bg-gray-900 rounded-lg border border-gray-200 dark:border-gray-700">
+    <div className="flex flex-col w-[280px] min-w-[280px] bg-gray-50 dark:bg-neutral-900 rounded-lg border border-gray-200 dark:border-neutral-700">
       {/* Header */}
-      <div className="px-4 py-3 border-b border-gray-200 dark:border-gray-700 flex items-center gap-2 bg-gray-100 dark:bg-gray-800 rounded-t-lg">
+      <div className="px-4 py-3 border-b border-gray-200 dark:border-neutral-700 flex items-center gap-2 bg-gray-100 dark:bg-neutral-800 rounded-t-lg">
         <span className="flex-1 font-medium text-gray-700 dark:text-gray-200">All Resources</span>
-        <span className="text-xs text-gray-500 bg-gray-200 dark:bg-gray-700 px-2 py-0.5 rounded-full">
+        <span className="text-xs text-gray-500 bg-gray-200 dark:bg-neutral-700 px-2 py-0.5 rounded-full">
           {count}
         </span>
       </div>

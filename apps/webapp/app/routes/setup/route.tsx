@@ -34,7 +34,7 @@ const SetupPage = ({ loaderData }: Route.ComponentProps) => {
   const { manifest, error } = loaderData;
 
   return (
-    <div className="min-h-screen bg-gray-50 dark:bg-gray-950 flex flex-col items-center justify-center p-4">
+    <div className="min-h-screen bg-gray-50 dark:bg-neutral-950 flex flex-col items-center justify-center p-4">
       <div className="w-full max-w-[450px]">
         <div className="text-center mb-8">
           <div className="flex justify-center mb-4">

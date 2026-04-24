@@ -3,15 +3,14 @@ import { Modal } from 'antd';
 import invariant from 'tiny-invariant';
 import { data, useFetcher, useParams } from 'react-router';
 import type { Route } from './+types/route';
-import { PageHeader } from '~/components';
 import { ClassmojiService } from '@classmoji/services';
 import { assertClassroomAccess } from '~/utils/helpers';
 import { buildCalendarUrl, getCalendarDateRange } from '~/utils/calendar.server';
-import CourseCalendar from '~/components/features/calendar/CourseCalendar';
 import CalendarSubscriptionCard from '~/components/features/calendar/CalendarSubscriptionCard';
 import EventCard from '~/components/features/calendar/EventCard';
 import EventLinks from '~/components/features/calendar/EventLinks';
 import type { CalendarEventWithLinks } from '~/components/features/calendar/types';
+import StudentCalendarView from './StudentCalendarView';
 
 export const loader = async ({ request, params }: Route.LoaderArgs) => {
   const { class: classSlug } = params;
@@ -110,17 +109,16 @@ const StudentCalendar = ({ loaderData }: Route.ComponentProps) => {
   };
 
   return (
-    <div>
-      <PageHeader title="Calendar" routeName="calendar">
+    <div className="min-h-full">
+      <div className="flex items-center justify-between gap-3 mt-2 mb-4">
+        <h1 className="text-base font-semibold text-gray-600 dark:text-gray-400">Calendar</h1>
         <CalendarSubscriptionCard subscriptionUrl={subscriptionUrl} />
-      </PageHeader>
+      </div>
 
-      <CourseCalendar
+      <StudentCalendarView
         events={events}
         onEventClick={handleEventClick}
-        onEventDrop={null}
         onMonthChange={handleMonthChange}
-        showCreator={true}
       />
 
       <Modal

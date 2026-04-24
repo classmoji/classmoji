@@ -6,7 +6,7 @@ import { toast } from 'react-toastify';
 import { assertClassroomAccess } from '~/utils/helpers';
 import { ClassmojiService } from '@classmoji/services';
 import getPrisma from '@classmoji/database';
-import { PageHeader, TableActionButtons, RecentViewers } from '~/components';
+import { TableActionButtons, RecentViewers } from '~/components';
 import type { Route } from './+types/route';
 
 export const loader = async ({ request, params }: Route.LoaderArgs) => {
@@ -322,59 +322,52 @@ export default function AdminPages({ loaderData }: Route.ComponentProps) {
   ];
 
   return (
-    <div>
+    <div className="min-h-full">
       <Outlet />
 
-      <div className="mb-4  items-center">
-        <div className="flex justify-between items-start">
-          <PageHeader title="Pages" routeName="pages" />
-          <div className="flex gap-2 items-center justify-between">
-            <Input
-              placeholder="Search page..."
-              value={searchText}
-              onChange={e => setSearchText(e.target.value)}
-              style={{ width: 300 }}
-            />
-            <Link to={`/admin/${classSlug}/pages/new`}>
-              <Button type="primary" icon={<IconPlus size={16} />}>
-                New Page
-              </Button>
-            </Link>
-          </div>
+      <div className="flex items-center justify-between gap-3 mt-2 mb-4">
+        <h1 className="text-base font-semibold text-gray-600 dark:text-gray-400">Pages</h1>
+        <div className="flex items-center gap-2">
+          <Input
+            placeholder="Search page..."
+            value={searchText}
+            onChange={e => setSearchText(e.target.value)}
+            style={{ width: 260 }}
+          />
+          <Link to={`/admin/${classSlug}/pages/new`}>
+            <Button type="primary" icon={<IconPlus size={16} />}>
+              New Page
+            </Button>
+          </Link>
         </div>
       </div>
 
-      <div className="space-y-6">
-        <div className="mt-4">
-          <Table
-            columns={columns as Parameters<typeof Table>[0]['columns']}
-            dataSource={filteredPages}
-            rowKey="id"
-            rowHoverable={false}
-            size="middle"
-            pagination={{
-              defaultPageSize: filteredPages.length || 25,
-              showSizeChanger: true,
-              pageSizeOptions: [25, 50, 100, filteredPages.length || 100],
-              showTotal: (total, range) => `${range[0]}-${range[1]} of ${total} pages`,
-            }}
-            locale={{
-              emptyText: searchText ? (
-                <div className="text-center py-8 text-gray-500">
-                  <div className="text-4xl mb-2">🔍</div>
-                  <div>No pages found matching &quot;{searchText}&quot;</div>
-                  <div className="text-sm">Try adjusting your search terms</div>
-                </div>
-              ) : (
-                <div className="text-center py-8 text-gray-500">
-                  <div className="text-4xl mb-2">📄</div>
-                  <div>No pages created yet</div>
-                  <div className="text-sm">Create your first page to get started!</div>
-                </div>
-              ),
-            }}
-          />
-        </div>
+      <div className="rounded-2xl overflow-hidden bg-white dark:bg-neutral-900 min-h-[calc(100vh-10rem)] p-5 sm:p-6">
+        <Table
+          columns={columns as Parameters<typeof Table>[0]['columns']}
+          dataSource={filteredPages}
+          rowKey="id"
+          rowHoverable={false}
+          size="middle"
+          pagination={{
+            defaultPageSize: filteredPages.length || 25,
+            showSizeChanger: false,
+            showTotal: (total, range) => `${range[0]}-${range[1]} of ${total} pages`,
+          }}
+          locale={{
+            emptyText: searchText ? (
+              <div className="text-center py-12 text-gray-500">
+                <div className="font-medium">No pages found matching &quot;{searchText}&quot;</div>
+                <div className="text-sm">Try adjusting your search terms</div>
+              </div>
+            ) : (
+              <div className="text-center py-12 text-gray-500">
+                <div className="font-medium">No pages created yet</div>
+                <div className="text-sm">Create your first page to get started!</div>
+              </div>
+            ),
+          }}
+        />
       </div>
     </div>
   );

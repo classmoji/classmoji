@@ -32,7 +32,7 @@ const ButtonFilter = ({ label }: ButtonFilterProps) => {
   return (
     <div className="relative" ref={ref}>
       <button
-        className="border border-gray-300 dark:border-gray-600 px-3 py-2 rounded-md shadow-xs bg-white dark:bg-gray-800"
+        className="border border-gray-300 dark:border-gray-600 px-3 py-2 rounded-md shadow-xs bg-white dark:bg-neutral-800"
         onClick={() => setIsOpen(true)}
       >
         <div className="flex gap-2 items-center">
@@ -48,7 +48,7 @@ const ButtonFilter = ({ label }: ButtonFilterProps) => {
         </div>
       </button>
       {isOpen && (
-        <div className="min-w-[250px] border border-gray-300 dark:border-gray-600 absolute z-10 mt-3 shadow-lg bg-white dark:bg-gray-800 px-4 py-4 flex flex-col gap-2 rounded-lg">
+        <div className="min-w-[250px] border border-gray-300 dark:border-gray-600 absolute z-10 mt-3 shadow-lg bg-white dark:bg-neutral-800 px-4 py-4 flex flex-col gap-2 rounded-lg">
           {optionList}
         </div>
       )}

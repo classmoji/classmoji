@@ -661,7 +661,7 @@ const LogLabel = ({ data, isDarkMode }: LogLabelProps) => {
 
   return (
     <div
-      className="flex items-center gap-2 py-1.5 px-2 -mx-2 rounded hover:bg-gray-200/50 dark:hover:bg-gray-700/50 transition-colors"
+      className="flex items-center gap-2 py-1.5 px-2 -mx-2 rounded hover:bg-gray-200/50 dark:hover:bg-neutral-700/50 transition-colors"
       style={{ borderLeft: `3px solid ${getLeftBorderColor()}` }}
     >
       <span className="text-gray-500 dark:text-gray-400 text-xs font-mono min-w-[60px]">

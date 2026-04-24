@@ -4,7 +4,6 @@ import { Skeleton } from 'antd';
 
 import GradesTable from './GradesTable';
 import { ClassmojiService } from '@classmoji/services';
-import { PageHeader } from '~/components';
 import { addAuditLog } from '~/utils/helpers';
 import { requireClassroomAdmin } from '~/utils/routeAuth.server';
 import type { Route } from './+types/route';
@@ -46,8 +45,10 @@ const Grades = ({ loaderData }: Route.ComponentProps) => {
       <Outlet />
       <Suspense
         fallback={
-          <div>
-            <PageHeader title="Grades" routeName="grades" />
+          <div className="min-h-full">
+            <h1 className="mt-2 mb-4 text-base font-semibold text-gray-600 dark:text-gray-400">
+              Grades
+            </h1>
             <Skeleton active />
           </div>
         }

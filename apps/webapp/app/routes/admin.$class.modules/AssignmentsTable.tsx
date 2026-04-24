@@ -119,9 +119,9 @@ const AssignmentTable = ({ assignments }: AssignmentTableProps) => {
       width: '15%',
       sorter: (a: Assignment, b: Assignment) => a.type.localeCompare(b.type),
       render: (type: string) => (
-        <Tag color={type === 'GROUP' ? 'blue' : 'purple'} className="font-semibold">
+        <span className="text-gray-700 dark:text-gray-300">
           {type.charAt(0) + type.slice(1).toLowerCase()}
-        </Tag>
+        </span>
       ),
     },
     {
@@ -224,47 +224,42 @@ const AssignmentTable = ({ assignments }: AssignmentTableProps) => {
   ];
 
   return (
-    <div className="space-y-6">
-      {/* Assignments Table */}
-      <div className="mt-4">
-        <Table
-          columns={columns}
-          dataSource={assignments}
-          rowKey={record => record.id}
-          rowHoverable={false}
-          size="middle"
-          pagination={{
-            pageSize: 25,
-            showSizeChanger: true,
-            showTotal: (total, range) => `${range[0]}-${range[1]} of ${total} assignments`,
-          }}
-          summary={() => (
-            <Table.Summary.Row>
-              <Table.Summary.Cell index={0} className="font-semibold">
-                Total
-              </Table.Summary.Cell>
-              <Table.Summary.Cell index={1}></Table.Summary.Cell>
-              <Table.Summary.Cell index={2} className="font-bold">
-                <span className={totalWeight === 100 ? 'text-green-600' : 'text-red-600'}>
-                  {totalWeight}%
-                </span>
-              </Table.Summary.Cell>
-              <Table.Summary.Cell index={3}></Table.Summary.Cell>
-              <Table.Summary.Cell index={4}></Table.Summary.Cell>
-            </Table.Summary.Row>
-          )}
-          locale={{
-            emptyText: (
-              <div className="text-center py-8 text-gray-500">
-                <div className="text-4xl mb-2">📚</div>
-                <div>No assignments created yet</div>
-                <div className="text-sm">Create your first assignment to get started!</div>
-              </div>
-            ),
-          }}
-          className="rounded-lg"
-        />
-      </div>
+    <div className="rounded-2xl overflow-hidden bg-white dark:bg-neutral-900 min-h-[calc(100vh-10rem)] p-5 sm:p-6">
+      <Table
+        columns={columns}
+        dataSource={assignments}
+        rowKey={record => record.id}
+        rowHoverable={false}
+        size="middle"
+        pagination={{
+          pageSize: 25,
+          showSizeChanger: true,
+          showTotal: (total, range) => `${range[0]}-${range[1]} of ${total} assignments`,
+        }}
+        summary={() => (
+          <Table.Summary.Row>
+            <Table.Summary.Cell index={0} className="font-semibold">
+              Total
+            </Table.Summary.Cell>
+            <Table.Summary.Cell index={1}></Table.Summary.Cell>
+            <Table.Summary.Cell index={2} className="font-bold">
+              <span className={totalWeight === 100 ? 'text-green-600' : 'text-red-600'}>
+                {totalWeight}%
+              </span>
+            </Table.Summary.Cell>
+            <Table.Summary.Cell index={3}></Table.Summary.Cell>
+            <Table.Summary.Cell index={4}></Table.Summary.Cell>
+          </Table.Summary.Row>
+        )}
+        locale={{
+          emptyText: (
+            <div className="text-center py-12 text-gray-500">
+              <div className="font-medium">No assignments created yet</div>
+              <div className="text-sm">Create your first assignment to get started!</div>
+            </div>
+          ),
+        }}
+      />
     </div>
   );
 };

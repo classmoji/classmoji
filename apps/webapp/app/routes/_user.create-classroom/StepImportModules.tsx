@@ -88,7 +88,7 @@ const StepImportModules = ({
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between p-4 bg-gray-50 dark:bg-gray-800 rounded-lg">
+      <div className="flex items-center justify-between p-4 bg-gray-50 dark:bg-neutral-800 rounded-lg">
         <div>
           <div className="font-medium">Import from existing classroom</div>
           <div className="text-sm text-gray-500">
@@ -146,7 +146,7 @@ const StepImportModules = ({
               </div>
 
               {sourceClassroomId && (
-                <div className="p-4 border border-gray-200 dark:border-gray-700 rounded-lg">
+                <div className="p-4 border border-gray-200 dark:border-neutral-700 rounded-lg">
                   <div className="flex items-center justify-between mb-3">
                     <span className="font-medium">Modules to Import</span>
                     <Button
