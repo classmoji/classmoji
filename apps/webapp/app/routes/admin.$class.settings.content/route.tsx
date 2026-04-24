@@ -180,8 +180,8 @@ const SettingsContent = ({ loaderData }: Route.ComponentProps) => {
               </div>
               <div className="space-y-2 text-sm text-gray-600 dark:text-gray-300">
                 <p>
-                  When enabled, students will see a floating chat button on student pages. They can
-                  ask questions about:
+                  When enabled, students will see a Course Assistant button in the nav bar. They
+                  can ask questions about:
                 </p>
                 <ul className="list-disc list-inside ml-2 space-y-1 text-gray-500 dark:text-gray-400">
                   <li>Due dates and deadlines</li>

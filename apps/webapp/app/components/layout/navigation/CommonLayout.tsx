@@ -1,7 +1,7 @@
 import { Avatar, Tooltip } from 'antd';
 import { Link, useParams, useLocation, useRouteLoaderData } from 'react-router';
 import { useEffect, useState } from 'react';
-import { IconFileText, IconMenu2, IconLogout } from '@tabler/icons-react';
+import { IconFileText, IconMenu2, IconLogout, IconApple } from '@tabler/icons-react';
 import { signOut } from '@classmoji/auth/client';
 import useLocalStorageState from 'use-local-storage-state';
 import { Logo } from '@classmoji/ui-components';
@@ -70,6 +70,8 @@ const CommonLayout = ({
   const { user, memberships = [], aiAgentAvailable = false } = rootData ?? {};
   const { isProTier } = useSubscription();
   const { tokenBalance } = useStore();
+  const askMojiEnabled = useStore(s => s.askMojiEnabled);
+  const setAskMojiOpen = useStore(s => s.setAskMojiOpen);
   const { isDarkMode, background: tweaksBackground } = useDarkMode();
   const themeColors = getThemeByKey(classroom?.settings?.theme);
   const themeBackground = isDarkMode ? themeColors.darkBackground : themeColors.background;
@@ -220,12 +222,46 @@ const CommonLayout = ({
     );
   };
 
+  const renderAskMoji = () => {
+    if (!askMojiEnabled) return null;
+
+    const baseClasses = `group flex items-center gap-2.5 rounded-md transition-colors duration-150 w-full text-gray-700 dark:text-gray-300 hover:bg-gray-100/70 dark:hover:bg-neutral-800/60 ${
+      collapsed ? 'justify-center p-2 mx-1.5' : 'px-2 py-1.5 mx-1.5'
+    }`;
+
+    return (
+      <button
+        key="ask-moji"
+        type="button"
+        onClick={() => setAskMojiOpen(true)}
+        className={baseClasses}
+      >
+        {collapsed ? (
+          <Tooltip title="Ask Moji" placement="right">
+            <IconApple size={20} strokeWidth={1.75} />
+          </Tooltip>
+        ) : (
+          <>
+            <IconApple size={20} strokeWidth={1.75} className="shrink-0" />
+            <div className="flex-1 flex flex-col text-left leading-tight">
+              <span>Ask Moji</span>
+              <span className="text-xs text-gray-400 dark:text-gray-500">Course Assistant</span>
+            </div>
+          </>
+        )}
+      </button>
+    );
+  };
+
   const tabs = [
     // Dashboard (uncategorized)
     renderNavItem(routes.dashboard, 'dashboard'),
 
     // Calendar (directly under dashboard)
     renderNavItem(routes.calendar, 'calendar'),
+
+    // Ask Moji — course assistant trigger (rendered when classroom enables it)
+    renderAskMoji(),
 
     // Render categorized sections
     ...Object.entries(routeCategories).map(([categoryKey, category]) => {

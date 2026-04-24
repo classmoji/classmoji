@@ -1,9 +1,10 @@
-import { useState, useEffect, useContext } from 'react';
+import { useEffect, useContext, useState } from 'react';
 import { useLocation } from 'react-router';
 import SyllabusBotWidget from './SyllabusBotWidget';
 import { useDarkMode } from '~/hooks';
 import { UserContext } from '~/contexts';
 import { getRoleFromPath } from '~/constants/roleSettings';
+import useStore from '~/store';
 
 /**
  * SyllabusBotRoot - Root-level wrapper for the syllabus bot widget
@@ -11,9 +12,9 @@ import { getRoleFromPath } from '~/constants/roleSettings';
  * Handles:
  * - Extracting org from URL
  * - Fetching syllabus bot config
- * - Rendering widget when enabled
- *
- * Placed in root.jsx to show on all pages when enabled.
+ * - Publishing enabled state to the global store so the sidebar can render
+ *   the "Ask Moji" nav item
+ * - Rendering the chat drawer, controlled by store's isAskMojiOpen
  */
 interface SyllabusBotConfig {
   enabled: boolean;
@@ -24,6 +25,10 @@ const SyllabusBotRoot = () => {
   const { pathname } = useLocation();
   const { isDarkMode } = useDarkMode();
   const { user } = useContext(UserContext);
+  const isAskMojiOpen = useStore(s => s.isAskMojiOpen);
+  const setAskMojiOpen = useStore(s => s.setAskMojiOpen);
+  const setAskMojiEnabled = useStore(s => s.setAskMojiEnabled);
+
   const [config, setConfig] = useState<SyllabusBotConfig | null>(null);
   const [currentClassroom, setCurrentClassroom] = useState<string | null>(null);
   const [currentRole, setCurrentRole] = useState<string | null>(null);
@@ -39,16 +44,19 @@ const SyllabusBotRoot = () => {
 
       if (classroomSlug !== currentClassroom) {
         setCurrentClassroom(classroomSlug);
-        setConfig(null); // Reset config when classroom changes
+        setConfig(null);
+        setAskMojiEnabled(false);
+        setAskMojiOpen(false);
       }
       setCurrentRole(role);
     } else {
-      // Not in a classroom context
       setCurrentClassroom(null);
       setCurrentRole(null);
       setConfig(null);
+      setAskMojiEnabled(false);
+      setAskMojiOpen(false);
     }
-  }, [pathname, currentClassroom]);
+  }, [pathname, currentClassroom, setAskMojiEnabled, setAskMojiOpen]);
 
   // Fetch config when classroom changes
   useEffect(() => {
@@ -60,8 +68,9 @@ const SyllabusBotRoot = () => {
       try {
         const response = await fetch(`/api/syllabus-bot/${currentClassroom}`);
         if (response.ok && !cancelled) {
-          const data = await response.json();
+          const data = (await response.json()) as SyllabusBotConfig;
           setConfig(data);
+          setAskMojiEnabled(Boolean(data?.enabled));
         }
       } catch (err: unknown) {
         console.warn(
@@ -76,9 +85,8 @@ const SyllabusBotRoot = () => {
     return () => {
       cancelled = true;
     };
-  }, [currentClassroom]);
+  }, [currentClassroom, setAskMojiEnabled]);
 
-  // Don't render if no classroom or not enabled
   if (!currentClassroom || !config?.enabled) {
     return null;
   }
@@ -90,7 +98,8 @@ const SyllabusBotRoot = () => {
       slidesUrl={config.slidesUrl ?? ''}
       userLogin={user?.login ?? null}
       userRole={currentRole ?? ''}
-      enabled={config.enabled}
+      isOpen={isAskMojiOpen}
+      onClose={() => setAskMojiOpen(false)}
       isDarkMode={isDarkMode}
     />
   );

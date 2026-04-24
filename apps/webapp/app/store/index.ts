@@ -62,10 +62,22 @@ const createAppSlice = (set: SetState) => ({
   setShowSpinner: (showSpinner: boolean) => set({ showSpinner }),
 });
 
+const createAskMojiSlice = (set: SetState) => ({
+  isAskMojiOpen: false,
+  setAskMojiOpen: (isAskMojiOpen: boolean) => set({ isAskMojiOpen }),
+  askMojiEnabled: false,
+  setAskMojiEnabled: (askMojiEnabled: boolean) =>
+    set((state: StoreState) => {
+      if (state.askMojiEnabled === askMojiEnabled) return state;
+      return { askMojiEnabled };
+    }),
+});
+
 const useStore = create<StoreState>()(
   devtools(set => ({
     ...createUserSlice(set),
     ...createAppSlice(set),
+    ...createAskMojiSlice(set),
   }))
 );
 

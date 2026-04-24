@@ -92,6 +92,12 @@ export interface StoreState {
   // App slice
   showSpinner: boolean;
   setShowSpinner: (showSpinner: boolean) => void;
+
+  // Ask Moji (course assistant) slice
+  isAskMojiOpen: boolean;
+  setAskMojiOpen: (open: boolean) => void;
+  askMojiEnabled: boolean;
+  setAskMojiEnabled: (enabled: boolean) => void;
 }
 
 // Template assignment shape from GitHub issues API

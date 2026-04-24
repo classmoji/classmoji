@@ -1,6 +1,6 @@
-import { useState, useCallback } from 'react';
-import { FloatButton, Drawer, Button, Space, Typography, Spin, Tooltip } from 'antd';
-import { IconMessageChatbot, IconRefresh, IconArrowLeft } from '@tabler/icons-react';
+import { useState, useCallback, useEffect } from 'react';
+import { Drawer, Button, Spin, Tooltip, Typography } from 'antd';
+import { IconRefresh, IconX, IconApple } from '@tabler/icons-react';
 import { useSyllabusBot } from '~/hooks/useSyllabusBot';
 import SyllabusBotChat from './SyllabusBotChat';
 import './styles.css';
@@ -8,17 +8,19 @@ import './styles.css';
 const { Text } = Typography;
 
 /**
- * SyllabusBotWidget - Floating widget for the syllabus bot
+ * SyllabusBotWidget - Drawer-only chat surface for the syllabus bot.
  *
- * Renders a floating button that opens a drawer with the chat interface.
- * Only shows when syllabus bot is enabled for the classroom.
+ * The trigger lives in the sidebar ("Ask Moji" nav item); this component is a
+ * controlled drawer driven by isOpen/onClose. It still owns conversation
+ * lifecycle (init on first open, reset, etc).
  */
 interface SyllabusBotWidgetProps {
   classroomSlug: string;
   slidesUrl: string;
   userLogin: string | null;
   userRole: string;
-  enabled?: boolean;
+  isOpen: boolean;
+  onClose: () => void;
   isDarkMode?: boolean;
 }
 
@@ -27,10 +29,10 @@ const SyllabusBotWidget = ({
   slidesUrl,
   userLogin,
   userRole,
-  enabled = false,
+  isOpen,
+  onClose,
   isDarkMode = false,
 }: SyllabusBotWidgetProps) => {
-  const [isOpen, setIsOpen] = useState(false);
   const [hasInitialized, setHasInitialized] = useState(false);
 
   const {
@@ -48,28 +50,26 @@ const SyllabusBotWidget = ({
     reset,
   } = useSyllabusBot({ classroomSlug, userRole });
 
-  // Handle opening the widget
-  const handleOpen = useCallback(async () => {
-    setIsOpen(true);
+  // Initialize conversation the first time the drawer opens
+  useEffect(() => {
+    if (!isOpen) return;
+    if (isActive || hasInitialized) return;
 
-    // Initialize conversation if not already active
-    if (!isActive && !hasInitialized) {
+    let cancelled = false;
+    (async () => {
       try {
         await initConversation();
-        setHasInitialized(true);
+        if (!cancelled) setHasInitialized(true);
       } catch (err: unknown) {
         console.error('[SyllabusBotWidget] Failed to initialize:', err);
       }
-    }
-  }, [isActive, hasInitialized, initConversation]);
+    })();
 
-  // Handle closing the widget
-  const handleClose = useCallback(() => {
-    setIsOpen(false);
-    // Don't end conversation - keep it active for quick reopen
-  }, []);
+    return () => {
+      cancelled = true;
+    };
+  }, [isOpen, isActive, hasInitialized, initConversation]);
 
-  // Handle reset/restart
   const handleReset = useCallback(async () => {
     try {
       await reset();
@@ -78,117 +78,98 @@ const SyllabusBotWidget = ({
     }
   }, [reset]);
 
-  // Don't render if not enabled
-  if (!enabled) {
-    return null;
-  }
-
   return (
-    <>
-      {/* Floating Button */}
-      <FloatButton
-        icon={<IconMessageChatbot size={26} className="relative right-[3.25px]" />}
-        type="primary"
-        tooltip={<span style={{ fontSize: '13px' }}>Course Assistant</span>}
-        onClick={handleOpen}
-        className="syllabus-bot-float-button"
-        style={{
-          right: 24,
-          bottom: 24,
-          width: 56,
-          height: 56,
-        }}
-        badge={
-          messages.length > 1
-            ? {
-                count: messages.length - 1,
-                overflowCount: 9,
-                color: 'red',
-              }
-            : undefined
-        }
-      />
-
-      {/* Drawer */}
-      <Drawer
-        title={
-          <Space align="center">
-            <span style={{ fontSize: '20px' }}>📚</span>
-            <span>Syllabusmoji</span>
-          </Space>
-        }
-        placement="right"
-        width={'35%'}
-        onClose={handleClose}
-        open={isOpen}
-        destroyOnClose={false}
-        extra={
-          <Space>
-            <Tooltip title="Start new conversation">
-              <Button
-                icon={<IconRefresh size={16} />}
-                onClick={handleReset}
-                disabled={isStreaming || isInitializing}
-                size="small"
-              />
-            </Tooltip>
-            <Button icon={<IconArrowLeft size={16} />} onClick={handleClose} size="small" />
-          </Space>
-        }
-        styles={{
-          body: {
-            padding: 0,
-            height: 'calc(100vh - 110px)',
+    <Drawer
+      title={
+        <div className="flex items-center gap-3">
+          <div
+            className="flex items-center justify-center w-9 h-9 rounded-full text-white shrink-0"
+            style={{ backgroundColor: 'var(--accent)' }}
+          >
+            <IconApple size={20} strokeWidth={1.75} />
+          </div>
+          <div className="flex flex-col leading-tight">
+            <span className="font-semibold text-gray-900 dark:text-gray-100">Ask Moji</span>
+            <span className="text-xs font-normal text-gray-500 dark:text-gray-400">
+              Course Assistant
+            </span>
+          </div>
+        </div>
+      }
+      placement="right"
+      width={440}
+      onClose={onClose}
+      open={isOpen}
+      destroyOnClose={false}
+      closeIcon={null}
+      extra={
+        <div className="flex items-center gap-1">
+          <Tooltip title="Start new conversation">
+            <Button
+              type="text"
+              icon={<IconRefresh size={16} />}
+              onClick={handleReset}
+              disabled={isStreaming || isInitializing}
+              size="small"
+            />
+          </Tooltip>
+          <Tooltip title="Close">
+            <Button type="text" icon={<IconX size={18} />} onClick={onClose} size="small" />
+          </Tooltip>
+        </div>
+      }
+      styles={{
+        body: {
+          padding: 0,
+          height: 'calc(100vh - 110px)',
+          display: 'flex',
+          flexDirection: 'column',
+          backgroundColor: isDarkMode ? '#111827' : '#fff',
+        },
+        header: {
+          backgroundColor: isDarkMode ? '#1f2937' : '#fff',
+          borderBottom: isDarkMode ? '1px solid #374151' : '1px solid #f0f0f0',
+          padding: '14px 20px',
+        },
+      }}
+    >
+      {isInitializing && (
+        <div
+          style={{
             display: 'flex',
             flexDirection: 'column',
-            backgroundColor: isDarkMode ? '#111827' : '#fff',
-          },
-          header: {
-            backgroundColor: isDarkMode ? '#1f2937' : '#fff',
-            borderBottom: isDarkMode ? '1px solid #374151' : '1px solid #f0f0f0',
-          },
-        }}
-      >
-        {/* Loading State */}
-        {isInitializing && (
-          <div
+            alignItems: 'center',
+            justifyContent: 'center',
+            height: '100%',
+            gap: '16px',
+          }}
+        >
+          <Spin size="large" />
+          <Text
             style={{
-              display: 'flex',
-              flexDirection: 'column',
-              alignItems: 'center',
-              justifyContent: 'center',
-              height: '100%',
-              gap: '16px',
+              color: isDarkMode ? '#9ca3af' : '#666',
             }}
           >
-            <Spin size="large" />
-            <Text
-              style={{
-                color: isDarkMode ? '#9ca3af' : '#666',
-              }}
-            >
-              Connecting to course assistant...
-            </Text>
-          </div>
-        )}
+            Connecting to course assistant...
+          </Text>
+        </div>
+      )}
 
-        {/* Chat Interface */}
-        {!isInitializing && (
-          <SyllabusBotChat
-            messages={messages}
-            isStreaming={isStreaming}
-            suggestedQuestions={suggestedQuestions}
-            error={error}
-            onSendMessage={sendMessage}
-            onAskSuggestedQuestion={askSuggestedQuestion}
-            classroomSlug={classroomSlug}
-            slidesUrl={slidesUrl}
-            userLogin={userLogin}
-            isDarkMode={isDarkMode}
-          />
-        )}
-      </Drawer>
-    </>
+      {!isInitializing && (
+        <SyllabusBotChat
+          messages={messages}
+          isStreaming={isStreaming}
+          suggestedQuestions={suggestedQuestions}
+          error={error}
+          onSendMessage={sendMessage}
+          onAskSuggestedQuestion={askSuggestedQuestion}
+          classroomSlug={classroomSlug}
+          slidesUrl={slidesUrl}
+          userLogin={userLogin}
+          isDarkMode={isDarkMode}
+        />
+      )}
+    </Drawer>
   );
 };
 
