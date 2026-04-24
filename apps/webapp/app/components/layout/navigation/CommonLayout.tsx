@@ -31,6 +31,8 @@ interface NavItem {
   icon: React.ComponentType<{ size?: number; strokeWidth?: number; className?: string }>;
   roles: string[];
   isProTier?: boolean;
+  /** When true, `link` is used as-is (not prefixed with role path + class slug). */
+  absolute?: boolean;
 }
 
 interface CommonLayoutProps {
@@ -106,9 +108,13 @@ const CommonLayout = ({
   );
 
   const renderNavItem = (item: NavItem, key: string) => {
-    const active =
-      (pathname.includes(item.link) && !pathname.includes('settings')) ||
-      (item.link.includes('setting') && pathname.includes('settings'));
+    const to = item.absolute
+      ? item.link
+      : `${roleSettings?.path}/${params.class}${item.link}`;
+    const active = item.absolute
+      ? pathname === item.link || pathname.startsWith(`${item.link}/`)
+      : (pathname.includes(item.link) && !pathname.includes('settings')) ||
+        (item.link.includes('setting') && pathname.includes('settings'));
 
     const isDemoClassroom = Number(classroom?.id) === DEMO_ORG_ID;
 
@@ -123,7 +129,7 @@ const CommonLayout = ({
     return (
       <RequireRole roles={item.roles} key={key}>
         <Link
-          to={`${roleSettings?.path}/${params.class}${item.link}`}
+          to={to}
           prefetch={item.label === 'Dashboard' ? 'render' : 'intent'}
           className={`
             group flex items-center gap-2.5 rounded-md transition-colors duration-150
