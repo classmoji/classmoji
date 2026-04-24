@@ -10,6 +10,13 @@ import { requireClassroomAdmin } from '~/utils/routeAuth.server';
 import SubmissionChart from './SubmissionChart';
 import Leaderboard from './Leaderboard';
 import GradingTabsCard from './GradingTabsCard';
+import {
+  AssignmentHeatmap,
+  TAOpsTable,
+  AtRiskStudents,
+  QuizAnalytics,
+  DeadlinePressure,
+} from '~/components/features/dashboard';
 import type { Route } from './+types/route';
 
 export const loader = async ({ params, request }: Route.LoaderArgs) => {
@@ -76,8 +83,17 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
     lateRepoAssignments: lateRepoAssignmentsPromise,
   };
 
+  const analyticsPromise = Promise.all([
+    ClassmojiService.dashboard.assignmentHealth(classroom.id),
+    ClassmojiService.dashboard.taOps(classroom.id),
+    ClassmojiService.dashboard.cohortOverview(classroom.id),
+    ClassmojiService.dashboard.quizAnalytics(classroom.id),
+    ClassmojiService.dashboard.deadlinePressure(classroom.id),
+  ]).catch(() => null);
+
   return {
     data: Promise.all(Object.values(promises)),
+    analytics: analyticsPromise,
     githubOrganization,
   };
 };
@@ -143,7 +159,7 @@ const RingChart = ({ pct, color }: { pct: number; color: string }) => {
 };
 
 const AdminDashboard = ({ loaderData }: Route.ComponentProps) => {
-  const { data, githubOrganization } = loaderData;
+  const { data, analytics, githubOrganization } = loaderData;
   const { class: classSlug } = useParams();
   const [bannerDismissed, setBannerDismissed] = useState(false);
 
@@ -252,6 +268,58 @@ const AdminDashboard = ({ loaderData }: Route.ComponentProps) => {
                   gradingProgress={gradingProgressPerAssignment}
                   assistantsProgress={assistantsProgress}
                 />
+              </>
+            );
+          }}
+        </Await>
+      </Suspense>
+
+      <Suspense fallback={<Skeleton active paragraph={{ rows: 6 }} />}>
+        <Await resolve={analytics} errorElement={null}>
+          {(result) => {
+            if (!result) return null;
+            const [assignments, taOps, cohort, quiz, deadlines] = result;
+            return (
+              <>
+                <section className="rounded-2xl bg-white dark:bg-neutral-900 ring-1 ring-stone-200 dark:ring-neutral-800 p-4 sm:p-5">
+                  <h3 className="text-sm font-semibold text-gray-900 dark:text-gray-100 mb-3">
+                    Assignment health
+                  </h3>
+                  <AssignmentHeatmap rows={assignments} />
+                </section>
+
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                  <section className="rounded-2xl bg-white dark:bg-neutral-900 ring-1 ring-stone-200 dark:ring-neutral-800 p-4 sm:p-5">
+                    <h3 className="text-sm font-semibold text-gray-900 dark:text-gray-100 mb-3">
+                      TA operations
+                    </h3>
+                    <TAOpsTable rows={taOps} />
+                  </section>
+                  <section className="rounded-2xl bg-white dark:bg-neutral-900 ring-1 ring-stone-200 dark:ring-neutral-800 p-4 sm:p-5">
+                    <h3 className="text-sm font-semibold text-gray-900 dark:text-gray-100 mb-3">
+                      At-risk students
+                    </h3>
+                    <AtRiskStudents
+                      atRiskCount={cohort.atRiskCount}
+                      students={cohort.atRiskStudents}
+                    />
+                  </section>
+                </div>
+
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                  <section className="rounded-2xl bg-white dark:bg-neutral-900 ring-1 ring-stone-200 dark:ring-neutral-800 p-4 sm:p-5">
+                    <h3 className="text-sm font-semibold text-gray-900 dark:text-gray-100 mb-3">
+                      Quiz analytics
+                    </h3>
+                    <QuizAnalytics data={quiz} />
+                  </section>
+                  <section className="rounded-2xl bg-white dark:bg-neutral-900 ring-1 ring-stone-200 dark:ring-neutral-800 p-4 sm:p-5">
+                    <h3 className="text-sm font-semibold text-gray-900 dark:text-gray-100 mb-3">
+                      Deadline pressure
+                    </h3>
+                    <DeadlinePressure buckets={deadlines} />
+                  </section>
+                </div>
               </>
             );
           }}
