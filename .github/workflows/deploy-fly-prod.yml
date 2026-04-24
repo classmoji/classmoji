@@ -71,6 +71,11 @@ jobs:
         with:
           submodules: true
           token: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Heal package-lock.json against submodule workspaces
+        run: npm install --package-lock-only --no-audit --no-fund --legacy-peer-deps
       - uses: superfly/flyctl-actions/setup-flyctl@master
       - name: Deploy ai-agent
         run: flyctl deploy --config apps/ai-agent/fly.toml --dockerfile apps/ai-agent/Dockerfile --remote-only
@@ -142,8 +147,11 @@ jobs:
           node-version: '22'
           cache: 'npm'
 
+      - name: Heal package-lock.json against submodule workspaces
+        run: npm install --package-lock-only --no-audit --no-fund --legacy-peer-deps
+
       - name: Install dependencies
-        run: npm ci
+        run: npm ci --legacy-peer-deps
 
       - name: Deploy to Trigger.dev
         working-directory: packages/tasks

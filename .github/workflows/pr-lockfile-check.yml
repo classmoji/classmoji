@@ -1,0 +1,54 @@
+name: PR Lockfile Check
+
+# Catches a specific failure mode: external contributors who clone without the
+# private ai-agent submodule can accidentally strip ai-agent's deps from
+# package-lock.json when they run `npm install`. When their PR merges to
+# staging, CI's `npm ci` then fails. This workflow runs BEFORE merge, with the
+# submodule populated, and fails the PR if the committed lockfile is out of
+# sync with the real workspace tree.
+#
+# Uses pull_request_target so secrets (PERSONAL_ACCESS_TOKEN) are available
+# even for fork PRs. We check out the PR head, but use --ignore-scripts on
+# every npm invocation to neutralize lifecycle-script attacks from untrusted
+# package.json changes.
+
+on:
+  pull_request_target:
+    branches:
+      - staging
+      - main
+    paths:
+      - 'package.json'
+      - 'package-lock.json'
+      - 'apps/*/package.json'
+      - 'packages/*/package.json'
+
+jobs:
+  check-lockfile:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout PR head with submodules
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          submodules: true
+          token: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Regenerate lockfile against real workspace tree
+        run: npm install --package-lock-only --ignore-scripts --no-audit --no-fund --legacy-peer-deps
+
+      - name: Fail if committed lockfile is out of sync
+        run: |
+          if ! git diff --exit-code -- package-lock.json; then
+            echo ""
+            echo "::error::package-lock.json is out of sync with the workspace tree."
+            echo "::error::This usually means the PR was generated without the ai-agent submodule populated."
+            echo "::error::A maintainer needs to regenerate the lockfile with the submodule initialized before this PR can merge."
+            exit 1
+          fi
+          echo "Lockfile is in sync."
