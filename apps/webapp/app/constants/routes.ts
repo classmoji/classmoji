@@ -44,7 +44,7 @@ export const routeCategories = {
   },
   settings: {
     label: 'Settings',
-    items: ['settings', 'accountSettings'],
+    items: ['settings', 'memberSettings'],
   },
 };
 
@@ -188,12 +188,11 @@ export const routes = {
     roles: ['OWNER'],
     category: 'settings',
   },
-  accountSettings: {
-    link: '/settings/general',
+  memberSettings: {
+    link: '/settings',
     label: 'Settings',
     icon: IconSettings,
     roles: ['STUDENT', 'ASSISTANT'],
     category: 'settings',
-    absolute: true,
   },
 };
