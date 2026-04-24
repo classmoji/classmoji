@@ -5,36 +5,100 @@
   --color-iron: #d0d7de;
   --color-white: #ffffff;
   --color-lightGray: #f9f9f9;
-/*
-   * Primary Color - Apple Green 🍏
-   */
-  --color-primary: #21883d;
-  --color-primary-50: #e6f4ea;
-  --color-primary-100: #21883d;
-  --color-primary-200: #21883d;
-  --color-primary-300: #21883d;
-  --color-primary-400: #21883d;
-  --color-primary-500: #21883d;
-  --color-primary-600: #21883d;
-  --color-primary-700: #21883d;
-  --color-primary-800: #1a6e31;
-  --color-primary-900: #145526;
 
   /*
-   * Secondary Color - Apple Red 🍎
-   * For accents and highlights
+   * Primary Color — mapped to accent token (set by Tweaks panel).
    */
-  --color-secondary: #ef4444;
-  --color-secondary-50: #fef2f2;
-  --color-secondary-100: #fee2e2;
-  --color-secondary-200: #fecaca;
-  --color-secondary-300: #fca5a5;
-  --color-secondary-400: #f87171;
-  --color-secondary-500: #ef4444;
-  --color-secondary-600: #dc2626;
-  --color-secondary-700: #b91c1c;
-  --color-secondary-800: #991b1b;
-  --color-secondary-900: #7f1d1d;
+  --color-primary: var(--accent);
+  --color-primary-50: var(--accent-soft);
+  --color-primary-100: var(--accent-soft-2);
+  --color-primary-500: var(--accent);
+  --color-primary-600: var(--accent-hover);
+  --color-primary-700: var(--accent-ink);
+
+  /*
+   * Secondary Color — same accent mapping.
+   */
+  --color-secondary: var(--accent);
+  --color-secondary-50: var(--accent-soft);
+  --color-secondary-100: var(--accent-soft-2);
+  --color-secondary-500: var(--accent);
+  --color-secondary-600: var(--accent-hover);
+  --color-secondary-700: var(--accent-ink);
+
+  /*
+   * Neutral surface tokens — reference the raw CSS vars defined in global.css :root
+   * so every utility like `bg-bg-0`, `bg-bg-1`, `text-ink-2` etc. is generated.
+   */
+  --color-bg-0: var(--bg-0);
+  --color-bg-1: var(--bg-1);
+  --color-bg-2: var(--bg-2);
+  --color-bg-3: var(--bg-3);
+  --color-bg-ink: var(--bg-ink);
+
+  --color-ink-0: var(--ink-0);
+  --color-ink-1: var(--ink-1);
+  --color-ink-2: var(--ink-2);
+  --color-ink-3: var(--ink-3);
+  --color-ink-4: var(--ink-4);
+
+  --color-line: var(--line);
+  --color-line-2: var(--line-2);
+  --color-line-strong: var(--line-strong);
+  --color-line-cool: var(--line-cool);
+
+  /* Pastel surface tokens */
+  --color-paper: var(--paper);
+  --color-panel: var(--panel);
+  --color-panel-hover: var(--panel-hover);
+  --color-sidebar: var(--sidebar);
+  --color-nav-hover: var(--nav-hover);
+
+  /* Accent (driven by Tweaks panel) */
+  --color-accent: var(--accent);
+  --color-accent-hover: var(--accent-hover);
+  --color-accent-soft: var(--accent-soft);
+  --color-accent-soft-2: var(--accent-soft-2);
+  --color-accent-ink: var(--accent-ink);
+
+  /* Accent palettes — exposed as Tailwind utilities (bg-mint, text-peach-ink, etc.) */
+  --color-violet: var(--violet);
+  --color-violet-soft: var(--violet-soft);
+  --color-violet-ink: var(--violet-ink);
+
+  --color-mint: var(--mint);
+  --color-mint-soft: var(--mint-soft);
+  --color-mint-ink: var(--mint-ink);
+  --color-mint-bg: var(--mint-bg);
+  --color-mint-bord: var(--mint-bord);
+
+  --color-peach: var(--peach);
+  --color-peach-soft: var(--peach-soft);
+  --color-peach-ink: var(--peach-ink);
+  --color-peach-bg: var(--peach-bg);
+  --color-peach-bord: var(--peach-bord);
+
+  --color-sky: var(--sky);
+  --color-sky-soft: var(--sky-soft);
+  --color-sky-ink: var(--sky-ink);
+  --color-sky-bg: var(--sky-bg);
+  --color-sky-bord: var(--sky-bord);
+
+  --color-lilac-bg: var(--lilac-bg);
+  --color-lilac-bord: var(--lilac-bord);
+  --color-lilac-ink: var(--lilac-ink);
+
+  --color-rose: var(--rose);
+  --color-rose-soft: var(--rose-soft);
+  --color-rose-ink: var(--rose-ink);
+  --color-rose-bg: var(--rose-bg);
+  --color-rose-bord: var(--rose-bord);
+
+  --color-amber: var(--amber);
+  --color-amber-soft: var(--amber-soft);
+  --color-amber-ink: var(--amber-ink);
+  --color-amber-bg: var(--amber-bg);
+  --color-amber-bord: var(--amber-bord);
 
   /* Adjusted text sizes */
   --text-xs: 0.6875rem;   /* 11px */
@@ -51,37 +115,13 @@
   --text-8xl: 5rem;       /* 80px */
   --text-9xl: 6.5rem;     /* 104px */
 
-  /* Font families */
-  --font-quicksand: 'Quicksand', sans-serif;
+  /* Font families — GitLab-style developer tool stack */
+  --font-sans: 'DM Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+  --font-mono: 'DM Mono', 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, Monaco, Consolas, monospace;
+  --font-display: 'DM Sans', 'Instrument Serif', 'Cormorant Garamond', Georgia, serif;
 }
 
 @variant dark (&:where(.dark, .dark *));
-
-/* Override Ant Design component styles to allow Tailwind utilities to take precedence */
-/* Place outside @layer to ensure highest specificity */
-.ant-layout-header {
-  background: transparent;
-  padding: 0;
-}
-
-/* Allow Tailwind color classes to override Tag colors */
-.ant-tag[class*="bg-"] {
-  background-color: inherit;
-  border-color: transparent;
-}
-
-.ant-tag[class*="text-"] {
-  color: inherit;
-}
-
-/* Allow Tailwind classes on other common Ant Design components */
-.ant-btn[class*="bg-"] {
-  background-color: inherit;
-}
-
-.ant-btn[class*="text-"] {
-  color: inherit;
-}
 
 /*
   The default border color has changed to `currentcolor` in Tailwind CSS v4,
@@ -104,4 +144,3 @@
     background-color: white;
   }
 }
-
