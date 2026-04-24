@@ -1,4 +1,4 @@
-import { Link } from 'react-router';
+import { Link, useLocation } from 'react-router';
 import { useState } from 'react';
 import { Alert, Button } from 'antd';
 import { IconChevronLeft } from '@tabler/icons-react';
@@ -78,6 +78,12 @@ const SubmissionAnalytics = ({ loaderData }: Route.ComponentProps) => {
     students,
   } = loaderData;
 
+  const { pathname } = useLocation();
+  const isAssistant = pathname.startsWith('/assistant/');
+  const backHref = isAssistant
+    ? `/assistant/${classSlug}/grading`
+    : `/admin/${classSlug}/grades`;
+
   const [refreshing, setRefreshing] = useState(false);
   const [refreshError, setRefreshError] = useState<string | null>(null);
 
@@ -102,7 +108,7 @@ const SubmissionAnalytics = ({ loaderData }: Route.ComponentProps) => {
   return (
     <div className="flex flex-col gap-4" data-testid="submission-analytics">
       <div className="flex items-center gap-2">
-        <Link to={`/admin/${classSlug}/grading`}>
+        <Link to={backHref}>
           <Button
             size="small"
             icon={<IconChevronLeft size={14} />}
