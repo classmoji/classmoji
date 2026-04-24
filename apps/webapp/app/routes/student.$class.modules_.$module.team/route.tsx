@@ -7,7 +7,6 @@ import { namedAction } from 'remix-utils/named-action';
 import type { Route } from './+types/route';
 import { ClassmojiService, getGitProvider } from '@classmoji/services';
 import { assertClassroomAccess } from '~/utils/helpers';
-import { PageHeader } from '~/components';
 import { titleToIdentifier } from '@classmoji/utils';
 import { tasks } from '@trigger.dev/sdk/v3';
 
@@ -338,7 +337,11 @@ const StudentTeamPage = ({ loaderData }: Route.ComponentProps) => {
         ← Back to Modules
       </Link>
 
-      <PageHeader title={`Team Formation: ${module.title}`} routeName="modules" />
+      <div className="flex items-center justify-between gap-3 mt-2 mb-4">
+        <h1 className="text-base font-semibold text-gray-600 dark:text-gray-400 truncate">
+          Team Formation: {module.title}
+        </h1>
+      </div>
 
       {deadline && (
         <div
@@ -450,9 +453,9 @@ const StudentTeamPage = ({ loaderData }: Route.ComponentProps) => {
             }
           >
             {availableTeams.length === 0 ? (
-              <div className="text-center py-8">
-                <div className="text-6xl mb-4">👥</div>
-                <p className="text-gray-500">No teams available to join yet. Create a new team!</p>
+              <div className="text-center py-12 text-gray-500">
+                <div className="font-medium">No teams available to join yet</div>
+                <div className="text-sm">Create a new team to get started!</div>
               </div>
             ) : (
               <List

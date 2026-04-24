@@ -7,7 +7,6 @@ import {
   Button,
   Modal,
   Tag,
-  Tabs,
   Tooltip,
   Space,
   Select,
@@ -16,7 +15,7 @@ import {
 import { CheckCircleOutlined, PlayCircleOutlined, TrophyOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import type { Route } from './+types/route';
-import { PageHeader, Countdown } from '~/components';
+import { Countdown } from '~/components';
 import { assertClassroomAccess } from '~/utils/helpers';
 import { formatDuration } from '~/utils/quizUtils';
 
@@ -448,8 +447,7 @@ export default function StudentQuizzes({ loaderData }: Route.ComponentProps) {
       key: 'name',
       render: (name: string, record: StudentQuiz) => (
         <Space>
-          <span style={{ fontSize: '16px' }}>🧑‍💻</span>
-          <span className="font-medium">{name}</span>
+          <span className="font-medium text-gray-800 dark:text-gray-200">{name}</span>
           {record.weight === 0 && (
             <Tooltip title="This quiz won't affect your grade">
               <Tag color="gold" style={{ fontSize: '11px', margin: 0 }}>
@@ -544,91 +542,91 @@ export default function StudentQuizzes({ loaderData }: Route.ComponentProps) {
   const currentCount = filterQuizzes(quizzes, 'current').length;
   const completedCount = filterQuizzes(quizzes, 'completed').length;
 
-  const tabItems = [
-    {
-      key: 'current',
-      label: `📝 Current (${currentCount})`,
-      children: (
-        <Table
-          columns={columns}
-          dataSource={filterQuizzes(quizzes, 'current')}
-          rowKey="id"
-          rowHoverable={false}
-          size="small"
-          pagination={{ pageSize: 25 }}
-          expandable={{
-            expandedRowRender: renderAttempts,
-            rowExpandable: record => record.attemptCount > 0,
-          }}
-          locale={{
-            emptyText: (
-              <div className="text-center py-12 text-gray-500">
-                <div className="text-6xl mb-4">✨</div>
-                <h3 className="text-xl font-semibold text-gray-700 mb-2">All caught up!</h3>
-                <p>No quizzes to complete right now</p>
-              </div>
-            ),
-          }}
-        />
-      ),
-    },
-    {
-      key: 'completed',
-      label: `✅ Completed (${completedCount})`,
-      children: (
-        <Table
-          columns={columns}
-          dataSource={filterQuizzes(quizzes, 'completed')}
-          rowKey="id"
-          rowHoverable={false}
-          size="small"
-          pagination={{ pageSize: 25 }}
-          expandable={{
-            expandedRowRender: renderAttempts,
-            rowExpandable: record => record.attemptCount > 0,
-          }}
-          locale={{
-            emptyText: (
-              <div className="text-center py-12 text-gray-500">
-                <div className="text-6xl mb-4">📝</div>
-                <h3 className="text-xl font-semibold text-gray-700 mb-2">
-                  No completed quizzes yet
-                </h3>
-                <p>Completed quizzes will appear here with your scores</p>
-              </div>
-            ),
-          }}
-        />
-      ),
-    },
-    {
-      key: 'all',
-      label: `📋 All (${publishedQuizzes.length})`,
-      children: (
-        <Table
-          columns={columns}
-          dataSource={publishedQuizzes}
-          rowKey="id"
-          rowHoverable={false}
-          size="small"
-          pagination={{ pageSize: 50 }}
-          expandable={{
-            expandedRowRender: renderAttempts,
-            rowExpandable: record => record.attemptCount > 0,
-          }}
-        />
-      ),
-    },
+  const tabs = [
+    { key: 'current', label: 'Current', count: currentCount },
+    { key: 'completed', label: 'Completed', count: completedCount },
+    { key: 'all', label: 'All', count: publishedQuizzes.length },
   ];
 
+  const dataSource =
+    activeTab === 'all' ? publishedQuizzes : filterQuizzes(quizzes, activeTab as 'current' | 'completed');
+
+  const emptyText =
+    activeTab === 'current' ? (
+      <div className="text-center py-12 text-gray-500">
+        <div className="font-medium">All caught up!</div>
+        <div className="text-sm">No quizzes to complete right now</div>
+      </div>
+    ) : activeTab === 'completed' ? (
+      <div className="text-center py-12 text-gray-500">
+        <div className="font-medium">No completed quizzes yet</div>
+        <div className="text-sm">Completed quizzes will appear here with your scores</div>
+      </div>
+    ) : (
+      <div className="text-center py-12 text-gray-500">
+        <div className="font-medium">No quizzes published yet</div>
+      </div>
+    );
+
   return (
-    <div className="relative">
-      {/* Outlet renders child routes (attempt drawer) */}
+    <div className="min-h-full relative">
       <Outlet />
 
-      <PageHeader title="Interactive Quizzes" routeName="quizzes" />
+      <div className="flex items-center justify-between gap-3 mt-2 mb-4">
+        <h1 className="text-base font-semibold text-gray-600 dark:text-gray-400">Quizzes</h1>
+      </div>
 
-      <Tabs activeKey={activeTab} onChange={setActiveTab} items={tabItems} size="large" />
+      <div className="flex -mb-px relative">
+        {tabs.map((tab, idx) => {
+          const isActive = tab.key === activeTab;
+          const baseZ = tabs.length - idx;
+          const zStyle = { zIndex: isActive ? 40 : baseZ };
+          return (
+            <button
+              key={tab.key}
+              type="button"
+              onClick={() => setActiveTab(tab.key)}
+              style={
+                isActive
+                  ? { ...zStyle, color: 'var(--accent)', borderTopColor: 'var(--accent)' }
+                  : zStyle
+              }
+              className={`relative px-4 py-2 text-sm font-medium rounded-t-2xl border whitespace-nowrap transition-colors ${
+                idx > 0 ? '-ml-2' : ''
+              } ${
+                isActive
+                  ? 'bg-white dark:bg-neutral-900 border-stone-200 dark:border-neutral-800 border-b-transparent'
+                  : 'bg-stone-100 dark:bg-neutral-800 text-gray-500 dark:text-gray-400 border-stone-200 dark:border-neutral-700 hover:text-gray-800 dark:hover:text-gray-200'
+              }`}
+            >
+              {tab.label}
+              <span
+                className={`ml-2 text-[11px] tabular-nums ${
+                  isActive ? 'text-gray-500 dark:text-gray-400' : 'text-gray-400 dark:text-gray-500'
+                }`}
+              >
+                {tab.count}
+              </span>
+            </button>
+          );
+        })}
+      </div>
+
+      <section className="rounded-2xl rounded-tl-none bg-white dark:bg-neutral-900 ring-1 ring-stone-200 dark:ring-neutral-800 min-h-[calc(100vh-14rem)] p-5 sm:p-6">
+        <Table
+          columns={columns}
+          dataSource={dataSource}
+          rowKey="id"
+          rowHoverable={false}
+          size="small"
+          pagination={{ pageSize: activeTab === 'all' ? 50 : 25 }}
+          expandable={{
+            expandedRowRender: renderAttempts,
+            rowExpandable: record => record.attemptCount > 0,
+          }}
+          locale={{ emptyText }}
+        />
+      </section>
 
       {/* Repository selection modal for TAs/admins on code-aware quizzes */}
       <Modal

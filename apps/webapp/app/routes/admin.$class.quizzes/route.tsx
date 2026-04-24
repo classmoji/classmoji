@@ -1,7 +1,7 @@
 import { useFetcher, useNavigate, useParams, Outlet } from 'react-router';
 import { Table, Button, Typography, Tag, Space, Tooltip, Popconfirm } from 'antd';
-import { IconSend, IconPlus, IconBook, IconCalendar, IconTrash } from '@tabler/icons-react';
-import { TableActionButtons, EditableCell, PageHeader } from '~/components';
+import { IconSend, IconBook, IconCalendar, IconTrash } from '@tabler/icons-react';
+import { TableActionButtons, EditableCell, ButtonNew } from '~/components';
 import { ClassmojiService } from '@classmoji/services';
 import { namedAction } from 'remix-utils/named-action';
 import { assertClassroomAccess } from '~/utils/helpers';
@@ -414,12 +414,11 @@ export default function AdminQuizzes({ loaderData }: Route.ComponentProps) {
   ];
 
   return (
-    <div>
-      {/* Outlet renders child routes (preview drawer) */}
+    <div className="min-h-full relative">
       <Outlet />
 
-      <div className=" flex justify-between items-start">
-        <PageHeader title="Quiz Management" routeName="quizzes" />
+      <div className="flex items-center justify-between gap-3 mt-2 mb-4">
+        <h1 className="text-base font-semibold text-gray-600 dark:text-gray-400">Quizzes</h1>
 
         <Space>
           <Popconfirm
@@ -433,66 +432,58 @@ export default function AdminQuizzes({ loaderData }: Route.ComponentProps) {
             <Button icon={<IconTrash size={16} />}>Clear My Attempts</Button>
           </Popconfirm>
 
-          <Button
-            type="primary"
-            icon={<IconPlus size={16} />}
-            onClick={() => navigate(`/admin/${classSlug}/quizzes/form`)}
-          >
-            New Quiz
-          </Button>
+          <ButtonNew action={() => navigate(`/admin/${classSlug}/quizzes/form`)}>
+            New quiz
+          </ButtonNew>
         </Space>
       </div>
 
-      <div className="space-y-6">
-        <div className="mt-4">
-          <Table
-            columns={columns}
-            dataSource={quizzes as readonly AdminQuiz[]}
-            rowKey={record => record.id}
-            rowHoverable={false}
-            size="middle"
-            pagination={{
-              pageSize: 25,
-              showSizeChanger: true,
-              showTotal: (total, range) => `${range[0]}-${range[1]} of ${total} quizzes`,
-            }}
-            summary={() => (
-              <Table.Summary.Row>
-                <Table.Summary.Cell index={0} className="font-semibold">
-                  Total
-                </Table.Summary.Cell>
-                <Table.Summary.Cell index={1}></Table.Summary.Cell>
-                <Table.Summary.Cell index={2} className="font-bold">
-                  <span
-                    className={
-                      totalWeight === 100
-                        ? 'text-green-600'
-                        : totalWeight > 100
-                          ? 'text-red-600'
-                          : 'text-orange-600'
-                    }
-                  >
-                    {totalWeight}%
-                  </span>
-                </Table.Summary.Cell>
-                <Table.Summary.Cell index={3}></Table.Summary.Cell>
-                <Table.Summary.Cell index={4}></Table.Summary.Cell>
-                <Table.Summary.Cell index={5}></Table.Summary.Cell>
-                <Table.Summary.Cell index={6}></Table.Summary.Cell>
-              </Table.Summary.Row>
-            )}
-            locale={{
-              emptyText: (
-                <div className="text-center py-8 text-gray-500">
-                  <div className="text-4xl mb-2">🤖</div>
-                  <div>No quizzes created yet</div>
-                  <div className="text-sm">Create your first AI-powered quiz to get started!</div>
-                </div>
-              ),
-            }}
-            className="rounded-lg"
-          />
-        </div>
+      <div className="rounded-2xl overflow-hidden bg-white dark:bg-neutral-900 min-h-[calc(100vh-10rem)] p-5 sm:p-6">
+        <Table
+          columns={columns}
+          dataSource={quizzes as readonly AdminQuiz[]}
+          rowKey={record => record.id}
+          rowHoverable={false}
+          size="middle"
+          pagination={{
+            pageSize: 25,
+            showSizeChanger: true,
+            showTotal: (total, range) => `${range[0]}-${range[1]} of ${total} quizzes`,
+          }}
+          summary={() => (
+            <Table.Summary.Row>
+              <Table.Summary.Cell index={0} className="font-semibold">
+                Total
+              </Table.Summary.Cell>
+              <Table.Summary.Cell index={1}></Table.Summary.Cell>
+              <Table.Summary.Cell index={2} className="font-bold">
+                <span
+                  className={
+                    totalWeight === 100
+                      ? 'text-green-600'
+                      : totalWeight > 100
+                        ? 'text-red-600'
+                        : 'text-orange-600'
+                  }
+                >
+                  {totalWeight}%
+                </span>
+              </Table.Summary.Cell>
+              <Table.Summary.Cell index={3}></Table.Summary.Cell>
+              <Table.Summary.Cell index={4}></Table.Summary.Cell>
+              <Table.Summary.Cell index={5}></Table.Summary.Cell>
+              <Table.Summary.Cell index={6}></Table.Summary.Cell>
+            </Table.Summary.Row>
+          )}
+          locale={{
+            emptyText: (
+              <div className="text-center py-12 text-gray-500">
+                <div className="font-medium">No quizzes created yet</div>
+                <div className="text-sm">Create your first quiz to get started!</div>
+              </div>
+            ),
+          }}
+        />
       </div>
     </div>
   );

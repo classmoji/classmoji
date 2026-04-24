@@ -125,11 +125,15 @@ const EmojiGrader = ({ repositoryAssignment, emojiMappings }: EmojiGraderProps) 
 
   return (
     <div className="relative" ref={ref}>
-      <>
-        <IconMoodHappy size={15} onClick={() => setShow(true)} className="cursor-pointer" />
-      </>
+      <div
+        onClick={() => setShow(true)}
+        className="flex items-center gap-1 text-gray-600 hover:text-gray-800 cursor-pointer"
+      >
+        <IconMoodHappy size={17} />
+        <span>Grade</span>
+      </div>
       {show && (
-        <div className="absolute py-3 px-4 border bg-white rounded-md shadow-sm top-0 left-1/2 transform -translate-x-2/3 -translate-y-[65px] z-10">
+        <div className="absolute py-3 px-4 border bg-white rounded-md shadow-sm top-0 right-0 -translate-y-[65px] z-10">
           <div className="flex gap-2 z-10">{emojiList}</div>
         </div>
       )}

@@ -1,4 +1,5 @@
 import { Button, Card, Empty, Tag } from 'antd';
+import { isRouteErrorResponse, useRouteError, Link } from 'react-router';
 import dayjs from 'dayjs';
 
 import { ClassmojiService } from '@classmoji/services';
@@ -225,5 +226,63 @@ const RepoHealth = ({ loaderData }: Route.ComponentProps) => {
     </div>
   );
 };
+
+export function ErrorBoundary() {
+  const error = useRouteError();
+
+  const is404 = isRouteErrorResponse(error) && error.status === 404;
+  const status = isRouteErrorResponse(error) ? error.status : 500;
+  const title = is404 ? 'Repo Health not found' : 'Repo Health is unavailable';
+
+  const message = isRouteErrorResponse(error)
+    ? error.statusText || error.data
+    : error instanceof Error
+      ? error.message
+      : 'An unexpected error occurred while loading repo health data.';
+
+  const isPrismaSchemaDrift =
+    error instanceof Error &&
+    /Unknown field|Unknown arg|does not exist/i.test(error.message) &&
+    /repo_analytics|analytics_snapshot|Repository/i.test(error.message);
+
+  return (
+    <div className="min-h-full relative">
+      <div className="flex items-center justify-between gap-3 mt-2 mb-4">
+        <h1 className="text-base font-semibold text-gray-600 dark:text-gray-400">Repo Health</h1>
+      </div>
+
+      <div className="rounded-2xl bg-white dark:bg-neutral-900 ring-1 ring-stone-200 dark:ring-neutral-800 p-6 sm:p-8 min-h-[calc(100vh-10rem)]">
+        <div className="max-w-2xl mx-auto py-12 text-center">
+          <div className="text-xs uppercase tracking-wide text-gray-400 dark:text-gray-500 font-semibold mb-3">
+            Error {status}
+          </div>
+          <h2 className="text-xl font-semibold text-gray-800 dark:text-gray-100 mb-3">{title}</h2>
+          <p className="text-sm text-gray-600 dark:text-gray-400 mb-6">{message}</p>
+
+          {isPrismaSchemaDrift && (
+            <div className="text-left rounded-lg bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 p-4 mb-6">
+              <div className="text-sm font-semibold text-amber-900 dark:text-amber-200 mb-1">
+                Likely cause: the database schema is out of date.
+              </div>
+              <div className="text-sm text-amber-800 dark:text-amber-300">
+                Run <code className="font-mono text-xs">npm run db:deploy</code> then{' '}
+                <code className="font-mono text-xs">npm run db:generate</code> to apply pending
+                migrations and regenerate the Prisma client. You may need to restart the dev
+                server.
+              </div>
+            </div>
+          )}
+
+          <div className="flex items-center justify-center gap-3">
+            <Button onClick={() => window.location.reload()}>Retry</Button>
+            <Link to="..">
+              <Button type="primary">Back</Button>
+            </Link>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 export default RepoHealth;

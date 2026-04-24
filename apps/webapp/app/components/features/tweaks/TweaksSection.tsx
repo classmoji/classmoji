@@ -15,13 +15,11 @@ interface AccentPreset {
 }
 
 const ACCENTS: AccentPreset[] = [
-  { name: 'Violet', hex: '#6d5efc' },
-  { name: 'Indigo', hex: '#4f46e5' },
+  { name: 'Orange', hex: '#f97316' },
+  { name: 'Rose', hex: '#f43f5e' },
   { name: 'Sky', hex: '#0ea5e9' },
   { name: 'Emerald', hex: '#10b981' },
   { name: 'Amber', hex: '#f59e0b' },
-  { name: 'Rose', hex: '#f43f5e' },
-  { name: 'Orange', hex: '#f97316' },
   { name: 'Teal', hex: '#14b8a6' },
   { name: 'Fuchsia', hex: '#d946ef' },
   { name: 'Slate', hex: '#475569' },
@@ -44,7 +42,7 @@ const TweaksSection = () => {
   return (
     <SettingSection
       title="Appearance"
-      description="Personal tweaks for accent color, light/dark mode, and background. Saved to this browser."
+      description="Personalize your theme, accent color, and background."
     >
       <div className="space-y-6">
         {/* Appearance mode */}
@@ -111,21 +109,6 @@ const TweaksSection = () => {
               );
             })}
           </div>
-
-          {/* Custom color */}
-          <div className="mt-3 flex items-center gap-3 p-2.5 pr-3 border border-dashed border-stone-300 dark:border-neutral-700 rounded-lg max-w-xs">
-            <input
-              type="color"
-              value={accent}
-              onChange={e => setAccent(e.target.value)}
-              aria-label="Custom accent color"
-              className="h-7 w-7 rounded cursor-pointer border-0 p-0 bg-transparent"
-            />
-            <div className="text-sm text-gray-600 dark:text-gray-300 flex-1">Custom</div>
-            <div className="font-mono text-xs uppercase text-gray-700 dark:text-gray-200">
-              {accent.toUpperCase()}
-            </div>
-          </div>
         </div>
 
         {/* Background presets */}
@@ -174,8 +157,6 @@ const TweaksSection = () => {
             })}
           </div>
         </div>
-
-        <p className="text-xs text-gray-500 dark:text-gray-400">Saved automatically to this browser.</p>
       </div>
     </SettingSection>
   );

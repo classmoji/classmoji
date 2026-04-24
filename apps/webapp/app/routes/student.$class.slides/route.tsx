@@ -2,7 +2,7 @@ import { Table } from 'antd';
 import getPrisma from '@classmoji/database';
 import type { Route } from './+types/route';
 import { assertClassroomAccess } from '~/utils/helpers';
-import { PageHeader, TableActionButtons } from '~/components';
+import { TableActionButtons } from '~/components';
 
 export const loader = async ({ request, params }: Route.LoaderArgs) => {
   const { class: classSlug } = params;
@@ -58,29 +58,32 @@ export default function StudentSlides({ loaderData }: Route.ComponentProps) {
   ];
 
   return (
-    <div>
-      <PageHeader title="Slides" routeName="slides" />
+    <div className="min-h-full relative">
+      <div className="flex items-center justify-between gap-3 mt-2 mb-4">
+        <h1 className="text-base font-semibold text-gray-600 dark:text-gray-400">Slides</h1>
+      </div>
 
-      <Table
-        columns={columns}
-        dataSource={slides}
-        rowKey="id"
-        rowHoverable={false}
-        size="middle"
-        pagination={{
-          pageSize: 25,
-          showSizeChanger: true,
-          showTotal: (total, range) => `${range[0]}-${range[1]} of ${total} slides`,
-        }}
-        locale={{
-          emptyText: (
-            <div className="text-center py-8 text-gray-500">
-              <div className="text-4xl mb-2">🎞️</div>
-              <div>No slides available yet</div>
-            </div>
-          ),
-        }}
-      />
+      <div className="rounded-2xl bg-white dark:bg-neutral-900 ring-1 ring-stone-200 dark:ring-neutral-800 p-5 sm:p-6 min-h-[calc(100vh-10rem)]">
+        <Table
+          columns={columns}
+          dataSource={slides}
+          rowKey="id"
+          rowHoverable={false}
+          size="middle"
+          pagination={{
+            pageSize: 25,
+            showSizeChanger: true,
+            showTotal: (total, range) => `${range[0]}-${range[1]} of ${total} slides`,
+          }}
+          locale={{
+            emptyText: (
+              <div className="text-center py-12 text-gray-500">
+                <div className="font-medium">No slides available yet</div>
+              </div>
+            ),
+          }}
+        />
+      </div>
     </div>
   );
 }

@@ -13,7 +13,7 @@ export interface TweaksState {
 }
 
 const STORAGE_KEY = 'cm-tweaks';
-const DEFAULT_TWEAKS: TweaksState = { theme: 'light', accent: '#6d5efc', background: 'default' };
+const DEFAULT_TWEAKS: TweaksState = { theme: 'light', accent: '#f97316', background: 'default' };
 
 export type BackgroundKey =
   | 'default'
@@ -39,17 +39,17 @@ export interface BackgroundPreset {
 export const BACKGROUNDS: BackgroundPreset[] = [
   {
     key: 'default', name: 'Default',
-    light: { s1: '#f3f6ff', s2: '#dce6fa', s3a: '#e6ecf8', s3b: '#eef2fb', s3c: '#e3ebfa',
-             paper: '#eaf0fb', paper2: '#dfe7f6', sidebar: '#ffffff' },
+    light: { s1: '#f7f9ff', s2: '#e6edfc', s3a: '#edf1fa', s3b: '#f3f6fc', s3c: '#ebf0fb',
+             paper: '#f0f4fc', paper2: '#e8eef8', sidebar: '#ffffff' },
     dark:  { s1: '#1a1f32', s2: '#0a0d17', s3a: '#0c0f1a', s3b: '#11152a', s3c: '#090b14',
              paper: '#0e1016', paper2: '#151824', sidebar: '#121521' },
   },
   {
     key: 'aurora', name: 'Aurora',
-    light: { s1: '#ffc9dd', s2: '#b9c9ff', s3a: '#e4d4ff', s3b: '#dce5ff', s3c: '#ffcedd',
-             paper: '#fbeaf2', paper2: '#f0e3fa', sidebar: '#fdf4f8' },
-    dark:  { s1: '#3a1a44', s2: '#0e0a26', s3a: '#17102c', s3b: '#241a44', s3c: '#0e0a22',
-             paper: '#170f1e', paper2: '#1e1530', sidebar: '#1a1226' },
+    light: { s1: '#ffd7e5', s2: '#ccd6ff', s3a: '#ece0ff', s3b: '#e7edff', s3c: '#ffdbe6',
+             paper: '#fcf0f5', paper2: '#f4ebfb', sidebar: '#fef8fb' },
+    dark:  { s1: '#2e1536', s2: '#0a071e', s3a: '#120c24', s3b: '#1c1436', s3c: '#0a071c',
+             paper: '#120c18', paper2: '#191127', sidebar: '#150e20' },
   },
   {
     key: 'mint', name: 'Mint',

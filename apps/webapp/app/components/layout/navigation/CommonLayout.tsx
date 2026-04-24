@@ -1,7 +1,8 @@
 import { Avatar, Tooltip } from 'antd';
 import { Link, useParams, useLocation, useRouteLoaderData } from 'react-router';
 import { useEffect, useState } from 'react';
-import { IconFileText, IconMenu2 } from '@tabler/icons-react';
+import { IconFileText, IconMenu2, IconLogout } from '@tabler/icons-react';
+import { signOut } from '@classmoji/auth/client';
 import useLocalStorageState from 'use-local-storage-state';
 import { Logo } from '@classmoji/ui-components';
 import { ProTierFeature, RequireRole, RecentViewers } from '~/components';
@@ -94,11 +95,11 @@ const CommonLayout = ({
   const siderWidth = collapsed ? 64 : 240;
 
   const TokenSection = () => (
-    <div className="flex items-center justify-between gap-2">
+    <div className="flex items-center justify-between gap-2 px-1">
       <span className="text-sm font-medium text-gray-600 dark:text-gray-400">Available Tokens</span>
-      <div className="flex items-center gap-2 bg-primary-50 dark:bg-primary-900/20 rounded-full px-3 py-1 shadow-xs border border-primary-200 dark:border-primary-800/50">
-        <img src={tokenImage} alt="token" className="h-5 w-5" />
-        <span className="text-lg font-bold text-primary-900 dark:text-primary-400">
+      <div className="flex items-center gap-1.5">
+        <img src={tokenImage} alt="token" className="h-4 w-4" />
+        <span className="text-sm font-semibold text-gray-900 dark:text-gray-100">
           {tokenBalance}
         </span>
       </div>
@@ -212,14 +213,8 @@ const CommonLayout = ({
     });
 
     return (
-      <div key="menu-pages" className={collapsed ? '' : 'pt-7'}>
-        {!collapsed && (
-          <div className="px-4 mb-3">
-            <h4 className="text-[11px] font-bold text-gray-400 dark:text-gray-500 uppercase tracking-wider">
-              Pages
-            </h4>
-          </div>
-        )}
+      <div key="menu-pages" className={collapsed ? 'pt-3' : 'pt-4'}>
+        <hr className="mx-4 mb-3 border-t border-gray-200 dark:border-gray-700" />
         <div className="space-y-1">{menuPageItems}</div>
       </div>
     );
@@ -247,15 +242,8 @@ const CommonLayout = ({
       );
 
       return (
-        <div key={categoryKey} className={collapsed ? '' : 'pt-7'}>
-          {/* Category Header - only show when expanded */}
-          {!collapsed && (
-            <div className="px-4 mb-3">
-              <h4 className="text-[11px] font-bold text-gray-400 dark:text-gray-500 uppercase tracking-wider">
-                {category.label}
-              </h4>
-            </div>
-          )}
+        <div key={categoryKey} className={collapsed ? 'pt-3' : 'pt-4'}>
+          <hr className="mx-4 mb-3 border-t border-gray-200 dark:border-gray-700" />
           <div className="space-y-1">{categoryItems}</div>
         </div>
       );
@@ -351,7 +339,7 @@ const CommonLayout = ({
         )}
 
         {/* Recent viewers */}
-        {!collapsed && recentViewers?.length > 0 && (
+        {!collapsed && recentViewers?.length >= 2 && (
           <>
             <div className="mx-4 h-px bg-stone-200 dark:bg-neutral-800 shrink-0" />
             <div className="px-3 pb-3 pt-3 shrink-0">
@@ -407,10 +395,23 @@ const CommonLayout = ({
                   )
                 }
               >
-                <img src={githubLogo} alt="GitHub" className="w-[16px] h-[16px] dark:invert" />
+                <img src={githubLogo} alt="GitHub" className="w-[18px] h-[18px] dark:invert" />
               </button>
             </Tooltip>
           )}
+          <Tooltip title="Log out">
+            <button
+              type="button"
+              aria-label="Log out"
+              className="p-1.5 rounded-lg text-gray-500 dark:text-gray-400 hover:text-red-600 dark:hover:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors shrink-0"
+              onClick={async () => {
+                await signOut();
+                window.location.href = window.location.origin;
+              }}
+            >
+              <IconLogout size={18} strokeWidth={1.75} />
+            </button>
+          </Tooltip>
         </div>
       </div>
 
@@ -436,14 +437,19 @@ const CommonLayout = ({
           className={`flex-1 overflow-auto relative min-w-0 ${
             pathname.includes('/dashboard') ||
             pathname.includes('/modules') ||
+            pathname.includes('/quizzes') ||
             pathname.includes('/calendar') ||
             pathname.includes('/assignments') ||
             pathname.includes('/regrade-requests') ||
             pathname.includes('/settings') ||
             pathname.includes('/students') ||
+            pathname.includes('/assistants') ||
+            pathname.includes('/tokens') ||
+            pathname.includes('/teams') ||
             pathname.includes('/grading') ||
             pathname.includes('/repo-health') ||
             pathname.includes('/submissions/') ||
+            pathname.match(/\/slides(\/|$)/) ||
             pathname.match(/\/pages(\/|$)/) ||
             pathname.match(/\/grades(\/|$)/) ||
             pathname.match(/\/repositories(\/|$)/)

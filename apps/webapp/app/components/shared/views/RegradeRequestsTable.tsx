@@ -8,7 +8,6 @@ import {
   UserThumbnailView,
   EmojisDisplay,
 } from '~/components';
-import { IconCheck } from '@tabler/icons-react';
 import { openRepositoryAssignmentInGithub } from '~/utils/helpers.client';
 
 interface RegradeGrade {
@@ -52,7 +51,7 @@ const RegradeRequestsTable = ({ requests, emojiMappings, org }: RegradeRequestsT
   const navigate = useNavigate();
   const { role } = useRole();
   const { class: classSlug } = useParams();
-  const { notify, fetcher } = useGlobalFetcher();
+  const { fetcher } = useGlobalFetcher();
 
   // Calculate statistics
   const _totalRequests = requests.length;
@@ -167,34 +166,30 @@ const RegradeRequestsTable = ({ requests, emojiMappings, org }: RegradeRequestsT
             />
           )}
           {request.status === 'IN_REVIEW' && role !== 'STUDENT' && (
-            <Tooltip title="Mark as resolved">
-              <Button
-                type="text"
-                icon={<IconCheck size={16} />}
-                className="text-green-600 hover:text-green-700 hover:bg-green-50"
-                size="small"
-                onClick={() => {
-                  notify('UPDATE_REGRADE_REQUEST', 'Updating regrade request...');
-                  fetcher!.submit(
-                    {
-                      request: {
-                        id: request.id,
-                        student_id: request.student_id,
-                        repository_assignment: {
-                          id: request.repository_assignment.id,
-                        },
+            <div
+              onClick={() => {
+                fetcher!.submit(
+                  {
+                    request: {
+                      id: request.id,
+                      student_id: request.student_id,
+                      repository_assignment: {
+                        id: request.repository_assignment.id,
                       },
-                      status: 'APPROVED',
                     },
-                    {
-                      method: 'post',
-                      action: `/api/operation/?action=updateRegradeRequest`,
-                      encType: 'application/json',
-                    }
-                  );
-                }}
-              />
-            </Tooltip>
+                    status: 'APPROVED',
+                  },
+                  {
+                    method: 'post',
+                    action: `/api/operation/?action=updateRegradeRequest`,
+                    encType: 'application/json',
+                  }
+                );
+              }}
+              className="flex items-center gap-1 text-green-600 hover:text-green-700 cursor-pointer whitespace-nowrap"
+            >
+              <span>Resolve</span>
+            </div>
           )}
         </TableActionButtons>
       ),

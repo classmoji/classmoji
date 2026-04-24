@@ -83,7 +83,7 @@ const SettingsQuizzes = ({ loaderData }: Route.ComponentProps) => {
   const { class: classSlug } = useParams();
   const [form] = Form.useForm();
 
-  const { notify, fetcher } = useGlobalFetcher();
+  const { fetcher } = useGlobalFetcher();
 
   const settings = (organization.settings || {}) as Record<string, unknown>;
   // Use the computed flag from getOrgForUI (API key is never sent to client)
@@ -94,8 +94,6 @@ const SettingsQuizzes = ({ loaderData }: Route.ComponentProps) => {
   const anthropicModels = availableModels?.anthropic || [];
 
   const handleQuizzesToggle = (checked: boolean) => {
-    notify(ActionTypes.SAVE_QUIZ_SETTINGS, 'Saving quiz settings...');
-
     fetcher!.submit(
       {
         _action: 'saveQuizSettings',
@@ -110,8 +108,6 @@ const SettingsQuizzes = ({ loaderData }: Route.ComponentProps) => {
   };
 
   const handleSaveLLMSettings = (values: Record<string, unknown>) => {
-    notify(ActionTypes.SAVE_QUIZ_SETTINGS, 'Saving LLM settings...');
-
     fetcher!.submit(
       {
         _action: 'saveLLMSettings',
@@ -133,8 +129,6 @@ const SettingsQuizzes = ({ loaderData }: Route.ComponentProps) => {
       okText: 'Clear',
       okType: 'danger',
       onOk: () => {
-        notify(ActionTypes.SAVE_QUIZ_SETTINGS, 'Clearing LLM settings...');
-
         fetcher!.submit(
           {
             _action: 'clearLLMSettings',

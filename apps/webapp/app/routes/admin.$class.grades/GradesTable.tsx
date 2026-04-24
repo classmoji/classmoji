@@ -328,8 +328,7 @@ const GradesTable = (props: GradesTableProps) => {
       <div className="rounded-2xl overflow-hidden bg-white dark:bg-neutral-900 min-h-[calc(100vh-10rem)] p-5 sm:p-6">
         {searchQuery && filteredStudents.length === 0 ? (
           <div className="text-center py-12 text-gray-500">
-            <div className="text-4xl mb-2">🔍</div>
-            <div className="text-lg mb-1">No students found</div>
+            <div className="font-medium">No students found</div>
             <div className="text-sm">
               No results for <span className="font-medium text-gray-900 italic">{searchQuery}</span>
             </div>
@@ -368,9 +367,8 @@ const GradesTable = (props: GradesTableProps) => {
                 summary={summary}
                 locale={{
                   emptyText: (
-                    <div className="text-center py-8 text-gray-500">
-                      <div className="text-4xl mb-2">📊</div>
-                      <div>No student grades available</div>
+                    <div className="text-center py-12 text-gray-500">
+                      <div className="font-medium">No student grades available</div>
                       <div className="text-sm">
                         Students will appear here once assignments are published
                       </div>

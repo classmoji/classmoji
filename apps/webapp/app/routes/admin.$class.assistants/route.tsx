@@ -9,7 +9,6 @@ import { getAuthSession } from '@classmoji/auth/server';
 import { authClient } from '@classmoji/auth/client';
 import {
   ButtonNew,
-  PageHeader,
   UserThumbnailView,
   SearchInput,
   ProTierFeature,
@@ -215,12 +214,13 @@ const AdminAssistants = ({ loaderData }: Route.ComponentProps) => {
 
   return (
     <ProTierFeature>
-      <div>
+      <div className="min-h-full relative">
         <Outlet />
 
-        <div className="flex justify-between items-start">
-          <PageHeader title="Assistants" routeName="assistants" />
-          <div className="flex gap-2 ">
+        <div className="flex items-center justify-between gap-3 mt-2 mb-4">
+          <h1 className="text-base font-semibold text-gray-600 dark:text-gray-400">Assistants</h1>
+
+          <div className="flex gap-3">
             <SearchInput
               query={query}
               setQuery={setQuery}
@@ -242,35 +242,33 @@ const AdminAssistants = ({ loaderData }: Route.ComponentProps) => {
           <FormAssistant close={close} token={token} />
         </Modal>
 
-        <div className="space-y-6">
-          <div>
-            <Table
-              columns={columns}
-              dataSource={filteredAssistants}
-              rowHoverable={false}
-              pagination={{
-                pageSize: 25,
-                showSizeChanger: true,
-                showTotal: (total, range) => `${range[0]}-${range[1]} of ${total} assistants`,
-              }}
-              size="middle"
-              locale={{
-                emptyText: query ? (
-                  <div className="text-center py-8 text-gray-500">
-                    <div className="text-4xl mb-2">🔍</div>
-                    <div>No assistants found matching &ldquo;{query}&rdquo;</div>
-                    <div className="text-sm">Try adjusting your search terms</div>
+        <div className="rounded-2xl bg-white dark:bg-neutral-900 ring-1 ring-stone-200 dark:ring-neutral-800 p-5 sm:p-6 min-h-[calc(100vh-10rem)]">
+          <Table
+            columns={columns}
+            dataSource={filteredAssistants}
+            rowHoverable={false}
+            pagination={{
+              pageSize: 25,
+              showSizeChanger: true,
+              showTotal: (total, range) => `${range[0]}-${range[1]} of ${total} assistants`,
+            }}
+            size="middle"
+            locale={{
+              emptyText: query ? (
+                <div className="text-center py-12 text-gray-500">
+                  <div className="font-medium">
+                    No assistants found matching &ldquo;{query}&rdquo;
                   </div>
-                ) : (
-                  <div className="text-center py-8 text-gray-500">
-                    <div className="text-4xl mb-2">👨‍🏫</div>
-                    <div>No assistants added yet</div>
-                    <div className="text-sm">Add your first teaching assistant to get started!</div>
-                  </div>
-                ),
-              }}
-            />
-          </div>
+                  <div className="text-sm">Try adjusting your search terms</div>
+                </div>
+              ) : (
+                <div className="text-center py-12 text-gray-500">
+                  <div className="font-medium">No assistants added yet</div>
+                  <div className="text-sm">Add your first teaching assistant to get started!</div>
+                </div>
+              ),
+            }}
+          />
         </div>
       </div>
     </ProTierFeature>

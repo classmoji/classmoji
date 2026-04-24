@@ -53,8 +53,7 @@ React.useLayoutEffect = React.useEffect;
 const ToastFade = cssTransition({
   enter: 'toast-fade-in',
   exit: 'toast-fade-out',
-  collapse: true,
-  collapseDuration: 220,
+  collapse: false,
 });
 
 export const meta = () => {

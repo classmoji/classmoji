@@ -32,10 +32,9 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
 
 const SettingsGeneral = ({ loaderData }: Route.ComponentProps) => {
   const { classroom, menuPages } = loaderData;
-  const { notify, fetcher } = useGlobalFetcher();
+  const { fetcher } = useGlobalFetcher();
 
   const handleRecentViewersToggle = (checked: boolean) => {
-    notify(ActionTypes.SAVE_EXTENSION_SETTINGS, 'Saving...');
     fetcher!.submit(
       { recent_viewers_enabled: checked },
       { action: '?/saveExtensionSettings', method: 'POST', encType: 'application/json' }

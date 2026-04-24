@@ -112,12 +112,12 @@ const RecentViewers = ({
   totalCount?: number;
   groupByRole?: boolean;
 }) => {
-  if (!viewers || viewers.length === 0) {
-    return null;
-  }
-
   // Use totalCount if provided, otherwise fall back to viewers.length
   const displayTotal = totalCount || viewers.length;
+
+  if (!viewers || viewers.length === 0 || displayTotal < 2) {
+    return null;
+  }
 
   // Group viewers by role category if enabled
   const groupedViewers = groupByRole

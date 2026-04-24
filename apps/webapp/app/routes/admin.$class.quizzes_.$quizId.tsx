@@ -2,7 +2,6 @@ import { useNavigate, useParams, Outlet, useFetcher } from 'react-router';
 import { useEffect, useState } from 'react';
 import type { Route } from './+types/admin.$class.quizzes_.$quizId';
 import {
-  Card,
   Table,
   Button,
   Tag,
@@ -18,7 +17,7 @@ import { IconEye, IconArrowLeft, IconClock, IconTrophy, IconChartBar } from '@ta
 import { TrophyOutlined, PlayCircleOutlined, ClearOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
-import { PageHeader, UserThumbnailView, GradeBadge, SectionHeader } from '~/components';
+import { UserThumbnailView, GradeBadge, SectionHeader } from '~/components';
 import { formatDuration, checkForCompletion } from '~/utils/quizUtils';
 import { namedAction } from 'remix-utils/named-action';
 
@@ -793,7 +792,7 @@ const QuizView = ({ loaderData }: Route.ComponentProps) => {
   ];
 
   return (
-    <div className="relative">
+    <div className="min-h-full relative">
       {/* Outlet renders child routes (attempt view drawer) */}
       <Outlet />
 
@@ -835,21 +834,20 @@ const QuizView = ({ loaderData }: Route.ComponentProps) => {
         )}
       </Modal>
 
-      <PageHeader
-        routeName="quizzes"
-        title={
-          <div className="flex items-center gap-3">
-            <Button
-              type="text"
-              className="text-gray-600! hover:text-gray-900! dark:text-gray-100! dark:hover:text-white!"
-              icon={<IconArrowLeft size={20} />}
-              onClick={() => navigate(`/admin/${classSlug}/quizzes`)}
-              aria-label="Back to quizzes"
-            />
-            <span>Quiz: {quiz.name}</span>
-          </div>
-        }
-      >
+      <div className="flex items-center justify-between gap-3 mt-2 mb-4">
+        <div className="flex items-center gap-2 min-w-0">
+          <Button
+            type="text"
+            className="text-gray-600! hover:text-gray-900! dark:text-gray-100! dark:hover:text-white!"
+            icon={<IconArrowLeft size={20} />}
+            onClick={() => navigate(`/admin/${classSlug}/quizzes`)}
+            aria-label="Back to quizzes"
+          />
+          <h1 className="text-base font-semibold text-gray-600 dark:text-gray-400 truncate">
+            Quiz: {quiz.name}
+          </h1>
+        </div>
+
         <Space>
           {adminAttempt && (
             <Tooltip title="Clear all your preview attempts for this quiz">
@@ -870,10 +868,10 @@ const QuizView = ({ loaderData }: Route.ComponentProps) => {
             </Button>
           </Tooltip>
         </Space>
-      </PageHeader>
+      </div>
 
       <div className="space-y-6">
-        <Card>
+        <div className="rounded-2xl bg-white dark:bg-neutral-900 ring-1 ring-stone-200 dark:ring-neutral-800 p-5 sm:p-6">
           <SectionHeader
             title="Quiz Statistics"
             subtitle="Performance overview across all attempts"
@@ -904,9 +902,9 @@ const QuizView = ({ loaderData }: Route.ComponentProps) => {
             <StatCard value={stats.highestScore} label="Highest Score" color="green" />
             <StatCard value={stats.lowestScore} label="Lowest Score" color="red" />
           </div>
-        </Card>
+        </div>
 
-        <Card>
+        <div className="rounded-2xl bg-white dark:bg-neutral-900 ring-1 ring-stone-200 dark:ring-neutral-800 p-5 sm:p-6">
           <SectionHeader
             title="Student Attempts"
             subtitle={`${students.length} students, ${allAttempts.length} total attempts`}
@@ -928,7 +926,7 @@ const QuizView = ({ loaderData }: Route.ComponentProps) => {
             }}
             scroll={{ x: 1200 }}
           />
-        </Card>
+        </div>
       </div>
     </div>
   );

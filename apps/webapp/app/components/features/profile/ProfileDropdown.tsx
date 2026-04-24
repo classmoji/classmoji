@@ -2,7 +2,6 @@ import { Popover, Avatar } from 'antd';
 import { Link, useNavigate } from 'react-router';
 
 import { useUser } from '~/hooks';
-import { signOut } from '@classmoji/auth/client';
 
 import type { TooltipPlacement } from 'antd/es/tooltip';
 
@@ -43,18 +42,6 @@ const ProfileDropdown = ({ children, placement = 'bottomRight' }: ProfileDropdow
       <div className="flex flex-col gap-0.5 p-1.5">
         <MenuItem label="Account Settings" path="/settings/general" />
         <MenuItem label="Usage & Billing" path="/settings/billing" />
-      </div>
-
-      <div className="border-t border-gray-200 dark:border-neutral-700 p-1.5">
-        <button
-          className="block w-full text-left text-sm text-red-600 dark:text-red-400 hover:text-red-700 dark:hover:text-red-300 hover:bg-red-100 dark:hover:bg-red-900/30 rounded-md py-1.5 px-2.5 transition-colors cursor-pointer"
-          onClick={async () => {
-            await signOut();
-            window.location.href = window.location.origin;
-          }}
-        >
-          Logout
-        </button>
       </div>
     </div>
   );

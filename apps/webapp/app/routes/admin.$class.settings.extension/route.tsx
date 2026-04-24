@@ -34,11 +34,9 @@ const SettingsExtensions = ({ loaderData }: Route.ComponentProps) => {
     String(settings.default_tokens_per_hour ?? '')
   );
 
-  const { notify, fetcher } = useGlobalFetcher();
+  const { fetcher } = useGlobalFetcher();
 
   const saveExtensionSettings = () => {
-    notify(ActionTypes.SAVE_EXTENSION_SETTINGS, 'Saving extension configuration...');
-
     fetcher!.submit(
       {
         default_tokens_per_hour: parseInt(tokensPerHour),

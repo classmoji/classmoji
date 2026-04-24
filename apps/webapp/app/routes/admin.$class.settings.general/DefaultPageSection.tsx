@@ -3,7 +3,6 @@ import { useState } from 'react';
 
 import { useGlobalFetcher } from '~/hooks';
 import { SettingSection } from '~/components';
-import { ActionTypes } from '~/constants';
 
 interface DefaultPageSectionProps {
   currentDefault: string;
@@ -13,11 +12,9 @@ interface DefaultPageSectionProps {
 const DefaultPageSection = ({ currentDefault, menuPages }: DefaultPageSectionProps) => {
   const [defaultPage, setDefaultPage] = useState(currentDefault);
 
-  const { notify, fetcher } = useGlobalFetcher();
+  const { fetcher } = useGlobalFetcher();
 
   const saveDefaultPage = () => {
-    notify(ActionTypes.SAVE_DEFAULT_PAGE, 'Saving default page...');
-
     fetcher!.submit(
       {
         default_student_page: defaultPage,

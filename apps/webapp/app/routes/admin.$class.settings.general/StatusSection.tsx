@@ -1,18 +1,15 @@
 import { SettingSection } from '~/components';
 import { Form, Radio } from 'antd';
 import { useGlobalFetcher } from '~/hooks';
-import { ActionTypes } from '~/constants';
 
 interface StatusSectionProps {
   organization: { is_active: boolean };
 }
 
 const StatusSection = ({ organization }: StatusSectionProps) => {
-  const { fetcher, notify } = useGlobalFetcher();
+  const { fetcher } = useGlobalFetcher();
 
   const handleStatusChange = async (isActive: boolean) => {
-    notify(ActionTypes.SAVE_PROFILE, 'Saving organization status...');
-
     fetcher!.submit(
       {
         is_active: isActive,

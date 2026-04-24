@@ -45,7 +45,7 @@ const SettingsContent = ({ loaderData }: Route.ComponentProps) => {
   const { organization, aiAgentAvailable } = loaderData;
   const { class: classSlug } = useParams();
 
-  const { notify, fetcher } = useGlobalFetcher();
+  const { fetcher } = useGlobalFetcher();
 
   // Generate repo name and URL for display
   const gitOrgLogin = organization.git_organization?.login || classSlug || '';
@@ -61,7 +61,6 @@ const SettingsContent = ({ loaderData }: Route.ComponentProps) => {
     e: React.FocusEvent<HTMLInputElement> | React.KeyboardEvent<HTMLInputElement>
   ) => {
     const value = (e.target as HTMLInputElement).value;
-    notify(ActionTypes.SAVE_CONTENT_SETTINGS, 'Saving content repository...');
 
     fetcher!.submit(
       {
@@ -77,8 +76,6 @@ const SettingsContent = ({ loaderData }: Route.ComponentProps) => {
   };
 
   const handleSlidesToggle = (checked: boolean) => {
-    notify(ActionTypes.SAVE_CONTENT_SETTINGS, 'Saving slides settings...');
-
     fetcher!.submit(
       {
         _action: 'saveContentSettings',
@@ -93,8 +90,6 @@ const SettingsContent = ({ loaderData }: Route.ComponentProps) => {
   };
 
   const handleSyllabusBotToggle = (checked: boolean) => {
-    notify(ActionTypes.SAVE_CONTENT_SETTINGS, 'Saving syllabus bot settings...');
-
     fetcher!.submit(
       {
         _action: 'saveContentSettings',

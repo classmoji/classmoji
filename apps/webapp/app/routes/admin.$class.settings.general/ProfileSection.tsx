@@ -4,7 +4,6 @@ import { useState } from 'react';
 
 import { useGlobalFetcher } from '~/hooks';
 import { SettingSection } from '~/components';
-import { ActionTypes } from '~/constants';
 
 interface ProfileSectionProps {
   organization: { name: string; term: string; year: string };
@@ -15,11 +14,9 @@ const ProfileSection = ({ organization }: ProfileSectionProps) => {
   const [term, setTerm] = useState(organization.term);
   const [year, setYear] = useState(organization.year);
 
-  const { notify, fetcher } = useGlobalFetcher();
+  const { fetcher } = useGlobalFetcher();
 
   const saveProfile = () => {
-    notify(ActionTypes.SAVE_PROFILE, 'Saving profile...');
-
     fetcher!.submit(
       {
         name,

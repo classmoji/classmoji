@@ -74,7 +74,7 @@ const Section = ({
 
 const SettingsRepos = ({ loaderData }: Route.ComponentProps) => {
   const { githubOrganization, error } = loaderData;
-  const { fetcher, notify } = useNotifiedFetcher();
+  const { fetcher } = useNotifiedFetcher();
 
   if (error || !githubOrganization) {
     return (
@@ -85,7 +85,6 @@ const SettingsRepos = ({ loaderData }: Route.ComponentProps) => {
   }
 
   const updateOrganization = async (updates: Record<string, unknown>) => {
-    notify('UPDATE_MEMBER_PERMISSIONS', 'Updating permissions...');
     fetcher.submit(updates as Record<string, string>, {
       method: 'post',
       encType: 'application/json',

@@ -45,12 +45,16 @@ const GradingTabsCard = ({ gradingProgress, assistantsProgress }: GradingTabsCar
               key={tab.key}
               type="button"
               onClick={() => setActive(tab.key)}
-              style={zStyle}
+              style={
+                isActive
+                  ? { ...zStyle, color: 'var(--accent)', borderTopColor: 'var(--accent)' }
+                  : zStyle
+              }
               className={`relative px-4 py-2 text-sm font-medium rounded-t-2xl border whitespace-nowrap transition-colors ${
                 idx > 0 ? '-ml-2' : ''
               } ${
                 isActive
-                  ? 'bg-white dark:bg-neutral-900 text-gray-900 dark:text-gray-100 border-stone-200 dark:border-neutral-800 border-b-transparent'
+                  ? 'bg-white dark:bg-neutral-900 border-stone-200 dark:border-neutral-800 border-b-transparent'
                   : 'bg-stone-100 dark:bg-neutral-800 text-gray-500 dark:text-gray-400 border-stone-200 dark:border-neutral-700 hover:text-gray-800 dark:hover:text-gray-200'
               }`}
             >

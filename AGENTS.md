@@ -75,6 +75,35 @@ When working on features that span admin/assistant/student routes, avoid duplica
 ### Service Isolation
 Slides, pages, and ai-agent are moving toward self-contained services. When working on these, keep code consolidated within each service rather than adding cross-app dependencies. Prefer importing from shared packages (`@classmoji/services`, `@classmoji/utils`, `@classmoji/database`) over reaching into another app's internals.
 
+### Standard Page Layout
+List/index pages (admin/student route pages with a header + table or list) should follow this uniform pattern. Reference: `apps/webapp/app/routes/admin.$class.assistants/route.tsx`.
+
+```jsx
+<div className="min-h-full relative">
+  <Outlet /> {/* if the route nests modals/drawers */}
+
+  {/* Header row: small inline title + actions on the right (search, buttons) */}
+  <div className="flex items-center justify-between gap-3 mt-2 mb-4">
+    <h1 className="text-base font-semibold text-gray-600 dark:text-gray-400">Page Title</h1>
+    <div className="flex gap-3">
+      {/* SearchInput, ButtonNew, etc. */}
+    </div>
+  </div>
+
+  {/* Floating card wrapping the table/list */}
+  <div className="rounded-2xl bg-white dark:bg-neutral-900 ring-1 ring-stone-200 dark:ring-neutral-800 p-5 sm:p-6 min-h-[calc(100vh-10rem)]">
+    <Table ... />
+  </div>
+</div>
+```
+
+Conventions:
+- **Title goes outside the card**, not inside.
+- The title is a single-line `h1` at `text-base font-semibold text-gray-600 dark:text-gray-400`. Do not use the old `PageHeader` component (it injects an icon and a much larger heading) — it's been removed from all routes and should not be reintroduced.
+- The card uses `rounded-2xl bg-white dark:bg-neutral-900 ring-1 ring-stone-200 dark:ring-neutral-800` with `p-5 sm:p-6`. Add `min-h-[calc(100vh-10rem)]` so the card fills the viewport on near-empty states.
+- **Empty states**: no decorative emoji. Use `<div className="text-center py-12 text-gray-500"><div className="font-medium">…</div><div className="text-sm">…</div></div>`. Functional/branding emojis (chat avatars, inline icons in info banners) are fine — only the big `text-4xl mb-2` decorative pattern is out.
+- **CommonLayout content shell**: `apps/webapp/app/components/layout/navigation/CommonLayout.tsx` wraps non-listed routes in its own outer white card. To get the floating-card effect, the route's path segment must be in the bare-canvas list in CommonLayout (look for the `pathname.includes(...) || pathname.match(...)` chain). When adding a new top-level list page, add its segment to that list — otherwise you'll get a double card-on-card.
+
 ## Environments & Deployment
 - Hosted on **Fly.io** with staging and production environments. Production database is on **Neon**.
 - **NEVER use Neon MCP tools** unless explicitly asked to debug a production issue.

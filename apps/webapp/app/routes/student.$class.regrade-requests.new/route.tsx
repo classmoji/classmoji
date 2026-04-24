@@ -28,7 +28,7 @@ const NewRegradeRequest = ({ loaderData }: Route.ComponentProps) => {
   const { show, close, visible } = useDisclosure();
   const [assignment, setAssignment] = useState(null);
   const [comment, setComment] = useState('');
-  const { fetcher, notify } = useGlobalFetcher();
+  const { fetcher } = useGlobalFetcher();
   const navigate = useNavigate();
   const { class: classSlug } = useParams();
   const { state } = useLocation();
@@ -44,8 +44,6 @@ const NewRegradeRequest = ({ loaderData }: Route.ComponentProps) => {
   }, [state]);
 
   const handleSubmit = () => {
-    notify('REQUEST_REGRADE', 'Submitting resubmit request...');
-
     fetcher!.submit(
       {
         student_comment: comment,
