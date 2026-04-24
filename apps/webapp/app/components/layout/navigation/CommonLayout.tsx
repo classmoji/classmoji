@@ -106,6 +106,7 @@ const CommonLayout = ({
   );
 
   const renderNavItem = (item: NavItem, key: string) => {
+    const to = `${roleSettings?.path}/${params.class}${item.link}`;
     const active =
       (pathname.includes(item.link) && !pathname.includes('settings')) ||
       (item.link.includes('setting') && pathname.includes('settings'));
@@ -123,7 +124,7 @@ const CommonLayout = ({
     return (
       <RequireRole roles={item.roles} key={key}>
         <Link
-          to={`${roleSettings?.path}/${params.class}${item.link}`}
+          to={to}
           prefetch={item.label === 'Dashboard' ? 'render' : 'intent'}
           className={`
             group flex items-center gap-2.5 rounded-md transition-colors duration-150
