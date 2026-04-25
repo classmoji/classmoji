@@ -23,7 +23,7 @@ export const sendEmailTask = task({
       throw new Error('sendEmailTask must run on the server');
     }
 
-    const nodemailer = await import('nodemailer');
+    const { default: nodemailer } = await import('nodemailer');
     const payload = extractPayload(input);
 
     const transporter = nodemailer.createTransport({
