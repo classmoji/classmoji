@@ -1,4 +1,5 @@
 import { Avatar } from 'antd';
+import { Link } from 'react-router';
 import { useUser } from '~/hooks';
 import { IconChevronDown } from '@tabler/icons-react';
 import { Logo } from '@classmoji/ui-components';
@@ -9,9 +10,10 @@ const UserHeader = () => {
 
   return (
     <div className="fixed z-10 flex items-center justify-between top-0 bg-lightGray dark:bg-neutral-900 p-4 w-screen h-[52px] border-b-[0.5px] border-[#dee2e6] dark:border-neutral-800">
-      <div className="flex items-center gap-2">
-        <Logo size={32} />
-      </div>
+      <Link to="/select-organization" className="flex items-center gap-2">
+        <Logo size={32} theme="current" />
+      </Link>
+
       <ProfileDropdown>
         <div className="flex items-center gap-1">
           <Avatar
