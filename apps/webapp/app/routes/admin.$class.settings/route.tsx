@@ -42,7 +42,7 @@ const OrgSettings = () => {
           {visibleTabs.map((tab, idx) => {
             const isActive = tab.key === currentTab;
             const baseZ = visibleTabs.length - idx;
-            const zStyle = { zIndex: isActive ? 40 : baseZ };
+            const zStyle = { zIndex: isActive ? 10 : baseZ };
             const inactiveTextColor = tab.danger
               ? 'text-red-500/80 dark:text-red-400/80 hover:text-red-600 dark:hover:text-red-400'
               : 'text-gray-500 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200';

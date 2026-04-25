@@ -154,6 +154,7 @@ const AdminTeams = ({ loaderData }: Route.ComponentProps) => {
               showTotal: (total, range) => `${range[0]}-${range[1]} of ${total} teams`,
             }}
             size="middle"
+            scroll={{ x: 'max-content' }}
             locale={{
               emptyText: query ? (
                 <div className="text-center py-8 text-gray-500 dark:text-gray-400">

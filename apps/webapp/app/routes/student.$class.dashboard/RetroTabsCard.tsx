@@ -343,7 +343,7 @@ const RetroTabsCard = ({
           const isActive = key === active;
           const activeIdx = TAB_ORDER.findIndex(t => t.key === active);
           const distance = Math.abs(idx - activeIdx);
-          const zClass = isActive ? 'z-30' : distance === 1 ? 'z-20' : 'z-10';
+          const zClass = isActive ? 'z-10' : distance === 1 ? 'z-[5]' : 'z-[2]';
           return (
             <button
               key={key}

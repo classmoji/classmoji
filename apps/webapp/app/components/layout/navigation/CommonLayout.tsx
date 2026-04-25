@@ -224,6 +224,7 @@ const CommonLayout = ({
 
   const renderAskMoji = () => {
     if (!askMojiEnabled) return null;
+    if (role === 'OWNER') return null;
 
     const baseClasses = `group flex items-center gap-2.5 rounded-md transition-colors duration-150 w-full text-gray-700 dark:text-gray-300 hover:bg-gray-100/70 dark:hover:bg-neutral-800/60 ${
       collapsed ? 'justify-center p-2 mx-1.5' : 'px-2 py-1.5 mx-1.5'

@@ -253,6 +253,7 @@ const AdminAssistants = ({ loaderData }: Route.ComponentProps) => {
               showTotal: (total, range) => `${range[0]}-${range[1]} of ${total} assistants`,
             }}
             size="middle"
+            scroll={{ x: 'max-content' }}
             locale={{
               emptyText: query ? (
                 <div className="text-center py-12 text-gray-500">

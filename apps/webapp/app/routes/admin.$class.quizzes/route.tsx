@@ -445,6 +445,7 @@ export default function AdminQuizzes({ loaderData }: Route.ComponentProps) {
           rowKey={record => record.id}
           rowHoverable={false}
           size="middle"
+          scroll={{ x: 'max-content' }}
           pagination={{
             pageSize: 25,
             showSizeChanger: true,

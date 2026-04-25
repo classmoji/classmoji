@@ -479,12 +479,12 @@ const RepositoryAssignmentsTable = ({
 
   return (
     <div className="flex flex-col">
-      <div className="flex items-center justify-between gap-3 mt-2 mb-4 min-h-8">
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mt-2 mb-4 sm:min-h-8">
         <h1 className="text-base font-semibold leading-8 text-gray-600 dark:text-gray-400">
           Grading
         </h1>
 
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-3">
           <label className="flex items-center gap-2 text-xs text-gray-600 dark:text-gray-300 whitespace-nowrap">
             <span className="font-medium">My assigned only</span>
             <Switch
@@ -497,7 +497,7 @@ const RepositoryAssignmentsTable = ({
             query={userQuery}
             setQuery={setUserQuery}
             placeholder="Search by name or login..."
-            className="w-64"
+            className="flex-1 min-w-0 sm:flex-none sm:w-64"
           />
         </div>
       </div>
@@ -506,7 +506,7 @@ const RepositoryAssignmentsTable = ({
         {TAB_ORDER.map((tab, idx) => {
           const isActive = tab.key === active;
           const baseZ = TAB_ORDER.length - idx;
-          const zStyle = { zIndex: isActive ? 40 : baseZ };
+          const zStyle = { zIndex: isActive ? 10 : baseZ };
           const count = counts[tab.key];
           return (
             <button
@@ -518,7 +518,7 @@ const RepositoryAssignmentsTable = ({
                   ? { ...zStyle, color: 'var(--accent)', borderTopColor: 'var(--accent)' }
                   : zStyle
               }
-              className={`relative px-4 py-2 text-sm font-medium rounded-t-2xl border whitespace-nowrap transition-colors ${
+              className={`relative px-3 py-1.5 text-xs sm:px-4 sm:py-2 sm:text-sm font-medium rounded-t-2xl border whitespace-nowrap transition-colors ${
                 idx > 0 ? '-ml-2' : ''
               } ${
                 isActive
@@ -570,6 +570,7 @@ const RepositoryAssignmentsTable = ({
             rowKey="id"
             rowHoverable={false}
             size="middle"
+            scroll={{ x: 'max-content' }}
             pagination={{
               pageSize: 15,
               showSizeChanger: true,

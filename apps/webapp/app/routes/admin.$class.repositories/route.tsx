@@ -387,6 +387,7 @@ const RepositoriesTable = ({
         dataSource={repositories}
         rowHoverable={false}
         size="small"
+        scroll={{ x: 'max-content' }}
         rowKey="name"
         onChange={handleTableChange}
         pagination={{

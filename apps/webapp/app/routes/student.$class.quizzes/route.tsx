@@ -580,7 +580,7 @@ export default function StudentQuizzes({ loaderData }: Route.ComponentProps) {
         {tabs.map((tab, idx) => {
           const isActive = tab.key === activeTab;
           const baseZ = tabs.length - idx;
-          const zStyle = { zIndex: isActive ? 40 : baseZ };
+          const zStyle = { zIndex: isActive ? 10 : baseZ };
           return (
             <button
               key={tab.key}

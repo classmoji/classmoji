@@ -81,7 +81,7 @@ const AssignmentsTabsCard = ({ rows }: AssignmentsTabsCardProps) => {
         {TAB_ORDER.map(({ key, label }, idx) => {
           const isActive = key === active;
           const baseZ = TAB_ORDER.length - idx;
-          const zStyle = { zIndex: isActive ? 40 : baseZ };
+          const zStyle = { zIndex: isActive ? 10 : baseZ };
           return (
             <button
               key={key}

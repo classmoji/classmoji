@@ -1,4 +1,4 @@
-import { Table, Button, Tag, Tooltip } from 'antd';
+import { Table, Button, Tag } from 'antd';
 import { useNavigate, useParams } from 'react-router';
 import { useGlobalFetcher, useRole } from '~/hooks';
 import {
@@ -130,9 +130,7 @@ const RegradeRequestsTable = ({ requests, emojiMappings, org }: RegradeRequestsT
       render: (comment: string | null) => (
         <div className="text-gray-700 max-w-xs">
           {comment ? (
-            <Tooltip title={comment}>
-              <div className="truncate">{comment}</div>
-            </Tooltip>
+            <div className="truncate">{comment}</div>
           ) : (
             <span className="text-gray-400 italic">No comment</span>
           )}
@@ -218,6 +216,7 @@ const RegradeRequestsTable = ({ requests, emojiMappings, org }: RegradeRequestsT
           columns={columns.filter(col => !col.hidden)}
           size="middle"
           rowHoverable={false}
+          scroll={{ x: 'max-content' }}
           pagination={{
             pageSize: 20,
             showSizeChanger: true,

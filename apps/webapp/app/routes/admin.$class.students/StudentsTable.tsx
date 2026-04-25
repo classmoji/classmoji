@@ -207,6 +207,7 @@ const StudentsTable = ({ students, query }: StudentsTableProps) => {
         rowKey={student => student.id}
         rowHoverable={false}
         size="middle"
+        scroll={{ x: 'max-content' }}
         pagination={{
           pageSize: 25,
           showSizeChanger: true,

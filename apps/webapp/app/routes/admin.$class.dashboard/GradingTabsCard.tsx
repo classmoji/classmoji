@@ -39,7 +39,7 @@ const GradingTabsCard = ({ gradingProgress, assistantsProgress }: GradingTabsCar
         {TABS.map((tab, idx) => {
           const isActive = tab.key === active;
           const baseZ = TABS.length - idx;
-          const zStyle = { zIndex: isActive ? 40 : baseZ };
+          const zStyle = { zIndex: isActive ? 10 : baseZ };
           return (
             <button
               key={tab.key}

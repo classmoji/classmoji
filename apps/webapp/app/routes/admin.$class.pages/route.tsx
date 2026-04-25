@@ -349,6 +349,7 @@ export default function AdminPages({ loaderData }: Route.ComponentProps) {
           rowKey="id"
           rowHoverable={false}
           size="middle"
+          scroll={{ x: 'max-content' }}
           pagination={{
             defaultPageSize: filteredPages.length || 25,
             showSizeChanger: false,

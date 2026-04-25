@@ -27,7 +27,7 @@ const UserSettings = () => {
           {ALL_TABS.map((tab, idx) => {
             const isActive = tab.key === currentTab;
             const baseZ = ALL_TABS.length - idx;
-            const zStyle = { zIndex: isActive ? 40 : baseZ };
+            const zStyle = { zIndex: isActive ? 10 : baseZ };
             return (
               <button
                 key={tab.key}
