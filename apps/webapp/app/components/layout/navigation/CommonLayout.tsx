@@ -387,7 +387,7 @@ const CommonLayout = ({
 
         {/* Navigation */}
         <div className="mx-4 h-px bg-stone-200 dark:bg-neutral-800 shrink-0" />
-        <nav className="flex-1 overflow-y-auto py-2">
+        <nav className="flex-1 overflow-y-auto overflow-x-hidden py-2">
           <div className="space-y-1">{tabs}</div>
         </nav>
 
