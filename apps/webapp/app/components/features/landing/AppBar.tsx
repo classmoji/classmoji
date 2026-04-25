@@ -1,15 +1,17 @@
-import {
-  Logo,
-  IconSearch,
-  IconBell,
-  IconSupport,
-  IconChevron,
-} from '@classmoji/ui-components';
+import { Logo, IconSearch, IconSupport, IconChevron } from '@classmoji/ui-components';
 import ProfileDropdown from '~/components/features/profile/ProfileDropdown';
 import { getInitials } from '~/utils/hue';
+import {
+  NotificationBell,
+  type BellNotification,
+  type NotificationRole,
+} from '~/components/features/notifications';
 
 interface AppBarProps {
   user: { name?: string | null; login?: string | null; avatar_url?: string | null } | null;
+  notifications?: BellNotification[];
+  unreadCount?: number;
+  membershipRoles?: Record<string, NotificationRole[]>;
 }
 
 const tabBtn = (active: boolean): React.CSSProperties => ({
@@ -35,7 +37,7 @@ const iconBtn: React.CSSProperties = {
   cursor: 'pointer',
 };
 
-export function AppBar({ user }: AppBarProps) {
+export function AppBar({ user, notifications, unreadCount, membershipRoles }: AppBarProps) {
   const initials = getInitials(user?.name, user?.login);
   return (
     <header
@@ -112,20 +114,11 @@ export function AppBar({ user }: AppBarProps) {
         <button type="button" title="What's new" style={iconBtn}>
           <IconSupport size={16} />
         </button>
-        <button type="button" title="Notifications" style={{ ...iconBtn, position: 'relative' }}>
-          <IconBell size={16} />
-          <span
-            style={{
-              position: 'absolute',
-              top: 8,
-              right: 8,
-              width: 6,
-              height: 6,
-              background: 'var(--violet)',
-              borderRadius: '50%',
-            }}
-          />
-        </button>
+        <NotificationBell
+          initialItems={notifications ?? []}
+          initialUnreadCount={unreadCount ?? 0}
+          membershipRoles={membershipRoles ?? {}}
+        />
 
         <ProfileDropdown>
           <button
@@ -155,8 +148,7 @@ export function AppBar({ user }: AppBarProps) {
                   width: 28,
                   height: 28,
                   borderRadius: '50%',
-                  background:
-                    'linear-gradient(135deg, oklch(80% 0.1 310), oklch(60% 0.18 310))',
+                  background: 'linear-gradient(135deg, oklch(80% 0.1 310), oklch(60% 0.18 310))',
                   color: 'white',
                   display: 'grid',
                   placeItems: 'center',

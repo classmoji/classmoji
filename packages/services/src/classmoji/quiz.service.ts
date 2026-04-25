@@ -1,5 +1,6 @@
 import getPrisma from '@classmoji/database';
 import type { Prisma, QuizGradingStrategy, QuizStatus, Role } from '@prisma/client';
+import * as notificationService from './notification.service.ts';
 
 interface QuizCreateInput {
   name: string;
@@ -360,10 +361,28 @@ export const getQuizzesForStudent = async (
 };
 
 export const publish = async (quizId: string) => {
-  return getPrisma().quiz.update({
+  const previous = await getPrisma().quiz.findUnique({
+    where: { id: quizId },
+    select: { status: true },
+  });
+  const quiz = await getPrisma().quiz.update({
     where: { id: quizId },
     data: { status: 'PUBLISHED' },
   });
+  if (previous && previous.status !== 'PUBLISHED') {
+    await notificationService.runSafely('quiz publish notification', async () => {
+      const studentIds = await notificationService.getStudentsInClassroom(quiz.classroom_id);
+      await notificationService.createNotifications({
+        type: 'QUIZ_PUBLISHED',
+        classroomId: quiz.classroom_id,
+        recipientUserIds: studentIds,
+        resourceType: 'quiz',
+        resourceId: quiz.id,
+        title: `Quiz published: ${quiz.name}`,
+      });
+    });
+  }
+  return quiz;
 };
 
 export const getStatsByClassroom = async (classroomId: string) => {

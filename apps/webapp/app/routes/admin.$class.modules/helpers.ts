@@ -65,7 +65,7 @@ export const publishAssignment = async (
     } else if (module.team_formation_mode === 'SELF_FORMED') {
       // For self-formed teams, just mark module as published
       // Teams and repos will be created when students form their teams
-      await ClassmojiService.module.update(moduleId, { is_published: true });
+      await ClassmojiService.module.setPublished(moduleId, true);
 
       return {
         success: 'Module published! Students can now form teams.',

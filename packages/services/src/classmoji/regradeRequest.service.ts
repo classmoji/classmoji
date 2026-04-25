@@ -1,5 +1,6 @@
 import getPrisma from '@classmoji/database';
-import type { Prisma } from '@prisma/client';
+import type { Prisma, RegradeRequest } from '@prisma/client';
+import * as notificationService from './notification.service.ts';
 
 export const create = async ({
   classroom_id,
@@ -13,8 +14,8 @@ export const create = async ({
   student_id: string;
   student_comment?: string | null;
   previous_grade?: string[];
-}): Promise<any> => {
-  return getPrisma().regradeRequest.create({
+}): Promise<RegradeRequest> => {
+  const request = await getPrisma().regradeRequest.create({
     data: {
       classroom_id,
       repository_assignment_id,
@@ -23,6 +24,33 @@ export const create = async ({
       previous_grade,
     },
   });
+
+  await notificationService.runSafely('regrade request notification', async () => {
+    const graders = await getPrisma().repositoryAssignmentGrader.findMany({
+      where: { repository_assignment_id },
+      select: { grader_id: true },
+    });
+    const graderIds = graders.map(g => g.grader_id);
+    if (graderIds.length > 0) {
+      const repoAssignment = await getPrisma().repositoryAssignment.findUnique({
+        where: { id: repository_assignment_id },
+        select: {
+          assignment: { select: { title: true } },
+          repository: { select: { name: true } },
+        },
+      });
+      await notificationService.createNotifications({
+        type: 'TA_REGRADE_ASSIGNED',
+        classroomId: classroom_id,
+        recipientUserIds: graderIds,
+        resourceType: 'regrade_request',
+        resourceId: request.id,
+        title: `Regrade request: ${repoAssignment?.assignment.title ?? 'Assignment'} - ${repoAssignment?.repository.name ?? ''}`,
+      });
+    }
+  });
+
+  return request;
 };
 
 export const findMany = async (query: Prisma.RegradeRequestWhereInput) => {

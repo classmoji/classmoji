@@ -55,33 +55,42 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
   const lateRepoAssignmentsPromise = prisma.repositoryAssignment
     .findMany({
       where: { repository: { classroom: { slug: classSlug! } } },
-      include: { assignment: true },
+      select: {
+        closed_at: true,
+        is_late_override: true,
+        assignment: { select: { student_deadline: true } },
+      },
     })
-    .then(list => (list as Array<{ is_late: boolean }>).filter(r => r.is_late).length);
+    .then(
+      list =>
+        list.filter(
+          r =>
+            r.is_late_override ||
+            Boolean(
+              r.closed_at &&
+              r.assignment.student_deadline &&
+              r.closed_at > r.assignment.student_deadline
+            )
+        ).length
+    );
 
-  const promises = {
-    students: ClassmojiService.classroomMembership.findUsersByRole(classroom.id, 'STUDENT'),
-    leaderbord: ClassmojiService.helper.calculateClassLeaderboard(classSlug!),
-    gradingProgress: ClassmojiService.repositoryAssignment.getGradingProgress(classSlug!),
-    completedAssignmentsProgress: ClassmojiService.repositoryAssignment.getCompletionProgress(
-      classSlug!
-    ),
-    lateSubmissionsPercent: ClassmojiService.repositoryAssignment.getLatePercentage(classSlug!),
-    recentRepositoryAssignments: ClassmojiService.repositoryAssignment.findRecentlyClosed(
+  const dataPromise = Promise.all([
+    ClassmojiService.classroomMembership.findUsersByRole(classroom.id, 'STUDENT'),
+    ClassmojiService.helper.calculateClassLeaderboard(classSlug!),
+    ClassmojiService.repositoryAssignment.getGradingProgress(classSlug!),
+    ClassmojiService.repositoryAssignment.getCompletionProgress(classSlug!),
+    ClassmojiService.repositoryAssignment.getLatePercentage(classSlug!),
+    ClassmojiService.repositoryAssignment.findRecentlyClosed(
       classSlug!,
       dayjs().subtract(10, 'day').toDate(),
       dayjs().toDate()
     ),
-    gradingProgressPerAssignment: ClassmojiService.helper.findClassroomGradingProgressPerAssignment(
-      classroom.id
-    ),
-    assistantsProgress: ClassmojiService.repositoryAssignmentGrader.findGradersProgress(
-      classroom.id
-    ),
-    totalRepoAssignments: totalRepoAssignmentsPromise,
-    submittedRepoAssignments: submittedRepoAssignmentsPromise,
-    lateRepoAssignments: lateRepoAssignmentsPromise,
-  };
+    ClassmojiService.helper.findClassroomGradingProgressPerAssignment(classroom.id),
+    ClassmojiService.repositoryAssignmentGrader.findGradersProgress(classroom.id),
+    totalRepoAssignmentsPromise,
+    submittedRepoAssignmentsPromise,
+    lateRepoAssignmentsPromise,
+  ] as const);
 
   const analyticsPromise = Promise.all([
     ClassmojiService.dashboard.assignmentHealth(classroom.id),
@@ -92,12 +101,11 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
   ]).catch(() => null);
 
   return {
-    data: Promise.all(Object.values(promises)),
+    data: dataPromise,
     analytics: analyticsPromise,
     githubOrganization,
   };
 };
-
 interface StatItemProps {
   label: string;
   value: string | number;
@@ -221,11 +229,7 @@ const AdminDashboard = ({ loaderData }: Route.ComponentProps) => {
             return (
               <>
                 <div className="rounded-2xl bg-white dark:bg-neutral-900 ring-1 ring-stone-200 dark:ring-neutral-800 overflow-hidden flex flex-col sm:flex-row divide-y sm:divide-y-0 sm:divide-x divide-stone-200/70 dark:divide-gray-800">
-                  <StatItem
-                    label="Students"
-                    value={students?.length || 0}
-                    subtitle="enrolled"
-                  />
+                  <StatItem label="Students" value={students?.length || 0} subtitle="enrolled" />
                   <StatItem
                     label="Submitted"
                     value={`${completedAssignmentsProgress || 0}%`}
@@ -276,7 +280,7 @@ const AdminDashboard = ({ loaderData }: Route.ComponentProps) => {
 
       <Suspense fallback={<Skeleton active paragraph={{ rows: 6 }} />}>
         <Await resolve={analytics} errorElement={null}>
-          {(result) => {
+          {result => {
             if (!result) return null;
             const [assignments, taOps, cohort, quiz, deadlines] = result;
             return (

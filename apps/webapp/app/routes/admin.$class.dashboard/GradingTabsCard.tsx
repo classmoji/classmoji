@@ -12,13 +12,13 @@ interface GradingProgressItem {
   id?: string;
   title: string;
   progress: number;
-  student_deadline: string;
+  student_deadline: string | Date | null;
   [key: string]: unknown;
 }
 
 interface GradingLeaderboardItem {
   id: string;
-  login: string;
+  login: string | null;
   name: string | null;
   progress: number;
   gradedCount?: number;

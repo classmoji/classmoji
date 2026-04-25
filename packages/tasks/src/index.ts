@@ -7,6 +7,7 @@ import * as installationTasks from './workflows/installation.ts';
 import * as tokenTasks from './workflows/token.ts';
 import * as contributionTasks from './workflows/contribution.ts';
 import * as repoAnalyticsTasks from './workflows/repoAnalytics.ts';
+import * as notificationTasks from './workflows/notifications.ts';
 
 // comment to trigger a build
 
@@ -20,6 +21,7 @@ const Tasks = {
   ...tokenTasks,
   ...contributionTasks,
   ...repoAnalyticsTasks,
+  ...notificationTasks,
 };
 
 export default Tasks;
