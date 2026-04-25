@@ -2,6 +2,7 @@ import getPrisma from '@classmoji/database';
 import { titleToIdentifier, generateTermString } from '@classmoji/utils';
 import { ContentService } from '@classmoji/content';
 import * as contentManifestService from './contentManifest.service.ts';
+import * as notificationService from './notification.service.ts';
 import type { Prisma } from '@prisma/client';
 
 interface PageQueryOptions {
@@ -367,6 +368,14 @@ export async function findByContentPath(
  * Quick update for specific fields
  */
 export async function quickUpdate(pageId: string, updates: Prisma.PageUncheckedUpdateInput) {
+  const previous =
+    'is_draft' in updates
+      ? await getPrisma().page.findUnique({
+          where: { id: pageId },
+          select: { is_draft: true },
+        })
+      : null;
+
   const page = await getPrisma().page.update({
     where: { id: pageId },
     data: {
@@ -374,6 +383,20 @@ export async function quickUpdate(pageId: string, updates: Prisma.PageUncheckedU
       updated_at: new Date(),
     },
   });
+
+  if (previous && previous.is_draft !== page.is_draft) {
+    await notificationService.runSafely('page publish notification', async () => {
+      const studentIds = await notificationService.getStudentsInClassroom(page.classroom_id);
+      await notificationService.createNotifications({
+        type: page.is_draft ? 'PAGE_UNPUBLISHED' : 'PAGE_PUBLISHED',
+        classroomId: page.classroom_id,
+        recipientUserIds: studentIds,
+        resourceType: 'page',
+        resourceId: page.id,
+        title: page.is_draft ? `Page unpublished: ${page.title}` : `Page published: ${page.title}`,
+      });
+    });
+  }
 
   return page;
 }

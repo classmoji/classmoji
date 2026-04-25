@@ -1,16 +1,11 @@
 import { useState, useMemo } from 'react';
 import { Link } from 'react-router';
-import {
-  Button,
-  IconGithub,
-  IconPlus,
-  IconChevron,
-  IconX,
-} from '@classmoji/ui-components';
+import { Button, IconGithub, IconPlus, IconChevron, IconX } from '@classmoji/ui-components';
 import { AppBar } from './AppBar';
 import { ClassroomCard } from './ClassroomCard';
 import { ClassroomRow, ClassroomRowHeader } from './ClassroomRow';
 import type { LandingClass, TermSection } from './types';
+import type { BellNotification, NotificationRole } from '~/components/features/notifications';
 
 interface Props {
   user: { name?: string | null; login?: string | null; avatar_url?: string | null } | null;
@@ -18,6 +13,9 @@ interface Props {
   termSections: TermSection[];
   activeTermLabel: string | null;
   onOpenClass: (c: LandingClass) => void;
+  notifications?: BellNotification[];
+  unreadCount?: number;
+  membershipRoles?: Record<string, NotificationRole[]>;
 }
 
 type TabId = 'all' | 'teaching' | 'learning' | 'archived';
@@ -64,6 +62,9 @@ export function ClassroomsLandingScreen({
   termSections,
   activeTermLabel,
   onOpenClass,
+  notifications,
+  unreadCount,
+  membershipRoles,
 }: Props) {
   const [tab, setTab] = useState<TabId>('all');
   const [view, setView] = useState<'grid' | 'list'>('grid');
@@ -94,7 +95,12 @@ export function ClassroomsLandingScreen({
 
   return (
     <div style={{ background: 'var(--bg-0)', minHeight: '100vh' }}>
-      <AppBar user={user} />
+      <AppBar
+        user={user}
+        notifications={notifications}
+        unreadCount={unreadCount}
+        membershipRoles={membershipRoles}
+      />
 
       <div
         style={{
@@ -139,8 +145,8 @@ export function ClassroomsLandingScreen({
               {activeTermLabel && (
                 <>
                   <span style={{ color: 'var(--ink-4)', margin: '0 6px' }}>·</span>
-                  <span style={{ fontFamily: 'var(--font-mono)' }}>{activeTermLabel}</span>{' '}
-                  in progress
+                  <span style={{ fontFamily: 'var(--font-mono)' }}>{activeTermLabel}</span> in
+                  progress
                 </>
               )}
             </div>
@@ -178,12 +184,6 @@ export function ClassroomsLandingScreen({
               tokens for early submissions and spend them on deadline extensions — configure the
               rate in class settings.
             </span>
-            <a
-              href="#"
-              style={{ color: '#1d4f8f', fontWeight: 500, textDecoration: 'underline' }}
-            >
-              Read more
-            </a>
             <button
               type="button"
               onClick={() => setBannerOpen(false)}
@@ -266,11 +266,7 @@ export function ClassroomsLandingScreen({
 
           <div style={{ flex: 1 }} />
 
-          <button
-            type="button"
-            className="btn"
-            style={{ color: 'var(--ink-2)' }}
-          >
+          <button type="button" className="btn" style={{ color: 'var(--ink-2)' }}>
             Sort: Recent <IconChevron size={12} />
           </button>
 
@@ -460,16 +456,6 @@ export function ClassroomsLandingScreen({
           }}
         >
           <span>classmoji</span>
-          <span>·</span>
-          <a href="#" style={{ color: 'var(--ink-2)' }}>
-            Docs
-          </a>
-          <a href="#" style={{ color: 'var(--ink-2)' }}>
-            Changelog
-          </a>
-          <a href="#" style={{ color: 'var(--ink-2)' }}>
-            Status
-          </a>
           <span style={{ marginLeft: 'auto' }}>synced with GitHub</span>
         </footer>
       </div>

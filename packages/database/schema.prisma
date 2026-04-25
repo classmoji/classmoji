@@ -25,6 +25,18 @@ enum Role {
   ASSISTANT
 }
 
+enum NotificationType {
+  QUIZ_PUBLISHED
+  PAGE_PUBLISHED
+  PAGE_UNPUBLISHED
+  MODULE_PUBLISHED
+  MODULE_UNPUBLISHED
+  ASSIGNMENT_DUE_DATE_CHANGED
+  ASSIGNMENT_GRADED
+  TA_GRADING_ASSIGNED
+  TA_REGRADE_ASSIGNED
+}
+
 enum Term {
   FALL
   SPRING
@@ -213,6 +225,8 @@ model User {
   ai_conversations              AIConversation[]
   resource_views                ResourceView[]
   contributor_links             RepositoryContributorLink[]
+  notifications                 Notification[]
+  notification_preference       NotificationPreference?
 
   @@unique([provider, provider_id])
   @@index([provider, login])
@@ -289,6 +303,7 @@ model Classroom {
   ai_conversations      AIConversation[]
   classroom_invites     ClassroomInvite[]
   resource_views        ResourceView[]
+  notifications         Notification[]
 
   @@index([git_org_id])
   @@map("classrooms")
@@ -1043,4 +1058,48 @@ model ResourceView {
   @@index([classroom_id, resource_path])
   @@index([last_viewed_at])
   @@map("resource_views")
+}
+
+// ============================================================================
+// NOTIFICATIONS
+// ============================================================================
+
+model Notification {
+  id            String           @id @default(uuid())
+  user_id       String
+  classroom_id  String?
+  type          NotificationType
+  resource_type String
+  resource_id   String
+  title         String
+  metadata      Json?
+  read_at       DateTime?
+  expires_at    DateTime
+  created_at    DateTime         @default(now())
+
+  user      User       @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  classroom Classroom? @relation(fields: [classroom_id], references: [id], onDelete: Cascade)
+
+  @@index([user_id, read_at, created_at])
+  @@index([expires_at])
+  @@map("notifications")
+}
+
+model NotificationPreference {
+  user_id                            String   @id
+  email_quiz_published               Boolean  @default(true)
+  email_page_published               Boolean  @default(false)
+  email_page_unpublished             Boolean  @default(false)
+  email_module_published             Boolean  @default(true)
+  email_module_unpublished           Boolean  @default(false)
+  email_assignment_due_date_changed  Boolean  @default(true)
+  email_assignment_graded            Boolean  @default(true)
+  email_ta_grading_assigned          Boolean  @default(true)
+  email_ta_regrade_assigned          Boolean  @default(true)
+  created_at                         DateTime @default(now())
+  updated_at                         DateTime @default(now()) @updatedAt
+
+  user User @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@map("notification_preferences")
 }

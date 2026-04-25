@@ -4,6 +4,29 @@
  * Manages grader assignments to RepositoryAssignments
  */
 import getPrisma from '@classmoji/database';
+import * as notificationService from './notification.service.ts';
+
+const notifyGraderAssigned = async (repositoryAssignmentId: string, graderIds: string[]) => {
+  if (graderIds.length === 0) return;
+  await notificationService.runSafely('grader assignment notification', async () => {
+    const repoAssignment = await getPrisma().repositoryAssignment.findUnique({
+      where: { id: repositoryAssignmentId },
+      select: {
+        assignment: { select: { title: true } },
+        repository: { select: { classroom_id: true, name: true } },
+      },
+    });
+    if (!repoAssignment) return;
+    await notificationService.createNotifications({
+      type: 'TA_GRADING_ASSIGNED',
+      classroomId: repoAssignment.repository.classroom_id,
+      recipientUserIds: graderIds,
+      resourceType: 'repository_assignment',
+      resourceId: repositoryAssignmentId,
+      title: `New grading: ${repoAssignment.assignment.title} - ${repoAssignment.repository.name}`,
+    });
+  });
+};
 
 interface GraderProgress {
   name: string | null;
@@ -42,7 +65,8 @@ export const findGradersProgress = async (classroomId: string) => {
   const progress: Record<string, GraderProgress> = {};
 
   assignmentGraders.forEach(graderAssignment => {
-    const login = graderAssignment.grader.login!;
+    const login = graderAssignment.grader.login;
+    if (!login) return;
     if (!progress[login]) {
       progress[login] = {
         name: graderAssignment.grader.name,
@@ -75,12 +99,14 @@ export const findGradersProgress = async (classroomId: string) => {
  * @returns {Promise<Object>}
  */
 export const addGraderToAssignment = async (repositoryAssignmentId: string, graderId: string) => {
-  return getPrisma().repositoryAssignmentGrader.create({
+  const created = await getPrisma().repositoryAssignmentGrader.create({
     data: {
       repository_assignment_id: repositoryAssignmentId,
       grader_id: graderId,
     },
   });
+  await notifyGraderAssigned(repositoryAssignmentId, [graderId]);
+  return created;
 };
 
 /**
@@ -170,13 +196,22 @@ export const findByAssignmentId = async (repositoryAssignmentId: string) => {
  * @returns {Promise<{count: number}>}
  */
 export const bulkAssignGraders = async (repositoryAssignmentId: string, graderIds: string[]) => {
-  return getPrisma().repositoryAssignmentGrader.createMany({
+  const existing = await getPrisma().repositoryAssignmentGrader.findMany({
+    where: { repository_assignment_id: repositoryAssignmentId, grader_id: { in: graderIds } },
+    select: { grader_id: true },
+  });
+  const existingIds = new Set(existing.map(g => g.grader_id));
+  const newGraderIds = graderIds.filter(id => !existingIds.has(id));
+
+  const result = await getPrisma().repositoryAssignmentGrader.createMany({
     data: graderIds.map(graderId => ({
       repository_assignment_id: repositoryAssignmentId,
       grader_id: graderId,
     })),
     skipDuplicates: true,
   });
+  await notifyGraderAssigned(repositoryAssignmentId, newGraderIds);
+  return result;
 };
 
 /**

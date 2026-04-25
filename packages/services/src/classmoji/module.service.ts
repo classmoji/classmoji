@@ -1,6 +1,7 @@
 import getPrisma from '@classmoji/database';
 import { titleToIdentifier } from '@classmoji/utils';
 import type { AssignmentType, Prisma } from '@prisma/client';
+import * as notificationService from './notification.service.ts';
 
 interface ModuleQueryOptions {
   includeAssignments?: boolean;
@@ -454,10 +455,31 @@ export const deleteById = async (id: string) => {
  * @returns {Promise<Object>}
  */
 export const setPublished = async (id: string, isPublished: boolean) => {
-  return getPrisma().module.update({
+  const previous = await getPrisma().module.findUnique({
+    where: { id },
+    select: { is_published: true },
+  });
+
+  const mod = await getPrisma().module.update({
     where: { id },
     data: { is_published: isPublished },
   });
+
+  if (previous && previous.is_published !== isPublished) {
+    await notificationService.runSafely('module publish notification', async () => {
+      const studentIds = await notificationService.getStudentsInClassroom(mod.classroom_id);
+      await notificationService.createNotifications({
+        type: isPublished ? 'MODULE_PUBLISHED' : 'MODULE_UNPUBLISHED',
+        classroomId: mod.classroom_id,
+        recipientUserIds: studentIds,
+        resourceType: 'module',
+        resourceId: mod.id,
+        title: isPublished ? `Module published: ${mod.title}` : `Module unpublished: ${mod.title}`,
+      });
+    });
+  }
+
+  return mod;
 };
 
 /**
