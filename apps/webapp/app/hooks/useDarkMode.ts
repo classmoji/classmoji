@@ -13,7 +13,7 @@ export interface TweaksState {
 }
 
 const STORAGE_KEY = 'cm-tweaks';
-const DEFAULT_TWEAKS: TweaksState = { theme: 'light', accent: '#f97316', background: 'default' };
+const DEFAULT_TWEAKS: TweaksState = { theme: 'light', accent: '#0ea5e9', background: 'default' };
 
 export type BackgroundKey =
   | 'default'

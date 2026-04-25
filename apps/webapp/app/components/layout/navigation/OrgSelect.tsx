@@ -1,5 +1,7 @@
 import { Select, Avatar } from 'antd';
 import { useNavigate } from 'react-router';
+import { useRef, useState } from 'react';
+import { IconChevronDown } from '@tabler/icons-react';
 import useStore from '~/store';
 import { roleSettings } from '~/constants/roleSettings';
 import type { MembershipWithOrganization } from '~/types';
@@ -40,14 +42,55 @@ const termAbbreviation = (term?: string | null, year?: number | null) => {
 const OrgSelect = ({ memberships }: OrgSelectProps) => {
   const { membership } = useStore();
   const navigate = useNavigate();
+  const [open, setOpen] = useState(false);
+  const closeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const cancelClose = () => {
+    if (closeTimerRef.current) {
+      clearTimeout(closeTimerRef.current);
+      closeTimerRef.current = null;
+    }
+  };
+
+  const scheduleClose = () => {
+    cancelClose();
+    closeTimerRef.current = setTimeout(() => setOpen(false), 120);
+  };
+
+  const handleMouseEnter = () => {
+    cancelClose();
+    setOpen(true);
+  };
 
   return (
-    <div className="w-full">
+    <div
+      className="w-full"
+      onMouseEnter={handleMouseEnter}
+      onMouseLeave={scheduleClose}
+    >
       <Select
         placeholder="Select classroom"
         variant="borderless"
         className="w-full bg-transparent hover:bg-gray-50 dark:hover:bg-neutral-800/50 rounded-md transition-colors"
         popupMatchSelectWidth={true}
+        open={open}
+        onDropdownVisibleChange={visible => {
+          cancelClose();
+          setOpen(visible);
+        }}
+        suffixIcon={
+          <IconChevronDown
+            size={16}
+            className={`text-gray-400 dark:text-gray-500 transition-transform duration-200 ease-out ${
+              open ? '-rotate-180' : 'rotate-0'
+            }`}
+          />
+        }
+        dropdownRender={menu => (
+          <div onMouseEnter={cancelClose} onMouseLeave={scheduleClose}>
+            {menu}
+          </div>
+        )}
         styles={{
           popup: {
             root: {
