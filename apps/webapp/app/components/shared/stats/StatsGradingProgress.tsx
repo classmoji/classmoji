@@ -4,7 +4,7 @@ interface GradingProgressItem {
   id?: string;
   title: string;
   progress: number;
-  student_deadline: string;
+  student_deadline: string | Date | null;
   [key: string]: unknown;
 }
 
@@ -17,15 +17,13 @@ const statusForPct = (pct: number) => {
   if (pct >= 100) {
     return {
       label: 'Done',
-      className:
-        'bg-[#619462]/15 text-[#3f6a40] dark:bg-[#619462]/20 dark:text-[#9BC39C]',
+      className: 'bg-[#619462]/15 text-[#3f6a40] dark:bg-[#619462]/20 dark:text-[#9BC39C]',
     };
   }
   if (pct > 0) {
     return {
       label: 'In progress',
-      className:
-        'bg-[#D4A289]/15 text-[#8a5b3a] dark:bg-[#D4A289]/20 dark:text-[#E8C4AC]',
+      className: 'bg-[#D4A289]/15 text-[#8a5b3a] dark:bg-[#D4A289]/20 dark:text-[#E8C4AC]',
     };
   }
   return {
@@ -36,7 +34,7 @@ const statusForPct = (pct: number) => {
 
 const StatsGradingProgress = ({ gradingProgress, bare = false }: StatsGradingProgressProps) => {
   const rows = gradingProgress
-    .filter(a => dayjs().isAfter(dayjs(a.student_deadline)))
+    .filter(a => a.student_deadline && dayjs().isAfter(dayjs(a.student_deadline)))
     .sort((a, b) => b.progress - a.progress);
 
   const body = (

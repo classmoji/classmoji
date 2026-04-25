@@ -1,6 +1,6 @@
 interface GradingLeaderboardItem {
   id: string;
-  login: string;
+  login: string | null;
   name: string | null;
   progress: number;
   gradedCount?: number;
@@ -12,7 +12,7 @@ interface TAGradingLeaderboardProps {
   bare?: boolean;
 }
 
-const initialsFor = (name: string | null, login: string) => {
+const initialsFor = (name: string | null, login: string | null) => {
   const base = (name || login || '?').trim();
   const parts = base.split(/\s+/);
   return ((parts[0]?.[0] || '?') + (parts[1]?.[0] || '')).toUpperCase();

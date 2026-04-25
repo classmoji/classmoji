@@ -13,7 +13,7 @@ import { useDarkMode } from '~/hooks';
 import theme from '~/config/theme';
 
 interface SubmissionChartProps {
-  recentRepositoryAssignments: { closed_at?: string | Date }[];
+  recentRepositoryAssignments: { closed_at?: string | Date | null }[];
 }
 
 const SubmissionChart = ({ recentRepositoryAssignments }: SubmissionChartProps) => {
@@ -26,8 +26,9 @@ const SubmissionChart = ({ recentRepositoryAssignments }: SubmissionChartProps) 
   const data = lastDays
     .map(day => ({
       name: day.format('MMM D'),
-      count: recentRepositoryAssignments.filter(ra => dayjs(ra.closed_at).isSame(day, 'day'))
-        .length,
+      count: recentRepositoryAssignments.filter(
+        ra => ra.closed_at && dayjs(ra.closed_at).isSame(day, 'day')
+      ).length,
     }))
     .reverse();
 

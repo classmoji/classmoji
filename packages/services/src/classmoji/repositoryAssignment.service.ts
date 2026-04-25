@@ -352,20 +352,26 @@ export const getLatePercentage = async (classroomSlug: string) => {
     },
   });
 
-  const repoAssignments = (await getPrisma().repositoryAssignment.findMany({
+  const repoAssignments = await getPrisma().repositoryAssignment.findMany({
     where: {
       repository: { classroom: { slug: classroomSlug } },
     },
-    include: {
-      assignment: true,
+    select: {
+      closed_at: true,
+      is_late_override: true,
+      assignment: { select: { student_deadline: true } },
     },
-  })) as Array<
-    Prisma.RepositoryAssignmentGetPayload<{ include: { assignment: true } }> & {
-      is_late: boolean;
-    }
-  >;
+  });
 
-  const numLate = repoAssignments.filter(ra => ra.is_late).length;
+  const numLate = repoAssignments.filter(
+    ra =>
+      ra.is_late_override ||
+      Boolean(
+        ra.closed_at &&
+        ra.assignment.student_deadline &&
+        ra.closed_at > ra.assignment.student_deadline
+      )
+  ).length;
 
   if (totalNum === 0) return 0;
 
