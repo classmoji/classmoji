@@ -424,7 +424,8 @@ const App = ({ loaderData }: Route.ComponentProps) => {
                     itemHoverColor: accent,
                   },
                   Switch: {
-                    ...((isDarkMode ? antdDarkTheme : antdTheme).components?.Switch ?? {}),
+                    ...(((isDarkMode ? antdDarkTheme : antdTheme) as ThemeConfig).components
+                      ?.Switch ?? {}),
                     colorPrimary: accent,
                     colorPrimaryHover: accent,
                   },

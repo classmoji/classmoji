@@ -4,9 +4,9 @@ import { IconChevronLeft, IconChevronRight } from '@tabler/icons-react';
 interface LeaderboardStudent {
   id: string;
   grade: number;
-  name?: string;
-  avatar_url?: string;
-  login?: string;
+  name?: string | null;
+  avatar_url?: string | null;
+  login?: string | null;
 }
 
 interface LeaderboardProps {
@@ -34,9 +34,7 @@ const avatarTintFor = (i: number) => {
 const PAGE_SIZE = 5;
 
 const Leaderboard = ({ students }: LeaderboardProps) => {
-  const ranked = [...students]
-    .filter(s => s.grade >= 0)
-    .sort((a, b) => b.grade - a.grade);
+  const ranked = [...students].filter(s => s.grade >= 0).sort((a, b) => b.grade - a.grade);
   const max = ranked[0]?.grade || 1;
 
   const pageSize = PAGE_SIZE;
@@ -49,9 +47,7 @@ const Leaderboard = ({ students }: LeaderboardProps) => {
   const pageItems = ranked.slice(startIdx, endIdx);
 
   const rangeLabel =
-    ranked.length === 0
-      ? '0 students'
-      : `${startIdx + 1}-${endIdx} of ${ranked.length} students`;
+    ranked.length === 0 ? '0 students' : `${startIdx + 1}-${endIdx} of ${ranked.length} students`;
 
   return (
     <section className="rounded-2xl bg-white dark:bg-neutral-900 ring-1 ring-stone-200 dark:ring-neutral-800 p-4 sm:p-5 h-full flex flex-col">
@@ -138,7 +134,6 @@ const Leaderboard = ({ students }: LeaderboardProps) => {
               >
                 <IconChevronRight size={14} />
               </button>
-
             </div>
           </div>
         </>

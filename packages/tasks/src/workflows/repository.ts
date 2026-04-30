@@ -188,9 +188,7 @@ export const createRepositoriesTask = task({
 
     await createRepositoryTask.batchTriggerAndWait(reposData);
 
-    await ClassmojiService.module.update(module.id, {
-      is_published: true,
-    });
+    await ClassmojiService.module.setPublished(module.id, true);
   },
 });
 

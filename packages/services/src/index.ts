@@ -31,6 +31,7 @@ export {
   moduleService,
   assignmentService,
   repositoryAssignmentService,
+  notificationService,
 } from './classmoji/index.ts';
 
 export { ClassmojiService, HelperService, StripeService, MarkdownImporter };

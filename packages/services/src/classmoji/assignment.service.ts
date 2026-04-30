@@ -7,6 +7,7 @@
 import getPrisma from '@classmoji/database';
 import { titleToIdentifier } from '@classmoji/utils';
 import type { Prisma } from '@prisma/client';
+import * as notificationService from './notification.service.ts';
 
 /**
  * Find an Assignment by ID
@@ -199,13 +200,97 @@ export const createMany = async (assignments: Prisma.AssignmentUncheckedCreateIn
  * @returns {Promise<Object>}
  */
 export const update = async (id: string, updates: Prisma.AssignmentUpdateInput) => {
-  return getPrisma().assignment.update({
+  const previous = await getPrisma().assignment.findUnique({
+    where: { id },
+    select: { student_deadline: true, grades_released: true },
+  });
+
+  const updated = await getPrisma().assignment.update({
     where: { id },
     data: updates,
     include: {
       module: true,
     },
   });
+
+  if ('student_deadline' in updates) {
+    await notificationService.runSafely('assignment due date notification', async () => {
+      const newDeadline = updated.student_deadline?.toISOString() ?? null;
+      const oldDeadline = previous?.student_deadline?.toISOString() ?? null;
+      if (newDeadline !== oldDeadline) {
+        const { studentIds, classroomId } = await notificationService.getStudentsForAssignment(id);
+        if (studentIds.length > 0) {
+          await notificationService.createNotifications({
+            type: 'ASSIGNMENT_DUE_DATE_CHANGED',
+            classroomId,
+            recipientUserIds: studentIds,
+            resourceType: 'assignment',
+            resourceId: id,
+            title: `Due date changed: ${updated.title}`,
+            metadata: { previous_deadline: oldDeadline, new_deadline: newDeadline },
+          });
+        }
+      }
+    });
+  }
+
+  if (
+    'grades_released' in updates &&
+    previous &&
+    !previous.grades_released &&
+    updated.grades_released
+  ) {
+    await notificationService.runSafely('assignment graded notification', async () => {
+      const recipientIds = await getGradedRecipientsForAssignment(id);
+      if (recipientIds.length > 0) {
+        await notificationService.createNotifications({
+          type: 'ASSIGNMENT_GRADED',
+          classroomId: updated.module.classroom_id,
+          recipientUserIds: recipientIds,
+          resourceType: 'assignment',
+          resourceId: id,
+          title: `Graded: ${updated.title}`,
+        });
+      }
+    });
+  }
+
+  return updated;
+};
+
+/**
+ * Recipients of a grade-release notification: students/team members whose
+ * RepositoryAssignment under this assignment has at least one grade row.
+ */
+const getGradedRecipientsForAssignment = async (assignmentId: string): Promise<string[]> => {
+  const repos = await getPrisma().repositoryAssignment.findMany({
+    where: { assignment_id: assignmentId, grades: { some: {} } },
+    select: {
+      repository: {
+        select: {
+          student_id: true,
+          team_id: true,
+        },
+      },
+    },
+  });
+
+  const userIds = new Set<string>();
+  const teamIds = new Set<string>();
+  for (const r of repos) {
+    if (r.repository.student_id) userIds.add(r.repository.student_id);
+    if (r.repository.team_id) teamIds.add(r.repository.team_id);
+  }
+
+  if (teamIds.size > 0) {
+    const members = await getPrisma().teamMembership.findMany({
+      where: { team_id: { in: [...teamIds] } },
+      select: { user_id: true },
+    });
+    for (const m of members) userIds.add(m.user_id);
+  }
+
+  return [...userIds];
 };
 
 /**

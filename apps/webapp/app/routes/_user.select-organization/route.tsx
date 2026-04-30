@@ -12,6 +12,7 @@ import {
   GitHubProvider,
   getGitProvider,
   ensureClassroomTeam,
+  notificationService,
 } from '@classmoji/services';
 import { ActionTypes, roleSettings } from '~/constants';
 import useStore from '~/store';
@@ -25,6 +26,7 @@ import {
   type TermBucketId,
   type TermSection,
 } from '~/components/features/landing';
+import type { NotificationRole } from '~/components/features/notifications';
 
 interface SelectOrganizationMembership extends MembershipWithOrganization {
   has_accepted_invite: boolean;
@@ -76,10 +78,35 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
       ({ organization }) => organization.is_active !== false
     );
 
+    const { items, unreadCount } = await notificationService.getForBell(typedUser.id);
+    const notifications = items.map(n => ({
+      id: n.id,
+      type: n.type,
+      title: n.title,
+      resource_type: n.resource_type,
+      resource_id: n.resource_id,
+      read_at: n.read_at ? n.read_at.toISOString() : null,
+      created_at: n.created_at.toISOString(),
+      classroom: n.classroom,
+      metadata: (n.metadata ?? null) as Record<string, unknown> | null,
+    }));
+
+    const membershipRoles: Record<string, NotificationRole[]> = {};
+    for (const m of typedUser.memberships ?? []) {
+      const orgId = (m as SelectOrganizationMembership).organization?.id;
+      const role = m.role as NotificationRole;
+      if (orgId && !membershipRoles[orgId]?.includes(role)) {
+        membershipRoles[orgId] = [...(membershipRoles[orgId] ?? []), role];
+      }
+    }
+
     return {
       user,
       memberships: typedUser.memberships as SelectOrganizationMembership[],
       githubAppName: process.env.GITHUB_APP_NAME,
+      notifications,
+      unreadCount,
+      membershipRoles,
     };
   } else {
     return redirect('/registration');
@@ -127,9 +154,7 @@ function formatUpdated(d: Date | string | null | undefined): string {
   return `${years}y ago`;
 }
 
-function buildLandingClasses(
-  memberships: SelectOrganizationMembership[]
-): LandingClass[] {
+function buildLandingClasses(memberships: SelectOrganizationMembership[]): LandingClass[] {
   return memberships.map(m => {
     const org = m.organization;
     const orgLogin = org.login;
@@ -181,7 +206,12 @@ function buildTermSections(classes: LandingClass[]): TermSection[] {
     sections.push({
       id: first.term,
       label,
-      meta: first.term === 'sandbox' ? 'for development & testing' : items[0]!.archived ? 'archived' : 'in progress',
+      meta:
+        first.term === 'sandbox'
+          ? 'for development & testing'
+          : items[0]!.archived
+            ? 'archived'
+            : 'in progress',
       classes: items,
     });
   }
@@ -202,7 +232,7 @@ function buildTermSections(classes: LandingClass[]): TermSection[] {
 // ───────── component ─────────
 
 const SelectOrganization = ({ loaderData }: Route.ComponentProps) => {
-  const { memberships } = loaderData;
+  const { memberships, notifications, unreadCount, membershipRoles } = loaderData;
   const { user } = useUser();
   const { classroom, setClassroom } = useStore();
   const { fetcher, notify } = useGlobalFetcher();
@@ -311,6 +341,9 @@ const SelectOrganization = ({ loaderData }: Route.ComponentProps) => {
           termSections={termSections}
           activeTermLabel={activeTermLabel}
           onOpenClass={onOpenClass}
+          notifications={notifications}
+          unreadCount={unreadCount}
+          membershipRoles={membershipRoles}
         />
       </div>
     </>
