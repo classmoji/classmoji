@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - dev
+  workflow_dispatch:
 
 concurrency:
   group: deploy-${{ github.ref }}
@@ -13,13 +14,13 @@ jobs:
   changes:
     runs-on: ubuntu-latest
     outputs:
-      webapp: ${{ steps.filter.outputs.webapp }}
-      ai-agent: ${{ steps.filter.outputs.ai-agent }}
-      hook-station: ${{ steps.filter.outputs.hook-station }}
-      site: ${{ steps.filter.outputs.site }}
-      slides: ${{ steps.filter.outputs.slides }}
-      pages: ${{ steps.filter.outputs.pages }}
-      tasks: ${{ steps.filter.outputs.tasks }}
+      webapp: ${{ steps.filter.outputs.webapp == 'true' || github.event_name == 'workflow_dispatch' }}
+      ai-agent: ${{ steps.filter.outputs.ai-agent == 'true' || github.event_name == 'workflow_dispatch' }}
+      hook-station: ${{ steps.filter.outputs.hook-station == 'true' || github.event_name == 'workflow_dispatch' }}
+      site: ${{ steps.filter.outputs.site == 'true' || github.event_name == 'workflow_dispatch' }}
+      slides: ${{ steps.filter.outputs.slides == 'true' || github.event_name == 'workflow_dispatch' }}
+      pages: ${{ steps.filter.outputs.pages == 'true' || github.event_name == 'workflow_dispatch' }}
+      tasks: ${{ steps.filter.outputs.tasks == 'true' || github.event_name == 'workflow_dispatch' }}
     steps:
       - uses: actions/checkout@v4
       - uses: dorny/paths-filter@v3
