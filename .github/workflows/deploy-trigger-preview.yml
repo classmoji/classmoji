@@ -1,0 +1,46 @@
+name: Deploy Trigger.dev (Preview - dev)
+
+on:
+  push:
+    branches:
+      - dev
+    paths:
+      - 'packages/tasks/**'
+      - 'packages/database/**'
+      - 'packages/services/**'
+      - 'packages/utils/**'
+
+concurrency:
+  group: deploy-trigger-preview-dev
+  cancel-in-progress: true
+
+jobs:
+  deploy-trigger-preview:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+          token: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Heal package-lock.json against submodule workspaces
+        run: npm install --package-lock-only --no-audit --no-fund --legacy-peer-deps
+
+      - name: Install dependencies
+        run: npm ci --legacy-peer-deps
+
+      - name: Deploy to Trigger.dev (preview/dev)
+        working-directory: packages/tasks
+        run: npx trigger.dev@4.4.0 deploy --push -e preview --branch dev
+        env:
+          TRIGGER_ACCESS_TOKEN: ${{ secrets.TRIGGER_ACCESS_TOKEN }}
+          INFISICAL_CLIENT_ID: ${{ secrets.INFISICAL_CLIENT_ID }}
+          INFISICAL_CLIENT_SECRET: ${{ secrets.INFISICAL_CLIENT_SECRET }}
+          INFISICAL_PROJECT_ID: e9a6487c-350e-41e7-8bba-2d95ca5934a6
+          INFISICAL_HOST: https://app.infisical.com

@@ -50,8 +50,9 @@ export default defineConfig({
             clientSecret: process.env.INFISICAL_CLIENT_SECRET,
           });
 
-          // Map Trigger.dev environment to Infisical environment
-          const envMap = { prod: 'prod', staging: 'sta' };
+          // Map Trigger.dev environment to Infisical environment.
+          // Preview deploys (e.g. branch "dev") pull from Infisical's dev env.
+          const envMap = { prod: 'prod', staging: 'sta', preview: 'dev' };
           const infisicalEnv = envMap[ctx.environment] ?? 'prod';
 
           console.log(
