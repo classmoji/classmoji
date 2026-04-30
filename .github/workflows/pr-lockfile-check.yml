@@ -15,6 +15,7 @@ name: PR Lockfile Check
 on:
   pull_request_target:
     branches:
+      - dev
       - staging
       - main
     paths:
