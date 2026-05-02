@@ -21,6 +21,13 @@ export function registerQuizzesWrite(server: McpServer, ctx: AuthContext): void 
         name: z.string().optional(),
         subject: z.string().optional(),
         description: z.string().optional(),
+        rubric_prompt: z
+          .string()
+          .optional()
+          .describe(
+            'AI grading rubric. Required at the DB level; if omitted on create, a generic placeholder is used and should be replaced via update before a real attempt.'
+          ),
+        system_prompt: z.string().optional(),
       }).shape,
     },
     async args => {
@@ -32,10 +39,13 @@ export function registerQuizzesWrite(server: McpServer, ctx: AuthContext): void 
         case 'create': {
           if (!args.name) throw mcpError('create requires name', ErrorCode.InvalidParams);
           const result = await ClassmojiService.quiz.create({
-            classroom: { connect: { id: resolved.classroom.id } },
+            classroomId: resolved.classroom.id,
             name: args.name,
             subject: args.subject ?? '',
-            description: args.description ?? '',
+            rubricPrompt:
+              args.rubric_prompt ??
+              'Grade based on correctness, completeness, and adherence to the question requirements.',
+            systemPrompt: args.system_prompt,
           } as never);
           return ok({ created: { id: result.id, name: result.name } });
         }
@@ -44,7 +54,8 @@ export function registerQuizzesWrite(server: McpServer, ctx: AuthContext): void 
           const updates: Record<string, unknown> = {};
           if (args.name !== undefined) updates.name = args.name;
           if (args.subject !== undefined) updates.subject = args.subject;
-          if (args.description !== undefined) updates.description = args.description;
+          if (args.rubric_prompt !== undefined) updates.rubricPrompt = args.rubric_prompt;
+          if (args.system_prompt !== undefined) updates.systemPrompt = args.system_prompt;
           const result = await ClassmojiService.quiz.update(args.quizId, updates);
           return ok({ updated: { id: result.id, name: result.name } });
         }

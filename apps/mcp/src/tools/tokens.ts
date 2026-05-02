@@ -54,7 +54,9 @@ export function registerTokensPurchaseExtension(server: McpServer, ctx: AuthCont
       const result = await ClassmojiService.token.updateExtension({
         classroom_id: resolved.classroom.id,
         student_id: ctx.userId,
-        amount: args.amount,
+        amount: -Math.abs(args.amount),
+        type: 'PURCHASE',
+        description: 'Deadline extension purchased via MCP',
       });
       return ok({ purchased: result });
     }

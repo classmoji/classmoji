@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { ClassmojiService } from '@classmoji/services';
+import getPrisma from '@classmoji/database';
 import type { AuthContext } from '../auth/context.ts';
 import { resolveClassroom } from '../context/classroom.ts';
 import { isAdminInAny } from '../auth/roles.ts';
@@ -48,7 +49,7 @@ export function registerMappingsWrite(server: McpServer, ctx: AuthContext): void
             resolved.classroom.id,
             {
               emoji: args.emoji,
-              score: args.score,
+              grade: args.score,
               description: args.description ?? '',
             } as never
           );
@@ -65,11 +66,25 @@ export function registerMappingsWrite(server: McpServer, ctx: AuthContext): void
         case 'letter_save': {
           if (!args.letterMapping)
             throw mcpError('letter_save requires letterMapping[]', ErrorCode.InvalidParams);
-          const result = await ClassmojiService.letterGradeMapping.save(
-            resolved.classroom.id,
-            args.letterMapping as never
-          );
-          return ok({ saved: result });
+          const prisma = getPrisma();
+          const saved = await prisma.$transaction(async tx => {
+            await tx.letterGradeMapping.deleteMany({
+              where: { classroom_id: resolved.classroom.id },
+            });
+            const created: Array<{ letter_grade: string; min_grade: number }> = [];
+            for (const m of args.letterMapping!) {
+              const row = await tx.letterGradeMapping.create({
+                data: {
+                  classroom_id: resolved.classroom.id,
+                  letter_grade: m.letter,
+                  min_grade: m.min_score,
+                },
+              });
+              created.push({ letter_grade: row.letter_grade, min_grade: row.min_grade });
+            }
+            return created;
+          });
+          return ok({ saved });
         }
       }
     }

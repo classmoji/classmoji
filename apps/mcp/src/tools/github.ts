@@ -64,7 +64,6 @@ export function registerGithubFeedback(server: McpServer, ctx: AuthContext): voi
         where: { classroom_id: resolved.classroom.id, student_id: targetStudent },
         include: {
           assignments: {
-            where: { provider_issue_number: { not: null } },
             include: { assignment: { include: { module: true } } },
           },
         },
