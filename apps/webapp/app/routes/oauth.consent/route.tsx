@@ -163,6 +163,9 @@ export const action = async ({ request }: Route.ActionArgs) => {
       'Content-Type': 'application/json',
       // Forward cookies so BetterAuth can read its session + state cookies.
       Cookie: request.headers.get('cookie') ?? '',
+      // Node fetch doesn't set Origin on server-to-server calls; BetterAuth's
+      // CSRF check rejects with MISSING_OR_NULL_ORIGIN without it.
+      Origin: webappUrl,
     },
     body: JSON.stringify({
       accept: decision === 'approve',
@@ -173,7 +176,7 @@ export const action = async ({ request }: Route.ActionArgs) => {
   });
 
   // BetterAuth replies either with a 30x redirect (preferred) or JSON
-  // containing { redirect_uri }.
+  // containing { redirect: true, url } or { redirect_uri }.
   if (upstream.status >= 300 && upstream.status < 400) {
     const location = upstream.headers.get('location');
     if (location) return redirect(location);
@@ -185,13 +188,14 @@ export const action = async ({ request }: Route.ActionArgs) => {
   } catch {
     /* non-JSON response */
   }
-  if (
-    payload &&
-    typeof payload === 'object' &&
-    'redirect_uri' in payload &&
-    typeof (payload as { redirect_uri: unknown }).redirect_uri === 'string'
-  ) {
-    return redirect((payload as { redirect_uri: string }).redirect_uri);
+  if (payload && typeof payload === 'object') {
+    const p = payload as { redirect?: unknown; url?: unknown; redirect_uri?: unknown };
+    if (p.redirect === true && typeof p.url === 'string') {
+      return redirect(p.url);
+    }
+    if (typeof p.redirect_uri === 'string') {
+      return redirect(p.redirect_uri);
+    }
   }
 
   throw new Response(
