@@ -1,6 +1,7 @@
 import { betterAuth } from 'better-auth';
 import { prismaAdapter } from 'better-auth/adapters/prisma';
-import { admin } from 'better-auth/plugins';
+import { admin, jwt } from 'better-auth/plugins';
+import { oauthProvider } from '@better-auth/oauth-provider';
 import getPrisma from '@classmoji/database';
 import type { Account as PrismaAccount, Role } from '@prisma/client';
 import { ClassmojiService } from '@classmoji/services';
@@ -302,7 +303,7 @@ async function refreshGitHubToken(
  * @param {string} userId - The user ID
  * @returns {Promise<{token: string, expiresAt: Date} | null>}
  */
-async function getValidGitHubToken(userId: string): Promise<GitHubTokenResult | null> {
+export async function getValidGitHubToken(userId: string): Promise<GitHubTokenResult | null> {
   return withRefreshLock(userId, async () => {
     const account = await getPrisma().account.findFirst({
       where: { user_id: userId, provider_id: 'github' },
@@ -475,12 +476,89 @@ export const auth = betterAuth({
       updatedAt: 'updated_at',
     },
   },
+  // BetterAuth plugin types don't satisfy each other across packages due to
+  // internal type narrowing differences. Runtime works fine; per-plugin
+  // ts-expect-error to keep `auth.api` type inference intact.
   plugins: [
+    // @ts-expect-error — admin plugin type vs BetterAuthPlugin
     admin({
       impersonationSessionDuration: 60 * 60, // 1 hour
       // Allow users with 'admin' role to impersonate
       // OWNER users need to have role='admin' set in the database
       adminRoles: ['admin'],
+    }),
+    // Required alongside oauthProvider so access tokens are JWTs (verifiable
+    // by MCP server via JWKS without per-request HTTP calls). Without this
+    // plugin, oauth-provider falls back to opaque tokens.
+    // @ts-expect-error — jwt plugin endpoint types are too strict
+    jwt(),
+    // OAuth 2.1 authorization server for the MCP server (and future apps).
+    // Spec-compliant: DCR (RFC 7591), PKCE/S256 mandatory, RFC 8707 audience
+    // binding, refresh rotation. See plan dreamy-shimmying-rossum.md Phase 0.5.
+    oauthProvider({
+      // BetterAuth redirects unauthenticated OAuth users here. The webapp's
+      // sign-in form lives at "/" (the home page renders SignInPage when no
+      // session exists, see apps/webapp/app/routes/_index/route.tsx).
+      loginPage: '/',
+      consentPage: '/oauth/consent',
+      scopes: [
+        // Identity (OIDC standard)
+        'openid',
+        'profile',
+        'email',
+        'offline_access',
+        // Resource scopes (Phase 0.6 vocabulary)
+        'assignments:read',
+        'assignments:write',
+        'modules:read',
+        'modules:write',
+        'grades:read',
+        'grades:write',
+        'calendar:read',
+        'calendar:write',
+        'roster:read',
+        'roster:write',
+        'content:read',
+        'content:write',
+        'quizzes:read',
+        'quizzes:write',
+        'tokens:read',
+        'tokens:write',
+        'teams:read',
+        'teams:write',
+        'regrade:read',
+        'regrade:write',
+        'settings:read',
+        'settings:write',
+        'feedback:read',
+        // Composite convenience scopes — expand server-side at issue time
+        'mcp:full',
+        'mcp:readonly',
+      ],
+      // Audience binding (RFC 8707). Env-driven for prod plus localhost
+      // fallbacks for dev, so MCP clients running on multiple ports can all
+      // authenticate against the same webapp without restarting.
+      validAudiences: [
+        ...(process.env.MCP_AUDIENCE ? [process.env.MCP_AUDIENCE] : []),
+        'https://mcp.classmoji.io/mcp',
+        'http://localhost:8100/mcp',
+        'http://127.0.0.1:8100/mcp',
+      ],
+      allowDynamicClientRegistration: true,
+      // Required for Claude clients which have no pre-issued credentials.
+      allowUnauthenticatedClientRegistration: true,
+      accessTokenExpiresIn: 3600, // 1h
+      refreshTokenExpiresIn: 2592000, // 30d
+      storeClientSecret: 'hashed',
+      storeTokens: 'hashed',
+      // Reserved JWT claims (sub, aud, iss, exp, iat, scope, azp, sid) cannot
+      // be overridden — they're set by oauth-provider after this function
+      // runs. Add custom non-reserved claims here if needed in the future.
+      customAccessTokenClaims: () => ({}),
+      // BetterAuth's auto-mount lives at /api/auth/.well-known/oauth-authorization-server,
+      // which is RFC-noncompliant for Claude clients. We manually mount at host
+      // root via the React Router .well-known.* routes. Silence the warning.
+      silenceWarnings: { oauthAuthServerConfig: true },
     }),
   ],
 });

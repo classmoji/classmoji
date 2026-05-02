@@ -212,6 +212,11 @@ model User {
   calendar_events               CalendarEvent[]
   ai_conversations              AIConversation[]
   resource_views                ResourceView[]
+  // OAuth provider (BetterAuth)
+  oauth_clients                 OauthClient[]
+  oauth_access_tokens           OauthAccessToken[]
+  oauth_refresh_tokens          OauthRefreshToken[]
+  oauth_consents                OauthConsent[]
 
   @@unique([provider, provider_id])
   @@index([provider, login])
@@ -1001,4 +1006,127 @@ model ResourceView {
   @@index([classroom_id, resource_path])
   @@index([last_viewed_at])
   @@map("resource_views")
+}
+
+// ============================================================================
+// OAUTH PROVIDER (BetterAuth oauth-provider + jwt plugins)
+// ============================================================================
+// These tables back the MCP server's OAuth 2.1 authorization flow. Field names
+// are camelCase to match BetterAuth's expected adapter shape — BetterAuth
+// reads/writes via these property names directly. We use snake_case @@map for
+// the actual Postgres table names to match project convention.
+
+model OauthClient {
+  id                       String   @id @default(uuid())
+  clientId                 String   @unique @map("client_id")
+  clientSecret             String?  @map("client_secret")
+  disabled                 Boolean? @default(false)
+  skipConsent              Boolean? @map("skip_consent")
+  enableEndSession         Boolean? @map("enable_end_session")
+  subjectType              String?  @map("subject_type")
+  scopes                   String[]
+  userId                   String?  @map("user_id")
+  createdAt                DateTime? @default(now()) @map("created_at")
+  updatedAt                DateTime? @default(now()) @updatedAt @map("updated_at")
+  name                     String?
+  uri                      String?
+  icon                     String?
+  contacts                 String[]
+  tos                      String?
+  policy                   String?
+  softwareId               String?  @map("software_id")
+  softwareVersion          String?  @map("software_version")
+  softwareStatement        String?  @map("software_statement")
+  redirectUris             String[] @map("redirect_uris")
+  postLogoutRedirectUris   String[] @map("post_logout_redirect_uris")
+  tokenEndpointAuthMethod  String?  @map("token_endpoint_auth_method")
+  grantTypes               String[] @map("grant_types")
+  responseTypes            String[] @map("response_types")
+  public                   Boolean?
+  type                     String?
+  requirePKCE              Boolean? @map("require_pkce")
+  referenceId              String?  @map("reference_id")
+  metadata                 Json?
+
+  user           User?               @relation(fields: [userId], references: [id], onDelete: SetNull)
+  access_tokens  OauthAccessToken[]
+  refresh_tokens OauthRefreshToken[]
+  consents       OauthConsent[]
+
+  @@index([userId])
+  @@map("oauth_clients")
+}
+
+model OauthRefreshToken {
+  id          String   @id @default(uuid())
+  token       String   @unique
+  clientId    String   @map("client_id")
+  sessionId   String?  @map("session_id")
+  userId      String   @map("user_id")
+  referenceId String?  @map("reference_id")
+  expiresAt   DateTime @map("expires_at")
+  createdAt   DateTime @default(now()) @map("created_at")
+  revoked     DateTime?
+  authTime    DateTime? @map("auth_time")
+  scopes      String[]
+
+  client        OauthClient        @relation(fields: [clientId], references: [clientId], onDelete: Cascade)
+  user          User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  access_tokens OauthAccessToken[]
+
+  @@index([clientId])
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("oauth_refresh_tokens")
+}
+
+model OauthAccessToken {
+  id          String   @id @default(uuid())
+  token       String   @unique
+  clientId    String   @map("client_id")
+  sessionId   String?  @map("session_id")
+  userId      String?  @map("user_id")
+  referenceId String?  @map("reference_id")
+  refreshId   String?  @map("refresh_id")
+  expiresAt   DateTime @map("expires_at")
+  createdAt   DateTime @default(now()) @map("created_at")
+  scopes      String[]
+
+  client         OauthClient         @relation(fields: [clientId], references: [clientId], onDelete: Cascade)
+  user           User?               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  refresh_token  OauthRefreshToken?  @relation(fields: [refreshId], references: [id], onDelete: SetNull)
+
+  @@index([clientId])
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("oauth_access_tokens")
+}
+
+model OauthConsent {
+  id          String   @id @default(uuid())
+  clientId    String   @map("client_id")
+  userId      String?  @map("user_id")
+  referenceId String?  @map("reference_id")
+  scopes      String[]
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @default(now()) @updatedAt @map("updated_at")
+
+  client OauthClient @relation(fields: [clientId], references: [clientId], onDelete: Cascade)
+  user   User?       @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([clientId])
+  @@index([userId])
+  @@map("oauth_consents")
+}
+
+model Jwks {
+  id         String    @id @default(uuid())
+  publicKey  String    @map("public_key")
+  privateKey String    @map("private_key")
+  alg        String?
+  crv        String?
+  createdAt  DateTime  @default(now()) @map("created_at")
+  expiresAt  DateTime? @map("expires_at")
+
+  @@map("jwks")
 }

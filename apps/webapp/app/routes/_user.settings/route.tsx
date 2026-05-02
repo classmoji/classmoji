@@ -1,6 +1,6 @@
 import { Tabs } from 'antd';
 import { Outlet, useNavigate, useLocation } from 'react-router';
-import { IconSettings, IconUser, IconCreditCard } from '@tabler/icons-react';
+import { IconSettings, IconUser, IconCreditCard, IconPlug } from '@tabler/icons-react';
 import { useUser } from '~/hooks';
 
 const UserSettings = () => {
@@ -27,6 +27,16 @@ const UserSettings = () => {
         <span className="inline-flex items-center gap-2">
           <IconCreditCard size={16} />
           <span>Billing</span>
+        </span>
+      ),
+      children: <Outlet />,
+    },
+    {
+      key: 'connected-apps',
+      label: (
+        <span className="inline-flex items-center gap-2">
+          <IconPlug size={16} />
+          <span>Connected Apps</span>
         </span>
       ),
       children: <Outlet />,

@@ -8,27 +8,53 @@ import type { Route } from './+types/route';
 
 export const loader = async ({ request }: Route.LoaderArgs) => {
   const session = await auth.api.getSession({ headers: request.headers });
+  const url = new URL(request.url);
+
+  // OAuth resume: if BetterAuth bounced an unauthenticated user here for
+  // login (loginPage in oauth-provider config), the URL carries the original
+  // OAuth authorize params (response_type, client_id, code_challenge, etc.)
+  // plus a signed `sig`. Once the user has a session, we re-trigger
+  // /authorize with those exact params so BetterAuth completes the flow
+  // (which will then bounce to the consent page or directly to the
+  // redirect_uri with an auth code).
+  const isOAuthResume =
+    url.searchParams.has('response_type') &&
+    url.searchParams.has('client_id') &&
+    url.searchParams.has('redirect_uri');
 
   if (session?.user) {
+    if (isOAuthResume) {
+      // Forward all original OAuth params (including BetterAuth's sig) to
+      // the proxy at /authorize, which forwards to /api/auth/oauth2/authorize.
+      // Now the request carries the user's session cookie, so BetterAuth
+      // proceeds to the consent step instead of bouncing back to loginPage.
+      return redirect(`/authorize?${url.searchParams.toString()}`);
+    }
     return redirect('/select-organization');
   }
 
-  const url = new URL(request.url);
+  // Unauthenticated user: render sign-in page. If OAuth params are present,
+  // preserve them across the GitHub OAuth round-trip so we land back here
+  // and can re-enter the resume branch above.
   return {
     isDev: process.env.NODE_ENV === 'development',
     multipleTokens: process.env.MULTIPLE_TOKENS === 'true',
     setupComplete: url.searchParams.get('setup') === 'complete',
+    oauthResumeQuery: isOAuthResume ? url.searchParams.toString() : null,
   };
 };
 
 const Index = ({ loaderData }: Route.ComponentProps) => {
-  const { isDev, setupComplete, multipleTokens } = loaderData;
+  const { isDev, setupComplete, multipleTokens, oauthResumeQuery } = loaderData;
 
   const handleGitHubLogin = async () => {
-    // Use BetterAuth client for OAuth flow
+    // If we got here via an OAuth authorize redirect (Claude Code, etc.),
+    // bring the OAuth params back to `/` after sign-in so the loader's
+    // resume branch can re-trigger /authorize with the new session cookie.
+    const callbackURL = oauthResumeQuery ? `/?${oauthResumeQuery}` : '/select-organization';
     await authClient.signIn.social({
       provider: 'github',
-      callbackURL: '/select-organization',
+      callbackURL,
     });
   };
 

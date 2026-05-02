@@ -10,8 +10,15 @@
     "./client": "./src/client.ts"
   },
   "dependencies": {
+    "@better-auth/core": "^1.6.9",
+    "@better-auth/oauth-provider": "^1.6.9",
+    "@better-auth/utils": "^0.4.0",
+    "@better-fetch/fetch": "^1.1.21",
     "@classmoji/database": "*",
     "@classmoji/services": "*",
-    "better-auth": "^1.4.7"
+    "better-auth": "^1.6.9",
+    "better-call": "^1.3.5",
+    "kysely": "^0.28.16",
+    "nanostores": "^1.3.0"
   }
 }
