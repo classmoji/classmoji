@@ -15,14 +15,13 @@ import { classroomSlugSchema, ok } from './_helpers.ts';
 /**
  * `grades_write` — modify grades.
  *
- * Methods (some require admin within the classroom even though tool is registered for teaching team):
- *   add                 — STAFF (OWNER+TEACHER): add an emoji grade to a repo assignment
- *   remove              — STAFF: remove a single grade by id
- *   remove_all          — STAFF: remove all grades for a repo assignment
- *   release             — STAFF: not yet wired (needs assignmentService.releaseGrades)
- *   update_letter       — STAFF: set a student's letter grade
- *   remap_emojis        — OWNER: bulk swap emoji symbols across all grades in classroom
- *                                 (changes grading policy — owner-only)
+ * Methods (registered for TEACHING_TEAM; per-method tier varies):
+ *   add                 — TEACHING (assistants are graders): add an emoji grade
+ *   remove              — TEACHING: remove a single grade by id
+ *   remove_all          — STAFF (OWNER+TEACHER): bulk-clear grades on a repo assignment
+ *   update_letter       — STAFF: set a student's final letter grade
+ *   remap_emojis        — OWNER: bulk swap emoji symbols across the classroom
+ *                                 (changes grading policy)
  */
 export function registerGradesWrite(server: McpServer, ctx: AuthContext): void {
   server.registerTool(
@@ -48,12 +47,16 @@ export function registerGradesWrite(server: McpServer, ctx: AuthContext): void {
     },
     async args => {
       const resolved = await resolveClassroom(ctx, args.classroomSlug);
-      // Every grades_write method requires STAFF (OWNER+TEACHER).
-      if (!isStaffInAny(resolved.roles)) {
-        throw mcpError('Staff role required', ErrorCode.InvalidRequest);
+      // add / remove are open to TEACHING (assistants grade individual
+      // assignments). The other methods narrow further: remove_all and
+      // update_letter need STAFF; remap_emojis is OWNER (grading policy).
+      const STAFF_METHODS = new Set(['remove_all', 'update_letter']);
+      if (STAFF_METHODS.has(args.method) && !isStaffInAny(resolved.roles)) {
+        throw mcpError(
+          `Method '${args.method}' requires staff role`,
+          ErrorCode.InvalidRequest
+        );
       }
-      // remap_emojis additionally requires OWNER — it changes grading policy
-      // for the whole classroom, not just edits an individual grade.
       if (args.method === 'remap_emojis' && !isOwnerInAny(resolved.roles)) {
         throw mcpError("Method 'remap_emojis' requires owner role", ErrorCode.InvalidRequest);
       }

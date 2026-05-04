@@ -361,7 +361,9 @@ export function registerResources(server: McpServer, ctx: AuthContext): void {
       buildTemplate('classmoji://{slug}/roster'),
       {
         title: 'Roster',
-        description: 'Full classroom membership list (teaching team only).',
+        description:
+          'Full classroom membership list (teaching team). Letter grades are ' +
+          'visible to STAFF only — assistants see other fields without final grades.',
         mimeType: 'application/json',
       },
       async (uri, { slug }) => {
@@ -372,7 +374,17 @@ export function registerResources(server: McpServer, ctx: AuthContext): void {
         const members = await ClassmojiService.classroomMembership.findByClassroomId(
           resolved.classroom.id
         );
-        return jsonResource(uri.href, { members });
+        // letter_grade is the assigned final grade. Assistants are graders
+        // for individual assignments but aren't supposed to see (or set)
+        // students' final letter grades — strip the field for non-STAFF.
+        const isStaff = isStaffInAny(resolved.roles);
+        const sanitized = isStaff
+          ? members
+          : members.map(m => {
+              const { letter_grade: _omitted, ...rest } = m as { letter_grade?: unknown };
+              return rest;
+            });
+        return jsonResource(uri.href, { members: sanitized });
       }
     );
   }
