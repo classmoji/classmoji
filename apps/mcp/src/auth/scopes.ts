@@ -40,15 +40,20 @@ const COMPOSITES: Record<string, readonly string[]> = {
 };
 
 /**
- * Expands a space-separated scope string into a Set of effective scopes.
+ * Expands scope tokens into a Set of effective scopes.
  *
  * Composite scopes (`mcp:full`, `mcp:readonly`) expand to their member
  * resource scopes. Identity scopes (`openid`, `profile`, `email`,
  * `offline_access`) pass through unchanged.
+ *
+ * Accepts either a space-separated string (JWT `scope` claim form) or an
+ * already-tokenized array.
  */
-export function expandScopes(scopeString: string): Set<string> {
+export function expandScopes(scopes: string | readonly string[]): Set<string> {
+  const tokens =
+    typeof scopes === 'string' ? scopes.split(/\s+/).filter(Boolean) : scopes;
   const out = new Set<string>();
-  for (const s of scopeString.split(/\s+/).filter(Boolean)) {
+  for (const s of tokens) {
     const composite = COMPOSITES[s];
     if (composite) {
       for (const x of composite) out.add(x);

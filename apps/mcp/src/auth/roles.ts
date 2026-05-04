@@ -39,6 +39,9 @@ export const isTeachingInAny = (roles: Set<Role>): boolean => {
 
 export const isStudentInAny = (roles: Set<Role>): boolean => roles.has('STUDENT');
 
+/** A role that can edit/observe other people's classroom data. */
+export const isPrivilegedRole = (role: Role): boolean => TEACHING_TEAM_ROLES.has(role);
+
 /**
  * Returns the highest-privilege role from a set, used for audit logging.
  */

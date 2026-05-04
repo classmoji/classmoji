@@ -3,6 +3,7 @@ import type { Role } from '@prisma/client';
 import {
   highestRole,
   isOwnerInAny,
+  isPrivilegedRole,
   isStaffInAny,
   isStudentInAny,
   isTeachingInAny,
@@ -38,6 +39,13 @@ describe('role helpers — exact alignment with webapp route auth', () => {
     expect(isStudentInAny(set('STUDENT'))).toBe(true);
     expect(isStudentInAny(set('OWNER'))).toBe(false);
     expect(isStudentInAny(set('OWNER', 'STUDENT'))).toBe(true);
+  });
+
+  it('isPrivilegedRole flags every role except STUDENT', () => {
+    expect(isPrivilegedRole('OWNER')).toBe(true);
+    expect(isPrivilegedRole('TEACHER')).toBe(true);
+    expect(isPrivilegedRole('ASSISTANT')).toBe(true);
+    expect(isPrivilegedRole('STUDENT')).toBe(false);
   });
 });
 

@@ -11,13 +11,9 @@ import { buildServerForUser } from './server.ts';
 import { rateLimitMcpEndpoint } from './middleware/rateLimiter.ts';
 import { emitLog } from './middleware/logging.ts';
 
-/**
- * Express 4 does not auto-route rejected promises from async handlers to
- * error middleware. Wrap async handlers so they always reach the final
- * error middleware below — without this, a thrown error from JWT context
- * resolution / DB call / SDK transport leaves the request hanging and may
- * trip Node's unhandled-rejection behavior.
- */
+// Express 4 doesn't auto-route rejected promises to error middleware; this
+// wrapper is what keeps a thrown error in JWT/DB/SDK code from leaving the
+// request hanging or tripping Node's unhandled-rejection guard.
 type AsyncHandler = (req: Request, res: Response, next: NextFunction) => Promise<unknown>;
 function asyncHandler(fn: AsyncHandler) {
   return (req: Request, res: Response, next: NextFunction) => {
@@ -59,15 +55,6 @@ app.get('/health', (_req, res) => {
 interface SessionState {
   transport: StreamableHTTPServerTransport;
   ctx: AuthContext;
-  /**
-   * Session-binding metadata captured from the JWT that initialized this
-   * session. Reusing the session ID with a *different* JWT (different user,
-   * different OAuth client, or even just a different token from the same
-   * principal) is rejected — without this, a leaked Mcp-Session-Id plus any
-   * valid Classmoji bearer would let the new bearer drive the original
-   * user's session state.
-   */
-  bind: { userId: string; clientId: string; tokenId: string };
 }
 
 const sessions = new Map<string, SessionState>();
@@ -77,11 +64,9 @@ function getSessionId(req: Request): string | undefined {
   return Array.isArray(v) ? v[0] : v;
 }
 
-/**
- * Verify the JWT on the request matches the JWT that opened this session.
- * Drop the session and return false if not — defense against session-id
- * leakage / cross-token reuse.
- */
+// Without binding the session to (userId, clientId, tokenId), a leaked
+// Mcp-Session-Id plus *any* valid Classmoji bearer would let that bearer
+// drive the original user's session.
 function authorizeSessionReuse(
   sid: string,
   state: SessionState,
@@ -89,12 +74,12 @@ function authorizeSessionReuse(
   res: Response
 ): boolean {
   const reqUser = req.auth!.extra!.userId;
-  const reqClient = req.auth!.clientId;
+  const reqClient = req.auth!.clientId === 'unknown' ? null : req.auth!.clientId;
   const reqToken = req.auth!.extra!.tokenId;
   if (
-    state.bind.userId !== reqUser ||
-    state.bind.clientId !== reqClient ||
-    state.bind.tokenId !== reqToken
+    state.ctx.userId !== reqUser ||
+    state.ctx.oauthClientId !== reqClient ||
+    state.ctx.accessTokenId !== reqToken
   ) {
     sessions.delete(sid);
     state.transport.close().catch(() => {
@@ -104,10 +89,10 @@ function authorizeSessionReuse(
       msg: 'mcp.session.bind_mismatch',
       level: 'warn',
       session_id: sid,
-      user_id: state.bind.userId,
-      oauth_client_id: state.bind.clientId,
-      access_token_id: state.bind.tokenId,
-      error: `request token (${reqUser}/${reqClient}) does not match bound (${state.bind.userId}/${state.bind.clientId})`,
+      user_id: state.ctx.userId,
+      oauth_client_id: state.ctx.oauthClientId,
+      access_token_id: state.ctx.accessTokenId,
+      error: `request token (${reqUser}/${reqClient}) does not match bound (${state.ctx.userId}/${state.ctx.oauthClientId})`,
     });
     res.status(401).json({
       jsonrpc: '2.0',
@@ -122,8 +107,6 @@ function authorizeSessionReuse(
 app.post('/mcp', requireValidJwt, rateLimitMcpEndpoint, asyncHandler(async (req, res) => {
   const sid = getSessionId(req);
 
-  // Reuse existing session — verify the caller matches the principal that
-  // opened the session. Without this any valid bearer can hijack a leaked sid.
   if (sid && sessions.has(sid)) {
     const state = sessions.get(sid)!;
     if (!authorizeSessionReuse(sid, state, req, res)) return;
@@ -131,25 +114,17 @@ app.post('/mcp', requireValidJwt, rateLimitMcpEndpoint, asyncHandler(async (req,
     return;
   }
 
-  // Initialize new session
   if (!sid && isInitializeRequest(req.body)) {
-    const ctx = await resolveAuthContext(
-      req.auth!.extra!.userId,
-      req.auth!.extra!.tokenId,
-      req.auth!.clientId === 'unknown' ? null : req.auth!.clientId,
-      req.auth!.scopes.join(' '),
-      req.auth!.extra!.cmRoles
-    );
-    const bind = {
-      userId: req.auth!.extra!.userId,
+    const ctx = await resolveAuthContext({
       clientId: req.auth!.clientId,
-      tokenId: req.auth!.extra!.tokenId,
-    };
+      scopes: req.auth!.scopes,
+      extra: req.auth!.extra!,
+    });
 
     const transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: () => randomUUID(),
       onsessioninitialized: (id: string) => {
-        sessions.set(id, { transport, ctx, bind });
+        sessions.set(id, { transport, ctx });
         emitLog({
           msg: 'mcp.session.opened',
           session_id: id,

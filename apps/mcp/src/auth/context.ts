@@ -22,6 +22,21 @@ export interface AuthContext {
 }
 
 /**
+ * Shape of `req.auth` populated by `requireValidJwt` — re-declared here so
+ * `resolveAuthContext` can take the whole object instead of seven positional
+ * args. Kept loose (only the fields we read) so the validator can grow.
+ */
+export interface RequestAuth {
+  clientId: string;
+  scopes: string[];
+  extra: {
+    userId: string;
+    tokenId: string;
+    cmRoles?: string[];
+  };
+}
+
+/**
  * Build the per-session AuthContext from validated JWT claims.
  *
  * Looks up the user's classroom memberships once per session — used for both
@@ -29,37 +44,31 @@ export interface AuthContext {
  * The per-classroom role check still happens inside each tool handler via
  * `resolveClassroom()` (defense in depth).
  *
- * If `viewAsRoles` is provided (from a `cm_roles` JWT claim — set by the
- * dev mint endpoint or by a future BetterAuth customAccessTokenClaims hook),
- * restrict the session's effective roles to the listed subset. Lets one
- * user with multiple roles in a classroom test the experience of a more
- * restricted role without changing memberships.
+ * The `cm_roles` JWT claim ("view-as") restricts the session's effective
+ * roles to a subset the user actually holds. Set by the dev mint endpoint;
+ * absent in production tokens until/unless we add a customAccessTokenClaims
+ * hook.
  */
-export async function resolveAuthContext(
-  userId: string,
-  tokenId: string,
-  oauthClientId: string | null,
-  scopeString: string,
-  viewAsRoles?: string[]
-): Promise<AuthContext> {
+export async function resolveAuthContext(auth: RequestAuth): Promise<AuthContext> {
+  const { userId, tokenId, cmRoles } = auth.extra;
+  const oauthClientId = auth.clientId === 'unknown' ? null : auth.clientId;
+
   const memberships = await getPrisma().classroomMembership.findMany({
     where: { user_id: userId, has_accepted_invite: true },
     include: { classroom: { select: { slug: true } } },
   });
 
   const allRoles = new Set(memberships.map(m => m.role));
-  // Filter to the requested subset, but only roles the user actually holds.
-  // (You can't view-as a role you don't have.)
   const effectiveRoles =
-    viewAsRoles && viewAsRoles.length > 0
-      ? new Set([...allRoles].filter(r => viewAsRoles.includes(r)))
+    cmRoles && cmRoles.length > 0
+      ? new Set([...allRoles].filter(r => cmRoles.includes(r)))
       : allRoles;
 
   return {
     userId,
     accessTokenId: tokenId,
     oauthClientId,
-    scopes: expandScopes(scopeString),
+    scopes: expandScopes(auth.scopes),
     roles: effectiveRoles,
     classroomSlugs: [...new Set(memberships.map(m => m.classroom.slug))],
     activeSlug: null,

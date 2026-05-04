@@ -39,11 +39,10 @@ export function registerTokensAssign(server: McpServer, ctx: AuthContext): void 
       if (!isStaffInAny(resolved.roles))
         throw mcpError('Staff role required', ErrorCode.InvalidRequest);
 
-      // Verify the target is actually a STUDENT (not just any classroom
-      // member) — the tool description says "Grant tokens to a student".
-      // Using prisma directly: a user can hold multiple roles, so we just
-      // need the STUDENT row to exist.
-      const isStudent = await getPrisma().classroomMembership.findFirst({
+      await assertUserMemberOfClassroom(args.studentId, resolved.classroom.id);
+      // Target must hold a STUDENT role; users may hold multiple roles, so
+      // a single row is enough.
+      const studentRow = await getPrisma().classroomMembership.findFirst({
         where: {
           user_id: args.studentId,
           classroom_id: resolved.classroom.id,
@@ -52,13 +51,12 @@ export function registerTokensAssign(server: McpServer, ctx: AuthContext): void 
         },
         select: { id: true },
       });
-      if (!isStudent) {
+      if (!studentRow) {
         throw mcpError(
           'Target user is not an accepted student in this classroom',
           ErrorCode.InvalidRequest
         );
       }
-      await assertUserMemberOfClassroom(args.studentId, resolved.classroom.id);
 
       const result = await ClassmojiService.token.assignToStudent({
         classroomId: resolved.classroom.id,

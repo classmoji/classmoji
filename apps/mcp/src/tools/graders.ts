@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { ClassmojiService } from '@classmoji/services';
+import getPrisma from '@classmoji/database';
 import type { AuthContext } from '../auth/context.ts';
 import { resolveClassroom } from '../context/classroom.ts';
 import {
@@ -58,8 +59,23 @@ export function registerGradersWrite(server: McpServer, ctx: AuthContext): void 
         case 'bulk_assign': {
           if (!args.graderIds || args.graderIds.length === 0)
             throw mcpError('bulk_assign requires graderIds[]', ErrorCode.InvalidParams);
-          for (const gid of args.graderIds) {
-            await assertUserMemberOfClassroom(gid, resolved.classroom.id);
+          // Single roundtrip vs N: fetch all accepted memberships at once,
+          // then diff against the requested set.
+          const members = await getPrisma().classroomMembership.findMany({
+            where: {
+              classroom_id: resolved.classroom.id,
+              user_id: { in: args.graderIds },
+              has_accepted_invite: true,
+            },
+            select: { user_id: true },
+          });
+          const present = new Set(members.map(m => m.user_id));
+          const missing = args.graderIds.filter(id => !present.has(id));
+          if (missing.length > 0) {
+            throw mcpError(
+              `Users not members of this classroom: ${missing.join(', ')}`,
+              ErrorCode.InvalidRequest
+            );
           }
           const result = await ClassmojiService.repositoryAssignmentGrader.bulkAssignGraders(
             args.repositoryAssignmentId,

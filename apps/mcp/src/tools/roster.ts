@@ -5,7 +5,7 @@ import getPrisma from '@classmoji/database';
 import type { AuthContext } from '../auth/context.ts';
 import { resolveClassroom } from '../context/classroom.ts';
 import { assertUserMemberOfClassroom } from '../context/ownership.ts';
-import { isOwnerInAny, isStaffInAny } from '../auth/roles.ts';
+import { isOwnerInAny, isPrivilegedRole, isStaffInAny } from '../auth/roles.ts';
 import { ErrorCode, mcpError } from '../utils/errors.ts';
 import { classroomSlugSchema, ok } from './_helpers.ts';
 
@@ -61,23 +61,18 @@ export function registerRosterWrite(server: McpServer, ctx: AuthContext): void {
         case 'remove_student': {
           await assertUserMemberOfClassroom(args.userId, resolved.classroom.id);
 
-          // Look up the target's existing roles; @@unique([classroom_id,
-          // user_id, role]) means a user can hold multiple roles.
+          // @@unique([classroom_id, user_id, role]) means a user can hold
+          // multiple roles, so findMany not findUnique.
           const targetRoles = await prisma.classroomMembership.findMany({
             where: { classroom_id: resolved.classroom.id, user_id: args.userId },
             select: { role: true },
           });
-          const targetIsPrivileged = targetRoles.some(
-            r => r.role === 'OWNER' || r.role === 'TEACHER' || r.role === 'ASSISTANT'
-          );
-          if (targetIsPrivileged && !isOwnerInAny(resolved.roles)) {
+          if (targetRoles.some(r => isPrivilegedRole(r.role)) && !isOwnerInAny(resolved.roles)) {
             throw mcpError(
               'Removing a privileged member requires owner role',
               ErrorCode.InvalidRequest
             );
           }
-
-          // Refuse to remove the classroom's last OWNER.
           if (targetRoles.some(r => r.role === 'OWNER')) {
             const ownerCount = await prisma.classroomMembership.count({
               where: { classroom_id: resolved.classroom.id, role: 'OWNER' },
@@ -103,10 +98,7 @@ export function registerRosterWrite(server: McpServer, ctx: AuthContext): void {
             where: { classroom_id: resolved.classroom.id, user_id: args.userId },
             select: { role: true },
           });
-          const targetIsPrivileged = targetRoles.some(
-            r => r.role === 'OWNER' || r.role === 'TEACHER' || r.role === 'ASSISTANT'
-          );
-          if (targetIsPrivileged && !isOwnerInAny(resolved.roles)) {
+          if (targetRoles.some(r => isPrivilegedRole(r.role)) && !isOwnerInAny(resolved.roles)) {
             throw mcpError(
               'Modifying a privileged member requires owner role',
               ErrorCode.InvalidRequest

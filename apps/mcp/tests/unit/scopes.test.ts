@@ -37,6 +37,12 @@ describe('expandScopes', () => {
     expect(scopes.has('calendar:write')).toBe(true);
     expect(scopes.has('grades:write')).toBe(false);
   });
+
+  it('accepts an already-tokenized array (matches string form)', () => {
+    const fromArray = expandScopes(['openid', 'mcp:readonly']);
+    const fromString = expandScopes('openid mcp:readonly');
+    expect([...fromArray].sort()).toEqual([...fromString].sort());
+  });
 });
 
 describe('hasAnyScope', () => {

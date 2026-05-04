@@ -74,16 +74,11 @@ export function rateLimitMcpEndpoint(req: Request, res: Response, next: NextFunc
 }
 
 /**
- * Wrap an MCP tool handler so it checks the per-(userId, toolName) bucket
- * before invoking the real handler. Without this wrapper, TOOL_CFG overrides
- * never fire — the endpoint-level limiter sees only "POST /mcp", not the
- * tool name (which lives inside the JSON-RPC body).
- *
- * On exhaustion, throws an McpError carrying `retry_after` in `data` so
- * Claude clients can back off intelligently. The default endpoint limiter
- * still runs first, so this is strictly the per-tool tightening layer.
+ * Per-(userId, toolName) bucket check around a tool handler. The endpoint
+ * limiter only sees "POST /mcp" since the tool name lives in the JSON-RPC
+ * body, so this is what makes TOOL_CFG overrides actually fire.
+ * On exhaustion, throws McpError with `retry_after` in `data`.
  */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function wrapToolHandler<TArgs, TResult>(
   toolName: string,
   ctx: AuthContext,
