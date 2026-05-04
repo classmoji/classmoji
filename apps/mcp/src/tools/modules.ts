@@ -3,7 +3,8 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { ClassmojiService } from '@classmoji/services';
 import type { AuthContext } from '../auth/context.ts';
 import { resolveClassroom } from '../context/classroom.ts';
-import { isAdminInAny } from '../auth/roles.ts';
+import { assertModuleInClassroom } from '../context/ownership.ts';
+import { isStaffInAny } from '../auth/roles.ts';
 import { ErrorCode, mcpError } from '../utils/errors.ts';
 import { classroomSlugSchema, ok } from './_helpers.ts';
 
@@ -24,7 +25,7 @@ export function registerModulesWrite(server: McpServer, ctx: AuthContext): void 
     },
     async args => {
       const resolved = await resolveClassroom(ctx, args.classroomSlug);
-      if (!isAdminInAny(resolved.roles))
+      if (!isStaffInAny(resolved.roles))
         throw mcpError('Admin role required', ErrorCode.InvalidRequest);
 
       switch (args.method) {
@@ -42,6 +43,7 @@ export function registerModulesWrite(server: McpServer, ctx: AuthContext): void 
         }
         case 'update': {
           if (!args.moduleId) throw mcpError('update requires moduleId', ErrorCode.InvalidParams);
+          await assertModuleInClassroom(args.moduleId, resolved.classroom.id);
           const updates: Record<string, unknown> = {};
           if (args.title !== undefined) updates.title = args.title;
           if (args.description !== undefined) updates.description = args.description;
@@ -51,11 +53,13 @@ export function registerModulesWrite(server: McpServer, ctx: AuthContext): void 
         }
         case 'publish': {
           if (!args.moduleId) throw mcpError('publish requires moduleId', ErrorCode.InvalidParams);
+          await assertModuleInClassroom(args.moduleId, resolved.classroom.id);
           const result = await ClassmojiService.module.setPublished(args.moduleId, true);
           return ok({ published: { id: result.id, title: result.title } });
         }
         case 'delete': {
           if (!args.moduleId) throw mcpError('delete requires moduleId', ErrorCode.InvalidParams);
+          await assertModuleInClassroom(args.moduleId, resolved.classroom.id);
           await ClassmojiService.module.deleteById(args.moduleId);
           return ok({ deleted: { id: args.moduleId } });
         }

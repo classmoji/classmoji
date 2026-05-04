@@ -4,7 +4,7 @@ import { ClassmojiService } from '@classmoji/services';
 import getPrisma from '@classmoji/database';
 import type { AuthContext } from '../auth/context.ts';
 import { hasAnyScope } from '../auth/scopes.ts';
-import { isAdminInAny, isStudentInAny, isTeachingInAny } from '../auth/roles.ts';
+import { isStaffInAny, isStudentInAny, isTeachingInAny } from '../auth/roles.ts';
 import { getClassroom, jsonResource } from './_helpers.ts';
 
 /**
@@ -39,47 +39,54 @@ export function registerResources(server: McpServer, ctx: AuthContext): void {
   const slugList = ctx.classroomSlugs;
 
   // ─── Cross-classroom ────────────────────────────────────────────────────
-  server.registerResource(
-    'user/me',
-    'classmoji://user/me',
-    {
-      title: 'Your Classmoji profile',
-      description: 'Basic identity for the authenticated user.',
-      mimeType: 'application/json',
-    },
-    async uri => {
-      const user = await prisma.user.findUnique({
-        where: { id: ctx.userId },
-        select: { id: true, login: true, name: true, email: true, image: true },
-      });
-      return jsonResource(uri.href, { user });
-    }
-  );
+  // `user/me` and `user/me/classrooms` are the bootstrap resources Claude
+  // clients fetch immediately after a session opens to ground the agent.
+  // We register them whenever the token includes any identity scope —
+  // `openid` is the OAuth standard for "this is who I am". Without an
+  // identity scope, the token can't see anything here.
+  if (hasAnyScope(ctx.scopes, ['openid', 'profile', 'email'])) {
+    server.registerResource(
+      'user/me',
+      'classmoji://user/me',
+      {
+        title: 'Your Classmoji profile',
+        description: 'Basic identity for the authenticated user.',
+        mimeType: 'application/json',
+      },
+      async uri => {
+        const user = await prisma.user.findUnique({
+          where: { id: ctx.userId },
+          select: { id: true, login: true, name: true, email: true, image: true },
+        });
+        return jsonResource(uri.href, { user });
+      }
+    );
 
-  server.registerResource(
-    'user/me/classrooms',
-    'classmoji://user/me/classrooms',
-    {
-      title: 'Your classroom memberships',
-      description: 'List of classrooms the user is in, with their role in each.',
-      mimeType: 'application/json',
-    },
-    async uri => {
-      const memberships = await prisma.classroomMembership.findMany({
-        where: { user_id: ctx.userId, has_accepted_invite: true },
-        include: { classroom: true },
-      });
-      return jsonResource(uri.href, {
-        classrooms: memberships.map(m => ({
-          slug: m.classroom.slug,
-          name: m.classroom.name,
-          role: m.role,
-          term: m.classroom.term,
-          year: m.classroom.year,
-        })),
-      });
-    }
-  );
+    server.registerResource(
+      'user/me/classrooms',
+      'classmoji://user/me/classrooms',
+      {
+        title: 'Your classroom memberships',
+        description: 'List of classrooms the user is in, with their role in each.',
+        mimeType: 'application/json',
+      },
+      async uri => {
+        const memberships = await prisma.classroomMembership.findMany({
+          where: { user_id: ctx.userId, has_accepted_invite: true },
+          include: { classroom: true },
+        });
+        return jsonResource(uri.href, {
+          classrooms: memberships.map(m => ({
+            slug: m.classroom.slug,
+            name: m.classroom.name,
+            role: m.role,
+            term: m.classroom.term,
+            year: m.classroom.year,
+          })),
+        });
+      }
+    );
+  }
 
   server.registerResource(
     'user/me/deadlines',
@@ -479,7 +486,7 @@ export function registerResources(server: McpServer, ctx: AuthContext): void {
 
   // ─── Repositories — own ─────────────────────────────────────────────────
 
-  if (isStudentInAny(ctx.roles)) {
+  if (isStudentInAny(ctx.roles) && hasAnyScope(ctx.scopes, ['roster:read'])) {
     server.registerResource(
       'repositories-my',
       buildTemplate('classmoji://{slug}/repositories/my'),
@@ -500,7 +507,7 @@ export function registerResources(server: McpServer, ctx: AuthContext): void {
 
   // ─── Admin-only ─────────────────────────────────────────────────────────
 
-  if (isAdminInAny(ctx.roles) && hasAnyScope(ctx.scopes, ['grades:read'])) {
+  if (isStaffInAny(ctx.roles) && hasAnyScope(ctx.scopes, ['grades:read'])) {
     server.registerResource(
       'grades-leaderboard',
       buildTemplate('classmoji://{slug}/grades/leaderboard'),
@@ -511,7 +518,7 @@ export function registerResources(server: McpServer, ctx: AuthContext): void {
       },
       async (uri, { slug }) => {
         const resolved = await getClassroom(ctx, String(slug));
-        if (!isAdminInAny(resolved.roles)) {
+        if (!isStaffInAny(resolved.roles)) {
           return jsonResource(uri.href, { error: 'Admin role required' });
         }
         const memberships = await prisma.classroomMembership.findMany({

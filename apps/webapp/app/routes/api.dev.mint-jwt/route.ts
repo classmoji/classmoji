@@ -22,6 +22,35 @@ if (process.env.NODE_ENV === 'production') {
   );
 }
 
+/**
+ * Even in non-production, this route is locked behind a secret header so
+ * shared dev tunnels / dogfood deploys / preview environments don't expose
+ * arbitrary-user MCP token minting to anyone who can reach the host. Set
+ * `DEV_MINT_KEY` in `.env` to enable; pass it via `x-dev-mint-key` header.
+ *
+ * If unset, the route refuses to issue tokens — fail-closed.
+ */
+function authorize(request: Request): Response | null {
+  const expected = process.env.DEV_MINT_KEY;
+  if (!expected) {
+    return Response.json(
+      {
+        error:
+          'DEV_MINT_KEY is not set. Add it to your .env to enable the dev JWT mint endpoint.',
+      },
+      { status: 503 }
+    );
+  }
+  const provided = request.headers.get('x-dev-mint-key');
+  if (provided !== expected) {
+    return Response.json(
+      { error: 'Missing or invalid x-dev-mint-key header.' },
+      { status: 401 }
+    );
+  }
+  return null;
+}
+
 const ALL_RESOURCE_SCOPES = [
   'assignments:read', 'assignments:write',
   'modules:read', 'modules:write',
@@ -50,6 +79,9 @@ function expandScope(input: string): string {
 }
 
 async function mint(request: Request) {
+  const denied = authorize(request);
+  if (denied) return denied;
+
   const url = new URL(request.url);
   let userId = url.searchParams.get('user_id');
   const scope = url.searchParams.get('scope') ?? 'mcp:full';

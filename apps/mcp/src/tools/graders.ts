@@ -3,7 +3,11 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { ClassmojiService } from '@classmoji/services';
 import type { AuthContext } from '../auth/context.ts';
 import { resolveClassroom } from '../context/classroom.ts';
-import { isAdminInAny } from '../auth/roles.ts';
+import {
+  assertRepositoryAssignmentInClassroom,
+  assertUserMemberOfClassroom,
+} from '../context/ownership.ts';
+import { isStaffInAny } from '../auth/roles.ts';
 import { ErrorCode, mcpError } from '../utils/errors.ts';
 import { classroomSlugSchema, ok } from './_helpers.ts';
 
@@ -25,12 +29,18 @@ export function registerGradersWrite(server: McpServer, ctx: AuthContext): void 
     },
     async args => {
       const resolved = await resolveClassroom(ctx, args.classroomSlug);
-      if (!isAdminInAny(resolved.roles))
+      if (!isStaffInAny(resolved.roles))
         throw mcpError('Admin role required', ErrorCode.InvalidRequest);
+
+      await assertRepositoryAssignmentInClassroom(
+        args.repositoryAssignmentId,
+        resolved.classroom.id
+      );
 
       switch (args.method) {
         case 'assign': {
           if (!args.graderId) throw mcpError('assign requires graderId', ErrorCode.InvalidParams);
+          await assertUserMemberOfClassroom(args.graderId, resolved.classroom.id);
           const result = await ClassmojiService.repositoryAssignmentGrader.addGraderToAssignment(
             args.repositoryAssignmentId,
             args.graderId
@@ -48,6 +58,9 @@ export function registerGradersWrite(server: McpServer, ctx: AuthContext): void 
         case 'bulk_assign': {
           if (!args.graderIds || args.graderIds.length === 0)
             throw mcpError('bulk_assign requires graderIds[]', ErrorCode.InvalidParams);
+          for (const gid of args.graderIds) {
+            await assertUserMemberOfClassroom(gid, resolved.classroom.id);
+          }
           const result = await ClassmojiService.repositoryAssignmentGrader.bulkAssignGraders(
             args.repositoryAssignmentId,
             args.graderIds

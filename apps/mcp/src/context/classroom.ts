@@ -52,8 +52,17 @@ export async function resolveClassroom(
     throw mcpError(`Classroom not found: ${targetSlug}`, ErrorCode.InvalidParams);
   }
 
+  // Filter to accepted memberships only — pending-invite rows must not grant
+  // access. Defense-in-depth: `AuthContext.classroomSlugs` already filters by
+  // `has_accepted_invite: true` at session start, but a direct resource URI
+  // could otherwise reach this code path with a slug the caller hasn't
+  // accepted yet.
   const memberships = await prisma.classroomMembership.findMany({
-    where: { classroom_id: classroom.id, user_id: ctx.userId },
+    where: {
+      classroom_id: classroom.id,
+      user_id: ctx.userId,
+      has_accepted_invite: true,
+    },
   });
   if (memberships.length === 0) {
     throw mcpError('Not a member of this classroom', ErrorCode.InvalidRequest);

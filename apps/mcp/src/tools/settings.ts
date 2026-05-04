@@ -3,7 +3,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { ClassmojiService } from '@classmoji/services';
 import type { AuthContext } from '../auth/context.ts';
 import { resolveClassroom } from '../context/classroom.ts';
-import { isAdminInAny } from '../auth/roles.ts';
+import { isOwnerInAny } from '../auth/roles.ts';
 import { ErrorCode, mcpError } from '../utils/errors.ts';
 import { classroomSlugSchema, ok } from './_helpers.ts';
 
@@ -33,8 +33,8 @@ export function registerClassroomSettingsUpdate(server: McpServer, ctx: AuthCont
     },
     async args => {
       const resolved = await resolveClassroom(ctx, args.classroomSlug);
-      if (!isAdminInAny(resolved.roles))
-        throw mcpError('Admin role required', ErrorCode.InvalidRequest);
+      if (!isOwnerInAny(resolved.roles))
+        throw mcpError('Owner role required', ErrorCode.InvalidRequest);
 
       const { classroomSlug: _slug, ...updates } = args;
       if (Object.keys(updates).length === 0) {

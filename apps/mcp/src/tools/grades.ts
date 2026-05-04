@@ -3,7 +3,12 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { ClassmojiService } from '@classmoji/services';
 import type { AuthContext } from '../auth/context.ts';
 import { resolveClassroom } from '../context/classroom.ts';
-import { isAdminInAny } from '../auth/roles.ts';
+import {
+  assertAssignmentGradeInClassroom,
+  assertRepositoryAssignmentInClassroom,
+  assertUserMemberOfClassroom,
+} from '../context/ownership.ts';
+import { isOwnerInAny, isStaffInAny } from '../auth/roles.ts';
 import { ErrorCode, mcpError } from '../utils/errors.ts';
 import { classroomSlugSchema, ok } from './_helpers.ts';
 
@@ -11,12 +16,13 @@ import { classroomSlugSchema, ok } from './_helpers.ts';
  * `grades_write` — modify grades.
  *
  * Methods (some require admin within the classroom even though tool is registered for teaching team):
- *   add                 — TEACHING_TEAM: add an emoji grade to a repo assignment
- *   remove              — TEACHING_TEAM: remove a single grade by id
- *   remove_all          — ADMIN: remove all grades for a repo assignment
- *   release             — ADMIN: not yet wired (needs assignmentService.releaseGrades)
- *   update_letter       — ADMIN: set a student's letter grade
- *   remap_emojis        — ADMIN: bulk swap emoji symbols across all grades in classroom
+ *   add                 — STAFF (OWNER+TEACHER): add an emoji grade to a repo assignment
+ *   remove              — STAFF: remove a single grade by id
+ *   remove_all          — STAFF: remove all grades for a repo assignment
+ *   release             — STAFF: not yet wired (needs assignmentService.releaseGrades)
+ *   update_letter       — STAFF: set a student's letter grade
+ *   remap_emojis        — OWNER: bulk swap emoji symbols across all grades in classroom
+ *                                 (changes grading policy — owner-only)
  */
 export function registerGradesWrite(server: McpServer, ctx: AuthContext): void {
   server.registerTool(
@@ -42,15 +48,24 @@ export function registerGradesWrite(server: McpServer, ctx: AuthContext): void {
     },
     async args => {
       const resolved = await resolveClassroom(ctx, args.classroomSlug);
-      const adminMethods = new Set(['remove_all', 'update_letter', 'remap_emojis']);
-      if (adminMethods.has(args.method) && !isAdminInAny(resolved.roles)) {
-        throw mcpError(`Method '${args.method}' requires admin role`, ErrorCode.InvalidRequest);
+      // Every grades_write method requires STAFF (OWNER+TEACHER).
+      if (!isStaffInAny(resolved.roles)) {
+        throw mcpError('Staff role required', ErrorCode.InvalidRequest);
+      }
+      // remap_emojis additionally requires OWNER — it changes grading policy
+      // for the whole classroom, not just edits an individual grade.
+      if (args.method === 'remap_emojis' && !isOwnerInAny(resolved.roles)) {
+        throw mcpError("Method 'remap_emojis' requires owner role", ErrorCode.InvalidRequest);
       }
 
       switch (args.method) {
         case 'add': {
           if (!args.repositoryAssignmentId || !args.emoji)
             throw mcpError('add requires repositoryAssignmentId and emoji', ErrorCode.InvalidParams);
+          await assertRepositoryAssignmentInClassroom(
+            args.repositoryAssignmentId,
+            resolved.classroom.id
+          );
           const result = await ClassmojiService.assignmentGrade.addGrade(
             args.repositoryAssignmentId,
             ctx.userId,
@@ -60,18 +75,24 @@ export function registerGradesWrite(server: McpServer, ctx: AuthContext): void {
         }
         case 'remove': {
           if (!args.gradeId) throw mcpError('remove requires gradeId', ErrorCode.InvalidParams);
+          await assertAssignmentGradeInClassroom(args.gradeId, resolved.classroom.id);
           await ClassmojiService.assignmentGrade.removeGrade(args.gradeId);
           return ok({ removed: { id: args.gradeId } });
         }
         case 'remove_all': {
           if (!args.repositoryAssignmentId)
             throw mcpError('remove_all requires repositoryAssignmentId', ErrorCode.InvalidParams);
+          await assertRepositoryAssignmentInClassroom(
+            args.repositoryAssignmentId,
+            resolved.classroom.id
+          );
           await ClassmojiService.assignmentGrade.removeAllGrades(args.repositoryAssignmentId);
           return ok({ removedAll: { repositoryAssignmentId: args.repositoryAssignmentId } });
         }
         case 'update_letter': {
           if (!args.userId || !args.letterGrade)
             throw mcpError('update_letter requires userId + letterGrade', ErrorCode.InvalidParams);
+          await assertUserMemberOfClassroom(args.userId, resolved.classroom.id);
           await ClassmojiService.classroomMembership.update(
             resolved.classroom.id,
             args.userId,

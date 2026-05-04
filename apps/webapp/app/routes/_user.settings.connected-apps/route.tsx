@@ -10,6 +10,7 @@ import {
 
 import type { Route } from './+types/route';
 import { auth, getAuthSession } from '@classmoji/auth/server';
+import getPrisma from '@classmoji/database';
 
 const { Title, Text, Paragraph } = Typography;
 
@@ -77,10 +78,33 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
 export const action = async ({ request }: Route.ActionArgs) => {
   const authData = await getAuthSession(request);
   if (!authData?.userId) return redirect('/sign-in');
+  const userId = authData.userId;
 
   const formData = await request.formData();
   const consentId = String(formData.get('consentId') ?? '');
   if (!consentId) return { ok: false, error: 'Missing consentId' };
+
+  const prisma = getPrisma();
+  // Look up the consent first so we know which clientId's tokens to revoke.
+  // Scoped by userId so a leaked consentId can't revoke someone else's grant.
+  const consent = await prisma.oauthConsent.findFirst({
+    where: { id: consentId, userId },
+    select: { clientId: true },
+  });
+
+  if (consent) {
+    // BetterAuth's deleteOAuthConsent only removes the consent row — derived
+    // refresh + access tokens stay in the DB and remain usable. Delete them
+    // here so the refresh chain breaks immediately. JWT access tokens that
+    // were already minted remain valid until exp (≤1h) because MCP validates
+    // them statelessly against JWKS without consulting these tables.
+    await prisma.oauthAccessToken.deleteMany({
+      where: { userId, clientId: consent.clientId },
+    });
+    await prisma.oauthRefreshToken.deleteMany({
+      where: { userId, clientId: consent.clientId },
+    });
+  }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   await (auth.api as any).deleteOAuthConsent({
@@ -140,6 +164,13 @@ export default function ConnectedAppsRoute({ loaderData }: Route.ComponentProps)
 
       {/* ─── Authorized list ─────────────────────────────────────────────── */}
       <Card title="Authorized applications" bordered>
+        <Alert
+          type="warning"
+          showIcon
+          style={{ marginBottom: 16 }}
+          message="Disconnect takes up to 1 hour to fully take effect"
+          description="Disconnecting immediately revokes the refresh token, so the app can't get a new access token. Existing access tokens remain valid until they expire (max 1 hour). For instant revocation, also revoke the GitHub session that authorized this app."
+        />
         {rows.length === 0 ? (
           <Empty
             description={

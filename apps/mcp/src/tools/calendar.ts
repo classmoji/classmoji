@@ -4,7 +4,8 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { ClassmojiService } from '@classmoji/services';
 import type { AuthContext } from '../auth/context.ts';
 import { resolveClassroom } from '../context/classroom.ts';
-import { isAdminInAny } from '../auth/roles.ts';
+import { assertCalendarEventInClassroom } from '../context/ownership.ts';
+import { isStaffInAny } from '../auth/roles.ts';
 import { ErrorCode, mcpError } from '../utils/errors.ts';
 import { classroomSlugSchema, ok } from './_helpers.ts';
 
@@ -80,7 +81,7 @@ export function registerCalendarWrite(server: McpServer, ctx: AuthContext): void
     },
     async args => {
       const resolved = await resolveClassroom(ctx, args.classroomSlug);
-      if (!isAdminInAny(resolved.roles))
+      if (!isStaffInAny(resolved.roles))
         throw mcpError('Admin role required', ErrorCode.InvalidRequest);
 
       switch (args.method) {
@@ -106,6 +107,7 @@ export function registerCalendarWrite(server: McpServer, ctx: AuthContext): void
         case 'event_update': {
           if (!args.eventId)
             throw mcpError('event_update requires eventId', ErrorCode.InvalidParams);
+          await assertCalendarEventInClassroom(args.eventId, resolved.classroom.id);
           const updates: Record<string, unknown> = {};
           if (args.title !== undefined) updates.title = args.title;
           if (args.description !== undefined) updates.description = args.description;
@@ -118,6 +120,7 @@ export function registerCalendarWrite(server: McpServer, ctx: AuthContext): void
         case 'event_delete': {
           if (!args.eventId)
             throw mcpError('event_delete requires eventId', ErrorCode.InvalidParams);
+          await assertCalendarEventInClassroom(args.eventId, resolved.classroom.id);
           await ClassmojiService.calendar.deleteEvent(args.eventId);
           return ok({ deleted: { id: args.eventId } });
         }

@@ -4,6 +4,7 @@ import getPrisma from '@classmoji/database';
 import type { AuthContext } from '../auth/context.ts';
 import { resolveClassroom } from '../context/classroom.ts';
 import { isTeachingInAny } from '../auth/roles.ts';
+import { wrapToolHandler } from '../middleware/rateLimiter.ts';
 
 interface SearchHit {
   type: 'page' | 'slide' | 'assignment' | 'quiz' | 'event' | 'module';
@@ -42,7 +43,7 @@ export function registerSearchContent(server: McpServer, ctx: AuthContext): void
         limit: z.number().int().min(1).max(50).optional().describe('Max results per type. Default 10.'),
       }).shape,
     },
-    async ({ query, classroomSlug, limit = 10 }) => {
+    wrapToolHandler('search_content', ctx, async ({ query, classroomSlug, limit = 10 }) => {
       const resolved = await resolveClassroom(ctx, classroomSlug);
       const isTeachingTeam = isTeachingInAny(resolved.roles);
       const cid = resolved.classroom.id;
@@ -166,6 +167,6 @@ export function registerSearchContent(server: McpServer, ctx: AuthContext): void
         content: [{ type: 'text', text: JSON.stringify(hits, null, 2) }],
         structuredContent: { query, total: hits.length, hits },
       };
-    }
+    })
   );
 }

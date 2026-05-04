@@ -1,6 +1,6 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { AuthContext } from '../auth/context.ts';
-import { isAdminInAny, isStudentInAny, isTeachingInAny } from '../auth/roles.ts';
+import { isStaffInAny, isStudentInAny, isTeachingInAny } from '../auth/roles.ts';
 import { hasAnyScope } from '../auth/scopes.ts';
 
 import { registerClassroomsList, registerSetActiveClassroom } from './classrooms.ts';
@@ -62,9 +62,13 @@ export const TOOL_SCOPES = {
 } as const satisfies Record<string, readonly string[]>;
 
 export function registerTools(server: McpServer, ctx: AuthContext): void {
-  // Cross-classroom — gated only on identity / generic read scope
-  registerClassroomsList(server, ctx);
-  registerSetActiveClassroom(server, ctx);
+  // Cross-classroom — bootstrap tools require an identity scope. A token with
+  // *only* resource scopes (e.g. `calendar:read`) and no identity claim should
+  // not enumerate the user's classroom list.
+  if (hasAnyScope(ctx.scopes, TOOL_SCOPES.classrooms_list)) {
+    registerClassroomsList(server, ctx);
+    registerSetActiveClassroom(server, ctx);
+  }
   if (hasAnyScope(ctx.scopes, TOOL_SCOPES.assignments_upcoming))
     registerAssignmentsUpcoming(server, ctx);
 
@@ -89,7 +93,7 @@ export function registerTools(server: McpServer, ctx: AuthContext): void {
   }
 
   // Admin
-  if (isAdminInAny(ctx.roles)) {
+  if (isStaffInAny(ctx.roles)) {
     if (hasAnyScope(ctx.scopes, TOOL_SCOPES.assignments_write))
       registerAssignmentsWrite(server, ctx);
     if (hasAnyScope(ctx.scopes, TOOL_SCOPES.modules_write))

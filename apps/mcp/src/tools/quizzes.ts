@@ -4,7 +4,8 @@ import { ClassmojiService } from '@classmoji/services';
 import getPrisma from '@classmoji/database';
 import type { AuthContext } from '../auth/context.ts';
 import { resolveClassroom } from '../context/classroom.ts';
-import { isAdminInAny } from '../auth/roles.ts';
+import { assertQuizInClassroom } from '../context/ownership.ts';
+import { isStaffInAny } from '../auth/roles.ts';
 import { ErrorCode, mcpError } from '../utils/errors.ts';
 import { classroomSlugSchema, ok } from './_helpers.ts';
 
@@ -32,7 +33,7 @@ export function registerQuizzesWrite(server: McpServer, ctx: AuthContext): void 
     },
     async args => {
       const resolved = await resolveClassroom(ctx, args.classroomSlug);
-      if (!isAdminInAny(resolved.roles))
+      if (!isStaffInAny(resolved.roles))
         throw mcpError('Admin role required', ErrorCode.InvalidRequest);
 
       switch (args.method) {
@@ -51,6 +52,7 @@ export function registerQuizzesWrite(server: McpServer, ctx: AuthContext): void 
         }
         case 'update': {
           if (!args.quizId) throw mcpError('update requires quizId', ErrorCode.InvalidParams);
+          await assertQuizInClassroom(args.quizId, resolved.classroom.id);
           const updates: Record<string, unknown> = {};
           if (args.name !== undefined) updates.name = args.name;
           if (args.subject !== undefined) updates.subject = args.subject;
@@ -61,11 +63,13 @@ export function registerQuizzesWrite(server: McpServer, ctx: AuthContext): void 
         }
         case 'publish': {
           if (!args.quizId) throw mcpError('publish requires quizId', ErrorCode.InvalidParams);
+          await assertQuizInClassroom(args.quizId, resolved.classroom.id);
           const result = await ClassmojiService.quiz.publish(args.quizId);
           return ok({ published: { id: result.id, name: result.name } });
         }
         case 'delete': {
           if (!args.quizId) throw mcpError('delete requires quizId', ErrorCode.InvalidParams);
+          await assertQuizInClassroom(args.quizId, resolved.classroom.id);
           await getPrisma().quiz.delete({ where: { id: args.quizId } });
           return ok({ deleted: { id: args.quizId } });
         }

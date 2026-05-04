@@ -1,4 +1,6 @@
 import type { Request, Response, NextFunction } from 'express';
+import { ErrorCode, mcpError } from '../utils/errors.ts';
+import type { AuthContext } from '../auth/context.ts';
 
 /**
  * In-memory token-bucket rate limiter, keyed per `(userId, toolName)`.
@@ -58,7 +60,7 @@ export function checkRateLimit(userId: string, toolName: string): { allowed: boo
 
 /**
  * Express-level rate limit on the /mcp endpoint itself (per-user, all tools).
- * Tool-specific limits are applied inside individual handlers via checkRateLimit.
+ * Tool-specific limits are applied inside individual handlers via wrapToolHandler.
  */
 export function rateLimitMcpEndpoint(req: Request, res: Response, next: NextFunction): void {
   const userId = req.auth?.extra?.userId ?? req.ip ?? 'anonymous';
@@ -69,4 +71,33 @@ export function rateLimitMcpEndpoint(req: Request, res: Response, next: NextFunc
     return;
   }
   next();
+}
+
+/**
+ * Wrap an MCP tool handler so it checks the per-(userId, toolName) bucket
+ * before invoking the real handler. Without this wrapper, TOOL_CFG overrides
+ * never fire — the endpoint-level limiter sees only "POST /mcp", not the
+ * tool name (which lives inside the JSON-RPC body).
+ *
+ * On exhaustion, throws an McpError carrying `retry_after` in `data` so
+ * Claude clients can back off intelligently. The default endpoint limiter
+ * still runs first, so this is strictly the per-tool tightening layer.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function wrapToolHandler<TArgs, TResult>(
+  toolName: string,
+  ctx: AuthContext,
+  handler: (args: TArgs) => Promise<TResult>
+): (args: TArgs) => Promise<TResult> {
+  return async (args: TArgs) => {
+    const r = checkRateLimit(ctx.userId, toolName);
+    if (!r.allowed) {
+      throw mcpError(
+        `Rate limit exceeded for ${toolName}. Retry after ${r.retryAfterSec ?? 60}s.`,
+        ErrorCode.InvalidRequest,
+        { retry_after: r.retryAfterSec ?? 60, tool: toolName }
+      );
+    }
+    return handler(args);
+  };
 }

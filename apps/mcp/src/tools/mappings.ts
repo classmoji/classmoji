@@ -4,7 +4,7 @@ import { ClassmojiService } from '@classmoji/services';
 import getPrisma from '@classmoji/database';
 import type { AuthContext } from '../auth/context.ts';
 import { resolveClassroom } from '../context/classroom.ts';
-import { isAdminInAny } from '../auth/roles.ts';
+import { isOwnerInAny } from '../auth/roles.ts';
 import { ErrorCode, mcpError } from '../utils/errors.ts';
 import { classroomSlugSchema, ok } from './_helpers.ts';
 
@@ -38,8 +38,8 @@ export function registerMappingsWrite(server: McpServer, ctx: AuthContext): void
     },
     async args => {
       const resolved = await resolveClassroom(ctx, args.classroomSlug);
-      if (!isAdminInAny(resolved.roles))
-        throw mcpError('Admin role required', ErrorCode.InvalidRequest);
+      if (!isOwnerInAny(resolved.roles))
+        throw mcpError('Owner role required', ErrorCode.InvalidRequest);
 
       switch (args.method) {
         case 'emoji_save': {

@@ -50,6 +50,13 @@
     "hook:start": {
       "dependsOn": ["^db:generate"]
     },
+    "mcp:dev": {
+      "persistent": true,
+      "cache": false
+    },
+    "mcp:start": {
+      "dependsOn": ["^db:generate"]
+    },
     "dev": {
       "persistent": true,
       "cache": false
@@ -153,6 +160,9 @@
     "INFISICAL_CLIENT_ID",
     "INFISICAL_CLIENT_SECRET",
     "INFISICAL_PROJECT_ID",
-    "INFISICAL_HOST"
+    "INFISICAL_HOST",
+    "MCP_PUBLIC_URL",
+    "MCP_AUDIENCE",
+    "DEV_MINT_KEY"
   ]
 }

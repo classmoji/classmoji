@@ -4,7 +4,11 @@ import { ClassmojiService } from '@classmoji/services';
 import getPrisma from '@classmoji/database';
 import type { AuthContext } from '../auth/context.ts';
 import { resolveClassroom } from '../context/classroom.ts';
-import { isAdminInAny } from '../auth/roles.ts';
+import {
+  assertAssignmentInClassroom,
+  assertModuleInClassroom,
+} from '../context/ownership.ts';
+import { isStaffInAny } from '../auth/roles.ts';
 import { ErrorCode, mcpError } from '../utils/errors.ts';
 
 export function registerAssignmentsUpcoming(server: McpServer, ctx: AuthContext): void {
@@ -106,7 +110,7 @@ export function registerAssignmentsWrite(server: McpServer, ctx: AuthContext): v
     },
     async args => {
       const resolved = await resolveClassroom(ctx, args.classroomSlug);
-      if (!isAdminInAny(resolved.roles)) {
+      if (!isStaffInAny(resolved.roles)) {
         throw mcpError('Admin role required for this classroom', ErrorCode.InvalidRequest);
       }
 
@@ -114,6 +118,7 @@ export function registerAssignmentsWrite(server: McpServer, ctx: AuthContext): v
         case 'create': {
           if (!args.moduleId || !args.title)
             throw mcpError('create requires moduleId and title', ErrorCode.InvalidParams);
+          await assertModuleInClassroom(args.moduleId, resolved.classroom.id);
           const result = await ClassmojiService.assignment.create({
             module_id: args.moduleId,
             title: args.title,
@@ -126,6 +131,7 @@ export function registerAssignmentsWrite(server: McpServer, ctx: AuthContext): v
         case 'update': {
           if (!args.assignmentId)
             throw mcpError('update requires assignmentId', ErrorCode.InvalidParams);
+          await assertAssignmentInClassroom(args.assignmentId, resolved.classroom.id);
           const updates: Record<string, unknown> = {};
           if (args.title !== undefined) updates.title = args.title;
           if (args.description !== undefined) updates.description = args.description;
@@ -138,6 +144,7 @@ export function registerAssignmentsWrite(server: McpServer, ctx: AuthContext): v
         case 'publish': {
           if (!args.assignmentId)
             throw mcpError('publish requires assignmentId', ErrorCode.InvalidParams);
+          await assertAssignmentInClassroom(args.assignmentId, resolved.classroom.id);
           const result = await ClassmojiService.assignment.update(args.assignmentId, {
             is_published: true,
           });
@@ -146,6 +153,7 @@ export function registerAssignmentsWrite(server: McpServer, ctx: AuthContext): v
         case 'delete': {
           if (!args.assignmentId)
             throw mcpError('delete requires assignmentId', ErrorCode.InvalidParams);
+          await assertAssignmentInClassroom(args.assignmentId, resolved.classroom.id);
           await ClassmojiService.assignment.deleteById(args.assignmentId);
           return ok({ deleted: { id: args.assignmentId } });
         }

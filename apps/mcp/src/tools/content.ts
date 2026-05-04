@@ -4,7 +4,9 @@ import { ClassmojiService } from '@classmoji/services';
 import getPrisma from '@classmoji/database';
 import type { AuthContext } from '../auth/context.ts';
 import { resolveClassroom } from '../context/classroom.ts';
-import { isAdminInAny, isTeachingInAny } from '../auth/roles.ts';
+import { assertPageInClassroom } from '../context/ownership.ts';
+import { isStaffInAny, isTeachingInAny } from '../auth/roles.ts';
+import { wrapToolHandler } from '../middleware/rateLimiter.ts';
 import { ErrorCode, mcpError } from '../utils/errors.ts';
 import { classroomSlugSchema, ok } from './_helpers.ts';
 
@@ -27,7 +29,7 @@ export function registerPageContentRead(server: McpServer, ctx: AuthContext): vo
         include_content: z.boolean().optional(),
       }).shape,
     },
-    async args => {
+    wrapToolHandler('page_content_read', ctx, async args => {
       const resolved = await resolveClassroom(ctx, args.classroomSlug);
       const isTeachingTeam = isTeachingInAny(resolved.roles);
       const page = await ClassmojiService.page.findById(args.pageId);
@@ -48,7 +50,7 @@ export function registerPageContentRead(server: McpServer, ctx: AuthContext): vo
       // Note: BlockNote content fetching from GitHub requires gitOrganization
       // context which is non-trivial to assemble here; v1 returns metadata.
       return ok({ page: meta });
-    }
+    })
   );
 }
 
@@ -67,7 +69,7 @@ export function registerSlideContentRead(server: McpServer, ctx: AuthContext): v
         slideId: z.string().uuid(),
       }).shape,
     },
-    async args => {
+    wrapToolHandler('slide_content_read', ctx, async args => {
       const resolved = await resolveClassroom(ctx, args.classroomSlug);
       const isTeachingTeam = isTeachingInAny(resolved.roles);
       const slide = await getPrisma().slide.findUnique({ where: { id: args.slideId } });
@@ -87,7 +89,7 @@ export function registerSlideContentRead(server: McpServer, ctx: AuthContext): v
           updated_at: slide.updated_at.toISOString(),
         },
       });
-    }
+    })
   );
 }
 
@@ -112,7 +114,7 @@ export function registerPagesWrite(server: McpServer, ctx: AuthContext): void {
     },
     async args => {
       const resolved = await resolveClassroom(ctx, args.classroomSlug);
-      if (!isAdminInAny(resolved.roles))
+      if (!isStaffInAny(resolved.roles))
         throw mcpError('Admin role required', ErrorCode.InvalidRequest);
 
       switch (args.method) {
@@ -131,6 +133,7 @@ export function registerPagesWrite(server: McpServer, ctx: AuthContext): void {
         }
         case 'update': {
           if (!args.pageId) throw mcpError('update requires pageId', ErrorCode.InvalidParams);
+          await assertPageInClassroom(args.pageId, resolved.classroom.id);
           // page.service.update only accepts title / content_path / show_in_student_menu
           const updates: { title?: string } = {};
           if (args.title !== undefined) updates.title = args.title;
@@ -139,6 +142,7 @@ export function registerPagesWrite(server: McpServer, ctx: AuthContext): void {
         }
         case 'delete': {
           if (!args.pageId) throw mcpError('delete requires pageId', ErrorCode.InvalidParams);
+          await assertPageInClassroom(args.pageId, resolved.classroom.id);
           await ClassmojiService.page.deletePage(args.pageId);
           return ok({ deleted: { id: args.pageId } });
         }

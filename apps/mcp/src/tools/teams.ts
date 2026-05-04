@@ -3,7 +3,8 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { ClassmojiService } from '@classmoji/services';
 import type { AuthContext } from '../auth/context.ts';
 import { resolveClassroom } from '../context/classroom.ts';
-import { isAdminInAny } from '../auth/roles.ts';
+import { assertUserMemberOfClassroom } from '../context/ownership.ts';
+import { isStaffInAny } from '../auth/roles.ts';
 import { ErrorCode, mcpError } from '../utils/errors.ts';
 import { classroomSlugSchema, ok } from './_helpers.ts';
 
@@ -25,7 +26,7 @@ export function registerTeamsWrite(server: McpServer, ctx: AuthContext): void {
     },
     async args => {
       const resolved = await resolveClassroom(ctx, args.classroomSlug);
-      if (!isAdminInAny(resolved.roles))
+      if (!isStaffInAny(resolved.roles))
         throw mcpError('Admin role required', ErrorCode.InvalidRequest);
 
       switch (args.method) {
@@ -52,6 +53,7 @@ export function registerTeamsWrite(server: McpServer, ctx: AuthContext): void {
             resolved.classroom.id
           );
           if (!team) throw mcpError('Team not found', ErrorCode.InvalidRequest);
+          await assertUserMemberOfClassroom(args.userId, resolved.classroom.id);
           const result = await ClassmojiService.teamMembership.addMemberToTeam(team.id, args.userId);
           return ok({ added: { teamSlug: args.teamSlug, userId: args.userId, result } });
         }

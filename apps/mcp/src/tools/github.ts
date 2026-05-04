@@ -5,6 +5,7 @@ import { getValidGitHubToken } from '@classmoji/auth/server';
 import type { AuthContext } from '../auth/context.ts';
 import { resolveClassroom } from '../context/classroom.ts';
 import { isTeachingInAny } from '../auth/roles.ts';
+import { wrapToolHandler } from '../middleware/rateLimiter.ts';
 import { ErrorCode, mcpError } from '../utils/errors.ts';
 import { classroomSlugSchema, ok } from './_helpers.ts';
 
@@ -48,7 +49,7 @@ export function registerGithubFeedback(server: McpServer, ctx: AuthContext): voi
         studentId: z.string().uuid().optional().describe('Teaching team can pass a student ID; defaults to caller'),
       }).shape,
     },
-    async args => {
+    wrapToolHandler('github_feedback', ctx, async args => {
       const resolved = await resolveClassroom(ctx, args.classroomSlug);
       const targetStudent = args.studentId ?? ctx.userId;
       if (targetStudent !== ctx.userId && !isTeachingInAny(resolved.roles)) {
@@ -117,7 +118,7 @@ export function registerGithubFeedback(server: McpServer, ctx: AuthContext): voi
       }
 
       return ok({ classroom: resolved.classroom.slug, total: feedback.length, feedback });
-    }
+    })
   );
 }
 
