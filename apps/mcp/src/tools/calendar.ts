@@ -42,7 +42,7 @@ export function registerCalendarIcsUrl(server: McpServer, ctx: AuthContext): voi
           ErrorCode.InternalError
         );
       }
-      const webappUrl = process.env.WEBAPP_URL ?? 'http://localhost:3001';
+      const webappUrl = process.env.WEBAPP_URL ?? 'http://localhost:3000';
       const url = `${webappUrl}/api/calendar/${resolved.classroom.slug}/${sig}.ics`;
       return ok({
         url,

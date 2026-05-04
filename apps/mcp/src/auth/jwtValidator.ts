@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { createRemoteJWKSet, jwtVerify } from 'jose';
 import type { Request as ExpressRequest, Response, NextFunction } from 'express';
 
-const WEBAPP_URL = process.env.WEBAPP_URL ?? 'http://localhost:3001';
+const WEBAPP_URL = process.env.WEBAPP_URL ?? 'http://localhost:3000';
 const MCP_AUDIENCE = process.env.MCP_AUDIENCE ?? 'http://localhost:8100/mcp';
 const MCP_PUBLIC_URL = process.env.MCP_PUBLIC_URL ?? 'http://localhost:8100';
 
@@ -41,6 +41,12 @@ declare module 'express-serve-static-core' {
       extra?: {
         userId: string;
         tokenId: string;
+        /**
+         * Custom claim from /api/dev/mint-jwt (and future BetterAuth
+         * customAccessTokenClaims). When present, restrict the user's
+         * effective roles for this session to the listed subset.
+         */
+        cmRoles?: string[];
       };
     };
   }
@@ -90,6 +96,12 @@ export async function requireValidJwt(
     const clientId = typeof payload.azp === 'string' ? payload.azp : 'unknown';
     const scopeStr = typeof payload.scope === 'string' ? payload.scope : '';
 
+    // Custom Classmoji claim: dev "view-as" role filter. Optional.
+    const cmRolesClaim = (payload as Record<string, unknown>).cm_roles;
+    const cmRoles = Array.isArray(cmRolesClaim)
+      ? cmRolesClaim.filter((r): r is string => typeof r === 'string')
+      : undefined;
+
     req.auth = {
       token,
       clientId,
@@ -99,6 +111,7 @@ export async function requireValidJwt(
       extra: {
         userId: String(payload.sub),
         tokenId: tokenHash,
+        ...(cmRoles && cmRoles.length > 0 ? { cmRoles } : {}),
       },
     };
     next();

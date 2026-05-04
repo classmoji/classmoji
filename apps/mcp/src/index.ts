@@ -69,7 +69,8 @@ app.post('/mcp', requireValidJwt, rateLimitMcpEndpoint, async (req, res) => {
       req.auth!.extra!.userId,
       req.auth!.extra!.tokenId,
       req.auth!.clientId === 'unknown' ? null : req.auth!.clientId,
-      req.auth!.scopes.join(' ')
+      req.auth!.scopes.join(' '),
+      req.auth!.extra!.cmRoles
     );
 
     const transport = new StreamableHTTPServerTransport({
@@ -134,7 +135,7 @@ app.listen(PORT, () => {
   });
   process.stdout.write(
     `[mcp] Listening on http://localhost:${PORT}\n` +
-      `[mcp] Webapp (AS):  ${process.env.WEBAPP_URL ?? 'http://localhost:3001'}\n` +
+      `[mcp] Webapp (AS):  ${process.env.WEBAPP_URL ?? 'http://localhost:3000'}\n` +
       `[mcp] Public URL:   ${process.env.MCP_PUBLIC_URL ?? `http://localhost:${PORT}`}\n` +
       `[mcp] Audience:     ${process.env.MCP_AUDIENCE ?? `http://localhost:${PORT}/mcp`}\n`
   );

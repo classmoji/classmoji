@@ -1,6 +1,6 @@
 import type { Request, Response } from 'express';
 
-const WEBAPP_URL = process.env.WEBAPP_URL ?? 'http://localhost:3001';
+const WEBAPP_URL = process.env.WEBAPP_URL ?? 'http://localhost:3000';
 const MCP_AUDIENCE = process.env.MCP_AUDIENCE ?? 'http://localhost:8100/mcp';
 
 /**

@@ -56,6 +56,20 @@ async function mint(request: Request) {
   const audience = url.searchParams.get('aud') ?? process.env.MCP_AUDIENCE ?? 'http://localhost:8100/mcp';
   const expiresIn = Number(url.searchParams.get('expires_in') ?? 3600);
 
+  // Optional: dev "view-as" — filter the session's effective roles to a
+  // subset of the user's actual classroom memberships. Useful when one user
+  // holds OWNER+ASSISTANT+STUDENT in the dev classroom and you want to
+  // simulate the student-only experience.
+  //   ?roles=STUDENT
+  //   ?roles=ASSISTANT,STUDENT
+  const rolesParam = url.searchParams.get('roles');
+  const viewAsRoles = rolesParam
+    ? rolesParam
+        .split(',')
+        .map(r => r.trim().toUpperCase())
+        .filter(r => ['OWNER', 'TEACHER', 'ASSISTANT', 'STUDENT'].includes(r))
+    : null;
+
   // If no user_id provided, fall back to current session user
   if (!userId) {
     const session = await getAuthSession(request);
@@ -74,9 +88,9 @@ async function mint(request: Request) {
 
   // Match oauth-provider's actual token shape: iss is `${baseURL}/api/auth`,
   // not just baseURL. signJWT's default uses baseURL so we set iss explicitly.
-  const webappUrl = process.env.WEBAPP_URL ?? 'http://localhost:3001';
+  const webappUrl = process.env.WEBAPP_URL ?? 'http://localhost:3000';
   const now = Math.floor(Date.now() / 1000);
-  const payload = {
+  const payload: Record<string, unknown> = {
     sub: userId,
     aud: [audience],
     azp: 'dev-mint-client',
@@ -86,6 +100,11 @@ async function mint(request: Request) {
     iat: now,
     exp: now + expiresIn,
   };
+  // Custom non-reserved claim — Classmoji-specific role filter for view-as.
+  // Read by apps/mcp/src/auth/context.ts → resolveAuthContext.
+  if (viewAsRoles && viewAsRoles.length > 0) {
+    payload.cm_roles = viewAsRoles;
+  }
 
   // BetterAuth's jwt() plugin: signJWT signs with the configured kty/alg
   // (default EdDSA Ed25519) using the jwks table key.

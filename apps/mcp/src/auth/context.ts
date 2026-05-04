@@ -28,24 +28,39 @@ export interface AuthContext {
  * tool-list filtering and Zod enum validation of `classroomSlug` arguments.
  * The per-classroom role check still happens inside each tool handler via
  * `resolveClassroom()` (defense in depth).
+ *
+ * If `viewAsRoles` is provided (from a `cm_roles` JWT claim — set by the
+ * dev mint endpoint or by a future BetterAuth customAccessTokenClaims hook),
+ * restrict the session's effective roles to the listed subset. Lets one
+ * user with multiple roles in a classroom test the experience of a more
+ * restricted role without changing memberships.
  */
 export async function resolveAuthContext(
   userId: string,
   tokenId: string,
   oauthClientId: string | null,
-  scopeString: string
+  scopeString: string,
+  viewAsRoles?: string[]
 ): Promise<AuthContext> {
   const memberships = await getPrisma().classroomMembership.findMany({
     where: { user_id: userId, has_accepted_invite: true },
     include: { classroom: { select: { slug: true } } },
   });
 
+  const allRoles = new Set(memberships.map(m => m.role));
+  // Filter to the requested subset, but only roles the user actually holds.
+  // (You can't view-as a role you don't have.)
+  const effectiveRoles =
+    viewAsRoles && viewAsRoles.length > 0
+      ? new Set([...allRoles].filter(r => viewAsRoles.includes(r)))
+      : allRoles;
+
   return {
     userId,
     accessTokenId: tokenId,
     oauthClientId,
     scopes: expandScopes(scopeString),
-    roles: new Set(memberships.map(m => m.role)),
+    roles: effectiveRoles,
     classroomSlugs: [...new Set(memberships.map(m => m.classroom.slug))],
     activeSlug: null,
   };
