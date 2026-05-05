@@ -31,7 +31,9 @@ export function CalloutSlot({
     : { opacity: 0, y: -8 };
   const exit = reducedMotion ? { opacity: 0, y: 0 } : { opacity: 0, y: -4 };
 
-  const wrapperClass = className ? `w-full ${className}` : 'w-full';
+  const baseClass =
+    'pointer-events-none fixed top-4 left-1/2 z-50 w-full max-w-2xl -translate-x-1/2 px-4';
+  const wrapperClass = className ? `${baseClass} ${className}` : baseClass;
 
   return (
     <div className={wrapperClass}>
@@ -43,6 +45,7 @@ export function CalloutSlot({
             animate={{ opacity: 1, y: 0 }}
             exit={exit}
             transition={{ duration: 0.18, ease: 'easeOut' }}
+            className="pointer-events-auto"
           >
             <CalloutCard
               payload={active}
