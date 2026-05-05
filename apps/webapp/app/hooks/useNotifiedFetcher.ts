@@ -1,65 +1,74 @@
 import { useFetcher } from 'react-router';
 import { useEffect, useRef } from 'react';
-import { toast, type ToastPosition } from 'react-toastify';
+import { useCallout } from '@classmoji/ui-components';
 
 export const useNotifiedFetcher = () => {
-  const toastIds = useRef(new Map()); // Track multiple toasts by ID
+  const calloutIds = useRef(new Map<string, string>()); // Track callouts by action key
+  const callout = useCallout();
   const fetcher = useFetcher();
-
-  const dismissToast = (action: string) => {
-    toast.dismiss(toastIds.current.get(action));
-  };
 
   useEffect(() => {
     if (fetcher.data?.success) {
-      const id = toastIds.current.get(fetcher.data.action);
+      const action = fetcher.data.action;
+      const id = action ? calloutIds.current.get(action) : undefined;
       if (id) {
-        toast.update(id, {
-          render: fetcher.data.success,
-          type: 'success',
-          isLoading: false,
-          autoClose: 2000,
+        callout.update(id, {
+          variant: 'success',
+          title: fetcher.data.success,
+          autoDismissMs: 2000,
+        });
+        calloutIds.current.delete(action);
+      } else {
+        // Fallback if no progress callout was shown
+        callout.show({
+          variant: 'success',
+          title: fetcher.data.success,
+          autoDismissMs: 2000,
         });
       }
-
       fetcher.reset();
     } else if (fetcher.data?.error) {
-      const id = toastIds.current.get(fetcher.data.action);
+      const action = fetcher.data.action;
+      const id = action ? calloutIds.current.get(action) : undefined;
       if (id) {
-        toast.update(id, {
-          render: fetcher.data.error,
-          type: 'error',
-          isLoading: false,
-          autoClose: 4000,
+        callout.update(id, {
+          variant: 'error',
+          title: fetcher.data.error,
         });
+        calloutIds.current.delete(action);
       } else {
-        // Fallback if no loading toast was shown
-        toast.error(fetcher.data.error);
+        // Fallback if no progress callout was shown
+        callout.show({
+          variant: 'error',
+          title: fetcher.data.error,
+        });
       }
       fetcher.reset();
     } else if (fetcher.data?.info) {
-      toast.info(fetcher.data.info, {
-        toastId: 'info',
+      callout.show({
+        variant: 'info',
+        title: fetcher.data.info,
       });
       fetcher.reset();
     }
   }, [fetcher.state, fetcher.data]);
 
-  const notify = (action: string, message?: string, position: ToastPosition = 'bottom-center') => {
-    if (toastIds.current.has(action)) {
-      dismissToast(action);
+  const notify = (action: string, message?: string, _position?: unknown) => {
+    // Suppress unused-arg lint for backward-compatible signature.
+    void _position;
+
+    const existingId = calloutIds.current.get(action);
+    if (existingId) {
+      callout.dismiss(existingId);
     }
 
-    // Create a new toast and store its ID
-    const id = toast(message, {
-      type: 'info',
-      autoClose: false,
-      isLoading: true,
-      position,
-      toastId: action,
+    const id = callout.show({
+      variant: 'progress',
+      title: message ?? '…',
+      persistent: true,
     });
 
-    toastIds.current.set(action, id); // Store ID by action type
+    calloutIds.current.set(action, id);
   };
 
   const reset = () => {
