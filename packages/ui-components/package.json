@@ -15,10 +15,14 @@
   },
   "peerDependencies": {
     "react": "^18.0.0 || ^19.0.0",
-    "react-dom": "^18.0.0 || ^19.0.0"
+    "react-dom": "^18.0.0 || ^19.0.0",
+    "framer-motion": "^12.23.22"
   },
   "dependencies": {
     "@codesandbox/sandpack-react": "^2.20.0",
     "@codesandbox/sandpack-themes": "^2.0.21"
+  },
+  "devDependencies": {
+    "framer-motion": "^12.23.22"
   }
 }

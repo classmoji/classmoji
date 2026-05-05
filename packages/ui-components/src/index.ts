@@ -46,6 +46,16 @@ export type { EmojiScaleProps, EmojiGrade } from './EmojiScale/index.ts';
 export { IconButton } from './IconButton/index.ts';
 export type { IconButtonProps } from './IconButton/index.ts';
 
+// Callout system
+export { CalloutProvider, CalloutSlot, useCallout } from './Callout/index.ts';
+export type {
+  CalloutVariant,
+  CalloutAction,
+  CalloutPayload,
+  CalloutHandle,
+  ActiveCallout,
+} from './Callout/index.ts';
+
 // Icon library
 export {
   Icon,

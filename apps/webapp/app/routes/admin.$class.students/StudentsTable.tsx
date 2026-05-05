@@ -5,7 +5,7 @@ import { useState } from 'react';
 
 import { RequireRole, TableActionButtons, UserThumbnailView } from '~/components';
 import { useGlobalFetcher } from '~/hooks';
-import { toast } from 'react-toastify';
+import { useCallout } from '@classmoji/ui-components';
 import { ActionTypes } from '~/constants';
 import { authClient } from '@classmoji/auth/client';
 
@@ -32,10 +32,11 @@ const StudentsTable = ({ students, query }: StudentsTableProps) => {
   const navigate = useNavigate();
   const { fetcher, notify } = useGlobalFetcher();
   const [impersonating, setImpersonating] = useState(false);
+  const callout = useCallout();
 
   const handleImpersonate = async (student: Student) => {
     if (!student.login) {
-      toast.error('Student has not accepted invite.');
+      callout.show({ variant: 'error', title: 'Student has not accepted invite.' });
       return;
     }
 
@@ -55,7 +56,10 @@ const StudentsTable = ({ students, query }: StudentsTableProps) => {
       navigate(`/student/${classSlug}`);
     } catch (error: unknown) {
       console.error('Impersonation failed:', error);
-      toast.error(error instanceof Error ? error.message : 'Failed to view as student');
+      callout.show({
+        variant: 'error',
+        title: error instanceof Error ? error.message : 'Failed to view as student',
+      });
     } finally {
       setImpersonating(false);
     }
@@ -161,7 +165,7 @@ const StudentsTable = ({ students, query }: StudentsTableProps) => {
             onView={() => {
               if (student.login) {
                 navigate(`${pathname}/${student.login}`);
-              } else toast.error('Student has not accepted invite.');
+              } else callout.show({ variant: 'error', title: 'Student has not accepted invite.' });
             }}
           >
             <RequireRole roles={['OWNER']}>

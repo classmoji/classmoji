@@ -14,12 +14,12 @@ import axios from 'axios';
 
 import React, { useEffect } from 'react';
 import dayjs from 'dayjs';
-import { ToastContainer, cssTransition } from 'react-toastify';
 import { ConfigProvider, theme } from 'antd';
 import { IconMoodSad } from '@tabler/icons-react';
 import { auth as triggerAuth } from '@trigger.dev/sdk';
 
 import { GitHubProvider, ClassmojiService } from '@classmoji/services';
+import { CalloutProvider } from '@classmoji/ui-components';
 import { auth, getAuthSession } from '@classmoji/auth/server';
 import { isAIAgentConfigured } from '~/utils/aiFeatures.server';
 import type { Route } from './+types/root';
@@ -44,17 +44,10 @@ dayjs.extend(isSameOrBefore);
 
 import getPrisma from '@classmoji/database';
 import '@fontsource/quicksand/700.css';
-import 'react-toastify/dist/ReactToastify.css';
 import '~/styles/tailwind.css';
 import '~/styles/global.css';
 
 React.useLayoutEffect = React.useEffect;
-
-const ToastFade = cssTransition({
-  enter: 'toast-fade-in',
-  exit: 'toast-fade-out',
-  collapse: false,
-});
 
 export const meta = () => {
   return [{ title: 'Classmoji' }];
@@ -276,8 +269,16 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
   };
 };
 
-const App = ({ loaderData }: Route.ComponentProps) => {
+// Provides FetcherContext; must live inside CalloutProvider since
+// useNotifiedFetcher reads useCallout().
+const FetcherProvider = ({ children }: { children: React.ReactNode }) => {
   const { fetcher, notify } = useNotifiedFetcher();
+  return (
+    <FetcherContext.Provider value={{ fetcher, notify }}>{children}</FetcherContext.Provider>
+  );
+};
+
+const App = ({ loaderData }: Route.ComponentProps) => {
   const { user, session } = loaderData;
   const { isDarkMode, accent } = useDarkMode();
   const { pathname } = useLocation();
@@ -441,30 +442,18 @@ const App = ({ loaderData }: Route.ComponentProps) => {
             )}
           >
             <UserContext.Provider value={{ user }}>
-              <FetcherContext.Provider value={{ fetcher, notify }}>
-                <ToastContainer
-                  position="bottom-center"
-                  autoClose={4000}
-                  hideProgressBar
-                  newestOnTop={false}
-                  closeOnClick={false}
-                  pauseOnFocusLoss
-                  draggable={false}
-                  pauseOnHover
-                  icon={false}
-                  theme="light"
-                  transition={ToastFade}
-                />
-
-                <ImpersonationBanner
-                  key={(session as Record<string, Record<string, string>>)?.session?.id}
-                  session={session}
-                />
-                <Outlet />
-                <SyllabusBotRoot />
-                <ScrollRestoration />
-                <Scripts />
-              </FetcherContext.Provider>
+              <CalloutProvider>
+                <FetcherProvider>
+                  <ImpersonationBanner
+                    key={(session as Record<string, Record<string, string>>)?.session?.id}
+                    session={session}
+                  />
+                  <Outlet />
+                  <SyllabusBotRoot />
+                  <ScrollRestoration />
+                  <Scripts />
+                </FetcherProvider>
+              </CalloutProvider>
             </UserContext.Provider>
           </ConfigProvider>
         </RenderErrorBoundary>

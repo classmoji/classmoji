@@ -1,12 +1,12 @@
 import { Modal, Form, Select, Radio } from 'antd';
 import { useState, useEffect } from 'react';
-import { toast } from 'react-toastify';
 import { useNavigate, useLocation, useParams } from 'react-router';
 import { nanoid } from 'nanoid';
 import { auth } from '@trigger.dev/sdk';
 
 import { useDisclosure, useGlobalFetcher } from '~/hooks';
 import { ClassmojiService } from '@classmoji/services';
+import { useCallout } from '@classmoji/ui-components';
 import { assignGradersToAssignmentsHandler } from './utils';
 import { requireClassroomAdmin } from '~/utils/routeAuth.server';
 import type { Route } from './+types/route';
@@ -34,6 +34,7 @@ const AssignGraders = ({ loaderData }: Route.ComponentProps) => {
   const navigate = useNavigate();
   const { fetcher } = useGlobalFetcher();
   const { pathname } = useLocation();
+  const callout = useCallout();
 
   useEffect(() => {
     show();
@@ -51,12 +52,12 @@ const AssignGraders = ({ loaderData }: Route.ComponentProps) => {
 
   const onSubmit = () => {
     if (!selectedAssignmentId) {
-      toast.error('Please select an assignment');
+      callout.show({ variant: 'error', title: 'Please select an assignment' });
       return;
     }
 
     if (method === 'EXISTING' && !templateAssignmentId) {
-      toast.error('Please select a template assignment');
+      callout.show({ variant: 'error', title: 'Please select a template assignment' });
       return;
     }
 

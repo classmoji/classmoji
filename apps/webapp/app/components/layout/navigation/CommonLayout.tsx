@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react';
 import { IconFileText, IconMenu2, IconLogout, IconApple } from '@tabler/icons-react';
 import { signOut } from '@classmoji/auth/client';
 import useLocalStorageState from 'use-local-storage-state';
-import { Logo } from '@classmoji/ui-components';
+import { Logo, CalloutSlot } from '@classmoji/ui-components';
 import { ProTierFeature, RequireRole, RecentViewers } from '~/components';
 import { useRoleSettings, useSubscription, useRole, useDarkMode } from '~/hooks';
 import { routes, routeCategories, DEMO_ORG_ID, getThemeByKey } from '~/constants';
@@ -501,6 +501,7 @@ const CommonLayout = ({
                 : 'px-4 pt-14 pb-4 sm:px-6 lg:px-8 lg:pt-6 lg:pb-6 min-h-full'
             }
           >
+            <CalloutSlot />
             {children}
           </div>
         </div>

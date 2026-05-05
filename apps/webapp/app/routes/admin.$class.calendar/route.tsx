@@ -3,8 +3,8 @@ import { Button, Modal } from 'antd';
 import { PlusOutlined } from '@ant-design/icons';
 import invariant from 'tiny-invariant';
 import { data, useFetcher, useParams } from 'react-router';
-import { toast } from 'react-toastify';
 import { ClassmojiService } from '@classmoji/services';
+import { useCallout } from '@classmoji/ui-components';
 import getPrisma from '@classmoji/database';
 import { assertClassroomAccess } from '~/utils/helpers';
 import { buildCalendarUrl, getCalendarDateRange } from '~/utils/calendar.server';
@@ -316,6 +316,7 @@ const AdminCalendar = ({ loaderData }: Route.ComponentProps) => {
   const { class: classSlug } = useParams();
   const fetcher = useFetcher();
   const eventsFetcher = useFetcher();
+  const callout = useCallout();
 
   const [addModalOpen, setAddModalOpen] = useState(false);
   const [editModalOpen, setEditModalOpen] = useState(false);
@@ -352,7 +353,7 @@ const AdminCalendar = ({ loaderData }: Route.ComponentProps) => {
         eventsFetcher.load(`?year=${currentViewYear}&month=${currentViewMonth}`);
       } else if (fetcher.data.error) {
         setOptimisticEvents(null); // Revert on error
-        toast.error(fetcher.data.error);
+        callout.show({ variant: 'error', title: fetcher.data.error });
       }
     }
   }, [fetcher.data, fetcher.state]);
@@ -393,7 +394,7 @@ const AdminCalendar = ({ loaderData }: Route.ComponentProps) => {
     const canDragEvent = isAdmin || Number(event.created_by) === Number(userId);
 
     if (!canDragEvent) {
-      toast.error('You can only move your own events');
+      callout.show({ variant: 'error', title: 'You can only move your own events' });
       return;
     }
 

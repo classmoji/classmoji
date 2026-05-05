@@ -1,11 +1,11 @@
 import { Form, Input, Button, Space, Typography } from 'antd';
 import { useState } from 'react';
-import { toast } from 'react-toastify';
 import { Octokit } from '@octokit/rest';
 
 import { IconMail, IconUser, IconBrandGithubCopilot } from '@tabler/icons-react';
 
 import { useGlobalFetcher } from '~/hooks';
+import { useCallout } from '@classmoji/ui-components';
 import { ActionTypes } from '~/constants';
 
 const { Text } = Typography;
@@ -20,6 +20,7 @@ const FormAssistant = ({ close, token }: FormAssistantProps) => {
   const [form] = Form.useForm();
   const [loading, setLoading] = useState(false);
   const [verifying, setVerifying] = useState(false);
+  const callout = useCallout();
   const octokit = new Octokit({ auth: token });
 
   const validateGitHubUser = async (login: string) => {
@@ -46,7 +47,7 @@ const FormAssistant = ({ close, token }: FormAssistantProps) => {
       const user = await validateGitHubUser(login);
 
       if (!user) {
-        toast.error('GitHub login is required');
+        callout.show({ variant: 'error', title: 'GitHub login is required' });
         setLoading(false);
         return;
       }
@@ -72,14 +73,17 @@ const FormAssistant = ({ close, token }: FormAssistantProps) => {
 
       close();
     } catch (error: unknown) {
-      toast.error(error instanceof Error ? error.message : 'Failed to verify GitHub user');
+      callout.show({
+        variant: 'error',
+        title: error instanceof Error ? error.message : 'Failed to verify GitHub user',
+      });
     } finally {
       setLoading(false);
     }
   };
 
   const onFinishFailed = () => {
-    toast.error('Please fill in all required fields');
+    callout.show({ variant: 'error', title: 'Please fill in all required fields' });
   };
 
   const handleGitHubLoginChange = async (e: React.ChangeEvent<HTMLInputElement>) => {

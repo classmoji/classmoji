@@ -1,10 +1,10 @@
 import { Input, InputNumber, Button, Table, Card, Form, Popconfirm } from 'antd';
-import { toast } from 'react-toastify';
 import { useState } from 'react';
 
 import { DeleteOutlined } from '@ant-design/icons';
 
 import { SettingSection } from '~/components';
+import { useCallout } from '@classmoji/ui-components';
 import { useGlobalFetcher } from '~/hooks';
 
 interface LetterGradeMap {
@@ -25,6 +25,7 @@ const LetterGradeMapping = ({ letterGradeMappings }: LetterGradeMappingProps) =>
   const [editValue, setEditValue] = useState<number | null>(null);
 
   const { notify, fetcher } = useGlobalFetcher();
+  const callout = useCallout();
 
   // Handle inline cell update
   const handleCellUpdate = (letterGradeKey: string, newMinGrade: number | null) => {
@@ -51,7 +52,10 @@ const LetterGradeMapping = ({ letterGradeMappings }: LetterGradeMappingProps) =>
 
   const createLetterGradeMapping = () => {
     if (!letterGrade || !minGrade) {
-      return toast.error('Please enter a letter grade and a minimum numeric value.');
+      return callout.show({
+        variant: 'error',
+        title: 'Please enter a letter grade and a minimum numeric value.',
+      });
     }
 
     notify('Creating letter grade mapping...');

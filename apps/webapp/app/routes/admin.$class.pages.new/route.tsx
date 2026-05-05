@@ -2,9 +2,9 @@ import { useState, useEffect } from 'react';
 import { useNavigate, useFetcher } from 'react-router';
 import { Form, Button, Alert, Modal, Tabs } from 'antd';
 import { FileTextOutlined, UploadOutlined } from '@ant-design/icons';
-import { toast } from 'react-toastify';
 import { assertClassroomAccess } from '~/utils/helpers';
 import { ClassmojiService, getGitProvider } from '@classmoji/services';
+import { useCallout } from '@classmoji/ui-components';
 import { ContentService } from '@classmoji/content';
 import { processMarkdownImport } from '~/utils/markdownImporter.server';
 import { wrapHtmlContent } from '~/utils/htmlWrapper';
@@ -279,6 +279,7 @@ export default function NewPage({ loaderData }: Route.ComponentProps) {
   const fetcher = useFetcher();
   const navigate = useNavigate();
   const { opened, close } = useRouteDrawer({});
+  const callout = useCallout();
   const [form] = Form.useForm();
   const [activeTab, setActiveTab] = useState('create-blank');
   const [importFiles, setImportFiles] = useState<{ markdown: File | null; images: File[] }>({
@@ -313,7 +314,7 @@ export default function NewPage({ loaderData }: Route.ComponentProps) {
   // Redirect on success (single page only - batch handled separately)
   useEffect(() => {
     if (fetcher.state === 'idle' && fetcher.data?.created && fetcher.data.page && !batchProgress) {
-      toast.success('Page created successfully!');
+      callout.show({ variant: 'success', title: 'Page created successfully!' });
       navigate(`/admin/${classroom.slug}/pages/${fetcher.data.page.id}`);
     }
   }, [fetcher.state, fetcher.data, navigate, classroom.slug, batchProgress]);
@@ -337,7 +338,7 @@ export default function NewPage({ loaderData }: Route.ComponentProps) {
       const initResult = await initResponse.json();
 
       if (initResult.error) {
-        toast.error(initResult.error);
+        callout.show({ variant: 'error', title: initResult.error });
         setBatchProgress(null);
         return;
       }
@@ -388,16 +389,23 @@ export default function NewPage({ loaderData }: Route.ComponentProps) {
       setBatchProgress(null);
 
       if (errors.length > 0) {
-        toast.warning(
-          `Imported ${total - errors.length} of ${total} pages. ${errors.length} failed.`
-        );
+        callout.show({
+          variant: 'error',
+          title: `Imported ${total - errors.length} of ${total} pages. ${errors.length} failed.`,
+        });
       } else {
-        toast.success(`Successfully imported ${total} page${total !== 1 ? 's' : ''}!`);
+        callout.show({
+          variant: 'success',
+          title: `Successfully imported ${total} page${total !== 1 ? 's' : ''}!`,
+        });
       }
       navigate(`/admin/${classroom.slug}/pages`);
     } catch (err: unknown) {
       console.error('Batch import failed:', err);
-      toast.error('Batch import failed: ' + (err instanceof Error ? err.message : String(err)));
+      callout.show({
+        variant: 'error',
+        title: 'Batch import failed: ' + (err instanceof Error ? err.message : String(err)),
+      });
       setBatchProgress(null);
     }
   };

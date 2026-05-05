@@ -1,10 +1,10 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect } from 'react';
 import { useFetcher, Link, Outlet, useSearchParams, useNavigate } from 'react-router';
 import { Table, Button, Input, Select, Switch, Tooltip } from 'antd';
 import { IconPlus, IconEyeOff, IconLock, IconWorld, IconMenu2 } from '@tabler/icons-react';
-import { toast } from 'react-toastify';
 import { assertClassroomAccess } from '~/utils/helpers';
 import { ClassmojiService } from '@classmoji/services';
+import { useCallout } from '@classmoji/ui-components';
 import getPrisma from '@classmoji/database';
 import { TableActionButtons, RecentViewers } from '~/components';
 import type { Route } from './+types/route';
@@ -129,39 +129,34 @@ export default function AdminPages({ loaderData }: Route.ComponentProps) {
   const fetcher = useFetcher();
   const [searchParams, setSearchParams] = useSearchParams();
   const [searchText, setSearchText] = useState('');
-  const toastIdRef = useRef<string | number | null>(null);
   const navigate = useNavigate();
+  const callout = useCallout();
 
   // Show toast notification after delete (from redirect)
   useEffect(() => {
     if (searchParams.get('deleted') === 'true') {
-      toast.success('Page deleted successfully!');
+      callout.show({ variant: 'success', title: 'Page deleted successfully!' });
       // Remove the query param to prevent showing toast on refresh
       setSearchParams({}, { replace: true });
     }
   }, [searchParams, setSearchParams]);
 
-  // Show loading toast when deleting
+  // Show success/error callout when delete completes
   useEffect(() => {
-    if (fetcher.state === 'submitting') {
-      toastIdRef.current = toast.loading('Deleting page...');
-    } else if (fetcher.state === 'idle' && toastIdRef.current) {
-      if (fetcher.data?.success) {
-        toast.update(toastIdRef.current, {
-          render: fetcher.data.message || 'Page deleted successfully!',
-          type: 'success',
-          isLoading: false,
-          autoClose: 3000,
+    if (fetcher.state === 'idle' && fetcher.data) {
+      if (fetcher.data.success) {
+        callout.show({
+          variant: 'success',
+          title: fetcher.data.message || 'Page deleted successfully!',
+          autoDismissMs: 3000,
         });
-      } else if (fetcher.data?.error) {
-        toast.update(toastIdRef.current, {
-          render: fetcher.data.error || 'Failed to delete page',
-          type: 'error',
-          isLoading: false,
-          autoClose: 3000,
+      } else if (fetcher.data.error) {
+        callout.show({
+          variant: 'error',
+          title: fetcher.data.error || 'Failed to delete page',
+          autoDismissMs: 3000,
         });
       }
-      toastIdRef.current = null;
     }
   }, [fetcher.state, fetcher.data]);
 
