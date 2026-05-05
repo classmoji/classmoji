@@ -14,7 +14,6 @@ import axios from 'axios';
 
 import React, { useEffect } from 'react';
 import dayjs from 'dayjs';
-import { ToastContainer, cssTransition } from 'react-toastify';
 import { ConfigProvider, theme } from 'antd';
 import { IconMoodSad } from '@tabler/icons-react';
 import { auth as triggerAuth } from '@trigger.dev/sdk';
@@ -45,17 +44,10 @@ dayjs.extend(isSameOrBefore);
 
 import getPrisma from '@classmoji/database';
 import '@fontsource/quicksand/700.css';
-import 'react-toastify/dist/ReactToastify.css';
 import '~/styles/tailwind.css';
 import '~/styles/global.css';
 
 React.useLayoutEffect = React.useEffect;
-
-const ToastFade = cssTransition({
-  enter: 'toast-fade-in',
-  exit: 'toast-fade-out',
-  collapse: false,
-});
 
 export const meta = () => {
   return [{ title: 'Classmoji' }];
@@ -452,20 +444,6 @@ const App = ({ loaderData }: Route.ComponentProps) => {
             <UserContext.Provider value={{ user }}>
               <CalloutProvider>
                 <FetcherProvider>
-                  <ToastContainer
-                    position="bottom-center"
-                    autoClose={4000}
-                    hideProgressBar
-                    newestOnTop={false}
-                    closeOnClick={false}
-                    pauseOnFocusLoss
-                    draggable={false}
-                    pauseOnHover
-                    icon={false}
-                    theme="light"
-                    transition={ToastFade}
-                  />
-
                   <ImpersonationBanner
                     key={(session as Record<string, Record<string, string>>)?.session?.id}
                     session={session}

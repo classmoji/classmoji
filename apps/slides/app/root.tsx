@@ -9,7 +9,6 @@ import {
   useRouteLoaderData,
 } from 'react-router';
 import React, { useEffect } from 'react';
-import { ToastContainer } from 'react-toastify';
 
 import useStore from '~/store';
 import type { SlideUser } from '~/store';
@@ -23,7 +22,6 @@ export function useUser() {
   return useRouteLoaderData('root');
 }
 
-import 'react-toastify/dist/ReactToastify.css';
 import '~/styles/tailwind.css';
 import '~/styles/global.css';
 
@@ -75,17 +73,6 @@ const App = () => {
         />
       </head>
       <body className="bg-white dark:bg-gray-900" suppressHydrationWarning>
-        <ToastContainer
-          position="top-center"
-          autoClose={3000}
-          hideProgressBar
-          newestOnTop={false}
-          closeOnClick
-          pauseOnFocusLoss
-          draggable
-          pauseOnHover
-          theme="colored"
-        />
         <Outlet />
         <ScrollRestoration />
         <Scripts />
