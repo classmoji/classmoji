@@ -10,6 +10,7 @@
     "web:start": "react-router-serve build/server/index.js",
     "web:test": "npx playwright test",
     "web:test:ui": "npx playwright test --ui",
+    "web:test:unit": "vitest run",
     "test": "npx playwright test",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
@@ -117,7 +118,8 @@
     "vite": "^6.4.1",
     "vite-env-only": "^3.0.3",
     "vite-plugin-devtools-json": "^0.2.1",
-    "vite-tsconfig-paths": "^4.3.2"
+    "vite-tsconfig-paths": "^4.3.2",
+    "vitest": "^4.1.5"
   },
   "engines": {
     "node": ">=22.0.0"

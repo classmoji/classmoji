@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { IconChevronLeft, IconChevronRight } from '@tabler/icons-react';
+import { initialsFor, avatarTintFor } from './leaderboardHelpers';
 
 interface LeaderboardStudent {
   id: string;
@@ -12,24 +13,6 @@ interface LeaderboardStudent {
 interface LeaderboardProps {
   students: LeaderboardStudent[];
 }
-
-const initialsFor = (s: LeaderboardStudent) => {
-  const base = (s.name || s.login || '?').trim();
-  const parts = base.split(/\s+/);
-  return (parts[0]?.[0] || '?') + (parts[1]?.[0] || '');
-};
-
-const avatarTintFor = (i: number) => {
-  const tints = [
-    'bg-stone-900 text-white',
-    'bg-emerald-100 text-emerald-700',
-    'bg-violet-100 text-violet-700',
-    'bg-rose-100 text-rose-700',
-    'bg-sky-100 text-sky-700',
-    'bg-amber-100 text-amber-700',
-  ];
-  return tints[i % tints.length];
-};
 
 const PAGE_SIZE = 5;
 

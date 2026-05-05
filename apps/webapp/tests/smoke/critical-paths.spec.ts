@@ -13,9 +13,38 @@ import { TEST_CLASSROOM, TEST_GIT_ORG } from '../helpers/env.helpers';
 test.describe('Critical Path: Authentication', () => {
   test('can access organization selection after login', async ({ authenticatedPage: page }) => {
     await page.goto('/select-organization');
-    await expect(page.getByText('Your Classes')).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Your classes' })).toBeVisible();
+
+    const appBar = page.locator('header');
+    await expect(appBar.getByRole('img', { name: 'Classmoji' })).toBeVisible();
+    await expect(appBar.getByRole('img', { name: 'Classmoji' })).toHaveAttribute(
+      'viewBox',
+      '0 0 279 51'
+    );
+    await expect(appBar.getByRole('img', { name: 'Classmoji' })).toHaveAttribute('height', '24');
+    await expect(appBar.getByRole('button', { name: 'Classes' })).toBeVisible();
+    await expect(appBar.getByRole('button', { name: 'Inbox' })).toBeVisible();
+    await expect(appBar.getByRole('button', { name: 'Explore' })).toBeVisible();
+    await expect(appBar.getByText(/Search classes, assignments, students/i)).toHaveCount(0);
+    await expect(appBar.locator('kbd')).toHaveCount(0);
+
     // Cards show git org login (@classmoji-development), use .first() since it appears multiple times
     await expect(page.getByText(TEST_GIT_ORG, { exact: false }).first()).toBeVisible();
+  });
+
+  test('user settings shell shows compact full brand logo', async ({ authenticatedPage: page }) => {
+    await page.goto('/settings/general');
+    await waitForDataLoad(page);
+
+    await expect(page.getByRole('heading', { name: 'Account Settings' })).toBeVisible();
+
+    const brandLink = page.getByRole('link', { name: 'Classmoji' });
+    await expect(brandLink).toHaveAttribute('href', '/select-organization');
+
+    const logo = brandLink.getByRole('img', { name: 'Classmoji' });
+    await expect(logo).toBeVisible();
+    await expect(logo).toHaveAttribute('viewBox', '0 0 279 51');
+    await expect(logo).toHaveAttribute('height', '24');
   });
 
   test('can navigate to owner dashboard', async ({ authenticatedPage: page }) => {

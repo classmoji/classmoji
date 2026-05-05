@@ -1,4 +1,4 @@
-import { Logo, IconSearch, IconSupport, IconChevron } from '@classmoji/ui-components';
+import { Logo, IconSupport, IconChevron } from '@classmoji/ui-components';
 import ProfileDropdown from '~/components/features/profile/ProfileDropdown';
 import { getInitials } from '~/utils/hue';
 import {
@@ -45,10 +45,10 @@ export function AppBar({ user, notifications, unreadCount, membershipRoles }: Ap
         position: 'sticky',
         top: 0,
         zIndex: 10,
-        display: 'grid',
-        gridTemplateColumns: 'auto 1fr auto',
+        display: 'flex',
+        justifyContent: 'space-between',
         alignItems: 'center',
-        columnGap: 24,
+        gap: 24,
         padding: '0 28px',
         height: 60,
         borderBottom: '1px solid var(--line)',
@@ -70,43 +70,6 @@ export function AppBar({ user, notifications, unreadCount, membershipRoles }: Ap
             Explore
           </button>
         </nav>
-      </div>
-
-      {/* Middle: search pill, centered in remaining space with a cap */}
-      <div style={{ display: 'flex', justifyContent: 'center' }}>
-        <div
-          style={{
-            width: '100%',
-            maxWidth: 520,
-            display: 'flex',
-            alignItems: 'center',
-            gap: 10,
-            height: 36,
-            padding: '0 12px',
-            border: '1px solid var(--line-2)',
-            borderRadius: 8,
-            background: 'var(--bg-0)',
-            color: 'var(--ink-3)',
-            fontSize: 13.5,
-          }}
-        >
-          <IconSearch size={16} />
-          <span>Search classes, assignments, students…</span>
-          <kbd
-            style={{
-              marginLeft: 'auto',
-              fontFamily: 'var(--font-mono)',
-              fontSize: 10.5,
-              padding: '1px 5px',
-              borderRadius: 3,
-              background: 'var(--bg-3)',
-              color: 'var(--ink-2)',
-              border: '1px solid var(--line)',
-            }}
-          >
-            ⌘K
-          </kbd>
-        </div>
       </div>
 
       {/* Right group: help / bell / user */}

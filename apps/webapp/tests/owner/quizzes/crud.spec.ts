@@ -20,8 +20,7 @@ test.describe('Quiz List', () => {
   });
 
   test('displays quiz list page with correct heading', async ({ authenticatedPage: page }) => {
-    // Page heading is "Quiz Management"
-    await expect(page.getByText('Quiz Management')).toBeVisible();
+    await expect(page.getByRole('heading', { level: 1, name: 'Quizzes' })).toBeVisible();
   });
 
   test('shows create quiz button', async ({ authenticatedPage: page }) => {
