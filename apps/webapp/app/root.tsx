@@ -269,8 +269,8 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
   };
 };
 
-// Local wrapper that calls useNotifiedFetcher inside CalloutProvider so that
-// future migrations of useNotifiedFetcher to useCallout() see a valid context.
+// Provides FetcherContext; must live inside CalloutProvider since
+// useNotifiedFetcher reads useCallout().
 const FetcherProvider = ({ children }: { children: React.ReactNode }) => {
   const { fetcher, notify } = useNotifiedFetcher();
   return (

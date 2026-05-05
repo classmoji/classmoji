@@ -13,15 +13,30 @@ import type {
   CalloutHandle,
   CalloutPayload,
 } from './types.ts';
-import { VARIANT_CONFIG } from './variants.ts';
+import { VARIANT_CONFIG } from './variants.tsx';
 
-const DEFAULT_SLOT_ID = 'default';
+export const DEFAULT_CALLOUT_SLOT_ID = 'default';
 const BUFFER_TIMEOUT_MS = 500;
 const PROGRESS_TO_SUCCESS_DISMISS_MS = 2000;
 
 interface BufferedEntry {
   payload: ActiveCallout;
   timer: ReturnType<typeof setTimeout>;
+}
+
+function shallowEqualPayload(a: ActiveCallout, b: ActiveCallout): boolean {
+  return (
+    a.id === b.id &&
+    a.slot === b.slot &&
+    a.variant === b.variant &&
+    a.title === b.title &&
+    a.message === b.message &&
+    a.progress === b.progress &&
+    a.icon === b.icon &&
+    a.action === b.action &&
+    a.persistent === b.persistent &&
+    a.autoDismissMs === b.autoDismissMs
+  );
 }
 
 export interface CalloutSlotInternal {
@@ -38,11 +53,7 @@ interface SlotInternalContextValue {
   registerSlot: (slotId: string) => void;
   unregisterSlot: (slotId: string) => void;
   dismiss: (id: string) => void;
-  /**
-   * Monotonically increasing tick — slots subscribe to it (via context) so
-   * they re-render when the registry changes. Stored on the context value
-   * so the provider can bump it without changing the dispatcher identities.
-   */
+  // Bumped on every registry mutation so slots subscribed to this context re-render.
   tick: number;
 }
 
@@ -55,19 +66,14 @@ export interface CalloutProviderProps {
 }
 
 export function CalloutProvider({ children }: CalloutProviderProps) {
-  // Single tick to trigger re-renders when registry changes.
   const [tick, setTick] = useState(0);
   const bumpTick = useCallback(() => {
     setTick((t) => t + 1);
   }, []);
 
-  // Per-slot active payload.
   const slotsRef = useRef<Map<string, ActiveCallout | null>>(new Map());
-  // Currently mounted slot ids.
   const mountedSlotsRef = useRef<Set<string>>(new Set());
-  // Payloads waiting for their target slot to mount.
   const bufferedByTargetSlotRef = useRef<Map<string, BufferedEntry>>(new Map());
-  // Auto-dismiss timers, keyed by callout id.
   const dismissTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(
     new Map(),
   );
@@ -89,7 +95,7 @@ export function CalloutProvider({ children }: CalloutProviderProps) {
     [],
   );
 
-  // Forward-declare dismiss so scheduleAutoDismiss can call it.
+  // dismiss is defined below; scheduleAutoDismiss reaches it through this ref.
   const dismissRef = useRef<(id: string) => void>(() => {});
 
   const scheduleAutoDismiss = useCallback(
@@ -138,15 +144,13 @@ export function CalloutProvider({ children }: CalloutProviderProps) {
     return null;
   }, []);
 
-  // ---------- Public dispatchers (stable via refs) ----------
-
   const show = useCallback(
     (payload: CalloutPayload): string => {
       const id =
         typeof crypto !== 'undefined' && 'randomUUID' in crypto
           ? crypto.randomUUID()
           : `callout_${Date.now()}_${Math.random().toString(36).slice(2)}`;
-      const targetSlotId = payload.slot ?? DEFAULT_SLOT_ID;
+      const targetSlotId = payload.slot ?? DEFAULT_CALLOUT_SLOT_ID;
       const active: ActiveCallout = { ...payload, id, slot: targetSlotId };
 
       if (mountedSlotsRef.current.has(targetSlotId)) {
@@ -169,20 +173,20 @@ export function CalloutProvider({ children }: CalloutProviderProps) {
           return;
         }
         if (
-          targetSlotId !== DEFAULT_SLOT_ID &&
-          mountedSlotsRef.current.has(DEFAULT_SLOT_ID)
+          targetSlotId !== DEFAULT_CALLOUT_SLOT_ID &&
+          mountedSlotsRef.current.has(DEFAULT_CALLOUT_SLOT_ID)
         ) {
           const fallback: ActiveCallout = {
             ...entry.payload,
-            slot: DEFAULT_SLOT_ID,
+            slot: DEFAULT_CALLOUT_SLOT_ID,
           };
-          placeInSlot(DEFAULT_SLOT_ID, fallback);
+          placeInSlot(DEFAULT_CALLOUT_SLOT_ID, fallback);
           bumpTick();
           return;
         }
         if (process.env.NODE_ENV !== 'production') {
           console.warn(
-            `[Callout] Dropped callout id=${entry.payload.id}: no slot "${targetSlotId}" or "${DEFAULT_SLOT_ID}" mounted within ${BUFFER_TIMEOUT_MS}ms`,
+            `[Callout] Dropped callout id=${entry.payload.id}: no slot "${targetSlotId}" or "${DEFAULT_CALLOUT_SLOT_ID}" mounted within ${BUFFER_TIMEOUT_MS}ms`,
           );
         }
       }, BUFFER_TIMEOUT_MS);
@@ -198,12 +202,13 @@ export function CalloutProvider({ children }: CalloutProviderProps) {
 
   const update = useCallback(
     (id: string, partial: Partial<CalloutPayload>): void => {
-      // Live in a slot?
       const slotId = findSlotForId(id);
       if (slotId !== null) {
         const current = slotsRef.current.get(slotId);
         if (!current) return;
         const merged: ActiveCallout = { ...current, ...partial, id, slot: slotId };
+
+        if (shallowEqualPayload(current, merged)) return;
 
         const isProgressToSuccessMorph =
           current.variant === 'progress' &&
@@ -225,21 +230,18 @@ export function CalloutProvider({ children }: CalloutProviderProps) {
         return;
       }
 
-      // Buffered?
       const bufferTarget = findBufferForId(id);
       if (bufferTarget !== null) {
         const entry = bufferedByTargetSlotRef.current.get(bufferTarget);
         if (entry === undefined) return;
-        const merged: ActiveCallout = {
+        // `slot` in partial is ignored mid-flight — it would strand the buffer timer.
+        entry.payload = {
           ...entry.payload,
           ...partial,
           id,
-          // Don't let `slot` in partial change the buffer target mid-flight.
           slot: entry.payload.slot,
         };
-        entry.payload = merged;
       }
-      // Otherwise: no-op (defensive — already dismissed).
     },
     [
       bumpTick,
@@ -273,13 +275,12 @@ export function CalloutProvider({ children }: CalloutProviderProps) {
     [bumpTick, clearDismissTimer, findBufferForId, findSlotForId],
   );
 
-  // Keep dismissRef pointed at the latest dismiss closure.
   useEffect(() => {
     dismissRef.current = dismiss;
   }, [dismiss]);
 
-  // ---------- Stable handle (refs so consumers don't re-render) ----------
-
+  // Mirror dispatchers into refs so the public handle (built once below) stays
+  // stable across renders — consumers of useCallout() do not re-render on tick.
   const showRef = useRef(show);
   const updateRef = useRef(update);
   const dismissPublicRef = useRef(dismiss);
@@ -302,15 +303,12 @@ export function CalloutProvider({ children }: CalloutProviderProps) {
     [],
   );
 
-  // ---------- Slot registration (for CalloutSlot) ----------
-
   const registerSlot = useCallback(
     (slotId: string) => {
       mountedSlotsRef.current.add(slotId);
       if (!slotsRef.current.has(slotId)) {
         slotsRef.current.set(slotId, null);
       }
-      // If something is buffered for this slot, deliver immediately.
       const buffered = bufferedByTargetSlotRef.current.get(slotId);
       if (buffered !== undefined) {
         clearTimeout(buffered.timer);
@@ -352,7 +350,6 @@ export function CalloutProvider({ children }: CalloutProviderProps) {
     [getActive, registerSlot, unregisterSlot, dismiss, tick],
   );
 
-  // Clean up all timers on full provider unmount.
   useEffect(() => {
     const dismissTimers = dismissTimersRef.current;
     const bufferEntries = bufferedByTargetSlotRef.current;
@@ -373,11 +370,7 @@ export function CalloutProvider({ children }: CalloutProviderProps) {
   );
 }
 
-/**
- * Internal hook for `CalloutSlot` (Task 4) to register itself, read its
- * active payload, and dismiss callouts. Not for app code — app code uses
- * `useCallout()` from Task 5.
- */
+// Internal hook used by CalloutSlot. App code should use useCallout() instead.
 export function useCalloutSlotInternal(slotId: string): CalloutSlotInternal {
   const ctx = useContext(SlotInternalContext);
   if (ctx === null) {
@@ -385,19 +378,10 @@ export function useCalloutSlotInternal(slotId: string): CalloutSlotInternal {
       'useCalloutSlotInternal must be used inside a <CalloutProvider>',
     );
   }
-  // Subscribing to ctx (which carries `tick`) ensures the slot re-renders
-  // whenever the registry changes.
-  const active = ctx.getActive(slotId);
-  const registerSlot = useCallback(() => {
-    ctx.registerSlot(slotId);
-  }, [ctx, slotId]);
-  const unregisterSlot = useCallback(() => {
-    ctx.unregisterSlot(slotId);
-  }, [ctx, slotId]);
   return {
-    active,
-    registerSlot,
-    unregisterSlot,
+    active: ctx.getActive(slotId),
+    registerSlot: () => ctx.registerSlot(slotId),
+    unregisterSlot: () => ctx.unregisterSlot(slotId),
     dismiss: ctx.dismiss,
   };
 }

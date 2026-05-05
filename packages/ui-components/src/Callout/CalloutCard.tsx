@@ -1,37 +1,12 @@
-import type { ReactNode } from 'react';
 import { Button } from '../Button/Button.tsx';
 import { IconButton } from '../IconButton/IconButton.tsx';
-import {
-  IconArrowRotate,
-  IconBell,
-  IconCheck,
-  IconX,
-} from '../icons/index.tsx';
-import type { ActiveCallout, CalloutVariant } from './types.ts';
-import { VARIANT_CONFIG } from './variants.ts';
+import { IconX } from '../icons/index.tsx';
+import type { ActiveCallout } from './types.ts';
+import { VARIANT_CONFIG } from './variants.tsx';
 
 export interface CalloutCardProps {
   payload: ActiveCallout;
   onDismiss: () => void;
-}
-
-function defaultIconFor(variant: CalloutVariant): ReactNode {
-  switch (variant) {
-    case 'success':
-      return <IconCheck size={18} />;
-    case 'error':
-      return <IconX size={18} />;
-    case 'info':
-      return <IconBell size={18} />;
-    case 'progress':
-      return (
-        <IconArrowRotate
-          size={18}
-          className="animate-spin"
-          style={{ animationDuration: '1.6s' }}
-        />
-      );
-  }
 }
 
 export function CalloutCard({ payload, onDismiss }: CalloutCardProps) {
@@ -42,10 +17,9 @@ export function CalloutCard({ payload, onDismiss }: CalloutCardProps) {
   const role = isAlert ? 'alert' : 'status';
   const ariaLive: 'assertive' | 'polite' = isAlert ? 'assertive' : 'polite';
 
-  const iconNode = icon ?? defaultIconFor(variant);
   const showProgressBar = variant === 'progress' && progress != null;
-  const clampedProgress = showProgressBar
-    ? Math.max(0, Math.min(1, progress as number))
+  const progressPct = showProgressBar
+    ? Math.max(0, Math.min(1, progress)) * 100
     : 0;
 
   return (
@@ -64,7 +38,7 @@ export function CalloutCard({ payload, onDismiss }: CalloutCardProps) {
       <div
         className={`flex-shrink-0 flex items-center justify-center w-6 h-6 ${config.iconColorClassName}`}
       >
-        {iconNode}
+        {icon ?? config.defaultIcon}
       </div>
 
       {/* Text block */}
@@ -104,7 +78,7 @@ export function CalloutCard({ payload, onDismiss }: CalloutCardProps) {
           aria-hidden="true"
           className="absolute bottom-0 left-0 h-0.5 bg-violet-500"
           style={{
-            width: `${clampedProgress * 100}%`,
+            width: `${progressPct}%`,
             transition: 'width 240ms ease-out',
           }}
         />

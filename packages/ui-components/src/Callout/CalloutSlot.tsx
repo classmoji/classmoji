@@ -1,43 +1,29 @@
-import { useEffect, useRef } from 'react';
+import { useEffect } from 'react';
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
 import { CalloutCard } from './CalloutCard.tsx';
-import { useCalloutSlotInternal } from './CalloutProvider.tsx';
-
-const DEFAULT_SLOT_ID = 'default';
+import {
+  DEFAULT_CALLOUT_SLOT_ID,
+  useCalloutSlotInternal,
+} from './CalloutProvider.tsx';
 
 export interface CalloutSlotProps {
   id?: string;
   className?: string;
 }
 
-function cn(...parts: Array<string | undefined | false | null>): string {
-  return parts.filter(Boolean).join(' ');
-}
-
 export function CalloutSlot({
-  id = DEFAULT_SLOT_ID,
+  id = DEFAULT_CALLOUT_SLOT_ID,
   className,
 }: CalloutSlotProps) {
   const { active, registerSlot, unregisterSlot, dismiss } =
     useCalloutSlotInternal(id);
   const reducedMotion = useReducedMotion();
 
-  // Latest dispatcher refs so the mount/unmount effect can stay [] without
-  // capturing stale closures (registerSlot/unregisterSlot identities change
-  // on every provider tick).
-  const registerRef = useRef(registerSlot);
-  const unregisterRef = useRef(unregisterSlot);
   useEffect(() => {
-    registerRef.current = registerSlot;
-    unregisterRef.current = unregisterSlot;
-  }, [registerSlot, unregisterSlot]);
-
-  // Register exactly once on mount, unregister exactly once on unmount.
-  useEffect(() => {
-    registerRef.current();
-    return () => {
-      unregisterRef.current();
-    };
+    registerSlot();
+    return unregisterSlot;
+    // registerSlot/unregisterSlot read the latest provider context internally.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const initial = reducedMotion
@@ -45,9 +31,11 @@ export function CalloutSlot({
     : { opacity: 0, y: -8 };
   const exit = reducedMotion ? { opacity: 0, y: 0 } : { opacity: 0, y: -4 };
 
+  const wrapperClass = className ? `w-full ${className}` : 'w-full';
+
   return (
-    <div className={cn('w-full', className)}>
-      <AnimatePresence mode="wait">
+    <div className={wrapperClass}>
+      <AnimatePresence>
         {active ? (
           <motion.div
             key={active.id}

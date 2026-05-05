@@ -8,7 +8,7 @@ export const UserContext = createContext<{ user: AppUser | null }>({
 
 export interface FetcherContextValue {
   fetcher: FetcherWithComponents<unknown> | null;
-  notify: (action: string, message?: string, position?: unknown) => void;
+  notify: (action: string, message?: string) => void;
 }
 
 export const FetcherContext = createContext<FetcherContextValue>({
