@@ -1,11 +1,11 @@
 import { Button, Card, Input, List, Avatar, Tag, Empty } from 'antd';
 import { IconUsers, IconUserPlus, IconLogout, IconPlus } from '@tabler/icons-react';
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect } from 'react';
 import { useFetcher, Link } from 'react-router';
-import { toast } from 'react-toastify';
 import { namedAction } from 'remix-utils/named-action';
 import type { Route } from './+types/route';
 import { ClassmojiService, getGitProvider } from '@classmoji/services';
+import { useCallout } from '@classmoji/ui-components';
 import { assertClassroomAccess } from '~/utils/helpers';
 import { titleToIdentifier } from '@classmoji/utils';
 import { tasks } from '@trigger.dev/sdk/v3';
@@ -263,50 +263,23 @@ const StudentTeamPage = ({ loaderData }: Route.ComponentProps) => {
   const fetcher = useFetcher();
   const [teamName, setTeamName] = useState('');
   const [showCreateForm, setShowCreateForm] = useState(false);
-  const toastIdRef = useRef<string | number | null>(null);
+  const callout = useCallout();
 
   const isSubmitting = fetcher.state !== 'idle';
-
-  // Show loading toast when submitting
-  useEffect(() => {
-    if (fetcher.state === 'submitting' && !toastIdRef.current) {
-      toastIdRef.current = toast.loading('Processing...');
-    }
-  }, [fetcher.state]);
 
   // Show feedback from action
   useEffect(() => {
     if (fetcher.data?.success) {
-      if (toastIdRef.current) {
-        toast.update(toastIdRef.current, {
-          render: fetcher.data.success,
-          type: 'success',
-          isLoading: false,
-          autoClose: 3000,
-        });
-        toastIdRef.current = null;
-      } else {
-        toast.success(fetcher.data.success);
-      }
+      callout.show({ variant: 'success', title: fetcher.data.success, autoDismissMs: 3000 });
     }
     if (fetcher.data?.error) {
-      if (toastIdRef.current) {
-        toast.update(toastIdRef.current, {
-          render: fetcher.data.error,
-          type: 'error',
-          isLoading: false,
-          autoClose: 3000,
-        });
-        toastIdRef.current = null;
-      } else {
-        toast.error(fetcher.data.error);
-      }
+      callout.show({ variant: 'error', title: fetcher.data.error, autoDismissMs: 3000 });
     }
   }, [fetcher.data]);
 
   const handleCreateTeam = () => {
     if (!teamName.trim()) {
-      toast.error('Please enter a team name');
+      callout.show({ variant: 'error', title: 'Please enter a team name' });
       return;
     }
     fetcher.submit({ teamName }, { method: 'post', action: '?/create' });

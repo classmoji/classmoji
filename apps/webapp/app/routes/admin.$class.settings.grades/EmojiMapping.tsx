@@ -1,10 +1,10 @@
 import { Input, InputNumber, Button, Table, Form, Card, Popconfirm, Alert, Select } from 'antd';
-import { toast } from 'react-toastify';
 import { useState } from 'react';
 
 import { DeleteOutlined, WarningOutlined } from '@ant-design/icons';
 
 import { SettingSection, Emoji } from '~/components';
+import { useCallout } from '@classmoji/ui-components';
 import { useGlobalFetcher, useSubscription } from '~/hooks';
 
 import tokenImage from '~/assets/images/token.png';
@@ -47,6 +47,7 @@ const EmojiMapping = ({ emojiMappings, orphanedEmojis }: EmojiMappingProps) => {
   const [editValue, setEditValue] = useState<string | number | null>(null);
 
   const { notify, fetcher } = useGlobalFetcher();
+  const callout = useCallout();
 
   // Handle inline cell update
   const handleCellUpdate = (emojiKey: string, field: string, value: string | number | null) => {
@@ -96,7 +97,10 @@ const EmojiMapping = ({ emojiMappings, orphanedEmojis }: EmojiMappingProps) => {
       .map(([oldEmoji, newEmoji]) => ({ oldEmoji, newEmoji }));
 
     if (mappings.length === 0) {
-      return toast.error('Please select a new emoji for at least one orphaned grade.');
+      return callout.show({
+        variant: 'error',
+        title: 'Please select a new emoji for at least one orphaned grade.',
+      });
     }
 
     notify('Remapping grades...');
@@ -115,7 +119,10 @@ const EmojiMapping = ({ emojiMappings, orphanedEmojis }: EmojiMappingProps) => {
 
   const createEmojiMapping = () => {
     if (!emoji || !grade) {
-      return toast.error('Please select an emoji and enter a numeric value.');
+      return callout.show({
+        variant: 'error',
+        title: 'Please select an emoji and enter a numeric value.',
+      });
     }
 
     notify('Creating emoji mapping...');

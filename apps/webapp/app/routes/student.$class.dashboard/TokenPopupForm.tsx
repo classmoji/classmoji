@@ -4,8 +4,8 @@ import { IconCalendarPlus } from '@tabler/icons-react';
 import { useRevalidator } from 'react-router';
 import dayjs from 'dayjs';
 import useSound from 'use-sound';
-import { toast } from 'react-toastify';
 
+import { useCallout } from '@classmoji/ui-components';
 import { useNotifiedFetcher, useUser } from '~/hooks';
 import useStore from '~/store';
 import tokenImage from '~/assets/images/token.png';
@@ -35,6 +35,7 @@ const TokenPopupForm = ({ repositoryAssignment, balance }: TokenPopupFormProps) 
   const { classroom } = useStore();
   const [play] = useSound(coinsSound, { volume: 0.6 });
   const revalidator = useRevalidator();
+  const callout = useCallout();
 
   // Revalidate parent route data after successful purchase
   useEffect(() => {
@@ -64,26 +65,32 @@ const TokenPopupForm = ({ repositoryAssignment, balance }: TokenPopupFormProps) 
   ) => {
     // Validate all required values exist
     if (balance === null || balance === undefined) {
-      toast.error('Unable to determine token balance. Please refresh the page.');
+      callout.show({
+        variant: 'error',
+        title: 'Unable to determine token balance. Please refresh the page.',
+      });
       hide();
       return;
     }
 
     if (!repoAssignment?.assignment?.tokens_per_hour) {
-      toast.error('Token cost not configured for this assignment.');
+      callout.show({ variant: 'error', title: 'Token cost not configured for this assignment.' });
       hide();
       return;
     }
 
     if (!purchaseHours || purchaseHours <= 0) {
-      toast.error('Please select a valid number of hours.');
+      callout.show({ variant: 'error', title: 'Please select a valid number of hours.' });
       hide();
       return;
     }
 
     const tokenCost = repoAssignment.assignment.tokens_per_hour * purchaseHours;
     if (balance < tokenCost) {
-      toast.error(`Insufficient tokens. You need ${tokenCost} tokens but only have ${balance}.`);
+      callout.show({
+        variant: 'error',
+        title: `Insufficient tokens. You need ${tokenCost} tokens but only have ${balance}.`,
+      });
       hide();
       return;
     }

@@ -3,9 +3,9 @@ import { Button, Modal } from 'antd';
 import { PlusOutlined } from '@ant-design/icons';
 import invariant from 'tiny-invariant';
 import { data, useFetcher, useParams } from 'react-router';
-import { toast } from 'react-toastify';
 import type { Route } from './+types/route';
 import { ClassmojiService } from '@classmoji/services';
+import { useCallout } from '@classmoji/ui-components';
 import getPrisma from '@classmoji/database';
 import { assertClassroomAccess } from '~/utils/helpers';
 import { buildCalendarUrl, getCalendarDateRange } from '~/utils/calendar.server';
@@ -279,6 +279,7 @@ const AssistantCalendar = ({ loaderData }: Route.ComponentProps) => {
   const { class: classSlug } = useParams();
   const fetcher = useFetcher();
   const eventsFetcher = useFetcher();
+  const callout = useCallout();
   const [addModalOpen, setAddModalOpen] = useState(false);
   const [editModalOpen, setEditModalOpen] = useState(false);
   const [selectedEvent, setSelectedEvent] = useState<CalendarEventWithLinks | null>(null);
@@ -314,7 +315,7 @@ const AssistantCalendar = ({ loaderData }: Route.ComponentProps) => {
         eventsFetcher.load(`?year=${currentViewYear}&month=${currentViewMonth}`);
       } else if (fetcher.data.error) {
         setOptimisticEvents(null); // Revert on error
-        toast.error(fetcher.data.error);
+        callout.show({ variant: 'error', title: fetcher.data.error });
       }
     }
   }, [fetcher.data, fetcher.state]);
@@ -330,7 +331,7 @@ const AssistantCalendar = ({ loaderData }: Route.ComponentProps) => {
   const handleUpdateEvent = (eventData: EventFormData) => {
     if (!selectedEvent?.id) {
       console.error('[Calendar] Cannot update: selectedEvent.id is missing');
-      toast.error('Unable to update event - please try again');
+      callout.show({ variant: 'error', title: 'Unable to update event - please try again' });
       return;
     }
 
@@ -356,7 +357,7 @@ const AssistantCalendar = ({ loaderData }: Route.ComponentProps) => {
   const handleEventDrop = (event: CalendarEventWithLinks, newStartTime: Date, newEndTime: Date) => {
     // Only allow dragging user's own events (not deadlines)
     if (event.is_deadline || String(event.created_by) !== String(userId)) {
-      toast.error('You can only move your own events');
+      callout.show({ variant: 'error', title: 'You can only move your own events' });
       return;
     }
 

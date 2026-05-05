@@ -12,11 +12,11 @@ import { namedAction } from 'remix-utils/named-action';
 import dayjs from 'dayjs';
 
 import { ClassmojiService, StripeService } from '@classmoji/services';
+import { useCallout } from '@classmoji/ui-components';
 import { useSubscription } from '~/hooks';
 import InfoCard from './InforCard';
 import { getUsageData } from './utils';
 import { getAuthSession } from '@classmoji/auth/server';
-import { toast } from 'react-toastify';
 import type { Route } from './+types/route';
 
 export const loader = async ({ request }: Route.LoaderArgs) => {
@@ -45,6 +45,7 @@ const SettingsSubscription = ({ loaderData }: Route.ComponentProps) => {
   const [loading, setLoading] = useState(false);
   const { search } = useLocation();
   const toastShownRef = useRef(new Set());
+  const callout = useCallout();
 
   useEffect(() => {
     const url = new URLSearchParams(search);
@@ -52,7 +53,7 @@ const SettingsSubscription = ({ loaderData }: Route.ComponentProps) => {
     const sessionId = url.get('session_id');
 
     if (success && sessionId && !toastShownRef.current.has(sessionId)) {
-      toast.success('Subscription updated successfully');
+      callout.show({ variant: 'success', title: 'Subscription updated successfully' });
       toastShownRef.current.add(sessionId);
     }
   }, [search]);
@@ -68,7 +69,7 @@ const SettingsSubscription = ({ loaderData }: Route.ComponentProps) => {
   useEffect(() => {
     const data = loaderData as Record<string, unknown>;
     if (data?.action === 'UPDATE_SUBSCRIPTION') {
-      toast.success(data.message as string);
+      callout.show({ variant: 'success', title: data.message as string });
     }
   }, [loaderData]);
 
