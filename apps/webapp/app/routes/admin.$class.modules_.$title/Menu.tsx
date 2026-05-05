@@ -1,6 +1,6 @@
 import { Button, Dropdown } from 'antd';
 import { useNavigate, useParams } from 'react-router';
-import { toast } from 'react-toastify';
+import { useCallout } from '@classmoji/ui-components';
 import { useGlobalFetcher, useSubscription } from '~/hooks';
 
 interface MenuProps {
@@ -21,10 +21,14 @@ const Menu = ({ module, assistants }: MenuProps) => {
   const { class: classSlug, title: moduleTitle } = useParams();
   const { fetcher } = useGlobalFetcher();
   const { isProTier } = useSubscription();
+  const callout = useCallout();
 
   const calculateContributions = () => {
     if (module.type === 'INDIVIDUAL') {
-      toast.error('Individual assignments do not support calculating contributions');
+      callout.show({
+        variant: 'error',
+        title: 'Individual assignments do not support calculating contributions',
+      });
       return;
     }
 
@@ -54,12 +58,12 @@ const Menu = ({ module, assistants }: MenuProps) => {
         <button
           onClick={() => {
             if (!module.assignments || module.assignments.length === 0) {
-              toast.error('No assignments to assign graders');
+              callout.show({ variant: 'error', title: 'No assignments to assign graders' });
               return;
             }
 
             if (assistants.length === 0) {
-              toast.error('No graders found');
+              callout.show({ variant: 'error', title: 'No graders found' });
               return;
             }
 

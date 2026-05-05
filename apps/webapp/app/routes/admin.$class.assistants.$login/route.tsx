@@ -2,10 +2,10 @@ import { useState } from 'react';
 import { useNavigate, useParams } from 'react-router';
 import { ConfigProvider, Drawer, Button, Tag, Card, Progress, Collapse, theme, Empty } from 'antd';
 import { IconX, IconUserSearch, IconClock } from '@tabler/icons-react';
-import { toast } from 'react-toastify';
 
 import { useRouteDrawer, useDarkMode } from '~/hooks';
 import { ClassmojiService } from '@classmoji/services';
+import { useCallout } from '@classmoji/ui-components';
 import { RequireRole, StatsCard } from '~/components';
 import { requireClassroomAdmin } from '~/utils/routeAuth.server';
 import { addAuditLog } from '~/utils/helpers';
@@ -121,10 +121,11 @@ const AdminAssistantDrawer = ({ loaderData }: Route.ComponentProps) => {
   const navigate = useNavigate();
   const { class: classSlug } = useParams();
   const [impersonating, setImpersonating] = useState(false);
+  const callout = useCallout();
 
   const handleImpersonate = async () => {
     if (!assistant.login) {
-      toast.error('Assistant has not accepted invite.');
+      callout.show({ variant: 'error', title: 'Assistant has not accepted invite.' });
       return;
     }
 
@@ -141,7 +142,10 @@ const AdminAssistantDrawer = ({ loaderData }: Route.ComponentProps) => {
       navigate(`/assistant/${classSlug}/dashboard`);
     } catch (error: unknown) {
       console.error('Impersonation failed:', error);
-      toast.error(error instanceof Error ? error.message : 'Failed to view as assistant');
+      callout.show({
+        variant: 'error',
+        title: error instanceof Error ? error.message : 'Failed to view as assistant',
+      });
     } finally {
       setImpersonating(false);
     }

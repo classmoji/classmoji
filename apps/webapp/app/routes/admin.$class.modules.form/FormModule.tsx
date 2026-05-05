@@ -1,9 +1,9 @@
 import _ from 'lodash';
 import { useEffect, useState } from 'react';
 import { Octokit } from '@octokit/rest';
-import { toast } from 'react-toastify';
 
 import { useRevalidator } from 'react-router';
+import { useCallout } from '@classmoji/ui-components';
 import { useForm, type Control, type FieldValues } from 'react-hook-form';
 import { FormItem } from 'react-hook-form-antd';
 import {
@@ -124,6 +124,7 @@ const FormModule = ({
 
   const { fetcher, notify } = useGlobalFetcher();
   const revalidator = useRevalidator();
+  const callout = useCallout();
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [opened, { open: openIssueModal, close: closeIssueModal }] = useDisclosure();
 
@@ -213,7 +214,10 @@ const FormModule = ({
 
       const fetcherData = fetcher!.data as ActionResponse | undefined;
       if (fetcherData?.error) {
-        toast.error(fetcherData.error || 'Failed to save module.');
+        callout.show({
+          variant: 'error',
+          title: fetcherData.error || 'Failed to save module.',
+        });
         return;
       }
 
@@ -710,7 +714,10 @@ const FormModule = ({
                     style={{ backgroundColor: '#619462', borderColor: '#619462' }}
                     onClick={() => {
                       if (!assignment.title.length)
-                        return toast.error('Please fill in the assignment title.');
+                        return callout.show({
+                          variant: 'error',
+                          title: 'Please fill in the assignment title.',
+                        });
 
                       const doesAssignmentExist = (assignments || []).find(
                         (a: { id?: string | number | null }) => a.id === assignment.id

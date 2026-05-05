@@ -3,7 +3,6 @@ import { useState } from 'react';
 
 import { IconUserSearch, IconTrash } from '@tabler/icons-react';
 import { Table, Radio, Popconfirm, Modal, Tag } from 'antd';
-import { toast } from 'react-toastify';
 
 import { getAuthSession } from '@classmoji/auth/server';
 import { authClient } from '@classmoji/auth/client';
@@ -16,6 +15,7 @@ import {
   TableActionButtons,
 } from '~/components';
 import { ClassmojiService } from '@classmoji/services';
+import { useCallout } from '@classmoji/ui-components';
 export { action } from './action';
 import FormAssistant from './FormAssistant';
 
@@ -57,10 +57,11 @@ const AdminAssistants = ({ loaderData }: Route.ComponentProps) => {
   const { show, close, visible } = useDisclosure();
   const [query, setQuery] = useState('');
   const [impersonating, setImpersonating] = useState(false);
+  const callout = useCallout();
 
   const handleImpersonate = async (assistant: Assistant) => {
     if (!assistant.login) {
-      toast.error('Assistant has not accepted invite.');
+      callout.show({ variant: 'error', title: 'Assistant has not accepted invite.' });
       return;
     }
 
@@ -77,7 +78,10 @@ const AdminAssistants = ({ loaderData }: Route.ComponentProps) => {
       navigate(`/assistant/${classSlug}`);
     } catch (error: unknown) {
       console.error('Impersonation failed:', error);
-      toast.error(error instanceof Error ? error.message : 'Failed to view as assistant');
+      callout.show({
+        variant: 'error',
+        title: error instanceof Error ? error.message : 'Failed to view as assistant',
+      });
     } finally {
       setImpersonating(false);
     }
@@ -173,7 +177,7 @@ const AdminAssistants = ({ loaderData }: Route.ComponentProps) => {
               if (assistant.login) {
                 navigate(`/admin/${classSlug}/assistants/${assistant.login}`);
               } else {
-                toast.error('Assistant has not accepted invite.');
+                callout.show({ variant: 'error', title: 'Assistant has not accepted invite.' });
               }
             }}
           >
