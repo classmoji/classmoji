@@ -15,7 +15,7 @@ test.describe('Settings Navigation', () => {
   });
 
   test('displays settings page header', async ({ authenticatedPage: page }) => {
-    await expect(page.getByRole('heading', { name: /Classroom Settings/i })).toBeVisible();
+    await expect(page.getByRole('heading', { name: /^Settings$/i })).toBeVisible();
   });
 
   test('displays all settings tabs', async ({ authenticatedPage: page }) => {
