@@ -20,6 +20,7 @@ import { IconMoodSad } from '@tabler/icons-react';
 import { auth as triggerAuth } from '@trigger.dev/sdk';
 
 import { GitHubProvider, ClassmojiService } from '@classmoji/services';
+import { CalloutProvider } from '@classmoji/ui-components';
 import { auth, getAuthSession } from '@classmoji/auth/server';
 import { isAIAgentConfigured } from '~/utils/aiFeatures.server';
 import type { Route } from './+types/root';
@@ -276,8 +277,16 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
   };
 };
 
-const App = ({ loaderData }: Route.ComponentProps) => {
+// Local wrapper that calls useNotifiedFetcher inside CalloutProvider so that
+// future migrations of useNotifiedFetcher to useCallout() see a valid context.
+const FetcherProvider = ({ children }: { children: React.ReactNode }) => {
   const { fetcher, notify } = useNotifiedFetcher();
+  return (
+    <FetcherContext.Provider value={{ fetcher, notify }}>{children}</FetcherContext.Provider>
+  );
+};
+
+const App = ({ loaderData }: Route.ComponentProps) => {
   const { user, session } = loaderData;
   const { isDarkMode, accent } = useDarkMode();
   const { pathname } = useLocation();
@@ -441,30 +450,32 @@ const App = ({ loaderData }: Route.ComponentProps) => {
             )}
           >
             <UserContext.Provider value={{ user }}>
-              <FetcherContext.Provider value={{ fetcher, notify }}>
-                <ToastContainer
-                  position="bottom-center"
-                  autoClose={4000}
-                  hideProgressBar
-                  newestOnTop={false}
-                  closeOnClick={false}
-                  pauseOnFocusLoss
-                  draggable={false}
-                  pauseOnHover
-                  icon={false}
-                  theme="light"
-                  transition={ToastFade}
-                />
+              <CalloutProvider>
+                <FetcherProvider>
+                  <ToastContainer
+                    position="bottom-center"
+                    autoClose={4000}
+                    hideProgressBar
+                    newestOnTop={false}
+                    closeOnClick={false}
+                    pauseOnFocusLoss
+                    draggable={false}
+                    pauseOnHover
+                    icon={false}
+                    theme="light"
+                    transition={ToastFade}
+                  />
 
-                <ImpersonationBanner
-                  key={(session as Record<string, Record<string, string>>)?.session?.id}
-                  session={session}
-                />
-                <Outlet />
-                <SyllabusBotRoot />
-                <ScrollRestoration />
-                <Scripts />
-              </FetcherContext.Provider>
+                  <ImpersonationBanner
+                    key={(session as Record<string, Record<string, string>>)?.session?.id}
+                    session={session}
+                  />
+                  <Outlet />
+                  <SyllabusBotRoot />
+                  <ScrollRestoration />
+                  <Scripts />
+                </FetcherProvider>
+              </CalloutProvider>
             </UserContext.Provider>
           </ConfigProvider>
         </RenderErrorBoundary>
