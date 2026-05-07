@@ -163,21 +163,6 @@ html.translucent-sidebar:not(.dark) [data-cm-sidebar] .bg-stone-200 {
   background-color: rgba(40, 48, 64, 0.10);
 }
 
-/* Org-select dropdown is portaled to <body>, so it sits outside the sidebar
-   container. Match the translucent vibe + slate border when the sidebar is
-   in glass mode so the open menu reads as part of the same surface. */
-html.translucent-sidebar .cm-org-select-popup {
-  background-color: color-mix(in srgb, var(--sidebar) 75%, transparent) !important;
-  backdrop-filter: blur(22px) saturate(140%);
-  -webkit-backdrop-filter: blur(22px) saturate(140%);
-}
-html.translucent-sidebar:not(.dark) .cm-org-select-popup {
-  border-color: rgba(40, 48, 64, 0.22) !important;
-}
-html.translucent-sidebar.dark .cm-org-select-popup {
-  border-color: rgba(255, 255, 255, 0.12) !important;
-}
-
 /* UI contrast: filters main content. Slider 50 is the neutral default.
    Range is intentionally narrow so neither extreme washes out card
    borders or near-white surfaces: 0 → 90%, 50 → 100%, 100 → 110%. */
