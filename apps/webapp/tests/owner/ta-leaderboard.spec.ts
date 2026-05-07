@@ -64,16 +64,25 @@ test.describe('TA Leaderboard Data Validation', () => {
     // - ta-classmoji: Teaching Assistant Tester (3 grades)
     // - prof-classmoji: Professor (1 grade)
 
-    const leaderboard = page.locator('text=TA Grading Leaderboard').locator('xpath=ancestor::div[contains(@class, "card") or contains(@class, "Card")]').first();
+    const leaderboard = page
+      .locator('text=TA Grading Leaderboard')
+      .locator('xpath=ancestor::div[contains(@class, "card") or contains(@class, "Card")]')
+      .first();
 
     // Check if actual TA names appear (not "Unknown")
     // If this fails, there's a bug where grader names aren't being fetched
     const unknownCount = await page.locator('text=Unknown').count();
-    const hasKnownTAs = await page.getByText(/ta-classmoji|Teaching Assistant|Professor|prof-classmoji/).first().isVisible().catch(() => false);
+    const hasKnownTAs = await page
+      .getByText(/ta-classmoji|Teaching Assistant|Professor|prof-classmoji/)
+      .first()
+      .isVisible()
+      .catch(() => false);
 
     // Log for debugging
     if (unknownCount > 0 && !hasKnownTAs) {
-      console.log(`WARNING: Leaderboard shows ${unknownCount} "Unknown" entries - possible bug in grader name resolution`);
+      console.log(
+        `WARNING: Leaderboard shows ${unknownCount} "Unknown" entries - possible bug in grader name resolution`
+      );
     }
 
     // At minimum, the section should be visible

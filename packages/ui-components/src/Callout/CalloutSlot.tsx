@@ -1,22 +1,15 @@
 import { useEffect } from 'react';
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
 import { CalloutCard } from './CalloutCard.tsx';
-import {
-  DEFAULT_CALLOUT_SLOT_ID,
-  useCalloutSlotInternal,
-} from './CalloutProvider.tsx';
+import { DEFAULT_CALLOUT_SLOT_ID, useCalloutSlotInternal } from './CalloutProvider.tsx';
 
 export interface CalloutSlotProps {
   id?: string;
   className?: string;
 }
 
-export function CalloutSlot({
-  id = DEFAULT_CALLOUT_SLOT_ID,
-  className,
-}: CalloutSlotProps) {
-  const { active, registerSlot, unregisterSlot, dismiss } =
-    useCalloutSlotInternal(id);
+export function CalloutSlot({ id = DEFAULT_CALLOUT_SLOT_ID, className }: CalloutSlotProps) {
+  const { active, registerSlot, unregisterSlot, dismiss } = useCalloutSlotInternal(id);
   const reducedMotion = useReducedMotion();
 
   useEffect(() => {
@@ -30,9 +23,7 @@ export function CalloutSlot({
     ? { opacity: 0, y: 0, scale: 1 }
     : { opacity: 0, y: -24, scale: 0.96 };
   const animate = { opacity: 1, y: 0, scale: 1 };
-  const exit = reducedMotion
-    ? { opacity: 0, y: 0, scale: 1 }
-    : { opacity: 0, y: -16, scale: 0.98 };
+  const exit = reducedMotion ? { opacity: 0, y: 0, scale: 1 } : { opacity: 0, y: -16, scale: 0.98 };
 
   const enterTransition = reducedMotion
     ? { duration: 0.15, ease: 'easeOut' as const }
@@ -65,10 +56,7 @@ export function CalloutSlot({
             style={{ transformOrigin: 'top center', willChange: 'transform, opacity' }}
             className="pointer-events-auto"
           >
-            <CalloutCard
-              payload={active}
-              onDismiss={() => dismiss(active.id)}
-            />
+            <CalloutCard payload={active} onDismiss={() => dismiss(active.id)} />
           </motion.div>
         ) : null}
       </AnimatePresence>

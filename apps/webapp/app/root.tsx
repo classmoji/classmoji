@@ -273,9 +273,7 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
 // useNotifiedFetcher reads useCallout().
 const FetcherProvider = ({ children }: { children: React.ReactNode }) => {
   const { fetcher, notify } = useNotifiedFetcher();
-  return (
-    <FetcherContext.Provider value={{ fetcher, notify }}>{children}</FetcherContext.Provider>
-  );
+  return <FetcherContext.Provider value={{ fetcher, notify }}>{children}</FetcherContext.Provider>;
 };
 
 const App = ({ loaderData }: Route.ComponentProps) => {

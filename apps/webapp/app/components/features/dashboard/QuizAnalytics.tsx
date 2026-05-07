@@ -42,14 +42,9 @@ const QuizAnalytics = ({ data }: QuizAnalyticsProps) => {
           </div>
         ) : (
           <ul className="space-y-2">
-            {data.hardestQuestions.map((q) => (
-              <li
-                key={q.questionId}
-                className="flex items-start justify-between gap-3 text-sm"
-              >
-                <span className="text-gray-800 dark:text-gray-200 flex-1 truncate">
-                  {q.prompt}
-                </span>
+            {data.hardestQuestions.map(q => (
+              <li key={q.questionId} className="flex items-start justify-between gap-3 text-sm">
+                <span className="text-gray-800 dark:text-gray-200 flex-1 truncate">{q.prompt}</span>
                 <span className="text-rose-ink dark:text-red-300 font-semibold tabular-nums">
                   {Math.round(q.correctRate * 100)}%
                 </span>

@@ -103,8 +103,7 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
       .filter(x => x.deadlineMs >= now)
       .sort((a, b) => a.deadlineMs - b.deadlineMs);
 
-    const spotlightId =
-      upcomingByModule[0]?.moduleId ?? modules[modules.length - 1]?.id ?? null;
+    const spotlightId = upcomingByModule[0]?.moduleId ?? modules[modules.length - 1]?.id ?? null;
     const spotlightSrc = spotlightId
       ? (modules.find(m => m.id === spotlightId) ?? null)
       : (modules[modules.length - 1] ?? null);
@@ -154,15 +153,10 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
         m.slug
       );
       if (!tag) continue;
-      const userTeam = await ClassmojiService.team.findUserTeamByTag(
-        classroom.id,
-        tag.id,
-        userId
-      );
+      const userTeam = await ClassmojiService.team.findUserTeamByTag(classroom.id, tag.id, userId);
       if (userTeam) {
-        const teamRepoName = allRepoAssignments.find(
-          ra => ra.repository?.module_id === m.id
-        )?.repository?.name;
+        const teamRepoName = allRepoAssignments.find(ra => ra.repository?.module_id === m.id)
+          ?.repository?.name;
         team = {
           moduleTitle: m.title,
           moduleSlug: m.slug,
@@ -185,9 +179,7 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
       }
     }
 
-    const resubmits: ResubmitItem[] = (
-      regradeRequests as Array<Record<string, unknown>>
-    ).map(r => {
+    const resubmits: ResubmitItem[] = (regradeRequests as Array<Record<string, unknown>>).map(r => {
       const ra = r.repository_assignment as { assignment?: { title?: string } } | undefined;
       return {
         id: String(r.id),

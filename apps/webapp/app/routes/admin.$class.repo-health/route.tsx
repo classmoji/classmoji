@@ -13,9 +13,7 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
     action: 'view_repo_health',
   });
 
-  const health = await ClassmojiService.repoAnalytics.classroomRepoHealth(
-    classroom.id,
-  );
+  const health = await ClassmojiService.repoAnalytics.classroomRepoHealth(classroom.id);
 
   return { classSlug, health };
 };
@@ -47,7 +45,7 @@ function LanguageBar({ langs }: { langs: Record<string, number> }) {
   return (
     <div className="flex flex-col gap-1 min-w-[160px]">
       <div className="flex h-1.5 w-full overflow-hidden rounded-full bg-gray-100 dark:bg-gray-800">
-        {items.map((l) => (
+        {items.map(l => (
           <div
             key={l.name}
             title={`${l.name} · ${l.pct.toFixed(1)}%`}
@@ -58,7 +56,7 @@ function LanguageBar({ langs }: { langs: Record<string, number> }) {
       <div className="text-[10px] text-gray-500 dark:text-gray-400 truncate">
         {items
           .slice(0, 3)
-          .map((l) => `${l.name} ${l.pct.toFixed(0)}%`)
+          .map(l => `${l.name} ${l.pct.toFixed(0)}%`)
           .join(' · ')}
       </div>
     </div>
@@ -72,9 +70,7 @@ const RepoHealth = ({ loaderData }: Route.ComponentProps) => {
   return (
     <div className="flex flex-col gap-4" data-testid="repo-health">
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">
-          Repo Health
-        </h1>
+        <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">Repo Health</h1>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
@@ -103,9 +99,7 @@ const RepoHealth = ({ loaderData }: Route.ComponentProps) => {
               </dd>
             </div>
             <div className="flex items-center justify-between">
-              <dt className="text-gray-500 dark:text-gray-400">
-                Refresh on deadline
-              </dt>
+              <dt className="text-gray-500 dark:text-gray-400">Refresh on deadline</dt>
               <dd>
                 <Tag color="success" className="dark:border-green-800">
                   enabled
@@ -124,12 +118,10 @@ const RepoHealth = ({ loaderData }: Route.ComponentProps) => {
             Unmatched contributors
           </div>
           {unmatched.length === 0 ? (
-            <div className="text-sm text-gray-500 dark:text-gray-400 py-3">
-              Everyone is linked.
-            </div>
+            <div className="text-sm text-gray-500 dark:text-gray-400 py-3">Everyone is linked.</div>
           ) : (
             <div className="rounded-lg border border-gray-100 dark:border-gray-700 divide-y divide-gray-100 dark:divide-gray-700 max-h-80 overflow-y-auto">
-              {unmatched.map((u) => (
+              {unmatched.map(u => (
                 <div
                   key={`${u.repo}-${u.login}`}
                   className="flex items-center justify-between px-3 py-2 text-sm"
@@ -141,8 +133,7 @@ const RepoHealth = ({ loaderData }: Route.ComponentProps) => {
                     </div>
                     <div className="text-xs text-gray-500 dark:text-gray-400 truncate">
                       {u.repo} · {u.commits} commit
-                      {u.commits === 1 ? '' : 's'} · first seen{' '}
-                      {dayjs(u.firstSeen).fromNow()}
+                      {u.commits === 1 ? '' : 's'} · first seen {dayjs(u.firstSeen).fromNow()}
                     </div>
                   </div>
                   <Button size="small" disabled title="Coming soon">
@@ -156,19 +147,14 @@ const RepoHealth = ({ loaderData }: Route.ComponentProps) => {
       </div>
 
       {/* Repos table */}
-      <Card
-        className="border border-gray-100 dark:border-gray-700"
-        data-testid="repos-card"
-      >
+      <Card className="border border-gray-100 dark:border-gray-700" data-testid="repos-card">
         <div className="text-xs uppercase tracking-wide text-gray-500 dark:text-gray-400 font-semibold mb-3">
           Repositories ({repos.length})
         </div>
         {repos.length === 0 ? (
           <Empty
             description={
-              <span className="text-gray-500 dark:text-gray-400">
-                No repository snapshots yet.
-              </span>
+              <span className="text-gray-500 dark:text-gray-400">No repository snapshots yet.</span>
             }
           />
         ) : (
@@ -184,7 +170,7 @@ const RepoHealth = ({ loaderData }: Route.ComponentProps) => {
                 </tr>
               </thead>
               <tbody>
-                {repos.map((r) => (
+                {repos.map(r => (
                   <tr
                     key={r.name}
                     className="border-b border-gray-50 dark:border-gray-800 last:border-0"
@@ -267,8 +253,7 @@ export function ErrorBoundary() {
               <div className="text-sm text-amber-800 dark:text-amber-300">
                 Run <code className="font-mono text-xs">npm run db:deploy</code> then{' '}
                 <code className="font-mono text-xs">npm run db:generate</code> to apply pending
-                migrations and regenerate the Prisma client. You may need to restart the dev
-                server.
+                migrations and regenerate the Prisma client. You may need to restart the dev server.
               </div>
             </div>
           )}

@@ -1,18 +1,7 @@
 import { useNavigate, useParams, Outlet, useFetcher } from 'react-router';
 import { useEffect, useState } from 'react';
 import type { Route } from './+types/admin.$class.quizzes_.$quizId';
-import {
-  Table,
-  Button,
-  Tag,
-  Tooltip,
-  Badge,
-  Space,
-  Modal,
-  message,
-  Select,
-  Spin,
-} from 'antd';
+import { Table, Button, Tag, Tooltip, Badge, Space, Modal, message, Select, Spin } from 'antd';
 import { IconEye, IconArrowLeft, IconClock, IconTrophy, IconChartBar } from '@tabler/icons-react';
 import { TrophyOutlined, PlayCircleOutlined, ClearOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';

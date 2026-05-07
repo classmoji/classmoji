@@ -34,12 +34,7 @@ const Anomalies = ({ snapshot, deadline }: AnomaliesProps) => {
   const lateRatio = lateCommitRatio(commits, deadlineDate);
   if (lateRatio > 0.3) {
     chips.push(
-      <Tag
-        key="late"
-        color="red"
-        data-testid="anomaly-late"
-        className="dark:border-red-800"
-      >
+      <Tag key="late" color="red" data-testid="anomaly-late" className="dark:border-red-800">
         Late commits {(lateRatio * 100).toFixed(0)}%
       </Tag>
     );
@@ -49,12 +44,7 @@ const Anomalies = ({ snapshot, deadline }: AnomaliesProps) => {
   const mega = commits.find(c => isMegaCommit(c, total_additions, total_deletions));
   if (mega) {
     chips.push(
-      <Tag
-        key="mega"
-        color="orange"
-        data-testid="anomaly-mega"
-        className="dark:border-orange-800"
-      >
+      <Tag key="mega" color="orange" data-testid="anomaly-mega" className="dark:border-orange-800">
         Mega commit {mega.sha.slice(0, 7)}
       </Tag>
     );
@@ -63,12 +53,7 @@ const Anomalies = ({ snapshot, deadline }: AnomaliesProps) => {
   // Dump and run
   if (dumpAndRun(commits, deadlineDate)) {
     chips.push(
-      <Tag
-        key="dump"
-        color="red"
-        data-testid="anomaly-dump"
-        className="dark:border-red-800"
-      >
+      <Tag key="dump" color="red" data-testid="anomaly-dump" className="dark:border-red-800">
         Dump-and-run
       </Tag>
     );
@@ -78,12 +63,7 @@ const Anomalies = ({ snapshot, deadline }: AnomaliesProps) => {
   const bus = busFactor(contributors);
   if (bus && bus.share > 0.7) {
     chips.push(
-      <Tag
-        key="bus"
-        color="gold"
-        data-testid="anomaly-bus"
-        className="dark:border-yellow-800"
-      >
+      <Tag key="bus" color="gold" data-testid="anomaly-bus" className="dark:border-yellow-800">
         Bus factor · {bus.login} {(bus.share * 100).toFixed(0)}%
       </Tag>
     );
@@ -94,12 +74,7 @@ const Anomalies = ({ snapshot, deadline }: AnomaliesProps) => {
     const quality = averageCommitQuality(commits);
     if (quality < 0.3) {
       chips.push(
-        <Tag
-          key="weak"
-          color="default"
-          data-testid="anomaly-weak"
-          className="dark:border-gray-700"
-        >
+        <Tag key="weak" color="default" data-testid="anomaly-weak" className="dark:border-gray-700">
           Weak messages
         </Tag>
       );
@@ -109,10 +84,7 @@ const Anomalies = ({ snapshot, deadline }: AnomaliesProps) => {
   if (chips.length === 0) return null;
 
   return (
-    <div
-      className="flex flex-wrap gap-2 mb-6"
-      data-testid="anomaly-chips"
-    >
+    <div className="flex flex-wrap gap-2 mb-6" data-testid="anomaly-chips">
       {chips}
     </div>
   );

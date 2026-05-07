@@ -381,7 +381,6 @@ const GradesTable = (props: GradesTableProps) => {
           </div>
         )}
       </div>
-
     </div>
   );
 };

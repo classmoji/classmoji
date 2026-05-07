@@ -1,4 +1,1 @@
-export {
-  loader,
-  default,
-} from '../admin.$class.submissions.$id/route';
+export { loader, default } from '../admin.$class.submissions.$id/route';

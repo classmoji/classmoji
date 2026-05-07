@@ -111,9 +111,7 @@ const PanelShell = ({
     <h3 className="text-base sm:text-lg font-semibold text-gray-900 dark:text-gray-100 tracking-tight">
       {title}
     </h3>
-    {subtitle && (
-      <div className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">{subtitle}</div>
-    )}
+    {subtitle && <div className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">{subtitle}</div>}
     <div className="flex-1 mt-4 min-h-0">{children}</div>
     {footer && (
       <div className="mt-3 pt-3 border-t border-stone-200/70 dark:border-neutral-700/50 flex items-center justify-between gap-2">
@@ -152,7 +150,10 @@ const FeedbackPanel = ({ items }: { items: FeedbackItem[] }) => {
                 {item.assignmentTitle}
               </div>
               <div className="text-xs text-gray-500 dark:text-gray-400 truncate">
-                {item.graders.map(g => g.name).filter(Boolean).join(', ') || 'Graded'}
+                {item.graders
+                  .map(g => g.name)
+                  .filter(Boolean)
+                  .join(', ') || 'Graded'}
                 {item.closedAt && <> · {fromNow(item.closedAt)}</>}
               </div>
             </div>
@@ -237,10 +238,7 @@ const TeamPanel = ({
   }
   if (needsTeam) {
     return (
-      <PanelShell
-        title="No team yet"
-        subtitle={`${needsTeam.moduleTitle} is self-formed.`}
-      >
+      <PanelShell title="No team yet" subtitle={`${needsTeam.moduleTitle} is self-formed.`}>
         <div className="h-full flex flex-col items-center justify-center text-center">
           <Link
             to={`/student/${classSlug}/modules`}
@@ -256,21 +254,13 @@ const TeamPanel = ({
   return (
     <PanelShell title="Team" subtitle="No group modules in this class">
       <div className="h-full flex flex-col items-center justify-center text-center">
-        <p className="text-sm text-gray-500 dark:text-gray-400">
-          Nothing to show here yet.
-        </p>
+        <p className="text-sm text-gray-500 dark:text-gray-400">Nothing to show here yet.</p>
       </div>
     </PanelShell>
   );
 };
 
-const ResubmitsPanel = ({
-  items,
-  classSlug,
-}: {
-  items: ResubmitItem[];
-  classSlug: string;
-}) => {
+const ResubmitsPanel = ({ items, classSlug }: { items: ResubmitItem[]; classSlug: string }) => {
   if (items.length === 0) {
     return (
       <PanelShell title="Regrade requests" subtitle="Track resubmits and their status">
@@ -293,11 +283,7 @@ const ResubmitsPanel = ({
     </>
   );
   return (
-    <PanelShell
-      title="Regrade requests"
-      subtitle={`${items.length} total`}
-      footer={footer}
-    >
+    <PanelShell title="Regrade requests" subtitle={`${items.length} total`} footer={footer}>
       <Eyebrow>RECENT</Eyebrow>
       <ul className="flex flex-col">
         {items.slice(0, 5).map(item => (
@@ -327,13 +313,7 @@ const ResubmitsPanel = ({
   );
 };
 
-const RetroTabsCard = ({
-  feedback,
-  team,
-  needsTeam,
-  resubmits,
-  classSlug,
-}: RetroTabsCardProps) => {
+const RetroTabsCard = ({ feedback, team, needsTeam, resubmits, classSlug }: RetroTabsCardProps) => {
   const [active, setActive] = useState<TabKey>('feedback');
 
   return (
@@ -350,9 +330,7 @@ const RetroTabsCard = ({
               type="button"
               onClick={() => setActive(key)}
               style={
-                isActive
-                  ? { color: 'var(--accent)', borderTopColor: 'var(--accent)' }
-                  : undefined
+                isActive ? { color: 'var(--accent)', borderTopColor: 'var(--accent)' } : undefined
               }
               className={`relative ${zClass} px-4 py-2 text-sm font-medium rounded-t-2xl border transition-colors ${
                 idx > 0 ? '-ml-2' : ''
@@ -373,9 +351,7 @@ const RetroTabsCard = ({
           {active === 'team' && (
             <TeamPanel team={team} needsTeam={needsTeam} classSlug={classSlug} />
           )}
-          {active === 'resubmits' && (
-            <ResubmitsPanel items={resubmits} classSlug={classSlug} />
-          )}
+          {active === 'resubmits' && <ResubmitsPanel items={resubmits} classSlug={classSlug} />}
         </div>
       </section>
     </div>

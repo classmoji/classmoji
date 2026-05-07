@@ -636,8 +636,7 @@ const FormModule = ({
               padding: 0,
               borderRadius: 16,
               overflow: 'hidden',
-              boxShadow:
-                '0 24px 48px -12px rgba(15, 23, 42, 0.25), 0 0 0 1px rgba(0, 0, 0, 0.04)',
+              boxShadow: '0 24px 48px -12px rgba(15, 23, 42, 0.25), 0 0 0 1px rgba(0, 0, 0, 0.04)',
             },
             body: { padding: 0 },
             header: { display: 'none' },
@@ -647,9 +646,9 @@ const FormModule = ({
           {(() => {
             const isEditingAssignment = Boolean(
               assignment?.id &&
-                (assignments || []).some(
-                  (a: { id?: string | number | null }) => a.id === assignment.id
-                )
+              (assignments || []).some(
+                (a: { id?: string | number | null }) => a.id === assignment.id
+              )
             );
             return (
               <>
@@ -725,9 +724,7 @@ const FormModule = ({
                       let currAssignments = [...(assignments || [])];
 
                       if (doesAssignmentExist)
-                        currAssignments = currAssignments.filter(
-                          a => a.id !== assignment.id
-                        );
+                        currAssignments = currAssignments.filter(a => a.id !== assignment.id);
 
                       const newList = _.uniq([
                         ...currAssignments,
@@ -762,7 +759,6 @@ const FormModule = ({
             {isNew ? 'Create module' : 'Update module'}
           </Button>
         </div>
-
       </Form>
     </div>
   );

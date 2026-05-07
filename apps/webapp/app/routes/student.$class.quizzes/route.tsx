@@ -1,17 +1,6 @@
 import { Outlet, useNavigate, useLocation } from 'react-router';
 import { useState } from 'react';
-import {
-  Table,
-  Badge,
-  Typography,
-  Button,
-  Modal,
-  Tag,
-  Tooltip,
-  Space,
-  Select,
-  Spin,
-} from 'antd';
+import { Table, Badge, Typography, Button, Modal, Tag, Tooltip, Space, Select, Spin } from 'antd';
 import { CheckCircleOutlined, PlayCircleOutlined, TrophyOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import type { Route } from './+types/route';
@@ -549,7 +538,9 @@ export default function StudentQuizzes({ loaderData }: Route.ComponentProps) {
   ];
 
   const dataSource =
-    activeTab === 'all' ? publishedQuizzes : filterQuizzes(quizzes, activeTab as 'current' | 'completed');
+    activeTab === 'all'
+      ? publishedQuizzes
+      : filterQuizzes(quizzes, activeTab as 'current' | 'completed');
 
   const emptyText =
     activeTab === 'current' ? (

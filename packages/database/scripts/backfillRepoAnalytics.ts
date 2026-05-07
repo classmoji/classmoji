@@ -15,9 +15,9 @@
 
 import { ClassmojiService } from '@classmoji/services';
 
-process.on('unhandledRejection', (reason) => {
+process.on('unhandledRejection', reason => {
   console.error('[backfill] Unhandled rejection:', reason);
-  process.exit(1);
+  process.exitCode = 1;
 });
 
 const INLINE = process.argv.includes('--inline');
@@ -57,7 +57,9 @@ async function main(): Promise<void> {
   const last = ids[ids.length - 1];
 
   if (INLINE) {
-    console.log(`[backfill] running inline for ${ids.length} assignments (first=${first} last=${last})`);
+    console.log(
+      `[backfill] running inline for ${ids.length} assignments (first=${first} last=${last})`
+    );
     await runInline(ids);
     console.log(`[backfill] completed ${ids.length} inline refreshes`);
     return;
@@ -68,7 +70,7 @@ async function main(): Promise<void> {
   console.log(`[backfill] enqueued ${ids.length} jobs (first=${first} last=${last})`);
 }
 
-main().catch((err) => {
+main().catch(err => {
   console.error('[backfill] fatal:', err);
-  process.exit(1);
+  process.exitCode = 1;
 });

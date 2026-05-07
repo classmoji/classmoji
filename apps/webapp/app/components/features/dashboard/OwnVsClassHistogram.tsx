@@ -43,7 +43,7 @@ const OwnVsClassHistogram = ({ yours, classroom }: OwnVsClassHistogramProps) => 
   const classMap = normalize(classroom);
   // Preserve order from `classroom` buckets (canonical), fall back to yours.
   const source = classroom.length > 0 ? classroom : yours;
-  const data = source.map((r) => ({
+  const data = source.map(r => ({
     bucket: r.bucket,
     yours: Math.round((yoursMap.get(r.bucket) ?? 0) * 1000) / 10,
     classroom: Math.round((classMap.get(r.bucket) ?? 0) * 1000) / 10,
@@ -58,9 +58,7 @@ const OwnVsClassHistogram = ({ yours, classroom }: OwnVsClassHistogramProps) => 
       {isEmpty ? (
         <Empty
           image={Empty.PRESENTED_IMAGE_SIMPLE}
-          description={
-            <span className="text-gray-500 dark:text-gray-400">No grades yet.</span>
-          }
+          description={<span className="text-gray-500 dark:text-gray-400">No grades yet.</span>}
         />
       ) : (
         <div style={{ height: 260 }}>

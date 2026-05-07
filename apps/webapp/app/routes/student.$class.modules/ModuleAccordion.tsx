@@ -221,9 +221,7 @@ const ModuleCard = ({
             <h3 className="mt-1 text-lg sm:text-xl font-semibold text-gray-900 dark:text-gray-100 tracking-tight">
               {module.title}
             </h3>
-            {summary && (
-              <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">{summary}</p>
-            )}
+            {summary && <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">{summary}</p>}
           </div>
           {hasExpandableContent && (
             <IconChevronDown
@@ -256,11 +254,7 @@ const ModuleCard = ({
       {open && hasExpandableContent && (
         <div className="px-5 sm:px-6 pb-5 sm:pb-6 -mt-1 border-t border-stone-200/70 dark:border-neutral-800 pt-5">
           {module.team_formation_mode === 'SELF_FORMED' && rolePrefix === 'student' && (
-            <TeamFormationBanner
-              module={module}
-              userTeam={userTeam}
-              classSlug={classSlug}
-            />
+            <TeamFormationBanner module={module} userTeam={userTeam} classSlug={classSlug} />
           )}
 
           {module.description && (

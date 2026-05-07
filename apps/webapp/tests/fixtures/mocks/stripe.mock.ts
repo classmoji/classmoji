@@ -16,7 +16,7 @@ export async function mockStripeAPI(page: Page, options: StripeMockOptions = {})
   const { shouldFail = false } = options;
 
   // Mock Stripe.js loading
-  await page.route('**/js.stripe.com/**', async (route) => {
+  await page.route('**/js.stripe.com/**', async route => {
     // Return a minimal Stripe.js mock
     return route.fulfill({
       status: 200,
@@ -63,7 +63,7 @@ export async function mockStripeAPI(page: Page, options: StripeMockOptions = {})
   });
 
   // Mock Stripe API calls
-  await page.route('**/api.stripe.com/**', async (route) => {
+  await page.route('**/api.stripe.com/**', async route => {
     const url = route.request().url();
     const method = route.request().method();
 
@@ -116,7 +116,7 @@ export async function mockStripeAPI(page: Page, options: StripeMockOptions = {})
   });
 
   // Mock internal checkout API
-  await page.route('**/api/checkout/**', async (route) => {
+  await page.route('**/api/checkout/**', async route => {
     return route.fulfill({
       status: 200,
       contentType: 'application/json',
@@ -133,7 +133,7 @@ export async function mockStripeAPI(page: Page, options: StripeMockOptions = {})
  */
 export async function mockPaymentSuccess(page: Page): Promise<void> {
   // Mock the success callback URL
-  await page.route('**/payment/success**', async (route) => {
+  await page.route('**/payment/success**', async route => {
     return route.fulfill({
       status: 302,
       headers: {
@@ -147,7 +147,7 @@ export async function mockPaymentSuccess(page: Page): Promise<void> {
  * Mock payment cancellation
  */
 export async function mockPaymentCancel(page: Page): Promise<void> {
-  await page.route('**/payment/cancel**', async (route) => {
+  await page.route('**/payment/cancel**', async route => {
     return route.fulfill({
       status: 302,
       headers: {

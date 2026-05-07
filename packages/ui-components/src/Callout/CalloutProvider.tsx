@@ -8,11 +8,7 @@ import {
   useState,
 } from 'react';
 import type { ReactNode } from 'react';
-import type {
-  ActiveCallout,
-  CalloutHandle,
-  CalloutPayload,
-} from './types.ts';
+import type { ActiveCallout, CalloutHandle, CalloutPayload } from './types.ts';
 import { VARIANT_CONFIG } from './variants.tsx';
 
 export const DEFAULT_CALLOUT_SLOT_ID = 'default';
@@ -57,9 +53,7 @@ interface SlotInternalContextValue {
   tick: number;
 }
 
-const SlotInternalContext = createContext<SlotInternalContextValue | null>(
-  null,
-);
+const SlotInternalContext = createContext<SlotInternalContextValue | null>(null);
 
 export interface CalloutProviderProps {
   children: ReactNode;
@@ -68,15 +62,13 @@ export interface CalloutProviderProps {
 export function CalloutProvider({ children }: CalloutProviderProps) {
   const [tick, setTick] = useState(0);
   const bumpTick = useCallback(() => {
-    setTick((t) => t + 1);
+    setTick(t => t + 1);
   }, []);
 
   const slotsRef = useRef<Map<string, ActiveCallout | null>>(new Map());
   const mountedSlotsRef = useRef<Set<string>>(new Set());
   const bufferedByTargetSlotRef = useRef<Map<string, BufferedEntry>>(new Map());
-  const dismissTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(
-    new Map(),
-  );
+  const dismissTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
 
   const clearDismissTimer = useCallback((id: string) => {
     const timer = dismissTimersRef.current.get(id);
@@ -86,14 +78,11 @@ export function CalloutProvider({ children }: CalloutProviderProps) {
     }
   }, []);
 
-  const resolveAutoDismissMs = useCallback(
-    (payload: CalloutPayload): number | null => {
-      if (payload.persistent === true) return null;
-      if (payload.autoDismissMs !== undefined) return payload.autoDismissMs;
-      return VARIANT_CONFIG[payload.variant].defaultAutoDismissMs;
-    },
-    [],
-  );
+  const resolveAutoDismissMs = useCallback((payload: CalloutPayload): number | null => {
+    if (payload.persistent === true) return null;
+    if (payload.autoDismissMs !== undefined) return payload.autoDismissMs;
+    return VARIANT_CONFIG[payload.variant].defaultAutoDismissMs;
+  }, []);
 
   // dismiss is defined below; scheduleAutoDismiss reaches it through this ref.
   const dismissRef = useRef<(id: string) => void>(() => {});
@@ -108,7 +97,7 @@ export function CalloutProvider({ children }: CalloutProviderProps) {
       }, ms);
       dismissTimersRef.current.set(payload.id, timer);
     },
-    [clearDismissTimer, resolveAutoDismissMs],
+    [clearDismissTimer, resolveAutoDismissMs]
   );
 
   const placeInSlot = useCallback(
@@ -116,7 +105,7 @@ export function CalloutProvider({ children }: CalloutProviderProps) {
       slotsRef.current.set(slotId, active);
       scheduleAutoDismiss(active);
     },
-    [scheduleAutoDismiss],
+    [scheduleAutoDismiss]
   );
 
   const clearBufferFor = useCallback((targetSlotId: string) => {
@@ -135,10 +124,7 @@ export function CalloutProvider({ children }: CalloutProviderProps) {
   }, []);
 
   const findBufferForId = useCallback((id: string): string | null => {
-    for (const [
-      targetSlotId,
-      entry,
-    ] of bufferedByTargetSlotRef.current.entries()) {
+    for (const [targetSlotId, entry] of bufferedByTargetSlotRef.current.entries()) {
       if (entry.payload.id === id) return targetSlotId;
     }
     return null;
@@ -186,7 +172,7 @@ export function CalloutProvider({ children }: CalloutProviderProps) {
         }
         if (process.env.NODE_ENV !== 'production') {
           console.warn(
-            `[Callout] Dropped callout id=${entry.payload.id}: no slot "${targetSlotId}" or "${DEFAULT_CALLOUT_SLOT_ID}" mounted within ${BUFFER_TIMEOUT_MS}ms`,
+            `[Callout] Dropped callout id=${entry.payload.id}: no slot "${targetSlotId}" or "${DEFAULT_CALLOUT_SLOT_ID}" mounted within ${BUFFER_TIMEOUT_MS}ms`
           );
         }
       }, BUFFER_TIMEOUT_MS);
@@ -197,7 +183,7 @@ export function CalloutProvider({ children }: CalloutProviderProps) {
       });
       return id;
     },
-    [bumpTick, clearBufferFor, placeInSlot],
+    [bumpTick, clearBufferFor, placeInSlot]
   );
 
   const update = useCallback(
@@ -243,13 +229,7 @@ export function CalloutProvider({ children }: CalloutProviderProps) {
         };
       }
     },
-    [
-      bumpTick,
-      clearDismissTimer,
-      findBufferForId,
-      findSlotForId,
-      scheduleAutoDismiss,
-    ],
+    [bumpTick, clearDismissTimer, findBufferForId, findSlotForId, scheduleAutoDismiss]
   );
 
   const dismiss = useCallback(
@@ -272,7 +252,7 @@ export function CalloutProvider({ children }: CalloutProviderProps) {
       }
       if (changed) bumpTick();
     },
-    [bumpTick, clearDismissTimer, findBufferForId, findSlotForId],
+    [bumpTick, clearDismissTimer, findBufferForId, findSlotForId]
   );
 
   useEffect(() => {
@@ -296,11 +276,11 @@ export function CalloutProvider({ children }: CalloutProviderProps) {
 
   const handle = useMemo<CalloutHandle>(
     () => ({
-      show: (payload) => showRef.current(payload),
+      show: payload => showRef.current(payload),
       update: (id, partial) => updateRef.current(id, partial),
-      dismiss: (id) => dismissPublicRef.current(id),
+      dismiss: id => dismissPublicRef.current(id),
     }),
-    [],
+    []
   );
 
   const registerSlot = useCallback(
@@ -317,7 +297,7 @@ export function CalloutProvider({ children }: CalloutProviderProps) {
       }
       bumpTick();
     },
-    [bumpTick, placeInSlot],
+    [bumpTick, placeInSlot]
   );
 
   const unregisterSlot = useCallback(
@@ -330,13 +310,12 @@ export function CalloutProvider({ children }: CalloutProviderProps) {
       slotsRef.current.delete(slotId);
       bumpTick();
     },
-    [bumpTick, clearDismissTimer],
+    [bumpTick, clearDismissTimer]
   );
 
   const getActive = useCallback(
-    (slotId: string): ActiveCallout | null =>
-      slotsRef.current.get(slotId) ?? null,
-    [],
+    (slotId: string): ActiveCallout | null => slotsRef.current.get(slotId) ?? null,
+    []
   );
 
   const slotInternalValue = useMemo<SlotInternalContextValue>(
@@ -347,7 +326,7 @@ export function CalloutProvider({ children }: CalloutProviderProps) {
       dismiss,
       tick,
     }),
-    [getActive, registerSlot, unregisterSlot, dismiss, tick],
+    [getActive, registerSlot, unregisterSlot, dismiss, tick]
   );
 
   useEffect(() => {
@@ -374,9 +353,7 @@ export function CalloutProvider({ children }: CalloutProviderProps) {
 export function useCalloutSlotInternal(slotId: string): CalloutSlotInternal {
   const ctx = useContext(SlotInternalContext);
   if (ctx === null) {
-    throw new Error(
-      'useCalloutSlotInternal must be used inside a <CalloutProvider>',
-    );
+    throw new Error('useCalloutSlotInternal must be used inside a <CalloutProvider>');
   }
   return {
     active: ctx.getActive(slotId),

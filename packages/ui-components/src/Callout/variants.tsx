@@ -1,10 +1,5 @@
 import type { ReactNode } from 'react';
-import {
-  IconArrowRotate,
-  IconBell,
-  IconCheck,
-  IconX,
-} from '../icons/index.tsx';
+import { IconArrowRotate, IconBell, IconCheck, IconX } from '../icons/index.tsx';
 import type { CalloutVariant } from './types.ts';
 
 export interface VariantConfig {
@@ -38,11 +33,7 @@ export const VARIANT_CONFIG: Record<CalloutVariant, VariantConfig> = {
     accentClassName: 'bg-violet-500',
     iconColorClassName: 'text-violet-600 dark:text-violet-400',
     defaultIcon: (
-      <IconArrowRotate
-        size={18}
-        className="animate-spin"
-        style={{ animationDuration: '1.6s' }}
-      />
+      <IconArrowRotate size={18} className="animate-spin" style={{ animationDuration: '1.6s' }} />
     ),
   },
 };

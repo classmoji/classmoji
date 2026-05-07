@@ -119,9 +119,7 @@ const ModuleSpotlightCard = ({ module, classSlug }: ModuleSpotlightCardProps) =>
       <h3 className="mt-1 text-lg sm:text-xl font-semibold text-gray-900 dark:text-gray-100 tracking-tight">
         {module.title}
       </h3>
-      {summary && (
-        <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">{summary}</p>
-      )}
+      {summary && <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">{summary}</p>}
 
       <div className="mt-5 text-[11px] font-semibold tracking-[0.18em] text-gray-400 dark:text-gray-500">
         THIS WEEK

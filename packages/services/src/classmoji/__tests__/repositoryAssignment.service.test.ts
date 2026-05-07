@@ -75,7 +75,10 @@ describe('getLatePercentage', () => {
     countMock.mockResolvedValue(2);
     const deadline = new Date('2026-01-10T00:00:00Z');
     findManyMock.mockResolvedValue([
-      row({ closed_at: new Date('2026-01-09T00:00:00Z'), assignment: { student_deadline: deadline } }),
+      row({
+        closed_at: new Date('2026-01-09T00:00:00Z'),
+        assignment: { student_deadline: deadline },
+      }),
       row({ closed_at: deadline, assignment: { student_deadline: deadline } }),
     ]);
     expect(await getLatePercentage('cls')).toBe(0);
@@ -85,9 +88,18 @@ describe('getLatePercentage', () => {
     countMock.mockResolvedValue(4);
     const deadline = new Date('2026-01-10T00:00:00Z');
     findManyMock.mockResolvedValue([
-      row({ closed_at: new Date('2026-01-11T00:00:00Z'), assignment: { student_deadline: deadline } }),
-      row({ closed_at: new Date('2026-01-12T00:00:00Z'), assignment: { student_deadline: deadline } }),
-      row({ closed_at: new Date('2026-01-09T00:00:00Z'), assignment: { student_deadline: deadline } }),
+      row({
+        closed_at: new Date('2026-01-11T00:00:00Z'),
+        assignment: { student_deadline: deadline },
+      }),
+      row({
+        closed_at: new Date('2026-01-12T00:00:00Z'),
+        assignment: { student_deadline: deadline },
+      }),
+      row({
+        closed_at: new Date('2026-01-09T00:00:00Z'),
+        assignment: { student_deadline: deadline },
+      }),
       row({ closed_at: null, assignment: { student_deadline: deadline } }),
     ]);
     expect(await getLatePercentage('cls')).toBe(50);
@@ -97,7 +109,10 @@ describe('getLatePercentage', () => {
     countMock.mockResolvedValue(3);
     const deadline = new Date('2026-01-10T00:00:00Z');
     findManyMock.mockResolvedValue([
-      row({ closed_at: new Date('2026-01-11T00:00:00Z'), assignment: { student_deadline: deadline } }),
+      row({
+        closed_at: new Date('2026-01-11T00:00:00Z'),
+        assignment: { student_deadline: deadline },
+      }),
       row({ closed_at: null, assignment: { student_deadline: deadline } }),
       row({ closed_at: null, assignment: { student_deadline: deadline } }),
     ]);

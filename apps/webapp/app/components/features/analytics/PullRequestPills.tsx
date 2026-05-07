@@ -28,13 +28,10 @@ const PullRequestPills = ({ pr_summary }: PullRequestPillsProps) => {
     { key: 'closed', count: pr_summary.closed, label: 'closed', tone: 'gray' },
   ];
 
-  const visible = items.filter((i) => i.count > 0);
+  const visible = items.filter(i => i.count > 0);
   if (visible.length === 0) {
     return (
-      <div
-        className="text-xs text-gray-500 dark:text-gray-400"
-        data-testid="pr-pills-empty"
-      >
+      <div className="text-xs text-gray-500 dark:text-gray-400" data-testid="pr-pills-empty">
         No pull requests.
       </div>
     );
@@ -45,11 +42,11 @@ const PullRequestPills = ({ pr_summary }: PullRequestPillsProps) => {
       <span className="text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400 self-center mr-1">
         PRs
       </span>
-      {visible.map((i) => (
+      {visible.map(i => (
         <span
           key={i.key}
           className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-xs font-medium ${pillClasses(
-            i.tone,
+            i.tone
           )}`}
           data-testid={`pr-pill-${i.key}`}
         >

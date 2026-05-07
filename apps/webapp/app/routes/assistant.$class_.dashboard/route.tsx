@@ -94,9 +94,7 @@ const AssistantDashboard = ({ loaderData }: Route.ComponentProps) => {
             const myGraded = myAssigned - numUngradedAssignments;
 
             const ungradedSubtitle =
-              myAssigned > 0
-                ? `${myGraded} of ${myAssigned} graded`
-                : 'nothing assigned yet';
+              myAssigned > 0 ? `${myGraded} of ${myAssigned} graded` : 'nothing assigned yet';
 
             return (
               <>
@@ -132,7 +130,7 @@ const AssistantDashboard = ({ loaderData }: Route.ComponentProps) => {
 
       <Suspense fallback={<Skeleton active paragraph={{ rows: 4 }} />}>
         <Await resolve={cockpit} errorElement={null}>
-          {(result) => {
+          {result => {
             if (!result) return null;
             const [queue, throughput, streak, distribution] = result;
             return (
@@ -141,10 +139,7 @@ const AssistantDashboard = ({ loaderData }: Route.ComponentProps) => {
                   <div className="lg:col-span-2">
                     <MyDayQueue queue={queue} />
                   </div>
-                  <StreakBadge
-                    days={streak.days}
-                    lastGradedAt={streak.lastGradedAt}
-                  />
+                  <StreakBadge days={streak.days} lastGradedAt={streak.lastGradedAt} />
                 </div>
 
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">

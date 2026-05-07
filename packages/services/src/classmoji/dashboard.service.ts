@@ -30,9 +30,7 @@ import { DEFAULT_EMOJI_GRADE_MAPPINGS } from '@classmoji/utils';
  * Median of a numeric array. Returns null for empty input. Ignores NaN/null.
  */
 export function computeGradeMedian(values: Array<number | null | undefined>): number | null {
-  const nums = values.filter(
-    (v): v is number => typeof v === 'number' && Number.isFinite(v),
-  );
+  const nums = values.filter((v): v is number => typeof v === 'number' && Number.isFinite(v));
   if (nums.length === 0) return null;
   const sorted = [...nums].sort((a, b) => a - b);
   const mid = Math.floor(sorted.length / 2);
@@ -43,10 +41,7 @@ export function computeGradeMedian(values: Array<number | null | undefined>): nu
  * Resolve a numeric grade (0-100) for a given emoji, using the classroom's
  * EmojiMapping when present, then DEFAULT_EMOJI_GRADE_MAPPINGS, else null.
  */
-export function emojiToGrade(
-  emoji: string,
-  classroomMap: Map<string, number>,
-): number | null {
+export function emojiToGrade(emoji: string, classroomMap: Map<string, number>): number | null {
   const fromClassroom = classroomMap.get(emoji);
   if (typeof fromClassroom === 'number') return fromClassroom;
   const fromDefault = DEFAULT_EMOJI_GRADE_MAPPINGS[emoji];
@@ -58,7 +53,7 @@ export function emojiToGrade(
  * (closed_at) timestamps, compute median time-to-grade in hours.
  */
 export function computeMedianTimeToGradeHours(
-  pairs: Array<{ submittedAt: Date | null; gradedAt: Date | null }>,
+  pairs: Array<{ submittedAt: Date | null; gradedAt: Date | null }>
 ): number | null {
   const diffs: number[] = [];
   for (const p of pairs) {
@@ -76,7 +71,7 @@ async function loadClassroomEmojiMap(classroomId: string): Promise<Map<string, n
     where: { classroom_id: classroomId },
     select: { emoji: true, grade: true },
   });
-  return new Map(rows.map((r) => [r.emoji, r.grade]));
+  return new Map(rows.map(r => [r.emoji, r.grade]));
 }
 
 // 1. Cohort overview
@@ -103,10 +98,7 @@ export interface CohortOverview {
 /**
  * Build N weekly bin cutoffs [start, end) ending at `now`, oldest→newest.
  */
-function buildWeeklyBins(
-  now: Date,
-  weeks: number,
-): Array<{ start: Date; end: Date }> {
+function buildWeeklyBins(now: Date, weeks: number): Array<{ start: Date; end: Date }> {
   const weekMs = 7 * 24 * 60 * 60 * 1000;
   const bins: Array<{ start: Date; end: Date }> = [];
   const endAnchor = now.getTime();
@@ -118,10 +110,7 @@ function buildWeeklyBins(
   return bins;
 }
 
-function bucketIndex(
-  ts: Date,
-  bins: Array<{ start: Date; end: Date }>,
-): number {
+function bucketIndex(ts: Date, bins: Array<{ start: Date; end: Date }>): number {
   const t = ts.getTime();
   for (let i = 0; i < bins.length; i++) {
     if (t >= bins[i].start.getTime() && t < bins[i].end.getTime()) return i;
@@ -138,7 +127,7 @@ export async function cohortOverview(classroomId: string): Promise<CohortOvervie
     where: { classroom_id: classroomId, role: 'STUDENT' },
     select: { user_id: true },
   });
-  const studentIds = memberships.map((m) => m.user_id);
+  const studentIds = memberships.map(m => m.user_id);
   const totalStudents = studentIds.length;
 
   if (totalStudents === 0) {
@@ -182,8 +171,8 @@ export async function cohortOverview(classroomId: string): Promise<CohortOvervie
   ]);
 
   const activeSet = new Set<string>();
-  recentQuizUsers.forEach((r) => activeSet.add(r.user_id));
-  recentCommitRepos.forEach((r) => {
+  recentQuizUsers.forEach(r => activeSet.add(r.user_id));
+  recentCommitRepos.forEach(r => {
     if (r.student_id) activeSet.add(r.student_id);
   });
   const activeStudents = activeSet.size;
@@ -200,7 +189,7 @@ export async function cohortOverview(classroomId: string): Promise<CohortOvervie
     select: { emoji: true },
   });
   const numeric = grades
-    .map((g) => emojiToGrade(g.emoji, emojiMap))
+    .map(g => emojiToGrade(g.emoji, emojiMap))
     .filter((v): v is number => v !== null);
   const medianGrade = computeGradeMedian(numeric);
 
@@ -231,17 +220,17 @@ export async function cohortOverview(classroomId: string): Promise<CohortOvervie
 
   // Load top-10 at-risk student profiles, ordered by missed-deadline count desc.
   const topAtRiskIds = atRiskIds
-    .map((id) => ({ id, count: missedCountByStudent.get(id) ?? 0 }))
+    .map(id => ({ id, count: missedCountByStudent.get(id) ?? 0 }))
     .sort((a, b) => b.count - a.count)
     .slice(0, 10);
   const atRiskProfiles =
     topAtRiskIds.length > 0
       ? await prisma.user.findMany({
-          where: { id: { in: topAtRiskIds.map((x) => x.id) } },
+          where: { id: { in: topAtRiskIds.map(x => x.id) } },
           select: { id: true, name: true, login: true },
         })
       : [];
-  const profileById = new Map(atRiskProfiles.map((p) => [p.id, p]));
+  const profileById = new Map(atRiskProfiles.map(p => [p.id, p]));
   const atRiskStudents: AtRiskStudent[] = topAtRiskIds
     .map(({ id, count }) => {
       const p = profileById.get(id);
@@ -328,7 +317,7 @@ export async function cohortOverview(classroomId: string): Promise<CohortOvervie
     const idx = bucketIndex(s.last_commit_at, bins);
     if (idx >= 0) activeSetsPerBin[idx].add(sid);
   }
-  const activeStudentsSeries = activeSetsPerBin.map((s) => s.size);
+  const activeStudentsSeries = activeSetsPerBin.map(s => s.size);
 
   const closedCountPerBin = new Array<number>(WEEKS).fill(0);
   for (const c of weeklyClosed) {
@@ -336,8 +325,8 @@ export async function cohortOverview(classroomId: string): Promise<CohortOvervie
     const idx = bucketIndex(c.closed_at, bins);
     if (idx >= 0) closedCountPerBin[idx] += 1;
   }
-  const submissionRateSeries = closedCountPerBin.map((n) =>
-    totalStudents > 0 ? Math.min(1, n / totalStudents) : 0,
+  const submissionRateSeries = closedCountPerBin.map(n =>
+    totalStudents > 0 ? Math.min(1, n / totalStudents) : 0
   );
 
   const ttgPerBin: Array<number[]> = Array.from({ length: WEEKS }, () => []);
@@ -349,14 +338,14 @@ export async function cohortOverview(classroomId: string): Promise<CohortOvervie
     const hours = (g.created_at.getTime() - closed.getTime()) / 3_600_000;
     if (hours >= 0) ttgPerBin[idx].push(hours);
   }
-  const slaSeriesHours = ttgPerBin.map((arr) => {
+  const slaSeriesHours = ttgPerBin.map(arr => {
     const m = computeGradeMedian(arr);
     return m ?? 0;
   });
 
   // At-risk series approximation: for each week-end, count students with >=2
   // past-due assignments (deadline <= weekEnd) that remain OPEN/ungraded today.
-  const atRiskSeries = bins.map((bin) => {
+  const atRiskSeries = bins.map(bin => {
     const byStudent = new Map<string, number>();
     for (const r of pastDueOpen) {
       const sid = r.repository.student_id;
@@ -395,9 +384,7 @@ export interface AssignmentHealthRow {
   regradeRate: number;
 }
 
-export async function assignmentHealth(
-  classroomId: string,
-): Promise<AssignmentHealthRow[]> {
+export async function assignmentHealth(classroomId: string): Promise<AssignmentHealthRow[]> {
   const prisma = getPrisma();
 
   const [assignments, studentCountRow, emojiMap] = await Promise.all([
@@ -429,9 +416,9 @@ export async function assignmentHealth(
 
   const enrolled = studentCountRow || 0;
 
-  return assignments.map((a) => {
+  return assignments.map(a => {
     const ras = a.repository_assignments;
-    const submitted = ras.filter((r) => r.closed_at !== null).length;
+    const submitted = ras.filter(r => r.closed_at !== null).length;
     const submissionRate = enrolled > 0 ? submitted / enrolled : 0;
 
     const gradeValues: number[] = [];
@@ -488,7 +475,7 @@ export async function taOps(classroomId: string): Promise<TaOpsRow[]> {
     },
   });
   if (taMemberships.length === 0) return [];
-  const taIds = taMemberships.map((m) => m.user.id);
+  const taIds = taMemberships.map(m => m.user.id);
 
   const [allGrades, emojiMap] = await Promise.all([
     prisma.assignmentGrade.findMany({
@@ -521,21 +508,19 @@ export async function taOps(classroomId: string): Promise<TaOpsRow[]> {
     byTa.set(g.grader_id, bucket);
   }
 
-  return taMemberships.map((m) => {
+  return taMemberships.map(m => {
     const u = m.user;
     const grades = byTa.get(u.id) ?? [];
-    const throughput7d = grades.filter((g) => g.created_at >= sevenDaysAgo).length;
+    const throughput7d = grades.filter(g => g.created_at >= sevenDaysAgo).length;
 
     const ttg = grades
-      .map((g) =>
+      .map(g =>
         g.repository_assignment.closed_at
-          ? (g.created_at.getTime() - g.repository_assignment.closed_at.getTime()) /
-            3_600_000
-          : null,
+          ? (g.created_at.getTime() - g.repository_assignment.closed_at.getTime()) / 3_600_000
+          : null
       )
       .filter((v): v is number => v !== null && v >= 0);
-    const avgTimeToGradeHours =
-      ttg.length > 0 ? ttg.reduce((a, b) => a + b, 0) / ttg.length : null;
+    const avgTimeToGradeHours = ttg.length > 0 ? ttg.reduce((a, b) => a + b, 0) / ttg.length : null;
 
     let overturned = 0;
     let withRegrade = 0;
@@ -543,13 +528,13 @@ export async function taOps(classroomId: string): Promise<TaOpsRow[]> {
       const reqs = g.repository_assignment.regrade_requests;
       if (reqs.length > 0) {
         withRegrade += 1;
-        if (reqs.some((r) => r.status === 'APPROVED')) overturned += 1;
+        if (reqs.some(r => r.status === 'APPROVED')) overturned += 1;
       }
     }
     const overturnRate = withRegrade > 0 ? overturned / withRegrade : null;
 
     const numericGrades = grades
-      .map((g) => emojiToGrade(g.emoji, emojiMap))
+      .map(g => emojiToGrade(g.emoji, emojiMap))
       .filter((v): v is number => v !== null);
     const gradeDistributionMean =
       numericGrades.length > 0
@@ -596,9 +581,7 @@ export async function quizAnalytics(classroomId: string): Promise<QuizAnalytics>
     }
   }
   const avgFocusPct =
-    focusValues.length > 0
-      ? focusValues.reduce((a, b) => a + b, 0) / focusValues.length
-      : null;
+    focusValues.length > 0 ? focusValues.reduce((a, b) => a + b, 0) / focusValues.length : null;
 
   // "Hardest question" requires a stable per-question identifier across
   // attempts; QuizAttempt.question_results_json does not guarantee that today.
@@ -613,9 +596,7 @@ export interface DeadlinePressureBucket {
   assignments: Array<{ id: string; title: string; dueAt: string }>;
 }
 
-export async function deadlinePressure(
-  classroomId: string,
-): Promise<DeadlinePressureBucket[]> {
+export async function deadlinePressure(classroomId: string): Promise<DeadlinePressureBucket[]> {
   const prisma = getPrisma();
   const now = new Date();
   const in7 = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);

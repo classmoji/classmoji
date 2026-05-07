@@ -1,10 +1,7 @@
 import { Link } from 'react-router';
 import dayjs, { type Dayjs } from 'dayjs';
 import { IconArrowRight } from '@tabler/icons-react';
-import {
-  getEventTypeLightBg,
-  getEventTypeDarkText,
-} from '~/components/features/calendar/utils';
+import { getEventTypeLightBg, getEventTypeDarkText } from '~/components/features/calendar/utils';
 
 export interface WeekEvent {
   id: string;
@@ -90,9 +87,7 @@ const WeeklyCalendarCard = ({ events, weekStart, classSlug }: WeeklyCalendarCard
               <div className="flex flex-col items-center mb-2">
                 <span
                   className={`text-[10px] font-semibold tracking-[0.14em] ${
-                    isTodayDate
-                      ? 'text-[#858A92]'
-                      : 'text-gray-400 dark:text-gray-500'
+                    isTodayDate ? 'text-[#858A92]' : 'text-gray-400 dark:text-gray-500'
                   }`}
                 >
                   {DAY_LABELS[idx]}

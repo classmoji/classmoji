@@ -248,7 +248,10 @@ test.describe('Module Actions', () => {
 });
 
 test.describe('Module Navigation', () => {
-  test('can navigate from dashboard to modules via sidebar', async ({ authenticatedPage: page, testOrg }) => {
+  test('can navigate from dashboard to modules via sidebar', async ({
+    authenticatedPage: page,
+    testOrg,
+  }) => {
     // Start from dashboard
     await mockGitHubAPI(page);
     await page.goto(`/admin/${testOrg}/dashboard`);
@@ -262,7 +265,10 @@ test.describe('Module Navigation', () => {
     await expect(page.getByRole('heading', { name: 'Modules' })).toBeVisible();
   });
 
-  test('can navigate from module detail back to list', async ({ authenticatedPage: page, testOrg }) => {
+  test('can navigate from module detail back to list', async ({
+    authenticatedPage: page,
+    testOrg,
+  }) => {
     await mockGitHubAPI(page);
     await page.goto(`/admin/${testOrg}/modules`);
     await waitForDataLoad(page);
@@ -416,7 +422,9 @@ test.describe('Assignment CRUD Operations', () => {
     await expect(page.getByText('Schedule & Deadlines')).toBeVisible({ timeout: 10000 });
 
     // Deadline fields should be visible - scope to the nested drawer
-    const nestedDrawer = page.locator('.ant-drawer').filter({ hasText: 'Add or Update Assignment' });
+    const nestedDrawer = page
+      .locator('.ant-drawer')
+      .filter({ hasText: 'Add or Update Assignment' });
     await expect(nestedDrawer.getByText('Student Deadline')).toBeVisible();
     await expect(nestedDrawer.getByText('Grader Deadline')).toBeVisible();
   });
@@ -527,7 +535,9 @@ test.describe('Module Detail - Assignment Tabs', () => {
 
   test('shows assignments overview section', async ({ authenticatedPage: page }) => {
     // Should show Assignments Overview with count
-    await expect(page.getByText('Assignments Overview').or(page.getByText(/\d+ Assignments?/))).toBeVisible();
+    await expect(
+      page.getByText('Assignments Overview').or(page.getByText(/\d+ Assignments?/))
+    ).toBeVisible();
   });
 
   test('has actions dropdown menu', async ({ authenticatedPage: page }) => {
@@ -545,7 +555,9 @@ test.describe('Module Detail - Assignment Tabs', () => {
     await expect(page.getByText('Edit module')).toBeVisible();
   });
 
-  test('shows grade management section for selected assignment', async ({ authenticatedPage: page }) => {
+  test('shows grade management section for selected assignment', async ({
+    authenticatedPage: page,
+  }) => {
     // Default view is Assignments view - grade management is visible by default
 
     // The selected tab should show grade management

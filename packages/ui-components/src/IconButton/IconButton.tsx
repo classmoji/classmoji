@@ -12,7 +12,7 @@ export interface IconButtonProps extends Omit<ButtonHTMLAttributes<HTMLButtonEle
  */
 export const IconButton = forwardRef<HTMLButtonElement, IconButtonProps>(function IconButton(
   { label, icon, className, ...rest },
-  ref,
+  ref
 ) {
   const classes = ['btn', 'btn-ghost', className].filter(Boolean).join(' ');
   return (

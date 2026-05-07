@@ -29,7 +29,7 @@ describe('padDailyBuckets', () => {
   it('handles empty counts map', () => {
     const out = padDailyBuckets(new Map(), '2026-04-19', 7);
     expect(out).toHaveLength(7);
-    expect(out.every((b) => b.count === 0)).toBe(true);
+    expect(out.every(b => b.count === 0)).toBe(true);
   });
 });
 
@@ -39,26 +39,24 @@ describe('computeStreakDays', () => {
   });
 
   it('counts consecutive days ending at most recent', () => {
-    expect(
-      computeStreakDays(['2026-04-17', '2026-04-18', '2026-04-19']),
-    ).toEqual({ days: 3, lastDay: '2026-04-19' });
+    expect(computeStreakDays(['2026-04-17', '2026-04-18', '2026-04-19'])).toEqual({
+      days: 3,
+      lastDay: '2026-04-19',
+    });
   });
 
   it('stops at first gap', () => {
-    expect(
-      computeStreakDays([
-        '2026-04-10',
-        '2026-04-17',
-        '2026-04-18',
-        '2026-04-19',
-      ]),
-    ).toEqual({ days: 3, lastDay: '2026-04-19' });
+    expect(computeStreakDays(['2026-04-10', '2026-04-17', '2026-04-18', '2026-04-19'])).toEqual({
+      days: 3,
+      lastDay: '2026-04-19',
+    });
   });
 
   it('deduplicates repeats on the same day', () => {
-    expect(
-      computeStreakDays(['2026-04-19', '2026-04-19', '2026-04-18']),
-    ).toEqual({ days: 2, lastDay: '2026-04-19' });
+    expect(computeStreakDays(['2026-04-19', '2026-04-19', '2026-04-18'])).toEqual({
+      days: 2,
+      lastDay: '2026-04-19',
+    });
   });
 
   it('single-day streak', () => {
@@ -75,7 +73,7 @@ describe('bucketGrades', () => {
     expect(out).toHaveLength(10);
     expect(out[0].bucket).toBe('0-10');
     expect(out[9].bucket).toBe('90-100');
-    expect(out.every((b) => b.count === 0)).toBe(true);
+    expect(out.every(b => b.count === 0)).toBe(true);
   });
 
   it('bins by floor(grade/10)', () => {

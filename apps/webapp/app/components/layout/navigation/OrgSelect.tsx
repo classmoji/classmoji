@@ -38,7 +38,6 @@ const termAbbreviation = (term?: string | null, year?: number | null) => {
   return `${p}${String(year).slice(-2)}`;
 };
 
-
 const OrgSelect = ({ memberships }: OrgSelectProps) => {
   const { membership } = useStore();
   const navigate = useNavigate();
@@ -63,11 +62,7 @@ const OrgSelect = ({ memberships }: OrgSelectProps) => {
   };
 
   return (
-    <div
-      className="w-full"
-      onMouseEnter={handleMouseEnter}
-      onMouseLeave={scheduleClose}
-    >
+    <div className="w-full" onMouseEnter={handleMouseEnter} onMouseLeave={scheduleClose}>
       <Select
         placeholder="Select classroom"
         variant="borderless"
@@ -118,10 +113,7 @@ const OrgSelect = ({ memberships }: OrgSelectProps) => {
         labelInValue={true}
         labelRender={() => {
           if (!membership) return null;
-          const term = termAbbreviation(
-            membership.organization.term,
-            membership.organization.year
-          );
+          const term = termAbbreviation(membership.organization.term, membership.organization.year);
           return (
             <div className="min-w-0 px-1 flex items-baseline gap-1.5">
               <span className="text-sm font-semibold text-gray-900 dark:text-gray-100 truncate">

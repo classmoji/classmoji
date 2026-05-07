@@ -68,17 +68,11 @@ const ProgressSummaryCard = ({
 
       <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1.5 text-xs text-gray-600 dark:text-gray-300">
         <span className="inline-flex items-center gap-1.5">
-          <span
-            className="h-2 w-2 rounded-full"
-            style={{ backgroundColor: '#619462' }}
-          />
+          <span className="h-2 w-2 rounded-full" style={{ backgroundColor: '#619462' }} />
           Completed
         </span>
         <span className="inline-flex items-center gap-1.5">
-          <span
-            className="h-2 w-2 rounded-full"
-            style={{ backgroundColor: '#D4A289' }}
-          />
+          <span className="h-2 w-2 rounded-full" style={{ backgroundColor: '#D4A289' }} />
           Current
         </span>
       </div>

@@ -32,7 +32,7 @@ const AtRiskStudents = ({ atRiskCount, students }: AtRiskStudentsProps) => {
         </div>
       ) : (
         <div className="flex flex-col gap-2 max-h-[360px] overflow-y-auto">
-          {students.map((s) => (
+          {students.map(s => (
             <div
               key={s.userId}
               className="flex items-center justify-between p-2 rounded-lg hover:bg-paper dark:hover:bg-gray-800 transition-colors"

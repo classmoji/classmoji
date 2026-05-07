@@ -49,7 +49,7 @@ describe('computeMedianTimeToGradeHours', () => {
       computeMedianTimeToGradeHours([
         { submittedAt: null, gradedAt: graded },
         { submittedAt: graded, gradedAt: null },
-      ]),
+      ])
     ).toBeNull();
   });
 
@@ -63,15 +63,13 @@ describe('computeMedianTimeToGradeHours', () => {
         { submittedAt: submit, gradedAt: g1 },
         { submittedAt: submit, gradedAt: g2 },
         { submittedAt: submit, gradedAt: g3 },
-      ]),
+      ])
     ).toBe(4);
   });
 
   it('skips negative diffs', () => {
     const submit = new Date('2026-01-02T00:00:00Z');
     const graded = new Date('2026-01-01T00:00:00Z');
-    expect(
-      computeMedianTimeToGradeHours([{ submittedAt: submit, gradedAt: graded }]),
-    ).toBeNull();
+    expect(computeMedianTimeToGradeHours([{ submittedAt: submit, gradedAt: graded }])).toBeNull();
   });
 });

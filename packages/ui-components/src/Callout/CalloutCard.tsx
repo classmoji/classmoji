@@ -18,9 +18,7 @@ export function CalloutCard({ payload, onDismiss }: CalloutCardProps) {
   const ariaLive: 'assertive' | 'polite' = isAlert ? 'assertive' : 'polite';
 
   const showProgressBar = variant === 'progress' && progress != null;
-  const progressPct = showProgressBar
-    ? Math.max(0, Math.min(1, progress)) * 100
-    : 0;
+  const progressPct = showProgressBar ? Math.max(0, Math.min(1, progress)) * 100 : 0;
 
   return (
     <div
@@ -44,22 +42,14 @@ export function CalloutCard({ payload, onDismiss }: CalloutCardProps) {
       {/* Text block */}
       <div className="min-w-0 flex-1">
         <div className="flex flex-col sm:flex-row sm:items-baseline sm:gap-1.5">
-          <span className="font-semibold text-gray-900 dark:text-gray-100">
-            {title}
-          </span>
-          {message ? (
-            <span className="text-gray-600 dark:text-gray-400">{message}</span>
-          ) : null}
+          <span className="font-semibold text-gray-900 dark:text-gray-100">{title}</span>
+          {message ? <span className="text-gray-600 dark:text-gray-400">{message}</span> : null}
         </div>
       </div>
 
       {/* Optional action */}
       {action ? (
-        <Button
-          variant="ghost"
-          onClick={action.onClick}
-          className="flex-shrink-0"
-        >
+        <Button variant="ghost" onClick={action.onClick} className="flex-shrink-0">
           {action.label}
         </Button>
       ) : null}

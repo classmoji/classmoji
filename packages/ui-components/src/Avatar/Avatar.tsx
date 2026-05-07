@@ -15,7 +15,7 @@ const DEFAULT_SIZE = 24;
 
 export const Avatar = forwardRef<HTMLSpanElement, AvatarProps>(function Avatar(
   { initials, hue = DEFAULT_HUE, size = DEFAULT_SIZE, src, alt, className, style, ...rest },
-  ref,
+  ref
 ) {
   const baseStyle: CSSProperties = {
     background: `linear-gradient(135deg, oklch(82% 0.09 ${hue}), oklch(60% 0.18 ${hue}))`,

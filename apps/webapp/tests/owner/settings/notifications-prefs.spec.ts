@@ -69,7 +69,9 @@ test.describe('Settings → Notifications preferences', () => {
     await page.goto('/settings/notifications');
     await waitForDataLoad(page);
 
-    const buttons = page.getByRole('button', { name: '' }).filter({ has: page.locator('[aria-pressed]') });
+    const buttons = page
+      .getByRole('button', { name: '' })
+      .filter({ has: page.locator('[aria-pressed]') });
     // Use aria-pressed to read state reliably.
     const allPressed = await page.locator('button[aria-pressed="true"]').count();
     expect(allPressed).toBe(STUDENT_LABELS.length + TA_LABELS.length);
@@ -84,13 +86,13 @@ test.describe('Settings → Notifications preferences', () => {
     await page.goto('/settings/notifications');
     await waitForDataLoad(page);
 
-    const row = page
-      .getByText('Quiz published', { exact: true })
-      .locator('xpath=ancestor::label');
+    const row = page.getByText('Quiz published', { exact: true }).locator('xpath=ancestor::label');
     const toggle = row.locator('button[aria-pressed]');
     await expect(toggle).toHaveAttribute('aria-pressed', 'false');
 
-    const req = page.waitForResponse(r => r.url().endsWith('/settings/notifications') && r.request().method() === 'POST');
+    const req = page.waitForResponse(
+      r => r.url().endsWith('/settings/notifications') && r.request().method() === 'POST'
+    );
     await toggle.click();
     await req;
 

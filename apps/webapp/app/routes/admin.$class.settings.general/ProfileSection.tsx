@@ -17,7 +17,9 @@ const ProfileSection = ({ organization }: ProfileSectionProps) => {
   const { fetcher } = useGlobalFetcher();
 
   const saveProfile = () => {
-    fetcher!.submit(
+    if (!fetcher) return;
+
+    fetcher.submit(
       {
         name,
         term,
@@ -48,20 +50,22 @@ const ProfileSection = ({ organization }: ProfileSectionProps) => {
           <Input value={name} onChange={e => setName(e.target.value)} />
         </Form.Item>
 
-        <div className="grid grid-cols-2 gap-3">
-          <Form.Item label="Term">
-            <Select value={term} onChange={setTerm}>
-              <Select.Option value="FALL">Fall</Select.Option>
-              <Select.Option value="SPRING">Spring</Select.Option>
-              <Select.Option value="SUMMER">Summer</Select.Option>
-              <Select.Option value="WINTER">Winter</Select.Option>
-            </Select>
-          </Form.Item>
-          <Form.Item label="Year">
-            <Select value={year} onChange={setYear}>
-              {yearOptions}
-            </Select>
-          </Form.Item>
+        <div className="@container">
+          <div className="grid grid-cols-1 @xs:grid-cols-2 gap-3">
+            <Form.Item label="Term">
+              <Select value={term} onChange={setTerm}>
+                <Select.Option value="FALL">Fall</Select.Option>
+                <Select.Option value="SPRING">Spring</Select.Option>
+                <Select.Option value="SUMMER">Summer</Select.Option>
+                <Select.Option value="WINTER">Winter</Select.Option>
+              </Select>
+            </Form.Item>
+            <Form.Item label="Year">
+              <Select value={year} onChange={setYear}>
+                {yearOptions}
+              </Select>
+            </Form.Item>
+          </div>
         </div>
 
         <Button type="primary" onClick={saveProfile}>

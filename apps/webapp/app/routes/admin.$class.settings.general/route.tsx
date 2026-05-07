@@ -115,7 +115,6 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
         action: ActionTypes.SAVE_DEFAULT_PAGE,
       };
     },
-
   });
 };
 

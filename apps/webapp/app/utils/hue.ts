@@ -16,10 +16,7 @@ export const hashHue = (value: string | number | null | undefined): number => {
  * Build initials from a name (e.g., "Alex Stein" -> "AS"). Falls back to a single
  * char from login/value when name is missing.
  */
-export const getInitials = (
-  name?: string | null,
-  fallback?: string | null
-): string => {
+export const getInitials = (name?: string | null, fallback?: string | null): string => {
   const source = (name || fallback || '?').trim();
   const parts = source.split(/\s+/).filter(Boolean);
   if (parts.length === 0) return '?';

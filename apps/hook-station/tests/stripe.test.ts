@@ -50,14 +50,9 @@ const post = async (
 
 describe('stripe webhook route', () => {
   beforeEach(() => {
-    [
-      constructWebhookEvent,
-      userFindBy,
-      subGetCurrent,
-      subUpdate,
-      subCreate,
-      subFindBy,
-    ].forEach(m => m.mockReset());
+    [constructWebhookEvent, userFindBy, subGetCurrent, subUpdate, subCreate, subFindBy].forEach(m =>
+      m.mockReset()
+    );
     vi.spyOn(console, 'error').mockImplementation(() => {});
   });
 
@@ -100,7 +95,10 @@ describe('stripe webhook route', () => {
     const res = await post(app, {}, { 'stripe-signature': 'sig' });
 
     expect(res.statusCode).toBe(200);
-    expect(subUpdate).toHaveBeenCalledWith('sub-old', expect.objectContaining({ ends_at: expect.any(Date) }));
+    expect(subUpdate).toHaveBeenCalledWith(
+      'sub-old',
+      expect.objectContaining({ ends_at: expect.any(Date) })
+    );
     expect(subCreate).toHaveBeenCalledWith(
       expect.objectContaining({
         user_id: 'user-1',

@@ -43,13 +43,7 @@ const goodnessTTG = (h: number | null) => {
   return 1 - clamped / 48;
 };
 
-const Cell = ({
-  value,
-  goodness,
-}: {
-  value: string;
-  goodness: number | null;
-}) => (
+const Cell = ({ value, goodness }: { value: string; goodness: number | null }) => (
   <div
     className={`flex items-center justify-center text-xs font-medium rounded-md px-2 py-2 tabular-nums ${
       goodness === null ? emptyCell : bandForGoodness(goodness)
@@ -79,7 +73,7 @@ const AssignmentHeatmap = ({ rows }: AssignmentHeatmapProps) => {
             </div>
           ) : (
             <div className="flex flex-col gap-1.5">
-              {rows.map((r) => (
+              {rows.map(r => (
                 <div
                   key={r.assignmentId}
                   className="grid grid-cols-[1.5fr_1fr_1fr_1fr_1fr] gap-2 items-center"

@@ -218,8 +218,8 @@ const AdminSingleTeamView = ({ loaderData }: Route.ComponentProps) => {
           }
         >
           <p className="mb-2 text-xs text-gray-500 dark:text-gray-400">
-            The team was renamed but these repositories still have the old suffix on GitHub.
-            Rename them manually or retry by renaming the team again.
+            The team was renamed but these repositories still have the old suffix on GitHub. Rename
+            them manually or retry by renaming the team again.
           </p>
           <ul className="text-sm">
             {renameFailures.map(f => (

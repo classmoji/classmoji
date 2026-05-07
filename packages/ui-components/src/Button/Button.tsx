@@ -10,7 +10,7 @@ export interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
 
 export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button(
   { variant = 'default', className, children, ...rest },
-  ref,
+  ref
 ) {
   const variantClass =
     variant === 'primary' ? 'btn-primary' : variant === 'ghost' ? 'btn-ghost' : '';

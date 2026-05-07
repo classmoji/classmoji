@@ -1,13 +1,17 @@
 /* Syllabus Bot Float Button - Notion Style */
 .syllabus-bot-float-button.ant-float-btn-primary .ant-float-btn-body {
   background: #ffffff !important;
-  box-shadow: 0 4px 14px 0 rgba(0, 0, 0, 0.1), 0 0 0 1px rgba(0, 0, 0, 0.05) !important;
+  box-shadow:
+    0 4px 14px 0 rgba(0, 0, 0, 0.1),
+    0 0 0 1px rgba(0, 0, 0, 0.05) !important;
   transition: all 0.2s ease !important;
 }
 
 .syllabus-bot-float-button.ant-float-btn-primary:hover .ant-float-btn-body {
   background: #ffffff !important;
-  box-shadow: 0 6px 20px 0 rgba(0, 0, 0, 0.15), 0 0 0 1px rgba(0, 0, 0, 0.08) !important;
+  box-shadow:
+    0 6px 20px 0 rgba(0, 0, 0, 0.15),
+    0 0 0 1px rgba(0, 0, 0, 0.08) !important;
   transform: translateY(-1px);
 }
 
@@ -26,12 +30,16 @@
 /* Dark mode adjustments */
 .dark .syllabus-bot-float-button.ant-float-btn-primary .ant-float-btn-body {
   background: #1f2937 !important;
-  box-shadow: 0 4px 14px 0 rgba(0, 0, 0, 0.3), 0 0 0 1px rgba(255, 255, 255, 0.1) !important;
+  box-shadow:
+    0 4px 14px 0 rgba(0, 0, 0, 0.3),
+    0 0 0 1px rgba(255, 255, 255, 0.1) !important;
 }
 
 .dark .syllabus-bot-float-button.ant-float-btn-primary:hover .ant-float-btn-body {
   background: #1f2937 !important;
-  box-shadow: 0 6px 20px 0 rgba(0, 0, 0, 0.4), 0 0 0 1px rgba(255, 255, 255, 0.15) !important;
+  box-shadow:
+    0 6px 20px 0 rgba(0, 0, 0, 0.4),
+    0 0 0 1px rgba(255, 255, 255, 0.15) !important;
   transform: translateY(-1px);
 }
 

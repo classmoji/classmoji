@@ -149,7 +149,10 @@ export function parseAuthCookie(cookieValue: string): Partial<TestUser> | null {
 /**
  * Get the dashboard URL for a specific role
  */
-export function getDashboardUrl(role: 'OWNER' | 'ASSISTANT' | 'STUDENT', org: string = TEST_ORG): string {
+export function getDashboardUrl(
+  role: 'OWNER' | 'ASSISTANT' | 'STUDENT',
+  org: string = TEST_ORG
+): string {
   switch (role) {
     case 'OWNER':
       return `/admin/${org}/dashboard`;
@@ -163,7 +166,10 @@ export function getDashboardUrl(role: 'OWNER' | 'ASSISTANT' | 'STUDENT', org: st
 /**
  * Get the base route prefix for a specific role
  */
-export function getRoutePrefix(role: 'OWNER' | 'ASSISTANT' | 'STUDENT', org: string = TEST_ORG): string {
+export function getRoutePrefix(
+  role: 'OWNER' | 'ASSISTANT' | 'STUDENT',
+  org: string = TEST_ORG
+): string {
   switch (role) {
     case 'OWNER':
       return `/admin/${org}`;

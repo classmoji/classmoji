@@ -1,12 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import {
-  linkAuthorsToUsers,
-  linkContributorsToUsers,
-} from '../repoAnalytics.service.ts';
-import type {
-  CommitRecord,
-  ContributorRecord,
-} from '../repoAnalytics.types.ts';
+import { linkAuthorsToUsers, linkContributorsToUsers } from '../repoAnalytics.service.ts';
+import type { CommitRecord, ContributorRecord } from '../repoAnalytics.types.ts';
 
 function commit(partial: Partial<CommitRecord>): CommitRecord {
   return {

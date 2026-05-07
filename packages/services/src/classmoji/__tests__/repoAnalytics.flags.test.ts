@@ -9,10 +9,7 @@ import {
   aggregateByContributor,
   commitsPerDayByContributor,
 } from '../repoAnalytics.flags.ts';
-import type {
-  CommitRecord,
-  ContributorRecord,
-} from '../repoAnalytics.types.ts';
+import type { CommitRecord, ContributorRecord } from '../repoAnalytics.types.ts';
 
 function commit(partial: Partial<CommitRecord>): CommitRecord {
   return {
@@ -56,7 +53,7 @@ describe('commitMessageQuality', () => {
     expect(commitMessageQuality('')).toBe(0);
     expect(commitMessageQuality('update')).toBeLessThan(0.3);
     expect(
-      commitMessageQuality('Refactor auth guard to handle expired tokens'),
+      commitMessageQuality('Refactor auth guard to handle expired tokens')
     ).toBeGreaterThanOrEqual(0.7);
     const q = commitMessageQuality('a'.repeat(100));
     expect(q).toBeGreaterThanOrEqual(0);
@@ -105,8 +102,8 @@ describe('dumpAndRun', () => {
           commit({ sha: 'early', ts: '2025-12-01T00:00:00Z' }),
           commit({ sha: 'late', ts: '2026-01-09T23:00:00Z' }),
         ],
-        deadline,
-      ),
+        deadline
+      )
     ).toBe(false);
   });
 });
@@ -125,7 +122,7 @@ describe('aggregateByContributor', () => {
     expect(rows[0]!.commits).toBe(2);
     expect(rows[0]!.additions).toBe(15);
     expect(rows[0]!.deletions).toBe(3);
-    expect(rows.find((r) => r.login === 'unknown')!.commits).toBe(1);
+    expect(rows.find(r => r.login === 'unknown')!.commits).toBe(1);
   });
 });
 
@@ -138,12 +135,7 @@ describe('commitsPerDayByContributor', () => {
       commit({ sha: '3', author_login: null, ts: '2026-04-15T10:00:00Z' }),
     ];
     const rows = commitsPerDayByContributor(cs);
-    expect(rows.map((r) => r.day)).toEqual([
-      '2026-04-15',
-      '2026-04-16',
-      '2026-04-17',
-      '2026-04-18',
-    ]);
+    expect(rows.map(r => r.day)).toEqual(['2026-04-15', '2026-04-16', '2026-04-17', '2026-04-18']);
     expect(rows[0]).toEqual({ day: '2026-04-15', alice: 1, bob: 0, unknown: 1 });
     expect(rows[3]).toEqual({ day: '2026-04-18', alice: 0, bob: 1, unknown: 0 });
   });

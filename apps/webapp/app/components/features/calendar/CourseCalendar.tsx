@@ -299,7 +299,9 @@ const CourseCalendar = ({
                     key={dayIdx}
                     id={dropId}
                     className={`min-h-[120px] p-2 border-r border-gray-200 dark:border-neutral-700 last:border-r-0 transition-colors overflow-hidden ${
-                      onCellClick ? 'cursor-pointer hover:bg-gray-50 dark:hover:bg-neutral-800/50' : ''
+                      onCellClick
+                        ? 'cursor-pointer hover:bg-gray-50 dark:hover:bg-neutral-800/50'
+                        : ''
                     } ${!isInCurrentMonth ? 'bg-gray-50/50 dark:bg-neutral-900/50' : ''}`}
                     onClick={() => onCellClick?.(date)}
                   >

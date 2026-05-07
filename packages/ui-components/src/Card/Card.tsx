@@ -10,7 +10,7 @@ export interface CardProps extends HTMLAttributes<HTMLDivElement> {
 
 export const Card = forwardRef<HTMLDivElement, CardProps>(function Card(
   { children, className, padding, style, ...rest },
-  ref,
+  ref
 ) {
   const mergedStyle: CSSProperties | undefined =
     padding !== undefined ? { padding, ...style } : style;

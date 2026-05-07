@@ -34,9 +34,7 @@ function Chip({ label, value, sub, tone, testId }: ChipProps) {
       data-testid={testId}
       data-tone={tone}
     >
-      <div className="text-[11px] uppercase tracking-wide font-semibold opacity-75">
-        {label}
-      </div>
+      <div className="text-[11px] uppercase tracking-wide font-semibold opacity-75">{label}</div>
       <div className="text-lg font-semibold leading-tight mt-0.5">{value}</div>
       <div className="text-xs opacity-80 mt-0.5">{sub}</div>
     </div>
@@ -73,11 +71,7 @@ const HeuristicsChips = ({ snapshot, focusPct }: HeuristicsChipsProps) => {
       <Chip
         label="Spread"
         value={`${uniqueDays} day${uniqueDays === 1 ? '' : 's'}`}
-        sub={
-          spreadTone === 'warn'
-            ? 'Concentrated in few days'
-            : 'Steady across the week'
-        }
+        sub={spreadTone === 'warn' ? 'Concentrated in few days' : 'Steady across the week'}
         tone={spreadTone}
         testId="heuristic-spread"
       />
@@ -85,9 +79,7 @@ const HeuristicsChips = ({ snapshot, focusPct }: HeuristicsChipsProps) => {
         label="Commit quality"
         value={`avg ${avgLen} chars/msg`}
         sub={
-          qualityTone === 'warn'
-            ? "Short messages — 'wip', 'fix', etc."
-            : 'Descriptive messages'
+          qualityTone === 'warn' ? "Short messages — 'wip', 'fix', etc." : 'Descriptive messages'
         }
         tone={qualityTone}
         testId="heuristic-quality"

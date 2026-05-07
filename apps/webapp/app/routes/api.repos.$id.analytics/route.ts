@@ -42,9 +42,9 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
   });
 
   const studentMemberships = await ClassmojiService.classroomMembership.findStudents(
-    repoAssignment.repository.classroom_id,
+    repoAssignment.repository.classroom_id
   );
-  const students = studentMemberships.map((m) => ({
+  const students = studentMemberships.map(m => ({
     id: m.user.id,
     name: m.user.name ?? m.user.login ?? 'Unknown',
     login: m.user.login ?? null,

@@ -5,9 +5,7 @@ interface ClassMarkProps {
 }
 
 export function ClassMark({ hue, name, size = 28 }: ClassMarkProps) {
-  const initials = (name.replace(/[^A-Z0-9]/gi, '').slice(0, 3) || '??')
-    .toUpperCase()
-    .slice(0, 2);
+  const initials = (name.replace(/[^A-Z0-9]/gi, '').slice(0, 3) || '??').toUpperCase().slice(0, 2);
   return (
     <span
       style={{

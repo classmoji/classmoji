@@ -39,7 +39,9 @@ export async function getUserByLogin(login: string): Promise<{ id: string; login
 /**
  * Find the Classroom row matching a slug. Throws if not present.
  */
-export async function getClassroomBySlug(slug: string): Promise<{ id: string; slug: string; name: string }> {
+export async function getClassroomBySlug(
+  slug: string
+): Promise<{ id: string; slug: string; name: string }> {
   const prisma = getTestPrisma();
   const classroom = await prisma.classroom.findFirst({ where: { slug } });
   if (!classroom) {

@@ -72,8 +72,7 @@ const AssignmentsTabsCard = ({ rows }: AssignmentsTabsCardProps) => {
     all: rows.length,
   };
 
-  const filtered =
-    active === 'all' ? rows : rows.filter(r => r.status === active);
+  const filtered = active === 'all' ? rows : rows.filter(r => r.status === active);
 
   return (
     <div className="h-full flex flex-col">
@@ -174,8 +173,8 @@ const AssignmentsTabsCard = ({ rows }: AssignmentsTabsCardProps) => {
                       </td>
                       <td className="px-4 py-3 hidden md:table-cell text-gray-600 dark:text-gray-300">
                         {row.moduleType ? (
-                          moduleTypeLabel[row.moduleType] ??
-                          row.moduleType.charAt(0) + row.moduleType.slice(1).toLowerCase()
+                          (moduleTypeLabel[row.moduleType] ??
+                          row.moduleType.charAt(0) + row.moduleType.slice(1).toLowerCase())
                         ) : (
                           <span className="text-gray-400 dark:text-gray-600">—</span>
                         )}
@@ -188,7 +187,9 @@ const AssignmentsTabsCard = ({ rows }: AssignmentsTabsCardProps) => {
                         </span>
                       </td>
                       <td className="px-4 py-3 hidden lg:table-cell">
-                        {row.status === 'completed' && row.gradesReleased && row.grades.length > 0 ? (
+                        {row.status === 'completed' &&
+                        row.gradesReleased &&
+                        row.grades.length > 0 ? (
                           <div className="flex items-center gap-1">
                             {row.grades.slice(0, 4).map((g, idx) => (
                               <Emoji key={g.id ?? idx} emoji={g.emoji} fontSize={18} />
@@ -202,9 +203,7 @@ const AssignmentsTabsCard = ({ rows }: AssignmentsTabsCardProps) => {
                       </td>
                       <td className="px-4 py-3 hidden lg:table-cell text-gray-600 dark:text-gray-300">
                         {row.gradersSummary ? (
-                          <span className="block truncate max-w-[10rem]">
-                            {row.gradersSummary}
-                          </span>
+                          <span className="block truncate max-w-[10rem]">{row.gradersSummary}</span>
                         ) : (
                           <span className="text-gray-400 dark:text-gray-600">—</span>
                         )}

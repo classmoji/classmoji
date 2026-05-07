@@ -134,9 +134,7 @@ const StudentCalendarView = ({ events, onEventClick, onMonthChange }: StudentCal
       todayIsInWeek && nowHourFloat >= DAY_START_HOUR && nowHourFloat <= DAY_END_HOUR;
     const timeLineTop = (nowHourFloat - DAY_START_HOUR) * HOUR_HEIGHT_PX;
 
-    const hasAnyAllDay = weekDates.some(d =>
-      getEventsForDate(d).some(e => isOutsideWindow(e))
-    );
+    const hasAnyAllDay = weekDates.some(d => getEventsForDate(d).some(e => isOutsideWindow(e)));
 
     return (
       <div>
@@ -181,9 +179,7 @@ const StudentCalendarView = ({ events, onEventClick, onMonthChange }: StudentCal
                   className="px-1.5 py-1.5 border-l border-stone-200/70 dark:border-neutral-800 first:border-l-0 flex flex-col gap-1 min-h-[2.25rem]"
                 >
                   {allDay.map(event => {
-                    const type = event.is_deadline
-                      ? 'DEADLINE'
-                      : (event.event_type ?? 'OTHER');
+                    const type = event.is_deadline ? 'DEADLINE' : (event.event_type ?? 'OTHER');
                     const start = new Date(event.start_time);
                     return (
                       <button
@@ -197,10 +193,7 @@ const StudentCalendarView = ({ events, onEventClick, onMonthChange }: StudentCal
                         </div>
                         {event.is_deadline && (
                           <div className="text-[10px] opacity-80 leading-tight truncate">
-                            due{' '}
-                            {dayjs(start).format(
-                              start.getMinutes() === 0 ? 'h A' : 'h:mm A'
-                            )}
+                            due {dayjs(start).format(start.getMinutes() === 0 ? 'h A' : 'h:mm A')}
                           </div>
                         )}
                       </button>
@@ -266,8 +259,7 @@ const StudentCalendarView = ({ events, onEventClick, onMonthChange }: StudentCal
                 {dayEvents.map(event => {
                   const start = new Date(event.start_time);
                   const end = new Date(event.end_time);
-                  const startFrac =
-                    start.getHours() + start.getMinutes() / 60 - DAY_START_HOUR;
+                  const startFrac = start.getHours() + start.getMinutes() / 60 - DAY_START_HOUR;
                   const durationHours = Math.max(
                     0.75,
                     (end.getTime() - start.getTime()) / (1000 * 60 * 60)

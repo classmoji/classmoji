@@ -28,7 +28,9 @@ const EMOJI_MAP: Record<string, number> = { heart: 100, '+1': 90, eyes: 80, '-1'
 const NO_PENALTY: OrganizationSettings = { late_penalty_points_per_hour: 0 };
 const PENALTY_5: OrganizationSettings = { late_penalty_points_per_hour: 5 };
 
-const ra = (overrides: Partial<RepositoryAssignment> & { id?: string } = {}): RepositoryAssignment => ({
+const ra = (
+  overrides: Partial<RepositoryAssignment> & { id?: string } = {}
+): RepositoryAssignment => ({
   id: overrides.id ?? 'ra-1',
   assignment: { weight: 100 },
   ...overrides,
@@ -69,15 +71,21 @@ describe('calculateNumericGrade', () => {
 
 describe('applyLatePenalty', () => {
   it('subtracts hours * penalty when not overridden', () => {
-    expect(applyLatePenalty(100, ra({ num_late_hours: 4, is_late_override: false }), PENALTY_5)).toBe(80);
+    expect(
+      applyLatePenalty(100, ra({ num_late_hours: 4, is_late_override: false }), PENALTY_5)
+    ).toBe(80);
   });
 
   it('does not penalize when is_late_override is true', () => {
-    expect(applyLatePenalty(100, ra({ num_late_hours: 4, is_late_override: true }), PENALTY_5)).toBe(100);
+    expect(
+      applyLatePenalty(100, ra({ num_late_hours: 4, is_late_override: true }), PENALTY_5)
+    ).toBe(100);
   });
 
   it('clamps at zero', () => {
-    expect(applyLatePenalty(10, ra({ num_late_hours: 100, is_late_override: false }), PENALTY_5)).toBe(0);
+    expect(
+      applyLatePenalty(10, ra({ num_late_hours: 100, is_late_override: false }), PENALTY_5)
+    ).toBe(0);
   });
 
   it('treats undefined num_late_hours as zero', () => {
@@ -105,19 +113,14 @@ describe('calculateRepositoryGrade', () => {
 
   it('treats should_be_zero as 0', () => {
     expect(
-      calculateRepositoryGrade(
-        [ra({ should_be_zero: true })],
-        EMOJI_MAP,
-        NO_PENALTY,
-        mod()
-      )
+      calculateRepositoryGrade([ra({ should_be_zero: true })], EMOJI_MAP, NO_PENALTY, mod())
     ).toBe(0);
   });
 
   it('weights assignments correctly (no drops)', () => {
     const assignments = [
       ra({ id: 'a', grades: [{ emoji: 'heart' }], assignment: { weight: 50 } }), // 100
-      ra({ id: 'b', grades: [{ emoji: 'eyes' }], assignment: { weight: 50 } }),  // 80
+      ra({ id: 'b', grades: [{ emoji: 'eyes' }], assignment: { weight: 50 } }), // 80
     ];
     expect(calculateRepositoryGrade(assignments, EMOJI_MAP, NO_PENALTY, mod())).toBe(90);
   });
@@ -125,18 +128,23 @@ describe('calculateRepositoryGrade', () => {
   it('drops the lowest scoring assignment when drop_lowest_count=1', () => {
     const assignments = [
       ra({ id: 'a', grades: [{ emoji: 'heart' }], assignment: { weight: 50 } }), // 100
-      ra({ id: 'b', grades: [{ emoji: 'eyes' }], assignment: { weight: 50 } }),  // 80
-      ra({ id: 'c', grades: [{ emoji: '-1' }], assignment: { weight: 50 } }),    // 60 (dropped)
+      ra({ id: 'b', grades: [{ emoji: 'eyes' }], assignment: { weight: 50 } }), // 80
+      ra({ id: 'c', grades: [{ emoji: '-1' }], assignment: { weight: 50 } }), // 60 (dropped)
     ];
-    expect(calculateRepositoryGrade(assignments, EMOJI_MAP, NO_PENALTY, mod({ drop_lowest_count: 1 }))).toBe(90);
+    expect(
+      calculateRepositoryGrade(assignments, EMOJI_MAP, NO_PENALTY, mod({ drop_lowest_count: 1 }))
+    ).toBe(90);
   });
 
   it('extra_credit modules sum without dividing by total weight', () => {
-    const assignments = [
-      ra({ id: 'a', grades: [{ emoji: 'heart' }], assignment: { weight: 50 } }),
-    ];
+    const assignments = [ra({ id: 'a', grades: [{ emoji: 'heart' }], assignment: { weight: 50 } })];
     expect(
-      calculateRepositoryGrade(assignments, EMOJI_MAP, NO_PENALTY, mod({ is_extra_credit: true, weight: 50 }))
+      calculateRepositoryGrade(
+        assignments,
+        EMOJI_MAP,
+        NO_PENALTY,
+        mod({ is_extra_credit: true, weight: 50 })
+      )
     ).toBe(50); // 100 * (50/100)
   });
 });
@@ -171,7 +179,10 @@ describe('calculateStudentFinalGrade', () => {
   it('adds extra credit module on top when penalty included', () => {
     const repos: Repository[] = [
       repo([ra({ grades: [{ emoji: 'eyes' }] })], mod({ weight: 100 })),
-      repo([ra({ id: 'x', grades: [{ emoji: 'heart' }] })], mod({ weight: 5, is_extra_credit: true })),
+      repo(
+        [ra({ id: 'x', grades: [{ emoji: 'heart' }] })],
+        mod({ weight: 5, is_extra_credit: true })
+      ),
     ];
     // base 80 + extra (100 * 5/100) = 80 + 5 = 85
     expect(calculateStudentFinalGrade(repos, EMOJI_MAP, NO_PENALTY, true)).toBe(85);
@@ -190,14 +201,24 @@ describe('getDroppedRepositoryAssignments', () => {
       ra({ id: 'b', grades: [{ emoji: '-1' }] }),
     ];
     expect(
-      getDroppedRepositoryAssignments(assignments, EMOJI_MAP, NO_PENALTY, mod({ drop_lowest_count: 1 }))
+      getDroppedRepositoryAssignments(
+        assignments,
+        EMOJI_MAP,
+        NO_PENALTY,
+        mod({ drop_lowest_count: 1 })
+      )
     ).toEqual(['b']);
   });
 
   it('returns empty when count >= assignments.length', () => {
     const assignments = [ra({ id: 'a', grades: [{ emoji: 'heart' }] })];
     expect(
-      getDroppedRepositoryAssignments(assignments, EMOJI_MAP, NO_PENALTY, mod({ drop_lowest_count: 5 }))
+      getDroppedRepositoryAssignments(
+        assignments,
+        EMOJI_MAP,
+        NO_PENALTY,
+        mod({ drop_lowest_count: 5 })
+      )
     ).toEqual([]);
   });
 

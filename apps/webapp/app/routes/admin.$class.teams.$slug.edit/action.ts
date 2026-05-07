@@ -133,10 +133,9 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
           classroom.id
         );
         if (existing && existing.id !== team.id) {
-          throw new Response(
-            `A team with slug "${newSlug}" already exists in this classroom`,
-            { status: 409 }
-          );
+          throw new Response(`A team with slug "${newSlug}" already exists in this classroom`, {
+            status: 409,
+          });
         }
       }
 

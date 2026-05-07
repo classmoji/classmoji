@@ -79,7 +79,10 @@ const ROLE_TO_LOGIN_PARAM: Record<TestRole, string> = {
  */
 
 // Create storage states for each role
-for (const [role, user] of Object.entries(TEST_USERS) as [TestRole, typeof TEST_USERS[TestRole]][]) {
+for (const [role, user] of Object.entries(TEST_USERS) as [
+  TestRole,
+  (typeof TEST_USERS)[TestRole],
+][]) {
   setup(`setup ${role} state`, async ({ page }) => {
     const stateFile = join(authDir, `${role}.json`);
 
@@ -118,7 +121,9 @@ for (const [role, user] of Object.entries(TEST_USERS) as [TestRole, typeof TEST_
       // If we don't have a valid state file, tests for this role will be skipped
       // Create a marker file so we don't retry immediately
       if (!existsSync(stateFile)) {
-        console.log(`⚠️ Creating empty state for ${role} - tests requiring this role will be skipped`);
+        console.log(
+          `⚠️ Creating empty state for ${role} - tests requiring this role will be skipped`
+        );
         writeFileSync(stateFile, JSON.stringify({ cookies: [], origins: [], _authFailed: true }));
       }
 

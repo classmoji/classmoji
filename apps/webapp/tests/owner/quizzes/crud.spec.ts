@@ -81,7 +81,9 @@ test.describe('Quiz Create', () => {
     await expect(page.locator('.ant-drawer')).toBeVisible({ timeout: 5000 });
 
     // Click cancel button
-    const cancelButton = page.locator('.ant-drawer-footer').getByRole('button', { name: /Cancel/i });
+    const cancelButton = page
+      .locator('.ant-drawer-footer')
+      .getByRole('button', { name: /Cancel/i });
     await cancelButton.click();
 
     // Drawer should close
@@ -183,7 +185,10 @@ test.describe('Quiz Actions', () => {
     const quizRow = page.getByRole('row').filter({ hasText: 'Intro to JavaScript' });
 
     // Click the edit button (pencil icon)
-    const editButton = quizRow.locator('[aria-label*="edit"], button').filter({ has: page.locator('[class*="Edit"]') }).first();
+    const editButton = quizRow
+      .locator('[aria-label*="edit"], button')
+      .filter({ has: page.locator('[class*="Edit"]') })
+      .first();
     if (await editButton.isVisible({ timeout: 2000 }).catch(() => false)) {
       await editButton.click();
       await expect(page.locator('.ant-drawer')).toBeVisible({ timeout: 5000 });
@@ -197,7 +202,10 @@ test.describe('Quiz Actions', () => {
 });
 
 test.describe('Quiz Navigation', () => {
-  test('can navigate from dashboard to quizzes via sidebar', async ({ authenticatedPage: page, testOrg }) => {
+  test('can navigate from dashboard to quizzes via sidebar', async ({
+    authenticatedPage: page,
+    testOrg,
+  }) => {
     // Start from dashboard
     await mockGitHubAPI(page);
     await page.goto(`/admin/${testOrg}/dashboard`);
@@ -211,7 +219,10 @@ test.describe('Quiz Navigation', () => {
     await expect(page.getByText('Quiz Management')).toBeVisible();
   });
 
-  test('can navigate from quiz detail back to list', async ({ authenticatedPage: page, testOrg }) => {
+  test('can navigate from quiz detail back to list', async ({
+    authenticatedPage: page,
+    testOrg,
+  }) => {
     await mockGitHubAPI(page);
     await page.goto(`/admin/${testOrg}/quizzes`);
     await waitForDataLoad(page);

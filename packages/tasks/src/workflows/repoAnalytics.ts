@@ -28,10 +28,7 @@ export const refreshRepoAnalytics = task({
         error: result.error,
       });
 
-      await refreshRepoAnalytics.trigger(
-        { repositoryAssignmentId },
-        { delay: '60s' }
-      );
+      await refreshRepoAnalytics.trigger({ repositoryAssignmentId }, { delay: '60s' });
     }
 
     return result;

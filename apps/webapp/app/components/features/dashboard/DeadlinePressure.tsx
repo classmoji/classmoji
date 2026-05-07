@@ -26,15 +26,15 @@ const DeadlinePressure = ({ buckets }: DeadlinePressureProps) => {
       dayLabel: d.format('ddd'),
     });
   }
-  const byDate = new Map(buckets.map((b) => [b.date, b]));
-  const maxCount = Math.max(1, ...buckets.map((b) => b.assignments.length));
+  const byDate = new Map(buckets.map(b => [b.date, b]));
+  const maxCount = Math.max(1, ...buckets.map(b => b.assignments.length));
 
   return (
     <Card className="h-full" data-testid="deadline-pressure">
       <CardHeader>Deadline Pressure (next 7 days)</CardHeader>
 
       <div className="flex items-end justify-between gap-2 py-6 min-h-[180px]">
-        {days.map((d) => {
+        {days.map(d => {
           const bucket = byDate.get(d.date);
           const count = bucket?.assignments.length ?? 0;
           // size: 12px (empty) -> 56px (max)
@@ -45,7 +45,7 @@ const DeadlinePressure = ({ buckets }: DeadlinePressureProps) => {
               <span>No deadlines</span>
             ) : (
               <div className="text-xs">
-                {assignments.map((a) => (
+                {assignments.map(a => (
                   <div key={a.id} className="truncate">
                     • {a.title}
                   </div>

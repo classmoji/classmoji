@@ -33,8 +33,7 @@ export default function ResourcesPage({ loaderData }: Route.ComponentProps) {
           height: 'calc(100vh - 3rem)',
           display: 'flex',
           flexDirection: 'column',
-          boxShadow:
-            '0 32px 64px -16px rgba(15, 23, 42, 0.35), 0 0 0 1px rgba(0, 0, 0, 0.04)',
+          boxShadow: '0 32px 64px -16px rgba(15, 23, 42, 0.35), 0 0 0 1px rgba(0, 0, 0, 0.04)',
         },
         body: {
           padding: 0,

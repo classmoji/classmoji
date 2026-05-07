@@ -12,7 +12,10 @@ type FakeCommitSummary = {
   parents: { sha: string }[];
 };
 
-function makeFakeOctokit(pages: FakeCommitSummary[][], fullMap: Record<string, { stats: { additions: number; deletions: number } }>) {
+function makeFakeOctokit(
+  pages: FakeCommitSummary[][],
+  fullMap: Record<string, { stats: { additions: number; deletions: number } }>
+) {
   const calls: { listArgs: unknown; getCommitRefs: string[] } = {
     listArgs: null,
     getCommitRefs: [],
@@ -22,7 +25,7 @@ function makeFakeOctokit(pages: FakeCommitSummary[][], fullMap: Record<string, {
     (() => {
       throw new Error('listCommits should be called via paginate.iterator in listCommits()');
     }) as unknown as (...args: unknown[]) => unknown,
-    {},
+    {}
   );
 
   const fakeOctokit = {
@@ -88,7 +91,7 @@ describe('GitHubProvider.listCommits', () => {
       {
         aaa111: { stats: { additions: 10, deletions: 2 } },
         bbb222: { stats: { additions: 5, deletions: 1 } },
-      },
+      }
     );
 
     const provider = new GitHubProvider('1');
@@ -139,7 +142,7 @@ describe('GitHubProvider.listCommits', () => {
       ],
       {
         ccc333: { stats: { additions: 1, deletions: 1 } },
-      },
+      }
     );
 
     const provider = new GitHubProvider('1');

@@ -504,96 +504,96 @@ export default function NewPage({ loaderData }: Route.ComponentProps) {
       </div>
 
       <div className="max-h-[75vh] overflow-y-auto px-6 py-5">
-      {/* Show form when not loading */}
-      {!isCreating && (
-        <>
-          {createError && (
-            <Alert
-              message="Error"
-              description={createError}
-              type="error"
-              closable
-              className="mb-4"
-            />
-          )}
-
-          <Form form={form} layout="vertical" onFinish={handleSubmit} initialValues={{}}>
-            <Tabs activeKey={activeTab} onChange={setActiveTab} items={tabItems} />
-
-            <div className="flex justify-end gap-3 mt-6 items-center">
-              <Button type="default" onClick={close}>
-                Cancel
-              </Button>
-              <Button
-                type="primary"
-                htmlType={activeTab === 'batch' ? 'button' : 'submit'}
-                onClick={activeTab === 'batch' ? () => handleSubmit({}) : undefined}
-                disabled={activeTab === 'batch' && batchPages.length === 0}
-                icon={
-                  activeTab === 'import' || activeTab === 'batch' ? (
-                    <UploadOutlined />
-                  ) : (
-                    <FileTextOutlined />
-                  )
-                }
-              >
-                {activeTab === 'batch'
-                  ? `Import ${batchPages.length} Page${batchPages.length !== 1 ? 's' : ''}`
-                  : activeTab === 'import'
-                    ? 'Import & Create'
-                    : 'Create Page'}
-              </Button>
-            </div>
-          </Form>
-        </>
-      )}
-
-      {/* Show loader when loading */}
-      {isCreating && (
-        <div className="flex items-center justify-center py-12">
-          <div className="flex flex-col items-center gap-5 min-w-[320px]">
-            {/* Bouncing dots loader */}
-            <div className="flex gap-2">
-              <div
-                className="w-4 h-4 rounded-full animate-bounce"
-                style={{ backgroundColor: '#10b981', animationDelay: '0ms' }}
+        {/* Show form when not loading */}
+        {!isCreating && (
+          <>
+            {createError && (
+              <Alert
+                message="Error"
+                description={createError}
+                type="error"
+                closable
+                className="mb-4"
               />
-              <div
-                className="w-4 h-4 rounded-full animate-bounce"
-                style={{ backgroundColor: '#10b981', animationDelay: '150ms' }}
-              />
-              <div
-                className="w-4 h-4 rounded-full animate-bounce"
-                style={{ backgroundColor: '#10b981', animationDelay: '300ms' }}
-              />
-            </div>
-            {batchProgress ? (
-              <>
-                <p className="text-gray-800 font-semibold text-center text-lg">
-                  {getProgressMessage()}
-                </p>
-                <div className="flex flex-col items-center gap-2 w-full">
-                  {/* Progress bar */}
-                  <div className="w-full bg-gray-200 rounded-full h-2">
-                    <div
-                      className="h-2 rounded-full transition-all duration-500 ease-out"
-                      style={{
-                        width: `${(batchProgress.current / batchProgress.total) * 100}%`,
-                        backgroundColor: '#10b981',
-                      }}
-                    />
-                  </div>
-                  <p className="text-gray-500 text-sm">
-                    Page {batchProgress.current} of {batchProgress.total}
-                  </p>
-                </div>
-              </>
-            ) : (
-              <p className="text-gray-700 font-medium">Creating page...</p>
             )}
+
+            <Form form={form} layout="vertical" onFinish={handleSubmit} initialValues={{}}>
+              <Tabs activeKey={activeTab} onChange={setActiveTab} items={tabItems} />
+
+              <div className="flex justify-end gap-3 mt-6 items-center">
+                <Button type="default" onClick={close}>
+                  Cancel
+                </Button>
+                <Button
+                  type="primary"
+                  htmlType={activeTab === 'batch' ? 'button' : 'submit'}
+                  onClick={activeTab === 'batch' ? () => handleSubmit({}) : undefined}
+                  disabled={activeTab === 'batch' && batchPages.length === 0}
+                  icon={
+                    activeTab === 'import' || activeTab === 'batch' ? (
+                      <UploadOutlined />
+                    ) : (
+                      <FileTextOutlined />
+                    )
+                  }
+                >
+                  {activeTab === 'batch'
+                    ? `Import ${batchPages.length} Page${batchPages.length !== 1 ? 's' : ''}`
+                    : activeTab === 'import'
+                      ? 'Import & Create'
+                      : 'Create Page'}
+                </Button>
+              </div>
+            </Form>
+          </>
+        )}
+
+        {/* Show loader when loading */}
+        {isCreating && (
+          <div className="flex items-center justify-center py-12">
+            <div className="flex flex-col items-center gap-5 min-w-[320px]">
+              {/* Bouncing dots loader */}
+              <div className="flex gap-2">
+                <div
+                  className="w-4 h-4 rounded-full animate-bounce"
+                  style={{ backgroundColor: '#10b981', animationDelay: '0ms' }}
+                />
+                <div
+                  className="w-4 h-4 rounded-full animate-bounce"
+                  style={{ backgroundColor: '#10b981', animationDelay: '150ms' }}
+                />
+                <div
+                  className="w-4 h-4 rounded-full animate-bounce"
+                  style={{ backgroundColor: '#10b981', animationDelay: '300ms' }}
+                />
+              </div>
+              {batchProgress ? (
+                <>
+                  <p className="text-gray-800 font-semibold text-center text-lg">
+                    {getProgressMessage()}
+                  </p>
+                  <div className="flex flex-col items-center gap-2 w-full">
+                    {/* Progress bar */}
+                    <div className="w-full bg-gray-200 rounded-full h-2">
+                      <div
+                        className="h-2 rounded-full transition-all duration-500 ease-out"
+                        style={{
+                          width: `${(batchProgress.current / batchProgress.total) * 100}%`,
+                          backgroundColor: '#10b981',
+                        }}
+                      />
+                    </div>
+                    <p className="text-gray-500 text-sm">
+                      Page {batchProgress.current} of {batchProgress.total}
+                    </p>
+                  </div>
+                </>
+              ) : (
+                <p className="text-gray-700 font-medium">Creating page...</p>
+              )}
+            </div>
           </div>
-        </div>
-      )}
+        )}
       </div>
     </Modal>
   );

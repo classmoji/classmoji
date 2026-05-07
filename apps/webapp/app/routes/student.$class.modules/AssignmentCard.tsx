@@ -46,14 +46,12 @@ const getStatusPill = (repoAssignment?: AssignmentCardRepositoryAssignment | nul
   if (repoAssignment.status === 'CLOSED') {
     return {
       label: 'Submitted',
-      className:
-        'bg-[#619462]/15 text-[#3f6a40] dark:bg-[#619462]/20 dark:text-[#9BC39C]',
+      className: 'bg-[#619462]/15 text-[#3f6a40] dark:bg-[#619462]/20 dark:text-[#9BC39C]',
     };
   }
   return {
     label: 'Not submitted',
-    className:
-      'bg-[#D4A289]/15 text-[#8a5b3a] dark:bg-[#D4A289]/20 dark:text-[#E8C4AC]',
+    className: 'bg-[#D4A289]/15 text-[#8a5b3a] dark:bg-[#D4A289]/20 dark:text-[#E8C4AC]',
   };
 };
 
@@ -77,9 +75,7 @@ const AssignmentCard = ({
       <div className="flex justify-between items-start gap-3">
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 flex-wrap">
-            <h4 className="font-medium text-gray-900 dark:text-gray-100">
-              {assignment.title}
-            </h4>
+            <h4 className="font-medium text-gray-900 dark:text-gray-100">{assignment.title}</h4>
             {statusPill && (
               <span
                 className={`inline-flex items-center text-[10px] font-semibold px-2 py-0.5 rounded-full ${statusPill.className}`}

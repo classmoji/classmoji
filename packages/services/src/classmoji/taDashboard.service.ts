@@ -31,7 +31,7 @@ export function toDayKey(d: Date): string {
 export function padDailyBuckets(
   countsByDay: Map<string, number>,
   endDay: string,
-  days: number,
+  days: number
 ): Array<{ date: string; count: number }> {
   const out: Array<{ date: string; count: number }> = [];
   const end = new Date(`${endDay}T00:00:00.000Z`);
@@ -71,9 +71,7 @@ export function computeStreakDays(dayKeys: Iterable<string>): {
  * [90,100]. Grade of exactly 100 goes into the last bucket. Values outside
  * 0-100 are clamped.
  */
-export function bucketGrades(
-  grades: Array<number>,
-): Array<{ bucket: string; count: number }> {
+export function bucketGrades(grades: Array<number>): Array<{ bucket: string; count: number }> {
   const counts = new Array<number>(10).fill(0);
   for (const g of grades) {
     if (!Number.isFinite(g)) continue;
@@ -90,21 +88,19 @@ export function bucketGrades(
 
 // Internal helpers
 
-async function loadClassroomEmojiMap(
-  classroomId: string,
-): Promise<Map<string, number>> {
+async function loadClassroomEmojiMap(classroomId: string): Promise<Map<string, number>> {
   const rows = await getPrisma().emojiMapping.findMany({
     where: { classroom_id: classroomId },
     select: { emoji: true, grade: true },
   });
-  return new Map(rows.map((r) => [r.emoji, r.grade]));
+  return new Map(rows.map(r => [r.emoji, r.grade]));
 }
 
 // 1. Personal throughput — 7-day rolling grade counts
 
 export async function personalThroughput(
   userId: string,
-  classroomId: string,
+  classroomId: string
 ): Promise<Array<{ date: string; count: number }>> {
   const prisma = getPrisma();
   const since = new Date(Date.now() - 7 * MS_PER_DAY);
@@ -130,7 +126,7 @@ export async function personalThroughput(
 
 export async function gradingStreak(
   userId: string,
-  classroomId: string,
+  classroomId: string
 ): Promise<{ days: number; lastGradedAt: string | null }> {
   const prisma = getPrisma();
   const grades = await prisma.assignmentGrade.findMany({
@@ -145,7 +141,7 @@ export async function gradingStreak(
   });
   if (grades.length === 0) return { days: 0, lastGradedAt: null };
 
-  const dayKeys = grades.map((g) => toDayKey(g.created_at));
+  const dayKeys = grades.map(g => toDayKey(g.created_at));
   const { days } = computeStreakDays(dayKeys);
   return { days, lastGradedAt: grades[0].created_at.toISOString() };
 }
@@ -162,7 +158,7 @@ export interface OverdueQueueRow {
 
 export async function overdueQueue(
   userId: string,
-  classroomId: string,
+  classroomId: string
 ): Promise<OverdueQueueRow[]> {
   const prisma = getPrisma();
   const now = Date.now();
@@ -202,21 +198,20 @@ export async function overdueQueue(
   });
 
   const enriched = rows
-    .map((r) => {
+    .map(r => {
       const ra = r.repository_assignment;
-      const lastTouch =
-        ra.grades.length > 0 ? ra.grades[0].created_at : ra.created_at;
+      const lastTouch = ra.grades.length > 0 ? ra.grades[0].created_at : ra.created_at;
       return {
         ra,
         lastTouch,
         ageMs: now - lastTouch.getTime(),
       };
     })
-    .filter((x) => x.lastTouch < cutoff);
+    .filter(x => x.lastTouch < cutoff);
 
   enriched.sort((a, b) => b.ageMs - a.ageMs); // oldest first
 
-  return enriched.slice(0, 10).map((x) => ({
+  return enriched.slice(0, 10).map(x => ({
     repositoryAssignmentId: x.ra.id,
     studentName: x.ra.repository.student?.name ?? null,
     studentLogin: x.ra.repository.student?.login ?? null,
@@ -238,20 +233,12 @@ export interface PersonalDailyTotals {
 
 export async function personalDailyTotals(
   userId: string,
-  classroomId: string,
+  classroomId: string
 ): Promise<PersonalDailyTotals> {
   const prisma = getPrisma();
   const now = new Date();
   const startOfTodayUtc = new Date(
-    Date.UTC(
-      now.getUTCFullYear(),
-      now.getUTCMonth(),
-      now.getUTCDate(),
-      0,
-      0,
-      0,
-      0,
-    ),
+    Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 0, 0, 0, 0)
   );
   const weekAgo = new Date(now.getTime() - 7 * MS_PER_DAY);
   const thirtyDaysAgo = new Date(now.getTime() - 30 * MS_PER_DAY);
@@ -329,7 +316,7 @@ export interface PersonalGradeDistribution {
 
 export async function personalGradeDistribution(
   userId: string,
-  classroomId: string,
+  classroomId: string
 ): Promise<PersonalGradeDistribution> {
   const prisma = getPrisma();
   const [allGrades, emojiMap] = await Promise.all([

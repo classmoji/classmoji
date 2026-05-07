@@ -12,12 +12,7 @@ export interface BreadcrumbProps {
  * Topbar breadcrumb from the redesign bundle (shell.jsx:219-245).
  * Inline styles mirror the design source verbatim; we may Tailwind-ify later.
  */
-export function Breadcrumb({
-  classroomSlug,
-  classroomHue = 285,
-  trail,
-  action,
-}: BreadcrumbProps) {
+export function Breadcrumb({ classroomSlug, trail, action }: BreadcrumbProps) {
   return (
     <div
       className="crumbs"

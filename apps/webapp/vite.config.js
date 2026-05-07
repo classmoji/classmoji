@@ -48,13 +48,7 @@ export default ({ command }) => {
         'jsonwebtoken',
       ],
     },
-    plugins: [
-      devtoolsJson(),
-      tailwindcss(),
-      reactRouter(),
-      tsconfigPaths(),
-      envOnlyMacros(),
-    ],
+    plugins: [devtoolsJson(), tailwindcss(), reactRouter(), tsconfigPaths(), envOnlyMacros()],
     server: {
       port: process.env.PORT ? Number(process.env.PORT) : 3000,
       host: '0.0.0.0',
@@ -75,7 +69,11 @@ export default ({ command }) => {
           // Suppress sourcemap warnings from node_modules (antd, etc.)
           if (warning.code === 'SOURCEMAP_ERROR') return;
           // Suppress mixed static/dynamic import warnings
-          if (warning.message?.includes('statically imported by') && warning.message?.includes('dynamically imported')) return;
+          if (
+            warning.message?.includes('statically imported by') &&
+            warning.message?.includes('dynamically imported')
+          )
+            return;
           warn(warning);
         },
         output: {

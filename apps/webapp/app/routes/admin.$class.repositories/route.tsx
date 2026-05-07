@@ -5,12 +5,7 @@ import { useState, useEffect, Suspense, useCallback } from 'react';
 import { Table, Button, Skeleton, Input } from 'antd';
 import { namedAction } from 'remix-utils/named-action';
 import { tasks } from '@trigger.dev/sdk';
-import {
-  IconRefresh,
-  IconTrash,
-  IconSearch,
-  IconAlertTriangle,
-} from '@tabler/icons-react';
+import { IconRefresh, IconTrash, IconSearch, IconAlertTriangle } from '@tabler/icons-react';
 import dayjs from 'dayjs';
 import { useDebounce } from '@uidotdev/usehooks';
 

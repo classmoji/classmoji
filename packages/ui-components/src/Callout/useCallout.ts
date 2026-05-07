@@ -7,7 +7,7 @@ export function useCallout(): CalloutHandle {
   if (handle === null) {
     throw new Error(
       'useCallout must be used inside a <CalloutProvider>. ' +
-        'Wrap your app root with <CalloutProvider> from @classmoji/ui-components.',
+        'Wrap your app root with <CalloutProvider> from @classmoji/ui-components.'
     );
   }
   return handle;

@@ -1,11 +1,5 @@
 import { Card, Button, Table, Spin } from 'antd';
-import {
-  IconCrown,
-  IconArrowRight,
-  IconExternalLink,
-  IconCheck,
-  IconX,
-} from '@tabler/icons-react';
+import { IconCrown, IconArrowRight, IconExternalLink, IconCheck, IconX } from '@tabler/icons-react';
 import { useFetcher, useLocation } from 'react-router';
 import { useEffect, useState, useRef } from 'react';
 import { namedAction } from 'remix-utils/named-action';

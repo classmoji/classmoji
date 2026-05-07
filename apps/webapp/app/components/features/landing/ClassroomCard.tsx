@@ -112,11 +112,7 @@ export function ClassroomCard({ c, onOpen }: ClassroomCardProps) {
               fontSize: 12.5,
               fontWeight: 500,
               color:
-                c.pending === 0
-                  ? 'var(--ink-3)'
-                  : c.role === 'STUDENT'
-                    ? '#8a2a16'
-                    : '#1a6b3e',
+                c.pending === 0 ? 'var(--ink-3)' : c.role === 'STUDENT' ? '#8a2a16' : '#1a6b3e',
             }}
           >
             {c.pending}

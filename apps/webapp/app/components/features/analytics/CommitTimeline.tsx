@@ -70,10 +70,7 @@ const CommitTimeline = ({ commits, deadline }: CommitTimelineProps) => {
   return (
     <div style={{ width: '100%', height: 220 }} data-testid="commit-timeline">
       <ResponsiveContainer width="100%" height="100%">
-        <AreaChart
-          data={data}
-          margin={{ top: 12, right: 24, left: 0, bottom: 8 }}
-        >
+        <AreaChart data={data} margin={{ top: 12, right: 24, left: 0, bottom: 8 }}>
           <defs>
             <linearGradient id="commitTimelineFill" x1="0" y1="0" x2="0" y2="1">
               <stop offset="0%" stopColor={theme.PRIMARY} stopOpacity={0.45} />

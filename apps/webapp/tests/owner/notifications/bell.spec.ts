@@ -107,8 +107,8 @@ test.describe('Notification bell', () => {
     const markAll = page.getByRole('button', { name: 'Mark all as read' });
     await expect(markAll).toBeEnabled();
 
-    const readReq = page.waitForResponse(r =>
-      r.url().includes('/api/notifications/read') && r.request().method() === 'POST'
+    const readReq = page.waitForResponse(
+      r => r.url().includes('/api/notifications/read') && r.request().method() === 'POST'
     );
     await markAll.click();
     await readReq;
@@ -143,8 +143,8 @@ test.describe('Notification bell', () => {
     const dialog = page.getByRole('dialog');
     const row = dialog.getByText(`${TAG} dismissable`).locator('..').locator('..');
 
-    const dismissReq = page.waitForResponse(r =>
-      r.url().includes('/api/notifications/dismiss') && r.request().method() === 'POST'
+    const dismissReq = page.waitForResponse(
+      r => r.url().includes('/api/notifications/dismiss') && r.request().method() === 'POST'
     );
     await row.getByRole('button', { name: 'Dismiss' }).click();
     await dismissReq;

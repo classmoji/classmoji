@@ -11,7 +11,7 @@ export interface ChipProps extends HTMLAttributes<HTMLSpanElement> {
 
 export const Chip = forwardRef<HTMLSpanElement, ChipProps>(function Chip(
   { variant, label, children, className, ...rest },
-  ref,
+  ref
 ) {
   const classes = `chip chip-${variant}${className ? ` ${className}` : ''}`;
   return (

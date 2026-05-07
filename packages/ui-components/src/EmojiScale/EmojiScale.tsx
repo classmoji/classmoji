@@ -24,7 +24,7 @@ export function EmojiScale({ grades, picked, onPick }: EmojiScaleProps) {
         borderRadius: 12,
       }}
     >
-      {grades.map((g) => {
+      {grades.map(g => {
         const active = picked?.emoji === g.emoji;
         return (
           <button
@@ -47,10 +47,7 @@ export function EmojiScale({ grades, picked, onPick }: EmojiScaleProps) {
             }}
           >
             <span style={{ fontSize: 22, lineHeight: 1 }}>{g.emoji}</span>
-            <span
-              style={{ fontSize: 10, color: 'var(--ink-3)', fontWeight: 600 }}
-              className="mono"
-            >
+            <span style={{ fontSize: 10, color: 'var(--ink-3)', fontWeight: 600 }} className="mono">
               {g.pct}
             </span>
           </button>

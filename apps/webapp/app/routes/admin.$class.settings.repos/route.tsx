@@ -40,7 +40,9 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
     return { githubOrganization, gitOrgLogin, error: null };
   } catch (err: unknown) {
     const status =
-      err && typeof err === 'object' && 'status' in err ? Number((err as { status: unknown }).status) : null;
+      err && typeof err === 'object' && 'status' in err
+        ? Number((err as { status: unknown }).status)
+        : null;
     const msg = err instanceof Error ? err.message : 'Unknown error';
     console.error('Failed to load GitHub org for repo settings:', msg);
     return {

@@ -782,7 +782,7 @@ const QuizMessageList = ({
       }
     `}</style>
       <div
-      tabIndex={0} // eslint-disable-line -- Keyboard accessibility: allows scrolling with arrow keys
+        tabIndex={0} // eslint-disable-line -- Keyboard accessibility: allows scrolling with arrow keys
         role="log"
         aria-live="polite"
         aria-label="Quiz conversation"

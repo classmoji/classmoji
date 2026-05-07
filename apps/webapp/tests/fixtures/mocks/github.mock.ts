@@ -173,7 +173,7 @@ export async function mockGitHubAPI(page: Page, options: GitHubMockOptions = {})
  * Mock GitHub roster sync operations
  */
 export async function mockGitHubRosterSync(page: Page): Promise<void> {
-  await page.route('**/api.github.com/orgs/*/memberships/*', async (route) => {
+  await page.route('**/api.github.com/orgs/*/memberships/*', async route => {
     return route.fulfill({
       status: 200,
       contentType: 'application/json',
@@ -181,7 +181,7 @@ export async function mockGitHubRosterSync(page: Page): Promise<void> {
     });
   });
 
-  await page.route('**/api.github.com/orgs/*/invitations', async (route) => {
+  await page.route('**/api.github.com/orgs/*/invitations', async route => {
     if (route.request().method() === 'POST') {
       return route.fulfill({
         status: 201,

@@ -80,14 +80,7 @@ interface RepositoryAssignmentsTableProps {
     | { emoji: string; grade: number; [key: string]: unknown }[];
 }
 
-type TabKey =
-  | 'overview'
-  | 'submitted'
-  | 'unsubmitted'
-  | 'ungraded'
-  | 'graded'
-  | 'overdue'
-  | 'all';
+type TabKey = 'overview' | 'submitted' | 'unsubmitted' | 'ungraded' | 'graded' | 'overdue' | 'all';
 
 const TAB_ORDER: { key: TabKey; label: string }[] = [
   { key: 'overview', label: 'Overview' },
@@ -226,7 +219,7 @@ const RepositoryAssignmentsTable = ({
         }));
       }
     },
-    [loadAnalytics],
+    [loadAnalytics]
   );
 
   const toggleAnalytics = useCallback(
@@ -234,12 +227,10 @@ const RepositoryAssignmentsTable = ({
       setExpandedKeys(prev => {
         const isOpen = prev.includes(repoAssignmentId);
         if (!isOpen) void loadAnalytics(repoAssignmentId);
-        return isOpen
-          ? prev.filter(k => k !== repoAssignmentId)
-          : [...prev, repoAssignmentId];
+        return isOpen ? prev.filter(k => k !== repoAssignmentId) : [...prev, repoAssignmentId];
       });
     },
-    [loadAnalytics],
+    [loadAnalytics]
   );
 
   const base = showMyAssignments ? repositoryAssignments : allRepositoryAssignments;
@@ -265,8 +256,7 @@ const RepositoryAssignmentsTable = ({
     const ungraded = searched.filter(a => !a.grades || a.grades.length === 0);
     const overdue = searched.filter(
       a =>
-        dayjs().isAfter(dayjs(a.assignment.grader_deadline)) &&
-        (!a.grades || a.grades.length === 0)
+        dayjs().isAfter(dayjs(a.assignment.grader_deadline)) && (!a.grades || a.grades.length === 0)
     );
     const overview = searched
       .filter(
@@ -418,10 +408,7 @@ const RepositoryAssignmentsTable = ({
           onView={
             classroom?.git_organization?.login
               ? () =>
-                  openRepositoryAssignmentInGithub(
-                    classroom.git_organization.login,
-                    repoAssignment
-                  )
+                  openRepositoryAssignmentInGithub(classroom.git_organization.login, repoAssignment)
               : undefined
           }
         >
@@ -435,43 +422,47 @@ const RepositoryAssignmentsTable = ({
             }}
             emojiMappings={emojiMappings as Record<string, unknown>}
           />
-          {classSlug ? (
-            (() => {
-              const isOpen = expandedKeys.includes(repoAssignment.id);
-              return (
-                <Tooltip title={isOpen ? 'Hide analytics' : 'Show analytics'}>
-                  <button
-                    type="button"
-                    aria-expanded={isOpen}
-                    onClick={event => {
-                      event.stopPropagation();
-                      toggleAnalytics(repoAssignment.id);
-                    }}
-                    className={`inline-flex items-center justify-center h-7 w-7 rounded-md transition-all duration-200 ease-out ${
-                      isOpen
-                        ? 'bg-primary-50 text-primary-600 ring-1 ring-primary-200 dark:bg-primary-900/30 dark:text-primary-300 dark:ring-primary-800/60'
-                        : 'text-gray-500 hover:text-primary-600 hover:bg-gray-100 dark:text-gray-400 dark:hover:text-primary-300 dark:hover:bg-neutral-800'
-                    }`}
-                  >
-                    <span className="relative inline-block w-4 h-4">
-                      <IconChartBar
-                        size={16}
-                        className={`absolute inset-0 transition-all duration-200 ease-out ${
-                          isOpen ? 'opacity-0 -rotate-90 scale-75' : 'opacity-100 rotate-0 scale-100'
-                        }`}
-                      />
-                      <IconChevronDown
-                        size={16}
-                        className={`absolute inset-0 transition-all duration-200 ease-out ${
-                          isOpen ? 'opacity-100 rotate-0 scale-100' : 'opacity-0 rotate-90 scale-75'
-                        }`}
-                      />
-                    </span>
-                  </button>
-                </Tooltip>
-              );
-            })()
-          ) : null}
+          {classSlug
+            ? (() => {
+                const isOpen = expandedKeys.includes(repoAssignment.id);
+                return (
+                  <Tooltip title={isOpen ? 'Hide analytics' : 'Show analytics'}>
+                    <button
+                      type="button"
+                      aria-expanded={isOpen}
+                      onClick={event => {
+                        event.stopPropagation();
+                        toggleAnalytics(repoAssignment.id);
+                      }}
+                      className={`inline-flex items-center justify-center h-7 w-7 rounded-md transition-all duration-200 ease-out ${
+                        isOpen
+                          ? 'bg-primary-50 text-primary-600 ring-1 ring-primary-200 dark:bg-primary-900/30 dark:text-primary-300 dark:ring-primary-800/60'
+                          : 'text-gray-500 hover:text-primary-600 hover:bg-gray-100 dark:text-gray-400 dark:hover:text-primary-300 dark:hover:bg-neutral-800'
+                      }`}
+                    >
+                      <span className="relative inline-block w-4 h-4">
+                        <IconChartBar
+                          size={16}
+                          className={`absolute inset-0 transition-all duration-200 ease-out ${
+                            isOpen
+                              ? 'opacity-0 -rotate-90 scale-75'
+                              : 'opacity-100 rotate-0 scale-100'
+                          }`}
+                        />
+                        <IconChevronDown
+                          size={16}
+                          className={`absolute inset-0 transition-all duration-200 ease-out ${
+                            isOpen
+                              ? 'opacity-100 rotate-0 scale-100'
+                              : 'opacity-0 rotate-90 scale-75'
+                          }`}
+                        />
+                      </span>
+                    </button>
+                  </Tooltip>
+                );
+              })()
+            : null}
         </TableActionButtons>
       ),
     },
@@ -545,19 +536,13 @@ const RepositoryAssignmentsTable = ({
             const { icon: Icon, title, subtitle } = emptyStates[active];
             return (
               <div className="flex-1 flex flex-col items-center justify-center text-center gap-3">
-                <Icon
-                  size={36}
-                  strokeWidth={1.5}
-                  className="text-gray-400 dark:text-gray-500"
-                />
+                <Icon size={36} strokeWidth={1.5} className="text-gray-400 dark:text-gray-500" />
                 <div>
                   <div className="text-sm font-semibold text-gray-800 dark:text-gray-200">
                     {title}
                   </div>
                   {subtitle && (
-                    <div className="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                      {subtitle}
-                    </div>
+                    <div className="mt-1 text-xs text-gray-500 dark:text-gray-400">{subtitle}</div>
                   )}
                 </div>
               </div>

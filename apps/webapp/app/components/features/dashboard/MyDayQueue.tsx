@@ -27,13 +27,11 @@ const MyDayQueue = ({ queue }: MyDayQueueProps) => {
       {queue.length === 0 ? (
         <Empty
           image={Empty.PRESENTED_IMAGE_SIMPLE}
-          description={
-            <span className="text-gray-500 dark:text-gray-400">Inbox zero — nice.</span>
-          }
+          description={<span className="text-gray-500 dark:text-gray-400">Inbox zero — nice.</span>}
         />
       ) : (
         <ul className="divide-y divide-gray-100 dark:divide-gray-800">
-          {queue.map((row) => {
+          {queue.map(row => {
             const sla = slaColor(row.ageDays);
             const displayName = row.studentName || row.studentLogin || 'Unknown';
             return (

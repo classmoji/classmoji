@@ -38,7 +38,9 @@ describe('getContentRepoName', () => {
   });
 
   it('falls back to content-<login>-<term> pattern', () => {
-    expect(getContentRepoName({ login: 'cs101', term: 'Fall', year: 2025 })).toBe('content-cs101-25f');
+    expect(getContentRepoName({ login: 'cs101', term: 'Fall', year: 2025 })).toBe(
+      'content-cs101-25f'
+    );
   });
 
   it('omits term suffix when term info missing', () => {

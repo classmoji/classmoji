@@ -29,17 +29,13 @@ const classifyStatus = (ra: RepoAssignment): AssignmentStatus =>
 
 const classifyProgressBucket = (ra: RepoAssignment): ProgressBucket => {
   const now = Date.now();
-  const releaseAt = ra.assignment?.release_at
-    ? new Date(ra.assignment.release_at).getTime()
-    : null;
+  const releaseAt = ra.assignment?.release_at ? new Date(ra.assignment.release_at).getTime() : null;
   const notYetReleased = releaseAt !== null && releaseAt > now;
   const notPublished = ra.assignment?.is_published === false;
 
   if (ra.status === 'OPEN' && (notPublished || notYetReleased)) return 'locked';
   if (ra.status === 'OPEN') return 'unlocked';
-  const hasReleasedGrades = Boolean(
-    ra.assignment?.grades_released && (ra.grades?.length ?? 0) > 0
-  );
+  const hasReleasedGrades = Boolean(ra.assignment?.grades_released && (ra.grades?.length ?? 0) > 0);
   return hasReleasedGrades ? 'graded' : 'submitted';
 };
 
@@ -88,9 +84,7 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
           moduleTitle: ra.repository?.module?.title ?? '',
           moduleType: ra.repository?.module?.type ?? null,
           status,
-          gradesReleased: Boolean(
-            ra.assignment?.grades_released && (ra.grades?.length ?? 0) > 0
-          ),
+          gradesReleased: Boolean(ra.assignment?.grades_released && (ra.grades?.length ?? 0) > 0),
           studentDeadline: ra.assignment?.student_deadline
             ? new Date(ra.assignment.student_deadline).toISOString()
             : null,
@@ -124,9 +118,7 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
     const termLabel = [termPretty, classroom.year ? String(classroom.year) : null]
       .filter(Boolean)
       .join(' ');
-    const subtitleParts = [gitOrgLogin, termLabel].filter(
-      (p): p is string => Boolean(p)
-    );
+    const subtitleParts = [gitOrgLogin, termLabel].filter((p): p is string => Boolean(p));
 
     return {
       classroomTitle: classroom.name ?? 'Class',

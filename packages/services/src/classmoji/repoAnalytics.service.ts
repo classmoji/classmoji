@@ -35,7 +35,7 @@ const ACTIVE_WINDOW_DAYS = 30;
 function pickLatestSnapshot<T, S extends { fetched_at: Date | string }>(
   items: T[],
   getSnap: (t: T) => S | null | undefined,
-  decorate: (snap: S, item: T) => S = (s) => s,
+  decorate: (snap: S, item: T) => S = s => s
 ): S | null {
   let best: S | null = null;
   for (const item of items) {
@@ -57,7 +57,7 @@ export function linkAuthorsToUsers(
   commits: CommitRecord[],
   loginToUserId: Map<string, string>
 ): CommitRecord[] {
-  return commits.map((c) => ({
+  return commits.map(c => ({
     ...c,
     author_user_id:
       c.author_login && loginToUserId.has(c.author_login)
@@ -73,7 +73,7 @@ export function linkContributorsToUsers(
   contributors: ContributorRecord[],
   loginToUserId: Map<string, string>
 ): ContributorRecord[] {
-  return contributors.map((c) => ({
+  return contributors.map(c => ({
     ...c,
     user_id: loginToUserId.has(c.login) ? (loginToUserId.get(c.login) ?? null) : null,
   }));
@@ -309,9 +309,7 @@ export async function linkContributor(
       select: { id: true },
     });
     if (!membership) {
-      throw new Error(
-        `User ${userId} is not a member of the classroom that owns this repository`
-      );
+      throw new Error(`User ${userId} is not a member of the classroom that owns this repository`);
     }
   }
 
@@ -404,8 +402,8 @@ export async function aggregateForTeam(teamId: string): Promise<TeamAggregate | 
   for (const repo of repos) {
     const latestSnapshot = pickLatestSnapshot(
       repo.assignments,
-      (ra) => ra.analytics_snapshot,
-      (snap, ra) => ({ ...snap, repository_assignment_id: ra.id }),
+      ra => ra.analytics_snapshot,
+      (snap, ra) => ({ ...snap, repository_assignment_id: ra.id })
     );
 
     if (!latestSnapshot) continue;
@@ -460,9 +458,7 @@ export async function aggregateForTeam(teamId: string): Promise<TeamAggregate | 
 
   if (Object.keys(snapshotsByRepoId).length === 0) return null;
 
-  const contributors = Array.from(contributorMap.values()).sort(
-    (a, b) => b.commits - a.commits
-  );
+  const contributors = Array.from(contributorMap.values()).sort((a, b) => b.commits - a.commits);
 
   return {
     commits,
@@ -504,9 +500,7 @@ export interface ClassroomRepoHealth {
  * contributor payloads but are not linked to a classroom user, and a
  * human-readable "next scheduled refresh" timestamp anchored to 4h boundaries.
  */
-export async function classroomRepoHealth(
-  classroomId: string,
-): Promise<ClassroomRepoHealth> {
+export async function classroomRepoHealth(classroomId: string): Promise<ClassroomRepoHealth> {
   const prisma = getPrisma();
 
   const reposRaw = await prisma.repository.findMany({
@@ -537,7 +531,7 @@ export async function classroomRepoHealth(
 
   for (const r of reposRaw) {
     // Latest snapshot across this repo's assignments.
-    const latest = pickLatestSnapshot(r.assignments, (a) => a.analytics_snapshot);
+    const latest = pickLatestSnapshot(r.assignments, a => a.analytics_snapshot);
     if (!latest) continue;
 
     const langs = (latest.languages ?? {}) as Record<string, number>;
@@ -552,9 +546,7 @@ export async function classroomRepoHealth(
     // Unmatched contributors: appear in payload, are not linked (by membership
     // login match already baked into user_id), and have no manual link row.
     const linkedLogins = new Set(
-      r.contributor_links
-        .filter((l) => l.user_id !== null)
-        .map((l) => l.github_login),
+      r.contributor_links.filter(l => l.user_id !== null).map(l => l.github_login)
     );
     const rawContribs = (latest.contributors ?? []) as Array<{
       login: string;
@@ -608,5 +600,5 @@ export async function listActiveAssignmentIds(): Promise<string[]> {
     },
     select: { id: true },
   });
-  return rows.map((r) => r.id);
+  return rows.map(r => r.id);
 }

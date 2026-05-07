@@ -14,10 +14,7 @@ import {
   YAxis,
   CartesianGrid,
 } from 'recharts';
-import {
-  aggregateByContributor,
-  commitsPerDayByContributor,
-} from '@classmoji/services/flags';
+import { aggregateByContributor, commitsPerDayByContributor } from '@classmoji/services/flags';
 import { useDarkMode } from '~/hooks';
 import type { CommitRecord } from './CommitTimeline';
 import type { ContributorRecord } from './GitHubStatsPanel';
@@ -110,7 +107,7 @@ const ContributorBreakdown = ({
 
   const logins = byContrib.map(c => c.login);
   const colorMap: Record<string, string> = Object.fromEntries(
-    logins.map(l => [l, loginToColor(l)]),
+    logins.map(l => [l, loginToColor(l)])
   );
 
   const commitsPieData = byContrib.map(c => ({
@@ -143,9 +140,7 @@ const ContributorBreakdown = ({
         </div>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div data-testid="commits-pie">
-            <div className="text-xs text-gray-500 dark:text-gray-400 mb-1 text-center">
-              Commits
-            </div>
+            <div className="text-xs text-gray-500 dark:text-gray-400 mb-1 text-center">Commits</div>
             <div style={{ width: '100%', height: 220 }}>
               <ResponsiveContainer width="100%" height="100%">
                 <PieChart>
@@ -156,9 +151,7 @@ const ContributorBreakdown = ({
                     cx="50%"
                     cy="50%"
                     outerRadius={70}
-                    label={entry =>
-                      `${entry.name} ${((entry.percent ?? 0) * 100).toFixed(0)}%`
-                    }
+                    label={entry => `${entry.name} ${((entry.percent ?? 0) * 100).toFixed(0)}%`}
                   >
                     {commitsPieData.map(d => (
                       <Cell key={d.name} fill={colorMap[d.name]} />
@@ -189,9 +182,7 @@ const ContributorBreakdown = ({
                     cx="50%"
                     cy="50%"
                     outerRadius={70}
-                    label={entry =>
-                      `${entry.name} ${((entry.percent ?? 0) * 100).toFixed(0)}%`
-                    }
+                    label={entry => `${entry.name} ${((entry.percent ?? 0) * 100).toFixed(0)}%`}
                   >
                     {linesPieData.map(d => (
                       <Cell key={d.name} fill={colorMap[d.name]} />
@@ -218,14 +209,8 @@ const ContributorBreakdown = ({
         </div>
         <div style={{ width: '100%', height: 220 }} data-testid="contributor-stacked-bar">
           <ResponsiveContainer width="100%" height="100%">
-            <BarChart
-              data={perDay}
-              margin={{ top: 12, right: 24, left: 0, bottom: 8 }}
-            >
-              <CartesianGrid
-                strokeDasharray="3 3"
-                stroke={isDarkMode ? '#374151' : '#f0f0f0'}
-              />
+            <BarChart data={perDay} margin={{ top: 12, right: 24, left: 0, bottom: 8 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke={isDarkMode ? '#374151' : '#f0f0f0'} />
               <XAxis dataKey="day" tick={axisTick} axisLine={axisLine} />
               <YAxis allowDecimals={false} tick={axisTick} axisLine={axisLine} />
               <Tooltip contentStyle={tooltipStyle} labelStyle={tooltipLabel} />
@@ -236,12 +221,7 @@ const ContributorBreakdown = ({
                 }}
               />
               {logins.map(login => (
-                <Bar
-                  key={login}
-                  dataKey={login}
-                  stackId="commits"
-                  fill={colorMap[login]}
-                />
+                <Bar key={login} dataKey={login} stackId="commits" fill={colorMap[login]} />
               ))}
             </BarChart>
           </ResponsiveContainer>
@@ -258,9 +238,7 @@ const ContributorBreakdown = ({
           }
         }}
         footer={null}
-        title={
-          linkTarget ? `Link GitHub user ${linkTarget} to a student` : undefined
-        }
+        title={linkTarget ? `Link GitHub user ${linkTarget} to a student` : undefined}
         destroyOnClose
         data-testid="link-contributor-modal"
       >
@@ -338,9 +316,7 @@ const ContributorBreakdown = ({
                     className="inline-block h-2.5 w-2.5 rounded-full"
                     style={{ backgroundColor: loginToColor(u.login) }}
                   />
-                  <span className="font-medium text-gray-800 dark:text-gray-100">
-                    {u.login}
-                  </span>
+                  <span className="font-medium text-gray-800 dark:text-gray-100">{u.login}</span>
                   <span className="text-gray-500 dark:text-gray-400">
                     · {u.commits} commit{u.commits === 1 ? '' : 's'}
                   </span>

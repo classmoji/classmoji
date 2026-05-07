@@ -22,7 +22,7 @@ const getInitials = (name?: string | null, login?: string | null) => {
   if (!source) return '?';
   const parts = source.split(/\s+/).filter(Boolean);
   const initials = parts
-    .map((p) => p[0])
+    .map(p => p[0])
     .slice(0, 2)
     .join('')
     .toUpperCase();

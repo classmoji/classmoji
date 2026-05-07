@@ -58,7 +58,10 @@ test.describe('Grading Queue Tabs', () => {
   });
 
   test('can switch to Submitted tab', async ({ authenticatedPage: page }) => {
-    await page.getByRole('tab', { name: /Submitted/i }).first().click();
+    await page
+      .getByRole('tab', { name: /Submitted/i })
+      .first()
+      .click();
     await expect(page.getByRole('tab', { name: /Submitted/i }).first()).toHaveAttribute(
       'aria-selected',
       'true'
@@ -88,7 +91,10 @@ test.describe('Grading Queue Tabs', () => {
   });
 
   test('can switch to Graded tab', async ({ authenticatedPage: page }) => {
-    await page.getByRole('tab', { name: /Graded/i }).first().click();
+    await page
+      .getByRole('tab', { name: /Graded/i })
+      .first()
+      .click();
     await expect(page.getByRole('tab', { name: /Graded/i }).first()).toHaveAttribute(
       'aria-selected',
       'true'
@@ -111,10 +117,7 @@ test.describe('Grading Queue Tabs', () => {
 
   test('can switch to All tab', async ({ authenticatedPage: page }) => {
     await page.getByRole('tab', { name: /All/i }).click();
-    await expect(page.getByRole('tab', { name: /All/i })).toHaveAttribute(
-      'aria-selected',
-      'true'
-    );
+    await expect(page.getByRole('tab', { name: /All/i })).toHaveAttribute('aria-selected', 'true');
     // Should show the all tab description
     await expect(page.getByText(/Complete list of all assignments/i)).toBeVisible();
   });
@@ -161,7 +164,10 @@ test.describe('Grading Table Columns', () => {
     const emptyState = page.getByText(/All caught up!|No .* assignments/i);
 
     const hasTable = await table.isVisible().catch(() => false);
-    const hasEmptyState = await emptyState.first().isVisible().catch(() => false);
+    const hasEmptyState = await emptyState
+      .first()
+      .isVisible()
+      .catch(() => false);
 
     expect(hasTable || hasEmptyState).toBeTruthy();
   });
@@ -172,7 +178,10 @@ test.describe('Grading Table Columns', () => {
     await page.waitForTimeout(500);
 
     // Check for expected column headers if there's a table
-    const hasTable = await page.locator('table').isVisible().catch(() => false);
+    const hasTable = await page
+      .locator('table')
+      .isVisible()
+      .catch(() => false);
     if (hasTable) {
       await expect(page.getByRole('columnheader', { name: /Owner/i })).toBeVisible();
       await expect(page.getByRole('columnheader', { name: /Module/i })).toBeVisible();

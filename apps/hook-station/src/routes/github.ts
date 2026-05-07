@@ -3,8 +3,13 @@ import type { WebhookEvent } from '@octokit/webhooks-types';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import Tasks from '@classmoji/tasks';
 
+const githubWebhookSecret = process.env.GITHUB_WEBHOOK_SECRET;
+if (!githubWebhookSecret) {
+  throw new Error('GITHUB_WEBHOOK_SECRET is required');
+}
+
 const webhooks = new Webhooks({
-  secret: process.env.GITHUB_WEBHOOK_SECRET!,
+  secret: githubWebhookSecret,
 });
 
 const githubWebhookHandlers: Record<string, (data: WebhookEvent) => Promise<void>> = {

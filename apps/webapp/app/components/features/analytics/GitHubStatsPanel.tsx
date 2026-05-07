@@ -4,9 +4,7 @@ import dayjs from 'dayjs';
 import StatsCard from '~/components/shared/stats/StatsCard';
 import CommitTimeline, { type CommitRecord } from './CommitTimeline';
 import Anomalies from './Anomalies';
-import ContributorBreakdown, {
-  type EligibleStudent,
-} from './ContributorBreakdown';
+import ContributorBreakdown, { type EligibleStudent } from './ContributorBreakdown';
 import HeuristicsChips from './HeuristicsChips';
 import PullRequestPills from './PullRequestPills';
 
@@ -161,10 +159,7 @@ const GitHubStatsPanel = ({
   } = snapshot;
 
   return (
-    <Card
-      className="border border-gray-100 dark:border-gray-700"
-      data-testid="github-stats-panel"
-    >
+    <Card className="border border-gray-100 dark:border-gray-700" data-testid="github-stats-panel">
       {/* Header */}
       <div className="flex items-center justify-between gap-4 mb-4">
         <div>

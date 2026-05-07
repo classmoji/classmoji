@@ -58,24 +58,14 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
   const userId = body.user_id === undefined ? null : body.user_id;
 
   if (!githubLogin || typeof githubLogin !== 'string') {
-    return Response.json(
-      { error: 'github_login is required' },
-      { status: 400 }
-    );
+    return Response.json({ error: 'github_login is required' }, { status: 400 });
   }
   if (userId !== null && typeof userId !== 'string') {
-    return Response.json(
-      { error: 'user_id must be a string or null' },
-      { status: 400 }
-    );
+    return Response.json({ error: 'user_id must be a string or null' }, { status: 400 });
   }
 
   try {
-    await ClassmojiService.repoAnalytics.linkContributor(
-      repositoryId,
-      githubLogin,
-      userId
-    );
+    await ClassmojiService.repoAnalytics.linkContributor(repositoryId, githubLogin, userId);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     return Response.json({ error: message }, { status: 400 });

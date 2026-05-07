@@ -44,10 +44,10 @@ async function migratePagesToBlockNote(): Promise<void> {
       include: {
         classroom: {
           include: {
-            git_organization: true
-          }
-        }
-      }
+            git_organization: true,
+          },
+        },
+      },
     });
 
     console.log(`📦 Fetched ${pages.length} pages with classroom/git org data`);
@@ -77,7 +77,9 @@ async function migratePagesToBlockNote(): Promise<void> {
     // Set OVERRIDE_GIT_ORG_LOGIN to use a different git org than what's in the database
     const OVERRIDE_GIT_ORG_LOGIN = process.env.OVERRIDE_GIT_ORG_LOGIN;
     if (OVERRIDE_GIT_ORG_LOGIN) {
-      console.log(`\n⚠️  Git org override enabled: Will use "${OVERRIDE_GIT_ORG_LOGIN}" for all pages`);
+      console.log(
+        `\n⚠️  Git org override enabled: Will use "${OVERRIDE_GIT_ORG_LOGIN}" for all pages`
+      );
     }
 
     // OPTIONAL: Filter to specific git org (uncomment and set the org name)
@@ -116,11 +118,16 @@ async function migratePagesToBlockNote(): Promise<void> {
           ? { ...gitOrg, login: OVERRIDE_GIT_ORG_LOGIN }
           : gitOrg;
 
-        const term = generateTermString(page.classroom.term as string ?? undefined, page.classroom.year ?? undefined);
+        const term = generateTermString(
+          (page.classroom.term as string) ?? undefined,
+          page.classroom.year ?? undefined
+        );
         const repo = `content-${effectiveGitOrg.login}-${term}`;
 
         console.log(`\n🔍 Processing: ${page.slug}`);
-        console.log(`   Git Org: ${gitOrg.login} ${OVERRIDE_GIT_ORG_LOGIN ? `→ ${effectiveGitOrg.login} (overridden)` : ''}`);
+        console.log(
+          `   Git Org: ${gitOrg.login} ${OVERRIDE_GIT_ORG_LOGIN ? `→ ${effectiveGitOrg.login} (overridden)` : ''}`
+        );
         console.log(`   Term: ${page.classroom.term}, Year: ${page.classroom.year}`);
         console.log(`   Generated term string: ${term}`);
         console.log(`   Repo: ${repo}`);
@@ -131,7 +138,7 @@ async function migratePagesToBlockNote(): Promise<void> {
           await ContentService.getContent({
             gitOrganization: effectiveGitOrg,
             repo,
-            path: `${page.content_path}/content.json`
+            path: `${page.content_path}/content.json`,
           });
 
           console.log(`⏭️  Skipping ${page.slug} - content.json already exists`);
@@ -148,12 +155,14 @@ async function migratePagesToBlockNote(): Promise<void> {
           const htmlResult = await ContentService.getContent({
             gitOrganization: effectiveGitOrg,
             repo,
-            path: `${page.content_path}/index.html`
+            path: `${page.content_path}/index.html`,
           });
           htmlContent = htmlResult!.content;
           console.log(`   ✓ Found index.html (${htmlContent.length} bytes)`);
         } catch (err: unknown) {
-          console.log(`❌ No index.html found for ${page.slug}: ${err instanceof Error ? err.message : String(err)}`);
+          console.log(
+            `❌ No index.html found for ${page.slug}: ${err instanceof Error ? err.message : String(err)}`
+          );
           errors++;
           continue;
         }
@@ -167,14 +176,16 @@ async function migratePagesToBlockNote(): Promise<void> {
           repo,
           path: `${page.content_path}/content.json`,
           content: JSON.stringify(blockNoteContent, null, 2),
-          message: `Migrate ${page.slug} from HTML to BlockNote format`
+          message: `Migrate ${page.slug} from HTML to BlockNote format`,
         });
 
         console.log(`✅ Converted ${page.slug}`);
         converted++;
-
       } catch (err: unknown) {
-        console.error(`❌ Error converting ${page.slug}:`, err instanceof Error ? err.message : String(err));
+        console.error(
+          `❌ Error converting ${page.slug}:`,
+          err instanceof Error ? err.message : String(err)
+        );
         errors++;
       }
     }
@@ -184,15 +195,13 @@ async function migratePagesToBlockNote(): Promise<void> {
     console.log(`   ⏭️  Skipped (already migrated): ${skipped}`);
     console.log(`   ❌ Errors: ${errors}`);
     console.log(`   📋 Total: ${pages.length}`);
-
   } finally {
     await prisma.$disconnect();
   }
 }
 
 // Run the migration
-migratePagesToBlockNote()
-  .catch((err: unknown) => {
-    console.error('Migration failed:', err);
-    process.exit(1);
-  });
+migratePagesToBlockNote().catch((err: unknown) => {
+  console.error('Migration failed:', err);
+  process.exit(1);
+});

@@ -56,13 +56,8 @@ export type {
 } from './classmoji/repoAnalytics.types.ts';
 
 // Repo analytics service entry points (server-only; touches Prisma)
-export {
-  aggregateForTeam,
-} from './classmoji/repoAnalytics.service.ts';
-export type {
-  TeamAggregate,
-  TeamRepoSnapshot,
-} from './classmoji/repoAnalytics.service.ts';
+export { aggregateForTeam } from './classmoji/repoAnalytics.service.ts';
+export type { TeamAggregate, TeamRepoSnapshot } from './classmoji/repoAnalytics.service.ts';
 
 // Repo analytics flag heuristics (pure, client-safe)
 export {

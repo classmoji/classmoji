@@ -40,8 +40,7 @@ describe('getQuestionProgressFromMessage', () => {
   });
 
   it('takes the higher questionNumber when both formats present', () => {
-    const msg =
-      'Question 2 of 5\n{"question_number": 4, "total_questions": 5}';
+    const msg = 'Question 2 of 5\n{"question_number": 4, "total_questions": 5}';
     expect(getQuestionProgressFromMessage(msg)).toEqual({
       questionNumber: 4,
       totalQuestions: 5,
@@ -118,8 +117,12 @@ describe('parseQuestionComplete', () => {
   });
 
   it('returns null when required fields missing', () => {
-    expect(parseQuestionComplete('[QUESTION_COMPLETE]\n```json\n{"emoji": "heart"}\n```')).toBeNull();
-    expect(parseQuestionComplete('[QUESTION_COMPLETE]\n```json\n{"question_num": 1}\n```')).toBeNull();
+    expect(
+      parseQuestionComplete('[QUESTION_COMPLETE]\n```json\n{"emoji": "heart"}\n```')
+    ).toBeNull();
+    expect(
+      parseQuestionComplete('[QUESTION_COMPLETE]\n```json\n{"question_num": 1}\n```')
+    ).toBeNull();
   });
 
   it('returns null on malformed JSON', () => {

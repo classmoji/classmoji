@@ -10,7 +10,7 @@ export const useNotifiedFetcher = () => {
 
   const finalize = (
     action: string | undefined,
-    payload: Pick<CalloutPayload, 'variant' | 'title' | 'autoDismissMs'>,
+    payload: Pick<CalloutPayload, 'variant' | 'title' | 'autoDismissMs'>
   ) => {
     const id = action ? calloutIds.current.get(action) : undefined;
     if (id) {
