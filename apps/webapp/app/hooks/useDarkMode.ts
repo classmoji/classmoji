@@ -4,7 +4,17 @@ import { useEffect, useState, useCallback } from 'react';
 // Reads/writes `cm-tweaks` from localStorage and applies the chosen theme +
 // accent color (and derived tints) to the document root.
 
-export type ThemeMode = 'light' | 'dark';
+export type ThemeMode = 'light' | 'dark' | 'system';
+
+/**
+ * Resolve a theme choice to the concrete light/dark value to apply to the DOM.
+ * 'system' falls through to the OS-level prefers-color-scheme media query.
+ */
+function resolveTheme(theme: ThemeMode): 'light' | 'dark' {
+  if (theme !== 'system') return theme;
+  if (typeof window === 'undefined') return 'light';
+  return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+}
 
 export interface TweaksState {
   theme: ThemeMode;
@@ -24,7 +34,7 @@ export const CONTRAST_MIN = 0;
 export const CONTRAST_MAX = 100;
 export const CONTRAST_DEFAULT = 50;
 const DEFAULT_TWEAKS: TweaksState = {
-  theme: 'light',
+  theme: 'system',
   accent: '#0ea5e9',
   background: 'default',
   uiFontSize: FONT_SIZE_DEFAULT,
@@ -33,18 +43,17 @@ const DEFAULT_TWEAKS: TweaksState = {
   pointerCursors: false,
 };
 
-export type BackgroundKey =
-  | 'default'
-  | 'aurora'
-  | 'mint'
-  | 'peach'
-  | 'slate'
-  | 'dusk'
-  | 'accent';
+export type BackgroundKey = 'default' | 'aurora' | 'mint' | 'peach' | 'slate' | 'dusk' | 'accent';
 
 interface BgStops {
-  s1: string; s2: string; s3a: string; s3b: string; s3c: string;
-  paper: string; paper2: string; sidebar: string;
+  s1: string;
+  s2: string;
+  s3a: string;
+  s3b: string;
+  s3c: string;
+  paper: string;
+  paper2: string;
+  sidebar: string;
 }
 
 export interface BackgroundPreset {
@@ -56,51 +65,154 @@ export interface BackgroundPreset {
 
 export const BACKGROUNDS: BackgroundPreset[] = [
   {
-    key: 'default', name: 'Default',
-    light: { s1: '#f7f9ff', s2: '#e6edfc', s3a: '#edf1fa', s3b: '#f3f6fc', s3c: '#ebf0fb',
-             paper: '#f0f4fc', paper2: '#e8eef8', sidebar: '#ffffff' },
-    dark:  { s1: '#1a1f32', s2: '#0a0d17', s3a: '#0c0f1a', s3b: '#11152a', s3c: '#090b14',
-             paper: '#0e1016', paper2: '#151824', sidebar: '#121521' },
+    key: 'default',
+    name: 'Default',
+    light: {
+      s1: '#f7f9ff',
+      s2: '#e6edfc',
+      s3a: '#edf1fa',
+      s3b: '#f3f6fc',
+      s3c: '#ebf0fb',
+      paper: '#f0f4fc',
+      paper2: '#e8eef8',
+      sidebar: '#ffffff',
+    },
+    dark: {
+      s1: '#1a1f32',
+      s2: '#0a0d17',
+      s3a: '#0c0f1a',
+      s3b: '#11152a',
+      s3c: '#090b14',
+      paper: '#0e1016',
+      paper2: '#151824',
+      sidebar: '#121521',
+    },
   },
   {
-    key: 'aurora', name: 'Aurora',
-    light: { s1: '#ffd7e5', s2: '#ccd6ff', s3a: '#ece0ff', s3b: '#e7edff', s3c: '#ffdbe6',
-             paper: '#fcf0f5', paper2: '#f4ebfb', sidebar: '#fef8fb' },
-    dark:  { s1: '#2e1536', s2: '#0a071e', s3a: '#120c24', s3b: '#1c1436', s3c: '#0a071c',
-             paper: '#120c18', paper2: '#191127', sidebar: '#150e20' },
+    key: 'aurora',
+    name: 'Aurora',
+    light: {
+      s1: '#ffd7e5',
+      s2: '#ccd6ff',
+      s3a: '#ece0ff',
+      s3b: '#e7edff',
+      s3c: '#ffdbe6',
+      paper: '#fcf0f5',
+      paper2: '#f4ebfb',
+      sidebar: '#fef8fb',
+    },
+    dark: {
+      s1: '#2e1536',
+      s2: '#0a071e',
+      s3a: '#120c24',
+      s3b: '#1c1436',
+      s3c: '#0a071c',
+      paper: '#120c18',
+      paper2: '#191127',
+      sidebar: '#150e20',
+    },
   },
   {
-    key: 'mint', name: 'Mint',
-    light: { s1: '#b9e7cc', s2: '#a8dec1', s3a: '#cfe8d8', s3b: '#dcecdf', s3c: '#b7d9c4',
-             paper: '#e8f3ec', paper2: '#d9ebe1', sidebar: '#f2f8f4' },
-    dark:  { s1: '#123629', s2: '#061510', s3a: '#0c2118', s3b: '#102c22', s3c: '#04100b',
-             paper: '#0a1812', paper2: '#0e2119', sidebar: '#0c1b14' },
+    key: 'mint',
+    name: 'Mint',
+    light: {
+      s1: '#b9e7cc',
+      s2: '#a8dec1',
+      s3a: '#cfe8d8',
+      s3b: '#dcecdf',
+      s3c: '#b7d9c4',
+      paper: '#e8f3ec',
+      paper2: '#d9ebe1',
+      sidebar: '#f2f8f4',
+    },
+    dark: {
+      s1: '#123629',
+      s2: '#061510',
+      s3a: '#0c2118',
+      s3b: '#102c22',
+      s3c: '#04100b',
+      paper: '#0a1812',
+      paper2: '#0e2119',
+      sidebar: '#0c1b14',
+    },
   },
   {
-    key: 'peach', name: 'Peach',
-    light: { s1: '#ffcea1', s2: '#ffb589', s3a: '#ffdcbd', s3b: '#ffe4cc', s3c: '#ffc395',
-             paper: '#fcebd8', paper2: '#f6dcbf', sidebar: '#fdf3e7' },
-    dark:  { s1: '#3b1f12', s2: '#160b07', s3a: '#1e1109', s3b: '#26160d', s3c: '#0f0805',
-             paper: '#1a110a', paper2: '#261a10', sidebar: '#1d140c' },
+    key: 'peach',
+    name: 'Peach',
+    light: {
+      s1: '#ffcea1',
+      s2: '#ffb589',
+      s3a: '#ffdcbd',
+      s3b: '#ffe4cc',
+      s3c: '#ffc395',
+      paper: '#fcebd8',
+      paper2: '#f6dcbf',
+      sidebar: '#fdf3e7',
+    },
+    dark: {
+      s1: '#3b1f12',
+      s2: '#160b07',
+      s3a: '#1e1109',
+      s3b: '#26160d',
+      s3c: '#0f0805',
+      paper: '#1a110a',
+      paper2: '#261a10',
+      sidebar: '#1d140c',
+    },
   },
   {
-    key: 'slate', name: 'Slate',
-    light: { s1: '#d6dce6', s2: '#c3cbd9', s3a: '#d0d7e1', s3b: '#dde2eb', s3c: '#c6ccd8',
-             paper: '#edf0f5', paper2: '#e0e5ee', sidebar: '#f5f7fa' },
-    dark:  { s1: '#21252f', s2: '#0a0c14', s3a: '#10131c', s3b: '#171a24', s3c: '#0a0b10',
-             paper: '#0f1117', paper2: '#161a22', sidebar: '#111319' },
+    key: 'slate',
+    name: 'Slate',
+    light: {
+      s1: '#d6dce6',
+      s2: '#c3cbd9',
+      s3a: '#d0d7e1',
+      s3b: '#dde2eb',
+      s3c: '#c6ccd8',
+      paper: '#edf0f5',
+      paper2: '#e0e5ee',
+      sidebar: '#f5f7fa',
+    },
+    dark: {
+      s1: '#21252f',
+      s2: '#0a0c14',
+      s3a: '#10131c',
+      s3b: '#171a24',
+      s3c: '#0a0b10',
+      paper: '#0f1117',
+      paper2: '#161a22',
+      sidebar: '#111319',
+    },
   },
   {
-    key: 'dusk', name: 'Dusk',
-    light: { s1: '#b4c3f0', s2: '#8fa3db', s3a: '#bcc7e7', s3b: '#c9d2ed', s3c: '#9dadd8',
-             paper: '#dfe6f7', paper2: '#ced8ef', sidebar: '#ecf0fa' },
-    dark:  { s1: '#232a5a', s2: '#050825', s3a: '#0a1030', s3b: '#121a40', s3c: '#050720',
-             paper: '#0c1029', paper2: '#131838', sidebar: '#0e1330' },
+    key: 'dusk',
+    name: 'Dusk',
+    light: {
+      s1: '#b4c3f0',
+      s2: '#8fa3db',
+      s3a: '#bcc7e7',
+      s3b: '#c9d2ed',
+      s3c: '#9dadd8',
+      paper: '#dfe6f7',
+      paper2: '#ced8ef',
+      sidebar: '#ecf0fa',
+    },
+    dark: {
+      s1: '#232a5a',
+      s2: '#050825',
+      s3a: '#0a1030',
+      s3b: '#121a40',
+      s3c: '#050720',
+      paper: '#0c1029',
+      paper2: '#131838',
+      sidebar: '#0e1330',
+    },
   },
   {
-    key: 'accent', name: 'Accent',
+    key: 'accent',
+    name: 'Accent',
     light: { s1: '', s2: '', s3a: '', s3b: '', s3c: '', paper: '', paper2: '', sidebar: '' },
-    dark:  { s1: '', s2: '', s3a: '', s3b: '', s3c: '', paper: '', paper2: '', sidebar: '' },
+    dark: { s1: '', s2: '', s3a: '', s3b: '', s3c: '', paper: '', paper2: '', sidebar: '' },
   },
 ];
 
@@ -114,7 +226,7 @@ function getBackgroundStops(key: BackgroundKey, theme: ThemeMode, accent: string
         s3b: mix(accent, '#ffffff', 0.86),
         s3c: mix(accent, '#ffffff', 0.72),
         paper: mix(accent, '#ffffff', 0.88),
-        paper2: mix(accent, '#ffffff', 0.80),
+        paper2: mix(accent, '#ffffff', 0.8),
         sidebar: mix(accent, '#ffffff', 0.94),
       };
     }
@@ -124,7 +236,7 @@ function getBackgroundStops(key: BackgroundKey, theme: ThemeMode, accent: string
       s3a: mix(accent, '#000000', 0.84),
       s3b: mix(accent, '#000000', 0.76),
       s3c: mix(accent, '#000000', 0.92),
-      paper: mix(accent, '#000000', 0.90),
+      paper: mix(accent, '#000000', 0.9),
       paper2: mix(accent, '#000000', 0.84),
       sidebar: mix(accent, '#000000', 0.88),
     };
@@ -158,7 +270,13 @@ const ACCENTS: AccentTints[] = [
 
 function hexToRgb(hex: string): { r: number; g: number; b: number } {
   const h = hex.replace('#', '');
-  const expanded = h.length === 3 ? h.split('').map(c => c + c).join('') : h;
+  const expanded =
+    h.length === 3
+      ? h
+          .split('')
+          .map(c => c + c)
+          .join('')
+      : h;
   const n = parseInt(expanded, 16);
   return { r: (n >> 16) & 255, g: (n >> 8) & 255, b: n & 255 };
 }
@@ -203,8 +321,9 @@ export function applyTweaks({
 }: TweaksState): void {
   if (typeof document === 'undefined') return;
   const root = document.documentElement;
-  root.setAttribute('data-theme', theme);
-  if (theme === 'dark') root.classList.add('dark');
+  const resolved = resolveTheme(theme);
+  root.setAttribute('data-theme', resolved);
+  if (resolved === 'dark') root.classList.add('dark');
   else root.classList.remove('dark');
 
   const clamped = Math.min(FONT_SIZE_MAX, Math.max(FONT_SIZE_MIN, uiFontSize));
@@ -223,7 +342,7 @@ export function applyTweaks({
   const style = root.style;
   style.setProperty('--accent', a.hex);
   style.setProperty('--accent-hover', a.hover);
-  if (theme === 'light') {
+  if (resolved === 'light') {
     style.setProperty('--accent-soft', a.soft);
     style.setProperty('--accent-soft-2', a.soft2);
     style.setProperty('--accent-ink', a.ink);
@@ -245,7 +364,7 @@ export function applyTweaks({
     style.removeProperty('--sidebar');
     style.removeProperty('--panel');
   } else {
-    const stops = getBackgroundStops(background, theme, accent);
+    const stops = getBackgroundStops(background, resolved, accent);
     style.setProperty('--bg-stop-1', stops.s1);
     style.setProperty('--bg-stop-2', stops.s2);
     style.setProperty('--bg-stop-3a', stops.s3a);
@@ -277,7 +396,15 @@ function readStored(): TweaksState {
     if (!raw) return DEFAULT_TWEAKS;
     const parsed = JSON.parse(raw) as Partial<TweaksState> | null;
     if (!parsed || typeof parsed !== 'object') return DEFAULT_TWEAKS;
-    const validBg: BackgroundKey[] = ['default', 'aurora', 'mint', 'peach', 'slate', 'dusk', 'accent'];
+    const validBg: BackgroundKey[] = [
+      'default',
+      'aurora',
+      'mint',
+      'peach',
+      'slate',
+      'dusk',
+      'accent',
+    ];
     const bg = validBg.includes(parsed.background as BackgroundKey)
       ? (parsed.background as BackgroundKey)
       : DEFAULT_TWEAKS.background;
@@ -290,7 +417,10 @@ function readStored(): TweaksState {
       ? Math.min(CONTRAST_MAX, Math.max(CONTRAST_MIN, rawContrast))
       : DEFAULT_TWEAKS.uiContrast;
     return {
-      theme: parsed.theme === 'dark' ? 'dark' : 'light',
+      theme:
+        parsed.theme === 'dark' || parsed.theme === 'light' || parsed.theme === 'system'
+          ? parsed.theme
+          : DEFAULT_TWEAKS.theme,
       accent: typeof parsed.accent === 'string' ? parsed.accent : DEFAULT_TWEAKS.accent,
       background: bg,
       uiFontSize,
@@ -339,6 +469,7 @@ const useDarkMode = (): UseDarkModeReturn => {
   // stored value with defaults before the hydration read completes.
   const [tweaks, setTweaksState] = useState<TweaksState>(DEFAULT_TWEAKS);
   const [hydrated, setHydrated] = useState(false);
+  const [systemDark, setSystemDark] = useState(false);
 
   useEffect(() => {
     setTweaksState(readStored());
@@ -346,10 +477,19 @@ const useDarkMode = (): UseDarkModeReturn => {
   }, []);
 
   useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const mq = window.matchMedia('(prefers-color-scheme: dark)');
+    setSystemDark(mq.matches);
+    const handler = (e: MediaQueryListEvent) => setSystemDark(e.matches);
+    mq.addEventListener('change', handler);
+    return () => mq.removeEventListener('change', handler);
+  }, []);
+
+  useEffect(() => {
     if (!hydrated) return;
     applyTweaks(tweaks);
     persist(tweaks);
-  }, [tweaks, hydrated]);
+  }, [tweaks, hydrated, systemDark]);
 
   useEffect(() => {
     listeners.add(setTweaksState);
@@ -418,8 +558,10 @@ const useDarkMode = (): UseDarkModeReturn => {
     [update]
   );
 
+  const isDarkMode = tweaks.theme === 'system' ? systemDark : tweaks.theme === 'dark';
+
   return {
-    isDarkMode: tweaks.theme === 'dark',
+    isDarkMode,
     theme: tweaks.theme,
     accent: tweaks.accent,
     background: tweaks.background,

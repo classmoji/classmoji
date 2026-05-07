@@ -1,5 +1,5 @@
 import { type CSSProperties, useEffect, useState } from 'react';
-import { IconSun, IconMoon, IconCheck } from '@tabler/icons-react';
+import { IconSun, IconMoon, IconDeviceLaptop, IconCheck } from '@tabler/icons-react';
 
 import { useDarkMode } from '~/hooks';
 import {
@@ -36,6 +36,7 @@ const ACCENTS: AccentPreset[] = [
 
 const TweaksSection = () => {
   const {
+    isDarkMode,
     theme,
     accent,
     background,
@@ -66,7 +67,7 @@ const TweaksSection = () => {
   const isCustom = !ACCENTS.some(a => a.hex.toLowerCase() === accent.toLowerCase());
 
   const segBtn = (active: boolean) =>
-    `flex-1 inline-flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
+    `inline-flex min-w-0 items-center justify-center gap-1.5 px-2 py-2 rounded-lg text-sm font-medium transition-colors @[280px]:gap-2 @[280px]:px-3 ${
       active
         ? 'bg-panel text-gray-900 dark:text-gray-100 shadow-sm'
         : 'text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100'
@@ -78,33 +79,48 @@ const TweaksSection = () => {
       description="Personalize your theme, accent color, and background."
     >
       <div className="space-y-6">
-        {/* Appearance mode */}
+        {/* Theme */}
         <div>
           <div className="text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400 mb-2">
-            Mode
+            Theme
           </div>
           <div
             role="radiogroup"
-            aria-label="Appearance"
-            className="inline-flex w-full max-w-xs p-1 rounded-xl bg-stone-100 dark:bg-neutral-800 gap-1"
+            aria-label="Theme"
+            className="@container grid grid-cols-3 w-full max-w-sm p-1 rounded-xl bg-stone-100 dark:bg-neutral-800 gap-1"
           >
             <button
               type="button"
               role="radio"
               aria-checked={theme === 'light'}
+              aria-label="Light"
               className={segBtn(theme === 'light')}
               onClick={() => setTheme('light')}
             >
-              <IconSun size={16} /> Light
+              <IconSun className="size-5 shrink-0" />
+              <span className="hidden @[280px]:inline">Light</span>
             </button>
             <button
               type="button"
               role="radio"
               aria-checked={theme === 'dark'}
+              aria-label="Dark"
               className={segBtn(theme === 'dark')}
               onClick={() => setTheme('dark')}
             >
-              <IconMoon size={16} /> Dark
+              <IconMoon className="size-5 shrink-0" />
+              <span className="hidden @[280px]:inline">Dark</span>
+            </button>
+            <button
+              type="button"
+              role="radio"
+              aria-checked={theme === 'system'}
+              aria-label="System"
+              className={segBtn(theme === 'system')}
+              onClick={() => setTheme('system')}
+            >
+              <IconDeviceLaptop className="size-5 shrink-0" />
+              <span className="hidden @[280px]:inline">System</span>
             </button>
           </div>
         </div>
@@ -149,7 +165,7 @@ const TweaksSection = () => {
           <div className="text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400 mb-2">
             Background
           </div>
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+          <div className="grid grid-cols-[repeat(auto-fit,minmax(110px,1fr))] gap-2">
             {BACKGROUNDS.map(bg => {
               const stops =
                 bg.key === 'accent'
@@ -160,7 +176,7 @@ const TweaksSection = () => {
                       s3b: accent,
                       s3c: accent,
                     }
-                  : theme === 'dark'
+                  : isDarkMode
                     ? bg.dark
                     : bg.light;
               const preview =
@@ -246,9 +262,7 @@ const TweaksSection = () => {
         {/* Pointer cursors toggle */}
         <div className="flex items-start justify-between gap-4">
           <div className="min-w-0">
-            <div className="text-sm text-gray-700 dark:text-gray-200">
-              Use pointer cursors
-            </div>
+            <div className="text-sm text-gray-700 dark:text-gray-200">Use pointer cursors</div>
             <div className="text-sm text-gray-500 dark:text-gray-400 mt-0.5">
               Use a pointer cursor on hover for clickable elements.
             </div>
