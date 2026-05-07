@@ -129,7 +129,7 @@ const ResourcesKanban = ({ modules, pages, slides }: ResourcesKanbanProps) => {
   return (
     <div className="flex-1 flex flex-col h-full overflow-hidden">
       {/* Toolbar */}
-      <div className="flex flex-wrap items-center gap-4 px-6 py-3 border-b border-stone-200 dark:border-neutral-800 bg-white dark:bg-neutral-900">
+      <div className="flex flex-wrap items-center gap-4 px-6 py-3 border-b border-stone-200 dark:border-neutral-800 bg-panel">
         <Input
           prefix={<IconSearch size={16} className="text-gray-400" />}
           placeholder="Search resources..."
@@ -160,7 +160,7 @@ const ResourcesKanban = ({ modules, pages, slides }: ResourcesKanbanProps) => {
       >
         <div className="flex-1 flex overflow-hidden">
           {/* Fixed source column */}
-          <div className="flex-shrink-0 p-4 border-r border-stone-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 overflow-y-auto">
+          <div className="flex-shrink-0 p-4 border-r border-stone-200 dark:border-neutral-800 bg-panel overflow-y-auto">
             <SourceColumn pages={allPages} slides={allSlides} />
           </div>
 

@@ -201,7 +201,7 @@ const ModuleCard = ({
   return (
     <section
       id={module.slug ?? undefined}
-      className="scroll-mt-24 rounded-2xl bg-white dark:bg-neutral-900 ring-1 ring-stone-200 dark:ring-neutral-800 overflow-hidden"
+      className="scroll-mt-24 rounded-2xl bg-panel ring-1 ring-stone-200 dark:ring-neutral-800 overflow-hidden"
     >
       <button
         type="button"

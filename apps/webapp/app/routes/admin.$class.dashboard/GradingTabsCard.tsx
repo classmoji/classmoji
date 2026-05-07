@@ -54,7 +54,7 @@ const GradingTabsCard = ({ gradingProgress, assistantsProgress }: GradingTabsCar
                 idx > 0 ? '-ml-2' : ''
               } ${
                 isActive
-                  ? 'bg-white dark:bg-neutral-900 border-stone-200 dark:border-neutral-800 border-b-transparent'
+                  ? 'bg-panel border-stone-200 dark:border-neutral-800 border-b-transparent'
                   : 'bg-stone-100 dark:bg-neutral-800 text-gray-500 dark:text-gray-400 border-stone-200 dark:border-neutral-700 hover:text-gray-800 dark:hover:text-gray-200'
               }`}
             >
@@ -64,7 +64,7 @@ const GradingTabsCard = ({ gradingProgress, assistantsProgress }: GradingTabsCar
         })}
       </div>
 
-      <section className="rounded-2xl rounded-tl-none bg-white dark:bg-neutral-900 ring-1 ring-stone-200 dark:ring-neutral-800 p-4 sm:p-5 min-h-[240px]">
+      <section className="rounded-2xl rounded-tl-none bg-panel ring-1 ring-stone-200 dark:ring-neutral-800 p-4 sm:p-5 min-h-[240px]">
         {active === 'grading' ? (
           <StatsGradingProgress gradingProgress={gradingProgress} bare />
         ) : (

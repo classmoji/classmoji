@@ -394,7 +394,7 @@ const StudentCalendarView = ({ events, onEventClick, onMonthChange }: StudentCal
   };
 
   return (
-    <section className="rounded-2xl bg-white dark:bg-neutral-900 ring-1 ring-stone-200 dark:ring-neutral-800 overflow-hidden min-h-[calc(100vh-10rem)]">
+    <section className="rounded-2xl bg-panel ring-1 ring-stone-200 dark:ring-neutral-800 overflow-hidden min-h-[calc(100vh-10rem)]">
       <header className="flex flex-wrap items-center justify-between gap-3 px-5 sm:px-6 pt-5 sm:pt-6 pb-4">
         <div className="flex items-center gap-2">
           <button

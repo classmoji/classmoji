@@ -358,7 +358,7 @@ const RetroTabsCard = ({
                 idx > 0 ? '-ml-2' : ''
               } ${
                 isActive
-                  ? 'bg-white dark:bg-neutral-900 border-stone-200 dark:border-neutral-800 border-b-transparent'
+                  ? 'bg-panel border-stone-200 dark:border-neutral-800 border-b-transparent'
                   : 'bg-stone-100 dark:bg-neutral-800 text-gray-500 dark:text-gray-400 border-stone-200 dark:border-neutral-700 hover:text-gray-800 dark:hover:text-gray-200'
               }`}
             >
@@ -367,7 +367,7 @@ const RetroTabsCard = ({
           );
         })}
       </div>
-      <section className="flex-1 rounded-2xl rounded-tl-none bg-white dark:bg-neutral-900 border border-stone-200 dark:border-neutral-800 min-h-[400px] flex flex-col">
+      <section className="flex-1 rounded-2xl rounded-tl-none bg-panel border border-stone-200 dark:border-neutral-800 min-h-[400px] flex flex-col">
         <div className="flex-1 p-5 sm:p-6">
           {active === 'feedback' && <FeedbackPanel items={feedback} />}
           {active === 'team' && (

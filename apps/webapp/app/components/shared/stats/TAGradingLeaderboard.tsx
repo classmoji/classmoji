@@ -86,7 +86,7 @@ const TAGradingLeaderboard = ({ progress, bare = false }: TAGradingLeaderboardPr
   if (bare) return body;
 
   return (
-    <section className="rounded-2xl bg-white dark:bg-neutral-900 ring-1 ring-stone-200 dark:ring-neutral-800 p-5 sm:p-6 h-full">
+    <section className="rounded-2xl bg-panel ring-1 ring-stone-200 dark:ring-neutral-800 p-5 sm:p-6 h-full">
       {body}
     </section>
   );

@@ -251,7 +251,7 @@ export function ErrorBoundary() {
         <h1 className="text-base font-semibold text-gray-600 dark:text-gray-400">Repo Health</h1>
       </div>
 
-      <div className="rounded-2xl bg-white dark:bg-neutral-900 ring-1 ring-stone-200 dark:ring-neutral-800 p-6 sm:p-8 min-h-[calc(100vh-10rem)]">
+      <div className="rounded-2xl bg-panel ring-1 ring-stone-200 dark:ring-neutral-800 p-6 sm:p-8 min-h-[calc(100vh-10rem)]">
         <div className="max-w-2xl mx-auto py-12 text-center">
           <div className="text-xs uppercase tracking-wide text-gray-400 dark:text-gray-500 font-semibold mb-3">
             Error {status}

@@ -325,7 +325,7 @@ const GradesTable = (props: GradesTableProps) => {
         </div>
       </div>
 
-      <div className="rounded-2xl overflow-hidden bg-white dark:bg-neutral-900 min-h-[calc(100vh-10rem)] p-5 sm:p-6">
+      <div className="rounded-2xl overflow-hidden bg-panel min-h-[calc(100vh-10rem)] p-5 sm:p-6">
         {searchQuery && filteredStudents.length === 0 ? (
           <div className="text-center py-12 text-gray-500">
             <div className="font-medium">No students found</div>

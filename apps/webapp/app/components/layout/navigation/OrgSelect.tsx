@@ -105,7 +105,7 @@ const OrgSelect = ({ memberships }: OrgSelectProps) => {
         }}
         classNames={{
           popup: {
-            root: '[&::-webkit-scrollbar]:hidden [&_.ant-select-item-option-selected]:!bg-transparent [&_.ant-select-item-option-active]:!bg-transparent',
+            root: 'cm-org-select-popup [&::-webkit-scrollbar]:hidden [&_.ant-select-item-option-selected]:!bg-transparent [&_.ant-select-item-option-active]:!bg-transparent',
           },
         }}
         options={memberships

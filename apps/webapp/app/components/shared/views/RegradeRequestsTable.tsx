@@ -210,7 +210,7 @@ const RegradeRequestsTable = ({ requests, emojiMappings, org }: RegradeRequestsT
         )}
       </div>
 
-      <div className="rounded-2xl overflow-hidden bg-white dark:bg-neutral-900 min-h-[calc(100vh-10rem)] p-5 sm:p-6">
+      <div className="rounded-2xl overflow-hidden bg-panel min-h-[calc(100vh-10rem)] p-5 sm:p-6">
         <Table
           dataSource={requests}
           columns={columns.filter(col => !col.hidden)}

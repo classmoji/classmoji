@@ -1,8 +1,15 @@
-import { type CSSProperties } from 'react';
+import { type CSSProperties, useEffect, useState } from 'react';
 import { IconSun, IconMoon, IconCheck } from '@tabler/icons-react';
 
 import { useDarkMode } from '~/hooks';
-import { BACKGROUNDS, type BackgroundKey } from '~/hooks/useDarkMode';
+import {
+  BACKGROUNDS,
+  FONT_SIZE_MIN,
+  FONT_SIZE_MAX,
+  CONTRAST_MIN,
+  CONTRAST_MAX,
+  type BackgroundKey,
+} from '~/hooks/useDarkMode';
 import { SettingSection } from '~/components';
 
 // Inline personal "Tweaks" for accent color, light/dark appearance, and
@@ -28,14 +35,40 @@ const ACCENTS: AccentPreset[] = [
 ];
 
 const TweaksSection = () => {
-  const { theme, accent, background, setTheme, setAccent, setBackground } = useDarkMode();
+  const {
+    theme,
+    accent,
+    background,
+    uiFontSize,
+    translucentSidebar,
+    uiContrast,
+    pointerCursors,
+    setTheme,
+    setAccent,
+    setBackground,
+    setUiFontSize,
+    setTranslucentSidebar,
+    setUiContrast,
+    setPointerCursors,
+  } = useDarkMode();
+  const [fontDraft, setFontDraft] = useState<string>(String(uiFontSize));
+
+  useEffect(() => {
+    setFontDraft(String(uiFontSize));
+  }, [uiFontSize]);
+
+  const commitFontSize = () => {
+    const parsed = parseInt(fontDraft, 10);
+    if (Number.isFinite(parsed)) setUiFontSize(parsed);
+    else setFontDraft(String(uiFontSize));
+  };
 
   const isCustom = !ACCENTS.some(a => a.hex.toLowerCase() === accent.toLowerCase());
 
   const segBtn = (active: boolean) =>
     `flex-1 inline-flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
       active
-        ? 'bg-white dark:bg-neutral-900 text-gray-900 dark:text-gray-100 shadow-sm'
+        ? 'bg-panel text-gray-900 dark:text-gray-100 shadow-sm'
         : 'text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100'
     }`;
 
@@ -155,6 +188,107 @@ const TweaksSection = () => {
                 </button>
               );
             })}
+          </div>
+        </div>
+
+        {/* UI font size */}
+        <div>
+          <div className="text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400 mb-2">
+            UI font size
+          </div>
+          <div className="flex items-center justify-between gap-4">
+            <div className="text-sm text-gray-500 dark:text-gray-400">
+              Adjust the base size used for the UI.
+            </div>
+            <div className="flex items-center gap-2 shrink-0">
+              <input
+                type="number"
+                min={FONT_SIZE_MIN}
+                max={FONT_SIZE_MAX}
+                step={1}
+                value={fontDraft}
+                onChange={e => setFontDraft(e.target.value)}
+                onBlur={commitFontSize}
+                onKeyDown={e => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    (e.target as HTMLInputElement).blur();
+                  }
+                }}
+                aria-label="UI font size in pixels"
+                className="w-16 text-center rounded-lg border border-stone-200 dark:border-neutral-700 bg-white dark:bg-neutral-800 text-gray-900 dark:text-gray-100 px-2 py-1.5 text-sm focus:outline-none focus:border-[var(--accent)] focus:ring-1 focus:ring-[var(--accent)]"
+              />
+              <span className="text-sm text-gray-500 dark:text-gray-400">px</span>
+            </div>
+          </div>
+        </div>
+
+        {/* Translucent sidebar toggle */}
+        <div className="flex items-center justify-between gap-4">
+          <div className="text-sm text-gray-700 dark:text-gray-200">Translucent sidebar</div>
+          <button
+            type="button"
+            role="switch"
+            aria-checked={translucentSidebar}
+            onClick={() => setTranslucentSidebar(!translucentSidebar)}
+            className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-[var(--accent)] focus:ring-offset-white dark:focus:ring-offset-neutral-900 ${
+              translucentSidebar ? 'bg-[var(--accent)]' : 'bg-stone-300 dark:bg-neutral-700'
+            }`}
+          >
+            <span
+              className={`inline-block h-5 w-5 transform rounded-full bg-white shadow transition-transform ${
+                translucentSidebar ? 'translate-x-[22px]' : 'translate-x-0.5'
+              }`}
+            />
+          </button>
+        </div>
+
+        {/* Pointer cursors toggle */}
+        <div className="flex items-start justify-between gap-4">
+          <div className="min-w-0">
+            <div className="text-sm text-gray-700 dark:text-gray-200">
+              Use pointer cursors
+            </div>
+            <div className="text-sm text-gray-500 dark:text-gray-400 mt-0.5">
+              Use a pointer cursor on hover for clickable elements.
+            </div>
+          </div>
+          <button
+            type="button"
+            role="switch"
+            aria-checked={pointerCursors}
+            onClick={() => setPointerCursors(!pointerCursors)}
+            className={`mt-0.5 relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-[var(--accent)] focus:ring-offset-white dark:focus:ring-offset-neutral-900 ${
+              pointerCursors ? 'bg-[var(--accent)]' : 'bg-stone-300 dark:bg-neutral-700'
+            }`}
+          >
+            <span
+              className={`inline-block h-5 w-5 transform rounded-full bg-white shadow transition-transform ${
+                pointerCursors ? 'translate-x-[22px]' : 'translate-x-0.5'
+              }`}
+            />
+          </button>
+        </div>
+
+        {/* Contrast slider */}
+        <div>
+          <div className="text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400 mb-2">
+            Contrast
+          </div>
+          <div className="flex items-center gap-3">
+            <input
+              type="range"
+              min={CONTRAST_MIN}
+              max={CONTRAST_MAX}
+              step={1}
+              value={uiContrast}
+              onChange={e => setUiContrast(Number(e.target.value))}
+              aria-label="UI contrast"
+              className="flex-1 accent-[var(--accent)]"
+            />
+            <span className="w-8 text-right tabular-nums text-sm text-gray-600 dark:text-gray-300">
+              {uiContrast}
+            </span>
           </div>
         </div>
       </div>

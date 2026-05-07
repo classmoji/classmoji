@@ -302,8 +302,9 @@ const CommonLayout = ({
     >
       {/* Floating Sidebar */}
       <div
+        data-cm-sidebar
         className={`fixed top-7 left-5 bottom-7 ${
-          tweaksBgActive ? '' : 'bg-white dark:bg-neutral-900'
+          tweaksBgActive ? '' : 'bg-sidebar'
         } rounded-2xl ring-1 ring-stone-200 dark:ring-neutral-800 z-30 transition-transform duration-300 ease-in-out flex flex-col overflow-hidden lg:translate-x-0 ${
           mobileOpen ? 'translate-x-0' : '-translate-x-[110%]'
         }`}
@@ -454,6 +455,7 @@ const CommonLayout = ({
 
       {/* Main Content Area */}
       <div
+        data-cm-main
         className="flex-1 flex flex-col transition-all duration-300 ease-in-out min-w-0 lg:ml-[calc(var(--sider-width)+1.5rem)]"
         style={{ '--sider-width': `${siderWidth}px` } as React.CSSProperties}
       >
@@ -491,7 +493,7 @@ const CommonLayout = ({
             pathname.match(/\/grades(\/|$)/) ||
             pathname.match(/\/repositories(\/|$)/)
               ? ''
-              : 'bg-white dark:bg-neutral-900 rounded-2xl ring-1 ring-stone-200 dark:ring-neutral-800'
+              : 'bg-panel rounded-2xl ring-1 ring-stone-200 dark:ring-neutral-800'
           }`}
         >
           <div

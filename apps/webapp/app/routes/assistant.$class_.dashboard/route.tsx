@@ -100,7 +100,7 @@ const AssistantDashboard = ({ loaderData }: Route.ComponentProps) => {
 
             return (
               <>
-                <div className="rounded-2xl bg-white dark:bg-neutral-900 ring-1 ring-stone-200 dark:ring-neutral-800 overflow-hidden flex flex-col sm:flex-row divide-y sm:divide-y-0 sm:divide-x divide-stone-200/70 dark:divide-gray-800">
+                <div className="rounded-2xl bg-panel ring-1 ring-stone-200 dark:ring-neutral-800 overflow-hidden flex flex-col sm:flex-row divide-y sm:divide-y-0 sm:divide-x divide-stone-200/70 dark:divide-gray-800">
                   <StatItem
                     label="Class assignments"
                     value={totalClass}

@@ -97,7 +97,7 @@ const buildSummary = (module: SpotlightModule) => {
 const ModuleSpotlightCard = ({ module, classSlug }: ModuleSpotlightCardProps) => {
   if (!module) {
     return (
-      <section className="rounded-2xl bg-white dark:bg-neutral-900 ring-1 ring-stone-200 dark:ring-neutral-800 p-5 sm:p-6 h-full flex flex-col items-center justify-center text-center">
+      <section className="rounded-2xl bg-panel ring-1 ring-stone-200 dark:ring-neutral-800 p-5 sm:p-6 h-full flex flex-col items-center justify-center text-center">
         <h3 className="text-base font-semibold text-gray-800 dark:text-gray-200">
           No published modules yet
         </h3>
@@ -112,7 +112,7 @@ const ModuleSpotlightCard = ({ module, classSlug }: ModuleSpotlightCardProps) =>
   const summary = buildSummary(module);
 
   return (
-    <section className="rounded-2xl bg-white dark:bg-neutral-900 ring-1 ring-stone-200 dark:ring-neutral-800 p-5 sm:p-6 h-full flex flex-col">
+    <section className="rounded-2xl bg-panel ring-1 ring-stone-200 dark:ring-neutral-800 p-5 sm:p-6 h-full flex flex-col">
       <div className="text-[11px] font-semibold tracking-[0.18em] text-gray-400 dark:text-gray-500">
         MODULE #{module.ordinal}
       </div>
@@ -169,7 +169,7 @@ const ModuleSpotlightCard = ({ module, classSlug }: ModuleSpotlightCardProps) =>
         </div>
         <Link
           to={`/student/${classSlug}/modules`}
-          className="inline-flex items-center gap-1.5 text-xs sm:text-sm font-medium text-gray-700 dark:text-gray-200 px-3 py-1.5 rounded-full ring-1 ring-stone-200 dark:ring-neutral-700 bg-white dark:bg-neutral-900 hover:bg-stone-50 dark:hover:bg-neutral-800 transition-colors"
+          className="inline-flex items-center gap-1.5 text-xs sm:text-sm font-medium text-gray-700 dark:text-gray-200 px-3 py-1.5 rounded-full ring-1 ring-stone-200 dark:ring-neutral-700 bg-panel hover:bg-stone-50 dark:hover:bg-neutral-800 transition-colors"
         >
           View module
           <IconArrowRight size={14} />

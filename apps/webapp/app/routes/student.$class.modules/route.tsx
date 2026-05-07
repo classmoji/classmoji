@@ -101,7 +101,7 @@ const StudentModules = ({ loaderData }: Route.ComponentProps) => {
       </h1>
 
       {modules.length === 0 ? (
-        <div className="rounded-2xl bg-white dark:bg-neutral-900 ring-1 ring-stone-200 dark:ring-neutral-800 p-8 text-center">
+        <div className="rounded-2xl bg-panel ring-1 ring-stone-200 dark:ring-neutral-800 p-8 text-center">
           <h3 className="text-base font-semibold text-gray-800 dark:text-gray-200">
             No published modules yet
           </h3>

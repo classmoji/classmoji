@@ -131,6 +131,84 @@ html.dark, html[data-theme="dark"] {
   box-sizing: border-box;
 }
 
+/* Root font-size drives all rem-based sizing (Tailwind text/spacing utilities).
+   Bumping this scales the whole app proportionally. Browser default is 16px.
+   Runtime override: useDarkMode applies the user's chosen size as inline style. */
+html {
+  font-size: 17px;
+  /* Default contrast; overridden inline by useDarkMode on hydration. */
+  --ui-contrast: 50;
+}
+
+/* Translucent sidebar: when toggled on, the sidebar floats with a glass effect.
+   Skips popovers/dropdowns since they're rendered in body-level portals. */
+html.translucent-sidebar [data-cm-sidebar] {
+  background-color: color-mix(in srgb, var(--sidebar) 75%, transparent) !important;
+  backdrop-filter: blur(22px) saturate(140%);
+  -webkit-backdrop-filter: blur(22px) saturate(140%);
+}
+
+/* Light-mode glass: faint stone-200 dividers vanish on translucent bg.
+   Bump them to a slate that still reads as structured but isn't heavy on
+   softer pastel backgrounds (mint, peach, aurora). */
+html.translucent-sidebar:not(.dark) [data-cm-sidebar] {
+  --tw-ring-color: rgba(40, 48, 64, 0.12);
+}
+html.translucent-sidebar:not(.dark) [data-cm-sidebar] hr,
+html.translucent-sidebar:not(.dark) [data-cm-sidebar] .border-stone-200,
+html.translucent-sidebar:not(.dark) [data-cm-sidebar] .border-gray-200 {
+  border-color: rgba(40, 48, 64, 0.10);
+}
+html.translucent-sidebar:not(.dark) [data-cm-sidebar] .bg-stone-200 {
+  background-color: rgba(40, 48, 64, 0.10);
+}
+
+/* Org-select dropdown is portaled to <body>, so it sits outside the sidebar
+   container. Match the translucent vibe + slate border when the sidebar is
+   in glass mode so the open menu reads as part of the same surface. */
+html.translucent-sidebar .cm-org-select-popup {
+  background-color: color-mix(in srgb, var(--sidebar) 75%, transparent) !important;
+  backdrop-filter: blur(22px) saturate(140%);
+  -webkit-backdrop-filter: blur(22px) saturate(140%);
+}
+html.translucent-sidebar:not(.dark) .cm-org-select-popup {
+  border-color: rgba(40, 48, 64, 0.22) !important;
+}
+html.translucent-sidebar.dark .cm-org-select-popup {
+  border-color: rgba(255, 255, 255, 0.12) !important;
+}
+
+/* UI contrast: filters main content. Slider 50 is the neutral default.
+   Range is intentionally narrow so neither extreme washes out card
+   borders or near-white surfaces: 0 → 90%, 50 → 100%, 100 → 110%. */
+[data-cm-main],
+[data-cm-sidebar] {
+  filter: contrast(calc(100% + (var(--ui-contrast, 50) - 50) * 0.2%));
+}
+
+/* Pointer cursors: force pointer on common interactive elements.
+   Skip disabled controls so they keep the not-allowed cursor. */
+html.pointer-cursors button:not(:disabled),
+html.pointer-cursors [role="button"]:not([aria-disabled="true"]),
+html.pointer-cursors summary,
+html.pointer-cursors [role="tab"],
+html.pointer-cursors [role="switch"],
+html.pointer-cursors label[for] {
+  cursor: pointer;
+}
+
+/* antd <Card> aligns with the rest of the app's panel surfaces.
+   Without this override antd uses its own theme tokens and ignores --panel,
+   leaving cards white in dark mode. */
+.ant-card {
+  background-color: var(--panel) !important;
+  border-color: rgb(231 229 238) !important; /* stone-200 */
+}
+html.dark .ant-card,
+html[data-theme="dark"] .ant-card {
+  border-color: rgb(38 38 41) !important; /* neutral-800 */
+}
+
 body {
   font-family: var(--font-sans);
   color: var(--ink-0);
@@ -140,7 +218,7 @@ body {
     linear-gradient(175deg, var(--bg-stop-3a) 0%, var(--bg-stop-3b) 55%, var(--bg-stop-3c) 100%);
   background-attachment: fixed;
   -webkit-font-smoothing: antialiased;
-  font-size: 13px;
+  font-size: 0.8125rem;
   line-height: 1.45;
 }
 .display { font-family: var(--font-display); letter-spacing: -0.005em; }
@@ -158,7 +236,7 @@ body {
 
 
 label {
-  font-size: 14px !important;
+  font-size: 1rem !important;
 }
 
 .font-header {
@@ -382,7 +460,7 @@ label {
   box-shadow: 0 4px 14px rgba(0, 0, 0, 0.05) !important;
   padding: 12px 14px !important;
   min-height: 0 !important;
-  font-size: 13px !important;
+  font-size: 0.8125rem !important;
   font-weight: 500 !important;
   position: relative;
 }
@@ -488,7 +566,7 @@ label {
 .caps {
   text-transform: uppercase;
   letter-spacing: 0.08em;
-  font-size: 10.5px;
+  font-size: 0.75rem;
   font-weight: 600;
   color: var(--ink-3);
 }
@@ -518,11 +596,11 @@ label {
   width: 34px; height: 34px; border-radius: 50%;
   background: linear-gradient(135deg, var(--accent-soft), var(--accent-soft-2));
   color: var(--accent-ink); display: grid; place-items: center;
-  font-size: 11px; font-weight: 600;
+  font-size: 0.875rem; font-weight: 600;
   border: 1px solid var(--line);
 }
-.user-card .name { font-size: 13.5px; font-weight: 500; color: var(--ink-0); line-height: 1.2; }
-.user-card .role { font-size: 11.5px; color: var(--ink-3); }
+.user-card .name { font-size: 0.9375rem; font-weight: 500; color: var(--ink-0); line-height: 1.2; }
+.user-card .role { font-size: 0.875rem; color: var(--ink-3); }
 
 .class-switch {
   display: flex; align-items: center; gap: 10px;
@@ -536,12 +614,12 @@ label {
 }
 .class-switch:hover { border-color: var(--line-2); background: var(--panel-hover); }
 .class-switch .cs-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); }
-.class-switch .cs-name { font-size: 13px; font-weight: 500; }
-.class-switch .cs-sub { font-size: 11px; color: var(--ink-3); margin-top: -1px; }
+.class-switch .cs-name { font-size: 0.9375rem; font-weight: 500; }
+.class-switch .cs-sub { font-size: 0.875rem; color: var(--ink-3); margin-top: -1px; }
 .class-switch .cs-chev { margin-left: auto; color: var(--ink-3); }
 
 .nav-section { margin: 14px 0 4px; padding: 0 8px; }
-.nav-section .caps { font-size: 10px; }
+.nav-section .caps { font-size: 0.8125rem; }
 
 .nav {
   display: flex; flex-direction: column; gap: 1px;
@@ -550,7 +628,7 @@ label {
   display: flex; align-items: center; gap: 10px;
   padding: 7px 10px;
   border-radius: 8px;
-  font-size: 13px;
+  font-size: 0.9375rem;
   color: var(--ink-1);
   cursor: pointer;
   text-decoration: none;
@@ -569,7 +647,7 @@ label {
 .sidebar-foot { margin-top: auto; padding-top: 12px; border-top: 1px solid var(--line); }
 
 /* Developer-tool: labels and metadata */
-.meta { font-size: 12px; color: var(--ink-2); }
+.meta { font-size: 0.8125rem; color: var(--ink-2); }
 .num { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
 
 /* Utility: truncate */
@@ -606,7 +684,7 @@ label {
   display: inline-flex; align-items: center; gap: 4px;
   padding: 2px 8px;
   border-radius: 6px;
-  font-size: 10.5px;
+  font-size: 0.75rem;
   font-weight: 600;
   letter-spacing: 0.04em;
   text-transform: uppercase;
@@ -634,7 +712,7 @@ label {
   padding: 7px 9px;
   border-radius: 8px;
   border: 1px solid;
-  font-size: 12px;
+  font-size: 0.8125rem;
   line-height: 1.35;
   cursor: pointer;
   transition: filter 100ms, transform 100ms;
@@ -645,7 +723,7 @@ label {
 html.dark .evt:hover,
 html[data-theme="dark"] .evt:hover { filter: brightness(1.15); }
 .evt .evt-title { font-weight: 500; color: inherit; }
-.evt .evt-time  { font-size: 11px; opacity: 0.8; margin-top: 1px; }
+.evt .evt-time  { font-size: 0.8125rem; opacity: 0.8; margin-top: 1px; }
 
 .evt-lect,
 .evt-quiz,
@@ -658,7 +736,7 @@ html[data-theme="dark"] .evt:hover { filter: brightness(1.15); }
   display: inline-flex; align-items: center; justify-content: center; gap: 6px;
   padding: 6px 12px;
   border-radius: 8px;
-  font-size: 13px;
+  font-size: 0.875rem;
   font-weight: 500;
   border: 1px solid var(--line-2);
   background: var(--panel);
@@ -683,7 +761,7 @@ html[data-theme="dark"] .evt:hover { filter: brightness(1.15); }
 }
 .btn-ghost:hover { background: var(--nav-hover); }
 
-.btn-sm { padding: 4px 9px; min-height: 26px; font-size: 12px; border-radius: 7px; }
+.btn-sm { padding: 4px 9px; min-height: 26px; font-size: 0.8125rem; border-radius: 7px; }
 
 /* Progress bars */
 .bar { height: 6px; background: var(--bar-track); border-radius: 99px; overflow: hidden; }
@@ -701,7 +779,7 @@ html[data-theme="dark"] .bar .fill.done { background: #4fd47d; }
 .avatar {
   display: inline-flex; align-items: center; justify-content: center;
   width: 28px; height: 28px; border-radius: 50%;
-  font-size: 10.5px; font-weight: 600;
+  font-size: 0.75rem; font-weight: 600;
   font-family: var(--font-sans);
   letter-spacing: 0;
   color: #ffffff;
@@ -794,7 +872,7 @@ html[data-theme="dark"] .bar .fill.done { background: #4fd47d; }
 }
 .tweaks-head .t-title {
   font-family: var(--font-display);
-  font-size: 17px;
+  font-size: 1.0625rem;
   color: var(--ink-0);
 }
 .tweaks-head .t-close {
@@ -807,7 +885,7 @@ html[data-theme="dark"] .bar .fill.done { background: #4fd47d; }
 .tweaks-body { padding: 14px 14px 16px; display: flex; flex-direction: column; gap: 16px; }
 
 .tw-row .tw-label {
-  font-size: 11px; font-weight: 600; letter-spacing: 0.06em;
+  font-size: 0.8125rem; font-weight: 600; letter-spacing: 0.06em;
   text-transform: uppercase; color: var(--ink-3);
   margin-bottom: 8px;
 }
@@ -862,7 +940,7 @@ html[data-theme="dark"] .bar .fill.done { background: #4fd47d; }
   position: absolute;
   left: 0; right: 0; bottom: 0;
   padding: 3px 6px;
-  font-size: 10px;
+  font-size: 0.75rem;
   font-weight: 500;
   letter-spacing: 0.02em;
   color: var(--ink-1);
@@ -886,7 +964,7 @@ html[data-theme="dark"] .bar .fill.done { background: #4fd47d; }
   display: flex; align-items: center; justify-content: center; gap: 6px;
   padding: 7px 10px;
   border-radius: 7px;
-  font-size: 12.5px;
+  font-size: 0.8125rem;
   color: var(--ink-2);
   cursor: pointer;
   transition: background 100ms, color 100ms;
@@ -918,17 +996,17 @@ html[data-theme="dark"] .bar .fill.done { background: #4fd47d; }
 .tw-custom input[type="color"]::-webkit-color-swatch-wrapper { padding: 0; }
 .tw-custom input[type="color"]::-webkit-color-swatch { border: 1px solid var(--line-2); border-radius: 6px; }
 .tw-custom .tw-custom-label {
-  font-size: 12.5px; color: var(--ink-2); flex: 1;
+  font-size: 0.8125rem; color: var(--ink-2); flex: 1;
 }
 .tw-custom .tw-hex {
   font-family: var(--font-mono);
-  font-size: 11.5px;
+  font-size: 0.8125rem;
   color: var(--ink-1);
   text-transform: uppercase;
 }
 
 .tw-foot {
-  font-size: 11px; color: var(--ink-3);
+  font-size: 0.8125rem; color: var(--ink-3);
   padding: 10px 14px;
   border-top: 1px solid var(--line-cool);
   background: var(--panel-tint);

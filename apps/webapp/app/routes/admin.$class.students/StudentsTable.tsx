@@ -204,7 +204,7 @@ const StudentsTable = ({ students, query }: StudentsTableProps) => {
   ];
 
   return (
-    <div className="rounded-2xl bg-white dark:bg-neutral-900 ring-1 ring-stone-200 dark:ring-neutral-800 shadow-sm p-5 sm:p-6 min-h-[calc(100vh-10rem)]">
+    <div className="rounded-2xl bg-panel ring-1 ring-stone-200 dark:ring-neutral-800 shadow-sm p-5 sm:p-6 min-h-[calc(100vh-10rem)]">
       <Table
         columns={columns}
         dataSource={students}

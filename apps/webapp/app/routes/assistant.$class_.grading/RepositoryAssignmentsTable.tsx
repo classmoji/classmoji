@@ -522,7 +522,7 @@ const RepositoryAssignmentsTable = ({
                 idx > 0 ? '-ml-2' : ''
               } ${
                 isActive
-                  ? 'bg-white dark:bg-neutral-900 border-stone-200 dark:border-neutral-800 border-b-transparent'
+                  ? 'bg-panel border-stone-200 dark:border-neutral-800 border-b-transparent'
                   : 'bg-stone-100 dark:bg-neutral-800 text-gray-500 dark:text-gray-400 border-stone-200 dark:border-neutral-700 hover:text-gray-800 dark:hover:text-gray-200'
               }`}
             >
@@ -539,7 +539,7 @@ const RepositoryAssignmentsTable = ({
         })}
       </div>
 
-      <section className="rounded-2xl rounded-tl-none bg-white dark:bg-neutral-900 border border-stone-200 dark:border-neutral-800 p-4 sm:p-5 min-h-[calc(100vh-10rem)] flex flex-col">
+      <section className="rounded-2xl rounded-tl-none bg-panel border border-stone-200 dark:border-neutral-800 p-4 sm:p-5 min-h-[calc(100vh-10rem)] flex flex-col">
         {filtered.length === 0 ? (
           (() => {
             const { icon: Icon, title, subtitle } = emptyStates[active];

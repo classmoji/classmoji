@@ -58,14 +58,14 @@ const WeeklyCalendarCard = ({ events, weekStart, classSlug }: WeeklyCalendarCard
     : `${start.format('MMM D')}–${end.format('MMM D')}`;
 
   return (
-    <section className="rounded-2xl bg-white dark:bg-neutral-900 ring-1 ring-stone-200 dark:ring-neutral-800 overflow-hidden">
+    <section className="rounded-2xl bg-panel ring-1 ring-stone-200 dark:ring-neutral-800 overflow-hidden">
       <header className="flex items-center justify-between gap-3 px-5 sm:px-6 pt-5 sm:pt-6 pb-4">
         <h2 className="text-base sm:text-lg font-semibold text-gray-900 dark:text-gray-100 tracking-tight">
           Week {weekNumber}: {rangeLabel}
         </h2>
         <Link
           to={`/student/${classSlug}/calendar`}
-          className="inline-flex items-center gap-1.5 text-xs sm:text-sm font-medium text-gray-700 dark:text-gray-200 px-3 py-1.5 rounded-full ring-1 ring-stone-200 dark:ring-neutral-700 bg-white dark:bg-neutral-900 hover:bg-stone-50 dark:hover:bg-neutral-800 transition-colors"
+          className="inline-flex items-center gap-1.5 text-xs sm:text-sm font-medium text-gray-700 dark:text-gray-200 px-3 py-1.5 rounded-full ring-1 ring-stone-200 dark:ring-neutral-700 bg-panel hover:bg-stone-50 dark:hover:bg-neutral-800 transition-colors"
         >
           View calendar
           <IconArrowRight size={14} />

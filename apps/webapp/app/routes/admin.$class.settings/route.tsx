@@ -61,7 +61,7 @@ const OrgSettings = () => {
                   idx > 0 ? '-ml-2' : ''
                 } ${
                   isActive
-                    ? `bg-white dark:bg-neutral-900 ${
+                    ? `bg-panel ${
                         tab.danger ? 'text-red-600 dark:text-red-400' : ''
                       } border-stone-200 dark:border-neutral-800 border-b-transparent`
                     : `bg-stone-100 dark:bg-neutral-800 ${inactiveTextColor} border-stone-200 dark:border-neutral-700`
@@ -73,7 +73,7 @@ const OrgSettings = () => {
           })}
         </div>
 
-        <section className="flex-1 rounded-2xl rounded-tl-none bg-white dark:bg-neutral-900 border border-stone-200 dark:border-neutral-800 min-h-[calc(100vh-10rem)] p-5 sm:p-6 overflow-auto">
+        <section className="flex-1 rounded-2xl rounded-tl-none bg-panel border border-stone-200 dark:border-neutral-800 min-h-[calc(100vh-10rem)] p-5 sm:p-6 overflow-auto">
           {currentTab === 'team' ? (
             <ProTierFeature>
               <Outlet />

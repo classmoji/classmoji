@@ -10,10 +10,28 @@ export interface TweaksState {
   theme: ThemeMode;
   accent: string;
   background: BackgroundKey;
+  uiFontSize: number;
+  translucentSidebar: boolean;
+  uiContrast: number;
+  pointerCursors: boolean;
 }
 
 const STORAGE_KEY = 'cm-tweaks';
-const DEFAULT_TWEAKS: TweaksState = { theme: 'light', accent: '#0ea5e9', background: 'default' };
+export const FONT_SIZE_MIN = 14;
+export const FONT_SIZE_MAX = 20;
+export const FONT_SIZE_DEFAULT = 17;
+export const CONTRAST_MIN = 0;
+export const CONTRAST_MAX = 100;
+export const CONTRAST_DEFAULT = 50;
+const DEFAULT_TWEAKS: TweaksState = {
+  theme: 'light',
+  accent: '#0ea5e9',
+  background: 'default',
+  uiFontSize: FONT_SIZE_DEFAULT,
+  translucentSidebar: false,
+  uiContrast: CONTRAST_DEFAULT,
+  pointerCursors: false,
+};
 
 export type BackgroundKey =
   | 'default'
@@ -174,12 +192,32 @@ function deriveDarkTints(hex: string): { soft: string; soft2: string; ink: strin
   };
 }
 
-export function applyTweaks({ theme, accent, background }: TweaksState): void {
+export function applyTweaks({
+  theme,
+  accent,
+  background,
+  uiFontSize,
+  translucentSidebar,
+  uiContrast,
+  pointerCursors,
+}: TweaksState): void {
   if (typeof document === 'undefined') return;
   const root = document.documentElement;
   root.setAttribute('data-theme', theme);
   if (theme === 'dark') root.classList.add('dark');
   else root.classList.remove('dark');
+
+  const clamped = Math.min(FONT_SIZE_MAX, Math.max(FONT_SIZE_MIN, uiFontSize));
+  root.style.fontSize = clamped + 'px';
+
+  if (translucentSidebar) root.classList.add('translucent-sidebar');
+  else root.classList.remove('translucent-sidebar');
+
+  const contrastClamped = Math.min(CONTRAST_MAX, Math.max(CONTRAST_MIN, uiContrast));
+  root.style.setProperty('--ui-contrast', String(contrastClamped));
+
+  if (pointerCursors) root.classList.add('pointer-cursors');
+  else root.classList.remove('pointer-cursors');
 
   const a = deriveAccent(accent);
   const style = root.style;
@@ -205,6 +243,7 @@ export function applyTweaks({ theme, accent, background }: TweaksState): void {
     style.removeProperty('--paper');
     style.removeProperty('--paper-2');
     style.removeProperty('--sidebar');
+    style.removeProperty('--panel');
   } else {
     const stops = getBackgroundStops(background, theme, accent);
     style.setProperty('--bg-stop-1', stops.s1);
@@ -212,9 +251,21 @@ export function applyTweaks({ theme, accent, background }: TweaksState): void {
     style.setProperty('--bg-stop-3a', stops.s3a);
     style.setProperty('--bg-stop-3b', stops.s3b);
     style.setProperty('--bg-stop-3c', stops.s3c);
+    // Don't override --panel: page cards keep the theme default (#ffffff /
+    // #171a25) in every bg preset, so they read as solid neutral surfaces
+    // against the themed body gradient instead of blending into it.
+    style.removeProperty('--panel');
+    // Body surfaces (--paper, --paper-2) always tint with the bg preset.
     style.setProperty('--paper', stops.paper);
     style.setProperty('--paper-2', stops.paper2);
-    style.setProperty('--sidebar', stops.sidebar);
+    // --sidebar only retints with the bg preset when the sidebar is in glass
+    // mode — translucent surfaces pick up the bg color naturally. When solid,
+    // the sidebar stays at the theme default for a consistent neutral chrome.
+    if (translucentSidebar) {
+      style.setProperty('--sidebar', stops.sidebar);
+    } else {
+      style.removeProperty('--sidebar');
+    }
   }
   root.setAttribute('data-bg', background);
 }
@@ -230,10 +281,22 @@ function readStored(): TweaksState {
     const bg = validBg.includes(parsed.background as BackgroundKey)
       ? (parsed.background as BackgroundKey)
       : DEFAULT_TWEAKS.background;
+    const rawSize = Number(parsed.uiFontSize);
+    const uiFontSize = Number.isFinite(rawSize)
+      ? Math.min(FONT_SIZE_MAX, Math.max(FONT_SIZE_MIN, rawSize))
+      : DEFAULT_TWEAKS.uiFontSize;
+    const rawContrast = Number(parsed.uiContrast);
+    const uiContrast = Number.isFinite(rawContrast)
+      ? Math.min(CONTRAST_MAX, Math.max(CONTRAST_MIN, rawContrast))
+      : DEFAULT_TWEAKS.uiContrast;
     return {
       theme: parsed.theme === 'dark' ? 'dark' : 'light',
       accent: typeof parsed.accent === 'string' ? parsed.accent : DEFAULT_TWEAKS.accent,
       background: bg,
+      uiFontSize,
+      translucentSidebar: parsed.translucentSidebar === true,
+      uiContrast,
+      pointerCursors: parsed.pointerCursors === true,
     };
   } catch {
     return DEFAULT_TWEAKS;
@@ -254,9 +317,17 @@ interface UseDarkModeReturn {
   theme: ThemeMode;
   accent: string;
   background: BackgroundKey;
+  uiFontSize: number;
+  translucentSidebar: boolean;
+  uiContrast: number;
+  pointerCursors: boolean;
   setTheme: (t: ThemeMode) => void;
   setAccent: (hex: string) => void;
   setBackground: (key: BackgroundKey) => void;
+  setUiFontSize: (px: number) => void;
+  setTranslucentSidebar: (on: boolean) => void;
+  setUiContrast: (n: number) => void;
+  setPointerCursors: (on: boolean) => void;
 }
 
 // Module-level pub/sub so every `useDarkMode` instance shares state.
@@ -322,15 +393,47 @@ const useDarkMode = (): UseDarkModeReturn => {
       update(prev => (prev.background === key ? prev : { ...prev, background: key })),
     [update]
   );
+  const setUiFontSize = useCallback(
+    (px: number) => {
+      const clamped = Math.min(FONT_SIZE_MAX, Math.max(FONT_SIZE_MIN, Math.round(px)));
+      update(prev => (prev.uiFontSize === clamped ? prev : { ...prev, uiFontSize: clamped }));
+    },
+    [update]
+  );
+  const setTranslucentSidebar = useCallback(
+    (on: boolean) =>
+      update(prev => (prev.translucentSidebar === on ? prev : { ...prev, translucentSidebar: on })),
+    [update]
+  );
+  const setUiContrast = useCallback(
+    (n: number) => {
+      const clamped = Math.min(CONTRAST_MAX, Math.max(CONTRAST_MIN, Math.round(n)));
+      update(prev => (prev.uiContrast === clamped ? prev : { ...prev, uiContrast: clamped }));
+    },
+    [update]
+  );
+  const setPointerCursors = useCallback(
+    (on: boolean) =>
+      update(prev => (prev.pointerCursors === on ? prev : { ...prev, pointerCursors: on })),
+    [update]
+  );
 
   return {
     isDarkMode: tweaks.theme === 'dark',
     theme: tweaks.theme,
     accent: tweaks.accent,
     background: tweaks.background,
+    uiFontSize: tweaks.uiFontSize,
+    translucentSidebar: tweaks.translucentSidebar,
+    uiContrast: tweaks.uiContrast,
+    pointerCursors: tweaks.pointerCursors,
     setTheme,
     setAccent,
     setBackground,
+    setUiFontSize,
+    setTranslucentSidebar,
+    setUiContrast,
+    setPointerCursors,
   };
 };
 

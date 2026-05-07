@@ -228,7 +228,7 @@ const AdminDashboard = ({ loaderData }: Route.ComponentProps) => {
 
             return (
               <>
-                <div className="rounded-2xl bg-white dark:bg-neutral-900 ring-1 ring-stone-200 dark:ring-neutral-800 overflow-hidden flex flex-col sm:flex-row divide-y sm:divide-y-0 sm:divide-x divide-stone-200/70 dark:divide-gray-800">
+                <div className="rounded-2xl bg-panel ring-1 ring-stone-200 dark:ring-neutral-800 overflow-hidden flex flex-col sm:flex-row divide-y sm:divide-y-0 sm:divide-x divide-stone-200/70 dark:divide-gray-800">
                   <StatItem label="Students" value={students?.length || 0} subtitle="enrolled" />
                   <StatItem
                     label="Submitted"
@@ -250,7 +250,7 @@ const AdminDashboard = ({ loaderData }: Route.ComponentProps) => {
                 </div>
 
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-                  <section className="rounded-2xl bg-white dark:bg-neutral-900 ring-1 ring-stone-200 dark:ring-neutral-800 p-4 sm:p-5">
+                  <section className="rounded-2xl bg-panel ring-1 ring-stone-200 dark:ring-neutral-800 p-4 sm:p-5">
                     <div className="flex items-center justify-between mb-2">
                       <h3 className="text-sm font-semibold text-gray-900 dark:text-gray-100">
                         Submissions

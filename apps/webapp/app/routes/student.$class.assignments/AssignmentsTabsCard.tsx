@@ -96,7 +96,7 @@ const AssignmentsTabsCard = ({ rows }: AssignmentsTabsCardProps) => {
                 idx > 0 ? '-ml-2' : ''
               } ${
                 isActive
-                  ? 'bg-white dark:bg-neutral-900 border-stone-200 dark:border-neutral-800 border-b-transparent'
+                  ? 'bg-panel border-stone-200 dark:border-neutral-800 border-b-transparent'
                   : 'bg-stone-100 dark:bg-neutral-800 text-gray-500 dark:text-gray-400 border-stone-200 dark:border-neutral-700 hover:text-gray-800 dark:hover:text-gray-200'
               }`}
             >
@@ -113,7 +113,7 @@ const AssignmentsTabsCard = ({ rows }: AssignmentsTabsCardProps) => {
         })}
       </div>
 
-      <section className="flex-1 rounded-2xl rounded-tl-none bg-white dark:bg-neutral-900 border border-stone-200 dark:border-neutral-800 min-h-[calc(100vh-10rem)] flex flex-col">
+      <section className="flex-1 rounded-2xl rounded-tl-none bg-panel border border-stone-200 dark:border-neutral-800 min-h-[calc(100vh-10rem)] flex flex-col">
         {filtered.length === 0 ? (
           <div className="flex-1 flex items-center justify-center py-16 text-sm text-gray-500 dark:text-gray-400">
             {emptyCopy[active]}
@@ -221,7 +221,7 @@ const AssignmentsTabsCard = ({ rows }: AssignmentsTabsCardProps) => {
                           <Link
                             to={`/student/${classSlug}/regrade-requests/new`}
                             state={{ assignment: { id: row.id, title: row.assignmentTitle } }}
-                            className="inline-flex items-center text-xs font-medium text-gray-700 dark:text-gray-200 px-3 py-1.5 rounded-full ring-1 ring-stone-200 dark:ring-neutral-700 bg-white dark:bg-neutral-900 hover:bg-stone-50 dark:hover:bg-neutral-800 transition-colors"
+                            className="inline-flex items-center text-xs font-medium text-gray-700 dark:text-gray-200 px-3 py-1.5 rounded-full ring-1 ring-stone-200 dark:ring-neutral-700 bg-panel hover:bg-stone-50 dark:hover:bg-neutral-800 transition-colors"
                           >
                             Request regrade
                           </Link>

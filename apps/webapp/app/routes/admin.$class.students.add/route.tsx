@@ -1,4 +1,4 @@
-import { Drawer, Button, Alert, Table, Tag, Input } from 'antd';
+import { Modal, Button, Alert, Table, Tag, Input } from 'antd';
 import { useState, useMemo } from 'react';
 import { PlusOutlined, CheckCircleOutlined, CloseCircleOutlined } from '@ant-design/icons';
 import { IconUserPlus } from '@tabler/icons-react';
@@ -101,14 +101,14 @@ const AddStudents = ({ loaderData }: Route.ComponentProps) => {
       title: 'Name',
       dataIndex: 'name',
       render: (name: string) => (
-        <span className="font-medium text-gray-800 dark:text-neutral-100">{name || '-'}</span>
+        <span className="font-medium text-gray-800 dark:text-gray-100">{name || '-'}</span>
       ),
     },
     {
       title: 'Email',
       dataIndex: 'email',
       render: (email: string) => (
-        <span className="text-gray-600 dark:text-neutral-400">{email || '-'}</span>
+        <span className="text-gray-600 dark:text-gray-400">{email || '-'}</span>
       ),
     },
   ];
@@ -144,65 +144,35 @@ const AddStudents = ({ loaderData }: Route.ComponentProps) => {
   const canAdd = parsed !== null && categorized.valid.length > 0;
 
   return (
-    <Drawer
-      onClose={close}
+    <Modal
       open={opened}
-      width={800}
+      onCancel={close}
       title={null}
+      footer={null}
+      width={720}
+      centered
       closable={false}
+      maskClosable
       styles={{
+        content: { padding: 0, borderRadius: 16, overflow: 'hidden' },
         body: { padding: 0 },
         header: { display: 'none' },
-        footer: { padding: 0, border: 'none' },
-        content: { borderRadius: 0 },
+        footer: { display: 'none' },
       }}
-      footer={
-        <div className="flex items-center justify-end gap-2 px-5 py-3 border-t border-stone-200 dark:border-white/[0.08] bg-stone-50/60 dark:bg-[#2a2a2a]">
-          {parsed !== null && (
-            <Button onClick={handleReset} type="text">
-              Start over
-            </Button>
-          )}
-          <Button onClick={close} type="text">
-            Discard
-          </Button>
-          {parsed === null ? (
-            <Button
-              type="primary"
-              onClick={handleParse}
-              disabled={!inputText.trim()}
-              style={{ backgroundColor: '#619462', borderColor: '#619462' }}
-            >
-              Parse students
-            </Button>
-          ) : (
-            <Button
-              type="primary"
-              icon={<PlusOutlined />}
-              onClick={handleSubmit}
-              disabled={!canAdd}
-              loading={submitting}
-              style={{ backgroundColor: '#619462', borderColor: '#619462' }}
-            >
-              Add {categorized.valid.length} student{categorized.valid.length !== 1 && 's'}
-            </Button>
-          )}
-        </div>
-      }
     >
       {/* Gmail-style header */}
-      <div className="flex items-center justify-between gap-3 px-5 py-3 bg-stone-50 dark:bg-[#2a2a2a] border-b border-stone-200 dark:border-white/[0.08]">
+      <div className="flex items-center justify-between gap-3 px-5 py-3 bg-stone-50 dark:bg-neutral-800/60 border-b border-stone-200 dark:border-neutral-800">
         <div className="flex items-center gap-2.5 min-w-0">
           <IconUserPlus
             size={18}
             strokeWidth={1.75}
-            className="shrink-0 text-gray-500 dark:text-neutral-400"
+            className="shrink-0 text-gray-500 dark:text-gray-400"
           />
           <div className="min-w-0">
-            <div className="text-sm font-semibold text-gray-900 dark:text-neutral-100 truncate">
+            <div className="text-sm font-semibold text-gray-900 dark:text-gray-100 truncate">
               Add students
             </div>
-            <div className="text-xs text-gray-500 dark:text-neutral-400 truncate">
+            <div className="text-xs text-gray-500 dark:text-gray-400 truncate">
               Bulk add students to your class
             </div>
           </div>
@@ -211,7 +181,7 @@ const AddStudents = ({ loaderData }: Route.ComponentProps) => {
           type="button"
           onClick={close}
           aria-label="Close"
-          className="p-1 rounded hover:bg-stone-200 dark:hover:bg-white/[0.08] text-gray-500 dark:text-neutral-400 transition-colors"
+          className="p-1 rounded hover:bg-stone-200 dark:hover:bg-neutral-700 text-gray-500 dark:text-gray-400 transition-colors"
         >
           <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
             <path
@@ -225,7 +195,7 @@ const AddStudents = ({ loaderData }: Route.ComponentProps) => {
       </div>
 
       {/* Body */}
-      <div className="px-5 pt-4 pb-4 space-y-4">
+      <div className="px-5 pt-4 pb-4 space-y-4 max-h-[70vh] overflow-y-auto">
         <SectionHeader
           title="Paste student information"
           subtitle="One student per line"
@@ -245,7 +215,7 @@ const AddStudents = ({ loaderData }: Route.ComponentProps) => {
           <>
             {categorized.valid.length > 0 && (
               <>
-                <div className="h-px bg-stone-200 dark:bg-white/[0.08]" />
+                <div className="h-px bg-stone-200 dark:bg-neutral-800" />
                 <SectionHeader
                   title="Ready to add"
                   subtitle="These students will be enrolled"
@@ -265,7 +235,7 @@ const AddStudents = ({ loaderData }: Route.ComponentProps) => {
 
             {categorized.skipped.length > 0 && (
               <>
-                <div className="h-px bg-stone-200 dark:bg-white/[0.08]" />
+                <div className="h-px bg-stone-200 dark:bg-neutral-800" />
                 <SectionHeader
                   title="Skipped"
                   subtitle="These students will not be added"
@@ -278,7 +248,7 @@ const AddStudents = ({ loaderData }: Route.ComponentProps) => {
                   size="small"
                   rowKey="key"
                   pagination={false}
-                  rowClassName="bg-gray-50 dark:bg-white/[0.04] opacity-70"
+                  rowClassName="bg-gray-50 dark:bg-neutral-800/40 opacity-70"
                 />
               </>
             )}
@@ -294,7 +264,40 @@ const AddStudents = ({ loaderData }: Route.ComponentProps) => {
           </>
         )}
       </div>
-    </Drawer>
+
+      {/* Footer */}
+      <div className="flex items-center justify-end gap-2 px-5 py-3 border-t border-stone-200 dark:border-neutral-800 bg-stone-50/60 dark:bg-neutral-800/40">
+        {parsed !== null && (
+          <Button onClick={handleReset} type="text">
+            Start over
+          </Button>
+        )}
+        <Button onClick={close} type="text">
+          Discard
+        </Button>
+        {parsed === null ? (
+          <Button
+            type="primary"
+            onClick={handleParse}
+            disabled={!inputText.trim()}
+            style={{ backgroundColor: '#619462', borderColor: '#619462' }}
+          >
+            Parse students
+          </Button>
+        ) : (
+          <Button
+            type="primary"
+            icon={<PlusOutlined />}
+            onClick={handleSubmit}
+            disabled={!canAdd}
+            loading={submitting}
+            style={{ backgroundColor: '#619462', borderColor: '#619462' }}
+          >
+            Add {categorized.valid.length} student{categorized.valid.length !== 1 && 's'}
+          </Button>
+        )}
+      </div>
+    </Modal>
   );
 };
 

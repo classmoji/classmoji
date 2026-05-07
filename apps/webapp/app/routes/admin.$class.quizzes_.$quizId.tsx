@@ -871,7 +871,7 @@ const QuizView = ({ loaderData }: Route.ComponentProps) => {
       </div>
 
       <div className="space-y-6">
-        <div className="rounded-2xl bg-white dark:bg-neutral-900 ring-1 ring-stone-200 dark:ring-neutral-800 p-5 sm:p-6">
+        <div className="rounded-2xl bg-panel ring-1 ring-stone-200 dark:ring-neutral-800 p-5 sm:p-6">
           <SectionHeader
             title="Quiz Statistics"
             subtitle="Performance overview across all attempts"
@@ -904,7 +904,7 @@ const QuizView = ({ loaderData }: Route.ComponentProps) => {
           </div>
         </div>
 
-        <div className="rounded-2xl bg-white dark:bg-neutral-900 ring-1 ring-stone-200 dark:ring-neutral-800 p-5 sm:p-6">
+        <div className="rounded-2xl bg-panel ring-1 ring-stone-200 dark:ring-neutral-800 p-5 sm:p-6">
           <SectionHeader
             title="Student Attempts"
             subtitle={`${students.length} students, ${allAttempts.length} total attempts`}
