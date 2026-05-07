@@ -1,6 +1,7 @@
 # Node.js specific ignores
 node_modules/
 .cache/
+.react-router/
 build/
 public/build/
 test-results/

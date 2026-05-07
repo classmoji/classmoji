@@ -6,6 +6,7 @@ node_modules
 .react-router
 .claude/*
 !.claude/skills
+.agents/
 .mcp.json
 .cursor
 .codebases
