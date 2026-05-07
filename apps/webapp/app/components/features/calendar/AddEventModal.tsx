@@ -8,6 +8,7 @@ import {
   TimePicker,
   Checkbox,
   Button,
+  Radio,
 } from 'antd';
 import dayjs from 'dayjs';
 import {
@@ -92,6 +93,7 @@ const AddEventModal = ({
   const eventTypes = allowedEventTypes.length > 0 ? allowedEventTypes : ALL_EVENT_TYPES;
   const [form] = Form.useForm();
   const [isRecurring, setIsRecurring] = useState(false);
+  const [hasEndDate, setHasEndDate] = useState(false);
 
   const [linkedPageIds, setLinkedPageIds] = useState<string[]>([]);
   const [linkedSlideIds, setLinkedSlideIds] = useState<string[]>([]);
@@ -100,6 +102,7 @@ const AddEventModal = ({
   const resetAll = () => {
     form.resetFields();
     setIsRecurring(false);
+    setHasEndDate(false);
     setLinkedPageIds([]);
     setLinkedSlideIds([]);
     setLinkedAssignmentIds([]);
@@ -130,7 +133,7 @@ const AddEventModal = ({
         recurrence_rule: isRecurring
           ? {
               days: values.recurrence_days || [],
-              until: values.recurrence_until
+              until: hasEndDate && values.recurrence_until
                 ? values.recurrence_until.toDate().toISOString()
                 : null,
             }
@@ -302,14 +305,26 @@ const AddEventModal = ({
                 >
                   <Checkbox.Group options={DAYS_OF_WEEK} />
                 </Form.Item>
-                <Form.Item
-                  name="recurrence_until"
-                  label="Repeat until"
-                  rules={[{ required: true, message: 'Please select an end date' }]}
-                  className="!mb-0"
-                >
-                  <DatePicker className="w-full" />
-                </Form.Item>
+                <div>
+                  <div className="text-[14px] mb-2 text-gray-700 dark:text-gray-300">Ends</div>
+                  <Radio.Group
+                    value={hasEndDate ? 'on' : 'never'}
+                    onChange={e => setHasEndDate(e.target.value === 'on')}
+                    className="flex gap-4"
+                  >
+                    <Radio value="never">Never</Radio>
+                    <Radio value="on">On date</Radio>
+                  </Radio.Group>
+                  {hasEndDate && (
+                    <Form.Item
+                      name="recurrence_until"
+                      rules={[{ required: true, message: 'Please select an end date' }]}
+                      className="!mb-0 !mt-2"
+                    >
+                      <DatePicker className="w-full" />
+                    </Form.Item>
+                  )}
+                </div>
               </div>
             )}
           </InlineRow>
