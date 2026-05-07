@@ -360,9 +360,7 @@ const EditEventModal = ({
       <Form form={form} layout="vertical" requiredMark={false}>
         {/* Gmail-style header */}
         <div className="flex items-center justify-between gap-3 px-5 py-3 bg-stone-50 dark:bg-neutral-800/60 border-b border-stone-200 dark:border-neutral-800">
-          <span className="text-sm font-semibold text-gray-900 dark:text-gray-100">
-            Edit event
-          </span>
+          <span className="text-sm font-semibold text-gray-900 dark:text-gray-100">Edit event</span>
           <button
             type="button"
             onClick={handleCancel}
@@ -445,24 +443,14 @@ const EditEventModal = ({
                 rules={[{ required: true, message: 'Required' }]}
                 className="!mb-0"
               >
-                <TimePicker
-                  variant="borderless"
-                  format="h:mm A"
-                  use12Hours
-                  className="w-28"
-                />
+                <TimePicker variant="borderless" format="h:mm A" use12Hours className="w-28" />
               </Form.Item>
               <Form.Item
                 name="end_time"
                 rules={[{ required: true, message: 'Required' }]}
                 className="!mb-0"
               >
-                <TimePicker
-                  variant="borderless"
-                  format="h:mm A"
-                  use12Hours
-                  className="w-28"
-                />
+                <TimePicker variant="borderless" format="h:mm A" use12Hours className="w-28" />
               </Form.Item>
             </div>
           </InlineRow>
@@ -541,7 +529,8 @@ const EditEventModal = ({
                   <div className="flex items-start gap-2 rounded-lg bg-[#FEF3EC] dark:bg-amber-900/20 border border-[#F4D8C5] dark:border-amber-800/40 px-3 py-2 text-xs text-[#8a5b3a] dark:text-amber-200 mb-2">
                     <IconInfoCircle size={14} className="shrink-0 mt-0.5" />
                     <div>
-                      Resource links are specific to this occurrence. They won&apos;t affect other dates in the series.
+                      Resource links are specific to this occurrence. They won&apos;t affect other
+                      dates in the series.
                     </div>
                   </div>
                 )}
@@ -578,9 +567,7 @@ const EditEventModal = ({
                       onChange={setLinkedAssignmentIds}
                       options={assignments.map(a => ({
                         value: a.id,
-                        label: a.module?.title
-                          ? `${a.module.title}: ${a.title}`
-                          : a.title,
+                        label: a.module?.title ? `${a.module.title}: ${a.title}` : a.title,
                       }))}
                       optionFilterProp="label"
                       allowClear

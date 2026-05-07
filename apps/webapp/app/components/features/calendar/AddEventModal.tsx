@@ -1,15 +1,5 @@
 import { useState } from 'react';
-import {
-  Modal,
-  Form,
-  Input,
-  Select,
-  DatePicker,
-  TimePicker,
-  Checkbox,
-  Button,
-  Radio,
-} from 'antd';
+import { Modal, Form, Input, Select, DatePicker, TimePicker, Checkbox, Button, Radio } from 'antd';
 import dayjs from 'dayjs';
 import {
   IconInfoCircle,
@@ -133,9 +123,10 @@ const AddEventModal = ({
         recurrence_rule: isRecurring
           ? {
               days: values.recurrence_days || [],
-              until: hasEndDate && values.recurrence_until
-                ? values.recurrence_until.toDate().toISOString()
-                : null,
+              until:
+                hasEndDate && values.recurrence_until
+                  ? values.recurrence_until.toDate().toISOString()
+                  : null,
             }
           : null,
         ...(isRecurring
@@ -191,9 +182,7 @@ const AddEventModal = ({
       >
         {/* Gmail-style header */}
         <div className="flex items-center justify-between gap-3 px-5 py-3 bg-stone-50 dark:bg-neutral-800/60 border-b border-stone-200 dark:border-neutral-800">
-          <span className="text-sm font-semibold text-gray-900 dark:text-gray-100">
-            New event
-          </span>
+          <span className="text-sm font-semibold text-gray-900 dark:text-gray-100">New event</span>
           <button
             type="button"
             onClick={handleCancel}
@@ -265,24 +254,14 @@ const AddEventModal = ({
                 rules={[{ required: true, message: 'Required' }]}
                 className="!mb-0"
               >
-                <TimePicker
-                  variant="borderless"
-                  format="h:mm A"
-                  use12Hours
-                  className="w-28"
-                />
+                <TimePicker variant="borderless" format="h:mm A" use12Hours className="w-28" />
               </Form.Item>
               <Form.Item
                 name="end_time"
                 rules={[{ required: true, message: 'Required' }]}
                 className="!mb-0"
               >
-                <TimePicker
-                  variant="borderless"
-                  format="h:mm A"
-                  use12Hours
-                  className="w-28"
-                />
+                <TimePicker variant="borderless" format="h:mm A" use12Hours className="w-28" />
               </Form.Item>
             </div>
           </InlineRow>
@@ -398,9 +377,7 @@ const AddEventModal = ({
                         onChange={setLinkedAssignmentIds}
                         options={assignments.map(a => ({
                           value: a.id,
-                          label: a.module?.title
-                            ? `${a.module.title}: ${a.title}`
-                            : a.title,
+                          label: a.module?.title ? `${a.module.title}: ${a.title}` : a.title,
                         }))}
                         optionFilterProp="label"
                         allowClear
