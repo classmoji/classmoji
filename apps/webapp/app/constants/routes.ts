@@ -41,7 +41,7 @@ export const routeCategories = {
   },
   integrations: {
     label: 'Integrations',
-    items: ['repositories', 'repo-health'],
+    items: ['gitrepos', 'repo-health'],
   },
   settings: {
     label: 'Settings',
@@ -163,9 +163,9 @@ export const routes = {
   },
 
   // Integrations
-  repositories: {
-    link: '/repositories',
-    label: 'Repositories',
+  gitrepos: {
+    link: '/gitrepos',
+    label: 'GitHub Repos',
     icon: IconBrandGithub,
     roles: ['OWNER'],
     category: 'integrations',

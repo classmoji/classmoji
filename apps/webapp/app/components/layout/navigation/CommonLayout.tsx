@@ -491,7 +491,7 @@ const CommonLayout = ({
             pathname.match(/\/slides(\/|$)/) ||
             pathname.match(/\/pages(\/|$)/) ||
             pathname.match(/\/grades(\/|$)/) ||
-            pathname.match(/\/repositories(\/|$)/)
+            pathname.match(/\/gitrepos(\/|$)/)
               ? ''
               : 'bg-panel rounded-2xl ring-1 ring-stone-200 dark:ring-neutral-800'
           }`}

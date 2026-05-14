@@ -35,7 +35,7 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
 
   // Repositories route
   if (defaultPage === 'repositories') {
-    return redirect('repositories');
+    return redirect('repos');
   }
 
   // Specific page - verify it exists and is visible to students
