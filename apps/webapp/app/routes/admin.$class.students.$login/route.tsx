@@ -102,7 +102,11 @@ const StudentView = ({ loaderData }: Route.ComponentProps) => {
           student={student}
           classroom={classroom}
           repositories={repositories}
-          repositoryAssignmentsGroupedByModule={groupByModule(repositoryAssignments)}
+          assignmentsByRepository={
+            groupByModule(repositoryAssignments) as Parameters<
+              typeof SingleStudentView
+            >[0]['assignmentsByRepository']
+          }
           emojiMappings={emojiMappings}
           settings={settings}
           letterGradeMappings={letterGradeMappings}
