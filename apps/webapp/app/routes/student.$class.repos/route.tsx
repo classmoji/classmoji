@@ -15,7 +15,7 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
     request,
     classroomSlug: classSlug,
     allowedRoles: ['OWNER', 'TEACHER', 'ASSISTANT', 'STUDENT'],
-    resourceType: 'STUDENT_MODULES',
+    resourceType: 'STUDENT_REPOSITORIES',
     attemptedAction: 'view_modules',
   });
 

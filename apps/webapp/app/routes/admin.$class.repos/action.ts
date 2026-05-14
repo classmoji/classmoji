@@ -10,7 +10,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
   const classSlug = params.class!;
 
   const { classroom, userId } = await requireClassroomAdmin(request, classSlug, {
-    resourceType: 'MODULES',
+    resourceType: 'REPOSITORIES',
     action: 'manage_modules',
   });
 

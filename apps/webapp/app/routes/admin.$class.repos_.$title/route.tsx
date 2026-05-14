@@ -35,7 +35,7 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
   const { class: classSlug, title } = params;
 
   const { classroom } = await requireClassroomAdmin(request, classSlug!, {
-    resourceType: 'MODULES',
+    resourceType: 'REPOSITORIES',
     action: 'view_module',
   });
 

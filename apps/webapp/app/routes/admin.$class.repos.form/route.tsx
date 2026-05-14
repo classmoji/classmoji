@@ -14,7 +14,7 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
   const { class: classSlug } = params;
 
   const { classroom } = await requireClassroomAdmin(request, classSlug!, {
-    resourceType: 'MODULES',
+    resourceType: 'REPOSITORIES',
     action: 'view_module_form',
   });
 
@@ -142,7 +142,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
   const { class: classSlug } = params;
 
   const { classroom, userId: _userId } = await requireClassroomAdmin(request, classSlug!, {
-    resourceType: 'MODULES',
+    resourceType: 'REPOSITORIES',
     action: 'create_module',
   });
 

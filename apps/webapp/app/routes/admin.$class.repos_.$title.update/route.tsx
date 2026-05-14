@@ -12,7 +12,7 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
   const { class: classSlug } = params;
 
   await requireClassroomAdmin(request, classSlug!, {
-    resourceType: 'MODULES',
+    resourceType: 'REPOSITORIES',
     action: 'view_module_update',
   });
 
@@ -90,7 +90,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
   const { class: classSlug } = params;
 
   const { classroom } = await requireClassroomAdmin(request, classSlug!, {
-    resourceType: 'MODULES',
+    resourceType: 'REPOSITORIES',
     action: 'update_module',
   });
 

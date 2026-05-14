@@ -10,8 +10,8 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
   const classSlug = params.class!;
 
   const { classroom, userId: _userId } = await requireClassroomAdmin(request, classSlug, {
-    resourceType: 'MODULES',
-    action: 'module_action',
+    resourceType: 'REPOSITORIES',
+    action: 'repository_action',
   });
 
   const data = await request.json();
