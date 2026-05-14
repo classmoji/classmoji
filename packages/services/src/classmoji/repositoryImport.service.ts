@@ -55,7 +55,7 @@ export const cloneTag = async (
 /**
  * Clone an assignment to a target repository
  * @param {string} sourceAssignmentId - Source assignment ID
- * @param {string} targetModuleId - Target repository ID
+ * @param {string} targetRepositoryId - Target repository ID
  * @param {Object} [options] - Clone options
  * @param {boolean} [options.stripDeadlines=true] - Remove deadline fields
  * @param {Object} [tx] - Optional Prisma transaction client
@@ -63,7 +63,7 @@ export const cloneTag = async (
  */
 export const cloneAssignment = async (
   sourceAssignmentId: string,
-  targetModuleId: string,
+  targetRepositoryId: string,
   options: { stripDeadlines?: boolean } = {},
   tx: RepositoryImportClient = getPrisma()
 ) => {
@@ -78,7 +78,7 @@ export const cloneAssignment = async (
   }
 
   const assignmentCreateData: unknown = {
-    repository_id: targetModuleId,
+    repository_id: targetRepositoryId,
     title: sourceAssignment.title,
     weight: sourceAssignment.weight,
     is_published: false,
@@ -102,7 +102,7 @@ export const cloneAssignment = async (
  * Clone a quiz to a target classroom/repository
  * @param {string} sourceQuizId - Source quiz ID
  * @param {string} targetClassroomId - Target classroom ID
- * @param {string|null} targetModuleId - Target repository ID (optional)
+ * @param {string|null} targetRepositoryId - Target repository ID (optional)
  * @param {Object} [options] - Clone options
  * @param {boolean} [options.setDraft=true] - Set status to DRAFT
  * @param {boolean} [options.stripDeadlines=true] - Remove due_date
@@ -112,7 +112,7 @@ export const cloneAssignment = async (
 export const cloneQuiz = async (
   sourceQuizId: string,
   targetClassroomId: string,
-  targetModuleId: string | null,
+  targetRepositoryId: string | null,
   options: { setDraft?: boolean; stripDeadlines?: boolean } = {},
   tx: RepositoryImportClient = getPrisma()
 ) => {
@@ -129,7 +129,7 @@ export const cloneQuiz = async (
   return tx.quiz.create({
     data: {
       classroom_id: targetClassroomId,
-      repository_id: targetModuleId,
+      repository_id: targetRepositoryId,
       name: sourceQuiz.name,
       system_prompt: sourceQuiz.system_prompt,
       rubric_prompt: sourceQuiz.rubric_prompt,
@@ -149,7 +149,7 @@ export const cloneQuiz = async (
 
 /**
  * Clone a repository to a target classroom
- * @param {string} sourceModuleId - Source repository ID
+ * @param {string} sourceRepositoryId - Source repository ID
  * @param {string} targetClassroomId - Target classroom ID
  * @param {Object} [options] - Clone options
  * @param {boolean} [options.includeAssignments=true] - Clone assignments
@@ -159,7 +159,7 @@ export const cloneQuiz = async (
  * @returns {Promise<Object>} - The cloned repository with relations
  */
 export const cloneModule = async (
-  sourceModuleId: string,
+  sourceRepositoryId: string,
   targetClassroomId: string,
   options: {
     includeAssignments?: boolean;
@@ -171,7 +171,7 @@ export const cloneModule = async (
   const { includeAssignments = true, includeQuizzes = false, stripDeadlines = true } = options;
 
   const sourceModule = await tx.repository.findUnique({
-    where: { id: sourceModuleId },
+    where: { id: sourceRepositoryId },
     include: {
       assignments: true,
       quizzes: true,
@@ -180,7 +180,7 @@ export const cloneModule = async (
   });
 
   if (!sourceModule) {
-    throw new Error(`Source repository not found: ${sourceModuleId}`);
+    throw new Error(`Source repository not found: ${sourceRepositoryId}`);
   }
 
   // Handle tag for GROUP repositories

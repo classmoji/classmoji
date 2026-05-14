@@ -9,7 +9,7 @@ export type AssignmentStatus = 'current' | 'completed';
 export interface AssignmentRow {
   id: string;
   assignmentTitle: string;
-  moduleTitle: string;
+  repositoryTitle: string;
   moduleType: string | null;
   status: AssignmentStatus;
   gradesReleased: boolean;
@@ -149,7 +149,7 @@ const AssignmentsTabsCard = ({ rows }: AssignmentsTabsCardProps) => {
                     >
                       <td className="px-4 py-3 text-gray-600 dark:text-gray-300">
                         <span className="block truncate max-w-[12rem]">
-                          {row.moduleTitle || '—'}
+                          {row.repositoryTitle || '—'}
                         </span>
                       </td>
                       <td className="px-4 py-3">

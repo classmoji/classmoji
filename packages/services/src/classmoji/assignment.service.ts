@@ -53,7 +53,7 @@ export const findByModuleAndTitle = async (repositoryId: string, title: string) 
  * @param {string} repositoryId - UUID of the Repository
  * @returns {Promise<Object[]>}
  */
-export const findByModuleId = async (repositoryId: string) => {
+export const findByRepositoryId = async (repositoryId: string) => {
   return getPrisma().assignment.findMany({
     where: { repository_id: repositoryId },
     orderBy: { created_at: 'asc' },
@@ -65,7 +65,7 @@ export const findByModuleId = async (repositoryId: string) => {
  * @param {string} repositoryId - UUID of the Repository
  * @returns {Promise<Object[]>}
  */
-export const findPublishedByModuleId = async (repositoryId: string) => {
+export const findPublishedByRepositoryId = async (repositoryId: string) => {
   return getPrisma().assignment.findMany({
     where: {
       repository_id: repositoryId,

@@ -13,20 +13,20 @@ type GitRepo = Awaited<ReturnType<typeof ClassmojiService.gitRepo.findByReposito
 
 export const publishAssignment = async (
   classroomSlug: string,
-  moduleId: string,
+  repositoryId: string,
   _userId: string | null = null
 ) => {
   try {
     const sessionId = nanoid();
     const classroom = await ClassmojiService.classroom.findBySlug(classroomSlug);
-    const repository = await ClassmojiService.repository.findById(moduleId);
+    const repository = await ClassmojiService.repository.findById(repositoryId);
 
     invariant(repository != null, 'Repository not found');
 
     // If repos already exist (re-publish after unpublish), just flip the flag
-    const existingRepos = await ClassmojiService.gitRepo.findByRepository(classroomSlug, moduleId);
+    const existingRepos = await ClassmojiService.gitRepo.findByRepository(classroomSlug, repositoryId);
     if (existingRepos.length > 0) {
-      await ClassmojiService.repository.setPublished(moduleId, true);
+      await ClassmojiService.repository.setPublished(repositoryId, true);
       return { success: 'Repository re-published. Use Sync to update repositories.' };
     }
 
@@ -65,7 +65,7 @@ export const publishAssignment = async (
     } else if (repository.team_formation_mode === 'SELF_FORMED') {
       // For self-formed teams, just mark repository as published
       // Teams and repos will be created when students form their teams
-      await ClassmojiService.repository.setPublished(moduleId, true);
+      await ClassmojiService.repository.setPublished(repositoryId, true);
 
       return {
         success: 'Repository published! Students can now form teams.',
@@ -121,11 +121,11 @@ export const publishAssignment = async (
 
 export const syncAssignment = async (
   classroomSlug: string,
-  moduleId: string,
+  repositoryId: string,
   _userId: string | null = null
 ) => {
   const classroom = await ClassmojiService.classroom.findBySlug(classroomSlug);
-  const repository = await ClassmojiService.repository.findById(moduleId);
+  const repository = await ClassmojiService.repository.findById(repositoryId);
   const sessionId = nanoid();
 
   const accessToken = await auth.createPublicToken({

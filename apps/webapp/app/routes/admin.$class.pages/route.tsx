@@ -161,7 +161,7 @@ export default function AdminPages({ loaderData }: Route.ComponentProps) {
   }, [fetcher.state, fetcher.data]);
 
   // Helper to get first linked repository title
-  const getLinkedModuleTitle = (page: PageRecord) => {
+  const getLinkedRepositoryTitle = (page: PageRecord) => {
     const moduleLink = page.links?.find(
       (link: { repository?: { title: string } | null }) => link.repository
     );
@@ -175,21 +175,21 @@ export default function AdminPages({ loaderData }: Route.ComponentProps) {
 
   const filteredPages = pages
     .filter(page => {
-      const moduleTitle = getLinkedModuleTitle(page as unknown as PageRecord);
+      const repositoryTitle = getLinkedRepositoryTitle(page as unknown as PageRecord);
       const matchesSearch =
         page.title.toLowerCase().includes(searchText.toLowerCase()) ||
-        (moduleTitle && moduleTitle.toLowerCase().includes(searchText.toLowerCase()));
+        (repositoryTitle && repositoryTitle.toLowerCase().includes(searchText.toLowerCase()));
 
       return matchesSearch;
     })
     .sort((a, b) => {
       // Sort by repository first (nulls last), then by title
-      const moduleA = getLinkedModuleTitle(a as unknown as PageRecord) || '';
-      const moduleB = getLinkedModuleTitle(b as unknown as PageRecord) || '';
-      const moduleCompare = moduleA.localeCompare(moduleB);
+      const repositoryA = getLinkedRepositoryTitle(a as unknown as PageRecord) || '';
+      const repositoryB = getLinkedRepositoryTitle(b as unknown as PageRecord) || '';
+      const repositoryCompare = repositoryA.localeCompare(repositoryB);
 
-      if (moduleCompare !== 0) {
-        return moduleCompare;
+      if (repositoryCompare !== 0) {
+        return repositoryCompare;
       }
 
       return a.title.localeCompare(b.title);

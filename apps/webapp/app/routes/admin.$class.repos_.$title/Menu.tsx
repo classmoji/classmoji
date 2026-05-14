@@ -18,7 +18,7 @@ interface MenuProps {
 
 const Menu = ({ repository, assistants }: MenuProps) => {
   const navigate = useNavigate();
-  const { class: classSlug, title: moduleTitle } = useParams();
+  const { class: classSlug, title: repositoryTitle } = useParams();
   const { fetcher } = useGlobalFetcher();
   const { isProTier } = useSubscription();
   const callout = useCallout();
@@ -34,7 +34,7 @@ const Menu = ({ repository, assistants }: MenuProps) => {
 
     fetcher!.submit(JSON.stringify({ repository }), {
       method: 'post',
-      action: `/admin/${classSlug}/repos/${moduleTitle}?action=calculateContributions`,
+      action: `/admin/${classSlug}/repos/${repositoryTitle}?action=calculateContributions`,
       encType: 'application/json',
     });
   };
@@ -45,7 +45,7 @@ const Menu = ({ repository, assistants }: MenuProps) => {
       label: (
         <button
           onClick={() => {
-            navigate(`/admin/${classSlug}/repos/form?title=${moduleTitle}`);
+            navigate(`/admin/${classSlug}/repos/form?title=${repositoryTitle}`);
           }}
         >
           Edit repository
@@ -67,7 +67,7 @@ const Menu = ({ repository, assistants }: MenuProps) => {
               return;
             }
 
-            navigate(`/admin/${classSlug}/repos/${moduleTitle}/assign-graders`);
+            navigate(`/admin/${classSlug}/repos/${repositoryTitle}/assign-graders`);
           }}
         >
           Assign graders
@@ -79,7 +79,7 @@ const Menu = ({ repository, assistants }: MenuProps) => {
       label: (
         <button
           onClick={() => {
-            navigate(`/admin/${classSlug}/repos/${moduleTitle}/update?id=${repository.id}`);
+            navigate(`/admin/${classSlug}/repos/${repositoryTitle}/update?id=${repository.id}`);
           }}
         >
           Update repositories

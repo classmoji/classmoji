@@ -47,13 +47,13 @@ export const groupByAssignment = (data: RepoAssignmentWithModule[]) => {
 
 export const groupByModule = (data: RepoAssignmentWithModule[]) => {
   return data.reduce((acc: Record<string, RepoAssignmentWithModule[]>, item) => {
-    const moduleId = item.assignment.repository_id!;
+    const repositoryId = item.assignment.repository_id!;
 
-    if (!acc[moduleId]) {
-      acc[moduleId] = [];
+    if (!acc[repositoryId]) {
+      acc[repositoryId] = [];
     }
 
-    acc[moduleId].push(item);
+    acc[repositoryId].push(item);
 
     return acc;
   }, {});

@@ -81,7 +81,7 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
         return {
           id: ra.id,
           assignmentTitle: ra.assignment?.title ?? 'Assignment',
-          moduleTitle: ra.git_repo?.repository?.title ?? '',
+          repositoryTitle: ra.git_repo?.repository?.title ?? '',
           moduleType: ra.git_repo?.repository?.type ?? null,
           status,
           gradesReleased: Boolean(ra.assignment?.grades_released && (ra.grades?.length ?? 0) > 0),

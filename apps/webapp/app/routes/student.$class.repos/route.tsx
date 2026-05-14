@@ -84,7 +84,7 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
   };
 };
 
-const StudentModules = ({ loaderData }: Route.ComponentProps) => {
+const StudentRepositories = ({ loaderData }: Route.ComponentProps) => {
   const {
     repositories,
     repoAssignmentsByAssignmentId,
@@ -123,4 +123,4 @@ const StudentModules = ({ loaderData }: Route.ComponentProps) => {
   );
 };
 
-export default StudentModules;
+export default StudentRepositories;

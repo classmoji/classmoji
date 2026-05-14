@@ -79,20 +79,20 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
   };
 
   // Group assignments by repository
-  const assignmentsByModule: Record<string, ModuleAssignmentsGroup> = {};
+  const assignmentsByRepository: Record<string, ModuleAssignmentsGroup> = {};
   assignedGraderItems.forEach(item => {
     const repoAssignment = item.git_repo_assignment;
-    const moduleName = repoAssignment?.git_repo?.repository?.title || 'Uncategorized';
-    const moduleId = repoAssignment?.git_repo?.repository?.id || 'uncategorized';
+    const repositoryName = repoAssignment?.git_repo?.repository?.title || 'Uncategorized';
+    const repositoryId = repoAssignment?.git_repo?.repository?.id || 'uncategorized';
 
-    if (!assignmentsByModule[moduleId]) {
-      assignmentsByModule[moduleId] = {
-        name: moduleName,
+    if (!assignmentsByRepository[repositoryId]) {
+      assignmentsByRepository[repositoryId] = {
+        name: repositoryName,
         assignments: [],
       };
     }
 
-    assignmentsByModule[moduleId].assignments.push({
+    assignmentsByRepository[repositoryId].assignments.push({
       id: repoAssignment.id,
       studentName:
         repoAssignment.git_repo?.student?.name ||
@@ -109,13 +109,13 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
   return {
     assistant,
     membership,
-    assignmentsByModule,
+    assignmentsByRepository,
     stats: assistantProgress,
   };
 };
 
 const AdminAssistantDrawer = ({ loaderData }: Route.ComponentProps) => {
-  const { assistant, membership, assignmentsByModule, stats } = loaderData;
+  const { assistant, membership, assignmentsByRepository, stats } = loaderData;
   const { close, opened, width } = useRouteDrawer({});
   const { isDarkMode } = useDarkMode();
   const navigate = useNavigate();
@@ -158,12 +158,12 @@ const AdminAssistantDrawer = ({ loaderData }: Route.ComponentProps) => {
     return '#ef4444'; // red
   };
 
-  const moduleCollapseItems = Object.entries(assignmentsByModule).map(([moduleId, repository]) => {
+  const repositoryCollapseItems = Object.entries(assignmentsByRepository).map(([repositoryId, repository]) => {
     const gradedCount = repository.assignments.filter(assignment => assignment.isGraded).length;
     const totalCount = repository.assignments.length;
 
     return {
-      key: moduleId,
+      key: repositoryId,
       label: (
         <div className="flex items-center justify-between w-full pr-4">
           <span className="font-medium">{repository.name}</span>
@@ -286,9 +286,9 @@ const AdminAssistantDrawer = ({ loaderData }: Route.ComponentProps) => {
 
         {/* Assignments Breakdown */}
         <Card title="Assignments Breakdown">
-          {moduleCollapseItems.length > 0 ? (
+          {repositoryCollapseItems.length > 0 ? (
             <Collapse
-              items={moduleCollapseItems}
+              items={repositoryCollapseItems}
               defaultActiveKey={[]}
               className="bg-transparent"
             />

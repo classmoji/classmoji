@@ -483,7 +483,7 @@ export const setPublished = async (id: string, isPublished: boolean) => {
 };
 
 /**
- * Get Modules with gitRepo status for a student
+ * Get Repositories with gitRepo status for a student
  * @param {string} classroomId - UUID of the Classroom
  * @param {string} studentId - UUID of the student
  * @returns {Promise<Object[]>}
