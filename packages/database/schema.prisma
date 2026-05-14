@@ -207,12 +207,12 @@ model User {
 
   // Relations
   accounts                      Account[]
-  sessions                      Session[]                    @relation("SessionUser")
-  impersonated_sessions         Session[]                    @relation("ImpersonatedBy")
+  sessions                      Session[]                 @relation("SessionUser")
+  impersonated_sessions         Session[]                 @relation("ImpersonatedBy")
   subscriptions                 Subscription[]
   classroom_memberships         ClassroomMembership[]
-  repositories                  Repository[]                 @relation("StudentRepositories")
-  graded_repository_assignments RepositoryAssignmentGrader[]
+  git_repos                     GitRepo[]                 @relation("StudentRepositories")
+  graded_repository_assignments GitRepoAssignmentGrader[]
   grades_given                  AssignmentGrade[]
   quiz_attempts                 QuizAttempt[]
   regrade_requests              RegradeRequest[]
@@ -224,7 +224,7 @@ model User {
   calendar_events               CalendarEvent[]
   ai_conversations              AIConversation[]
   resource_views                ResourceView[]
-  contributor_links             RepositoryContributorLink[]
+  contributor_links             GitRepoContributorLink[]
   notifications                 Notification[]
   notification_preference       NotificationPreference?
 
@@ -288,7 +288,7 @@ model Classroom {
   settings              ClassroomSettings?
   memberships           ClassroomMembership[]
   modules               Module[]
-  repositories          Repository[]
+  git_repos             GitRepo[]
   teams                 Team[]
   tags                  Tag[]
   quizzes               Quiz[]
@@ -383,13 +383,13 @@ model Module {
   created_at              DateTime           @default(now())
   updated_at              DateTime           @default(now()) @updatedAt
 
-  classroom    Classroom    @relation(fields: [classroom_id], references: [id], onDelete: Cascade)
-  tag          Tag?         @relation(fields: [tag_id], references: [id])
-  assignments  Assignment[]
-  repositories Repository[]
-  quizzes      Quiz[]
-  pages        PageLink[]
-  slides       SlideLink[]
+  classroom   Classroom    @relation(fields: [classroom_id], references: [id], onDelete: Cascade)
+  tag         Tag?         @relation(fields: [tag_id], references: [id])
+  assignments Assignment[]
+  git_repos   GitRepo[]
+  quizzes     Quiz[]
+  pages       PageLink[]
+  slides      SlideLink[]
 
   @@unique([classroom_id, title])
   @@index([classroom_id])
@@ -412,11 +412,11 @@ model Assignment {
   created_at       DateTime  @default(now())
   updated_at       DateTime  @default(now()) @updatedAt
 
-  module                 Module                        @relation(fields: [module_id], references: [id], onDelete: Cascade)
-  repository_assignments RepositoryAssignment[]
-  pages                  PageLink[]
-  slides                 SlideLink[]
-  calendarEventLinks     CalendarEventAssignmentLink[]
+  module               Module                        @relation(fields: [module_id], references: [id], onDelete: Cascade)
+  git_repo_assignments GitRepoAssignment[]
+  pages                PageLink[]
+  slides               SlideLink[]
+  calendarEventLinks   CalendarEventAssignmentLink[]
 
   @@unique([module_id, title])
   @@index([module_id])
@@ -427,7 +427,7 @@ model Assignment {
 // REPOSITORY & REPOSITORY ASSIGNMENT (formerly RepositoryIssue)
 // ============================================================================
 
-model Repository {
+model GitRepo {
   id             String      @id @default(uuid())
   provider       GitProvider
   provider_id    String // GitHub repo ID
@@ -442,26 +442,26 @@ model Repository {
   created_at     DateTime    @default(now())
   updated_at     DateTime    @default(now()) @updatedAt
 
-  classroom   Classroom              @relation(fields: [classroom_id], references: [id], onDelete: Cascade)
-  module      Module                 @relation(fields: [module_id], references: [id], onDelete: Cascade)
-  student     User?                  @relation("StudentRepositories", fields: [student_id], references: [id], onDelete: Cascade)
-  team        Team?                  @relation(fields: [team_id], references: [id], onDelete: Cascade)
-  assignments RepositoryAssignment[]
-  contributor_links RepositoryContributorLink[]
+  classroom         Classroom                @relation(fields: [classroom_id], references: [id], onDelete: Cascade)
+  module            Module                   @relation(fields: [module_id], references: [id], onDelete: Cascade)
+  student           User?                    @relation("StudentRepositories", fields: [student_id], references: [id], onDelete: Cascade)
+  team              Team?                    @relation(fields: [team_id], references: [id], onDelete: Cascade)
+  assignments       GitRepoAssignment[]
+  contributor_links GitRepoContributorLink[]
 
   @@unique([provider, provider_id])
   @@index([classroom_id])
   @@index([module_id])
   @@index([student_id])
-  @@map("repositories")
+  @@map("git_repos")
 }
 
-model RepositoryAssignment {
+model GitRepoAssignment {
   id                    String      @id @default(uuid())
   provider              GitProvider
   provider_id           String // GitHub issue ID
   provider_issue_number Int // Issue #number
-  repository_id         String
+  git_repo_id           String
   assignment_id         String
   status                IssueStatus @default(OPEN)
   closed_at             DateTime?
@@ -469,107 +469,107 @@ model RepositoryAssignment {
   created_at            DateTime    @default(now())
   updated_at            DateTime    @default(now()) @updatedAt
 
-  repository         Repository                   @relation(fields: [repository_id], references: [id], onDelete: Cascade)
-  assignment         Assignment                   @relation(fields: [assignment_id], references: [id], onDelete: Cascade)
+  git_repo           GitRepo                   @relation(fields: [git_repo_id], references: [id], onDelete: Cascade)
+  assignment         Assignment                @relation(fields: [assignment_id], references: [id], onDelete: Cascade)
   grades             AssignmentGrade[]
-  graders            RepositoryAssignmentGrader[]
+  graders            GitRepoAssignmentGrader[]
   regrade_requests   RegradeRequest[]
   token_transactions TokenTransaction[]
-  analytics_snapshot RepoAnalyticsSnapshot?
+  analytics_snapshot GitRepoAnalyticsSnapshot?
 
   @@unique([provider, provider_id])
-  @@index([repository_id])
+  @@index([git_repo_id])
   @@index([assignment_id])
-  @@map("repository_assignments")
+  @@map("git_repo_assignments")
 }
 
-model RepoAnalyticsSnapshot {
-  id                       String   @id @default(uuid())
-  repository_assignment_id String   @unique
-  repository_assignment    RepositoryAssignment @relation(fields: [repository_assignment_id], references: [id], onDelete: Cascade)
-  fetched_at               DateTime
-  default_branch           String?
-  total_commits            Int      @default(0)
-  total_additions          Int      @default(0)
-  total_deletions          Int      @default(0)
-  first_commit_at          DateTime?
-  last_commit_at           DateTime?
-  commits                  Json     @default("[]")
-  contributors             Json     @default("[]")
-  languages                Json     @default("{}")
-  pr_summary               Json     @default("{}")
-  stale                    Boolean  @default(false)
-  error                    String?
-  created_at               DateTime @default(now())
-  updated_at               DateTime @default(now()) @updatedAt
+model GitRepoAnalyticsSnapshot {
+  id                     String            @id @default(uuid())
+  git_repo_assignment_id String            @unique
+  git_repo_assignment    GitRepoAssignment @relation(fields: [git_repo_assignment_id], references: [id], onDelete: Cascade)
+  fetched_at             DateTime
+  default_branch         String?
+  total_commits          Int               @default(0)
+  total_additions        Int               @default(0)
+  total_deletions        Int               @default(0)
+  first_commit_at        DateTime?
+  last_commit_at         DateTime?
+  commits                Json              @default("[]")
+  contributors           Json              @default("[]")
+  languages              Json              @default("{}")
+  pr_summary             Json              @default("{}")
+  stale                  Boolean           @default(false)
+  error                  String?
+  created_at             DateTime          @default(now())
+  updated_at             DateTime          @default(now()) @updatedAt
 
   @@index([fetched_at])
-  @@map("repo_analytics_snapshots")
+  @@map("git_repo_analytics_snapshots")
 }
 
-model RepositoryContributorLink {
-  id            String   @id @default(uuid())
-  repository_id String
-  repository    Repository @relation(fields: [repository_id], references: [id], onDelete: Cascade)
-  github_login  String
-  user_id       String?
-  user          User?    @relation(fields: [user_id], references: [id], onDelete: SetNull)
-  created_at    DateTime @default(now())
+model GitRepoContributorLink {
+  id           String   @id @default(uuid())
+  git_repo_id  String
+  git_repo     GitRepo  @relation(fields: [git_repo_id], references: [id], onDelete: Cascade)
+  github_login String
+  user_id      String?
+  user         User?    @relation(fields: [user_id], references: [id], onDelete: SetNull)
+  created_at   DateTime @default(now())
 
-  @@unique([repository_id, github_login])
+  @@unique([git_repo_id, github_login])
   @@index([user_id])
-  @@map("repository_contributor_links")
+  @@map("git_repo_contributor_links")
 }
 
 // ============================================================================
 // GRADING
 // ============================================================================
 
-model RepositoryAssignmentGrader {
-  id                       String   @id @default(uuid())
-  repository_assignment_id String
-  grader_id                String
-  created_at               DateTime @default(now())
-  updated_at               DateTime @default(now()) @updatedAt
+model GitRepoAssignmentGrader {
+  id                     String   @id @default(uuid())
+  git_repo_assignment_id String
+  grader_id              String
+  created_at             DateTime @default(now())
+  updated_at             DateTime @default(now()) @updatedAt
 
-  repository_assignment RepositoryAssignment @relation(fields: [repository_assignment_id], references: [id], onDelete: Cascade)
-  grader                User                 @relation(fields: [grader_id], references: [id], onDelete: Cascade)
+  git_repo_assignment GitRepoAssignment @relation(fields: [git_repo_assignment_id], references: [id], onDelete: Cascade)
+  grader              User              @relation(fields: [grader_id], references: [id], onDelete: Cascade)
 
-  @@unique([repository_assignment_id, grader_id])
-  @@map("repository_assignment_graders")
+  @@unique([git_repo_assignment_id, grader_id])
+  @@map("git_repo_assignment_graders")
 }
 
 model AssignmentGrade {
-  id                       String   @id @default(uuid())
-  repository_assignment_id String
-  grader_id                String?
-  emoji                    String
-  token_transaction_id     String?  @unique
-  created_at               DateTime @default(now())
-  updated_at               DateTime @default(now()) @updatedAt
+  id                     String   @id @default(uuid())
+  git_repo_assignment_id String
+  grader_id              String?
+  emoji                  String
+  token_transaction_id   String?  @unique
+  created_at             DateTime @default(now())
+  updated_at             DateTime @default(now()) @updatedAt
 
-  repository_assignment RepositoryAssignment @relation(fields: [repository_assignment_id], references: [id], onDelete: Cascade)
-  grader                User?                @relation(fields: [grader_id], references: [id])
-  token_transaction     TokenTransaction?    @relation(fields: [token_transaction_id], references: [id], onDelete: SetNull)
+  git_repo_assignment GitRepoAssignment @relation(fields: [git_repo_assignment_id], references: [id], onDelete: Cascade)
+  grader              User?             @relation(fields: [grader_id], references: [id])
+  token_transaction   TokenTransaction? @relation(fields: [token_transaction_id], references: [id], onDelete: SetNull)
 
   @@map("assignment_grades")
 }
 
 model RegradeRequest {
-  id                       String               @id @default(uuid())
-  repository_assignment_id String
-  classroom_id             String
-  student_id               String
-  student_comment          String?
-  grader_comment           String?
-  previous_grade           String[]
-  status                   RegradeRequestStatus @default(IN_REVIEW)
-  created_at               DateTime             @default(now())
-  updated_at               DateTime             @default(now()) @updatedAt
+  id                     String               @id @default(uuid())
+  git_repo_assignment_id String
+  classroom_id           String
+  student_id             String
+  student_comment        String?
+  grader_comment         String?
+  previous_grade         String[]
+  status                 RegradeRequestStatus @default(IN_REVIEW)
+  created_at             DateTime             @default(now())
+  updated_at             DateTime             @default(now()) @updatedAt
 
-  repository_assignment RepositoryAssignment @relation(fields: [repository_assignment_id], references: [id], onDelete: Cascade)
-  classroom             Classroom            @relation(fields: [classroom_id], references: [id], onDelete: Cascade)
-  student               User                 @relation(fields: [student_id], references: [id], onDelete: Cascade)
+  git_repo_assignment GitRepoAssignment @relation(fields: [git_repo_assignment_id], references: [id], onDelete: Cascade)
+  classroom           Classroom         @relation(fields: [classroom_id], references: [id], onDelete: Cascade)
+  student             User              @relation(fields: [student_id], references: [id], onDelete: Cascade)
 
   @@index([classroom_id])
   @@index([student_id])
@@ -621,10 +621,10 @@ model Team {
   created_at   DateTime     @default(now())
   updated_at   DateTime     @default(now()) @updatedAt
 
-  classroom    Classroom        @relation(fields: [classroom_id], references: [id], onDelete: Cascade)
-  repositories Repository[]
-  memberships  TeamMembership[]
-  tags         TeamTag[]
+  classroom   Classroom        @relation(fields: [classroom_id], references: [id], onDelete: Cascade)
+  git_repos   GitRepo[]
+  memberships TeamMembership[]
+  tags        TeamTag[]
 
   @@unique([classroom_id, slug])
   @@unique([provider, provider_id])
@@ -679,23 +679,23 @@ model TeamTag {
 // ============================================================================
 
 model TokenTransaction {
-  id                       String               @id @default(uuid())
-  classroom_id             String
-  student_id               String
-  repository_assignment_id String?
-  amount                   Int
-  type                     TokenTransactionType
-  hours_purchased          Int?
-  balance_after            Int
-  description              String               @default("")
-  is_cancelled             Boolean              @default(false)
-  created_at               DateTime             @default(now())
-  updated_at               DateTime             @default(now()) @updatedAt
+  id                     String               @id @default(uuid())
+  classroom_id           String
+  student_id             String
+  git_repo_assignment_id String?
+  amount                 Int
+  type                   TokenTransactionType
+  hours_purchased        Int?
+  balance_after          Int
+  description            String               @default("")
+  is_cancelled           Boolean              @default(false)
+  created_at             DateTime             @default(now())
+  updated_at             DateTime             @default(now()) @updatedAt
 
-  classroom             Classroom             @relation(fields: [classroom_id], references: [id], onDelete: Cascade)
-  student               User                  @relation(fields: [student_id], references: [id], onDelete: Cascade)
-  repository_assignment RepositoryAssignment? @relation(fields: [repository_assignment_id], references: [id], onDelete: Cascade)
-  assignment_grade      AssignmentGrade?
+  classroom           Classroom          @relation(fields: [classroom_id], references: [id], onDelete: Cascade)
+  student             User               @relation(fields: [student_id], references: [id], onDelete: Cascade)
+  git_repo_assignment GitRepoAssignment? @relation(fields: [git_repo_assignment_id], references: [id], onDelete: Cascade)
+  assignment_grade    AssignmentGrade?
 
   @@index([classroom_id])
   @@index([student_id])
@@ -1086,18 +1086,18 @@ model Notification {
 }
 
 model NotificationPreference {
-  user_id                            String   @id
-  email_quiz_published               Boolean  @default(true)
-  email_page_published               Boolean  @default(false)
-  email_page_unpublished             Boolean  @default(false)
-  email_module_published             Boolean  @default(true)
-  email_module_unpublished           Boolean  @default(false)
-  email_assignment_due_date_changed  Boolean  @default(true)
-  email_assignment_graded            Boolean  @default(true)
-  email_ta_grading_assigned          Boolean  @default(true)
-  email_ta_regrade_assigned          Boolean  @default(true)
-  created_at                         DateTime @default(now())
-  updated_at                         DateTime @default(now()) @updatedAt
+  user_id                           String   @id
+  email_quiz_published              Boolean  @default(true)
+  email_page_published              Boolean  @default(false)
+  email_page_unpublished            Boolean  @default(false)
+  email_module_published            Boolean  @default(true)
+  email_module_unpublished          Boolean  @default(false)
+  email_assignment_due_date_changed Boolean  @default(true)
+  email_assignment_graded           Boolean  @default(true)
+  email_ta_grading_assigned         Boolean  @default(true)
+  email_ta_regrade_assigned         Boolean  @default(true)
+  created_at                        DateTime @default(now())
+  updated_at                        DateTime @default(now()) @updatedAt
 
   user User @relation(fields: [user_id], references: [id], onDelete: Cascade)
 
