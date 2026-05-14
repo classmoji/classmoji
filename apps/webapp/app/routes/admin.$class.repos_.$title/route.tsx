@@ -65,7 +65,7 @@ const SingleModule = ({ loaderData }: Route.ComponentProps) => {
         grades_released: gradesReleased,
       },
       {
-        action: `/api/repositoryAssignment/${classSlug}?/updateGradeRelease`,
+        action: `/api/gitRepoAssignment/${classSlug}?/updateGradeRelease`,
         method: 'post',
         encType: 'application/json',
       }

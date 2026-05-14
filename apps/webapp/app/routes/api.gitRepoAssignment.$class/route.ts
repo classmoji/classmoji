@@ -17,7 +17,7 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
         request,
         classroomSlug: classSlug,
         allowedRoles: ['OWNER', 'TEACHER'],
-        resourceType: 'REPOSITORY_ASSIGNMENT',
+        resourceType: 'GIT_REPO_ASSIGNMENT',
         attemptedAction: 'autograde',
         metadata: { workflowName: data.workflowName },
       });
@@ -31,12 +31,12 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
 
         return {
           success: 'Autograde workflow created',
-          action: 'AUTOGRADE_REPOSITORY_ASSIGNMENT',
+          action: 'AUTOGRADE_GIT_REPO_ASSIGNMENT',
         };
       } catch (error: unknown) {
         console.error('dispatch_autograde_workflow failed:', error);
         return {
-          action: 'AUTOGRADE_REPOSITORY_ASSIGNMENT',
+          action: 'AUTOGRADE_GIT_REPO_ASSIGNMENT',
           error: 'Failed to start autograde workflow. Please try again.',
         };
       }
@@ -47,16 +47,16 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
         request,
         classroomSlug: classSlug,
         allowedRoles: ['OWNER', 'TEACHER', 'ASSISTANT'],
-        resourceType: 'REPOSITORY_ASSIGNMENT',
+        resourceType: 'GIT_REPO_ASSIGNMENT',
         attemptedAction: 'add_grade',
-        metadata: { assignment_id: data.repositoryAssignment?.assignment_id },
+        metadata: { assignment_id: data.gitRepoAssignment?.assignment_id },
       });
 
-      const { repositoryAssignment, graderId, grade, studentId, teamId } = data;
+      const { gitRepoAssignment, graderId, grade, studentId, teamId } = data;
 
       await HelperService.addGradeToGitRepoAssignment({
         classroom,
-        gitRepoAssignment: repositoryAssignment,
+        gitRepoAssignment,
         graderId,
         grade,
         studentId,
@@ -64,7 +64,7 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
       });
 
       return {
-        action: ActionTypes.ADD_GRADE_TO_REPOSITORY_ASSIGNMENT,
+        action: ActionTypes.ADD_GRADE_TO_GIT_REPO_ASSIGNMENT,
         success: 'Added grade successfully!',
       };
     },
@@ -74,21 +74,21 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
         request,
         classroomSlug: classSlug,
         allowedRoles: ['OWNER', 'TEACHER', 'ASSISTANT'],
-        resourceType: 'REPOSITORY_ASSIGNMENT',
+        resourceType: 'GIT_REPO_ASSIGNMENT',
         attemptedAction: 'remove_grade',
-        metadata: { assignment_id: data.repositoryAssignment?.assignment_id },
+        metadata: { assignment_id: data.gitRepoAssignment?.assignment_id },
       });
 
-      const { grade, repositoryAssignment } = data;
+      const { grade, gitRepoAssignment } = data;
 
       await HelperService.removeGradeFromGitRepoAssignment({
         classroom,
-        gitRepoAssignment: repositoryAssignment,
+        gitRepoAssignment,
         grade,
       });
 
       return {
-        action: ActionTypes.REMOVE_GRADE_FROM_REPOSITORY_ASSIGNMENT,
+        action: ActionTypes.REMOVE_GRADE_FROM_GIT_REPO_ASSIGNMENT,
         success: 'Removed grade successfully!',
       };
     },
@@ -98,7 +98,7 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
         request,
         classroomSlug: classSlug,
         allowedRoles: ['OWNER', 'TEACHER'],
-        resourceType: 'REPOSITORY_ASSIGNMENT',
+        resourceType: 'GIT_REPO_ASSIGNMENT',
         attemptedAction: 'update_late_override',
         metadata: { git_repo_assignment_id: data.git_repo_assignment_id },
       });
@@ -121,7 +121,7 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
         request,
         classroomSlug: classSlug,
         allowedRoles: ['OWNER', 'TEACHER'],
-        resourceType: 'REPOSITORY_ASSIGNMENT',
+        resourceType: 'GIT_REPO_ASSIGNMENT',
         attemptedAction: 'update_grade_release',
         metadata: { assignment_id: data.assignment_id },
       });

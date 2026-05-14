@@ -28,7 +28,7 @@ const LateOverrideButton = ({ repositoryAssignment }: LateOverrideButtonProps) =
       },
       {
         method: 'post',
-        action: `/api/repositoryAssignment/${classroom?.slug}?action=updateLateOverride`,
+        action: `/api/gitRepoAssignment/${classroom?.slug}?action=updateLateOverride`,
         encType: 'application/json',
       }
     );
