@@ -115,7 +115,7 @@ export const findByIdWithRepositories = async (teamId: string) => {
   return getPrisma().team.findUnique({
     where: { id: teamId },
     include: {
-      repositories: true,
+      git_repos: true,
     },
   });
 };
@@ -139,7 +139,7 @@ export const renameAndRepos = async (payload: {
       data: { name: newName, slug: newSlug },
     }),
     ...repoRenames.map(r =>
-      prisma.repository.update({
+      prisma.gitRepo.update({
         where: { id: r.id },
         data: { name: r.name },
       })

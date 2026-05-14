@@ -108,8 +108,8 @@ export async function personalThroughput(
     where: {
       grader_id: userId,
       created_at: { gte: since },
-      repository_assignment: {
-        repository: { classroom_id: classroomId },
+      git_repo_assignment: {
+        git_repo: { classroom_id: classroomId },
       },
     },
     select: { created_at: true },
@@ -132,8 +132,8 @@ export async function gradingStreak(
   const grades = await prisma.assignmentGrade.findMany({
     where: {
       grader_id: userId,
-      repository_assignment: {
-        repository: { classroom_id: classroomId },
+      git_repo_assignment: {
+        git_repo: { classroom_id: classroomId },
       },
     },
     select: { created_at: true },
@@ -164,20 +164,20 @@ export async function overdueQueue(
   const now = Date.now();
   const cutoff = new Date(now - 3 * MS_PER_DAY);
 
-  // Queue = RepositoryAssignments this user is a grader on, that are still
+  // Queue = GitRepoAssignments this user is a grader on, that are still
   // OPEN (i.e. not yet fully graded/closed) in this classroom. "Opened" =
   // any grade interaction by anyone; we read the latest grade timestamp and
   // fall back to the RA created_at.
-  const rows = await prisma.repositoryAssignmentGrader.findMany({
+  const rows = await prisma.gitRepoAssignmentGrader.findMany({
     where: {
       grader_id: userId,
-      repository_assignment: {
-        repository: { classroom_id: classroomId },
+      git_repo_assignment: {
+        git_repo: { classroom_id: classroomId },
         status: 'OPEN',
       },
     },
     select: {
-      repository_assignment: {
+      git_repo_assignment: {
         select: {
           id: true,
           created_at: true,
@@ -187,7 +187,7 @@ export async function overdueQueue(
             take: 1,
           },
           assignment: { select: { title: true } },
-          repository: {
+          git_repo: {
             select: {
               student: { select: { name: true, login: true } },
             },
@@ -199,7 +199,7 @@ export async function overdueQueue(
 
   const enriched = rows
     .map(r => {
-      const ra = r.repository_assignment;
+      const ra = r.git_repo_assignment;
       const lastTouch = ra.grades.length > 0 ? ra.grades[0].created_at : ra.created_at;
       return {
         ra,
@@ -213,8 +213,8 @@ export async function overdueQueue(
 
   return enriched.slice(0, 10).map(x => ({
     repositoryAssignmentId: x.ra.id,
-    studentName: x.ra.repository.student?.name ?? null,
-    studentLogin: x.ra.repository.student?.login ?? null,
+    studentName: x.ra.git_repo.student?.name ?? null,
+    studentLogin: x.ra.git_repo.student?.login ?? null,
     assignmentTitle: x.ra.assignment.title,
     ageDays: Math.floor(x.ageMs / MS_PER_DAY),
   }));
@@ -244,8 +244,8 @@ export async function personalDailyTotals(
   const thirtyDaysAgo = new Date(now.getTime() - 30 * MS_PER_DAY);
 
   const classroomScopedRA = {
-    repository_assignment: {
-      repository: { classroom_id: classroomId },
+    git_repo_assignment: {
+      git_repo: { classroom_id: classroomId },
     },
   } as const;
 
@@ -268,21 +268,21 @@ export async function personalDailyTotals(
       where: {
         grader_id: userId,
         created_at: { gte: thirtyDaysAgo },
-        repository_assignment: {
-          repository: { classroom_id: classroomId },
+        git_repo_assignment: {
+          git_repo: { classroom_id: classroomId },
           closed_at: { not: null },
         },
       },
       select: {
         created_at: true,
-        repository_assignment: { select: { closed_at: true } },
+        git_repo_assignment: { select: { closed_at: true } },
       },
     }),
-    prisma.repositoryAssignmentGrader.count({
+    prisma.gitRepoAssignmentGrader.count({
       where: {
         grader_id: userId,
-        repository_assignment: {
-          repository: { classroom_id: classroomId },
+        git_repo_assignment: {
+          git_repo: { classroom_id: classroomId },
           grades: { none: {} },
         },
       },
@@ -291,7 +291,7 @@ export async function personalDailyTotals(
 
   const slaHours: number[] = [];
   for (const g of slaGrades) {
-    const closedAt = g.repository_assignment.closed_at;
+    const closedAt = g.git_repo_assignment.closed_at;
     if (!closedAt) continue;
     const diffMs = g.created_at.getTime() - closedAt.getTime();
     if (diffMs < 0) continue;
@@ -322,8 +322,8 @@ export async function personalGradeDistribution(
   const [allGrades, emojiMap] = await Promise.all([
     prisma.assignmentGrade.findMany({
       where: {
-        repository_assignment: {
-          repository: { classroom_id: classroomId },
+        git_repo_assignment: {
+          git_repo: { classroom_id: classroomId },
         },
       },
       select: { emoji: true, grader_id: true },

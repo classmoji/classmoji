@@ -10,8 +10,8 @@ type EmailPrefKey =
   | 'email_quiz_published'
   | 'email_page_published'
   | 'email_page_unpublished'
-  | 'email_module_published'
-  | 'email_module_unpublished'
+  | 'email_repository_published'
+  | 'email_repository_unpublished'
   | 'email_assignment_due_date_changed'
   | 'email_assignment_graded'
   | 'email_ta_grading_assigned'
@@ -21,8 +21,8 @@ const PREF_FIELD_BY_TYPE: Record<NotificationType, EmailPrefKey> = {
   QUIZ_PUBLISHED: 'email_quiz_published',
   PAGE_PUBLISHED: 'email_page_published',
   PAGE_UNPUBLISHED: 'email_page_unpublished',
-  MODULE_PUBLISHED: 'email_module_published',
-  MODULE_UNPUBLISHED: 'email_module_unpublished',
+  MODULE_PUBLISHED: 'email_repository_published',
+  MODULE_UNPUBLISHED: 'email_repository_unpublished',
   ASSIGNMENT_DUE_DATE_CHANGED: 'email_assignment_due_date_changed',
   ASSIGNMENT_GRADED: 'email_assignment_graded',
   TA_GRADING_ASSIGNED: 'email_ta_grading_assigned',
@@ -33,8 +33,8 @@ const DEFAULT_PREFS: Record<EmailPrefKey, boolean> = {
   email_quiz_published: true,
   email_page_published: false,
   email_page_unpublished: false,
-  email_module_published: true,
-  email_module_unpublished: false,
+  email_repository_published: true,
+  email_repository_unpublished: false,
   email_assignment_due_date_changed: true,
   email_assignment_graded: true,
   email_ta_grading_assigned: true,
@@ -231,10 +231,10 @@ export const getStudentsInClassroom = async (classroomId: string): Promise<strin
 };
 
 export const getStudentsForModule = async (
-  moduleId: string
+  repositoryId: string
 ): Promise<{ classroomId: string; studentIds: string[] }> => {
-  const mod = await getPrisma().module.findUnique({
-    where: { id: moduleId },
+  const mod = await getPrisma().repository.findUnique({
+    where: { id: repositoryId },
     select: { classroom_id: true },
   });
   if (!mod) return { classroomId: '', studentIds: [] };
@@ -249,9 +249,9 @@ export const getStudentsForAssignment = async (
 ): Promise<{ classroomId: string; studentIds: string[] }> => {
   const assignment = await getPrisma().assignment.findUnique({
     where: { id: assignmentId },
-    select: { module: { select: { classroom_id: true } } },
+    select: { repository: { select: { classroom_id: true } } },
   });
-  const classroomId = assignment?.module.classroom_id ?? '';
+  const classroomId = assignment?.repository.classroom_id ?? '';
   if (!classroomId) return { classroomId: '', studentIds: [] };
   return { classroomId, studentIds: await getStudentsInClassroom(classroomId) };
 };

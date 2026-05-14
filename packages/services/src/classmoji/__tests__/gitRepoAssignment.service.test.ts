@@ -5,14 +5,14 @@ const findManyMock = vi.fn();
 
 vi.mock('@classmoji/database', () => ({
   default: () => ({
-    repositoryAssignment: {
+    gitRepoAssignment: {
       count: countMock,
       findMany: findManyMock,
     },
   }),
 }));
 
-const { getLatePercentage } = await import('../repositoryAssignment.service.ts');
+const { getLatePercentage } = await import('../gitRepoAssignment.service.ts');
 
 type Row = {
   closed_at: Date | null;

@@ -2,7 +2,7 @@ import getPrisma from '@classmoji/database';
 import { titleToIdentifier } from '@classmoji/utils';
 import type { Prisma } from '@prisma/client';
 
-type ModuleImportClient = Prisma.TransactionClient | ReturnType<typeof getPrisma>;
+type RepositoryImportClient = Prisma.TransactionClient | ReturnType<typeof getPrisma>;
 
 type SourceAssignmentWithLegacyFields = Prisma.AssignmentGetPayload<Record<string, never>> & {
   branch?: string | null;
@@ -19,7 +19,7 @@ type SourceAssignmentWithLegacyFields = Prisma.AssignmentGetPayload<Record<strin
 export const cloneTag = async (
   sourceTagId: string,
   targetClassroomId: string,
-  tx: ModuleImportClient = getPrisma()
+  tx: RepositoryImportClient = getPrisma()
 ) => {
   const sourceTag = await tx.tag.findUnique({
     where: { id: sourceTagId },
@@ -53,9 +53,9 @@ export const cloneTag = async (
 };
 
 /**
- * Clone an assignment to a target module
+ * Clone an assignment to a target repository
  * @param {string} sourceAssignmentId - Source assignment ID
- * @param {string} targetModuleId - Target module ID
+ * @param {string} targetModuleId - Target repository ID
  * @param {Object} [options] - Clone options
  * @param {boolean} [options.stripDeadlines=true] - Remove deadline fields
  * @param {Object} [tx] - Optional Prisma transaction client
@@ -65,7 +65,7 @@ export const cloneAssignment = async (
   sourceAssignmentId: string,
   targetModuleId: string,
   options: { stripDeadlines?: boolean } = {},
-  tx: ModuleImportClient = getPrisma()
+  tx: RepositoryImportClient = getPrisma()
 ) => {
   const { stripDeadlines = true } = options;
 
@@ -78,7 +78,7 @@ export const cloneAssignment = async (
   }
 
   const assignmentCreateData: unknown = {
-    module_id: targetModuleId,
+    repository_id: targetModuleId,
     title: sourceAssignment.title,
     weight: sourceAssignment.weight,
     is_published: false,
@@ -99,10 +99,10 @@ export const cloneAssignment = async (
 };
 
 /**
- * Clone a quiz to a target classroom/module
+ * Clone a quiz to a target classroom/repository
  * @param {string} sourceQuizId - Source quiz ID
  * @param {string} targetClassroomId - Target classroom ID
- * @param {string|null} targetModuleId - Target module ID (optional)
+ * @param {string|null} targetModuleId - Target repository ID (optional)
  * @param {Object} [options] - Clone options
  * @param {boolean} [options.setDraft=true] - Set status to DRAFT
  * @param {boolean} [options.stripDeadlines=true] - Remove due_date
@@ -114,7 +114,7 @@ export const cloneQuiz = async (
   targetClassroomId: string,
   targetModuleId: string | null,
   options: { setDraft?: boolean; stripDeadlines?: boolean } = {},
-  tx: ModuleImportClient = getPrisma()
+  tx: RepositoryImportClient = getPrisma()
 ) => {
   const { setDraft = true, stripDeadlines = true } = options;
 
@@ -129,7 +129,7 @@ export const cloneQuiz = async (
   return tx.quiz.create({
     data: {
       classroom_id: targetClassroomId,
-      module_id: targetModuleId,
+      repository_id: targetModuleId,
       name: sourceQuiz.name,
       system_prompt: sourceQuiz.system_prompt,
       rubric_prompt: sourceQuiz.rubric_prompt,
@@ -148,15 +148,15 @@ export const cloneQuiz = async (
 };
 
 /**
- * Clone a module to a target classroom
- * @param {string} sourceModuleId - Source module ID
+ * Clone a repository to a target classroom
+ * @param {string} sourceModuleId - Source repository ID
  * @param {string} targetClassroomId - Target classroom ID
  * @param {Object} [options] - Clone options
  * @param {boolean} [options.includeAssignments=true] - Clone assignments
  * @param {boolean} [options.includeQuizzes=false] - Clone quizzes
  * @param {boolean} [options.stripDeadlines=true] - Remove deadline fields
  * @param {Object} [tx] - Optional Prisma transaction client
- * @returns {Promise<Object>} - The cloned module with relations
+ * @returns {Promise<Object>} - The cloned repository with relations
  */
 export const cloneModule = async (
   sourceModuleId: string,
@@ -166,11 +166,11 @@ export const cloneModule = async (
     includeQuizzes?: boolean;
     stripDeadlines?: boolean;
   } = {},
-  tx: ModuleImportClient = getPrisma()
+  tx: RepositoryImportClient = getPrisma()
 ) => {
   const { includeAssignments = true, includeQuizzes = false, stripDeadlines = true } = options;
 
-  const sourceModule = await tx.module.findUnique({
+  const sourceModule = await tx.repository.findUnique({
     where: { id: sourceModuleId },
     include: {
       assignments: true,
@@ -180,18 +180,18 @@ export const cloneModule = async (
   });
 
   if (!sourceModule) {
-    throw new Error(`Source module not found: ${sourceModuleId}`);
+    throw new Error(`Source repository not found: ${sourceModuleId}`);
   }
 
-  // Handle tag for GROUP modules
+  // Handle tag for GROUP repositories
   let targetTagId = null;
   if (sourceModule.type === 'GROUP' && sourceModule.tag_id) {
     const clonedTag = await cloneTag(sourceModule.tag_id, targetClassroomId, tx);
     targetTagId = clonedTag.id;
   }
 
-  // Create the module
-  const newModule = await tx.module.create({
+  // Create the repository
+  const newModule = await tx.repository.create({
     data: {
       classroom_id: targetClassroomId,
       title: titleToIdentifier(sourceModule.title),
@@ -206,11 +206,11 @@ export const cloneModule = async (
   });
 
   const results: {
-    module: typeof newModule;
+    repository: typeof newModule;
     assignments: Awaited<ReturnType<typeof cloneAssignment>>[];
     quizzes: Awaited<ReturnType<typeof cloneQuiz>>[];
   } = {
-    module: newModule,
+    repository: newModule,
     assignments: [],
     quizzes: [],
   };
@@ -246,10 +246,10 @@ export const cloneModule = async (
 };
 
 /**
- * Clone multiple modules with their relations (high-level orchestrator)
+ * Clone multiple repositories with their relations (high-level orchestrator)
  * @param {string} targetClassroomId - Target classroom ID
- * @param {Object[]} moduleConfigs - Array of module configurations
- * @param {string} moduleConfigs[].id - Source module ID
+ * @param {Object[]} moduleConfigs - Array of repository configurations
+ * @param {string} moduleConfigs[].id - Source repository ID
  * @param {boolean} [moduleConfigs[].includeQuizzes=false] - Include quizzes
  * @param {Object} [options] - Global options
  * @param {boolean} [options.stripDeadlines=true] - Remove deadline fields
@@ -264,12 +264,12 @@ export const cloneModulesWithRelations = async (
 
   return getPrisma().$transaction(async tx => {
     const results: {
-      modules: Awaited<ReturnType<typeof cloneModule>>['module'][];
+      repositories: Awaited<ReturnType<typeof cloneModule>>['repository'][];
       assignments: Awaited<ReturnType<typeof cloneAssignment>>[];
       quizzes: Awaited<ReturnType<typeof cloneQuiz>>[];
       tags: Prisma.TagUncheckedCreateInput[];
     } = {
-      modules: [],
+      repositories: [],
       assignments: [],
       quizzes: [],
       tags: [],
@@ -287,7 +287,7 @@ export const cloneModulesWithRelations = async (
         tx
       );
 
-      results.modules.push(cloneResult.module);
+      results.repositories.push(cloneResult.repository);
       results.assignments.push(...cloneResult.assignments);
       results.quizzes.push(...cloneResult.quizzes);
     }
@@ -297,12 +297,12 @@ export const cloneModulesWithRelations = async (
 };
 
 /**
- * Get modules from a classroom with counts for import preview
+ * Get repositories from a classroom with counts for import preview
  * @param {string} classroomId - Classroom ID
  * @returns {Promise<Object[]>} - Modules with relation counts
  */
 export const getModulesForImport = async (classroomId: string) => {
-  return getPrisma().module.findMany({
+  return getPrisma().repository.findMany({
     where: { classroom_id: classroomId },
     select: {
       id: true,

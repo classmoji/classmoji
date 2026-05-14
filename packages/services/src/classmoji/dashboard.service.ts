@@ -10,11 +10,11 @@
  *   numeric 0-100 score we join against the per-classroom EmojiMapping table
  *   (falling back to DEFAULT_EMOJI_GRADE_MAPPINGS in memory when no mapping
  *   exists).
- * - "Submission" proxy: RepositoryAssignment.closed_at being non-null (plus
+ * - "Submission" proxy: GitRepoAssignment.closed_at being non-null (plus
  *   status = CLOSED) represents a submission. There is no separate submission
  *   timestamp in the schema.
- * - "Active" student: has a QuizAttempt in the last 14 days OR a repository
- *   whose RepoAnalyticsSnapshot.last_commit_at is in the last 14 days.
+ * - "Active" student: has a QuizAttempt in the last 14 days OR a gitRepo
+ *   whose GitRepoAnalyticsSnapshot.last_commit_at is in the last 14 days.
  * - "Hardest question" drilling requires parsing QuizAttempt.question_results_json
  *   which does not have a stable cross-quiz question identifier today. We
  *   return an empty array and flag this in the task report. avgFocusPct is
@@ -156,7 +156,7 @@ export async function cohortOverview(classroomId: string): Promise<CohortOvervie
       select: { user_id: true },
       distinct: ['user_id'],
     }),
-    prisma.repository.findMany({
+    prisma.gitRepo.findMany({
       where: {
         classroom_id: classroomId,
         student_id: { in: studentIds },
@@ -182,8 +182,8 @@ export async function cohortOverview(classroomId: string): Promise<CohortOvervie
   const emojiMap = await loadClassroomEmojiMap(classroomId);
   const grades = await prisma.assignmentGrade.findMany({
     where: {
-      repository_assignment: {
-        repository: { classroom_id: classroomId, student_id: { in: studentIds } },
+      git_repo_assignment: {
+        git_repo: { classroom_id: classroomId, student_id: { in: studentIds } },
       },
     },
     select: { emoji: true },
@@ -193,19 +193,19 @@ export async function cohortOverview(classroomId: string): Promise<CohortOvervie
     .filter((v): v is number => v !== null);
   const medianGrade = computeGradeMedian(numeric);
 
-  // At-risk: students with >= 2 past-due RepositoryAssignments with no grades.
-  const missed = await prisma.repositoryAssignment.findMany({
+  // At-risk: students with >= 2 past-due GitRepoAssignments with no grades.
+  const missed = await prisma.gitRepoAssignment.findMany({
     where: {
-      repository: { classroom_id: classroomId, student_id: { in: studentIds } },
+      git_repo: { classroom_id: classroomId, student_id: { in: studentIds } },
       assignment: { student_deadline: { lt: now } },
       status: 'OPEN',
       grades: { none: {} },
     },
-    select: { repository: { select: { student_id: true } } },
+    select: { git_repo: { select: { student_id: true } } },
   });
   const missedCountByStudent = new Map<string, number>();
   for (const m of missed) {
-    const sid = m.repository.student_id;
+    const sid = m.git_repo.student_id;
     if (!sid) continue;
     missedCountByStudent.set(sid, (missedCountByStudent.get(sid) ?? 0) + 1);
   }
@@ -259,46 +259,46 @@ export async function cohortOverview(classroomId: string): Promise<CohortOvervie
         },
         select: { user_id: true, started_at: true },
       }),
-      prisma.repoAnalyticsSnapshot.findMany({
+      prisma.gitRepoAnalyticsSnapshot.findMany({
         where: {
-          repository_assignment: {
-            repository: { classroom_id: classroomId, student_id: { in: studentIds } },
+          git_repo_assignment: {
+            git_repo: { classroom_id: classroomId, student_id: { in: studentIds } },
           },
           last_commit_at: { gte: earliest, lte: now },
         },
         select: {
           last_commit_at: true,
-          repository_assignment: { select: { repository: { select: { student_id: true } } } },
+          git_repo_assignment: { select: { git_repo: { select: { student_id: true } } } },
         },
       }),
-      prisma.repositoryAssignment.findMany({
+      prisma.gitRepoAssignment.findMany({
         where: {
-          repository: { classroom_id: classroomId, student_id: { in: studentIds } },
+          git_repo: { classroom_id: classroomId, student_id: { in: studentIds } },
           closed_at: { gte: earliest, lte: now },
         },
         select: { closed_at: true },
       }),
       prisma.assignmentGrade.findMany({
         where: {
-          repository_assignment: {
-            repository: { classroom_id: classroomId, student_id: { in: studentIds } },
+          git_repo_assignment: {
+            git_repo: { classroom_id: classroomId, student_id: { in: studentIds } },
           },
           created_at: { gte: earliest, lte: now },
         },
         select: {
           created_at: true,
-          repository_assignment: { select: { closed_at: true } },
+          git_repo_assignment: { select: { closed_at: true } },
         },
       }),
-      prisma.repositoryAssignment.findMany({
+      prisma.gitRepoAssignment.findMany({
         where: {
-          repository: { classroom_id: classroomId, student_id: { in: studentIds } },
+          git_repo: { classroom_id: classroomId, student_id: { in: studentIds } },
           assignment: { student_deadline: { lt: now, gte: earliest } },
           status: 'OPEN',
           grades: { none: {} },
         },
         select: {
-          repository: { select: { student_id: true } },
+          git_repo: { select: { student_id: true } },
           assignment: { select: { student_deadline: true } },
         },
       }),
@@ -312,7 +312,7 @@ export async function cohortOverview(classroomId: string): Promise<CohortOvervie
   }
   for (const s of weeklySnapshots) {
     if (!s.last_commit_at) continue;
-    const sid = s.repository_assignment.repository.student_id;
+    const sid = s.git_repo_assignment.git_repo.student_id;
     if (!sid) continue;
     const idx = bucketIndex(s.last_commit_at, bins);
     if (idx >= 0) activeSetsPerBin[idx].add(sid);
@@ -331,7 +331,7 @@ export async function cohortOverview(classroomId: string): Promise<CohortOvervie
 
   const ttgPerBin: Array<number[]> = Array.from({ length: WEEKS }, () => []);
   for (const g of weeklyGrades) {
-    const closed = g.repository_assignment.closed_at;
+    const closed = g.git_repo_assignment.closed_at;
     if (!closed) continue;
     const idx = bucketIndex(g.created_at, bins);
     if (idx < 0) continue;
@@ -348,7 +348,7 @@ export async function cohortOverview(classroomId: string): Promise<CohortOvervie
   const atRiskSeries = bins.map(bin => {
     const byStudent = new Map<string, number>();
     for (const r of pastDueOpen) {
-      const sid = r.repository.student_id;
+      const sid = r.git_repo.student_id;
       const dl = r.assignment.student_deadline;
       if (!sid || !dl) continue;
       if (dl.getTime() <= bin.end.getTime()) {
@@ -389,16 +389,16 @@ export async function assignmentHealth(classroomId: string): Promise<AssignmentH
 
   const [assignments, studentCountRow, emojiMap] = await Promise.all([
     prisma.assignment.findMany({
-      where: { module: { classroom_id: classroomId } },
+      where: { repository: { classroom_id: classroomId } },
       select: {
         id: true,
         title: true,
-        repository_assignments: {
+        git_repo_assignments: {
           select: {
             id: true,
             closed_at: true,
             status: true,
-            repository: { select: { student_id: true } },
+            git_repo: { select: { student_id: true } },
             grades: {
               select: { emoji: true, created_at: true },
               orderBy: { created_at: 'asc' },
@@ -417,7 +417,7 @@ export async function assignmentHealth(classroomId: string): Promise<AssignmentH
   const enrolled = studentCountRow || 0;
 
   return assignments.map(a => {
-    const ras = a.repository_assignments;
+    const ras = a.git_repo_assignments;
     const submitted = ras.filter(r => r.closed_at !== null).length;
     const submissionRate = enrolled > 0 ? submitted / enrolled : 0;
 
@@ -481,15 +481,15 @@ export async function taOps(classroomId: string): Promise<TaOpsRow[]> {
     prisma.assignmentGrade.findMany({
       where: {
         grader_id: { in: taIds },
-        repository_assignment: {
-          repository: { classroom_id: classroomId },
+        git_repo_assignment: {
+          git_repo: { classroom_id: classroomId },
         },
       },
       select: {
         grader_id: true,
         emoji: true,
         created_at: true,
-        repository_assignment: {
+        git_repo_assignment: {
           select: {
             closed_at: true,
             regrade_requests: { select: { status: true } },
@@ -515,8 +515,8 @@ export async function taOps(classroomId: string): Promise<TaOpsRow[]> {
 
     const ttg = grades
       .map(g =>
-        g.repository_assignment.closed_at
-          ? (g.created_at.getTime() - g.repository_assignment.closed_at.getTime()) / 3_600_000
+        g.git_repo_assignment.closed_at
+          ? (g.created_at.getTime() - g.git_repo_assignment.closed_at.getTime()) / 3_600_000
           : null
       )
       .filter((v): v is number => v !== null && v >= 0);
@@ -525,7 +525,7 @@ export async function taOps(classroomId: string): Promise<TaOpsRow[]> {
     let overturned = 0;
     let withRegrade = 0;
     for (const g of grades) {
-      const reqs = g.repository_assignment.regrade_requests;
+      const reqs = g.git_repo_assignment.regrade_requests;
       if (reqs.length > 0) {
         withRegrade += 1;
         if (reqs.some(r => r.status === 'APPROVED')) overturned += 1;
@@ -603,7 +603,7 @@ export async function deadlinePressure(classroomId: string): Promise<DeadlinePre
 
   const assignments = await prisma.assignment.findMany({
     where: {
-      module: { classroom_id: classroomId },
+      repository: { classroom_id: classroomId },
       student_deadline: { gte: now, lte: in7 },
     },
     select: { id: true, title: true, student_deadline: true },

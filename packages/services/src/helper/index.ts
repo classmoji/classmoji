@@ -18,20 +18,20 @@ interface DeleteRepositoryPayload {
   deleteFromGithub?: boolean;
 }
 
-interface RepositoryAssignmentGraderPayload {
+interface GitRepoAssignmentGraderPayload {
   repoName: string;
   gitOrganization: HelperGitOrganization;
   githubIssueNumber: number;
   graderLogin: string;
   graderId: string;
-  repositoryAssignmentId: string;
+  gitRepoAssignmentId: string;
 }
 
 interface HelperClassroomRef {
   id: string;
 }
 
-interface RepositoryAssignmentRef {
+interface GitRepoAssignmentRef {
   id: string;
   studentId?: string | null;
   teamId?: string | null;
@@ -39,7 +39,7 @@ interface RepositoryAssignmentRef {
 
 interface GradeAssignmentPayload {
   classroom: HelperClassroomRef;
-  repositoryAssignment: RepositoryAssignmentRef;
+  gitRepoAssignment: GitRepoAssignmentRef;
   graderId: string;
   grade: string;
   studentId?: string;
@@ -48,7 +48,7 @@ interface GradeAssignmentPayload {
 
 interface TokenAssignmentPayload {
   organization: HelperClassroomRef;
-  repositoryAssignment: RepositoryAssignmentRef;
+  gitRepoAssignment: GitRepoAssignmentRef;
   grade: string;
   studentId: string;
 }
@@ -87,7 +87,7 @@ interface GradeWithTokenTransaction {
 
 interface RemoveGradePayload {
   classroom: HelperClassroomRef;
-  repositoryAssignment: RepositoryAssignmentRef;
+  gitRepoAssignment: GitRepoAssignmentRef;
   grade: GradeWithTokenTransaction;
 }
 
@@ -99,15 +99,15 @@ class HelperService {
         const gitProvider = getGitProvider(gitOrganization);
         await gitProvider.deleteRepository(gitOrganization.login, repoName);
       }
-      if (payload?.id) return ClassmojiService.repository.deleteById(payload.id);
+      if (payload?.id) return ClassmojiService.gitRepo.deleteById(payload.id);
     } catch (error: unknown) {
-      console.error('Error deleting repository:', error);
+      console.error('Error deleting git_repo:', error);
       throw error;
     }
   }
 
-  static async addGraderToRepositoryAssignment(
-    payload: RepositoryAssignmentGraderPayload
+  static async addGraderToGitRepoAssignment(
+    payload: GitRepoAssignmentGraderPayload
   ): Promise<unknown> {
     const {
       repoName,
@@ -115,7 +115,7 @@ class HelperService {
       githubIssueNumber,
       graderLogin,
       graderId,
-      repositoryAssignmentId,
+      gitRepoAssignmentId,
     } = payload;
 
     const gitProvider = getGitProvider(gitOrganization);
@@ -123,14 +123,14 @@ class HelperService {
       graderLogin,
     ]);
 
-    return ClassmojiService.repositoryAssignmentGrader.addGraderToAssignment(
-      repositoryAssignmentId,
+    return ClassmojiService.gitRepoAssignmentGrader.addGraderToAssignment(
+      gitRepoAssignmentId,
       graderId
     );
   }
 
-  static async removeGraderFromRepositoryAssignment(
-    payload: RepositoryAssignmentGraderPayload
+  static async removeGraderFromGitRepoAssignment(
+    payload: GitRepoAssignmentGraderPayload
   ): Promise<unknown> {
     const {
       repoName,
@@ -138,7 +138,7 @@ class HelperService {
       githubIssueNumber,
       graderLogin,
       graderId,
-      repositoryAssignmentId,
+      gitRepoAssignmentId,
     } = payload;
 
     const gitProvider = getGitProvider(gitOrganization);
@@ -146,20 +146,20 @@ class HelperService {
       graderLogin,
     ]);
 
-    return ClassmojiService.repositoryAssignmentGrader.removeGraderFromAssignment(
-      repositoryAssignmentId,
+    return ClassmojiService.gitRepoAssignmentGrader.removeGraderFromAssignment(
+      gitRepoAssignmentId,
       graderId
     );
   }
 
-  static async addGradeToRepositoryAssignment(payload: GradeAssignmentPayload): Promise<void> {
-    const { classroom, repositoryAssignment, graderId, grade, studentId, teamId } = payload;
-    if (await ClassmojiService.assignmentGrade.doesGradeExist(repositoryAssignment.id, grade)) {
+  static async addGradeToGitRepoAssignment(payload: GradeAssignmentPayload): Promise<void> {
+    const { classroom, gitRepoAssignment, graderId, grade, studentId, teamId } = payload;
+    if (await ClassmojiService.assignmentGrade.doesGradeExist(gitRepoAssignment.id, grade)) {
       return;
     }
 
     const assignmentGrade = await ClassmojiService.assignmentGrade.addGrade(
-      repositoryAssignment.id,
+      gitRepoAssignment.id,
       graderId,
       grade
     );
@@ -168,7 +168,7 @@ class HelperService {
       this.assignTokensToStudent(
         {
           organization: classroom,
-          repositoryAssignment,
+          gitRepoAssignment,
           grade,
           studentId,
         },
@@ -178,7 +178,7 @@ class HelperService {
       this.assignTokensToTeam(
         {
           organization: classroom,
-          repositoryAssignment,
+          gitRepoAssignment,
           grade,
           teamId,
         },
@@ -191,7 +191,7 @@ class HelperService {
     payload: TokenAssignmentPayload,
     assignmentGrade: AssignmentGradeRef
   ): Promise<void> {
-    const { organization, repositoryAssignment, grade } = payload;
+    const { organization, gitRepoAssignment, grade } = payload;
 
     const emojiMapping = (await ClassmojiService.emojiMapping.findByClassroomId(
       organization.id,
@@ -207,7 +207,7 @@ class HelperService {
         studentId: payload.studentId,
         amount: emoji.extra_tokens,
         description: `Tokens for getting a ${grade}.`,
-        repositoryAssignmentId: repositoryAssignment.id,
+        gitRepoAssignmentId: gitRepoAssignment.id,
       };
 
       const tokenTransaction = await ClassmojiService.token.assignToStudent(data);
@@ -222,7 +222,7 @@ class HelperService {
     payload: TeamTokenAssignmentPayload,
     assignmentGrade: AssignmentGradeRef
   ): Promise<void> {
-    const { organization, repositoryAssignment, grade, teamId } = payload;
+    const { organization, gitRepoAssignment, grade, teamId } = payload;
 
     const emojiMapping = (await ClassmojiService.emojiMapping.findByClassroomId(
       organization.id,
@@ -244,7 +244,7 @@ class HelperService {
           studentId: membership.user_id,
           amount: emoji.extra_tokens,
           description: `Tokens for getting a ${grade}.`,
-          repositoryAssignmentId: repositoryAssignment.id,
+          gitRepoAssignmentId: gitRepoAssignment.id,
         };
 
         const tokenTransaction = await ClassmojiService.token.assignToStudent(data);
@@ -262,15 +262,15 @@ class HelperService {
     }
   }
 
-  static async removeGradeFromRepositoryAssignment(payload: RemoveGradePayload): Promise<void> {
-    const { classroom, repositoryAssignment, grade } = payload;
+  static async removeGradeFromGitRepoAssignment(payload: RemoveGradePayload): Promise<void> {
+    const { classroom, gitRepoAssignment, grade } = payload;
 
     await ClassmojiService.assignmentGrade.removeGrade(grade.id);
     // Remove tokens
     if (!grade.token_transaction) return;
 
-    const studentId = repositoryAssignment.studentId;
-    const teamId = repositoryAssignment.teamId;
+    const studentId = gitRepoAssignment.studentId;
+    const teamId = gitRepoAssignment.teamId;
 
     if (studentId) {
       const data = {
@@ -278,7 +278,7 @@ class HelperService {
         studentId,
         amount: grade.token_transaction.amount * -1,
         description: `Removing ${grade.emoji}.`,
-        repositoryAssignmentId: repositoryAssignment.id,
+        gitRepoAssignmentId: gitRepoAssignment.id,
         type: 'REMOVAL',
       };
 
@@ -293,7 +293,7 @@ class HelperService {
           studentId: membership.user_id,
           amount: grade.token_transaction.amount * -1,
           description: `Removing ${grade.emoji}.`,
-          repositoryAssignmentId: repositoryAssignment.id,
+          gitRepoAssignmentId: gitRepoAssignment.id,
           type: 'REMOVAL',
         };
 

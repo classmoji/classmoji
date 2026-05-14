@@ -4,13 +4,13 @@ import * as notificationService from './notification.service.ts';
 
 export const create = async ({
   classroom_id,
-  repository_assignment_id,
+  git_repo_assignment_id,
   student_id,
   student_comment,
   previous_grade,
 }: {
   classroom_id: string;
-  repository_assignment_id: string;
+  git_repo_assignment_id: string;
   student_id: string;
   student_comment?: string | null;
   previous_grade?: string[];
@@ -18,7 +18,7 @@ export const create = async ({
   const request = await getPrisma().regradeRequest.create({
     data: {
       classroom_id,
-      repository_assignment_id,
+      git_repo_assignment_id,
       student_id,
       student_comment,
       previous_grade,
@@ -26,17 +26,17 @@ export const create = async ({
   });
 
   await notificationService.runSafely('regrade request notification', async () => {
-    const graders = await getPrisma().repositoryAssignmentGrader.findMany({
-      where: { repository_assignment_id },
+    const graders = await getPrisma().gitRepoAssignmentGrader.findMany({
+      where: { git_repo_assignment_id },
       select: { grader_id: true },
     });
     const graderIds = graders.map(g => g.grader_id);
     if (graderIds.length > 0) {
-      const repoAssignment = await getPrisma().repositoryAssignment.findUnique({
-        where: { id: repository_assignment_id },
+      const repoAssignment = await getPrisma().gitRepoAssignment.findUnique({
+        where: { id: git_repo_assignment_id },
         select: {
           assignment: { select: { title: true } },
-          repository: { select: { name: true } },
+          git_repo: { select: { name: true } },
         },
       });
       await notificationService.createNotifications({
@@ -45,7 +45,7 @@ export const create = async ({
         recipientUserIds: graderIds,
         resourceType: 'regrade_request',
         resourceId: request.id,
-        title: `Regrade request: ${repoAssignment?.assignment.title ?? 'Assignment'} - ${repoAssignment?.repository.name ?? ''}`,
+        title: `Regrade request: ${repoAssignment?.assignment.title ?? 'Assignment'} - ${repoAssignment?.git_repo.name ?? ''}`,
       });
     }
   });
@@ -57,10 +57,10 @@ export const findMany = async (query: Prisma.RegradeRequestWhereInput) => {
   return getPrisma().regradeRequest.findMany({
     where: query,
     include: {
-      repository_assignment: {
+      git_repo_assignment: {
         include: {
           assignment: true,
-          repository: true,
+          git_repo: true,
           graders: {
             include: {
               grader: true,

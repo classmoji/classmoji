@@ -1,14 +1,14 @@
 /**
  * AssignmentGrade Service (formerly IssueGrade)
  *
- * Manages grades for RepositoryAssignments
+ * Manages grades for GitRepoAssignments
  */
 import getPrisma from '@classmoji/database';
 import type { Prisma } from '@prisma/client';
 
 /**
- * Add a grade to a RepositoryAssignment
- * @param {string} repositoryAssignmentId - UUID of the RepositoryAssignment
+ * Add a grade to a GitRepoAssignment
+ * @param {string} repositoryAssignmentId - UUID of the GitRepoAssignment
  * @param {string} graderId - UUID of the grader User
  * @param {string} emoji - Emoji grade
  * @returns {Promise<Object>}
@@ -16,7 +16,7 @@ import type { Prisma } from '@prisma/client';
 export const addGrade = async (repositoryAssignmentId: string, graderId: string, emoji: string) => {
   return getPrisma().assignmentGrade.create({
     data: {
-      repository_assignment_id: repositoryAssignmentId,
+      git_repo_assignment_id: repositoryAssignmentId,
       grader_id: graderId,
       emoji: emoji,
     },
@@ -36,14 +36,14 @@ export const removeGrade = async (id: string) => {
 
 /**
  * Check if a grade with a specific emoji already exists
- * @param {string} repositoryAssignmentId - UUID of the RepositoryAssignment
+ * @param {string} repositoryAssignmentId - UUID of the GitRepoAssignment
  * @param {string} emoji - Emoji to check
  * @returns {Promise<boolean>}
  */
 export const doesGradeExist = async (repositoryAssignmentId: string, emoji: string) => {
   const grades = await getPrisma().assignmentGrade.findMany({
     where: {
-      repository_assignment_id: repositoryAssignmentId,
+      git_repo_assignment_id: repositoryAssignmentId,
       emoji: emoji,
     },
   });
@@ -64,27 +64,27 @@ export const update = async (id: string, data: Prisma.AssignmentGradeUncheckedUp
 };
 
 /**
- * Remove all grades from a RepositoryAssignment
- * @param {string} repositoryAssignmentId - UUID of the RepositoryAssignment
+ * Remove all grades from a GitRepoAssignment
+ * @param {string} repositoryAssignmentId - UUID of the GitRepoAssignment
  * @returns {Promise<{count: number}>}
  */
 export const removeAllGrades = async (repositoryAssignmentId: string) => {
   return getPrisma().assignmentGrade.deleteMany({
     where: {
-      repository_assignment_id: repositoryAssignmentId,
+      git_repo_assignment_id: repositoryAssignmentId,
     },
   });
 };
 
 /**
- * Find grades by RepositoryAssignment
- * @param {string} repositoryAssignmentId - UUID of the RepositoryAssignment
+ * Find grades by GitRepoAssignment
+ * @param {string} repositoryAssignmentId - UUID of the GitRepoAssignment
  * @returns {Promise<Object[]>}
  */
 export const findByAssignmentId = async (repositoryAssignmentId: string) => {
   return getPrisma().assignmentGrade.findMany({
     where: {
-      repository_assignment_id: repositoryAssignmentId,
+      git_repo_assignment_id: repositoryAssignmentId,
     },
     include: {
       grader: true,
@@ -103,7 +103,7 @@ export const findById = async (id: string) => {
     where: { id },
     include: {
       grader: true,
-      repository_assignment: true,
+      git_repo_assignment: true,
       token_transaction: true,
     },
   });
@@ -125,9 +125,9 @@ export const findOrphanedGradeEmojis = async (classroomId: string) => {
   // Find grades in this classroom that use emojis not in the valid set
   const grades = await getPrisma().assignmentGrade.findMany({
     where: {
-      repository_assignment: {
+      git_repo_assignment: {
         assignment: {
-          module: {
+          repository: {
             classroom_id: classroomId,
           },
         },
@@ -169,9 +169,9 @@ export const remapGradeEmojis = async (
     const gradesToUpdate = await getPrisma().assignmentGrade.findMany({
       where: {
         emoji: oldEmoji,
-        repository_assignment: {
+        git_repo_assignment: {
           assignment: {
-            module: {
+            repository: {
               classroom_id: classroomId,
             },
           },
