@@ -469,7 +469,7 @@ export const setPublished = async (id: string, isPublished: boolean) => {
     await notificationService.runSafely('repository publish notification', async () => {
       const studentIds = await notificationService.getStudentsInClassroom(mod.classroom_id);
       await notificationService.createNotifications({
-        type: isPublished ? 'MODULE_PUBLISHED' : 'MODULE_UNPUBLISHED',
+        type: isPublished ? 'REPOSITORY_PUBLISHED' : 'REPOSITORY_UNPUBLISHED',
         classroomId: mod.classroom_id,
         recipientUserIds: studentIds,
         resourceType: 'repository',
