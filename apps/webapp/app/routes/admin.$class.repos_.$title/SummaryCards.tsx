@@ -1,6 +1,14 @@
 import { Tag, Button, Progress } from 'antd';
 import { IconBrandGithub } from '@tabler/icons-react';
 import { useFetcher, useParams } from 'react-router';
+import { ClassmojiService } from '@classmoji/services';
+
+type RepositoryWithAssignments = NonNullable<
+  Awaited<ReturnType<typeof ClassmojiService.repository.findBySlugAndTitle>>
+>;
+type GitRepoWithAssignments = Awaited<
+  ReturnType<typeof ClassmojiService.gitRepo.findByRepository>
+>[number];
 
 interface CardProps {
   title: string;
@@ -30,32 +38,9 @@ const StatItem = ({ label, value }: StatItemProps) => (
   </div>
 );
 
-interface Assignment {
-  id: string;
-}
-
-interface GitRepoAssignment {
-  assignment_id: string;
-  status: string;
-}
-
-interface GitRepoSummary {
-  project_id?: string | null;
-  assignments?: GitRepoAssignment[];
-  [key: string]: unknown;
-}
-
-interface Repository {
-  id: string;
-  type: string;
-  weight: number;
-  project_template_id?: string | null;
-  assignments?: Assignment[];
-}
-
 interface SummaryCardsProps {
-  repository: Repository;
-  repos: GitRepoSummary[];
+  repository: RepositoryWithAssignments;
+  repos: GitRepoWithAssignments[];
 }
 
 const SummaryCards = ({ repository, repos }: SummaryCardsProps) => {
@@ -65,7 +50,7 @@ const SummaryCards = ({ repository, repos }: SummaryCardsProps) => {
   // Count total submissions across all assignments in the repository
   const allAssignments = repository.assignments || [];
   const totalSubmissions = allAssignments.reduce(
-    (total: number, assignment: Assignment) =>
+    (total, assignment) =>
       total +
       repos.filter(repo =>
         repo.assignments?.some(

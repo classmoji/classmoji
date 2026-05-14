@@ -158,10 +158,7 @@ const SingleModule = ({ loaderData }: Route.ComponentProps) => {
       </div>
       <Divider />
 
-      <SummaryCards
-        repository={repository as unknown as Parameters<typeof SummaryCards>[0]['repository']}
-        repos={repos as unknown as Parameters<typeof SummaryCards>[0]['repos']}
-      />
+      <SummaryCards repository={repository!} repos={repos} />
 
       {/* View Toggle */}
       <div className="flex justify-end items-center mb-6">
