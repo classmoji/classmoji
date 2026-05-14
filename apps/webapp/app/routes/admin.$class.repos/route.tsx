@@ -198,7 +198,7 @@ const AdminAssignments = ({ loaderData }: Route.ComponentProps) => {
       </Modal>
       <>
         {fetcherData?.triggerSession?.numReposToDelete && (
-          <TriggerProgress operation="DELETE_REPOS" validIdentifiers={['delete_repository']} />
+          <TriggerProgress operation="DELETE_REPOS" validIdentifiers={['delete_git_repo']} />
         )}
 
         {(fetcherData?.triggerSession?.numReposToCreate ||
@@ -206,10 +206,10 @@ const AdminAssignments = ({ loaderData }: Route.ComponentProps) => {
           <TriggerProgress
             operation="PUBLISH_OR_SYNC_ASSIGNMENT"
             validIdentifiers={[
-              'gh-create_repository',
-              'cf-create_repository',
-              'gh-create_issue',
-              'cf-create_issue',
+              'gh-create_git_repo',
+              'cf-create_git_repo',
+              'gh-create_git_repo_assignment',
+              'cf-create_git_repo_assignment',
               'gh-add_collaborator_to_repo',
             ]}
           />

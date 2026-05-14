@@ -222,7 +222,7 @@ const SingleModule = ({ loaderData }: Route.ComponentProps) => {
         />
       )}
 
-      <TriggerProgress operation="UPDATE_REPOS" validIdentifiers={['update_repository']} />
+      <TriggerProgress operation="UPDATE_REPOS" validIdentifiers={['update_git_repo']} />
 
       <TriggerProgress
         operation="CALCULATE_REPO_CONTRIBUTIONS"
@@ -231,7 +231,7 @@ const SingleModule = ({ loaderData }: Route.ComponentProps) => {
 
       <TriggerProgress
         operation="ASSIGN_GRADERS_TO_ASSIGNMENTS"
-        validIdentifiers={['add_grader_to_repository_assignment']}
+        validIdentifiers={['add_grader_to_git_repo_assignment']}
         callback={() => setTimeout(() => revalidate(), 100)}
       />
 

@@ -504,7 +504,7 @@ const GithubRepositories = ({ loaderData }: Route.ComponentProps) => {
 
       <TriggerProgress
         operation="DELETE_REPOS"
-        validIdentifiers={['delete_repository']}
+        validIdentifiers={['delete_git_repo']}
         callback={() => {
           revalidate();
         }}
