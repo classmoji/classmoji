@@ -174,7 +174,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
       }
 
       // Trigger repository creation workflow
-      await tasks.trigger('create_repositories', {
+      await tasks.trigger('create_git_repos', {
         logins: [teamSlug],
         assignmentTitle: repository.title,
         org: classSlug,

@@ -69,8 +69,8 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
 
     async createProjects() {
       // Trigger the backfill task to create projects for repos without them
-      const handle = await tasks.trigger('gh-create_projects_for_module', {
-        moduleId: data.moduleId,
+      const handle = await tasks.trigger('gh-create_projects_for_repository', {
+        repositoryId: data.repositoryId,
         classroomSlug: classSlug,
       });
 

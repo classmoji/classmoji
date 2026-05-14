@@ -552,7 +552,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
       };
 
       try {
-        const run = await tasks.trigger('delete_repository', payload);
+        const run = await tasks.trigger('delete_git_repo', payload);
 
         await waitForRunCompletion(run.id);
 
@@ -561,7 +561,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
           success: 'Repository deleted',
         };
       } catch (error: unknown) {
-        console.error('delete_repository failed:', error);
+        console.error('delete_git_repo failed:', error);
         return {
           action: ActionTypes.DELETE_REPO,
           error: 'Failed to delete repository. Please try again.',

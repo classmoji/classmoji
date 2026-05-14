@@ -83,7 +83,7 @@ const SummaryCards = ({ repository, repos }: SummaryCardsProps) => {
   const handleCreateProjects = () => {
     fetcher.submit(
       {
-        moduleId: repository.id,
+        repositoryId: repository.id,
       },
       {
         action: `/admin/${classSlug}/repos/${title}?/createProjects`,
