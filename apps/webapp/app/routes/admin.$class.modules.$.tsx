@@ -1,8 +1,6 @@
-import { redirect, type LoaderFunctionArgs } from 'react-router';
+import type { LoaderFunctionArgs } from 'react-router';
+import { redirectModulesToRepos } from '~/utils/redirects.server';
 
 export async function loader({ params, request }: LoaderFunctionArgs) {
-  const url = new URL(request.url);
-  const splat = params['*'] ?? '';
-  const target = `/admin/${params.class}/repos${splat ? `/${splat}` : ''}${url.search}`;
-  return redirect(target, { status: 301 });
+  return redirectModulesToRepos('admin', params.class, params['*'], request);
 }
