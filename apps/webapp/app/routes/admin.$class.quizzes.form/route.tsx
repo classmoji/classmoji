@@ -44,7 +44,7 @@ export async function loader({ params, request }: Route.LoaderArgs) {
   });
 
   // Fetch modules for linking
-  const modules = await ClassmojiService.module.findByClassroomId(classroom.id);
+  const modules = await ClassmojiService.repository.findByClassroomId(classroom.id);
   const examplePrompts = getExamplePrompts();
 
   // If editing, fetch the quiz data
@@ -59,7 +59,7 @@ export async function loader({ params, request }: Route.LoaderArgs) {
     quiz = {
       id: quiz.id,
       name: quiz.name,
-      moduleId: quiz.module_id?.toString() || null,
+      moduleId: quiz.repository_id?.toString() || null,
       systemPrompt: quiz.system_prompt,
       rubricPrompt: quiz.rubric_prompt,
       subject: quiz.subject || '',
@@ -114,7 +114,7 @@ function QuizFormDrawer({ loaderData }: Route.ComponentProps) {
       difficultyLevel: values.difficultyLevel,
       questionCount: values.questionCount,
       includeCodeContext: values.includeCodeContext,
-      module: linkedModule
+      repository: linkedModule
         ? {
             title: linkedModule.title,
             template: linkedModule.template,
@@ -343,9 +343,9 @@ function QuizFormDrawer({ loaderData }: Route.ComponentProps) {
                   tooltip="Optionally link this quiz to a specific module"
                 >
                   <Select placeholder="Select a module to link this quiz to (optional)" allowClear>
-                    {assignments?.map((module: { id: string; title: string }) => (
-                      <Option key={module.id} value={module.id}>
-                        {module.title}
+                    {assignments?.map((repository: { id: string; title: string }) => (
+                      <Option key={repository.id} value={repository.id}>
+                        {repository.title}
                       </Option>
                     ))}
                   </Select>

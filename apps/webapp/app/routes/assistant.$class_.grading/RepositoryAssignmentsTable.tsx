@@ -54,7 +54,7 @@ interface RepositoryInfo {
   student?: StudentOrTeam | null;
   team?: StudentOrTeam | null;
   student_id?: string | null;
-  module: { title: string };
+  repository: { title: string };
 }
 
 interface RepoAssignment {
@@ -63,7 +63,7 @@ interface RepoAssignment {
   assignment_id: string;
   assignment: AssignmentInfo;
   grades: GradeEntry[];
-  repository: RepositoryInfo;
+  git_repo: RepositoryInfo;
   provider_issue_number?: number;
 }
 
@@ -238,8 +238,8 @@ const RepositoryAssignmentsTable = ({
     if (!userQuery.trim()) return base;
     const q = userQuery.toLowerCase();
     return base.filter(a => {
-      const student = a.repository?.student;
-      const team = a.repository?.team;
+      const student = a.git_repo?.student;
+      const team = a.git_repo?.team;
       return (
         student?.name?.toLowerCase().includes(q) ||
         student?.login?.toLowerCase().includes(q) ||
@@ -331,7 +331,7 @@ const RepositoryAssignmentsTable = ({
           ? modules.map(({ title }: ModuleItem) => ({ text: title, value: title }))
           : undefined,
       onFilter: (value: React.Key | boolean, record: RepoAssignment) =>
-        record.repository.module.title === value,
+        record.git_repo.repository.title === value,
     },
     {
       title: 'Assignment',
@@ -416,9 +416,9 @@ const RepositoryAssignmentsTable = ({
             repositoryAssignment={{
               id: repoAssignment.id,
               assignment_id: repoAssignment.assignment_id,
-              studentId: repoAssignment.repository.student_id ?? undefined,
+              studentId: repoAssignment.git_repo.student_id ?? undefined,
               grades: repoAssignment.grades,
-              repository: repoAssignment.repository,
+              repository: repoAssignment.git_repo,
             }}
             emojiMappings={emojiMappings as Record<string, unknown>}
           />

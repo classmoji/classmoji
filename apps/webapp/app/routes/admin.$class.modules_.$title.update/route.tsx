@@ -18,7 +18,7 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
 
   const url = new URL(request.url);
   const moduleId = url.searchParams.get('id');
-  const module = await ClassmojiService.module.findById(moduleId!);
+  const module = await ClassmojiService.repository.findById(moduleId!);
   return { module };
 };
 
@@ -124,7 +124,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
     }
   );
 
-  const repositories = await ClassmojiService.repository.findByModule(classSlug!, module.id);
+  const repositories = await ClassmojiService.gitRepo.findByRepository(classSlug!, module.id);
   const [templateOwner, templateRepo] = module.template.split('/');
 
   const payloads = repositories.map(repo => {

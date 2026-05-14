@@ -23,7 +23,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
         await getPrisma().pageLink.create({
           data: {
             page_id: resourceId,
-            module_id: targetType === 'module' ? targetId : null,
+            repository_id: targetType === 'module' ? targetId : null,
             assignment_id: targetType === 'assignment' ? targetId : null,
           },
         });
@@ -31,7 +31,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
         await getPrisma().slideLink.create({
           data: {
             slide_id: resourceId,
-            module_id: targetType === 'module' ? targetId : null,
+            repository_id: targetType === 'module' ? targetId : null,
             assignment_id: targetType === 'assignment' ? targetId : null,
           },
         });

@@ -47,9 +47,9 @@ export const mockModules = [
     is_extra_credit: false,
     drop_lowest_count: 0,
     assignments: [
-      { id: 101, title: 'Setup', weight: 30, module_id: 1 },
-      { id: 102, title: 'Implementation', weight: 50, module_id: 1 },
-      { id: 103, title: 'Testing', weight: 20, module_id: 1 },
+      { id: 101, title: 'Setup', weight: 30, repository_id: 1 },
+      { id: 102, title: 'Implementation', weight: 50, repository_id: 1 },
+      { id: 103, title: 'Testing', weight: 20, repository_id: 1 },
     ],
   },
   {
@@ -60,8 +60,8 @@ export const mockModules = [
     is_extra_credit: false,
     drop_lowest_count: 0,
     assignments: [
-      { id: 201, title: 'Part A', weight: 50, module_id: 2 },
-      { id: 202, title: 'Part B', weight: 50, module_id: 2 },
+      { id: 201, title: 'Part A', weight: 50, repository_id: 2 },
+      { id: 202, title: 'Part B', weight: 50, repository_id: 2 },
     ],
   },
   {
@@ -71,7 +71,7 @@ export const mockModules = [
     is_published: true,
     is_extra_credit: false,
     drop_lowest_count: 0,
-    assignments: [{ id: 301, title: 'Exercise', weight: 100, module_id: 3 }],
+    assignments: [{ id: 301, title: 'Exercise', weight: 100, repository_id: 3 }],
   },
   {
     id: 4,
@@ -81,10 +81,10 @@ export const mockModules = [
     is_extra_credit: false,
     drop_lowest_count: 1,
     assignments: [
-      { id: 401, title: 'Problem 1', weight: 25, module_id: 4 },
-      { id: 402, title: 'Problem 2', weight: 25, module_id: 4 },
-      { id: 403, title: 'Problem 3', weight: 25, module_id: 4 },
-      { id: 404, title: 'Problem 4', weight: 25, module_id: 4 },
+      { id: 401, title: 'Problem 1', weight: 25, repository_id: 4 },
+      { id: 402, title: 'Problem 2', weight: 25, repository_id: 4 },
+      { id: 403, title: 'Problem 3', weight: 25, repository_id: 4 },
+      { id: 404, title: 'Problem 4', weight: 25, repository_id: 4 },
     ],
   },
   {
@@ -95,9 +95,9 @@ export const mockModules = [
     is_extra_credit: false,
     drop_lowest_count: 0,
     assignments: [
-      { id: 501, title: 'Q1', weight: 33, module_id: 5 },
-      { id: 502, title: 'Q2', weight: 33, module_id: 5 },
-      { id: 503, title: 'Q3', weight: 34, module_id: 5 },
+      { id: 501, title: 'Q1', weight: 33, repository_id: 5 },
+      { id: 502, title: 'Q2', weight: 33, repository_id: 5 },
+      { id: 503, title: 'Q3', weight: 34, repository_id: 5 },
     ],
   },
   {
@@ -108,8 +108,8 @@ export const mockModules = [
     is_extra_credit: false,
     drop_lowest_count: 0,
     assignments: [
-      { id: 601, title: 'Part 1', weight: 50, module_id: 6 },
-      { id: 602, title: 'Part 2', weight: 50, module_id: 6 },
+      { id: 601, title: 'Part 1', weight: 50, repository_id: 6 },
+      { id: 602, title: 'Part 2', weight: 50, repository_id: 6 },
     ],
   },
   {
@@ -119,7 +119,7 @@ export const mockModules = [
     is_published: true,
     is_extra_credit: false,
     drop_lowest_count: 0,
-    assignments: [{ id: 701, title: 'Exam', weight: 100, module_id: 7 }],
+    assignments: [{ id: 701, title: 'Exam', weight: 100, repository_id: 7 }],
   },
   {
     id: 8,
@@ -129,9 +129,9 @@ export const mockModules = [
     is_extra_credit: false,
     drop_lowest_count: 0,
     assignments: [
-      { id: 801, title: 'Design', weight: 30, module_id: 8 },
-      { id: 802, title: 'Code Quality', weight: 40, module_id: 8 },
-      { id: 803, title: 'Documentation', weight: 30, module_id: 8 },
+      { id: 801, title: 'Design', weight: 30, repository_id: 8 },
+      { id: 802, title: 'Code Quality', weight: 40, repository_id: 8 },
+      { id: 803, title: 'Documentation', weight: 30, repository_id: 8 },
     ],
   },
   {
@@ -142,8 +142,8 @@ export const mockModules = [
     is_extra_credit: false,
     drop_lowest_count: 0,
     assignments: [
-      { id: 901, title: 'Implementation', weight: 60, module_id: 9 },
-      { id: 902, title: 'Testing', weight: 40, module_id: 9 },
+      { id: 901, title: 'Implementation', weight: 60, repository_id: 9 },
+      { id: 902, title: 'Testing', weight: 40, repository_id: 9 },
     ],
   },
   {
@@ -153,7 +153,7 @@ export const mockModules = [
     is_published: true,
     is_extra_credit: false,
     drop_lowest_count: 0,
-    assignments: [{ id: 1001, title: 'Final Exam', weight: 100, module_id: 10 }],
+    assignments: [{ id: 1001, title: 'Final Exam', weight: 100, repository_id: 10 }],
   },
   {
     id: 11,
@@ -162,7 +162,7 @@ export const mockModules = [
     is_published: true,
     is_extra_credit: true,
     drop_lowest_count: 0,
-    assignments: [{ id: 1101, title: 'Bonus Task', weight: 100, module_id: 11 }],
+    assignments: [{ id: 1101, title: 'Bonus Task', weight: 100, repository_id: 11 }],
   },
 ];
 
@@ -271,8 +271,8 @@ function generateStudentData(index: number) {
 
     return {
       id: module.id * 100 + index,
-      module_id: module.id,
-      module: {
+      repository_id: module.id,
+      repository: {
         id: module.id,
         title: module.title,
         weight: module.weight,

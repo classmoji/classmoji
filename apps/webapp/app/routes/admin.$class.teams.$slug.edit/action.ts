@@ -118,7 +118,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
       }
 
       const teamWithRepos = await ClassmojiService.team.findByIdWithRepositories(team.id);
-      const repositories = teamWithRepos?.repositories ?? [];
+      const repositories = teamWithRepos?.git_repos ?? [];
 
       const gitProvider = getGitProvider(classroom.git_organization);
 

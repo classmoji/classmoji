@@ -22,22 +22,22 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
     action: 'view_submission_analytics',
   });
 
-  const repoAssignment = await getPrisma().repositoryAssignment.findUnique({
+  const repoAssignment = await getPrisma().gitRepoAssignment.findUnique({
     where: { id: repoAssignmentId },
     include: {
       assignment: true,
-      repository: {
+      git_repo: {
         include: {
           student: true,
           team: true,
-          module: true,
+          repository: true,
         },
       },
       analytics_snapshot: true,
     },
   });
 
-  if (!repoAssignment || repoAssignment.repository.classroom_id !== classroom.id) {
+  if (!repoAssignment || repoAssignment.git_repo.classroom_id !== classroom.id) {
     throw new Response('Submission not found', { status: 404 });
   }
 
@@ -53,10 +53,10 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
   return {
     classSlug,
     repoAssignmentId,
-    repoName: repoAssignment.repository.name,
+    repoName: repoAssignment.git_repo.name,
     assignmentTitle: repoAssignment.assignment.title,
     deadline: repoAssignment.assignment.student_deadline?.toISOString() ?? null,
-    repositoryId: repoAssignment.repository.id,
+    repositoryId: repoAssignment.git_repo.id,
     snapshot,
     students,
   };

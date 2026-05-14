@@ -5,7 +5,7 @@ import {
   getDroppedRepositoryAssignments,
   isRepositoryAssignmentDropped,
 } from '@classmoji/utils';
-import type { RepositoryAssignment, OrganizationSettings, GradeEntry } from '@classmoji/utils';
+import type { GitRepoAssignment, OrganizationSettings, GradeEntry } from '@classmoji/utils';
 import { EmojisDisplay, GradeBadge } from '~/components';
 import { Tag, Tooltip } from 'antd';
 import type { TableProps } from 'antd';
@@ -13,10 +13,10 @@ import type { TableProps } from 'antd';
 type EmojiMappings = Record<string, number>;
 type ViewMode = string;
 
-/** Extended RepositoryAssignment with fields used in the grades table */
-interface GradeRepoAssignment extends RepositoryAssignment {
+/** Extended GitRepoAssignment with fields used in the grades table */
+interface GradeRepoAssignment extends GitRepoAssignment {
   assignment_id: string | number;
-  assignment: RepositoryAssignment['assignment'] & { title?: string };
+  assignment: GitRepoAssignment['assignment'] & { title?: string };
 }
 
 interface ModuleData {
@@ -43,8 +43,8 @@ interface ModuleInfo {
 }
 
 interface StudentRepository {
-  module_id: string | number;
-  module: ModuleInfo;
+  repository_id: string | number;
+  repository: ModuleInfo;
   assignments: GradeRepoAssignment[];
 }
 
@@ -56,7 +56,7 @@ interface StudentRecord {
  * Calculates the grade for a specific repository assignment with late penalties applied
  */
 const calculateRepositoryAssignmentGrade = (
-  repoAssignment: RepositoryAssignment,
+  repoAssignment: GitRepoAssignment,
   emojiMappings: EmojiMappings,
   settings: OrganizationSettings
 ) => {
@@ -72,7 +72,7 @@ const calculateRepositoryAssignmentGrade = (
  * Renders the grade display based on view mode
  */
 const renderGradeCell = (
-  repoAssignment: RepositoryAssignment | undefined,
+  repoAssignment: GitRepoAssignment | undefined,
   view: ViewMode,
   emojiMappings: EmojiMappings,
   settings: OrganizationSettings,
@@ -113,7 +113,7 @@ const renderGradeCell = (
  * Creates column definitions for individual assignments within a module
  */
 const createRepositoryAssignmentColumns = (
-  module: ModuleData,
+  repository: ModuleData,
   view: ViewMode,
   emojiMappings: EmojiMappings,
   settings: OrganizationSettings,
@@ -121,15 +121,15 @@ const createRepositoryAssignmentColumns = (
 ) => {
   if (!showAssignments) return [];
 
-  return (module.assignments || []).map((assignment: AssignmentData) => ({
+  return (repository.assignments || []).map((assignment: AssignmentData) => ({
     title: `${assignment.title} (${assignment.weight}%)`,
     dataIndex: assignment.title,
     hidden: !showAssignments,
     width: 140,
     ellipsis: true,
     sorter: (a: StudentRecord, b: StudentRecord) => {
-      const repoA = a.repositories.find(repo => repo.module_id === module.id);
-      const repoB = b.repositories.find(repo => repo.module_id === module.id);
+      const repoA = a.repositories.find(repo => repo.repository_id === repository.id);
+      const repoB = b.repositories.find(repo => repo.repository_id === repository.id);
 
       const repoAssignmentA = repoA?.assignments?.find(
         (ra: GradeRepoAssignment) => ra.assignment_id === assignment.id
@@ -148,13 +148,13 @@ const createRepositoryAssignmentColumns = (
       return (gradeA ?? -1) - (gradeB ?? -1);
     },
     render: (_: unknown, student: StudentRecord) => {
-      const repository = student.repositories.find(repo => repo.module_id === module.id);
+      const studentRepo = student.repositories.find(repo => repo.repository_id === repository.id);
 
-      if (!repository) {
+      if (!studentRepo) {
         return <span className="text-red-500 italic">None</span>;
       }
 
-      const repoAssignment = repository.assignments?.find(
+      const repoAssignment = studentRepo.assignments?.find(
         (ra: GradeRepoAssignment) => ra.assignment_id === assignment.id
       );
 
@@ -162,10 +162,10 @@ const createRepositoryAssignmentColumns = (
       const dropped = repoAssignment
         ? isRepositoryAssignmentDropped(
             repoAssignment.id,
-            repository.assignments,
+            studentRepo.assignments,
             emojiMappings,
             settings,
-            repository.module
+            studentRepo.repository
           )
         : false;
 
@@ -178,7 +178,7 @@ const createRepositoryAssignmentColumns = (
  * Creates the total/average column for a module
  */
 const createModuleTotalColumn = (
-  module: ModuleData,
+  repository: ModuleData,
   emojiMappings: EmojiMappings,
   settings: OrganizationSettings,
   showAssignments: boolean
@@ -191,40 +191,40 @@ const createModuleTotalColumn = (
     width: 120,
     ellipsis: true,
     sorter: (a: StudentRecord, b: StudentRecord) => {
-      const repoA = a.repositories.find(repo => repo.module_id === module.id);
-      const repoB = b.repositories.find(repo => repo.module_id === module.id);
+      const repoA = a.repositories.find(repo => repo.repository_id === repository.id);
+      const repoB = b.repositories.find(repo => repo.repository_id === repository.id);
 
       const gradeA = repoA
-        ? calculateRepositoryGrade(repoA.assignments, emojiMappings, settings, repoA.module)
+        ? calculateRepositoryGrade(repoA.assignments, emojiMappings, settings, repoA.repository)
         : -1;
       const gradeB = repoB
-        ? calculateRepositoryGrade(repoB.assignments, emojiMappings, settings, repoB.module)
+        ? calculateRepositoryGrade(repoB.assignments, emojiMappings, settings, repoB.repository)
         : -1;
 
       return gradeA - gradeB;
     },
     render: (_: unknown, student: StudentRecord) => {
-      const repository = student.repositories.find(repo => repo.module_id === module.id);
+      const studentRepo = student.repositories.find(repo => repo.repository_id === repository.id);
 
-      if (!repository) {
+      if (!studentRepo) {
         return <span className="text-red-500 italic">None</span>;
       }
 
       const grade = calculateRepositoryGrade(
-        repository.assignments,
+        studentRepo.assignments,
         emojiMappings,
         settings,
-        repository.module
+        studentRepo.repository
       );
 
       if (grade < 0) return null;
 
       // Get dropped assignments for this student
       const droppedAssignmentIds = getDroppedRepositoryAssignments(
-        repository.assignments,
+        studentRepo.assignments,
         emojiMappings,
         settings,
-        repository.module
+        studentRepo.repository
       );
       const hasDroppedAssignments = droppedAssignmentIds.length > 0;
 
@@ -242,7 +242,7 @@ const createModuleTotalColumn = (
                   </div>
                   <div className="text-xs">
                     {droppedAssignmentIds.map(id => {
-                      const repoAssignment = repository.assignments?.find(
+                      const repoAssignment = studentRepo.assignments?.find(
                         (ra: GradeRepoAssignment) => ra.id === id
                       );
                       return (
@@ -271,29 +271,29 @@ const createModuleTotalColumn = (
  */
 
 export const createAssignmentColumns = (
-  modules: ModuleData[],
+  repositories: ModuleData[],
   view: ViewMode,
   showAssignments: boolean,
   emojiMappings: EmojiMappings,
   settings: OrganizationSettings
 ): TableProps<StudentRecord>['columns'] => {
-  return modules
-    .filter((module: ModuleData) => module.is_published)
-    .map((module: ModuleData) => {
+  return repositories
+    .filter((repository: ModuleData) => repository.is_published)
+    .map((repository: ModuleData) => {
       const assignmentColumns = createRepositoryAssignmentColumns(
-        module,
+        repository,
         view,
         emojiMappings,
         settings,
         showAssignments
       );
 
-      const totalColumn = createModuleTotalColumn(module, emojiMappings, settings, showAssignments);
+      const totalColumn = createModuleTotalColumn(repository, emojiMappings, settings, showAssignments);
 
       return {
         title: (
           <span className="font-semibold">
-            {module.title} ({module.weight}%)
+            {repository.title} ({repository.weight}%)
           </span>
         ),
         align: 'left' as const,
@@ -304,33 +304,33 @@ export const createAssignmentColumns = (
           ? [...assignmentColumns, ...(totalColumn ? [totalColumn] : [])]
           : [],
         sorter: (a: StudentRecord, b: StudentRecord) => {
-          const repoA = a.repositories.find(repo => repo.module_id === module.id);
-          const repoB = b.repositories.find(repo => repo.module_id === module.id);
+          const repoA = a.repositories.find(repo => repo.repository_id === repository.id);
+          const repoB = b.repositories.find(repo => repo.repository_id === repository.id);
 
           let gradeA = repoA
-            ? calculateRepositoryGrade(repoA.assignments, emojiMappings, settings, repoA.module)
+            ? calculateRepositoryGrade(repoA.assignments, emojiMappings, settings, repoA.repository)
             : -1;
           let gradeB = repoB
-            ? calculateRepositoryGrade(repoB.assignments, emojiMappings, settings, repoB.module)
+            ? calculateRepositoryGrade(repoB.assignments, emojiMappings, settings, repoB.repository)
             : -1;
 
-          if (module.is_extra_credit) {
-            gradeA = gradeA >= 0 ? gradeA * (module.weight / 100) : -1;
-            gradeB = gradeB >= 0 ? gradeB * (module.weight / 100) : -1;
+          if (repository.is_extra_credit) {
+            gradeA = gradeA >= 0 ? gradeA * (repository.weight / 100) : -1;
+            gradeB = gradeB >= 0 ? gradeB * (repository.weight / 100) : -1;
           }
 
           return gradeA - gradeB;
         },
         render: (_: unknown, student: StudentRecord) => {
-          const repository = student.repositories.find(repo => repo.module_id === module.id);
+          const studentRepo = student.repositories.find(repo => repo.repository_id === repository.id);
 
-          if (!repository) {
+          if (!studentRepo) {
             return <span className="text-gray-500 italic">None</span>;
           }
 
           if (view === 'Emoji') {
             const allGrades =
-              repository.assignments?.flatMap((a: GradeRepoAssignment) => a.grades || []) || [];
+              studentRepo.assignments?.flatMap((a: GradeRepoAssignment) => a.grades || []) || [];
             if (allGrades.length === 0) {
               return <span className="text-gray-500 italic">None</span>;
             }
@@ -338,21 +338,21 @@ export const createAssignmentColumns = (
           }
 
           let grade = calculateRepositoryGrade(
-            repository.assignments,
+            studentRepo.assignments,
             emojiMappings,
             settings,
-            repository.module
+            studentRepo.repository
           );
 
-          if (module.is_extra_credit) {
-            grade = grade * (module.weight / 100);
+          if (repository.is_extra_credit) {
+            grade = grade * (repository.weight / 100);
           }
 
           if (grade < 0) return null;
 
           return (
             <span className="font-medium">
-              {module.is_extra_credit ? (
+              {repository.is_extra_credit ? (
                 <span className="text-green-600">+{grade.toFixed(1)}</span>
               ) : (
                 <GradeBadge grade={grade} />

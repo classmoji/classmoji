@@ -8,8 +8,8 @@ import { ClassmojiService } from '@classmoji/services';
 import Tasks from '@classmoji/tasks';
 
 type Classroom = NonNullable<Awaited<ReturnType<typeof ClassmojiService.classroom.findBySlug>>>;
-type Module = NonNullable<Awaited<ReturnType<typeof ClassmojiService.module.findById>>>;
-type Repository = Awaited<ReturnType<typeof ClassmojiService.repository.findByModule>>[number];
+type Repository = NonNullable<Awaited<ReturnType<typeof ClassmojiService.repository.findById>>>;
+type GitRepo = Awaited<ReturnType<typeof ClassmojiService.gitRepo.findByRepository>>[number];
 
 export const publishAssignment = async (
   classroomSlug: string,
@@ -19,14 +19,14 @@ export const publishAssignment = async (
   try {
     const sessionId = nanoid();
     const classroom = await ClassmojiService.classroom.findBySlug(classroomSlug);
-    const module = await ClassmojiService.module.findById(moduleId);
+    const module = await ClassmojiService.repository.findById(moduleId);
 
     invariant(module != null, 'Module not found');
 
     // If repos already exist (re-publish after unpublish), just flip the flag
-    const existingRepos = await ClassmojiService.repository.findByModule(classroomSlug, moduleId);
+    const existingRepos = await ClassmojiService.gitRepo.findByRepository(classroomSlug, moduleId);
     if (existingRepos.length > 0) {
-      await ClassmojiService.module.setPublished(moduleId, true);
+      await ClassmojiService.repository.setPublished(moduleId, true);
       return { success: 'Module re-published. Use Sync to update repositories.' };
     }
 
@@ -65,7 +65,7 @@ export const publishAssignment = async (
     } else if (module.team_formation_mode === 'SELF_FORMED') {
       // For self-formed teams, just mark module as published
       // Teams and repos will be created when students form their teams
-      await ClassmojiService.module.setPublished(moduleId, true);
+      await ClassmojiService.repository.setPublished(moduleId, true);
 
       return {
         success: 'Module published! Students can now form teams.',
@@ -125,7 +125,7 @@ export const syncAssignment = async (
   _userId: string | null = null
 ) => {
   const classroom = await ClassmojiService.classroom.findBySlug(classroomSlug);
-  const module = await ClassmojiService.module.findById(moduleId);
+  const module = await ClassmojiService.repository.findById(moduleId);
   const sessionId = nanoid();
 
   const accessToken = await auth.createPublicToken({
@@ -161,7 +161,7 @@ export const syncAssignment = async (
 const syncIndividualAssignment = async (
   classroomSlug: string,
   classroom: Classroom,
-  module: Module,
+  repository: Repository,
   sessionId: string
 ) => {
   // 1. Find students in classroom
@@ -170,8 +170,8 @@ const syncIndividualAssignment = async (
     'STUDENT'
   );
 
-  // 2. Find existing repos for module given classroom
-  const existingRepos = await ClassmojiService.repository.findByModule(classroomSlug, module.id);
+  // 2. Find existing repos for repository given classroom
+  const existingRepos = await ClassmojiService.gitRepo.findByRepository(classroomSlug, repository.id);
 
   // 3. Find students with missing repos and create missing repos
   const studentsWithMissingRepos = students.filter(
@@ -185,7 +185,7 @@ const syncIndividualAssignment = async (
         logins: studentsWithMissingRepos
           .map(user => user.login || '')
           .filter(login => login !== ''),
-        assignmentTitle: module.title,
+        assignmentTitle: repository.title,
         org: classroomSlug,
         sessionId,
       },
@@ -193,7 +193,7 @@ const syncIndividualAssignment = async (
     );
   }
   // 4. Find and create missing assignments
-  const missingAssignments = findMissingAssignments(module, existingRepos);
+  const missingAssignments = findMissingAssignments(repository, existingRepos);
 
   const numMissingAssignments = Object.values(missingAssignments).reduce(
     (acc: number, curr: { repos: unknown[] }) => {
@@ -216,14 +216,14 @@ const syncIndividualAssignment = async (
 const syncTeamAssignment = async (
   classroomSlug: string,
   classroom: Classroom,
-  module: Module,
+  repository: Repository,
   sessionId: string
 ) => {
   // 1. Find teams using tag
-  const teams = await ClassmojiService.organizationTag.findTeamsByTag(module.tag_id!);
+  const teams = await ClassmojiService.organizationTag.findTeamsByTag(repository.tag_id!);
 
-  // 2. Find existing repos for module given classroom
-  const existingRepos = await ClassmojiService.repository.findByModule(classroomSlug, module.id);
+  // 2. Find existing repos for repository given classroom
+  const existingRepos = await ClassmojiService.gitRepo.findByRepository(classroomSlug, repository.id);
 
   // 3. Find teams with missing repos and create missing repos
   const teamsWithMissingRepos = teams.filter(
@@ -234,7 +234,7 @@ const syncTeamAssignment = async (
     await Tasks.createRepositoriesTask.trigger(
       {
         logins: teamsWithMissingRepos.map(team => team.slug),
-        assignmentTitle: module.title,
+        assignmentTitle: repository.title,
         org: classroomSlug,
         sessionId,
       },
@@ -242,7 +242,7 @@ const syncTeamAssignment = async (
     );
 
   // 4. Find and create missing assignments
-  const missingAssignments = findMissingAssignments(module, existingRepos);
+  const missingAssignments = findMissingAssignments(repository, existingRepos);
   const numMissingAssignments = Object.values(missingAssignments).reduce(
     (acc: number, curr: { repos: unknown[] }) => {
       return acc + curr.repos.length;
@@ -264,13 +264,13 @@ const syncTeamAssignment = async (
 const syncSelfFormedTeamAssignment = async (
   classroomSlug: string,
   classroom: Classroom,
-  module: Module,
+  repository: Repository,
   sessionId: string
 ) => {
   // For self-formed teams, find teams by the module slug tag
   const tag = await ClassmojiService.organizationTag.findByClassroomIdAndName(
     classroom.id,
-    module.slug!
+    repository.slug!
   );
 
   if (!tag) {
@@ -284,8 +284,8 @@ const syncSelfFormedTeamAssignment = async (
   // Find teams using the tag
   const teams = await ClassmojiService.team.findByTagId(classroom.id, tag.id);
 
-  // Find existing repos for module given classroom
-  const existingRepos = await ClassmojiService.repository.findByModule(classroomSlug, module.id);
+  // Find existing repos for repository given classroom
+  const existingRepos = await ClassmojiService.gitRepo.findByRepository(classroomSlug, repository.id);
 
   // Find teams with missing repos and create missing repos
   const teamsWithMissingRepos = teams.filter(
@@ -296,7 +296,7 @@ const syncSelfFormedTeamAssignment = async (
     await Tasks.createRepositoriesTask.trigger(
       {
         logins: teamsWithMissingRepos.map(team => team.slug),
-        assignmentTitle: module.title,
+        assignmentTitle: repository.title,
         org: classroomSlug,
         sessionId,
       },
@@ -304,7 +304,7 @@ const syncSelfFormedTeamAssignment = async (
     );
 
   // Find and create missing assignments
-  const missingAssignments = findMissingAssignments(module, existingRepos);
+  const missingAssignments = findMissingAssignments(repository, existingRepos);
   const numMissingAssignments = Object.values(missingAssignments).reduce(
     (acc: number, curr: { repos: unknown[] }) => {
       return acc + curr.repos.length;
@@ -325,10 +325,10 @@ const syncSelfFormedTeamAssignment = async (
 
 // Internal helper functions
 const findMissingAssignments = (
-  module: Module,
-  repos: Repository[]
+  repository: Repository,
+  repos: GitRepo[]
 ): Record<string, MissingAssignmentEntry> => {
-  const keyed = _.keyBy(module.assignments, 'id');
+  const keyed = _.keyBy(repository.assignments, 'id');
   // Add `repos` array to each assignment entry for tracking missing assignments per repo
   const moduleAssignments = keyed as unknown as Record<string, MissingAssignmentEntry>;
   _.forEach(moduleAssignments, assignment => (assignment.repos = []));
@@ -341,7 +341,7 @@ const findMissingAssignments = (
     }
   }
 
-  repos.forEach((repo: Repository) => {
+  repos.forEach((repo: GitRepo) => {
     const moduleAssignmentIds = Object.keys(moduleAssignments);
 
     const repoAssignmentIds =
@@ -359,7 +359,7 @@ const findMissingAssignments = (
 
 interface MissingAssignmentEntry {
   id: string;
-  repos: Repository[];
+  repos: GitRepo[];
   [key: string]: unknown;
 }
 
@@ -372,7 +372,7 @@ const createMissingAssignments = async (
 
   Object.values(missingAssignments).forEach((assignment: MissingAssignmentEntry) => {
     const { repos, ...assignmentData } = assignment;
-    repos.forEach((repo: Repository) => {
+    repos.forEach((repo: GitRepo) => {
       const payload = {
         repoName: repo.name,
         assignment: assignmentData,

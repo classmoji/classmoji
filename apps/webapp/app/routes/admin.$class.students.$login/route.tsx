@@ -19,8 +19,8 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
   });
 
   const student = await ClassmojiService.user.findByLogin(login!);
-  const modules = await ClassmojiService.module.findByClassroomSlug(classSlug!);
-  const repositoryAssignments = await ClassmojiService.repositoryAssignment.findAllForStudent(
+  const modules = await ClassmojiService.repository.findByClassroomSlug(classSlug!);
+  const repositoryAssignments = await ClassmojiService.gitRepoAssignment.findAllForStudent(
     student!.id,
     classSlug!
   );

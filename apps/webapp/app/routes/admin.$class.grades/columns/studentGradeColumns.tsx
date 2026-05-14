@@ -1,5 +1,5 @@
 import { calculateStudentFinalGrade, calculateLetterGrade } from '@classmoji/utils';
-import type { Repository, OrganizationSettings, LetterGradeMappingEntry } from '@classmoji/utils';
+import type { GitRepo, OrganizationSettings, LetterGradeMappingEntry } from '@classmoji/utils';
 import { GradeBadge, InfoTooltip, EditableCell } from '~/components';
 import type { ReactNode } from 'react';
 
@@ -7,7 +7,7 @@ type EmojiMappings = Record<string, number>;
 
 interface StudentRecord {
   id: string | number;
-  repositories: Repository[];
+  repositories: GitRepo[];
 }
 
 interface Membership {

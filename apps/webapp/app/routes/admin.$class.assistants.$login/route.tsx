@@ -63,13 +63,13 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
 
   // Get their grading assignments
   const assignedGraderItems =
-    await ClassmojiService.repositoryAssignmentGrader.findAssignedByGrader(
+    await ClassmojiService.gitRepoAssignmentGrader.findAssignedByGrader(
       assistant.id,
       classroom.id
     );
 
   // Get overall progress stats for this grader
-  const gradersProgress = await ClassmojiService.repositoryAssignmentGrader.findGradersProgress(
+  const gradersProgress = await ClassmojiService.gitRepoAssignmentGrader.findGradersProgress(
     classroom.id
   );
   const assistantProgress = gradersProgress.find(g => g.login === login) || {
@@ -81,9 +81,9 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
   // Group assignments by module
   const assignmentsByModule: Record<string, ModuleAssignmentsGroup> = {};
   assignedGraderItems.forEach(item => {
-    const repoAssignment = item.repository_assignment;
-    const moduleName = repoAssignment?.repository?.module?.title || 'Uncategorized';
-    const moduleId = repoAssignment?.repository?.module?.id || 'uncategorized';
+    const repoAssignment = item.git_repo_assignment;
+    const moduleName = repoAssignment?.git_repo?.repository?.title || 'Uncategorized';
+    const moduleId = repoAssignment?.git_repo?.repository?.id || 'uncategorized';
 
     if (!assignmentsByModule[moduleId]) {
       assignmentsByModule[moduleId] = {
@@ -95,11 +95,11 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
     assignmentsByModule[moduleId].assignments.push({
       id: repoAssignment.id,
       studentName:
-        repoAssignment.repository?.student?.name ||
-        repoAssignment.repository?.team?.name ||
+        repoAssignment.git_repo?.student?.name ||
+        repoAssignment.git_repo?.team?.name ||
         'Unknown',
       studentLogin:
-        repoAssignment.repository?.student?.login || repoAssignment.repository?.team?.slug,
+        repoAssignment.git_repo?.student?.login || repoAssignment.git_repo?.team?.slug,
       assignmentTitle: repoAssignment.assignment?.title || 'Unknown Assignment',
       isGraded: repoAssignment.grades?.length > 0,
       gradeEmoji: repoAssignment.grades?.[0]?.emoji,

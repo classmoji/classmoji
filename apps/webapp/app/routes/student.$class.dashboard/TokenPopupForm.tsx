@@ -104,7 +104,7 @@ const TokenPopupForm = ({ repositoryAssignment, balance }: TokenPopupFormProps) 
         hours_purchased: purchaseHours,
         type: 'PURCHASE',
         description: `Purchase of ${purchaseHours} hour(s).`,
-        repository_assignment_id: repoAssignment.id,
+        git_repo_assignment_id: repoAssignment.id,
       },
       {
         method: 'post',

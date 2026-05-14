@@ -24,7 +24,7 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
     action: 'view_modules',
   });
 
-  const modules = await ClassmojiService.module.findByClassroomSlug(classSlug!);
+  const modules = await ClassmojiService.repository.findByClassroomSlug(classSlug!);
   return { modules };
 };
 
@@ -216,8 +216,8 @@ const AdminAssignments = ({ loaderData }: Route.ComponentProps) => {
         )}
 
         <AssignmentTable
-          assignments={modules.filter((module: { title: string }) =>
-            module.title.toLowerCase().includes(query.toLowerCase())
+          assignments={modules.filter((repository: { title: string }) =>
+            repository.title.toLowerCase().includes(query.toLowerCase())
           )}
         />
       </>

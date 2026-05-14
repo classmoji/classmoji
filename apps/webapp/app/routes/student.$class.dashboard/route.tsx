@@ -47,7 +47,7 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
       ClassmojiService.calendar
         .getClassroomCalendar(classroom.id, weekStart.toDate(), weekEnd.toDate(), userId)
         .catch(() => [] as unknown[]),
-      getPrisma().module.findMany({
+      getPrisma().repository.findMany({
         where: { classroom_id: classroom.id, is_published: true },
         include: {
           assignments: {
@@ -97,7 +97,7 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
     const upcomingByModule = allRepoAssignments
       .filter(ra => ra.status === 'OPEN' && ra.assignment?.student_deadline)
       .map(ra => ({
-        moduleId: ra.repository.module_id as string,
+        moduleId: ra.git_repo.repository_id as string,
         deadlineMs: new Date(ra.assignment.student_deadline as Date).getTime(),
       }))
       .filter(x => x.deadlineMs >= now)
@@ -137,8 +137,8 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
         graders: (ra.graders ?? []).map(g => ({ id: g.grader.id, name: g.grader.name })),
         grades: (ra.grades ?? []).map(g => ({ id: g.id, emoji: g.emoji })),
         issueUrl:
-          gitOrgLogin && ra.repository?.name
-            ? `https://github.com/${gitOrgLogin}/${ra.repository.name}/issues/${ra.provider_issue_number}`
+          gitOrgLogin && ra.git_repo?.name
+            ? `https://github.com/${gitOrgLogin}/${ra.git_repo.name}/issues/${ra.provider_issue_number}`
             : null,
       }));
 
@@ -155,8 +155,8 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
       if (!tag) continue;
       const userTeam = await ClassmojiService.team.findUserTeamByTag(classroom.id, tag.id, userId);
       if (userTeam) {
-        const teamRepoName = allRepoAssignments.find(ra => ra.repository?.module_id === m.id)
-          ?.repository?.name;
+        const teamRepoName = allRepoAssignments.find(ra => ra.git_repo?.repository_id === m.id)
+          ?.git_repo?.name;
         team = {
           moduleTitle: m.title,
           moduleSlug: m.slug,
@@ -180,7 +180,7 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
     }
 
     const resubmits: ResubmitItem[] = (regradeRequests as Array<Record<string, unknown>>).map(r => {
-      const ra = r.repository_assignment as { assignment?: { title?: string } } | undefined;
+      const ra = r.git_repo_assignment as { assignment?: { title?: string } } | undefined;
       return {
         id: String(r.id),
         assignmentTitle: ra?.assignment?.title ?? 'Assignment',
@@ -267,7 +267,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
       if (!data.amount || data.amount >= 0) {
         throw new Error('Invalid amount: Token spending amount must be negative.');
       }
-      if (!data.repository_assignment_id) {
+      if (!data.git_repo_assignment_id) {
         throw new Error('Missing repository assignment ID.');
       }
       if (String(data.classroom_id) !== String(classroom.id)) {

@@ -2,10 +2,10 @@ import { ClassmojiService, getGitProvider } from '@classmoji/services';
 import { tasks, auth } from '@trigger.dev/sdk';
 import { nanoid } from 'nanoid';
 
-export const calculateContributions = async (module: { id: string }, classroomSlug: string) => {
+export const calculateContributions = async (repository: { id: string }, classroomSlug: string) => {
   const sessionId = nanoid();
 
-  const repoNames = (await ClassmojiService.repository.findByModule(classroomSlug, module.id)).map(
+  const repoNames = (await ClassmojiService.gitRepo.findByRepository(classroomSlug, module.id)).map(
     repo => repo.name
   );
   const classroom = await ClassmojiService.classroom.findBySlug(classroomSlug);

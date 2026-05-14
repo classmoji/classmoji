@@ -19,7 +19,7 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
     attemptedAction: 'view_modules',
   });
 
-  const modules = await getPrisma().module.findMany({
+  const modules = await getPrisma().repository.findMany({
     where: { classroom_id: classroom.id, is_published: true },
     include: {
       assignments: {

@@ -54,7 +54,7 @@ export const notificationLink = (
       return `/${prefix}/${slug}/modules`;
     case 'page':
       return `/${prefix}/${slug}/pages/${n.resource_id}`;
-    case 'repository_assignment':
+    case 'git_repo_assignment':
       // TA grading queue only exists under the assistant route tree.
       return prefix === 'assistant' ? `/${prefix}/${slug}/grading` : `/${prefix}/${slug}`;
     case 'regrade_request':

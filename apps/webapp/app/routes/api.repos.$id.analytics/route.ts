@@ -14,11 +14,11 @@ import type { Route } from './+types/route';
 export const loader = async ({ params, request }: Route.LoaderArgs) => {
   const repoAssignmentId = params.id!;
 
-  const repoAssignment = await getPrisma().repositoryAssignment.findUnique({
+  const repoAssignment = await getPrisma().gitRepoAssignment.findUnique({
     where: { id: repoAssignmentId },
     include: {
       assignment: true,
-      repository: {
+      git_repo: {
         select: { id: true, classroom_id: true, classroom: { select: { slug: true } } },
       },
       analytics_snapshot: true,
@@ -34,15 +34,15 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
 
   await assertClassroomAccess({
     request,
-    classroomSlug: repoAssignment.repository.classroom.slug,
+    classroomSlug: repoAssignment.git_repo.classroom.slug,
     allowedRoles: ['OWNER', 'TEACHER', 'ASSISTANT'],
     resourceType: 'REPOSITORY_ASSIGNMENT',
     attemptedAction: 'view_submission_analytics',
-    metadata: { repository_assignment_id: repoAssignmentId },
+    metadata: { git_repo_assignment_id: repoAssignmentId },
   });
 
   const studentMemberships = await ClassmojiService.classroomMembership.findStudents(
-    repoAssignment.repository.classroom_id
+    repoAssignment.git_repo.classroom_id
   );
   const students = studentMemberships.map(m => ({
     id: m.user.id,
@@ -53,7 +53,7 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
   return Response.json({
     snapshot: repoAssignment.analytics_snapshot,
     deadline: repoAssignment.assignment.student_deadline?.toISOString() ?? null,
-    repositoryId: repoAssignment.repository.id,
+    repositoryId: repoAssignment.git_repo.id,
     students,
   });
 };

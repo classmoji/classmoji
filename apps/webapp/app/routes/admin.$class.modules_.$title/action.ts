@@ -36,13 +36,13 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
     },
 
     async addGrader() {
-      await HelperService.addGraderToRepositoryAssignment({
+      await HelperService.addGraderToGitRepoAssignment({
         repoName: data.repoName,
         gitOrganization: classroom.git_organization,
         githubIssueNumber: data.githubIssueNumber,
         graderLogin: data.graderLogin,
         graderId: data.graderId,
-        repositoryAssignmentId: data.repoAssignmentId,
+        gitRepoAssignmentId: data.repoAssignmentId,
       });
 
       return {
@@ -52,13 +52,13 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
     },
 
     async removeGrader() {
-      await HelperService.removeGraderFromRepositoryAssignment({
+      await HelperService.removeGraderFromGitRepoAssignment({
         repoName: data.repoName,
         gitOrganization: classroom.git_organization,
         githubIssueNumber: data.githubIssueNumber,
         graderLogin: data.graderLogin,
         graderId: data.graderId,
-        repositoryAssignmentId: data.repoAssignmentId,
+        gitRepoAssignmentId: data.repoAssignmentId,
       });
 
       return {

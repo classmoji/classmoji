@@ -107,9 +107,9 @@ const SingleStudentView = (props: SingleStudentViewProps) => {
   // Build repositories array for grade calculation
   // calculateGrades expects { module, assignments } where assignments is array of repository assignments
   const repositories = effectiveAssignments
-    .map(module => {
-      const assignments = effectiveIssuesGrouped[module.id] || [];
-      return { module, assignments };
+    .map(repository => {
+      const assignments = effectiveIssuesGrouped[repository.id] || [];
+      return { repository, assignments };
     })
     .filter(repo => repo.assignments.length > 0);
 
@@ -153,20 +153,20 @@ const SingleStudentView = (props: SingleStudentViewProps) => {
     {
       title: 'Repository Grade',
       key: 'repositoryGrade',
-      render: (_: unknown, module: StudentModule) => {
-        const repositoryAssignments = effectiveIssuesGrouped[module.id];
+      render: (_: unknown, repository: StudentModule) => {
+        const repositoryAssignments = effectiveIssuesGrouped[repository.id];
         const grade = calculateRepositoryGrade(
           repositoryAssignments,
           emojiMappings as Record<string, number>,
           settings as OrganizationSettings,
-          module
+          repository
         );
 
         if (grade === -1) return <Tag color="red">No Grade</Tag>;
 
-        if (module.is_extra_credit) {
+        if (repository.is_extra_credit) {
           return (
-            <span className="font-bold text-green-600">+ {(grade * module.weight) / 100}</span>
+            <span className="font-bold text-green-600">+ {(grade * repository.weight) / 100}</span>
           );
         }
 

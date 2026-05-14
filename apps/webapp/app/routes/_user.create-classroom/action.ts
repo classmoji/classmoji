@@ -100,7 +100,7 @@ export const action = checkAuth(async ({ request }: { request: Request }) => {
   let importResult = null;
   if (importConfig?.modules?.length > 0) {
     try {
-      importResult = await ClassmojiService.moduleImport.cloneModulesWithRelations(
+      importResult = await ClassmojiService.repositoryImport.cloneModulesWithRelations(
         classroom.id,
         importConfig.modules,
         { stripDeadlines: true }
@@ -134,9 +134,9 @@ export const action = checkAuth(async ({ request }: { request: Request }) => {
   let successMessage = 'Classroom created successfully!';
   if (importResult) {
     const parts = [];
-    if (importResult.modules.length > 0) {
+    if (importResult.repositories.length > 0) {
       parts.push(
-        `${importResult.modules.length} module${importResult.modules.length !== 1 ? 's' : ''}`
+        `${importResult.repositories.length} module${importResult.repositories.length !== 1 ? 's' : ''}`
       );
     }
     if (importResult.assignments.length > 0) {

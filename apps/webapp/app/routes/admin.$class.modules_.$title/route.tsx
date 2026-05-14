@@ -26,7 +26,7 @@ interface ModuleAssignmentSummary {
   grades_released: boolean;
   is_published: boolean;
   tokens_per_hour: number;
-  module_id: string;
+  repository_id: string;
   created_at: Date;
   updated_at: Date;
 }
@@ -39,8 +39,8 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
     action: 'view_module',
   });
 
-  const module = await ClassmojiService.module.findBySlugAndTitle(classSlug!, title!);
-  const repos = await ClassmojiService.repository.findByModule(classSlug!, module!.id);
+  const module = await ClassmojiService.repository.findBySlugAndTitle(classSlug!, title!);
+  const repos = await ClassmojiService.gitRepo.findByRepository(classSlug!, module!.id);
   const assistants = (
     await ClassmojiService.classroomMembership.findUsersByRole(classroom.id, 'ASSISTANT')
   ).filter(({ is_grader }) => is_grader);

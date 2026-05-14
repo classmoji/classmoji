@@ -5,7 +5,7 @@ interface KanbanCardProps {
   resource: {
     id: string;
     title: string;
-    links?: Array<{ id: string; module_id: string | null; assignment_id: string | null }>;
+    links?: Array<{ id: string; repository_id: string | null; assignment_id: string | null }>;
     [key: string]: unknown;
   };
   resourceType: string;

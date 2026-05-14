@@ -19,7 +19,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
 
   return namedAction(request, {
     async delete() {
-      await ClassmojiService.module.deleteById(assignmentId);
+      await ClassmojiService.repository.deleteById(assignmentId);
 
       return {
         success: 'Module deleted',
@@ -32,7 +32,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
     },
 
     async unpublish() {
-      await ClassmojiService.module.setPublished(assignmentId, false);
+      await ClassmojiService.repository.setPublished(assignmentId, false);
       return { success: 'Module unpublished' };
     },
 
@@ -53,7 +53,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
     async updateAssignment() {
       const { weight } = data;
 
-      const result = await ClassmojiService.module.update(assignmentId, { weight });
+      const result = await ClassmojiService.repository.update(assignmentId, { weight });
 
       return result;
     },
@@ -64,7 +64,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
         'STUDENT'
       );
       const student_ids = students.map(({ id }) => id);
-      const repositories = await ClassmojiService.repository.findMany({
+      const repositories = await ClassmojiService.gitRepo.findMany({
         classroom_id: classroom.id,
       });
 

@@ -10,7 +10,7 @@ import { createAssignmentColumns } from './columns/assignmentColumns';
 import { createStudentGradeColumns } from './columns/studentGradeColumns';
 import { calculateStudentFinalGrade } from '@classmoji/utils';
 import type { TableProps } from 'antd';
-import type { Repository, OrganizationSettings, LetterGradeMappingEntry } from '@classmoji/utils';
+import type { GitRepo, OrganizationSettings, LetterGradeMappingEntry } from '@classmoji/utils';
 import { useGlobalFetcher } from '~/hooks';
 
 interface ModuleData {
@@ -28,7 +28,7 @@ interface Student {
   login: string;
   email?: string;
   provider_email?: string;
-  repositories: Repository[];
+  repositories: GitRepo[];
   [key: string]: unknown;
 }
 
@@ -43,7 +43,7 @@ type EmojiMappings = Record<string, number>;
 
 interface GradesTableProps {
   emojiMappings: EmojiMappings;
-  modules: ModuleData[];
+  repositories: ModuleData[];
   students: Student[];
   settings: OrganizationSettings;
   letterGradeMappings: LetterGradeMappingEntry[];
@@ -53,7 +53,7 @@ interface GradesTableProps {
 const GradesTable = (props: GradesTableProps) => {
   const {
     emojiMappings,
-    modules: assignments,
+    repositories: assignments,
     students,
     settings,
     letterGradeMappings: initialLetterGradeMappings,

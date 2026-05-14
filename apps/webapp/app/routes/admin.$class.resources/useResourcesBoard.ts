@@ -2,7 +2,7 @@ import { useState, useMemo, useCallback } from 'react';
 
 interface ResourceLink {
   id: string;
-  module_id: string | null;
+  repository_id: string | null;
   assignment_id: string | null;
 }
 
@@ -25,7 +25,7 @@ interface ActiveCard {
 }
 
 export const useResourcesBoard = (
-  modules: ResourceModule[],
+  repositories: ResourceModule[],
   pages: Resource[],
   slides: Resource[]
 ) => {
@@ -51,11 +51,11 @@ export const useResourcesBoard = (
   const getModuleResources = useCallback(
     (moduleId: string) => {
       const modulePages = allPages.filter(page =>
-        page.links?.some(link => link.module_id === moduleId && !link.assignment_id)
+        page.links?.some(link => link.repository_id === moduleId && !link.assignment_id)
       );
 
       const moduleSlides = allSlides.filter(slide =>
-        slide.links?.some(link => link.module_id === moduleId && !link.assignment_id)
+        slide.links?.some(link => link.repository_id === moduleId && !link.assignment_id)
       );
 
       return { pages: modulePages, slides: moduleSlides };
@@ -84,7 +84,7 @@ export const useResourcesBoard = (
     (resource: Resource, _resourceType: string, targetType: string, targetId: string) => {
       return resource.links?.some(link =>
         targetType === 'module'
-          ? link.module_id === targetId && !link.assignment_id
+          ? link.repository_id === targetId && !link.assignment_id
           : link.assignment_id === targetId
       );
     },
@@ -95,7 +95,7 @@ export const useResourcesBoard = (
   const getLinkId = useCallback((resource: Resource, targetType: string, targetId: string) => {
     const link = resource.links?.find(link =>
       targetType === 'module'
-        ? link.module_id === targetId && !link.assignment_id
+        ? link.repository_id === targetId && !link.assignment_id
         : link.assignment_id === targetId
     );
     return link?.id;

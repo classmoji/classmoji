@@ -23,7 +23,7 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
   });
 
   // Get the module
-  const module = await ClassmojiService.module.findByClassroomSlugAndModuleSlug(
+  const module = await ClassmojiService.repository.findByClassroomSlugAndModuleSlug(
     classSlug,
     moduleSlug
   );
@@ -79,7 +79,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
   });
 
   // Get the module
-  const module = await ClassmojiService.module.findByClassroomSlugAndModuleSlug(
+  const module = await ClassmojiService.repository.findByClassroomSlugAndModuleSlug(
     classSlug,
     moduleSlug
   );

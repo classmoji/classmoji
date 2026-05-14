@@ -5,7 +5,7 @@ import KanbanCard from './KanbanCard';
 
 interface ResourceLink {
   id: string;
-  module_id: string | null;
+  repository_id: string | null;
   assignment_id: string | null;
 }
 
@@ -142,7 +142,7 @@ const AssignmentSection = ({
 };
 
 interface ModuleColumnProps {
-  module: { id: string; title: string };
+  repository: { id: string; title: string };
   modulePages: Resource[];
   moduleSlides: Resource[];
   assignments: AssignmentRef[];
@@ -157,7 +157,7 @@ interface ModuleColumnProps {
 }
 
 const ModuleColumn = ({
-  module,
+  repository,
   modulePages,
   moduleSlides,
   assignments,
@@ -178,7 +178,7 @@ const ModuleColumn = ({
       <div className="px-4 py-3 border-b border-gray-100 dark:border-neutral-700 flex items-center gap-2">
         <IconFolder size={18} className="text-gray-500 dark:text-gray-400" />
         <span className="flex-1 font-medium text-gray-800 dark:text-gray-200 truncate">
-          {module.title}
+          {repository.title}
         </span>
         <span className="text-xs text-gray-400 bg-gray-100 dark:bg-neutral-700 px-2 py-0.5 rounded-full">
           {totalCount}
@@ -191,28 +191,28 @@ const ModuleColumn = ({
           Module Level
         </div>
         <DropZone
-          id={`module-${module.id}`}
+          id={`module-${repository.id}`}
           targetType="module"
-          targetId={module.id}
+          targetId={repository.id}
           isOver={isOver}
           hasResources={moduleCount > 0}
         >
           {modulePages.map(page => (
             <KanbanCard
-              key={`page-${page.id}-module-${module.id}`}
+              key={`page-${page.id}-module-${repository.id}`}
               resource={page}
               resourceType="page"
-              linkId={getLinkId(page, 'module', module.id)}
+              linkId={getLinkId(page, 'module', repository.id)}
               onRemove={onRemoveLink}
               draggable={false}
             />
           ))}
           {moduleSlides.map(slide => (
             <KanbanCard
-              key={`slide-${slide.id}-module-${module.id}`}
+              key={`slide-${slide.id}-module-${repository.id}`}
               resource={slide}
               resourceType="slide"
-              linkId={getLinkId(slide, 'module', module.id)}
+              linkId={getLinkId(slide, 'module', repository.id)}
               onRemove={onRemoveLink}
               draggable={false}
             />
@@ -232,7 +232,7 @@ const ModuleColumn = ({
               <AssignmentSection
                 key={assignment.id}
                 assignment={assignment}
-                moduleId={module.id}
+                moduleId={repository.id}
                 pages={pages}
                 slides={slides}
                 getLinkId={getLinkId}

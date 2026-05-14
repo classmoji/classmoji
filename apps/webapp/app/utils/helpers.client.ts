@@ -1,10 +1,10 @@
 interface RepoAssignmentForGithub {
-  repository?: { name: string } | null;
+  git_repo?: { name: string } | null;
   provider_issue_number?: number;
 }
 
 interface RepoAssignmentWithModule {
-  assignment: { id: string; module_id?: string };
+  assignment: { id: string; repository_id?: string };
 }
 
 export const openRepositoryAssignmentInGithub = (
@@ -12,7 +12,7 @@ export const openRepositoryAssignmentInGithub = (
   repositoryAssignment: RepoAssignmentForGithub
 ) =>
   window.open(
-    `https://github.com/${org}/${repositoryAssignment.repository?.name}/issues/${repositoryAssignment.provider_issue_number}`,
+    `https://github.com/${org}/${repositoryAssignment.git_repo?.name}/issues/${repositoryAssignment.provider_issue_number}`,
     '_blank'
   );
 
@@ -47,7 +47,7 @@ export const groupByAssignment = (data: RepoAssignmentWithModule[]) => {
 
 export const groupByModule = (data: RepoAssignmentWithModule[]) => {
   return data.reduce((acc: Record<string, RepoAssignmentWithModule[]>, item) => {
-    const moduleId = item.assignment.module_id!;
+    const moduleId = item.assignment.repository_id!;
 
     if (!acc[moduleId]) {
       acc[moduleId] = [];

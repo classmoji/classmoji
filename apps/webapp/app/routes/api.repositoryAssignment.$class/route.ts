@@ -54,9 +54,9 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
 
       const { repositoryAssignment, graderId, grade, studentId, teamId } = data;
 
-      await HelperService.addGradeToRepositoryAssignment({
+      await HelperService.addGradeToGitRepoAssignment({
         classroom,
-        repositoryAssignment,
+        gitRepoAssignment: repositoryAssignment,
         graderId,
         grade,
         studentId,
@@ -81,9 +81,9 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
 
       const { grade, repositoryAssignment } = data;
 
-      await HelperService.removeGradeFromRepositoryAssignment({
+      await HelperService.removeGradeFromGitRepoAssignment({
         classroom,
-        repositoryAssignment,
+        gitRepoAssignment: repositoryAssignment,
         grade,
       });
 
@@ -100,13 +100,13 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
         allowedRoles: ['OWNER', 'TEACHER'],
         resourceType: 'REPOSITORY_ASSIGNMENT',
         attemptedAction: 'update_late_override',
-        metadata: { repository_assignment_id: data.repository_assignment_id },
+        metadata: { git_repo_assignment_id: data.git_repo_assignment_id },
       });
 
-      const { repository_assignment_id, is_late_override } = data;
+      const { git_repo_assignment_id, is_late_override } = data;
       const message = is_late_override ? 'Added override' : 'Removed override';
 
-      await ClassmojiService.repositoryAssignment.update(repository_assignment_id, {
+      await ClassmojiService.gitRepoAssignment.update(git_repo_assignment_id, {
         is_late_override,
       });
 

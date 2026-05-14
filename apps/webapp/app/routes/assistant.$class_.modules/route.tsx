@@ -7,7 +7,7 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
   const { class: classSlug } = params;
   const { classroom } = await requireClassroomTeachingTeam(request, classSlug!);
 
-  const modules = await getPrisma().module.findMany({
+  const modules = await getPrisma().repository.findMany({
     where: { classroom_id: classroom.id, is_published: true },
     include: {
       assignments: {

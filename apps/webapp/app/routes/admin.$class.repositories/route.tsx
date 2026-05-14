@@ -542,7 +542,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
   return namedAction(request, {
     async deleteSingleRepository() {
       const data = await request.json();
-      const repo = await ClassmojiService.repository.findByName(classSlug, data.name);
+      const repo = await ClassmojiService.gitRepo.findByName(classSlug, data.name);
 
       const payload = {
         name: data.name,

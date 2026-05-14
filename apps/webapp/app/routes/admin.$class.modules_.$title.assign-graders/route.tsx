@@ -19,7 +19,7 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
     action: 'view_grader_assignment',
   });
 
-  const module = await ClassmojiService.module.findBySlugAndTitle(classSlug!, title!);
+  const module = await ClassmojiService.repository.findBySlugAndTitle(classSlug!, title!);
   return { module };
 };
 

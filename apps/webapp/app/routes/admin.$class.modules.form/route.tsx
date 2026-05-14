@@ -27,16 +27,16 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
   let hasReposWithProjects = false;
 
   if (moduleTitle) {
-    module = await ClassmojiService.module.findBySlugAndTitle(classSlug!, moduleTitle, {
+    module = await ClassmojiService.repository.findBySlugAndTitle(classSlug!, moduleTitle, {
       includePages: true,
       includeSlides: true,
     });
 
     // Check if any repos have projects (for locking project template field)
     if (module) {
-      const reposWithProjects = await getPrisma().repository.count({
+      const reposWithProjects = await getPrisma().gitRepo.count({
         where: {
-          module_id: module.id,
+          repository_id: module.id,
           project_id: { not: null },
         },
       });
@@ -52,7 +52,7 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
     where: { classroom_id: classroom.id },
     include: {
       links: {
-        include: { module: true },
+        include: { repository: true },
       },
     },
     orderBy: { title: 'asc' },
@@ -163,11 +163,11 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
   const syncModuleContentLinks = async (moduleId: string) => {
     // Get current links for this module
     const currentPageLinks = await getPrisma().pageLink.findMany({
-      where: { module_id: moduleId },
+      where: { repository_id: moduleId },
       select: { page_id: true },
     });
     const currentSlideLinks = await getPrisma().slideLink.findMany({
-      where: { module_id: moduleId },
+      where: { repository_id: moduleId },
       select: { slide_id: true },
     });
 
@@ -190,7 +190,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
       await getPrisma().pageLink.createMany({
         data: pagesToAdd.map((pageId: string) => ({
           page_id: pageId,
-          module_id: moduleId,
+          repository_id: moduleId,
         })),
         skipDuplicates: true,
       });
@@ -200,7 +200,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
     if (pagesToRemove.length > 0) {
       await getPrisma().pageLink.deleteMany({
         where: {
-          module_id: moduleId,
+          repository_id: moduleId,
           page_id: { in: pagesToRemove },
         },
       });
@@ -211,7 +211,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
       await getPrisma().slideLink.createMany({
         data: slidesToAdd.map((slideId: string) => ({
           slide_id: slideId,
-          module_id: moduleId,
+          repository_id: moduleId,
         })),
         skipDuplicates: true,
       });
@@ -221,7 +221,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
     if (slidesToRemove.length > 0) {
       await getPrisma().slideLink.deleteMany({
         where: {
-          module_id: moduleId,
+          repository_id: moduleId,
           slide_id: { in: slidesToRemove },
         },
       });
@@ -310,7 +310,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
   return namedAction(request, {
     async create() {
       try {
-        const createdModule = await ClassmojiService.module.create({
+        const createdModule = await ClassmojiService.repository.create({
           ...moduleData,
           classroom_id: classroom.id,
           tag_id: tag || null,
@@ -338,7 +338,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
     },
     async update() {
       try {
-        await ClassmojiService.module.updateWithAssignments({
+        await ClassmojiService.repository.updateWithAssignments({
           ...moduleData,
           tag,
           assignments: assignments || [],

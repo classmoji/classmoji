@@ -28,7 +28,7 @@ export const assignGradersToAssignmentsHandler = async (
   const classroom = await ClassmojiService.classroom.findBySlug(classroomSlug);
   const gitOrganization = classroom!.git_organization;
 
-  const repoAssignments = await ClassmojiService.repositoryAssignment.findByAssignmentId(
+  const repoAssignments = await ClassmojiService.gitRepoAssignment.findByAssignmentId(
     selectedAssignmentId,
     classroomSlug
   );
@@ -40,28 +40,28 @@ export const assignGradersToAssignmentsHandler = async (
   });
 
   const taskPayloads = repoAssignments.map((repoAssignment, index) => {
-    const { repository } = repoAssignment;
+    const { git_repo } = repoAssignment;
 
     if (method === 'RANDOM') {
       return {
         payload: {
-          repoName: repository.name,
+          repoName: git_repo.name,
           gitOrganization,
           githubIssueNumber: repoAssignment.provider_issue_number,
-          repositoryAssignmentId: repoAssignment.id,
+          gitRepoAssignmentId: repoAssignment.id,
           graderLogin: graderLoginList[index].login!,
           graderId: graderLoginList[index].id!,
         },
         options: { tags: [`session_${sessionId}`] },
       };
     } else {
-      const isIndividualRepository = repository.student_id !== null;
+      const isIndividualRepository = git_repo.student_id !== null;
       let graderMatch;
 
       if (isIndividualRepository) {
-        graderMatch = graderLoginList.find(grader => grader.studentId === repository.student_id);
+        graderMatch = graderLoginList.find(grader => grader.studentId === git_repo.student_id);
       } else {
-        graderMatch = graderLoginList.find(grader => grader.teamId === repository.team_id);
+        graderMatch = graderLoginList.find(grader => grader.teamId === git_repo.team_id);
       }
 
       // Skip if no matching grader assignment found in template
@@ -73,10 +73,10 @@ export const assignGradersToAssignmentsHandler = async (
         ({ grader }: { grader: { id: string; login: string | null } }) => {
           return {
             payload: {
-              repoName: repository.name,
+              repoName: git_repo.name,
               gitOrganization,
               githubIssueNumber: repoAssignment.provider_issue_number,
-              repositoryAssignmentId: repoAssignment.id,
+              gitRepoAssignmentId: repoAssignment.id,
               graderLogin: grader.login,
               graderId: grader.id,
             },
@@ -121,14 +121,14 @@ const getGradersList = async (data: GetGradersData): Promise<GraderInfo[]> => {
       return assistants[index % assistants.length] as unknown as GraderInfo;
     });
   } else {
-    const templateRepoAssignments = await ClassmojiService.repositoryAssignment.findByAssignmentId(
+    const templateRepoAssignments = await ClassmojiService.gitRepoAssignment.findByAssignmentId(
       templateAssignmentId!,
       classroomSlug
     );
 
     graderLoginList = templateRepoAssignments.map(repoAssignment => ({
-      studentId: repoAssignment.repository.student_id,
-      teamId: repoAssignment.repository.team_id,
+      studentId: repoAssignment.git_repo.student_id,
+      teamId: repoAssignment.git_repo.team_id,
       graders: repoAssignment.graders as unknown as GraderInfo['graders'],
     }));
   }
