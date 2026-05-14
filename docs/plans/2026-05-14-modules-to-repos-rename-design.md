@@ -1,88 +1,68 @@
-# Rename `Module` → `Repo`
+# Rename `Module` → `Repository`, `Repository` → `GitRepo`
 
 ## Goal
 
-Rename the `Module` domain entity to `Repo` end-to-end: database schema, backend code, frontend routes/components, URLs, UI copy, and email notifications. Preserve all production data. Maintain backwards compatibility for existing URLs via 301 redirects for ~30 days.
+Swap two domain entities end-to-end:
 
-## Scope
+- `Module` → `Repository` (the course-level definition; today's `modules` table)
+- `Repository` → `GitRepo` (the per-student/team git repo; today's `repositories` table)
 
-Full rename. No partial / code-only variant.
+…and rename the related `Repository*` child models (`RepositoryAssignment` → `GitRepoAssignment`, etc.). Cover DB schema, backend code, frontend routes/components, URLs, UI copy, and email notifications. Preserve all production data. 301-redirect old URLs for ~30 days.
 
-## 1. Database (`packages/database`)
+URL slug: `/repos` (shorter than `/repositories`). UI copy: "Repository" / "Repositories".
 
-Single Prisma migration using metadata-only Postgres operations.
+## Naming map
 
-- `model Module` → `model Repo`; `@@map("modules")` → `@@map("repos")`.
-- All `module_id` FK columns → `repo_id`, with `@map("repo_id")` where the Prisma field name differs from the column.
-- Relation fields renamed: `module` → `repo`, `modules` → `repos`.
-- Affected tables (from schema grep): `modules`, plus child/related tables holding `module_id` (module items, `Page`, `Slide`, `Assignment`, join/scope rows with `@@unique([page_id, module_id, assignment_id])` etc.).
-- User/settings notification flag columns: `email_module_published` → `email_repo_published`, `email_module_unpublished` → `email_repo_unpublished`.
-- Indexes (`@@index([module_id])`) and unique constraints follow the renamed columns automatically when written as `@@index([repo_id])`.
-- Pre-deploy: take Neon snapshot. Prepare rollback migration that reverses the renames.
+| Today                          | After                       |
+| ------------------------------ | --------------------------- |
+| `model Module`                 | `model Repository`          |
+| table `modules`                | table `repositories`        |
+| column `module_id`             | column `repository_id`      |
+| `model Repository`             | `model GitRepo`             |
+| table `repositories`           | table `git_repos`           |
+| column `repository_id`         | column `git_repo_id`        |
+| `model RepositoryAssignment`   | `model GitRepoAssignment`   |
+| table `repository_assignments` | table `git_repo_assignments`|
+| column `repository_assignment_id` | column `git_repo_assignment_id` |
+| `model RepositoryContributorLink` | `model GitRepoContributorLink` |
+| table `repository_contributor_links` | table `git_repo_contributor_links` |
+| `model RepositoryAssignmentGrader` | `model GitRepoAssignmentGrader` |
+| table `repository_assignment_graders` | table `git_repo_assignment_graders` |
+| `model RepoAnalyticsSnapshot`  | `model GitRepoAnalyticsSnapshot` |
+| table `repo_analytics_snapshots` | table `git_repo_analytics_snapshots` |
+| URL `/modules*`                | URL `/repos*`               |
+| route param `$module`          | route param `$repo`         |
+| `email_module_published`       | `email_repository_published` |
+| `email_module_unpublished`     | `email_repository_unpublished` |
 
-Postgres `ALTER TABLE ... RENAME` and `ALTER TABLE ... RENAME COLUMN` are metadata-only — no row rewrite, no ID changes, near-instant even on large tables.
+## Migration ordering (critical)
 
-## 2. Shared packages
+The string `repositories` changes owners. The migration SQL must execute in this exact order, all inside a single transaction:
 
-- `packages/services`: rename functions (`getModule*` → `getRepo*`, etc.), types, exported identifiers, and any string keys.
-- `packages/utils`, `packages/auth`, `packages/content`: grep + rename references.
-- `packages/tasks` (Trigger.dev): rename workflows/jobs keyed on `module*`. Any in-flight queued jobs referencing the old name will fail post-deploy — drain the queue before cutover, or register a temporary alias handler.
+1. Rename old `Repository*` tables to their `git_repo*` names AND rename their `repository_id` FK columns to `git_repo_id` (and indexes/uniques).
+2. Rename `modules` → `repositories`, `module_id` → `repository_id`.
+3. Rename notification columns on the user/settings table.
 
-## 3. Webapp (`apps/webapp`)
+Postgres `ALTER TABLE RENAME` and `ALTER TABLE RENAME COLUMN` are metadata-only, so this is near-instant and data-preserving.
 
-Routes (rename directories and route params):
+## Sections (same as before)
 
-- `admin.$class.modules` → `admin.$class.repos`
-- `admin.$class.modules_.$title` → `admin.$class.repos_.$title`
-- `admin.$class.modules_.$title.assign-graders` → `…repos_.$title.assign-graders`
-- `admin.$class.modules_.$title.update` → `…repos_.$title.update`
-- `admin.$class.modules.form` → `admin.$class.repos.form`
-- `assistant.$class_.modules` → `assistant.$class_.repos`
-- `student.$class.modules` → `student.$class.repos`
-- `student.$class.modules_.$module.team` → `student.$class.repos_.$repo.team` (note `$module` param → `$repo`)
+1. **Database** — single Prisma migration following the ordering above. Pre-deploy: Neon snapshot + reverse migration prepared.
+2. **Shared packages** — `packages/services`, `packages/utils`, `packages/auth`, `packages/content`, `packages/tasks` (Trigger.dev — drain queue or alias old job names).
+3. **Webapp routes** — rename 8 route directories from `modules*` to `repos*`; `$module` param → `$repo`. Update `CommonLayout.tsx` bare-canvas list. Update Playwright specs.
+4. **UI copy** — all "Module"/"Modules" → "Repository"/"Repositories".
+5. **301 redirects** — `/admin|assistant|student/:class/modules*` → `…/repos*`. Keep ~30 days.
+6. **Other apps** — `apps/slides`, `apps/site`, `apps/hook-station`, `apps/pages`, `apps/ai-agent` (submodule, parallel PR if needed).
+7. **Email templates** — subject lines, body copy, variable names.
+8. **Deploy** — dev → staging verify → Neon snapshot → main → monitor 24h → remove redirects after 30 days.
 
-Other webapp updates:
+## Risk callouts
 
-- Nav items, page titles, breadcrumbs, empty states, button labels, toasts: "Module" → "Repo", "Modules" → "Repos".
-- `CommonLayout.tsx` bare-canvas list: add `repos` (and remove `modules` after redirect window).
-- Playwright specs in `apps/webapp/tests/**`: update selectors and URL assertions.
-
-## 4. URL redirects
-
-Add 301 redirects:
-
-- `/admin/:class/modules*` → `/admin/:class/repos*`
-- `/assistant/:class/modules*` → `/assistant/:class/repos*`
-- `/student/:class/modules*` → `/student/:class/repos*`
-
-Implement via a thin redirect route or a top-level `loader` in each role section. Keep for 30 days, then remove in a follow-up PR.
-
-## 5. Other apps
-
-- `apps/slides`, `apps/site`, `apps/hook-station`, `apps/pages`: grep + rename remaining references. Most are webapp-local; expect minimal churn.
-- `apps/ai-agent` (private submodule): parallel PR if it references the Prisma client or any `module*` identifiers.
-
-## 6. Email templates
-
-- Subject lines and body copy: "Module" → "Repo".
-- Template variable names tied to `module*` → `repo*`.
-- Notification preference UI labels updated accordingly (driven by the renamed columns from §1).
-
-## 7. Deploy sequence
-
-1. Merge code PR to `dev` → verify on staging (staging DB migration runs via `db:deploy`).
-2. Take prod Neon snapshot.
-3. Merge to `main` → Fly rolling deploy runs Prisma migration in lockstep with new code.
-4. Monitor logs and Sentry for `modules`-related errors for 24h.
-5. After ~30 days, remove the redirect shim in a follow-up PR.
-
-## Testing
-
-- Update existing Playwright e2e specs to new URLs and labels.
-- Manual smoke on staging: create repo, attach page/slide/assignment, publish, student view, receive notification email.
-- Verify `/modules*` URLs 301 to `/repos*`.
+- The `Repository` → `GitRepo` rename is the more dangerous half because more code touches it (GitHub sync, grading, analytics, RepositoryAssignment workflows). Lean on TypeScript: after schema rename, `npm run db:generate` will turn every stale reference into a compile error, which is the primary safety net.
+- Trigger.dev workflows may reference `Repository` types via `@classmoji/database`. Redeploy `packages/tasks` in the same window.
+- The `repo_analytics_snapshots` table name doesn't actually contain the word `repository` — it already says `repo`. We're renaming it to `git_repo_analytics_snapshots` for consistency with the rest of the `GitRepo*` family.
 
 ## Rollback
 
 - Code: revert PR.
-- DB: pre-prepared reverse migration (`RENAME repos TO modules`, column renames) and/or Neon snapshot restore.
+- DB: pre-written reverse migration that does the swap in reverse, and/or Neon snapshot restore.
