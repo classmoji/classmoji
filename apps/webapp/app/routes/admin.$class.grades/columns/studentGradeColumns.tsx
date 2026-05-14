@@ -7,7 +7,7 @@ type EmojiMappings = Record<string, number>;
 
 interface StudentRecord {
   id: string | number;
-  repositories: GitRepo[];
+  git_repos: GitRepo[];
 }
 
 interface Membership {
@@ -114,14 +114,14 @@ export const createStudentGradeColumns = (
       tooltip: 'Final grade takes into account late penalties.',
       width: 160,
       calculateGrade: (student: StudentRecord) =>
-        calculateStudentFinalGrade(student.repositories, emojiMappings, settings),
+        calculateStudentFinalGrade(student.git_repos, emojiMappings, settings),
       renderGrade: (grade: number) => {
         const letterGrade = calculateLetterGrade(grade, letterGradeMappings);
         return <span className="font-semibold text-lg">{letterGrade}</span>;
       },
       sorter: (a: StudentRecord, b: StudentRecord) => {
-        const gradeA = calculateStudentFinalGrade(a.repositories, emojiMappings, settings);
-        const gradeB = calculateStudentFinalGrade(b.repositories, emojiMappings, settings);
+        const gradeA = calculateStudentFinalGrade(a.git_repos, emojiMappings, settings);
+        const gradeB = calculateStudentFinalGrade(b.git_repos, emojiMappings, settings);
         return gradeA - gradeB;
       },
     }),
@@ -132,14 +132,14 @@ export const createStudentGradeColumns = (
       tooltip: 'Raw grade does not take into account late penalties.',
       width: 150,
       calculateGrade: (student: StudentRecord) =>
-        calculateStudentFinalGrade(student.repositories, emojiMappings, settings, false),
+        calculateStudentFinalGrade(student.git_repos, emojiMappings, settings, false),
       renderGrade: (grade: number) => {
         const letterGrade = calculateLetterGrade(grade, letterGradeMappings);
         return <span className="font-medium">{letterGrade}</span>;
       },
       sorter: (a: StudentRecord, b: StudentRecord) => {
-        const gradeA = calculateStudentFinalGrade(a.repositories, emojiMappings, settings, false);
-        const gradeB = calculateStudentFinalGrade(b.repositories, emojiMappings, settings, false);
+        const gradeA = calculateStudentFinalGrade(a.git_repos, emojiMappings, settings, false);
+        const gradeB = calculateStudentFinalGrade(b.git_repos, emojiMappings, settings, false);
         return gradeA - gradeB;
       },
     }),
@@ -150,17 +150,17 @@ export const createStudentGradeColumns = (
       tooltip: 'This does not take into account group assignments, only individual assignments.',
       width: 210,
       calculateGrade: (student: StudentRecord) =>
-        calculateStudentFinalGrade(student.repositories, emojiMappings, settings, true, false),
+        calculateStudentFinalGrade(student.git_repos, emojiMappings, settings, true, false),
       sorter: (a: StudentRecord, b: StudentRecord) => {
         const gradeA = calculateStudentFinalGrade(
-          a.repositories,
+          a.git_repos,
           emojiMappings,
           settings,
           true,
           false
         );
         const gradeB = calculateStudentFinalGrade(
-          b.repositories,
+          b.git_repos,
           emojiMappings,
           settings,
           true,
@@ -176,10 +176,10 @@ export const createStudentGradeColumns = (
       tooltip: 'This takes into account both individual and group assignments.',
       width: 210,
       calculateGrade: (student: StudentRecord) =>
-        calculateStudentFinalGrade(student.repositories, emojiMappings, settings),
+        calculateStudentFinalGrade(student.git_repos, emojiMappings, settings),
       sorter: (a: StudentRecord, b: StudentRecord) => {
-        const gradeA = calculateStudentFinalGrade(a.repositories, emojiMappings, settings);
-        const gradeB = calculateStudentFinalGrade(b.repositories, emojiMappings, settings);
+        const gradeA = calculateStudentFinalGrade(a.git_repos, emojiMappings, settings);
+        const gradeB = calculateStudentFinalGrade(b.git_repos, emojiMappings, settings);
         return gradeA - gradeB;
       },
     }),
@@ -190,10 +190,10 @@ export const createStudentGradeColumns = (
       tooltip: 'This does not take into account late penalties.',
       width: 150,
       calculateGrade: (student: StudentRecord) =>
-        calculateStudentFinalGrade(student.repositories, emojiMappings, settings, false),
+        calculateStudentFinalGrade(student.git_repos, emojiMappings, settings, false),
       sorter: (a: StudentRecord, b: StudentRecord) => {
-        const gradeA = calculateStudentFinalGrade(a.repositories, emojiMappings, settings, false);
-        const gradeB = calculateStudentFinalGrade(b.repositories, emojiMappings, settings, false);
+        const gradeA = calculateStudentFinalGrade(a.git_repos, emojiMappings, settings, false);
+        const gradeB = calculateStudentFinalGrade(b.git_repos, emojiMappings, settings, false);
         return gradeA - gradeB;
       },
     }),

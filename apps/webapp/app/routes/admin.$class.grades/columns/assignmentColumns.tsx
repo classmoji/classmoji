@@ -42,14 +42,14 @@ interface ModuleInfo {
   drop_lowest_count?: number;
 }
 
-interface StudentRepository {
+interface StudentGitRepo {
   repository_id: string | number;
   repository: ModuleInfo;
   assignments: GradeRepoAssignment[];
 }
 
 interface StudentRecord {
-  repositories: StudentRepository[];
+  git_repos: StudentGitRepo[];
 }
 
 /**
@@ -128,8 +128,8 @@ const createRepositoryAssignmentColumns = (
     width: 140,
     ellipsis: true,
     sorter: (a: StudentRecord, b: StudentRecord) => {
-      const repoA = a.repositories.find(repo => repo.repository_id === repository.id);
-      const repoB = b.repositories.find(repo => repo.repository_id === repository.id);
+      const repoA = a.git_repos.find(repo => repo.repository_id === repository.id);
+      const repoB = b.git_repos.find(repo => repo.repository_id === repository.id);
 
       const repoAssignmentA = repoA?.assignments?.find(
         (ra: GradeRepoAssignment) => ra.assignment_id === assignment.id
@@ -148,7 +148,7 @@ const createRepositoryAssignmentColumns = (
       return (gradeA ?? -1) - (gradeB ?? -1);
     },
     render: (_: unknown, student: StudentRecord) => {
-      const studentRepo = student.repositories.find(repo => repo.repository_id === repository.id);
+      const studentRepo = student.git_repos.find(repo => repo.repository_id === repository.id);
 
       if (!studentRepo) {
         return <span className="text-red-500 italic">None</span>;
@@ -191,8 +191,8 @@ const createModuleTotalColumn = (
     width: 120,
     ellipsis: true,
     sorter: (a: StudentRecord, b: StudentRecord) => {
-      const repoA = a.repositories.find(repo => repo.repository_id === repository.id);
-      const repoB = b.repositories.find(repo => repo.repository_id === repository.id);
+      const repoA = a.git_repos.find(repo => repo.repository_id === repository.id);
+      const repoB = b.git_repos.find(repo => repo.repository_id === repository.id);
 
       const gradeA = repoA
         ? calculateRepositoryGrade(repoA.assignments, emojiMappings, settings, repoA.repository)
@@ -204,7 +204,7 @@ const createModuleTotalColumn = (
       return gradeA - gradeB;
     },
     render: (_: unknown, student: StudentRecord) => {
-      const studentRepo = student.repositories.find(repo => repo.repository_id === repository.id);
+      const studentRepo = student.git_repos.find(repo => repo.repository_id === repository.id);
 
       if (!studentRepo) {
         return <span className="text-red-500 italic">None</span>;
@@ -304,8 +304,8 @@ export const createAssignmentColumns = (
           ? [...assignmentColumns, ...(totalColumn ? [totalColumn] : [])]
           : [],
         sorter: (a: StudentRecord, b: StudentRecord) => {
-          const repoA = a.repositories.find(repo => repo.repository_id === repository.id);
-          const repoB = b.repositories.find(repo => repo.repository_id === repository.id);
+          const repoA = a.git_repos.find(repo => repo.repository_id === repository.id);
+          const repoB = b.git_repos.find(repo => repo.repository_id === repository.id);
 
           let gradeA = repoA
             ? calculateRepositoryGrade(repoA.assignments, emojiMappings, settings, repoA.repository)
@@ -322,7 +322,7 @@ export const createAssignmentColumns = (
           return gradeA - gradeB;
         },
         render: (_: unknown, student: StudentRecord) => {
-          const studentRepo = student.repositories.find(repo => repo.repository_id === repository.id);
+          const studentRepo = student.git_repos.find(repo => repo.repository_id === repository.id);
 
           if (!studentRepo) {
             return <span className="text-gray-500 italic">None</span>;

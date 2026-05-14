@@ -28,7 +28,7 @@ interface Student {
   login: string;
   email?: string;
   provider_email?: string;
-  repositories: GitRepo[];
+  git_repos: GitRepo[];
   [key: string]: unknown;
 }
 
@@ -198,10 +198,10 @@ const GradesTable = (props: GradesTableProps) => {
     }
 
     const finalIndividualNumericGrades = pageData.map((student: Student) => {
-      return calculateStudentFinalGrade(student.repositories, emojiMappings, settings, true, false);
+      return calculateStudentFinalGrade(student.git_repos, emojiMappings, settings, true, false);
     });
     const finalNumericGrades = pageData.map((student: Student) => {
-      return calculateStudentFinalGrade(student.repositories, emojiMappings, settings);
+      return calculateStudentFinalGrade(student.git_repos, emojiMappings, settings);
     });
 
     // Filter out invalid grades for statistics
