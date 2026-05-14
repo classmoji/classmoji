@@ -28,7 +28,7 @@ export const action = async ({ request }: { request: Request }) => {
 
   const zipFile = formData.get('zip');
   const title = formData.get('title') as string | null;
-  const moduleId = (formData.get('moduleId') as string | null) || null;
+  const repositoryId = (formData.get('repositoryId') as string | null) || null;
   const themeOption = formData.get('themeOption') as string | null;
   const saveThemeAs = (formData.get('saveThemeAs') as string | null)?.trim() || null;
   const useSavedTheme = (formData.get('useSavedTheme') as string | null) || null;
@@ -121,7 +121,7 @@ export const action = async ({ request }: { request: Request }) => {
   processZipImport({
     zipFile,
     title: title.trim(),
-    moduleId,
+    repositoryId,
     importTheme,
     useSavedTheme: themeOption === 'saved' ? useSavedTheme : null,
     saveThemeAs: themeOption === 'import' ? saveThemeAs : null,

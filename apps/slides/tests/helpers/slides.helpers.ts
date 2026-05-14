@@ -13,13 +13,13 @@ export type SlideVisibility = 'draft' | 'private' | 'public';
  *
  * @param page - Playwright page
  * @param title - Slide title
- * @param moduleIndex - Index of the module to select (0-based)
+ * @param repositoryIndex - Index of the repository to select (0-based)
  * @returns The new slide's ID
  */
 export async function createSlide(
   page: Page,
   title: string,
-  moduleIndex: number = 0
+  repositoryIndex: number = 0
 ): Promise<string> {
   const classroomSlug = getTestClassroomSlug();
 
@@ -30,9 +30,9 @@ export async function createSlide(
   // Fill title
   await page.fill('input[name="title"]', title);
 
-  // Select module (first option after the placeholder)
-  const moduleSelect = page.locator('select[name="module"]');
-  await moduleSelect.selectOption({ index: moduleIndex + 1 }); // +1 to skip "Select a module..." placeholder
+  // Select repository (first option after the placeholder)
+  const repositorySelect = page.locator('select[name="repository"]');
+  await repositorySelect.selectOption({ index: repositoryIndex + 1 }); // +1 to skip "Select a repository..." placeholder
 
   // Submit form
   await page.click('button[type="submit"]');
