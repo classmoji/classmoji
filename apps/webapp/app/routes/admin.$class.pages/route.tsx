@@ -114,7 +114,7 @@ interface PageRecord {
   is_public: boolean;
   show_in_student_menu: boolean;
   updated_at: string;
-  links?: Array<{ module?: { title: string } | null; [key: string]: unknown }>;
+  links?: Array<{ repository?: { title: string } | null; [key: string]: unknown }>;
   [key: string]: unknown;
 }
 
@@ -160,12 +160,12 @@ export default function AdminPages({ loaderData }: Route.ComponentProps) {
     }
   }, [fetcher.state, fetcher.data]);
 
-  // Helper to get first linked module title
+  // Helper to get first linked repository title
   const getLinkedModuleTitle = (page: PageRecord) => {
     const moduleLink = page.links?.find(
-      (link: { module?: { title: string } | null }) => link.module
+      (link: { repository?: { title: string } | null }) => link.repository
     );
-    return moduleLink?.module?.title || null;
+    return moduleLink?.repository?.title || null;
   };
 
   // Handle field updates (for inline editing)
@@ -183,7 +183,7 @@ export default function AdminPages({ loaderData }: Route.ComponentProps) {
       return matchesSearch;
     })
     .sort((a, b) => {
-      // Sort by module first (nulls last), then by title
+      // Sort by repository first (nulls last), then by title
       const moduleA = getLinkedModuleTitle(a as unknown as PageRecord) || '';
       const moduleB = getLinkedModuleTitle(b as unknown as PageRecord) || '';
       const moduleCompare = moduleA.localeCompare(moduleB);

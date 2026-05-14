@@ -23,20 +23,20 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
   const moduleTitle = url.searchParams.get('title');
   const tags = await ClassmojiService.organizationTag.findByClassroomId(classroom.id);
 
-  let module = null;
+  let repository = null;
   let hasReposWithProjects = false;
 
   if (moduleTitle) {
-    module = await ClassmojiService.repository.findBySlugAndTitle(classSlug!, moduleTitle, {
+    repository = await ClassmojiService.repository.findBySlugAndTitle(classSlug!, moduleTitle, {
       includePages: true,
       includeSlides: true,
     });
 
     // Check if any repos have projects (for locking project template field)
-    if (module) {
+    if (repository) {
       const reposWithProjects = await getPrisma().gitRepo.count({
         where: {
-          repository_id: module.id,
+          repository_id: repository.id,
           project_id: { not: null },
         },
       });
@@ -60,8 +60,8 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
 
   return {
     token: authData?.token,
-    module,
-    isNew: !module,
+    repository,
+    isNew: !repository,
     tags,
     classroom,
     pages,
@@ -71,7 +71,7 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
 };
 
 const ModuleForm = ({ loaderData }: Route.ComponentProps) => {
-  const { token, module, isNew, tags, classroom, pages, slides, hasReposWithProjects } = loaderData;
+  const { token, repository, isNew, tags, classroom, pages, slides, hasReposWithProjects } = loaderData;
   const { opened, close } = useRouteDrawer({});
 
   return (
@@ -95,12 +95,12 @@ const ModuleForm = ({ loaderData }: Route.ComponentProps) => {
       <div className="flex items-center justify-between gap-3 px-5 py-3 bg-stone-50 dark:bg-neutral-800/60 border-b border-stone-200 dark:border-neutral-800">
         <div className="flex flex-col">
           <span className="text-sm font-semibold text-gray-900 dark:text-gray-100">
-            {isNew ? 'New module' : 'Edit module'}
+            {isNew ? 'New repository' : 'Edit repository'}
           </span>
           <span className="text-[11px] font-normal text-gray-500 dark:text-gray-400">
             {isNew
-              ? 'Set up the module, its assignments, and linked resources.'
-              : 'Update module details, assignments, and linked resources.'}
+              ? 'Set up the repository, its assignments, and linked resources.'
+              : 'Update repository details, assignments, and linked resources.'}
           </span>
         </div>
         <button
@@ -124,7 +124,7 @@ const ModuleForm = ({ loaderData }: Route.ComponentProps) => {
       <div className="max-h-[75vh] overflow-y-auto px-6 py-5">
         <FormModule
           token={token!}
-          module={module as Parameters<typeof FormModule>[0]['module']}
+          repository={repository as Parameters<typeof FormModule>[0]['repository']}
           isNew={isNew}
           close={close}
           tags={tags}
@@ -159,9 +159,9 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
     ...moduleData
   } = data;
 
-  // Helper to sync module-level content links
+  // Helper to sync repository-level content links
   const syncModuleContentLinks = async (moduleId: string) => {
-    // Get current links for this module
+    // Get current links for this repository
     const currentPageLinks = await getPrisma().pageLink.findMany({
       where: { repository_id: moduleId },
       select: { page_id: true },
@@ -317,7 +317,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
           assignments: assignments || [],
         });
 
-        // Sync content links for module and assignments
+        // Sync content links for repository and assignments
         await syncModuleContentLinks(createdModule.id);
         await syncAssignmentContentLinks(assignments);
 
@@ -325,13 +325,13 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
         await saveContentManifest();
 
         return {
-          success: 'Module created',
+          success: 'Repository created',
           action: ActionTypes.SAVE_ASSIGNMENT,
         };
       } catch (error: unknown) {
-        console.error('Module create error:', error);
+        console.error('Repository create error:', error);
         return {
-          error: 'Failed to create module. Please try again.',
+          error: 'Failed to create repository. Please try again.',
           action: ActionTypes.SAVE_ASSIGNMENT,
         };
       }
@@ -345,7 +345,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
           assignmentsToRemove: assignmentsToRemove || [],
         });
 
-        // Sync content links for module and assignments
+        // Sync content links for repository and assignments
         await syncModuleContentLinks(moduleData.id);
         await syncAssignmentContentLinks(assignments);
 
@@ -353,13 +353,13 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
         await saveContentManifest();
 
         return {
-          success: 'Module updated',
+          success: 'Repository updated',
           action: ActionTypes.SAVE_ASSIGNMENT,
         };
       } catch (error: unknown) {
-        console.error('Module update error:', error);
+        console.error('Repository update error:', error);
         return {
-          error: 'Failed to update module. Please try again.',
+          error: 'Failed to update repository. Please try again.',
           action: ActionTypes.SAVE_ASSIGNMENT,
         };
       }

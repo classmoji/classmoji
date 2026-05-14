@@ -19,7 +19,7 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
   });
 
   const student = await ClassmojiService.user.findByLogin(login!);
-  const modules = await ClassmojiService.repository.findByClassroomSlug(classSlug!);
+  const repositories = await ClassmojiService.repository.findByClassroomSlug(classSlug!);
   const repositoryAssignments = await ClassmojiService.gitRepoAssignment.findAllForStudent(
     student!.id,
     classSlug!
@@ -46,7 +46,7 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
   return {
     student,
     classroom,
-    modules,
+    repositories,
     repositoryAssignments,
     emojiMappings,
     settings,
@@ -59,7 +59,7 @@ const StudentView = ({ loaderData }: Route.ComponentProps) => {
   const {
     student,
     classroom,
-    modules,
+    repositories,
     repositoryAssignments,
     emojiMappings,
     settings,
@@ -101,7 +101,7 @@ const StudentView = ({ loaderData }: Route.ComponentProps) => {
         <SingleStudentView
           student={student}
           classroom={classroom}
-          modules={modules}
+          repositories={repositories}
           repositoryAssignmentsGroupedByModule={groupByModule(repositoryAssignments)}
           emojiMappings={emojiMappings}
           settings={settings}

@@ -19,7 +19,7 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
     attemptedAction: 'view_modules',
   });
 
-  const modules = await getPrisma().repository.findMany({
+  const repositories = await getPrisma().repository.findMany({
     where: { classroom_id: classroom.id, is_published: true },
     include: {
       assignments: {
@@ -48,18 +48,18 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
     orderBy: { created_at: 'asc' },
   });
 
-  // For self-formed team modules, check if user has a team
+  // For self-formed team repositories, check if user has a team
   const userTeamsByModuleSlug: Record<string, UserTeamResult> = {};
-  const selfFormedModules = modules.filter(m => m.team_formation_mode === 'SELF_FORMED');
+  const selfFormedModules = repositories.filter(m => m.team_formation_mode === 'SELF_FORMED');
 
-  for (const module of selfFormedModules) {
+  for (const repository of selfFormedModules) {
     const tag = await ClassmojiService.organizationTag.findByClassroomIdAndName(
       classroom.id,
-      module.slug!
+      repository.slug!
     );
     if (tag) {
       const userTeam = await ClassmojiService.team.findUserTeamByTag(classroom.id, tag.id, userId);
-      if (userTeam) userTeamsByModuleSlug[module.slug!] = userTeam;
+      if (userTeam) userTeamsByModuleSlug[repository.slug!] = userTeam;
     }
   }
 
@@ -75,7 +75,7 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
   });
 
   return {
-    modules,
+    repositories,
     repoAssignmentsByAssignmentId,
     userTeamsByModuleSlug,
     slidesUrl: process.env.SLIDES_URL || 'http://localhost:6500',
@@ -86,7 +86,7 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
 
 const StudentModules = ({ loaderData }: Route.ComponentProps) => {
   const {
-    modules,
+    repositories,
     repoAssignmentsByAssignmentId,
     userTeamsByModuleSlug,
     slidesUrl,
@@ -97,21 +97,21 @@ const StudentModules = ({ loaderData }: Route.ComponentProps) => {
   return (
     <div className="min-h-full">
       <h1 className="mt-2 mb-4 text-base font-semibold text-gray-600 dark:text-gray-400">
-        Modules
+        Repositories
       </h1>
 
-      {modules.length === 0 ? (
+      {repositories.length === 0 ? (
         <div className="rounded-2xl bg-panel ring-1 ring-stone-200 dark:ring-neutral-800 p-8 text-center">
           <h3 className="text-base font-semibold text-gray-800 dark:text-gray-200">
-            No published modules yet
+            No published repositories yet
           </h3>
           <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
-            Modules will appear here once your instructor publishes them.
+            Repositories will appear here once your instructor publishes them.
           </p>
         </div>
       ) : (
         <ModuleAccordion
-          modules={modules}
+          repositories={repositories}
           repoAssignmentsByAssignmentId={repoAssignmentsByAssignmentId}
           userTeamsByModuleSlug={userTeamsByModuleSlug}
           classSlug={classSlug}

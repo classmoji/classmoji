@@ -22,47 +22,47 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
     attemptedAction: 'view_teams',
   });
 
-  // Get the module
-  const module = await ClassmojiService.repository.findByClassroomSlugAndModuleSlug(
+  // Get the repository
+  const repository = await ClassmojiService.repository.findByClassroomSlugAndModuleSlug(
     classSlug,
     moduleSlug
   );
 
-  if (!module) {
-    throw new Response('Module not found', { status: 404 });
+  if (!repository) {
+    throw new Response('Repository not found', { status: 404 });
   }
 
-  // Only allow for GROUP modules with SELF_FORMED mode
-  if (module.type !== 'GROUP' || module.team_formation_mode !== 'SELF_FORMED') {
-    throw new Response('Team formation not available for this module', { status: 400 });
+  // Only allow for GROUP repositories with SELF_FORMED mode
+  if (repository.type !== 'GROUP' || repository.team_formation_mode !== 'SELF_FORMED') {
+    throw new Response('Team formation not available for this repository', { status: 400 });
   }
 
-  // Get the tag for this module (if it exists)
+  // Get the tag for this repository (if it exists)
   const tag = await ClassmojiService.organizationTag.findByClassroomIdAndName(
     classroom.id,
-    module.slug!
+    repository.slug!
   );
 
-  // Get all teams for this module (by tag)
+  // Get all teams for this repository (by tag)
   const teams = tag ? await ClassmojiService.team.findByTagId(classroom.id, tag.id) : [];
 
   // Find user's current team
   const userTeam = teams.find(team => team.memberships.some(m => m.user_id === userId));
 
   // Check if deadline has passed
-  const deadlinePassed = module.team_formation_deadline
-    ? new Date() > new Date(module.team_formation_deadline)
+  const deadlinePassed = repository.team_formation_deadline
+    ? new Date() > new Date(repository.team_formation_deadline)
     : false;
 
   return {
-    module,
+    repository,
     teams,
     userTeam,
     userId,
     classSlug,
-    maxTeamSize: module.max_team_size,
+    maxTeamSize: repository.max_team_size,
     deadlinePassed,
-    deadline: module.team_formation_deadline,
+    deadline: repository.team_formation_deadline,
   };
 };
 
@@ -78,26 +78,26 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
     attemptedAction: 'modify_team',
   });
 
-  // Get the module
-  const module = await ClassmojiService.repository.findByClassroomSlugAndModuleSlug(
+  // Get the repository
+  const repository = await ClassmojiService.repository.findByClassroomSlugAndModuleSlug(
     classSlug,
     moduleSlug
   );
 
-  if (!module || module.type !== 'GROUP' || module.team_formation_mode !== 'SELF_FORMED') {
-    return { error: 'Team formation not available for this module' };
+  if (!repository || repository.type !== 'GROUP' || repository.team_formation_mode !== 'SELF_FORMED') {
+    return { error: 'Team formation not available for this repository' };
   }
 
   // Check deadline
-  if (module.team_formation_deadline && new Date() > new Date(module.team_formation_deadline)) {
+  if (repository.team_formation_deadline && new Date() > new Date(repository.team_formation_deadline)) {
     return { error: 'Team formation deadline has passed' };
   }
 
   // Get user info for GitHub operations
   const user = await ClassmojiService.user.findById(userId);
 
-  // Get or create tag for this module
-  const tag = await ClassmojiService.organizationTag.upsert(classroom.id, module.slug!);
+  // Get or create tag for this repository
+  const tag = await ClassmojiService.organizationTag.upsert(classroom.id, repository.slug!);
 
   // Get classroom with git organization for provider operations
   const classroomWithOrg = await ClassmojiService.classroom.findById(classroom.id);
@@ -133,7 +133,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
         return { error: 'A team with this name already exists' };
       }
 
-      // Check if user is already on a team for this module
+      // Check if user is already on a team for this repository
       const userCurrentTeam = await ClassmojiService.team.findUserTeamByTag(
         classroom.id,
         tag.id,
@@ -176,7 +176,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
       // Trigger repository creation workflow
       await tasks.trigger('create_repositories', {
         logins: [teamSlug],
-        assignmentTitle: module.title,
+        assignmentTitle: repository.title,
         org: classSlug,
         sessionId: Date.now().toString(),
       });
@@ -192,7 +192,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
         return { error: 'Team ID is required' };
       }
 
-      // Check if user is already on a team for this module
+      // Check if user is already on a team for this repository
       const userCurrentTeam = await ClassmojiService.team.findUserTeamByTag(
         classroom.id,
         tag.id,
@@ -210,13 +210,13 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
         return { error: 'Team not found' };
       }
 
-      // Check if team is for this module
+      // Check if team is for this repository
       if (!team.tags.some(t => t.tag_id === tag.id)) {
-        return { error: 'This team is not for this module' };
+        return { error: 'This team is not for this repository' };
       }
 
       // Check if team is full
-      if (module.max_team_size && team.memberships.length >= module.max_team_size) {
+      if (repository.max_team_size && team.memberships.length >= repository.max_team_size) {
         return { error: 'This team is full' };
       }
 
@@ -235,7 +235,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
     },
 
     async leave() {
-      // Find user's current team for this module
+      // Find user's current team for this repository
       const userTeam = await ClassmojiService.team.findUserTeamByTag(classroom.id, tag.id, userId);
 
       if (!userTeam) {
@@ -259,7 +259,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
 };
 
 const StudentTeamPage = ({ loaderData }: Route.ComponentProps) => {
-  const { module, teams, userTeam, maxTeamSize, deadlinePassed, deadline, classSlug } = loaderData;
+  const { repository, teams, userTeam, maxTeamSize, deadlinePassed, deadline, classSlug } = loaderData;
   const fetcher = useFetcher();
   const [teamName, setTeamName] = useState('');
   const [showCreateForm, setShowCreateForm] = useState(false);
@@ -307,12 +307,12 @@ const StudentTeamPage = ({ loaderData }: Route.ComponentProps) => {
         to={`/student/${classSlug}/repos`}
         className="text-blue-600 hover:underline mb-4 inline-block"
       >
-        ← Back to Modules
+        ← Back to Repositories
       </Link>
 
       <div className="flex items-center justify-between gap-3 mt-2 mb-4">
         <h1 className="text-base font-semibold text-gray-600 dark:text-gray-400 truncate">
-          Team Formation: {module.title}
+          Team Formation: {repository.title}
         </h1>
       </div>
 

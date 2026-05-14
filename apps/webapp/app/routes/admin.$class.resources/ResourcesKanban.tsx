@@ -21,7 +21,7 @@ interface Resource {
   [key: string]: unknown;
 }
 
-interface Module {
+interface Repository {
   id: string;
   title: string;
   assignments?: Array<{ id: string; title: string; [key: string]: unknown }>;
@@ -29,7 +29,7 @@ interface Module {
 }
 
 interface ResourcesKanbanProps {
-  repositories: Module[];
+  repositories: Repository[];
   pages: Resource[];
   slides: Resource[];
 }
@@ -164,9 +164,9 @@ const ResourcesKanban = ({ repositories, pages, slides }: ResourcesKanbanProps) 
             <SourceColumn pages={allPages} slides={allSlides} />
           </div>
 
-          {/* Scrollable modules area */}
+          {/* Scrollable repositories area */}
           <div className="flex-1 flex gap-4 p-4 overflow-x-auto overflow-y-auto">
-            {repositories.map((repository: Module) => {
+            {repositories.map((repository: Repository) => {
               const { pages: modPages, slides: modSlides } = getModuleResources(repository.id);
               return (
                 <ModuleColumn
@@ -184,7 +184,7 @@ const ResourcesKanban = ({ repositories, pages, slides }: ResourcesKanbanProps) 
             })}
             {repositories.length === 0 && (
               <div className="flex items-center justify-center flex-1 text-sm text-gray-500 dark:text-gray-400">
-                No modules available. Create a module first.
+                No repositories available. Create a repository first.
               </div>
             )}
           </div>

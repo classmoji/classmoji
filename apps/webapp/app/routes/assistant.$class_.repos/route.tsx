@@ -7,7 +7,7 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
   const { class: classSlug } = params;
   const { classroom } = await requireClassroomTeachingTeam(request, classSlug!);
 
-  const modules = await getPrisma().repository.findMany({
+  const repositories = await getPrisma().repository.findMany({
     where: { classroom_id: classroom.id, is_published: true },
     include: {
       assignments: {
@@ -37,7 +37,7 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
   });
 
   return {
-    modules,
+    repositories,
     repoAssignmentsByAssignmentId: {}, // Assistants don't have personal assignments
     slidesUrl: process.env.SLIDES_URL || 'http://localhost:6500',
     pagesUrl: process.env.PAGES_URL || 'http://localhost:7100',
@@ -46,26 +46,26 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
 };
 
 const AssistantModules = ({ loaderData }: Route.ComponentProps) => {
-  const { modules, repoAssignmentsByAssignmentId, slidesUrl, pagesUrl, classSlug } = loaderData;
+  const { repositories, repoAssignmentsByAssignmentId, slidesUrl, pagesUrl, classSlug } = loaderData;
 
   return (
     <div className="min-h-full">
       <h1 className="mt-2 mb-4 text-base font-semibold text-gray-600 dark:text-gray-400">
-        Modules
+        Repositories
       </h1>
 
-      {modules.length === 0 ? (
+      {repositories.length === 0 ? (
         <div className="rounded-2xl bg-panel ring-1 ring-stone-200 dark:ring-neutral-800 p-8 text-center">
           <h3 className="text-base font-semibold text-gray-800 dark:text-gray-200">
-            No published modules yet
+            No published repositories yet
           </h3>
           <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
-            Modules will appear here once your instructor publishes them.
+            Repositories will appear here once your instructor publishes them.
           </p>
         </div>
       ) : (
         <ModuleAccordion
-          modules={modules}
+          repositories={repositories}
           repoAssignmentsByAssignmentId={repoAssignmentsByAssignmentId}
           classSlug={classSlug}
           slidesUrl={slidesUrl}

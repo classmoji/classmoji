@@ -9,7 +9,7 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
   const assignedGraderItems =
     await ClassmojiService.gitRepoAssignmentGrader.findAssignedByGrader(userId, classroom.id);
   const myRepositoryAssignments = assignedGraderItems.map(item => item.git_repo_assignment);
-  const modules = await ClassmojiService.repository.findByClassroomSlug(classSlug!);
+  const repositories = await ClassmojiService.repository.findByClassroomSlug(classSlug!);
 
   const allRepositoryAssignments = await ClassmojiService.gitRepoAssignment.findByClassroomId(
     classroom.id
@@ -17,18 +17,18 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
 
   const emojiMappings = await ClassmojiService.emojiMapping.findByClassroomId(classroom.id);
 
-  return { allRepositoryAssignments, myRepositoryAssignments, modules, emojiMappings };
+  return { allRepositoryAssignments, myRepositoryAssignments, repositories, emojiMappings };
 };
 
 const AssistantGrading = ({ loaderData }: Route.ComponentProps) => {
-  const { myRepositoryAssignments, modules, allRepositoryAssignments, emojiMappings } = loaderData;
+  const { myRepositoryAssignments, repositories, allRepositoryAssignments, emojiMappings } = loaderData;
 
   return (
     <div className="min-h-full">
       <RepositoryAssignmentsTable
         allRepositoryAssignments={allRepositoryAssignments}
         repositoryAssignments={myRepositoryAssignments}
-        modules={modules}
+        repositories={repositories}
         emojiMappings={emojiMappings}
       />
     </div>

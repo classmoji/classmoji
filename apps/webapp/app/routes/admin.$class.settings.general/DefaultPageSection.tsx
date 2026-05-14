@@ -27,10 +27,10 @@ const DefaultPageSection = ({ currentDefault, menuPages }: DefaultPageSectionPro
     );
   };
 
-  // Build options: Dashboard, Modules, then any menu pages
+  // Build options: Dashboard, Repositories, then any menu pages
   const pageOptions = [
     { value: 'dashboard', label: 'Dashboard' },
-    { value: 'modules', label: 'Modules' },
+    { value: 'repositories', label: 'Repositories' },
     ...menuPages.map(page => ({
       value: `page:${page.id}`,
       label: page.title,

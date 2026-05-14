@@ -26,7 +26,7 @@ interface Assignment {
   [key: string]: unknown;
 }
 
-interface Module {
+interface Repository {
   id: string;
   slug: string | null;
   title: string;
@@ -59,18 +59,18 @@ interface RepoAssignment {
 }
 
 interface TeamFormationBannerProps {
-  module: Module;
+  repository: Repository;
   userTeam: UserTeam | undefined;
   classSlug: string | undefined;
 }
 
-const TeamFormationBanner = ({ module, userTeam, classSlug }: TeamFormationBannerProps) => {
-  const deadlinePassed = module.team_formation_deadline
-    ? new Date() > new Date(module.team_formation_deadline)
+const TeamFormationBanner = ({ repository, userTeam, classSlug }: TeamFormationBannerProps) => {
+  const deadlinePassed = repository.team_formation_deadline
+    ? new Date() > new Date(repository.team_formation_deadline)
     : false;
 
   if (userTeam) {
-    const maxTeamSize = module.max_team_size;
+    const maxTeamSize = repository.max_team_size;
     return (
       <Alert
         type="success"
@@ -97,7 +97,7 @@ const TeamFormationBanner = ({ module, userTeam, classSlug }: TeamFormationBanne
                 ))}
               </div>
             </div>
-            <Link to={`/student/${classSlug}/repos/${module.slug}/team`}>
+            <Link to={`/student/${classSlug}/repos/${repository.slug}/team`}>
               <Button size="small" type="link">
                 View Team
               </Button>
@@ -127,14 +127,14 @@ const TeamFormationBanner = ({ module, userTeam, classSlug }: TeamFormationBanne
       message={
         <div className="flex justify-between items-center">
           <span>
-            You need to join or create a team for this module
-            {module.team_formation_deadline && (
+            You need to join or create a team for this repository
+            {repository.team_formation_deadline && (
               <span className="ml-2 text-sm">
-                (Deadline: {new Date(module.team_formation_deadline).toLocaleDateString()})
+                (Deadline: {new Date(repository.team_formation_deadline).toLocaleDateString()})
               </span>
             )}
           </span>
-          <Link to={`/student/${classSlug}/repos/${module.slug}/team`}>
+          <Link to={`/student/${classSlug}/repos/${repository.slug}/team`}>
             <Button type="primary">Create or Join Team</Button>
           </Link>
         </div>
@@ -145,7 +145,7 @@ const TeamFormationBanner = ({ module, userTeam, classSlug }: TeamFormationBanne
 };
 
 interface ModuleCardProps {
-  module: Module;
+  repository: Repository;
   ordinal: number;
   repoAssignmentsByAssignmentId: Record<string, RepoAssignment>;
   userTeam?: UserTeam;
@@ -156,11 +156,11 @@ interface ModuleCardProps {
   defaultOpen: boolean;
 }
 
-const buildSummary = (module: Module) => {
-  const qCount = module.quizzes?.length ?? 0;
-  const sCount = module.slides?.length ?? 0;
-  const pCount = module.pages?.length ?? 0;
-  const aCount = module.assignments?.length ?? 0;
+const buildSummary = (repository: Repository) => {
+  const qCount = repository.quizzes?.length ?? 0;
+  const sCount = repository.slides?.length ?? 0;
+  const pCount = repository.pages?.length ?? 0;
+  const aCount = repository.assignments?.length ?? 0;
   const parts: string[] = [];
   if (qCount) parts.push(`${qCount} ${qCount === 1 ? 'quiz' : 'quizzes'}`);
   if (sCount) parts.push(`${sCount} slide ${sCount === 1 ? 'deck' : 'decks'}`);
@@ -170,7 +170,7 @@ const buildSummary = (module: Module) => {
 };
 
 const ModuleCard = ({
-  module,
+  repository,
   ordinal,
   repoAssignmentsByAssignmentId,
   userTeam,
@@ -182,25 +182,25 @@ const ModuleCard = ({
 }: ModuleCardProps) => {
   const [open, setOpen] = useState(defaultOpen);
 
-  const assignments = module.assignments ?? [];
+  const assignments = repository.assignments ?? [];
   const total = assignments.length;
   const done = assignments.filter(a => {
     const ra = repoAssignmentsByAssignmentId[String(a.id)];
     return ra?.status === 'CLOSED';
   }).length;
   const pct = total > 0 ? Math.round((done / total) * 100) : null;
-  const summary = buildSummary(module);
+  const summary = buildSummary(repository);
 
   const hasExpandableContent =
-    (module.pages?.length ?? 0) > 0 ||
-    (module.slides?.length ?? 0) > 0 ||
+    (repository.pages?.length ?? 0) > 0 ||
+    (repository.slides?.length ?? 0) > 0 ||
     assignments.length > 0 ||
-    !!module.description ||
-    (module.team_formation_mode === 'SELF_FORMED' && rolePrefix === 'student');
+    !!repository.description ||
+    (repository.team_formation_mode === 'SELF_FORMED' && rolePrefix === 'student');
 
   return (
     <section
-      id={module.slug ?? undefined}
+      id={repository.slug ?? undefined}
       className="scroll-mt-24 rounded-2xl bg-panel ring-1 ring-stone-200 dark:ring-neutral-800 overflow-hidden"
     >
       <button
@@ -219,7 +219,7 @@ const ModuleCard = ({
               MODULE #{ordinal}
             </div>
             <h3 className="mt-1 text-lg sm:text-xl font-semibold text-gray-900 dark:text-gray-100 tracking-tight">
-              {module.title}
+              {repository.title}
             </h3>
             {summary && <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">{summary}</p>}
           </div>
@@ -253,24 +253,24 @@ const ModuleCard = ({
 
       {open && hasExpandableContent && (
         <div className="px-5 sm:px-6 pb-5 sm:pb-6 -mt-1 border-t border-stone-200/70 dark:border-neutral-800 pt-5">
-          {module.team_formation_mode === 'SELF_FORMED' && rolePrefix === 'student' && (
-            <TeamFormationBanner module={module} userTeam={userTeam} classSlug={classSlug} />
+          {repository.team_formation_mode === 'SELF_FORMED' && rolePrefix === 'student' && (
+            <TeamFormationBanner repository={repository} userTeam={userTeam} classSlug={classSlug} />
           )}
 
-          {module.description && (
-            <p className="text-gray-600 dark:text-gray-400 mb-4">{module.description}</p>
+          {repository.description && (
+            <p className="text-gray-600 dark:text-gray-400 mb-4">{repository.description}</p>
           )}
 
           <ResourceLinks
-            pages={module.pages}
-            slides={module.slides}
+            pages={repository.pages}
+            slides={repository.slides}
             classSlug={classSlug}
             slidesUrl={slidesUrl}
             pagesUrl={pagesUrl}
             rolePrefix={rolePrefix}
           />
 
-          {((module.pages?.length ?? 0) > 0 || (module.slides?.length ?? 0) > 0) &&
+          {((repository.pages?.length ?? 0) > 0 || (repository.slides?.length ?? 0) > 0) &&
             assignments.length > 0 && (
               <div className="border-t border-stone-200/70 dark:border-neutral-800 my-4" />
             )}
@@ -300,7 +300,7 @@ const ModuleCard = ({
 };
 
 interface ModuleAccordionProps {
-  modules: Module[];
+  repositories: Repository[];
   repoAssignmentsByAssignmentId: Record<string, RepoAssignment>;
   userTeamsByModuleSlug?: Record<string, UserTeam>;
   classSlug: string | undefined;
@@ -310,7 +310,7 @@ interface ModuleAccordionProps {
 }
 
 const ModuleAccordion = ({
-  modules,
+  repositories,
   repoAssignmentsByAssignmentId,
   userTeamsByModuleSlug = {},
   classSlug,
@@ -320,18 +320,18 @@ const ModuleAccordion = ({
 }: ModuleAccordionProps) => {
   return (
     <div className="space-y-4 lg:space-y-5">
-      {modules.map((module, idx) => {
-        const hasOpenAssignment = (module.assignments ?? []).some(a => {
+      {repositories.map((repository, idx) => {
+        const hasOpenAssignment = (repository.assignments ?? []).some(a => {
           const ra = repoAssignmentsByAssignmentId[String(a.id)];
           return !ra || ra.status !== 'CLOSED';
         });
         return (
           <ModuleCard
-            key={module.id}
-            module={module}
+            key={repository.id}
+            repository={repository}
             ordinal={idx + 1}
             repoAssignmentsByAssignmentId={repoAssignmentsByAssignmentId}
-            userTeam={module.slug ? userTeamsByModuleSlug[module.slug] : undefined}
+            userTeam={repository.slug ? userTeamsByModuleSlug[repository.slug] : undefined}
             classSlug={classSlug}
             slidesUrl={slidesUrl}
             pagesUrl={pagesUrl}

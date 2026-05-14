@@ -74,7 +74,7 @@ interface ModuleItem {
 interface RepositoryAssignmentsTableProps {
   allRepositoryAssignments: RepoAssignment[];
   repositoryAssignments: RepoAssignment[];
-  modules: ModuleItem[];
+  repositories: ModuleItem[];
   emojiMappings:
     | Record<string, number>
     | { emoji: string; grade: number; [key: string]: unknown }[];
@@ -139,7 +139,7 @@ const emptyStates: Record<TabKey, EmptyState> = {
 const RepositoryAssignmentsTable = ({
   allRepositoryAssignments,
   repositoryAssignments,
-  modules,
+  repositories,
   emojiMappings,
 }: RepositoryAssignmentsTableProps) => {
   const [userQuery, setUserQuery] = useState('');
@@ -323,12 +323,12 @@ const RepositoryAssignmentsTable = ({
       },
     },
     {
-      title: 'Module',
-      dataIndex: ['repository', 'module', 'title'],
-      key: 'module',
+      title: 'Repository',
+      dataIndex: ['repository', 'repository', 'title'],
+      key: 'repository',
       filters:
         active === 'all'
-          ? modules.map(({ title }: ModuleItem) => ({ text: title, value: title }))
+          ? repositories.map(({ title }: ModuleItem) => ({ text: title, value: title }))
           : undefined,
       onFilter: (value: React.Key | boolean, record: RepoAssignment) =>
         record.git_repo.repository.title === value,

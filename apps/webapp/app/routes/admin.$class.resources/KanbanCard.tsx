@@ -70,7 +70,7 @@ const KanbanCard = ({
       <Icon size={16} className={`flex-shrink-0 ${iconColorClass}`} />
       <span className="truncate flex-1 text-gray-700 dark:text-gray-200">{resource.title}</span>
       {isUnlinked && (
-        <span title="Not linked to any module or assignment">
+        <span title="Not linked to any repository or assignment">
           <IconLinkOff size={14} className="text-gray-400 flex-shrink-0" />
         </span>
       )}

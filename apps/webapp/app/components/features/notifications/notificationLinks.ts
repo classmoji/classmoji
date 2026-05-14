@@ -50,7 +50,7 @@ export const notificationLink = (
     case 'assignment':
       // Only the student route tree has an assignments list page.
       return prefix === 'student' ? `/${prefix}/${slug}/assignments` : `/${prefix}/${slug}`;
-    case 'module':
+    case 'repository':
       return `/${prefix}/${slug}/repos`;
     case 'page':
       return `/${prefix}/${slug}/pages/${n.resource_id}`;

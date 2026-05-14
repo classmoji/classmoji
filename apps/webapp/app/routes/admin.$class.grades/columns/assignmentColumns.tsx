@@ -110,7 +110,7 @@ const renderGradeCell = (
 };
 
 /**
- * Creates column definitions for individual assignments within a module
+ * Creates column definitions for individual assignments within a repository
  */
 const createRepositoryAssignmentColumns = (
   repository: ModuleData,
@@ -175,7 +175,7 @@ const createRepositoryAssignmentColumns = (
 };
 
 /**
- * Creates the total/average column for a module
+ * Creates the total/average column for a repository
  */
 const createModuleTotalColumn = (
   repository: ModuleData,
@@ -267,7 +267,7 @@ const createModuleTotalColumn = (
 };
 
 /**
- * Creates column definitions for all modules
+ * Creates column definitions for all repositories
  */
 
 export const createAssignmentColumns = (

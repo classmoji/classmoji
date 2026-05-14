@@ -22,7 +22,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
       await ClassmojiService.repository.deleteById(assignmentId);
 
       return {
-        success: 'Module deleted',
+        success: 'Repository deleted',
         action: ActionTypes.DELETE_ASSIGNMENT,
       };
     },
@@ -33,7 +33,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
 
     async unpublish() {
       await ClassmojiService.repository.setPublished(assignmentId, false);
-      return { success: 'Module unpublished' };
+      return { success: 'Repository unpublished' };
     },
 
     async sync() {

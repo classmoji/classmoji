@@ -43,7 +43,7 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
   const gitOrgLogin = classroom.git_organization?.login ?? null;
 
   const dataPromise = (async (): Promise<DashboardData> => {
-    const [weekEventsRaw, modules, regradeRequests, allRepoAssignments] = await Promise.all([
+    const [weekEventsRaw, repositories, regradeRequests, allRepoAssignments] = await Promise.all([
       ClassmojiService.calendar
         .getClassroomCalendar(classroom.id, weekStart.toDate(), weekEnd.toDate(), userId)
         .catch(() => [] as unknown[]),
@@ -92,7 +92,7 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
       is_deadline: Boolean(e.is_deadline),
     }));
 
-    // Spotlight: module containing the nearest upcoming OPEN assignment
+    // Spotlight: repository containing the nearest upcoming OPEN assignment
     const now = Date.now();
     const upcomingByModule = allRepoAssignments
       .filter(ra => ra.status === 'OPEN' && ra.assignment?.student_deadline)
@@ -103,17 +103,17 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
       .filter(x => x.deadlineMs >= now)
       .sort((a, b) => a.deadlineMs - b.deadlineMs);
 
-    const spotlightId = upcomingByModule[0]?.moduleId ?? modules[modules.length - 1]?.id ?? null;
+    const spotlightId = upcomingByModule[0]?.moduleId ?? repositories[repositories.length - 1]?.id ?? null;
     const spotlightSrc = spotlightId
-      ? (modules.find(m => m.id === spotlightId) ?? null)
-      : (modules[modules.length - 1] ?? null);
+      ? (repositories.find(m => m.id === spotlightId) ?? null)
+      : (repositories[repositories.length - 1] ?? null);
 
     const spotlight: SpotlightModule | null = spotlightSrc
       ? {
           id: spotlightSrc.id,
           slug: spotlightSrc.slug,
           title: spotlightSrc.title,
-          ordinal: modules.findIndex(m => m.id === spotlightSrc.id) + 1,
+          ordinal: repositories.findIndex(m => m.id === spotlightSrc.id) + 1,
           assignments: spotlightSrc.assignments,
           pages: spotlightSrc.pages,
           slides: spotlightSrc.slides,
@@ -142,10 +142,10 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
             : null,
       }));
 
-    // Team: first SELF_FORMED module where student is on a team, otherwise prompt
+    // Team: first SELF_FORMED repository where student is on a team, otherwise prompt
     let team: TeamSummary | null = null;
     let needsTeam: SelfFormedNeedsTeam | null = null;
-    const selfFormedModules = modules.filter(m => m.team_formation_mode === 'SELF_FORMED');
+    const selfFormedModules = repositories.filter(m => m.team_formation_mode === 'SELF_FORMED');
     for (const m of selfFormedModules) {
       if (!m.slug) continue;
       const tag = await ClassmojiService.organizationTag.findByClassroomIdAndName(
@@ -225,7 +225,7 @@ const StudentDashboard = ({ loaderData }: Route.ComponentProps) => {
                   classSlug={slug}
                 />
               </div>
-              <ModuleSpotlightCard module={d.spotlight} classSlug={slug} />
+              <ModuleSpotlightCard repository={d.spotlight} classSlug={slug} />
               <RetroTabsCard
                 feedback={d.feedback}
                 team={d.team}

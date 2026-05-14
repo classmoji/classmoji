@@ -91,7 +91,7 @@ interface ModuleData {
 interface FormModuleProps {
   token: string;
   isNew: boolean;
-  module: ModuleData | null;
+  repository: ModuleData | null;
   close: () => void;
   tags: TagRef[];
   classroom: { slug: string; settings: Record<string, unknown>; [key: string]: unknown };
@@ -103,7 +103,7 @@ interface FormModuleProps {
 const FormModule = ({
   token,
   isNew,
-  module,
+  repository,
   close,
   tags,
   classroom,
@@ -128,33 +128,33 @@ const FormModule = ({
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [opened, { open: openIssueModal, close: closeIssueModal }] = useDisclosure();
 
-  // State for module-level linked pages and slides
+  // State for repository-level linked pages and slides
   const [linkedPageIds, setLinkedPageIds] = useState(() => {
-    return module?.pages?.map((link: { page?: PageRef }) => link.page?.id).filter(Boolean) || [];
+    return repository?.pages?.map((link: { page?: PageRef }) => link.page?.id).filter(Boolean) || [];
   });
   const [linkedSlideIds, setLinkedSlideIds] = useState(() => {
     return (
-      module?.slides?.map((link: { slide?: SlideRef }) => link.slide?.id).filter(Boolean) || []
+      repository?.slides?.map((link: { slide?: SlideRef }) => link.slide?.id).filter(Boolean) || []
     );
   });
 
   const updateFormDefaultValues = {
-    id: module?.id,
-    title: module?.title,
-    template: module?.template,
-    type: module?.type,
-    tag: module?.tag_id,
-    is_extra_credit: module?.is_extra_credit,
-    drop_lowest_count: module?.drop_lowest_count ?? 0,
-    description: module?.description || '',
-    team_formation_mode: module?.team_formation_mode || 'INSTRUCTOR',
-    team_formation_deadline: module?.team_formation_deadline
-      ? dayjs(module.team_formation_deadline)
+    id: repository?.id,
+    title: repository?.title,
+    template: repository?.template,
+    type: repository?.type,
+    tag: repository?.tag_id,
+    is_extra_credit: repository?.is_extra_credit,
+    drop_lowest_count: repository?.drop_lowest_count ?? 0,
+    description: repository?.description || '',
+    team_formation_mode: repository?.team_formation_mode || 'INSTRUCTOR',
+    team_formation_deadline: repository?.team_formation_deadline
+      ? dayjs(repository.team_formation_deadline)
       : null,
-    max_team_size: module?.max_team_size || null,
-    project_template_id: module?.project_template_id || null,
-    project_template_title: module?.project_template_title || null,
-    assignments: module?.assignments.map((assignment: ModuleData['assignments'][number]) => {
+    max_team_size: repository?.max_team_size || null,
+    project_template_id: repository?.project_template_id || null,
+    project_template_title: repository?.project_template_title || null,
+    assignments: repository?.assignments.map((assignment: ModuleData['assignments'][number]) => {
       return {
         ...assignment,
         student_deadline: assignment.student_deadline ? dayjs(assignment.student_deadline) : null,
@@ -168,7 +168,7 @@ const FormModule = ({
       };
     }),
     organization: classroom?.slug,
-    weight: module?.weight,
+    weight: repository?.weight,
   };
 
   const newFormUpdateValues = {
@@ -201,11 +201,11 @@ const FormModule = ({
   const isExtraCredit = watch('is_extra_credit');
 
   useEffect(() => {
-    if (module) setValue('template', module.template);
+    if (repository) setValue('template', repository.template);
     return () => {
       resetAssignmentsToRemove();
     };
-  }, [module]);
+  }, [repository]);
 
   // Close drawer after successful submission and revalidate parent route
   useEffect(() => {
@@ -216,7 +216,7 @@ const FormModule = ({
       if (fetcherData?.error) {
         callout.show({
           variant: 'error',
-          title: fetcherData.error || 'Failed to save module.',
+          title: fetcherData.error || 'Failed to save repository.',
         });
         return;
       }
@@ -253,11 +253,11 @@ const FormModule = ({
       Promise.all(promises).then(assignments => setTemplateAssignments(assignments));
     };
 
-    if (template || module?.template) {
+    if (template || repository?.template) {
       fetchTemplateRepoIssues();
-      setValue('template', template || module?.template);
+      setValue('template', template || repository?.template);
     }
-  }, [template, module?.template]);
+  }, [template, repository?.template]);
 
   const serializeDates = (data: Record<string, unknown>) => {
     const serialized = { ...data } as Record<string, unknown>;
@@ -287,7 +287,7 @@ const FormModule = ({
   };
 
   const onSubmit = (data: Record<string, unknown>) => {
-    const message = isNew ? 'Creating module...' : 'Updating module...';
+    const message = isNew ? 'Creating repository...' : 'Updating repository...';
 
     notify(ActionTypes.SAVE_ASSIGNMENT, message);
     setIsSubmitting(true);
@@ -405,7 +405,7 @@ const FormModule = ({
                 control={control}
                 name="drop_lowest_count"
                 label={
-                  <Tooltip title="Number of lowest-scoring assignments to drop from this module's grade calculation">
+                  <Tooltip title="Number of lowest-scoring assignments to drop from this repository's grade calculation">
                     <span>Drop Lowest Assignments</span>
                   </Tooltip>
                 }
@@ -425,7 +425,7 @@ const FormModule = ({
                   <span className="text-sm">
                     This is an{' '}
                     <span className="font-semibold text-green-600 text-sm">extra credit</span>{' '}
-                    module
+                    repository
                   </span>
                 </Checkbox>
               </FormItem>
@@ -508,11 +508,11 @@ const FormModule = ({
             </Card>
           )}
 
-          {/* Module Description */}
+          {/* Repository Description */}
           <Card className="shadow-xs mb-6">
             <SectionHeader
               title="Learning Objectives"
-              subtitle="Add a description for the learning objective of this module"
+              subtitle="Add a description for the learning objective of this repository"
               size="md"
               className="mb-4"
             />
@@ -520,7 +520,7 @@ const FormModule = ({
               <Input.TextArea
                 rows={4}
                 placeholder="Enter learning objective..."
-                value={module?.description || ''}
+                value={repository?.description || ''}
               />
             </FormItem>
           </Card>
@@ -536,8 +536,8 @@ const FormModule = ({
 
             <AsyncAutocomplete
               control={control as unknown as Control<FieldValues>}
-              template={module?.template || ''}
-              isPublished={module?.is_published || false}
+              template={repository?.template || ''}
+              isPublished={repository?.is_published || false}
               setTemplate={setTemplate}
               token={token}
             />
@@ -576,7 +576,7 @@ const FormModule = ({
           <Card className="shadow-xs mb-6">
             <SectionHeader
               title="Linked Content"
-              subtitle="Link pages and slides to this module"
+              subtitle="Link pages and slides to this repository"
               size="md"
               className="mb-4"
             />
@@ -617,7 +617,7 @@ const FormModule = ({
           </Card>
         </div>
 
-        {/* Modal for adding/editing assignments (nested on top of module modal) */}
+        {/* Modal for adding/editing assignments (nested on top of repository modal) */}
         <Modal
           open={opened}
           onCancel={() => {
@@ -756,7 +756,7 @@ const FormModule = ({
             htmlType="submit"
             style={{ backgroundColor: '#619462', borderColor: '#619462' }}
           >
-            {isNew ? 'Create module' : 'Update module'}
+            {isNew ? 'Create repository' : 'Update repository'}
           </Button>
         </div>
       </Form>

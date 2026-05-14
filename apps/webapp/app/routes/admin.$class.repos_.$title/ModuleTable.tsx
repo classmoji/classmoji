@@ -18,7 +18,7 @@ interface ModuleTableRepo {
 }
 
 interface ModuleTableProps {
-  module: {
+  repository: {
     type: string;
   };
   repos: ModuleTableRepo[];
@@ -27,8 +27,8 @@ interface ModuleTableProps {
   org: string;
 }
 
-const ModuleTable = ({ module, repos, emojiMappings, settings, org }: ModuleTableProps) => {
-  const isIndividualAssignment = module.type === 'INDIVIDUAL';
+const ModuleTable = ({ repository, repos, emojiMappings, settings, org }: ModuleTableProps) => {
+  const isIndividualAssignment = repository.type === 'INDIVIDUAL';
 
   const columns = [
     {
@@ -57,7 +57,7 @@ const ModuleTable = ({ module, repos, emojiMappings, settings, org }: ModuleTabl
       key: 'grade',
       width: '35%',
       render: (_: unknown, repo: ModuleTableRepo) => {
-        // For module-level view, use a default assignment config (no extra credit, no drop lowest)
+        // For repository-level view, use a default assignment config (no extra credit, no drop lowest)
         const moduleAssignment = { is_extra_credit: false, drop_lowest_count: 0, weight: 0 };
         const grade = calculateRepositoryGrade(
           repo.assignments,

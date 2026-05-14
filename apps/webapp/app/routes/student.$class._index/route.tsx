@@ -7,7 +7,7 @@ import { requireStudentAccess } from '~/utils/helpers';
  * Student classroom index route - redirects to configured default page
  *
  * Handles redirect logic for `/student/{classSlug}` to the classroom's
- * configured default landing page (dashboard, modules, or a specific page).
+ * configured default landing page (dashboard, repositories, or a specific page).
  */
 export const loader = async ({ params, request }: Route.LoaderArgs) => {
   let classroom;
@@ -33,9 +33,9 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
     return redirect('dashboard');
   }
 
-  // Modules route
-  if (defaultPage === 'modules') {
-    return redirect('modules');
+  // Repositories route
+  if (defaultPage === 'repositories') {
+    return redirect('repositories');
   }
 
   // Specific page - verify it exists and is visible to students

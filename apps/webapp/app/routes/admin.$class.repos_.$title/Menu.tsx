@@ -4,7 +4,7 @@ import { useCallout } from '@classmoji/ui-components';
 import { useGlobalFetcher, useSubscription } from '~/hooks';
 
 interface MenuProps {
-  module: {
+  repository: {
     id: string;
     type: string;
     assignments?: unknown[];
@@ -16,7 +16,7 @@ interface MenuProps {
   notify?: unknown;
 }
 
-const Menu = ({ module, assistants }: MenuProps) => {
+const Menu = ({ repository, assistants }: MenuProps) => {
   const navigate = useNavigate();
   const { class: classSlug, title: moduleTitle } = useParams();
   const { fetcher } = useGlobalFetcher();
@@ -24,7 +24,7 @@ const Menu = ({ module, assistants }: MenuProps) => {
   const callout = useCallout();
 
   const calculateContributions = () => {
-    if (module.type === 'INDIVIDUAL') {
+    if (repository.type === 'INDIVIDUAL') {
       callout.show({
         variant: 'error',
         title: 'Individual assignments do not support calculating contributions',
@@ -32,7 +32,7 @@ const Menu = ({ module, assistants }: MenuProps) => {
       return;
     }
 
-    fetcher!.submit(JSON.stringify({ module }), {
+    fetcher!.submit(JSON.stringify({ repository }), {
       method: 'post',
       action: `/admin/${classSlug}/repos/${moduleTitle}?action=calculateContributions`,
       encType: 'application/json',
@@ -48,7 +48,7 @@ const Menu = ({ module, assistants }: MenuProps) => {
             navigate(`/admin/${classSlug}/repos/form?title=${moduleTitle}`);
           }}
         >
-          Edit module
+          Edit repository
         </button>
       ),
     },
@@ -57,7 +57,7 @@ const Menu = ({ module, assistants }: MenuProps) => {
       label: (
         <button
           onClick={() => {
-            if (!module.assignments || module.assignments.length === 0) {
+            if (!repository.assignments || repository.assignments.length === 0) {
               callout.show({ variant: 'error', title: 'No assignments to assign graders' });
               return;
             }
@@ -79,14 +79,14 @@ const Menu = ({ module, assistants }: MenuProps) => {
       label: (
         <button
           onClick={() => {
-            navigate(`/admin/${classSlug}/repos/${moduleTitle}/update?id=${module.id}`);
+            navigate(`/admin/${classSlug}/repos/${moduleTitle}/update?id=${repository.id}`);
           }}
         >
           Update repositories
         </button>
       ),
     },
-    module.type === 'GROUP' && {
+    repository.type === 'GROUP' && {
       key: 'calculate-contributions',
       label: <button onClick={calculateContributions}>Calculate contributions</button>,
     },

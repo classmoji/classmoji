@@ -37,7 +37,7 @@ const StepReview = ({
   let totalQuizzes = 0;
 
   if (importEnabled && sourceClassroom && selectedModules.size > 0) {
-    sourceClassroom.modules?.forEach(m => {
+    sourceClassroom.repositories?.forEach(m => {
       if (selectedModules.has(m.id)) {
         totalAssignments += m._count?.assignments || 0;
         const config = selectedModules.get(m.id);
@@ -110,7 +110,7 @@ const StepReview = ({
               </div>
             </div>
             <div className="flex justify-between items-center">
-              <span className="text-gray-500">Modules</span>
+              <span className="text-gray-500">Repositories</span>
               <Tag color="blue" icon={<BookOutlined />}>
                 {selectedModules.size}
               </Tag>
@@ -128,7 +128,7 @@ const StepReview = ({
               </Tag>
             </div>
             <div className="pt-2 border-t border-gray-200 dark:border-neutral-700 text-sm text-gray-500">
-              All deadlines will be cleared. Modules and quizzes will start unpublished.
+              All deadlines will be cleared. Repositories and quizzes will start unpublished.
             </div>
           </div>
         </Card>
@@ -143,7 +143,7 @@ const StepReview = ({
           size="small"
         >
           <div className="text-gray-500">
-            No modules will be imported. You can add modules later.
+            No repositories will be imported. You can add repositories later.
           </div>
         </Card>
       )}

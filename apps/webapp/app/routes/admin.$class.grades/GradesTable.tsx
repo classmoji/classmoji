@@ -180,8 +180,8 @@ const GradesTable = (props: GradesTableProps) => {
       0
     );
     const cols = assignmentColumns ?? [];
-    const assignmentColumnsWidth = cols.reduce((sum: number, module) => {
-      const mod = module as { width?: number; children?: Array<{ width?: number }> };
+    const assignmentColumnsWidth = cols.reduce((sum: number, repository) => {
+      const mod = repository as { width?: number; children?: Array<{ width?: number }> };
       if (!mod.children?.length) return sum + (Number(mod.width) || 140);
       return (
         sum +

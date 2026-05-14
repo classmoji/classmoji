@@ -19,22 +19,22 @@ export const publishAssignment = async (
   try {
     const sessionId = nanoid();
     const classroom = await ClassmojiService.classroom.findBySlug(classroomSlug);
-    const module = await ClassmojiService.repository.findById(moduleId);
+    const repository = await ClassmojiService.repository.findById(moduleId);
 
-    invariant(module != null, 'Module not found');
+    invariant(repository != null, 'Repository not found');
 
     // If repos already exist (re-publish after unpublish), just flip the flag
     const existingRepos = await ClassmojiService.gitRepo.findByRepository(classroomSlug, moduleId);
     if (existingRepos.length > 0) {
       await ClassmojiService.repository.setPublished(moduleId, true);
-      return { success: 'Module re-published. Use Sync to update repositories.' };
+      return { success: 'Repository re-published. Use Sync to update repositories.' };
     }
 
     let numReposToCreate = 0;
     let numIssuesToCreate = 0;
     let _numStudents = 0;
 
-    if (module?.type == 'INDIVIDUAL') {
+    if (repository?.type == 'INDIVIDUAL') {
       const students = await ClassmojiService.classroomMembership.findUsersByRole(
         classroom!.id,
         'STUDENT'
@@ -49,30 +49,30 @@ export const publishAssignment = async (
 
       numReposToCreate = studentList.length;
       numIssuesToCreate =
-        module.assignments.filter(assignment => dayjs(assignment.release_at).isBefore(dayjs()))
+        repository.assignments.filter(assignment => dayjs(assignment.release_at).isBefore(dayjs()))
           .length * studentList.length;
       _numStudents = studentList.length;
 
       Tasks.createRepositoriesTask.trigger(
         {
           logins: studentList,
-          assignmentTitle: module.title,
+          assignmentTitle: repository.title,
           org: classroomSlug,
           sessionId,
         },
         { concurrencyKey: classroomSlug }
       );
-    } else if (module.team_formation_mode === 'SELF_FORMED') {
-      // For self-formed teams, just mark module as published
+    } else if (repository.team_formation_mode === 'SELF_FORMED') {
+      // For self-formed teams, just mark repository as published
       // Teams and repos will be created when students form their teams
       await ClassmojiService.repository.setPublished(moduleId, true);
 
       return {
-        success: 'Module published! Students can now form teams.',
+        success: 'Repository published! Students can now form teams.',
       };
     } else {
       // Instructor-assigned teams
-      const teams = await ClassmojiService.organizationTag.findTeamsByTag(module.tag_id!);
+      const teams = await ClassmojiService.organizationTag.findTeamsByTag(repository.tag_id!);
 
       if (teams.length === 0) {
         return {
@@ -82,14 +82,14 @@ export const publishAssignment = async (
 
       numReposToCreate = teams.length;
       numIssuesToCreate =
-        module.assignments.filter(assignment => dayjs(assignment.release_at).isBefore(dayjs()))
+        repository.assignments.filter(assignment => dayjs(assignment.release_at).isBefore(dayjs()))
           .length * teams.length;
       _numStudents = teams.length;
 
       Tasks.createRepositoriesTask.trigger(
         {
           logins: teams.map(team => team.slug),
-          assignmentTitle: module.title,
+          assignmentTitle: repository.title,
           org: classroomSlug,
           sessionId,
         },
@@ -125,7 +125,7 @@ export const syncAssignment = async (
   _userId: string | null = null
 ) => {
   const classroom = await ClassmojiService.classroom.findBySlug(classroomSlug);
-  const module = await ClassmojiService.repository.findById(moduleId);
+  const repository = await ClassmojiService.repository.findById(moduleId);
   const sessionId = nanoid();
 
   const accessToken = await auth.createPublicToken({
@@ -138,12 +138,12 @@ export const syncAssignment = async (
 
   let syncResult;
 
-  if (module!.type === 'INDIVIDUAL') {
-    syncResult = await syncIndividualAssignment(classroomSlug, classroom!, module!, sessionId);
-  } else if (module!.team_formation_mode === 'SELF_FORMED') {
-    syncResult = await syncSelfFormedTeamAssignment(classroomSlug, classroom!, module!, sessionId);
+  if (repository!.type === 'INDIVIDUAL') {
+    syncResult = await syncIndividualAssignment(classroomSlug, classroom!, repository!, sessionId);
+  } else if (repository!.team_formation_mode === 'SELF_FORMED') {
+    syncResult = await syncSelfFormedTeamAssignment(classroomSlug, classroom!, repository!, sessionId);
   } else {
-    syncResult = await syncTeamAssignment(classroomSlug, classroom!, module!, sessionId);
+    syncResult = await syncTeamAssignment(classroomSlug, classroom!, repository!, sessionId);
   }
 
   const { numReposToCreate, numIssuesToCreate } = syncResult;
@@ -267,7 +267,7 @@ const syncSelfFormedTeamAssignment = async (
   repository: Repository,
   sessionId: string
 ) => {
-  // For self-formed teams, find teams by the module slug tag
+  // For self-formed teams, find teams by the repository slug tag
   const tag = await ClassmojiService.organizationTag.findByClassroomIdAndName(
     classroom.id,
     repository.slug!

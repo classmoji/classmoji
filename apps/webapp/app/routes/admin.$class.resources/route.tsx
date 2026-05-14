@@ -53,7 +53,7 @@ export default function ResourcesPage({ loaderData }: Route.ComponentProps) {
             Link resources
           </span>
           <span className="text-[11px] font-normal text-gray-500 dark:text-gray-400">
-            Drag pages and slide decks onto modules or assignments to link them.
+            Drag pages and slide decks onto repositories or assignments to link them.
           </span>
         </div>
         <button

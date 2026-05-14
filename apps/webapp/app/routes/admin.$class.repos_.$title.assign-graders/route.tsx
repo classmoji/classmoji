@@ -19,12 +19,12 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
     action: 'view_grader_assignment',
   });
 
-  const module = await ClassmojiService.repository.findBySlugAndTitle(classSlug!, title!);
-  return { module };
+  const repository = await ClassmojiService.repository.findBySlugAndTitle(classSlug!, title!);
+  return { repository };
 };
 
 const AssignGraders = ({ loaderData }: Route.ComponentProps) => {
-  const { module } = loaderData;
+  const { repository } = loaderData;
   const { class: classSlug, title } = useParams();
 
   const [selectedAssignmentId, setSelectedAssignmentId] = useState(null);
@@ -94,7 +94,7 @@ const AssignGraders = ({ loaderData }: Route.ComponentProps) => {
         <Form.Item label="Assignment title">
           <Select
             placeholder="Select assignment"
-            options={module!.assignments.map((assignment: { title: string; id: string }) => ({
+            options={repository!.assignments.map((assignment: { title: string; id: string }) => ({
               label: assignment.title,
               value: assignment.id,
             }))}
@@ -112,7 +112,7 @@ const AssignGraders = ({ loaderData }: Route.ComponentProps) => {
           <Form.Item label="Select assignment from which grader assignment should be based on?">
             <Select
               placeholder="Select template assignment"
-              options={module!.assignments
+              options={repository!.assignments
                 .map((assignment: { title: string; id: string }) => ({
                   label: assignment.title,
                   value: assignment.id,

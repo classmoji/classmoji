@@ -88,7 +88,7 @@ interface Assistant {
 
 interface AssignmentTableProps {
   assignment: AssignmentDef;
-  module: ModuleDef | null;
+  repository: ModuleDef | null;
   repos: Repo[];
   assistants: Assistant[];
   emojiMappings: Record<string, unknown>;
@@ -98,7 +98,7 @@ interface AssignmentTableProps {
 
 const AssignmentTable = ({
   assignment,
-  module,
+  repository,
   repos,
   assistants,
   emojiMappings,
@@ -108,7 +108,7 @@ const AssignmentTable = ({
   const { isFreeTier } = useSubscription();
   const { fetcher, notify } = useGlobalFetcher();
 
-  const isIndividualAssignment = module?.type === 'INDIVIDUAL';
+  const isIndividualAssignment = repository?.type === 'INDIVIDUAL';
 
   const getRepoAssignment = (repo: Repo) => {
     return repo.assignments?.find(a => a.assignment_id === assignment.id);

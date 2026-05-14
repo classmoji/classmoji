@@ -77,7 +77,7 @@ interface SingleStudentViewProps {
   settings: unknown;
   letterGradeMappings: unknown;
   tokenBalance: number;
-  modules?: StudentModule[];
+  repositories?: StudentModule[];
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Prisma query shapes vary across grouped assignment views
   repositoryAssignmentsGroupedByModule?: Record<string, any[]>;
   classroom?: Record<string, unknown>;
@@ -93,20 +93,20 @@ const SingleStudentView = (props: SingleStudentViewProps) => {
     letterGradeMappings,
     tokenBalance,
     // Also accept alternative prop names from route.jsx
-    modules,
+    repositories,
     repositoryAssignmentsGroupedByModule,
   } = props;
 
   const { classroom } = useStore();
 
   // Support both old and new prop naming conventions
-  const effectiveAssignments = assignments || modules || [];
+  const effectiveAssignments = assignments || repositories || [];
   const effectiveIssuesGrouped =
     issuesGroupedByAssignment || repositoryAssignmentsGroupedByModule || {};
 
   // Build repositories array for grade calculation
-  // calculateGrades expects { module, assignments } where assignments is array of repository assignments
-  const repositories = effectiveAssignments
+  // calculateGrades expects { repository, assignments } where assignments is array of repository assignments
+  const gradeRepositories = effectiveAssignments
     .map(repository => {
       const assignments = effectiveIssuesGrouped[repository.id] || [];
       return { repository, assignments };
@@ -114,7 +114,7 @@ const SingleStudentView = (props: SingleStudentViewProps) => {
     .filter(repo => repo.assignments.length > 0);
 
   const { finalNumericGrade, finalLetterGrade, rawNumericGrade, rawLetterGrade } = calculateGrades(
-    repositories,
+    gradeRepositories,
     emojiMappings as Record<string, number>,
     settings as OrganizationSettings,
     letterGradeMappings as LetterGradeMappingEntry[]
@@ -122,9 +122,9 @@ const SingleStudentView = (props: SingleStudentViewProps) => {
 
   const assignmentColumns = [
     {
-      title: 'Module',
+      title: 'Repository',
       dataIndex: 'title',
-      key: 'module',
+      key: 'repository',
       render: (title: string) => (
         <div className="flex items-center gap-2">
           <div className="w-1 h-4 bg-primary dark:bg-primary rounded-full"></div>
@@ -361,7 +361,7 @@ const SingleStudentView = (props: SingleStudentViewProps) => {
         <Card className="shadow-xs">
           <div className="flex items-center gap-3 mb-6">
             <div className="w-1 h-6 bg-primary dark:bg-primary rounded-full"></div>
-            <h2 className="text-xl font-bold text-gray-900">Module Overview</h2>
+            <h2 className="text-xl font-bold text-gray-900">Repository Overview</h2>
           </div>
           <Table
             columns={assignmentColumns}

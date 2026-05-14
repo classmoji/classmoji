@@ -24,20 +24,20 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
     action: 'view_modules',
   });
 
-  const modules = await ClassmojiService.repository.findByClassroomSlug(classSlug!);
-  return { modules };
+  const repositories = await ClassmojiService.repository.findByClassroomSlug(classSlug!);
+  return { repositories };
 };
 
 const AdminAssignments = ({ loaderData }: Route.ComponentProps) => {
   const { pathname } = useLocation();
   const { class: classSlug } = useParams();
-  const { modules } = loaderData;
+  const { repositories } = loaderData;
   const { fetcher } = useGlobalFetcher();
   const [query, setQuery] = useState('');
   const { show, close, visible } = useDisclosure();
   const [unenrolledStudents, setUnenrolledStudents] = useState<Array<Record<string, unknown>>>([]);
   const [selectedStudents, setSelectedStudents] = useState<Array<Record<string, unknown>>>([]);
-  const [repositories, setRepositories] = useState<string[]>([]);
+  const [repoNames, setRepoNames] = useState<string[]>([]);
   const fetcherData = fetcher!.data as
     | {
         students?: Array<Record<string, unknown>>;
@@ -60,7 +60,7 @@ const AdminAssignments = ({ loaderData }: Route.ComponentProps) => {
   useEffect(() => {
     if (fetcherData) {
       setUnenrolledStudents(fetcherData.students || []);
-      setRepositories(fetcherData.repositories || []);
+      setRepoNames(fetcherData.repositories || []);
     }
   }, [fetcher!.data]);
 
@@ -84,9 +84,9 @@ const AdminAssignments = ({ loaderData }: Route.ComponentProps) => {
     const repositoriesToDelete: { name: string }[] = [];
 
     loginNames.forEach(login => {
-      repositories.forEach(repository => {
-        if (repository.includes(login)) {
-          repositoriesToDelete.push({ name: repository });
+      repoNames.forEach(repoName => {
+        if (repoName.includes(login)) {
+          repositoriesToDelete.push({ name: repoName });
         }
       });
     });
@@ -109,7 +109,7 @@ const AdminAssignments = ({ loaderData }: Route.ComponentProps) => {
     <div className="min-h-full relative">
       <Outlet />
       <div className="flex items-center justify-between gap-3 mt-2 mb-4">
-        <h1 className="text-base font-semibold text-gray-600 dark:text-gray-400">Modules</h1>
+        <h1 className="text-base font-semibold text-gray-600 dark:text-gray-400">Repositories</h1>
 
         <RequireRole roles={['OWNER']}>
           <div className="flex items-center gap-3">
@@ -132,7 +132,7 @@ const AdminAssignments = ({ loaderData }: Route.ComponentProps) => {
               <Button icon={<IconLink size={16} />}>Link Resources</Button>
             </NavLink>
             <NavLink to={`${pathname}/form`}>
-              <ButtonNew>New module</ButtonNew>
+              <ButtonNew>New repository</ButtonNew>
             </NavLink>
           </div>
         </RequireRole>
@@ -216,7 +216,7 @@ const AdminAssignments = ({ loaderData }: Route.ComponentProps) => {
         )}
 
         <AssignmentTable
-          assignments={modules.filter((repository: { title: string }) =>
+          assignments={repositories.filter((repository: { title: string }) =>
             repository.title.toLowerCase().includes(query.toLowerCase())
           )}
         />

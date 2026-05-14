@@ -245,8 +245,8 @@ function generateStudentData(index: number) {
   // Base performance varies by student (0.5 = 50th percentile to 1.0 = 100th percentile)
   const basePerformance = 0.5 + Math.random() * 0.5;
 
-  const repositories = mockModules.map(module => {
-    const assignments = module.assignments.map(assignment => {
+  const repositories = mockModules.map(repository => {
+    const assignments = repository.assignments.map(assignment => {
       const grades = [generateRandomGrade(assignment.id, basePerformance)];
 
       // Random late penalty (30% chance of being late)
@@ -270,14 +270,14 @@ function generateStudentData(index: number) {
     });
 
     return {
-      id: module.id * 100 + index,
-      repository_id: module.id,
+      id: repository.id * 100 + index,
+      repository_id: repository.id,
       repository: {
-        id: module.id,
-        title: module.title,
-        weight: module.weight,
-        is_extra_credit: module.is_extra_credit,
-        drop_lowest_count: module.drop_lowest_count,
+        id: repository.id,
+        title: repository.title,
+        weight: repository.weight,
+        is_extra_credit: repository.is_extra_credit,
+        drop_lowest_count: repository.drop_lowest_count,
       },
       assignments,
     };

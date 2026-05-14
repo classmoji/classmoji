@@ -16,8 +16,8 @@ const STUDENT_PREFS: PrefRow[] = [
   { key: 'email_quiz_published', label: 'Quiz published' },
   { key: 'email_assignment_due_date_changed', label: 'Assignment due date changed' },
   { key: 'email_assignment_graded', label: 'Assignment graded' },
-  { key: 'email_repository_published', label: 'Module published' },
-  { key: 'email_repository_unpublished', label: 'Module unpublished' },
+  { key: 'email_repository_published', label: 'Repository published' },
+  { key: 'email_repository_unpublished', label: 'Repository unpublished' },
   { key: 'email_page_published', label: 'Page published' },
   { key: 'email_page_unpublished', label: 'Page unpublished' },
 ];

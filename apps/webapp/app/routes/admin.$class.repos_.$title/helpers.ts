@@ -5,7 +5,7 @@ import { nanoid } from 'nanoid';
 export const calculateContributions = async (repository: { id: string }, classroomSlug: string) => {
   const sessionId = nanoid();
 
-  const repoNames = (await ClassmojiService.gitRepo.findByRepository(classroomSlug, module.id)).map(
+  const repoNames = (await ClassmojiService.gitRepo.findByRepository(classroomSlug, repository.id)).map(
     repo => repo.name
   );
   const classroom = await ClassmojiService.classroom.findBySlug(classroomSlug);

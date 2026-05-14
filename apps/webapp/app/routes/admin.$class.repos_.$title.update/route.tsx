@@ -18,13 +18,13 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
 
   const url = new URL(request.url);
   const moduleId = url.searchParams.get('id');
-  const module = await ClassmojiService.repository.findById(moduleId!);
-  return { module };
+  const repository = await ClassmojiService.repository.findById(moduleId!);
+  return { repository };
 };
 
 const UpdateRepositories = ({ loaderData }: Route.ComponentProps) => {
   const { show, visible, close } = useDisclosure();
-  const { module } = loaderData;
+  const { repository } = loaderData;
   const navigate = useNavigate();
   const [form] = Form.useForm();
   const { fetcher } = useGlobalFetcher();
@@ -39,7 +39,7 @@ const UpdateRepositories = ({ loaderData }: Route.ComponentProps) => {
       .validateFields()
       .then(() => {
         const values = form.getFieldsValue();
-        fetcher!.submit(JSON.stringify({ values, module }), {
+        fetcher!.submit(JSON.stringify({ values, repository }), {
           method: 'post',
           action: `/admin/${classSlug}/repos/${title}/update`,
           encType: 'application/json',
@@ -94,7 +94,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
     action: 'update_module',
   });
 
-  const { values, module } = await request.json();
+  const { values, repository } = await request.json();
   const sessionId = nanoid();
   const accessToken = await auth.createPublicToken({
     scopes: {
@@ -124,8 +124,8 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
     }
   );
 
-  const repositories = await ClassmojiService.gitRepo.findByRepository(classSlug!, module.id);
-  const [templateOwner, templateRepo] = module.template.split('/');
+  const repositories = await ClassmojiService.gitRepo.findByRepository(classSlug!, repository.id);
+  const [templateOwner, templateRepo] = repository.template.split('/');
 
   const payloads = repositories.map(repo => {
     return {

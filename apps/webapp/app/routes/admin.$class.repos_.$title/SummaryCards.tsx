@@ -34,18 +34,18 @@ interface Assignment {
   id: string;
 }
 
-interface RepoAssignment {
+interface GitRepoAssignment {
   assignment_id: string;
   status: string;
 }
 
-interface Repository {
+interface GitRepoSummary {
   project_id?: string | null;
-  assignments?: RepoAssignment[];
+  assignments?: GitRepoAssignment[];
   [key: string]: unknown;
 }
 
-interface Module {
+interface Repository {
   id: string;
   type: string;
   weight: number;
@@ -54,16 +54,16 @@ interface Module {
 }
 
 interface SummaryCardsProps {
-  module: Module;
-  repos: Repository[];
+  repository: Repository;
+  repos: GitRepoSummary[];
 }
 
-const SummaryCards = ({ module, repos }: SummaryCardsProps) => {
+const SummaryCards = ({ repository, repos }: SummaryCardsProps) => {
   const fetcher = useFetcher();
   const { class: classSlug, title } = useParams();
 
-  // Count total submissions across all assignments in the module
-  const allAssignments = module.assignments || [];
+  // Count total submissions across all assignments in the repository
+  const allAssignments = repository.assignments || [];
   const totalSubmissions = allAssignments.reduce(
     (total: number, assignment: Assignment) =>
       total +
@@ -78,12 +78,12 @@ const SummaryCards = ({ module, repos }: SummaryCardsProps) => {
 
   // Count repos with projects
   const reposWithProjects = repos.filter(repo => repo.project_id).length;
-  const showProjectsCard = module.type === 'GROUP' && module.project_template_id;
+  const showProjectsCard = repository.type === 'GROUP' && repository.project_template_id;
 
   const handleCreateProjects = () => {
     fetcher.submit(
       {
-        moduleId: module.id,
+        moduleId: repository.id,
       },
       {
         action: `/admin/${classSlug}/repos/${title}?/createProjects`,
@@ -99,16 +99,16 @@ const SummaryCards = ({ module, repos }: SummaryCardsProps) => {
     <div
       className={`grid grid-cols-1 ${showProjectsCard ? 'md:grid-cols-3' : 'md:grid-cols-2'} gap-6 mb-8`}
     >
-      <Card title="Module Overview">
+      <Card title="Repository Overview">
         <StatItem
           label="Type"
           value={
-            <Tag color={module.type === 'GROUP' ? 'blue' : 'orange'} className="m-0">
-              {module.type}
+            <Tag color={repository.type === 'GROUP' ? 'blue' : 'orange'} className="m-0">
+              {repository.type}
             </Tag>
           }
         />
-        <StatItem label="Weight" value={`${module.weight}%`} />
+        <StatItem label="Weight" value={`${repository.weight}%`} />
         <StatItem label="Repositories" value={repos.length} />
       </Card>
 

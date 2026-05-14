@@ -39,8 +39,8 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
     action: 'view_module',
   });
 
-  const module = await ClassmojiService.repository.findBySlugAndTitle(classSlug!, title!);
-  const repos = await ClassmojiService.gitRepo.findByRepository(classSlug!, module!.id);
+  const repository = await ClassmojiService.repository.findBySlugAndTitle(classSlug!, title!);
+  const repos = await ClassmojiService.gitRepo.findByRepository(classSlug!, repository!.id);
   const assistants = (
     await ClassmojiService.classroomMembership.findUsersByRole(classroom.id, 'ASSISTANT')
   ).filter(({ is_grader }) => is_grader);
@@ -48,15 +48,15 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
   const emojiMappings = await ClassmojiService.emojiMapping.findByClassroomId(classroom.id);
   const settings = await ClassmojiService.classroom.getClassroomSettingsForServer(classroom.id);
 
-  return { module, repos, assistants, emojiMappings, settings, classroom };
+  return { repository, repos, assistants, emojiMappings, settings, classroom };
 };
 
 const SingleModule = ({ loaderData }: Route.ComponentProps) => {
-  const { module, repos, assistants, emojiMappings, settings, classroom } = loaderData;
+  const { repository, repos, assistants, emojiMappings, settings, classroom } = loaderData;
   const { fetcher, notify: _notify } = useGlobalFetcher();
   const { class: classSlug } = useParams();
   const { revalidate } = useRevalidator();
-  const [viewMode, setViewMode] = useState('assignment'); // 'module' or 'assignment'
+  const [viewMode, setViewMode] = useState('assignment'); // 'repository' or 'assignment'
 
   const handleGradeRelease = async (assignmentId: string, gradesReleased: boolean) => {
     fetcher!.submit(
@@ -72,7 +72,7 @@ const SingleModule = ({ loaderData }: Route.ComponentProps) => {
     );
   };
 
-  const tabItems = (module!.assignments as ModuleAssignmentSummary[])
+  const tabItems = (repository!.assignments as ModuleAssignmentSummary[])
     .sort((a, b) => {
       // First sort by deadline
       const aTime = a.student_deadline ? new Date(a.student_deadline).getTime() : 0;
@@ -126,7 +126,7 @@ const SingleModule = ({ loaderData }: Route.ComponentProps) => {
               assignment={
                 assignment as unknown as Parameters<typeof AssignmentTable>[0]['assignment']
               }
-              module={module as Parameters<typeof AssignmentTable>[0]['module']}
+              repository={repository as Parameters<typeof AssignmentTable>[0]['repository']}
               repos={repos as Parameters<typeof AssignmentTable>[0]['repos']}
               assistants={assistants as Parameters<typeof AssignmentTable>[0]['assistants']}
               emojiMappings={
@@ -146,27 +146,21 @@ const SingleModule = ({ loaderData }: Route.ComponentProps) => {
         <div className="flex items-center gap-2 mt-4">
           <IconFileText className="text-black dark:text-gray-200" />
           <div className="flex items-center gap-2">
-            <span className="text-2xl font-bold text-black dark:text-gray-200">Modules / </span>{' '}
-            <span className="text-2xl text-black dark:text-gray-200">{`${module!.title}`}</span>
+            <span className="text-2xl font-bold text-black dark:text-gray-200">Repositories / </span>{' '}
+            <span className="text-2xl text-black dark:text-gray-200">{`${repository!.title}`}</span>
           </div>
         </div>
 
         <Menu
-          module={module as Parameters<typeof Menu>[0]['module']}
+          repository={repository as Parameters<typeof Menu>[0]['repository']}
           assistants={assistants as Parameters<typeof Menu>[0]['assistants']}
         />
       </div>
       <Divider />
 
       <SummaryCards
-        module={module!}
-        repos={
-          repos as {
-            project_id?: string | null;
-            assignments?: { assignment_id: string; status: string }[];
-            [key: string]: unknown;
-          }[]
-        }
+        repository={repository as unknown as Parameters<typeof SummaryCards>[0]['repository']}
+        repos={repos as unknown as Parameters<typeof SummaryCards>[0]['repos']}
       />
 
       {/* View Toggle */}
@@ -178,22 +172,22 @@ const SingleModule = ({ loaderData }: Route.ComponentProps) => {
               <IconTable
                 size={18}
                 className={
-                  viewMode === 'module' ? 'text-yellow-600 dark:text-yellow-400' : 'text-gray-400'
+                  viewMode === 'repository' ? 'text-yellow-600 dark:text-yellow-400' : 'text-gray-400'
                 }
               />
               <span
                 className={`text-sm font-medium ${
-                  viewMode === 'module'
+                  viewMode === 'repository'
                     ? 'text-yellow-600 dark:text-yellow-400'
                     : 'text-gray-600 dark:text-gray-400'
                 }`}
               >
-                Module
+                Repository
               </span>
             </div>
             <Switch
               checked={viewMode === 'assignment'}
-              onChange={checked => setViewMode(checked ? 'assignment' : 'module')}
+              onChange={checked => setViewMode(checked ? 'assignment' : 'repository')}
               size="small"
             />
             <div className="flex items-center gap-2">
@@ -223,7 +217,7 @@ const SingleModule = ({ loaderData }: Route.ComponentProps) => {
         <Tabs items={tabItems} />
       ) : (
         <ModuleTable
-          module={module as Parameters<typeof ModuleTable>[0]['module']}
+          repository={repository as Parameters<typeof ModuleTable>[0]['repository']}
           repos={repos as unknown as Parameters<typeof ModuleTable>[0]['repos']}
           emojiMappings={emojiMappings as Parameters<typeof ModuleTable>[0]['emojiMappings']}
           settings={settings as Parameters<typeof ModuleTable>[0]['settings']}

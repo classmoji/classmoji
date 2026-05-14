@@ -27,7 +27,7 @@ export interface SpotlightModule {
 }
 
 interface ModuleSpotlightCardProps {
-  module: SpotlightModule | null;
+  repository: SpotlightModule | null;
   classSlug: string;
 }
 
@@ -59,9 +59,9 @@ const formatRelative = (date: string | Date) => {
   return target.format('MMM D');
 };
 
-const buildItems = (module: SpotlightModule): SpotlightItem[] => {
+const buildItems = (repository: SpotlightModule): SpotlightItem[] => {
   const items: SpotlightItem[] = [];
-  module.assignments?.forEach(a => {
+  repository.assignments?.forEach(a => {
     items.push({
       key: `a-${a.id}`,
       type: 'ASGN',
@@ -69,24 +69,24 @@ const buildItems = (module: SpotlightModule): SpotlightItem[] => {
       meta: a.student_deadline ? formatRelative(a.student_deadline) : undefined,
     });
   });
-  module.slides?.forEach(s => {
+  repository.slides?.forEach(s => {
     items.push({ key: `s-${s.slide.id}`, type: 'LECT', title: s.slide.title });
   });
-  module.pages?.forEach(p => {
+  repository.pages?.forEach(p => {
     items.push({ key: `p-${p.page.id}`, type: 'PAGE', title: p.page.title });
   });
-  module.quizzes?.forEach(q => {
+  repository.quizzes?.forEach(q => {
     items.push({ key: `q-${q.id}`, type: 'QUIZ', title: q.title });
   });
   return items.slice(0, 5);
 };
 
-const buildSummary = (module: SpotlightModule) => {
+const buildSummary = (repository: SpotlightModule) => {
   const parts: string[] = [];
-  const aCount = module.assignments?.length ?? 0;
-  const sCount = module.slides?.length ?? 0;
-  const pCount = module.pages?.length ?? 0;
-  const qCount = module.quizzes?.length ?? 0;
+  const aCount = repository.assignments?.length ?? 0;
+  const sCount = repository.slides?.length ?? 0;
+  const pCount = repository.pages?.length ?? 0;
+  const qCount = repository.quizzes?.length ?? 0;
   if (qCount) parts.push(`${qCount} ${qCount === 1 ? 'quiz' : 'quizzes'}`);
   if (sCount) parts.push(`${sCount} slide ${sCount === 1 ? 'deck' : 'decks'}`);
   if (pCount) parts.push(`${pCount} ${pCount === 1 ? 'page' : 'pages'}`);
@@ -94,30 +94,30 @@ const buildSummary = (module: SpotlightModule) => {
   return parts.join(' · ');
 };
 
-const ModuleSpotlightCard = ({ module, classSlug }: ModuleSpotlightCardProps) => {
-  if (!module) {
+const ModuleSpotlightCard = ({ repository, classSlug }: ModuleSpotlightCardProps) => {
+  if (!repository) {
     return (
       <section className="rounded-2xl bg-panel ring-1 ring-stone-200 dark:ring-neutral-800 p-5 sm:p-6 h-full flex flex-col items-center justify-center text-center">
         <h3 className="text-base font-semibold text-gray-800 dark:text-gray-200">
-          No published modules yet
+          No published repositories yet
         </h3>
         <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
-          Modules will appear here once your instructor publishes them.
+          Repositories will appear here once your instructor publishes them.
         </p>
       </section>
     );
   }
 
-  const items = buildItems(module);
-  const summary = buildSummary(module);
+  const items = buildItems(repository);
+  const summary = buildSummary(repository);
 
   return (
     <section className="rounded-2xl bg-panel ring-1 ring-stone-200 dark:ring-neutral-800 p-5 sm:p-6 h-full flex flex-col">
       <div className="text-[11px] font-semibold tracking-[0.18em] text-gray-400 dark:text-gray-500">
-        MODULE #{module.ordinal}
+        MODULE #{repository.ordinal}
       </div>
       <h3 className="mt-1 text-lg sm:text-xl font-semibold text-gray-900 dark:text-gray-100 tracking-tight">
-        {module.title}
+        {repository.title}
       </h3>
       {summary && <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">{summary}</p>}
 
@@ -127,7 +127,7 @@ const ModuleSpotlightCard = ({ module, classSlug }: ModuleSpotlightCardProps) =>
       <ul className="mt-2 flex-1 flex flex-col gap-1.5">
         {items.length === 0 && (
           <li className="text-sm text-gray-500 dark:text-gray-400">
-            Nothing scheduled in this module yet.
+            Nothing scheduled in this repository yet.
           </li>
         )}
         {items.map(item => (
@@ -154,12 +154,12 @@ const ModuleSpotlightCard = ({ module, classSlug }: ModuleSpotlightCardProps) =>
 
       <div className="mt-4 pt-4 border-t border-stone-200/60 dark:border-neutral-700/50 flex items-center justify-between gap-2">
         <div className="flex items-center gap-1.5 text-xs">
-          {module.assignments && module.assignments.length > 0 && (
+          {repository.assignments && repository.assignments.length > 0 && (
             <span className="px-2 py-1 rounded-full ring-1 ring-stone-200 dark:ring-neutral-700 text-gray-600 dark:text-gray-300">
               Assignments
             </span>
           )}
-          {module.slides && module.slides.length > 0 && (
+          {repository.slides && repository.slides.length > 0 && (
             <span className="px-2 py-1 rounded-full ring-1 ring-stone-200 dark:ring-neutral-700 text-gray-600 dark:text-gray-300">
               Lectures
             </span>
@@ -169,7 +169,7 @@ const ModuleSpotlightCard = ({ module, classSlug }: ModuleSpotlightCardProps) =>
           to={`/student/${classSlug}/repos`}
           className="inline-flex items-center gap-1.5 text-xs sm:text-sm font-medium text-gray-700 dark:text-gray-200 px-3 py-1.5 rounded-full ring-1 ring-stone-200 dark:ring-neutral-700 bg-panel hover:bg-stone-50 dark:hover:bg-neutral-800 transition-colors"
         >
-          View module
+          View repository
           <IconArrowRight size={14} />
         </Link>
       </div>

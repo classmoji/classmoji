@@ -451,9 +451,9 @@ export default function StudentQuizzes({ loaderData }: Route.ComponentProps) {
       ),
     },
     {
-      title: 'Module',
+      title: 'Repository',
       dataIndex: 'assignmentTitle',
-      key: 'module',
+      key: 'repository',
       render: (title: string) => <Text type="secondary">{title}</Text>,
     },
     {

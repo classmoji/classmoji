@@ -5,7 +5,7 @@ import type { ClassroomModule, ModuleConfig } from './types';
 interface ModuleSelectionDrawerProps {
   open: boolean;
   onClose: () => void;
-  modules: ClassroomModule[];
+  repositories: ClassroomModule[];
   selectedModules: Map<string, ModuleConfig>;
   onModuleToggle: (moduleId: string, checked: boolean) => void;
   onQuizToggle: (moduleId: string, checked: boolean) => void;
@@ -16,7 +16,7 @@ interface ModuleSelectionDrawerProps {
 const ModuleSelectionDrawer = ({
   open,
   onClose,
-  modules,
+  repositories,
   selectedModules,
   onModuleToggle,
   onQuizToggle,
@@ -25,7 +25,7 @@ const ModuleSelectionDrawer = ({
 }: ModuleSelectionDrawerProps) => {
   return (
     <Drawer
-      title="Select Modules to Import"
+      title="Select Repositories to Import"
       placement="right"
       width={720}
       open={open}
@@ -42,7 +42,7 @@ const ModuleSelectionDrawer = ({
       }
     >
       <ModuleImportTable
-        modules={modules}
+        repositories={repositories}
         selectedModules={selectedModules}
         onModuleToggle={onModuleToggle}
         onQuizToggle={onQuizToggle}
@@ -50,10 +50,10 @@ const ModuleSelectionDrawer = ({
       <div className="mt-4 text-sm text-gray-500">
         {selectedModules.size > 0 ? (
           <span>
-            {selectedModules.size} module{selectedModules.size !== 1 ? 's' : ''} selected
+            {selectedModules.size} repository{selectedModules.size !== 1 ? 's' : ''} selected
           </span>
         ) : (
-          <span>No modules selected</span>
+          <span>No repositories selected</span>
         )}
       </div>
     </Drawer>

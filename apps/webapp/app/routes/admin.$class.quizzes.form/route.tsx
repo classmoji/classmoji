@@ -43,8 +43,8 @@ export async function loader({ params, request }: Route.LoaderArgs) {
     attemptedAction: quizId ? 'edit_quiz' : 'create_quiz',
   });
 
-  // Fetch modules for linking
-  const modules = await ClassmojiService.repository.findByClassroomId(classroom.id);
+  // Fetch repositories for linking
+  const repositories = await ClassmojiService.repository.findByClassroomId(classroom.id);
   const examplePrompts = getExamplePrompts();
 
   // If editing, fetch the quiz data
@@ -78,7 +78,7 @@ export async function loader({ params, request }: Route.LoaderArgs) {
     org: classSlug,
     quiz,
     isEditing: Boolean(quizId),
-    assignments: modules, // Keep variable name for backward compat with component
+    assignments: repositories, // Keep variable name for backward compat with component
     examplePrompts,
   };
 }
@@ -339,10 +339,10 @@ function QuizFormDrawer({ loaderData }: Route.ComponentProps) {
 
                 <Form.Item
                   name="moduleId"
-                  label="Linked Module (Optional)"
-                  tooltip="Optionally link this quiz to a specific module"
+                  label="Linked Repository (Optional)"
+                  tooltip="Optionally link this quiz to a specific repository"
                 >
-                  <Select placeholder="Select a module to link this quiz to (optional)" allowClear>
+                  <Select placeholder="Select a repository to link this quiz to (optional)" allowClear>
                     {assignments?.map((repository: { id: string; title: string }) => (
                       <Option key={repository.id} value={repository.id}>
                         {repository.title}
@@ -368,7 +368,7 @@ function QuizFormDrawer({ loaderData }: Route.ComponentProps) {
                   name="includeCodeContext"
                   label="Code-Aware Quiz"
                   valuePropName="checked"
-                  tooltip="Enable AI agent to analyze student's code submission and ask specific questions about their implementation. Requires a linked module with student repositories."
+                  tooltip="Enable AI agent to analyze student's code submission and ask specific questions about their implementation. Requires a linked repository with student repositories."
                 >
                   <Switch checkedChildren="Enabled" unCheckedChildren="Disabled" />
                 </Form.Item>

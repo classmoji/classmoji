@@ -78,7 +78,7 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
     progress: 0,
   };
 
-  // Group assignments by module
+  // Group assignments by repository
   const assignmentsByModule: Record<string, ModuleAssignmentsGroup> = {};
   assignedGraderItems.forEach(item => {
     const repoAssignment = item.git_repo_assignment;
@@ -158,15 +158,15 @@ const AdminAssistantDrawer = ({ loaderData }: Route.ComponentProps) => {
     return '#ef4444'; // red
   };
 
-  const moduleCollapseItems = Object.entries(assignmentsByModule).map(([moduleId, module]) => {
-    const gradedCount = module.assignments.filter(assignment => assignment.isGraded).length;
-    const totalCount = module.assignments.length;
+  const moduleCollapseItems = Object.entries(assignmentsByModule).map(([moduleId, repository]) => {
+    const gradedCount = repository.assignments.filter(assignment => assignment.isGraded).length;
+    const totalCount = repository.assignments.length;
 
     return {
       key: moduleId,
       label: (
         <div className="flex items-center justify-between w-full pr-4">
-          <span className="font-medium">{module.name}</span>
+          <span className="font-medium">{repository.name}</span>
           <Tag color={gradedCount === totalCount ? 'green' : 'orange'}>
             {gradedCount}/{totalCount} graded
           </Tag>
@@ -174,7 +174,7 @@ const AdminAssistantDrawer = ({ loaderData }: Route.ComponentProps) => {
       ),
       children: (
         <div className="space-y-2">
-          {module.assignments.map(assignment => (
+          {repository.assignments.map(assignment => (
             <div
               key={assignment.id}
               className="flex items-center justify-between p-2 bg-gray-50 dark:bg-neutral-800 rounded-lg"

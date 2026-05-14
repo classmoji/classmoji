@@ -100,9 +100,9 @@ const AssignmentTable = ({ assignments }: AssignmentTableProps) => {
 
   const columns = [
     {
-      title: 'Module',
+      title: 'Repository',
       dataIndex: 'title',
-      key: 'module',
+      key: 'repository',
       width: '30%',
       sorter: (a: Assignment, b: Assignment) => a.title.localeCompare(b.title),
       render: (title: string, record: Assignment) => (

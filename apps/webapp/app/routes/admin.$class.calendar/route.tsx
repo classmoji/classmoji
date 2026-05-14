@@ -264,7 +264,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
       return data({ success: false, error: 'Assignment not found' }, { status: 404 });
     }
 
-    // Verify assignment belongs to this classroom (through its module)
+    // Verify assignment belongs to this classroom (through its repository)
     if (assignment.repository.classroom_id !== classroom.id) {
       return data(
         { success: false, error: 'Assignment does not belong to this classroom' },

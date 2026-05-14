@@ -268,7 +268,7 @@ interface BatchProgress {
 
 interface BatchPage {
   title: string;
-  module?: string;
+  repository?: string;
   assignmentId?: string;
   markdownContent: string;
   imageFiles: File[];
@@ -309,7 +309,7 @@ export default function NewPage({ loaderData }: Route.ComponentProps) {
   const isCreating = fetcher.state !== 'idle' || batchProgress !== null;
   const createError = fetcher.data?.error;
 
-  // Module is now optional for all pages - no validation needed
+  // Repository is now optional for all pages - no validation needed
 
   // Redirect on success (single page only - batch handled separately)
   useEffect(() => {
@@ -354,7 +354,7 @@ export default function NewPage({ loaderData }: Route.ComponentProps) {
         formData.append('classSlug', classroom.slug);
         formData.append('term', String(term));
         formData.append('title', page.title);
-        if (page.module) formData.append('module', page.module);
+        if (page.repository) formData.append('repository', page.repository);
         if (page.assignmentId) formData.append('assignmentId', page.assignmentId);
 
         // Add markdown

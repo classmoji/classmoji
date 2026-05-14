@@ -252,7 +252,7 @@ const TeamPanel = ({
     );
   }
   return (
-    <PanelShell title="Team" subtitle="No group modules in this class">
+    <PanelShell title="Team" subtitle="No group repositories in this class">
       <div className="h-full flex flex-col items-center justify-center text-center">
         <p className="text-sm text-gray-500 dark:text-gray-400">Nothing to show here yet.</p>
       </div>

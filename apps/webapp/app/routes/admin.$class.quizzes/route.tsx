@@ -298,9 +298,9 @@ export default function AdminQuizzes({ loaderData }: Route.ComponentProps) {
       ),
     },
     {
-      title: 'Module',
+      title: 'Repository',
       dataIndex: 'moduleTitle',
-      key: 'module',
+      key: 'repository',
       width: '20%',
       sorter: (a: AdminQuiz, b: AdminQuiz) => a.moduleTitle.localeCompare(b.moduleTitle),
       render: (title: string) => (

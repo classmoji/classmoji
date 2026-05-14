@@ -47,7 +47,7 @@ export const useResourcesBoard = (
     return slides.filter(slide => slide.title.toLowerCase().includes(searchQuery.toLowerCase()));
   }, [slides, searchQuery, showSlides]);
 
-  // Get resources linked to a specific module
+  // Get resources linked to a specific repository
   const getModuleResources = useCallback(
     (moduleId: string) => {
       const modulePages = allPages.filter(page =>
@@ -83,7 +83,7 @@ export const useResourcesBoard = (
   const isLinked = useCallback(
     (resource: Resource, _resourceType: string, targetType: string, targetId: string) => {
       return resource.links?.some(link =>
-        targetType === 'module'
+        targetType === 'repository'
           ? link.repository_id === targetId && !link.assignment_id
           : link.assignment_id === targetId
       );
@@ -94,7 +94,7 @@ export const useResourcesBoard = (
   // Get link ID for a resource in a specific target
   const getLinkId = useCallback((resource: Resource, targetType: string, targetId: string) => {
     const link = resource.links?.find(link =>
-      targetType === 'module'
+      targetType === 'repository'
         ? link.repository_id === targetId && !link.assignment_id
         : link.assignment_id === targetId
     );

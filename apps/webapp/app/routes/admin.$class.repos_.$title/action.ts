@@ -18,7 +18,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
 
   return namedAction(request, {
     async calculateContributions() {
-      const result = await calculateContributions(data.module, classSlug);
+      const result = await calculateContributions(data.repository, classSlug);
 
       return result;
     },

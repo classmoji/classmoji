@@ -122,7 +122,7 @@ const AssignmentsTabsCard = ({ rows }: AssignmentsTabsCardProps) => {
             <table className="w-full text-sm">
               <thead className="text-[11px] font-semibold tracking-[0.08em] uppercase text-gray-500 dark:text-gray-400">
                 <tr className="border-b border-stone-200 dark:border-neutral-800">
-                  <th className="text-left px-4 py-3 font-semibold">Module</th>
+                  <th className="text-left px-4 py-3 font-semibold">Repository</th>
                   <th className="text-left px-4 py-3 font-semibold">Assignment</th>
                   <th className="text-left px-4 py-3 font-semibold hidden md:table-cell">Type</th>
                   <th className="text-left px-4 py-3 font-semibold">Status</th>
