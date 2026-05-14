@@ -184,7 +184,7 @@ test.describe('Grading Table Columns', () => {
       .catch(() => false);
     if (hasTable) {
       await expect(page.getByRole('columnheader', { name: /Owner/i })).toBeVisible();
-      await expect(page.getByRole('columnheader', { name: /Module/i })).toBeVisible();
+      await expect(page.getByRole('columnheader', { name: /Repository/i })).toBeVisible();
       await expect(page.getByRole('columnheader', { name: /Assignment/i })).toBeVisible();
       await expect(page.getByRole('columnheader', { name: /Grade/i })).toBeVisible();
       await expect(page.getByRole('columnheader', { name: /Status/i })).toBeVisible();

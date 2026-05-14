@@ -26,7 +26,7 @@ test.describe('Student Quiz List', () => {
     await expect(page.locator('table')).toBeVisible({ timeout: 10000 });
 
     // Check for expected column headers
-    const headers = ['Quiz Name', 'Module', 'Due Date'];
+    const headers = ['Quiz Name', 'Repository', 'Due Date'];
     for (const header of headers) {
       await expect(page.getByRole('columnheader', { name: new RegExp(header, 'i') })).toBeVisible();
     }

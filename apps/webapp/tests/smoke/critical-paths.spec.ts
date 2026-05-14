@@ -72,18 +72,18 @@ test.describe('Critical Path: Owner Dashboard', () => {
   test('navigation sidebar is functional', async ({ authenticatedPage: page }) => {
     // Check key navigation items exist
     await expect(page.getByRole('link', { name: 'Dashboard' })).toBeVisible();
-    await expect(page.getByRole('link', { name: 'Modules' })).toBeVisible();
+    await expect(page.getByRole('link', { name: 'Repositories' })).toBeVisible();
     await expect(page.getByRole('link', { name: 'Quizzes' })).toBeVisible();
     await expect(page.getByRole('link', { name: 'Grades' })).toBeVisible();
     await expect(page.getByRole('link', { name: 'Students' })).toBeVisible();
   });
 
-  test('can navigate to modules page', async ({ authenticatedPage: page }) => {
-    await page.getByRole('link', { name: 'Modules' }).click();
-    await page.waitForURL(`**/admin/${TEST_CLASSROOM}/modules`);
+  test('can navigate to repositories page', async ({ authenticatedPage: page }) => {
+    await page.getByRole('link', { name: 'Repositories' }).click();
+    await page.waitForURL(`**/admin/${TEST_CLASSROOM}/repos`);
     await waitForDataLoad(page);
-    // Should be on modules page
-    await expect(page).toHaveURL(new RegExp(`/admin/${TEST_CLASSROOM}/modules`));
+    // Should be on repositories page
+    await expect(page).toHaveURL(new RegExp(`/admin/${TEST_CLASSROOM}/repos`));
   });
 
   test('can navigate to quizzes page', async ({ authenticatedPage: page }) => {

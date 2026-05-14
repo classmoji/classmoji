@@ -3,98 +3,98 @@ import { mockGitHubAPI } from '../../fixtures/mocks/github.mock';
 import { waitForDataLoad } from '../../helpers/wait.helpers';
 
 /**
- * Module CRUD Tests
+ * Repository CRUD Tests
  *
- * Tests for module (assignment) management at /admin/$org/modules
+ * Tests for repository (assignment) management at /admin/$org/repos
  * Including list view, create, edit, delete, publish, and navigation.
  *
- * Seeded modules (from packages/database/scripts/seed.js):
+ * Seeded repositories (from packages/database/scripts/seed.js):
  * - hello-world (Published, Individual, 5%)
  * - lab1-landing-page (Published, Individual, 8%)
  * - starterpack (Draft, Individual, 5%)
  */
 
-test.describe('Module List', () => {
+test.describe('Repository List', () => {
   test.beforeEach(async ({ authenticatedPage: page, testOrg }) => {
     await mockGitHubAPI(page);
-    await page.goto(`/admin/${testOrg}/modules`);
+    await page.goto(`/admin/${testOrg}/repos`);
     await waitForDataLoad(page);
   });
 
-  test('displays module list page with correct heading', async ({ authenticatedPage: page }) => {
-    // Page heading is "Modules"
-    await expect(page.getByRole('heading', { name: 'Modules' })).toBeVisible();
+  test('displays repository list page with correct heading', async ({ authenticatedPage: page }) => {
+    // Page heading is "Repositories"
+    await expect(page.getByRole('heading', { name: 'Repositories' })).toBeVisible();
   });
 
-  test('shows new module button', async ({ authenticatedPage: page }) => {
-    const newButton = page.getByRole('button', { name: /New module/i });
+  test('shows new repository button', async ({ authenticatedPage: page }) => {
+    const newButton = page.getByRole('button', { name: /New repository/i });
     await expect(newButton).toBeVisible();
   });
 
-  test('displays seeded modules in table', async ({ authenticatedPage: page }) => {
-    // Seed data modules (see packages/database/scripts/seed.js)
+  test('displays seeded repositories in table', async ({ authenticatedPage: page }) => {
+    // Seed data repositories (see packages/database/scripts/seed.js)
     await expect(page.getByText('starterpack')).toBeVisible();
     await expect(page.getByText('hello-world')).toBeVisible();
     await expect(page.getByText('lab1-landing-page')).toBeVisible();
   });
 
-  test('module table has expected columns', async ({ authenticatedPage: page }) => {
+  test('repository table has expected columns', async ({ authenticatedPage: page }) => {
     const table = page.locator('table');
     await expect(table).toBeVisible();
     // Use exact matching to avoid sidebar link conflicts
-    await expect(table.getByText('Module', { exact: true })).toBeVisible();
+    await expect(table.getByText('Repository', { exact: true })).toBeVisible();
     await expect(table.getByText('Type', { exact: true })).toBeVisible();
     await expect(table.getByText('Weight (%)', { exact: true })).toBeVisible();
     await expect(table.getByText('Status', { exact: true })).toBeVisible();
   });
 
-  test('shows module type badges', async ({ authenticatedPage: page }) => {
-    // Individual modules should show "Individual" type tag
+  test('shows repository type badges', async ({ authenticatedPage: page }) => {
+    // Individual repositories should show "Individual" type tag
     await expect(page.getByText('Individual').first()).toBeVisible();
   });
 
-  test('shows module status badges', async ({ authenticatedPage: page }) => {
-    // Published modules should show "Published" status
+  test('shows repository status badges', async ({ authenticatedPage: page }) => {
+    // Published repositories should show "Published" status
     await expect(page.getByText('Published').first()).toBeVisible();
-    // Draft modules should show "Draft" status
+    // Draft repositories should show "Draft" status
     await expect(page.getByText('Draft').first()).toBeVisible();
   });
 
-  test('search filters modules by title', async ({ authenticatedPage: page }) => {
+  test('search filters repositories by title', async ({ authenticatedPage: page }) => {
     // Use the search input
     const searchInput = page.getByPlaceholder('Search by title');
     await expect(searchInput).toBeVisible();
 
-    // Search for a specific module
+    // Search for a specific repository
     await searchInput.fill('starterpack');
 
     // Should show starterpack
     await expect(page.getByText('starterpack')).toBeVisible();
-    // Other modules should be filtered out (or have fewer rows)
+    // Other repositories should be filtered out (or have fewer rows)
     // This is a basic verification that search works
   });
 });
 
-test.describe('Module Create', () => {
+test.describe('Repository Create', () => {
   test.beforeEach(async ({ authenticatedPage: page, testOrg }) => {
     await mockGitHubAPI(page);
-    await page.goto(`/admin/${testOrg}/modules`);
+    await page.goto(`/admin/${testOrg}/repos`);
     await waitForDataLoad(page);
   });
 
-  test('can navigate to create module form', async ({ authenticatedPage: page }) => {
-    // Click new module button
-    const newButton = page.getByRole('button', { name: /New module/i });
+  test('can navigate to create repository form', async ({ authenticatedPage: page }) => {
+    // Click new repository button
+    const newButton = page.getByRole('button', { name: /New repository/i });
     await newButton.click();
 
     // Should navigate to form page
-    await page.waitForURL(/\/modules\/form/, { timeout: 10000 });
+    await page.waitForURL(/\/repos\/form/, { timeout: 10000 });
   });
 
   test('create form page shows required fields', async ({ authenticatedPage: page }) => {
     // Navigate to form
-    await page.getByRole('button', { name: /New module/i }).click();
-    await page.waitForURL(/\/modules\/form/, { timeout: 10000 });
+    await page.getByRole('button', { name: /New repository/i }).click();
+    await page.waitForURL(/\/repos\/form/, { timeout: 10000 });
 
     // Wait for drawer to open
     const drawer = page.locator('.ant-drawer');
@@ -107,8 +107,8 @@ test.describe('Module Create', () => {
   });
 
   test('create form has type selector', async ({ authenticatedPage: page }) => {
-    await page.getByRole('button', { name: /New module/i }).click();
-    await page.waitForURL(/\/modules\/form/, { timeout: 10000 });
+    await page.getByRole('button', { name: /New repository/i }).click();
+    await page.waitForURL(/\/repos\/form/, { timeout: 10000 });
 
     // Wait for drawer to open
     const drawer = page.locator('.ant-drawer');
@@ -119,79 +119,79 @@ test.describe('Module Create', () => {
   });
 });
 
-test.describe('Module Detail View', () => {
+test.describe('Repository Detail View', () => {
   test.beforeEach(async ({ authenticatedPage: page, testOrg }) => {
     await mockGitHubAPI(page);
-    await page.goto(`/admin/${testOrg}/modules`);
+    await page.goto(`/admin/${testOrg}/repos`);
     await waitForDataLoad(page);
   });
 
-  test('can navigate to module detail page', async ({ authenticatedPage: page }) => {
-    // Find the module row
-    const moduleRow = page.getByRole('row').filter({ hasText: 'starterpack' });
-    await expect(moduleRow).toBeVisible();
+  test('can navigate to repository detail page', async ({ authenticatedPage: page }) => {
+    // Find the repository row
+    const repoRow = page.getByRole('row').filter({ hasText: 'starterpack' });
+    await expect(repoRow).toBeVisible();
 
     // Click the view button (first icon in actions cell)
-    const actionsCell = moduleRow.getByRole('cell').last();
+    const actionsCell = repoRow.getByRole('cell').last();
     const viewButton = actionsCell.locator('svg, img').first();
     await viewButton.click();
 
-    // Should navigate to module detail page
-    await page.waitForURL(/\/modules\/starterpack/, { timeout: 10000 });
+    // Should navigate to repository detail page
+    await page.waitForURL(/\/repos\/starterpack/, { timeout: 10000 });
   });
 
-  test('module detail page shows module title', async ({ authenticatedPage: page }) => {
-    const moduleRow = page.getByRole('row').filter({ hasText: 'starterpack' });
-    const actionsCell = moduleRow.getByRole('cell').last();
+  test('repository detail page shows repository title', async ({ authenticatedPage: page }) => {
+    const repoRow = page.getByRole('row').filter({ hasText: 'starterpack' });
+    const actionsCell = repoRow.getByRole('cell').last();
     const viewButton = actionsCell.locator('svg, img').first();
     await viewButton.click();
-    await page.waitForURL(/\/modules\/starterpack/, { timeout: 10000 });
+    await page.waitForURL(/\/repos\/starterpack/, { timeout: 10000 });
 
-    // Should show module title in the page
+    // Should show repository title in the page
     await expect(page.getByText('starterpack').first()).toBeVisible();
   });
 
-  test('module detail shows assignments table', async ({ authenticatedPage: page }) => {
-    const moduleRow = page.getByRole('row').filter({ hasText: 'starterpack' });
-    const actionsCell = moduleRow.getByRole('cell').last();
+  test('repository detail shows assignments table', async ({ authenticatedPage: page }) => {
+    const repoRow = page.getByRole('row').filter({ hasText: 'starterpack' });
+    const actionsCell = repoRow.getByRole('cell').last();
     const viewButton = actionsCell.locator('svg, img').first();
     await viewButton.click();
-    await page.waitForURL(/\/modules\/starterpack/, { timeout: 10000 });
+    await page.waitForURL(/\/repos\/starterpack/, { timeout: 10000 });
 
     // Detail page should show assignments info (table or cards)
     await expect(page.locator('table').first()).toBeVisible({ timeout: 5000 });
   });
 });
 
-test.describe('Module Actions', () => {
+test.describe('Repository Actions', () => {
   test.beforeEach(async ({ authenticatedPage: page, testOrg }) => {
     await mockGitHubAPI(page);
-    await page.goto(`/admin/${testOrg}/modules`);
+    await page.goto(`/admin/${testOrg}/repos`);
     await waitForDataLoad(page);
   });
 
-  test('module row has action buttons', async ({ authenticatedPage: page }) => {
-    // Find a module row
-    const moduleRow = page.getByRole('row').filter({ hasText: 'starterpack' });
-    await expect(moduleRow).toBeVisible();
+  test('repository row has action buttons', async ({ authenticatedPage: page }) => {
+    // Find a repository row
+    const repoRow = page.getByRole('row').filter({ hasText: 'starterpack' });
+    await expect(repoRow).toBeVisible();
 
     // Should have action icons (view, edit, delete)
-    const actionIcons = moduleRow.locator('svg, img');
+    const actionIcons = repoRow.locator('svg, img');
     const iconCount = await actionIcons.count();
     expect(iconCount).toBeGreaterThan(0);
   });
 
-  test('can open edit form from module row', async ({ authenticatedPage: page }) => {
-    // Find the module row
-    const moduleRow = page.getByRole('row').filter({ hasText: 'starterpack' });
+  test('can open edit form from repository row', async ({ authenticatedPage: page }) => {
+    // Find the repository row
+    const repoRow = page.getByRole('row').filter({ hasText: 'starterpack' });
 
     // Click the edit button (second icon in actions cell - pencil icon)
-    const actionsCell = moduleRow.getByRole('cell').last();
+    const actionsCell = repoRow.getByRole('cell').last();
     const editButton = actionsCell.locator('svg, img').nth(1);
     await editButton.click();
 
     // Should navigate to edit form
-    await page.waitForURL(/\/modules\/form\?title=starterpack/, { timeout: 10000 });
+    await page.waitForURL(/\/repos\/form\?title=starterpack/, { timeout: 10000 });
   });
 
   test('cleanup repos button is visible for owners', async ({ authenticatedPage: page }) => {
@@ -199,46 +199,46 @@ test.describe('Module Actions', () => {
     await expect(page.getByRole('button', { name: /Cleanup repos/i })).toBeVisible();
   });
 
-  test('published module shows sync option', async ({ authenticatedPage: page }) => {
-    // Find a published module (hello-world is published in seed)
-    const moduleRow = page.getByRole('row').filter({ hasText: 'hello-world' });
-    await expect(moduleRow).toBeVisible();
+  test('published repository shows sync option', async ({ authenticatedPage: page }) => {
+    // Find a published repository (hello-world is published in seed)
+    const repoRow = page.getByRole('row').filter({ hasText: 'hello-world' });
+    await expect(repoRow).toBeVisible();
 
-    // Should show "Sync" text for published modules
-    await expect(moduleRow.getByText('Sync')).toBeVisible();
+    // Should show "Sync" text for published repositories
+    await expect(repoRow.getByText('Sync')).toBeVisible();
   });
 
-  test('draft module shows publish option', async ({ authenticatedPage: page }) => {
-    // Find a draft module (starterpack is draft in seed)
-    const moduleRow = page.getByRole('row').filter({ hasText: 'starterpack' });
-    await expect(moduleRow).toBeVisible();
+  test('draft repository shows publish option', async ({ authenticatedPage: page }) => {
+    // Find a draft repository (starterpack is draft in seed)
+    const repoRow = page.getByRole('row').filter({ hasText: 'starterpack' });
+    await expect(repoRow).toBeVisible();
 
-    // Should show "Publish" text for draft modules
-    await expect(moduleRow.getByText('Publish')).toBeVisible();
+    // Should show "Publish" text for draft repositories
+    await expect(repoRow.getByText('Publish')).toBeVisible();
   });
 
-  test('published module shows unpublish option', async ({ authenticatedPage: page }) => {
-    // Find a published module (hello-world is published in seed)
-    const moduleRow = page.getByRole('row').filter({ hasText: 'hello-world' });
-    await expect(moduleRow).toBeVisible();
+  test('published repository shows unpublish option', async ({ authenticatedPage: page }) => {
+    // Find a published repository (hello-world is published in seed)
+    const repoRow = page.getByRole('row').filter({ hasText: 'hello-world' });
+    await expect(repoRow).toBeVisible();
 
-    // Should show "Unpublish" text for published modules
-    await expect(moduleRow.getByText('Unpublish')).toBeVisible();
+    // Should show "Unpublish" text for published repositories
+    await expect(repoRow.getByText('Unpublish')).toBeVisible();
   });
 
-  test('draft module does not show unpublish option', async ({ authenticatedPage: page }) => {
-    // Find a draft module (starterpack is draft in seed)
-    const moduleRow = page.getByRole('row').filter({ hasText: 'starterpack' });
-    await expect(moduleRow).toBeVisible();
+  test('draft repository does not show unpublish option', async ({ authenticatedPage: page }) => {
+    // Find a draft repository (starterpack is draft in seed)
+    const repoRow = page.getByRole('row').filter({ hasText: 'starterpack' });
+    await expect(repoRow).toBeVisible();
 
-    // Draft modules should not have unpublish option
-    await expect(moduleRow.getByText('Unpublish')).not.toBeVisible();
+    // Draft repositories should not have unpublish option
+    await expect(repoRow.getByText('Unpublish')).not.toBeVisible();
   });
 
   test('unpublish shows confirmation popover', async ({ authenticatedPage: page }) => {
-    // Find a published module
-    const moduleRow = page.getByRole('row').filter({ hasText: 'hello-world' });
-    await moduleRow.getByText('Unpublish').click();
+    // Find a published repository
+    const repoRow = page.getByRole('row').filter({ hasText: 'hello-world' });
+    await repoRow.getByText('Unpublish').click();
 
     // Should show confirmation popover
     await expect(page.getByText('This will hide the assignment from students')).toBeVisible();
@@ -247,8 +247,8 @@ test.describe('Module Actions', () => {
   });
 });
 
-test.describe('Module Navigation', () => {
-  test('can navigate from dashboard to modules via sidebar', async ({
+test.describe('Repository Navigation', () => {
+  test('can navigate from dashboard to repositories via sidebar', async ({
     authenticatedPage: page,
     testOrg,
   }) => {
@@ -257,51 +257,51 @@ test.describe('Module Navigation', () => {
     await page.goto(`/admin/${testOrg}/dashboard`);
     await waitForDataLoad(page);
 
-    // Click modules link in sidebar
-    await page.getByRole('link', { name: 'Modules' }).click();
-    await page.waitForURL(/\/modules/);
+    // Click repositories link in sidebar
+    await page.getByRole('link', { name: 'Repositories' }).click();
+    await page.waitForURL(/\/repos/);
 
-    // Verify we're on the modules page
-    await expect(page.getByRole('heading', { name: 'Modules' })).toBeVisible();
+    // Verify we're on the repositories page
+    await expect(page.getByRole('heading', { name: 'Repositories' })).toBeVisible();
   });
 
-  test('can navigate from module detail back to list', async ({
+  test('can navigate from repository detail back to list', async ({
     authenticatedPage: page,
     testOrg,
   }) => {
     await mockGitHubAPI(page);
-    await page.goto(`/admin/${testOrg}/modules`);
+    await page.goto(`/admin/${testOrg}/repos`);
     await waitForDataLoad(page);
 
-    // Go to module detail by clicking view button
-    const moduleRow = page.getByRole('row').filter({ hasText: 'starterpack' });
-    const actionsCell = moduleRow.getByRole('cell').last();
+    // Go to repository detail by clicking view button
+    const repoRow = page.getByRole('row').filter({ hasText: 'starterpack' });
+    const actionsCell = repoRow.getByRole('cell').last();
     const viewButton = actionsCell.locator('svg, img').first();
     await viewButton.click();
-    await page.waitForURL(/\/modules\/starterpack/, { timeout: 10000 });
+    await page.waitForURL(/\/repos\/starterpack/, { timeout: 10000 });
 
-    // Click Modules in sidebar to go back
-    await page.getByRole('link', { name: 'Modules' }).click();
-    await page.waitForURL(/\/modules$/, { timeout: 5000 });
+    // Click Repositories in sidebar to go back
+    await page.getByRole('link', { name: 'Repositories' }).click();
+    await page.waitForURL(/\/repos$/, { timeout: 5000 });
 
-    await expect(page.getByRole('heading', { name: 'Modules' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Repositories' })).toBeVisible();
   });
 });
 
-test.describe('Module Weight Editing', () => {
+test.describe('Repository Weight Editing', () => {
   test.beforeEach(async ({ authenticatedPage: page, testOrg }) => {
     await mockGitHubAPI(page);
-    await page.goto(`/admin/${testOrg}/modules`);
+    await page.goto(`/admin/${testOrg}/repos`);
     await waitForDataLoad(page);
   });
 
   test('weight cell shows current weight value', async ({ authenticatedPage: page }) => {
-    // Find a module with a known weight
-    const moduleRow = page.getByRole('row').filter({ hasText: 'starterpack' });
-    await expect(moduleRow).toBeVisible();
+    // Find a repository with a known weight
+    const repoRow = page.getByRole('row').filter({ hasText: 'starterpack' });
+    await expect(repoRow).toBeVisible();
 
     // Weight cell should be visible (starterpack has 5% weight)
-    await expect(moduleRow.getByText('5 %')).toBeVisible();
+    await expect(repoRow.getByText('5 %')).toBeVisible();
   });
 
   test('table shows total weight in footer', async ({ authenticatedPage: page }) => {
@@ -310,20 +310,20 @@ test.describe('Module Weight Editing', () => {
   });
 });
 
-test.describe('Assignment Management (within Module)', () => {
+test.describe('Assignment Management (within Repository)', () => {
   test.beforeEach(async ({ authenticatedPage: page, testOrg }) => {
     await mockGitHubAPI(page);
-    // Navigate directly to module edit form (using hello-world from seed data)
-    await page.goto(`/admin/${testOrg}/modules/form?title=hello-world`);
+    // Navigate directly to repository edit form (using hello-world from seed data)
+    await page.goto(`/admin/${testOrg}/repos/form?title=hello-world`);
     await waitForDataLoad(page);
   });
 
-  test('module edit form drawer opens', async ({ authenticatedPage: page }) => {
-    // The module form uses Ant Design Drawer
+  test('repository edit form drawer opens', async ({ authenticatedPage: page }) => {
+    // The repository form uses Ant Design Drawer
     const drawer = page.locator('.ant-drawer');
     await expect(drawer).toBeVisible({ timeout: 5000 });
-    // Use exact match to avoid matching "This is an extra credit module" text
-    await expect(drawer.getByText('Edit module', { exact: true })).toBeVisible();
+    // Use exact match to avoid matching "This is an extra credit repository" text
+    await expect(drawer.getByText('Edit repository', { exact: true })).toBeVisible();
   });
 
   test('shows assignments section with table', async ({ authenticatedPage: page }) => {
@@ -383,7 +383,7 @@ test.describe('Assignment CRUD Operations', () => {
   test.beforeEach(async ({ authenticatedPage: page, testOrg }) => {
     await mockGitHubAPI(page);
     // Using hello-world from seed data
-    await page.goto(`/admin/${testOrg}/modules/form?title=hello-world`);
+    await page.goto(`/admin/${testOrg}/repos/form?title=hello-world`);
     await waitForDataLoad(page);
   });
 
@@ -487,15 +487,15 @@ test.describe('Assignment CRUD Operations', () => {
     await expect(titleInput).toHaveValue('Hello World Part 1');
   });
 
-  test('module form has update button', async ({ authenticatedPage: page }) => {
+  test('repository form has update button', async ({ authenticatedPage: page }) => {
     const drawer = page.locator('.ant-drawer').first();
     await expect(drawer).toBeVisible({ timeout: 5000 });
 
-    // Update module button at bottom of drawer
-    await expect(drawer.getByRole('button', { name: /Update module/i })).toBeVisible();
+    // Update repository button at bottom of drawer
+    await expect(drawer.getByRole('button', { name: /Update repository/i })).toBeVisible();
   });
 
-  test('module form has cancel button', async ({ authenticatedPage: page }) => {
+  test('repository form has cancel button', async ({ authenticatedPage: page }) => {
     const drawer = page.locator('.ant-drawer').first();
     await expect(drawer).toBeVisible({ timeout: 5000 });
 
@@ -503,16 +503,16 @@ test.describe('Assignment CRUD Operations', () => {
   });
 });
 
-test.describe('Module Detail - Assignment Tabs', () => {
+test.describe('Repository Detail - Assignment Tabs', () => {
   test.beforeEach(async ({ authenticatedPage: page, testOrg }) => {
     await mockGitHubAPI(page);
-    // Navigate directly to module detail page (using hello-world which is published)
-    await page.goto(`/admin/${testOrg}/modules/hello-world`);
+    // Navigate directly to repository detail page (using hello-world which is published)
+    await page.goto(`/admin/${testOrg}/repos/hello-world`);
     await waitForDataLoad(page);
   });
 
-  test('displays breadcrumb with module name', async ({ authenticatedPage: page }) => {
-    // Breadcrumb should show: Modules / hello-world
+  test('displays breadcrumb with repository name', async ({ authenticatedPage: page }) => {
+    // Breadcrumb should show: Repositories / hello-world
     await expect(page.getByText('hello-world').first()).toBeVisible();
   });
 
@@ -528,9 +528,9 @@ test.describe('Module Detail - Assignment Tabs', () => {
     await expect(page.getByRole('tab', { name: /Hello World Part 1/i })).toBeVisible();
   });
 
-  test('shows module overview section', async ({ authenticatedPage: page }) => {
-    // Should show module info: Type, Weight, Repositories
-    await expect(page.getByRole('heading', { name: 'Module Overview' })).toBeVisible();
+  test('shows repository overview section', async ({ authenticatedPage: page }) => {
+    // Should show repository info: Type, Weight, Repositories
+    await expect(page.getByRole('heading', { name: 'Repository Overview' })).toBeVisible();
   });
 
   test('shows assignments overview section', async ({ authenticatedPage: page }) => {
@@ -546,13 +546,13 @@ test.describe('Module Detail - Assignment Tabs', () => {
     await expect(actionsButton).toBeVisible();
   });
 
-  test('actions menu contains edit module option', async ({ authenticatedPage: page }) => {
+  test('actions menu contains edit repository option', async ({ authenticatedPage: page }) => {
     // Click actions button
     const actionsButton = page.getByRole('button', { name: /Actions/i });
     await actionsButton.click();
 
-    // Menu should show Edit module option
-    await expect(page.getByText('Edit module')).toBeVisible();
+    // Menu should show Edit repository option
+    await expect(page.getByText('Edit repository')).toBeVisible();
   });
 
   test('shows grade management section for selected assignment', async ({

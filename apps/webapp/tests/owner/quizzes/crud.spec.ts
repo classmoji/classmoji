@@ -35,12 +35,12 @@ test.describe('Quiz List', () => {
   });
 
   test('quiz table has expected columns', async ({ authenticatedPage: page }) => {
-    // Table should have columns for Quiz Name, Module, Weight, Due Date, Status, Attempts, Actions
+    // Table should have columns for Quiz Name, Repository, Weight, Due Date, Status, Attempts, Actions
     const table = page.locator('table');
     await expect(table).toBeVisible();
     // Use exact matching to avoid matching sidebar links
     await expect(table.getByText('Quiz Name')).toBeVisible();
-    await expect(table.getByText('Module', { exact: true })).toBeVisible();
+    await expect(table.getByText('Repository', { exact: true })).toBeVisible();
     await expect(table.getByText('Status', { exact: true })).toBeVisible();
   });
 });
