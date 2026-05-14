@@ -5,27 +5,27 @@ import { emojiShortcodes } from '@classmoji/utils';
 
 const emojiMap: Record<string, string> = emojiShortcodes;
 
-interface RepositoryAssignmentGraderRecord {
+interface GitRepoAssignmentGraderRecord {
   grader: {
     email: string;
   };
 }
 
-interface RepositoryAssignmentRecord {
+interface GitRepoAssignmentRecord {
   id: string;
   issue_number: number;
-  repository: {
+  git_repo: {
     name: string;
   };
   assignment: {
     title: string;
   };
-  graders?: RepositoryAssignmentGraderRecord[];
+  graders?: GitRepoAssignmentGraderRecord[];
 }
 
 interface RequestRegradeTaskPayload {
   classroom_id: string;
-  repositoryAssignment: RepositoryAssignmentRecord;
+  gitRepoAssignment: GitRepoAssignmentRecord;
   student_id: string;
   student_comment?: string | null;
   previous_grade: string[];
@@ -37,7 +37,7 @@ interface UpdateRegradeRequestTaskPayload {
     student: {
       email: string;
     };
-    repository_assignment: {
+    git_repo_assignment: {
       assignment: {
         title: string;
       };
@@ -53,12 +53,12 @@ interface TaskPayloadWrapper<TPayload> {
 export const requestRegradeTask = task({
   id: 'request_regrade',
   run: async (payload: RequestRegradeTaskPayload) => {
-    const { classroom_id, repositoryAssignment, student_id, student_comment, previous_grade } =
+    const { classroom_id, gitRepoAssignment, student_id, student_comment, previous_grade } =
       payload;
 
     return ClassmojiService.regradeRequest.create({
       classroom_id,
-      repository_assignment_id: repositoryAssignment.id,
+      git_repo_assignment_id: gitRepoAssignment.id,
       student_id,
       student_comment,
       previous_grade,
@@ -66,7 +66,7 @@ export const requestRegradeTask = task({
   },
 
   onSuccess: async ({ payload }: TaskPayloadWrapper<RequestRegradeTaskPayload>) => {
-    const { classroom_id, repositoryAssignment, previous_grade, student_comment, student_id } =
+    const { classroom_id, gitRepoAssignment, previous_grade, student_comment, student_id } =
       payload;
 
     const classroom = await ClassmojiService.classroom.findById(classroom_id);
@@ -76,17 +76,17 @@ export const requestRegradeTask = task({
       return;
     }
 
-    const issueUrl = `https://github.com/${classroom.git_organization.login}/${repositoryAssignment.repository.name}/issues/${repositoryAssignment.issue_number}`;
+    const issueUrl = `https://github.com/${classroom.git_organization.login}/${gitRepoAssignment.git_repo.name}/issues/${gitRepoAssignment.issue_number}`;
 
-    if (repositoryAssignment.graders && repositoryAssignment.graders.length > 0) {
+    if (gitRepoAssignment.graders && gitRepoAssignment.graders.length > 0) {
       sendEmailTask.batchTrigger(
-        repositoryAssignment.graders.map(({ grader }) => ({
+        gitRepoAssignment.graders.map(({ grader }) => ({
           payload: {
             to: grader.email,
             subject: '[Classmoji] Action required: Regrade requested',
             html: `<p>${student.name} (@${student.login}) has requested a regrade for
                         <a href="${issueUrl}" style="text-decoration: underline;">${
-                          repositoryAssignment.assignment.title
+                          gitRepoAssignment.assignment.title
                         }</a>
                      .</p>
                      <p>Previous grade: ${previous_grade
@@ -114,7 +114,7 @@ export const updateRegradeRequestTask = task({
     sendEmailTask.trigger({
       to: request.student.email,
       subject: '[Classmoji] Regrade request resolved',
-      html: `<p>Your regrade request for <u>${request.repository_assignment.assignment.title}</u> has been resolved.</p>
+      html: `<p>Your regrade request for <u>${request.git_repo_assignment.assignment.title}</u> has been resolved.</p>
              <p>Check your dashboard for the updated grade.</p>
       `,
     });

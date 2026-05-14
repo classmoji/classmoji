@@ -1,15 +1,15 @@
 import { task, schedules, logger } from '@trigger.dev/sdk';
 import { ClassmojiService, HelperService, getGitProvider } from '@classmoji/services';
 import { titleToIdentifier } from '@classmoji/utils';
-import { createRepositoriesTask } from './repository.ts';
+import { createRepositoriesTask } from './gitRepo.ts';
 import { nanoid } from 'nanoid';
 import dayjs from 'dayjs';
 
 type GitOrganizationLike = Parameters<typeof getGitProvider>[0] & { login: string | null };
 type StrictGitOrganizationLike = Parameters<typeof getGitProvider>[0] & { login: string };
-type ModuleType = 'INDIVIDUAL' | 'GROUP';
+type RepositoryType = 'INDIVIDUAL' | 'GROUP';
 
-interface RepositoryAssignmentTaskContext {
+interface GitRepoAssignmentTaskContext {
   ctx: {
     run: {
       tags?: string[];
@@ -46,17 +46,17 @@ interface CreateDatabaseRepositoryAssignmentTaskPayload {
   id: string;
 }
 
-interface RepositoryAssignmentGraderTaskPayload {
+interface GitRepoAssignmentGraderTaskPayload {
   repoName: string;
   gitOrganization: StrictGitOrganizationLike;
   githubIssueNumber: number;
   graderLogin: string;
   graderId: string;
-  repositoryAssignmentId: string;
+  gitRepoAssignmentId: string;
 }
 
 interface UpdateRepositoryAssignmentPayload {
-  repositoryAssignmentId: string;
+  gitRepoAssignmentId: string;
   status?: string;
   closed_at?: string | Date | null;
 }
@@ -70,7 +70,7 @@ interface WebhookIssuePayload {
   closed_at?: string | Date | null;
 }
 
-interface RepositoryAssignmentWebhookTaskPayload {
+interface GitRepoAssignmentWebhookTaskPayload {
   issue: WebhookIssuePayload;
 }
 
@@ -94,15 +94,15 @@ interface ReleaseModuleRecord {
   id: string;
   title: string;
   slug: string | null;
-  type: ModuleType;
+  type: RepositoryType;
   tag_id: string | null;
   is_published: boolean;
   classroom: ClassroomRecord;
 }
 
 interface ReleaseAssignmentRecord extends IssueAssignmentRecord {
-  module_id: string;
-  module: ReleaseModuleRecord;
+  repository_id: string;
+  repository: ReleaseModuleRecord;
 }
 
 interface StudentRecord {
@@ -117,13 +117,13 @@ const getErrorMessage = (error: unknown): string =>
   error instanceof Error ? error.message : String(error);
 
 export const createGithubRepositoryAssignmentTask = task({
-  id: 'gh-create_repository_assignment',
+  id: 'gh-create_git_repo_assignment',
   queue: {
     concurrencyLimit: 4,
   },
   run: async (
     payload: CreateGithubRepositoryAssignmentTaskPayload,
-    { ctx }: RepositoryAssignmentTaskContext
+    { ctx }: GitRepoAssignmentTaskContext
   ) => {
     const { repoName, assignment, studentRepo } = payload;
     const organization = payload.organization || payload.classroom?.git_organization;
@@ -177,62 +177,62 @@ export const createGithubRepositoryAssignmentTask = task({
 });
 
 export const createDatabaseRepositoryAssignmentTask = task({
-  id: 'cf-create_repository_assignment',
+  id: 'cf-create_git_repo_assignment',
   run: async (payload: CreateDatabaseRepositoryAssignmentTaskPayload) => {
     const { assignment, studentRepo, issueNumber, id } = payload;
 
     const data = {
       id,
       assignment_id: assignment.id,
-      repository_id: studentRepo.id,
+      git_repo_id: studentRepo.id,
       provider: 'GITHUB',
       provider_id: String(id),
       provider_issue_number: issueNumber,
     };
 
-    return ClassmojiService.repositoryAssignment.create(data);
+    return ClassmojiService.gitRepoAssignment.create(data);
   },
 });
 
 export const addGraderToRepositoryAssignmentTask = task({
-  id: 'add_grader_to_repository_assignment',
-  run: async (payload: RepositoryAssignmentGraderTaskPayload) => {
-    return HelperService.addGraderToRepositoryAssignment(payload);
+  id: 'add_grader_to_git_repo_assignment',
+  run: async (payload: GitRepoAssignmentGraderTaskPayload) => {
+    return HelperService.addGraderToGitRepoAssignment(payload);
   },
 });
 
 export const removeGraderFromRepositoryAssignmentTask = task({
-  id: 'remove_grader_from_repository_assignment',
-  run: async (payload: RepositoryAssignmentGraderTaskPayload) => {
-    return HelperService.removeGraderFromRepositoryAssignment(payload);
+  id: 'remove_grader_from_git_repo_assignment',
+  run: async (payload: GitRepoAssignmentGraderTaskPayload) => {
+    return HelperService.removeGraderFromGitRepoAssignment(payload);
   },
 });
 
 export const updateRepositoryAssignmentTask = task({
-  id: 'update_repository_assignment',
+  id: 'update_git_repo_assignment',
   run: async ({ payload }: UpdateRepositoryAssignmentTaskPayload) => {
-    const { repositoryAssignmentId, ...updates } = payload;
-    return ClassmojiService.repositoryAssignment.update(repositoryAssignmentId, updates);
+    const { gitRepoAssignmentId, ...updates } = payload;
+    return ClassmojiService.gitRepoAssignment.update(gitRepoAssignmentId, updates);
   },
 });
 
 export const repositoryAssignmentClosedHandlerTask = task({
-  id: 'webhook-repository_assignment_closed_handler',
-  run: async (payload: RepositoryAssignmentWebhookTaskPayload) => {
+  id: 'webhook-git_repo_assignment_closed_handler',
+  run: async (payload: GitRepoAssignmentWebhookTaskPayload) => {
     const { issue } = payload;
-    const repoAssignment = await ClassmojiService.repositoryAssignment.findByProviderId(
+    const repoAssignment = await ClassmojiService.gitRepoAssignment.findByProviderId(
       'GITHUB',
       String(issue.id)
     );
 
     if (!repoAssignment?.assignment) {
-      logger.info('Repository assignment not found in database', { issue });
+      logger.info('GitRepo assignment not found in database', { issue });
       return;
     }
 
     return updateRepositoryAssignmentTask.trigger({
       payload: {
-        repositoryAssignmentId: repoAssignment.id,
+        gitRepoAssignmentId: repoAssignment.id,
         status: 'CLOSED',
         closed_at: issue.closed_at,
       },
@@ -241,23 +241,23 @@ export const repositoryAssignmentClosedHandlerTask = task({
 });
 
 export const repositoryAssignmentDeletedHandlerTask = task({
-  id: 'webhook-repository_assignment_deleted_handler',
-  run: async (payload: RepositoryAssignmentWebhookTaskPayload) => {
+  id: 'webhook-git_repo_assignment_deleted_handler',
+  run: async (payload: GitRepoAssignmentWebhookTaskPayload) => {
     const { issue } = payload;
-    const repoAssignment = await ClassmojiService.repositoryAssignment.findByProviderId(
+    const repoAssignment = await ClassmojiService.gitRepoAssignment.findByProviderId(
       'GITHUB',
       String(issue.id)
     );
 
     if (repoAssignment?.assignment) {
-      return ClassmojiService.repositoryAssignment.deleteById(repoAssignment.id);
+      return ClassmojiService.gitRepoAssignment.deleteById(repoAssignment.id);
     }
   },
 });
 
 export const dailyRepositoryAssignmentsReleaseTask = schedules.task({
-  id: 'daily_repository_assignments_release',
-  run: async (_payload: ScheduleTaskPayload, { ctx }: RepositoryAssignmentTaskContext) => {
+  id: 'daily_git_repo_assignments_release',
+  run: async (_payload: ScheduleTaskPayload, { ctx }: GitRepoAssignmentTaskContext) => {
     try {
       const assignmentsToRelease = (await ClassmojiService.assignment.findReadyForRelease(
         dayjs().endOf('day').toDate()
@@ -274,70 +274,70 @@ export const dailyRepositoryAssignmentsReleaseTask = schedules.task({
 
       const moduleGroups: Record<string, ReleaseAssignmentRecord[]> = {};
       for (const assignment of assignmentsToRelease) {
-        if (!moduleGroups[assignment.module_id]) {
-          moduleGroups[assignment.module_id] = [];
+        if (!moduleGroups[assignment.repository_id]) {
+          moduleGroups[assignment.repository_id] = [];
         }
-        moduleGroups[assignment.module_id].push(assignment);
+        moduleGroups[assignment.repository_id].push(assignment);
       }
 
-      for (const moduleId in moduleGroups) {
-        const moduleAssignments = moduleGroups[moduleId];
-        const module = moduleAssignments[0].module;
-        const classroom = module.classroom;
+      for (const repositoryId in moduleGroups) {
+        const moduleAssignments = moduleGroups[repositoryId];
+        const repository = moduleAssignments[0].repository;
+        const classroom = repository.classroom;
         const gitOrg = classroom.git_organization;
 
         let logins: string[] = [];
 
-        if (module.type === 'INDIVIDUAL') {
+        if (repository.type === 'INDIVIDUAL') {
           const students: StudentRecord[] =
             await ClassmojiService.classroomMembership.findUsersByRole(classroom.id, 'STUDENT');
 
           logins = students
             .map((user: StudentRecord) => user.login || '')
             .filter(login => login !== '');
-        } else if (module.tag_id) {
+        } else if (repository.tag_id) {
           const teams: TeamRecord[] = await ClassmojiService.organizationTag.findTeamsByTag(
-            module.tag_id
+            repository.tag_id
           );
           logins = teams.map((team: TeamRecord) => team.slug);
         }
 
-        if (!module.is_published) {
-          logger.info('Publishing Module', {
-            title: module.title,
+        if (!repository.is_published) {
+          logger.info('Publishing Repository', {
+            title: repository.title,
             org: classroom.slug,
           });
 
           if (logins.length > 0) {
             await createRepositoriesTask.triggerAndWait({
               logins,
-              assignmentTitle: module.title,
+              assignmentTitle: repository.title,
               org: classroom.slug,
               sessionId: nanoid(),
             });
           }
         } else {
-          const moduleSlug = module.slug || titleToIdentifier(module.title);
+          const repositorySlug = repository.slug || titleToIdentifier(repository.title);
 
           for await (const assignment of moduleAssignments) {
             logger.info('Processing assignment', { title: assignment.title });
 
             const payloads = await Promise.all(
               logins.map(async login => {
-                const studentRepo = await ClassmojiService.repository.find({
-                  name: `${moduleSlug}-${login}`,
+                const studentRepo = await ClassmojiService.gitRepo.find({
+                  name: `${repositorySlug}-${login}`,
                   classroom_id: classroom.id,
                 });
 
                 if (!studentRepo) {
-                  throw new Error(`Repository not found for ${moduleSlug}-${login}`);
+                  throw new Error(`GitRepo not found for ${repositorySlug}-${login}`);
                 }
 
                 return {
                   payload: {
                     assignment,
                     organization: gitOrg,
-                    repoName: `${moduleSlug}-${login}`,
+                    repoName: `${repositorySlug}-${login}`,
                     studentRepo,
                   },
                   options: { tags: ctx.run.tags },

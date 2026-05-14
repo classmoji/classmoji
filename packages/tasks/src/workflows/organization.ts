@@ -1,6 +1,6 @@
 import { task } from '@trigger.dev/sdk';
 import { ClassmojiService, getGitProvider, getTeamNameForClassroom } from '@classmoji/services';
-import { createRepositoryTask } from './repository.ts';
+import { createRepositoryTask } from './gitRepo.ts';
 import invariant from 'tiny-invariant';
 
 interface MemberAddedPayload {
@@ -75,18 +75,18 @@ export const memberAddedHandlerTask = task({
 
       // Create existing assignments for new students
       if (membership.role === 'STUDENT') {
-        const modules = await ClassmojiService.module.findByClassroomSlug(
+        const repositories = await ClassmojiService.repository.findByClassroomSlug(
           membership.classroom.slug
         );
-        const assignments = modules.flatMap(module =>
-          module.assignments
+        const assignments = repositories.flatMap(repository =>
+          repository.assignments
             .filter(a => a.is_published === true && 'type' in a && a.type === 'INDIVIDUAL')
-            .map(assignment => ({ ...assignment, module }))
+            .map(assignment => ({ ...assignment, repository }))
         );
 
         const promises = assignments.map(async assignment => {
-          const [templateOwner, templateRepo] = assignment.module.template.split('/');
-          const repoName = `${assignment.module.slug}-${user.login}`;
+          const [templateOwner, templateRepo] = assignment.repository.template.split('/');
+          const repoName = `${assignment.repository.slug}-${user.login}`;
 
           const createRepoTaskData = {
             templateOwner,

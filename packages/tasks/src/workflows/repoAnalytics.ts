@@ -6,7 +6,7 @@ interface RefreshRepoAnalyticsPayload {
 }
 
 /**
- * Refresh analytics for a single repository assignment.
+ * Refresh analytics for a single gitRepo assignment.
  *
  * If the snapshot comes back stale (e.g. GitHub contributor-stats cache is
  * still warming and returned 202), self-reschedule in 60s so the row
@@ -36,7 +36,7 @@ export const refreshRepoAnalytics = task({
 });
 
 /**
- * Cron: refresh analytics for every active repository assignment every 6h.
+ * Cron: refresh analytics for every active gitRepo assignment every 6h.
  */
 export const refreshAllActiveRepoAnalytics = schedules.task({
   id: 'refresh-repo-analytics-all',
