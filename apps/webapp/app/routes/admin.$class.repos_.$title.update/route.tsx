@@ -41,7 +41,7 @@ const UpdateRepositories = ({ loaderData }: Route.ComponentProps) => {
         const values = form.getFieldsValue();
         fetcher!.submit(JSON.stringify({ values, module }), {
           method: 'post',
-          action: `/admin/${classSlug}/modules/${title}/update`,
+          action: `/admin/${classSlug}/repos/${title}/update`,
           encType: 'application/json',
         });
 

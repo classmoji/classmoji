@@ -12,7 +12,7 @@ import { tasks } from '@trigger.dev/sdk/v3';
 
 export const loader = async ({ request, params }: Route.LoaderArgs) => {
   const classSlug = params.class!;
-  const moduleSlug = params.module!;
+  const moduleSlug = params.repo!;
 
   const { userId, classroom } = await assertClassroomAccess({
     request,
@@ -68,7 +68,7 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
 
 export const action = async ({ request, params }: Route.ActionArgs) => {
   const classSlug = params.class!;
-  const moduleSlug = params.module!;
+  const moduleSlug = params.repo!;
 
   const { userId, classroom } = await assertClassroomAccess({
     request,
@@ -304,7 +304,7 @@ const StudentTeamPage = ({ loaderData }: Route.ComponentProps) => {
   return (
     <div className="max-w-4xl mx-auto">
       <Link
-        to={`/student/${classSlug}/modules`}
+        to={`/student/${classSlug}/repos`}
         className="text-blue-600 hover:underline mb-4 inline-block"
       >
         ← Back to Modules

@@ -140,7 +140,7 @@ const EventLinks = ({
           return (
             <NavLink
               key={assignment.id}
-              to={`/${rolePrefix}/${resolvedClassSlug}/modules#${module?.slug || ''}`}
+              to={`/${rolePrefix}/${resolvedClassSlug}/repos#${module?.slug || ''}`}
               className="flex items-center gap-2 text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300 text-sm"
             >
               <IconClipboardList size={18} className="text-gray-500 dark:text-gray-400" />

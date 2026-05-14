@@ -157,12 +157,12 @@ const AssignmentTable = ({ assignments }: AssignmentTableProps) => {
       render: (_: unknown, record: Assignment) => (
         <TableActionButtons
           onView={() =>
-            navigate(`/admin/${classSlug}/modules/${record.title}`, {
+            navigate(`/admin/${classSlug}/repos/${record.title}`, {
               state: { assignment: record },
             })
           }
           onEdit={() =>
-            navigate(`/admin/${classSlug}/modules/form?title=${record.title}`, {
+            navigate(`/admin/${classSlug}/repos/form?title=${record.title}`, {
               state: { assignment: record },
             })
           }

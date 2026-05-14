@@ -1,7 +1,7 @@
 import getPrisma from '@classmoji/database';
 import type { Route } from './+types/route';
 import { requireClassroomTeachingTeam } from '~/utils/routeAuth.server';
-import ModuleAccordion from '../student.$class.modules/ModuleAccordion';
+import ModuleAccordion from '../student.$class.repos/ModuleAccordion';
 
 export const loader = async ({ params, request }: Route.LoaderArgs) => {
   const { class: classSlug } = params;

@@ -34,7 +34,7 @@ const Menu = ({ module, assistants }: MenuProps) => {
 
     fetcher!.submit(JSON.stringify({ module }), {
       method: 'post',
-      action: `/admin/${classSlug}/modules/${moduleTitle}?action=calculateContributions`,
+      action: `/admin/${classSlug}/repos/${moduleTitle}?action=calculateContributions`,
       encType: 'application/json',
     });
   };
@@ -45,7 +45,7 @@ const Menu = ({ module, assistants }: MenuProps) => {
       label: (
         <button
           onClick={() => {
-            navigate(`/admin/${classSlug}/modules/form?title=${moduleTitle}`);
+            navigate(`/admin/${classSlug}/repos/form?title=${moduleTitle}`);
           }}
         >
           Edit module
@@ -67,7 +67,7 @@ const Menu = ({ module, assistants }: MenuProps) => {
               return;
             }
 
-            navigate(`/admin/${classSlug}/modules/${moduleTitle}/assign-graders`);
+            navigate(`/admin/${classSlug}/repos/${moduleTitle}/assign-graders`);
           }}
         >
           Assign graders
@@ -79,7 +79,7 @@ const Menu = ({ module, assistants }: MenuProps) => {
       label: (
         <button
           onClick={() => {
-            navigate(`/admin/${classSlug}/modules/${moduleTitle}/update?id=${module.id}`);
+            navigate(`/admin/${classSlug}/repos/${moduleTitle}/update?id=${module.id}`);
           }}
         >
           Update repositories

@@ -97,7 +97,7 @@ const TeamFormationBanner = ({ module, userTeam, classSlug }: TeamFormationBanne
                 ))}
               </div>
             </div>
-            <Link to={`/student/${classSlug}/modules/${module.slug}/team`}>
+            <Link to={`/student/${classSlug}/repos/${module.slug}/team`}>
               <Button size="small" type="link">
                 View Team
               </Button>
@@ -134,7 +134,7 @@ const TeamFormationBanner = ({ module, userTeam, classSlug }: TeamFormationBanne
               </span>
             )}
           </span>
-          <Link to={`/student/${classSlug}/modules/${module.slug}/team`}>
+          <Link to={`/student/${classSlug}/repos/${module.slug}/team`}>
             <Button type="primary">Create or Join Team</Button>
           </Link>
         </div>

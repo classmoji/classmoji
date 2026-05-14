@@ -86,7 +86,7 @@ const SummaryCards = ({ module, repos }: SummaryCardsProps) => {
         moduleId: module.id,
       },
       {
-        action: `/admin/${classSlug}/modules/${title}?/createProjects`,
+        action: `/admin/${classSlug}/repos/${title}?/createProjects`,
         method: 'post',
         encType: 'application/json',
       }

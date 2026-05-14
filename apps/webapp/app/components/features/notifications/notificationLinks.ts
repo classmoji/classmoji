@@ -51,7 +51,7 @@ export const notificationLink = (
       // Only the student route tree has an assignments list page.
       return prefix === 'student' ? `/${prefix}/${slug}/assignments` : `/${prefix}/${slug}`;
     case 'module':
-      return `/${prefix}/${slug}/modules`;
+      return `/${prefix}/${slug}/repos`;
     case 'page':
       return `/${prefix}/${slug}/pages/${n.resource_id}`;
     case 'git_repo_assignment':

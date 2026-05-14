@@ -70,7 +70,7 @@ export const routes = {
 
   // Content
   modules: {
-    link: '/modules',
+    link: '/repos',
     label: 'Modules',
     icon: IconFileText,
     roles: ['OWNER', 'ASSISTANT', 'STUDENT'],

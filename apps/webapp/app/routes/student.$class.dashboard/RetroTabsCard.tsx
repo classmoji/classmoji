@@ -187,7 +187,7 @@ const TeamPanel = ({
     const footer = (
       <>
         <Link
-          to={`/student/${classSlug}/modules`}
+          to={`/student/${classSlug}/repos`}
           className="text-xs font-medium text-gray-700 dark:text-gray-200 px-3 py-1.5 rounded-full ring-1 ring-stone-200 dark:ring-neutral-700 hover:bg-stone-50 dark:hover:bg-neutral-800 transition-colors"
         >
           View group
@@ -241,7 +241,7 @@ const TeamPanel = ({
       <PanelShell title="No team yet" subtitle={`${needsTeam.moduleTitle} is self-formed.`}>
         <div className="h-full flex flex-col items-center justify-center text-center">
           <Link
-            to={`/student/${classSlug}/modules`}
+            to={`/student/${classSlug}/repos`}
             className="inline-flex items-center gap-1.5 text-xs font-medium text-gray-700 dark:text-gray-200 px-3 py-1.5 rounded-full ring-1 ring-stone-200 dark:ring-neutral-700 hover:bg-stone-50 dark:hover:bg-neutral-800 transition-colors"
           >
             Choose a team

@@ -65,7 +65,7 @@ const AssignGraders = ({ loaderData }: Route.ComponentProps) => {
 
     reset();
 
-    navigate(`/admin/${classSlug}/modules/${title}`);
+    navigate(`/admin/${classSlug}/repos/${title}`);
   };
 
   const handleCancel = () => {
