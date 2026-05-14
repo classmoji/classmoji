@@ -180,7 +180,7 @@ export const action = checkAuth(async ({ request }: { request: Request }) => {
 
       const numReposToDelete = repositories.length;
 
-      await tasks.batchTrigger('delete_repository', payloads);
+      await tasks.batchTrigger('delete_git_repo', payloads);
 
       return {
         triggerSession: { accessToken, id: sessionId, numReposToDelete },

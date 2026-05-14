@@ -143,7 +143,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
     };
   });
 
-  await tasks.batchTrigger('update_repository', payloads);
+  await tasks.batchTrigger('update_git_repo', payloads);
 
   return {
     triggerSession: {
