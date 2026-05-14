@@ -230,7 +230,7 @@ export const getStudentsInClassroom = async (classroomId: string): Promise<strin
   return [...new Set(rows.map(r => r.user_id))];
 };
 
-export const getStudentsForModule = async (
+export const getStudentsForRepository = async (
   repositoryId: string
 ): Promise<{ classroomId: string; studentIds: string[] }> => {
   const mod = await getPrisma().repository.findUnique({
