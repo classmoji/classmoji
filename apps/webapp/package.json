@@ -70,6 +70,7 @@
     "framer-motion": "^12.23.22",
     "highlight.js": "^11.11.1",
     "isbot": "^4",
+    "isomorphic-dompurify": "^3.13.0",
     "js-cookie": "^3.0.5",
     "jsonwebtoken": "^9.0.2",
     "jszip": "^3.10.1",
