@@ -2,7 +2,7 @@ import { useOutlet, redirect } from 'react-router';
 import { Button } from 'antd';
 import type { Route } from './+types/route';
 import { Logo } from '@classmoji/ui-components';
-import { buildManifest } from './manifest.js';
+import { buildManifest } from './manifest.ts';
 
 export const loader = async ({ request }: Route.LoaderArgs) => {
   if (!process.env.SETUP_GITHUB_APP) {
