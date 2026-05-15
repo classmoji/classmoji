@@ -15,10 +15,20 @@ export const loader = checkAuth(
 
     switch (operation) {
       case 'get-org-subscription': {
-        const subscription = await ClassmojiService.subscription.getByClassroom(
-          searchParams.get('orgLogin') as string
-        );
+        const orgLogin = searchParams.get('orgLogin');
+        if (!orgLogin) {
+          return data({ error: 'orgLogin is required' }, { status: 400 });
+        }
 
+        await assertClassroomAccess({
+          request,
+          classroomSlug: orgLogin,
+          allowedRoles: ['OWNER'],
+          resourceType: 'CLASSROOM_SUBSCRIPTION',
+          attemptedAction: 'read_subscription',
+        });
+
+        const subscription = await ClassmojiService.subscription.getByClassroom(orgLogin);
         return subscription;
       }
       case 'get-tc-installation-token': {
