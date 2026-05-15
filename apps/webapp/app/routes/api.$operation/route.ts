@@ -116,8 +116,23 @@ export const action = checkAuth(async ({ request }: { request: Request }) => {
       }
     },
     async cancelTokenTransaction() {
-      // First, get the classroom from the transaction's classroom_id
-      const classroom = await ClassmojiService.classroom.findById(body.transaction.classroom_id);
+      // Re-derive every authorization-relevant and financial field from the DB.
+      // Body fields other than transaction.id are NOT trusted (prior bug: a
+      // caller could inflate refund amount by setting body.transaction.amount).
+      const transactionId = body?.transaction?.id;
+      if (typeof transactionId !== 'string' || !transactionId) {
+        return data({ error: 'transaction.id is required' }, { status: 400 });
+      }
+
+      const [storedTransaction] = await ClassmojiService.token.findTransactions({
+        id: transactionId,
+      });
+
+      if (!storedTransaction) {
+        return data({ error: 'Transaction not found' }, { status: 404 });
+      }
+
+      const classroom = await ClassmojiService.classroom.findById(storedTransaction.classroom_id);
 
       if (!classroom) {
         return data({ error: 'Classroom not found' }, { status: 404 });
@@ -136,13 +151,20 @@ export const action = checkAuth(async ({ request }: { request: Request }) => {
         resourceType: 'TOKEN_TRANSACTION',
         attemptedAction: 'cancel_transaction',
         metadata: {
-          transaction_id: body.transaction.id,
+          transaction_id: storedTransaction.id,
         },
-        resourceOwnerId: body.transaction.student_id,
+        resourceOwnerId: storedTransaction.student_id,
         selfAccessRoles: ['STUDENT'], // Students can cancel their own
       });
 
-      await cancelTokenTransactionHandler(body.transaction);
+      await cancelTokenTransactionHandler({
+        id: storedTransaction.id,
+        classroom_id: storedTransaction.classroom_id,
+        student_id: storedTransaction.student_id,
+        amount: storedTransaction.amount,
+        repository_assignment_id: storedTransaction.repository_assignment_id ?? '',
+        hours_purchased: storedTransaction.hours_purchased ?? 0,
+      });
 
       return {
         action: 'CANCEL_TOKEN_TRANSACTION',
