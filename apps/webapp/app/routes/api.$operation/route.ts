@@ -158,6 +158,14 @@ export const action = checkAuth(async ({ request }: { request: Request }) => {
         return data({ error: 'Classroom not found' }, { status: 404 });
       }
 
+      await assertClassroomAccess({
+        request,
+        classroomSlug: classroom.slug,
+        allowedRoles: ['OWNER'],
+        resourceType: 'REPOSITORY',
+        attemptedAction: 'delete_repositories',
+      });
+
       const sessionId = nanoid();
       const payloads = await Promise.all(
         repositories.map(async (repo: { name: string }) => {
