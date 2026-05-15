@@ -5,6 +5,8 @@
   "type": "module",
   "scripts": {
     "typecheck": "react-router typegen && tsc --noEmit",
+    "predev": "node ../../scripts/check-no-default-secrets.mjs",
+    "prestart": "node ../../scripts/check-no-default-secrets.mjs",
     "web:dev": "react-router dev",
     "web:build": "react-router build",
     "web:start": "react-router-serve build/server/index.js",
