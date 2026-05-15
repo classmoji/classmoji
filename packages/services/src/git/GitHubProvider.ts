@@ -914,8 +914,16 @@ export class GitHubProvider extends GitProvider {
   verifyWebhook(payload: string, signature: string): boolean {
     const secret = process.env.GITHUB_WEBHOOK_SECRET!;
     const expected = 'sha256=' + createHmac('sha256', secret).update(payload).digest('hex');
+    const sigBuf = Buffer.from(signature);
+    const expBuf = Buffer.from(expected);
+    // timingSafeEqual throws on unequal lengths, which leaks length via timing.
+    // Compare a self-hash to consume similar CPU then return false.
+    if (sigBuf.length !== expBuf.length) {
+      timingSafeEqual(expBuf, expBuf);
+      return false;
+    }
     try {
-      return timingSafeEqual(Buffer.from(signature), Buffer.from(expected));
+      return timingSafeEqual(sigBuf, expBuf);
     } catch {
       return false;
     }
