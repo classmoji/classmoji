@@ -51,9 +51,14 @@ const MEMBERSHIP_TO_PATH: Record<string, string> = {
  *   /test-login?role=student - Login as student (uses GITHUB_STUDENT_TOKEN)
  */
 export const loader = async ({ request }: Route.LoaderArgs) => {
-  // Only allow in development
-  if (process.env.NODE_ENV !== 'development') {
-    throw new Error('Test login is only available in development mode');
+  // Belt-and-suspenders: NODE_ENV is the standard guard, but production
+  // misconfiguration (forgetting NODE_ENV=production) would otherwise expose a
+  // login-as-anyone backdoor. Require an explicit allow flag too.
+  if (
+    process.env.NODE_ENV !== 'development' ||
+    process.env.ENABLE_TEST_LOGIN !== 'true'
+  ) {
+    throw new Response('Not Found', { status: 404 });
   }
 
   // Get role from query param, default to 'admin'

@@ -1103,3 +1103,12 @@ model NotificationPreference {
 
   @@map("notification_preferences")
 }
+
+model ProcessedWebhookEvent {
+  event_id     String   @id
+  source       String
+  processed_at DateTime @default(now())
+
+  @@index([source, processed_at])
+  @@map("processed_webhook_events")
+}

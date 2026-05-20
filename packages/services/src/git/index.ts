@@ -1,7 +1,6 @@
 import { GitProvider } from './GitProvider.ts';
 import { GitHubProvider } from './GitHubProvider.ts';
 import { GitLabProvider } from './GitLabProvider.ts';
-// Future: import { GiteaProvider } from './GiteaProvider.js';
 
 /**
  * Factory function - returns the appropriate provider adapter for the git organization.

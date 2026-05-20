@@ -22,7 +22,9 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
   const { data: githubUser } = await octokit.rest.users.getAuthenticated();
 
   // In local dev, skip the registration form entirely — auto-register using GitHub profile data.
-  if (process.env.NODE_ENV === 'development') {
+  // Gated on an explicit allow flag in addition to NODE_ENV to avoid a misconfigured
+  // production (NODE_ENV unset) silently turning into a no-form auto-register backdoor.
+  if (process.env.NODE_ENV === 'development' && process.env.ENABLE_DEV_AUTO_REGISTER === 'true') {
     const githubId = String(githubUser.id);
     const email = githubUser.email || `${githubUser.login}@dev.local`;
 

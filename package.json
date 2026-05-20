@@ -58,7 +58,7 @@
     "commit": "cz"
   },
   "dependencies": {
-    "@infisical/sdk": "^3.0.91",
+    "@infisical/sdk": "^5.0.2",
     "@trigger.dev/sdk": "^4.4.4",
     "dayjs": "^1.11.13",
     "dotenv": "^16.4.5",
@@ -101,7 +101,8 @@
     "node": ">=22.12.0"
   },
   "overrides": {
-    "p-map": "^4.0.0"
+    "p-map": "^4.0.0",
+    "protobufjs": "^7.5.8"
   },
   "config": {
     "commitizen": {
