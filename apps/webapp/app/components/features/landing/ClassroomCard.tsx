@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useFetcher } from 'react-router';
+import { motion, AnimatePresence } from 'framer-motion';
 import { IconGithub } from '@classmoji/ui-components';
 import { ClassMark } from './ClassMark';
 import { RoleChip } from './RoleChip';
@@ -120,30 +121,39 @@ export function ClassroomCard({
         e.currentTarget.style.background = 'var(--bg-1)';
       }}
     >
-      {canPin && (hover || isPinned) && (
-        <button
-          type="button"
-          aria-label={isPinned ? 'Unpin classroom' : 'Pin classroom'}
-          title={isPinned ? 'Unpin' : 'Pin'}
-          onClick={handlePinClick}
-          style={{
-            position: 'absolute',
-            top: 6,
-            right: 6,
-            border: 'none',
-            background: 'transparent',
-            color: isPinned ? 'var(--ink-0)' : 'var(--ink-3)',
-            cursor: 'pointer',
-            padding: 4,
-            borderRadius: 4,
-            display: 'inline-flex',
-            alignItems: 'center',
-            zIndex: 2,
-          }}
-        >
-          <PinIcon filled={isPinned} />
-        </button>
-      )}
+      <AnimatePresence>
+        {canPin && (hover || isPinned) && (
+          <motion.button
+            key="pin-btn"
+            type="button"
+            aria-label={isPinned ? 'Unpin classroom' : 'Pin classroom'}
+            title={isPinned ? 'Unpin' : 'Pin'}
+            onClick={handlePinClick}
+            initial={{ opacity: 0, scale: 0.6 }}
+            animate={{ opacity: 1, scale: 1, rotate: isPinned ? -18 : 0 }}
+            exit={{ opacity: 0, scale: 0.6 }}
+            whileHover={{ scale: 1.15 }}
+            whileTap={{ scale: 0.85, rotate: isPinned ? 0 : -18 }}
+            transition={{ type: 'spring', stiffness: 600, damping: 22 }}
+            style={{
+              position: 'absolute',
+              top: 6,
+              right: 6,
+              border: 'none',
+              background: 'transparent',
+              color: isPinned ? 'var(--accent)' : 'var(--ink-3)',
+              cursor: 'pointer',
+              padding: 4,
+              borderRadius: 4,
+              display: 'inline-flex',
+              alignItems: 'center',
+              zIndex: 2,
+            }}
+          >
+            <PinIcon filled={isPinned} />
+          </motion.button>
+        )}
+      </AnimatePresence>
 
       <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10 }}>
         <ClassMark hue={c.hue} name={c.name} />

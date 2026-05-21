@@ -1,5 +1,6 @@
 import { useState, useMemo, useEffect, useRef } from 'react';
 import { Link } from 'react-router';
+import { motion, AnimatePresence, LayoutGroup } from 'framer-motion';
 import { Button, IconGithub, IconPlus, IconX } from '@classmoji/ui-components';
 import { AppBar } from './AppBar';
 import { ClassroomCard } from './ClassroomCard';
@@ -195,20 +196,31 @@ export function ClassroomsLandingScreen({
         gap: 12,
       }}
     >
-      {items.map(c => (
-        <ClassroomCard
-          key={c.id}
-          c={c}
-          onOpen={() => onOpenClass(c)}
-          showSlug={isDuplicate(c.name)}
-          onPinChanged={handlePinChanged}
-          draggable={draggable}
-          onDragStart={draggable ? handleDragStart(c.id) : undefined}
-          onDragOver={draggable ? handleDragOver(c.id) : undefined}
-          onDrop={draggable ? handleDrop(c.id) : undefined}
-          onDragEnd={draggable ? handleDragEnd : undefined}
-        />
-      ))}
+      <AnimatePresence initial={false}>
+        {items.map(c => (
+          <motion.div
+            key={c.id}
+            layout
+            layoutId={c.id}
+            initial={{ opacity: 0, scale: 0.96 }}
+            animate={{ opacity: 1, scale: 1 }}
+            exit={{ opacity: 0, scale: 0.92 }}
+            transition={{ type: 'spring', stiffness: 380, damping: 32, mass: 0.6 }}
+          >
+            <ClassroomCard
+              c={c}
+              onOpen={() => onOpenClass(c)}
+              showSlug={isDuplicate(c.name)}
+              onPinChanged={handlePinChanged}
+              draggable={draggable}
+              onDragStart={draggable ? handleDragStart(c.id) : undefined}
+              onDragOver={draggable ? handleDragOver(c.id) : undefined}
+              onDrop={draggable ? handleDrop(c.id) : undefined}
+              onDragEnd={draggable ? handleDragEnd : undefined}
+            />
+          </motion.div>
+        ))}
+      </AnimatePresence>
       {withNewCard && (
         <Link
           to="/create-classroom"
@@ -444,7 +456,7 @@ export function ClassroomsLandingScreen({
             No classrooms yet.
           </div>
         ) : (
-          <>
+          <LayoutGroup>
             {pinnedDisplay.length > 0 && (
               <section style={{ marginBottom: 24 }}>
                 {sectionHeading('Pinned', pinnedDisplay.length)}
@@ -484,7 +496,7 @@ export function ClassroomsLandingScreen({
                 </div>
               </details>
             )}
-          </>
+          </LayoutGroup>
         )}
 
         <footer
