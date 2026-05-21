@@ -5,10 +5,10 @@ import {
   GitHubProvider,
   getGitProvider,
   ensureClassroomTeam,
-  classroomService,
 } from '@classmoji/services';
 import { ActionTypes } from '~/constants';
 import getPrisma from '@classmoji/database';
+import { slugify } from './utils';
 
 export const action = checkAuth(async ({ request }: { request: Request }) => {
   const authData = await getAuthSession(request);
@@ -22,10 +22,10 @@ export const action = checkAuth(async ({ request }: { request: Request }) => {
     return { error: 'Unauthorized' };
   }
 
-  const { git_org_id, name, term, year, importConfig } = await request.json();
+  const { git_org_id, name, importConfig } = await request.json();
 
-  if (!term || !year) {
-    return { error: 'Term and year are required' };
+  if (!name) {
+    return { error: 'Classroom name is required' };
   }
 
   // Get GitOrganization
@@ -65,8 +65,8 @@ export const action = checkAuth(async ({ request }: { request: Request }) => {
     };
   }
 
-  // Generate unique slug (name, term, year - no gitOrg)
-  const slug = await classroomService.generateSlug(name, term, year);
+  // Slug derived from name only
+  const slug = slugify(name);
 
   // Create Classroom, Settings, and Membership in transaction
   const classroom = await getPrisma().$transaction(async tx => {
@@ -75,8 +75,7 @@ export const action = checkAuth(async ({ request }: { request: Request }) => {
         git_org_id,
         slug,
         name,
-        term,
-        year: Number(year),
+        content_namespace: slug,
       },
     });
 

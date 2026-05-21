@@ -12,7 +12,7 @@ import getPrisma from '@classmoji/database';
 import StepBasicInfo from './StepBasicInfo';
 import StepImportModules from './StepImportModules';
 import StepReview from './StepReview';
-import { slugify, getTermCode, STEPS } from './utils';
+import { slugify, STEPS } from './utils';
 import type { Route } from './+types/route';
 
 export const loader = async ({ request }: Route.LoaderArgs) => {
@@ -147,8 +147,6 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
       id: true,
       slug: true,
       name: true,
-      term: true,
-      year: true,
       git_organization: {
         select: {
           login: true,
@@ -189,16 +187,11 @@ const CreateClassroom = ({ loaderData }: Route.ComponentProps) => {
   const { fetcher, notify } = useGlobalFetcher();
   const { openInstallPopup, isRefreshing } = useGitHubAppInstallPopup(githubAppName);
 
-  const currentYear = new Date().getFullYear();
-  const years = [currentYear - 1, currentYear, currentYear + 1, currentYear + 2];
-
   // React Hook Form - persists values across step changes
   const methods = useForm({
     defaultValues: {
       git_org_id: '',
       name: '',
-      term: '',
-      year: currentYear,
     },
   });
 
@@ -224,20 +217,11 @@ const CreateClassroom = ({ loaderData }: Route.ComponentProps) => {
   }, [fetcher!.data, navigate]);
 
   // Compute slug preview from watched form values
-  const slugPreview = (() => {
-    const { name, term, year } = formValues;
-    if (name && term && year) {
-      const termCode = getTermCode(term, year);
-      return `${slugify(name)}-${termCode}`;
-    } else if (name) {
-      return slugify(name);
-    }
-    return '';
-  })();
+  const slugPreview = formValues.name ? slugify(formValues.name) : '';
 
   const handleNext = async () => {
     if (currentStep === 0) {
-      const isValid = await trigger(['git_org_id', 'name', 'term', 'year']);
+      const isValid = await trigger(['git_org_id', 'name']);
       if (isValid) {
         setCurrentStep(1);
       }
@@ -315,7 +299,6 @@ const CreateClassroom = ({ loaderData }: Route.ComponentProps) => {
               <StepBasicInfo
                 gitOrgs={gitOrgs}
                 slugPreview={slugPreview}
-                years={years}
                 githubAppName={githubAppName}
               />
             )}

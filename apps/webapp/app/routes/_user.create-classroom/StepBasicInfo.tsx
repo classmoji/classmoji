@@ -7,11 +7,10 @@ import type { GitOrganizationOption } from './types';
 interface StepBasicInfoProps {
   gitOrgs: GitOrganizationOption[];
   slugPreview: string;
-  years: number[];
   githubAppName?: string | null;
 }
 
-const StepBasicInfo = ({ gitOrgs, slugPreview, years, githubAppName }: StepBasicInfoProps) => {
+const StepBasicInfo = ({ gitOrgs, slugPreview, githubAppName }: StepBasicInfoProps) => {
   const {
     control,
     formState: { errors },
@@ -100,63 +99,6 @@ const StepBasicInfo = ({ gitOrgs, slugPreview, years, githubAppName }: StepBasic
           {errors.name && (
             <span className="text-red-500 text-sm">{errors.name.message as string}</span>
           )}
-        </div>
-
-        <div className="grid grid-cols-2 gap-4">
-          <div>
-            <p className="block text-sm font-medium mb-1">
-              <span className="text-red-500">*</span> Term
-            </p>
-            <Controller
-              name="term"
-              control={control}
-              rules={{ required: 'Please select a term' }}
-              render={({ field }) => (
-                <Select
-                  {...field}
-                  placeholder="Select Term"
-                  className="w-full"
-                  status={errors.term ? 'error' : ''}
-                >
-                  <Select.Option value="FALL">Fall</Select.Option>
-                  <Select.Option value="SPRING">Spring</Select.Option>
-                  <Select.Option value="SUMMER">Summer</Select.Option>
-                  <Select.Option value="WINTER">Winter</Select.Option>
-                </Select>
-              )}
-            />
-            {errors.term && (
-              <span className="text-red-500 text-sm">{errors.term.message as string}</span>
-            )}
-          </div>
-
-          <div>
-            <p className="block text-sm font-medium mb-1">
-              <span className="text-red-500">*</span> Year
-            </p>
-            <Controller
-              name="year"
-              control={control}
-              rules={{ required: 'Please select a year' }}
-              render={({ field }) => (
-                <Select
-                  {...field}
-                  placeholder="Select Year"
-                  className="w-full"
-                  status={errors.year ? 'error' : ''}
-                >
-                  {years.map(year => (
-                    <Select.Option key={year} value={year}>
-                      {year}
-                    </Select.Option>
-                  ))}
-                </Select>
-              )}
-            />
-            {errors.year && (
-              <span className="text-red-500 text-sm">{errors.year.message as string}</span>
-            )}
-          </div>
         </div>
 
         {slugPreview && (

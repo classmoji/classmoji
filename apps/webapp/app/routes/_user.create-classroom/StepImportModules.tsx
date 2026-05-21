@@ -133,9 +133,6 @@ const StepImportModules = ({
                           />
                         )}
                         <span>{classroom.name}</span>
-                        <span className="text-gray-400">
-                          ({classroom.term} {classroom.year})
-                        </span>
                         <span className="text-gray-400 ml-auto">
                           {classroom.modules?.length || 0} modules
                         </span>
