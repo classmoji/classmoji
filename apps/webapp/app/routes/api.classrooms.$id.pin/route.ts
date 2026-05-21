@@ -2,23 +2,20 @@
  * Pin/unpin a classroom for the current user.
  *
  * POST /api/classrooms/:id/pin
+ * Body: { role: string } — the membership role to pin (a user may have
+ *   multiple memberships in the same classroom; pinning is per-membership).
  *
- * Toggles `pin_order` on the classroom. If currently null, sets it to
- * `max(pin_order) + 1` scoped per `git_org_id` (the simpler scope — two orgs
- * may each have their own pin_order=1; the landing screen sorts within each).
- * If non-null, sets it back to null.
+ * Toggles `pin_order` on the user's ClassroomMembership row. If currently
+ * null, sets it to `max(pin_order) + 1` across all of this user's memberships.
+ * If non-null, clears it. Returns `{ pin_order: number | null }`.
  *
- * Returns `{ pin_order: number | null }`.
- *
- * Auth: requires the user to be on the classroom's teaching team
- * (OWNER / TEACHER / ASSISTANT). Students cannot pin.
+ * Auth: any signed-in user — pinning is a personal organization feature,
+ * not tied to a role.
  */
 
 import { requireAuth } from '@classmoji/auth/server';
 import getPrisma from '@classmoji/database';
 import type { Route } from './+types/route';
-
-const TEACHING_ROLES = ['OWNER', 'TEACHER', 'ASSISTANT'] as const;
 
 export const action = async ({ request, params }: Route.ActionArgs) => {
   if (request.method !== 'POST') {
@@ -26,50 +23,47 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
   }
 
   const { userId } = await requireAuth(request);
-  const id = params.id;
-  if (!id) {
+  const classroomId = params.id;
+  if (!classroomId) {
     return new Response('Missing classroom id', { status: 400 });
   }
 
-  const prisma = getPrisma();
-
-  const classroom = await prisma.classroom.findUnique({
-    where: { id },
-    select: { id: true, git_org_id: true, pin_order: true },
-  });
-  if (!classroom) {
-    return new Response('Not Found', { status: 404 });
+  let role: string | null = null;
+  try {
+    const body = (await request.json()) as { role?: string };
+    role = body?.role ?? null;
+  } catch {
+    /* no body / not JSON */
+  }
+  if (!role) {
+    return new Response('Missing role', { status: 400 });
   }
 
-  // Authorize: user must have a teaching-team membership in this classroom.
-  const membership = await prisma.classroomMembership.findFirst({
-    where: {
-      classroom_id: classroom.id,
-      user_id: userId,
-      role: { in: TEACHING_ROLES as unknown as string[] },
-    },
-    select: { id: true },
+  const prisma = getPrisma();
+  const membership = await prisma.classroomMembership.findUnique({
+    where: { classroom_id_user_id_role: { classroom_id: classroomId, user_id: userId, role } },
+    select: { id: true, pin_order: true },
   });
   if (!membership) {
     return new Response('Forbidden', { status: 403 });
   }
 
   const newPinOrder = await prisma.$transaction(async tx => {
-    if (classroom.pin_order != null) {
-      await tx.classroom.update({
-        where: { id: classroom.id },
+    if (membership.pin_order != null) {
+      await tx.classroomMembership.update({
+        where: { id: membership.id },
         data: { pin_order: null },
       });
       return null;
     }
-    // Scope: per git_org_id (simpler than per-user across all memberships).
-    const agg = await tx.classroom.aggregate({
+    // Scope: per user across all of their memberships.
+    const agg = await tx.classroomMembership.aggregate({
       _max: { pin_order: true },
-      where: { git_org_id: classroom.git_org_id },
+      where: { user_id: userId },
     });
     const next = (agg._max.pin_order ?? 0) + 1;
-    await tx.classroom.update({
-      where: { id: classroom.id },
+    await tx.classroomMembership.update({
+      where: { id: membership.id },
       data: { pin_order: next },
     });
     return next;

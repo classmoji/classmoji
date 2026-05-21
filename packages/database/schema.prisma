@@ -273,7 +273,6 @@ model Classroom {
   name              String
   content_namespace String
   is_active         Boolean  @default(true)
-  pin_order         Int?
   created_at        DateTime @default(now())
   updated_at        DateTime @default(now()) @updatedAt
 
@@ -340,6 +339,7 @@ model ClassroomMembership {
   has_accepted_invite Boolean  @default(false)
   comment             String?
   letter_grade        String?
+  pin_order           Int?
   created_at          DateTime @default(now())
   updated_at          DateTime @default(now()) @updatedAt
 

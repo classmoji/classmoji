@@ -1,12 +1,13 @@
 /**
- * Reorder pinned classrooms.
+ * Reorder pinned classrooms for the current user.
  *
  * POST /api/classrooms/reorder-pins
- * Body: { ids: string[] }
+ * Body: { items: Array<{ classroom_id: string; role: string }> }
  *
- * The order in the array is the new `pin_order` (1..N).
- * Auth: requires the user to have a teaching-team membership on EVERY
- * classroom in the payload; otherwise 403.
+ * The order in the array is the new per-user `pin_order` (1..N), applied to
+ * each matching `ClassroomMembership` row owned by the user. Any signed-in
+ * user may reorder their own pins; the endpoint only updates memberships the
+ * user already owns, so non-owned classrooms are silently ignored.
  *
  * Returns `{ ok: true }`.
  */
@@ -15,7 +16,10 @@ import { requireAuth } from '@classmoji/auth/server';
 import getPrisma from '@classmoji/database';
 import type { Route } from './+types/route';
 
-const TEACHING_ROLES = ['OWNER', 'TEACHER', 'ASSISTANT'] as const;
+interface ReorderItem {
+  classroom_id: string;
+  role: string;
+}
 
 export const action = async ({ request }: Route.ActionArgs) => {
   if (request.method !== 'POST') {
@@ -31,35 +35,31 @@ export const action = async ({ request }: Route.ActionArgs) => {
     return new Response('Invalid JSON', { status: 400 });
   }
 
-  const ids =
-    body && typeof body === 'object' && Array.isArray((body as { ids?: unknown }).ids)
-      ? ((body as { ids: unknown[] }).ids.filter(v => typeof v === 'string') as string[])
-      : null;
+  const raw = (body as { items?: unknown }).items;
+  if (!Array.isArray(raw) || raw.length === 0) {
+    return new Response('Missing items', { status: 400 });
+  }
+  const items: ReorderItem[] = raw
+    .filter((v): v is ReorderItem => {
+      return (
+        !!v &&
+        typeof v === 'object' &&
+        typeof (v as ReorderItem).classroom_id === 'string' &&
+        typeof (v as ReorderItem).role === 'string'
+      );
+    })
+    .map(v => ({ classroom_id: v.classroom_id, role: v.role }));
 
-  if (!ids || ids.length === 0) {
-    return new Response('Missing ids', { status: 400 });
+  if (items.length === 0) {
+    return new Response('Missing items', { status: 400 });
   }
 
   const prisma = getPrisma();
 
-  // Verify the user has a teaching-team membership on every classroom in the list.
-  const memberships = await prisma.classroomMembership.findMany({
-    where: {
-      user_id: userId,
-      classroom_id: { in: ids },
-      role: { in: TEACHING_ROLES as unknown as string[] },
-    },
-    select: { classroom_id: true },
-  });
-  const allowed = new Set(memberships.map(m => m.classroom_id));
-  if (ids.some(id => !allowed.has(id))) {
-    return new Response('Forbidden', { status: 403 });
-  }
-
   await prisma.$transaction(
-    ids.map((id, idx) =>
-      prisma.classroom.update({
-        where: { id },
+    items.map((item, idx) =>
+      prisma.classroomMembership.updateMany({
+        where: { user_id: userId, classroom_id: item.classroom_id, role: item.role },
         data: { pin_order: idx + 1 },
       })
     )

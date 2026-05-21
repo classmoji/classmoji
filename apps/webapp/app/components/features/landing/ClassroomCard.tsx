@@ -12,12 +12,34 @@ interface ClassroomCardProps {
   showSlug?: boolean;
   /** Called after the pin endpoint responds with the new pin_order. */
   onPinChanged?: (id: string, pin_order: number | null) => void;
+  /** Called after the archive endpoint responds with the new is_active. */
+  onArchiveChanged?: (id: string, is_active: boolean) => void;
   /** Drag handlers — supplied only inside the Pinned section. */
   draggable?: boolean;
   onDragStart?: (e: React.DragEvent<HTMLDivElement>) => void;
   onDragOver?: (e: React.DragEvent<HTMLDivElement>) => void;
   onDrop?: (e: React.DragEvent<HTMLDivElement>) => void;
   onDragEnd?: (e: React.DragEvent<HTMLDivElement>) => void;
+}
+
+function ArchiveIcon({ filled, size = 14 }: { filled: boolean; size?: number }) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill={filled ? 'currentColor' : 'none'}
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <rect x="3" y="4" width="18" height="4" rx="1" />
+      <path d="M5 8v11a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8" />
+      <path d="M10 12h4" />
+    </svg>
+  );
 }
 
 function PinIcon({ filled, size = 14 }: { filled: boolean; size?: number }) {
@@ -44,6 +66,7 @@ export function ClassroomCard({
   onOpen,
   showSlug = false,
   onPinChanged,
+  onArchiveChanged,
   draggable = false,
   onDragStart,
   onDragOver,
@@ -57,28 +80,65 @@ export function ClassroomCard({
         ? 'Open'
         : 'Pending';
 
-  const fetcher = useFetcher<{ pin_order: number | null }>();
+  const pinFetcher = useFetcher<{ pin_order: number | null }>();
+  const archiveFetcher = useFetcher<{ is_active: boolean }>();
   const [hover, setHover] = useState(false);
-  const lastSubmittedRef = useRef<typeof fetcher.state>('idle');
+  const lastPinStateRef = useRef<typeof pinFetcher.state>('idle');
+  const lastArchiveStateRef = useRef<typeof archiveFetcher.state>('idle');
 
   const isPinned = c.pin_order != null;
-  const canPin = c.role === 'OWNER' || c.role === 'ASSISTANT';
+  // Pinning is a personal organization feature — available to all roles
+  // except pending invites.
+  const canPin = c.role !== 'PENDING INVITE';
+  // Only OWNER can archive/unarchive.
+  const canArchive = c.role === 'OWNER';
 
   useEffect(() => {
-    if (fetcher.state === 'idle' && lastSubmittedRef.current !== 'idle' && fetcher.data) {
-      onPinChanged?.(c.id, fetcher.data.pin_order);
+    if (
+      pinFetcher.state === 'idle' &&
+      lastPinStateRef.current !== 'idle' &&
+      pinFetcher.data
+    ) {
+      onPinChanged?.(c.id, pinFetcher.data.pin_order);
     }
-    lastSubmittedRef.current = fetcher.state;
-  }, [fetcher.state, fetcher.data, c.id, onPinChanged]);
+    lastPinStateRef.current = pinFetcher.state;
+  }, [pinFetcher.state, pinFetcher.data, c.id, onPinChanged]);
+
+  useEffect(() => {
+    if (
+      archiveFetcher.state === 'idle' &&
+      lastArchiveStateRef.current !== 'idle' &&
+      archiveFetcher.data
+    ) {
+      onArchiveChanged?.(c.id, archiveFetcher.data.is_active);
+    }
+    lastArchiveStateRef.current = archiveFetcher.state;
+  }, [archiveFetcher.state, archiveFetcher.data, c.id, onArchiveChanged]);
 
   const handlePinClick = (e: React.MouseEvent) => {
     e.stopPropagation();
-    if (fetcher.state !== 'idle') return;
-    fetcher.submit(null, {
+    if (pinFetcher.state !== 'idle') return;
+    pinFetcher.submit(JSON.stringify({ role: c.membershipRole }), {
       method: 'POST',
       action: `/api/classrooms/${c.classroomId}/pin`,
+      encType: 'application/json',
     });
   };
+
+  const handleArchiveClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (archiveFetcher.state !== 'idle') return;
+    const msg = c.is_active
+      ? `Archive "${c.name}"? You can unarchive it later.`
+      : `Unarchive "${c.name}"?`;
+    if (typeof window !== 'undefined' && !window.confirm(msg)) return;
+    archiveFetcher.submit(null, {
+      method: 'POST',
+      action: `/api/classrooms/${c.classroomId}/archive`,
+    });
+  };
+
+  const fetcher = pinFetcher; // alias used downstream for opacity styling
 
   return (
     <div
@@ -163,6 +223,35 @@ export function ClassroomCard({
           }}
         >
           <AnimatePresence initial={false}>
+            {canArchive && hover && (
+              <motion.button
+                key="archive-btn"
+                type="button"
+                aria-label={c.is_active ? 'Archive classroom' : 'Unarchive classroom'}
+                title={c.is_active ? 'Archive' : 'Unarchive'}
+                onClick={handleArchiveClick}
+                initial={{ opacity: 0, scale: 0.6, width: 0 }}
+                animate={{ opacity: 1, scale: 1, width: 'auto' }}
+                exit={{ opacity: 0, scale: 0.6, width: 0 }}
+                whileHover={{ scale: 1.15 }}
+                whileTap={{ scale: 0.85 }}
+                transition={{ type: 'spring', stiffness: 600, damping: 22 }}
+                style={{
+                  border: 'none',
+                  background: 'transparent',
+                  color: c.is_active ? 'var(--ink-3)' : 'var(--accent)',
+                  cursor: 'pointer',
+                  padding: 2,
+                  borderRadius: 4,
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  overflow: 'hidden',
+                }}
+              >
+                <ArchiveIcon filled={!c.is_active} />
+              </motion.button>
+            )}
             {canPin && (hover || isPinned) && (
               <motion.button
                 key="pin-btn"

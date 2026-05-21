@@ -141,7 +141,6 @@ function formatUpdated(d: Date | string | null | undefined): string {
 function buildLandingClasses(memberships: SelectOrganizationMembership[]): LandingClass[] {
   const items = memberships.map(m => {
     const org = m.organization as SelectOrganizationMembership['organization'] & {
-      pin_order?: number | null;
       updated_at?: Date | string | null;
     };
     const orgLogin = org.login;
@@ -151,12 +150,13 @@ function buildLandingClasses(memberships: SelectOrganizationMembership[]): Landi
     const updatedAt =
       org.settings?.updated_at ?? (org as { updated_at?: Date | string | null }).updated_at;
     const updatedTs = updatedAt ? new Date(updatedAt as string | Date).getTime() || 0 : 0;
-    const pinOrder = org.pin_order ?? null;
+    const pinOrder = (m as { pin_order?: number | null }).pin_order ?? null;
 
     return {
       landing: {
         id: `${org.id}:${m.role}`,
         classroomId: org.id,
+        membershipRole: m.role,
         name: org.name ?? orgLogin,
         subtitle: '',
         slug: `@${gitLogin}/${orgLogin}`,

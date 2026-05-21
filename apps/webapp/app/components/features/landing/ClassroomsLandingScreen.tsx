@@ -64,37 +64,52 @@ export function ClassroomsLandingScreen({
   const [view, setView] = useState<'grid' | 'list'>('grid');
   const [bannerOpen, setBannerOpen] = useState(true);
 
-  // Local overrides for optimistic pin/unpin and drag-reorder. Keyed by classroom id.
+  // Local overrides for optimistic pin/unpin, drag-reorder, and archive. Keyed by composite landing id.
   const [pinOverrides, setPinOverrides] = useState<Record<string, number | null>>({});
+  const [archiveOverrides, setArchiveOverrides] = useState<Record<string, boolean>>({});
 
   // Reset overrides if upstream classes change (e.g. revalidation).
   const classesSigRef = useRef<string>('');
   useEffect(() => {
-    const sig = classes.map(c => `${c.id}:${c.pin_order ?? ''}`).join('|');
+    const sig = classes
+      .map(c => `${c.id}:${c.pin_order ?? ''}:${c.is_active ? '1' : '0'}`)
+      .join('|');
     if (sig !== classesSigRef.current) {
       classesSigRef.current = sig;
       setPinOverrides({});
+      setArchiveOverrides({});
     }
   }, [classes]);
 
   const effectivePinOrder = (c: LandingClass): number | null =>
     Object.prototype.hasOwnProperty.call(pinOverrides, c.id) ? pinOverrides[c.id] : c.pin_order;
+  const effectiveIsActive = (c: LandingClass): boolean =>
+    Object.prototype.hasOwnProperty.call(archiveOverrides, c.id)
+      ? archiveOverrides[c.id]
+      : c.is_active;
 
   const handlePinChanged = (id: string, pin_order: number | null) => {
     setPinOverrides(prev => ({ ...prev, [id]: pin_order }));
   };
+  const handleArchiveChanged = (id: string, is_active: boolean) => {
+    setArchiveOverrides(prev => ({ ...prev, [id]: is_active }));
+  };
 
   const { pinned, active, archived } = useMemo(() => {
-    const withEffective = classes.map(c => ({ c, p: effectivePinOrder(c) }));
+    const withEffective = classes.map(c => ({
+      c: { ...c, is_active: effectiveIsActive(c), pin_order: effectivePinOrder(c) },
+      p: effectivePinOrder(c),
+      a: effectiveIsActive(c),
+    }));
     const pinned = withEffective
-      .filter(x => x.p != null)
+      .filter(x => x.p != null && x.a)
       .sort((a, b) => (a.p ?? 0) - (b.p ?? 0))
       .map(x => x.c);
-    const active = withEffective.filter(x => x.p == null && x.c.is_active).map(x => x.c);
-    const archived = withEffective.filter(x => x.p == null && !x.c.is_active).map(x => x.c);
+    const active = withEffective.filter(x => x.p == null && x.a).map(x => x.c);
+    const archived = withEffective.filter(x => !x.a).map(x => x.c);
     return { pinned, active, archived };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [classes, pinOverrides]);
+  }, [classes, pinOverrides, archiveOverrides]);
 
   // Drag state for the Pinned section.
   const dragIdRef = useRef<string | null>(null);
@@ -118,13 +133,16 @@ export function ClassroomsLandingScreen({
     const prev = pinnedOrder;
     setPinnedOrder(ids);
     try {
-      // Translate composite UI ids → bare classroom UUIDs for the API.
-      const byId = new Map(classes.map(c => [c.id, c.classroomId]));
-      const classroomIds = ids.map(id => byId.get(id)).filter(Boolean) as string[];
+      // Translate composite UI ids → {classroom_id, role} pairs for the API.
+      const byId = new Map(classes.map(c => [c.id, c]));
+      const items = ids
+        .map(id => byId.get(id))
+        .filter(Boolean)
+        .map(c => ({ classroom_id: (c as LandingClass).classroomId, role: (c as LandingClass).membershipRole }));
       const res = await fetch('/api/classrooms/reorder-pins', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ids: classroomIds }),
+        body: JSON.stringify({ items }),
       });
       if (!res.ok) {
         setPinnedOrder(prev);
@@ -212,6 +230,7 @@ export function ClassroomsLandingScreen({
               onOpen={() => onOpenClass(c)}
               showSlug={isDuplicate(c.name)}
               onPinChanged={handlePinChanged}
+              onArchiveChanged={handleArchiveChanged}
               draggable={draggable}
               onDragStart={draggable ? handleDragStart(c.id) : undefined}
               onDragOver={draggable ? handleDragOver(c.id) : undefined}
