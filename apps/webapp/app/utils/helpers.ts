@@ -127,7 +127,11 @@ export const addAuditLog = async ({
 };
 
 // Re-export from shared auth package for backward compatibility
-export { assertClassroomAccess, requireStudentAccess } from '@classmoji/auth/server';
+export {
+  assertClassroomAccess,
+  assertClassroomMutationAllowed,
+  requireStudentAccess,
+} from '@classmoji/auth/server';
 
 // NOTE: sanitizeClassroomForClient was removed - assertClassroomAccess now sanitizes automatically.
 // For direct findBySlug calls, use ClassmojiService.classroom.getClassroomForUI()

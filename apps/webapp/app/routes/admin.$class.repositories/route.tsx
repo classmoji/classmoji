@@ -13,7 +13,7 @@ import { ActionTypes } from '~/constants';
 import { ClassmojiService, getGitProvider, GitHubProvider } from '@classmoji/services';
 import { useGlobalFetcher } from '~/hooks';
 import { waitForRunCompletion } from '~/utils/helpers';
-import { requireClassroomAdmin } from '~/utils/routeAuth.server';
+import { requireClassroomAdmin, assertClassroomMutationAllowed } from '~/utils/routeAuth.server';
 import type { Route } from './+types/route';
 
 interface OrganizationRepositoryPageInfo {
@@ -534,10 +534,11 @@ const GithubRepositories = ({ loaderData }: Route.ComponentProps) => {
 export const action = async ({ request, params }: Route.ActionArgs) => {
   const classSlug = params.class!;
 
-  const { classroom, userId: _userId } = await requireClassroomAdmin(request, classSlug, {
+  const { classroom, userId: _userId, membership } = await requireClassroomAdmin(request, classSlug, {
     resourceType: 'REPOSITORIES',
     action: 'manage_repositories',
   });
+  assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
 
   return namedAction(request, {
     async deleteSingleRepository() {

@@ -4,7 +4,7 @@ import { IconSend, IconBook, IconCalendar, IconTrash } from '@tabler/icons-react
 import { TableActionButtons, EditableCell, ButtonNew } from '~/components';
 import { ClassmojiService } from '@classmoji/services';
 import { namedAction } from 'remix-utils/named-action';
-import { assertClassroomAccess } from '~/utils/helpers';
+import { assertClassroomAccess, assertClassroomMutationAllowed } from '~/utils/helpers';
 import type { Route } from './+types/route';
 import type React from 'react';
 import type { TablerIconsProps } from '@tabler/icons-react';
@@ -124,7 +124,7 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
 
   const data = await request.json();
 
-  const { userId, classroom } = await assertClassroomAccess({
+  const { userId, classroom, membership } = await assertClassroomAccess({
     request,
     classroomSlug: classSlug,
     allowedRoles: ['OWNER', 'ASSISTANT'],
@@ -134,6 +134,7 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
       quiz_id: data.id || null,
     },
   });
+  assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
 
   // Create FormData with the action from the JSON
   const formData = new FormData();

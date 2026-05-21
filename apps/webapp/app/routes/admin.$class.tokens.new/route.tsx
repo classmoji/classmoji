@@ -9,7 +9,7 @@ import { nanoid } from 'nanoid';
 import { ClassmojiService } from '@classmoji/services';
 import { useGlobalFetcher, useRouteDrawer } from '~/hooks';
 import Tasks from '@classmoji/tasks';
-import { requireClassroomAdmin } from '~/utils/routeAuth.server';
+import { requireClassroomAdmin, assertClassroomMutationAllowed } from '~/utils/routeAuth.server';
 import type { Route } from './+types/route';
 
 const InlineRow = ({
@@ -249,10 +249,11 @@ const AdminTokensNew = ({ loaderData }: Route.ComponentProps) => {
 export const action = async ({ params, request }: Route.ActionArgs) => {
   const { class: classSlug } = params;
 
-  const { classroom, userId: _userId } = await requireClassroomAdmin(request, classSlug!, {
+  const { classroom, userId: _userId, membership } = await requireClassroomAdmin(request, classSlug!, {
     resourceType: 'TOKEN_GRANT',
     action: 'assign_tokens_bulk',
   });
+  assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
 
   const data = await request.json();
   const sessionId = nanoid();

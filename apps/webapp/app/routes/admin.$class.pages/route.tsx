@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { useFetcher, Link, Outlet, useSearchParams, useNavigate } from 'react-router';
 import { Table, Button, Input, Select, Switch, Tooltip } from 'antd';
 import { IconPlus, IconEyeOff, IconLock, IconWorld, IconMenu2 } from '@tabler/icons-react';
-import { assertClassroomAccess } from '~/utils/helpers';
+import { assertClassroomAccess, assertClassroomMutationAllowed } from '~/utils/helpers';
 import { ClassmojiService } from '@classmoji/services';
 import { useCallout } from '@classmoji/ui-components';
 import getPrisma from '@classmoji/database';
@@ -50,13 +50,14 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
 export const action = async ({ request, params }: Route.ActionArgs) => {
   const { class: classSlug } = params;
 
-  await assertClassroomAccess({
+  const { classroom, membership } = await assertClassroomAccess({
     request,
     classroomSlug: classSlug!,
     allowedRoles: ['OWNER', 'TEACHER'],
     resourceType: 'PAGES',
     attemptedAction: 'manage',
   });
+  assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
 
   const formData = await request.formData();
   const intent = formData.get('intent') as string | null;

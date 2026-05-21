@@ -5,7 +5,7 @@ import { useState, useEffect } from 'react';
 import { ClassmojiService } from '@classmoji/services';
 import { useGlobalFetcher } from '~/hooks';
 import { UserThumbnailView } from '~/components';
-import { assertClassroomAccess } from '~/utils/helpers';
+import { assertClassroomAccess, assertClassroomMutationAllowed } from '~/utils/helpers';
 import type { Route } from './+types/route';
 
 export const loader = async ({ params, request }: Route.LoaderArgs) => {
@@ -87,13 +87,14 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
   const { class: classSlug } = params;
 
   // Authorize: only OWNER/ASSISTANT can modify student grade comments
-  await assertClassroomAccess({
+  const { classroom, membership } = await assertClassroomAccess({
     request,
     classroomSlug: classSlug!,
     allowedRoles: ['OWNER', 'ASSISTANT'],
     resourceType: 'GRADES',
     attemptedAction: 'modify_student_grade',
   });
+  assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
 
   const data = await request.json();
   const { membershipId, comment } = data;

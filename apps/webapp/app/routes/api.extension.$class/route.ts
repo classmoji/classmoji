@@ -2,7 +2,7 @@ import { namedAction } from 'remix-utils/named-action';
 import { tasks } from '@trigger.dev/sdk';
 
 import { ActionTypes } from '~/constants';
-import { assertClassroomAccess, waitForRunCompletion } from '~/utils/helpers';
+import { assertClassroomAccess, waitForRunCompletion, assertClassroomMutationAllowed } from '~/utils/helpers';
 import type { Route } from './+types/route';
 
 export const loader = async () => {
@@ -15,7 +15,7 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
 
   return namedAction(request, {
     async createExtension() {
-      const { classroom } = await assertClassroomAccess({
+      const { classroom, membership } = await assertClassroomAccess({
         request,
         classroomSlug: classSlug,
         allowedRoles: ['OWNER', 'TEACHER'],
@@ -23,6 +23,7 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
         attemptedAction: 'create_extension',
         metadata: { student_id: data.student_id, hours: data.hours },
       });
+      assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
 
       try {
         const run = await tasks.trigger('request_extension', {
@@ -46,7 +47,7 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
     },
 
     async updateExtension() {
-      await assertClassroomAccess({
+      const { classroom, membership } = await assertClassroomAccess({
         request,
         classroomSlug: classSlug,
         allowedRoles: ['OWNER', 'TEACHER'],
@@ -54,6 +55,7 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
         attemptedAction: 'update_extension',
         metadata: { extension_id: data.extension_id },
       });
+      assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
 
       try {
         const run = await tasks.trigger('update_extension', {

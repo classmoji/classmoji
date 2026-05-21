@@ -10,7 +10,7 @@ import {
   IconNotes,
 } from '@tabler/icons-react';
 import getPrisma from '@classmoji/database';
-import { assertClassroomAccess } from '~/utils/helpers';
+import { assertClassroomAccess, assertClassroomMutationAllowed } from '~/utils/helpers';
 import { ClassmojiService } from '@classmoji/services';
 import { TableActionButtons, RecentViewers } from '~/components';
 import type { Route } from './+types/route';
@@ -70,13 +70,14 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
   const value = formData.get('value') as string;
 
   // Authorization: require OWNER or TEACHER to modify slide settings
-  await assertClassroomAccess({
+  const { classroom, membership } = await assertClassroomAccess({
     request,
     classroomSlug: classSlug,
     allowedRoles: ['OWNER', 'TEACHER'],
     resourceType: 'SLIDES',
     attemptedAction: 'update_slide_visibility',
   });
+  assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
 
   // Handle status changes (combines is_draft and is_public)
   if (field === 'status') {

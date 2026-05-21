@@ -1,7 +1,7 @@
 import { tasks } from '@trigger.dev/sdk';
 
 import { ClassmojiService } from '@classmoji/services';
-import { assertClassroomAccess } from '~/utils/routeAuth.server';
+import { assertClassroomAccess, assertClassroomMutationAllowed } from '~/utils/routeAuth.server';
 import type { Route } from './+types/route';
 
 /**
@@ -42,7 +42,7 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
     });
   }
 
-  await assertClassroomAccess({
+  const { classroom: accessClassroom, membership } = await assertClassroomAccess({
     request,
     classroomSlug: classroom.slug,
     allowedRoles: ['OWNER', 'TEACHER', 'ASSISTANT'],
@@ -50,6 +50,7 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
     attemptedAction: 'refresh_repo_analytics',
     metadata: { repository_assignment_id: repositoryAssignmentId },
   });
+  assertClassroomMutationAllowed({ status: accessClassroom.status, role: membership!.role });
 
   const handle = await tasks.trigger('refresh-repo-analytics', {
     repositoryAssignmentId,

@@ -6,7 +6,7 @@ import { namedAction } from 'remix-utils/named-action';
 import type { Route } from './+types/route';
 import { ClassmojiService, getGitProvider } from '@classmoji/services';
 import { useCallout } from '@classmoji/ui-components';
-import { assertClassroomAccess } from '~/utils/helpers';
+import { assertClassroomAccess, assertClassroomMutationAllowed } from '~/utils/helpers';
 import { titleToIdentifier } from '@classmoji/utils';
 import { tasks } from '@trigger.dev/sdk/v3';
 import { showStatusErrorFromResponse } from '~/utils/classroomStatusModals';
@@ -71,13 +71,14 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
   const classSlug = params.class!;
   const moduleSlug = params.module!;
 
-  const { userId, classroom } = await assertClassroomAccess({
+  const { userId, classroom, membership } = await assertClassroomAccess({
     request,
     classroomSlug: classSlug,
     allowedRoles: ['STUDENT', 'OWNER', 'TEACHER'],
     resourceType: 'TEAM',
     attemptedAction: 'modify_team',
   });
+  assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
 
   // Get the module
   const module = await ClassmojiService.module.findByClassroomSlugAndModuleSlug(

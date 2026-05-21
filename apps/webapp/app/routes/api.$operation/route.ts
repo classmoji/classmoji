@@ -5,7 +5,7 @@ import { nanoid } from 'nanoid';
 import { getAuthSession } from '@classmoji/auth/server';
 
 import { ClassmojiService } from '@classmoji/services';
-import { checkAuth, waitForRunCompletion, assertClassroomAccess } from '~/utils/helpers';
+import { checkAuth, waitForRunCompletion, assertClassroomAccess, assertClassroomMutationAllowed } from '~/utils/helpers';
 
 export const loader = checkAuth(
   async ({ request, params }: { request: Request; params: Record<string, string | undefined> }) => {
@@ -180,13 +180,14 @@ export const action = checkAuth(async ({ request }: { request: Request }) => {
         return data({ error: 'Classroom not found' }, { status: 404 });
       }
 
-      await assertClassroomAccess({
+      const { classroom: accessClassroom, membership } = await assertClassroomAccess({
         request,
         classroomSlug: classroom.slug,
         allowedRoles: ['OWNER'],
         resourceType: 'REPOSITORY',
         attemptedAction: 'delete_repositories',
       });
+      assertClassroomMutationAllowed({ status: accessClassroom.status, role: membership!.role });
 
       const sessionId = nanoid();
       const payloads = await Promise.all(

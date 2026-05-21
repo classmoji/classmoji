@@ -12,6 +12,7 @@
  */
 
 import { assertClassroomAccess } from '~/utils/helpers';
+import { assertClassroomMutationAllowed } from '~/utils/routeAuth.server';
 import { isAIAgentConfigured } from '~/utils/aiFeatures.server';
 import { sendRequest } from '~/services/aiAgentConnection.server';
 import agentStreamManager from '~/utils/agentStreamManager';
@@ -59,13 +60,14 @@ async function handleInitSession(request: Request, formData: FormData) {
   const exampleRepoUrl = formData.get('exampleRepoUrl') as string | null;
 
   // Verify instructor has access to the classroom
-  const { userId, classroom } = await assertClassroomAccess({
+  const { userId, classroom, membership } = await assertClassroomAccess({
     request,
     classroomSlug,
     allowedRoles: ['OWNER', 'ASSISTANT'],
     resourceType: 'PROMPT_ASSISTANT',
     attemptedAction: 'init_session',
   });
+  assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
 
   // Get classroom settings for LLM config
   const { ClassmojiService } = await import('@classmoji/services');
@@ -149,13 +151,14 @@ async function handleSendMessage(request: Request, formData: FormData) {
   const content = formData.get('content') as string | null;
 
   // Verify instructor has access
-  await assertClassroomAccess({
+  const { classroom: smClassroom, membership: smMembership } = await assertClassroomAccess({
     request,
     classroomSlug,
     allowedRoles: ['OWNER', 'ASSISTANT'],
     resourceType: 'PROMPT_ASSISTANT',
     attemptedAction: 'send_message',
   });
+  assertClassroomMutationAllowed({ status: smClassroom.status, role: smMembership!.role });
 
   if (!sessionId || !content) {
     return jsonResponse({ error: 'Missing sessionId or content' }, 400);

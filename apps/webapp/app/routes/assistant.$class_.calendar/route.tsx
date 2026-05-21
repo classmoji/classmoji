@@ -7,7 +7,7 @@ import type { Route } from './+types/route';
 import { ClassmojiService } from '@classmoji/services';
 import { useCallout } from '@classmoji/ui-components';
 import getPrisma from '@classmoji/database';
-import { assertClassroomAccess } from '~/utils/helpers';
+import { assertClassroomAccess, assertClassroomMutationAllowed } from '~/utils/helpers';
 import { buildCalendarUrl, getCalendarDateRange } from '~/utils/calendar.server';
 import CourseCalendar from '~/components/features/calendar/CourseCalendar';
 import CalendarSubscriptionCard from '~/components/features/calendar/CalendarSubscriptionCard';
@@ -98,13 +98,14 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
   const { class: classSlug } = params;
   invariant(classSlug, 'Classroom is required');
 
-  const { userId, classroom } = await assertClassroomAccess({
+  const { userId, classroom, membership } = await assertClassroomAccess({
     request,
     classroomSlug: classSlug,
     allowedRoles: ['ASSISTANT', 'OWNER', 'TEACHER'],
     resourceType: 'CALENDAR',
     attemptedAction: 'modify',
   });
+  assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
 
   const formData = await request.formData();
   const intent = formData.get('intent');

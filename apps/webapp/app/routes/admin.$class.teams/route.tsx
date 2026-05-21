@@ -13,7 +13,7 @@ import {
 import { ClassmojiService, getGitProvider } from '@classmoji/services';
 import { useGlobalFetcher } from '~/hooks';
 import { ActionTypes } from '~/constants';
-import { requireClassroomAdmin } from '~/utils/routeAuth.server';
+import { requireClassroomAdmin, assertClassroomMutationAllowed } from '~/utils/routeAuth.server';
 import type { Route } from './+types/route';
 
 interface Team {
@@ -178,10 +178,11 @@ const AdminTeams = ({ loaderData }: Route.ComponentProps) => {
 export const action = async ({ params, request }: Route.ActionArgs) => {
   const classSlug = params.class!;
 
-  const { classroom } = await requireClassroomAdmin(request, classSlug, {
+  const { classroom, membership } = await requireClassroomAdmin(request, classSlug, {
     resourceType: 'TEAMS',
     action: 'manage_teams',
   });
+  assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
 
   const data = await request.json();
   const { team } = data;

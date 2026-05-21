@@ -15,6 +15,7 @@
  */
 
 import { assertClassroomAccess } from '~/utils/helpers';
+import { assertClassroomMutationAllowed } from '~/utils/routeAuth.server';
 import { isAIAgentConfigured } from '~/utils/aiFeatures.server';
 import { getContentRepoName } from '@classmoji/utils';
 import { sendRequest } from '~/services/aiAgentConnection.server';
@@ -114,6 +115,7 @@ async function handleInitConversation(request: Request, classSlug: string, formD
     resourceType: 'SYLLABUS_BOT',
     attemptedAction: 'init_conversation',
   });
+  assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
 
   const settings = await ClassmojiService.classroom.getClassroomSettingsForServer(classroom.id);
 
@@ -215,13 +217,14 @@ async function handleSendMessage(request: Request, classSlug: string, formData: 
   const content = formData.get('content') as string | null;
 
   // Verify user has access
-  await assertClassroomAccess({
+  const { classroom: smClassroom, membership: smMembership } = await assertClassroomAccess({
     request,
     classroomSlug: classSlug,
     allowedRoles: ['OWNER', 'TEACHER', 'ASSISTANT', 'STUDENT'],
     resourceType: 'SYLLABUS_BOT',
     attemptedAction: 'send_message',
   });
+  assertClassroomMutationAllowed({ status: smClassroom.status, role: smMembership!.role });
 
   if (!conversationId || !content) {
     return jsonResponse({ error: 'Missing conversationId or content' }, 400);

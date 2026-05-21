@@ -8,7 +8,7 @@ import { useDisclosure, useGlobalFetcher } from '~/hooks';
 import { ClassmojiService } from '@classmoji/services';
 import { useCallout } from '@classmoji/ui-components';
 import { assignGradersToAssignmentsHandler } from './utils';
-import { requireClassroomAdmin } from '~/utils/routeAuth.server';
+import { requireClassroomAdmin, assertClassroomMutationAllowed } from '~/utils/routeAuth.server';
 import type { Route } from './+types/route';
 
 export const loader = async ({ params, request }: Route.LoaderArgs) => {
@@ -131,7 +131,7 @@ const AssignGraders = ({ loaderData }: Route.ComponentProps) => {
 export const action = async ({ params, request }: Route.ActionArgs) => {
   const { class: classSlug } = params;
 
-  const { classroom: _classroom, userId: _userId } = await requireClassroomAdmin(
+  const { classroom, userId: _userId, membership } = await requireClassroomAdmin(
     request,
     classSlug!,
     {
@@ -139,6 +139,7 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
       action: 'assign_graders',
     }
   );
+  assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
 
   const data = await request.json();
   const sessionId = nanoid();

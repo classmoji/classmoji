@@ -7,7 +7,7 @@ import { tasks } from '@trigger.dev/sdk';
 import type { Route } from './+types/route';
 import { useDisclosure, useGlobalFetcher } from '~/hooks';
 import { ClassmojiService } from '@classmoji/services';
-import { requireStudentAccess, waitForRunCompletion } from '~/utils/helpers';
+import { requireStudentAccess, waitForRunCompletion, assertClassroomMutationAllowed } from '~/utils/helpers';
 
 export const loader = async ({ params, request }: Route.LoaderArgs) => {
   const { userId } = await requireStudentAccess(request, params.class!, {
@@ -110,10 +110,11 @@ const NewRegradeRequest = ({ loaderData }: Route.ComponentProps) => {
 };
 
 export const action = async ({ request, params }: Route.ActionArgs) => {
-  const { userId, classroom } = await requireStudentAccess(request, params.class!, {
+  const { userId, classroom, membership } = await requireStudentAccess(request, params.class!, {
     resourceType: 'REGRADE_REQUESTS',
     action: 'submit_regrade_request',
   });
+  assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
 
   const data = await request.json();
   const repositoryAssignment = await ClassmojiService.repositoryAssignment.findById(

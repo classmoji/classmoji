@@ -6,7 +6,7 @@ import dayjs from 'dayjs';
 import getPrisma from '@classmoji/database';
 import { ClassmojiService } from '@classmoji/services';
 import type { Route } from './+types/route';
-import { assertClassroomAccess } from '~/utils/helpers';
+import { assertClassroomAccess, assertClassroomMutationAllowed } from '~/utils/helpers';
 import WeeklyCalendarCard, { type WeekEvent } from './WeeklyCalendarCard';
 import ModuleSpotlightCard, { type SpotlightModule } from './ModuleSpotlightCard';
 import RetroTabsCard, {
@@ -247,7 +247,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
 
   return namedAction(request, {
     async purchaseExtensionHours() {
-      const { classroom } = await assertClassroomAccess({
+      const { classroom, membership } = await assertClassroomAccess({
         request,
         classroomSlug: classSlug,
         allowedRoles: ['OWNER', 'TEACHER'],
@@ -260,6 +260,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
         resourceOwnerId: data.student_id,
         selfAccessRoles: ['STUDENT'],
       });
+      assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
 
       if (!data.hours_purchased || data.hours_purchased <= 0) {
         throw new Error('Invalid hours: Must be a positive number.');
