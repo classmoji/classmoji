@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect, useRef } from 'react';
 import { Link } from 'react-router';
 import { Button, IconGithub, IconPlus, IconX } from '@classmoji/ui-components';
 import { AppBar } from './AppBar';
@@ -63,14 +63,112 @@ export function ClassroomsLandingScreen({
   const [view, setView] = useState<'grid' | 'list'>('grid');
   const [bannerOpen, setBannerOpen] = useState(true);
 
-  const { pinned, active, archived } = useMemo(() => {
-    const pinned = classes
-      .filter(c => c.pin_order != null)
-      .sort((a, b) => (a.pin_order ?? 0) - (b.pin_order ?? 0));
-    const active = classes.filter(c => c.pin_order == null && c.is_active);
-    const archived = classes.filter(c => c.pin_order == null && !c.is_active);
-    return { pinned, active, archived };
+  // Local overrides for optimistic pin/unpin and drag-reorder. Keyed by classroom id.
+  const [pinOverrides, setPinOverrides] = useState<Record<string, number | null>>({});
+
+  // Reset overrides if upstream classes change (e.g. revalidation).
+  const classesSigRef = useRef<string>('');
+  useEffect(() => {
+    const sig = classes.map(c => `${c.id}:${c.pin_order ?? ''}`).join('|');
+    if (sig !== classesSigRef.current) {
+      classesSigRef.current = sig;
+      setPinOverrides({});
+    }
   }, [classes]);
+
+  const effectivePinOrder = (c: LandingClass): number | null =>
+    Object.prototype.hasOwnProperty.call(pinOverrides, c.id) ? pinOverrides[c.id] : c.pin_order;
+
+  const handlePinChanged = (id: string, pin_order: number | null) => {
+    setPinOverrides(prev => ({ ...prev, [id]: pin_order }));
+  };
+
+  const { pinned, active, archived } = useMemo(() => {
+    const withEffective = classes.map(c => ({ c, p: effectivePinOrder(c) }));
+    const pinned = withEffective
+      .filter(x => x.p != null)
+      .sort((a, b) => (a.p ?? 0) - (b.p ?? 0))
+      .map(x => x.c);
+    const active = withEffective.filter(x => x.p == null && x.c.is_active).map(x => x.c);
+    const archived = withEffective.filter(x => x.p == null && !x.c.is_active).map(x => x.c);
+    return { pinned, active, archived };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [classes, pinOverrides]);
+
+  // Drag state for the Pinned section.
+  const dragIdRef = useRef<string | null>(null);
+  const [pinnedOrder, setPinnedOrder] = useState<string[] | null>(null);
+
+  const pinnedDisplay = useMemo(() => {
+    if (!pinnedOrder) return pinned;
+    const byId = new Map(pinned.map(c => [c.id, c]));
+    const ordered = pinnedOrder.map(id => byId.get(id)).filter(Boolean) as LandingClass[];
+    // Append any pinned items not in pinnedOrder (e.g. a freshly pinned card).
+    for (const c of pinned) if (!pinnedOrder.includes(c.id)) ordered.push(c);
+    return ordered;
+  }, [pinned, pinnedOrder]);
+
+  useEffect(() => {
+    // When the upstream pinned set changes shape, drop local drag order.
+    setPinnedOrder(null);
+  }, [classes]);
+
+  const submitReorder = async (ids: string[]) => {
+    const prev = pinnedOrder;
+    setPinnedOrder(ids);
+    try {
+      const res = await fetch('/api/classrooms/reorder-pins', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids }),
+      });
+      if (!res.ok) {
+        setPinnedOrder(prev);
+      } else {
+        // Reflect new pin_order locally so reload of state is consistent.
+        setPinOverrides(prevOverrides => {
+          const next = { ...prevOverrides };
+          ids.forEach((id, idx) => {
+            next[id] = idx + 1;
+          });
+          return next;
+        });
+      }
+    } catch {
+      setPinnedOrder(prev);
+    }
+  };
+
+  const handleDragStart = (id: string) => (e: React.DragEvent<HTMLDivElement>) => {
+    dragIdRef.current = id;
+    e.dataTransfer.effectAllowed = 'move';
+    try {
+      e.dataTransfer.setData('text/plain', id);
+    } catch {
+      /* noop */
+    }
+  };
+  const handleDragOver = (_id: string) => (e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+  };
+  const handleDrop = (targetId: string) => (e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    const sourceId = dragIdRef.current;
+    dragIdRef.current = null;
+    if (!sourceId || sourceId === targetId) return;
+    const currentIds = pinnedDisplay.map(c => c.id);
+    const from = currentIds.indexOf(sourceId);
+    const to = currentIds.indexOf(targetId);
+    if (from < 0 || to < 0) return;
+    const next = currentIds.slice();
+    next.splice(from, 1);
+    next.splice(to, 0, sourceId);
+    void submitReorder(next);
+  };
+  const handleDragEnd = () => {
+    dragIdRef.current = null;
+  };
 
   const counts = useMemo(
     () => ({
@@ -86,7 +184,7 @@ export function ClassroomsLandingScreen({
     return (name: string) => (nameCounts.get(name) ?? 0) > 1;
   }, [classes]);
 
-  const renderGrid = (items: LandingClass[], withNewCard: boolean) => (
+  const renderGrid = (items: LandingClass[], withNewCard: boolean, draggable = false) => (
     <div
       style={{
         display: 'grid',
@@ -100,6 +198,12 @@ export function ClassroomsLandingScreen({
           c={c}
           onOpen={() => onOpenClass(c)}
           showSlug={isDuplicate(c.name)}
+          onPinChanged={handlePinChanged}
+          draggable={draggable}
+          onDragStart={draggable ? handleDragStart(c.id) : undefined}
+          onDragOver={draggable ? handleDragOver(c.id) : undefined}
+          onDrop={draggable ? handleDrop(c.id) : undefined}
+          onDragEnd={draggable ? handleDragEnd : undefined}
         />
       ))}
       {withNewCard && (
@@ -338,10 +442,12 @@ export function ClassroomsLandingScreen({
           </div>
         ) : (
           <>
-            {pinned.length > 0 && (
+            {pinnedDisplay.length > 0 && (
               <section style={{ marginBottom: 24 }}>
-                {sectionHeading('Pinned', pinned.length)}
-                {view === 'grid' ? renderGrid(pinned, false) : renderList(pinned)}
+                {sectionHeading('Pinned', pinnedDisplay.length)}
+                {view === 'grid'
+                  ? renderGrid(pinnedDisplay, false, true)
+                  : renderList(pinnedDisplay)}
               </section>
             )}
 

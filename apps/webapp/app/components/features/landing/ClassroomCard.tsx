@@ -1,3 +1,5 @@
+import { useEffect, useRef, useState } from 'react';
+import { useFetcher } from 'react-router';
 import { IconGithub } from '@classmoji/ui-components';
 import { ClassMark } from './ClassMark';
 import { RoleChip } from './RoleChip';
@@ -7,9 +9,46 @@ interface ClassroomCardProps {
   c: LandingClass;
   onOpen: () => void;
   showSlug?: boolean;
+  /** Called after the pin endpoint responds with the new pin_order. */
+  onPinChanged?: (id: string, pin_order: number | null) => void;
+  /** Drag handlers — supplied only inside the Pinned section. */
+  draggable?: boolean;
+  onDragStart?: (e: React.DragEvent<HTMLDivElement>) => void;
+  onDragOver?: (e: React.DragEvent<HTMLDivElement>) => void;
+  onDrop?: (e: React.DragEvent<HTMLDivElement>) => void;
+  onDragEnd?: (e: React.DragEvent<HTMLDivElement>) => void;
 }
 
-export function ClassroomCard({ c, onOpen, showSlug = false }: ClassroomCardProps) {
+function PinIcon({ filled, size = 14 }: { filled: boolean; size?: number }) {
+  // Simple inline pin icon; switches between filled (pinned) and outline.
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill={filled ? 'currentColor' : 'none'}
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M12 2 L15 8 L21 9 L17 13 L18 20 L12 17 L6 20 L7 13 L3 9 L9 8 Z" />
+    </svg>
+  );
+}
+
+export function ClassroomCard({
+  c,
+  onOpen,
+  showSlug = false,
+  onPinChanged,
+  draggable = false,
+  onDragStart,
+  onDragOver,
+  onDrop,
+  onDragEnd,
+}: ClassroomCardProps) {
   const roleVerb =
     c.role === 'OWNER' || c.role === 'ASSISTANT'
       ? 'To grade'
@@ -17,11 +56,39 @@ export function ClassroomCard({ c, onOpen, showSlug = false }: ClassroomCardProp
         ? 'Open'
         : 'Pending';
 
+  const fetcher = useFetcher<{ pin_order: number | null }>();
+  const [hover, setHover] = useState(false);
+  const lastSubmittedRef = useRef<typeof fetcher.state>('idle');
+
+  const isPinned = c.pin_order != null;
+  const canPin = c.role === 'OWNER' || c.role === 'ASSISTANT';
+
+  useEffect(() => {
+    if (fetcher.state === 'idle' && lastSubmittedRef.current !== 'idle' && fetcher.data) {
+      onPinChanged?.(c.id, fetcher.data.pin_order);
+    }
+    lastSubmittedRef.current = fetcher.state;
+  }, [fetcher.state, fetcher.data, c.id, onPinChanged]);
+
+  const handlePinClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (fetcher.state !== 'idle') return;
+    fetcher.submit(null, {
+      method: 'POST',
+      action: `/api/classrooms/${c.id}/pin`,
+    });
+  };
+
   return (
     <div
       onClick={onOpen}
       role="button"
       tabIndex={0}
+      draggable={draggable}
+      onDragStart={onDragStart}
+      onDragOver={onDragOver}
+      onDrop={onDrop}
+      onDragEnd={onDragEnd}
       onKeyDown={e => {
         if (e.key === 'Enter' || e.key === ' ') {
           e.preventDefault();
@@ -34,22 +101,50 @@ export function ClassroomCard({ c, onOpen, showSlug = false }: ClassroomCardProp
         border: '1px solid var(--line)',
         borderRadius: 8,
         padding: '14px 14px 12px',
-        cursor: 'pointer',
-        transition: 'border-color 120ms, background 120ms',
+        cursor: draggable ? 'grab' : 'pointer',
+        transition: 'border-color 120ms, background 120ms, opacity 120ms',
         display: 'flex',
         flexDirection: 'column',
         gap: 10,
         minHeight: 150,
+        opacity: fetcher.state !== 'idle' ? 0.7 : 1,
       }}
       onMouseEnter={e => {
+        setHover(true);
         e.currentTarget.style.borderColor = 'var(--line-strong)';
         e.currentTarget.style.background = 'var(--panel-hover)';
       }}
       onMouseLeave={e => {
+        setHover(false);
         e.currentTarget.style.borderColor = 'var(--line)';
         e.currentTarget.style.background = 'var(--bg-1)';
       }}
     >
+      {canPin && (hover || isPinned) && (
+        <button
+          type="button"
+          aria-label={isPinned ? 'Unpin classroom' : 'Pin classroom'}
+          title={isPinned ? 'Unpin' : 'Pin'}
+          onClick={handlePinClick}
+          style={{
+            position: 'absolute',
+            top: 6,
+            right: 6,
+            border: 'none',
+            background: 'transparent',
+            color: isPinned ? 'var(--ink-0)' : 'var(--ink-3)',
+            cursor: 'pointer',
+            padding: 4,
+            borderRadius: 4,
+            display: 'inline-flex',
+            alignItems: 'center',
+            zIndex: 2,
+          }}
+        >
+          <PinIcon filled={isPinned} />
+        </button>
+      )}
+
       <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10 }}>
         <ClassMark hue={c.hue} name={c.name} />
         <div style={{ flex: 1, minWidth: 0 }}>
