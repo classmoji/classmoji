@@ -334,6 +334,8 @@ export function applyTweaks({
 
   const contrastClamped = Math.min(CONTRAST_MAX, Math.max(CONTRAST_MIN, uiContrast));
   root.style.setProperty('--ui-contrast', String(contrastClamped));
+  if (contrastClamped !== 50) root.classList.add('ui-contrast-active');
+  else root.classList.remove('ui-contrast-active');
 
   if (pointerCursors) root.classList.add('pointer-cursors');
   else root.classList.remove('pointer-cursors');
