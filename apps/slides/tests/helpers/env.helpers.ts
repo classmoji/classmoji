@@ -52,12 +52,3 @@ export function getTestClassroomSlug(): string {
 export function getTestClassroomOrg(): string {
   return process.env.TEST_CLASSROOM_ORG || 'CS-TestClassroom';
 }
-
-/**
- * Get the test classroom term.
- * Used for import functionality which requires org and term params.
- * Note: The term format is '25w' (short form), not 'winter-2025'.
- */
-export function getTestClassroomTerm(): string {
-  return process.env.TEST_CLASSROOM_TERM || '25w';
-}

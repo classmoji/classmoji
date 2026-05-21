@@ -112,13 +112,7 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
       total: progressBuckets.length,
     };
 
-    const termPretty = classroom.term
-      ? String(classroom.term).charAt(0) + String(classroom.term).slice(1).toLowerCase()
-      : null;
-    const termLabel = [termPretty, classroom.year ? String(classroom.year) : null]
-      .filter(Boolean)
-      .join(' ');
-    const subtitleParts = [gitOrgLogin, termLabel].filter((p): p is string => Boolean(p));
+    const subtitleParts = [gitOrgLogin].filter((p): p is string => Boolean(p));
 
     return {
       classroomTitle: classroom.name ?? 'Class',

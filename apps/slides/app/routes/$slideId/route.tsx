@@ -77,7 +77,7 @@ export const loader = async ({
   }
 
   // Get content repo name and file path
-  const repo = `content-${gitOrgLogin}-${slide.term}`;
+  const repo = `content-${gitOrgLogin}-${slide.classroom.content_namespace}`;
   const filePath = `${slide.content_path}/index.html`;
 
   // Build the content URL using content proxy (CDN-first + API fallback)
@@ -244,7 +244,7 @@ export const action = async ({
 
   // Used for content URLs and fallback orgLogin param
   const gitOrgLogin = gitOrganization.login;
-  const repo = `content-${gitOrgLogin}-${slide.term}`;
+  const repo = `content-${gitOrgLogin}-${slide.classroom.content_namespace}`;
   const filePath = `${slide.content_path}/index.html`;
 
   // ─────────────────────────────────────────────────────────────────────────

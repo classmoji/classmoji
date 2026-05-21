@@ -16,7 +16,6 @@
 import { randomUUID } from 'crypto';
 import getPrisma from '@classmoji/database';
 import { requireClassroomStaff } from '@classmoji/auth/server';
-import { generateTermString } from '@classmoji/utils';
 import { processZipImport } from '~/utils/slidesComImporter.server';
 import { importStreamManager } from '~/utils/importStreamManager';
 
@@ -81,7 +80,7 @@ export const action = async ({ request }: { request: Request }) => {
   }
 
   // Get classroom with git_organization
-  const classroom = await getPrisma().classroom.findUnique({
+  const classroom = await getPrisma().classroom.findFirst({
     where: { slug: classroomSlug },
     include: { git_organization: true },
   });
@@ -98,7 +97,13 @@ export const action = async ({ request }: { request: Request }) => {
     );
   }
 
-  const term = generateTermString(classroom.term ?? undefined, classroom.year ?? undefined);
+  const contentNamespace = classroom.content_namespace;
+  if (!contentNamespace) {
+    return Response.json(
+      { error: 'Classroom content namespace not configured' },
+      { status: 400 }
+    );
+  }
 
   // Generate unique import ID for SSE routing
   // This is returned immediately while the actual slideId is created during import
@@ -128,7 +133,7 @@ export const action = async ({ request }: { request: Request }) => {
     org: gitOrgLogin,
     classroomSlug,
     classroomId: classroom.id,
-    term: term!,
+    contentNamespace,
     userId,
     cloudinaryVideoPaths,
     onProgress,

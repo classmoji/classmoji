@@ -37,13 +37,6 @@ enum NotificationType {
   TA_REGRADE_ASSIGNED
 }
 
-enum Term {
-  FALL
-  SPRING
-  SUMMER
-  WINTER
-}
-
 enum AssignmentType {
   INDIVIDUAL
   GROUP
@@ -274,15 +267,14 @@ model GitOrganization {
 }
 
 model Classroom {
-  id         String   @id @default(uuid())
-  slug       String   @unique // URL slug: "cs101-fall-2025"
-  git_org_id String
-  name       String
-  term       Term?
-  year       Int?
-  is_active  Boolean  @default(true)
-  created_at DateTime @default(now())
-  updated_at DateTime @default(now()) @updatedAt
+  id                String   @id @default(uuid())
+  slug              String // URL slug: "cs101-fall-2025"
+  git_org_id        String
+  name              String
+  content_namespace String
+  is_active         Boolean  @default(true)
+  created_at        DateTime @default(now())
+  updated_at        DateTime @default(now()) @updatedAt
 
   git_organization      GitOrganization       @relation(fields: [git_org_id], references: [id], onDelete: Cascade)
   settings              ClassroomSettings?
@@ -305,6 +297,7 @@ model Classroom {
   resource_views        ResourceView[]
   notifications         Notification[]
 
+  @@unique([git_org_id, slug])
   @@index([git_org_id])
   @@map("classrooms")
 }
@@ -346,6 +339,7 @@ model ClassroomMembership {
   has_accepted_invite Boolean  @default(false)
   comment             String?
   letter_grade        String?
+  pin_order           Int?
   created_at          DateTime @default(now())
   updated_at          DateTime @default(now()) @updatedAt
 
@@ -798,7 +792,6 @@ model Slide {
   classroom_id       String
   title              String
   slug               String
-  term               String
   content_path       String
   multiplex_id       String?
   multiplex_secret   String?
