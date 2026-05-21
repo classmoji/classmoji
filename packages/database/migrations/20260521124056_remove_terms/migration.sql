@@ -8,11 +8,13 @@ UPDATE "classrooms"
 SET "content_namespace" = (
   SUBSTRING(CAST("year" AS TEXT) FROM LENGTH(CAST("year" AS TEXT)) - 1)
   ||
+  -- Term enum values are stored uppercase in Postgres
   CASE "term"
     WHEN 'WINTER' THEN 'w'
     WHEN 'SPRING' THEN 's'
     WHEN 'SUMMER' THEN 'u'
     WHEN 'FALL'   THEN 'f'
+    ELSE LOWER(LEFT("term"::text, 1))
   END
 )
 WHERE "term" IS NOT NULL AND "year" IS NOT NULL;
@@ -30,8 +32,8 @@ UPDATE "classrooms"
 SET "name" = "name" || ' ' || INITCAP(LOWER("term"::text)) || ' ' || "year"
 WHERE "term" IS NOT NULL
   AND "year" IS NOT NULL
-  AND "name" NOT ILIKE '%' || INITCAP(LOWER("term"::text)) || '%'
-  AND "name" NOT LIKE '%' || "year"::text || '%';
+  AND "name" !~* ('\m' || INITCAP(LOWER("term"::text)) || '\M')
+  AND "name" !~* ('\m' || "year"::text || '\M');
 
 -- Pre-check: any duplicate (git_org_id, slug) pairs? Should be impossible because slug is currently globally unique.
 DO $$
