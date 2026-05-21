@@ -5,7 +5,7 @@ import { IconGithub } from '@classmoji/ui-components';
 import { ClassMark } from './ClassMark';
 import { RoleChip } from './RoleChip';
 import type { LandingClass } from './types';
-import { showUnpublishedModal } from '~/utils/classroomStatusModals';
+import { useClassroomStatusModals } from '~/utils/classroomStatusModals';
 
 interface ClassroomCardProps {
   c: LandingClass;
@@ -89,13 +89,14 @@ export function ClassroomCard({
   };
 
   const fetcher = pinFetcher; // alias used downstream for opacity styling
+  const { showUnpublished } = useClassroomStatusModals();
 
   // Use raw DB role: derived `c.role` collapses TEACHER into 'OWNER' for display,
   // but the unpublished gate must match the server (OWNER only).
   const blockedUnpublished = c.status === 'UNPUBLISHED' && c.membershipRole !== 'OWNER';
   const handleOpenGuarded = () => {
     if (blockedUnpublished) {
-      showUnpublishedModal();
+      showUnpublished();
       return;
     }
     onOpen();

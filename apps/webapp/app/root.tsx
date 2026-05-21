@@ -14,7 +14,7 @@ import axios from 'axios';
 
 import React, { useEffect } from 'react';
 import dayjs from 'dayjs';
-import { ConfigProvider, theme } from 'antd';
+import { ConfigProvider, theme, App as AntdApp } from 'antd';
 import { IconMoodSad } from '@tabler/icons-react';
 import { auth as triggerAuth } from '@trigger.dev/sdk';
 
@@ -439,20 +439,22 @@ const App = ({ loaderData }: Route.ComponentProps) => {
               </div>
             )}
           >
-            <UserContext.Provider value={{ user }}>
-              <CalloutProvider>
-                <FetcherProvider>
-                  <ImpersonationBanner
-                    key={(session as Record<string, Record<string, string>>)?.session?.id}
-                    session={session}
-                  />
-                  <Outlet />
-                  <SyllabusBotRoot />
-                  <ScrollRestoration />
-                  <Scripts />
-                </FetcherProvider>
-              </CalloutProvider>
-            </UserContext.Provider>
+            <AntdApp>
+              <UserContext.Provider value={{ user }}>
+                <CalloutProvider>
+                  <FetcherProvider>
+                    <ImpersonationBanner
+                      key={(session as Record<string, Record<string, string>>)?.session?.id}
+                      session={session}
+                    />
+                    <Outlet />
+                    <SyllabusBotRoot />
+                    <ScrollRestoration />
+                    <Scripts />
+                  </FetcherProvider>
+                </CalloutProvider>
+              </UserContext.Provider>
+            </AntdApp>
           </ConfigProvider>
         </RenderErrorBoundary>
       </body>

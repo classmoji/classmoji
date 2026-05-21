@@ -16,7 +16,7 @@ import EditEventModal, { type EventFormData } from '~/components/features/calend
 import EventCard from '~/components/features/calendar/EventCard';
 import EventLinks from '~/components/features/calendar/EventLinks';
 import type { CalendarEventWithLinks } from '~/components/features/calendar/types';
-import { showStatusErrorFromResponse } from '~/utils/classroomStatusModals';
+import { useClassroomStatusModals } from '~/utils/classroomStatusModals';
 
 export const loader = async ({ request, params }: Route.LoaderArgs) => {
   const { class: classSlug } = params;
@@ -282,6 +282,7 @@ const AssistantCalendar = ({ loaderData }: Route.ComponentProps) => {
   const fetcher = useFetcher();
   const eventsFetcher = useFetcher();
   const callout = useCallout();
+  const { showStatusErrorFromResponse } = useClassroomStatusModals();
   const [addModalOpen, setAddModalOpen] = useState(false);
   const [editModalOpen, setEditModalOpen] = useState(false);
   const [selectedEvent, setSelectedEvent] = useState<CalendarEventWithLinks | null>(null);

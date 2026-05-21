@@ -9,7 +9,7 @@ import { useCallout } from '@classmoji/ui-components';
 import { assertClassroomAccess, assertClassroomMutationAllowed } from '~/utils/helpers';
 import { titleToIdentifier } from '@classmoji/utils';
 import { tasks } from '@trigger.dev/sdk/v3';
-import { showStatusErrorFromResponse } from '~/utils/classroomStatusModals';
+import { useClassroomStatusModals } from '~/utils/classroomStatusModals';
 
 export const loader = async ({ request, params }: Route.LoaderArgs) => {
   const classSlug = params.class!;
@@ -266,6 +266,7 @@ const StudentTeamPage = ({ loaderData }: Route.ComponentProps) => {
   const [teamName, setTeamName] = useState('');
   const [showCreateForm, setShowCreateForm] = useState(false);
   const callout = useCallout();
+  const { showStatusErrorFromResponse } = useClassroomStatusModals();
 
   const isSubmitting = fetcher.state !== 'idle';
 
