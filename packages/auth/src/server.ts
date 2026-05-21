@@ -779,6 +779,11 @@ export const assertClassroomAccess = async ({
     classroom
   ) as SafeClassroomRecord;
 
+  assertClassroomEntryAllowed({
+    status: classroom.status as 'ACTIVE' | 'LOCKED' | 'UNPUBLISHED',
+    role: membership.role as 'OWNER' | 'TEACHER' | 'ASSISTANT' | 'STUDENT',
+  });
+
   return {
     userId: authData.userId,
     classroom: safeClassroom,
@@ -881,6 +886,63 @@ export async function requireStudentAccess(
     attemptedAction: options.action || 'access',
     metadata: options.metadata,
   });
+}
+
+export type ClassroomStatusError = 'CLASSROOM_LOCKED' | 'CLASSROOM_UNPUBLISHED';
+
+const statusErrorResponse = (code: ClassroomStatusError, message: string) =>
+  new Response(JSON.stringify({ error: code, message }), {
+    status: 403,
+    headers: { 'Content-Type': 'application/json' },
+  });
+
+/**
+ * Block non-owners from entering an UNPUBLISHED classroom.
+ * Call after the role check inside loaders. LOCKED never blocks entry.
+ */
+export function assertClassroomEntryAllowed({
+  status,
+  role,
+}: {
+  status: 'ACTIVE' | 'LOCKED' | 'UNPUBLISHED';
+  role: 'OWNER' | 'TEACHER' | 'ASSISTANT' | 'STUDENT';
+}): void {
+  if (status === 'UNPUBLISHED' && role !== 'OWNER') {
+    throw statusErrorResponse(
+      'CLASSROOM_UNPUBLISHED',
+      'This class has been unpublished by the owner.'
+    );
+  }
+}
+
+/** Pure predicate: can this role mutate the classroom in its current state? */
+export function canMutateClassroom({
+  status,
+  role,
+}: {
+  status: 'ACTIVE' | 'LOCKED' | 'UNPUBLISHED';
+  role: 'OWNER' | 'TEACHER' | 'ASSISTANT' | 'STUDENT';
+}): boolean {
+  if (role === 'OWNER') return true;
+  return status === 'ACTIVE';
+}
+
+/** Throw 403 with typed code when the current role cannot mutate. */
+export function assertClassroomMutationAllowed(args: {
+  status: 'ACTIVE' | 'LOCKED' | 'UNPUBLISHED';
+  role: 'OWNER' | 'TEACHER' | 'ASSISTANT' | 'STUDENT';
+}): void {
+  if (canMutateClassroom(args)) return;
+  if (args.status === 'LOCKED') {
+    throw statusErrorResponse(
+      'CLASSROOM_LOCKED',
+      'This class is in read-only mode. The owner has locked it.'
+    );
+  }
+  throw statusErrorResponse(
+    'CLASSROOM_UNPUBLISHED',
+    'This class has been unpublished by the owner.'
+  );
 }
 
 /**
