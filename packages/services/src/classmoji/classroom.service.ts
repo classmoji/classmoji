@@ -112,7 +112,7 @@ export const findByUserId = async (userId: string, role: Role | null = null) => 
  */
 export const findAll = async (query: Prisma.ClassroomWhereInput = {}) => {
   return getPrisma().classroom.findMany({
-    where: { is_active: true, ...query },
+    where: { ...query },
     include: {
       git_organization: true,
       settings: true,
