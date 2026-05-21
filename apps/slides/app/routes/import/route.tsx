@@ -11,7 +11,7 @@ import { useLoaderData, useNavigate } from 'react-router';
 import { useDropzone, type FileRejection } from 'react-dropzone';
 import getPrisma from '@classmoji/database';
 import { ClassmojiService } from '@classmoji/services';
-import { generateTermString, getContentRepoName } from '@classmoji/utils';
+import { getContentRepoName } from '@classmoji/utils';
 import { requireClassroomStaff } from '@classmoji/auth/server';
 import { useUser } from '~/root';
 import { listSavedThemes } from '~/utils/themeService.server';
@@ -20,7 +20,7 @@ import VideoSelectionModal from '~/components/VideoSelectionModal';
 import ImportProgressModal from '~/components/ImportProgressModal';
 import { useImportStream } from '~/hooks/useImportStream';
 
-// Note: prisma, ClassmojiService, generateTermString, getContentRepoName are used in the loader
+// Note: prisma, ClassmojiService, getContentRepoName are used in the loader
 
 // Max file size for ZIP uploads (in bytes)
 const MAX_FILE_SIZE = 150 * 1024 * 1024; // 150MB
@@ -57,23 +57,19 @@ export const loader = async ({ request }: { request: Request }) => {
     throw new Response('Git organization not configured for this classroom', { status: 400 });
   }
 
-  // Derive term string from classroom data
-  const term = generateTermString(classroom.term ?? undefined, classroom.year ?? undefined);
-
   // Get modules for dropdown
   const modules = await ClassmojiService.module.findByClassroomSlug(classroomSlug);
 
   // Get content repo name using utility (same as slidesComImporter)
   const repoName = getContentRepoName({
     login: gitOrgLogin,
-    term: classroom.term ?? undefined,
-    year: classroom.year ?? undefined,
+    content_namespace: classroom.content_namespace ?? undefined,
   });
   const savedThemes = await listSavedThemes(gitOrgLogin, repoName);
 
   return {
     classroomSlug,
-    term,
+    contentNamespace: classroom.content_namespace,
     gitOrgLogin,
     classroom,
     modules: modules.map(m => ({ id: m.id, title: m.title })),

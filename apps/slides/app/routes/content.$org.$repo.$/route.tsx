@@ -32,8 +32,7 @@ import getPrisma from '@classmoji/database';
 
 interface ContentRouteMembership {
   classroom?: {
-    term?: string | null;
-    year?: number | null;
+    content_namespace?: string | null;
     git_organization?: {
       login: string;
       settings?: Record<string, string> | null;
@@ -116,8 +115,7 @@ export const loader = async ({
       // Get the expected content repo name for this classroom
       const expectedRepo = getContentRepoName({
         login: gitOrg.login,
-        term: m.classroom?.term ?? undefined,
-        year: m.classroom?.year ?? undefined,
+        content_namespace: m.classroom?.content_namespace ?? undefined,
         settings: gitOrg.settings as Record<string, string> | undefined,
       });
 
@@ -143,8 +141,7 @@ export const loader = async ({
         // Validate the requested repo matches the slide's content repo
         const expectedRepo = getContentRepoName({
           login: gitOrg.login,
-          term: slide.classroom.term ?? undefined,
-          year: slide.classroom.year ?? undefined,
+          content_namespace: slide.classroom.content_namespace,
         });
 
         if (repo === expectedRepo) {

@@ -166,7 +166,7 @@ ${slidesContent}
  * @param {string} options.org - Git organization login (for GitHub API calls)
  * @param {string} [options.classroomSlug] - Classroom slug (for database reference)
  * @param {string} options.classroomId - Classroom UUID (for database reference)
- * @param {string} options.term - Term string (e.g., "25w")
+ * @param {string} options.contentNamespace - Classroom content namespace (e.g., "25w" or a slug)
  * @param {string} options.userId - User ID who is importing
  * @param {string[]} [options.cloudinaryVideoPaths] - Paths of videos to upload to Cloudinary instead of GitHub
  * @param {Function} [options.onProgress] - Callback for progress updates ({ type: 'step'|'done'|'error', step?: string, current?: number, total?: number, filename?: string })
@@ -182,7 +182,7 @@ export async function processZipImport({
   org,
   classroomSlug: _classroomSlug,
   classroomId,
-  term,
+  contentNamespace,
   userId,
   cloudinaryVideoPaths = [],
   onProgress = () => {},
@@ -196,7 +196,7 @@ export async function processZipImport({
   org: string;
   classroomSlug?: string;
   classroomId: string;
-  term: string;
+  contentNamespace: string;
   userId: string;
   cloudinaryVideoPaths?: string[];
   onProgress?: (event: {
@@ -253,11 +253,11 @@ export async function processZipImport({
   // 5. Flat content path: slides/{slug}-{timestamp}
   const timestamp = Date.now();
   const contentPath = `slides/${slug}-${timestamp}`;
-  // Build organization-like object for getContentRepoName (adapts new classroom schema)
+  // Build organization-like object for getContentRepoName, using the
+  // classroom's stable content_namespace as the namespace.
   const repoName = getContentRepoName({
     login: classroom.git_organization.login,
-    term: classroom.term ?? undefined,
-    year: classroom.year ?? undefined,
+    content_namespace: classroom.content_namespace,
   });
 
   // 6. Ensure content repo exists (org is git org login for GitHub API)
@@ -267,7 +267,7 @@ export async function processZipImport({
     await gitProvider.createPublicRepository(
       org,
       repoName,
-      `Course content for ${classroom.name || org} - ${term}`
+      `Course content for ${classroom.name || org} - ${contentNamespace}`
     );
     // Give GitHub a moment to initialize the repo
     await new Promise(resolve => setTimeout(resolve, 2000));
@@ -712,7 +712,10 @@ export async function processZipImport({
     data: {
       title: slideTitle,
       slug,
-      term,
+      // Slide.term column is dropped in a later migration; populate with
+      // the classroom's content_namespace until then so the NOT NULL
+      // constraint is satisfied.
+      term: contentNamespace,
       content_path: contentPath,
       classroom_id: classroom.id,
       created_by: userId,

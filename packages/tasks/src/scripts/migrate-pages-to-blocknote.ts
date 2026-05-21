@@ -1,7 +1,6 @@
 import { PrismaClient } from '@prisma/client';
 import { ContentService } from '@classmoji/content';
 import { migrateHtmlToBlockNote } from '../../../../apps/pages/app/utils/migration.server.ts';
-import { generateTermString } from '@classmoji/utils';
 import { BlockNoteSchema, defaultBlockSpecs, createCodeBlockSpec } from '@blocknote/core';
 import { multiColumnSchema } from '@blocknote/xl-multi-column';
 import { codeBlockOptions } from '@blocknote/code-block';
@@ -118,18 +117,14 @@ async function migratePagesToBlockNote(): Promise<void> {
           ? { ...gitOrg, login: OVERRIDE_GIT_ORG_LOGIN }
           : gitOrg;
 
-        const term = generateTermString(
-          (page.classroom.term as string) ?? undefined,
-          page.classroom.year ?? undefined
-        );
-        const repo = `content-${effectiveGitOrg.login}-${term}`;
+        const contentNamespace = page.classroom.content_namespace as string;
+        const repo = `content-${effectiveGitOrg.login}-${contentNamespace}`;
 
         console.log(`\n🔍 Processing: ${page.slug}`);
         console.log(
           `   Git Org: ${gitOrg.login} ${OVERRIDE_GIT_ORG_LOGIN ? `→ ${effectiveGitOrg.login} (overridden)` : ''}`
         );
-        console.log(`   Term: ${page.classroom.term}, Year: ${page.classroom.year}`);
-        console.log(`   Generated term string: ${term}`);
+        console.log(`   Content namespace: ${contentNamespace}`);
         console.log(`   Repo: ${repo}`);
         console.log(`   Path: ${page.content_path}`);
 

@@ -197,7 +197,7 @@ export const action = async ({ request }: { request: Request }) => {
         return { error: 'Git organization not configured for this classroom' };
       }
 
-      const repo = `content-${gitOrganization.login}-${slide.term}`;
+      const repo = `content-${gitOrganization.login}-${slide.classroom?.content_namespace}`;
       const newSlug = `${slide.slug}-copy-${Date.now()}`;
       const newContentPath = `slides/${newSlug}`;
 
@@ -240,7 +240,9 @@ export const action = async ({ request }: { request: Request }) => {
         data: {
           title: `${slide.title} (Copy)`,
           slug: newSlug,
-          term: slide.term,
+          // Slide.term column is dropped in a later migration; populate
+          // with the classroom's content_namespace until then.
+          term: slide.classroom?.content_namespace ?? '',
           content_path: newContentPath,
           classroom_id: slide.classroom_id,
           created_by: authData?.userId || slide.created_by,

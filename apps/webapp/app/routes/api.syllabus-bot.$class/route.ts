@@ -64,8 +64,7 @@ export async function loader({ params, request }: Route.LoaderArgs) {
   // Check if we have a content repo (either explicitly set or can be derived)
   const contentRepoName = getContentRepoName({
     login: classroom.git_organization?.login,
-    term: classroom.term ?? undefined,
-    year: classroom.year ?? undefined,
+    content_namespace: classroom.content_namespace ?? undefined,
   });
 
   return jsonResponse({
@@ -155,8 +154,7 @@ async function handleInitConversation(request: Request, classSlug: string, formD
     settings?.content_repo_name ||
     getContentRepoName({
       login: classroom.git_organization?.login,
-      term: classroom.term ?? undefined,
-      year: classroom.year ?? undefined,
+      content_namespace: classroom.content_namespace ?? undefined,
     });
   if (contentRepoNameForClone && classroom.git_organization?.github_installation_id) {
     try {

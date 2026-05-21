@@ -12,7 +12,6 @@ import { getGitProvider, ClassmojiService } from '@classmoji/services';
 import { ContentService } from '@classmoji/content';
 import { requireClassroomTeachingTeam } from '@classmoji/auth/server';
 import { useUser } from '~/root';
-import { generateTermString } from '@classmoji/utils';
 import { generateSlideTemplate } from '~/utils/slideHelpers.server';
 
 export const loader = async ({
@@ -46,15 +45,14 @@ export const loader = async ({
     throw new Response('Git organization not configured for this classroom', { status: 400 });
   }
 
-  // Generate term string from classroom settings
-  const term = generateTermString(classroom.term ?? undefined, classroom.year ?? undefined);
-  if (!term) {
-    throw new Response('Classroom term/year not configured', { status: 400 });
+  const contentNamespace = classroom.content_namespace;
+  if (!contentNamespace) {
+    throw new Response('Classroom content namespace not configured', { status: 400 });
   }
 
   return {
     classroomSlug,
-    term,
+    contentNamespace,
     gitOrgLogin,
     classroom,
     webappUrl: process.env.WEBAPP_URL || 'http://localhost:3000',
@@ -73,7 +71,6 @@ export const action = async ({
   const formData = await request.formData();
 
   const title = (formData.get('title') as string | null)?.trim();
-  const term = formData.get('term') as string;
 
   // Validate required fields
   if (!title) {
@@ -100,14 +97,19 @@ export const action = async ({
     return { error: 'Git organization not configured for this classroom' };
   }
 
+  const contentNamespace = classroom.content_namespace;
+  if (!contentNamespace) {
+    return { error: 'Classroom content namespace not configured' };
+  }
+
   // Generate slug from title
   const slug = title
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-|-$/g, '');
 
-  // Content repo name: content-{gitOrgLogin}-{term}
-  const repoName = `content-${gitOrgLogin}-${term}`;
+  // Content repo name: content-{gitOrgLogin}-{contentNamespace}
+  const repoName = `content-${gitOrgLogin}-${contentNamespace}`;
 
   // Flat content path: slides/{slug}
   const contentPath = `slides/${slug}`;
@@ -121,7 +123,7 @@ export const action = async ({
       await gitProvider.createPublicRepository(
         gitOrgLogin,
         repoName,
-        `Course content for ${classroom.name || gitOrgLogin} - ${term}`
+        `Course content for ${classroom.name || gitOrgLogin} - ${contentNamespace}`
       );
 
       // Give GitHub a moment to initialize the repo
@@ -157,7 +159,10 @@ export const action = async ({
       data: {
         title,
         slug,
-        term,
+        // Slide.term column is dropped in a later migration; populate with
+        // the classroom's content_namespace until then so the NOT NULL
+        // constraint is satisfied.
+        term: contentNamespace,
         content_path: contentPath,
         classroom_id: classroom.id,
         created_by: userId,
@@ -177,7 +182,7 @@ export const action = async ({
 };
 
 export default function CreateSlidePage() {
-  const { classroomSlug, term, classroom, webappUrl } = useLoaderData<typeof loader>();
+  const { classroomSlug, contentNamespace, classroom, webappUrl } = useLoaderData<typeof loader>();
   const userContext = useUser();
   const user = userContext?.user;
   const navigation = useNavigation();
@@ -196,16 +201,7 @@ export default function CreateSlidePage() {
     membership?.role === 'TEACHER' ||
     membership?.role === 'ASSISTANT';
 
-  // Format term for display (e.g., "25w" -> "Winter 2025")
-  const termDisplayMap: Record<string, string> = {
-    w: 'Winter',
-    s: 'Spring',
-    u: 'Summer',
-    f: 'Fall',
-  };
-  const termYear = term ? `20${term.slice(0, 2)}` : '';
-  const termSeason = term ? termDisplayMap[term.slice(2)] : '';
-  const termDisplay = term ? `${termSeason} ${termYear}` : '';
+  const namespaceDisplay = contentNamespace ?? '';
 
   if (!canCreate) {
     return (
@@ -250,9 +246,6 @@ export default function CreateSlidePage() {
         {/* Create Form */}
         <div className="bg-white dark:bg-gray-800 rounded-lg shadow-xs border border-gray-200 dark:border-gray-700 p-6">
           <Form method="post">
-            {/* Hidden field for term */}
-            <input type="hidden" name="term" value={term} />
-
             {/* Error message */}
             {error && (
               <div className="mb-6 p-4 bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-800 rounded-md">
@@ -274,19 +267,19 @@ export default function CreateSlidePage() {
               />
             </div>
 
-            {/* Term (read-only) */}
+            {/* Content namespace (read-only) */}
             <div className="mb-6">
               <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                Term
+                Content namespace
               </label>
               <input
                 type="text"
-                value={termDisplay}
+                value={namespaceDisplay}
                 disabled
                 className="w-full px-4 py-2 border border-gray-200 dark:border-gray-700 rounded-md bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-400 cursor-not-allowed"
               />
               <p className="mt-1 text-xs text-gray-400 dark:text-gray-500">
-                Term is determined by your classroom settings
+                Determined by your classroom settings
               </p>
             </div>
 

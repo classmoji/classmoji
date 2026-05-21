@@ -24,11 +24,15 @@ function getSharedThemeFromHtml(htmlContent: string): string | null {
 /**
  * Count how many slides are using a specific shared theme
  * @param {string} gitOrgLogin - Git organization login
- * @param {string} term - Term string (e.g., "25w")
+ * @param {string} contentNamespace - Content namespace (e.g., "25w" or a slug)
  * @param {string} themeName - Theme name to check
  * @returns {Promise<{count: number, slides: Array<{id: string, title: string}>}>}
  */
-export async function countSlidesUsingTheme(gitOrgLogin: string, term: string, themeName: string) {
+export async function countSlidesUsingTheme(
+  gitOrgLogin: string,
+  contentNamespace: string,
+  themeName: string
+) {
   // Get git organization for installation ID
   const gitOrg = await getPrisma().gitOrganization.findFirst({
     where: { provider: 'GITHUB', login: gitOrgLogin },
@@ -38,9 +42,9 @@ export async function countSlidesUsingTheme(gitOrgLogin: string, term: string, t
     return { count: 0, slides: [] };
   }
 
-  // Get all slides for this term
+  // Get all slides whose classroom uses this namespace
   const slides = await getPrisma().slide.findMany({
-    where: { term },
+    where: { classroom: { content_namespace: contentNamespace } },
     include: {
       classroom: {
         include: { git_organization: true },
@@ -53,7 +57,7 @@ export async function countSlidesUsingTheme(gitOrgLogin: string, term: string, t
 
   const gitProvider = new GitHubProvider(gitOrg.github_installation_id, gitOrgLogin);
   const octokit = await gitProvider.getOctokit();
-  const repoName = `content-${gitOrgLogin}-${term}`;
+  const repoName = `content-${gitOrgLogin}-${contentNamespace}`;
 
   const slidesUsingTheme = [];
 
@@ -90,10 +94,14 @@ export async function countSlidesUsingTheme(gitOrgLogin: string, term: string, t
 /**
  * Delete a shared theme from GitHub
  * @param {string} gitOrgLogin - Git organization login
- * @param {string} term - Term string
+ * @param {string} contentNamespace - Content namespace (e.g., "25w" or a slug)
  * @param {string} themeName - Theme name to delete
  */
-export async function deleteSharedTheme(gitOrgLogin: string, term: string, themeName: string) {
+export async function deleteSharedTheme(
+  gitOrgLogin: string,
+  contentNamespace: string,
+  themeName: string
+) {
   const gitOrg = await getPrisma().gitOrganization.findFirst({
     where: { provider: 'GITHUB', login: gitOrgLogin },
   });
@@ -102,7 +110,7 @@ export async function deleteSharedTheme(gitOrgLogin: string, term: string, theme
     throw new Error('Git organization not found');
   }
 
-  const repoName = `content-${gitOrgLogin}-${term}`;
+  const repoName = `content-${gitOrgLogin}-${contentNamespace}`;
   const themePath = `${THEMES_FOLDER}/${themeName}`;
 
   await ContentService.deleteFolder({
@@ -151,7 +159,7 @@ export async function deleteSlide({
     throw new Error('GitHub installation not configured');
   }
 
-  const repoName = `content-${gitOrgLogin}-${slide.term}`;
+  const repoName = `content-${gitOrgLogin}-${slide.classroom.content_namespace}`;
   const gitProvider = new GitHubProvider(gitOrg.github_installation_id, gitOrgLogin);
   const octokit = await gitProvider.getOctokit();
 
@@ -199,12 +207,16 @@ export async function deleteSlide({
   // Handle shared theme deletion if requested
   if (themeName && deleteTheme) {
     // Count how many OTHER slides are using this theme (excluding the one being deleted)
-    const themeUsage = await countSlidesUsingTheme(gitOrgLogin, slide.term, themeName);
+    const themeUsage = await countSlidesUsingTheme(
+      gitOrgLogin,
+      slide.classroom.content_namespace,
+      themeName
+    );
     otherSlidesUsingTheme = themeUsage.slides.filter(s => s.id !== slideId).length;
 
     if (otherSlidesUsingTheme === 0) {
       try {
-        await deleteSharedTheme(gitOrgLogin, slide.term, themeName);
+        await deleteSharedTheme(gitOrgLogin, slide.classroom.content_namespace, themeName);
         themeDeleted = true;
       } catch (error: unknown) {
         console.error('Failed to delete shared theme:', error);
@@ -264,7 +276,7 @@ export async function getSlideDeleteInfo(slideId: string) {
     return { slide, themeName: null };
   }
 
-  const repoName = `content-${gitOrgLogin}-${slide.term}`;
+  const repoName = `content-${gitOrgLogin}-${slide.classroom.content_namespace}`;
   const gitProvider = new GitHubProvider(gitOrg.github_installation_id, gitOrgLogin);
 
   let themeName: string | null = null;
@@ -291,7 +303,11 @@ export async function getSlideDeleteInfo(slideId: string) {
   }
 
   // Count other slides using this theme
-  const themeUsage = await countSlidesUsingTheme(gitOrgLogin, slide.term, themeName);
+  const themeUsage = await countSlidesUsingTheme(
+    gitOrgLogin,
+    slide.classroom.content_namespace,
+    themeName
+  );
   const otherSlides = themeUsage.slides.filter(s => s.id !== slideId);
 
   return {

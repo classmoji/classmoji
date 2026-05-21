@@ -9,8 +9,6 @@ const extractBodyContent = (html: string): string => {
   const bodyMatch = html.match(/<body[^>]*>([\s\S]*)<\/body>/i);
   return bodyMatch ? bodyMatch[1] : html;
 };
-import { generateTermString } from '@classmoji/utils';
-
 import type { Route } from './+types/route';
 
 interface PageWithClassroom {
@@ -19,8 +17,7 @@ interface PageWithClassroom {
   content_path: string;
   width: number;
   classroom: {
-    term: string | undefined;
-    year: number | undefined;
+    content_namespace: string;
     git_organization: {
       login: string;
       provider: string;
@@ -99,11 +96,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
 
       const pageData = page as unknown as PageWithClassroom;
       const gitOrg = pageData.classroom.git_organization;
-      const term = generateTermString(
-        pageData.classroom.term,
-        pageData.classroom.year ?? undefined
-      );
-      const repo = `content-${gitOrg.login}-${term}`;
+      const repo = `content-${gitOrg.login}-${pageData.classroom.content_namespace}`;
       const assetsFolder = `${page.content_path}/assets`;
 
       console.error('[upload-image action] Uploading to repo:', repo, 'folder:', assetsFolder);
@@ -174,11 +167,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
 
       const pageData = page as unknown as PageWithClassroom;
       const gitOrg = pageData.classroom.git_organization;
-      const term = generateTermString(
-        pageData.classroom.term,
-        pageData.classroom.year ?? undefined
-      );
-      const repo = `content-${gitOrg.login}-${term}`;
+      const repo = `content-${gitOrg.login}-${pageData.classroom.content_namespace}`;
       const assetsFolder = `${page.content_path}/assets`;
 
       const buffer = Buffer.from(await file.arrayBuffer());
@@ -342,11 +331,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
 
       const pageData = page as unknown as PageWithClassroom;
       const gitOrg = pageData.classroom.git_organization;
-      const term = generateTermString(
-        pageData.classroom.term,
-        pageData.classroom.year ?? undefined
-      );
-      const repo = `content-${gitOrg.login}-${term}`;
+      const repo = `content-${gitOrg.login}-${pageData.classroom.content_namespace}`;
 
       // Upload header image to content repo (in page folder, not assets)
       const buffer = Buffer.from(await file.arrayBuffer());
@@ -459,11 +444,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
 
       const pageData = page as unknown as PageWithClassroom;
       const gitOrg = pageData.classroom.git_organization;
-      const term = generateTermString(
-        pageData.classroom.term,
-        pageData.classroom.year ?? undefined
-      );
-      const repo = `content-${gitOrg.login}-${term}`;
+      const repo = `content-${gitOrg.login}-${pageData.classroom.content_namespace}`;
       const assetsFolder = `${page.content_path}/assets`;
 
       // Read markdown content
@@ -614,11 +595,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
 
     const savePageData = page as unknown as PageWithClassroom;
     const gitOrg = savePageData.classroom.git_organization;
-    const term = generateTermString(
-      savePageData.classroom.term,
-      savePageData.classroom.year ?? undefined
-    );
-    const repo = `content-${gitOrg.login}-${term}`;
+    const repo = `content-${gitOrg.login}-${savePageData.classroom.content_namespace}`;
     const filePath = `${page.content_path}/index.html`;
 
     // Wrap HTML content in full document with the page's width setting

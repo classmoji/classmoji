@@ -1,5 +1,5 @@
 import getPrisma from '@classmoji/database';
-import { titleToIdentifier, generateTermString } from '@classmoji/utils';
+import { titleToIdentifier } from '@classmoji/utils';
 import { ContentService } from '@classmoji/content';
 import * as contentManifestService from './contentManifest.service.ts';
 import * as notificationService from './notification.service.ts';
@@ -292,11 +292,7 @@ export async function deletePage(pageId: string) {
 
   // Delete from GitHub if configured
   if (gitOrgLogin && page.content_path) {
-    const term = generateTermString(
-      page.classroom.term ?? undefined,
-      page.classroom.year ?? undefined
-    );
-    const repoName = `content-${gitOrgLogin}-${term}`;
+    const repoName = `content-${gitOrgLogin}-${page.classroom.content_namespace}`;
 
     try {
       await ContentService.deleteFolder({
