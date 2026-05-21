@@ -63,6 +63,7 @@ export function ClassroomsLandingScreen({
 }: Props) {
   const [view, setView] = useState<'grid' | 'list'>('grid');
   const [bannerOpen, setBannerOpen] = useState(true);
+  const [archivedExpanded, setArchivedExpanded] = useState(false);
 
   // Local overrides for optimistic pin/unpin, drag-reorder, and archive. Keyed by composite landing id.
   const [pinOverrides, setPinOverrides] = useState<Record<string, number | null>>({});
@@ -72,7 +73,7 @@ export function ClassroomsLandingScreen({
   const classesSigRef = useRef<string>('');
   useEffect(() => {
     const sig = classes
-      .map(c => `${c.id}:${c.pin_order ?? ''}:${c.is_active ? '1' : '0'}`)
+      .map(c => `${c.id}:${c.pin_order ?? ''}:${c.is_archived ? '1' : '0'}`)
       .join('|');
     if (sig !== classesSigRef.current) {
       classesSigRef.current = sig;
@@ -83,30 +84,27 @@ export function ClassroomsLandingScreen({
 
   const effectivePinOrder = (c: LandingClass): number | null =>
     Object.prototype.hasOwnProperty.call(pinOverrides, c.id) ? pinOverrides[c.id] : c.pin_order;
-  const effectiveIsActive = (c: LandingClass): boolean =>
+  const effectiveIsArchived = (c: LandingClass): boolean =>
     Object.prototype.hasOwnProperty.call(archiveOverrides, c.id)
       ? archiveOverrides[c.id]
-      : c.is_active;
+      : c.is_archived;
 
   const handlePinChanged = (id: string, pin_order: number | null) => {
     setPinOverrides(prev => ({ ...prev, [id]: pin_order }));
   };
-  const handleArchiveChanged = (id: string, is_active: boolean) => {
-    setArchiveOverrides(prev => ({ ...prev, [id]: is_active }));
-  };
 
   const { pinned, active, archived } = useMemo(() => {
     const withEffective = classes.map(c => ({
-      c: { ...c, is_active: effectiveIsActive(c), pin_order: effectivePinOrder(c) },
+      c: { ...c, is_archived: effectiveIsArchived(c), pin_order: effectivePinOrder(c) },
       p: effectivePinOrder(c),
-      a: effectiveIsActive(c),
+      a: effectiveIsArchived(c),
     }));
     const pinned = withEffective
-      .filter(x => x.p != null && x.a)
+      .filter(x => x.p != null && !x.a)
       .sort((a, b) => (a.p ?? 0) - (b.p ?? 0))
       .map(x => x.c);
-    const active = withEffective.filter(x => x.p == null && x.a).map(x => x.c);
-    const archived = withEffective.filter(x => !x.a).map(x => x.c);
+    const active = withEffective.filter(x => x.p == null && !x.a).map(x => x.c);
+    const archived = withEffective.filter(x => x.a).map(x => x.c);
     return { pinned, active, archived };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [classes, pinOverrides, archiveOverrides]);
@@ -194,8 +192,8 @@ export function ClassroomsLandingScreen({
 
   const counts = useMemo(
     () => ({
-      all: classes.filter(c => effectiveIsActive(c)).length,
-      archived: classes.filter(c => !effectiveIsActive(c)).length,
+      all: classes.filter(c => !effectiveIsArchived(c)).length,
+      archived: classes.filter(c => effectiveIsArchived(c)).length,
     }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [classes, archiveOverrides]
@@ -231,7 +229,6 @@ export function ClassroomsLandingScreen({
               onOpen={() => onOpenClass(c)}
               showSlug={isDuplicate(c.name)}
               onPinChanged={handlePinChanged}
-              onArchiveChanged={handleArchiveChanged}
               draggable={draggable}
               onDragStart={draggable ? handleDragStart(c.id) : undefined}
               onDragOver={draggable ? handleDragOver(c.id) : undefined}
@@ -494,12 +491,26 @@ export function ClassroomsLandingScreen({
             )}
 
             {archived.length > 0 && (
-              <details open style={{ marginBottom: 24 }}>
-                <summary
+              <section style={{ marginBottom: 24 }}>
+                <button
+                  type="button"
+                  onClick={() => setArchivedExpanded(v => !v)}
+                  aria-expanded={archivedExpanded}
                   className="text-sm font-semibold text-gray-500 dark:text-gray-400"
-                  style={{ cursor: 'pointer', marginBottom: 10, marginTop: 4, listStyle: 'revert' }}
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 6,
+                    cursor: 'pointer',
+                    marginBottom: 10,
+                    marginTop: 4,
+                    background: 'transparent',
+                    border: 'none',
+                    padding: 0,
+                  }}
                 >
-                  Archived{' '}
+                  <span aria-hidden>{archivedExpanded ? '▾' : '▸'}</span>
+                  <span>Archived</span>
                   <span
                     style={{
                       fontFamily: 'var(--font-mono)',
@@ -510,11 +521,13 @@ export function ClassroomsLandingScreen({
                   >
                     {archived.length}
                   </span>
-                </summary>
-                <div style={{ marginTop: 10 }}>
-                  {view === 'grid' ? renderGrid(archived, false) : renderList(archived)}
-                </div>
-              </details>
+                </button>
+                {archivedExpanded && (
+                  <div style={{ marginTop: 10 }}>
+                    {view === 'grid' ? renderGrid(archived, false) : renderList(archived)}
+                  </div>
+                )}
+              </section>
             )}
           </LayoutGroup>
         )}

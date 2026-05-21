@@ -29,7 +29,8 @@ import type { NotificationRole } from '~/components/features/notifications';
 interface SelectOrganizationMembership extends MembershipWithOrganization {
   has_accepted_invite: boolean;
   organization: MembershipOrganization & {
-    is_active?: boolean;
+    status?: 'ACTIVE' | 'LOCKED' | 'UNPUBLISHED';
+    is_archived?: boolean;
   };
 }
 
@@ -145,7 +146,8 @@ function buildLandingClasses(memberships: SelectOrganizationMembership[]): Landi
     const orgLogin = org.login;
     const gitLogin = org.git_organization?.login ?? orgLogin;
 
-    const archived = org.is_active === false;
+    const status = (org.status ?? 'ACTIVE') as 'ACTIVE' | 'LOCKED' | 'UNPUBLISHED';
+    const archived = org.is_archived === true;
     const updatedAt =
       org.settings?.updated_at ?? (org as { updated_at?: Date | string | null }).updated_at;
     const updatedTs = updatedAt ? new Date(updatedAt as string | Date).getTime() || 0 : 0;
@@ -167,7 +169,8 @@ function buildLandingClasses(memberships: SelectOrganizationMembership[]): Landi
         updated: archived ? 'archived' : formatUpdated(updatedAt),
         archived,
         pin_order: pinOrder,
-        is_active: !archived,
+        status,
+        is_archived: archived,
         updated_at: (updatedAt as string | Date | null) ?? new Date(0),
         organization: { id: org.id, login: orgLogin, name: org.name },
         hasAcceptedInvite: m.has_accepted_invite,

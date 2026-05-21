@@ -21,7 +21,8 @@ export interface LandingClass {
   updated: string;
   archived: boolean;
   pin_order: number | null;
-  is_active: boolean;
+  status: 'ACTIVE' | 'LOCKED' | 'UNPUBLISHED';
+  is_archived: boolean;
   updated_at: string | Date;
   // Pass-through for navigation handler
   organization: {

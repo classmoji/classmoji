@@ -5,6 +5,7 @@ import { IconGithub } from '@classmoji/ui-components';
 import { ClassMark } from './ClassMark';
 import { RoleChip } from './RoleChip';
 import type { LandingClass } from './types';
+import { showUnpublishedModal } from '~/utils/classroomStatusModals';
 
 interface ClassroomCardProps {
   c: LandingClass;
@@ -89,9 +90,18 @@ export function ClassroomCard({
 
   const fetcher = pinFetcher; // alias used downstream for opacity styling
 
+  const blockedUnpublished = c.status === 'UNPUBLISHED' && c.role !== 'OWNER';
+  const handleOpenGuarded = () => {
+    if (blockedUnpublished) {
+      showUnpublishedModal();
+      return;
+    }
+    onOpen();
+  };
+
   return (
     <div
-      onClick={onOpen}
+      onClick={handleOpenGuarded}
       role="button"
       tabIndex={0}
       draggable={draggable}
@@ -102,7 +112,7 @@ export function ClassroomCard({
       onKeyDown={e => {
         if (e.key === 'Enter' || e.key === ' ') {
           e.preventDefault();
-          onOpen();
+          handleOpenGuarded();
         }
       }}
       style={{
@@ -207,6 +217,16 @@ export function ClassroomCard({
               </motion.button>
             )}
           </AnimatePresence>
+          {c.status === 'LOCKED' && (
+            <span className="inline-flex items-center rounded-full bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-200 px-2 py-0.5 text-xs">
+              Read-only
+            </span>
+          )}
+          {c.status === 'UNPUBLISHED' && (
+            <span className="inline-flex items-center rounded-full bg-gray-200 text-gray-700 dark:bg-gray-800 dark:text-gray-300 px-2 py-0.5 text-xs">
+              Unpublished
+            </span>
+          )}
           <RoleChip role={c.role} />
         </div>
       </div>
