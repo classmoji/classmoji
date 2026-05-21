@@ -194,10 +194,11 @@ export function ClassroomsLandingScreen({
 
   const counts = useMemo(
     () => ({
-      all: classes.filter(c => !c.archived).length,
-      archived: classes.filter(c => c.archived).length,
+      all: classes.filter(c => effectiveIsActive(c)).length,
+      archived: classes.filter(c => !effectiveIsActive(c)).length,
     }),
-    [classes]
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [classes, archiveOverrides]
   );
 
   const isDuplicate = useMemo(() => {
@@ -493,7 +494,7 @@ export function ClassroomsLandingScreen({
             )}
 
             {archived.length > 0 && (
-              <details style={{ marginBottom: 24 }}>
+              <details open style={{ marginBottom: 24 }}>
                 <summary
                   className="text-sm font-semibold text-gray-500 dark:text-gray-400"
                   style={{ cursor: 'pointer', marginBottom: 10, marginTop: 4, listStyle: 'revert' }}

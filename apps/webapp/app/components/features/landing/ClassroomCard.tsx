@@ -22,13 +22,14 @@ interface ClassroomCardProps {
   onDragEnd?: (e: React.DragEvent<HTMLDivElement>) => void;
 }
 
-function ArchiveIcon({ filled, size = 14 }: { filled: boolean; size?: number }) {
+function ArchiveIcon({ size = 14 }: { size?: number }) {
+  // Box with a downward arrow into it — "archive" gesture.
   return (
     <svg
       width={size}
       height={size}
       viewBox="0 0 24 24"
-      fill={filled ? 'currentColor' : 'none'}
+      fill="none"
       stroke="currentColor"
       strokeWidth="1.8"
       strokeLinecap="round"
@@ -37,7 +38,28 @@ function ArchiveIcon({ filled, size = 14 }: { filled: boolean; size?: number }) 
     >
       <rect x="3" y="4" width="18" height="4" rx="1" />
       <path d="M5 8v11a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8" />
-      <path d="M10 12h4" />
+      <path d="M12 11v5m0 0-2-2m2 2 2-2" />
+    </svg>
+  );
+}
+
+function UnarchiveIcon({ size = 14 }: { size?: number }) {
+  // Box with an upward arrow out of it — "unarchive" gesture.
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <rect x="3" y="4" width="18" height="4" rx="1" />
+      <path d="M5 8v11a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8" />
+      <path d="M12 17v-5m0 0-2 2m2-2 2 2" />
     </svg>
   );
 }
@@ -249,7 +271,7 @@ export function ClassroomCard({
                   overflow: 'hidden',
                 }}
               >
-                <ArchiveIcon filled={!c.is_active} />
+                {c.is_active ? <ArchiveIcon /> : <UnarchiveIcon />}
               </motion.button>
             )}
             {canPin && (hover || isPinned) && (

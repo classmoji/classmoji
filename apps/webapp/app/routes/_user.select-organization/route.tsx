@@ -71,10 +71,9 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
 
   if (user) {
     const typedUser = user as AppUser;
-    const memberships = (typedUser.memberships ?? []) as SelectOrganizationMembership[];
-    typedUser.memberships = memberships.filter(
-      ({ organization }) => organization.is_active !== false
-    );
+    // Surface ALL memberships — including archived classrooms — so the
+    // landing screen can show them in the Archived section.
+    typedUser.memberships = (typedUser.memberships ?? []) as SelectOrganizationMembership[];
 
     const { items, unreadCount } = await notificationService.getForBell(typedUser.id);
     const notifications = items.map(n => ({
