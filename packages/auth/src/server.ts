@@ -2,7 +2,7 @@ import { betterAuth } from 'better-auth';
 import { prismaAdapter } from 'better-auth/adapters/prisma';
 import { admin } from 'better-auth/plugins';
 import getPrisma from '@classmoji/database';
-import type { Account as PrismaAccount, Role } from '@prisma/client';
+import type { Account as PrismaAccount, Role, ClassroomStatus } from '@prisma/client';
 import { ClassmojiService } from '@classmoji/services';
 
 // Use explicit secret for consistent session signing
@@ -780,8 +780,8 @@ export const assertClassroomAccess = async ({
   ) as SafeClassroomRecord;
 
   assertClassroomEntryAllowed({
-    status: classroom.status as 'ACTIVE' | 'LOCKED' | 'UNPUBLISHED',
-    role: membership.role as 'OWNER' | 'TEACHER' | 'ASSISTANT' | 'STUDENT',
+    status: classroom.status,
+    role: membership.role,
   });
 
   return {
@@ -890,6 +890,13 @@ export async function requireStudentAccess(
 
 export type ClassroomStatusError = 'CLASSROOM_LOCKED' | 'CLASSROOM_UNPUBLISHED';
 
+type ClassroomStatusInput = { status: ClassroomStatus; role: Role };
+
+/**
+ * Throws a 403 Response with a JSON body `{ error: ClassroomStatusError, message: string }`.
+ * This intentionally diverges from the plain-text 403s used elsewhere in this module —
+ * the typed error code lets the client map specific failure modes to in-app modals.
+ */
 const statusErrorResponse = (code: ClassroomStatusError, message: string) =>
   new Response(JSON.stringify({ error: code, message }), {
     status: 403,
@@ -903,10 +910,7 @@ const statusErrorResponse = (code: ClassroomStatusError, message: string) =>
 export function assertClassroomEntryAllowed({
   status,
   role,
-}: {
-  status: 'ACTIVE' | 'LOCKED' | 'UNPUBLISHED';
-  role: 'OWNER' | 'TEACHER' | 'ASSISTANT' | 'STUDENT';
-}): void {
+}: ClassroomStatusInput): void {
   if (status === 'UNPUBLISHED' && role !== 'OWNER') {
     throw statusErrorResponse(
       'CLASSROOM_UNPUBLISHED',
@@ -919,19 +923,13 @@ export function assertClassroomEntryAllowed({
 export function canMutateClassroom({
   status,
   role,
-}: {
-  status: 'ACTIVE' | 'LOCKED' | 'UNPUBLISHED';
-  role: 'OWNER' | 'TEACHER' | 'ASSISTANT' | 'STUDENT';
-}): boolean {
+}: ClassroomStatusInput): boolean {
   if (role === 'OWNER') return true;
   return status === 'ACTIVE';
 }
 
 /** Throw 403 with typed code when the current role cannot mutate. */
-export function assertClassroomMutationAllowed(args: {
-  status: 'ACTIVE' | 'LOCKED' | 'UNPUBLISHED';
-  role: 'OWNER' | 'TEACHER' | 'ASSISTANT' | 'STUDENT';
-}): void {
+export function assertClassroomMutationAllowed(args: ClassroomStatusInput): void {
   if (canMutateClassroom(args)) return;
   if (args.status === 'LOCKED') {
     throw statusErrorResponse(
