@@ -14,7 +14,6 @@ export {
   getSlidesBaseURL,
   getTestClassroomSlug,
   getTestClassroomOrg,
-  getTestClassroomTerm,
 } from './env.helpers';
 
 // Wait helpers
