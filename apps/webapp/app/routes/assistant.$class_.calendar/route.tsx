@@ -16,6 +16,7 @@ import EditEventModal, { type EventFormData } from '~/components/features/calend
 import EventCard from '~/components/features/calendar/EventCard';
 import EventLinks from '~/components/features/calendar/EventLinks';
 import type { CalendarEventWithLinks } from '~/components/features/calendar/types';
+import { showStatusErrorFromResponse } from '~/utils/classroomStatusModals';
 
 export const loader = async ({ request, params }: Route.LoaderArgs) => {
   const { class: classSlug } = params;
@@ -306,6 +307,7 @@ const AssistantCalendar = ({ loaderData }: Route.ComponentProps) => {
   // Close modals and show toast when fetcher completes
   useEffect(() => {
     if (fetcher.state === 'idle' && fetcher.data) {
+      showStatusErrorFromResponse(fetcher.data as { error?: string } | undefined);
       if (fetcher.data.success) {
         setOptimisticEvents(null); // Clear optimistic state, let fresh data take over
         setAddModalOpen(false);

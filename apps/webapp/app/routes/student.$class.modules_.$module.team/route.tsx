@@ -9,6 +9,7 @@ import { useCallout } from '@classmoji/ui-components';
 import { assertClassroomAccess } from '~/utils/helpers';
 import { titleToIdentifier } from '@classmoji/utils';
 import { tasks } from '@trigger.dev/sdk/v3';
+import { showStatusErrorFromResponse } from '~/utils/classroomStatusModals';
 
 export const loader = async ({ request, params }: Route.LoaderArgs) => {
   const classSlug = params.class!;
@@ -269,6 +270,7 @@ const StudentTeamPage = ({ loaderData }: Route.ComponentProps) => {
 
   // Show feedback from action
   useEffect(() => {
+    showStatusErrorFromResponse(fetcher.data as { error?: string } | undefined);
     if (fetcher.data?.success) {
       callout.show({ variant: 'success', title: fetcher.data.success, autoDismissMs: 3000 });
     }
