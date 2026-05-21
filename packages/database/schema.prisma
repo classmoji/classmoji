@@ -274,15 +274,17 @@ model GitOrganization {
 }
 
 model Classroom {
-  id         String   @id @default(uuid())
-  slug       String   @unique // URL slug: "cs101-fall-2025"
-  git_org_id String
-  name       String
-  term       Term?
-  year       Int?
-  is_active  Boolean  @default(true)
-  created_at DateTime @default(now())
-  updated_at DateTime @default(now()) @updatedAt
+  id                String   @id @default(uuid())
+  slug              String // URL slug: "cs101-fall-2025"
+  git_org_id        String
+  name              String
+  content_namespace String
+  term              Term?
+  year              Int?
+  is_active         Boolean  @default(true)
+  pin_order         Int?
+  created_at        DateTime @default(now())
+  updated_at        DateTime @default(now()) @updatedAt
 
   git_organization      GitOrganization       @relation(fields: [git_org_id], references: [id], onDelete: Cascade)
   settings              ClassroomSettings?
@@ -305,6 +307,7 @@ model Classroom {
   resource_views        ResourceView[]
   notifications         Notification[]
 
+  @@unique([git_org_id, slug])
   @@index([git_org_id])
   @@map("classrooms")
 }
