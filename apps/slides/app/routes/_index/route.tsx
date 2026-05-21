@@ -61,6 +61,7 @@ export const loader = async ({ request }: { request: Request }) => {
         select: {
           slug: true,
           name: true,
+          content_namespace: true,
         },
       },
       links: {
@@ -417,7 +418,7 @@ export default function SlidesIndex() {
                       {slide.links?.[0]?.module?.title || '—'}
                     </p>
                     <div className="mt-2 text-xs text-gray-400 dark:text-gray-500">
-                      {slide.term}
+                      {slide.classroom?.content_namespace}
                     </div>
                   </Link>
                 </div>
