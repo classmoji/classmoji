@@ -16,6 +16,9 @@ export interface LandingClass {
   progress: number;
   updated: string;
   archived: boolean;
+  pin_order: number | null;
+  is_active: boolean;
+  updated_at: string | Date;
   // Pass-through for navigation handler
   organization: {
     id: string;

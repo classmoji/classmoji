@@ -1,6 +1,6 @@
 import { useState, useMemo } from 'react';
 import { Link } from 'react-router';
-import { Button, IconGithub, IconPlus, IconChevron, IconX } from '@classmoji/ui-components';
+import { Button, IconGithub, IconPlus, IconX } from '@classmoji/ui-components';
 import { AppBar } from './AppBar';
 import { ClassroomCard } from './ClassroomCard';
 import { ClassroomRow, ClassroomRowHeader } from './ClassroomRow';
@@ -15,8 +15,6 @@ interface Props {
   unreadCount?: number;
   membershipRoles?: Record<string, NotificationRole[]>;
 }
-
-type TabId = 'all' | 'teaching' | 'learning' | 'archived';
 
 function ViewGridIcon() {
   return (
@@ -62,30 +60,111 @@ export function ClassroomsLandingScreen({
   unreadCount,
   membershipRoles,
 }: Props) {
-  const [tab, setTab] = useState<TabId>('all');
   const [view, setView] = useState<'grid' | 'list'>('grid');
   const [bannerOpen, setBannerOpen] = useState(true);
+
+  const { pinned, active, archived } = useMemo(() => {
+    const pinned = classes
+      .filter(c => c.pin_order != null)
+      .sort((a, b) => (a.pin_order ?? 0) - (b.pin_order ?? 0));
+    const active = classes.filter(c => c.pin_order == null && c.is_active);
+    const archived = classes.filter(c => c.pin_order == null && !c.is_active);
+    return { pinned, active, archived };
+  }, [classes]);
 
   const counts = useMemo(
     () => ({
       all: classes.filter(c => !c.archived).length,
-      teaching: classes.filter(c => !c.archived && (c.role === 'OWNER' || c.role === 'ASSISTANT'))
-        .length,
-      learning: classes.filter(c => !c.archived && c.role === 'STUDENT').length,
       archived: classes.filter(c => c.archived).length,
     }),
     [classes]
   );
 
-  const filteredClasses = useMemo(() => {
-    const filterClass = (c: LandingClass) => {
-      if (tab === 'teaching') return !c.archived && (c.role === 'OWNER' || c.role === 'ASSISTANT');
-      if (tab === 'learning') return !c.archived && c.role === 'STUDENT';
-      if (tab === 'archived') return c.archived;
-      return !c.archived;
-    };
-    return classes.filter(filterClass);
-  }, [classes, tab]);
+  const isDuplicate = useMemo(() => {
+    const nameCounts = new Map<string, number>();
+    for (const c of classes) nameCounts.set(c.name, (nameCounts.get(c.name) ?? 0) + 1);
+    return (name: string) => (nameCounts.get(name) ?? 0) > 1;
+  }, [classes]);
+
+  const renderGrid = (items: LandingClass[], withNewCard: boolean) => (
+    <div
+      style={{
+        display: 'grid',
+        gridTemplateColumns: 'repeat(3, minmax(0, 1fr))',
+        gap: 12,
+      }}
+    >
+      {items.map(c => (
+        <ClassroomCard
+          key={c.id}
+          c={c}
+          onOpen={() => onOpenClass(c)}
+          showSlug={isDuplicate(c.name)}
+        />
+      ))}
+      {withNewCard && (
+        <Link
+          to="/create-classroom"
+          style={{
+            border: '1px dashed var(--line-2)',
+            background: 'transparent',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            flexDirection: 'column',
+            gap: 6,
+            color: 'var(--ink-2)',
+            cursor: 'pointer',
+            minHeight: 150,
+            borderRadius: 8,
+            transition: 'border-color 120ms, color 120ms, background 120ms',
+            textDecoration: 'none',
+          }}
+        >
+          <span
+            style={{
+              width: 28,
+              height: 28,
+              borderRadius: 6,
+              display: 'grid',
+              placeItems: 'center',
+              background: 'var(--bg-3)',
+              color: 'var(--ink-2)',
+            }}
+          >
+            <IconPlus size={14} />
+          </span>
+          <span style={{ fontSize: 13, fontWeight: 500 }}>New class</span>
+          <span style={{ fontSize: 11, color: 'var(--ink-3)' }}>or import from GitHub</span>
+        </Link>
+      )}
+    </div>
+  );
+
+  const renderList = (items: LandingClass[]) => (
+    <div
+      style={{
+        background: 'var(--bg-1)',
+        border: '1px solid var(--line)',
+        borderRadius: 8,
+        overflow: 'hidden',
+      }}
+    >
+      <ClassroomRowHeader />
+      {items.map(c => (
+        <ClassroomRow key={c.id} c={c} onOpen={() => onOpenClass(c)} />
+      ))}
+    </div>
+  );
+
+  const sectionHeading = (label: string, count: number) => (
+    <div className="text-sm font-semibold text-gray-500 dark:text-gray-400" style={{ marginBottom: 10, marginTop: 4 }}>
+      {label}{' '}
+      <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--ink-3)', fontWeight: 400 }}>
+        {count}
+      </span>
+    </div>
+  );
 
   return (
     <div style={{ background: 'var(--bg-0)', minHeight: '100vh' }}>
@@ -197,65 +276,7 @@ export function ClassroomsLandingScreen({
             marginBottom: 18,
           }}
         >
-          <div
-            style={{
-              display: 'flex',
-              gap: 2,
-              padding: 2,
-              background: 'var(--bg-3)',
-              border: '1px solid var(--line)',
-              borderRadius: 7,
-            }}
-          >
-            {(
-              [
-                ['all', 'All', counts.all],
-                ['teaching', 'Teaching', counts.teaching],
-                ['learning', 'Learning', counts.learning],
-                ['archived', 'Archived', counts.archived],
-              ] as const
-            ).map(([id, label, n]) => {
-              const active = tab === id;
-              return (
-                <button
-                  key={id}
-                  type="button"
-                  onClick={() => setTab(id)}
-                  style={{
-                    padding: '4px 10px',
-                    borderRadius: 5,
-                    fontSize: 12.5,
-                    fontWeight: 500,
-                    color: active ? 'var(--ink-0)' : 'var(--ink-2)',
-                    background: active ? 'var(--bg-1)' : 'transparent',
-                    boxShadow: active ? '0 1px 2px rgba(0,0,0,0.04)' : 'none',
-                    cursor: 'pointer',
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    gap: 6,
-                    border: 'none',
-                  }}
-                >
-                  {label}{' '}
-                  <span
-                    style={{
-                      fontFamily: 'var(--font-mono)',
-                      fontSize: 10.5,
-                      color: active ? 'var(--ink-2)' : 'var(--ink-3)',
-                    }}
-                  >
-                    {n}
-                  </span>
-                </button>
-              );
-            })}
-          </div>
-
           <div style={{ flex: 1 }} />
-
-          <button type="button" className="btn" style={{ color: 'var(--ink-2)' }}>
-            Sort: Recent <IconChevron size={12} />
-          </button>
 
           <div
             style={{
@@ -303,7 +324,7 @@ export function ClassroomsLandingScreen({
           </div>
         </div>
 
-        {filteredClasses.length === 0 ? (
+        {pinned.length === 0 && active.length === 0 && archived.length === 0 ? (
           <div
             style={{
               border: '1px dashed var(--line-2)',
@@ -313,68 +334,48 @@ export function ClassroomsLandingScreen({
               color: 'var(--ink-3)',
             }}
           >
-            Nothing here. Try a different filter.
-          </div>
-        ) : view === 'grid' ? (
-          <div
-            style={{
-              display: 'grid',
-              gridTemplateColumns: 'repeat(3, minmax(0, 1fr))',
-              gap: 12,
-            }}
-          >
-            {filteredClasses.map(c => (
-              <ClassroomCard key={c.id} c={c} onOpen={() => onOpenClass(c)} />
-            ))}
-            <Link
-              to="/create-classroom"
-              style={{
-                border: '1px dashed var(--line-2)',
-                background: 'transparent',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                flexDirection: 'column',
-                gap: 6,
-                color: 'var(--ink-2)',
-                cursor: 'pointer',
-                minHeight: 150,
-                borderRadius: 8,
-                transition: 'border-color 120ms, color 120ms, background 120ms',
-                textDecoration: 'none',
-              }}
-            >
-              <span
-                style={{
-                  width: 28,
-                  height: 28,
-                  borderRadius: 6,
-                  display: 'grid',
-                  placeItems: 'center',
-                  background: 'var(--bg-3)',
-                  color: 'var(--ink-2)',
-                }}
-              >
-                <IconPlus size={14} />
-              </span>
-              <span style={{ fontSize: 13, fontWeight: 500 }}>New class</span>
-              <span style={{ fontSize: 11, color: 'var(--ink-3)' }}>or import from GitHub</span>
-            </Link>
+            No classrooms yet.
           </div>
         ) : (
-          <div
-            style={{
-              background: 'var(--bg-1)',
-              border: '1px solid var(--line)',
-              borderRadius: 8,
-              overflow: 'hidden',
-            }}
-          >
-            <ClassroomRowHeader />
-            {filteredClasses.map(c => (
-              <ClassroomRow key={c.id} c={c} onOpen={() => onOpenClass(c)} />
-            ))}
-          </div>
+          <>
+            {pinned.length > 0 && (
+              <section style={{ marginBottom: 24 }}>
+                {sectionHeading('Pinned', pinned.length)}
+                {view === 'grid' ? renderGrid(pinned, false) : renderList(pinned)}
+              </section>
+            )}
+
+            {active.length > 0 && (
+              <section style={{ marginBottom: 24 }}>
+                {sectionHeading('Active', active.length)}
+                {view === 'grid' ? renderGrid(active, true) : renderList(active)}
+              </section>
+            )}
+
+            {archived.length > 0 && (
+              <details style={{ marginBottom: 24 }}>
+                <summary
+                  className="text-sm font-semibold text-gray-500 dark:text-gray-400"
+                  style={{ cursor: 'pointer', marginBottom: 10, marginTop: 4, listStyle: 'revert' }}
+                >
+                  Archived{' '}
+                  <span
+                    style={{
+                      fontFamily: 'var(--font-mono)',
+                      fontSize: 12,
+                      color: 'var(--ink-3)',
+                      fontWeight: 400,
+                    }}
+                  >
+                    {archived.length}
+                  </span>
+                </summary>
+                <div style={{ marginTop: 10 }}>
+                  {view === 'grid' ? renderGrid(archived, false) : renderList(archived)}
+                </div>
+              </details>
+            )}
+          </>
         )}
 
         <footer

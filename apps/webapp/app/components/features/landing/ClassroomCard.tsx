@@ -6,9 +6,10 @@ import type { LandingClass } from './types';
 interface ClassroomCardProps {
   c: LandingClass;
   onOpen: () => void;
+  showSlug?: boolean;
 }
 
-export function ClassroomCard({ c, onOpen }: ClassroomCardProps) {
+export function ClassroomCard({ c, onOpen, showSlug = false }: ClassroomCardProps) {
   const roleVerb =
     c.role === 'OWNER' || c.role === 'ASSISTANT'
       ? 'To grade'
@@ -62,16 +63,18 @@ export function ClassroomCard({ c, onOpen }: ClassroomCardProps) {
           >
             {c.name}
           </div>
-          <div
-            style={{
-              fontFamily: 'var(--font-mono)',
-              fontSize: 11.5,
-              color: 'var(--ink-3)',
-              marginTop: 1,
-            }}
-          >
-            {c.slug}
-          </div>
+          {showSlug && (
+            <div
+              style={{
+                fontFamily: 'var(--font-mono)',
+                fontSize: 11.5,
+                color: 'var(--ink-3)',
+                marginTop: 1,
+              }}
+            >
+              {c.slug}
+            </div>
+          )}
         </div>
         <RoleChip role={c.role} />
       </div>

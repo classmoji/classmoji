@@ -140,16 +140,18 @@ function formatUpdated(d: Date | string | null | undefined): string {
 
 function buildLandingClasses(memberships: SelectOrganizationMembership[]): LandingClass[] {
   const items = memberships.map(m => {
-    const org = m.organization;
+    const org = m.organization as SelectOrganizationMembership['organization'] & {
+      pin_order?: number | null;
+      updated_at?: Date | string | null;
+    };
     const orgLogin = org.login;
     const gitLogin = org.git_organization?.login ?? orgLogin;
 
     const archived = org.is_active === false;
     const updatedAt =
       org.settings?.updated_at ?? (org as { updated_at?: Date | string | null }).updated_at;
-    const updatedTs = updatedAt
-      ? new Date(updatedAt as string | Date).getTime() || 0
-      : 0;
+    const updatedTs = updatedAt ? new Date(updatedAt as string | Date).getTime() || 0 : 0;
+    const pinOrder = org.pin_order ?? null;
 
     return {
       landing: {
@@ -164,15 +166,26 @@ function buildLandingClasses(memberships: SelectOrganizationMembership[]): Landi
         progress: 0,
         updated: archived ? 'archived' : formatUpdated(updatedAt),
         archived,
+        pin_order: pinOrder,
+        is_active: !archived,
+        updated_at: (updatedAt as string | Date | null) ?? new Date(0),
         organization: { id: org.id, login: orgLogin, name: org.name },
         hasAcceptedInvite: m.has_accepted_invite,
       } satisfies LandingClass,
       updatedTs,
+      pinOrder,
     };
   });
 
-  // Recency sort: most recently updated first (intermediate; Task 7 adds full Pinned/Active/Archived)
-  items.sort((a, b) => b.updatedTs - a.updatedTs);
+  // Sort: pin_order ASC NULLS LAST, then updated_at DESC
+  items.sort((a, b) => {
+    const ap = a.pinOrder;
+    const bp = b.pinOrder;
+    if (ap != null && bp != null && ap !== bp) return ap - bp;
+    if (ap != null && bp == null) return -1;
+    if (ap == null && bp != null) return 1;
+    return b.updatedTs - a.updatedTs;
+  });
   return items.map(i => i.landing);
 }
 
