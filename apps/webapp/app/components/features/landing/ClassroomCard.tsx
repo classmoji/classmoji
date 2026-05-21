@@ -121,40 +121,6 @@ export function ClassroomCard({
         e.currentTarget.style.background = 'var(--bg-1)';
       }}
     >
-      <AnimatePresence>
-        {canPin && (hover || isPinned) && (
-          <motion.button
-            key="pin-btn"
-            type="button"
-            aria-label={isPinned ? 'Unpin classroom' : 'Pin classroom'}
-            title={isPinned ? 'Unpin' : 'Pin'}
-            onClick={handlePinClick}
-            initial={{ opacity: 0, scale: 0.6 }}
-            animate={{ opacity: 1, scale: 1, rotate: isPinned ? -18 : 0 }}
-            exit={{ opacity: 0, scale: 0.6 }}
-            whileHover={{ scale: 1.15 }}
-            whileTap={{ scale: 0.85, rotate: isPinned ? 0 : -18 }}
-            transition={{ type: 'spring', stiffness: 600, damping: 22 }}
-            style={{
-              position: 'absolute',
-              top: 6,
-              right: 6,
-              border: 'none',
-              background: 'transparent',
-              color: isPinned ? 'var(--accent)' : 'var(--ink-3)',
-              cursor: 'pointer',
-              padding: 4,
-              borderRadius: 4,
-              display: 'inline-flex',
-              alignItems: 'center',
-              zIndex: 2,
-            }}
-          >
-            <PinIcon filled={isPinned} />
-          </motion.button>
-        )}
-      </AnimatePresence>
-
       <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10 }}>
         <ClassMark hue={c.hue} name={c.name} />
         <div style={{ flex: 1, minWidth: 0 }}>
@@ -164,6 +130,9 @@ export function ClassroomCard({
               fontWeight: 600,
               color: 'var(--ink-0)',
               letterSpacing: '-0.01em',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
             }}
           >
             {c.name}
@@ -175,13 +144,62 @@ export function ClassroomCard({
                 fontSize: 11.5,
                 color: 'var(--ink-3)',
                 marginTop: 1,
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
               }}
+              title={c.slug}
             >
               {c.slug}
             </div>
           )}
         </div>
-        <RoleChip role={c.role} />
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 6,
+            flexShrink: 0,
+          }}
+        >
+          <AnimatePresence initial={false}>
+            {canPin && (hover || isPinned) && (
+              <motion.button
+                key="pin-btn"
+                type="button"
+                aria-label={isPinned ? 'Unpin classroom' : 'Pin classroom'}
+                title={isPinned ? 'Unpin' : 'Pin'}
+                onClick={handlePinClick}
+                initial={{ opacity: 0, scale: 0.6, width: 0 }}
+                animate={{
+                  opacity: 1,
+                  scale: 1,
+                  width: 'auto',
+                  rotate: isPinned ? -18 : 0,
+                }}
+                exit={{ opacity: 0, scale: 0.6, width: 0 }}
+                whileHover={{ scale: 1.15 }}
+                whileTap={{ scale: 0.85, rotate: isPinned ? 0 : -18 }}
+                transition={{ type: 'spring', stiffness: 600, damping: 22 }}
+                style={{
+                  border: 'none',
+                  background: 'transparent',
+                  color: isPinned ? 'var(--accent)' : 'var(--ink-3)',
+                  cursor: 'pointer',
+                  padding: 2,
+                  borderRadius: 4,
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  overflow: 'hidden',
+                }}
+              >
+                <PinIcon filled={isPinned} />
+              </motion.button>
+            )}
+          </AnimatePresence>
+          <RoleChip role={c.role} />
+        </div>
       </div>
 
       {c.subtitle && (
