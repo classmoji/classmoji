@@ -4,14 +4,12 @@ import { Button, IconGithub, IconPlus, IconChevron, IconX } from '@classmoji/ui-
 import { AppBar } from './AppBar';
 import { ClassroomCard } from './ClassroomCard';
 import { ClassroomRow, ClassroomRowHeader } from './ClassroomRow';
-import type { LandingClass, TermSection } from './types';
+import type { LandingClass } from './types';
 import type { BellNotification, NotificationRole } from '~/components/features/notifications';
 
 interface Props {
   user: { name?: string | null; login?: string | null; avatar_url?: string | null } | null;
   classes: LandingClass[];
-  termSections: TermSection[];
-  activeTermLabel: string | null;
   onOpenClass: (c: LandingClass) => void;
   notifications?: BellNotification[];
   unreadCount?: number;
@@ -59,8 +57,6 @@ function ViewListIcon() {
 export function ClassroomsLandingScreen({
   user,
   classes,
-  termSections,
-  activeTermLabel,
   onOpenClass,
   notifications,
   unreadCount,
@@ -81,17 +77,15 @@ export function ClassroomsLandingScreen({
     [classes]
   );
 
-  const filteredSections = useMemo(() => {
+  const filteredClasses = useMemo(() => {
     const filterClass = (c: LandingClass) => {
       if (tab === 'teaching') return !c.archived && (c.role === 'OWNER' || c.role === 'ASSISTANT');
       if (tab === 'learning') return !c.archived && c.role === 'STUDENT';
       if (tab === 'archived') return c.archived;
       return !c.archived;
     };
-    return termSections
-      .map(s => ({ ...s, classes: s.classes.filter(filterClass) }))
-      .filter(s => s.classes.length > 0);
-  }, [termSections, tab]);
+    return classes.filter(filterClass);
+  }, [classes, tab]);
 
   return (
     <div style={{ background: 'var(--bg-0)', minHeight: '100vh' }}>
@@ -142,13 +136,6 @@ export function ClassroomsLandingScreen({
                 {counts.archived}
               </span>{' '}
               archived
-              {activeTermLabel && (
-                <>
-                  <span style={{ color: 'var(--ink-4)', margin: '0 6px' }}>·</span>
-                  <span style={{ fontFamily: 'var(--font-mono)' }}>{activeTermLabel}</span> in
-                  progress
-                </>
-              )}
             </div>
           </div>
           <div style={{ display: 'flex', gap: 8 }}>
@@ -180,9 +167,9 @@ export function ClassroomsLandingScreen({
           >
             <span style={{ fontSize: 14 }}>🪙</span>
             <span>
-              <b style={{ fontWeight: 600 }}>Token economy is live this term.</b> Students earn
-              tokens for early submissions and spend them on deadline extensions — configure the
-              rate in class settings.
+              <b style={{ fontWeight: 600 }}>Token economy is live.</b> Students earn tokens for
+              early submissions and spend them on deadline extensions — configure the rate in class
+              settings.
             </span>
             <button
               type="button"
@@ -316,7 +303,7 @@ export function ClassroomsLandingScreen({
           </div>
         </div>
 
-        {filteredSections.length === 0 && (
+        {filteredClasses.length === 0 ? (
           <div
             style={{
               border: '1px dashed var(--line-2)',
@@ -328,119 +315,67 @@ export function ClassroomsLandingScreen({
           >
             Nothing here. Try a different filter.
           </div>
-        )}
-
-        {filteredSections.map(term => (
-          <section key={term.id} style={{ marginTop: 26 }}>
-            <div
+        ) : view === 'grid' ? (
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(3, minmax(0, 1fr))',
+              gap: 12,
+            }}
+          >
+            {filteredClasses.map(c => (
+              <ClassroomCard key={c.id} c={c} onOpen={() => onOpenClass(c)} />
+            ))}
+            <Link
+              to="/create-classroom"
               style={{
+                border: '1px dashed var(--line-2)',
+                background: 'transparent',
                 display: 'flex',
                 alignItems: 'center',
-                gap: 10,
-                paddingBottom: 10,
-                marginBottom: 12,
-                borderBottom: '1px dashed var(--line)',
+                justifyContent: 'center',
+                flexDirection: 'column',
+                gap: 6,
+                color: 'var(--ink-2)',
+                cursor: 'pointer',
+                minHeight: 150,
+                borderRadius: 8,
+                transition: 'border-color 120ms, color 120ms, background 120ms',
+                textDecoration: 'none',
               }}
             >
               <span
                 style={{
-                  fontSize: 11,
-                  fontWeight: 600,
-                  color: 'var(--ink-2)',
-                  letterSpacing: '0.08em',
-                  textTransform: 'uppercase',
-                }}
-              >
-                {term.label}
-              </span>
-              <span
-                style={{
-                  fontFamily: 'var(--font-mono)',
-                  fontSize: 11,
-                  color: 'var(--ink-3)',
-                }}
-              >
-                · {term.meta}
-              </span>
-              <div style={{ flex: 1 }} />
-              <span
-                style={{
-                  fontFamily: 'var(--font-mono)',
-                  fontSize: 11,
-                  color: 'var(--ink-3)',
-                }}
-              >
-                {term.classes.length} {term.classes.length === 1 ? 'class' : 'classes'}
-              </span>
-            </div>
-
-            {view === 'grid' ? (
-              <div
-                style={{
+                  width: 28,
+                  height: 28,
+                  borderRadius: 6,
                   display: 'grid',
-                  gridTemplateColumns: 'repeat(3, minmax(0, 1fr))',
-                  gap: 12,
+                  placeItems: 'center',
+                  background: 'var(--bg-3)',
+                  color: 'var(--ink-2)',
                 }}
               >
-                {term.classes.map(c => (
-                  <ClassroomCard key={c.id} c={c} onOpen={() => onOpenClass(c)} />
-                ))}
-                {term.id === 'spring' && (
-                  <Link
-                    to="/create-classroom"
-                    style={{
-                      border: '1px dashed var(--line-2)',
-                      background: 'transparent',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      flexDirection: 'column',
-                      gap: 6,
-                      color: 'var(--ink-2)',
-                      cursor: 'pointer',
-                      minHeight: 150,
-                      borderRadius: 8,
-                      transition: 'border-color 120ms, color 120ms, background 120ms',
-                      textDecoration: 'none',
-                    }}
-                  >
-                    <span
-                      style={{
-                        width: 28,
-                        height: 28,
-                        borderRadius: 6,
-                        display: 'grid',
-                        placeItems: 'center',
-                        background: 'var(--bg-3)',
-                        color: 'var(--ink-2)',
-                      }}
-                    >
-                      <IconPlus size={14} />
-                    </span>
-                    <span style={{ fontSize: 13, fontWeight: 500 }}>New class</span>
-                    <span style={{ fontSize: 11, color: 'var(--ink-3)' }}>
-                      or import from GitHub
-                    </span>
-                  </Link>
-                )}
-              </div>
-            ) : (
-              <div
-                style={{
-                  background: 'var(--bg-1)',
-                  border: '1px solid var(--line)',
-                  borderRadius: 8,
-                  overflow: 'hidden',
-                }}
-              >
-                <ClassroomRowHeader />
-                {term.classes.map(c => (
-                  <ClassroomRow key={c.id} c={c} onOpen={() => onOpenClass(c)} />
-                ))}
-              </div>
-            )}
-          </section>
-        ))}
+                <IconPlus size={14} />
+              </span>
+              <span style={{ fontSize: 13, fontWeight: 500 }}>New class</span>
+              <span style={{ fontSize: 11, color: 'var(--ink-3)' }}>or import from GitHub</span>
+            </Link>
+          </div>
+        ) : (
+          <div
+            style={{
+              background: 'var(--bg-1)',
+              border: '1px solid var(--line)',
+              borderRadius: 8,
+              overflow: 'hidden',
+            }}
+          >
+            <ClassroomRowHeader />
+            {filteredClasses.map(c => (
+              <ClassroomRow key={c.id} c={c} onOpen={() => onOpenClass(c)} />
+            ))}
+          </div>
+        )}
 
         <footer
           style={{

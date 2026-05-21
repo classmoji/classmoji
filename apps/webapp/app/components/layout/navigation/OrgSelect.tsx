@@ -25,19 +25,6 @@ const roleLabel = (role: string) => {
   return map[role] ?? role.charAt(0) + role.slice(1).toLowerCase();
 };
 
-const termAbbreviation = (term?: string | null, year?: number | null) => {
-  if (!term || !year) return null;
-  const prefix: Record<string, string> = {
-    FALL: 'F',
-    WINTER: 'W',
-    SPRING: 'S',
-    SUMMER: 'X',
-  };
-  const p = prefix[term];
-  if (!p) return null;
-  return `${p}${String(year).slice(-2)}`;
-};
-
 const OrgSelect = ({ memberships }: OrgSelectProps) => {
   const { membership } = useStore();
   const navigate = useNavigate();
@@ -113,17 +100,11 @@ const OrgSelect = ({ memberships }: OrgSelectProps) => {
         labelInValue={true}
         labelRender={() => {
           if (!membership) return null;
-          const term = termAbbreviation(membership.organization.term, membership.organization.year);
           return (
             <div className="min-w-0 px-1 flex items-baseline gap-1.5">
               <span className="text-sm font-semibold text-gray-900 dark:text-gray-100 truncate">
                 {membership.organization.name}
               </span>
-              {term && (
-                <span className="text-xs font-medium text-gray-400 dark:text-gray-500 shrink-0">
-                  {term}
-                </span>
-              )}
             </div>
           );
         }}
@@ -150,17 +131,6 @@ const OrgSelect = ({ memberships }: OrgSelectProps) => {
                   <div className="font-medium text-[13px] text-gray-900 dark:text-gray-100 truncate leading-tight">
                     {membershipOption.organization.name}
                   </div>
-                  {(() => {
-                    const term = termAbbreviation(
-                      membershipOption.organization.term,
-                      membershipOption.organization.year
-                    );
-                    return term ? (
-                      <span className="text-[11px] font-medium text-gray-400 dark:text-gray-500 shrink-0">
-                        {term}
-                      </span>
-                    ) : null;
-                  })()}
                 </div>
                 <div className="text-[11px] text-gray-500 dark:text-gray-400 truncate leading-tight">
                   {roleLabel(membershipOption.role)}

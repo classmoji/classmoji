@@ -74,7 +74,6 @@ export async function loader({ params, request }: Route.LoaderArgs) {
     isInstructor,
     orgName: classroom.name,
     courseName: (settings as { course_name?: string })?.course_name,
-    term: classroom.term,
     slidesUrl: process.env.SLIDES_URL || 'http://localhost:6500',
   });
 }
@@ -134,7 +133,6 @@ async function handleInitConversation(request: Request, classSlug: string, formD
     gitOrgLogin: classroom.git_organization?.login, // GitHub org for content repo cloning
     orgName: classroom.name,
     courseName: (settings as { course_name?: string })?.course_name || classroom.name,
-    term: classroom.term || 'Current',
     userRole: contextRole,
   };
 

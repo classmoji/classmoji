@@ -4,4 +4,4 @@ export { ClassroomRow, ClassroomRowHeader } from './ClassroomRow';
 export { ClassMark } from './ClassMark';
 export { RoleChip } from './RoleChip';
 export { AppBar } from './AppBar';
-export type { LandingClass, LandingRole, TermBucketId, TermSection } from './types';
+export type { LandingClass, LandingRole } from './types';

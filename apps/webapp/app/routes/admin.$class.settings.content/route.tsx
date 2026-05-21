@@ -5,6 +5,7 @@ import { IconInfoCircle, IconExternalLink } from '@tabler/icons-react';
 import { namedAction } from 'remix-utils/named-action';
 
 import { ClassmojiService } from '@classmoji/services';
+import { getContentRepoName } from '@classmoji/utils';
 import { SettingSection } from '~/components';
 import { ActionTypes } from '~/constants';
 import { useGlobalFetcher } from '~/hooks';
@@ -28,19 +29,6 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
   return { organization: classroom, aiAgentAvailable: isAIAgentConfigured() };
 };
 
-/**
- * Generate a suggested content repository name based on classSlug and term
- */
-function generateSuggestedRepoName(classSlug: string, term: string, year: number) {
-  if (!term || !year) return `content-${classSlug}`;
-
-  const termMap: Record<string, string> = { WINTER: 'w', SPRING: 's', SUMMER: 'u', FALL: 'f' };
-  const termCode = termMap[term] || term.charAt(0).toLowerCase();
-  const yearShort = String(year).slice(-2);
-
-  return `content-${classSlug}-${yearShort}${termCode}`;
-}
-
 const SettingsContent = ({ loaderData }: Route.ComponentProps) => {
   const { organization, aiAgentAvailable } = loaderData;
   const { class: classSlug } = useParams();
@@ -49,11 +37,10 @@ const SettingsContent = ({ loaderData }: Route.ComponentProps) => {
 
   // Generate repo name and URL for display
   const gitOrgLogin = organization.git_organization?.login || classSlug || '';
-  const repoName = generateSuggestedRepoName(
-    gitOrgLogin,
-    String(organization.term ?? ''),
-    organization.year ?? 0
-  );
+  const repoName = getContentRepoName({
+    login: gitOrgLogin,
+    content_namespace: organization.content_namespace ?? undefined,
+  });
   const repoUrl = `https://github.com/${gitOrgLogin}/${repoName}`;
 
   // Handler for customizable repo name (currently disabled in UI)

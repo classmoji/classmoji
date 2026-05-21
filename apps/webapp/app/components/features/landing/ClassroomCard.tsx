@@ -118,41 +118,6 @@ export function ClassroomCard({ c, onOpen }: ClassroomCardProps) {
             {c.pending}
           </span>
         </div>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 1, fontSize: 11, flex: 1 }}>
-          <span style={{ color: 'var(--ink-3)', whiteSpace: 'nowrap' }}>Term progress</span>
-          <span
-            style={{
-              fontFamily: 'var(--font-mono)',
-              fontSize: 12.5,
-              color: 'var(--ink-0)',
-              fontWeight: 500,
-            }}
-          >
-            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-              <span
-                style={{
-                  width: 48,
-                  height: 4,
-                  borderRadius: 99,
-                  background: 'var(--bg-3)',
-                  position: 'relative',
-                  overflow: 'hidden',
-                  display: 'inline-block',
-                }}
-              >
-                <span
-                  style={{
-                    position: 'absolute',
-                    inset: 0,
-                    width: `${c.progress}%`,
-                    background: c.progress >= 100 ? '#1a6b3e' : 'var(--violet)',
-                  }}
-                />
-              </span>
-              <span style={{ fontSize: 11, color: 'var(--ink-2)' }}>{c.progress}%</span>
-            </span>
-          </span>
-        </div>
       </div>
 
       <div

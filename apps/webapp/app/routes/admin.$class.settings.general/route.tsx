@@ -46,8 +46,6 @@ const SettingsGeneral = ({ loaderData }: Route.ComponentProps) => {
       <ProfileSection
         organization={{
           name: classroom.name,
-          term: classroom.term ?? '',
-          year: String(classroom.year ?? ''),
         }}
       />
       <DefaultPageSection
