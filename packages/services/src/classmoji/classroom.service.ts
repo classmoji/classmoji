@@ -1,5 +1,4 @@
 import getPrisma from '@classmoji/database';
-import { getTermCode } from '../git/index.ts';
 import type { Prisma, Role } from '@prisma/client';
 
 /**
@@ -338,32 +337,3 @@ export const updateSettings = async (
   });
 };
 
-/**
- * Generate a unique slug for a classroom
- * @param {string} name - Classroom name
- * @param {string} term - Term (WINTER, SPRING, SUMMER, FALL) - required
- * @param {number} year - Year - required
- * @returns {Promise<string>}
- */
-export const generateSlug = async (name: string, term: string, year: number) => {
-  // Start with base slug from name
-  let baseSlug = name
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-|-$/g, '');
-
-  // Add short term code (e.g., "25w" for Winter 2025)
-  const termCode = getTermCode(term, year);
-  baseSlug = `${baseSlug}-${termCode}`;
-
-  // Check if slug exists
-  let slug = baseSlug;
-  let counter = 1;
-
-  while (await getPrisma().classroom.findUnique({ where: { slug } })) {
-    slug = `${baseSlug}-${counter}`;
-    counter++;
-  }
-
-  return slug;
-};

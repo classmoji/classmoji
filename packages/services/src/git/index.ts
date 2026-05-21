@@ -76,18 +76,6 @@ export function getGitHubProvider(installationId: string, orgLogin: string | nul
 }
 
 /**
- * Get short term code (e.g., "25w" for Winter 2025)
- * @param {string} term - Term enum (WINTER, SPRING, SUMMER, FALL)
- * @param {number} year - Full year (e.g., 2025)
- * @returns {string} Short term code (e.g., "25w")
- */
-export function getTermCode(term: string, year: number) {
-  const termMap: Record<string, string> = { WINTER: 'w', SPRING: 's', SUMMER: 'x', FALL: 'f' };
-  const shortYear = String(year).slice(-2);
-  return `${shortYear}${termMap[term] || 'x'}`;
-}
-
-/**
  * Get team name for a classroom based on role
  * Format: {classroom-slug}-{students|assistants}
  * Example: cs101-25w-students (CS101 Winter 2025 students)
