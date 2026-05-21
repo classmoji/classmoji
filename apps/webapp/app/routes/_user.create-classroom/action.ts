@@ -22,7 +22,7 @@ export const action = checkAuth(async ({ request }: { request: Request }) => {
     return { error: 'Unauthorized' };
   }
 
-  const { git_org_id, name, importConfig } = await request.json();
+  const { git_org_id, name, slug: slugInput, importConfig } = await request.json();
 
   if (!name) {
     return { error: 'Classroom name is required' };
@@ -65,8 +65,8 @@ export const action = checkAuth(async ({ request }: { request: Request }) => {
     };
   }
 
-  // Slug derived from name only
-  const slug = slugify(name);
+  // Slug: prefer client-provided (user override / suggestion) when present, else derive from name.
+  const slug = slugInput && typeof slugInput === 'string' ? slugify(slugInput) : slugify(name);
 
   // Create Classroom, Settings, and Membership in transaction
   const classroom = await getPrisma().$transaction(async tx => {

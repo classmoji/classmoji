@@ -1,5 +1,5 @@
-import { redirect, useNavigate } from 'react-router';
-import { useState, useEffect } from 'react';
+import { redirect, useNavigate, useFetcher } from 'react-router';
+import { useState, useEffect, useRef } from 'react';
 import { useForm, FormProvider } from 'react-hook-form';
 import { Button, Card, Alert, Steps } from 'antd';
 
@@ -192,6 +192,7 @@ const CreateClassroom = ({ loaderData }: Route.ComponentProps) => {
     defaultValues: {
       git_org_id: '',
       name: '',
+      slug: '',
     },
   });
 
@@ -218,11 +219,40 @@ const CreateClassroom = ({ loaderData }: Route.ComponentProps) => {
 
   // Compute slug preview from watched form values
   const slugPreview = formValues.name ? slugify(formValues.name) : '';
+  const slugOverride = (formValues as { slug?: string }).slug;
+  const effectiveSlug = slugOverride && slugOverride.length > 0 ? slugOverride : slugPreview;
+
+  // Debounced availability check (shared with StepBasicInfo via props)
+  const availabilityFetcher = useFetcher<{
+    slug_available: boolean;
+    slug_suggestion?: string;
+  }>();
+  const lastQueriedRef = useRef<string>('');
+  useEffect(() => {
+    if (!formValues.git_org_id || !effectiveSlug) return;
+    const key = `${formValues.git_org_id}::${effectiveSlug}`;
+    if (lastQueriedRef.current === key) return;
+    const handle = setTimeout(() => {
+      lastQueriedRef.current = key;
+      const params = new URLSearchParams({
+        git_org_id: formValues.git_org_id,
+        slug: effectiveSlug,
+      });
+      availabilityFetcher.load(`/api/classrooms/availability?${params.toString()}`);
+    }, 300);
+    return () => clearTimeout(handle);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [formValues.git_org_id, effectiveSlug]);
+
+  const slugIsTaken =
+    !!availabilityFetcher.data &&
+    availabilityFetcher.data.slug_available === false &&
+    availabilityFetcher.state === 'idle';
 
   const handleNext = async () => {
     if (currentStep === 0) {
       const isValid = await trigger(['git_org_id', 'name']);
-      if (isValid) {
+      if (isValid && !slugIsTaken) {
         setCurrentStep(1);
       }
     } else if (currentStep === 1) {
@@ -252,7 +282,7 @@ const CreateClassroom = ({ loaderData }: Route.ComponentProps) => {
     notify(ActionTypes.CREATE_CLASSROOM, 'Creating classroom...');
 
     fetcher!.submit(
-      { ...values, importConfig },
+      { ...values, slug: effectiveSlug, importConfig },
       {
         method: 'post',
         action: '/create-classroom',
@@ -300,6 +330,8 @@ const CreateClassroom = ({ loaderData }: Route.ComponentProps) => {
                 gitOrgs={gitOrgs}
                 slugPreview={slugPreview}
                 githubAppName={githubAppName}
+                availability={availabilityFetcher.data}
+                availabilityLoading={availabilityFetcher.state !== 'idle'}
               />
             )}
 
@@ -333,7 +365,11 @@ const CreateClassroom = ({ loaderData }: Route.ComponentProps) => {
                   <Button onClick={() => navigate('/select-organization')}>Cancel</Button>
                 )}
                 {currentStep < 2 ? (
-                  <Button type="primary" onClick={handleNext}>
+                  <Button
+                    type="primary"
+                    onClick={handleNext}
+                    disabled={currentStep === 0 && slugIsTaken}
+                  >
                     Next
                   </Button>
                 ) : (
