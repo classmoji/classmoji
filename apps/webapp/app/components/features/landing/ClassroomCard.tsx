@@ -90,7 +90,9 @@ export function ClassroomCard({
 
   const fetcher = pinFetcher; // alias used downstream for opacity styling
 
-  const blockedUnpublished = c.status === 'UNPUBLISHED' && c.role !== 'OWNER';
+  // Use raw DB role: derived `c.role` collapses TEACHER into 'OWNER' for display,
+  // but the unpublished gate must match the server (OWNER only).
+  const blockedUnpublished = c.status === 'UNPUBLISHED' && c.membershipRole !== 'OWNER';
   const handleOpenGuarded = () => {
     if (blockedUnpublished) {
       showUnpublishedModal();
