@@ -127,8 +127,7 @@ export const findAll = async (query: Prisma.ClassroomWhereInput = {}) => {
  * @param {string} data.git_org_id - UUID of the GitOrganization
  * @param {string} data.slug - URL-friendly slug
  * @param {string} data.name - Display name
- * @param {string} [data.term] - Term (FALL, SPRING, SUMMER, WINTER)
- * @param {number} [data.year] - Year
+ * @param {string} data.content_namespace - Identifier embedded in content repo name
  * @param {string} [data.emoji] - Emoji (default: "dart")
  * @returns {Promise<Object>}
  */
