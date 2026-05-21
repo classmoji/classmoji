@@ -6,6 +6,7 @@ import { SettingSection } from '~/components';
 import { ActionTypes } from '~/constants';
 import { useGlobalFetcher } from '~/hooks';
 import ProfileSection from './ProfileSection';
+import StatusSection from './StatusSection';
 import DefaultPageSection from './DefaultPageSection';
 import TweaksSection from '~/components/features/tweaks/TweaksSection';
 import { assertClassroomAccess } from '~/utils/helpers';
@@ -47,6 +48,11 @@ const SettingsGeneral = ({ loaderData }: Route.ComponentProps) => {
         organization={{
           name: classroom.name,
         }}
+      />
+      <StatusSection
+        classroomId={classroom.id}
+        status={classroom.status as 'ACTIVE' | 'LOCKED' | 'UNPUBLISHED'}
+        isArchived={classroom.is_archived}
       />
       <DefaultPageSection
         currentDefault={classroom.settings?.default_student_page || 'dashboard'}
