@@ -159,10 +159,6 @@ export const action = async ({
       data: {
         title,
         slug,
-        // Slide.term column is dropped in a later migration; populate with
-        // the classroom's content_namespace until then so the NOT NULL
-        // constraint is satisfied.
-        term: contentNamespace,
         content_path: contentPath,
         classroom_id: classroom.id,
         created_by: userId,

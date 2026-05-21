@@ -712,10 +712,6 @@ export async function processZipImport({
     data: {
       title: slideTitle,
       slug,
-      // Slide.term column is dropped in a later migration; populate with
-      // the classroom's content_namespace until then so the NOT NULL
-      // constraint is satisfied.
-      term: contentNamespace,
       content_path: contentPath,
       classroom_id: classroom.id,
       created_by: userId,

@@ -37,13 +37,6 @@ enum NotificationType {
   TA_REGRADE_ASSIGNED
 }
 
-enum Term {
-  FALL
-  SPRING
-  SUMMER
-  WINTER
-}
-
 enum AssignmentType {
   INDIVIDUAL
   GROUP
@@ -279,8 +272,6 @@ model Classroom {
   git_org_id        String
   name              String
   content_namespace String
-  term              Term?
-  year              Int?
   is_active         Boolean  @default(true)
   pin_order         Int?
   created_at        DateTime @default(now())
@@ -801,7 +792,6 @@ model Slide {
   classroom_id       String
   title              String
   slug               String
-  term               String
   content_path       String
   multiplex_id       String?
   multiplex_secret   String?
