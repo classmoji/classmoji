@@ -153,7 +153,7 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
         user_id: user.id,
         role: expectedMembershipRole as 'OWNER' | 'ASSISTANT' | 'STUDENT',
         classroom: {
-          is_active: true,
+          is_archived: false,
           slug: testClassroom, // Target specific test classroom
         },
       },
