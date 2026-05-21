@@ -14,17 +14,6 @@ interface AppBarProps {
   membershipRoles?: Record<string, NotificationRole[]>;
 }
 
-const tabBtn = (active: boolean): React.CSSProperties => ({
-  padding: '6px 14px',
-  borderRadius: 6,
-  fontSize: 13.5,
-  fontWeight: active ? 600 : 500,
-  color: active ? 'var(--ink-0)' : 'var(--ink-2)',
-  background: 'transparent',
-  cursor: 'pointer',
-  border: 'none',
-});
-
 const iconBtn: React.CSSProperties = {
   width: 36,
   height: 36,
@@ -59,17 +48,6 @@ export function AppBar({ user, notifications, unreadCount, membershipRoles }: Ap
       <div style={{ display: 'flex', alignItems: 'center', gap: 22 }}>
         <Logo variant="full" size={24} theme="current" />
 
-        <nav style={{ display: 'flex', gap: 2 }}>
-          <button type="button" style={tabBtn(true)}>
-            Classes
-          </button>
-          <button type="button" style={tabBtn(false)}>
-            Inbox
-          </button>
-          <button type="button" style={tabBtn(false)}>
-            Explore
-          </button>
-        </nav>
       </div>
 
       {/* Right group: help / bell / user */}

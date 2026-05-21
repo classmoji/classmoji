@@ -6,6 +6,8 @@ export type LandingRole = 'OWNER' | 'ASSISTANT' | 'STUDENT' | 'PENDING INVITE';
 
 export interface LandingClass {
   id: string;
+  /** Bare classroom UUID for API calls (pin/reorder). `id` is composite `${classroomId}:${role}` for UI dedup. */
+  classroomId: string;
   name: string;
   subtitle: string;
   slug: string;

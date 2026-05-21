@@ -46,7 +46,7 @@ export const findById = async (id: string) => {
  * @returns {Promise<Object|null>}
  */
 export const findBySlug = async (slug: string) => {
-  return getPrisma().classroom.findUnique({
+  return getPrisma().classroom.findFirst({
     where: { slug },
     include: {
       git_organization: true,

@@ -156,6 +156,7 @@ function buildLandingClasses(memberships: SelectOrganizationMembership[]): Landi
     return {
       landing: {
         id: `${org.id}:${m.role}`,
+        classroomId: org.id,
         name: org.name ?? orgLogin,
         subtitle: '',
         slug: `@${gitLogin}/${orgLogin}`,

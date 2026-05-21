@@ -75,7 +75,7 @@ export function ClassroomCard({
     if (fetcher.state !== 'idle') return;
     fetcher.submit(null, {
       method: 'POST',
-      action: `/api/classrooms/${c.id}/pin`,
+      action: `/api/classrooms/${c.classroomId}/pin`,
     });
   };
 

@@ -117,10 +117,13 @@ export function ClassroomsLandingScreen({
     const prev = pinnedOrder;
     setPinnedOrder(ids);
     try {
+      // Translate composite UI ids → bare classroom UUIDs for the API.
+      const byId = new Map(classes.map(c => [c.id, c.classroomId]));
+      const classroomIds = ids.map(id => byId.get(id)).filter(Boolean) as string[];
       const res = await fetch('/api/classrooms/reorder-pins', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ids }),
+        body: JSON.stringify({ ids: classroomIds }),
       });
       if (!res.ok) {
         setPinnedOrder(prev);

@@ -80,7 +80,7 @@ export const action = async ({ request }: { request: Request }) => {
   }
 
   // Get classroom with git_organization
-  const classroom = await getPrisma().classroom.findUnique({
+  const classroom = await getPrisma().classroom.findFirst({
     where: { slug: classroomSlug },
     include: { git_organization: true },
   });
