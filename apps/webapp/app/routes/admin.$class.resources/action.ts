@@ -1,19 +1,20 @@
 import { namedAction } from 'remix-utils/named-action';
 import getPrisma from '@classmoji/database';
 import { ClassmojiService } from '@classmoji/services';
-import { assertClassroomAccess } from '~/utils/helpers';
+import { assertClassroomAccess, assertClassroomMutationAllowed } from '~/utils/helpers';
 import type { Route } from './+types/route';
 
 export const action = async ({ request, params }: Route.ActionArgs) => {
   const classSlug = params.class!;
 
-  const { classroom } = await assertClassroomAccess({
+  const { classroom, membership } = await assertClassroomAccess({
     request,
     classroomSlug: classSlug,
     allowedRoles: ['OWNER', 'TEACHER'],
     resourceType: 'RESOURCES',
     attemptedAction: 'manage_links',
   });
+  assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
 
   return namedAction(request, {
     async addLink() {

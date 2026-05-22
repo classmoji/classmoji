@@ -21,6 +21,7 @@
  * - restartQuiz: Deletes and restarts a quiz attempt (dev mode only)
  */
 import { assertClassroomAccess } from '~/utils/helpers';
+import { assertClassroomMutationAllowed } from '~/utils/routeAuth.server';
 import { isAIAgentConfigured } from '~/utils/aiFeatures.server';
 import { getQuestionProgressFromMessage, checkForCompletion } from '@classmoji/utils';
 import type { Role } from '@prisma/client';
@@ -289,6 +290,7 @@ export async function action({ request }: Route.ActionArgs) {
       attemptedAction: data._action,
       metadata: context.metadata,
     });
+    assertClassroomMutationAllowed({ status: access.classroom.status, role: access.membership!.role });
 
     // Check AI agent availability AFTER auth (preserves audit logging)
     if (!isAIAgentConfigured()) {

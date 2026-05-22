@@ -116,6 +116,12 @@ enum EventType {
   ASSESSMENT
 }
 
+enum ClassroomStatus {
+  ACTIVE
+  LOCKED
+  UNPUBLISHED
+}
+
 // ============================================================================
 // BETTERAUTH TABLES
 // ============================================================================
@@ -272,7 +278,8 @@ model Classroom {
   git_org_id        String
   name              String
   content_namespace String
-  is_active         Boolean  @default(true)
+  status            ClassroomStatus @default(ACTIVE)
+  is_archived       Boolean         @default(false)
   created_at        DateTime @default(now())
   updated_at        DateTime @default(now()) @updatedAt
 

@@ -1,14 +1,17 @@
 /**
- * Set the archive flag on a classroom (idempotent).
+ * Set the status on a classroom.
  *
- * PATCH /api/classrooms/:id/archive  body: { is_archived: boolean }
+ * PATCH /api/classrooms/:id/status  body: { status: 'ACTIVE' | 'LOCKED' | 'UNPUBLISHED' }
  *
- * Only OWNER. Returns `{ is_archived: boolean }`.
+ * Only OWNER. Returns `{ status }`.
  */
 
 import { requireAuth } from '@classmoji/auth/server';
 import getPrisma from '@classmoji/database';
 import type { Route } from './+types/route';
+
+const STATUSES = ['ACTIVE', 'LOCKED', 'UNPUBLISHED'] as const;
+type Status = (typeof STATUSES)[number];
 
 export const action = async ({ request, params }: Route.ActionArgs) => {
   if (request.method !== 'PATCH' && request.method !== 'POST') {
@@ -21,9 +24,9 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
     return new Response('Missing classroom id', { status: 400 });
   }
 
-  const body = (await request.json().catch(() => ({}))) as { is_archived?: boolean };
-  if (typeof body.is_archived !== 'boolean') {
-    return new Response('Invalid body', { status: 400 });
+  const body = (await request.json().catch(() => ({}))) as { status?: Status };
+  if (!body.status || !STATUSES.includes(body.status)) {
+    return new Response('Invalid status', { status: 400 });
   }
 
   const prisma = getPrisma();
@@ -38,8 +41,8 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
 
   const updated = await prisma.classroom.update({
     where: { id: classroomId },
-    data: { is_archived: body.is_archived },
-    select: { is_archived: true },
+    data: { status: body.status },
+    select: { status: true },
   });
 
   return Response.json(updated);

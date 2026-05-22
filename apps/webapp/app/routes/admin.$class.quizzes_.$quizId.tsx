@@ -9,6 +9,7 @@ import relativeTime from 'dayjs/plugin/relativeTime';
 import { UserThumbnailView, GradeBadge, SectionHeader } from '~/components';
 import { formatDuration, checkForCompletion } from '~/utils/quizUtils';
 import { namedAction } from 'remix-utils/named-action';
+import { assertClassroomMutationAllowed } from '~/utils/routeAuth.server';
 
 dayjs.extend(relativeTime);
 
@@ -310,7 +311,7 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
     async clearMyAttempts() {
       // SECURITY: Only admins (OWNER/ASSISTANT) can clear preview attempts
       // The service layer scopes deletion to only the authenticated user's attempts
-      const { userId, classroom } = await assertClassroomAccess({
+      const { userId, classroom, membership } = await assertClassroomAccess({
         request,
         classroomSlug: classSlug,
         allowedRoles: ['OWNER', 'ASSISTANT'],
@@ -320,6 +321,7 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
           quiz_id: quizId,
         },
       });
+      assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
 
       // Delete only this authenticated user's attempts for this specific quiz
       // The userId from assertClassroomAccess ensures we only clear the authenticated user's attempts

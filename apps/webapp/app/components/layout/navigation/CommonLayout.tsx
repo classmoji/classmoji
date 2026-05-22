@@ -13,6 +13,7 @@ import useStore from '~/store';
 import tokenImage from '~/assets/images/token.png';
 import githubLogo from '~/assets/images/github_logo.svg';
 import ProfileDropdown from '../../features/profile/ProfileDropdown';
+import { LockedBanner } from '~/components/features/classroom/LockedBanner';
 import type { AppUser, MembershipWithOrganization } from '~/types';
 
 interface MenuPage {
@@ -504,6 +505,7 @@ const CommonLayout = ({
             }
           >
             <CalloutSlot />
+            {classroom?.status === 'LOCKED' && role !== 'OWNER' && <LockedBanner />}
             {children}
           </div>
         </div>

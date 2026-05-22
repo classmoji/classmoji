@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { useNavigate, useFetcher } from 'react-router';
 import { Form, Button, Alert, Modal, Tabs } from 'antd';
 import { FileTextOutlined, UploadOutlined } from '@ant-design/icons';
-import { assertClassroomAccess } from '~/utils/helpers';
+import { assertClassroomAccess, assertClassroomMutationAllowed } from '~/utils/helpers';
 import { ClassmojiService, getGitProvider } from '@classmoji/services';
 import { useCallout } from '@classmoji/ui-components';
 import { ContentService } from '@classmoji/content';
@@ -44,13 +44,14 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
   const formData = await request.formData();
   const intent = formData.get('intent');
 
-  const { classroom, userId } = await assertClassroomAccess({
+  const { classroom, userId, membership } = await assertClassroomAccess({
     request,
     classroomSlug: classSlug!,
     allowedRoles: ['OWNER', 'TEACHER'],
     resourceType: 'PAGES',
     attemptedAction: 'create_page',
   });
+  assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
 
   // Use git_organization.login for GitHub API calls, not the classroom slug
   const gitOrgLogin = classroom.git_organization?.login;

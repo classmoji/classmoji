@@ -2,7 +2,7 @@ import { Modal } from 'antd';
 import { namedAction } from 'remix-utils/named-action';
 
 import { getAuthSession } from '@classmoji/auth/server';
-import { requireClassroomAdmin } from '~/utils/routeAuth.server';
+import { requireClassroomAdmin, assertClassroomMutationAllowed } from '~/utils/routeAuth.server';
 import FormModule from './FormModule';
 import { ClassmojiService } from '@classmoji/services';
 import getPrisma from '@classmoji/database';
@@ -141,10 +141,11 @@ const ModuleForm = ({ loaderData }: Route.ComponentProps) => {
 export const action = async ({ request, params }: Route.ActionArgs) => {
   const { class: classSlug } = params;
 
-  const { classroom, userId: _userId } = await requireClassroomAdmin(request, classSlug!, {
+  const { classroom, userId: _userId, membership } = await requireClassroomAdmin(request, classSlug!, {
     resourceType: 'MODULES',
     action: 'create_module',
   });
+  assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
 
   const data = await request.json();
 

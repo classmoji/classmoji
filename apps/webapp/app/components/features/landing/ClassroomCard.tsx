@@ -5,6 +5,7 @@ import { IconGithub } from '@classmoji/ui-components';
 import { ClassMark } from './ClassMark';
 import { RoleChip } from './RoleChip';
 import type { LandingClass } from './types';
+import { useClassroomStatusModals } from '~/utils/classroomStatusModals';
 
 interface ClassroomCardProps {
   c: LandingClass;
@@ -12,56 +13,12 @@ interface ClassroomCardProps {
   showSlug?: boolean;
   /** Called after the pin endpoint responds with the new pin_order. */
   onPinChanged?: (id: string, pin_order: number | null) => void;
-  /** Called after the archive endpoint responds with the new is_active. */
-  onArchiveChanged?: (id: string, is_active: boolean) => void;
   /** Drag handlers — supplied only inside the Pinned section. */
   draggable?: boolean;
   onDragStart?: (e: React.DragEvent<HTMLDivElement>) => void;
   onDragOver?: (e: React.DragEvent<HTMLDivElement>) => void;
   onDrop?: (e: React.DragEvent<HTMLDivElement>) => void;
   onDragEnd?: (e: React.DragEvent<HTMLDivElement>) => void;
-}
-
-function ArchiveIcon({ size = 14 }: { size?: number }) {
-  // Box with a downward arrow into it — "archive" gesture.
-  return (
-    <svg
-      width={size}
-      height={size}
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.8"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-    >
-      <rect x="3" y="4" width="18" height="4" rx="1" />
-      <path d="M5 8v11a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8" />
-      <path d="M12 11v5m0 0-2-2m2 2 2-2" />
-    </svg>
-  );
-}
-
-function UnarchiveIcon({ size = 14 }: { size?: number }) {
-  // Box with an upward arrow out of it — "unarchive" gesture.
-  return (
-    <svg
-      width={size}
-      height={size}
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.8"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-    >
-      <rect x="3" y="4" width="18" height="4" rx="1" />
-      <path d="M5 8v11a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8" />
-      <path d="M12 17v-5m0 0-2 2m2-2 2 2" />
-    </svg>
-  );
 }
 
 function PinIcon({ filled, size = 14 }: { filled: boolean; size?: number }) {
@@ -88,7 +45,6 @@ export function ClassroomCard({
   onOpen,
   showSlug = false,
   onPinChanged,
-  onArchiveChanged,
   draggable = false,
   onDragStart,
   onDragOver,
@@ -103,17 +59,13 @@ export function ClassroomCard({
         : 'Pending';
 
   const pinFetcher = useFetcher<{ pin_order: number | null }>();
-  const archiveFetcher = useFetcher<{ is_active: boolean }>();
   const [hover, setHover] = useState(false);
   const lastPinStateRef = useRef<typeof pinFetcher.state>('idle');
-  const lastArchiveStateRef = useRef<typeof archiveFetcher.state>('idle');
 
   const isPinned = c.pin_order != null;
   // Pinning is a personal organization feature — available to all roles
   // except pending invites.
   const canPin = c.role !== 'PENDING INVITE';
-  // Only OWNER can archive/unarchive.
-  const canArchive = c.role === 'OWNER';
 
   useEffect(() => {
     if (
@@ -126,17 +78,6 @@ export function ClassroomCard({
     lastPinStateRef.current = pinFetcher.state;
   }, [pinFetcher.state, pinFetcher.data, c.id, onPinChanged]);
 
-  useEffect(() => {
-    if (
-      archiveFetcher.state === 'idle' &&
-      lastArchiveStateRef.current !== 'idle' &&
-      archiveFetcher.data
-    ) {
-      onArchiveChanged?.(c.id, archiveFetcher.data.is_active);
-    }
-    lastArchiveStateRef.current = archiveFetcher.state;
-  }, [archiveFetcher.state, archiveFetcher.data, c.id, onArchiveChanged]);
-
   const handlePinClick = (e: React.MouseEvent) => {
     e.stopPropagation();
     if (pinFetcher.state !== 'idle') return;
@@ -147,24 +88,23 @@ export function ClassroomCard({
     });
   };
 
-  const handleArchiveClick = (e: React.MouseEvent) => {
-    e.stopPropagation();
-    if (archiveFetcher.state !== 'idle') return;
-    const msg = c.is_active
-      ? `Archive "${c.name}"? You can unarchive it later.`
-      : `Unarchive "${c.name}"?`;
-    if (typeof window !== 'undefined' && !window.confirm(msg)) return;
-    archiveFetcher.submit(null, {
-      method: 'POST',
-      action: `/api/classrooms/${c.classroomId}/archive`,
-    });
-  };
-
   const fetcher = pinFetcher; // alias used downstream for opacity styling
+  const { showUnpublished } = useClassroomStatusModals();
+
+  // Use raw DB role: derived `c.role` collapses TEACHER into 'OWNER' for display,
+  // but the unpublished gate must match the server (OWNER only).
+  const blockedUnpublished = c.status === 'UNPUBLISHED' && c.membershipRole !== 'OWNER';
+  const handleOpenGuarded = () => {
+    if (blockedUnpublished) {
+      showUnpublished();
+      return;
+    }
+    onOpen();
+  };
 
   return (
     <div
-      onClick={onOpen}
+      onClick={handleOpenGuarded}
       role="button"
       tabIndex={0}
       draggable={draggable}
@@ -175,7 +115,7 @@ export function ClassroomCard({
       onKeyDown={e => {
         if (e.key === 'Enter' || e.key === ' ') {
           e.preventDefault();
-          onOpen();
+          handleOpenGuarded();
         }
       }}
       style={{
@@ -245,35 +185,6 @@ export function ClassroomCard({
           }}
         >
           <AnimatePresence initial={false}>
-            {canArchive && hover && (
-              <motion.button
-                key="archive-btn"
-                type="button"
-                aria-label={c.is_active ? 'Archive classroom' : 'Unarchive classroom'}
-                title={c.is_active ? 'Archive' : 'Unarchive'}
-                onClick={handleArchiveClick}
-                initial={{ opacity: 0, scale: 0.6, width: 0 }}
-                animate={{ opacity: 1, scale: 1, width: 'auto' }}
-                exit={{ opacity: 0, scale: 0.6, width: 0 }}
-                whileHover={{ scale: 1.15 }}
-                whileTap={{ scale: 0.85 }}
-                transition={{ type: 'spring', stiffness: 600, damping: 22 }}
-                style={{
-                  border: 'none',
-                  background: 'transparent',
-                  color: c.is_active ? 'var(--ink-3)' : 'var(--accent)',
-                  cursor: 'pointer',
-                  padding: 2,
-                  borderRadius: 4,
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  overflow: 'hidden',
-                }}
-              >
-                {c.is_active ? <ArchiveIcon /> : <UnarchiveIcon />}
-              </motion.button>
-            )}
             {canPin && (hover || isPinned) && (
               <motion.button
                 key="pin-btn"
@@ -309,6 +220,16 @@ export function ClassroomCard({
               </motion.button>
             )}
           </AnimatePresence>
+          {c.status === 'LOCKED' && (
+            <span className="inline-flex items-center rounded-full bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-200 px-2 py-0.5 text-xs">
+              Read-only
+            </span>
+          )}
+          {c.status === 'UNPUBLISHED' && (
+            <span className="inline-flex items-center rounded-full bg-gray-200 text-gray-700 dark:bg-gray-800 dark:text-gray-300 px-2 py-0.5 text-xs">
+              Unpublished
+            </span>
+          )}
           <RoleChip role={c.role} />
         </div>
       </div>
