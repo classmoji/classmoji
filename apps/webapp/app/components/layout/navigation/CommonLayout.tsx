@@ -133,17 +133,18 @@ const CommonLayout = ({
           className={`
             group flex items-center gap-2.5 rounded-md transition-colors duration-150
             ${collapsed ? 'justify-center p-2 mx-1.5' : 'px-2 py-1.5 mx-1.5'}
-            ${
-              active
-                ? ''
-                : 'text-gray-700 dark:text-gray-300 hover:bg-gray-100/70 dark:hover:bg-neutral-800/60'
-            }
+            ${active ? '' : 'hover:bg-gray-100/70 dark:hover:bg-neutral-800/60'}
           `}
-          style={
-            active
-              ? { backgroundColor: 'var(--accent-soft)', color: 'var(--accent-ink)' }
-              : undefined
-          }
+          style={{
+            color: isDarkMode
+              ? active
+                ? '#f3f4f6'
+                : '#d1d5db'
+              : active
+                ? '#111827'
+                : '#374151',
+            ...(active ? { backgroundColor: 'var(--accent-soft)' } : {}),
+          }}
           data-active={active || undefined}
         >
           {collapsed ? (
@@ -198,8 +199,9 @@ const CommonLayout = ({
           className={`
             group flex items-center gap-2.5 rounded-md transition-colors duration-150 w-full
             ${collapsed ? 'justify-center p-2 mx-1.5' : 'px-2 py-1.5 mx-1.5'}
-            text-gray-700 dark:text-gray-300 hover:bg-gray-100/70 dark:hover:bg-neutral-800/60
+            hover:bg-gray-100/70 dark:hover:bg-neutral-800/60
           `}
+          style={{ color: isDarkMode ? '#d1d5db' : '#374151' }}
         >
           {collapsed ? (
             <Tooltip title={page.title} placement="right">
