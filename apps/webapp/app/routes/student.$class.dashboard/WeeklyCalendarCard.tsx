@@ -55,7 +55,7 @@ const WeeklyCalendarCard = ({ events, weekStart, classSlug }: WeeklyCalendarCard
     : `${start.format('MMM D')}–${end.format('MMM D')}`;
 
   return (
-    <section className="rounded-2xl bg-panel ring-1 ring-stone-200 dark:ring-neutral-800 overflow-hidden">
+    <section className="rounded-[15px] bg-panel ring-1 ring-stone-200 dark:ring-neutral-800 overflow-hidden">
       <header className="flex items-center justify-between gap-3 px-5 sm:px-6 pt-5 sm:pt-6 pb-4">
         <h2 className="text-base sm:text-lg font-semibold text-gray-900 dark:text-gray-100 tracking-tight">
           Week {weekNumber}: {rangeLabel}

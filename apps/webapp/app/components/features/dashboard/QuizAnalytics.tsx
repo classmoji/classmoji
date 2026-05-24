@@ -15,7 +15,7 @@ const QuizAnalytics = ({ data }: QuizAnalyticsProps) => {
   const display = pct === null ? '—' : `${Math.round(pct * 100)}%`;
 
   return (
-    <Card className="h-full" data-testid="quiz-analytics">
+    <Card className="h-full !rounded-[15px]" data-testid="quiz-analytics">
       <CardHeader>Quiz Analytics</CardHeader>
       <div className="flex flex-col items-center justify-center py-8">
         <div className="text-[11px] uppercase tracking-wide text-gray-500 dark:text-gray-400 font-semibold mb-2">

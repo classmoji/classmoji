@@ -22,7 +22,7 @@ function slaColor(ageDays: number): { color: string; label: string } {
 
 const MyDayQueue = ({ queue }: MyDayQueueProps) => {
   return (
-    <Card className="h-full" data-testid="my-day-queue">
+    <Card className="h-full !rounded-[15px]" data-testid="my-day-queue">
       <CardHeader>My Day</CardHeader>
       {queue.length === 0 ? (
         <Empty

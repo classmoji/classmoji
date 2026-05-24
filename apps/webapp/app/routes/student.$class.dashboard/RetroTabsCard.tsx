@@ -332,7 +332,7 @@ const RetroTabsCard = ({ feedback, team, needsTeam, resubmits, classSlug }: Retr
               style={
                 isActive ? { color: 'var(--accent)', borderTopColor: 'var(--accent)' } : undefined
               }
-              className={`relative ${zClass} px-4 py-2 text-sm font-medium rounded-t-2xl border transition-colors ${
+              className={`relative ${zClass} px-4 py-2 text-sm font-medium rounded-t-[15px] border transition-colors ${
                 idx > 0 ? '-ml-2' : ''
               } ${
                 isActive
@@ -345,7 +345,7 @@ const RetroTabsCard = ({ feedback, team, needsTeam, resubmits, classSlug }: Retr
           );
         })}
       </div>
-      <section className="flex-1 rounded-2xl rounded-tl-none bg-panel border border-stone-200 dark:border-neutral-800 min-h-[400px] flex flex-col">
+      <section className="flex-1 rounded-[15px] rounded-tl-none bg-panel border border-stone-200 dark:border-neutral-800 min-h-[400px] flex flex-col">
         <div className="flex-1 p-5 sm:p-6">
           {active === 'feedback' && <FeedbackPanel items={feedback} />}
           {active === 'team' && (

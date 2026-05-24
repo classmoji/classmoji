@@ -10,7 +10,7 @@ interface StreakBadgeProps {
 const StreakBadge = ({ days, lastGradedAt }: StreakBadgeProps) => {
   const hasStreak = days > 0;
   return (
-    <Card className="h-full" data-testid="streak-badge">
+    <Card className="h-full !rounded-[15px]" data-testid="streak-badge">
       <CardHeader>Grading Streak</CardHeader>
       {hasStreak ? (
         <div className="flex flex-col gap-1">

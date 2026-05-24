@@ -30,7 +30,7 @@ const DeadlinePressure = ({ buckets }: DeadlinePressureProps) => {
   const maxCount = Math.max(1, ...buckets.map(b => b.assignments.length));
 
   return (
-    <Card className="h-full" data-testid="deadline-pressure">
+    <Card className="h-full !rounded-[15px]" data-testid="deadline-pressure">
       <CardHeader>Deadline Pressure (next 7 days)</CardHeader>
 
       <div className="flex items-end justify-between gap-2 py-6 min-h-[180px]">

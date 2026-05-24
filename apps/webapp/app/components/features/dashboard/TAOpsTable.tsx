@@ -84,7 +84,7 @@ const TAOpsTable = ({ rows }: TAOpsTableProps) => {
   ];
 
   return (
-    <Card className="h-full" data-testid="ta-ops-table">
+    <Card className="h-full !rounded-[15px]" data-testid="ta-ops-table">
       <CardHeader>TA Operations</CardHeader>
       <Table<TaOpsRow>
         rowKey="taId"

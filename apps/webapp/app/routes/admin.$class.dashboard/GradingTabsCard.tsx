@@ -50,7 +50,7 @@ const GradingTabsCard = ({ gradingProgress, assistantsProgress }: GradingTabsCar
                   ? { ...zStyle, color: 'var(--accent)', borderTopColor: 'var(--accent)' }
                   : zStyle
               }
-              className={`relative px-4 py-2 text-sm font-medium rounded-t-2xl border whitespace-nowrap transition-colors ${
+              className={`relative px-4 py-2 text-sm font-medium rounded-t-[15px] border whitespace-nowrap transition-colors ${
                 idx > 0 ? '-ml-2' : ''
               } ${
                 isActive
@@ -64,7 +64,7 @@ const GradingTabsCard = ({ gradingProgress, assistantsProgress }: GradingTabsCar
         })}
       </div>
 
-      <section className="rounded-2xl rounded-tl-none bg-panel ring-1 ring-stone-200 dark:ring-neutral-800 p-4 sm:p-5 min-h-[240px]">
+      <section className="rounded-[15px] rounded-tl-none bg-panel ring-1 ring-stone-200 dark:ring-neutral-800 p-4 sm:p-5 min-h-[240px]">
         {active === 'grading' ? (
           <StatsGradingProgress gradingProgress={gradingProgress} bare />
         ) : (

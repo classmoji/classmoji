@@ -41,7 +41,7 @@ const ThroughputSparkline = ({ data }: ThroughputSparklineProps) => {
   const { accent } = useDarkMode();
   const gradientId = useId();
   return (
-    <Card className="h-full" data-testid="throughput-sparkline">
+    <Card className="h-full !rounded-[15px]" data-testid="throughput-sparkline">
       <CardHeader>Throughput (7d)</CardHeader>
       <div className="text-2xl font-semibold tabular-nums text-gray-900 dark:text-gray-100">
         {total}

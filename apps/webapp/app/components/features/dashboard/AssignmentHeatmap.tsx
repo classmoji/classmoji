@@ -55,7 +55,7 @@ const Cell = ({ value, goodness }: { value: string; goodness: number | null }) =
 
 const AssignmentHeatmap = ({ rows }: AssignmentHeatmapProps) => {
   return (
-    <Card className="h-full" data-testid="assignment-heatmap">
+    <Card className="h-full !rounded-[15px]" data-testid="assignment-heatmap">
       <CardHeader>Assignment Health</CardHeader>
       <div className="overflow-auto max-h-[420px]">
         <div className="min-w-[520px]">

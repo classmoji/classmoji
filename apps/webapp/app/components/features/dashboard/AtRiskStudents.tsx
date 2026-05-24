@@ -16,7 +16,7 @@ interface AtRiskStudentsProps {
 
 const AtRiskStudents = ({ atRiskCount, students }: AtRiskStudentsProps) => {
   return (
-    <Card className="h-full" data-testid="at-risk-students">
+    <Card className="h-full !rounded-[15px]" data-testid="at-risk-students">
       <div className="flex items-center justify-between">
         <CardHeader>At-Risk Students</CardHeader>
         <Tag
