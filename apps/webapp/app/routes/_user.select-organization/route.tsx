@@ -275,33 +275,22 @@ const SelectOrganization = ({ loaderData }: Route.ComponentProps) => {
         </p>
       </Modal>
 
-      {/* Cover the parent _user layout's UserHeader and padding so the new design owns the viewport */}
-      <div
-        style={{
-          position: 'fixed',
-          inset: 0,
-          overflow: 'auto',
-          background: 'var(--bg-0)',
-          zIndex: 20,
-        }}
-      >
-        <ClassroomsLandingScreen
-          user={
-            user
-              ? {
-                  name: user.name ?? null,
-                  login: user.login ?? null,
-                  avatar_url: user.avatar_url ?? null,
-                }
-              : null
-          }
-          classes={classes}
-          onOpenClass={onOpenClass}
-          notifications={notifications}
-          unreadCount={unreadCount}
-          membershipRoles={membershipRoles}
-        />
-      </div>
+      <ClassroomsLandingScreen
+        user={
+          user
+            ? {
+                name: user.name ?? null,
+                login: user.login ?? null,
+                avatar_url: user.avatar_url ?? null,
+              }
+            : null
+        }
+        classes={classes}
+        onOpenClass={onOpenClass}
+        notifications={notifications}
+        unreadCount={unreadCount}
+        membershipRoles={membershipRoles}
+      />
     </>
   );
 };

@@ -3,9 +3,12 @@ import { UserHeader } from '~/components';
 
 const UserLayout = () => {
   return (
-    <div className="min-h-screen bg-panel">
+    <div
+      className="min-h-screen"
+      style={{ background: '#EDEDED' }}
+    >
       <UserHeader />
-      <div className="absolute top-[50px] px-20 w-full pt-12">
+      <div className="max-w-[1200px] mx-auto px-8 pt-7 pb-20">
         <Outlet />
       </div>
     </div>

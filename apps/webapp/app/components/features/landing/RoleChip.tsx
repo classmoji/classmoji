@@ -17,20 +17,11 @@ export function RoleChip({ role }: { role: LandingRole }) {
   const m = ROLE_META[role];
   return (
     <span
+      className="inline-flex items-center gap-1 text-[10.5px] font-semibold tracking-[0.04em] px-1.5 py-px rounded-full uppercase"
       style={{
-        display: 'inline-flex',
-        alignItems: 'center',
-        gap: 4,
-        fontSize: 10.5,
-        fontWeight: 600,
-        letterSpacing: '0.04em',
-        padding: '1px 7px 1px 6px',
-        borderRadius: 99,
-        textTransform: 'uppercase',
-        border: '1px solid',
         color: m.color,
         background: m.bg,
-        borderColor: m.border,
+        border: `1px solid ${m.border}`,
       }}
     >
       {m.label}

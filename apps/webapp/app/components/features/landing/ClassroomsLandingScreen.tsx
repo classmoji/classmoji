@@ -2,7 +2,6 @@ import { useState, useMemo, useEffect, useRef } from 'react';
 import { Link } from 'react-router';
 import { motion, AnimatePresence, LayoutGroup } from 'framer-motion';
 import { Button, IconGithub, IconPlus, IconX } from '@classmoji/ui-components';
-import { AppBar } from './AppBar';
 import { ClassroomCard } from './ClassroomCard';
 import { ClassroomRow, ClassroomRowHeader } from './ClassroomRow';
 import type { LandingClass } from './types';
@@ -65,11 +64,9 @@ export function ClassroomsLandingScreen({
   const [bannerOpen, setBannerOpen] = useState(true);
   const [archivedExpanded, setArchivedExpanded] = useState(false);
 
-  // Local overrides for optimistic pin/unpin, drag-reorder, and archive. Keyed by composite landing id.
   const [pinOverrides, setPinOverrides] = useState<Record<string, number | null>>({});
   const [archiveOverrides, setArchiveOverrides] = useState<Record<string, boolean>>({});
 
-  // Reset overrides if upstream classes change (e.g. revalidation).
   const classesSigRef = useRef<string>('');
   useEffect(() => {
     const sig = classes
@@ -109,7 +106,6 @@ export function ClassroomsLandingScreen({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [classes, pinOverrides, archiveOverrides]);
 
-  // Drag state for the Pinned section.
   const dragIdRef = useRef<string | null>(null);
   const [pinnedOrder, setPinnedOrder] = useState<string[] | null>(null);
 
@@ -117,13 +113,11 @@ export function ClassroomsLandingScreen({
     if (!pinnedOrder) return pinned;
     const byId = new Map(pinned.map(c => [c.id, c]));
     const ordered = pinnedOrder.map(id => byId.get(id)).filter(Boolean) as LandingClass[];
-    // Append any pinned items not in pinnedOrder (e.g. a freshly pinned card).
     for (const c of pinned) if (!pinnedOrder.includes(c.id)) ordered.push(c);
     return ordered;
   }, [pinned, pinnedOrder]);
 
   useEffect(() => {
-    // When the upstream pinned set changes shape, drop local drag order.
     setPinnedOrder(null);
   }, [classes]);
 
@@ -131,7 +125,6 @@ export function ClassroomsLandingScreen({
     const prev = pinnedOrder;
     setPinnedOrder(ids);
     try {
-      // Translate composite UI ids → {classroom_id, role} pairs for the API.
       const byId = new Map(classes.map(c => [c.id, c]));
       const items = ids
         .map(id => byId.get(id))
@@ -145,7 +138,6 @@ export function ClassroomsLandingScreen({
       if (!res.ok) {
         setPinnedOrder(prev);
       } else {
-        // Reflect new pin_order locally so reload of state is consistent.
         setPinOverrides(prevOverrides => {
           const next = { ...prevOverrides };
           ids.forEach((id, idx) => {
@@ -205,14 +197,8 @@ export function ClassroomsLandingScreen({
     return (name: string) => (nameCounts.get(name) ?? 0) > 1;
   }, [classes]);
 
-  const renderGrid = (items: LandingClass[], withNewCard: boolean, draggable = false) => (
-    <div
-      style={{
-        display: 'grid',
-        gridTemplateColumns: 'repeat(3, minmax(0, 1fr))',
-        gap: 12,
-      }}
-    >
+  const renderGrid = (items: LandingClass[], draggable = false) => (
+    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
       <AnimatePresence initial={false}>
         {items.map(c => (
           <motion.div
@@ -238,54 +224,11 @@ export function ClassroomsLandingScreen({
           </motion.div>
         ))}
       </AnimatePresence>
-      {withNewCard && (
-        <Link
-          to="/create-classroom"
-          style={{
-            border: '1px dashed var(--line-2)',
-            background: 'transparent',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            flexDirection: 'column',
-            gap: 6,
-            color: 'var(--ink-2)',
-            cursor: 'pointer',
-            minHeight: 150,
-            borderRadius: 8,
-            transition: 'border-color 120ms, color 120ms, background 120ms',
-            textDecoration: 'none',
-          }}
-        >
-          <span
-            style={{
-              width: 28,
-              height: 28,
-              borderRadius: 6,
-              display: 'grid',
-              placeItems: 'center',
-              background: 'var(--bg-3)',
-              color: 'var(--ink-2)',
-            }}
-          >
-            <IconPlus size={14} />
-          </span>
-          <span style={{ fontSize: 13, fontWeight: 500 }}>New class</span>
-          <span style={{ fontSize: 11, color: 'var(--ink-3)' }}>or import from GitHub</span>
-        </Link>
-      )}
     </div>
   );
 
   const renderList = (items: LandingClass[]) => (
-    <div
-      style={{
-        background: 'var(--bg-1)',
-        border: '1px solid var(--line)',
-        borderRadius: 8,
-        overflow: 'hidden',
-      }}
-    >
+    <div className="bg-white dark:bg-neutral-900 ring-1 ring-stone-200 dark:ring-neutral-800 rounded-2xl overflow-hidden">
       <ClassroomRowHeader />
       {items.map(c => (
         <ClassroomRow key={c.id} c={c} onOpen={() => onOpenClass(c)} />
@@ -294,66 +237,28 @@ export function ClassroomsLandingScreen({
   );
 
   const sectionHeading = (label: string, count: number) => (
-    <div className="text-sm font-semibold text-gray-500 dark:text-gray-400" style={{ marginBottom: 10, marginTop: 4 }}>
+    <div className="text-sm font-semibold text-gray-500 dark:text-gray-400 mb-2.5 mt-1">
       {label}{' '}
-      <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--ink-3)', fontWeight: 400 }}>
+      <span className="text-xs text-gray-400 dark:text-gray-500 font-normal">
         {count}
       </span>
     </div>
   );
 
   return (
-    <div style={{ background: 'var(--bg-0)', minHeight: '100vh' }}>
-      <AppBar
-        user={user}
-        notifications={notifications}
-        unreadCount={unreadCount}
-        membershipRoles={membershipRoles}
-      />
-
-      <div
-        style={{
-          maxWidth: 1200,
-          margin: '0 auto',
-          padding: '28px 32px 80px',
-          position: 'relative',
-          zIndex: 1,
-        }}
-      >
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'flex-end',
-            gap: 16,
-            paddingBottom: 18,
-            marginBottom: 22,
-            borderBottom: '1px solid var(--line)',
-          }}
-        >
-          <div style={{ flex: 1 }}>
-            <h1
-              style={{
-                fontSize: 28,
-                fontWeight: 600,
-                letterSpacing: '-0.02em',
-                margin: 0,
-              }}
-            >
+    <div>
+        <div className="flex flex-col sm:flex-row sm:items-end gap-4 pb-5 mb-6">
+          <div className="flex-1">
+            <h1 className="text-base font-semibold text-gray-600 dark:text-gray-400 m-0">
               Your classes
+              <span className="ml-2 text-sm font-normal text-gray-400 dark:text-gray-500">
+                {counts.all} active
+                <span className="text-gray-300 dark:text-gray-600 mx-1">·</span>
+                {counts.archived} archived
+              </span>
             </h1>
-            <div style={{ fontSize: 14, color: 'var(--ink-2)', marginTop: 4 }}>
-              <span className="num" style={{ color: 'var(--ink-1)' }}>
-                {counts.all}
-              </span>{' '}
-              active
-              <span style={{ color: 'var(--ink-4)', margin: '0 6px' }}>·</span>
-              <span className="num" style={{ color: 'var(--ink-1)' }}>
-                {counts.archived}
-              </span>{' '}
-              archived
-            </div>
           </div>
-          <div style={{ display: 'flex', gap: 8 }}>
+          <div className="flex gap-2">
             <Button>
               <IconGithub size={14} /> Import from GitHub Classroom
             </Button>
@@ -366,37 +271,17 @@ export function ClassroomsLandingScreen({
         </div>
 
         {bannerOpen && (
-          <div
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: 10,
-              padding: '10px 14px',
-              marginBottom: 16,
-              border: '1px solid oklch(90% 0.04 230)',
-              background: 'oklch(98% 0.02 230)',
-              borderRadius: 8,
-              fontSize: 12.5,
-              color: '#1d4f8f',
-            }}
-          >
-            <span style={{ fontSize: 14 }}>🪙</span>
+          <div className="flex items-center gap-2.5 px-3.5 py-2.5 mb-4 rounded-xl bg-[#fdf8e8] dark:bg-amber-950/20 ring-1 ring-[#f0e6b8] dark:ring-amber-800/40 text-[#6b5a1e] dark:text-amber-200 text-[12.5px]">
+            <span className="text-sm">🪙</span>
             <span>
-              <b style={{ fontWeight: 600 }}>Token economy is live.</b> Students earn tokens for
+              <b className="font-semibold">Token economy is live.</b> Students earn tokens for
               early submissions and spend them on deadline extensions — configure the rate in class
               settings.
             </span>
             <button
               type="button"
               onClick={() => setBannerOpen(false)}
-              style={{
-                marginLeft: 'auto',
-                color: '#1d4f8f',
-                background: 'transparent',
-                border: 'none',
-                cursor: 'pointer',
-                display: 'inline-flex',
-              }}
+              className="ml-auto text-[#8a7530] dark:text-amber-400 bg-transparent border-none cursor-pointer inline-flex hover:text-[#5a4c1a] dark:hover:text-amber-200 transition-colors"
               aria-label="Dismiss"
             >
               <IconX size={12} />
@@ -404,39 +289,19 @@ export function ClassroomsLandingScreen({
           </div>
         )}
 
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 8,
-            marginBottom: 18,
-          }}
-        >
-          <div style={{ flex: 1 }} />
+        <div className="flex items-center gap-2 mb-4">
+          <div className="flex-1" />
 
-          <div
-            style={{
-              display: 'flex',
-              border: '1px solid var(--line-2)',
-              borderRadius: 6,
-              overflow: 'hidden',
-            }}
-          >
+          <div className="flex rounded-lg ring-1 ring-stone-200 dark:ring-neutral-700 overflow-hidden">
             <button
               type="button"
               onClick={() => setView('grid')}
               title="Grid"
-              style={{
-                padding: '5px 10px',
-                fontSize: 12,
-                color: view === 'grid' ? 'var(--ink-0)' : 'var(--ink-2)',
-                background: view === 'grid' ? 'var(--bg-3)' : 'var(--bg-1)',
-                borderRight: '1px solid var(--line)',
-                border: 'none',
-                cursor: 'pointer',
-                display: 'inline-flex',
-                alignItems: 'center',
-              }}
+              className={`px-2.5 py-1.5 text-xs border-none cursor-pointer inline-flex items-center transition-colors ${
+                view === 'grid'
+                  ? 'bg-stone-100 dark:bg-neutral-800 text-gray-900 dark:text-gray-100'
+                  : 'bg-white dark:bg-neutral-900 text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300'
+              }`}
             >
               <ViewGridIcon />
             </button>
@@ -444,16 +309,11 @@ export function ClassroomsLandingScreen({
               type="button"
               onClick={() => setView('list')}
               title="List"
-              style={{
-                padding: '5px 10px',
-                fontSize: 12,
-                color: view === 'list' ? 'var(--ink-0)' : 'var(--ink-2)',
-                background: view === 'list' ? 'var(--bg-3)' : 'var(--bg-1)',
-                border: 'none',
-                cursor: 'pointer',
-                display: 'inline-flex',
-                alignItems: 'center',
-              }}
+              className={`px-2.5 py-1.5 text-xs border-none cursor-pointer inline-flex items-center transition-colors ${
+                view === 'list'
+                  ? 'bg-stone-100 dark:bg-neutral-800 text-gray-900 dark:text-gray-100'
+                  : 'bg-white dark:bg-neutral-900 text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300'
+              }`}
             >
               <ViewListIcon />
             </button>
@@ -461,70 +321,44 @@ export function ClassroomsLandingScreen({
         </div>
 
         {pinned.length === 0 && active.length === 0 && archived.length === 0 ? (
-          <div
-            style={{
-              border: '1px dashed var(--line-2)',
-              borderRadius: 8,
-              padding: 40,
-              textAlign: 'center',
-              color: 'var(--ink-3)',
-            }}
-          >
+          <div className="rounded-2xl border-2 border-dashed border-stone-200 dark:border-neutral-700 p-10 text-center text-gray-400 dark:text-gray-500">
             No classrooms yet.
           </div>
         ) : (
           <LayoutGroup>
             {pinnedDisplay.length > 0 && (
-              <section style={{ marginBottom: 24 }}>
+              <section className="mb-6">
                 {sectionHeading('Pinned', pinnedDisplay.length)}
                 {view === 'grid'
-                  ? renderGrid(pinnedDisplay, false, true)
+                  ? renderGrid(pinnedDisplay, true)
                   : renderList(pinnedDisplay)}
               </section>
             )}
 
             {active.length > 0 && (
-              <section style={{ marginBottom: 24 }}>
+              <section className="mb-6">
                 {sectionHeading('Active', active.length)}
-                {view === 'grid' ? renderGrid(active, true) : renderList(active)}
+                {view === 'grid' ? renderGrid(active) : renderList(active)}
               </section>
             )}
 
             {archived.length > 0 && (
-              <section style={{ marginBottom: 24 }}>
+              <section className="mb-6">
                 <button
                   type="button"
                   onClick={() => setArchivedExpanded(v => !v)}
                   aria-expanded={archivedExpanded}
-                  className="text-sm font-semibold text-gray-500 dark:text-gray-400"
-                  style={{
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    gap: 6,
-                    cursor: 'pointer',
-                    marginBottom: 10,
-                    marginTop: 4,
-                    background: 'transparent',
-                    border: 'none',
-                    padding: 0,
-                  }}
+                  className="inline-flex items-center gap-1.5 cursor-pointer mb-2.5 mt-1 bg-transparent border-none p-0 text-sm font-semibold text-gray-500 dark:text-gray-400"
                 >
                   <span aria-hidden>{archivedExpanded ? '▾' : '▸'}</span>
                   <span>Archived</span>
-                  <span
-                    style={{
-                      fontFamily: 'var(--font-mono)',
-                      fontSize: 12,
-                      color: 'var(--ink-3)',
-                      fontWeight: 400,
-                    }}
-                  >
+                  <span className="text-xs text-gray-400 dark:text-gray-500 font-normal">
                     {archived.length}
                   </span>
                 </button>
                 {archivedExpanded && (
-                  <div style={{ marginTop: 10 }}>
-                    {view === 'grid' ? renderGrid(archived, false) : renderList(archived)}
+                  <div className="mt-2.5">
+                    {view === 'grid' ? renderGrid(archived) : renderList(archived)}
                   </div>
                 )}
               </section>
@@ -532,23 +366,6 @@ export function ClassroomsLandingScreen({
           </LayoutGroup>
         )}
 
-        <footer
-          style={{
-            marginTop: 40,
-            paddingTop: 18,
-            borderTop: '1px solid var(--line)',
-            display: 'flex',
-            alignItems: 'center',
-            gap: 16,
-            fontSize: 11.5,
-            color: 'var(--ink-3)',
-            fontFamily: 'var(--font-mono)',
-          }}
-        >
-          <span>classmoji</span>
-          <span style={{ marginLeft: 'auto' }}>synced with GitHub</span>
-        </footer>
-      </div>
     </div>
   );
 }

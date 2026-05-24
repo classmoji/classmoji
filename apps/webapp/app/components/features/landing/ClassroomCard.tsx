@@ -11,9 +11,7 @@ interface ClassroomCardProps {
   c: LandingClass;
   onOpen: () => void;
   showSlug?: boolean;
-  /** Called after the pin endpoint responds with the new pin_order. */
   onPinChanged?: (id: string, pin_order: number | null) => void;
-  /** Drag handlers — supplied only inside the Pinned section. */
   draggable?: boolean;
   onDragStart?: (e: React.DragEvent<HTMLDivElement>) => void;
   onDragOver?: (e: React.DragEvent<HTMLDivElement>) => void;
@@ -22,7 +20,6 @@ interface ClassroomCardProps {
 }
 
 function PinIcon({ filled, size = 14 }: { filled: boolean; size?: number }) {
-  // Simple inline pin icon; switches between filled (pinned) and outline.
   return (
     <svg
       width={size}
@@ -63,8 +60,6 @@ export function ClassroomCard({
   const lastPinStateRef = useRef<typeof pinFetcher.state>('idle');
 
   const isPinned = c.pin_order != null;
-  // Pinning is a personal organization feature — available to all roles
-  // except pending invites.
   const canPin = c.role !== 'PENDING INVITE';
 
   useEffect(() => {
@@ -88,11 +83,9 @@ export function ClassroomCard({
     });
   };
 
-  const fetcher = pinFetcher; // alias used downstream for opacity styling
+  const fetcher = pinFetcher;
   const { showUnpublished } = useClassroomStatusModals();
 
-  // Use raw DB role: derived `c.role` collapses TEACHER into 'OWNER' for display,
-  // but the unpublished gate must match the server (OWNER only).
   const blockedUnpublished = c.status === 'UNPUBLISHED' && c.membershipRole !== 'OWNER';
   const handleOpenGuarded = () => {
     if (blockedUnpublished) {
@@ -118,72 +111,28 @@ export function ClassroomCard({
           handleOpenGuarded();
         }
       }}
-      style={{
-        position: 'relative',
-        background: 'var(--bg-1)',
-        border: '1px solid var(--line)',
-        borderRadius: 8,
-        padding: '14px 14px 12px',
-        cursor: draggable ? 'grab' : 'pointer',
-        transition: 'border-color 120ms, background 120ms, opacity 120ms',
-        display: 'flex',
-        flexDirection: 'column',
-        gap: 10,
-        minHeight: 150,
-        opacity: fetcher.state !== 'idle' ? 0.7 : 1,
-      }}
-      onMouseEnter={e => {
-        setHover(true);
-        e.currentTarget.style.borderColor = 'var(--line-strong)';
-        e.currentTarget.style.background = 'var(--panel-hover)';
-      }}
-      onMouseLeave={e => {
-        setHover(false);
-        e.currentTarget.style.borderColor = 'var(--line)';
-        e.currentTarget.style.background = 'var(--bg-1)';
-      }}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      className={`relative rounded-2xl p-4 flex flex-col gap-2.5 min-h-[150px] bg-white dark:bg-neutral-900 ring-1 ring-stone-200 dark:ring-neutral-800 hover:ring-stone-300 dark:hover:ring-neutral-700 hover:shadow-sm transition-all duration-150 ${draggable ? 'cursor-grab' : 'cursor-pointer'} ${fetcher.state !== 'idle' ? 'opacity-70' : ''}`}
+      style={{ borderLeft: '3px solid var(--accent)' }}
     >
-      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10 }}>
+      <div className="flex items-start gap-2.5">
         <ClassMark hue={c.hue} name={c.name} />
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div
-            style={{
-              fontSize: 14,
-              fontWeight: 600,
-              color: 'var(--ink-0)',
-              letterSpacing: '-0.01em',
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-              whiteSpace: 'nowrap',
-            }}
-          >
+        <div className="flex-1 min-w-0">
+          <div className="text-sm font-semibold text-gray-900 dark:text-gray-100 tracking-tight truncate">
             {c.name}
           </div>
           {showSlug && (
             <div
-              style={{
-                fontFamily: 'var(--font-mono)',
-                fontSize: 11.5,
-                color: 'var(--ink-3)',
-                marginTop: 1,
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-                whiteSpace: 'nowrap',
-              }}
+              className="text-[11.5px] text-gray-400 dark:text-gray-500 mt-px truncate"
+              style={{ fontFamily: 'var(--font-mono)' }}
               title={c.slug}
             >
               {c.slug}
             </div>
           )}
         </div>
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 6,
-            flexShrink: 0,
-          }}
-        >
+        <div className="flex items-center gap-1.5 flex-shrink-0">
           <AnimatePresence initial={false}>
             {canPin && (hover || isPinned) && (
               <motion.button
@@ -203,30 +152,19 @@ export function ClassroomCard({
                 whileHover={{ scale: 1.15 }}
                 whileTap={{ scale: 0.85, rotate: isPinned ? 0 : -18 }}
                 transition={{ type: 'spring', stiffness: 600, damping: 22 }}
-                style={{
-                  border: 'none',
-                  background: 'transparent',
-                  color: isPinned ? 'var(--accent)' : 'var(--ink-3)',
-                  cursor: 'pointer',
-                  padding: 2,
-                  borderRadius: 4,
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  overflow: 'hidden',
-                }}
+                className={`border-none bg-transparent cursor-pointer p-0.5 rounded inline-flex items-center justify-center overflow-hidden ${isPinned ? 'text-[var(--accent)]' : 'text-gray-400 dark:text-gray-500'}`}
               >
                 <PinIcon filled={isPinned} />
               </motion.button>
             )}
           </AnimatePresence>
           {c.status === 'LOCKED' && (
-            <span className="inline-flex items-center rounded-full bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-200 px-2 py-0.5 text-xs">
+            <span className="inline-flex items-center rounded-md bg-amber-50 text-amber-700 dark:bg-amber-900/40 dark:text-amber-200 ring-1 ring-amber-200 dark:ring-amber-800/50 px-2 py-0.5 text-[10.5px] font-medium">
               Read-only
             </span>
           )}
           {c.status === 'UNPUBLISHED' && (
-            <span className="inline-flex items-center rounded-full bg-gray-200 text-gray-700 dark:bg-gray-800 dark:text-gray-300 px-2 py-0.5 text-xs">
+            <span className="inline-flex items-center rounded-md bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-300 ring-1 ring-gray-200 dark:ring-gray-700 px-2 py-0.5 text-[10.5px] font-medium">
               Unpublished
             </span>
           )}
@@ -235,40 +173,23 @@ export function ClassroomCard({
       </div>
 
       {c.subtitle && (
-        <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.4, marginTop: -2 }}>
+        <div className="text-xs text-gray-500 dark:text-gray-400 leading-relaxed -mt-0.5">
           {c.subtitle}
         </div>
       )}
 
-      <div
-        style={{
-          display: 'flex',
-          gap: 14,
-          paddingTop: 10,
-          borderTop: '1px solid var(--line)',
-          marginTop: 'auto',
-        }}
-      >
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 1, fontSize: 11 }}>
-          <span style={{ color: 'var(--ink-3)', whiteSpace: 'nowrap' }}>Roster</span>
-          <span
-            style={{
-              fontFamily: 'var(--font-mono)',
-              fontSize: 12.5,
-              color: 'var(--ink-0)',
-              fontWeight: 500,
-            }}
-          >
+      <div className="flex gap-3.5 pt-2.5 mt-auto">
+        <div className="flex flex-col gap-px text-[11px]">
+          <span className="text-gray-400 dark:text-gray-500 whitespace-nowrap">Roster</span>
+          <span className="text-xs font-medium text-gray-900 dark:text-gray-100">
             {c.students}
           </span>
         </div>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 1, fontSize: 11 }}>
-          <span style={{ color: 'var(--ink-3)', whiteSpace: 'nowrap' }}>{roleVerb}</span>
+        <div className="flex flex-col gap-px text-[11px]">
+          <span className="text-gray-400 dark:text-gray-500 whitespace-nowrap">{roleVerb}</span>
           <span
+            className="text-xs font-medium"
             style={{
-              fontFamily: 'var(--font-mono)',
-              fontSize: 12.5,
-              fontWeight: 500,
               color:
                 c.pending === 0 ? 'var(--ink-3)' : c.role === 'STUDENT' ? '#8a2a16' : '#1a6b3e',
             }}
@@ -278,26 +199,10 @@ export function ClassroomCard({
         </div>
       </div>
 
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: 8,
-          fontSize: 11,
-          color: 'var(--ink-3)',
-        }}
-      >
+      <div className="flex items-center gap-2 text-[11px] text-gray-400 dark:text-gray-500">
         <IconGithub size={12} />
         <span style={{ fontFamily: 'var(--font-mono)' }}>main</span>
-        <span
-          style={{
-            width: 4,
-            height: 4,
-            borderRadius: '50%',
-            background: 'var(--ink-4)',
-            display: 'inline-block',
-          }}
-        />
+        <span className="w-1 h-1 rounded-full bg-gray-300 dark:bg-gray-600 inline-block" />
         <span>updated {c.updated}</span>
       </div>
     </div>

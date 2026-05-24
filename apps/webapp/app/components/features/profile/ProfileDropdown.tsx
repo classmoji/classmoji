@@ -1,5 +1,7 @@
 import { Popover, Avatar } from 'antd';
 import { Link, useNavigate } from 'react-router';
+import { IconLogout } from '@tabler/icons-react';
+import { signOut } from '@classmoji/auth/client';
 
 import { useUser } from '~/hooks';
 
@@ -42,6 +44,20 @@ const ProfileDropdown = ({ children, placement = 'bottomRight' }: ProfileDropdow
       <div className="flex flex-col gap-0.5 p-1.5">
         <MenuItem label="Account Settings" path="/settings/general" />
         <MenuItem label="Usage & Billing" path="/settings/billing" />
+      </div>
+
+      <div className="border-t border-gray-200 dark:border-neutral-700 p-1.5">
+        <button
+          type="button"
+          onClick={async () => {
+            await signOut();
+            window.location.href = window.location.origin;
+          }}
+          className="flex items-center gap-2 w-full text-sm text-gray-700 dark:text-gray-300 hover:text-red-600 dark:hover:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-md py-1.5 px-2.5 transition-colors cursor-pointer border-none bg-transparent"
+        >
+          <IconLogout size={15} strokeWidth={1.75} />
+          Log out
+        </button>
       </div>
     </div>
   );

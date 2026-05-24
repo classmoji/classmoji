@@ -1,8 +1,7 @@
 import { Avatar, Tooltip } from 'antd';
 import { Link, useParams, useLocation, useRouteLoaderData } from 'react-router';
 import { useEffect, useState } from 'react';
-import { IconFileText, IconMenu2, IconLogout, IconApple } from '@tabler/icons-react';
-import { signOut } from '@classmoji/auth/client';
+import { IconFileText, IconMenu2, IconApple } from '@tabler/icons-react';
 import useLocalStorageState from 'use-local-storage-state';
 import { Logo, CalloutSlot } from '@classmoji/ui-components';
 import { ProTierFeature, RequireRole, RecentViewers } from '~/components';
@@ -440,19 +439,6 @@ const CommonLayout = ({
               </button>
             </Tooltip>
           )}
-          <Tooltip title="Log out">
-            <button
-              type="button"
-              aria-label="Log out"
-              className="p-1.5 rounded-lg text-gray-500 dark:text-gray-400 hover:text-red-600 dark:hover:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors shrink-0"
-              onClick={async () => {
-                await signOut();
-                window.location.href = window.location.origin;
-              }}
-            >
-              <IconLogout size={18} strokeWidth={1.75} />
-            </button>
-          </Tooltip>
         </div>
       </div>
 

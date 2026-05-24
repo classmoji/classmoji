@@ -19,7 +19,7 @@ export function ClassMark({ hue, name, size = 28 }: ClassMarkProps) {
         fontFamily: 'var(--font-mono)',
         fontSize: 11,
         fontWeight: 700,
-        background: `linear-gradient(135deg, oklch(72% 0.14 ${hue}), oklch(55% 0.19 ${hue}))`,
+        background: 'linear-gradient(135deg, var(--accent), var(--accent-hover))',
       }}
     >
       {initials}
