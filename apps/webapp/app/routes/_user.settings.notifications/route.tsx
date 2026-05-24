@@ -72,7 +72,7 @@ const Toggle = ({
           type="submit"
           aria-pressed={optimistic}
           className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${
-            optimistic ? 'bg-violet-500' : 'bg-stone-300 dark:bg-neutral-700'
+            optimistic ? 'bg-[var(--accent)]' : 'bg-stone-300 dark:bg-neutral-700'
           }`}
         >
           <span

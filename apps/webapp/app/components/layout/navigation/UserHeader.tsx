@@ -10,7 +10,8 @@ const UserHeader = () => {
   const initials = getInitials(user?.name, user?.login);
 
   return (
-    <div className="sticky top-0 z-10 pt-7 max-w-[1280px] mx-auto px-8">
+    <div className="sticky top-0 z-50 pt-7 pb-4" style={{ background: 'linear-gradient(to bottom, #EDEDED 70%, transparent)' }}>
+      <div className="max-w-[1280px] mx-auto px-8">
       <div className="flex items-center justify-between h-[52px] px-6 rounded-2xl bg-white/80 dark:bg-neutral-900/80 backdrop-blur-xl ring-1 ring-stone-200 dark:ring-neutral-800 shadow-sm">
         <Link to="/select-organization" className="flex items-center gap-2 no-underline" style={{ color: 'inherit' }}>
           <Logo variant="full" size={24} theme="light" />
@@ -56,6 +57,7 @@ const UserHeader = () => {
             </button>
           </ProfileDropdown>
         </div>
+      </div>
       </div>
     </div>
   );
