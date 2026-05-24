@@ -191,7 +191,7 @@ export function ClassroomCard({
             className="text-xs font-medium"
             style={{
               color:
-                c.pending === 0 ? 'var(--ink-3)' : c.role === 'STUDENT' ? '#8a2a16' : '#1a6b3e',
+                c.pending === 0 ? 'var(--ink-3)' : c.role === 'STUDENT' ? 'var(--ink-0)' : 'var(--ink-0)',
             }}
           >
             {c.pending}
