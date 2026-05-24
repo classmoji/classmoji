@@ -247,7 +247,7 @@ const createMarkdownComponents = (
           color: codeTextColor,
           padding: '2px 6px',
           borderRadius: '4px',
-          fontFamily: '"JetBrains Mono", monospace',
+          fontFamily: '"DM Mono", monospace',
           fontSize: '0.9em',
         }}
         {...rest}

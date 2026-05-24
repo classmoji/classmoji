@@ -1,4 +1,4 @@
-import { Logo, IconSupport, IconChevron } from '@classmoji/ui-components';
+import { Logo, IconDocs, IconChevron } from '@classmoji/ui-components';
 import ProfileDropdown from '~/components/features/profile/ProfileDropdown';
 import { getInitials } from '~/utils/hue';
 import {
@@ -52,8 +52,15 @@ export function AppBar({ user, notifications, unreadCount, membershipRoles }: Ap
 
       {/* Right group: help / bell / user */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-        <button type="button" title="What's new" style={iconBtn}>
-          <IconSupport size={16} />
+        <button
+          type="button"
+          title="Help & docs"
+          style={iconBtn}
+          onClick={() =>
+            window.open('https://classmoji.io/docs', '_blank', 'noopener,noreferrer')
+          }
+        >
+          <IconDocs size={16} />
         </button>
         <NotificationBell
           initialItems={notifications ?? []}
