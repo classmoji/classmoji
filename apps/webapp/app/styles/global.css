@@ -183,6 +183,7 @@ html[data-theme='dark'] {
    Runtime override: useDarkMode applies the user's chosen size as inline style. */
 html {
   font-size: 17px;
+  overflow-x: hidden;
   /* Default contrast; overridden inline by useDarkMode on hydration. */
   --ui-contrast: 50;
 }

@@ -228,11 +228,13 @@ export function ClassroomsLandingScreen({
   );
 
   const renderList = (items: LandingClass[]) => (
-    <div className="bg-white dark:bg-neutral-900 ring-1 ring-stone-200 dark:ring-neutral-800 rounded-2xl overflow-hidden">
-      <ClassroomRowHeader />
-      {items.map(c => (
-        <ClassroomRow key={c.id} c={c} onOpen={() => onOpenClass(c)} />
-      ))}
+    <div className="overflow-x-auto -mx-4 px-4 sm:mx-0 sm:px-0">
+      <div className="bg-white dark:bg-neutral-900 ring-1 ring-stone-200 dark:ring-neutral-800 rounded-2xl overflow-hidden min-w-[700px]">
+        <ClassroomRowHeader />
+        {items.map(c => (
+          <ClassroomRow key={c.id} c={c} onOpen={() => onOpenClass(c)} />
+        ))}
+      </div>
     </div>
   );
 
@@ -258,7 +260,7 @@ export function ClassroomsLandingScreen({
               </span>
             </h1>
           </div>
-          <div className="flex gap-2">
+          <div className="flex flex-wrap gap-2">
             <Button>
               <IconGithub size={14} /> Import from GitHub Classroom
             </Button>

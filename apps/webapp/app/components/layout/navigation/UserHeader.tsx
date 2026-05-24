@@ -10,9 +10,9 @@ const UserHeader = () => {
   const initials = getInitials(user?.name, user?.login);
 
   return (
-    <div className="sticky top-0 z-50 pt-7 pb-4 bg-gradient-to-b from-[#EDEDED] from-70% to-transparent dark:from-[#1d1d1d]">
-      <div className="max-w-[1280px] mx-auto px-8">
-      <div className="flex items-center justify-between h-[52px] px-6 rounded-2xl bg-white/80 dark:bg-neutral-900/80 backdrop-blur-xl ring-1 ring-stone-200 dark:ring-neutral-800 shadow-sm">
+    <div className="sticky top-0 z-50 pt-3 sm:pt-7 pb-4 bg-gradient-to-b from-[#EDEDED] from-70% to-transparent dark:from-[#1d1d1d]">
+      <div className="max-w-[1280px] mx-auto px-4 sm:px-8">
+      <div className="flex items-center justify-between h-[52px] px-3 sm:px-6 rounded-2xl bg-white/80 dark:bg-neutral-900/80 backdrop-blur-xl ring-1 ring-stone-200 dark:ring-neutral-800 shadow-sm">
         <Link to="/select-organization" className="flex items-center gap-2 no-underline !text-[#0d0d10] dark:!text-white">
           <Logo variant="full" size={24} theme="current" />
         </Link>
