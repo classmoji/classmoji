@@ -834,7 +834,7 @@ const QuizView = ({ loaderData }: Route.ComponentProps) => {
             onClick={() => navigate(`/admin/${classSlug}/quizzes`)}
             aria-label="Back to quizzes"
           />
-          <h1 className="text-base font-semibold text-gray-600 dark:text-gray-400 truncate">
+          <h1 className="text-base font-semibold text-ink-2 truncate">
             Quiz: {quiz.name}
           </h1>
         </div>
@@ -862,7 +862,7 @@ const QuizView = ({ loaderData }: Route.ComponentProps) => {
       </div>
 
       <div className="space-y-6">
-        <div className="rounded-2xl bg-panel ring-1 ring-stone-200 dark:ring-neutral-800 p-5 sm:p-6">
+        <div className="rounded-2xl bg-panel ring-1 ring-line p-5 sm:p-6">
           <SectionHeader
             title="Quiz Statistics"
             subtitle="Performance overview across all attempts"
@@ -895,7 +895,7 @@ const QuizView = ({ loaderData }: Route.ComponentProps) => {
           </div>
         </div>
 
-        <div className="rounded-2xl bg-panel ring-1 ring-stone-200 dark:ring-neutral-800 p-5 sm:p-6">
+        <div className="rounded-2xl bg-panel ring-1 ring-line p-5 sm:p-6">
           <SectionHeader
             title="Student Attempts"
             subtitle={`${students.length} students, ${allAttempts.length} total attempts`}

@@ -79,7 +79,7 @@ function LanguageBar({ languages }: { languages: Record<string, number> }) {
 
   return (
     <div className="space-y-2" data-testid="language-breakdown">
-      <div className="text-xs uppercase tracking-wide text-gray-500 dark:text-gray-400 font-semibold">
+      <div className="text-xs uppercase tracking-wide text-ink-3 font-semibold">
         Languages
       </div>
       <div className="flex h-2 w-full overflow-hidden rounded-full bg-gray-100 dark:bg-gray-800">
@@ -99,7 +99,7 @@ function LanguageBar({ languages }: { languages: Record<string, number> }) {
               style={{ backgroundColor: l.color }}
             />
             <span className="font-medium">{l.name}</span>
-            <span className="text-gray-400 dark:text-gray-500">{l.pct.toFixed(1)}%</span>
+            <span className="text-ink-4">{l.pct.toFixed(1)}%</span>
           </span>
         ))}
       </div>
@@ -124,10 +124,10 @@ const GitHubStatsPanel = ({
       >
         <div className="flex items-center justify-between gap-4">
           <div>
-            <div className="text-lg font-semibold text-gray-900 dark:text-gray-100">
+            <div className="text-lg font-semibold text-ink-0">
               GitHub Activity
             </div>
-            <div className="text-sm text-gray-500 dark:text-gray-400">
+            <div className="text-sm text-ink-3">
               No snapshot yet for this submission.
             </div>
           </div>
@@ -163,10 +163,10 @@ const GitHubStatsPanel = ({
       {/* Header */}
       <div className="flex items-center justify-between gap-4 mb-4">
         <div>
-          <div className="text-lg font-semibold text-gray-900 dark:text-gray-100">
+          <div className="text-lg font-semibold text-ink-0">
             GitHub Activity
           </div>
-          <div className="mt-1 flex items-center gap-2 text-xs text-gray-500 dark:text-gray-400">
+          <div className="mt-1 flex items-center gap-2 text-xs text-ink-3">
             <span data-testid="fetched-at">Updated {dayjs(fetched_at).fromNow()}</span>
             {stale && (
               <Tag color="warning" data-testid="stale-badge">
@@ -218,7 +218,7 @@ const GitHubStatsPanel = ({
 
       {/* Commit timeline */}
       <div className="mb-6">
-        <div className="text-xs uppercase tracking-wide text-gray-500 dark:text-gray-400 font-semibold mb-2">
+        <div className="text-xs uppercase tracking-wide text-ink-3 font-semibold mb-2">
           Commit Timeline
         </div>
         <CommitTimeline commits={commits} deadline={deadline} />

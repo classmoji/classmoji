@@ -140,7 +140,7 @@ const InlineRow = ({
     <Icon
       size={18}
       strokeWidth={1.75}
-      className="shrink-0 mt-2.5 text-gray-400 dark:text-gray-500"
+      className="shrink-0 mt-2.5 text-ink-4"
     />
     <div className="flex-1 min-w-0">{children}</div>
   </div>
@@ -359,13 +359,13 @@ const EditEventModal = ({
     >
       <Form form={form} layout="vertical" requiredMark={false}>
         {/* Gmail-style header */}
-        <div className="flex items-center justify-between gap-3 px-5 py-3 bg-stone-50 dark:bg-neutral-800/60 border-b border-stone-200 dark:border-neutral-800">
-          <span className="text-sm font-semibold text-gray-900 dark:text-gray-100">Edit event</span>
+        <div className="flex items-center justify-between gap-3 px-5 py-3 bg-stone-50 dark:bg-neutral-800/60 border-b border-line">
+          <span className="text-sm font-semibold text-ink-0">Edit event</span>
           <button
             type="button"
             onClick={handleCancel}
             aria-label="Close"
-            className="p-1 rounded hover:bg-stone-200 dark:hover:bg-neutral-700 text-gray-500 dark:text-gray-400 transition-colors"
+            className="p-1 rounded hover:bg-line text-ink-3 transition-colors"
           >
             <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
               <path
@@ -405,7 +405,7 @@ const EditEventModal = ({
             />
           </Form.Item>
 
-          <div className="h-px bg-stone-200 dark:bg-neutral-800" />
+          <div className="h-px bg-line" />
 
           <InlineRow icon={IconCalendarEvent}>
             <Form.Item
@@ -464,7 +464,7 @@ const EditEventModal = ({
               <span className="text-sm">Repeat</span>
             </Checkbox>
             {isRecurring && (
-              <div className="mt-2 rounded-lg bg-stone-50 dark:bg-neutral-800/40 border border-stone-200 dark:border-neutral-800 px-3 py-3 space-y-3">
+              <div className="mt-2 rounded-lg bg-stone-50 dark:bg-neutral-800/40 border border-line px-3 py-3 space-y-3">
                 <Form.Item
                   name="recurrence_days"
                   label="Repeat on"
@@ -474,7 +474,7 @@ const EditEventModal = ({
                   <Checkbox.Group options={DAYS_OF_WEEK} />
                 </Form.Item>
                 <div>
-                  <div className="text-[14px] mb-2 text-gray-700 dark:text-gray-300">Ends</div>
+                  <div className="text-sm mb-2 text-ink-1">Ends</div>
                   <Radio.Group
                     value={hasEndDate ? 'on' : 'never'}
                     onChange={e => setHasEndDate(e.target.value === 'on')}
@@ -522,7 +522,7 @@ const EditEventModal = ({
 
           {hasLinks && (
             <>
-              <div className="h-px bg-stone-200 dark:bg-neutral-800 my-2" />
+              <div className="h-px bg-line my-2" />
 
               <InlineRow icon={IconLink}>
                 {isRecurringOccurrence && (
@@ -581,7 +581,7 @@ const EditEventModal = ({
         </div>
 
         {/* Footer */}
-        <div className="flex items-center justify-between gap-2 px-5 py-3 border-t border-stone-200 dark:border-neutral-800 bg-stone-50/60 dark:bg-neutral-800/40">
+        <div className="flex items-center justify-between gap-2 px-5 py-3 border-t border-line bg-stone-50/60 dark:bg-neutral-800/40">
           <Button
             type="text"
             danger

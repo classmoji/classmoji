@@ -53,12 +53,12 @@ const OwnVsClassHistogram = ({ yours, classroom }: OwnVsClassHistogramProps) => 
   const isEmpty = totalYours === 0 && totalClass === 0;
 
   return (
-    <Card className="h-full !rounded-[15px]" data-testid="own-vs-class-histogram">
+    <Card className="h-full !rounded-2xl" data-testid="own-vs-class-histogram">
       <CardHeader>My Grades vs. Class</CardHeader>
       {isEmpty ? (
         <Empty
           image={Empty.PRESENTED_IMAGE_SIMPLE}
-          description={<span className="text-gray-500 dark:text-gray-400">No grades yet.</span>}
+          description={<span className="text-ink-3">No grades yet.</span>}
         />
       ) : (
         <div style={{ height: 260 }}>

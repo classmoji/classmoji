@@ -436,7 +436,7 @@ export default function StudentQuizzes({ loaderData }: Route.ComponentProps) {
       key: 'name',
       render: (name: string, record: StudentQuiz) => (
         <Space>
-          <span className="font-medium text-gray-800 dark:text-gray-200">{name}</span>
+          <span className="font-medium text-ink-1">{name}</span>
           {record.weight === 0 && (
             <Tooltip title="This quiz won't affect your grade">
               <Tag color="gold" style={{ fontSize: '11px', margin: 0 }}>
@@ -564,7 +564,7 @@ export default function StudentQuizzes({ loaderData }: Route.ComponentProps) {
       <Outlet />
 
       <div className="flex items-center justify-between gap-3 mt-2 mb-4">
-        <h1 className="text-base font-semibold text-gray-600 dark:text-gray-400">Quizzes</h1>
+        <h1 className="text-base font-semibold text-ink-2">Quizzes</h1>
       </div>
 
       <div className="flex -mb-px relative">
@@ -586,14 +586,14 @@ export default function StudentQuizzes({ loaderData }: Route.ComponentProps) {
                 idx > 0 ? '-ml-2' : ''
               } ${
                 isActive
-                  ? 'bg-panel border-stone-200 dark:border-neutral-800 border-b-transparent'
-                  : 'bg-stone-100 dark:bg-neutral-800 text-gray-500 dark:text-gray-400 border-stone-200 dark:border-neutral-700 hover:text-gray-800 dark:hover:text-gray-200'
+                  ? 'bg-panel border-line border-b-transparent'
+                  : 'bg-nav-hover text-ink-3 border-line hover:text-gray-800 dark:hover:text-gray-200'
               }`}
             >
               {tab.label}
               <span
-                className={`ml-2 text-[11px] tabular-nums ${
-                  isActive ? 'text-gray-500 dark:text-gray-400' : 'text-gray-400 dark:text-gray-500'
+                className={`ml-2 text-xs tabular-nums ${
+                  isActive ? 'text-ink-3' : 'text-ink-4'
                 }`}
               >
                 {tab.count}
@@ -603,7 +603,7 @@ export default function StudentQuizzes({ loaderData }: Route.ComponentProps) {
         })}
       </div>
 
-      <section className="rounded-2xl rounded-tl-none bg-panel ring-1 ring-stone-200 dark:ring-neutral-800 min-h-[calc(100vh-14rem)] p-5 sm:p-6">
+      <section className="rounded-2xl rounded-tl-none bg-panel ring-1 ring-line min-h-[calc(100vh-14rem)] p-5 sm:p-6">
         <Table
           columns={columns}
           dataSource={dataSource}

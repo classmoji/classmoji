@@ -282,7 +282,7 @@ const RepositoriesTable = ({
       key: 'name',
       width: '70%',
       render: (name: string) => (
-        <span className="font-medium text-gray-800 dark:text-gray-200">{name}</span>
+        <span className="font-medium text-ink-1">{name}</span>
       ),
     },
     {
@@ -330,7 +330,7 @@ const RepositoriesTable = ({
       {/* Search Results Summary */}
       {search && (
         <div className="mb-4 pb-4 border-b border-gray-200 dark:border-neutral-700">
-          <p className="text-sm text-gray-600 dark:text-gray-400">
+          <p className="text-sm text-ink-2">
             {totalCount} repositor{totalCount !== 1 ? 'ies' : 'y'} found
             <span className="ml-1">
               for &quot;
@@ -358,7 +358,7 @@ const RepositoriesTable = ({
               <summary className="cursor-pointer select-none hover:text-rose-900 dark:hover:text-rose-100">
                 Technical details
               </summary>
-              <code className="mt-1 block font-mono text-[11px] leading-relaxed break-all text-rose-800/80 dark:text-rose-100/80">
+              <code className="mt-1 block font-mono text-xs leading-relaxed break-all text-rose-800/80 dark:text-rose-100/80">
                 {error}
               </code>
             </details>
@@ -480,7 +480,7 @@ const GithubRepositories = ({ loaderData }: Route.ComponentProps) => {
   return (
     <div className="min-h-full">
       <div className="flex items-center justify-between gap-3 mt-2 mb-4 flex-wrap">
-        <h1 className="text-base font-semibold text-gray-600 dark:text-gray-400">
+        <h1 className="text-base font-semibold text-ink-2">
           GitHub Repositories
         </h1>
         <div className="flex items-center gap-2">

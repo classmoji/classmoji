@@ -125,7 +125,7 @@ const AdminTeams = ({ loaderData }: Route.ComponentProps) => {
       <div className="min-h-full relative">
         <Outlet />
         <div className="flex items-center justify-between gap-3 mt-2 mb-4">
-          <h1 className="text-base font-semibold text-gray-600 dark:text-gray-400">Teams</h1>
+          <h1 className="text-base font-semibold text-ink-2">Teams</h1>
 
           <div className="flex gap-3">
             <SearchInput
@@ -141,7 +141,7 @@ const AdminTeams = ({ loaderData }: Route.ComponentProps) => {
           </div>
         </div>
 
-        <div className="rounded-2xl bg-panel ring-1 ring-stone-200 dark:ring-neutral-800 p-5 sm:p-6 min-h-[calc(100vh-10rem)]">
+        <div className="rounded-2xl bg-panel ring-1 ring-line p-5 sm:p-6 min-h-[calc(100vh-10rem)]">
           <Table
             columns={columns}
             dataSource={filteredTeams}
@@ -157,12 +157,12 @@ const AdminTeams = ({ loaderData }: Route.ComponentProps) => {
             scroll={{ x: 'max-content' }}
             locale={{
               emptyText: query ? (
-                <div className="text-center py-8 text-gray-500 dark:text-gray-400">
+                <div className="text-center py-8 text-ink-3">
                   <div className="font-medium">No teams found matching &quot;{query}&quot;</div>
                   <div className="text-sm">Try adjusting your search terms.</div>
                 </div>
               ) : (
-                <div className="text-center py-8 text-gray-500 dark:text-gray-400">
+                <div className="text-center py-8 text-ink-3">
                   <div className="font-medium">No teams created yet</div>
                   <div className="text-sm">Create your first team to get started.</div>
                 </div>

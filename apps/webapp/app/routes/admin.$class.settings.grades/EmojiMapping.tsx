@@ -1,4 +1,4 @@
-import { Input, InputNumber, Button, Table, Form, Card, Popconfirm, Alert, Select } from 'antd';
+import { Input, InputNumber, Button, Table, Popconfirm, Alert, Select } from 'antd';
 import { useState } from 'react';
 
 import { DeleteOutlined, WarningOutlined } from '@ant-design/icons';
@@ -33,7 +33,6 @@ interface EmojiMappingProps {
   orphanedEmojis?: OrphanedEmoji[];
 }
 
-// Props type uses EmojiMappingRecord[] but loader may return a wider union; narrow at call site if needed
 const EmojiMapping = ({ emojiMappings, orphanedEmojis }: EmojiMappingProps) => {
   const [emoji, setEmoji] = useState('');
   const [grade, setGrade] = useState<string | null>(null);
@@ -42,14 +41,12 @@ const EmojiMapping = ({ emojiMappings, orphanedEmojis }: EmojiMappingProps) => {
   const [remapSelections, setRemapSelections] = useState<Record<string, string>>({});
   const { isProTier, isFreeTier } = useSubscription();
 
-  // Inline editing state
   const [editingCell, setEditingCell] = useState<EditingCell | null>(null);
   const [editValue, setEditValue] = useState<string | number | null>(null);
 
   const { notify, fetcher } = useGlobalFetcher();
   const callout = useCallout();
 
-  // Handle inline cell update
   const handleCellUpdate = (emojiKey: string, field: string, value: string | number | null) => {
     const mapping = emojiMappings.find(m => m.emoji === emojiKey);
     if (!mapping) return;
@@ -71,7 +68,6 @@ const EmojiMapping = ({ emojiMappings, orphanedEmojis }: EmojiMappingProps) => {
     setEditValue(null);
   };
 
-  // Start editing a cell
   const startEditing = (
     emojiKey: string,
     field: EditingCell['field'],
@@ -79,12 +75,6 @@ const EmojiMapping = ({ emojiMappings, orphanedEmojis }: EmojiMappingProps) => {
   ) => {
     setEditingCell({ emoji: emojiKey, field });
     setEditValue(currentValue);
-  };
-
-  // Cancel editing without saving
-  const _cancelEditing = () => {
-    setEditingCell(null);
-    setEditValue(null);
   };
 
   const handleRemapSelection = (oldEmoji: string, newEmoji: string) => {
@@ -180,20 +170,18 @@ const EmojiMapping = ({ emojiMappings, orphanedEmojis }: EmojiMappingProps) => {
       title: 'Emoji',
       dataIndex: 'emoji',
       key: 'emoji',
-      width: '15%',
-      render: (emoji: string) => {
-        return (
-          <div className="flex justify-center">
-            <Emoji emoji={emoji} size="lg" />
-          </div>
-        );
-      },
+      width: 72,
+      render: (emoji: string) => (
+        <div className="flex justify-center">
+          <Emoji emoji={emoji} size="lg" />
+        </div>
+      ),
     },
     {
       title: 'Grade',
       dataIndex: 'grade',
       key: 'grade',
-      width: '15%',
+      width: 80,
       render: (grade: number, record: EmojiMappingRecord) => {
         const isEditing = editingCell?.emoji === record.emoji && editingCell?.field === 'grade';
         if (isEditing) {
@@ -234,7 +222,7 @@ const EmojiMapping = ({ emojiMappings, orphanedEmojis }: EmojiMappingProps) => {
       dataIndex: 'extra_tokens',
       hidden: isFreeTier,
       key: 'extra_tokens',
-      width: '15%',
+      width: 90,
       render: (_: number, record: EmojiMappingRecord) => {
         const isEditing =
           editingCell?.emoji === record.emoji && editingCell?.field === 'extra_tokens';
@@ -289,23 +277,23 @@ const EmojiMapping = ({ emojiMappings, orphanedEmojis }: EmojiMappingProps) => {
           <button
             type="button"
             onClick={() => startEditing(record.emoji, 'description', description || '')}
-            className="text-gray-700 cursor-pointer bg-transparent border-none p-0 m-0 hover:underline text-left"
+            className="text-ink-1 cursor-pointer bg-transparent border-none p-0 m-0 hover:underline text-left"
           >
-            {description || <span className="text-gray-400 italic">No description</span>}
+            {description || <span className="text-ink-4 italic">No description</span>}
           </button>
         );
       },
     },
     {
-      title: 'Actions',
+      title: '',
       key: 'actions',
-      width: '10%',
+      width: 48,
       render: (_: unknown, record: EmojiMappingRecord) => (
         <Button
           type="text"
           icon={<DeleteOutlined />}
           onClick={() => deleteMapping(record)}
-          className="text-red-500 hover:text-red-700 hover:bg-red-50"
+          className="text-red-500 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-900/20"
           size="small"
         />
       ),
@@ -317,16 +305,16 @@ const EmojiMapping = ({ emojiMappings, orphanedEmojis }: EmojiMappingProps) => {
       title="Emoji Mapping"
       description="Assign emojis to represent specific numerical values in your grading system."
     >
-      {(orphanedEmojis?.length ?? 0) > 0 && (
+      <div className="flex flex-col gap-6">
+        {(orphanedEmojis?.length ?? 0) > 0 && (
         <Alert
           type="warning"
           showIcon
           icon={<WarningOutlined />}
-          className="mb-6"
           message="Orphaned Grades Detected"
           description={
             <div className="mt-2">
-              <p className="mb-3 text-gray-600">
+              <p className="mb-3 text-ink-2">
                 The following emoji grades are used but no longer have mappings. Select a new emoji
                 for each to fix:
               </p>
@@ -335,10 +323,10 @@ const EmojiMapping = ({ emojiMappings, orphanedEmojis }: EmojiMappingProps) => {
                   <div key={oldEmoji} className="flex items-center gap-3">
                     <div className="flex items-center gap-2 min-w-[140px]">
                       <Emoji emoji={oldEmoji} size="sm" />
-                      <span className="text-gray-700 font-mono text-sm">{oldEmoji}</span>
-                      <span className="text-gray-500 text-xs">({count})</span>
+                      <span className="text-ink-1 font-mono text-sm">{oldEmoji}</span>
+                      <span className="text-ink-3 text-xs">({count})</span>
                     </div>
-                    <span className="text-gray-400">→</span>
+                    <span className="text-ink-4">&rarr;</span>
                     <Select
                       placeholder="Select new emoji"
                       className="w-48"
@@ -350,7 +338,7 @@ const EmojiMapping = ({ emojiMappings, orphanedEmojis }: EmojiMappingProps) => {
                           <div className="flex items-center gap-2">
                             <Emoji emoji={m.emoji} size="sm" />
                             <span>{m.emoji}</span>
-                            <span className="text-gray-400">({m.grade})</span>
+                            <span className="text-ink-4">({m.grade})</span>
                           </div>
                         ),
                       }))}
@@ -371,69 +359,14 @@ const EmojiMapping = ({ emojiMappings, orphanedEmojis }: EmojiMappingProps) => {
           }
         />
       )}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-        {/* Form Section */}
-        <Card className="h-fit">
-          <div className="flex items-center gap-3 mb-6">
-            <div className="w-1 h-6 bg-yellow-400 rounded-full"></div>
-            <h3 className="text-lg font-semibold text-gray-900">Add New Mapping</h3>
-          </div>
 
-          <Form layout="vertical" className="space-y-4">
-            <Form.Item label="Emoji Grade" className="mb-4">
-              <EmojiPicker setEmoji={setEmoji} emoji={emoji} />
-            </Form.Item>
-
-            <Form.Item label="Numeric Value" className="mb-4">
-              <Input
-                value={grade ?? undefined}
-                onChange={e => setGrade(e.target.value)}
-                type="number"
-                placeholder="Enter grade value (0-100)"
-                min={0}
-                max={100}
-                className="rounded-lg"
-              />
-            </Form.Item>
-
-            {isProTier && (
-              <Form.Item label="Extra Tokens" className="mb-4">
-                <Input
-                  value={extraTokens}
-                  onChange={e => setExtraTokens(parseInt(e.target.value) || 0)}
-                  type="number"
-                  min={0}
-                  addonBefore={<img src={tokenImage} alt="token" className="w-4 h-4" />}
-                  addonAfter="tokens"
-                  className="rounded-lg"
-                />
-              </Form.Item>
-            )}
-
-            <Form.Item label="Description" className="mb-6">
-              <Input.TextArea
-                rows={3}
-                placeholder="Optional description for this grade mapping..."
-                value={description}
-                onChange={e => setDescription(e.target.value)}
-                className="rounded-lg"
-              />
-            </Form.Item>
-
-            <Button type="primary" onClick={createEmojiMapping}>
-              Save
-            </Button>
-          </Form>
-        </Card>
-
-        {/* Table Section */}
-        <Card>
-          <div className="flex items-center justify-between mb-6">
-            <div className="flex items-center gap-3">
-              <div className="w-1 h-6 bg-yellow-400 rounded-full"></div>
-              <h3 className="text-lg font-semibold text-gray-900">Current Mappings</h3>
-              <span className="text-sm text-gray-500 bg-gray-100 px-2 py-1 rounded-full">
-                {emojiMappings?.length || 0} total
+      <div className="rounded-2xl ring-1 ring-line overflow-hidden">
+        <div className="px-4 sm:px-5 py-4 border-b border-line bg-panel">
+          <div className="flex items-center justify-between mb-4">
+            <div className="flex items-center gap-2">
+              <span className="text-sm font-semibold text-ink-0">Emoji Mappings</span>
+              <span className="text-xs text-ink-3 bg-nav-hover px-2 py-0.5 rounded-full tabular-nums">
+                {emojiMappings?.length || 0}
               </span>
             </div>
             <Popconfirm
@@ -443,30 +376,60 @@ const EmojiMapping = ({ emojiMappings, orphanedEmojis }: EmojiMappingProps) => {
               okText="Yes, reset"
               cancelText="Cancel"
             >
-              <Button type="primary" size="small">
-                Populate Defaults
-              </Button>
+              <Button size="small">Populate Defaults</Button>
             </Popconfirm>
           </div>
+          <div className="flex flex-wrap items-end gap-3">
+            <EmojiPicker setEmoji={setEmoji} emoji={emoji} />
+            <Input
+              value={grade ?? undefined}
+              onChange={e => setGrade(e.target.value)}
+              type="number"
+              placeholder="Grade (0-100)"
+              min={0}
+              max={100}
+              className="!w-28"
+            />
+            {isProTier && (
+              <Input
+                value={extraTokens}
+                onChange={e => setExtraTokens(parseInt(e.target.value) || 0)}
+                type="number"
+                min={0}
+                placeholder="Tokens"
+                addonBefore={<img src={tokenImage} alt="token" className="w-4 h-4" />}
+                className="!w-28"
+              />
+            )}
+            <Input
+              placeholder="Description (optional)"
+              value={description}
+              onChange={e => setDescription(e.target.value)}
+              className="flex-1 !min-w-[140px]"
+            />
+            <Button type="primary" onClick={createEmojiMapping}>
+              Add
+            </Button>
+          </div>
+        </div>
 
-          <Table
-            dataSource={emojiMappings?.length ? emojiMappings : []}
-            columns={emojiMappingColumns}
-            size="middle"
-            pagination={false}
-            rowHoverable={false}
-            locale={{
-              emptyText: (
-                <div className="text-center py-8 text-gray-500">
-                  <div className="text-4xl mb-2">😊</div>
-                  <div>No emoji mappings yet</div>
-                  <div className="text-sm">Add your first mapping to get started!</div>
-                </div>
-              ),
-            }}
-            className="rounded-lg"
-          />
-        </Card>
+        <Table
+          dataSource={emojiMappings?.length ? emojiMappings : []}
+          columns={emojiMappingColumns}
+          size="small"
+          pagination={false}
+          rowHoverable={false}
+          rowKey="emoji"
+          locale={{
+            emptyText: (
+              <div className="text-center py-8">
+                <div className="font-medium text-ink-3">No emoji mappings yet</div>
+                <div className="text-sm text-ink-4">Add your first mapping above</div>
+              </div>
+            ),
+          }}
+        />
+      </div>
       </div>
     </SettingSection>
   );

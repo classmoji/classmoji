@@ -600,10 +600,10 @@ export function ErrorBoundary() {
                     />
                   </svg>
                 </div>
-                <h1 className="text-2xl font-semibold text-gray-900 dark:text-gray-100 mb-2">
+                <h1 className="text-2xl font-semibold text-ink-0 mb-2">
                   Something went wrong
                 </h1>
-                <p className="text-gray-600 dark:text-gray-400">
+                <p className="text-ink-2">
                   {errorMessage ||
                     'We encountered an unexpected error. Our team has been notified and is working on a fix.'}
                 </p>
@@ -612,7 +612,7 @@ export function ErrorBoundary() {
               <div className="flex flex-col sm:flex-row gap-3 justify-center">
                 <button
                   onClick={() => (window.location.href = '/')}
-                  className="px-5 py-2.5 text-sm font-medium rounded-lg border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 bg-white dark:bg-neutral-800 hover:bg-gray-50 dark:hover:bg-neutral-700 transition-colors"
+                  className="px-5 py-2.5 text-sm font-medium rounded-lg border border-gray-300 dark:border-gray-600 text-ink-1 bg-white dark:bg-neutral-800 hover:bg-gray-50 dark:hover:bg-neutral-700 transition-colors"
                 >
                   Back to Home
                 </button>

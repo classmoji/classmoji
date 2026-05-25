@@ -107,9 +107,9 @@ const SubmissionAnalytics = ({ loaderData }: Route.ComponentProps) => {
             Back
           </Button>
         </Link>
-        <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">
+        <h1 className="text-2xl font-bold text-ink-0">
           {assignmentTitle}{' '}
-          <span className="font-mono text-base text-gray-500 dark:text-gray-400">· {repoName}</span>
+          <span className="font-mono text-base text-ink-3">· {repoName}</span>
         </h1>
       </div>
 

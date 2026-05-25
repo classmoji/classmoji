@@ -229,7 +229,7 @@ export function ClassroomsLandingScreen({
 
   const renderList = (items: LandingClass[]) => (
     <div className="overflow-x-auto -mx-4 px-4 sm:mx-0 sm:px-0">
-      <div className="bg-white dark:bg-neutral-900 ring-1 ring-stone-200 dark:ring-neutral-800 rounded-2xl overflow-hidden min-w-[700px]">
+      <div className="bg-panel ring-1 ring-line rounded-2xl overflow-hidden min-w-[700px]">
         <ClassroomRowHeader />
         {items.map(c => (
           <ClassroomRow key={c.id} c={c} onOpen={() => onOpenClass(c)} />
@@ -239,9 +239,9 @@ export function ClassroomsLandingScreen({
   );
 
   const sectionHeading = (label: string, count: number) => (
-    <div className="text-sm font-semibold text-gray-500 dark:text-gray-400 mb-2.5 mt-1">
+    <div className="text-sm font-semibold text-ink-3 mb-2.5 mt-1">
       {label}{' '}
-      <span className="text-xs text-gray-400 dark:text-gray-500 font-normal">
+      <span className="text-xs text-ink-4 font-normal">
         {count}
       </span>
     </div>
@@ -251,9 +251,9 @@ export function ClassroomsLandingScreen({
     <div>
         <div className="flex flex-col sm:flex-row sm:items-end gap-4 pb-5 mb-6">
           <div className="flex-1">
-            <h1 className="text-base font-semibold text-gray-600 dark:text-gray-400 m-0">
+            <h1 className="text-base font-semibold text-ink-2 m-0">
               Your classes
-              <span className="ml-2 text-sm font-normal text-gray-400 dark:text-gray-500">
+              <span className="ml-2 text-sm font-normal text-ink-4">
                 {counts.all} active
                 <span className="text-gray-300 dark:text-gray-600 mx-1">·</span>
                 {counts.archived} archived
@@ -273,7 +273,7 @@ export function ClassroomsLandingScreen({
         </div>
 
         {bannerOpen && (
-          <div className="flex items-center gap-2.5 px-3.5 py-2.5 mb-4 rounded-xl bg-[#fdf8e8] dark:bg-amber-950/20 ring-1 ring-[#f0e6b8] dark:ring-amber-800/40 text-[#6b5a1e] dark:text-amber-200 text-[12.5px]">
+          <div className="flex items-center gap-2.5 px-3.5 py-2.5 mb-4 rounded-xl bg-[#fdf8e8] dark:bg-amber-950/20 ring-1 ring-[#f0e6b8] dark:ring-amber-800/40 text-[#6b5a1e] dark:text-amber-200 text-sm">
             <span className="text-sm">🪙</span>
             <span>
               <b className="font-semibold">Token economy is live.</b> Students earn tokens for
@@ -294,15 +294,15 @@ export function ClassroomsLandingScreen({
         <div className="flex items-center gap-2 mb-4">
           <div className="flex-1" />
 
-          <div className="flex rounded-lg ring-1 ring-stone-200 dark:ring-neutral-700 overflow-hidden">
+          <div className="flex rounded-lg ring-1 ring-line overflow-hidden">
             <button
               type="button"
               onClick={() => setView('grid')}
               title="Grid"
               className={`px-2.5 py-1.5 text-xs border-none cursor-pointer inline-flex items-center transition-colors ${
                 view === 'grid'
-                  ? 'bg-stone-100 dark:bg-neutral-800 text-gray-900 dark:text-gray-100'
-                  : 'bg-white dark:bg-neutral-900 text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300'
+                  ? 'bg-nav-hover text-ink-0'
+                  : 'bg-panel text-ink-4 hover:text-gray-600 dark:hover:text-gray-300'
               }`}
             >
               <ViewGridIcon />
@@ -313,8 +313,8 @@ export function ClassroomsLandingScreen({
               title="List"
               className={`px-2.5 py-1.5 text-xs border-none cursor-pointer inline-flex items-center transition-colors ${
                 view === 'list'
-                  ? 'bg-stone-100 dark:bg-neutral-800 text-gray-900 dark:text-gray-100'
-                  : 'bg-white dark:bg-neutral-900 text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300'
+                  ? 'bg-nav-hover text-ink-0'
+                  : 'bg-panel text-ink-4 hover:text-gray-600 dark:hover:text-gray-300'
               }`}
             >
               <ViewListIcon />
@@ -323,7 +323,7 @@ export function ClassroomsLandingScreen({
         </div>
 
         {pinned.length === 0 && active.length === 0 && archived.length === 0 ? (
-          <div className="rounded-2xl border-2 border-dashed border-stone-200 dark:border-neutral-700 p-10 text-center text-gray-400 dark:text-gray-500">
+          <div className="rounded-2xl border-2 border-dashed border-line p-10 text-center text-ink-4">
             No classrooms yet.
           </div>
         ) : (
@@ -350,11 +350,11 @@ export function ClassroomsLandingScreen({
                   type="button"
                   onClick={() => setArchivedExpanded(v => !v)}
                   aria-expanded={archivedExpanded}
-                  className="inline-flex items-center gap-1.5 cursor-pointer mb-2.5 mt-1 bg-transparent border-none p-0 text-sm font-semibold text-gray-500 dark:text-gray-400"
+                  className="inline-flex items-center gap-1.5 cursor-pointer mb-2.5 mt-1 bg-transparent border-none p-0 text-sm font-semibold text-ink-3"
                 >
                   <span aria-hidden>{archivedExpanded ? '▾' : '▸'}</span>
                   <span>Archived</span>
-                  <span className="text-xs text-gray-400 dark:text-gray-500 font-normal">
+                  <span className="text-xs text-ink-4 font-normal">
                     {archived.length}
                   </span>
                 </button>

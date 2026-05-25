@@ -92,12 +92,12 @@ const ModuleForm = ({ loaderData }: Route.ComponentProps) => {
       }}
     >
       {/* Gmail-style header */}
-      <div className="flex items-center justify-between gap-3 px-5 py-3 bg-stone-50 dark:bg-neutral-800/60 border-b border-stone-200 dark:border-neutral-800">
+      <div className="flex items-center justify-between gap-3 px-5 py-3 bg-stone-50 dark:bg-neutral-800/60 border-b border-line">
         <div className="flex flex-col">
-          <span className="text-sm font-semibold text-gray-900 dark:text-gray-100">
+          <span className="text-sm font-semibold text-ink-0">
             {isNew ? 'New module' : 'Edit module'}
           </span>
-          <span className="text-[11px] font-normal text-gray-500 dark:text-gray-400">
+          <span className="text-xs font-normal text-ink-3">
             {isNew
               ? 'Set up the module, its assignments, and linked resources.'
               : 'Update module details, assignments, and linked resources.'}
@@ -107,7 +107,7 @@ const ModuleForm = ({ loaderData }: Route.ComponentProps) => {
           type="button"
           onClick={close}
           aria-label="Close"
-          className="p-1 rounded hover:bg-stone-200 dark:hover:bg-neutral-700 text-gray-500 dark:text-gray-400 transition-colors"
+          className="p-1 rounded hover:bg-line text-ink-3 transition-colors"
         >
           <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
             <path

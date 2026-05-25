@@ -107,7 +107,7 @@ const AssignmentTable = ({ assignments }: AssignmentTableProps) => {
       sorter: (a: Assignment, b: Assignment) => a.title.localeCompare(b.title),
       render: (title: string, record: Assignment) => (
         <div className="flex items-center gap-2">
-          <span className="font-medium text-gray-800 dark:text-gray-200">{title}</span>
+          <span className="font-medium text-ink-1">{title}</span>
           {record.is_extra_credit && <IconStarFilled size={16} className="text-yellow-500" />}
         </div>
       ),
@@ -119,7 +119,7 @@ const AssignmentTable = ({ assignments }: AssignmentTableProps) => {
       width: '15%',
       sorter: (a: Assignment, b: Assignment) => a.type.localeCompare(b.type),
       render: (type: string) => (
-        <span className="text-gray-700 dark:text-gray-300">
+        <span className="text-ink-1">
           {type.charAt(0) + type.slice(1).toLowerCase()}
         </span>
       ),
@@ -181,7 +181,7 @@ const AssignmentTable = ({ assignments }: AssignmentTableProps) => {
                 cancelText="Cancel"
               >
                 <div className="flex items-center gap-1 text-gray-600 hover:text-gray-800 cursor-pointer">
-                  <IconRefresh size={17} />
+                  <IconRefresh size={16} />
                   <span>Sync</span>
                 </div>
               </Popconfirm>
@@ -196,7 +196,7 @@ const AssignmentTable = ({ assignments }: AssignmentTableProps) => {
                 cancelText="Cancel"
               >
                 <div className="flex items-center gap-1 text-gray-600 hover:text-gray-800 cursor-pointer">
-                  <IconEyeOff size={17} />
+                  <IconEyeOff size={16} />
                   <span>Unpublish</span>
                 </div>
               </Popconfirm>
@@ -213,7 +213,7 @@ const AssignmentTable = ({ assignments }: AssignmentTableProps) => {
               cancelText="Cancel"
             >
               <div className="flex items-center gap-1 text-gray-600 hover:text-gray-800 cursor-pointer">
-                <IconSend size={17} />
+                <IconSend size={16} />
                 <span>Publish</span>
               </div>
             </Popconfirm>

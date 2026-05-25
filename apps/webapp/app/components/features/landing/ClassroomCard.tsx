@@ -113,18 +113,18 @@ export function ClassroomCard({
       }}
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
-      className={`relative rounded-2xl p-4 flex flex-col gap-2.5 min-h-[150px] bg-white dark:bg-neutral-900 ring-1 ring-stone-200 dark:ring-neutral-800 hover:ring-stone-300 dark:hover:ring-neutral-700 hover:shadow-sm transition-all duration-150 ${draggable ? 'cursor-grab' : 'cursor-pointer'} ${fetcher.state !== 'idle' ? 'opacity-70' : ''}`}
+      className={`relative rounded-2xl p-4 flex flex-col gap-2.5 min-h-[150px] bg-panel ring-1 ring-line hover:ring-stone-300 dark:hover:ring-neutral-700 hover:shadow-sm transition-all duration-150 ${draggable ? 'cursor-grab' : 'cursor-pointer'} ${fetcher.state !== 'idle' ? 'opacity-70' : ''}`}
       style={{ borderLeft: '3px solid var(--accent)' }}
     >
       <div className="flex items-start gap-2.5">
         <ClassMark hue={c.hue} name={c.name} />
         <div className="flex-1 min-w-0">
-          <div className="text-sm font-semibold text-gray-900 dark:text-gray-100 tracking-tight truncate">
+          <div className="text-sm font-semibold text-ink-0 tracking-tight truncate">
             {c.name}
           </div>
           {showSlug && (
             <div
-              className="text-[11.5px] text-gray-400 dark:text-gray-500 mt-px truncate"
+              className="text-xs text-ink-4 mt-px truncate"
               style={{ fontFamily: 'var(--font-mono)' }}
               title={c.slug}
             >
@@ -152,19 +152,19 @@ export function ClassroomCard({
                 whileHover={{ scale: 1.15 }}
                 whileTap={{ scale: 0.85, rotate: isPinned ? 0 : -18 }}
                 transition={{ type: 'spring', stiffness: 600, damping: 22 }}
-                className={`border-none bg-transparent cursor-pointer p-0.5 rounded inline-flex items-center justify-center overflow-hidden ${isPinned ? 'text-[var(--accent)]' : 'text-gray-400 dark:text-gray-500'}`}
+                className={`border-none bg-transparent cursor-pointer p-0.5 rounded inline-flex items-center justify-center overflow-hidden ${isPinned ? 'text-[var(--accent)]' : 'text-ink-4'}`}
               >
                 <PinIcon filled={isPinned} />
               </motion.button>
             )}
           </AnimatePresence>
           {c.status === 'LOCKED' && (
-            <span className="inline-flex items-center rounded-md bg-amber-50 text-amber-700 dark:bg-amber-900/40 dark:text-amber-200 ring-1 ring-amber-200 dark:ring-amber-800/50 px-2 py-0.5 text-[10.5px] font-medium">
+            <span className="inline-flex items-center rounded-md bg-amber-50 text-amber-700 dark:bg-amber-900/40 dark:text-amber-200 ring-1 ring-amber-200 dark:ring-amber-800/50 px-2 py-0.5 text-xs font-medium">
               Read-only
             </span>
           )}
           {c.status === 'UNPUBLISHED' && (
-            <span className="inline-flex items-center rounded-md bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-300 ring-1 ring-gray-200 dark:ring-gray-700 px-2 py-0.5 text-[10.5px] font-medium">
+            <span className="inline-flex items-center rounded-md bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-300 ring-1 ring-gray-200 dark:ring-gray-700 px-2 py-0.5 text-xs font-medium">
               Unpublished
             </span>
           )}
@@ -173,20 +173,20 @@ export function ClassroomCard({
       </div>
 
       {c.subtitle && (
-        <div className="text-xs text-gray-500 dark:text-gray-400 leading-relaxed -mt-0.5">
+        <div className="text-xs text-ink-3 leading-relaxed -mt-0.5">
           {c.subtitle}
         </div>
       )}
 
       <div className="flex gap-3.5 pt-2.5 mt-auto">
-        <div className="flex flex-col gap-px text-[11px]">
-          <span className="text-gray-400 dark:text-gray-500 whitespace-nowrap">Roster</span>
-          <span className="text-xs font-medium text-gray-900 dark:text-gray-100">
+        <div className="flex flex-col gap-px text-xs">
+          <span className="text-ink-4 whitespace-nowrap">Roster</span>
+          <span className="text-xs font-medium text-ink-0">
             {c.students}
           </span>
         </div>
-        <div className="flex flex-col gap-px text-[11px]">
-          <span className="text-gray-400 dark:text-gray-500 whitespace-nowrap">{roleVerb}</span>
+        <div className="flex flex-col gap-px text-xs">
+          <span className="text-ink-4 whitespace-nowrap">{roleVerb}</span>
           <span
             className="text-xs font-medium"
             style={{
@@ -199,7 +199,7 @@ export function ClassroomCard({
         </div>
       </div>
 
-      <div className="flex items-center gap-2 text-[11px] text-gray-400 dark:text-gray-500">
+      <div className="flex items-center gap-2 text-xs text-ink-4">
         <IconGithub size={12} />
         <span style={{ fontFamily: 'var(--font-mono)' }}>main</span>
         <span className="w-1 h-1 rounded-full bg-gray-300 dark:bg-gray-600 inline-block" />

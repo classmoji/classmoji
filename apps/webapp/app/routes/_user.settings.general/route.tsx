@@ -36,7 +36,7 @@ const SettingsGeneral = () => {
           </div>
           <div className="flex-1">
             <h3 className="text-xl font-bold text-gray-800 dark:text-gray-100 mb-2">{user?.name || 'User Name'}</h3>
-            <p className="text-gray-600 dark:text-gray-400 text-base mb-3">{user?.email}</p>
+            <p className="text-ink-2 text-base mb-3">{user?.email}</p>
             <div className="flex items-center gap-2 text-sm text-gray-500">
               <GithubOutlined className="text-gray-400" />
               <span>@{user?.login}</span>
@@ -62,7 +62,7 @@ const SettingsGeneral = () => {
           >
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
               <Form.Item
-                label={<span className="text-gray-700 dark:text-gray-300 font-medium text-sm">Full Name</span>}
+                label={<span className="text-ink-1 font-medium text-sm">Full Name</span>}
                 name="name"
                 className="mb-6"
               >
@@ -74,7 +74,7 @@ const SettingsGeneral = () => {
               </Form.Item>
 
               <Form.Item
-                label={<span className="text-gray-700 dark:text-gray-300 font-medium text-sm">Email Address</span>}
+                label={<span className="text-ink-1 font-medium text-sm">Email Address</span>}
                 name="email"
                 className="mb-6"
               >
@@ -86,7 +86,7 @@ const SettingsGeneral = () => {
               </Form.Item>
 
               <Form.Item
-                label={<span className="text-gray-700 dark:text-gray-300 font-medium text-sm">GitHub Username</span>}
+                label={<span className="text-ink-1 font-medium text-sm">GitHub Username</span>}
                 name="github_username"
                 className="md:col-span-2 mb-6"
               >

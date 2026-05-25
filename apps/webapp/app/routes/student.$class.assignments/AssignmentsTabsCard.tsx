@@ -95,14 +95,14 @@ const AssignmentsTabsCard = ({ rows }: AssignmentsTabsCardProps) => {
                 idx > 0 ? '-ml-2' : ''
               } ${
                 isActive
-                  ? 'bg-panel border-stone-200 dark:border-neutral-800 border-b-transparent'
-                  : 'bg-stone-100 dark:bg-neutral-800 text-gray-500 dark:text-gray-400 border-stone-200 dark:border-neutral-700 hover:text-gray-800 dark:hover:text-gray-200'
+                  ? 'bg-panel border-line border-b-transparent'
+                  : 'bg-nav-hover text-ink-3 border-line hover:text-gray-800 dark:hover:text-gray-200'
               }`}
             >
               {label}
               <span
-                className={`ml-2 text-[11px] tabular-nums ${
-                  isActive ? 'text-gray-500 dark:text-gray-400' : 'text-gray-400 dark:text-gray-500'
+                className={`ml-2 text-xs tabular-nums ${
+                  isActive ? 'text-ink-3' : 'text-ink-4'
                 }`}
               >
                 {counts[key]}
@@ -112,16 +112,16 @@ const AssignmentsTabsCard = ({ rows }: AssignmentsTabsCardProps) => {
         })}
       </div>
 
-      <section className="flex-1 rounded-2xl rounded-tl-none bg-panel border border-stone-200 dark:border-neutral-800 min-h-[calc(100vh-10rem)] flex flex-col">
+      <section className="flex-1 rounded-2xl rounded-tl-none bg-panel border border-line min-h-[calc(100vh-10rem)] flex flex-col">
         {filtered.length === 0 ? (
-          <div className="flex-1 flex items-center justify-center py-16 text-sm text-gray-500 dark:text-gray-400">
+          <div className="flex-1 flex items-center justify-center py-16 text-sm text-ink-3">
             {emptyCopy[active]}
           </div>
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
-              <thead className="text-[11px] font-semibold tracking-[0.08em] uppercase text-gray-500 dark:text-gray-400">
-                <tr className="border-b border-stone-200 dark:border-neutral-800">
+              <thead className="text-xs font-semibold tracking-[0.08em] uppercase text-ink-3">
+                <tr className="border-b border-line">
                   <th className="text-left px-4 py-3 font-semibold">Module</th>
                   <th className="text-left px-4 py-3 font-semibold">Assignment</th>
                   <th className="text-left px-4 py-3 font-semibold hidden md:table-cell">Type</th>
@@ -154,7 +154,7 @@ const AssignmentsTabsCard = ({ rows }: AssignmentsTabsCardProps) => {
                       </td>
                       <td className="px-4 py-3">
                         <div className="flex items-center gap-2">
-                          <span className="font-medium text-gray-900 dark:text-gray-100">
+                          <span className="font-medium text-ink-0">
                             {row.assignmentTitle}
                           </span>
                           {row.moduleType === 'INDIVIDUAL' && row.issueUrl && (
@@ -164,7 +164,7 @@ const AssignmentsTabsCard = ({ rows }: AssignmentsTabsCardProps) => {
                               rel="noreferrer"
                               title="View GitHub issue"
                               aria-label="View GitHub issue"
-                              className="inline-flex items-center justify-center w-6 h-6 rounded-md text-gray-500 hover:text-gray-900 dark:text-gray-400 dark:hover:text-gray-100 hover:bg-stone-100 dark:hover:bg-neutral-800 transition-colors"
+                              className="inline-flex items-center justify-center w-6 h-6 rounded-md text-gray-500 hover:text-gray-900 dark:text-gray-400 dark:hover:text-gray-100 hover:bg-nav-hover transition-colors"
                             >
                               <IconBrandGithub size={14} />
                             </a>
@@ -181,7 +181,7 @@ const AssignmentsTabsCard = ({ rows }: AssignmentsTabsCardProps) => {
                       </td>
                       <td className="px-4 py-3">
                         <span
-                          className={`inline-flex items-center text-[10px] font-semibold px-2 py-0.5 rounded-full ${statusPillStyle[row.status]}`}
+                          className={`inline-flex items-center text-xs font-semibold px-2 py-0.5 rounded-full ${statusPillStyle[row.status]}`}
                         >
                           {statusPillLabel[row.status]}
                         </span>
@@ -196,7 +196,7 @@ const AssignmentsTabsCard = ({ rows }: AssignmentsTabsCardProps) => {
                             ))}
                           </div>
                         ) : row.status === 'completed' ? (
-                          <span className="text-xs text-gray-500 dark:text-gray-400">Pending</span>
+                          <span className="text-xs text-ink-3">Pending</span>
                         ) : (
                           <span className="text-gray-400 dark:text-gray-600">—</span>
                         )}
@@ -220,7 +220,7 @@ const AssignmentsTabsCard = ({ rows }: AssignmentsTabsCardProps) => {
                           <Link
                             to={`/student/${classSlug}/regrade-requests/new`}
                             state={{ assignment: { id: row.id, title: row.assignmentTitle } }}
-                            className="inline-flex items-center text-xs font-medium text-gray-700 dark:text-gray-200 px-3 py-1.5 rounded-full ring-1 ring-stone-200 dark:ring-neutral-700 bg-panel hover:bg-stone-50 dark:hover:bg-neutral-800 transition-colors"
+                            className="inline-flex items-center text-xs font-medium text-gray-700 dark:text-gray-200 px-3 py-1.5 rounded-full ring-1 ring-line bg-panel hover:bg-nav-hover transition-colors"
                           >
                             Request regrade
                           </Link>

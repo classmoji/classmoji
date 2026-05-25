@@ -377,7 +377,7 @@ const RepositoryAssignmentsTable = ({
           : 'bg-[#D4A289]/15 text-[#8a5b3a] dark:bg-[#D4A289]/20 dark:text-[#E8C4AC]';
         return (
           <span
-            className={`inline-flex items-center text-[10px] font-semibold px-2 py-0.5 rounded-full ${className}`}
+            className={`inline-flex items-center text-xs font-semibold px-2 py-0.5 rounded-full ${className}`}
           >
             {isClosed ? 'Submitted' : 'Not submitted'}
           </span>
@@ -471,7 +471,7 @@ const RepositoryAssignmentsTable = ({
   return (
     <div className="flex flex-col">
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mt-2 mb-4 sm:min-h-8">
-        <h1 className="text-base font-semibold leading-8 text-gray-600 dark:text-gray-400">
+        <h1 className="text-base font-semibold leading-8 text-ink-2">
           Grading
         </h1>
 
@@ -513,14 +513,14 @@ const RepositoryAssignmentsTable = ({
                 idx > 0 ? '-ml-2' : ''
               } ${
                 isActive
-                  ? 'bg-panel border-stone-200 dark:border-neutral-800 border-b-transparent'
-                  : 'bg-stone-100 dark:bg-neutral-800 text-gray-500 dark:text-gray-400 border-stone-200 dark:border-neutral-700 hover:text-gray-800 dark:hover:text-gray-200'
+                  ? 'bg-panel border-line border-b-transparent'
+                  : 'bg-nav-hover text-ink-3 border-line hover:text-gray-800 dark:hover:text-gray-200'
               }`}
             >
               {tab.label}
               <span
-                className={`ml-2 text-[11px] tabular-nums ${
-                  isActive ? 'text-gray-500 dark:text-gray-400' : 'text-gray-400 dark:text-gray-500'
+                className={`ml-2 text-xs tabular-nums ${
+                  isActive ? 'text-ink-3' : 'text-ink-4'
                 }`}
               >
                 {count}
@@ -530,19 +530,19 @@ const RepositoryAssignmentsTable = ({
         })}
       </div>
 
-      <section className="rounded-2xl rounded-tl-none bg-panel border border-stone-200 dark:border-neutral-800 p-4 sm:p-5 min-h-[calc(100vh-10rem)] flex flex-col">
+      <section className="rounded-2xl rounded-tl-none bg-panel border border-line p-4 sm:p-5 min-h-[calc(100vh-10rem)] flex flex-col">
         {filtered.length === 0 ? (
           (() => {
             const { icon: Icon, title, subtitle } = emptyStates[active];
             return (
               <div className="flex-1 flex flex-col items-center justify-center text-center gap-3">
-                <Icon size={36} strokeWidth={1.5} className="text-gray-400 dark:text-gray-500" />
+                <Icon size={36} strokeWidth={1.5} className="text-ink-4" />
                 <div>
-                  <div className="text-sm font-semibold text-gray-800 dark:text-gray-200">
+                  <div className="text-sm font-semibold text-ink-1">
                     {title}
                   </div>
                   {subtitle && (
-                    <div className="mt-1 text-xs text-gray-500 dark:text-gray-400">{subtitle}</div>
+                    <div className="mt-1 text-xs text-ink-3">{subtitle}</div>
                   )}
                 </div>
               </div>

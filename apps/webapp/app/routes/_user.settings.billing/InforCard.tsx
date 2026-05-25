@@ -11,7 +11,7 @@ const InfoCard = ({ title, children, className = '' }: InfoCardProps) => (
     className={`bg-white dark:bg-neutral-800 border border-gray-200 dark:border-neutral-700 ${className}`}
   >
     <div>
-      <h3 className="font-medium text-gray-600 dark:text-gray-400 mb-2">{title}</h3>
+      <h3 className="font-medium text-ink-2 mb-2">{title}</h3>
       {children}
     </div>
   </Card>

@@ -158,10 +158,10 @@ const SettingsContent = ({ loaderData }: Route.ComponentProps) => {
           </Form.Item>
 
           {settings.syllabus_bot_enabled && (
-            <div className="mt-4 p-4 bg-gray-100 dark:bg-neutral-800 rounded-lg border border-gray-200 dark:border-neutral-700">
+            <div className="mt-4 p-4 bg-nav-hover rounded-lg border border-gray-200 dark:border-neutral-700">
               <div className="flex items-center gap-2 mb-3">
-                <IconInfoCircle size={16} className="text-gray-500 dark:text-gray-400" />
-                <span className="font-medium text-gray-900 dark:text-gray-100">
+                <IconInfoCircle size={16} className="text-ink-3" />
+                <span className="font-medium text-ink-0">
                   About the Syllabus Bot
                 </span>
               </div>
@@ -170,7 +170,7 @@ const SettingsContent = ({ loaderData }: Route.ComponentProps) => {
                   When enabled, students will see a Course Assistant button in the nav bar. They can
                   ask questions about:
                 </p>
-                <ul className="list-disc list-inside ml-2 space-y-1 text-gray-500 dark:text-gray-400">
+                <ul className="list-disc list-inside ml-2 space-y-1 text-ink-3">
                   <li>Due dates and deadlines</li>
                   <li>Grading policies and rubrics</li>
                   <li>Course schedule and topics</li>
@@ -182,7 +182,7 @@ const SettingsContent = ({ loaderData }: Route.ComponentProps) => {
                     Customization:
                   </span>{' '}
                   Add a{' '}
-                  <code className="bg-gray-200 dark:bg-neutral-700 px-1.5 py-0.5 rounded text-gray-700 dark:text-gray-300">
+                  <code className="bg-gray-200 dark:bg-neutral-700 px-1.5 py-0.5 rounded text-ink-1">
                     bot-context/
                   </code>{' '}
                   folder to your content repository with additional context files (e.g., FAQ,

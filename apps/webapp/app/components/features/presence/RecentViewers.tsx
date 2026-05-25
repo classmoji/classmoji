@@ -83,10 +83,10 @@ const ViewerRow = ({ user, lastViewedAt }: { user: ViewerUser; lastViewedAt: str
       {!user.avatar_url && (user.name?.[0] || user.login?.[0] || '?')}
     </Avatar>
     <div className="flex-1 min-w-0">
-      <div className="text-sm font-medium text-gray-900 dark:text-gray-100 truncate">
+      <div className="text-sm font-medium text-ink-0 truncate">
         {user.name || user.login || 'Unknown'}
       </div>
-      <div className="text-xs text-gray-500 dark:text-gray-400">
+      <div className="text-xs text-ink-3">
         {formatRelativeTime(lastViewedAt)}
       </div>
     </div>
@@ -135,9 +135,9 @@ const RecentViewers = ({
   // Dropdown content - grouped or flat list
   const dropdownContent = (
     <div className="bg-white dark:bg-neutral-800 rounded-lg shadow-lg border border-gray-200 dark:border-neutral-700 p-3 min-w-[280px] max-h-[70vh] overflow-y-auto">
-      <div className="text-[10px] font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-3 flex items-center justify-between">
+      <div className="text-xs font-semibold text-ink-3 uppercase tracking-wider mb-3 flex items-center justify-between">
         <span>Last viewed by</span>
-        <span className="bg-gray-100 dark:bg-neutral-700 px-1.5 py-0.5 rounded text-[10px] font-medium">
+        <span className="bg-gray-100 dark:bg-neutral-700 px-1.5 py-0.5 rounded text-xs font-medium">
           {displayTotal} {displayTotal === 1 ? 'viewer' : 'viewers'}
         </span>
       </div>
@@ -153,7 +153,7 @@ const RecentViewers = ({
             return (
               <div key={categoryKey}>
                 <div
-                  className={`text-[10px] font-semibold uppercase tracking-wider mb-2 px-2 py-1 rounded ${category.bgColor} ${category.color}`}
+                  className={`text-xs font-semibold uppercase tracking-wider mb-2 px-2 py-1 rounded ${category.bgColor} ${category.color}`}
                 >
                   {category.label} ({categoryViewers.length})
                 </div>

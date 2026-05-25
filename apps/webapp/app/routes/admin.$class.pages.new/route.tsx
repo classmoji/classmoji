@@ -482,10 +482,10 @@ export default function NewPage({ loaderData }: Route.ComponentProps) {
       }}
     >
       {/* Gmail-style header */}
-      <div className="flex items-center justify-between gap-3 px-5 py-3 bg-stone-50 dark:bg-neutral-800/60 border-b border-stone-200 dark:border-neutral-800">
+      <div className="flex items-center justify-between gap-3 px-5 py-3 bg-stone-50 dark:bg-neutral-800/60 border-b border-line">
         <div className="flex flex-col">
-          <span className="text-sm font-semibold text-gray-900 dark:text-gray-100">New page</span>
-          <span className="text-[11px] font-normal text-gray-500 dark:text-gray-400">
+          <span className="text-sm font-semibold text-ink-0">New page</span>
+          <span className="text-xs font-normal text-ink-3">
             Create a blank page, import from markdown, or batch import.
           </span>
         </div>
@@ -494,7 +494,7 @@ export default function NewPage({ loaderData }: Route.ComponentProps) {
           onClick={close}
           aria-label="Close"
           disabled={isCreating}
-          className="p-1 rounded hover:bg-stone-200 dark:hover:bg-neutral-700 text-gray-500 dark:text-gray-400 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+          className="p-1 rounded hover:bg-line text-ink-3 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
         >
           <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
             <path

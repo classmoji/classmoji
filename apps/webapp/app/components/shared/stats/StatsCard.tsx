@@ -13,10 +13,10 @@ const StatsCard = ({ title, children, icon }: StatsCardProps) => {
     <Card className="hover:shadow-lg transition-all duration-200 shadow-sm border border-gray-100 dark:border-neutral-700 hover:border-primary-200 dark:hover:border-primary-900/50 border-t-2 border-t-primary">
       <div className="flex justify-between items-start gap-4">
         <div className="flex-1 min-w-0">
-          <div className="text-xs uppercase tracking-wide text-gray-500 dark:text-gray-400 font-semibold mb-2">
+          <div className="text-xs uppercase tracking-wide text-ink-3 font-semibold mb-2">
             {title}
           </div>
-          <div className="text-3xl font-bold text-gray-900 dark:text-gray-100 tabular-nums">
+          <div className="text-3xl font-bold text-ink-0 tabular-nums">
             {children}
           </div>
         </div>

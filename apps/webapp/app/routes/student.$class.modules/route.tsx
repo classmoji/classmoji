@@ -96,16 +96,16 @@ const StudentModules = ({ loaderData }: Route.ComponentProps) => {
 
   return (
     <div className="min-h-full">
-      <h1 className="mt-2 mb-4 text-base font-semibold text-gray-600 dark:text-gray-400">
+      <h1 className="mt-2 mb-4 text-base font-semibold text-ink-2">
         Modules
       </h1>
 
       {modules.length === 0 ? (
-        <div className="rounded-2xl bg-panel ring-1 ring-stone-200 dark:ring-neutral-800 p-8 text-center">
-          <h3 className="text-base font-semibold text-gray-800 dark:text-gray-200">
+        <div className="rounded-2xl bg-panel ring-1 ring-line p-8 text-center">
+          <h3 className="text-base font-semibold text-ink-1">
             No published modules yet
           </h3>
-          <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
+          <p className="text-sm text-ink-3 mt-1">
             Modules will appear here once your instructor publishes them.
           </p>
         </div>

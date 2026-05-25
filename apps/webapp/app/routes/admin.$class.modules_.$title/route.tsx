@@ -172,7 +172,7 @@ const SingleModule = ({ loaderData }: Route.ComponentProps) => {
       {/* View Toggle */}
       <div className="flex justify-end items-center mb-6">
         <div className="flex items-center gap-4">
-          <span className="text-sm font-medium text-gray-600 dark:text-gray-400">View:</span>
+          <span className="text-sm font-medium text-ink-2">View:</span>
           <div className="flex items-center gap-3 bg-gray-50 dark:bg-neutral-800 rounded-lg p-2 border border-gray-200 dark:border-neutral-700">
             <div className="flex items-center gap-2">
               <IconTable
@@ -185,7 +185,7 @@ const SingleModule = ({ loaderData }: Route.ComponentProps) => {
                 className={`text-sm font-medium ${
                   viewMode === 'module'
                     ? 'text-yellow-600 dark:text-yellow-400'
-                    : 'text-gray-600 dark:text-gray-400'
+                    : 'text-ink-2'
                 }`}
               >
                 Module
@@ -209,7 +209,7 @@ const SingleModule = ({ loaderData }: Route.ComponentProps) => {
                 className={`text-sm font-medium ${
                   viewMode === 'assignment'
                     ? 'text-yellow-600 dark:text-yellow-400'
-                    : 'text-gray-600 dark:text-gray-400'
+                    : 'text-ink-2'
                 }`}
               >
                 Assignments

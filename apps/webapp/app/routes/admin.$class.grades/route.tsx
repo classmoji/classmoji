@@ -46,7 +46,7 @@ const Grades = ({ loaderData }: Route.ComponentProps) => {
       <Suspense
         fallback={
           <div className="min-h-full">
-            <h1 className="mt-2 mb-4 text-base font-semibold text-gray-600 dark:text-gray-400">
+            <h1 className="mt-2 mb-4 text-base font-semibold text-ink-2">
               Grades
             </h1>
             <Skeleton active />

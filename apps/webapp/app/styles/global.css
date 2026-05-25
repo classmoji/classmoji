@@ -203,11 +203,10 @@ html.translucent-sidebar:not(.dark) [data-cm-sidebar] {
   --tw-ring-color: rgba(40, 48, 64, 0.12);
 }
 html.translucent-sidebar:not(.dark) [data-cm-sidebar] hr,
-html.translucent-sidebar:not(.dark) [data-cm-sidebar] .border-stone-200,
-html.translucent-sidebar:not(.dark) [data-cm-sidebar] .border-gray-200 {
+html.translucent-sidebar:not(.dark) [data-cm-sidebar] .border-line {
   border-color: rgba(40, 48, 64, 0.1);
 }
-html.translucent-sidebar:not(.dark) [data-cm-sidebar] .bg-stone-200 {
+html.translucent-sidebar:not(.dark) [data-cm-sidebar] .bg-line {
   background-color: rgba(40, 48, 64, 0.1);
 }
 

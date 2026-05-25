@@ -191,7 +191,7 @@ const AdminAssistants = ({ loaderData }: Route.ComponentProps) => {
                 }}
                 className={`flex items-center gap-1 text-gray-600 hover:text-gray-800 cursor-pointer ${impersonating ? 'opacity-50' : ''}`}
               >
-                <IconUserSearch size={17} />
+                <IconUserSearch size={16} />
                 <span>View as</span>
               </div>
             </RequireRole>
@@ -205,7 +205,7 @@ const AdminAssistants = ({ loaderData }: Route.ComponentProps) => {
                 cancelText="Cancel"
               >
                 <div className="flex items-center gap-1 text-red-600 cursor-pointer hover:text-red-700">
-                  <IconTrash size={17} />
+                  <IconTrash size={16} />
                   <span>Remove</span>
                 </div>
               </Popconfirm>
@@ -222,7 +222,7 @@ const AdminAssistants = ({ loaderData }: Route.ComponentProps) => {
         <Outlet />
 
         <div className="flex items-center justify-between gap-3 mt-2 mb-4">
-          <h1 className="text-base font-semibold text-gray-600 dark:text-gray-400">Assistants</h1>
+          <h1 className="text-base font-semibold text-ink-2">Assistants</h1>
 
           <div className="flex gap-3">
             <SearchInput
@@ -246,7 +246,7 @@ const AdminAssistants = ({ loaderData }: Route.ComponentProps) => {
           <FormAssistant close={close} token={token} />
         </Modal>
 
-        <div className="rounded-2xl bg-panel ring-1 ring-stone-200 dark:ring-neutral-800 p-5 sm:p-6 min-h-[calc(100vh-10rem)]">
+        <div className="rounded-2xl bg-panel ring-1 ring-line p-5 sm:p-6 min-h-[calc(100vh-10rem)]">
           <Table
             columns={columns}
             dataSource={filteredAssistants}

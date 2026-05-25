@@ -74,8 +74,8 @@ const GradeComment = ({ loaderData }: Route.ComponentProps) => {
           }
         />
       </div>
-      <p className="pb-4 text-gray-500 text-[13px]">
-        You can provide comments on <span className=" underline text-[13px]">{student?.name}</span>
+      <p className="pb-4 text-gray-500 text-sm">
+        You can provide comments on <span className=" underline text-sm">{student?.name}</span>
         &rsquo;s performance
       </p>
       <Input.TextArea rows={8} value={comment} onChange={e => setComment(e.target.value)} />

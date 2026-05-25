@@ -295,7 +295,7 @@ export default function AdminQuizzes({ loaderData }: Route.ComponentProps) {
       width: '25%',
       sorter: (a: AdminQuiz, b: AdminQuiz) => a.name.localeCompare(b.name),
       render: (name: string) => (
-        <span className="font-medium text-gray-800 dark:text-gray-200">{name}</span>
+        <span className="font-medium text-ink-1">{name}</span>
       ),
     },
     {
@@ -306,7 +306,7 @@ export default function AdminQuizzes({ loaderData }: Route.ComponentProps) {
       sorter: (a: AdminQuiz, b: AdminQuiz) => a.moduleTitle.localeCompare(b.moduleTitle),
       render: (title: string) => (
         <Space>
-          <IconBook size={17} className="text-gray-400" />
+          <IconBook size={16} className="text-gray-400" />
           <Text type="secondary">{title}</Text>
         </Space>
       ),
@@ -338,7 +338,7 @@ export default function AdminQuizzes({ loaderData }: Route.ComponentProps) {
       render: (dueDate: string | null) =>
         dueDate ? (
           <Space>
-            <IconCalendar size={17} className="text-gray-400" />
+            <IconCalendar size={16} className="text-gray-400" />
             <Text>{new Date(dueDate).toLocaleDateString()}</Text>
           </Space>
         ) : (
@@ -419,7 +419,7 @@ export default function AdminQuizzes({ loaderData }: Route.ComponentProps) {
       <Outlet />
 
       <div className="flex items-center justify-between gap-3 mt-2 mb-4">
-        <h1 className="text-base font-semibold text-gray-600 dark:text-gray-400">Quizzes</h1>
+        <h1 className="text-base font-semibold text-ink-2">Quizzes</h1>
 
         <Space>
           <Popconfirm

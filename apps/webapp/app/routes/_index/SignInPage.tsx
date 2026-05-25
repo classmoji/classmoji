@@ -33,7 +33,7 @@ const SignInPage = ({ handleGitHubLogin }: SignInPageProps) => {
       </main>
 
       {/* Footer */}
-      <footer className="py-6 text-center text-sm text-gray-500 dark:text-gray-400">
+      <footer className="py-6 text-center text-sm text-ink-3">
         © {new Date().getFullYear()} Classmoji
       </footer>
     </div>

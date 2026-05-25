@@ -7,7 +7,7 @@ interface CardHeaderProps {
 const CardHeader = ({ children }: CardHeaderProps) => {
   return (
     <div className="flex items-center pb-7">
-      <h1 className="text-sm font-semibold text-gray-900 dark:text-gray-100">
+      <h1 className="text-sm font-semibold text-ink-0">
         {children}
       </h1>
     </div>

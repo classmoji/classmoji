@@ -30,7 +30,7 @@ const DeadlinePressure = ({ buckets }: DeadlinePressureProps) => {
   const maxCount = Math.max(1, ...buckets.map(b => b.assignments.length));
 
   return (
-    <Card className="h-full !rounded-[15px]" data-testid="deadline-pressure">
+    <Card className="h-full !rounded-2xl" data-testid="deadline-pressure">
       <CardHeader>Deadline Pressure (next 7 days)</CardHeader>
 
       <div className="flex items-end justify-between gap-2 py-6 min-h-[180px]">
@@ -59,7 +59,7 @@ const DeadlinePressure = ({ buckets }: DeadlinePressureProps) => {
                 <Tooltip title={tooltipContent}>
                   <div
                     data-testid="deadline-dot"
-                    className={`rounded-full transition-transform hover:scale-110 cursor-pointer flex items-center justify-center text-[10px] font-bold ${
+                    className={`rounded-full transition-transform hover:scale-110 cursor-pointer flex items-center justify-center text-xs font-bold ${
                       count === 0
                         ? 'bg-gray-200 dark:bg-gray-700'
                         : count >= 3
@@ -74,10 +74,10 @@ const DeadlinePressure = ({ buckets }: DeadlinePressureProps) => {
                   </div>
                 </Tooltip>
               </div>
-              <div className="text-[11px] uppercase tracking-wide text-gray-500 dark:text-gray-400 font-semibold">
+              <div className="text-xs uppercase tracking-wide text-ink-3 font-semibold">
                 {d.dayLabel}
               </div>
-              <div className="text-[11px] text-gray-400 dark:text-gray-500 tabular-nums">
+              <div className="text-xs text-ink-4 tabular-nums">
                 {d.label}
               </div>
             </div>

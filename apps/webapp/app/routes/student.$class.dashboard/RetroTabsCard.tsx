@@ -91,7 +91,7 @@ const initials = (name: string | null, login: string | null) => {
 };
 
 const Eyebrow = ({ children }: { children: React.ReactNode }) => (
-  <div className="text-[10px] font-semibold tracking-[0.18em] text-gray-400 dark:text-gray-500 mb-2">
+  <div className="text-xs font-semibold tracking-[0.18em] text-ink-4 mb-2">
     {children}
   </div>
 );
@@ -108,13 +108,13 @@ const PanelShell = ({
   footer?: React.ReactNode;
 }) => (
   <div className="h-full flex flex-col">
-    <h3 className="text-base sm:text-lg font-semibold text-gray-900 dark:text-gray-100 tracking-tight">
+    <h3 className="text-base sm:text-lg font-semibold text-ink-0 tracking-tight">
       {title}
     </h3>
-    {subtitle && <div className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">{subtitle}</div>}
+    {subtitle && <div className="text-xs text-ink-3 mt-0.5">{subtitle}</div>}
     <div className="flex-1 mt-4 min-h-0">{children}</div>
     {footer && (
-      <div className="mt-3 pt-3 border-t border-stone-200/70 dark:border-neutral-700/50 flex items-center justify-between gap-2">
+      <div className="mt-3 pt-3 border-t border-line/60 flex items-center justify-between gap-2">
         {footer}
       </div>
     )}
@@ -126,7 +126,7 @@ const FeedbackPanel = ({ items }: { items: FeedbackItem[] }) => {
     return (
       <PanelShell title="Recent feedback" subtitle="Released grades from your graders">
         <div className="h-full flex flex-col items-center justify-center text-center">
-          <p className="text-sm text-gray-500 dark:text-gray-400">No graded feedback yet</p>
+          <p className="text-sm text-ink-3">No graded feedback yet</p>
         </div>
       </PanelShell>
     );
@@ -138,7 +138,7 @@ const FeedbackPanel = ({ items }: { items: FeedbackItem[] }) => {
         {items.map(item => (
           <li
             key={item.id}
-            className="flex items-center gap-3 py-2.5 border-b border-stone-200/60 dark:border-neutral-700/50 last:border-0"
+            className="flex items-center gap-3 py-2.5 border-b border-line/60 last:border-0"
           >
             <div className="flex items-center gap-1 shrink-0">
               {item.grades.slice(0, 3).map((g, idx) => (
@@ -146,10 +146,10 @@ const FeedbackPanel = ({ items }: { items: FeedbackItem[] }) => {
               ))}
             </div>
             <div className="flex-1 min-w-0">
-              <div className="text-sm font-medium text-gray-900 dark:text-gray-100 truncate">
+              <div className="text-sm font-medium text-ink-0 truncate">
                 {item.assignmentTitle}
               </div>
-              <div className="text-xs text-gray-500 dark:text-gray-400 truncate">
+              <div className="text-xs text-ink-3 truncate">
                 {item.graders
                   .map(g => g.name)
                   .filter(Boolean)
@@ -162,7 +162,7 @@ const FeedbackPanel = ({ items }: { items: FeedbackItem[] }) => {
                 href={item.issueUrl}
                 target="_blank"
                 rel="noreferrer"
-                className="text-xs font-medium text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100 px-2 py-1 rounded ring-1 ring-stone-200 dark:ring-neutral-700 hover:bg-stone-50 dark:hover:bg-neutral-800 transition-colors"
+                className="text-xs font-medium text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100 px-2 py-1 rounded ring-1 ring-line hover:bg-nav-hover transition-colors"
               >
                 View
               </a>
@@ -188,7 +188,7 @@ const TeamPanel = ({
       <>
         <Link
           to={`/student/${classSlug}/modules`}
-          className="text-xs font-medium text-gray-700 dark:text-gray-200 px-3 py-1.5 rounded-full ring-1 ring-stone-200 dark:ring-neutral-700 hover:bg-stone-50 dark:hover:bg-neutral-800 transition-colors"
+          className="text-xs font-medium text-gray-700 dark:text-gray-200 px-3 py-1.5 rounded-full ring-1 ring-line hover:bg-nav-hover transition-colors"
         >
           View group
         </Link>
@@ -212,7 +212,7 @@ const TeamPanel = ({
       <PanelShell
         title={team.teamName}
         subtitle={
-          <span className="font-mono text-[11px] text-gray-500 dark:text-gray-400">
+          <span className="font-mono text-xs text-ink-3">
             {team.moduleTitle}
           </span>
         }
@@ -229,7 +229,7 @@ const TeamPanel = ({
               </Tooltip>
             ))}
           </Avatar.Group>
-          <span className="text-xs text-gray-500 dark:text-gray-400 ml-1">
+          <span className="text-xs text-ink-3 ml-1">
             {team.members.length} {team.members.length === 1 ? 'member' : 'members'}
           </span>
         </div>
@@ -242,7 +242,7 @@ const TeamPanel = ({
         <div className="h-full flex flex-col items-center justify-center text-center">
           <Link
             to={`/student/${classSlug}/modules`}
-            className="inline-flex items-center gap-1.5 text-xs font-medium text-gray-700 dark:text-gray-200 px-3 py-1.5 rounded-full ring-1 ring-stone-200 dark:ring-neutral-700 hover:bg-stone-50 dark:hover:bg-neutral-800 transition-colors"
+            className="inline-flex items-center gap-1.5 text-xs font-medium text-gray-700 dark:text-gray-200 px-3 py-1.5 rounded-full ring-1 ring-line hover:bg-nav-hover transition-colors"
           >
             Choose a team
             <IconArrowRight size={12} />
@@ -254,7 +254,7 @@ const TeamPanel = ({
   return (
     <PanelShell title="Team" subtitle="No group modules in this class">
       <div className="h-full flex flex-col items-center justify-center text-center">
-        <p className="text-sm text-gray-500 dark:text-gray-400">Nothing to show here yet.</p>
+        <p className="text-sm text-ink-3">Nothing to show here yet.</p>
       </div>
     </PanelShell>
   );
@@ -265,7 +265,7 @@ const ResubmitsPanel = ({ items, classSlug }: { items: ResubmitItem[]; classSlug
     return (
       <PanelShell title="Regrade requests" subtitle="Track resubmits and their status">
         <div className="h-full flex flex-col items-center justify-center text-center">
-          <p className="text-sm text-gray-500 dark:text-gray-400">No resubmits yet</p>
+          <p className="text-sm text-ink-3">No resubmits yet</p>
         </div>
       </PanelShell>
     );
@@ -275,7 +275,7 @@ const ResubmitsPanel = ({ items, classSlug }: { items: ResubmitItem[]; classSlug
       <span />
       <Link
         to={`/student/${classSlug}/regrade-requests`}
-        className="inline-flex items-center gap-1.5 text-xs font-medium text-gray-700 dark:text-gray-200 px-3 py-1.5 rounded-full ring-1 ring-stone-200 dark:ring-neutral-700 hover:bg-stone-50 dark:hover:bg-neutral-800 transition-colors"
+        className="inline-flex items-center gap-1.5 text-xs font-medium text-gray-700 dark:text-gray-200 px-3 py-1.5 rounded-full ring-1 ring-line hover:bg-nav-hover transition-colors"
       >
         View all
         <IconArrowRight size={12} />
@@ -289,18 +289,18 @@ const ResubmitsPanel = ({ items, classSlug }: { items: ResubmitItem[]; classSlug
         {items.slice(0, 5).map(item => (
           <li
             key={item.id}
-            className="flex items-center gap-3 py-2.5 border-b border-stone-200/60 dark:border-neutral-700/50 last:border-0"
+            className="flex items-center gap-3 py-2.5 border-b border-line/60 last:border-0"
           >
             <div className="flex-1 min-w-0">
-              <div className="text-sm font-medium text-gray-900 dark:text-gray-100 truncate">
+              <div className="text-sm font-medium text-ink-0 truncate">
                 {item.assignmentTitle}
               </div>
-              <div className="text-xs text-gray-500 dark:text-gray-400">
+              <div className="text-xs text-ink-3">
                 {fromNow(item.createdAt)}
               </div>
             </div>
             <span
-              className={`text-[10px] font-bold tracking-wider px-2 py-0.5 rounded-full ring-1 ${
+              className={`text-xs font-bold tracking-wider px-2 py-0.5 rounded-full ring-1 ${
                 statusStyles[item.status] ?? 'bg-gray-50 text-gray-700 ring-gray-200'
               }`}
             >
@@ -336,8 +336,8 @@ const RetroTabsCard = ({ feedback, team, needsTeam, resubmits, classSlug }: Retr
                 idx > 0 ? '-ml-2' : ''
               } ${
                 isActive
-                  ? 'bg-panel border-stone-200 dark:border-neutral-800 border-b-transparent'
-                  : 'bg-stone-100 dark:bg-neutral-800 text-gray-500 dark:text-gray-400 border-stone-200 dark:border-neutral-700 hover:text-gray-800 dark:hover:text-gray-200'
+                  ? 'bg-panel border-line border-b-transparent'
+                  : 'bg-nav-hover text-ink-3 border-line hover:text-gray-800 dark:hover:text-gray-200'
               }`}
             >
               {label}
@@ -345,7 +345,7 @@ const RetroTabsCard = ({ feedback, team, needsTeam, resubmits, classSlug }: Retr
           );
         })}
       </div>
-      <section className="flex-1 rounded-[15px] rounded-tl-none bg-panel border border-stone-200 dark:border-neutral-800 min-h-[400px] flex flex-col">
+      <section className="flex-1 rounded-2xl rounded-tl-none bg-panel border border-line min-h-[400px] flex flex-col">
         <div className="flex-1 p-5 sm:p-6">
           {active === 'feedback' && <FeedbackPanel items={feedback} />}
           {active === 'team' && (

@@ -53,7 +53,7 @@ const OrgSelect = ({ memberships }: OrgSelectProps) => {
       <Select
         placeholder="Select classroom"
         variant="borderless"
-        className="w-full bg-transparent hover:bg-gray-50 dark:hover:bg-neutral-800/50 rounded-md transition-colors"
+        className="w-full bg-transparent hover:bg-nav-hover rounded-md transition-colors"
         popupMatchSelectWidth={true}
         open={open}
         onDropdownVisibleChange={visible => {
@@ -63,7 +63,7 @@ const OrgSelect = ({ memberships }: OrgSelectProps) => {
         suffixIcon={
           <IconChevronDown
             size={16}
-            className={`text-gray-400 dark:text-gray-500 transition-transform duration-200 ease-out ${
+            className={`text-ink-4 transition-transform duration-200 ease-out ${
               open ? '-rotate-180' : 'rotate-0'
             }`}
           />
@@ -80,8 +80,8 @@ const OrgSelect = ({ memberships }: OrgSelectProps) => {
               msOverflowStyle: 'none',
               scrollbarWidth: 'none',
               boxShadow: 'none',
-              border: '1px solid rgb(231 229 228)',
-              borderRadius: '6px',
+              border: '1px solid var(--line)',
+              borderRadius: '8px',
             },
           },
         }}
@@ -102,7 +102,7 @@ const OrgSelect = ({ memberships }: OrgSelectProps) => {
           if (!membership) return null;
           return (
             <div className="min-w-0 px-1 flex items-baseline gap-1.5">
-              <span className="text-sm font-semibold text-gray-900 dark:text-gray-100 truncate">
+              <span className="text-sm font-semibold text-ink-0 truncate">
                 {membership.organization.name}
               </span>
             </div>
@@ -112,7 +112,7 @@ const OrgSelect = ({ memberships }: OrgSelectProps) => {
           const membershipOption = data as OrgSelectOption;
           return (
             <button
-              className="flex w-full items-center gap-2 px-1.5 py-1.5 hover:bg-stone-50 dark:hover:bg-neutral-800/60 rounded-md cursor-pointer transition-colors text-left"
+              className="flex w-full items-center gap-2 px-1.5 py-1.5 hover:bg-nav-hover rounded-md cursor-pointer transition-colors text-left"
               onClick={() => {
                 // Students go to class root (student.$class._index handles default page)
                 const suffix = membershipOption.role === 'STUDENT' ? '' : '/dashboard';
@@ -128,11 +128,11 @@ const OrgSelect = ({ memberships }: OrgSelectProps) => {
               />
               <div className="min-w-0 flex-1">
                 <div className="flex items-baseline gap-1.5 min-w-0">
-                  <div className="font-medium text-[13px] text-gray-900 dark:text-gray-100 truncate leading-tight">
+                  <div className="font-medium text-sm text-ink-0 truncate leading-tight">
                     {membershipOption.organization.name}
                   </div>
                 </div>
-                <div className="text-[11px] text-gray-500 dark:text-gray-400 truncate leading-tight">
+                <div className="text-xs text-ink-3 truncate leading-tight">
                   {roleLabel(membershipOption.role)}
                 </div>
               </div>

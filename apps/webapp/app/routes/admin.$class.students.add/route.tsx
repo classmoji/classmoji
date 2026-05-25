@@ -108,7 +108,7 @@ const AddStudents = ({ loaderData }: Route.ComponentProps) => {
       title: 'Email',
       dataIndex: 'email',
       render: (email: string) => (
-        <span className="text-gray-600 dark:text-gray-400">{email || '-'}</span>
+        <span className="text-ink-2">{email || '-'}</span>
       ),
     },
   ];
@@ -161,18 +161,18 @@ const AddStudents = ({ loaderData }: Route.ComponentProps) => {
       }}
     >
       {/* Gmail-style header */}
-      <div className="flex items-center justify-between gap-3 px-5 py-3 bg-stone-50 dark:bg-neutral-800/60 border-b border-stone-200 dark:border-neutral-800">
+      <div className="flex items-center justify-between gap-3 px-5 py-3 bg-stone-50 dark:bg-neutral-800/60 border-b border-line">
         <div className="flex items-center gap-2.5 min-w-0">
           <IconUserPlus
             size={18}
             strokeWidth={1.75}
-            className="shrink-0 text-gray-500 dark:text-gray-400"
+            className="shrink-0 text-ink-3"
           />
           <div className="min-w-0">
-            <div className="text-sm font-semibold text-gray-900 dark:text-gray-100 truncate">
+            <div className="text-sm font-semibold text-ink-0 truncate">
               Add students
             </div>
-            <div className="text-xs text-gray-500 dark:text-gray-400 truncate">
+            <div className="text-xs text-ink-3 truncate">
               Bulk add students to your class
             </div>
           </div>
@@ -181,7 +181,7 @@ const AddStudents = ({ loaderData }: Route.ComponentProps) => {
           type="button"
           onClick={close}
           aria-label="Close"
-          className="p-1 rounded hover:bg-stone-200 dark:hover:bg-neutral-700 text-gray-500 dark:text-gray-400 transition-colors"
+          className="p-1 rounded hover:bg-line text-ink-3 transition-colors"
         >
           <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
             <path
@@ -215,7 +215,7 @@ const AddStudents = ({ loaderData }: Route.ComponentProps) => {
           <>
             {categorized.valid.length > 0 && (
               <>
-                <div className="h-px bg-stone-200 dark:bg-neutral-800" />
+                <div className="h-px bg-line" />
                 <SectionHeader
                   title="Ready to add"
                   subtitle="These students will be enrolled"
@@ -235,7 +235,7 @@ const AddStudents = ({ loaderData }: Route.ComponentProps) => {
 
             {categorized.skipped.length > 0 && (
               <>
-                <div className="h-px bg-stone-200 dark:bg-neutral-800" />
+                <div className="h-px bg-line" />
                 <SectionHeader
                   title="Skipped"
                   subtitle="These students will not be added"
@@ -266,7 +266,7 @@ const AddStudents = ({ loaderData }: Route.ComponentProps) => {
       </div>
 
       {/* Footer */}
-      <div className="flex items-center justify-end gap-2 px-5 py-3 border-t border-stone-200 dark:border-neutral-800 bg-stone-50/60 dark:bg-neutral-800/40">
+      <div className="flex items-center justify-end gap-2 px-5 py-3 border-t border-line bg-stone-50/60 dark:bg-neutral-800/40">
         {parsed !== null && (
           <Button onClick={handleReset} type="text">
             Start over

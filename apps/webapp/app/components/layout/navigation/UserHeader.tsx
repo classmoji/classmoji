@@ -12,7 +12,7 @@ const UserHeader = () => {
   return (
     <div className="sticky top-0 z-50 pt-3 sm:pt-7 pb-4 bg-gradient-to-b from-[#EDEDED] from-70% to-transparent dark:from-[#1d1d1d]">
       <div className="max-w-[1280px] mx-auto px-4 sm:px-8">
-      <div className="flex items-center justify-between h-[52px] px-3 sm:px-6 rounded-2xl bg-white/80 dark:bg-neutral-900/80 backdrop-blur-xl ring-1 ring-stone-200 dark:ring-neutral-800 shadow-sm">
+      <div className="flex items-center justify-between h-[52px] px-3 sm:px-6 rounded-2xl bg-panel/80 backdrop-blur-xl ring-1 ring-line shadow-sm">
         <Link to="/select-organization" className="flex items-center gap-2 no-underline !text-[#0d0d10] dark:!text-white">
           <Logo variant="full" size={24} theme="current" />
         </Link>
@@ -21,7 +21,7 @@ const UserHeader = () => {
           <button
             type="button"
             title="Help & docs"
-            className="w-9 h-9 rounded-lg grid place-items-center text-gray-500 dark:text-gray-400 hover:bg-stone-100 dark:hover:bg-neutral-800 transition-colors cursor-pointer border-none bg-transparent"
+            className="w-9 h-9 rounded-lg grid place-items-center text-ink-3 hover:bg-nav-hover transition-colors cursor-pointer border-none bg-transparent"
             onClick={() =>
               window.open('https://classmoji.io/docs', '_blank', 'noopener,noreferrer')
             }
@@ -37,7 +37,7 @@ const UserHeader = () => {
           <ProfileDropdown>
             <button
               type="button"
-              className="flex items-center gap-2 py-0.5 pl-0.5 pr-2.5 rounded-full border border-stone-200 dark:border-neutral-700 bg-white dark:bg-neutral-900 hover:bg-stone-50 dark:hover:bg-neutral-800 cursor-pointer ml-1 transition-colors text-[13px]"
+              className="flex items-center gap-2 py-0.5 pl-0.5 pr-2.5 rounded-full border border-line bg-panel hover:bg-panel-hover cursor-pointer ml-1 transition-colors text-sm"
             >
               {user?.avatar_url ? (
                 <img

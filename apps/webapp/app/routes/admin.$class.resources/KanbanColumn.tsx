@@ -47,7 +47,7 @@ const DropZone = ({ id, targetType, targetId, isOver, children, hasResources }: 
         <div
           className={`
           flex items-center justify-center h-12 border border-dashed rounded-md
-          text-xs text-gray-400 dark:text-gray-500
+          text-xs text-ink-4
           ${isActive ? 'border-primary bg-primary/5' : 'border-gray-200 dark:border-neutral-700'}
         `}
         >
@@ -176,8 +176,8 @@ const ModuleColumn = ({
     <div className="flex flex-col flex-shrink-0 min-w-[300px] max-w-[340px] bg-white dark:bg-neutral-800 rounded-lg border border-gray-200 dark:border-neutral-700 shadow-sm">
       {/* Module Header */}
       <div className="px-4 py-3 border-b border-gray-100 dark:border-neutral-700 flex items-center gap-2">
-        <IconFolder size={18} className="text-gray-500 dark:text-gray-400" />
-        <span className="flex-1 font-medium text-gray-800 dark:text-gray-200 truncate">
+        <IconFolder size={18} className="text-ink-3" />
+        <span className="flex-1 font-medium text-ink-1 truncate">
           {module.title}
         </span>
         <span className="text-xs text-gray-400 bg-gray-100 dark:bg-neutral-700 px-2 py-0.5 rounded-full">
@@ -187,7 +187,7 @@ const ModuleColumn = ({
 
       {/* Module-level drop zone */}
       <div className="px-2 pt-2">
-        <div className="text-xs text-gray-400 dark:text-gray-500 px-1 mb-1 uppercase tracking-wide">
+        <div className="text-xs text-ink-4 px-1 mb-1 uppercase tracking-wide">
           Module Level
         </div>
         <DropZone
@@ -223,7 +223,7 @@ const ModuleColumn = ({
       {/* Assignments */}
       {assignments.length > 0 && (
         <div className="mt-2">
-          <div className="text-xs text-gray-400 dark:text-gray-500 px-3 mb-1 uppercase tracking-wide">
+          <div className="text-xs text-ink-4 px-3 mb-1 uppercase tracking-wide">
             Assignments
           </div>
           {assignments.map((assignment: AssignmentRef) => {
@@ -261,7 +261,7 @@ const SourceColumn = ({ pages, slides }: SourceColumnProps) => {
   return (
     <div className="flex flex-col w-[280px] min-w-[280px] bg-gray-50 dark:bg-neutral-900 rounded-lg border border-gray-200 dark:border-neutral-700">
       {/* Header */}
-      <div className="px-4 py-3 border-b border-gray-200 dark:border-neutral-700 flex items-center gap-2 bg-gray-100 dark:bg-neutral-800 rounded-t-lg">
+      <div className="px-4 py-3 border-b border-gray-200 dark:border-neutral-700 flex items-center gap-2 bg-nav-hover rounded-t-lg">
         <span className="flex-1 font-medium text-gray-700 dark:text-gray-200">All Resources</span>
         <span className="text-xs text-gray-500 bg-gray-200 dark:bg-neutral-700 px-2 py-0.5 rounded-full">
           {count}
@@ -289,7 +289,7 @@ const SourceColumn = ({ pages, slides }: SourceColumnProps) => {
           />
         ))}
         {count === 0 && (
-          <div className="text-center text-sm text-gray-400 dark:text-gray-500 py-8">
+          <div className="text-center text-sm text-ink-4 py-8">
             No resources available
           </div>
         )}

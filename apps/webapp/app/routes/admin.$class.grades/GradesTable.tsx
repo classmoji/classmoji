@@ -258,9 +258,9 @@ const GradesTable = (props: GradesTableProps) => {
     <div className="min-h-full min-w-0">
       <div className="flex items-center justify-between gap-3 mt-2 mb-4 flex-wrap">
         <div className="flex items-center gap-3">
-          <h1 className="text-base font-semibold text-gray-600 dark:text-gray-400">Grades</h1>
+          <h1 className="text-base font-semibold text-ink-2">Grades</h1>
           {searchQuery && (
-            <span className="text-xs text-gray-500 dark:text-gray-400 bg-stone-100 dark:bg-neutral-800 px-2.5 py-1 rounded-full">
+            <span className="text-xs text-ink-3 bg-nav-hover px-2.5 py-1 rounded-full">
               {filteredStudents.length} of {students.length}
             </span>
           )}
@@ -272,7 +272,7 @@ const GradesTable = (props: GradesTableProps) => {
           <Checkbox checked={showComments} onChange={() => setShowComments(!showComments)}>
             Show Comments
           </Checkbox>
-          <div className="h-6 w-px bg-stone-200 dark:bg-neutral-700" />
+          <div className="h-6 w-px bg-line" />
           <div className="flex items-center gap-1.5">
             <ConfigProvider
               theme={{

@@ -40,7 +40,7 @@ const SetupPage = ({ loaderData }: Route.ComponentProps) => {
           <div className="flex justify-center mb-4">
             <Logo size={48} />
           </div>
-          <p className="text-gray-600 dark:text-gray-400">
+          <p className="text-ink-2">
             Classmoji requires a GitHub App to manage classroom repositories, issues, and workflows.
             Click below to create one automatically.
           </p>

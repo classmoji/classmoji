@@ -10,15 +10,15 @@ interface StreakBadgeProps {
 const StreakBadge = ({ days, lastGradedAt }: StreakBadgeProps) => {
   const hasStreak = days > 0;
   return (
-    <Card className="h-full !rounded-[15px]" data-testid="streak-badge">
+    <Card className="h-full !rounded-2xl" data-testid="streak-badge">
       <CardHeader>Grading Streak</CardHeader>
       {hasStreak ? (
         <div className="flex flex-col gap-1">
           <div className="flex items-baseline gap-2">
-            <span className="text-3xl font-semibold tabular-nums text-gray-900 dark:text-gray-100">
+            <span className="text-3xl font-semibold tabular-nums text-ink-0">
               {days}
             </span>
-            <span className="text-sm text-gray-500 dark:text-gray-400">
+            <span className="text-sm text-ink-3">
               day{days === 1 ? '' : 's'}
             </span>
             <span aria-hidden className="text-xl">
@@ -26,13 +26,13 @@ const StreakBadge = ({ days, lastGradedAt }: StreakBadgeProps) => {
             </span>
           </div>
           {lastGradedAt && (
-            <div className="text-[11px] text-gray-500 dark:text-gray-400">
+            <div className="text-xs text-ink-3">
               Last graded {dayjs(lastGradedAt).fromNow()}
             </div>
           )}
         </div>
       ) : (
-        <div className="text-sm text-gray-600 dark:text-gray-400 leading-snug">
+        <div className="text-sm text-ink-2 leading-snug">
           Start a streak — grade 1 assignment today
         </div>
       )}

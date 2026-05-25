@@ -129,7 +129,7 @@ const EmojiGrader = ({ repositoryAssignment, emojiMappings }: EmojiGraderProps) 
         onClick={() => setShow(true)}
         className="flex items-center gap-1 text-gray-600 hover:text-gray-800 cursor-pointer"
       >
-        <IconMoodHappy size={17} />
+        <IconMoodHappy size={16} />
         <span>Grade</span>
       </div>
       {show && (

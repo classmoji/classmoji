@@ -73,7 +73,7 @@ const StatusSection = ({ classroomId, status, isArchived }: StatusSectionProps) 
               />
               <span>
                 <span className="font-medium">{opt.label}</span>
-                <span className="block text-sm text-gray-500 dark:text-gray-400">
+                <span className="block text-sm text-ink-3">
                   {opt.desc}
                 </span>
               </span>

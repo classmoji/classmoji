@@ -26,14 +26,14 @@ const ProgressSummaryCard = ({
   const currentPct = total === 0 ? 0 : (current / total) * 100;
 
   return (
-    <section className="rounded-2xl bg-panel ring-1 ring-stone-200 dark:ring-neutral-800 p-5 sm:p-6">
+    <section className="rounded-2xl bg-panel ring-1 ring-line p-5 sm:p-6">
       <div className="flex items-start justify-between gap-4">
         <div className="min-w-0">
-          <h2 className="text-lg sm:text-xl font-semibold text-gray-900 dark:text-gray-100 tracking-tight truncate">
+          <h2 className="text-lg sm:text-xl font-semibold text-ink-0 tracking-tight truncate">
             {classroomTitle}
           </h2>
           {classroomSubtitle && (
-            <p className="text-sm text-gray-500 dark:text-gray-400 mt-0.5 truncate">
+            <p className="text-sm text-ink-3 mt-0.5 truncate">
               {classroomSubtitle}
             </p>
           )}
@@ -41,13 +41,13 @@ const ProgressSummaryCard = ({
         <div className="shrink-0 text-right">
           <div className="text-2xl sm:text-3xl font-semibold tracking-tight">
             <span style={{ color: '#619462' }}>{completed}</span>
-            <span className="text-gray-400 dark:text-gray-500">/{total}</span>
+            <span className="text-ink-4">/{total}</span>
           </div>
         </div>
       </div>
 
       <div className="mt-4 flex items-center gap-3">
-        <div className="flex-1 h-2.5 rounded-full bg-stone-100 dark:bg-neutral-800 overflow-hidden flex">
+        <div className="flex-1 h-2.5 rounded-full bg-nav-hover overflow-hidden flex">
           {completedPct > 0 && (
             <div
               style={{ width: `${completedPct}%`, backgroundColor: '#619462' }}
@@ -61,7 +61,7 @@ const ProgressSummaryCard = ({
             />
           )}
         </div>
-        <span className="text-xs text-gray-500 dark:text-gray-400 shrink-0 tabular-nums">
+        <span className="text-xs text-ink-3 shrink-0 tabular-nums">
           {pct}% complete
         </span>
       </div>

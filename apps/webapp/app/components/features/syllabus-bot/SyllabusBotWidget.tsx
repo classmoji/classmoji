@@ -89,8 +89,8 @@ const SyllabusBotWidget = ({
             <IconApple size={20} strokeWidth={1.75} />
           </div>
           <div className="flex flex-col leading-tight">
-            <span className="font-semibold text-gray-900 dark:text-gray-100">Ask Moji</span>
-            <span className="text-xs font-normal text-gray-500 dark:text-gray-400">
+            <span className="font-semibold text-ink-0">Ask Moji</span>
+            <span className="text-xs font-normal text-ink-3">
               Course Assistant
             </span>
           </div>

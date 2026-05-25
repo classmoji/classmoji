@@ -40,7 +40,7 @@ const GradingSettingsOptions = ({ settings }: GradingSettingsOptionsProps) => {
     >
       <Form
         layout="vertical"
-        className="w-[50%]"
+        className="max-w-md"
         onFinish={onFinish}
         initialValues={{
           late_penalty_points_per_hour: settings.late_penalty_points_per_hour,

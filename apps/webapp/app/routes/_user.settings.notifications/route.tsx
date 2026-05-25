@@ -64,7 +64,7 @@ const Toggle = ({
 
   return (
     <label className="flex items-center justify-between py-3 cursor-pointer border-b border-stone-100 dark:border-neutral-800 last:border-b-0">
-      <span className="text-sm text-gray-800 dark:text-gray-200">{label}</span>
+      <span className="text-sm text-ink-1">{label}</span>
       <fetcher.Form method="post">
         <input type="hidden" name="key" value={prefKey} />
         <input type="hidden" name="value" value={String(!optimistic)} />
@@ -91,16 +91,16 @@ const SettingsNotifications = ({ loaderData }: Route.ComponentProps) => {
 
   return (
     <div className="max-w-2xl">
-      <p className="text-sm text-gray-500 dark:text-gray-400 mb-6">
+      <p className="text-sm text-ink-3 mb-6">
         Choose which events you want to receive an email for. In-app notifications always appear in
         the bell on the home screen.
       </p>
 
       <section className="mb-8">
-        <h2 className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-2">
+        <h2 className="text-sm font-semibold text-ink-1 mb-2">
           As a student
         </h2>
-        <div className="rounded-xl border border-stone-200 dark:border-neutral-800 px-4">
+        <div className="rounded-xl border border-line px-4">
           {STUDENT_PREFS.map(p => (
             <Toggle key={p.key} prefKey={p.key} label={p.label} checked={Boolean(prefs[p.key])} />
           ))}
@@ -108,10 +108,10 @@ const SettingsNotifications = ({ loaderData }: Route.ComponentProps) => {
       </section>
 
       <section>
-        <h2 className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-2">
+        <h2 className="text-sm font-semibold text-ink-1 mb-2">
           As a teaching assistant
         </h2>
-        <div className="rounded-xl border border-stone-200 dark:border-neutral-800 px-4">
+        <div className="rounded-xl border border-line px-4">
           {TA_PREFS.map(p => (
             <Toggle key={p.key} prefKey={p.key} label={p.label} checked={Boolean(prefs[p.key])} />
           ))}
