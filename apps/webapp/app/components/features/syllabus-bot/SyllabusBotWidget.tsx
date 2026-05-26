@@ -75,9 +75,12 @@ const SyllabusBotWidget = ({
       setPanelState('opening');
       setAskMojiActive(true);
     } else if (!isOpen && panelState === 'open') {
-      setPanelState('closing');
+      setPanelState('closed');
+      setAskMojiActive(false);
+      setHasInitialized(false);
+      endConversation();
     }
-  }, [isOpen, panelState, setAskMojiActive]);
+  }, [isOpen, panelState, setAskMojiActive, endConversation]);
 
   useEffect(() => {
     if (panelState === 'opening' || panelState === 'closing') {
@@ -111,12 +114,6 @@ const SyllabusBotWidget = ({
 
     return () => { cancelled = true; };
   }, [panelState, isActive, hasInitialized, initConversation, setAskMojiActive]);
-
-  const handleGenie = useCallback(() => {
-    applyGenieVars();
-    setPanelState('closing');
-    onClose();
-  }, [onClose, applyGenieVars]);
 
   const handleClose = useCallback(async () => {
     onClose();
@@ -160,16 +157,6 @@ const SyllabusBotWidget = ({
               <svg width="8" height="8" viewBox="0 0 8 8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
                 <line x1="1" y1="1" x2="7" y2="7" />
                 <line x1="7" y1="1" x2="1" y2="7" />
-              </svg>
-            </button>
-            <button
-              type="button"
-              className="askmoji-dot-btn askmoji-dot-btn--minimize"
-              onClick={handleGenie}
-              aria-label="Minimize"
-            >
-              <svg width="8" height="8" viewBox="0 0 8 8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
-                <line x1="1" y1="4" x2="7" y2="4" />
               </svg>
             </button>
             <button

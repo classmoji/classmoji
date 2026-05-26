@@ -186,7 +186,7 @@ const SyllabusBotChat = ({
   return (
     <>
       {/* Scrollable body */}
-      <div className="askmoji-body">
+      <div className="askmoji-body" onClick={() => inputRef.current?.focus()}>
         {/* Course header */}
         <div className="askmoji-course-name">{courseName}</div>
         <div className="askmoji-course-sub">Ask about assignments, deadlines, tokens, or the syllabus.</div>
@@ -303,6 +303,8 @@ const SyllabusBotChat = ({
               {inputValue}
               {!isStreaming && !isInitializing && <span className="askmoji-cursor" />}
             </span>
+          ) : hasUserMessages ? (
+            <span className="askmoji-input-display" />
           ) : (
             <span className="askmoji-input-display askmoji-input-display--empty">
               Ask about the course...

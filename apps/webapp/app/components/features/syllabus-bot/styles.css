@@ -94,7 +94,7 @@
 .askmoji-header {
   display: flex;
   align-items: center;
-  padding: 10px 14px;
+  padding: 4px 10px;
   background: var(--am-header-bg);
   border-bottom: 1px solid var(--am-border);
   flex-shrink: 0;
@@ -164,19 +164,15 @@
   background: rgba(255, 96, 89, 0.12);
 }
 
-.askmoji-dot-btn--minimize:hover {
-  color: #FFBD2E;
-  background: rgba(255, 189, 46, 0.12);
-}
-
 .askmoji-title {
   position: absolute;
   left: 50%;
   transform: translateX(-50%);
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 500;
   color: var(--am-title);
   pointer-events: none;
+  letter-spacing: 0.02em;
 }
 
 .askmoji-refresh {
