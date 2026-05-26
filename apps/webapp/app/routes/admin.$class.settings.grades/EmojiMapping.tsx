@@ -39,7 +39,7 @@ const EmojiMapping = ({ emojiMappings, orphanedEmojis }: EmojiMappingProps) => {
   const [extraTokens, setExtraTokens] = useState(0);
   const [description, setDescription] = useState('');
   const [remapSelections, setRemapSelections] = useState<Record<string, string>>({});
-  const { isProTier, isFreeTier } = useSubscription();
+  const { isFreeTier } = useSubscription();
 
   const [editingCell, setEditingCell] = useState<EditingCell | null>(null);
   const [editValue, setEditValue] = useState<string | number | null>(null);
@@ -390,17 +390,15 @@ const EmojiMapping = ({ emojiMappings, orphanedEmojis }: EmojiMappingProps) => {
               max={100}
               className="!w-28"
             />
-            {isProTier && (
-              <Input
-                value={extraTokens}
-                onChange={e => setExtraTokens(parseInt(e.target.value) || 0)}
-                type="number"
-                min={0}
-                placeholder="Tokens"
-                addonBefore={<img src={tokenImage} alt="token" className="w-4 h-4" />}
-                className="!w-28"
-              />
-            )}
+            <Input
+              value={extraTokens}
+              onChange={e => setExtraTokens(parseInt(e.target.value) || 0)}
+              type="number"
+              min={0}
+              placeholder="Tokens"
+              addonBefore={<img src={tokenImage} alt="token" className="w-4 h-4" />}
+              className="!w-28"
+            />
             <Input
               placeholder="Description (optional)"
               value={description}
