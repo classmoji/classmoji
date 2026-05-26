@@ -283,16 +283,27 @@ const SyllabusBotChat = ({
       </div>
 
       {/* Input bar */}
-      <div className="askmoji-input-bar">
+      <div className="askmoji-input-bar" onClick={() => inputRef.current?.focus()}>
         <span className="askmoji-chevron">&#x276F;</span>
-        <input
-          ref={inputRef}
-          value={inputValue}
-          onChange={e => setInputValue(e.target.value)}
-          onKeyDown={handleKeyDown}
-          placeholder="Ask about the course..."
-          disabled={isStreaming || isInitializing}
-        />
+        <div className="askmoji-input-wrap">
+          <input
+            ref={inputRef}
+            value={inputValue}
+            onChange={e => setInputValue(e.target.value)}
+            onKeyDown={handleKeyDown}
+            disabled={isStreaming || isInitializing}
+          />
+          {inputValue ? (
+            <span className="askmoji-input-display">
+              {inputValue}
+              {!isStreaming && !isInitializing && <span className="askmoji-cursor" />}
+            </span>
+          ) : (
+            <span className="askmoji-input-display askmoji-input-display--empty">
+              Ask about the course...
+            </span>
+          )}
+        </div>
       </div>
     </>
   );
