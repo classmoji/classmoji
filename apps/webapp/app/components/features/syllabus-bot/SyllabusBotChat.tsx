@@ -122,6 +122,7 @@ const SyllabusBotChat = ({
   courseName,
 }: SyllabusBotChatProps) => {
   const [inputValue, setInputValue] = useState('');
+  const [inputFocused, setInputFocused] = useState(false);
   const [revealedIds, setRevealedIds] = useState<Set<string>>(new Set(['welcome']));
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -291,9 +292,11 @@ const SyllabusBotChat = ({
             value={inputValue}
             onChange={e => setInputValue(e.target.value)}
             onKeyDown={handleKeyDown}
+            onFocus={() => setInputFocused(true)}
+            onBlur={() => setInputFocused(false)}
             disabled={isStreaming || isInitializing}
           />
-          {inputValue ? (
+          {inputValue || inputFocused ? (
             <span className="askmoji-input-display">
               {inputValue}
               {!isStreaming && !isInitializing && <span className="askmoji-cursor" />}
