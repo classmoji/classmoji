@@ -14,11 +14,7 @@ export const useSubscription = (mode = 'org') => {
       isProTier: false,
       isActive: true,
       canAddTAs: true,
-      canCreateUnlimitedCourses: false,
-      canHaveUnlimitedStudents: false,
       canManageTeams: true,
-      maxStudents: 15,
-      maxCourses: 1,
     };
   }
 
@@ -28,24 +24,12 @@ export const useSubscription = (mode = 'org') => {
   // Compute status from ends_at date (status field was removed from schema)
   const isActive = subscription.ends_at ? new Date(subscription.ends_at) > new Date() : true;
 
-  const canAddTAs = true;
-  const canCreateUnlimitedCourses = isProTier && isActive;
-  const canHaveUnlimitedStudents = isProTier && isActive;
-  const canManageTeams = true;
-
-  const maxStudents = isProTier ? Infinity : 15;
-  const maxCourses = isProTier ? Infinity : 1;
-
   return {
     tier: subscription.tier,
     isFreeTier,
     isProTier,
     isActive,
-    canAddTAs,
-    canCreateUnlimitedCourses,
-    canHaveUnlimitedStudents,
-    canManageTeams,
-    maxStudents,
-    maxCourses,
+    canAddTAs: true,
+    canManageTeams: true,
   };
 };
