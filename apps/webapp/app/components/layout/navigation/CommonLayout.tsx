@@ -71,6 +71,8 @@ const CommonLayout = ({
   const { isProTier } = useSubscription();
   const { tokenBalance } = useStore();
   const askMojiEnabled = useStore(s => s.askMojiEnabled);
+  const isAskMojiOpen = useStore(s => s.isAskMojiOpen);
+  const askMojiActive = useStore(s => s.askMojiActive);
   const setAskMojiOpen = useStore(s => s.setAskMojiOpen);
   const { isDarkMode, background: tweaksBackground } = useDarkMode();
   const themeColors = getThemeByKey(classroom?.settings?.theme);
@@ -221,20 +223,35 @@ const CommonLayout = ({
   const renderAskMoji = () => {
     if (!askMojiEnabled) return null;
 
-    const baseClasses = `group flex items-center gap-2.5 rounded-md transition-colors duration-150 w-full text-ink-1 hover:bg-gray-100/70 dark:hover:bg-neutral-800/60 ${
+    const highlighted = isAskMojiOpen || askMojiActive;
+
+    const baseClasses = `group flex items-center gap-2.5 rounded-md transition-colors duration-150 w-full ${
       collapsed ? 'justify-center p-2 mx-1.5' : 'px-2 py-1.5 mx-1.5'
-    }`;
+    } ${highlighted ? '' : 'hover:bg-nav-hover'}`;
 
     return (
       <button
         key="ask-moji"
         type="button"
-        onClick={() => setAskMojiOpen(true)}
+        data-askmoji-trigger
+        onClick={() => setAskMojiOpen(!isAskMojiOpen)}
         className={baseClasses}
+        style={{
+          color: highlighted ? 'var(--ink-0)' : 'var(--ink-1)',
+          ...(highlighted ? { backgroundColor: 'var(--accent-soft)' } : {}),
+        }}
       >
         {collapsed ? (
           <Tooltip title="Ask Moji" placement="right">
-            <IconApple size={20} strokeWidth={1.75} />
+            <div className="relative">
+              <IconApple size={20} strokeWidth={1.75} />
+              {askMojiActive && (
+                <span
+                  className="absolute -right-1 -top-1 rounded-full"
+                  style={{ width: 6, height: 6, background: '#5DCAA5' }}
+                />
+              )}
+            </div>
           </Tooltip>
         ) : (
           <>
@@ -243,6 +260,12 @@ const CommonLayout = ({
               <span>Ask Moji</span>
               <span className="text-xs text-ink-4">Course Assistant</span>
             </div>
+            {askMojiActive && (
+              <span
+                className="rounded-full shrink-0"
+                style={{ width: 6, height: 6, background: '#5DCAA5' }}
+              />
+            )}
           </>
         )}
       </button>

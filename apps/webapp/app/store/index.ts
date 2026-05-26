@@ -71,6 +71,8 @@ const createAskMojiSlice = (set: SetState) => ({
       if (state.askMojiEnabled === askMojiEnabled) return state;
       return { askMojiEnabled };
     }),
+  askMojiActive: false,
+  setAskMojiActive: (askMojiActive: boolean) => set({ askMojiActive }),
 });
 
 const useStore = create<StoreState>()(
