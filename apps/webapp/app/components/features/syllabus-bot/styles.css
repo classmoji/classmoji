@@ -52,6 +52,23 @@
   transition: width 250ms ease, height 250ms ease;
 }
 
+@media (max-width: 640px) {
+  .askmoji-panel {
+    width: 100%;
+    height: 100%;
+    bottom: 0;
+    right: 0;
+    border-radius: 0;
+    border: none;
+    box-shadow: none;
+  }
+
+  .askmoji-panel[data-expanded] {
+    width: 100%;
+    height: 100%;
+  }
+}
+
 .askmoji-panel[data-expanded] {
   width: 500px;
   height: min(740px, calc(100vh - 48px));
