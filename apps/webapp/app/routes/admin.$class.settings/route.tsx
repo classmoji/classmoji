@@ -1,13 +1,9 @@
 import type { CSSProperties } from 'react';
 import { Outlet, useNavigate, useParams, useLocation } from 'react-router';
 
-import { ProTierFeature } from '~/components';
-import { useSubscription } from '~/hooks';
-
 interface TabDef {
   key: string;
   label: string;
-  pro?: boolean;
   danger?: boolean;
 }
 
@@ -17,7 +13,7 @@ const ALL_TABS: TabDef[] = [
   { key: 'grades', label: 'Grades' },
   { key: 'quizzes', label: 'Quizzes' },
   { key: 'content', label: 'Content' },
-  { key: 'team', label: 'Team', pro: true },
+  { key: 'team', label: 'Team' },
   { key: 'extension', label: 'Extension' },
   { key: 'danger-zone', label: 'Danger Zone', danger: true },
 ];
@@ -26,10 +22,8 @@ const OrgSettings = () => {
   const navigate = useNavigate();
   const { class: classSlug } = useParams();
   const location = useLocation();
-  const { isProTier } = useSubscription();
 
   const currentTab = location.pathname.split('/').pop() || 'general';
-  const visibleTabs = ALL_TABS.filter(t => !t.pro || isProTier);
 
   return (
     <div className="min-h-full flex flex-col">
@@ -39,9 +33,9 @@ const OrgSettings = () => {
 
       <div className="flex-1 flex flex-col">
         <div className="flex -mb-px relative overflow-x-auto">
-          {visibleTabs.map((tab, idx) => {
+          {ALL_TABS.map((tab, idx) => {
             const isActive = tab.key === currentTab;
-            const baseZ = visibleTabs.length - idx;
+            const baseZ = ALL_TABS.length - idx;
             const zStyle = { zIndex: isActive ? 10 : baseZ };
             const inactiveTextColor = tab.danger
               ? 'text-red-500/80 dark:text-red-400/80 hover:text-red-600 dark:hover:text-red-400'
@@ -74,13 +68,7 @@ const OrgSettings = () => {
         </div>
 
         <section className="flex-1 rounded-2xl rounded-tl-none bg-panel border border-line min-h-[calc(100vh-10rem)] p-5 sm:p-6 overflow-auto">
-          {currentTab === 'team' ? (
-            <ProTierFeature>
-              <Outlet />
-            </ProTierFeature>
-          ) : (
-            <Outlet />
-          )}
+          <Outlet />
         </section>
       </div>
     </div>
