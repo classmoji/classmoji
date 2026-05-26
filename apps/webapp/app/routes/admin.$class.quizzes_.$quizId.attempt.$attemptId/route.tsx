@@ -3,7 +3,7 @@ import { useNavigate, useParams } from 'react-router';
 import { Drawer, ConfigProvider, theme, Modal } from 'antd';
 import { useRouteDrawer, useDarkMode } from '~/hooks';
 import { QuizAttemptInterface } from '~/components';
-import { assertClassroomAccess } from '~/utils/helpers';
+import { assertClassroomAccess, assertProTier } from '~/utils/helpers';
 import type { Route } from './+types/route';
 
 export async function loader({ params, request }: Route.LoaderArgs) {
@@ -24,6 +24,8 @@ export async function loader({ params, request }: Route.LoaderArgs) {
     resourceType: 'QUIZ_ATTEMPT',
     attemptedAction: 'view_student_attempt',
   });
+
+  await assertProTier(classSlug);
 
   // 2. Fetch quiz
   const quiz = await ClassmojiService.quiz.findById(quizId);

@@ -1,7 +1,7 @@
 import { Button, Dropdown } from 'antd';
 import { useNavigate, useParams } from 'react-router';
 import { useCallout } from '@classmoji/ui-components';
-import { useGlobalFetcher, useSubscription } from '~/hooks';
+import { useGlobalFetcher } from '~/hooks';
 
 interface MenuProps {
   module: {
@@ -20,7 +20,6 @@ const Menu = ({ module, assistants }: MenuProps) => {
   const navigate = useNavigate();
   const { class: classSlug, title: moduleTitle } = useParams();
   const { fetcher } = useGlobalFetcher();
-  const { isProTier } = useSubscription();
   const callout = useCallout();
 
   const calculateContributions = () => {
@@ -52,7 +51,7 @@ const Menu = ({ module, assistants }: MenuProps) => {
         </button>
       ),
     },
-    isProTier && {
+    {
       key: 'assign-graders',
       label: (
         <button

@@ -8,7 +8,6 @@ import {
   AvatarGroup,
   SearchInput,
   TableActionButtons,
-  ProTierFeature,
 } from '~/components';
 import { ClassmojiService, getGitProvider } from '@classmoji/services';
 import { useGlobalFetcher } from '~/hooks';
@@ -121,57 +120,55 @@ const AdminTeams = ({ loaderData }: Route.ComponentProps) => {
   ];
 
   return (
-    <ProTierFeature>
-      <div className="min-h-full relative">
-        <Outlet />
-        <div className="flex items-center justify-between gap-3 mt-2 mb-4">
-          <h1 className="text-base font-semibold text-ink-2">Teams</h1>
+    <div className="min-h-full relative">
+      <Outlet />
+      <div className="flex items-center justify-between gap-3 mt-2 mb-4">
+        <h1 className="text-base font-semibold text-ink-2">Teams</h1>
 
-          <div className="flex gap-3">
-            <SearchInput
-              query={query}
-              setQuery={setQuery}
-              placeholder="Search teams by name..."
-              className="w-64"
-            />
-
-            <ButtonNew action={() => navigate('../teams/new', { relative: 'path' })}>
-              New team
-            </ButtonNew>
-          </div>
-        </div>
-
-        <div className="rounded-2xl bg-panel ring-1 ring-line p-5 sm:p-6 min-h-[calc(100vh-10rem)]">
-          <Table
-            columns={columns}
-            dataSource={filteredTeams}
-            rowHoverable={false}
-            rowKey={record => record.id}
-            pagination={{
-              pageSize: 20,
-              showSizeChanger: true,
-              showQuickJumper: true,
-              showTotal: (total, range) => `${range[0]}-${range[1]} of ${total} teams`,
-            }}
-            size="middle"
-            scroll={{ x: 'max-content' }}
-            locale={{
-              emptyText: query ? (
-                <div className="text-center py-8 text-ink-3">
-                  <div className="font-medium">No teams found matching &quot;{query}&quot;</div>
-                  <div className="text-sm">Try adjusting your search terms.</div>
-                </div>
-              ) : (
-                <div className="text-center py-8 text-ink-3">
-                  <div className="font-medium">No teams created yet</div>
-                  <div className="text-sm">Create your first team to get started.</div>
-                </div>
-              ),
-            }}
+        <div className="flex gap-3">
+          <SearchInput
+            query={query}
+            setQuery={setQuery}
+            placeholder="Search teams by name..."
+            className="w-64"
           />
+
+          <ButtonNew action={() => navigate('../teams/new', { relative: 'path' })}>
+            New team
+          </ButtonNew>
         </div>
       </div>
-    </ProTierFeature>
+
+      <div className="rounded-2xl bg-panel ring-1 ring-line p-5 sm:p-6 min-h-[calc(100vh-10rem)]">
+        <Table
+          columns={columns}
+          dataSource={filteredTeams}
+          rowHoverable={false}
+          rowKey={record => record.id}
+          pagination={{
+            pageSize: 20,
+            showSizeChanger: true,
+            showQuickJumper: true,
+            showTotal: (total, range) => `${range[0]}-${range[1]} of ${total} teams`,
+          }}
+          size="middle"
+          scroll={{ x: 'max-content' }}
+          locale={{
+            emptyText: query ? (
+              <div className="text-center py-8 text-ink-3">
+                <div className="font-medium">No teams found matching &quot;{query}&quot;</div>
+                <div className="text-sm">Try adjusting your search terms.</div>
+              </div>
+            ) : (
+              <div className="text-center py-8 text-ink-3">
+                <div className="font-medium">No teams created yet</div>
+                <div className="text-sm">Create your first team to get started.</div>
+              </div>
+            ),
+          }}
+        />
+      </div>
+    </div>
   );
 };
 

@@ -11,7 +11,7 @@
  * All payloads are HMAC-signed before being sent to ai-agent service.
  */
 
-import { assertClassroomAccess } from '~/utils/helpers';
+import { assertClassroomAccess, assertProTier } from '~/utils/helpers';
 import { assertClassroomMutationAllowed } from '~/utils/routeAuth.server';
 import { isAIAgentConfigured } from '~/utils/aiFeatures.server';
 import { sendRequest } from '~/services/aiAgentConnection.server';
@@ -68,6 +68,7 @@ async function handleInitSession(request: Request, formData: FormData) {
     attemptedAction: 'init_session',
   });
   assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
+  await assertProTier(classroomSlug);
 
   // Get classroom settings for LLM config
   const { ClassmojiService } = await import('@classmoji/services');
@@ -159,6 +160,7 @@ async function handleSendMessage(request: Request, formData: FormData) {
     attemptedAction: 'send_message',
   });
   assertClassroomMutationAllowed({ status: smClassroom.status, role: smMembership!.role });
+  await assertProTier(classroomSlug);
 
   if (!sessionId || !content) {
     return jsonResponse({ error: 'Missing sessionId or content' }, 400);

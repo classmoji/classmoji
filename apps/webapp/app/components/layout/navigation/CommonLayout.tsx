@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react';
 import { IconFileText, IconMenu2, IconApple } from '@tabler/icons-react';
 import useLocalStorageState from 'use-local-storage-state';
 import { Logo, CalloutSlot } from '@classmoji/ui-components';
-import { ProTierFeature, RequireRole, RecentViewers } from '~/components';
+import { RequireRole, RecentViewers } from '~/components';
 import { useRoleSettings, useSubscription, useRole, useDarkMode } from '~/hooks';
 import { routes, routeCategories, DEMO_ORG_ID, getThemeByKey } from '~/constants';
 import OrgSelect from './OrgSelect';
@@ -365,13 +365,11 @@ const CommonLayout = ({
 
         {/* Token chip (student + pro tier) */}
         {!collapsed && (
-          <ProTierFeature>
-            <RequireRole roles={['STUDENT']}>
-              <div className="px-3 pb-3 shrink-0">
-                <TokenSection />
-              </div>
-            </RequireRole>
-          </ProTierFeature>
+          <RequireRole roles={['STUDENT']}>
+            <div className="px-3 pb-3 shrink-0">
+              <TokenSection />
+            </div>
+          </RequireRole>
         )}
 
         {/* Recent viewers */}

@@ -149,8 +149,6 @@ export const routes = {
     label: 'Teams',
     icon: IconUsersGroup,
     roles: ['OWNER'],
-    tiers: ['PRO'],
-    isProTier: true,
     category: 'people',
   },
   assistants: {
@@ -158,7 +156,6 @@ export const routes = {
     label: 'Assistants',
     icon: IconUserCheck,
     roles: ['OWNER'],
-    isProTier: true,
     category: 'people',
   },
 
@@ -184,7 +181,6 @@ export const routes = {
     label: 'Tokens',
     icon: IconCoin,
     roles: ['OWNER', 'STUDENT'],
-    isProTier: true,
     category: 'assessment',
   },
 
