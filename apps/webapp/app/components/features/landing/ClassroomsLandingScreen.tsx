@@ -1,7 +1,7 @@
 import { useState, useMemo, useEffect, useRef } from 'react';
 import { Link } from 'react-router';
 import { motion, AnimatePresence, LayoutGroup } from 'framer-motion';
-import { Button, IconGithub, IconPlus, IconX } from '@classmoji/ui-components';
+import { Button, IconGithub, IconPlus } from '@classmoji/ui-components';
 import { ClassroomCard } from './ClassroomCard';
 import { ClassroomRow, ClassroomRowHeader } from './ClassroomRow';
 import type { LandingClass } from './types';
@@ -61,7 +61,7 @@ export function ClassroomsLandingScreen({
   membershipRoles,
 }: Props) {
   const [view, setView] = useState<'grid' | 'list'>('grid');
-  const [bannerOpen, setBannerOpen] = useState(true);
+
   const [archivedExpanded, setArchivedExpanded] = useState(false);
 
   const [pinOverrides, setPinOverrides] = useState<Record<string, number | null>>({});
@@ -272,24 +272,6 @@ export function ClassroomsLandingScreen({
           </div>
         </div>
 
-        {bannerOpen && (
-          <div className="flex items-center gap-2.5 px-3.5 py-2.5 mb-4 rounded-xl bg-[#fdf8e8] dark:bg-amber-950/20 ring-1 ring-[#f0e6b8] dark:ring-amber-800/40 text-[#6b5a1e] dark:text-amber-200 text-sm">
-            <span className="text-sm">🪙</span>
-            <span>
-              <b className="font-semibold">Token economy is live.</b> Students earn tokens for
-              early submissions and spend them on deadline extensions — configure the rate in class
-              settings.
-            </span>
-            <button
-              type="button"
-              onClick={() => setBannerOpen(false)}
-              className="ml-auto text-[#8a7530] dark:text-amber-400 bg-transparent border-none cursor-pointer inline-flex hover:text-[#5a4c1a] dark:hover:text-amber-200 transition-colors"
-              aria-label="Dismiss"
-            >
-              <IconX size={12} />
-            </button>
-          </div>
-        )}
 
         <div className="flex items-center gap-2 mb-4">
           <div className="flex-1" />
