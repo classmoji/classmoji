@@ -67,7 +67,6 @@ enum QuizGradingStrategy {
 enum SubscriptionTier {
   FREE
   PRO
-  ENTERPRISE
 }
 
 enum TokenTransactionType {
