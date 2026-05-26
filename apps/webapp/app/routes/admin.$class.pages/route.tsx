@@ -68,7 +68,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
   // Handle delete action
   if (intent === 'delete') {
     await ClassmojiService.page.deletePage(pageId);
-    return { success: true, message: 'Page deleted successfully' };
+    return { success: true, intent: 'delete' };
   }
 
   // Handle status changes (combines is_draft and is_public)
@@ -145,10 +145,10 @@ export default function AdminPages({ loaderData }: Route.ComponentProps) {
   // Show success/error callout when delete completes
   useEffect(() => {
     if (fetcher.state === 'idle' && fetcher.data) {
-      if (fetcher.data.success) {
+      if (fetcher.data.intent === 'delete' && fetcher.data.success) {
         callout.show({
           variant: 'success',
-          title: fetcher.data.message || 'Page deleted successfully!',
+          title: 'Page deleted successfully!',
           autoDismissMs: 3000,
         });
       } else if (fetcher.data.error) {
