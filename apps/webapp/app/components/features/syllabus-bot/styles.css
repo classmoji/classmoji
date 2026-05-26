@@ -280,7 +280,7 @@
 }
 
 .askmoji-msg + .askmoji-msg {
-  margin-top: 14px;
+  margin-top: 20px;
 }
 
 .askmoji-msg--user {
@@ -298,8 +298,9 @@
 }
 
 .askmoji-msg--user .askmoji-user-text {
-  color: var(--am-text-user);
+  color: var(--accent);
   font-size: 14px;
+  font-weight: 600;
   line-height: 1.6;
 }
 
@@ -360,7 +361,6 @@
   flex-wrap: wrap;
   gap: 6px;
   margin-top: 10px;
-  padding-left: 22px;
 }
 
 .askmoji-ref {
