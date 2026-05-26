@@ -223,11 +223,9 @@ const CommonLayout = ({
   const renderAskMoji = () => {
     if (!askMojiEnabled) return null;
 
-    const highlighted = isAskMojiOpen || askMojiActive;
-
-    const baseClasses = `group flex items-center gap-2.5 rounded-md transition-colors duration-150 w-full ${
-      collapsed ? 'justify-center p-2 mx-1.5' : 'px-2 py-1.5 mx-1.5'
-    } ${highlighted ? '' : 'hover:bg-nav-hover'}`;
+    const baseClasses = `group flex items-center gap-2.5 rounded-md transition-colors duration-150 ${
+      collapsed ? 'justify-center p-2 mx-1.5 w-[calc(100%-12px)]' : 'px-2 py-1.5 mx-1.5 w-[calc(100%-12px)] text-left'
+    } ${isAskMojiOpen ? '' : 'hover:bg-nav-hover'}`;
 
     return (
       <button
@@ -237,8 +235,8 @@ const CommonLayout = ({
         onClick={() => setAskMojiOpen(!isAskMojiOpen)}
         className={baseClasses}
         style={{
-          color: highlighted ? 'var(--ink-0)' : 'var(--ink-1)',
-          ...(highlighted ? { backgroundColor: 'var(--accent-soft)' } : {}),
+          color: isAskMojiOpen ? 'var(--ink-0)' : 'var(--ink-1)',
+          ...(isAskMojiOpen ? { backgroundColor: 'var(--nav-hover)' } : {}),
         }}
       >
         {collapsed ? (
@@ -257,15 +255,17 @@ const CommonLayout = ({
           <>
             <IconApple size={20} strokeWidth={1.75} className="shrink-0" />
             <div className="flex-1 flex flex-col text-left leading-tight">
-              <span>Ask Moji</span>
+              <span className="flex items-center gap-1.5">
+                Ask Moji
+                {askMojiActive && (
+                  <span
+                    className="rounded-full"
+                    style={{ width: 5, height: 5, background: '#5DCAA5' }}
+                  />
+                )}
+              </span>
               <span className="text-xs text-ink-4">Course Assistant</span>
             </div>
-            {askMojiActive && (
-              <span
-                className="rounded-full shrink-0"
-                style={{ width: 6, height: 6, background: '#5DCAA5' }}
-              />
-            )}
           </>
         )}
       </button>
