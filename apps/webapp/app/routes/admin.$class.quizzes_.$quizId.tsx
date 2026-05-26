@@ -86,7 +86,7 @@ const getEvaluationData = (attempt: Pick<QuizAttempt, 'messages'>) => {
 
 export const loader = async ({ request, params }: Route.LoaderArgs) => {
   const { ClassmojiService } = await import('@classmoji/services');
-  const { addAuditLog, assertClassroomAccess } = await import('~/utils/helpers');
+  const { addAuditLog, assertClassroomAccess, assertProTier } = await import('~/utils/helpers');
 
   const classSlug = params.class!;
   const quizId = params.quizId!;
@@ -99,6 +99,8 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
     resourceType: 'QUIZ_DETAILS',
     attemptedAction: 'view',
   });
+
+  await assertProTier(classSlug);
 
   const quiz = await ClassmojiService.quiz.findById(quizId);
 
@@ -294,9 +296,11 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
 
 export const action = async ({ params, request }: Route.ActionArgs) => {
   const { ClassmojiService } = await import('@classmoji/services');
-  const { assertClassroomAccess } = await import('~/utils/helpers');
+  const { assertClassroomAccess, assertProTier } = await import('~/utils/helpers');
   const classSlug = params.class!;
   const quizId = params.quizId!;
+
+  await assertProTier(classSlug);
 
   const data = await request.json();
   console.log('[Quiz Detail Action] Received action:', data._action);

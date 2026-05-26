@@ -4,7 +4,7 @@ import { IconSend, IconBook, IconCalendar, IconTrash } from '@tabler/icons-react
 import { TableActionButtons, EditableCell, ButtonNew } from '~/components';
 import { ClassmojiService } from '@classmoji/services';
 import { namedAction } from 'remix-utils/named-action';
-import { assertClassroomAccess, assertClassroomMutationAllowed } from '~/utils/helpers';
+import { assertClassroomAccess, assertClassroomMutationAllowed, assertProTier } from '~/utils/helpers';
 import type { Route } from './+types/route';
 import type React from 'react';
 import type { TablerIconsProps } from '@tabler/icons-react';
@@ -53,6 +53,8 @@ export async function loader({ params, request }: Route.LoaderArgs) {
     resourceType: 'ADMIN_QUIZ_ACCESS',
     attemptedAction: 'view_admin_quizzes',
   });
+
+  await assertProTier(classSlug);
 
   // Get classroom settings
   const settings = await ClassmojiService.classroom.getClassroomSettingsForServer(classroom.id);
@@ -135,6 +137,7 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
     },
   });
   assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
+  await assertProTier(classSlug);
 
   // Create FormData with the action from the JSON
   const formData = new FormData();

@@ -133,6 +133,19 @@ export {
   requireStudentAccess,
 } from '@classmoji/auth/server';
 
+/**
+ * Throws a 403 Response if the classroom's owner does not have an active PRO
+ * subscription. Use after assertClassroomAccess in loaders/actions that gate
+ * pro-only features (e.g. quizzes).
+ */
+export const assertProTier = async (classroomSlug: string) => {
+  const subscription = await ClassmojiService.subscription.getByClassroom(classroomSlug);
+  const isActive = subscription.ends_at ? new Date(subscription.ends_at) > new Date() : true;
+  if (subscription.tier !== 'PRO' || !isActive) {
+    throw new Response('This feature requires a Pro subscription', { status: 403 });
+  }
+};
+
 // NOTE: sanitizeClassroomForClient was removed - assertClassroomAccess now sanitizes automatically.
 // For direct findBySlug calls, use ClassmojiService.classroom.getClassroomForUI()
 

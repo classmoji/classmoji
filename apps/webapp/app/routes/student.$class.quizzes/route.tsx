@@ -5,7 +5,7 @@ import { CheckCircleOutlined, PlayCircleOutlined, TrophyOutlined } from '@ant-de
 import dayjs from 'dayjs';
 import type { Route } from './+types/route';
 import { Countdown } from '~/components';
-import { assertClassroomAccess } from '~/utils/helpers';
+import { assertClassroomAccess, assertProTier } from '~/utils/helpers';
 import { formatDuration } from '~/utils/quizUtils';
 
 const { Text } = Typography;
@@ -81,6 +81,8 @@ export async function loader({ params, request }: Route.LoaderArgs) {
     resourceType: 'STUDENT_QUIZ_ACCESS',
     attemptedAction: 'view_student_quizzes',
   });
+
+  await assertProTier(classSlug);
 
   // Get classroom settings
   const settings = await ClassmojiService.classroom.getClassroomSettingsForServer(classroom.id);
