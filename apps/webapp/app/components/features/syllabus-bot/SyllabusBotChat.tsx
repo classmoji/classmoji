@@ -123,7 +123,9 @@ const SyllabusBotChat = ({
 }: SyllabusBotChatProps) => {
   const [inputValue, setInputValue] = useState('');
   const [inputFocused, setInputFocused] = useState(false);
-  const [revealedIds, setRevealedIds] = useState<Set<string>>(new Set(['welcome']));
+  const [revealedIds, setRevealedIds] = useState<Set<string>>(
+    () => new Set(messages.filter(m => m.role === 'assistant').map(m => m.id))
+  );
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
