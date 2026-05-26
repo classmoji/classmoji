@@ -25,14 +25,14 @@ function PinIcon({ filled, size = 14 }: { filled: boolean; size?: number }) {
       width={size}
       height={size}
       viewBox="0 0 24 24"
-      fill={filled ? 'currentColor' : 'none'}
-      stroke="currentColor"
+      fill={filled ? '#f59e0b' : 'none'}
+      stroke={filled ? '#f59e0b' : 'currentColor'}
       strokeWidth="1.8"
       strokeLinecap="round"
       strokeLinejoin="round"
       aria-hidden="true"
     >
-      <path d="M12 2 L15 8 L21 9 L17 13 L18 20 L12 17 L6 20 L7 13 L3 9 L9 8 Z" />
+      <path d="M12 2l2.94 5.95L21 8.95l-4.5 4.39 1.06 6.18L12 16.5l-5.56 2.92 1.06-6.18L3 8.95l6.06-.94L12 2z" />
     </svg>
   );
 }
@@ -141,18 +141,13 @@ export function ClassroomCard({
                 aria-label={isPinned ? 'Unpin classroom' : 'Pin classroom'}
                 title={isPinned ? 'Unpin' : 'Pin'}
                 onClick={handlePinClick}
-                initial={{ opacity: 0, scale: 0.6, width: 0 }}
-                animate={{
-                  opacity: 1,
-                  scale: 1,
-                  width: 'auto',
-                  rotate: isPinned ? -18 : 0,
-                }}
-                exit={{ opacity: 0, scale: 0.6, width: 0 }}
-                whileHover={{ scale: 1.15 }}
-                whileTap={{ scale: 0.85, rotate: isPinned ? 0 : -18 }}
-                transition={{ type: 'spring', stiffness: 600, damping: 22 }}
-                className={`border-none bg-transparent cursor-pointer p-0.5 rounded inline-flex items-center justify-center overflow-hidden ${isPinned ? 'text-[var(--accent)]' : 'text-ink-4'}`}
+                initial={{ opacity: 0, scale: 0.5, rotate: -90 }}
+                animate={{ opacity: 1, scale: 1, rotate: 0 }}
+                exit={{ opacity: 0, scale: 0.5, rotate: 90 }}
+                whileHover={{ scale: 1.2, rotate: 15 }}
+                whileTap={{ scale: 0.8, rotate: -15 }}
+                transition={{ type: 'spring', stiffness: 200, damping: 15 }}
+                className={`border-none bg-transparent cursor-pointer p-2 -m-1.5 rounded-lg inline-flex items-center justify-center ${isPinned ? 'text-amber-500' : 'text-ink-4 hover:text-amber-400'}`}
               >
                 <PinIcon filled={isPinned} />
               </motion.button>
