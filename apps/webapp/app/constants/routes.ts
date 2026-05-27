@@ -29,7 +29,7 @@ import {
 export const routeCategories = {
   content: {
     label: 'Content',
-    items: ['modules', 'assignments', 'slides', 'pages', 'quizzes'],
+    items: ['repositories', 'assignments', 'slides', 'pages', 'quizzes'],
   },
   assessment: {
     label: 'Assessment',
@@ -69,9 +69,9 @@ export const routes = {
   },
 
   // Content
-  modules: {
+  repositories: {
     link: '/repos',
-    label: 'Modules',
+    label: 'Repositories',
     icon: IconFileText,
     roles: ['OWNER', 'ASSISTANT', 'STUDENT'],
     category: 'content',
