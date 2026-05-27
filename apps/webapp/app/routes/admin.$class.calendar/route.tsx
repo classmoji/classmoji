@@ -3,11 +3,10 @@ import { Button, Modal } from 'antd';
 import { PlusOutlined } from '@ant-design/icons';
 import invariant from 'tiny-invariant';
 import { data, useFetcher, useParams } from 'react-router';
-import { toast } from 'react-toastify';
-import { PageHeader } from '~/components';
 import { ClassmojiService } from '@classmoji/services';
+import { useCallout } from '@classmoji/ui-components';
 import getPrisma from '@classmoji/database';
-import { assertClassroomAccess } from '~/utils/helpers';
+import { assertClassroomAccess, assertClassroomMutationAllowed } from '~/utils/helpers';
 import { buildCalendarUrl, getCalendarDateRange } from '~/utils/calendar.server';
 import type { Route } from './+types/route';
 import CourseCalendar from '~/components/features/calendar/CourseCalendar';
@@ -75,8 +74,8 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
       orderBy: { title: 'asc' },
     }),
     getPrisma().assignment.findMany({
-      where: { module: { classroom_id: classroom.id }, is_published: true },
-      select: { id: true, title: true, module: { select: { title: true, slug: true } } },
+      where: { repository: { classroom_id: classroom.id }, is_published: true },
+      select: { id: true, title: true, repository: { select: { title: true, slug: true } } },
       orderBy: { title: 'asc' },
     }),
   ]);
@@ -115,6 +114,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
     resourceType: 'CALENDAR',
     attemptedAction: 'modify',
   });
+  assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
 
   const isAdmin = ['OWNER', 'TEACHER'].includes(membership!.role);
 
@@ -265,8 +265,8 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
       return data({ success: false, error: 'Assignment not found' }, { status: 404 });
     }
 
-    // Verify assignment belongs to this classroom (through its module)
-    if (assignment.module.classroom_id !== classroom.id) {
+    // Verify assignment belongs to this classroom (through its repository)
+    if (assignment.repository.classroom_id !== classroom.id) {
       return data(
         { success: false, error: 'Assignment does not belong to this classroom' },
         { status: 403 }
@@ -317,6 +317,7 @@ const AdminCalendar = ({ loaderData }: Route.ComponentProps) => {
   const { class: classSlug } = useParams();
   const fetcher = useFetcher();
   const eventsFetcher = useFetcher();
+  const callout = useCallout();
 
   const [addModalOpen, setAddModalOpen] = useState(false);
   const [editModalOpen, setEditModalOpen] = useState(false);
@@ -353,7 +354,7 @@ const AdminCalendar = ({ loaderData }: Route.ComponentProps) => {
         eventsFetcher.load(`?year=${currentViewYear}&month=${currentViewMonth}`);
       } else if (fetcher.data.error) {
         setOptimisticEvents(null); // Revert on error
-        toast.error(fetcher.data.error);
+        callout.show({ variant: 'error', title: fetcher.data.error });
       }
     }
   }, [fetcher.data, fetcher.state]);
@@ -394,7 +395,7 @@ const AdminCalendar = ({ loaderData }: Route.ComponentProps) => {
     const canDragEvent = isAdmin || Number(event.created_by) === Number(userId);
 
     if (!canDragEvent) {
-      toast.error('You can only move your own events');
+      callout.show({ variant: 'error', title: 'You can only move your own events' });
       return;
     }
 
@@ -493,8 +494,9 @@ const AdminCalendar = ({ loaderData }: Route.ComponentProps) => {
   };
 
   return (
-    <div>
-      <PageHeader title="Calendar" routeName="calendar">
+    <div className="min-h-full">
+      <div className="flex items-center justify-between gap-3 mt-2 mb-4">
+        <h1 className="text-base font-semibold text-ink-2">Calendar</h1>
         <div className="flex gap-2">
           <CalendarSubscriptionCard subscriptionUrl={subscriptionUrl} />
           {canEdit && (
@@ -503,7 +505,7 @@ const AdminCalendar = ({ loaderData }: Route.ComponentProps) => {
             </Button>
           )}
         </div>
-      </PageHeader>
+      </div>
 
       <CourseCalendar
         events={events}

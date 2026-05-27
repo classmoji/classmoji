@@ -3,12 +3,11 @@ import { Button, Modal } from 'antd';
 import { PlusOutlined } from '@ant-design/icons';
 import invariant from 'tiny-invariant';
 import { data, useFetcher, useParams } from 'react-router';
-import { toast } from 'react-toastify';
 import type { Route } from './+types/route';
-import { PageHeader } from '~/components';
 import { ClassmojiService } from '@classmoji/services';
+import { useCallout } from '@classmoji/ui-components';
 import getPrisma from '@classmoji/database';
-import { assertClassroomAccess } from '~/utils/helpers';
+import { assertClassroomAccess, assertClassroomMutationAllowed } from '~/utils/helpers';
 import { buildCalendarUrl, getCalendarDateRange } from '~/utils/calendar.server';
 import CourseCalendar from '~/components/features/calendar/CourseCalendar';
 import CalendarSubscriptionCard from '~/components/features/calendar/CalendarSubscriptionCard';
@@ -17,6 +16,7 @@ import EditEventModal, { type EventFormData } from '~/components/features/calend
 import EventCard from '~/components/features/calendar/EventCard';
 import EventLinks from '~/components/features/calendar/EventLinks';
 import type { CalendarEventWithLinks } from '~/components/features/calendar/types';
+import { useClassroomStatusModals } from '~/utils/classroomStatusModals';
 
 export const loader = async ({ request, params }: Route.LoaderArgs) => {
   const { class: classSlug } = params;
@@ -73,8 +73,8 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
       orderBy: { title: 'asc' },
     }),
     getPrisma().assignment.findMany({
-      where: { module: { classroom_id: classroom.id }, is_published: true },
-      select: { id: true, title: true, module: { select: { title: true, slug: true } } },
+      where: { repository: { classroom_id: classroom.id }, is_published: true },
+      select: { id: true, title: true, repository: { select: { title: true, slug: true } } },
       orderBy: { title: 'asc' },
     }),
   ]);
@@ -98,13 +98,14 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
   const { class: classSlug } = params;
   invariant(classSlug, 'Classroom is required');
 
-  const { userId, classroom } = await assertClassroomAccess({
+  const { userId, classroom, membership } = await assertClassroomAccess({
     request,
     classroomSlug: classSlug,
     allowedRoles: ['ASSISTANT', 'OWNER', 'TEACHER'],
     resourceType: 'CALENDAR',
     attemptedAction: 'modify',
   });
+  assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
 
   const formData = await request.formData();
   const intent = formData.get('intent');
@@ -280,6 +281,8 @@ const AssistantCalendar = ({ loaderData }: Route.ComponentProps) => {
   const { class: classSlug } = useParams();
   const fetcher = useFetcher();
   const eventsFetcher = useFetcher();
+  const callout = useCallout();
+  const { showStatusErrorFromResponse } = useClassroomStatusModals();
   const [addModalOpen, setAddModalOpen] = useState(false);
   const [editModalOpen, setEditModalOpen] = useState(false);
   const [selectedEvent, setSelectedEvent] = useState<CalendarEventWithLinks | null>(null);
@@ -306,6 +309,7 @@ const AssistantCalendar = ({ loaderData }: Route.ComponentProps) => {
   // Close modals and show toast when fetcher completes
   useEffect(() => {
     if (fetcher.state === 'idle' && fetcher.data) {
+      showStatusErrorFromResponse(fetcher.data as { error?: string } | undefined);
       if (fetcher.data.success) {
         setOptimisticEvents(null); // Clear optimistic state, let fresh data take over
         setAddModalOpen(false);
@@ -315,7 +319,7 @@ const AssistantCalendar = ({ loaderData }: Route.ComponentProps) => {
         eventsFetcher.load(`?year=${currentViewYear}&month=${currentViewMonth}`);
       } else if (fetcher.data.error) {
         setOptimisticEvents(null); // Revert on error
-        toast.error(fetcher.data.error);
+        callout.show({ variant: 'error', title: fetcher.data.error });
       }
     }
   }, [fetcher.data, fetcher.state]);
@@ -331,7 +335,7 @@ const AssistantCalendar = ({ loaderData }: Route.ComponentProps) => {
   const handleUpdateEvent = (eventData: EventFormData) => {
     if (!selectedEvent?.id) {
       console.error('[Calendar] Cannot update: selectedEvent.id is missing');
-      toast.error('Unable to update event - please try again');
+      callout.show({ variant: 'error', title: 'Unable to update event - please try again' });
       return;
     }
 
@@ -357,7 +361,7 @@ const AssistantCalendar = ({ loaderData }: Route.ComponentProps) => {
   const handleEventDrop = (event: CalendarEventWithLinks, newStartTime: Date, newEndTime: Date) => {
     // Only allow dragging user's own events (not deadlines)
     if (event.is_deadline || String(event.created_by) !== String(userId)) {
-      toast.error('You can only move your own events');
+      callout.show({ variant: 'error', title: 'You can only move your own events' });
       return;
     }
 
@@ -428,15 +432,16 @@ const AssistantCalendar = ({ loaderData }: Route.ComponentProps) => {
   };
 
   return (
-    <div>
-      <PageHeader title="Calendar" routeName="calendar">
+    <div className="min-h-full">
+      <div className="flex items-center justify-between gap-3 mt-2 mb-4">
+        <h1 className="text-base font-semibold text-ink-2">Calendar</h1>
         <div className="flex gap-2">
           <CalendarSubscriptionCard subscriptionUrl={subscriptionUrl} />
           <Button type="primary" icon={<PlusOutlined />} onClick={() => setAddModalOpen(true)}>
             Add Event
           </Button>
         </div>
-      </PageHeader>
+      </div>
 
       <CourseCalendar
         events={events}

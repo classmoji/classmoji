@@ -10,8 +10,8 @@ import { ClassmojiService } from '@classmoji/services';
 import StudentsTable from './StudentsTable';
 import { ActionTypes } from '~/constants';
 import { waitForRunCompletion } from '~/utils/helpers';
-import { requireClassroomAdmin } from '~/utils/routeAuth.server';
-import { PageHeader, RequireRole, SearchInput } from '~/components';
+import { requireClassroomAdmin, assertClassroomMutationAllowed } from '~/utils/routeAuth.server';
+import { RequireRole, SearchInput } from '~/components';
 import type { Route } from './+types/route';
 
 export const loader = async ({ params, request }: Route.LoaderArgs) => {
@@ -68,12 +68,12 @@ const StudentsScreen = ({ loaderData }: Route.ComponentProps) => {
       });
 
   return (
-    <>
+    <div className="min-h-full relative">
       <Outlet />
-      <div className="flex justify-between items-center">
-        <PageHeader title="Students" routeName="students" />
+      <div className="flex items-center justify-between gap-3 mt-2 mb-4">
+        <h1 className="text-base font-semibold text-ink-2">Students</h1>
 
-        <div className="flex gap-4">
+        <div className="flex gap-3">
           <SearchInput
             query={query}
             setQuery={setQuery}
@@ -94,17 +94,18 @@ const StudentsScreen = ({ loaderData }: Route.ComponentProps) => {
       </div>
 
       <StudentsTable students={filteredStudents} classroom={classroom} query={query} />
-    </>
+    </div>
   );
 };
 
 export const action = async ({ request, params }: Route.ActionArgs) => {
   const classSlug = params.class!;
 
-  const { classroom } = await requireClassroomAdmin(request, classSlug, {
+  const { classroom, membership } = await requireClassroomAdmin(request, classSlug, {
     resourceType: 'STUDENT_ROSTER',
     action: 'remove_student',
   });
+  assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
 
   const data = await request.json();
 

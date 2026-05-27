@@ -23,12 +23,12 @@ const LateOverrideButton = ({ repositoryAssignment }: LateOverrideButtonProps) =
 
     fetcher!.submit(
       {
-        repository_assignment_id: repositoryAssignment.id,
+        git_repo_assignment_id: repositoryAssignment.id,
         is_late_override: value,
       },
       {
         method: 'post',
-        action: `/api/repositoryAssignment/${classroom?.slug}?action=updateLateOverride`,
+        action: `/api/gitRepoAssignment/${classroom?.slug}?action=updateLateOverride`,
         encType: 'application/json',
       }
     );

@@ -7,6 +7,7 @@
     "db:generate": "prisma generate",
     "db:reset": "prisma migrate reset --force",
     "db:seed": "node ./scripts/seed.js",
+    "backfill:repo-analytics": "tsx scripts/backfillRepoAnalytics.ts",
     "db:console": "@prismatools/console@latest",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",

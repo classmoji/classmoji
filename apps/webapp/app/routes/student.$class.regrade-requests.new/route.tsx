@@ -7,7 +7,7 @@ import { tasks } from '@trigger.dev/sdk';
 import type { Route } from './+types/route';
 import { useDisclosure, useGlobalFetcher } from '~/hooks';
 import { ClassmojiService } from '@classmoji/services';
-import { requireStudentAccess, waitForRunCompletion } from '~/utils/helpers';
+import { requireStudentAccess, waitForRunCompletion, assertClassroomMutationAllowed } from '~/utils/helpers';
 
 export const loader = async ({ params, request }: Route.LoaderArgs) => {
   const { userId } = await requireStudentAccess(request, params.class!, {
@@ -28,7 +28,7 @@ const NewRegradeRequest = ({ loaderData }: Route.ComponentProps) => {
   const { show, close, visible } = useDisclosure();
   const [assignment, setAssignment] = useState(null);
   const [comment, setComment] = useState('');
-  const { fetcher, notify } = useGlobalFetcher();
+  const { fetcher } = useGlobalFetcher();
   const navigate = useNavigate();
   const { class: classSlug } = useParams();
   const { state } = useLocation();
@@ -44,12 +44,10 @@ const NewRegradeRequest = ({ loaderData }: Route.ComponentProps) => {
   }, [state]);
 
   const handleSubmit = () => {
-    notify('REQUEST_REGRADE', 'Submitting resubmit request...');
-
     fetcher!.submit(
       {
         student_comment: comment,
-        repository_assignment_id: assignment,
+        git_repo_assignment_id: assignment,
       },
       {
         method: 'POST',
@@ -83,7 +81,7 @@ const NewRegradeRequest = ({ loaderData }: Route.ComponentProps) => {
     >
       <Alert message="Explain your resubmit request below." type="info" showIcon banner />
 
-      <p className="my-4 text-[13px] text-gray-500">
+      <p className="my-4 text-sm text-gray-500">
         If you want to resubmit your assignment, you can use this form to contact the TA
         responsible. Make sure to review your course resubmit policy before submitting.
       </p>
@@ -112,21 +110,22 @@ const NewRegradeRequest = ({ loaderData }: Route.ComponentProps) => {
 };
 
 export const action = async ({ request, params }: Route.ActionArgs) => {
-  const { userId, classroom } = await requireStudentAccess(request, params.class!, {
+  const { userId, classroom, membership } = await requireStudentAccess(request, params.class!, {
     resourceType: 'REGRADE_REQUESTS',
     action: 'submit_regrade_request',
   });
+  assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
 
   const data = await request.json();
-  const repositoryAssignment = await ClassmojiService.repositoryAssignment.findById(
-    data.repository_assignment_id
+  const repositoryAssignment = await ClassmojiService.gitRepoAssignment.findById(
+    data.git_repo_assignment_id
   );
 
   // Verify assignment belongs to this classroom AND this user (IDOR protection)
   if (
     !repositoryAssignment ||
-    repositoryAssignment.repository.classroom_id !== classroom.id ||
-    repositoryAssignment.repository.student_id !== userId
+    repositoryAssignment.git_repo.classroom_id !== classroom.id ||
+    repositoryAssignment.git_repo.student_id !== userId
   ) {
     throw new Response('Assignment not found or not yours', { status: 403 });
   }

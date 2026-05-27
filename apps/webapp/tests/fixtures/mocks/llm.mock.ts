@@ -46,7 +46,7 @@ export async function mockQuizAPI(page: Page, options: LLMMockOptions = {}): Pro
 
     // Add artificial delay
     if (delay > 0) {
-      await new Promise((r) => setTimeout(r, delay));
+      await new Promise(r => setTimeout(r, delay));
     }
 
     const action = postData?._action;
@@ -116,7 +116,7 @@ export async function mockQuizAPI(page: Page, options: LLMMockOptions = {}): Pro
  * Mock prompt assistant endpoint
  */
 export async function mockPromptAssistant(page: Page): Promise<void> {
-  await page.route('**/api/quiz.prompt-assistant', async (route) => {
+  await page.route('**/api/quiz.prompt-assistant', async route => {
     return route.fulfill({
       status: 200,
       contentType: 'application/json',
@@ -135,7 +135,7 @@ export async function mockPromptAssistant(page: Page): Promise<void> {
  * Mock syllabus bot endpoint
  */
 export async function mockSyllabusBot(page: Page): Promise<void> {
-  await page.route('**/api/syllabus-bot.*', async (route) => {
+  await page.route('**/api/syllabus-bot.*', async route => {
     return route.fulfill({
       status: 200,
       contentType: 'application/json',

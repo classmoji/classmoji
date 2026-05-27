@@ -10,6 +10,6 @@
       "~/*": ["./app/*"]
     }
   },
-  "include": ["app/**/*", ".react-router/types/**/*", "playwright.config.ts"],
+  "include": ["app/**/*", ".react-router/types/**/*", "playwright.config.ts", "vitest.config.ts"],
   "exclude": [".react-router/types/+routes.ts", ".react-router/types/app/routes/+types/README.ts"]
 }

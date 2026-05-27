@@ -1,15 +1,13 @@
-import { Table, Button, Tag, Tooltip } from 'antd';
+import { Table, Button, Tag } from 'antd';
 import { useNavigate, useParams } from 'react-router';
 import { useGlobalFetcher, useRole } from '~/hooks';
 import {
   Emoji,
   EmojiGrader,
-  PageHeader,
   TableActionButtons,
   UserThumbnailView,
   EmojisDisplay,
 } from '~/components';
-import { IconCheck } from '@tabler/icons-react';
 import { openRepositoryAssignmentInGithub } from '~/utils/helpers.client';
 
 interface RegradeGrade {
@@ -29,10 +27,10 @@ interface RegradeRequest {
     image?: string | null;
     _count: { regrade_requests: number };
   };
-  repository_assignment: {
+  git_repo_assignment: {
     id: string;
     assignment: { title: string; [key: string]: unknown };
-    repository: { name: string; [key: string]: unknown } | null;
+    git_repo: { name: string; [key: string]: unknown } | null;
     grades: RegradeGrade[];
     provider_issue_number?: number | null;
     studentId?: string;
@@ -53,7 +51,7 @@ const RegradeRequestsTable = ({ requests, emojiMappings, org }: RegradeRequestsT
   const navigate = useNavigate();
   const { role } = useRole();
   const { class: classSlug } = useParams();
-  const { notify, fetcher } = useGlobalFetcher();
+  const { fetcher } = useGlobalFetcher();
 
   // Calculate statistics
   const _totalRequests = requests.length;
@@ -79,11 +77,11 @@ const RegradeRequestsTable = ({ requests, emojiMappings, org }: RegradeRequestsT
     },
     {
       title: 'Assignment',
-      dataIndex: ['repository_assignment', 'assignment', 'title'],
+      dataIndex: ['git_repo_assignment', 'assignment', 'title'],
       key: 'assignment',
       width: role === 'STUDENT' ? '25%' : '20%',
       render: (title: string) => (
-        <div className="truncate font-medium text-gray-800 dark:text-gray-200">{title}</div>
+        <div className="truncate font-medium text-ink-1">{title}</div>
       ),
     },
     {
@@ -102,10 +100,10 @@ const RegradeRequestsTable = ({ requests, emojiMappings, org }: RegradeRequestsT
     },
     {
       title: 'New Grade',
-      dataIndex: 'repository_assignment',
+      dataIndex: 'git_repo_assignment',
       key: 'new_grade',
       width: '12%',
-      render: (repositoryAssignment: RegradeRequest['repository_assignment']) => (
+      render: (repositoryAssignment: RegradeRequest['git_repo_assignment']) => (
         <div className="flex justify-center">
           <EmojisDisplay grades={repositoryAssignment?.grades} />
         </div>
@@ -132,9 +130,7 @@ const RegradeRequestsTable = ({ requests, emojiMappings, org }: RegradeRequestsT
       render: (comment: string | null) => (
         <div className="text-gray-700 max-w-xs">
           {comment ? (
-            <Tooltip title={comment}>
-              <div className="truncate">{comment}</div>
-            </Tooltip>
+            <div className="truncate">{comment}</div>
           ) : (
             <span className="text-gray-400 italic">No comment</span>
           )}
@@ -148,12 +144,12 @@ const RegradeRequestsTable = ({ requests, emojiMappings, org }: RegradeRequestsT
       render: (_: unknown, request: RegradeRequest) => (
         <TableActionButtons
           onView={
-            org && request.repository_assignment?.repository
+            org && request.git_repo_assignment?.git_repo
               ? () =>
                   openRepositoryAssignmentInGithub(org, {
-                    ...request.repository_assignment,
+                    ...request.git_repo_assignment,
                     provider_issue_number:
-                      request.repository_assignment.provider_issue_number ?? undefined,
+                      request.git_repo_assignment.provider_issue_number ?? undefined,
                   })
               : undefined
           }
@@ -161,41 +157,37 @@ const RegradeRequestsTable = ({ requests, emojiMappings, org }: RegradeRequestsT
           {role !== 'STUDENT' && (
             <EmojiGrader
               repositoryAssignment={{
-                ...request.repository_assignment,
+                ...request.git_repo_assignment,
                 studentId: request.student_id,
               }}
               emojiMappings={emojiMappings ?? {}}
             />
           )}
           {request.status === 'IN_REVIEW' && role !== 'STUDENT' && (
-            <Tooltip title="Mark as resolved">
-              <Button
-                type="text"
-                icon={<IconCheck size={16} />}
-                className="text-green-600 hover:text-green-700 hover:bg-green-50"
-                size="small"
-                onClick={() => {
-                  notify('UPDATE_REGRADE_REQUEST', 'Updating regrade request...');
-                  fetcher!.submit(
-                    {
-                      request: {
-                        id: request.id,
-                        student_id: request.student_id,
-                        repository_assignment: {
-                          id: request.repository_assignment.id,
-                        },
+            <div
+              onClick={() => {
+                fetcher!.submit(
+                  {
+                    request: {
+                      id: request.id,
+                      student_id: request.student_id,
+                      git_repo_assignment: {
+                        id: request.git_repo_assignment.id,
                       },
-                      status: 'APPROVED',
                     },
-                    {
-                      method: 'post',
-                      action: `/api/operation/?action=updateRegradeRequest`,
-                      encType: 'application/json',
-                    }
-                  );
-                }}
-              />
-            </Tooltip>
+                    status: 'APPROVED',
+                  },
+                  {
+                    method: 'post',
+                    action: `/api/operation/?action=updateRegradeRequest`,
+                    encType: 'application/json',
+                  }
+                );
+              }}
+              className="flex items-center gap-1 text-green-600 hover:text-green-700 cursor-pointer whitespace-nowrap"
+            >
+              <span>Resolve</span>
+            </div>
           )}
         </TableActionButtons>
       ),
@@ -203,8 +195,11 @@ const RegradeRequestsTable = ({ requests, emojiMappings, org }: RegradeRequestsT
   ];
 
   return (
-    <>
-      <PageHeader title="Resubmit Requests" routeName="regrade-requests">
+    <div className="min-h-full">
+      <div className="flex items-center justify-between gap-3 mt-2 mb-4">
+        <h1 className="text-base font-semibold text-ink-2">
+          Resubmit Requests
+        </h1>
         {role === 'STUDENT' && (
           <Button
             onClick={() => navigate(`/student/${classSlug}/regrade-requests/new`)}
@@ -213,15 +208,15 @@ const RegradeRequestsTable = ({ requests, emojiMappings, org }: RegradeRequestsT
             Request Resubmit
           </Button>
         )}
-      </PageHeader>
+      </div>
 
-      <div className="space-y-6">
-        {/* Requests Table */}
+      <div className="rounded-2xl overflow-hidden bg-panel min-h-[calc(100vh-10rem)] p-5 sm:p-6">
         <Table
           dataSource={requests}
           columns={columns.filter(col => !col.hidden)}
           size="middle"
           rowHoverable={false}
+          scroll={{ x: 'max-content' }}
           pagination={{
             pageSize: 20,
             showSizeChanger: true,
@@ -230,21 +225,19 @@ const RegradeRequestsTable = ({ requests, emojiMappings, org }: RegradeRequestsT
           }}
           locale={{
             emptyText: (
-              <div className="text-center py-8 text-gray-500">
-                <div className="text-4xl mb-2">📝</div>
-                <div>No regrade requests yet</div>
+              <div className="text-center py-12 text-gray-500">
+                <div className="font-medium">No regrade requests yet</div>
                 <div className="text-sm">
                   {role === 'STUDENT'
-                    ? 'Submit your first request to get started!'
+                    ? 'Submit your first request to get started.'
                     : "Students haven't submitted any requests yet."}
                 </div>
               </div>
             ),
           }}
-          className="rounded-lg"
         />
       </div>
-    </>
+    </div>
   );
 };
 

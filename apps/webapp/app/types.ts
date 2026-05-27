@@ -12,6 +12,7 @@ type UserInclude = {
               select: {
                 quizzes_enabled: true;
                 slides_enabled: true;
+                theme: true;
                 updated_at: true;
               };
             };
@@ -91,6 +92,14 @@ export interface StoreState {
   // App slice
   showSpinner: boolean;
   setShowSpinner: (showSpinner: boolean) => void;
+
+  // Ask Moji (course assistant) slice
+  isAskMojiOpen: boolean;
+  setAskMojiOpen: (open: boolean) => void;
+  askMojiEnabled: boolean;
+  setAskMojiEnabled: (enabled: boolean) => void;
+  askMojiActive: boolean;
+  setAskMojiActive: (active: boolean) => void;
 }
 
 // Template assignment shape from GitHub issues API

@@ -19,7 +19,6 @@ export {
   getGitHubProvider,
   getTeamNameForClassroom,
   ensureClassroomTeam,
-  getTermCode,
   Octokit,
 } from './git/index.ts';
 
@@ -28,9 +27,10 @@ export {
   gitOrganizationService,
   classroomService,
   classroomMembershipService,
-  moduleService,
+  repositoryService,
   assignmentService,
-  repositoryAssignmentService,
+  gitRepoAssignmentService,
+  notificationService,
 } from './classmoji/index.ts';
 
 export { ClassmojiService, HelperService, StripeService, MarkdownImporter };
@@ -44,3 +44,28 @@ export {
   assessmentGuidelines,
   getExamplePrompts,
 } from './classmoji/quizPrompts.ts';
+
+// Repo analytics snapshot payload types
+export type {
+  CommitRecord,
+  ContributorRecord,
+  LanguagesMap,
+  PRSummary,
+  SnapshotPayload,
+} from './classmoji/repoAnalytics.types.ts';
+
+// Repo analytics service entry points (server-only; touches Prisma)
+export { aggregateForTeam } from './classmoji/repoAnalytics.service.ts';
+export type { TeamAggregate, TeamRepoSnapshot } from './classmoji/repoAnalytics.service.ts';
+
+// Repo analytics flag heuristics (pure, client-safe)
+export {
+  lateCommitRatio,
+  isMegaCommit,
+  commitMessageQuality,
+  averageCommitQuality,
+  busFactor,
+  dumpAndRun,
+  aggregateByContributor,
+  commitsPerDayByContributor,
+} from './classmoji/repoAnalytics.flags.ts';

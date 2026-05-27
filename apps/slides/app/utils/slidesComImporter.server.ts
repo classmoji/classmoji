@@ -159,14 +159,14 @@ ${slidesContent}
  * @param {Object} options
  * @param {File|Blob} options.zipFile - The ZIP file to import
  * @param {string} options.title - Title for the slide
- * @param {string} [options.moduleId] - Module UUID for optional linking
+ * @param {string} [options.repositoryId] - Repository UUID for optional linking
  * @param {boolean} options.importTheme - Whether to import custom theme CSS (ignored if useSavedTheme is set)
  * @param {string} [options.useSavedTheme] - Name of saved theme to use (skips lib/ extraction)
  * @param {string} [options.saveThemeAs] - Save extracted theme with this name to .slidesthemes/
  * @param {string} options.org - Git organization login (for GitHub API calls)
  * @param {string} [options.classroomSlug] - Classroom slug (for database reference)
  * @param {string} options.classroomId - Classroom UUID (for database reference)
- * @param {string} options.term - Term string (e.g., "25w")
+ * @param {string} options.contentNamespace - Classroom content namespace (e.g., "25w" or a slug)
  * @param {string} options.userId - User ID who is importing
  * @param {string[]} [options.cloudinaryVideoPaths] - Paths of videos to upload to Cloudinary instead of GitHub
  * @param {Function} [options.onProgress] - Callback for progress updates ({ type: 'step'|'done'|'error', step?: string, current?: number, total?: number, filename?: string })
@@ -175,28 +175,28 @@ ${slidesContent}
 export async function processZipImport({
   zipFile,
   title,
-  moduleId,
+  repositoryId,
   importTheme,
   useSavedTheme,
   saveThemeAs,
   org,
   classroomSlug: _classroomSlug,
   classroomId,
-  term,
+  contentNamespace,
   userId,
   cloudinaryVideoPaths = [],
   onProgress = () => {},
 }: {
   zipFile: File | Blob;
   title: string;
-  moduleId?: string | null;
+  repositoryId?: string | null;
   importTheme: boolean;
   useSavedTheme?: string | null;
   saveThemeAs?: string | null;
   org: string;
   classroomSlug?: string;
   classroomId: string;
-  term: string;
+  contentNamespace: string;
   userId: string;
   cloudinaryVideoPaths?: string[];
   onProgress?: (event: {
@@ -253,12 +253,9 @@ export async function processZipImport({
   // 5. Flat content path: slides/{slug}-{timestamp}
   const timestamp = Date.now();
   const contentPath = `slides/${slug}-${timestamp}`;
-  // Build organization-like object for getContentRepoName (adapts new classroom schema)
-  const repoName = getContentRepoName({
-    login: classroom.git_organization.login,
-    term: classroom.term ?? undefined,
-    year: classroom.year ?? undefined,
-  });
+  const repoName = classroom.content_namespace
+    ? `content-${classroom.git_organization.login}-${classroom.content_namespace}`
+    : getContentRepoName({ login: classroom.git_organization.login });
 
   // 6. Ensure content repo exists (org is git org login for GitHub API)
   const repoExists = await gitProvider.repositoryExists(org, repoName);
@@ -267,7 +264,7 @@ export async function processZipImport({
     await gitProvider.createPublicRepository(
       org,
       repoName,
-      `Course content for ${classroom.name || org} - ${term}`
+      `Course content for ${classroom.name || org} - ${contentNamespace}`
     );
     // Give GitHub a moment to initialize the repo
     await new Promise(resolve => setTimeout(resolve, 2000));
@@ -712,19 +709,18 @@ export async function processZipImport({
     data: {
       title: slideTitle,
       slug,
-      term,
       content_path: contentPath,
       classroom_id: classroom.id,
       created_by: userId,
     },
   });
 
-  // Link slide to module
-  if (moduleId) {
+  // Link slide to repository
+  if (repositoryId) {
     await getPrisma().slideLink.create({
       data: {
         slide_id: slide.id,
-        module_id: moduleId,
+        repository_id: repositoryId,
       },
     });
   }

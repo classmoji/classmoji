@@ -6,7 +6,7 @@ import { aptGet, syncEnvVars } from '@trigger.dev/build/extensions/core';
 import { InfisicalSDK } from '@infisical/sdk';
 
 export default defineConfig({
-  project: 'proj_ijxcrutouxchmrbjmkkk',
+  project: process.env.TRIGGER_PROJECT_ID || 'proj_ijxcrutouxchmrbjmkkk',
   runtime: 'node',
   logLevel: 'log',
   machine: 'small-2x',
@@ -50,8 +50,9 @@ export default defineConfig({
             clientSecret: process.env.INFISICAL_CLIENT_SECRET,
           });
 
-          // Map Trigger.dev environment to Infisical environment
-          const envMap = { prod: 'prod', staging: 'sta' };
+          // Map Trigger.dev environment to Infisical environment.
+          // Preview deploys (e.g. branch "dev") pull from Infisical's dev env.
+          const envMap = { prod: 'prod', staging: 'sta', preview: 'dev' };
           const infisicalEnv = envMap[ctx.environment] ?? 'prod';
 
           console.log(

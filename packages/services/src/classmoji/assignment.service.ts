@@ -1,12 +1,13 @@
 /**
  * Assignment Service (formerly Issue)
  *
- * An Assignment represents a specific deadline/branch configuration within a Module.
- * Students work on RepositoryAssignments which track their progress on these Assignments.
+ * An Assignment represents a specific deadline/branch configuration within a Repository.
+ * Students work on GitRepoAssignments which track their progress on these Assignments.
  */
 import getPrisma from '@classmoji/database';
 import { titleToIdentifier } from '@classmoji/utils';
 import type { Prisma } from '@prisma/client';
+import * as notificationService from './notification.service.ts';
 
 /**
  * Find an Assignment by ID
@@ -17,57 +18,57 @@ export const findById = async (id: string) => {
   return getPrisma().assignment.findUnique({
     where: { id },
     include: {
-      module: {
+      repository: {
         include: {
           classroom: true,
         },
       },
-      repository_assignments: true,
+      git_repo_assignments: true,
     },
   });
 };
 
 /**
- * Find an Assignment by module and title
- * @param {string} moduleId - UUID of the Module
+ * Find an Assignment by repository and title
+ * @param {string} repositoryId - UUID of the Repository
  * @param {string} title - Assignment title
  * @returns {Promise<Object|null>}
  */
-export const findByModuleAndTitle = async (moduleId: string, title: string) => {
+export const findByModuleAndTitle = async (repositoryId: string, title: string) => {
   return getPrisma().assignment.findUnique({
     where: {
-      module_id_title: {
-        module_id: moduleId,
+      repository_id_title: {
+        repository_id: repositoryId,
         title,
       },
     },
     include: {
-      module: true,
+      repository: true,
     },
   });
 };
 
 /**
- * Find all Assignments for a module
- * @param {string} moduleId - UUID of the Module
+ * Find all Assignments for a repository
+ * @param {string} repositoryId - UUID of the Repository
  * @returns {Promise<Object[]>}
  */
-export const findByModuleId = async (moduleId: string) => {
+export const findByRepositoryId = async (repositoryId: string) => {
   return getPrisma().assignment.findMany({
-    where: { module_id: moduleId },
+    where: { repository_id: repositoryId },
     orderBy: { created_at: 'asc' },
   });
 };
 
 /**
- * Find all published Assignments for a module
- * @param {string} moduleId - UUID of the Module
+ * Find all published Assignments for a repository
+ * @param {string} repositoryId - UUID of the Repository
  * @returns {Promise<Object[]>}
  */
-export const findPublishedByModuleId = async (moduleId: string) => {
+export const findPublishedByRepositoryId = async (repositoryId: string) => {
   return getPrisma().assignment.findMany({
     where: {
-      module_id: moduleId,
+      repository_id: repositoryId,
       is_published: true,
     },
     orderBy: { created_at: 'asc' },
@@ -86,13 +87,13 @@ export const findByClassroomId = async (
 ) => {
   return getPrisma().assignment.findMany({
     where: {
-      module: {
+      repository: {
         classroom_id: classroomId,
       },
       ...query,
     },
     include: {
-      module: true,
+      repository: true,
     },
     orderBy: { created_at: 'asc' },
   });
@@ -107,7 +108,7 @@ export const findByClassroomId = async (
 export const findUpcoming = async (classroomId: string, afterDate: Date = new Date()) => {
   return getPrisma().assignment.findMany({
     where: {
-      module: {
+      repository: {
         classroom_id: classroomId,
       },
       is_published: true,
@@ -116,7 +117,7 @@ export const findUpcoming = async (classroomId: string, afterDate: Date = new Da
       },
     },
     include: {
-      module: true,
+      repository: true,
     },
     orderBy: { student_deadline: 'asc' },
   });
@@ -136,7 +137,7 @@ export const findReadyForRelease = async (beforeDate: Date = new Date()) => {
       },
     },
     include: {
-      module: {
+      repository: {
         include: {
           classroom: {
             include: {
@@ -152,7 +153,7 @@ export const findReadyForRelease = async (beforeDate: Date = new Date()) => {
 /**
  * Create an Assignment
  * @param {Object} data - Assignment data
- * @param {string} data.module_id - UUID of the Module
+ * @param {string} data.repository_id - UUID of the Repository
  * @param {string} data.title - Assignment title
  * @param {number} [data.weight] - Weight for grading
  * @param {string} [data.description] - Description
@@ -172,7 +173,7 @@ export const create = async (data: Prisma.AssignmentUncheckedCreateInput) => {
       weight: Number(data.weight || 100),
     },
     include: {
-      module: true,
+      repository: true,
     },
   });
 };
@@ -199,13 +200,97 @@ export const createMany = async (assignments: Prisma.AssignmentUncheckedCreateIn
  * @returns {Promise<Object>}
  */
 export const update = async (id: string, updates: Prisma.AssignmentUpdateInput) => {
-  return getPrisma().assignment.update({
+  const previous = await getPrisma().assignment.findUnique({
+    where: { id },
+    select: { student_deadline: true, grades_released: true },
+  });
+
+  const updated = await getPrisma().assignment.update({
     where: { id },
     data: updates,
     include: {
-      module: true,
+      repository: true,
     },
   });
+
+  if ('student_deadline' in updates) {
+    await notificationService.runSafely('assignment due date notification', async () => {
+      const newDeadline = updated.student_deadline?.toISOString() ?? null;
+      const oldDeadline = previous?.student_deadline?.toISOString() ?? null;
+      if (newDeadline !== oldDeadline) {
+        const { studentIds, classroomId } = await notificationService.getStudentsForAssignment(id);
+        if (studentIds.length > 0) {
+          await notificationService.createNotifications({
+            type: 'ASSIGNMENT_DUE_DATE_CHANGED',
+            classroomId,
+            recipientUserIds: studentIds,
+            resourceType: 'assignment',
+            resourceId: id,
+            title: `Due date changed: ${updated.title}`,
+            metadata: { previous_deadline: oldDeadline, new_deadline: newDeadline },
+          });
+        }
+      }
+    });
+  }
+
+  if (
+    'grades_released' in updates &&
+    previous &&
+    !previous.grades_released &&
+    updated.grades_released
+  ) {
+    await notificationService.runSafely('assignment graded notification', async () => {
+      const recipientIds = await getGradedRecipientsForAssignment(id);
+      if (recipientIds.length > 0) {
+        await notificationService.createNotifications({
+          type: 'ASSIGNMENT_GRADED',
+          classroomId: updated.repository.classroom_id,
+          recipientUserIds: recipientIds,
+          resourceType: 'assignment',
+          resourceId: id,
+          title: `Graded: ${updated.title}`,
+        });
+      }
+    });
+  }
+
+  return updated;
+};
+
+/**
+ * Recipients of a grade-release notification: students/team members whose
+ * GitRepoAssignment under this assignment has at least one grade row.
+ */
+const getGradedRecipientsForAssignment = async (assignmentId: string): Promise<string[]> => {
+  const repos = await getPrisma().gitRepoAssignment.findMany({
+    where: { assignment_id: assignmentId, grades: { some: {} } },
+    select: {
+      git_repo: {
+        select: {
+          student_id: true,
+          team_id: true,
+        },
+      },
+    },
+  });
+
+  const userIds = new Set<string>();
+  const teamIds = new Set<string>();
+  for (const r of repos) {
+    if (r.git_repo.student_id) userIds.add(r.git_repo.student_id);
+    if (r.git_repo.team_id) teamIds.add(r.git_repo.team_id);
+  }
+
+  if (teamIds.size > 0) {
+    const members = await getPrisma().teamMembership.findMany({
+      where: { team_id: { in: [...teamIds] } },
+      select: { user_id: true },
+    });
+    for (const m of members) userIds.add(m.user_id);
+  }
+
+  return [...userIds];
 };
 
 /**
@@ -263,15 +348,15 @@ export const findWithGradingSummary = async (id: string) => {
   const assignment = await getPrisma().assignment.findUnique({
     where: { id },
     include: {
-      module: {
+      repository: {
         include: {
           classroom: true,
         },
       },
-      repository_assignments: {
+      git_repo_assignments: {
         include: {
           grades: true,
-          repository: {
+          git_repo: {
             include: {
               student: true,
               team: true,
@@ -285,14 +370,14 @@ export const findWithGradingSummary = async (id: string) => {
   if (!assignment) return null;
 
   const stats = {
-    total: assignment.repository_assignments.length,
+    total: assignment.git_repo_assignments.length,
     graded: 0,
     ungraded: 0,
     open: 0,
     closed: 0,
   };
 
-  for (const ra of assignment.repository_assignments) {
+  for (const ra of assignment.git_repo_assignments) {
     if (ra.grades.length > 0) {
       stats.graded++;
     } else {

@@ -20,7 +20,7 @@ import { ClassmojiService } from '@classmoji/services';
 import { SettingSection } from '~/components';
 import { ActionTypes } from '~/constants';
 import { useGlobalFetcher } from '~/hooks';
-import { assertClassroomAccess } from '~/utils/helpers';
+import { assertClassroomAccess, assertClassroomMutationAllowed } from '~/utils/helpers';
 import { isAIAgentConfigured } from '~/utils/aiFeatures.server';
 import type { Route } from './+types/route';
 
@@ -83,7 +83,7 @@ const SettingsQuizzes = ({ loaderData }: Route.ComponentProps) => {
   const { class: classSlug } = useParams();
   const [form] = Form.useForm();
 
-  const { notify, fetcher } = useGlobalFetcher();
+  const { fetcher } = useGlobalFetcher();
 
   const settings = (organization.settings || {}) as Record<string, unknown>;
   // Use the computed flag from getOrgForUI (API key is never sent to client)
@@ -94,8 +94,6 @@ const SettingsQuizzes = ({ loaderData }: Route.ComponentProps) => {
   const anthropicModels = availableModels?.anthropic || [];
 
   const handleQuizzesToggle = (checked: boolean) => {
-    notify(ActionTypes.SAVE_QUIZ_SETTINGS, 'Saving quiz settings...');
-
     fetcher!.submit(
       {
         _action: 'saveQuizSettings',
@@ -110,8 +108,6 @@ const SettingsQuizzes = ({ loaderData }: Route.ComponentProps) => {
   };
 
   const handleSaveLLMSettings = (values: Record<string, unknown>) => {
-    notify(ActionTypes.SAVE_QUIZ_SETTINGS, 'Saving LLM settings...');
-
     fetcher!.submit(
       {
         _action: 'saveLLMSettings',
@@ -133,8 +129,6 @@ const SettingsQuizzes = ({ loaderData }: Route.ComponentProps) => {
       okText: 'Clear',
       okType: 'danger',
       onOk: () => {
-        notify(ActionTypes.SAVE_QUIZ_SETTINGS, 'Clearing LLM settings...');
-
         fetcher!.submit(
           {
             _action: 'clearLLMSettings',
@@ -347,13 +341,14 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
   const classSlug = params.class!;
 
   // Authorize: only OWNER can modify quiz settings
-  const { classroom } = await assertClassroomAccess({
+  const { classroom, membership } = await assertClassroomAccess({
     request,
     classroomSlug: classSlug,
     allowedRoles: ['OWNER'],
     resourceType: 'QUIZ_SETTINGS',
     attemptedAction: 'modify',
   });
+  assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
 
   const data = await request.json();
 

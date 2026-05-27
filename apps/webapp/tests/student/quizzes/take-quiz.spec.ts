@@ -114,10 +114,7 @@ test.describe('Quiz Taking E2E', () => {
     await expect(page.locator('.ant-drawer-title').getByText(SEEDED_QUIZ_NAME)).toBeVisible();
   });
 
-  test('quiz drawer loads with chat interface', async ({
-    authenticatedPage: page,
-    testOrg,
-  }) => {
+  test('quiz drawer loads with chat interface', async ({ authenticatedPage: page, testOrg }) => {
     // Quiz messages loaded from DB via revalidation (no SSE mock needed)
 
     // Start or resume the quiz
@@ -129,10 +126,20 @@ test.describe('Quiz Taking E2E', () => {
 
     // Check for chat input area - the interface should have some kind of input
     // Could be contenteditable div or textarea
-    const hasInput = await page.locator('[contenteditable="true"], textarea, input[type="text"]').first().isVisible({ timeout: 5000 }).catch(() => false);
+    const hasInput = await page
+      .locator('[contenteditable="true"], textarea, input[type="text"]')
+      .first()
+      .isVisible({ timeout: 5000 })
+      .catch(() => false);
 
     // The drawer should have content loaded
-    expect(hasInput || await page.locator('.ant-drawer-body').textContent().then(t => t && t.length > 10)).toBeTruthy();
+    expect(
+      hasInput ||
+        (await page
+          .locator('.ant-drawer-body')
+          .textContent()
+          .then(t => t && t.length > 10))
+    ).toBeTruthy();
   });
 });
 
@@ -178,7 +185,9 @@ test.describe('Quiz Attempt Management', () => {
     // Table should update - use more specific selector to avoid matching multiple tables
     // The Completed tab will have either quizzes or empty state
     await page.waitForTimeout(500); // Brief wait for tab content to render
-    const completedTable = page.locator('[role="tabpanel"][data-active="true"] table, .ant-tabs-tabpane-active table').first();
+    const completedTable = page
+      .locator('[role="tabpanel"][data-active="true"] table, .ant-tabs-tabpane-active table')
+      .first();
     const emptyState = page.getByRole('heading', { name: /No completed quizzes yet/i });
 
     // Either the table or empty state should be present in the active tab
@@ -189,10 +198,7 @@ test.describe('Quiz Attempt Management', () => {
 });
 
 test.describe('Quiz Interface Controls', () => {
-  test('quiz drawer shows quiz name in title', async ({
-    authenticatedPage: page,
-    testOrg,
-  }) => {
+  test('quiz drawer shows quiz name in title', async ({ authenticatedPage: page, testOrg }) => {
     // Quiz messages loaded from DB via revalidation (no SSE mock needed)
 
     await page.goto(`/student/${testOrg}/quizzes`);

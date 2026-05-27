@@ -39,10 +39,7 @@ test.describe('Student Dashboard', () => {
 
     // Click All tab
     await page.getByRole('tab', { name: /All/i }).click();
-    await expect(page.getByRole('tab', { name: /All/i })).toHaveAttribute(
-      'aria-selected',
-      'true'
-    );
+    await expect(page.getByRole('tab', { name: /All/i })).toHaveAttribute('aria-selected', 'true');
   });
 });
 

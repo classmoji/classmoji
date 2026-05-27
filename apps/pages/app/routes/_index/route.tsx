@@ -1,6 +1,5 @@
 import { useLoaderData } from 'react-router';
 import { ClassmojiService, getAuthSession } from '~/utils/db.server.ts';
-import { generateTermString } from '@classmoji/utils';
 
 /**
  * Root index route.
@@ -25,8 +24,7 @@ export const loader = async ({ request }: { request: Request }) => {
     classrooms: sortedMemberships.map(m => ({
       slug: m.classroom.slug,
       name: m.classroom.name,
-      term: m.classroom.term,
-      year: m.classroom.year,
+      content_namespace: m.classroom.content_namespace,
       role: m.role,
     })),
   };
@@ -46,13 +44,7 @@ const Index = () => {
         {classrooms.length > 0 ? (
           <div className="space-y-2">
             {classrooms.map(
-              (c: {
-                slug: string;
-                name: string;
-                term: string | null;
-                year: number | null;
-                role: string;
-              }) => (
+              (c: { slug: string; name: string; content_namespace: string; role: string }) => (
                 <a
                   key={c.slug}
                   href={`/${c.slug}`}
@@ -61,7 +53,7 @@ const Index = () => {
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-2">
                       <span className="px-2 py-0.5 text-xs bg-green-100 dark:bg-green-900 text-green-700 dark:text-green-300 rounded uppercase">
-                        {generateTermString(c.term ?? undefined, c.year ?? undefined)}
+                        {c.content_namespace}
                       </span>
                       <span className="font-medium text-gray-900 dark:text-white">{c.name}</span>
                     </div>

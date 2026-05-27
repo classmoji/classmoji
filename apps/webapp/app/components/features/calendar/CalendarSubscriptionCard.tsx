@@ -39,7 +39,7 @@ const CalendarSubscriptionCard = ({ subscriptionUrl }: CalendarSubscriptionCardP
         footer={null}
         width={500}
       >
-        <p className="text-gray-600 dark:text-gray-400 mb-4">
+        <p className="text-ink-2 mb-4">
           Add this URL to Google Calendar, Apple Calendar, or Outlook to automatically sync events.
         </p>
         <div className="flex gap-2">

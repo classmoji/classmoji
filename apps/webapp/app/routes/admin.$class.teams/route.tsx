@@ -4,17 +4,15 @@ import { useState } from 'react';
 
 import {
   ButtonNew,
-  PageHeader,
   TeamThumbnailView,
   AvatarGroup,
   SearchInput,
   TableActionButtons,
-  ProTierFeature,
 } from '~/components';
 import { ClassmojiService, getGitProvider } from '@classmoji/services';
 import { useGlobalFetcher } from '~/hooks';
 import { ActionTypes } from '~/constants';
-import { requireClassroomAdmin } from '~/utils/routeAuth.server';
+import { requireClassroomAdmin, assertClassroomMutationAllowed } from '~/utils/routeAuth.server';
 import type { Route } from './+types/route';
 
 interface Team {
@@ -122,11 +120,12 @@ const AdminTeams = ({ loaderData }: Route.ComponentProps) => {
   ];
 
   return (
-    <ProTierFeature>
-      <div className="flex items-center justify-between">
-        <PageHeader title="Teams" routeName="teams" />
+    <div className="min-h-full relative">
+      <Outlet />
+      <div className="flex items-center justify-between gap-3 mt-2 mb-4">
+        <h1 className="text-base font-semibold text-ink-2">Teams</h1>
 
-        <div className="flex gap-4">
+        <div className="flex gap-3">
           <SearchInput
             query={query}
             setQuery={setQuery}
@@ -140,10 +139,7 @@ const AdminTeams = ({ loaderData }: Route.ComponentProps) => {
         </div>
       </div>
 
-      <div className="space-y-6">
-        <Outlet />
-
-        {/* Teams Table */}
+      <div className="rounded-2xl bg-panel ring-1 ring-line p-5 sm:p-6 min-h-[calc(100vh-10rem)]">
         <Table
           columns={columns}
           dataSource={filteredTeams}
@@ -156,35 +152,34 @@ const AdminTeams = ({ loaderData }: Route.ComponentProps) => {
             showTotal: (total, range) => `${range[0]}-${range[1]} of ${total} teams`,
           }}
           size="middle"
+          scroll={{ x: 'max-content' }}
           locale={{
             emptyText: query ? (
-              <div className="text-center py-8 text-gray-500">
-                <div className="text-4xl mb-2">🔍</div>
-                <div>No teams found matching &quot;{query}&quot;</div>
-                <div className="text-sm">Try adjusting your search terms</div>
+              <div className="text-center py-8 text-ink-3">
+                <div className="font-medium">No teams found matching &quot;{query}&quot;</div>
+                <div className="text-sm">Try adjusting your search terms.</div>
               </div>
             ) : (
-              <div className="text-center py-8 text-gray-500">
-                <div className="text-4xl mb-2">👥</div>
-                <div>No teams created yet</div>
-                <div className="text-sm">Create your first team to get started!</div>
+              <div className="text-center py-8 text-ink-3">
+                <div className="font-medium">No teams created yet</div>
+                <div className="text-sm">Create your first team to get started.</div>
               </div>
             ),
           }}
-          className="rounded-lg"
         />
       </div>
-    </ProTierFeature>
+    </div>
   );
 };
 
 export const action = async ({ params, request }: Route.ActionArgs) => {
   const classSlug = params.class!;
 
-  const { classroom } = await requireClassroomAdmin(request, classSlug, {
+  const { classroom, membership } = await requireClassroomAdmin(request, classSlug, {
     resourceType: 'TEAMS',
     action: 'manage_teams',
   });
+  assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
 
   const data = await request.json();
   const { team } = data;

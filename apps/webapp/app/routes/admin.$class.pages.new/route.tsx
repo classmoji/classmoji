@@ -2,16 +2,16 @@ import { useState, useEffect } from 'react';
 import { useNavigate, useFetcher } from 'react-router';
 import { Form, Button, Alert, Modal, Tabs } from 'antd';
 import { FileTextOutlined, UploadOutlined } from '@ant-design/icons';
-import { toast } from 'react-toastify';
-import { assertClassroomAccess } from '~/utils/helpers';
+import { assertClassroomAccess, assertClassroomMutationAllowed } from '~/utils/helpers';
 import { ClassmojiService, getGitProvider } from '@classmoji/services';
+import { useCallout } from '@classmoji/ui-components';
 import { ContentService } from '@classmoji/content';
 import { processMarkdownImport } from '~/utils/markdownImporter.server';
 import { wrapHtmlContent } from '~/utils/htmlWrapper';
 import ImportTab from './ImportTab';
 import CreateBlankTab from './CreateBlankTab';
 import BatchImportTab from './BatchImportTab';
-import { generateTermString } from '@classmoji/utils';
+import { useRouteDrawer } from '~/hooks';
 import { generatePageTemplate } from './utils';
 import type { Route } from './+types/route';
 
@@ -26,12 +26,11 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
     attemptedAction: 'create_page',
   });
 
-  // Generate term from classroom settings
-  const term = generateTermString(classroom.term ?? undefined, classroom.year ?? undefined);
+  const contentNamespace = classroom.content_namespace;
 
   // Include slug for navigation and gitOrgLogin for API calls
   return {
-    term,
+    contentNamespace,
     classroom: {
       ...classroom,
       slug: classroom.slug, // For navigation URLs
@@ -45,13 +44,14 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
   const formData = await request.formData();
   const intent = formData.get('intent');
 
-  const { classroom, userId } = await assertClassroomAccess({
+  const { classroom, userId, membership } = await assertClassroomAccess({
     request,
     classroomSlug: classSlug!,
     allowedRoles: ['OWNER', 'TEACHER'],
     resourceType: 'PAGES',
     attemptedAction: 'create_page',
   });
+  assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
 
   // Use git_organization.login for GitHub API calls, not the classroom slug
   const gitOrgLogin = classroom.git_organization?.login;
@@ -59,7 +59,10 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
     return { error: 'Git organization not configured' };
   }
 
-  const term = formData.get('term');
+  const contentNamespace = classroom.content_namespace;
+  if (!contentNamespace) {
+    return { error: 'Classroom content namespace not configured' };
+  }
 
   // Single page import/create
   const title = formData.get('title') as string;
@@ -70,8 +73,8 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-|-$/g, '');
 
-  // Content repo name: content-{gitOrgLogin}-{term}
-  const repoName = `content-${gitOrgLogin}-${term}`;
+  // Content repo name: content-{gitOrgLogin}-{contentNamespace}
+  const repoName = `content-${gitOrgLogin}-${contentNamespace}`;
 
   // Flat content path: pages/{slug}
   const contentPath = `pages/${slug}`;
@@ -85,7 +88,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
         await gitProvider.createPublicRepository(
           gitOrgLogin,
           repoName,
-          `Course content for ${classroom.name || gitOrgLogin} - ${term}`
+          `Course content for ${classroom.name || gitOrgLogin} - ${contentNamespace}`
         );
 
         // Give GitHub a moment to initialize the repo
@@ -267,16 +270,18 @@ interface BatchProgress {
 
 interface BatchPage {
   title: string;
-  module?: string;
+  repository?: string;
   assignmentId?: string;
   markdownContent: string;
   imageFiles: File[];
 }
 
 export default function NewPage({ loaderData }: Route.ComponentProps) {
-  const { term, classroom } = loaderData;
+  const { contentNamespace, classroom } = loaderData;
   const fetcher = useFetcher();
   const navigate = useNavigate();
+  const { opened, close } = useRouteDrawer({});
+  const callout = useCallout();
   const [form] = Form.useForm();
   const [activeTab, setActiveTab] = useState('create-blank');
   const [importFiles, setImportFiles] = useState<{ markdown: File | null; images: File[] }>({
@@ -306,12 +311,12 @@ export default function NewPage({ loaderData }: Route.ComponentProps) {
   const isCreating = fetcher.state !== 'idle' || batchProgress !== null;
   const createError = fetcher.data?.error;
 
-  // Module is now optional for all pages - no validation needed
+  // Repository is now optional for all pages - no validation needed
 
   // Redirect on success (single page only - batch handled separately)
   useEffect(() => {
     if (fetcher.state === 'idle' && fetcher.data?.created && fetcher.data.page && !batchProgress) {
-      toast.success('Page created successfully!');
+      callout.show({ variant: 'success', title: 'Page created successfully!' });
       navigate(`/admin/${classroom.slug}/pages/${fetcher.data.page.id}`);
     }
   }, [fetcher.state, fetcher.data, navigate, classroom.slug, batchProgress]);
@@ -326,7 +331,7 @@ export default function NewPage({ loaderData }: Route.ComponentProps) {
       const initFormData = new FormData();
       initFormData.append('intent', 'batch-init');
       initFormData.append('classSlug', classroom.slug);
-      initFormData.append('term', String(term));
+      initFormData.append('contentNamespace', String(contentNamespace ?? ''));
 
       const initResponse = await fetch('/api/pages/batch', {
         method: 'POST',
@@ -335,7 +340,7 @@ export default function NewPage({ loaderData }: Route.ComponentProps) {
       const initResult = await initResponse.json();
 
       if (initResult.error) {
-        toast.error(initResult.error);
+        callout.show({ variant: 'error', title: initResult.error });
         setBatchProgress(null);
         return;
       }
@@ -349,9 +354,9 @@ export default function NewPage({ loaderData }: Route.ComponentProps) {
         const formData = new FormData();
         formData.append('intent', 'batch-import-single');
         formData.append('classSlug', classroom.slug);
-        formData.append('term', String(term));
+        formData.append('contentNamespace', String(contentNamespace ?? ''));
         formData.append('title', page.title);
-        if (page.module) formData.append('module', page.module);
+        if (page.repository) formData.append('repository', page.repository);
         if (page.assignmentId) formData.append('assignmentId', page.assignmentId);
 
         // Add markdown
@@ -386,23 +391,30 @@ export default function NewPage({ loaderData }: Route.ComponentProps) {
       setBatchProgress(null);
 
       if (errors.length > 0) {
-        toast.warning(
-          `Imported ${total - errors.length} of ${total} pages. ${errors.length} failed.`
-        );
+        callout.show({
+          variant: 'error',
+          title: `Imported ${total - errors.length} of ${total} pages. ${errors.length} failed.`,
+        });
       } else {
-        toast.success(`Successfully imported ${total} page${total !== 1 ? 's' : ''}!`);
+        callout.show({
+          variant: 'success',
+          title: `Successfully imported ${total} page${total !== 1 ? 's' : ''}!`,
+        });
       }
       navigate(`/admin/${classroom.slug}/pages`);
     } catch (err: unknown) {
       console.error('Batch import failed:', err);
-      toast.error('Batch import failed: ' + (err instanceof Error ? err.message : String(err)));
+      callout.show({
+        variant: 'error',
+        title: 'Batch import failed: ' + (err instanceof Error ? err.message : String(err)),
+      });
       setBatchProgress(null);
     }
   };
 
   const handleSubmit = (values: Record<string, string>) => {
     const formData = new FormData();
-    formData.append('term', String(term));
+    formData.append('contentNamespace', String(contentNamespace ?? ''));
 
     if (activeTab === 'batch') {
       // Handle batch import with progress
@@ -446,109 +458,147 @@ export default function NewPage({ loaderData }: Route.ComponentProps) {
     {
       key: 'batch',
       label: 'Batch Import',
-      children: <BatchImportTab term={term ?? ''} onPagesChange={setBatchPages} />,
+      children: (
+        <BatchImportTab contentNamespace={contentNamespace ?? ''} onPagesChange={setBatchPages} />
+      ),
     },
   ];
 
   return (
     <Modal
-      title="New Page"
-      open={true}
-      onCancel={() => navigate(`/admin/${classroom.slug}/pages`)}
+      open={opened}
+      onCancel={close}
+      title={null}
       footer={null}
       width={700}
-      closable={!isCreating}
+      centered
+      closable={false}
+      maskClosable={!isCreating}
+      styles={{
+        content: { padding: 0, borderRadius: 16, overflow: 'hidden', maxWidth: '90vw' },
+        body: { padding: 0 },
+        header: { display: 'none' },
+        footer: { display: 'none' },
+      }}
     >
-      {/* Show form when not loading */}
-      {!isCreating && (
-        <>
-          {createError && (
-            <Alert
-              message="Error"
-              description={createError}
-              type="error"
-              closable
-              className="mb-4"
-            />
-          )}
-
-          <Form form={form} layout="vertical" onFinish={handleSubmit} initialValues={{}}>
-            <Tabs activeKey={activeTab} onChange={setActiveTab} items={tabItems} />
-
-            <div className="flex justify-end gap-3 mt-6 items-center">
-              <Button type="default" onClick={() => navigate(`/admin/${classroom.slug}/pages`)}>
-                Cancel
-              </Button>
-              <Button
-                type="primary"
-                htmlType={activeTab === 'batch' ? 'button' : 'submit'}
-                onClick={activeTab === 'batch' ? () => handleSubmit({}) : undefined}
-                disabled={activeTab === 'batch' && batchPages.length === 0}
-                icon={
-                  activeTab === 'import' || activeTab === 'batch' ? (
-                    <UploadOutlined />
-                  ) : (
-                    <FileTextOutlined />
-                  )
-                }
-              >
-                {activeTab === 'batch'
-                  ? `Import ${batchPages.length} Page${batchPages.length !== 1 ? 's' : ''}`
-                  : activeTab === 'import'
-                    ? 'Import & Create'
-                    : 'Create Page'}
-              </Button>
-            </div>
-          </Form>
-        </>
-      )}
-
-      {/* Show loader when loading */}
-      {isCreating && (
-        <div className="flex items-center justify-center py-12">
-          <div className="flex flex-col items-center gap-5 min-w-[320px]">
-            {/* Bouncing dots loader */}
-            <div className="flex gap-2">
-              <div
-                className="w-4 h-4 rounded-full animate-bounce"
-                style={{ backgroundColor: '#10b981', animationDelay: '0ms' }}
-              />
-              <div
-                className="w-4 h-4 rounded-full animate-bounce"
-                style={{ backgroundColor: '#10b981', animationDelay: '150ms' }}
-              />
-              <div
-                className="w-4 h-4 rounded-full animate-bounce"
-                style={{ backgroundColor: '#10b981', animationDelay: '300ms' }}
-              />
-            </div>
-            {batchProgress ? (
-              <>
-                <p className="text-gray-800 font-semibold text-center text-lg">
-                  {getProgressMessage()}
-                </p>
-                <div className="flex flex-col items-center gap-2 w-full">
-                  {/* Progress bar */}
-                  <div className="w-full bg-gray-200 rounded-full h-2">
-                    <div
-                      className="h-2 rounded-full transition-all duration-500 ease-out"
-                      style={{
-                        width: `${(batchProgress.current / batchProgress.total) * 100}%`,
-                        backgroundColor: '#10b981',
-                      }}
-                    />
-                  </div>
-                  <p className="text-gray-500 text-sm">
-                    Page {batchProgress.current} of {batchProgress.total}
-                  </p>
-                </div>
-              </>
-            ) : (
-              <p className="text-gray-700 font-medium">Creating page...</p>
-            )}
-          </div>
+      {/* Gmail-style header */}
+      <div className="flex items-center justify-between gap-3 px-5 py-3 bg-stone-50 dark:bg-neutral-800/60 border-b border-line">
+        <div className="flex flex-col">
+          <span className="text-sm font-semibold text-ink-0">New page</span>
+          <span className="text-xs font-normal text-ink-3">
+            Create a blank page, import from markdown, or batch import.
+          </span>
         </div>
-      )}
+        <button
+          type="button"
+          onClick={close}
+          aria-label="Close"
+          disabled={isCreating}
+          className="p-1 rounded hover:bg-line text-ink-3 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+        >
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
+            <path
+              d="M4 4l8 8M12 4l-8 8"
+              stroke="currentColor"
+              strokeWidth="1.5"
+              strokeLinecap="round"
+            />
+          </svg>
+        </button>
+      </div>
+
+      <div className="max-h-[75vh] overflow-y-auto px-6 py-5">
+        {/* Show form when not loading */}
+        {!isCreating && (
+          <>
+            {createError && (
+              <Alert
+                message="Error"
+                description={createError}
+                type="error"
+                closable
+                className="mb-4"
+              />
+            )}
+
+            <Form form={form} layout="vertical" onFinish={handleSubmit} initialValues={{}}>
+              <Tabs activeKey={activeTab} onChange={setActiveTab} items={tabItems} />
+
+              <div className="flex justify-end gap-3 mt-6 items-center">
+                <Button type="default" onClick={close}>
+                  Cancel
+                </Button>
+                <Button
+                  type="primary"
+                  htmlType={activeTab === 'batch' ? 'button' : 'submit'}
+                  onClick={activeTab === 'batch' ? () => handleSubmit({}) : undefined}
+                  disabled={activeTab === 'batch' && batchPages.length === 0}
+                  icon={
+                    activeTab === 'import' || activeTab === 'batch' ? (
+                      <UploadOutlined />
+                    ) : (
+                      <FileTextOutlined />
+                    )
+                  }
+                >
+                  {activeTab === 'batch'
+                    ? `Import ${batchPages.length} Page${batchPages.length !== 1 ? 's' : ''}`
+                    : activeTab === 'import'
+                      ? 'Import & Create'
+                      : 'Create Page'}
+                </Button>
+              </div>
+            </Form>
+          </>
+        )}
+
+        {/* Show loader when loading */}
+        {isCreating && (
+          <div className="flex items-center justify-center py-12">
+            <div className="flex flex-col items-center gap-5 min-w-[320px]">
+              {/* Bouncing dots loader */}
+              <div className="flex gap-2">
+                <div
+                  className="w-4 h-4 rounded-full animate-bounce"
+                  style={{ backgroundColor: '#10b981', animationDelay: '0ms' }}
+                />
+                <div
+                  className="w-4 h-4 rounded-full animate-bounce"
+                  style={{ backgroundColor: '#10b981', animationDelay: '150ms' }}
+                />
+                <div
+                  className="w-4 h-4 rounded-full animate-bounce"
+                  style={{ backgroundColor: '#10b981', animationDelay: '300ms' }}
+                />
+              </div>
+              {batchProgress ? (
+                <>
+                  <p className="text-gray-800 font-semibold text-center text-lg">
+                    {getProgressMessage()}
+                  </p>
+                  <div className="flex flex-col items-center gap-2 w-full">
+                    {/* Progress bar */}
+                    <div className="w-full bg-gray-200 rounded-full h-2">
+                      <div
+                        className="h-2 rounded-full transition-all duration-500 ease-out"
+                        style={{
+                          width: `${(batchProgress.current / batchProgress.total) * 100}%`,
+                          backgroundColor: '#10b981',
+                        }}
+                      />
+                    </div>
+                    <p className="text-gray-500 text-sm">
+                      Page {batchProgress.current} of {batchProgress.total}
+                    </p>
+                  </div>
+                </>
+              ) : (
+                <p className="text-gray-700 font-medium">Creating page...</p>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
     </Modal>
   );
 }

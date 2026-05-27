@@ -20,7 +20,8 @@
  * - recordModalOpen: Calculates gap time and adds to unfocused duration when modal reopens
  * - restartQuiz: Deletes and restarts a quiz attempt (dev mode only)
  */
-import { assertClassroomAccess } from '~/utils/helpers';
+import { assertClassroomAccess, assertProTier } from '~/utils/helpers';
+import { assertClassroomMutationAllowed } from '~/utils/routeAuth.server';
 import { isAIAgentConfigured } from '~/utils/aiFeatures.server';
 import { getQuestionProgressFromMessage, checkForCompletion } from '@classmoji/utils';
 import type { Role } from '@prisma/client';
@@ -56,7 +57,7 @@ export async function action({ request }: Route.ActionArgs) {
     });
   }
 
-  // Import server-only modules
+  // Import server-only repositories
   const { ClassmojiService } = await import('@classmoji/services');
   const { getInstallationToken } = await import('../student.$class.quizzes/helpers.server');
   const { initializeQuizViaAgent, sendMessageToAgent, endQuizSession } =
@@ -289,6 +290,8 @@ export async function action({ request }: Route.ActionArgs) {
       attemptedAction: data._action,
       metadata: context.metadata,
     });
+    assertClassroomMutationAllowed({ status: access.classroom.status, role: access.membership!.role });
+    await assertProTier(context.classroomSlug);
 
     // Check AI agent availability AFTER auth (preserves audit logging)
     if (!isAIAgentConfigured()) {
@@ -364,8 +367,8 @@ export async function action({ request }: Route.ActionArgs) {
             });
           }
 
-          // Check if this is a code-aware quiz (linked to a module with code context enabled)
-          if (attempt.quiz.module_id && attempt.quiz.include_code_context) {
+          // Check if this is a code-aware quiz (linked to a repository with code context enabled)
+          if (attempt.quiz.repository_id && attempt.quiz.include_code_context) {
             // Process in background to allow SSE connection
             // Note: ai-agent now handles welcome message generation and publishing
             setTimeout(async () => {
@@ -399,12 +402,12 @@ export async function action({ request }: Route.ActionArgs) {
                   }
                 } else {
                   // Standard flow: find student's repo
-                  const repo = await ClassmojiService.repository.findByStudent(
-                    attempt.quiz.module_id!,
+                  const repo = await ClassmojiService.gitRepo.findByStudent(
+                    attempt.quiz.repository_id!,
                     userId
                   );
                   if (!repo) {
-                    throw new Error('No repository found for this module.');
+                    throw new Error('No repository found for this repository.');
                   }
                   repoName = repo.name;
                 }

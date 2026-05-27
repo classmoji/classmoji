@@ -3,9 +3,11 @@ import { UserHeader } from '~/components';
 
 const UserLayout = () => {
   return (
-    <div className="min-h-screen bg-white dark:bg-gray-900">
+    <div
+      className="min-h-screen bg-[#EDEDED] dark:bg-[#1d1d1d]"
+    >
       <UserHeader />
-      <div className="absolute top-[50px] px-20 w-full pt-12">
+      <div className="max-w-[1200px] mx-auto px-4 sm:px-8 pt-4 sm:pt-7 pb-20">
         <Outlet />
       </div>
     </div>

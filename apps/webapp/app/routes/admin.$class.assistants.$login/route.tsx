@@ -2,10 +2,10 @@ import { useState } from 'react';
 import { useNavigate, useParams } from 'react-router';
 import { ConfigProvider, Drawer, Button, Tag, Card, Progress, Collapse, theme, Empty } from 'antd';
 import { IconX, IconUserSearch, IconClock } from '@tabler/icons-react';
-import { toast } from 'react-toastify';
 
 import { useRouteDrawer, useDarkMode } from '~/hooks';
 import { ClassmojiService } from '@classmoji/services';
+import { useCallout } from '@classmoji/ui-components';
 import { RequireRole, StatsCard } from '~/components';
 import { requireClassroomAdmin } from '~/utils/routeAuth.server';
 import { addAuditLog } from '~/utils/helpers';
@@ -63,13 +63,13 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
 
   // Get their grading assignments
   const assignedGraderItems =
-    await ClassmojiService.repositoryAssignmentGrader.findAssignedByGrader(
+    await ClassmojiService.gitRepoAssignmentGrader.findAssignedByGrader(
       assistant.id,
       classroom.id
     );
 
   // Get overall progress stats for this grader
-  const gradersProgress = await ClassmojiService.repositoryAssignmentGrader.findGradersProgress(
+  const gradersProgress = await ClassmojiService.gitRepoAssignmentGrader.findGradersProgress(
     classroom.id
   );
   const assistantProgress = gradersProgress.find(g => g.login === login) || {
@@ -78,28 +78,28 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
     progress: 0,
   };
 
-  // Group assignments by module
-  const assignmentsByModule: Record<string, ModuleAssignmentsGroup> = {};
+  // Group assignments by repository
+  const assignmentsByRepository: Record<string, ModuleAssignmentsGroup> = {};
   assignedGraderItems.forEach(item => {
-    const repoAssignment = item.repository_assignment;
-    const moduleName = repoAssignment?.repository?.module?.title || 'Uncategorized';
-    const moduleId = repoAssignment?.repository?.module?.id || 'uncategorized';
+    const repoAssignment = item.git_repo_assignment;
+    const repositoryName = repoAssignment?.git_repo?.repository?.title || 'Uncategorized';
+    const repositoryId = repoAssignment?.git_repo?.repository?.id || 'uncategorized';
 
-    if (!assignmentsByModule[moduleId]) {
-      assignmentsByModule[moduleId] = {
-        name: moduleName,
+    if (!assignmentsByRepository[repositoryId]) {
+      assignmentsByRepository[repositoryId] = {
+        name: repositoryName,
         assignments: [],
       };
     }
 
-    assignmentsByModule[moduleId].assignments.push({
+    assignmentsByRepository[repositoryId].assignments.push({
       id: repoAssignment.id,
       studentName:
-        repoAssignment.repository?.student?.name ||
-        repoAssignment.repository?.team?.name ||
+        repoAssignment.git_repo?.student?.name ||
+        repoAssignment.git_repo?.team?.name ||
         'Unknown',
       studentLogin:
-        repoAssignment.repository?.student?.login || repoAssignment.repository?.team?.slug,
+        repoAssignment.git_repo?.student?.login || repoAssignment.git_repo?.team?.slug,
       assignmentTitle: repoAssignment.assignment?.title || 'Unknown Assignment',
       isGraded: repoAssignment.grades?.length > 0,
       gradeEmoji: repoAssignment.grades?.[0]?.emoji,
@@ -109,22 +109,23 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
   return {
     assistant,
     membership,
-    assignmentsByModule,
+    assignmentsByRepository,
     stats: assistantProgress,
   };
 };
 
 const AdminAssistantDrawer = ({ loaderData }: Route.ComponentProps) => {
-  const { assistant, membership, assignmentsByModule, stats } = loaderData;
+  const { assistant, membership, assignmentsByRepository, stats } = loaderData;
   const { close, opened, width } = useRouteDrawer({});
   const { isDarkMode } = useDarkMode();
   const navigate = useNavigate();
   const { class: classSlug } = useParams();
   const [impersonating, setImpersonating] = useState(false);
+  const callout = useCallout();
 
   const handleImpersonate = async () => {
     if (!assistant.login) {
-      toast.error('Assistant has not accepted invite.');
+      callout.show({ variant: 'error', title: 'Assistant has not accepted invite.' });
       return;
     }
 
@@ -141,7 +142,10 @@ const AdminAssistantDrawer = ({ loaderData }: Route.ComponentProps) => {
       navigate(`/assistant/${classSlug}/dashboard`);
     } catch (error: unknown) {
       console.error('Impersonation failed:', error);
-      toast.error(error instanceof Error ? error.message : 'Failed to view as assistant');
+      callout.show({
+        variant: 'error',
+        title: error instanceof Error ? error.message : 'Failed to view as assistant',
+      });
     } finally {
       setImpersonating(false);
     }
@@ -154,15 +158,15 @@ const AdminAssistantDrawer = ({ loaderData }: Route.ComponentProps) => {
     return '#ef4444'; // red
   };
 
-  const moduleCollapseItems = Object.entries(assignmentsByModule).map(([moduleId, module]) => {
-    const gradedCount = module.assignments.filter(assignment => assignment.isGraded).length;
-    const totalCount = module.assignments.length;
+  const repositoryCollapseItems = Object.entries(assignmentsByRepository).map(([repositoryId, repository]) => {
+    const gradedCount = repository.assignments.filter(assignment => assignment.isGraded).length;
+    const totalCount = repository.assignments.length;
 
     return {
-      key: moduleId,
+      key: repositoryId,
       label: (
         <div className="flex items-center justify-between w-full pr-4">
-          <span className="font-medium">{module.name}</span>
+          <span className="font-medium">{repository.name}</span>
           <Tag color={gradedCount === totalCount ? 'green' : 'orange'}>
             {gradedCount}/{totalCount} graded
           </Tag>
@@ -170,10 +174,10 @@ const AdminAssistantDrawer = ({ loaderData }: Route.ComponentProps) => {
       ),
       children: (
         <div className="space-y-2">
-          {module.assignments.map(assignment => (
+          {repository.assignments.map(assignment => (
             <div
               key={assignment.id}
-              className="flex items-center justify-between p-2 bg-gray-50 dark:bg-gray-800 rounded-lg"
+              className="flex items-center justify-between p-2 bg-gray-50 dark:bg-neutral-800 rounded-lg"
             >
               <div className="flex-1 min-w-0">
                 <p className="font-medium text-sm truncate">{assignment.studentName}</p>
@@ -220,7 +224,7 @@ const AdminAssistantDrawer = ({ loaderData }: Route.ComponentProps) => {
         onClose={close}
         open={opened}
         width={width}
-        closeIcon={<IconX className="text-gray-700 dark:text-gray-300" size={18} />}
+        closeIcon={<IconX className="text-ink-1" size={18} />}
         footer={
           <div className="flex justify-end py-2">
             <Button onClick={close}>Close</Button>
@@ -237,7 +241,7 @@ const AdminAssistantDrawer = ({ loaderData }: Route.ComponentProps) => {
                   `https://avatars.githubusercontent.com/${assistant.login}`
                 }
                 alt={assistant.name!}
-                className="w-16 h-16 rounded-full ring-2 ring-gray-200 dark:ring-gray-700"
+                className="w-16 h-16 rounded-full ring-2 ring-gray-200 dark:ring-neutral-700"
               />
               <div>
                 <h3 className="text-lg font-semibold">{assistant.name}</h3>
@@ -266,7 +270,7 @@ const AdminAssistantDrawer = ({ loaderData }: Route.ComponentProps) => {
         </Card>
 
         {/* Stats Section */}
-        <div className="grid grid-cols-3 gap-4 mb-4">
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-4">
           <StatsCard title="Total Assigned">{stats.total}</StatsCard>
           <StatsCard title="Completed">{stats.completed}</StatsCard>
           <Card className="text-center">
@@ -282,9 +286,9 @@ const AdminAssistantDrawer = ({ loaderData }: Route.ComponentProps) => {
 
         {/* Assignments Breakdown */}
         <Card title="Assignments Breakdown">
-          {moduleCollapseItems.length > 0 ? (
+          {repositoryCollapseItems.length > 0 ? (
             <Collapse
-              items={moduleCollapseItems}
+              items={repositoryCollapseItems}
               defaultActiveKey={[]}
               className="bg-transparent"
             />

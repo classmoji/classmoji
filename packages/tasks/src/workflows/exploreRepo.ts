@@ -2,7 +2,7 @@
 import { task, logger, metadata } from '@trigger.dev/sdk/v3';
 import Anthropic from '@anthropic-ai/sdk';
 
-console.log('[explore-repo] Module loaded (v2 with metadata streaming)');
+console.log('[explore-repo] Repository loaded (v2 with metadata streaming)');
 
 /**
  * GitHub API helpers
@@ -66,11 +66,11 @@ const GITHUB_HEADERS = (token: string): Record<string, string> => ({
 });
 
 /**
- * Fetch the full repository file tree via the Git Trees API.
+ * Fetch the full gitRepo file tree via the Git Trees API.
  * Returns a flat list of all files with paths, sizes, and types.
  *
  * @param {string} owner - GitHub org/user
- * @param {string} repo - Repository name
+ * @param {string} repo - GitRepo name
  * @param {string} token - GitHub installation access token
  * @returns {Promise<Array<{path: string, size: number, type: string}>>}
  */
@@ -98,7 +98,7 @@ async function fetchRepoTree(
  * Returns decoded UTF-8 text content.
  *
  * @param {string} owner - GitHub org/user
- * @param {string} repo - Repository name
+ * @param {string} repo - GitRepo name
  * @param {string} path - File path within the repo
  * @param {string} token - GitHub installation access token
  * @returns {Promise<string>} File content as text
@@ -253,7 +253,7 @@ async function pickRelevantFiles(
     messages: [
       {
         role: 'user',
-        content: `You are a code exploration assistant. Given a repository file tree and a focus area, pick the ${maxFiles} most relevant files to read.
+        content: `You are a code exploration assistant. Given a gitRepo file tree and a focus area, pick the ${maxFiles} most relevant files to read.
 
 FOCUS AREA: ${focusArea === 'initial' ? 'Get an overview of the project: framework, structure, main components, key patterns' : focusArea}
 ${previousContext}${previousFilesContext}${questionContext}
@@ -338,7 +338,7 @@ async function synthesizeFindings(
     messages: [
       {
         role: 'user',
-        content: `You are a code exploration assistant analyzing a student's repository. Provide a structured summary of what you found.
+        content: `You are a code exploration assistant analyzing a student's gitRepo. Provide a structured summary of what you found.
 
 FOCUS AREA: ${isInitial ? 'Initial project overview' : focusArea}
 ${previousContext}${questionContext}
@@ -396,7 +396,7 @@ Respond with ONLY the JSON object, no other text.`,
 }
 
 /**
- * Trigger.dev task: Explore a GitHub repository using the REST API + Claude Haiku.
+ * Trigger.dev task: Explore a GitHub gitRepo using the REST API + Claude Haiku.
  *
  * This is the core of the "trigger" exploration mode. Instead of cloning repos into
  * VMs (slow, expensive), it reads files directly via GitHub's API and uses Haiku
@@ -449,25 +449,25 @@ export const exploreRepoTask = task({
     }
     const client = new Anthropic({ apiKey: anthropicApiKey });
 
-    // Step 1: Fetch repository tree (~200ms)
+    // Step 1: Fetch gitRepo tree (~200ms)
     console.log(`[explore-repo] Step 1: Fetching repo tree...`);
-    logger.info('Fetching repository structure...');
-    metadata.set('currentStep', 'Fetching repository structure');
+    logger.info('Fetching gitRepo structure...');
+    metadata.set('currentStep', 'Fetching gitRepo structure');
     metadata.set('steps', [
-      { action: 'Fetching repository structure', toolName: 'github_tree', timestamp: Date.now() },
+      { action: 'Fetching gitRepo structure', toolName: 'github_tree', timestamp: Date.now() },
     ]);
     await metadata.flush();
 
     const tree = await fetchRepoTree(owner, repo, accessToken);
     console.log(`[explore-repo] Step 1 done: ${tree.length} files in tree`);
-    logger.info(`Repository has ${tree.length} files`);
+    logger.info(`GitRepo has ${tree.length} files`);
 
     const treeListing = formatTreeForLLM(tree);
 
     // Step 2: Claude picks relevant files (~2s)
     console.log(`[explore-repo] Step 2: Asking Haiku to pick relevant files...`);
-    logger.info('Analyzing repository structure...');
-    metadata.set('currentStep', 'Analyzing repository structure');
+    logger.info('Analyzing gitRepo structure...');
+    metadata.set('currentStep', 'Analyzing gitRepo structure');
     metadata.append('steps', {
       action: `Analyzing ${tree.length} files`,
       toolName: 'analyze_structure',

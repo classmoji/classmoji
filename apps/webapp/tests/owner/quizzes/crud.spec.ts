@@ -20,8 +20,7 @@ test.describe('Quiz List', () => {
   });
 
   test('displays quiz list page with correct heading', async ({ authenticatedPage: page }) => {
-    // Page heading is "Quiz Management"
-    await expect(page.getByText('Quiz Management')).toBeVisible();
+    await expect(page.getByRole('heading', { level: 1, name: 'Quizzes' })).toBeVisible();
   });
 
   test('shows create quiz button', async ({ authenticatedPage: page }) => {
@@ -36,12 +35,12 @@ test.describe('Quiz List', () => {
   });
 
   test('quiz table has expected columns', async ({ authenticatedPage: page }) => {
-    // Table should have columns for Quiz Name, Module, Weight, Due Date, Status, Attempts, Actions
+    // Table should have columns for Quiz Name, Repository, Weight, Due Date, Status, Attempts, Actions
     const table = page.locator('table');
     await expect(table).toBeVisible();
     // Use exact matching to avoid matching sidebar links
     await expect(table.getByText('Quiz Name')).toBeVisible();
-    await expect(table.getByText('Module', { exact: true })).toBeVisible();
+    await expect(table.getByText('Repository', { exact: true })).toBeVisible();
     await expect(table.getByText('Status', { exact: true })).toBeVisible();
   });
 });
@@ -82,7 +81,9 @@ test.describe('Quiz Create', () => {
     await expect(page.locator('.ant-drawer')).toBeVisible({ timeout: 5000 });
 
     // Click cancel button
-    const cancelButton = page.locator('.ant-drawer-footer').getByRole('button', { name: /Cancel/i });
+    const cancelButton = page
+      .locator('.ant-drawer-footer')
+      .getByRole('button', { name: /Cancel/i });
     await cancelButton.click();
 
     // Drawer should close
@@ -184,7 +185,10 @@ test.describe('Quiz Actions', () => {
     const quizRow = page.getByRole('row').filter({ hasText: 'Intro to JavaScript' });
 
     // Click the edit button (pencil icon)
-    const editButton = quizRow.locator('[aria-label*="edit"], button').filter({ has: page.locator('[class*="Edit"]') }).first();
+    const editButton = quizRow
+      .locator('[aria-label*="edit"], button')
+      .filter({ has: page.locator('[class*="Edit"]') })
+      .first();
     if (await editButton.isVisible({ timeout: 2000 }).catch(() => false)) {
       await editButton.click();
       await expect(page.locator('.ant-drawer')).toBeVisible({ timeout: 5000 });
@@ -198,7 +202,10 @@ test.describe('Quiz Actions', () => {
 });
 
 test.describe('Quiz Navigation', () => {
-  test('can navigate from dashboard to quizzes via sidebar', async ({ authenticatedPage: page, testOrg }) => {
+  test('can navigate from dashboard to quizzes via sidebar', async ({
+    authenticatedPage: page,
+    testOrg,
+  }) => {
     // Start from dashboard
     await mockGitHubAPI(page);
     await page.goto(`/admin/${testOrg}/dashboard`);
@@ -212,7 +219,10 @@ test.describe('Quiz Navigation', () => {
     await expect(page.getByText('Quiz Management')).toBeVisible();
   });
 
-  test('can navigate from quiz detail back to list', async ({ authenticatedPage: page, testOrg }) => {
+  test('can navigate from quiz detail back to list', async ({
+    authenticatedPage: page,
+    testOrg,
+  }) => {
     await mockGitHubAPI(page);
     await page.goto(`/admin/${testOrg}/quizzes`);
     await waitForDataLoad(page);

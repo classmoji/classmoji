@@ -1,4 +1,4 @@
-import { assertClassroomAccess } from '~/utils/helpers';
+import { assertClassroomAccess, assertClassroomMutationAllowed } from '~/utils/helpers';
 import { ClassmojiService, getGitProvider } from '@classmoji/services';
 import { ContentService } from '@classmoji/content';
 import { processMarkdownImport } from '~/utils/markdownImporter.server';
@@ -12,15 +12,14 @@ export const action = async ({ request }: Route.ActionArgs) => {
   const formData = await request.formData();
   const intent = formData.get('intent') as string;
   const classSlug = formData.get('classSlug') as string;
-  const term = formData.get('term') as string;
-
-  const { classroom, userId } = await assertClassroomAccess({
+  const { classroom, userId, membership } = await assertClassroomAccess({
     request,
     classroomSlug: classSlug,
     allowedRoles: ['OWNER', 'TEACHER'],
     resourceType: 'PAGES',
     attemptedAction: 'create_page',
   });
+  assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
 
   // Use git_organization.login for GitHub API calls, not the classroom slug
   const gitOrgLogin = classroom.git_organization?.login;
@@ -28,9 +27,14 @@ export const action = async ({ request }: Route.ActionArgs) => {
     return Response.json({ error: 'Git organization not configured' });
   }
 
+  const contentNamespace = classroom.content_namespace;
+  if (!contentNamespace) {
+    return Response.json({ error: 'Classroom content namespace not configured' });
+  }
+
   // Initialize batch import - creates repo if needed
   if (intent === 'batch-init') {
-    const repoName = `content-${gitOrgLogin}-${term}`;
+    const repoName = `content-${gitOrgLogin}-${contentNamespace}`;
     const gitProvider = getGitProvider(classroom.git_organization);
 
     const repoExists = await gitProvider.repositoryExists(gitOrgLogin, repoName);
@@ -39,7 +43,7 @@ export const action = async ({ request }: Route.ActionArgs) => {
         await gitProvider.createPublicRepository(
           gitOrgLogin,
           repoName,
-          `Course content for ${classroom.name || gitOrgLogin} - ${term}`
+          `Course content for ${classroom.name || gitOrgLogin} - ${contentNamespace}`
         );
         await new Promise(resolve => setTimeout(resolve, 2000));
       } catch (repoError) {
@@ -67,7 +71,7 @@ export const action = async ({ request }: Route.ActionArgs) => {
   if (intent === 'batch-import-single') {
     const title = formData.get('title') as string;
     const moduleId = (formData.get('assignmentId') as string) || null; // Optional - for linking
-    const repoName = `content-${gitOrgLogin}-${term}`;
+    const repoName = `content-${gitOrgLogin}-${contentNamespace}`;
 
     try {
       // Generate slug from title
@@ -165,9 +169,9 @@ export const action = async ({ request }: Route.ActionArgs) => {
         created_by: userId,
       });
 
-      // Link to module if specified
+      // Link to repository if specified
       if (moduleId) {
-        await ClassmojiService.page.linkPage(page.id, { moduleId });
+        await ClassmojiService.page.linkPage(page.id, { repositoryId: moduleId });
       }
 
       // Update manifest after creating page

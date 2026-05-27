@@ -44,7 +44,7 @@ interface StoredQuizQuestionResult extends QuizQuestionResultInput {
 interface CodeAwareQuizAttempt {
   id: string;
   quiz: {
-    module_id: string | null;
+    repository_id: string | null;
     classroom_id: string;
     system_prompt: string | null;
     rubric_prompt: string | null;
@@ -193,7 +193,7 @@ export const findById = async (attemptId: string) => {
     include: {
       quiz: {
         include: {
-          module: true,
+          repository: true,
           classroom: {
             include: {
               settings: true,
@@ -722,7 +722,7 @@ export const findByUser = async (userId: string, organizationId: string | null =
     include: {
       quiz: {
         include: {
-          module: true,
+          repository: true,
           classroom: true,
         },
       },
@@ -808,7 +808,7 @@ export const getUserAttemptForQuiz = async (quizId: string, userId: string) => {
     include: {
       quiz: {
         include: {
-          module: true,
+          repository: true,
         },
       },
     },
@@ -1202,7 +1202,7 @@ export const calculateQuizScore = async (quizId: string, userId: string) => {
 };
 
 /**
- * Initialize a code-aware quiz by cloning the student's repository and generating opening message
+ * Initialize a code-aware quiz by cloning the student's gitRepo and generating opening message
  * @param {Object} attempt - The quiz attempt object with quiz and assignment info
  * @param {string} userId - The user ID
  * @param {Object} codebaseManager - The codebase manager instance
@@ -1242,7 +1242,7 @@ export const initializeCodeAwareQuiz = async (
     questionCount: number
   ) => Promise<QuizOpeningResult>,
   findStudentRepository: (
-    moduleId: string | null,
+    repositoryId: string | null,
     userId: string
   ) => Promise<CodeAwareQuizRepository | null>,
   findClassroomById: (classroomId: string) => Promise<CodeAwareQuizClassroom>,
@@ -1255,10 +1255,10 @@ export const initializeCodeAwareQuiz = async (
   ) => Promise<unknown>,
   incrementQuestionsAsked: (attemptId: string) => Promise<unknown>
 ) => {
-  // Find student's repository
-  const repo = await findStudentRepository(attempt.quiz.module_id, userId);
+  // Find student's gitRepo
+  const repo = await findStudentRepository(attempt.quiz.repository_id, userId);
   if (!repo) {
-    throw new Error('No repository found for this module');
+    throw new Error('No gitRepo found for this repository');
   }
 
   // Get classroom and GitHub token
@@ -1267,7 +1267,7 @@ export const initializeCodeAwareQuiz = async (
     classroom.git_organization?.github_installation_id
   );
 
-  // Clone repository
+  // Clone gitRepo
   const codebasePath = await codebaseManager.cloneForAttempt(
     attempt.id.toString(),
     classroom.slug,

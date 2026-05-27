@@ -74,7 +74,7 @@ function createPrismaClient() {
           },
         },
       },
-      repositoryAssignment: {
+      gitRepoAssignment: {
         extension_hours: {
           needs: { token_transactions: true },
           compute(repoAssignment: { token_transactions: TokenTransaction[] }) {

@@ -53,7 +53,7 @@ export const loader = async ({
   }
 
   // Get content repo name and file path
-  const repo = `content-${gitOrgLogin}-${slide.term}`;
+  const repo = `content-${gitOrgLogin}-${slide.classroom.content_namespace}`;
   const filePath = `${slide.content_path}/index.html`;
 
   // Fetch content using shared utility (CDN first, API fallback)

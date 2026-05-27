@@ -11,7 +11,7 @@ function generateSignature(slug: string) {
   if (!CALENDAR_SECRET) {
     throw new Error('CALENDAR_SECRET environment variable is not set');
   }
-  return crypto.createHmac('sha256', CALENDAR_SECRET).update(slug).digest('hex').slice(0, 16);
+  return crypto.createHmac('sha256', CALENDAR_SECRET).update(slug).digest('hex');
 }
 
 /**

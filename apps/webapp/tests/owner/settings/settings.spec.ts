@@ -15,7 +15,7 @@ test.describe('Settings Navigation', () => {
   });
 
   test('displays settings page header', async ({ authenticatedPage: page }) => {
-    await expect(page.getByRole('heading', { name: /Classroom Settings/i })).toBeVisible();
+    await expect(page.getByRole('heading', { name: /^Settings$/i })).toBeVisible();
   });
 
   test('displays all settings tabs', async ({ authenticatedPage: page }) => {
@@ -161,7 +161,7 @@ test.describe('Danger Zone Tab', () => {
     // Modal should appear with classroom name
     await expect(page.getByText(`Remove ${testOrg} classroom`)).toBeVisible();
     await expect(
-      page.getByText(/The following data will be removed: modules, student enrollments/i)
+      page.getByText(/The following data will be removed: repositories, student enrollments/i)
     ).toBeVisible();
 
     // Cancel button should close the modal

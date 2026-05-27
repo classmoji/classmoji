@@ -1,16 +1,17 @@
 import { ClassmojiService } from '@classmoji/services';
 import Tasks from '@classmoji/tasks';
 import getPrisma from '@classmoji/database';
-import { requireClassroomAdmin } from '~/utils/routeAuth.server';
+import { requireClassroomAdmin, assertClassroomMutationAllowed } from '~/utils/routeAuth.server';
 import type { Route } from './+types/route';
 
 export const action = async ({ request, params }: Route.ActionArgs) => {
   const classSlug = params.class!;
 
-  const { classroom, userId: _userId } = await requireClassroomAdmin(request, classSlug, {
+  const { classroom, userId: _userId, membership } = await requireClassroomAdmin(request, classSlug, {
     resourceType: 'STUDENT_ROSTER',
     action: 'bulk_add_students',
   });
+  assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
 
   const data = (await request.json()) as { students: Array<{ email: string; name?: string }> };
   const emails = data.students.map(s => s.email.toLowerCase());

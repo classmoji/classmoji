@@ -4,6 +4,7 @@
  */
 export {
   assertClassroomAccess,
+  assertClassroomMutationAllowed,
   requireClassroomAdmin,
   requireClassroomStaff,
   requireClassroomTeachingTeam,

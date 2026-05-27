@@ -1,4 +1,4 @@
-import { BRAND, BRAND_LIGHT, BRAND_BG, PRIMARY, PRIMARY_600 } from './theme.js';
+import { BRAND, BRAND_LIGHT, BRAND_BG, PRIMARY, PRIMARY_600 } from './theme.ts';
 
 const theme = {
   token: {
@@ -44,6 +44,11 @@ const theme = {
       optionSelectedBg: '#f3f4f6',
       optionActiveBg: '#f9fafb',
       optionSelectedFontWeight: 600,
+    },
+    Input: {
+      hoverBorderColor: '#d1d5db',
+      activeBorderColor: '#9ca3af',
+      activeShadow: 'none',
     },
     FloatButton: {
       colorPrimary: BRAND,

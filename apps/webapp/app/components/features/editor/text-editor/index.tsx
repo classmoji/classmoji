@@ -171,7 +171,7 @@ const TextEditor = forwardRef(({ content, onUpdate, showTable }: TextEditorProps
         onClick={() => editor?.commands.focus()}
       >
         {/* Toolbar */}
-        <div className="border-b p-3 flex gap-1 flex-wrap bg-gray-50 dark:bg-gray-800 dark:border-gray-700">
+        <div className="border-b p-3 flex gap-1 flex-wrap bg-gray-50 dark:bg-neutral-800 dark:border-neutral-700">
           {/* Headings */}
           <div className="flex gap-1 border-r border-gray-300 dark:border-gray-600 pr-2 mr-2">
             <button
@@ -179,7 +179,7 @@ const TextEditor = forwardRef(({ content, onUpdate, showTable }: TextEditorProps
               className={`px-2 py-1 rounded text-sm font-semibold ${
                 editor.isActive('heading', { level: 1 })
                   ? 'bg-blue-200 dark:bg-blue-700 dark:text-blue-100'
-                  : 'hover:bg-gray-100 dark:hover:bg-gray-700 dark:text-gray-300'
+                  : 'hover:bg-gray-100 dark:hover:bg-neutral-700 dark:text-gray-300'
               }`}
             >
               H1
@@ -189,7 +189,7 @@ const TextEditor = forwardRef(({ content, onUpdate, showTable }: TextEditorProps
               className={`px-2 py-1 rounded text-sm font-semibold ${
                 editor.isActive('heading', { level: 2 })
                   ? 'bg-blue-200 dark:bg-blue-700 dark:text-blue-100'
-                  : 'hover:bg-gray-100 dark:hover:bg-gray-700 dark:text-gray-300'
+                  : 'hover:bg-gray-100 dark:hover:bg-neutral-700 dark:text-gray-300'
               }`}
             >
               H2
@@ -199,7 +199,7 @@ const TextEditor = forwardRef(({ content, onUpdate, showTable }: TextEditorProps
               className={`px-2 py-1 rounded text-sm font-semibold ${
                 editor.isActive('heading', { level: 3 })
                   ? 'bg-blue-200 dark:bg-blue-700 dark:text-blue-100'
-                  : 'hover:bg-gray-100 dark:hover:bg-gray-700 dark:text-gray-300'
+                  : 'hover:bg-gray-100 dark:hover:bg-neutral-700 dark:text-gray-300'
               }`}
             >
               H3
@@ -213,7 +213,7 @@ const TextEditor = forwardRef(({ content, onUpdate, showTable }: TextEditorProps
               className={`px-2 py-1 rounded text-sm ${
                 editor.isActive('bold')
                   ? 'bg-gray-200 dark:bg-gray-600 dark:text-gray-100'
-                  : 'hover:bg-gray-100 dark:hover:bg-gray-700 dark:text-gray-300'
+                  : 'hover:bg-gray-100 dark:hover:bg-neutral-700 dark:text-gray-300'
               }`}
             >
               <strong>B</strong>
@@ -223,7 +223,7 @@ const TextEditor = forwardRef(({ content, onUpdate, showTable }: TextEditorProps
               className={`px-2 py-1 rounded text-sm ${
                 editor.isActive('italic')
                   ? 'bg-gray-200 dark:bg-gray-600 dark:text-gray-100'
-                  : 'hover:bg-gray-100 dark:hover:bg-gray-700 dark:text-gray-300'
+                  : 'hover:bg-gray-100 dark:hover:bg-neutral-700 dark:text-gray-300'
               }`}
             >
               <em>I</em>
@@ -233,7 +233,7 @@ const TextEditor = forwardRef(({ content, onUpdate, showTable }: TextEditorProps
               className={`px-2 py-1 rounded text-sm ${
                 editor.isActive('underline')
                   ? 'bg-gray-200 dark:bg-gray-600 dark:text-gray-100'
-                  : 'hover:bg-gray-100 dark:hover:bg-gray-700 dark:text-gray-300'
+                  : 'hover:bg-gray-100 dark:hover:bg-neutral-700 dark:text-gray-300'
               }`}
             >
               <u>U</u>
@@ -243,7 +243,7 @@ const TextEditor = forwardRef(({ content, onUpdate, showTable }: TextEditorProps
               className={`px-2 py-1 rounded text-sm ${
                 editor.isActive('strike')
                   ? 'bg-gray-200 dark:bg-gray-600 dark:text-gray-100'
-                  : 'hover:bg-gray-100 dark:hover:bg-gray-700 dark:text-gray-300'
+                  : 'hover:bg-gray-100 dark:hover:bg-neutral-700 dark:text-gray-300'
               }`}
             >
               <s>S</s>
@@ -257,7 +257,7 @@ const TextEditor = forwardRef(({ content, onUpdate, showTable }: TextEditorProps
               className={`px-2 py-1 rounded text-sm ${
                 editor.isActive('bulletList')
                   ? 'bg-gray-200 dark:bg-gray-600 dark:text-gray-100'
-                  : 'hover:bg-gray-100 dark:hover:bg-gray-700 dark:text-gray-300'
+                  : 'hover:bg-gray-100 dark:hover:bg-neutral-700 dark:text-gray-300'
               }`}
             >
               • List
@@ -267,7 +267,7 @@ const TextEditor = forwardRef(({ content, onUpdate, showTable }: TextEditorProps
               className={`px-2 py-1 rounded text-sm ${
                 editor.isActive('orderedList')
                   ? 'bg-gray-200 dark:bg-gray-600 dark:text-gray-100'
-                  : 'hover:bg-gray-100 dark:hover:bg-gray-700 dark:text-gray-300'
+                  : 'hover:bg-gray-100 dark:hover:bg-neutral-700 dark:text-gray-300'
               }`}
             >
               1. List
@@ -281,7 +281,7 @@ const TextEditor = forwardRef(({ content, onUpdate, showTable }: TextEditorProps
               className={`px-2 py-1 rounded text-sm ${
                 editor.isActive({ textAlign: 'left' })
                   ? 'bg-gray-200 dark:bg-gray-600 dark:text-gray-100'
-                  : 'hover:bg-gray-100 dark:hover:bg-gray-700 dark:text-gray-300'
+                  : 'hover:bg-gray-100 dark:hover:bg-neutral-700 dark:text-gray-300'
               }`}
             >
               ⬅
@@ -291,7 +291,7 @@ const TextEditor = forwardRef(({ content, onUpdate, showTable }: TextEditorProps
               className={`px-2 py-1 rounded text-sm ${
                 editor.isActive({ textAlign: 'center' })
                   ? 'bg-gray-200 dark:bg-gray-600 dark:text-gray-100'
-                  : 'hover:bg-gray-100 dark:hover:bg-gray-700 dark:text-gray-300'
+                  : 'hover:bg-gray-100 dark:hover:bg-neutral-700 dark:text-gray-300'
               }`}
             >
               ↔
@@ -301,7 +301,7 @@ const TextEditor = forwardRef(({ content, onUpdate, showTable }: TextEditorProps
               className={`px-2 py-1 rounded text-sm ${
                 editor.isActive({ textAlign: 'right' })
                   ? 'bg-gray-200 dark:bg-gray-600 dark:text-gray-100'
-                  : 'hover:bg-gray-100 dark:hover:bg-gray-700 dark:text-gray-300'
+                  : 'hover:bg-gray-100 dark:hover:bg-neutral-700 dark:text-gray-300'
               }`}
             >
               ➡
@@ -315,7 +315,7 @@ const TextEditor = forwardRef(({ content, onUpdate, showTable }: TextEditorProps
               className={`px-2 py-1 rounded text-sm ${
                 editor.isActive('blockquote')
                   ? 'bg-gray-200 dark:bg-gray-600 dark:text-gray-100'
-                  : 'hover:bg-gray-100 dark:hover:bg-gray-700 dark:text-gray-300'
+                  : 'hover:bg-gray-100 dark:hover:bg-neutral-700 dark:text-gray-300'
               }`}
             >
               Quote
@@ -325,7 +325,7 @@ const TextEditor = forwardRef(({ content, onUpdate, showTable }: TextEditorProps
               className={`px-2 py-1 rounded text-sm ${
                 editor.isActive('link')
                   ? 'bg-gray-200 dark:bg-gray-600 dark:text-gray-100'
-                  : 'hover:bg-gray-100 dark:hover:bg-gray-700 dark:text-gray-300'
+                  : 'hover:bg-gray-100 dark:hover:bg-neutral-700 dark:text-gray-300'
               }`}
             >
               🔗 Link
@@ -335,7 +335,7 @@ const TextEditor = forwardRef(({ content, onUpdate, showTable }: TextEditorProps
               className={`px-2 py-1 rounded text-sm ${
                 editor.isActive('highlight')
                   ? 'bg-yellow-200 dark:bg-yellow-700 dark:text-yellow-100'
-                  : 'hover:bg-gray-100 dark:hover:bg-gray-700 dark:text-gray-300'
+                  : 'hover:bg-gray-100 dark:hover:bg-neutral-700 dark:text-gray-300'
               }`}
             >
               🖍 Highlight
@@ -345,7 +345,7 @@ const TextEditor = forwardRef(({ content, onUpdate, showTable }: TextEditorProps
 
         {/* Editor Content */}
         <div
-          className="p-4 min-h-[250px] cursor-text dark:bg-gray-900"
+          className="p-4 min-h-[250px] cursor-text dark:bg-neutral-900"
           onClick={e => {
             // Only handle clicks on the wrapper div, not on content
             if (e.target === e.currentTarget) {

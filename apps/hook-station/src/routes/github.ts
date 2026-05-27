@@ -3,8 +3,13 @@ import type { WebhookEvent } from '@octokit/webhooks-types';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import Tasks from '@classmoji/tasks';
 
+const githubWebhookSecret = process.env.GITHUB_WEBHOOK_SECRET;
+if (!githubWebhookSecret) {
+  throw new Error('GITHUB_WEBHOOK_SECRET is required');
+}
+
 const webhooks = new Webhooks({
-  secret: process.env.GITHUB_WEBHOOK_SECRET!,
+  secret: githubWebhookSecret,
 });
 
 const githubWebhookHandlers: Record<string, (data: WebhookEvent) => Promise<void>> = {
@@ -53,6 +58,7 @@ const githubWebhookHandlers: Record<string, (data: WebhookEvent) => Promise<void
 
 export default async function githubRoutes(fastify: FastifyInstance): Promise<void> {
   fastify.post('/github', {
+    config: { rawBody: true },
     preHandler: async function handler(request: FastifyRequest, reply: FastifyReply) {
       const signature = request.headers['x-hub-signature-256'];
       if (typeof signature !== 'string') {
@@ -60,8 +66,15 @@ export default async function githubRoutes(fastify: FastifyInstance): Promise<vo
         return;
       }
 
-      if (!(await webhooks.verify(JSON.stringify(request.body), signature))) {
+      const rawBody = (request as FastifyRequest & { rawBody?: string }).rawBody;
+      if (typeof rawBody !== 'string') {
         reply.status(401).send('Unauthorized');
+        return;
+      }
+
+      if (!(await webhooks.verify(rawBody, signature))) {
+        reply.status(401).send('Unauthorized');
+        return;
       }
     },
     handler: async function handler(request: FastifyRequest, reply: FastifyReply) {

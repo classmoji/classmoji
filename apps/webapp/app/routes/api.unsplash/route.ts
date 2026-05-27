@@ -8,7 +8,19 @@
  * POST /api/unsplash (with downloadUrl in body) - Trigger download tracking
  */
 
+import { requireAuth } from '@classmoji/auth/server';
 import type { Route } from './+types/route';
+
+const ALLOWED_DOWNLOAD_HOST = 'api.unsplash.com';
+
+function isAllowedUnsplashUrl(value: string): boolean {
+  try {
+    const parsed = new URL(value);
+    return parsed.protocol === 'https:' && parsed.hostname === ALLOWED_DOWNLOAD_HOST;
+  } catch {
+    return false;
+  }
+}
 
 interface UnsplashPhoto {
   id: string;
@@ -25,6 +37,8 @@ interface UnsplashPhoto {
 const UNSPLASH_ACCESS_KEY = process.env.UNSPLASH_ACCESS_KEY;
 
 export const loader = async ({ request }: Route.LoaderArgs) => {
+  await requireAuth(request);
+
   if (!UNSPLASH_ACCESS_KEY) {
     return Response.json({ error: 'Unsplash API not configured' }, { status: 503 });
   }
@@ -94,6 +108,8 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
  * Per Unsplash API guidelines, we MUST call the download endpoint when a photo is used.
  */
 export const action = async ({ request }: Route.ActionArgs) => {
+  await requireAuth(request);
+
   if (!UNSPLASH_ACCESS_KEY) {
     return Response.json({ error: 'Unsplash API not configured' }, { status: 503 });
   }
@@ -103,6 +119,10 @@ export const action = async ({ request }: Route.ActionArgs) => {
 
   if (!downloadUrl) {
     return Response.json({ error: 'Missing downloadUrl' }, { status: 400 });
+  }
+
+  if (!isAllowedUnsplashUrl(downloadUrl)) {
+    return Response.json({ error: 'Invalid downloadUrl' }, { status: 400 });
   }
 
   try {

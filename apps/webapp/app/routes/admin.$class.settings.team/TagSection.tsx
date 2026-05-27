@@ -1,8 +1,8 @@
 import { useState } from 'react';
-import { toast } from 'react-toastify';
 
 import { SettingSection, TableActionButtons } from '~/components';
 import { Input, Button, Table, Tag } from 'antd';
+import { useCallout } from '@classmoji/ui-components';
 import { useGlobalFetcher } from '~/hooks';
 
 interface Tag {
@@ -17,10 +17,11 @@ interface TagSectionProps {
 const TagSection = ({ tags }: TagSectionProps) => {
   const [name, setName] = useState('');
   const { fetcher } = useGlobalFetcher();
+  const callout = useCallout();
 
   const createTag = () => {
     if (tags.find((tag: Tag) => tag.name === name)) {
-      toast.error('Tag already exists');
+      callout.show({ variant: 'error', title: 'Tag already exists' });
       return;
     }
 

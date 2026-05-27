@@ -42,8 +42,20 @@ test.describe('Calendar Display', () => {
   test('shows current month and year', async ({ authenticatedPage: page }) => {
     // The calendar should show month and year (e.g., "December 2025")
     const currentDate = new Date();
-    const monthNames = ['January', 'February', 'March', 'April', 'May', 'June',
-      'July', 'August', 'September', 'October', 'November', 'December'];
+    const monthNames = [
+      'January',
+      'February',
+      'March',
+      'April',
+      'May',
+      'June',
+      'July',
+      'August',
+      'September',
+      'October',
+      'November',
+      'December',
+    ];
     const currentMonth = monthNames[currentDate.getMonth()];
     const currentYear = currentDate.getFullYear().toString();
 
@@ -64,13 +76,22 @@ test.describe('Calendar Navigation', () => {
     await expect(page.getByRole('button', { name: 'Today' })).toBeVisible();
     // Navigation arrows should be present (using SVG icons or arrow text)
     // The calendar has < and > buttons for navigation
-    const prevButton = page.locator('button').filter({ hasText: /<|‹|Previous|prev/i }).first();
-    const nextButton = page.locator('button').filter({ hasText: />|›|Next|next/i }).first();
+    const prevButton = page
+      .locator('button')
+      .filter({ hasText: /<|‹|Previous|prev/i })
+      .first();
+    const nextButton = page
+      .locator('button')
+      .filter({ hasText: />|›|Next|next/i })
+      .first();
     // At minimum, the Today button should be visible for navigation
     await expect(page.getByRole('button', { name: 'Today' })).toBeVisible();
   });
 
-  test('can navigate from dashboard to calendar via sidebar', async ({ authenticatedPage: page, testOrg }) => {
+  test('can navigate from dashboard to calendar via sidebar', async ({
+    authenticatedPage: page,
+    testOrg,
+  }) => {
     // Start from dashboard
     await page.goto(`/admin/${testOrg}/dashboard`);
     await waitForDataLoad(page);

@@ -30,7 +30,7 @@ interface CalendarAssignmentLink extends OccurrenceLink {
     id: string;
     title: string;
     slug: string | null;
-    module: {
+    repository: {
       id: string;
       title: string;
       slug: string | null;
@@ -73,7 +73,7 @@ interface CalendarExpandedEvent extends CalendarEventWithLinks {
   slides: Array<{ slide: CalendarSlideLink['slide'] }>;
   assignments: Array<{
     assignment: CalendarAssignmentLink['assignment'];
-    module: NonNullable<CalendarAssignmentLink['assignment']>['module'] | undefined;
+    repository: NonNullable<CalendarAssignmentLink['assignment']>['repository'] | undefined;
   }>;
   occurrence_date?: Date;
   is_overridden?: boolean;
@@ -92,7 +92,7 @@ interface CalendarDeadlineItem {
   is_deadline: true;
   is_unpublished: boolean;
   assignment_id: string;
-  module_id: string;
+  repository_id: string;
   pages: unknown[];
   slides: unknown[];
   github_issue_url: string | null;
@@ -132,7 +132,7 @@ interface CalendarOverrideData {
 
 interface DeadlineRepositoryAssignment {
   provider_issue_number: number;
-  repository: {
+  git_repo: {
     name: string;
   };
 }
@@ -271,10 +271,10 @@ const mapLinksToDisplayFormat = (
     .filter(l => !filterDrafts || !l.slide?.is_draft)
     .map(l => ({ slide: l.slide }));
 
-  // Map assignments with module info for navigation
+  // Map assignments with repository info for navigation
   const assignments = (assignmentLinks || []).map(l => ({
     assignment: l.assignment,
-    module: l.assignment?.module,
+    repository: l.assignment?.repository,
   }));
 
   return { pages, slides, assignments };
@@ -550,7 +550,7 @@ export const getClassroomCalendar = async (
               id: true,
               title: true,
               slug: true,
-              module: { select: { id: true, title: true, slug: true } },
+              repository: { select: { id: true, title: true, slug: true } },
             },
           },
         },
@@ -601,7 +601,7 @@ export const getDeadlinesForRange = async (
 ) => {
   const assignments = await getPrisma().assignment.findMany({
     where: {
-      module: {
+      repository: {
         classroom_id: classroomId,
         // Only filter by is_published if not including unpublished
         ...(includeUnpublished ? {} : { is_published: true }),
@@ -614,7 +614,7 @@ export const getDeadlinesForRange = async (
       },
     },
     include: {
-      module: {
+      repository: {
         select: {
           id: true,
           title: true,
@@ -667,16 +667,16 @@ export const getDeadlinesForRange = async (
           order: 'asc',
         },
       },
-      // Include user's repository assignment if userId provided
+      // Include user's gitRepo assignment if userId provided
       ...(userId && {
-        repository_assignments: {
+        git_repo_assignments: {
           where: {
-            repository: {
+            git_repo: {
               student_id: userId,
             },
           },
           include: {
-            repository: {
+            git_repo: {
               select: {
                 name: true,
               },
@@ -693,32 +693,32 @@ export const getDeadlinesForRange = async (
 
   return assignments.map(assignment => {
     const repoAssignment = (
-      'repository_assignments' in assignment
-        ? (assignment.repository_assignments?.[0] ?? null)
+      'git_repo_assignments' in assignment
+        ? (assignment.git_repo_assignments?.[0] ?? null)
         : null
     ) as DeadlineRepositoryAssignment | null;
-    const gitOrgLogin = assignment.module.classroom?.git_organization?.login;
+    const gitOrgLogin = assignment.repository.classroom?.git_organization?.login;
 
     // Build GitHub issue URL if user has a repo assignment
     let github_issue_url = null;
     if (repoAssignment && gitOrgLogin) {
-      github_issue_url = `https://github.com/${gitOrgLogin}/${repoAssignment.repository.name}/issues/${repoAssignment.provider_issue_number}`;
+      github_issue_url = `https://github.com/${gitOrgLogin}/${repoAssignment.git_repo.name}/issues/${repoAssignment.provider_issue_number}`;
     }
 
     // Flag unpublished content for admin UI styling
-    const isUnpublished = !assignment.is_published || !assignment.module?.is_published;
+    const isUnpublished = !assignment.is_published || !assignment.repository?.is_published;
 
     const deadline: CalendarDeadlineItem = {
       id: `deadline-${assignment.id}`,
       event_type: 'DEADLINE',
       title: `Due: ${assignment.title}`,
-      description: assignment.module.title,
+      description: assignment.repository.title,
       start_time: assignment.student_deadline!,
       end_time: assignment.student_deadline!,
       is_deadline: true,
       is_unpublished: isUnpublished,
       assignment_id: assignment.id,
-      module_id: assignment.module.id,
+      repository_id: assignment.repository.id,
       pages: assignment.pages,
       slides: assignment.slides,
       github_issue_url,
@@ -1149,7 +1149,7 @@ export const updateEventLinks = async (
       : [],
     assignmentIds.length > 0
       ? getPrisma().assignment.findMany({
-          where: { id: { in: assignmentIds }, module: { classroom_id: classroomId } },
+          where: { id: { in: assignmentIds }, repository: { classroom_id: classroomId } },
           select: { id: true },
         })
       : [],

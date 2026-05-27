@@ -7,7 +7,7 @@ interface SignInPageProps {
 
 const SignInPage = ({ handleGitHubLogin }: SignInPageProps) => {
   return (
-    <div className="min-h-screen dark:bg-gray-950 flex flex-col">
+    <div className="min-h-screen dark:bg-neutral-950 flex flex-col">
       {/* Main content */}
       <main className="flex-1 flex items-center justify-center px-4">
         <div className="w-64">
@@ -33,7 +33,7 @@ const SignInPage = ({ handleGitHubLogin }: SignInPageProps) => {
       </main>
 
       {/* Footer */}
-      <footer className="py-6 text-center text-sm text-gray-500 dark:text-gray-400">
+      <footer className="py-6 text-center text-sm text-ink-3">
         © {new Date().getFullYear()} Classmoji
       </footer>
     </div>

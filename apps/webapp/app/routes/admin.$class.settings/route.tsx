@@ -1,138 +1,76 @@
+import type { CSSProperties } from 'react';
 import { Outlet, useNavigate, useParams, useLocation } from 'react-router';
-import { Tabs } from 'antd';
-import {
-  IconSettings,
-  IconSchool,
-  IconUsers,
-  IconPuzzle,
-  IconAlertTriangle,
-  IconBrandGit,
-  IconBrain,
-  IconFileText,
-} from '@tabler/icons-react';
 
-import { PageHeader, ProTierFeature } from '~/components';
-import { useSubscription } from '~/hooks';
+interface TabDef {
+  key: string;
+  label: string;
+  danger?: boolean;
+}
+
+const ALL_TABS: TabDef[] = [
+  { key: 'general', label: 'General' },
+  { key: 'repos', label: 'Repositories' },
+  { key: 'grades', label: 'Grades' },
+  { key: 'quizzes', label: 'Quizzes' },
+  { key: 'content', label: 'Content' },
+  { key: 'team', label: 'Team' },
+  { key: 'extension', label: 'Extension' },
+  { key: 'danger-zone', label: 'Danger Zone', danger: true },
+];
 
 const OrgSettings = () => {
   const navigate = useNavigate();
   const { class: classSlug } = useParams();
   const location = useLocation();
-  const { isProTier } = useSubscription();
 
-  // Extract current tab from URL
   const currentTab = location.pathname.split('/').pop() || 'general';
 
-  const items = [
-    {
-      key: 'general',
-      label: (
-        <div className="flex items-center gap-2">
-          <IconSettings size={16} />
-          <span>General</span>
-        </div>
-      ),
-      children: <Outlet />,
-    },
-    {
-      key: 'repos',
-      label: (
-        <div className="flex items-center gap-2">
-          <IconBrandGit size={16} />
-          <span>Repositories</span>
-        </div>
-      ),
-      children: <Outlet />,
-    },
-    {
-      key: 'grades',
-      label: (
-        <div className="flex items-center gap-2">
-          <IconSchool size={16} />
-          <span>Grades</span>
-        </div>
-      ),
-      children: <Outlet />,
-    },
-    {
-      key: 'quizzes',
-      label: (
-        <div className="flex items-center gap-2">
-          <IconBrain size={16} />
-          <span>Quizzes</span>
-        </div>
-      ),
-      children: <Outlet />,
-    },
-    {
-      key: 'content',
-      label: (
-        <div className="flex items-center gap-2">
-          <IconFileText size={16} />
-          <span>Content</span>
-        </div>
-      ),
-      children: <Outlet />,
-    },
-    ...(isProTier
-      ? [
-          {
-            key: 'team',
-            label: (
-              <div className="flex items-center gap-2">
-                <IconUsers size={16} />
-                <span>Team</span>
-              </div>
-            ),
-            children: (
-              <ProTierFeature>
-                <Outlet />
-              </ProTierFeature>
-            ),
-          },
-        ]
-      : []),
-    {
-      key: 'extension',
-      label: (
-        <div className="flex items-center gap-2">
-          <IconPuzzle size={16} />
-          <span>Extension</span>
-        </div>
-      ),
-      children: <Outlet />,
-    },
-    {
-      key: 'danger-zone',
-      label: (
-        <div className="flex items-center gap-2 text-red-600">
-          <IconAlertTriangle size={16} />
-          <span>Danger Zone</span>
-        </div>
-      ),
-      children: <Outlet />,
-    },
-  ];
-
   return (
-    <div className="space-y-6">
-      <PageHeader title="Classroom Settings" routeName="settings" />
+    <div className="min-h-full flex flex-col">
+      <h1 className="mt-2 mb-4 text-base font-semibold text-ink-2">
+        Settings
+      </h1>
 
-      <style>{`.danger-zone-active .ant-tabs-ink-bar { background: #dc2626 !important; }`}</style>
-      <Tabs
-        activeKey={currentTab}
-        items={items}
-        className={currentTab === 'danger-zone' ? 'danger-zone-active' : ''}
-        onChange={tabKey => {
-          const path = `/admin/${classSlug}/settings/${tabKey}`;
-          navigate(path);
-        }}
-        tabBarStyle={{
-          marginBottom: '24px',
-          borderBottom: '1px solid #f0f0f0',
-          marginTop: '-18px',
-        }}
-      />
+      <div className="flex-1 flex flex-col">
+        <div className="flex -mb-px relative overflow-x-auto">
+          {ALL_TABS.map((tab, idx) => {
+            const isActive = tab.key === currentTab;
+            const baseZ = ALL_TABS.length - idx;
+            const zStyle = { zIndex: isActive ? 10 : baseZ };
+            const inactiveTextColor = tab.danger
+              ? 'text-red-500/80 dark:text-red-400/80 hover:text-red-600 dark:hover:text-red-400'
+              : 'text-ink-3 hover:text-gray-800 dark:hover:text-gray-200';
+            const activeStyle: CSSProperties = isActive
+              ? tab.danger
+                ? { ...zStyle }
+                : { ...zStyle, color: 'var(--accent)', borderTopColor: 'var(--accent)' }
+              : zStyle;
+            return (
+              <button
+                key={tab.key}
+                type="button"
+                onClick={() => navigate(`/admin/${classSlug}/settings/${tab.key}`)}
+                style={activeStyle}
+                className={`relative px-4 py-2 text-sm font-medium rounded-t-2xl border whitespace-nowrap transition-colors ${
+                  idx > 0 ? '-ml-2' : ''
+                } ${
+                  isActive
+                    ? `bg-panel ${
+                        tab.danger ? 'text-red-600 dark:text-red-400' : ''
+                      } border-line border-b-transparent`
+                    : `bg-nav-hover ${inactiveTextColor} border-line`
+                }`}
+              >
+                {tab.label}
+              </button>
+            );
+          })}
+        </div>
+
+        <section className="flex-1 rounded-2xl rounded-tl-none bg-panel border border-line min-h-[calc(100vh-10rem)] p-5 sm:p-6 overflow-auto">
+          <Outlet />
+        </section>
+      </div>
     </div>
   );
 };

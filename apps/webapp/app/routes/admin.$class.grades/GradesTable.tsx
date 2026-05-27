@@ -1,17 +1,16 @@
 import { useState, useMemo } from 'react';
-import { Table, Checkbox, ConfigProvider, Radio, FloatButton, Card } from 'antd';
-import { IconSettings, IconMessagePlus } from '@tabler/icons-react';
+import { Table, Checkbox, ConfigProvider, Segmented, Popover, Input } from 'antd';
+import { IconInfoCircle, IconMessagePlus, IconSearch } from '@tabler/icons-react';
 import { useParams, useNavigate } from 'react-router';
 import { mean, median } from 'simple-statistics';
-import './styles.css';
 
-import { PageHeader, UserThumbnailView, TableActionButtons, SearchInput } from '~/components';
+import { UserThumbnailView, TableActionButtons } from '~/components';
 import GradeSettings from './GradeSettings';
 import { createAssignmentColumns } from './columns/assignmentColumns';
 import { createStudentGradeColumns } from './columns/studentGradeColumns';
 import { calculateStudentFinalGrade } from '@classmoji/utils';
 import type { TableProps } from 'antd';
-import type { Repository, OrganizationSettings, LetterGradeMappingEntry } from '@classmoji/utils';
+import type { GitRepo, OrganizationSettings, LetterGradeMappingEntry } from '@classmoji/utils';
 import { useGlobalFetcher } from '~/hooks';
 
 interface ModuleData {
@@ -29,7 +28,7 @@ interface Student {
   login: string;
   email?: string;
   provider_email?: string;
-  repositories: Repository[];
+  git_repos: GitRepo[];
   [key: string]: unknown;
 }
 
@@ -44,7 +43,7 @@ type EmojiMappings = Record<string, number>;
 
 interface GradesTableProps {
   emojiMappings: EmojiMappings;
-  modules: ModuleData[];
+  repositories: ModuleData[];
   students: Student[];
   settings: OrganizationSettings;
   letterGradeMappings: LetterGradeMappingEntry[];
@@ -54,7 +53,7 @@ interface GradesTableProps {
 const GradesTable = (props: GradesTableProps) => {
   const {
     emojiMappings,
-    modules: assignments,
+    repositories: assignments,
     students,
     settings,
     letterGradeMappings: initialLetterGradeMappings,
@@ -181,8 +180,8 @@ const GradesTable = (props: GradesTableProps) => {
       0
     );
     const cols = assignmentColumns ?? [];
-    const assignmentColumnsWidth = cols.reduce((sum: number, module) => {
-      const mod = module as { width?: number; children?: Array<{ width?: number }> };
+    const assignmentColumnsWidth = cols.reduce((sum: number, repository) => {
+      const mod = repository as { width?: number; children?: Array<{ width?: number }> };
       if (!mod.children?.length) return sum + (Number(mod.width) || 140);
       return (
         sum +
@@ -199,10 +198,10 @@ const GradesTable = (props: GradesTableProps) => {
     }
 
     const finalIndividualNumericGrades = pageData.map((student: Student) => {
-      return calculateStudentFinalGrade(student.repositories, emojiMappings, settings, true, false);
+      return calculateStudentFinalGrade(student.git_repos, emojiMappings, settings, true, false);
     });
     const finalNumericGrades = pageData.map((student: Student) => {
-      return calculateStudentFinalGrade(student.repositories, emojiMappings, settings);
+      return calculateStudentFinalGrade(student.git_repos, emojiMappings, settings);
     });
 
     // Filter out invalid grades for statistics
@@ -256,45 +255,80 @@ const GradesTable = (props: GradesTableProps) => {
   };
 
   return (
-    <div className="space-y-6 min-w-0">
-      <PageHeader title="Grades" routeName="grades">
+    <div className="min-h-full min-w-0">
+      <div className="flex items-center justify-between gap-3 mt-2 mb-4 flex-wrap">
         <div className="flex items-center gap-3">
+          <h1 className="text-base font-semibold text-ink-2">Grades</h1>
+          {searchQuery && (
+            <span className="text-xs text-ink-3 bg-nav-hover px-2.5 py-1 rounded-full">
+              {filteredStudents.length} of {students.length}
+            </span>
+          )}
+        </div>
+        <div className="flex items-center gap-3 flex-wrap">
           <Checkbox checked={showIssues} onChange={() => setShowIssues(!showIssues)}>
             Show Assignments
           </Checkbox>
           <Checkbox checked={showComments} onChange={() => setShowComments(!showComments)}>
             Show Comments
           </Checkbox>
-          <div className="h-[30px] w-[1px] bg-gray-300" />
-          <Radio.Group value={view} onChange={e => setView(e.target.value)} size="small">
-            <Radio.Button value="Emoji">🎨 Emoji</Radio.Button>
-            <Radio.Button value="Numeric">🔢 Numeric</Radio.Button>
-          </Radio.Group>
-        </div>
-      </PageHeader>
-
-      {/* Grades Table */}
-      <Card className="shadow-sm overflow-x-auto">
-        <div className="flex items-center justify-between gap-4 mb-4">
-          <div className="flex items-center gap-3">
-            {searchQuery && (
-              <span className="text-sm text-gray-500 bg-gray-100 px-3 py-1 rounded-full">
-                {filteredStudents.length} of {students.length}
-              </span>
-            )}
+          <div className="h-6 w-px bg-line" />
+          <div className="flex items-center gap-1.5">
+            <ConfigProvider
+              theme={{
+                token: {
+                  borderRadius: 6,
+                },
+                components: {
+                  Segmented: {
+                    borderRadius: 6,
+                    borderRadiusSM: 4,
+                    itemSelectedBg: '#ffffff',
+                    itemSelectedColor: '#1f2937',
+                    trackPadding: 3,
+                  },
+                },
+              }}
+            >
+              <Segmented
+                value={view}
+                onChange={val => setView(val as string)}
+                options={['Emoji', 'Numeric']}
+              />
+            </ConfigProvider>
+            <Popover
+              trigger="click"
+              placement="bottomRight"
+              content={
+                <GradeSettings
+                  letterGradeMappings={letterGradeMappings}
+                  changeLetterGradeMapping={changeLetterGradeMapping}
+                />
+              }
+            >
+              <button
+                type="button"
+                aria-label="Letter grade scale"
+                className="flex items-center justify-center text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200 cursor-pointer"
+              >
+                <IconInfoCircle size={18} />
+              </button>
+            </Popover>
           </div>
-          <SearchInput
-            query={searchQuery}
-            setQuery={setSearchQuery}
+          <Input
             placeholder="Search by name, username, or email..."
-            className="w-80"
+            prefix={<IconSearch size={16} />}
+            value={searchQuery}
+            onChange={e => setSearchQuery(e.target.value)}
+            style={{ width: 320 }}
           />
         </div>
+      </div>
 
+      <div className="rounded-2xl overflow-hidden bg-panel min-h-[calc(100vh-10rem)] p-5 sm:p-6">
         {searchQuery && filteredStudents.length === 0 ? (
           <div className="text-center py-12 text-gray-500">
-            <div className="text-4xl mb-2">🔍</div>
-            <div className="text-lg mb-1">No students found</div>
+            <div className="font-medium">No students found</div>
             <div className="text-sm">
               No results for <span className="font-medium text-gray-900 italic">{searchQuery}</span>
             </div>
@@ -333,9 +367,8 @@ const GradesTable = (props: GradesTableProps) => {
                 summary={summary}
                 locale={{
                   emptyText: (
-                    <div className="text-center py-8 text-gray-500">
-                      <div className="text-4xl mb-2">📊</div>
-                      <div>No student grades available</div>
+                    <div className="text-center py-12 text-gray-500">
+                      <div className="font-medium">No student grades available</div>
                       <div className="text-sm">
                         Students will appear here once assignments are published
                       </div>
@@ -347,20 +380,7 @@ const GradesTable = (props: GradesTableProps) => {
             </ConfigProvider>
           </div>
         )}
-      </Card>
-
-      <FloatButton.Group
-        trigger="hover"
-        style={{ right: 24, bottom: 94, width: 56, height: 56 }}
-        icon={<IconSettings size={28} className="relative -left-[3.75px]" />}
-        className="grades-float-button"
-        {...({ position: 'topLeft' } as Record<string, unknown>)}
-      >
-        <GradeSettings
-          letterGradeMappings={letterGradeMappings}
-          changeLetterGradeMapping={changeLetterGradeMapping}
-        />
-      </FloatButton.Group>
+      </div>
     </div>
   );
 };

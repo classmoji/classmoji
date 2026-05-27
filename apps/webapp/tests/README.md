@@ -76,6 +76,7 @@ const { webappUrl, apiUrl, databaseUrl } = getDevContext();
 ```
 
 For CI, set environment variables:
+
 - `WEBAPP_URL` - Webapp base URL
 - `API_URL` - API base URL
 - `GITHUB_PROF_TOKEN` - Auth token for test user
@@ -96,6 +97,7 @@ test('my test', async ({ authenticatedPage, testUser, testOrg }) => {
 ### Test User
 
 All tests use `prof-classmoji` (ID: 220514774) who has all 3 roles in `classmoji-development`:
+
 - OWNER
 - ASSISTANT
 - STUDENT
@@ -103,6 +105,7 @@ All tests use `prof-classmoji` (ID: 220514774) who has all 3 roles in `classmoji
 ## Mocking External Services
 
 ### GitHub API
+
 ```typescript
 import { mockGitHubAPI } from '../fixtures/mocks/github.mock';
 
@@ -112,6 +115,7 @@ test.beforeEach(async ({ page }) => {
 ```
 
 ### Quiz/LLM API
+
 ```typescript
 import { mockQuizAPI, mockQuizSSE } from '../fixtures/mocks/llm.mock';
 
@@ -122,6 +126,7 @@ test.beforeEach(async ({ page }) => {
 ```
 
 ### Stripe
+
 ```typescript
 import { mockStripeAPI } from '../fixtures/mocks/stripe.mock';
 
@@ -140,6 +145,7 @@ test.beforeEach(async ({ page }) => {
 6. Use `waitForDataLoad()` after navigation
 
 Example:
+
 ```typescript
 import { test, expect } from '../fixtures/auth.fixture';
 import { mockGitHubAPI } from '../fixtures/mocks/github.mock';
@@ -161,15 +167,18 @@ test.describe('My Feature', () => {
 ## Troubleshooting
 
 ### Tests fail with "Cookie not set"
+
 - Ensure `GITHUB_PROF_TOKEN` is set in your `.env` file
 - Check `.dev-context` exists (start dev server first)
 
 ### Tests fail with "Element not found"
+
 - Increase timeout: `await expect(element).toBeVisible({ timeout: 15000 })`
 - Add `waitForDataLoad(page)` after navigation
 - Check if element is in a modal or tab that needs to be opened first
 
 ### Tests are flaky
+
 - Use `waitForDataLoad()` instead of fixed delays
 - Use `expect.poll()` for dynamic content
 - Mock external APIs that may be slow/unreliable

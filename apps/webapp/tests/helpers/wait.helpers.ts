@@ -119,7 +119,7 @@ export async function retry<T>(
     } catch (error) {
       lastError = error as Error;
       if (i < attempts - 1) {
-        await new Promise((resolve) => setTimeout(resolve, delay));
+        await new Promise(resolve => setTimeout(resolve, delay));
       }
     }
   }

@@ -32,8 +32,7 @@ import getPrisma from '@classmoji/database';
 
 interface ContentRouteMembership {
   classroom?: {
-    term?: string | null;
-    year?: number | null;
+    content_namespace?: string | null;
     git_organization?: {
       login: string;
       settings?: Record<string, string> | null;
@@ -114,12 +113,12 @@ export const loader = async ({
       if (!gitOrg || gitOrg.login !== org) return false;
 
       // Get the expected content repo name for this classroom
-      const expectedRepo = getContentRepoName({
-        login: gitOrg.login,
-        term: m.classroom?.term ?? undefined,
-        year: m.classroom?.year ?? undefined,
-        settings: gitOrg.settings as Record<string, string> | undefined,
-      });
+      const expectedRepo = m.classroom?.content_namespace
+        ? `content-${gitOrg.login}-${m.classroom.content_namespace}`
+        : getContentRepoName({
+            login: gitOrg.login,
+            settings: gitOrg.settings as { content_repo_name?: string } | undefined,
+          });
 
       return repo === expectedRepo; // EXACT match only
     });
@@ -141,11 +140,9 @@ export const loader = async ({
       const gitOrg = slide.classroom?.git_organization;
       if (gitOrg && gitOrg.login === org) {
         // Validate the requested repo matches the slide's content repo
-        const expectedRepo = getContentRepoName({
-          login: gitOrg.login,
-          term: slide.classroom.term ?? undefined,
-          year: slide.classroom.year ?? undefined,
-        });
+        const expectedRepo = slide.classroom.content_namespace
+          ? `content-${gitOrg.login}-${slide.classroom.content_namespace}`
+          : getContentRepoName({ login: gitOrg.login });
 
         if (repo === expectedRepo) {
           // For public slides, allow access to content in the slide's content_path

@@ -1,6 +1,7 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import Stripe from 'stripe';
 import { ClassmojiService, StripeService } from '@classmoji/services';
+import { getPrisma } from '@classmoji/database';
 import dayjs from 'dayjs';
 
 interface BillingUser {
@@ -125,8 +126,21 @@ export default async function stripeRoutes(fastify: FastifyInstance): Promise<vo
         return reply.status(401).send('Unauthorized');
       }
 
+      // Idempotency: Stripe retries deliveries; reject duplicates so a retry
+      // doesn't produce a second subscription row.
+      const prisma = getPrisma();
+      const alreadyProcessed = await prisma.processedWebhookEvent.findUnique({
+        where: { event_id: event.id },
+      });
+      if (alreadyProcessed) {
+        return reply.status(200).send({ success: true, duplicate: true });
+      }
+
       const handler = stripeWebhookHandlers[event.type];
       if (!handler) {
+        await prisma.processedWebhookEvent.create({
+          data: { event_id: event.id, source: 'stripe' },
+        });
         return reply.status(200).send({ success: true });
       }
 
@@ -142,6 +156,10 @@ export default async function stripeRoutes(fastify: FastifyInstance): Promise<vo
         : null;
 
       await handler(user, subscription);
+
+      await prisma.processedWebhookEvent.create({
+        data: { event_id: event.id, source: 'stripe' },
+      });
 
       return reply.status(200).send({ success: true });
     },

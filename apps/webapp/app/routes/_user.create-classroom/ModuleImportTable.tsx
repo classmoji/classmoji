@@ -13,20 +13,20 @@ interface ModuleConfig {
 }
 
 interface ModuleImportTableProps {
-  modules: ImportModule[];
+  repositories: ImportModule[];
   selectedModules: Map<string, ModuleConfig>;
   onModuleToggle: (moduleId: string, checked: boolean) => void;
   onQuizToggle: (moduleId: string, checked: boolean) => void;
 }
 
 const ModuleImportTable = ({
-  modules,
+  repositories,
   selectedModules,
   onModuleToggle,
   onQuizToggle,
 }: ModuleImportTableProps) => {
-  if (!modules || modules.length === 0) {
-    return <Empty description="This classroom has no modules to import" className="py-8" />;
+  if (!repositories || repositories.length === 0) {
+    return <Empty description="This classroom has no repositories to import" className="py-8" />;
   }
 
   const columns = [
@@ -42,7 +42,7 @@ const ModuleImportTable = ({
       ),
     },
     {
-      title: 'Module',
+      title: 'Repository',
       dataIndex: 'title',
       render: (title: string, record: ImportModule) => (
         <div>
@@ -92,12 +92,12 @@ const ModuleImportTable = ({
 
   return (
     <Table
-      dataSource={modules}
+      dataSource={repositories}
       columns={columns as Parameters<typeof Table>[0]['columns']}
       rowKey="id"
       pagination={false}
       size="small"
-      className="border border-gray-200 dark:border-gray-700 rounded-lg"
+      className="border border-gray-200 dark:border-neutral-700 rounded-lg"
     />
   );
 };

@@ -1,7 +1,6 @@
 import { GitProvider } from './GitProvider.ts';
 import { GitHubProvider } from './GitHubProvider.ts';
 import { GitLabProvider } from './GitLabProvider.ts';
-// Future: import { GiteaProvider } from './GiteaProvider.js';
 
 /**
  * Factory function - returns the appropriate provider adapter for the git organization.
@@ -74,18 +73,6 @@ export function getGitProvider(gitOrganization: {
  */
 export function getGitHubProvider(installationId: string, orgLogin: string | null = null) {
   return new GitHubProvider(installationId, orgLogin);
-}
-
-/**
- * Get short term code (e.g., "25w" for Winter 2025)
- * @param {string} term - Term enum (WINTER, SPRING, SUMMER, FALL)
- * @param {number} year - Full year (e.g., 2025)
- * @returns {string} Short term code (e.g., "25w")
- */
-export function getTermCode(term: string, year: number) {
-  const termMap: Record<string, string> = { WINTER: 'w', SPRING: 's', SUMMER: 'x', FALL: 'f' };
-  const shortYear = String(year).slice(-2);
-  return `${shortYear}${termMap[term] || 'x'}`;
 }
 
 /**

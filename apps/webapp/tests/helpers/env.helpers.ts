@@ -19,9 +19,9 @@ export function getDevContext(): DevContext {
   // 1. From repo root: .dev-context
   // 2. From apps/webapp: ../../.dev-context
   const possiblePaths = [
-    join(process.cwd(), '.dev-context'),           // Repo root
-    join(process.cwd(), '../../.dev-context'),     // From apps/webapp
-    join(process.cwd(), '../../../.dev-context'),  // From apps/webapp/tests
+    join(process.cwd(), '.dev-context'), // Repo root
+    join(process.cwd(), '../../.dev-context'), // From apps/webapp
+    join(process.cwd(), '../../../.dev-context'), // From apps/webapp/tests
   ];
 
   let devContextPath: string | null = null;

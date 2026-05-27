@@ -19,6 +19,8 @@ import {
   IconCalendar,
   IconLink,
   IconChecklist,
+  IconClipboardList,
+  IconHeartRateMonitor,
 } from '@tabler/icons-react';
 
 /**
@@ -27,7 +29,7 @@ import {
 export const routeCategories = {
   content: {
     label: 'Content',
-    items: ['modules', 'slides', 'pages', 'quizzes'],
+    items: ['repositories', 'assignments', 'slides', 'pages', 'quizzes'],
   },
   assessment: {
     label: 'Assessment',
@@ -39,11 +41,11 @@ export const routeCategories = {
   },
   integrations: {
     label: 'Integrations',
-    items: ['repositories'],
+    items: ['gitrepos', 'repo-health'],
   },
   settings: {
     label: 'Settings',
-    items: ['settings'],
+    items: ['settings', 'memberSettings'],
   },
 };
 
@@ -67,11 +69,18 @@ export const routes = {
   },
 
   // Content
-  modules: {
-    link: '/modules',
-    label: 'Modules',
+  repositories: {
+    link: '/repos',
+    label: 'Repositories',
     icon: IconFileText,
     roles: ['OWNER', 'ASSISTANT', 'STUDENT'],
+    category: 'content',
+  },
+  assignments: {
+    link: '/assignments',
+    label: 'Assignments',
+    icon: IconClipboardList,
+    roles: ['STUDENT'],
     category: 'content',
   },
   slides: {
@@ -140,8 +149,6 @@ export const routes = {
     label: 'Teams',
     icon: IconUsersGroup,
     roles: ['OWNER'],
-    tiers: ['PRO'],
-    isProTier: true,
     category: 'people',
   },
   assistants: {
@@ -149,15 +156,21 @@ export const routes = {
     label: 'Assistants',
     icon: IconUserCheck,
     roles: ['OWNER'],
-    isProTier: true,
     category: 'people',
   },
 
   // Integrations
-  repositories: {
-    link: '/repositories',
-    label: 'Repositories',
+  gitrepos: {
+    link: '/gitrepos',
+    label: 'GitHub Repos',
     icon: IconBrandGithub,
+    roles: ['OWNER'],
+    category: 'integrations',
+  },
+  'repo-health': {
+    link: '/repo-health',
+    label: 'Repo Health',
+    icon: IconHeartRateMonitor,
     roles: ['OWNER'],
     category: 'integrations',
   },
@@ -168,7 +181,6 @@ export const routes = {
     label: 'Tokens',
     icon: IconCoin,
     roles: ['OWNER', 'STUDENT'],
-    isProTier: true,
     category: 'assessment',
   },
 
@@ -178,6 +190,13 @@ export const routes = {
     label: 'Class Settings',
     icon: IconSettings,
     roles: ['OWNER'],
+    category: 'settings',
+  },
+  memberSettings: {
+    link: '/settings',
+    label: 'Settings',
+    icon: IconSettings,
+    roles: ['STUDENT', 'ASSISTANT'],
     category: 'settings',
   },
 };

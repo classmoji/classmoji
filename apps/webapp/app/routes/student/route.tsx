@@ -3,7 +3,6 @@ import type { Route } from './+types/route';
 import { CommonLayout, RequireRole } from '~/components';
 import { ClassmojiService } from '@classmoji/services';
 import { requireClassroomMember } from '~/utils/routeAuth.server';
-import { SHARED_CONTENT_PATHS } from '~/constants';
 
 export const loader = async ({ params, request }: Route.LoaderArgs) => {
   const { class: classSlug } = params;
@@ -44,16 +43,10 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
     });
 
     if (recentViewersEnabled) {
-      // Only DISPLAY recent viewers for shared content (pages, slides, modules, calendar)
-      // Skip personal routes like dashboard, grades, tokens to avoid privacy confusion
-      const isSharedContent = SHARED_CONTENT_PATHS.some(p => resourcePath.startsWith(p));
-
-      if (isSharedContent) {
-        recentViewers = await ClassmojiService.resourceView.getRecentViewers({
-          resourcePath,
-          classroomId: classroom.id,
-        });
-      }
+      recentViewers = await ClassmojiService.resourceView.getRecentViewers({
+        resourcePath,
+        classroomId: classroom.id,
+      });
     }
 
     return {
