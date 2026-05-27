@@ -6,9 +6,10 @@ import { SettingSection } from '~/components';
 import { ActionTypes } from '~/constants';
 import { useGlobalFetcher } from '~/hooks';
 import ProfileSection from './ProfileSection';
+import StatusSection from './StatusSection';
 import DefaultPageSection from './DefaultPageSection';
 import TweaksSection from '~/components/features/tweaks/TweaksSection';
-import { assertClassroomAccess } from '~/utils/helpers';
+import { assertClassroomAccess, assertClassroomMutationAllowed } from '~/utils/helpers';
 import type { Route } from './+types/route';
 
 export const loader = async ({ params, request }: Route.LoaderArgs) => {
@@ -46,9 +47,12 @@ const SettingsGeneral = ({ loaderData }: Route.ComponentProps) => {
       <ProfileSection
         organization={{
           name: classroom.name,
-          term: classroom.term ?? '',
-          year: String(classroom.year ?? ''),
         }}
+      />
+      <StatusSection
+        classroomId={classroom.id}
+        status={classroom.status as 'ACTIVE' | 'LOCKED' | 'UNPUBLISHED'}
+        isArchived={classroom.is_archived}
       />
       <DefaultPageSection
         currentDefault={classroom.settings?.default_student_page || 'dashboard'}
@@ -79,13 +83,14 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
   const classSlug = params.class!;
 
   // Authorize: only OWNER can modify general settings
-  const { classroom } = await assertClassroomAccess({
+  const { classroom, membership } = await assertClassroomAccess({
     request,
     classroomSlug: classSlug,
     allowedRoles: ['OWNER'],
     resourceType: 'SETTINGS',
     attemptedAction: 'modify_general_settings',
   });
+  assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
 
   const data = await request.json();
 

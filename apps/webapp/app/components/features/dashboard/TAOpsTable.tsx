@@ -26,11 +26,11 @@ const TAOpsTable = ({ rows }: TAOpsTableProps) => {
         <div className="flex items-center gap-2 min-w-0">
           <UserAvatar login={r.login} name={r.name} seed={r.taId} size={28} />
           <div className="min-w-0">
-            <div className="text-sm text-gray-900 dark:text-gray-100 truncate">
+            <div className="text-sm text-ink-0 truncate">
               {r.name || r.login || 'Unknown'}
             </div>
             {r.login && (
-              <div className="text-[11px] text-gray-500 dark:text-gray-400 truncate">
+              <div className="text-xs text-ink-3 truncate">
                 @{r.login}
               </div>
             )}
@@ -84,7 +84,7 @@ const TAOpsTable = ({ rows }: TAOpsTableProps) => {
   ];
 
   return (
-    <Card className="h-full" data-testid="ta-ops-table">
+    <Card className="h-full !rounded-2xl" data-testid="ta-ops-table">
       <CardHeader>TA Operations</CardHeader>
       <Table<TaOpsRow>
         rowKey="taId"

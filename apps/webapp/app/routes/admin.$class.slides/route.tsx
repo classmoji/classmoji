@@ -10,7 +10,7 @@ import {
   IconNotes,
 } from '@tabler/icons-react';
 import getPrisma from '@classmoji/database';
-import { assertClassroomAccess } from '~/utils/helpers';
+import { assertClassroomAccess, assertClassroomMutationAllowed } from '~/utils/helpers';
 import { ClassmojiService } from '@classmoji/services';
 import { TableActionButtons, RecentViewers } from '~/components';
 import type { Route } from './+types/route';
@@ -70,13 +70,14 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
   const value = formData.get('value') as string;
 
   // Authorization: require OWNER or TEACHER to modify slide settings
-  await assertClassroomAccess({
+  const { classroom, membership } = await assertClassroomAccess({
     request,
     classroomSlug: classSlug,
     allowedRoles: ['OWNER', 'TEACHER'],
     resourceType: 'SLIDES',
     attemptedAction: 'update_slide_visibility',
   });
+  assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
 
   // Handle status changes (combines is_draft and is_public)
   if (field === 'status') {
@@ -280,7 +281,7 @@ export default function SlidesAdmin({ loaderData }: Route.ComponentProps) {
             rel="noopener noreferrer"
             className="flex items-center gap-1 !text-gray-600 hover:text-gray-800 no-underline cursor-pointer"
           >
-            <IconPresentation size={17} />
+            <IconPresentation size={16} />
             <span>Present</span>
           </a>
         </TableActionButtons>
@@ -291,7 +292,7 @@ export default function SlidesAdmin({ loaderData }: Route.ComponentProps) {
   return (
     <div className="min-h-full relative">
       <div className="flex items-center justify-between gap-3 mt-2 mb-4">
-        <h1 className="text-base font-semibold text-gray-600 dark:text-gray-400">Slides</h1>
+        <h1 className="text-base font-semibold text-ink-2">Slides</h1>
         <div className="flex items-center gap-3">
           <Button
             onClick={() => {
@@ -311,7 +312,7 @@ export default function SlidesAdmin({ loaderData }: Route.ComponentProps) {
         </div>
       </div>
 
-      <div className="rounded-2xl bg-panel ring-1 ring-stone-200 dark:ring-neutral-800 p-5 sm:p-6 min-h-[calc(100vh-10rem)]">
+      <div className="rounded-2xl bg-panel ring-1 ring-line p-5 sm:p-6 min-h-[calc(100vh-10rem)]">
         <Table
           columns={columns as Parameters<typeof Table>[0]['columns']}
           dataSource={slides}

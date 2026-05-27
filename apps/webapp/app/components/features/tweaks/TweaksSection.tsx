@@ -69,8 +69,8 @@ const TweaksSection = () => {
   const segBtn = (active: boolean) =>
     `inline-flex min-w-0 items-center justify-center gap-1.5 px-2 py-2 rounded-lg text-sm font-medium transition-colors @[280px]:gap-2 @[280px]:px-3 ${
       active
-        ? 'bg-panel text-gray-900 dark:text-gray-100 shadow-sm'
-        : 'text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100'
+        ? 'bg-panel text-ink-0 shadow-sm'
+        : 'text-ink-2 hover:text-gray-900 dark:hover:text-gray-100'
     }`;
 
   return (
@@ -81,13 +81,13 @@ const TweaksSection = () => {
       <div className="space-y-6">
         {/* Theme */}
         <div>
-          <div className="text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400 mb-2">
+          <div className="text-xs font-semibold uppercase tracking-wider text-ink-3 mb-2">
             Theme
           </div>
           <div
             role="radiogroup"
             aria-label="Theme"
-            className="@container grid grid-cols-3 w-full max-w-sm p-1 rounded-xl bg-stone-100 dark:bg-neutral-800 gap-1"
+            className="@container grid grid-cols-3 w-full max-w-sm p-1 rounded-xl bg-nav-hover gap-1"
           >
             <button
               type="button"
@@ -127,7 +127,7 @@ const TweaksSection = () => {
 
         {/* Accent swatches */}
         <div>
-          <div className="text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400 mb-2">
+          <div className="text-xs font-semibold uppercase tracking-wider text-ink-3 mb-2">
             Accent
           </div>
           <div className="flex flex-wrap gap-3">
@@ -162,7 +162,7 @@ const TweaksSection = () => {
 
         {/* Background presets */}
         <div>
-          <div className="text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400 mb-2">
+          <div className="text-xs font-semibold uppercase tracking-wider text-ink-3 mb-2">
             Background
           </div>
           <div className="grid grid-cols-[repeat(auto-fit,minmax(110px,1fr))] gap-2">
@@ -194,11 +194,11 @@ const TweaksSection = () => {
                   className={`relative overflow-hidden rounded-lg border-2 transition-all hover:-translate-y-0.5 focus:outline-none ${
                     isActive
                       ? 'border-gray-900 dark:border-gray-100 shadow-sm'
-                      : 'border-stone-200 dark:border-neutral-700 hover:border-stone-400 dark:hover:border-neutral-500'
+                      : 'border-line hover:border-stone-400 dark:hover:border-neutral-500'
                   }`}
                   style={{ aspectRatio: '1.35', background: preview } as CSSProperties}
                 >
-                  <span className="absolute inset-x-0 bottom-0 px-2 py-1 text-[11px] font-medium text-center text-gray-800 dark:text-gray-100 bg-white/70 dark:bg-black/40 backdrop-blur-sm">
+                  <span className="absolute inset-x-0 bottom-0 px-2 py-1 text-xs font-medium text-center text-gray-800 dark:text-gray-100 bg-white/70 dark:bg-black/40 backdrop-blur-sm">
                     {bg.name}
                   </span>
                 </button>
@@ -209,11 +209,11 @@ const TweaksSection = () => {
 
         {/* UI font size */}
         <div>
-          <div className="text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400 mb-2">
+          <div className="text-xs font-semibold uppercase tracking-wider text-ink-3 mb-2">
             UI font size
           </div>
           <div className="flex items-center justify-between gap-4">
-            <div className="text-sm text-gray-500 dark:text-gray-400">
+            <div className="text-sm text-ink-3">
               Adjust the base size used for the UI.
             </div>
             <div className="flex items-center gap-2 shrink-0">
@@ -232,9 +232,9 @@ const TweaksSection = () => {
                   }
                 }}
                 aria-label="UI font size in pixels"
-                className="w-16 text-center rounded-lg border border-stone-200 dark:border-neutral-700 bg-white dark:bg-neutral-800 text-gray-900 dark:text-gray-100 px-2 py-1.5 text-sm focus:outline-none focus:border-[var(--accent)] focus:ring-1 focus:ring-[var(--accent)]"
+                className="w-16 text-center rounded-lg border border-line bg-white dark:bg-neutral-800 text-ink-0 px-2 py-1.5 text-sm focus:outline-none focus:border-[var(--accent)] focus:ring-1 focus:ring-[var(--accent)]"
               />
-              <span className="text-sm text-gray-500 dark:text-gray-400">px</span>
+              <span className="text-sm text-ink-3">px</span>
             </div>
           </div>
         </div>
@@ -263,7 +263,7 @@ const TweaksSection = () => {
         <div className="flex items-start justify-between gap-4">
           <div className="min-w-0">
             <div className="text-sm text-gray-700 dark:text-gray-200">Use pointer cursors</div>
-            <div className="text-sm text-gray-500 dark:text-gray-400 mt-0.5">
+            <div className="text-sm text-ink-3 mt-0.5">
               Use a pointer cursor on hover for clickable elements.
             </div>
           </div>
@@ -286,7 +286,7 @@ const TweaksSection = () => {
 
         {/* Contrast slider */}
         <div>
-          <div className="text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400 mb-2">
+          <div className="text-xs font-semibold uppercase tracking-wider text-ink-3 mb-2">
             Contrast
           </div>
           <div className="flex items-center gap-3">

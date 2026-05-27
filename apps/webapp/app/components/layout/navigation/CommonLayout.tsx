@@ -1,11 +1,10 @@
 import { Avatar, Tooltip } from 'antd';
 import { Link, useParams, useLocation, useRouteLoaderData } from 'react-router';
 import { useEffect, useState } from 'react';
-import { IconFileText, IconMenu2, IconLogout, IconApple } from '@tabler/icons-react';
-import { signOut } from '@classmoji/auth/client';
+import { IconFileText, IconMenu2, IconApple } from '@tabler/icons-react';
 import useLocalStorageState from 'use-local-storage-state';
 import { Logo, CalloutSlot } from '@classmoji/ui-components';
-import { ProTierFeature, RequireRole, RecentViewers } from '~/components';
+import { RequireRole, RecentViewers } from '~/components';
 import { useRoleSettings, useSubscription, useRole, useDarkMode } from '~/hooks';
 import { routes, routeCategories, DEMO_ORG_ID, getThemeByKey } from '~/constants';
 import OrgSelect from './OrgSelect';
@@ -13,6 +12,7 @@ import useStore from '~/store';
 import tokenImage from '~/assets/images/token.png';
 import githubLogo from '~/assets/images/github_logo.svg';
 import ProfileDropdown from '../../features/profile/ProfileDropdown';
+import { LockedBanner } from '~/components/features/classroom/LockedBanner';
 import type { AppUser, MembershipWithOrganization } from '~/types';
 
 interface MenuPage {
@@ -71,6 +71,8 @@ const CommonLayout = ({
   const { isProTier } = useSubscription();
   const { tokenBalance } = useStore();
   const askMojiEnabled = useStore(s => s.askMojiEnabled);
+  const isAskMojiOpen = useStore(s => s.isAskMojiOpen);
+  const askMojiActive = useStore(s => s.askMojiActive);
   const setAskMojiOpen = useStore(s => s.setAskMojiOpen);
   const { isDarkMode, background: tweaksBackground } = useDarkMode();
   const themeColors = getThemeByKey(classroom?.settings?.theme);
@@ -98,10 +100,10 @@ const CommonLayout = ({
 
   const TokenSection = () => (
     <div className="flex items-center justify-between gap-2 px-1">
-      <span className="text-sm font-medium text-gray-600 dark:text-gray-400">Available Tokens</span>
+      <span className="text-sm font-medium text-ink-2">Available Tokens</span>
       <div className="flex items-center gap-1.5">
         <img src={tokenImage} alt="token" className="h-4 w-4" />
-        <span className="text-sm font-semibold text-gray-900 dark:text-gray-100">
+        <span className="text-sm font-semibold text-ink-0">
           {tokenBalance}
         </span>
       </div>
@@ -132,17 +134,12 @@ const CommonLayout = ({
           className={`
             group flex items-center gap-2.5 rounded-md transition-colors duration-150
             ${collapsed ? 'justify-center p-2 mx-1.5' : 'px-2 py-1.5 mx-1.5'}
-            ${
-              active
-                ? ''
-                : 'text-gray-700 dark:text-gray-300 hover:bg-gray-100/70 dark:hover:bg-neutral-800/60'
-            }
+            ${active ? '' : 'hover:bg-nav-hover'}
           `}
-          style={
-            active
-              ? { backgroundColor: 'var(--accent-soft)', color: 'var(--accent-ink)' }
-              : undefined
-          }
+          style={{
+            color: active ? 'var(--ink-0)' : 'var(--ink-1)',
+            ...(active ? { backgroundColor: 'var(--accent-soft)' } : {}),
+          }}
           data-active={active || undefined}
         >
           {collapsed ? (
@@ -150,7 +147,7 @@ const CommonLayout = ({
               <div className="flex flex-col items-center">
                 <item.icon size={20} strokeWidth={1.75} />
                 {isDemoClassroom && item.isProTier && (
-                  <span className="text-[10px] text-amber-600 dark:text-amber-400 mt-0.5">Pro</span>
+                  <span className="text-xs text-amber-600 dark:text-amber-400 mt-0.5">Pro</span>
                 )}
               </div>
             </Tooltip>
@@ -197,8 +194,9 @@ const CommonLayout = ({
           className={`
             group flex items-center gap-2.5 rounded-md transition-colors duration-150 w-full
             ${collapsed ? 'justify-center p-2 mx-1.5' : 'px-2 py-1.5 mx-1.5'}
-            text-gray-700 dark:text-gray-300 hover:bg-gray-100/70 dark:hover:bg-neutral-800/60
+            hover:bg-gray-100/70 dark:hover:bg-neutral-800/60
           `}
+          style={{ color: isDarkMode ? '#d1d5db' : '#374151' }}
         >
           {collapsed ? (
             <Tooltip title={page.title} placement="right">
@@ -224,29 +222,49 @@ const CommonLayout = ({
 
   const renderAskMoji = () => {
     if (!askMojiEnabled) return null;
-    if (role === 'OWNER') return null;
 
-    const baseClasses = `group flex items-center gap-2.5 rounded-md transition-colors duration-150 w-full text-gray-700 dark:text-gray-300 hover:bg-gray-100/70 dark:hover:bg-neutral-800/60 ${
-      collapsed ? 'justify-center p-2 mx-1.5' : 'px-2 py-1.5 mx-1.5'
-    }`;
+    const baseClasses = `group flex items-center gap-2.5 rounded-md transition-colors duration-150 ${
+      collapsed ? 'justify-center p-2 mx-1.5 w-[calc(100%-12px)]' : 'px-2 py-1.5 mx-1.5 w-[calc(100%-12px)] text-left'
+    } ${isAskMojiOpen ? '' : 'hover:bg-nav-hover'}`;
 
     return (
       <button
         key="ask-moji"
         type="button"
-        onClick={() => setAskMojiOpen(true)}
+        data-askmoji-trigger
+        onClick={() => setAskMojiOpen(!isAskMojiOpen)}
         className={baseClasses}
+        style={{
+          color: isAskMojiOpen ? 'var(--ink-0)' : 'var(--ink-1)',
+          ...(isAskMojiOpen ? { backgroundColor: 'var(--nav-hover)' } : {}),
+        }}
       >
         {collapsed ? (
           <Tooltip title="Ask Moji" placement="right">
-            <IconApple size={20} strokeWidth={1.75} />
+            <div className="relative">
+              <IconApple size={20} strokeWidth={1.75} />
+              {askMojiActive && (
+                <span
+                  className="absolute -right-1 -top-1 rounded-full"
+                  style={{ width: 6, height: 6, background: '#5DCAA5' }}
+                />
+              )}
+            </div>
           </Tooltip>
         ) : (
           <>
             <IconApple size={20} strokeWidth={1.75} className="shrink-0" />
             <div className="flex-1 flex flex-col text-left leading-tight">
-              <span>Ask Moji</span>
-              <span className="text-xs text-gray-400 dark:text-gray-500">Course Assistant</span>
+              <span className="flex items-center gap-1.5">
+                Ask Moji
+                {askMojiActive && (
+                  <span
+                    className="rounded-full"
+                    style={{ width: 5, height: 5, background: '#5DCAA5' }}
+                  />
+                )}
+              </span>
+              <span className="text-xs text-ink-4">Course Assistant</span>
             </div>
           </>
         )}
@@ -303,9 +321,9 @@ const CommonLayout = ({
       {/* Floating Sidebar */}
       <div
         data-cm-sidebar
-        className={`fixed top-7 left-5 bottom-7 ${
+        className={`fixed top-0 left-0 bottom-0 lg:top-7 lg:left-5 lg:bottom-7 ${
           tweaksBgActive ? '' : 'bg-sidebar'
-        } rounded-2xl ring-1 ring-stone-200 dark:ring-neutral-800 z-30 transition-transform duration-300 ease-in-out flex flex-col overflow-hidden lg:translate-x-0 ${
+        } rounded-none lg:rounded-2xl ring-1 ring-line z-30 transition-transform duration-300 ease-in-out flex flex-col overflow-hidden lg:translate-x-0 ${
           mobileOpen ? 'translate-x-0' : '-translate-x-[110%]'
         }`}
         style={{
@@ -321,9 +339,9 @@ const CommonLayout = ({
         >
           <Link to="/select-organization" className="flex items-center">
             {collapsed ? (
-              <Logo size={32} variant="icon" theme={isDarkMode ? 'dark' : 'light'} />
+              <Logo size={24} variant="icon" theme={isDarkMode ? 'dark' : 'light'} />
             ) : (
-              <Logo size={32} variant="full" theme={isDarkMode ? 'dark' : 'light'} />
+              <Logo size={24} variant="full" theme={isDarkMode ? 'dark' : 'light'} />
             )}
           </Link>
           <Tooltip
@@ -334,7 +352,7 @@ const CommonLayout = ({
               type="button"
               onClick={() => setCollapsed(!collapsed)}
               aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-              className="hidden lg:inline-flex p-1.5 rounded-md text-gray-500 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200 hover:bg-gray-100 dark:hover:bg-neutral-800 transition-colors"
+              className="hidden lg:inline-flex p-1.5 rounded-md text-ink-3 hover:text-ink-0 hover:bg-nav-hover transition-colors"
             >
               <svg
                 width="18"
@@ -345,12 +363,14 @@ const CommonLayout = ({
                 strokeWidth="1.75"
                 strokeLinecap="round"
                 strokeLinejoin="round"
-                className={collapsed ? 'scale-x-[-1]' : ''}
               >
-                <path d="M4 6 L20 6" />
-                <path d="M4 12 L13 12" />
-                <path d="M16 9 L19 12 L16 15" />
-                <path d="M4 18 L20 18" />
+                <rect x="3" y="3" width="18" height="18" rx="3" />
+                <path d="M9 3L9 21" />
+                {collapsed ? (
+                  <path d="M15 9L18 12L15 15" />
+                ) : (
+                  <path d="M16 9L13 12L16 15" />
+                )}
               </svg>
             </button>
           </Tooltip>
@@ -359,7 +379,7 @@ const CommonLayout = ({
         {/* Class selector */}
         {!collapsed && memberships.length > 0 && (
           <div className="px-3 pb-3 shrink-0">
-            <div className="rounded-md border border-stone-200 dark:border-neutral-700 hover:border-stone-300 dark:hover:border-gray-600 transition-colors">
+            <div className="rounded-md border border-line hover:border-line-2 transition-colors">
               <OrgSelect memberships={memberships} />
             </div>
           </div>
@@ -367,19 +387,17 @@ const CommonLayout = ({
 
         {/* Token chip (student + pro tier) */}
         {!collapsed && (
-          <ProTierFeature>
-            <RequireRole roles={['STUDENT']}>
-              <div className="px-3 pb-3 shrink-0">
-                <TokenSection />
-              </div>
-            </RequireRole>
-          </ProTierFeature>
+          <RequireRole roles={['STUDENT']}>
+            <div className="px-3 pb-3 shrink-0">
+              <TokenSection />
+            </div>
+          </RequireRole>
         )}
 
         {/* Recent viewers */}
         {!collapsed && recentViewers?.length >= 2 && (
           <>
-            <div className="mx-4 h-px bg-stone-200 dark:bg-neutral-800 shrink-0" />
+            <div className="mx-4 h-px bg-line shrink-0" />
             <div className="px-3 pb-3 pt-3 shrink-0">
               <RecentViewers viewers={recentViewers} groupByRole={groupViewersByRole} />
             </div>
@@ -387,20 +405,20 @@ const CommonLayout = ({
         )}
 
         {/* Navigation */}
-        <div className="mx-4 h-px bg-stone-200 dark:bg-neutral-800 shrink-0" />
+        <div className="mx-4 h-px bg-line shrink-0" />
         <nav className="flex-1 overflow-y-auto overflow-x-hidden py-2">
           <div className="space-y-1">{tabs}</div>
         </nav>
 
         {/* Bottom row: profile + GitHub + collapse */}
-        <div className="mx-4 h-px bg-stone-200 dark:bg-neutral-800 shrink-0" />
+        <div className="mx-4 h-px bg-line shrink-0" />
         <div
           className={`px-2 py-2 shrink-0 flex items-center gap-1 ${collapsed ? 'flex-col' : ''}`}
         >
           <ProfileDropdown placement="topLeft">
             <button
               type="button"
-              className={`flex items-center gap-2.5 p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-neutral-800 transition-colors text-left min-w-0 ${collapsed ? 'justify-center' : 'flex-1'}`}
+              className={`flex items-center gap-2.5 p-1.5 rounded-lg hover:bg-nav-hover transition-colors text-left min-w-0 ${collapsed ? 'justify-center' : 'flex-1'}`}
             >
               <Avatar
                 src={user?.avatar_url}
@@ -411,10 +429,10 @@ const CommonLayout = ({
               </Avatar>
               {!collapsed && (
                 <div className="min-w-0 flex-1">
-                  <div className="font-semibold text-sm text-gray-900 dark:text-gray-100 truncate leading-tight">
+                  <div className="font-semibold text-sm text-ink-0 truncate leading-tight">
                     {user?.name}
                   </div>
-                  <div className="text-xs text-gray-500 dark:text-gray-400 capitalize truncate leading-tight">
+                  <div className="text-xs text-ink-3 capitalize truncate leading-tight">
                     {role ? role.toLowerCase() : ''}
                   </div>
                 </div>
@@ -425,7 +443,7 @@ const CommonLayout = ({
             <Tooltip title="View on GitHub">
               <button
                 type="button"
-                className="p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-neutral-800 transition-colors shrink-0"
+                className="p-1.5 rounded-lg hover:bg-nav-hover transition-colors shrink-0"
                 onClick={() =>
                   window.open(
                     `https://github.com/orgs/${classroom.git_organization?.login}/repositories`,
@@ -437,19 +455,6 @@ const CommonLayout = ({
               </button>
             </Tooltip>
           )}
-          <Tooltip title="Log out">
-            <button
-              type="button"
-              aria-label="Log out"
-              className="p-1.5 rounded-lg text-gray-500 dark:text-gray-400 hover:text-red-600 dark:hover:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors shrink-0"
-              onClick={async () => {
-                await signOut();
-                window.location.href = window.location.origin;
-              }}
-            >
-              <IconLogout size={18} strokeWidth={1.75} />
-            </button>
-          </Tooltip>
         </div>
       </div>
 
@@ -467,7 +472,7 @@ const CommonLayout = ({
             aria-label="Open menu"
             className="fixed top-4 left-4 z-40 p-1 lg:hidden"
           >
-            <IconMenu2 size={24} className="text-gray-800 dark:text-gray-200" strokeWidth={1.75} />
+            <IconMenu2 size={24} className="text-ink-1" strokeWidth={1.75} />
           </button>
         )}
 
@@ -493,7 +498,7 @@ const CommonLayout = ({
             pathname.match(/\/grades(\/|$)/) ||
             pathname.match(/\/gitrepos(\/|$)/)
               ? ''
-              : 'bg-panel rounded-2xl ring-1 ring-stone-200 dark:ring-neutral-800'
+              : 'bg-panel rounded-2xl ring-1 ring-line'
           }`}
         >
           <div
@@ -504,6 +509,7 @@ const CommonLayout = ({
             }
           >
             <CalloutSlot />
+            {classroom?.status === 'LOCKED' && role !== 'OWNER' && <LockedBanner />}
             {children}
           </div>
         </div>

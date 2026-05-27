@@ -16,7 +16,7 @@ import {
 import { RobotOutlined, DeleteOutlined, BulbOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import { useRouteDrawer, useDarkMode } from '~/hooks';
-import { assertClassroomAccess } from '~/utils/helpers';
+import { assertClassroomAccess, assertProTier } from '~/utils/helpers';
 import { ClassmojiService } from '@classmoji/services';
 import { PromptAssistant, type PromptSuggestion } from '~/components/quiz/PromptAssistant';
 
@@ -42,6 +42,8 @@ export async function loader({ params, request }: Route.LoaderArgs) {
     resourceType: 'ADMIN_QUIZ_FORM',
     attemptedAction: quizId ? 'edit_quiz' : 'create_quiz',
   });
+
+  await assertProTier(classSlug);
 
   // Fetch repositories for linking
   const repositories = await ClassmojiService.repository.findByClassroomId(classroom.id);

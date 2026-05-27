@@ -135,12 +135,12 @@ const ContributorBreakdown = ({
     <div className="mb-6 space-y-6" data-testid="contributor-breakdown">
       {/* Pies */}
       <div>
-        <div className="text-xs uppercase tracking-wide text-gray-500 dark:text-gray-400 font-semibold mb-2">
+        <div className="text-xs uppercase tracking-wide text-ink-3 font-semibold mb-2">
           Contribution Share
         </div>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div data-testid="commits-pie">
-            <div className="text-xs text-gray-500 dark:text-gray-400 mb-1 text-center">Commits</div>
+            <div className="text-xs text-ink-3 mb-1 text-center">Commits</div>
             <div style={{ width: '100%', height: 220 }}>
               <ResponsiveContainer width="100%" height="100%">
                 <PieChart>
@@ -169,7 +169,7 @@ const ContributorBreakdown = ({
             </div>
           </div>
           <div data-testid="lines-pie">
-            <div className="text-xs text-gray-500 dark:text-gray-400 mb-1 text-center">
+            <div className="text-xs text-ink-3 mb-1 text-center">
               Lines changed (added + deleted)
             </div>
             <div style={{ width: '100%', height: 220 }}>
@@ -204,7 +204,7 @@ const ContributorBreakdown = ({
 
       {/* Stacked bar of commits per day by contributor */}
       <div>
-        <div className="text-xs uppercase tracking-wide text-gray-500 dark:text-gray-400 font-semibold mb-2">
+        <div className="text-xs uppercase tracking-wide text-ink-3 font-semibold mb-2">
           Commits per Day by Contributor
         </div>
         <div style={{ width: '100%', height: 220 }} data-testid="contributor-stacked-bar">
@@ -263,7 +263,7 @@ const ContributorBreakdown = ({
             data-testid="link-contributor-student-list"
           >
             {filteredStudents.length === 0 ? (
-              <div className="px-3 py-4 text-sm text-gray-500 dark:text-gray-400 text-center">
+              <div className="px-3 py-4 text-sm text-ink-3 text-center">
                 No students match.
               </div>
             ) : (
@@ -278,7 +278,7 @@ const ContributorBreakdown = ({
                       {s.name ?? s.login ?? 'Unknown student'}
                     </div>
                     {s.login && (
-                      <div className="text-xs text-gray-500 dark:text-gray-400 truncate">
+                      <div className="text-xs text-ink-3 truncate">
                         @{s.login}
                       </div>
                     )}
@@ -301,7 +301,7 @@ const ContributorBreakdown = ({
       {/* Unmatched contributors */}
       {unmatched.length > 0 && (
         <div data-testid="unmatched-contributors">
-          <div className="text-xs uppercase tracking-wide text-gray-500 dark:text-gray-400 font-semibold mb-2">
+          <div className="text-xs uppercase tracking-wide text-ink-3 font-semibold mb-2">
             Unmatched GitHub logins
           </div>
           <div className="rounded-lg border border-gray-100 dark:border-gray-700 divide-y divide-gray-100 dark:divide-gray-700">
@@ -317,7 +317,7 @@ const ContributorBreakdown = ({
                     style={{ backgroundColor: loginToColor(u.login) }}
                   />
                   <span className="font-medium text-gray-800 dark:text-gray-100">{u.login}</span>
-                  <span className="text-gray-500 dark:text-gray-400">
+                  <span className="text-ink-3">
                     · {u.commits} commit{u.commits === 1 ? '' : 's'}
                   </span>
                 </div>

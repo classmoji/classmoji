@@ -2,16 +2,17 @@ import { namedAction } from 'remix-utils/named-action';
 
 import { ClassmojiService } from '@classmoji/services';
 import { DEFAULT_EMOJI_MAPPINGS, DEFAULT_LETTER_GRADE_MAPPINGS } from '@classmoji/utils';
-import { requireClassroomAdmin } from '~/utils/routeAuth.server';
+import { requireClassroomAdmin, assertClassroomMutationAllowed } from '~/utils/routeAuth.server';
 import type { Route } from './+types/route';
 
 export const action = async ({ request, params }: Route.ActionArgs) => {
   const classSlug = params.class!;
 
-  const { classroom } = await requireClassroomAdmin(request, classSlug, {
+  const { classroom, membership } = await requireClassroomAdmin(request, classSlug, {
     resourceType: 'SETTINGS',
     action: 'update_grade_settings',
   });
+  assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
 
   const data = await request.json();
 

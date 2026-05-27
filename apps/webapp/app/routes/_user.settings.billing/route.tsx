@@ -116,10 +116,10 @@ const SettingsSubscription = ({ loaderData }: Route.ComponentProps) => {
           <div className="bg-linear-to-r from-yellow-50 to-orange-50 dark:from-yellow-900/20 dark:to-orange-900/20 border border-yellow-200 dark:border-yellow-800 rounded-lg p-6">
             <div className="flex items-center justify-between">
               <div>
-                <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-2">
+                <h3 className="text-lg font-semibold text-ink-0 mb-2">
                   Unleash the full power of Classmoji
                 </h3>
-                <p className="text-gray-600 dark:text-gray-400">
+                <p className="text-ink-2">
                   Get unlimited students, courses, TA management, team projects, and so much more.
                 </p>
               </div>
@@ -128,14 +128,14 @@ const SettingsSubscription = ({ loaderData }: Route.ComponentProps) => {
                   Upgrade Plan
                 </Button>
                 <div className="text-right">
-                  <p className="text-sm text-gray-600 dark:text-gray-400 mb-1">
+                  <p className="text-sm text-ink-2 mb-1">
                     Want to learn more?
                   </p>
                   <Button
                     type="text"
                     size="small"
                     icon={<IconExternalLink size={14} />}
-                    className="text-gray-700 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100 p-0 h-auto"
+                    className="text-ink-1 hover:text-gray-900 dark:hover:text-gray-100 p-0 h-auto"
                   >
                     Book a demo
                   </Button>
@@ -158,12 +158,12 @@ const SettingsSubscription = ({ loaderData }: Route.ComponentProps) => {
                 >
                   <IconCrown
                     className={`w-5 h-5 ${
-                      isProTier ? 'text-black' : 'text-gray-400 dark:text-gray-500'
+                      isProTier ? 'text-black' : 'text-ink-4'
                     }`}
                   />
                 </div>
                 <div>
-                  <h2 className="text-xl font-bold text-gray-900 dark:text-gray-100">
+                  <h2 className="text-xl font-bold text-ink-0">
                     {isFreeTier ? 'Free' : 'Pro'}
                   </h2>
                 </div>
@@ -182,7 +182,7 @@ const SettingsSubscription = ({ loaderData }: Route.ComponentProps) => {
 
           {/* Price */}
           <InfoCard title="Price">
-            <p className="text-2xl font-bold text-gray-900 dark:text-gray-100">
+            <p className="text-2xl font-bold text-ink-0">
               {isFreeTier || isVIP ? '$0.00' : '$29.00'} / month
             </p>
           </InfoCard>
@@ -193,7 +193,7 @@ const SettingsSubscription = ({ loaderData }: Route.ComponentProps) => {
               className={`text-2xl font-bold ${
                 classmojiSubscription.cancelled_at
                   ? 'text-red-500'
-                  : 'text-gray-900 dark:text-gray-100'
+                  : 'text-ink-0'
               }`}
             >
               {nextBillingDate}
@@ -203,7 +203,7 @@ const SettingsSubscription = ({ loaderData }: Route.ComponentProps) => {
 
         {/* Current Usage Table */}
         <Card className="bg-white dark:bg-neutral-800 border border-gray-200 dark:border-neutral-700">
-          <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-6">
+          <h3 className="text-lg font-semibold text-ink-0 mb-6">
             Current usage
           </h3>
           <Table
@@ -220,7 +220,7 @@ const SettingsSubscription = ({ loaderData }: Route.ComponentProps) => {
                 width: '33%',
                 render: (text, record) => (
                   <div className="flex items-center gap-2">
-                    <span className="text-gray-900 dark:text-gray-100 font-medium">{text}</span>
+                    <span className="text-ink-0 font-medium">{text}</span>
                     {record.feature === 'Students per course' && (
                       <div className="w-4 h-4 rounded-full bg-gray-200 dark:bg-gray-600 flex items-center justify-center">
                         <span className="text-xs text-gray-600 dark:text-gray-300">?</span>
@@ -242,7 +242,7 @@ const SettingsSubscription = ({ loaderData }: Route.ComponentProps) => {
                     return <IconX size={18} className="text-red-600 dark:text-red-500" />;
                   }
                   return (
-                    <span className="text-gray-900 dark:text-gray-100 font-medium">{value}</span>
+                    <span className="text-ink-0 font-medium">{value}</span>
                   );
                 },
               },
@@ -256,10 +256,10 @@ const SettingsSubscription = ({ loaderData }: Route.ComponentProps) => {
                     return <IconCheck size={18} className="text-green-600 dark:text-green-500" />;
                   }
                   if (value === null || value === false) {
-                    return <span className="text-gray-500 dark:text-gray-400">-</span>;
+                    return <span className="text-ink-3">-</span>;
                   }
                   return (
-                    <span className="text-gray-900 dark:text-gray-100 font-medium">{value}</span>
+                    <span className="text-ink-0 font-medium">{value}</span>
                   );
                 },
               },

@@ -40,7 +40,7 @@ const ButtonFilter = ({ label }: ButtonFilterProps) => {
           <Tag color="green" className="mr-0">
             5
           </Tag>
-          <span className="font-bold text-gray-900 dark:text-gray-100">selected</span>
+          <span className="font-bold text-ink-0">selected</span>
           <IconX
             size={16}
             className="cursor-pointer text-gray-500 hover:text-gray-700 dark:hover:text-gray-300"

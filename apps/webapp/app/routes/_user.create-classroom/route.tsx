@@ -1,5 +1,5 @@
-import { redirect, useNavigate } from 'react-router';
-import { useState, useEffect } from 'react';
+import { redirect, useNavigate, useFetcher } from 'react-router';
+import { useState, useEffect, useRef } from 'react';
 import { useForm, FormProvider } from 'react-hook-form';
 import { Button, Card, Alert, Steps } from 'antd';
 
@@ -12,7 +12,7 @@ import getPrisma from '@classmoji/database';
 import StepBasicInfo from './StepBasicInfo';
 import StepImportModules from './StepImportModules';
 import StepReview from './StepReview';
-import { slugify, getTermCode, STEPS } from './utils';
+import { slugify, STEPS } from './utils';
 import type { Route } from './+types/route';
 
 export const loader = async ({ request }: Route.LoaderArgs) => {
@@ -147,8 +147,6 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
       id: true,
       slug: true,
       name: true,
-      term: true,
-      year: true,
       git_organization: {
         select: {
           login: true,
@@ -189,16 +187,12 @@ const CreateClassroom = ({ loaderData }: Route.ComponentProps) => {
   const { fetcher, notify } = useGlobalFetcher();
   const { openInstallPopup, isRefreshing } = useGitHubAppInstallPopup(githubAppName);
 
-  const currentYear = new Date().getFullYear();
-  const years = [currentYear - 1, currentYear, currentYear + 1, currentYear + 2];
-
   // React Hook Form - persists values across step changes
   const methods = useForm({
     defaultValues: {
       git_org_id: '',
       name: '',
-      term: '',
-      year: currentYear,
+      slug: '',
     },
   });
 
@@ -224,21 +218,41 @@ const CreateClassroom = ({ loaderData }: Route.ComponentProps) => {
   }, [fetcher!.data, navigate]);
 
   // Compute slug preview from watched form values
-  const slugPreview = (() => {
-    const { name, term, year } = formValues;
-    if (name && term && year) {
-      const termCode = getTermCode(term, year);
-      return `${slugify(name)}-${termCode}`;
-    } else if (name) {
-      return slugify(name);
-    }
-    return '';
-  })();
+  const slugPreview = formValues.name ? slugify(formValues.name) : '';
+  const slugOverride = (formValues as { slug?: string }).slug;
+  const effectiveSlug = slugOverride && slugOverride.length > 0 ? slugOverride : slugPreview;
+
+  // Debounced availability check (shared with StepBasicInfo via props)
+  const availabilityFetcher = useFetcher<{
+    slug_available: boolean;
+    slug_suggestion?: string;
+  }>();
+  const lastQueriedRef = useRef<string>('');
+  useEffect(() => {
+    if (!formValues.git_org_id || !effectiveSlug) return;
+    const key = `${formValues.git_org_id}::${effectiveSlug}`;
+    if (lastQueriedRef.current === key) return;
+    const handle = setTimeout(() => {
+      lastQueriedRef.current = key;
+      const params = new URLSearchParams({
+        git_org_id: formValues.git_org_id,
+        slug: effectiveSlug,
+      });
+      availabilityFetcher.load(`/api/classrooms/availability?${params.toString()}`);
+    }, 300);
+    return () => clearTimeout(handle);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [formValues.git_org_id, effectiveSlug]);
+
+  const slugIsTaken =
+    !!availabilityFetcher.data &&
+    availabilityFetcher.data.slug_available === false &&
+    availabilityFetcher.state === 'idle';
 
   const handleNext = async () => {
     if (currentStep === 0) {
-      const isValid = await trigger(['git_org_id', 'name', 'term', 'year']);
-      if (isValid) {
+      const isValid = await trigger(['git_org_id', 'name']);
+      if (isValid && !slugIsTaken) {
         setCurrentStep(1);
       }
     } else if (currentStep === 1) {
@@ -268,7 +282,7 @@ const CreateClassroom = ({ loaderData }: Route.ComponentProps) => {
     notify(ActionTypes.CREATE_CLASSROOM, 'Creating classroom...');
 
     fetcher!.submit(
-      { ...values, importConfig },
+      { ...values, slug: effectiveSlug, importConfig },
       {
         method: 'post',
         action: '/create-classroom',
@@ -315,8 +329,9 @@ const CreateClassroom = ({ loaderData }: Route.ComponentProps) => {
               <StepBasicInfo
                 gitOrgs={gitOrgs}
                 slugPreview={slugPreview}
-                years={years}
                 githubAppName={githubAppName}
+                availability={availabilityFetcher.data}
+                availabilityLoading={availabilityFetcher.state !== 'idle'}
               />
             )}
 
@@ -350,7 +365,11 @@ const CreateClassroom = ({ loaderData }: Route.ComponentProps) => {
                   <Button onClick={() => navigate('/select-organization')}>Cancel</Button>
                 )}
                 {currentStep < 2 ? (
-                  <Button type="primary" onClick={handleNext}>
+                  <Button
+                    type="primary"
+                    onClick={handleNext}
+                    disabled={currentStep === 0 && slugIsTaken}
+                  >
                     Next
                   </Button>
                 ) : (

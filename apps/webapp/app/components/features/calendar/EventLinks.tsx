@@ -88,7 +88,7 @@ const EventLinks = ({
             rel="noopener noreferrer"
             className="flex items-center gap-2 text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300 text-sm"
           >
-            <IconFileText size={18} className="text-gray-500 dark:text-gray-400" />
+            <IconFileText size={18} className="text-ink-3" />
             <span className="underline">{page.title}</span>
             <IconExternalLink size={14} className="text-gray-400" />
           </a>
@@ -104,7 +104,7 @@ const EventLinks = ({
             rel="noopener noreferrer"
             className="flex items-center gap-2 text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300 text-sm"
           >
-            <IconPresentation size={18} className="text-gray-500 dark:text-gray-400" />
+            <IconPresentation size={18} className="text-ink-3" />
             <span className="underline">{slide.title}</span>
             <IconExternalLink size={14} className="text-gray-400" />
           </a>
@@ -129,7 +129,7 @@ const EventLinks = ({
                 rel="noopener noreferrer"
                 className="flex items-center gap-2 text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300 text-sm"
               >
-                <IconClipboardList size={18} className="text-gray-500 dark:text-gray-400" />
+                <IconClipboardList size={18} className="text-ink-3" />
                 <span className="underline">{assignment.title}</span>
                 <IconExternalLink size={14} className="text-gray-400" />
               </a>
@@ -143,7 +143,7 @@ const EventLinks = ({
               to={`/${rolePrefix}/${resolvedClassSlug}/repos#${repository?.slug || ''}`}
               className="flex items-center gap-2 text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300 text-sm"
             >
-              <IconClipboardList size={18} className="text-gray-500 dark:text-gray-400" />
+              <IconClipboardList size={18} className="text-ink-3" />
               <span className="underline">{assignment.title}</span>
             </NavLink>
           );

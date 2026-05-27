@@ -55,11 +55,11 @@ const Cell = ({ value, goodness }: { value: string; goodness: number | null }) =
 
 const AssignmentHeatmap = ({ rows }: AssignmentHeatmapProps) => {
   return (
-    <Card className="h-full" data-testid="assignment-heatmap">
+    <Card className="h-full !rounded-2xl" data-testid="assignment-heatmap">
       <CardHeader>Assignment Health</CardHeader>
       <div className="overflow-auto max-h-[420px]">
         <div className="min-w-[520px]">
-          <div className="grid grid-cols-[1.5fr_1fr_1fr_1fr_1fr] gap-2 text-[11px] uppercase tracking-wide text-gray-500 dark:text-gray-400 pb-2 border-b border-gray-100 dark:border-gray-700 mb-2">
+          <div className="grid grid-cols-[1.5fr_1fr_1fr_1fr_1fr] gap-2 text-xs uppercase tracking-wide text-ink-3 pb-2 border-b border-gray-100 dark:border-gray-700 mb-2">
             <div>Assignment</div>
             <div className="text-center">Sub Rate</div>
             <div className="text-center">Median</div>
@@ -68,7 +68,7 @@ const AssignmentHeatmap = ({ rows }: AssignmentHeatmapProps) => {
           </div>
 
           {rows.length === 0 ? (
-            <div className="text-sm text-gray-500 dark:text-gray-400 py-6 text-center">
+            <div className="text-sm text-ink-3 py-6 text-center">
               No assignments yet.
             </div>
           ) : (
@@ -79,7 +79,7 @@ const AssignmentHeatmap = ({ rows }: AssignmentHeatmapProps) => {
                   className="grid grid-cols-[1.5fr_1fr_1fr_1fr_1fr] gap-2 items-center"
                 >
                   <div
-                    className="text-sm text-gray-800 dark:text-gray-200 truncate"
+                    className="text-sm text-ink-1 truncate"
                     title={r.title}
                   >
                     {r.title}

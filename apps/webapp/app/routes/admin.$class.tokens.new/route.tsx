@@ -9,7 +9,7 @@ import { nanoid } from 'nanoid';
 import { ClassmojiService } from '@classmoji/services';
 import { useGlobalFetcher, useRouteDrawer } from '~/hooks';
 import Tasks from '@classmoji/tasks';
-import { requireClassroomAdmin } from '~/utils/routeAuth.server';
+import { requireClassroomAdmin, assertClassroomMutationAllowed } from '~/utils/routeAuth.server';
 import type { Route } from './+types/route';
 
 const InlineRow = ({
@@ -23,7 +23,7 @@ const InlineRow = ({
     <Icon
       size={18}
       strokeWidth={1.75}
-      className="shrink-0 mt-2.5 text-gray-400 dark:text-gray-500"
+      className="shrink-0 mt-2.5 text-ink-4"
     />
     <div className="flex-1 min-w-0">{children}</div>
   </div>
@@ -114,7 +114,7 @@ const AdminTokensNew = ({ loaderData }: Route.ComponentProps) => {
       maskClosable
       destroyOnClose
       styles={{
-        content: { padding: 0, borderRadius: 16, overflow: 'hidden' },
+        content: { padding: 0, borderRadius: 16, overflow: 'hidden', maxWidth: '90vw' },
         body: { padding: 0 },
         header: { display: 'none' },
         footer: { display: 'none' },
@@ -128,15 +128,15 @@ const AdminTokensNew = ({ loaderData }: Route.ComponentProps) => {
         requiredMark={false}
       >
         {/* Gmail-style header */}
-        <div className="flex items-center justify-between gap-3 px-5 py-3 bg-stone-50 dark:bg-neutral-800/60 border-b border-stone-200 dark:border-neutral-800">
-          <span className="text-sm font-semibold text-gray-900 dark:text-gray-100">
+        <div className="flex items-center justify-between gap-3 px-5 py-3 bg-stone-50 dark:bg-neutral-800/60 border-b border-line">
+          <span className="text-sm font-semibold text-ink-0">
             Assign tokens
           </span>
           <button
             type="button"
             onClick={close}
             aria-label="Close"
-            className="p-1 rounded hover:bg-stone-200 dark:hover:bg-neutral-700 text-gray-500 dark:text-gray-400 transition-colors"
+            className="p-1 rounded hover:bg-line text-ink-3 transition-colors"
           >
             <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
               <path
@@ -169,10 +169,10 @@ const AdminTokensNew = ({ loaderData }: Route.ComponentProps) => {
             />
           </Form.Item>
 
-          <div className="h-px bg-stone-200 dark:bg-neutral-800" />
+          <div className="h-px bg-line" />
 
           <InlineRow icon={IconCoin}>
-            <div className="flex items-center gap-2 py-2 text-sm text-gray-600 dark:text-gray-400">
+            <div className="flex items-center gap-2 py-2 text-sm text-ink-2">
               {students.length > 0
                 ? `${students.length} student${students.length !== 1 ? 's' : ''} in this class`
                 : 'No students enrolled yet'}
@@ -227,7 +227,7 @@ const AdminTokensNew = ({ loaderData }: Route.ComponentProps) => {
         </div>
 
         {/* Footer */}
-        <div className="flex items-center justify-end gap-2 px-5 py-3 border-t border-stone-200 dark:border-neutral-800 bg-stone-50/60 dark:bg-neutral-800/40">
+        <div className="flex items-center justify-end gap-2 px-5 py-3 border-t border-line bg-stone-50/60 dark:bg-neutral-800/40">
           <Button onClick={close} type="text" disabled={isLoading}>
             Discard
           </Button>
@@ -249,10 +249,11 @@ const AdminTokensNew = ({ loaderData }: Route.ComponentProps) => {
 export const action = async ({ params, request }: Route.ActionArgs) => {
   const { class: classSlug } = params;
 
-  const { classroom, userId: _userId } = await requireClassroomAdmin(request, classSlug!, {
+  const { classroom, userId: _userId, membership } = await requireClassroomAdmin(request, classSlug!, {
     resourceType: 'TOKEN_GRANT',
     action: 'assign_tokens_bulk',
   });
+  assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
 
   const data = await request.json();
   const sessionId = nanoid();

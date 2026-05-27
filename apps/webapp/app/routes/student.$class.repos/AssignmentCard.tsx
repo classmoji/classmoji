@@ -75,10 +75,10 @@ const AssignmentCard = ({
       <div className="flex justify-between items-start gap-3">
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 flex-wrap">
-            <h4 className="font-medium text-gray-900 dark:text-gray-100">{assignment.title}</h4>
+            <h4 className="font-medium text-ink-0">{assignment.title}</h4>
             {statusPill && (
               <span
-                className={`inline-flex items-center text-[10px] font-semibold px-2 py-0.5 rounded-full ${statusPill.className}`}
+                className={`inline-flex items-center text-xs font-semibold px-2 py-0.5 rounded-full ${statusPill.className}`}
               >
                 {statusPill.label}
               </span>
@@ -96,7 +96,7 @@ const AssignmentCard = ({
 
         <div className="flex items-center gap-3 shrink-0 text-sm">
           {assignment.student_deadline && (
-            <span className="text-gray-500 dark:text-gray-400 whitespace-nowrap">
+            <span className="text-ink-3 whitespace-nowrap">
               {dayjs(assignment.student_deadline).format('MMM D, YYYY')}
             </span>
           )}

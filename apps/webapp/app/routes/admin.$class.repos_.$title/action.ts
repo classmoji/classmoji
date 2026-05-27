@@ -1,7 +1,7 @@
 import { namedAction } from 'remix-utils/named-action';
 import { calculateContributions } from './helpers';
 import { HelperService } from '@classmoji/services';
-import { requireClassroomAdmin } from '~/utils/routeAuth.server';
+import { requireClassroomAdmin, assertClassroomMutationAllowed } from '~/utils/routeAuth.server';
 import { ActionTypes } from '~/constants';
 import { tasks } from '@trigger.dev/sdk/v3';
 import type { Route } from './+types/route';
@@ -9,10 +9,11 @@ import type { Route } from './+types/route';
 export const action = async ({ request, params }: Route.ActionArgs) => {
   const classSlug = params.class!;
 
-  const { classroom, userId: _userId } = await requireClassroomAdmin(request, classSlug, {
+  const { classroom, userId: _userId, membership } = await requireClassroomAdmin(request, classSlug, {
     resourceType: 'REPOSITORIES',
     action: 'repository_action',
   });
+  assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
 
   const data = await request.json();
 

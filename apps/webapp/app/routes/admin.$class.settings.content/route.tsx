@@ -5,10 +5,11 @@ import { IconInfoCircle, IconExternalLink } from '@tabler/icons-react';
 import { namedAction } from 'remix-utils/named-action';
 
 import { ClassmojiService } from '@classmoji/services';
+import { getContentRepoName } from '@classmoji/utils';
 import { SettingSection } from '~/components';
 import { ActionTypes } from '~/constants';
 import { useGlobalFetcher } from '~/hooks';
-import { assertClassroomAccess } from '~/utils/helpers';
+import { assertClassroomAccess, assertClassroomMutationAllowed } from '~/utils/helpers';
 import { isAIAgentConfigured } from '~/utils/aiFeatures.server';
 import type { Route } from './+types/route';
 
@@ -28,19 +29,6 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
   return { organization: classroom, aiAgentAvailable: isAIAgentConfigured() };
 };
 
-/**
- * Generate a suggested content repository name based on classSlug and term
- */
-function generateSuggestedRepoName(classSlug: string, term: string, year: number) {
-  if (!term || !year) return `content-${classSlug}`;
-
-  const termMap: Record<string, string> = { WINTER: 'w', SPRING: 's', SUMMER: 'u', FALL: 'f' };
-  const termCode = termMap[term] || term.charAt(0).toLowerCase();
-  const yearShort = String(year).slice(-2);
-
-  return `content-${classSlug}-${yearShort}${termCode}`;
-}
-
 const SettingsContent = ({ loaderData }: Route.ComponentProps) => {
   const { organization, aiAgentAvailable } = loaderData;
   const { class: classSlug } = useParams();
@@ -49,11 +37,10 @@ const SettingsContent = ({ loaderData }: Route.ComponentProps) => {
 
   // Generate repo name and URL for display
   const gitOrgLogin = organization.git_organization?.login || classSlug || '';
-  const repoName = generateSuggestedRepoName(
-    gitOrgLogin,
-    String(organization.term ?? ''),
-    organization.year ?? 0
-  );
+  const repoName = getContentRepoName({
+    login: gitOrgLogin,
+    content_namespace: organization.content_namespace ?? undefined,
+  });
   const repoUrl = `https://github.com/${gitOrgLogin}/${repoName}`;
 
   // Handler for customizable repo name (currently disabled in UI)
@@ -171,10 +158,10 @@ const SettingsContent = ({ loaderData }: Route.ComponentProps) => {
           </Form.Item>
 
           {settings.syllabus_bot_enabled && (
-            <div className="mt-4 p-4 bg-gray-100 dark:bg-neutral-800 rounded-lg border border-gray-200 dark:border-neutral-700">
+            <div className="mt-4 p-4 bg-nav-hover rounded-lg border border-gray-200 dark:border-neutral-700">
               <div className="flex items-center gap-2 mb-3">
-                <IconInfoCircle size={16} className="text-gray-500 dark:text-gray-400" />
-                <span className="font-medium text-gray-900 dark:text-gray-100">
+                <IconInfoCircle size={16} className="text-ink-3" />
+                <span className="font-medium text-ink-0">
                   About the Syllabus Bot
                 </span>
               </div>
@@ -183,7 +170,7 @@ const SettingsContent = ({ loaderData }: Route.ComponentProps) => {
                   When enabled, students will see a Course Assistant button in the nav bar. They can
                   ask questions about:
                 </p>
-                <ul className="list-disc list-inside ml-2 space-y-1 text-gray-500 dark:text-gray-400">
+                <ul className="list-disc list-inside ml-2 space-y-1 text-ink-3">
                   <li>Due dates and deadlines</li>
                   <li>Grading policies and rubrics</li>
                   <li>Course schedule and topics</li>
@@ -195,7 +182,7 @@ const SettingsContent = ({ loaderData }: Route.ComponentProps) => {
                     Customization:
                   </span>{' '}
                   Add a{' '}
-                  <code className="bg-gray-200 dark:bg-neutral-700 px-1.5 py-0.5 rounded text-gray-700 dark:text-gray-300">
+                  <code className="bg-gray-200 dark:bg-neutral-700 px-1.5 py-0.5 rounded text-ink-1">
                     bot-context/
                   </code>{' '}
                   folder to your content repository with additional context files (e.g., FAQ,
@@ -214,13 +201,14 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
   const classSlug = params.class!;
 
   // Authorize: only OWNER can modify content settings
-  const { classroom } = await assertClassroomAccess({
+  const { classroom, membership } = await assertClassroomAccess({
     request,
     classroomSlug: classSlug,
     allowedRoles: ['OWNER'],
     resourceType: 'CONTENT_SETTINGS',
     attemptedAction: 'modify',
   });
+  assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
 
   const data = await request.json();
 

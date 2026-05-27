@@ -39,12 +39,12 @@ const TAGradingLeaderboard = ({ progress, bare = false }: TAGradingLeaderboardPr
   const body = (
     <>
       {!bare && (
-        <h3 className="text-base font-semibold text-gray-900 dark:text-gray-100 mb-4">
+        <h3 className="text-base font-semibold text-ink-0 mb-4">
           TA grading
         </h3>
       )}
       {sorted.length === 0 ? (
-        <p className="text-sm text-gray-500 dark:text-gray-400">No TAs assigned yet.</p>
+        <p className="text-sm text-ink-3">No TAs assigned yet.</p>
       ) : (
         <ul className="flex flex-col gap-2">
           {sorted.map((item, i) => {
@@ -58,20 +58,20 @@ const TAGradingLeaderboard = ({ progress, bare = false }: TAGradingLeaderboardPr
                   {initialsFor(item.name, item.login)}
                 </span>
                 <div className="min-w-0 flex-1">
-                  <div className="text-sm font-medium text-gray-900 dark:text-gray-100 truncate">
+                  <div className="text-sm font-medium text-ink-0 truncate">
                     {item.name || item.login}
                   </div>
                   {thisWeek !== undefined && (
-                    <div className="text-xs text-gray-500 dark:text-gray-400">
+                    <div className="text-xs text-ink-3">
                       {thisWeek} graded this week
                     </div>
                   )}
                 </div>
                 <div className="shrink-0 text-right">
-                  <div className="text-lg font-semibold text-gray-900 dark:text-gray-100 tabular-nums leading-none">
+                  <div className="text-lg font-semibold text-ink-0 tabular-nums leading-none">
                     {total}
                   </div>
-                  <div className="text-[10px] uppercase tracking-[0.08em] text-gray-400 dark:text-gray-500 mt-0.5">
+                  <div className="text-xs uppercase tracking-[0.08em] text-ink-4 mt-0.5">
                     {item.gradedCount !== undefined ? 'total' : '%'}
                   </div>
                 </div>
@@ -86,7 +86,7 @@ const TAGradingLeaderboard = ({ progress, bare = false }: TAGradingLeaderboardPr
   if (bare) return body;
 
   return (
-    <section className="rounded-2xl bg-panel ring-1 ring-stone-200 dark:ring-neutral-800 p-5 sm:p-6 h-full">
+    <section className="rounded-2xl bg-panel ring-1 ring-line p-5 sm:p-6 h-full">
       {body}
     </section>
   );

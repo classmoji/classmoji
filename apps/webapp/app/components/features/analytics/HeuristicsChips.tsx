@@ -34,7 +34,7 @@ function Chip({ label, value, sub, tone, testId }: ChipProps) {
       data-testid={testId}
       data-tone={tone}
     >
-      <div className="text-[11px] uppercase tracking-wide font-semibold opacity-75">{label}</div>
+      <div className="text-xs uppercase tracking-wide font-semibold opacity-75">{label}</div>
       <div className="text-lg font-semibold leading-tight mt-0.5">{value}</div>
       <div className="text-xs opacity-80 mt-0.5">{sub}</div>
     </div>

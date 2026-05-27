@@ -9,6 +9,7 @@ import relativeTime from 'dayjs/plugin/relativeTime';
 import { UserThumbnailView, GradeBadge, SectionHeader } from '~/components';
 import { formatDuration, checkForCompletion } from '~/utils/quizUtils';
 import { namedAction } from 'remix-utils/named-action';
+import { assertClassroomMutationAllowed } from '~/utils/routeAuth.server';
 
 dayjs.extend(relativeTime);
 
@@ -85,7 +86,7 @@ const getEvaluationData = (attempt: Pick<QuizAttempt, 'messages'>) => {
 
 export const loader = async ({ request, params }: Route.LoaderArgs) => {
   const { ClassmojiService } = await import('@classmoji/services');
-  const { addAuditLog, assertClassroomAccess } = await import('~/utils/helpers');
+  const { addAuditLog, assertClassroomAccess, assertProTier } = await import('~/utils/helpers');
 
   const classSlug = params.class!;
   const quizId = params.quizId!;
@@ -98,6 +99,8 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
     resourceType: 'QUIZ_DETAILS',
     attemptedAction: 'view',
   });
+
+  await assertProTier(classSlug);
 
   const quiz = await ClassmojiService.quiz.findById(quizId);
 
@@ -293,9 +296,11 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
 
 export const action = async ({ params, request }: Route.ActionArgs) => {
   const { ClassmojiService } = await import('@classmoji/services');
-  const { assertClassroomAccess } = await import('~/utils/helpers');
+  const { assertClassroomAccess, assertProTier } = await import('~/utils/helpers');
   const classSlug = params.class!;
   const quizId = params.quizId!;
+
+  await assertProTier(classSlug);
 
   const data = await request.json();
   console.log('[Quiz Detail Action] Received action:', data._action);
@@ -310,7 +315,7 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
     async clearMyAttempts() {
       // SECURITY: Only admins (OWNER/ASSISTANT) can clear preview attempts
       // The service layer scopes deletion to only the authenticated user's attempts
-      const { userId, classroom } = await assertClassroomAccess({
+      const { userId, classroom, membership } = await assertClassroomAccess({
         request,
         classroomSlug: classSlug,
         allowedRoles: ['OWNER', 'ASSISTANT'],
@@ -320,6 +325,7 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
           quiz_id: quizId,
         },
       });
+      assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
 
       // Delete only this authenticated user's attempts for this specific quiz
       // The userId from assertClassroomAccess ensures we only clear the authenticated user's attempts
@@ -832,7 +838,7 @@ const QuizView = ({ loaderData }: Route.ComponentProps) => {
             onClick={() => navigate(`/admin/${classSlug}/quizzes`)}
             aria-label="Back to quizzes"
           />
-          <h1 className="text-base font-semibold text-gray-600 dark:text-gray-400 truncate">
+          <h1 className="text-base font-semibold text-ink-2 truncate">
             Quiz: {quiz.name}
           </h1>
         </div>
@@ -860,7 +866,7 @@ const QuizView = ({ loaderData }: Route.ComponentProps) => {
       </div>
 
       <div className="space-y-6">
-        <div className="rounded-2xl bg-panel ring-1 ring-stone-200 dark:ring-neutral-800 p-5 sm:p-6">
+        <div className="rounded-2xl bg-panel ring-1 ring-line p-5 sm:p-6">
           <SectionHeader
             title="Quiz Statistics"
             subtitle="Performance overview across all attempts"
@@ -893,7 +899,7 @@ const QuizView = ({ loaderData }: Route.ComponentProps) => {
           </div>
         </div>
 
-        <div className="rounded-2xl bg-panel ring-1 ring-stone-200 dark:ring-neutral-800 p-5 sm:p-6">
+        <div className="rounded-2xl bg-panel ring-1 ring-line p-5 sm:p-6">
           <SectionHeader
             title="Student Attempts"
             subtitle={`${students.length} students, ${allAttempts.length} total attempts`}

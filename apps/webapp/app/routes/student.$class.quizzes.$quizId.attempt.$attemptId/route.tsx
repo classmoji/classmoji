@@ -4,7 +4,7 @@ import { Drawer, ConfigProvider, theme, Modal } from 'antd';
 import type { Route } from './+types/route';
 import { useRouteDrawer, useDarkMode } from '~/hooks';
 import { QuizAttemptInterface } from '~/components';
-import { assertClassroomAccess } from '~/utils/helpers';
+import { assertClassroomAccess, assertProTier } from '~/utils/helpers';
 
 export async function loader({ params, request }: Route.LoaderArgs) {
   const { ClassmojiService } = await import('@classmoji/services');
@@ -20,6 +20,8 @@ export async function loader({ params, request }: Route.LoaderArgs) {
     resourceType: 'QUIZ_ATTEMPT',
     attemptedAction: 'view',
   });
+
+  await assertProTier(classSlug);
 
   // 2. Fetch quiz
   const quiz = await ClassmojiService.quiz.findById(quizId);

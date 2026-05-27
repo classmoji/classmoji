@@ -152,7 +152,7 @@ const StudentsTable = ({ students, query }: StudentsTableProps) => {
                 cancelText="Cancel"
               >
                 <div className="flex items-center gap-1 text-red-600 cursor-pointer hover:text-red-700">
-                  <IconTrash size={17} />
+                  <IconTrash size={16} />
                   <span>Remove</span>
                 </div>
               </Popconfirm>
@@ -178,7 +178,7 @@ const StudentsTable = ({ students, query }: StudentsTableProps) => {
                 }}
                 className={`flex items-center gap-1 text-gray-600 hover:text-gray-800 cursor-pointer ${impersonating ? 'opacity-50' : ''}`}
               >
-                <IconUserSearch size={17} />
+                <IconUserSearch size={16} />
                 <span>View as</span>
               </div>
             </RequireRole>
@@ -192,7 +192,7 @@ const StudentsTable = ({ students, query }: StudentsTableProps) => {
                 cancelText="Cancel"
               >
                 <div className="flex items-center gap-1 text-red-600 cursor-pointer hover:text-red-700">
-                  <IconTrash size={17} />
+                  <IconTrash size={16} />
                   <span>Remove</span>
                 </div>
               </Popconfirm>
@@ -204,7 +204,7 @@ const StudentsTable = ({ students, query }: StudentsTableProps) => {
   ];
 
   return (
-    <div className="rounded-2xl bg-panel ring-1 ring-stone-200 dark:ring-neutral-800 shadow-sm p-5 sm:p-6 min-h-[calc(100vh-10rem)]">
+    <div className="rounded-2xl bg-panel ring-1 ring-line shadow-sm p-5 sm:p-6 min-h-[calc(100vh-10rem)]">
       <Table
         columns={columns}
         dataSource={students}
@@ -220,12 +220,12 @@ const StudentsTable = ({ students, query }: StudentsTableProps) => {
         }}
         locale={{
           emptyText: query ? (
-            <div className="text-center py-8 text-gray-500 dark:text-gray-400">
+            <div className="text-center py-8 text-ink-3">
               <div className="font-medium">No students found matching &apos;{query}&apos;</div>
               <div className="text-sm">Try adjusting your search terms.</div>
             </div>
           ) : (
-            <div className="text-center py-8 text-gray-500 dark:text-gray-400">
+            <div className="text-center py-8 text-ink-3">
               <div className="font-medium">No students enrolled yet</div>
               <div className="text-sm">Add your first student to get started.</div>
             </div>

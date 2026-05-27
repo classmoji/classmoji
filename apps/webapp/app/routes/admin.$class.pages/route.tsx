@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { useFetcher, Link, Outlet, useSearchParams, useNavigate } from 'react-router';
 import { Table, Button, Input, Select, Switch, Tooltip } from 'antd';
 import { IconPlus, IconEyeOff, IconLock, IconWorld, IconMenu2 } from '@tabler/icons-react';
-import { assertClassroomAccess } from '~/utils/helpers';
+import { assertClassroomAccess, assertClassroomMutationAllowed } from '~/utils/helpers';
 import { ClassmojiService } from '@classmoji/services';
 import { useCallout } from '@classmoji/ui-components';
 import getPrisma from '@classmoji/database';
@@ -50,13 +50,14 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
 export const action = async ({ request, params }: Route.ActionArgs) => {
   const { class: classSlug } = params;
 
-  await assertClassroomAccess({
+  const { classroom, membership } = await assertClassroomAccess({
     request,
     classroomSlug: classSlug!,
     allowedRoles: ['OWNER', 'TEACHER'],
     resourceType: 'PAGES',
     attemptedAction: 'manage',
   });
+  assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
 
   const formData = await request.formData();
   const intent = formData.get('intent') as string | null;
@@ -67,7 +68,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
   // Handle delete action
   if (intent === 'delete') {
     await ClassmojiService.page.deletePage(pageId);
-    return { success: true, message: 'Page deleted successfully' };
+    return { success: true, intent: 'delete' };
   }
 
   // Handle status changes (combines is_draft and is_public)
@@ -144,10 +145,10 @@ export default function AdminPages({ loaderData }: Route.ComponentProps) {
   // Show success/error callout when delete completes
   useEffect(() => {
     if (fetcher.state === 'idle' && fetcher.data) {
-      if (fetcher.data.success) {
+      if (fetcher.data.intent === 'delete' && fetcher.data.success) {
         callout.show({
           variant: 'success',
-          title: fetcher.data.message || 'Page deleted successfully!',
+          title: 'Page deleted successfully!',
           autoDismissMs: 3000,
         });
       } else if (fetcher.data.error) {
@@ -321,7 +322,7 @@ export default function AdminPages({ loaderData }: Route.ComponentProps) {
       <Outlet />
 
       <div className="flex items-center justify-between gap-3 mt-2 mb-4">
-        <h1 className="text-base font-semibold text-gray-600 dark:text-gray-400">Pages</h1>
+        <h1 className="text-base font-semibold text-ink-2">Pages</h1>
         <div className="flex items-center gap-2">
           <Input
             placeholder="Search page..."

@@ -1,19 +1,11 @@
-import { useState, useCallback, useEffect } from 'react';
-import { Drawer, Button, Spin, Tooltip, Typography } from 'antd';
-import { IconRefresh, IconX, IconApple } from '@tabler/icons-react';
+import { useState, useCallback, useEffect, useRef } from 'react';
+import { IconRefresh } from '@tabler/icons-react';
+import { Tooltip } from 'antd';
 import { useSyllabusBot } from '~/hooks/useSyllabusBot';
+import useStore from '~/store';
 import SyllabusBotChat from './SyllabusBotChat';
 import './styles.css';
 
-const { Text } = Typography;
-
-/**
- * SyllabusBotWidget - Drawer-only chat surface for the syllabus bot.
- *
- * The trigger lives in the sidebar ("Ask Moji" nav item); this component is a
- * controlled drawer driven by isOpen/onClose. It still owns conversation
- * lifecycle (init on first open, reset, etc).
- */
 interface SyllabusBotWidgetProps {
   classroomSlug: string;
   slidesUrl: string;
@@ -21,7 +13,23 @@ interface SyllabusBotWidgetProps {
   userRole: string;
   isOpen: boolean;
   onClose: () => void;
-  isDarkMode?: boolean;
+  courseName?: string;
+  orgName?: string;
+}
+
+type PanelState = 'opening' | 'open' | 'closing' | 'closed';
+
+function getGenieOffset(panelEl: HTMLElement | null) {
+  const trigger = document.querySelector('[data-askmoji-trigger]');
+  if (!trigger || !panelEl) {
+    return { x: -300, y: 120 };
+  }
+  const tr = trigger.getBoundingClientRect();
+  const pr = panelEl.getBoundingClientRect();
+  return {
+    x: tr.left + tr.width / 2 - (pr.left + pr.width / 2),
+    y: tr.top + tr.height / 2 - (pr.top + pr.height / 2),
+  };
 }
 
 const SyllabusBotWidget = ({
@@ -31,12 +39,16 @@ const SyllabusBotWidget = ({
   userRole,
   isOpen,
   onClose,
-  isDarkMode = false,
+  courseName,
+  orgName,
 }: SyllabusBotWidgetProps) => {
   const [hasInitialized, setHasInitialized] = useState(false);
+  const [panelState, setPanelState] = useState<PanelState>('closed');
+  const [expanded, setExpanded] = useState(false);
+  const panelRef = useRef<HTMLDivElement>(null);
+  const setAskMojiActive = useStore(s => s.setAskMojiActive);
 
   const {
-    conversationId: _conversationId,
     messages,
     isStreaming,
     isInitializing,
@@ -46,29 +58,70 @@ const SyllabusBotWidget = ({
     initConversation,
     sendMessage,
     askSuggestedQuestion,
-    endConversation: _endConversation,
+    endConversation,
     reset,
   } = useSyllabusBot({ classroomSlug, userRole });
 
-  // Initialize conversation the first time the drawer opens
+  const applyGenieVars = useCallback(() => {
+    const el = panelRef.current;
+    if (!el) return;
+    const { x, y } = getGenieOffset(el);
+    el.style.setProperty('--genie-x', `${x}px`);
+    el.style.setProperty('--genie-y', `${y}px`);
+  }, []);
+
   useEffect(() => {
-    if (!isOpen) return;
+    if (isOpen && panelState === 'closed') {
+      setPanelState('opening');
+      setAskMojiActive(true);
+    } else if (!isOpen && panelState === 'open') {
+      setPanelState('closed');
+      setAskMojiActive(false);
+      setHasInitialized(false);
+      endConversation();
+    }
+  }, [isOpen, panelState, setAskMojiActive, endConversation]);
+
+  useEffect(() => {
+    if (panelState === 'opening' || panelState === 'closing') {
+      requestAnimationFrame(applyGenieVars);
+    }
+  }, [panelState, applyGenieVars]);
+
+  const handleAnimationEnd = useCallback(() => {
+    if (panelState === 'opening') {
+      setPanelState('open');
+    } else if (panelState === 'closing') {
+      setPanelState('closed');
+    }
+  }, [panelState]);
+
+  useEffect(() => {
+    if (panelState !== 'opening') return;
     if (isActive || hasInitialized) return;
 
     let cancelled = false;
     (async () => {
       try {
         await initConversation();
-        if (!cancelled) setHasInitialized(true);
+        if (!cancelled) {
+          setHasInitialized(true);
+        }
       } catch (err: unknown) {
         console.error('[SyllabusBotWidget] Failed to initialize:', err);
       }
     })();
 
-    return () => {
-      cancelled = true;
-    };
-  }, [isOpen, isActive, hasInitialized, initConversation]);
+    return () => { cancelled = true; };
+  }, [panelState, isActive, hasInitialized, initConversation, setAskMojiActive]);
+
+  const handleClose = useCallback(async () => {
+    onClose();
+    setPanelState('closed');
+    setAskMojiActive(false);
+    setHasInitialized(false);
+    await endConversation();
+  }, [onClose, setAskMojiActive, endConversation]);
 
   const handleReset = useCallback(async () => {
     try {
@@ -78,98 +131,84 @@ const SyllabusBotWidget = ({
     }
   }, [reset]);
 
-  return (
-    <Drawer
-      title={
-        <div className="flex items-center gap-3">
-          <div
-            className="flex items-center justify-center w-9 h-9 rounded-full text-white shrink-0"
-            style={{ backgroundColor: 'var(--accent)' }}
-          >
-            <IconApple size={20} strokeWidth={1.75} />
-          </div>
-          <div className="flex flex-col leading-tight">
-            <span className="font-semibold text-gray-900 dark:text-gray-100">Ask Moji</span>
-            <span className="text-xs font-normal text-gray-500 dark:text-gray-400">
-              Course Assistant
-            </span>
-          </div>
-        </div>
-      }
-      placement="right"
-      width={440}
-      onClose={onClose}
-      open={isOpen}
-      destroyOnClose={false}
-      closeIcon={null}
-      extra={
-        <div className="flex items-center gap-1">
-          <Tooltip title="Start new conversation">
-            <Button
-              type="text"
-              icon={<IconRefresh size={16} />}
-              onClick={handleReset}
-              disabled={isStreaming || isInitializing}
-              size="small"
-            />
-          </Tooltip>
-          <Tooltip title="Close">
-            <Button type="text" icon={<IconX size={18} />} onClick={onClose} size="small" />
-          </Tooltip>
-        </div>
-      }
-      styles={{
-        body: {
-          padding: 0,
-          height: 'calc(100vh - 110px)',
-          display: 'flex',
-          flexDirection: 'column',
-          backgroundColor: isDarkMode ? '#111827' : '#fff',
-        },
-        header: {
-          backgroundColor: isDarkMode ? '#1f2937' : '#fff',
-          borderBottom: isDarkMode ? '1px solid #374151' : '1px solid #f0f0f0',
-          padding: '14px 20px',
-        },
-      }}
-    >
-      {isInitializing && (
-        <div
-          style={{
-            display: 'flex',
-            flexDirection: 'column',
-            alignItems: 'center',
-            justifyContent: 'center',
-            height: '100%',
-            gap: '16px',
-          }}
-        >
-          <Spin size="large" />
-          <Text
-            style={{
-              color: isDarkMode ? '#9ca3af' : '#666',
-            }}
-          >
-            Connecting to course assistant...
-          </Text>
-        </div>
-      )}
+  if (panelState === 'closed') return null;
 
-      {!isInitializing && (
-        <SyllabusBotChat
-          messages={messages}
-          isStreaming={isStreaming}
-          suggestedQuestions={suggestedQuestions}
-          error={error}
-          onSendMessage={sendMessage}
-          onAskSuggestedQuestion={askSuggestedQuestion}
-          classroomSlug={classroomSlug}
-          slidesUrl={slidesUrl}
-          userLogin={userLogin}
-          isDarkMode={isDarkMode}
-        />
-      )}
-    </Drawer>
+  const displayName = courseName || orgName || 'Course Assistant';
+
+  return (
+    <div
+      ref={panelRef}
+      className="askmoji-panel"
+      data-state={panelState}
+      {...(expanded ? { 'data-expanded': '' } : {})}
+      onAnimationEnd={handleAnimationEnd}
+    >
+      {/* Header */}
+      <div className="askmoji-header">
+        <div className="askmoji-dots">
+          <span className="askmoji-status-dot" />
+          <div className="askmoji-dot-actions">
+            <button
+              type="button"
+              className="askmoji-dot-btn askmoji-dot-btn--close"
+              onClick={handleClose}
+              aria-label="Close"
+            >
+              <svg width="8" height="8" viewBox="0 0 8 8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+                <line x1="1" y1="1" x2="7" y2="7" />
+                <line x1="7" y1="1" x2="1" y2="7" />
+              </svg>
+            </button>
+            <button
+              type="button"
+              className="askmoji-dot-btn"
+              onClick={() => setExpanded(e => !e)}
+              aria-label={expanded ? 'Restore size' : 'Expand'}
+            >
+              {expanded ? (
+                <svg width="8" height="8" viewBox="0 0 8 8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                  <polyline points="3,1 3,3 1,3" />
+                  <polyline points="5,7 5,5 7,5" />
+                </svg>
+              ) : (
+                <svg width="8" height="8" viewBox="0 0 8 8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                  <polyline points="1,3 1,1 3,1" />
+                  <polyline points="7,5 7,7 5,7" />
+                </svg>
+              )}
+            </button>
+          </div>
+        </div>
+        <span className="askmoji-title">Ask Moji</span>
+        <Tooltip title="New conversation">
+          <button
+            type="button"
+            className="askmoji-refresh"
+            onClick={handleReset}
+            disabled={isStreaming || isInitializing}
+            aria-label="New conversation"
+          >
+            <IconRefresh size={14} />
+          </button>
+        </Tooltip>
+      </div>
+
+      {/* Chat body */}
+      <SyllabusBotChat
+        messages={messages}
+        isStreaming={isStreaming}
+        isInitializing={isInitializing}
+        suggestedQuestions={suggestedQuestions}
+        error={error}
+        onSendMessage={sendMessage}
+        onAskSuggestedQuestion={askSuggestedQuestion}
+        onReset={handleReset}
+        classroomSlug={classroomSlug}
+        slidesUrl={slidesUrl}
+        userLogin={userLogin}
+        courseName={displayName}
+      />
+    </div>
   );
 };
 

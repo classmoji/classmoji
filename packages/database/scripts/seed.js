@@ -22,14 +22,13 @@ async function main() {
   // ── Classroom ────────────────────────────────────────────────────────────
   // Slug must match TEST_CLASSROOM env var default in test-login route
   const classroom = await prisma.classroom.upsert({
-    where: { slug: 'classmoji-dev-winter-2025' },
+    where: { git_org_id_slug: { git_org_id: org.id, slug: 'classmoji-dev-winter-2025' } },
     update: {},
     create: {
       git_org_id: org.id,
       slug: 'classmoji-dev-winter-2025',
       name: 'Dev Classroom',
-      term: 'WINTER',
-      year: 2025,
+      content_namespace: 'classmoji-dev-winter-2025',
     },
   });
 

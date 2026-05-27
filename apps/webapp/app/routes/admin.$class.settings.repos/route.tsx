@@ -1,7 +1,7 @@
 import { Select, Switch, Alert } from 'antd';
 import { useNotifiedFetcher } from '~/hooks';
 
-import { assertClassroomAccess } from '~/utils/helpers';
+import { assertClassroomAccess, assertClassroomMutationAllowed } from '~/utils/helpers';
 import { getGitProvider } from '@classmoji/services';
 import type { Route } from './+types/route';
 
@@ -147,13 +147,14 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
   const classSlug = params.class!;
 
   // Get classroom with git_organization to find the GitHub org login
-  const { classroom } = await assertClassroomAccess({
+  const { classroom, membership } = await assertClassroomAccess({
     request,
     classroomSlug: classSlug,
     allowedRoles: ['OWNER'],
     resourceType: 'REPO_SETTINGS',
     attemptedAction: 'modify',
   });
+  assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
 
   const gitOrgLogin = classroom.git_organization?.login;
   if (!gitOrgLogin) {

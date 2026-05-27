@@ -224,7 +224,7 @@ const AdminAssistantDrawer = ({ loaderData }: Route.ComponentProps) => {
         onClose={close}
         open={opened}
         width={width}
-        closeIcon={<IconX className="text-gray-700 dark:text-gray-300" size={18} />}
+        closeIcon={<IconX className="text-ink-1" size={18} />}
         footer={
           <div className="flex justify-end py-2">
             <Button onClick={close}>Close</Button>
@@ -270,7 +270,7 @@ const AdminAssistantDrawer = ({ loaderData }: Route.ComponentProps) => {
         </Card>
 
         {/* Stats Section */}
-        <div className="grid grid-cols-3 gap-4 mb-4">
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-4">
           <StatsCard title="Total Assigned">{stats.total}</StatsCard>
           <StatsCard title="Completed">{stats.completed}</StatsCard>
           <Card className="text-center">

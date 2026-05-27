@@ -1,4 +1,3 @@
-import _ from 'lodash';
 import pWaitFor from 'p-wait-for';
 import { runs } from '@trigger.dev/sdk';
 import { redirect } from 'react-router';
@@ -11,47 +10,6 @@ export const sleep = async (ms: number) => {
 };
 
 export const roundToTwo = (num: number) => Math.round((num + Number.EPSILON) * 100) / 100;
-
-interface MembershipWithClassroom {
-  classroom: {
-    term: string;
-    year: number;
-    [key: string]: unknown;
-  };
-  [key: string]: unknown;
-}
-
-export const groupByYearAndTerm = (memberships: MembershipWithClassroom[]) => {
-  const seasonOrder: Record<string, number> = {
-    Winter: 1,
-    Spring: 2,
-    Summer: 3,
-    Fall: 4,
-  };
-
-  // Group memberships by a combination of year and term from the classroom object
-  const grouped = _.groupBy(memberships, membership => {
-    const { term, year } = membership.classroom;
-    return `${year} ${term}`;
-  });
-
-  // Sort the keys based on year and season order
-  const sortedKeys = _.orderBy(
-    Object.keys(grouped),
-    [
-      key => parseInt(key.split(' ')[0]), // Sort by year first
-      key => seasonOrder[key.split(' ')[1]], // Then by season order (Winter, Spring, etc.)
-    ],
-    ['asc', 'asc'] // Sort both year and term in ascending order
-  );
-
-  const sortedGrouped: Record<string, typeof memberships> = {};
-  sortedKeys.forEach(key => {
-    sortedGrouped[key] = grouped[key];
-  });
-
-  return sortedGrouped;
-};
 
 // Server functions
 export const pollRunStatus = async (runId: string, interval = 1000) => {
@@ -169,7 +127,24 @@ export const addAuditLog = async ({
 };
 
 // Re-export from shared auth package for backward compatibility
-export { assertClassroomAccess, requireStudentAccess } from '@classmoji/auth/server';
+export {
+  assertClassroomAccess,
+  assertClassroomMutationAllowed,
+  requireStudentAccess,
+} from '@classmoji/auth/server';
+
+/**
+ * Throws a 403 Response if the classroom's owner does not have an active PRO
+ * subscription. Use after assertClassroomAccess in loaders/actions that gate
+ * pro-only features (e.g. quizzes).
+ */
+export const assertProTier = async (classroomSlug: string) => {
+  const subscription = await ClassmojiService.subscription.getByClassroom(classroomSlug);
+  const isActive = subscription.ends_at ? new Date(subscription.ends_at) > new Date() : true;
+  if (subscription.tier !== 'PRO' || !isActive) {
+    throw new Response('This feature requires a Pro subscription', { status: 403 });
+  }
+};
 
 // NOTE: sanitizeClassroomForClient was removed - assertClassroomAccess now sanitizes automatically.
 // For direct findBySlug calls, use ClassmojiService.classroom.getClassroomForUI()

@@ -2,7 +2,7 @@ import { Modal } from 'antd';
 import { namedAction } from 'remix-utils/named-action';
 
 import { getAuthSession } from '@classmoji/auth/server';
-import { requireClassroomAdmin } from '~/utils/routeAuth.server';
+import { requireClassroomAdmin, assertClassroomMutationAllowed } from '~/utils/routeAuth.server';
 import FormModule from './FormModule';
 import { ClassmojiService } from '@classmoji/services';
 import getPrisma from '@classmoji/database';
@@ -85,19 +85,19 @@ const ModuleForm = ({ loaderData }: Route.ComponentProps) => {
       closable={false}
       maskClosable
       styles={{
-        content: { padding: 0, borderRadius: 16, overflow: 'hidden' },
+        content: { padding: 0, borderRadius: 16, overflow: 'hidden', maxWidth: '90vw' },
         body: { padding: 0 },
         header: { display: 'none' },
         footer: { display: 'none' },
       }}
     >
       {/* Gmail-style header */}
-      <div className="flex items-center justify-between gap-3 px-5 py-3 bg-stone-50 dark:bg-neutral-800/60 border-b border-stone-200 dark:border-neutral-800">
+      <div className="flex items-center justify-between gap-3 px-5 py-3 bg-stone-50 dark:bg-neutral-800/60 border-b border-line">
         <div className="flex flex-col">
-          <span className="text-sm font-semibold text-gray-900 dark:text-gray-100">
+          <span className="text-sm font-semibold text-ink-0">
             {isNew ? 'New repository' : 'Edit repository'}
           </span>
-          <span className="text-[11px] font-normal text-gray-500 dark:text-gray-400">
+          <span className="text-xs font-normal text-ink-3">
             {isNew
               ? 'Set up the repository, its assignments, and linked resources.'
               : 'Update repository details, assignments, and linked resources.'}
@@ -107,7 +107,7 @@ const ModuleForm = ({ loaderData }: Route.ComponentProps) => {
           type="button"
           onClick={close}
           aria-label="Close"
-          className="p-1 rounded hover:bg-stone-200 dark:hover:bg-neutral-700 text-gray-500 dark:text-gray-400 transition-colors"
+          className="p-1 rounded hover:bg-line text-ink-3 transition-colors"
         >
           <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
             <path
@@ -141,10 +141,11 @@ const ModuleForm = ({ loaderData }: Route.ComponentProps) => {
 export const action = async ({ request, params }: Route.ActionArgs) => {
   const { class: classSlug } = params;
 
-  const { classroom, userId: _userId } = await requireClassroomAdmin(request, classSlug!, {
+  const { classroom, userId: _userId, membership } = await requireClassroomAdmin(request, classSlug!, {
     resourceType: 'REPOSITORIES',
-    action: 'create_module',
+    action: 'create_repository',
   });
+  assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
 
   const data = await request.json();
 

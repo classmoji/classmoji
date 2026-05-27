@@ -62,7 +62,8 @@ interface UserWithMemberships {
   classroom_memberships: Array<{
     classroom: {
       slug: string;
-      is_active: boolean;
+      status: 'ACTIVE' | 'LOCKED' | 'UNPUBLISHED';
+      is_archived: boolean;
       _count?: {
         repositories?: number;
       };
@@ -280,7 +281,8 @@ export const findById = async (id: string, options: { includeMemberships?: boole
         organization: {
           ...m.classroom,
           login: m.classroom.slug, // Use slug as "login" for URL compatibility
-          is_active: m.classroom.is_active,
+          status: m.classroom.status,
+          is_archived: m.classroom.is_archived,
           assignments: { _count: m.classroom._count?.repositories || 0 },
           memberships: m.classroom.memberships,
         },
@@ -325,7 +327,8 @@ export const findByLogin = async (login: string) => {
       organization: {
         ...m.classroom,
         login: m.classroom.slug, // Use slug as "login" for URL compatibility
-        is_active: m.classroom.is_active,
+        status: m.classroom.status,
+        is_archived: m.classroom.is_archived,
         assignments: { _count: m.classroom._count?.repositories || 0 },
         memberships: m.classroom.memberships,
       },

@@ -117,7 +117,7 @@ interface StatItemProps {
 const StatItem = ({ label, value, subtitle, valueColor, accent }: StatItemProps) => (
   <div className="flex-1 min-w-0 flex items-start justify-between gap-3 px-4 sm:px-5 py-4">
     <div className="min-w-0">
-      <div className="text-xs font-medium text-gray-500 dark:text-gray-400">{label}</div>
+      <div className="text-xs font-medium text-ink-3">{label}</div>
       <div
         className="mt-1 text-2xl sm:text-3xl font-semibold tracking-tight leading-tight"
         style={valueColor ? { color: valueColor } : undefined}
@@ -125,7 +125,7 @@ const StatItem = ({ label, value, subtitle, valueColor, accent }: StatItemProps)
         {value}
       </div>
       {subtitle && (
-        <div className="mt-0.5 text-[11px] text-gray-500 dark:text-gray-400 truncate">
+        <div className="mt-0.5 text-xs text-ink-3 truncate">
           {subtitle}
         </div>
       )}
@@ -176,7 +176,7 @@ const AdminDashboard = ({ loaderData }: Route.ComponentProps) => {
 
   return (
     <div className="min-h-full flex flex-col gap-4">
-      <h1 className="mt-2 mb-1 text-base font-semibold text-gray-600 dark:text-gray-400">
+      <h1 className="mt-2 mb-1 text-base font-semibold text-ink-2">
         Dashboard
       </h1>
 
@@ -228,7 +228,7 @@ const AdminDashboard = ({ loaderData }: Route.ComponentProps) => {
 
             return (
               <>
-                <div className="rounded-2xl bg-panel ring-1 ring-stone-200 dark:ring-neutral-800 overflow-hidden flex flex-col sm:flex-row divide-y sm:divide-y-0 sm:divide-x divide-stone-200/70 dark:divide-gray-800">
+                <div className="rounded-2xl bg-panel ring-1 ring-line overflow-hidden flex flex-col sm:flex-row divide-y sm:divide-y-0 sm:divide-x divide-line">
                   <StatItem label="Students" value={students?.length || 0} subtitle="enrolled" />
                   <StatItem
                     label="Submitted"
@@ -250,12 +250,12 @@ const AdminDashboard = ({ loaderData }: Route.ComponentProps) => {
                 </div>
 
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-                  <section className="rounded-2xl bg-panel ring-1 ring-stone-200 dark:ring-neutral-800 p-4 sm:p-5">
+                  <section className="rounded-2xl bg-panel ring-1 ring-line p-4 sm:p-5">
                     <div className="flex items-center justify-between mb-2">
-                      <h3 className="text-sm font-semibold text-gray-900 dark:text-gray-100">
+                      <h3 className="text-sm font-semibold text-ink-0">
                         Submissions
                       </h3>
-                      <span className="text-[11px] text-gray-500 dark:text-gray-400">
+                      <span className="text-xs text-ink-3">
                         Last 10 days
                       </span>
                     </div>

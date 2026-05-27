@@ -4,7 +4,7 @@ import { useEffect } from 'react';
 import { auth, tasks } from '@trigger.dev/sdk';
 import { nanoid } from 'nanoid';
 import { ClassmojiService, getGitProvider, GitHubProvider } from '@classmoji/services';
-import { requireClassroomAdmin } from '~/utils/routeAuth.server';
+import { requireClassroomAdmin, assertClassroomMutationAllowed } from '~/utils/routeAuth.server';
 import { useDisclosure, useGlobalFetcher } from '~/hooks';
 import type { Route } from './+types/route';
 
@@ -89,10 +89,11 @@ const UpdateRepositories = ({ loaderData }: Route.ComponentProps) => {
 export const action = async ({ request, params }: Route.ActionArgs) => {
   const { class: classSlug } = params;
 
-  const { classroom } = await requireClassroomAdmin(request, classSlug!, {
+  const { classroom, membership } = await requireClassroomAdmin(request, classSlug!, {
     resourceType: 'REPOSITORIES',
-    action: 'update_module',
+    action: 'update_repository',
   });
+  assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
 
   const { values, repository } = await request.json();
   const sessionId = nanoid();

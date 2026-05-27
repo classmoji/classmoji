@@ -22,12 +22,12 @@ function slaColor(ageDays: number): { color: string; label: string } {
 
 const MyDayQueue = ({ queue }: MyDayQueueProps) => {
   return (
-    <Card className="h-full" data-testid="my-day-queue">
+    <Card className="h-full !rounded-2xl" data-testid="my-day-queue">
       <CardHeader>My Day</CardHeader>
       {queue.length === 0 ? (
         <Empty
           image={Empty.PRESENTED_IMAGE_SIMPLE}
-          description={<span className="text-gray-500 dark:text-gray-400">Inbox zero — nice.</span>}
+          description={<span className="text-ink-3">Inbox zero — nice.</span>}
         />
       ) : (
         <ul className="divide-y divide-gray-100 dark:divide-gray-800">
@@ -47,10 +47,10 @@ const MyDayQueue = ({ queue }: MyDayQueueProps) => {
                   size={32}
                 />
                 <div className="min-w-0 flex-1">
-                  <div className="text-sm text-gray-900 dark:text-gray-100 truncate">
+                  <div className="text-sm text-ink-0 truncate">
                     {displayName}
                   </div>
-                  <div className="text-[11px] text-gray-500 dark:text-gray-400 truncate">
+                  <div className="text-xs text-ink-3 truncate">
                     {row.assignmentTitle}
                   </div>
                 </div>

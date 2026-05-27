@@ -3,16 +3,17 @@ import { namedAction } from 'remix-utils/named-action';
 import { ClassmojiService } from '@classmoji/services';
 import { publishAssignment, syncAssignment } from './helpers';
 import { ActionTypes } from '~/constants';
-import { requireClassroomAdmin } from '~/utils/routeAuth.server';
+import { requireClassroomAdmin, assertClassroomMutationAllowed } from '~/utils/routeAuth.server';
 import type { Route } from './+types/route';
 
 export const action = async ({ request, params }: Route.ActionArgs) => {
   const classSlug = params.class!;
 
-  const { classroom, userId } = await requireClassroomAdmin(request, classSlug, {
+  const { classroom, userId, membership } = await requireClassroomAdmin(request, classSlug, {
     resourceType: 'REPOSITORIES',
-    action: 'manage_modules',
+    action: 'manage_repositories',
   });
+  assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
 
   const data = await request.json();
   const assignmentId = data.assignment_id;

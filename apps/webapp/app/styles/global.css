@@ -101,7 +101,7 @@
 
   --font-sans:
     'DM Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
-  --font-mono: 'DM Mono', 'JetBrains Mono', ui-monospace, Menlo, Consolas, monospace;
+  --font-mono: 'DM Mono', ui-monospace, Menlo, Consolas, monospace;
   --font-display: 'DM Sans', 'Instrument Serif', 'Cormorant Garamond', Georgia, serif;
 }
 
@@ -183,6 +183,7 @@ html[data-theme='dark'] {
    Runtime override: useDarkMode applies the user's chosen size as inline style. */
 html {
   font-size: 17px;
+  overflow-x: hidden;
   /* Default contrast; overridden inline by useDarkMode on hydration. */
   --ui-contrast: 50;
 }
@@ -202,19 +203,22 @@ html.translucent-sidebar:not(.dark) [data-cm-sidebar] {
   --tw-ring-color: rgba(40, 48, 64, 0.12);
 }
 html.translucent-sidebar:not(.dark) [data-cm-sidebar] hr,
-html.translucent-sidebar:not(.dark) [data-cm-sidebar] .border-stone-200,
-html.translucent-sidebar:not(.dark) [data-cm-sidebar] .border-gray-200 {
+html.translucent-sidebar:not(.dark) [data-cm-sidebar] .border-line {
   border-color: rgba(40, 48, 64, 0.1);
 }
-html.translucent-sidebar:not(.dark) [data-cm-sidebar] .bg-stone-200 {
+html.translucent-sidebar:not(.dark) [data-cm-sidebar] .bg-line {
   background-color: rgba(40, 48, 64, 0.1);
 }
 
 /* UI contrast: filters main content. Slider 50 is the neutral default.
    Range is intentionally narrow so neither extreme washes out card
    borders or near-white surfaces: 0 → 90%, 50 → 100%, 100 → 110%. */
-[data-cm-main],
-[data-cm-sidebar] {
+/* Only apply the filter when the user has actually moved the slider off the
+   default. A non-`none` filter establishes a containing block for
+   `position: fixed` descendants, which breaks libraries like dnd-kit that
+   assume the viewport is the containing block (e.g. DragOverlay). */
+html.ui-contrast-active [data-cm-main],
+html.ui-contrast-active [data-cm-sidebar] {
   filter: contrast(calc(100% + (var(--ui-contrast, 50) - 50) * 0.2%));
 }
 

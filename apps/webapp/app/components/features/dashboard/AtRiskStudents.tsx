@@ -16,7 +16,7 @@ interface AtRiskStudentsProps {
 
 const AtRiskStudents = ({ atRiskCount, students }: AtRiskStudentsProps) => {
   return (
-    <Card className="h-full" data-testid="at-risk-students">
+    <Card className="h-full !rounded-2xl" data-testid="at-risk-students">
       <div className="flex items-center justify-between">
         <CardHeader>At-Risk Students</CardHeader>
         <Tag
@@ -27,7 +27,7 @@ const AtRiskStudents = ({ atRiskCount, students }: AtRiskStudentsProps) => {
         </Tag>
       </div>
       {students.length === 0 ? (
-        <div className="text-sm text-gray-500 dark:text-gray-400 py-6 text-center">
+        <div className="text-sm text-ink-3 py-6 text-center">
           No at-risk students. Nice work!
         </div>
       ) : (
@@ -40,11 +40,11 @@ const AtRiskStudents = ({ atRiskCount, students }: AtRiskStudentsProps) => {
               <div className="flex items-center gap-3 min-w-0 flex-1">
                 <UserAvatar login={s.login} name={s.name} seed={s.userId} size={32} />
                 <div className="min-w-0">
-                  <div className="text-sm text-gray-900 dark:text-gray-100 truncate">
+                  <div className="text-sm text-ink-0 truncate">
                     {s.name || s.login || 'Unknown'}
                   </div>
                   {s.login && (
-                    <div className="text-[11px] text-gray-500 dark:text-gray-400 truncate">
+                    <div className="text-xs text-ink-3 truncate">
                       @{s.login}
                     </div>
                   )}

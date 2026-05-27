@@ -29,7 +29,7 @@ const StepReview = ({
   sourceClassroom,
   selectedModules,
 }: StepReviewProps) => {
-  const { git_org_id, name, term, year } = formValues;
+  const { git_org_id, name } = formValues;
   const selectedOrg = gitOrgs.find(o => o.id === git_org_id);
 
   // Calculate totals
@@ -72,12 +72,6 @@ const StepReview = ({
             <span className="font-medium">{name}</span>
           </div>
           <div className="flex justify-between">
-            <span className="text-gray-500">Term</span>
-            <span>
-              {term} {year}
-            </span>
-          </div>
-          <div className="flex justify-between">
             <span className="text-gray-500">Slug</span>
             <code className="bg-yellow-100 dark:bg-yellow-900/30 text-yellow-800 dark:text-yellow-200 px-2 py-0.5 rounded text-sm">
               {slugPreview}
@@ -104,9 +98,6 @@ const StepReview = ({
                   <Avatar src={sourceClassroom.git_organization.avatar_url} size={16} />
                 )}
                 <span>{sourceClassroom?.name}</span>
-                <span className="text-gray-400">
-                  ({sourceClassroom?.term} {sourceClassroom?.year})
-                </span>
               </div>
             </div>
             <div className="flex justify-between items-center">

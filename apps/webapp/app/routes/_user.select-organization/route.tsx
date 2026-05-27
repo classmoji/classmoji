@@ -23,15 +23,14 @@ import {
   ClassroomsLandingScreen,
   type LandingClass,
   type LandingRole,
-  type TermBucketId,
-  type TermSection,
 } from '~/components/features/landing';
 import type { NotificationRole } from '~/components/features/notifications';
 
 interface SelectOrganizationMembership extends MembershipWithOrganization {
   has_accepted_invite: boolean;
   organization: MembershipOrganization & {
-    is_active?: boolean;
+    status?: 'ACTIVE' | 'LOCKED' | 'UNPUBLISHED';
+    is_archived?: boolean;
   };
 }
 
@@ -73,10 +72,9 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
 
   if (user) {
     const typedUser = user as AppUser;
-    const memberships = (typedUser.memberships ?? []) as SelectOrganizationMembership[];
-    typedUser.memberships = memberships.filter(
-      ({ organization }) => organization.is_active !== false
-    );
+    // Surface ALL memberships — including archived classrooms — so the
+    // landing screen can show them in the Archived section.
+    typedUser.memberships = (typedUser.memberships ?? []) as SelectOrganizationMembership[];
 
     const { items, unreadCount } = await notificationService.getForBell(typedUser.id);
     const notifications = items.map(n => ({
@@ -115,20 +113,6 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
 
 // ───────── helpers ─────────
 
-const TERM_BUCKETS: Record<string, { id: TermBucketId; name: string }> = {
-  SPRING: { id: 'spring', name: 'Spring' },
-  SUMMER: { id: 'summer', name: 'Summer' },
-  FALL: { id: 'fall', name: 'Fall' },
-  WINTER: { id: 'winter', name: 'Winter' },
-};
-
-const SEASON_ORDER: TermBucketId[] = ['spring', 'summer', 'fall', 'winter', 'sandbox'];
-
-function isSandboxOrg(login: string | null | undefined, name: string | null | undefined): boolean {
-  const s = `${login ?? ''} ${name ?? ''}`.toLowerCase();
-  return /\b(sandbox|dev[-\s]?test|demo|test)\b/.test(s);
-}
-
 function deriveRole(role: string, hasAcceptedInvite: boolean): LandingRole {
   if (!hasAcceptedInvite && role !== 'OWNER') return 'PENDING INVITE';
   if (role === 'TEACHER' || role === 'OWNER') return 'OWNER';
@@ -155,78 +139,57 @@ function formatUpdated(d: Date | string | null | undefined): string {
 }
 
 function buildLandingClasses(memberships: SelectOrganizationMembership[]): LandingClass[] {
-  return memberships.map(m => {
-    const org = m.organization;
+  const items = memberships.map(m => {
+    const org = m.organization as SelectOrganizationMembership['organization'] & {
+      updated_at?: Date | string | null;
+    };
     const orgLogin = org.login;
     const gitLogin = org.git_organization?.login ?? orgLogin;
-    const term = org.term ? TERM_BUCKETS[org.term] : null;
-    const sandbox = isSandboxOrg(orgLogin, org.name);
-    const bucketId: TermBucketId = sandbox ? 'sandbox' : (term?.id ?? 'fall');
-    const termLabel = sandbox
-      ? 'Sandbox'
-      : `${org.year ?? ''}${org.year && term ? ' · ' : ''}${term?.name ?? ''}`.trim() ||
-        'Unscheduled';
 
-    const archived = org.is_active === false;
+    const status = (org.status ?? 'ACTIVE') as 'ACTIVE' | 'LOCKED' | 'UNPUBLISHED';
+    const archived = org.is_archived === true;
     const updatedAt =
       org.settings?.updated_at ?? (org as { updated_at?: Date | string | null }).updated_at;
+    const updatedTs = updatedAt ? new Date(updatedAt as string | Date).getTime() || 0 : 0;
+    const pinOrder = (m as { pin_order?: number | null }).pin_order ?? null;
 
     return {
-      id: `${org.id}:${m.role}`,
-      name: org.name ?? orgLogin,
-      subtitle: '', // TODO: wire description if Classroom gets one
-      slug: `@${gitLogin}/${orgLogin}`,
-      role: deriveRole(m.role, m.has_accepted_invite),
-      term: bucketId,
-      termLabel,
-      hue: hashHue(org.id),
-      students: 0, // TODO: wire aggregates (roster count)
-      pending: 0, // TODO: wire aggregates (to-grade / open count)
-      progress: 0, // TODO: wire aggregates (term progress)
-      updated: archived ? 'archived' : formatUpdated(updatedAt),
-      archived,
-      organization: { id: org.id, login: orgLogin, name: org.name },
-      hasAcceptedInvite: m.has_accepted_invite,
-    } satisfies LandingClass;
-  });
-}
-
-function buildTermSections(classes: LandingClass[]): TermSection[] {
-  // Group by (year, bucket). Sandbox is its own bucket regardless of year.
-  const buckets = new Map<string, LandingClass[]>();
-  for (const c of classes) {
-    const key = c.termLabel;
-    if (!buckets.has(key)) buckets.set(key, []);
-    buckets.get(key)!.push(c);
-  }
-
-  const sections: TermSection[] = [];
-  for (const [label, items] of buckets) {
-    const first = items[0]!;
-    sections.push({
-      id: first.term,
-      label,
-      meta:
-        first.term === 'sandbox'
-          ? 'for development & testing'
-          : items[0]!.archived
-            ? 'archived'
-            : 'in progress',
-      classes: items,
-    });
-  }
-
-  // Sort: non-archived first, then by season order; sandbox last.
-  sections.sort((a, b) => {
-    if (a.id === 'sandbox' && b.id !== 'sandbox') return 1;
-    if (b.id === 'sandbox' && a.id !== 'sandbox') return -1;
-    const aArch = a.classes.every(c => c.archived);
-    const bArch = b.classes.every(c => c.archived);
-    if (aArch !== bArch) return aArch ? 1 : -1;
-    return SEASON_ORDER.indexOf(a.id) - SEASON_ORDER.indexOf(b.id);
+      landing: {
+        id: `${org.id}:${m.role}`,
+        classroomId: org.id,
+        membershipRole: m.role,
+        name: org.name ?? orgLogin,
+        subtitle: '',
+        slug: `@${gitLogin}/${orgLogin}`,
+        role: deriveRole(m.role, m.has_accepted_invite),
+        hue: hashHue(org.id),
+        students: 0,
+        pending: 0,
+        progress: 0,
+        updated: archived ? 'archived' : formatUpdated(updatedAt),
+        archived,
+        pin_order: pinOrder,
+        status,
+        is_archived: archived,
+        updated_at: (updatedAt as string | Date | null) ?? new Date(0),
+        organization: { id: org.id, login: orgLogin, name: org.name },
+        hasAcceptedInvite: m.has_accepted_invite,
+      } satisfies LandingClass,
+      updatedTs,
+      pinOrder,
+    };
   });
 
-  return sections;
+  // Sort: pin_order ASC NULLS LAST, then updated_at DESC
+  items.sort((a, b) => {
+    const ap = a.pinOrder;
+    const bp = b.pinOrder;
+    if (ap != null && bp != null && ap !== bp) return ap - bp;
+    if (ap != null && bp == null) return -1;
+    if (ap == null && bp != null) return 1;
+    return b.updatedTs - a.updatedTs;
+  });
+  return items.map(i => i.landing);
 }
 
 // ───────── component ─────────
@@ -246,11 +209,6 @@ const SelectOrganization = ({ loaderData }: Route.ComponentProps) => {
 
   const memberList = memberships as SelectOrganizationMembership[];
   const classes = useMemo(() => buildLandingClasses(memberList), [memberList]);
-  const termSections = useMemo(() => buildTermSections(classes), [classes]);
-  const activeTermLabel = useMemo(() => {
-    const active = termSections.find(s => s.id !== 'sandbox' && s.classes.some(c => !c.archived));
-    return active?.label ?? null;
-  }, [termSections]);
 
   if (!user) return null;
 
@@ -317,35 +275,22 @@ const SelectOrganization = ({ loaderData }: Route.ComponentProps) => {
         </p>
       </Modal>
 
-      {/* Cover the parent _user layout's UserHeader and padding so the new design owns the viewport */}
-      <div
-        style={{
-          position: 'fixed',
-          inset: 0,
-          overflow: 'auto',
-          background: 'var(--bg-0)',
-          zIndex: 20,
-        }}
-      >
-        <ClassroomsLandingScreen
-          user={
-            user
-              ? {
-                  name: user.name ?? null,
-                  login: user.login ?? null,
-                  avatar_url: user.avatar_url ?? null,
-                }
-              : null
-          }
-          classes={classes}
-          termSections={termSections}
-          activeTermLabel={activeTermLabel}
-          onOpenClass={onOpenClass}
-          notifications={notifications}
-          unreadCount={unreadCount}
-          membershipRoles={membershipRoles}
-        />
-      </div>
+      <ClassroomsLandingScreen
+        user={
+          user
+            ? {
+                name: user.name ?? null,
+                login: user.login ?? null,
+                avatar_url: user.avatar_url ?? null,
+              }
+            : null
+        }
+        classes={classes}
+        onOpenClass={onOpenClass}
+        notifications={notifications}
+        unreadCount={unreadCount}
+        membershipRoles={membershipRoles}
+      />
     </>
   );
 };

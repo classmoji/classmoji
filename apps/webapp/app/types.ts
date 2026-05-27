@@ -98,6 +98,8 @@ export interface StoreState {
   setAskMojiOpen: (open: boolean) => void;
   askMojiEnabled: boolean;
   setAskMojiEnabled: (enabled: boolean) => void;
+  askMojiActive: boolean;
+  setAskMojiActive: (active: boolean) => void;
 }
 
 // Template assignment shape from GitHub issues API

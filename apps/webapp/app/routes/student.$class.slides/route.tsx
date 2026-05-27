@@ -46,7 +46,7 @@ export default function StudentSlides({ loaderData }: Route.ComponentProps) {
       dataIndex: 'repository',
       key: 'repository',
       render: (repository: string | null) =>
-        repository || <span className="text-gray-400 dark:text-gray-500">—</span>,
+        repository || <span className="text-ink-4">—</span>,
     },
     {
       title: 'Actions',
@@ -60,10 +60,10 @@ export default function StudentSlides({ loaderData }: Route.ComponentProps) {
   return (
     <div className="min-h-full relative">
       <div className="flex items-center justify-between gap-3 mt-2 mb-4">
-        <h1 className="text-base font-semibold text-gray-600 dark:text-gray-400">Slides</h1>
+        <h1 className="text-base font-semibold text-ink-2">Slides</h1>
       </div>
 
-      <div className="rounded-2xl bg-panel ring-1 ring-stone-200 dark:ring-neutral-800 p-5 sm:p-6 min-h-[calc(100vh-10rem)]">
+      <div className="rounded-2xl bg-panel ring-1 ring-line p-5 sm:p-6 min-h-[calc(100vh-10rem)]">
         <Table
           columns={columns}
           dataSource={slides}

@@ -1,6 +1,6 @@
 import { ClassmojiService } from '@classmoji/services';
 import getPrisma from '@classmoji/database';
-import { assertClassroomAccess } from '~/utils/routeAuth.server';
+import { assertClassroomAccess, assertClassroomMutationAllowed } from '~/utils/routeAuth.server';
 import type { Route } from './+types/route';
 
 /**
@@ -38,7 +38,7 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
     });
   }
 
-  await assertClassroomAccess({
+  const { classroom, membership } = await assertClassroomAccess({
     request,
     classroomSlug: repo.classroom.slug,
     allowedRoles: ['OWNER', 'TEACHER', 'ASSISTANT'],
@@ -46,6 +46,7 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
     attemptedAction: 'link_contributor',
     metadata: { git_repo_id: repositoryId },
   });
+  assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
 
   let body: { github_login?: string; user_id?: string | null };
   try {

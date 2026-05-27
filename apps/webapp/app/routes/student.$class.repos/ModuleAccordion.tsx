@@ -201,7 +201,7 @@ const ModuleCard = ({
   return (
     <section
       id={repository.slug ?? undefined}
-      className="scroll-mt-24 rounded-2xl bg-panel ring-1 ring-stone-200 dark:ring-neutral-800 overflow-hidden"
+      className="scroll-mt-24 rounded-2xl bg-panel ring-1 ring-line overflow-hidden"
     >
       <button
         type="button"
@@ -215,18 +215,18 @@ const ModuleCard = ({
       >
         <div className="flex items-start justify-between gap-3">
           <div className="flex-1 min-w-0">
-            <div className="text-[11px] font-semibold tracking-[0.18em] text-gray-400 dark:text-gray-500">
+            <div className="text-xs font-semibold tracking-[0.18em] text-ink-4">
               MODULE #{ordinal}
             </div>
-            <h3 className="mt-1 text-lg sm:text-xl font-semibold text-gray-900 dark:text-gray-100 tracking-tight">
+            <h3 className="mt-1 text-lg sm:text-xl font-semibold text-ink-0 tracking-tight">
               {repository.title}
             </h3>
-            {summary && <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">{summary}</p>}
+            {summary && <p className="text-sm text-ink-3 mt-1">{summary}</p>}
           </div>
           {hasExpandableContent && (
             <IconChevronDown
               size={20}
-              className={`text-gray-400 dark:text-gray-500 shrink-0 transition-transform ${
+              className={`text-ink-4 shrink-0 transition-transform ${
                 open ? 'rotate-180' : ''
               }`}
             />
@@ -235,7 +235,7 @@ const ModuleCard = ({
 
         {pct !== null && (
           <div className="mt-5 flex items-center gap-3">
-            <div className="h-2 flex-1 bg-stone-100 dark:bg-neutral-800 rounded-full overflow-hidden">
+            <div className="h-2 flex-1 bg-nav-hover rounded-full overflow-hidden">
               <div
                 className="h-full rounded-full transition-all"
                 style={{
@@ -244,7 +244,7 @@ const ModuleCard = ({
                 }}
               />
             </div>
-            <span className="text-sm font-medium text-gray-700 dark:text-gray-300 tabular-nums">
+            <span className="text-sm font-medium text-ink-1 tabular-nums">
               {pct}%
             </span>
           </div>
@@ -252,13 +252,13 @@ const ModuleCard = ({
       </button>
 
       {open && hasExpandableContent && (
-        <div className="px-5 sm:px-6 pb-5 sm:pb-6 -mt-1 border-t border-stone-200/70 dark:border-neutral-800 pt-5">
+        <div className="px-5 sm:px-6 pb-5 sm:pb-6 -mt-1 border-t border-line pt-5">
           {repository.team_formation_mode === 'SELF_FORMED' && rolePrefix === 'student' && (
             <TeamFormationBanner repository={repository} userTeam={userTeam} classSlug={classSlug} />
           )}
 
           {repository.description && (
-            <p className="text-gray-600 dark:text-gray-400 mb-4">{repository.description}</p>
+            <p className="text-ink-2 mb-4">{repository.description}</p>
           )}
 
           <ResourceLinks
@@ -272,12 +272,12 @@ const ModuleCard = ({
 
           {((repository.pages?.length ?? 0) > 0 || (repository.slides?.length ?? 0) > 0) &&
             assignments.length > 0 && (
-              <div className="border-t border-stone-200/70 dark:border-neutral-800 my-4" />
+              <div className="border-t border-line my-4" />
             )}
 
           {assignments.length > 0 && (
             <div>
-              <h4 className="text-sm font-semibold text-gray-500 dark:text-gray-400 mb-3">
+              <h4 className="text-sm font-semibold text-ink-3 mb-3">
                 Assignments
               </h4>
               {assignments.map(assignment => (

@@ -29,7 +29,7 @@ const SparkTooltip = ({
   const point = payload[0].payload;
   if (!point) return null;
   return (
-    <div className="rounded-md bg-gray-900/90 dark:bg-gray-100/90 px-2 py-1 text-[11px] text-white dark:text-gray-900 shadow">
+    <div className="rounded-md bg-gray-900/90 dark:bg-gray-100/90 px-2 py-1 text-xs text-white dark:text-gray-900 shadow">
       <div className="font-semibold tabular-nums">{point.count} graded</div>
       <div className="opacity-80">{dayjs(point.date).format('ddd MMM D')}</div>
     </div>
@@ -41,9 +41,9 @@ const ThroughputSparkline = ({ data }: ThroughputSparklineProps) => {
   const { accent } = useDarkMode();
   const gradientId = useId();
   return (
-    <Card className="h-full" data-testid="throughput-sparkline">
+    <Card className="h-full !rounded-2xl" data-testid="throughput-sparkline">
       <CardHeader>Throughput (7d)</CardHeader>
-      <div className="text-2xl font-semibold tabular-nums text-gray-900 dark:text-gray-100">
+      <div className="text-2xl font-semibold tabular-nums text-ink-0">
         {total}
       </div>
       <div style={{ height: 60 }} className="mt-1">

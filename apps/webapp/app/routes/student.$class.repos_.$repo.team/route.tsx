@@ -6,9 +6,10 @@ import { namedAction } from 'remix-utils/named-action';
 import type { Route } from './+types/route';
 import { ClassmojiService, getGitProvider } from '@classmoji/services';
 import { useCallout } from '@classmoji/ui-components';
-import { assertClassroomAccess } from '~/utils/helpers';
+import { assertClassroomAccess, assertClassroomMutationAllowed } from '~/utils/helpers';
 import { titleToIdentifier } from '@classmoji/utils';
 import { tasks } from '@trigger.dev/sdk/v3';
+import { useClassroomStatusModals } from '~/utils/classroomStatusModals';
 
 export const loader = async ({ request, params }: Route.LoaderArgs) => {
   const classSlug = params.class!;
@@ -70,13 +71,14 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
   const classSlug = params.class!;
   const moduleSlug = params.repo!;
 
-  const { userId, classroom } = await assertClassroomAccess({
+  const { userId, classroom, membership } = await assertClassroomAccess({
     request,
     classroomSlug: classSlug,
     allowedRoles: ['STUDENT', 'OWNER', 'TEACHER'],
     resourceType: 'TEAM',
     attemptedAction: 'modify_team',
   });
+  assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
 
   // Get the repository
   const repository = await ClassmojiService.repository.findByClassroomSlugAndModuleSlug(
@@ -264,11 +266,13 @@ const StudentTeamPage = ({ loaderData }: Route.ComponentProps) => {
   const [teamName, setTeamName] = useState('');
   const [showCreateForm, setShowCreateForm] = useState(false);
   const callout = useCallout();
+  const { showStatusErrorFromResponse } = useClassroomStatusModals();
 
   const isSubmitting = fetcher.state !== 'idle';
 
   // Show feedback from action
   useEffect(() => {
+    showStatusErrorFromResponse(fetcher.data as { error?: string } | undefined);
     if (fetcher.data?.success) {
       callout.show({ variant: 'success', title: fetcher.data.success, autoDismissMs: 3000 });
     }
@@ -311,7 +315,7 @@ const StudentTeamPage = ({ loaderData }: Route.ComponentProps) => {
       </Link>
 
       <div className="flex items-center justify-between gap-3 mt-2 mb-4">
-        <h1 className="text-base font-semibold text-gray-600 dark:text-gray-400 truncate">
+        <h1 className="text-base font-semibold text-ink-2 truncate">
           Team Formation: {repository.title}
         </h1>
       </div>

@@ -26,8 +26,6 @@ export interface OwnedClassroom {
   id: string;
   slug?: string;
   name: string;
-  term: string | null;
-  year: number | null;
   git_organization?: {
     login: string;
     avatar_url?: string | null;
@@ -43,6 +41,4 @@ export interface ModuleConfig {
 export interface CreateClassroomFormValues {
   git_org_id: string;
   name: string;
-  term: string;
-  year: number;
 }

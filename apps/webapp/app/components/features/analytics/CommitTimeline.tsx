@@ -52,7 +52,7 @@ const CommitTimeline = ({ commits, deadline }: CommitTimelineProps) => {
   if (!commits || commits.length === 0) {
     return (
       <div
-        className="flex items-center justify-center rounded-lg border border-dashed border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-gray-500 dark:text-gray-400 text-sm"
+        className="flex items-center justify-center rounded-lg border border-dashed border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-ink-3 text-sm"
         style={{ height: 180 }}
         data-testid="commit-timeline-empty"
       >

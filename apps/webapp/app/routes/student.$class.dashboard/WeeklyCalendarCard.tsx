@@ -55,21 +55,21 @@ const WeeklyCalendarCard = ({ events, weekStart, classSlug }: WeeklyCalendarCard
     : `${start.format('MMM D')}–${end.format('MMM D')}`;
 
   return (
-    <section className="rounded-2xl bg-panel ring-1 ring-stone-200 dark:ring-neutral-800 overflow-hidden">
+    <section className="rounded-2xl bg-panel ring-1 ring-line overflow-hidden">
       <header className="flex items-center justify-between gap-3 px-5 sm:px-6 pt-5 sm:pt-6 pb-4">
-        <h2 className="text-base sm:text-lg font-semibold text-gray-900 dark:text-gray-100 tracking-tight">
+        <h2 className="text-base sm:text-lg font-semibold text-ink-0 tracking-tight">
           Week {weekNumber}: {rangeLabel}
         </h2>
         <Link
           to={`/student/${classSlug}/calendar`}
-          className="inline-flex items-center gap-1.5 text-xs sm:text-sm font-medium text-gray-700 dark:text-gray-200 px-3 py-1.5 rounded-full ring-1 ring-stone-200 dark:ring-neutral-700 bg-panel hover:bg-stone-50 dark:hover:bg-neutral-800 transition-colors"
+          className="inline-flex items-center gap-1.5 text-xs sm:text-sm font-medium text-gray-700 dark:text-gray-200 px-3 py-1.5 rounded-full ring-1 ring-line bg-panel hover:bg-nav-hover transition-colors"
         >
           View calendar
           <IconArrowRight size={14} />
         </Link>
       </header>
 
-      <div className="grid grid-cols-7 border-t border-stone-200 dark:border-neutral-800">
+      <div className="grid grid-cols-7 border-t border-line">
         {grid.map((dayEvents, idx) => {
           const day = start.add(idx, 'day');
           const isTodayDate = day.isSame(today, 'day');
@@ -80,21 +80,21 @@ const WeeklyCalendarCard = ({ events, weekStart, classSlug }: WeeklyCalendarCard
           return (
             <div
               key={idx}
-              className={`flex flex-col px-2 py-3 border-r border-stone-200 dark:border-neutral-800 last:border-r-0 min-w-0 min-h-[200px] ${
+              className={`flex flex-col px-2 py-3 border-r border-line last:border-r-0 min-w-0 min-h-[200px] ${
                 isWeekend ? 'bg-stone-50/70 dark:bg-neutral-800/30' : ''
               }`}
             >
               <div className="flex flex-col items-center mb-2">
                 <span
-                  className={`text-[10px] font-semibold tracking-[0.14em] ${
-                    isTodayDate ? 'text-[#858A92]' : 'text-gray-400 dark:text-gray-500'
+                  className={`text-xs font-semibold tracking-[0.14em] ${
+                    isTodayDate ? 'text-[#858A92]' : 'text-ink-4'
                   }`}
                 >
                   {DAY_LABELS[idx]}
                 </span>
                 <span
                   className={`flex items-center justify-center w-7 h-7 rounded-full text-sm font-semibold mt-1 ${
-                    isTodayDate ? 'text-white' : 'text-gray-800 dark:text-gray-200'
+                    isTodayDate ? 'text-white' : 'text-ink-1'
                   }`}
                   style={isTodayDate ? { backgroundColor: 'var(--accent)' } : undefined}
                 >
@@ -109,11 +109,11 @@ const WeeklyCalendarCard = ({ events, weekStart, classSlug }: WeeklyCalendarCard
                     <div
                       key={event.id}
                       title={event.title}
-                      className={`text-[11px] leading-tight rounded px-1.5 py-1 truncate ${getEventTypeLightBg(type)} ${getEventTypeDarkText(type)}`}
+                      className={`text-xs leading-tight rounded px-1.5 py-1 truncate ${getEventTypeLightBg(type)} ${getEventTypeDarkText(type)}`}
                     >
                       <div className="font-medium truncate">{event.title}</div>
                       {!event.is_deadline && (
-                        <div className="text-[10px] opacity-70 truncate">
+                        <div className="text-xs opacity-70 truncate">
                           {formatTime(event.start_time)}
                         </div>
                       )}
@@ -123,7 +123,7 @@ const WeeklyCalendarCard = ({ events, weekStart, classSlug }: WeeklyCalendarCard
                 {overflow > 0 && (
                   <Link
                     to={`/student/${classSlug}/calendar`}
-                    className="text-[10px] text-gray-500 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200 text-center pt-0.5"
+                    className="text-xs text-ink-3 hover:text-gray-800 dark:hover:text-gray-200 text-center pt-0.5"
                   >
                     +{overflow} more
                   </Link>

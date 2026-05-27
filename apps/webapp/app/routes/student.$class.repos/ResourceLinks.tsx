@@ -41,7 +41,7 @@ const ResourceLinks = ({
             rel="noopener noreferrer"
             className="flex items-center gap-1 text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300 text-sm underline"
           >
-            <IconFileText size={16} className="text-gray-500 dark:text-gray-400" />
+            <IconFileText size={16} className="text-ink-3" />
             {page.title}
           </a>
         ))}
@@ -54,7 +54,7 @@ const ResourceLinks = ({
             rel="noopener noreferrer"
             className="flex items-center gap-1 text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300 text-sm underline"
           >
-            <IconPresentation size={16} className="text-gray-500 dark:text-gray-400" />
+            <IconPresentation size={16} className="text-ink-3" />
             {slide.title}
           </a>
         ))}

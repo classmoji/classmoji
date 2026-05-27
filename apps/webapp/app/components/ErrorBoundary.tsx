@@ -44,10 +44,10 @@ function ErrorFallback({ error, resetErrorBoundary }: FallbackProps) {
         {isDevelopment && Boolean(error) && (
           <div className="mt-6 text-left">
             <details className="cursor-pointer">
-              <summary className="text-sm font-medium text-gray-700 dark:text-gray-300">
+              <summary className="text-sm font-medium text-ink-1">
                 Error Details (Development Only)
               </summary>
-              <pre className="mt-2 p-4 bg-gray-100 dark:bg-neutral-800 rounded-md text-xs overflow-auto max-h-96">
+              <pre className="mt-2 p-4 bg-nav-hover rounded-md text-xs overflow-auto max-h-96">
                 <code className="text-red-600 dark:text-red-400">
                   {String(getErrorStack(error) ?? '')}
                 </code>

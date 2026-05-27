@@ -1,4 +1,4 @@
-import { Card, Tag, Table } from 'antd';
+import { Tag, Table } from 'antd';
 
 import {
   EmojisDisplay,
@@ -18,7 +18,6 @@ import {
   type OrganizationSettings,
   type LetterGradeMappingEntry,
 } from '@classmoji/utils';
-import InfoCard from './InfoCard';
 
 interface StudentGrade {
   id: string;
@@ -120,7 +119,7 @@ const SingleStudentView = (props: SingleStudentViewProps) => {
       render: (title: string) => (
         <div className="flex items-center gap-2">
           <div className="w-1 h-4 bg-primary dark:bg-primary rounded-full"></div>
-          <span className="font-medium text-gray-900 dark:text-gray-100">{title}</span>
+          <span className="font-medium text-ink-0">{title}</span>
         </div>
       ),
     },
@@ -139,7 +138,7 @@ const SingleStudentView = (props: SingleStudentViewProps) => {
       dataIndex: 'weight',
       key: 'weight',
       render: (weight: number) => (
-        <span className="font-medium text-gray-900 dark:text-gray-100">{weight}%</span>
+        <span className="font-medium text-ink-0">{weight}%</span>
       ),
     },
     {
@@ -162,7 +161,7 @@ const SingleStudentView = (props: SingleStudentViewProps) => {
           );
         }
 
-        return <span className="font-bold text-gray-900">{grade}</span>;
+        return <span className="font-bold text-ink-0">{grade}</span>;
       },
     },
   ];
@@ -177,7 +176,7 @@ const SingleStudentView = (props: SingleStudentViewProps) => {
       key: 'assignment',
       width: '20%',
       render: (title: string) => (
-        <span className="font-medium text-gray-800 dark:text-gray-200">{title}</span>
+        <span className="font-medium text-ink-1">{title}</span>
       ),
     },
     {
@@ -186,7 +185,7 @@ const SingleStudentView = (props: SingleStudentViewProps) => {
       key: 'weight',
       width: '10%',
       render: (weight: number) => (
-        <span className="font-medium text-gray-900 dark:text-gray-100">{weight}%</span>
+        <span className="font-medium text-ink-0">{weight}%</span>
       ),
     },
     {
@@ -195,7 +194,7 @@ const SingleStudentView = (props: SingleStudentViewProps) => {
       dataIndex: ['grades'],
       width: '10%',
       render: (grades: StudentGrade[]) => {
-        if (!grades.length) return <span className="text-gray-500 italic">No grades yet</span>;
+        if (!grades.length) return <span className="text-ink-3 italic">No grades yet</span>;
         return <EmojisDisplay grades={grades} />;
       },
     },
@@ -205,7 +204,7 @@ const SingleStudentView = (props: SingleStudentViewProps) => {
       dataIndex: ['grades'],
       width: '10%',
       render: (grades: StudentGrade[], repositoryAssignment: StudentRepoAssignment) => {
-        if (!grades.length) return <span className="text-gray-500 italic">No grades yet</span>;
+        if (!grades.length) return <span className="text-ink-3 italic">No grades yet</span>;
         const rawGrade = calculateNumericGrade(
           grades.map(({ emoji }) => emoji),
           emojiMappings as Record<string, number>
@@ -232,7 +231,6 @@ const SingleStudentView = (props: SingleStudentViewProps) => {
       key: 'status',
       width: '25%',
       render: (repoAssignment: StudentRepoAssignment) => {
-        // Check if this repository assignment is dropped for this student
         const dropped = isRepositoryAssignmentDropped(
           repoAssignment?.id,
           allRepositoryAssignments,
@@ -297,82 +295,76 @@ const SingleStudentView = (props: SingleStudentViewProps) => {
         size="small"
         showHeader={true}
         bordered={false}
+        scroll={{ x: 'max-content' }}
       />
     );
   };
 
   return (
-    <div className="grid grid-cols-5 gap-8">
-      <div className="col-span-1">
-        {/* Student Profile Card */}
-        <Card className="shadow-xs hover:shadow-md transition-shadow duration-200 border ">
-          <div className="flex flex-col items-center gap-6 justify-center">
-            <div className="relative">
-              <img
-                className="rounded-full h-[120px] w-[120px] object-cover ring-4 ring-primary-50 dark:ring-primary/30 shadow-lg"
-                src={student?.avatar_url ?? student?.image ?? undefined}
-                alt={student?.name ?? undefined}
-              />
-              <div className="absolute -bottom-2 -right-2 w-8 h-8 bg-primary dark:bg-primary rounded-full flex items-center justify-center shadow-lg">
-                <span className="text-white font-bold text-sm">★</span>
-              </div>
-            </div>
-
-            <div className="flex flex-col items-center gap-2 text-center">
-              <h1 className="font-bold text-xl text-gray-900">{student?.name}</h1>
-              <h3 className="text-gray-600 font-medium">@{student?.login}</h3>
-              <h3 className="text-sm text-gray-500 bg-gray-100 px-3 py-1 rounded-full">
-                ID: {student?.school_id}
-              </h3>
-            </div>
+    <div className="space-y-5">
+      <div className="flex items-center gap-4">
+        <img
+          className="rounded-full h-11 w-11 sm:h-14 sm:w-14 object-cover ring-2 ring-primary-50 dark:ring-primary/30"
+          src={student?.avatar_url ?? student?.image ?? undefined}
+          alt={student?.name ?? undefined}
+        />
+        <div className="min-w-0">
+          <h1 className="font-bold text-lg text-ink-0">{student?.name}</h1>
+          <div className="flex items-center gap-2 text-sm text-ink-3">
+            <span>@{student?.login}</span>
+            {student?.school_id && (
+              <>
+                <span className="text-ink-4">&middot;</span>
+                <span>ID: {student.school_id}</span>
+              </>
+            )}
           </div>
-        </Card>
-
-        {/* Grade Cards */}
-        <div className="grid grid-cols-2 gap-4 mt-6">
-          <InfoCard title="Raw Letter" value={`${rawNumericGrade >= 0 ? rawLetterGrade : 'N/A'}`} />
-          <InfoCard
-            title="Final Letter"
-            value={`${finalNumericGrade >= 0 ? finalLetterGrade : 'N/A'}`}
-          />
-          <InfoCard title="Raw Score" value={`${rawNumericGrade >= 0 ? rawNumericGrade : 'N/A'}`} />
-          <InfoCard
-            title="Final Score"
-            value={`${finalNumericGrade >= 0 ? finalNumericGrade : 'N/A'}`}
-          />
-          <InfoCard
-            title="Token Balance"
-            value={tokenBalance}
-            note={tokenBalance < 10 ? 'Low balance' : null}
-          />
         </div>
       </div>
 
-      <div className="col-span-4">
-        {/* Assignments Table */}
-        <Card className="shadow-xs">
-          <div className="flex items-center gap-3 mb-6">
-            <div className="w-1 h-6 bg-primary dark:bg-primary rounded-full"></div>
-            <h2 className="text-xl font-bold text-gray-900">Repository Overview</h2>
-          </div>
-          <Table
-            columns={assignmentColumns}
-            dataSource={effectiveAssignments}
-            rowKey={a => a.id}
-            expandable={{
-              expandedRowRender,
-              rowExpandable: record => (effectiveIssuesGrouped[record.id]?.length || 0) > 0,
-              defaultExpandedRowKeys: effectiveAssignments
-                .filter(m => (effectiveIssuesGrouped[m.id]?.length || 0) > 0)
-                .map(m => m.id),
-            }}
-            rowHoverable={false}
-            pagination={false}
-            size="middle"
-            bordered={true}
-          />
-        </Card>
+      <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
+        <div className="rounded-xl ring-1 ring-line p-3 text-center">
+          <div className="text-xs font-medium text-ink-3 mb-1">Raw Letter</div>
+          <div className="text-xl font-bold text-ink-0">{rawNumericGrade >= 0 ? rawLetterGrade : 'N/A'}</div>
+        </div>
+        <div className="rounded-xl ring-1 ring-line p-3 text-center">
+          <div className="text-xs font-medium text-ink-3 mb-1">Final Letter</div>
+          <div className="text-xl font-bold text-ink-0">{finalNumericGrade >= 0 ? finalLetterGrade : 'N/A'}</div>
+        </div>
+        <div className="rounded-xl ring-1 ring-line p-3 text-center">
+          <div className="text-xs font-medium text-ink-3 mb-1">Raw Score</div>
+          <div className="text-xl font-bold text-ink-0">{rawNumericGrade >= 0 ? rawNumericGrade : 'N/A'}</div>
+        </div>
+        <div className="rounded-xl ring-1 ring-line p-3 text-center">
+          <div className="text-xs font-medium text-ink-3 mb-1">Final Score</div>
+          <div className="text-xl font-bold text-ink-0">{finalNumericGrade >= 0 ? finalNumericGrade : 'N/A'}</div>
+        </div>
+        <div className="rounded-xl ring-1 ring-line p-3 text-center">
+          <div className="text-xs font-medium text-ink-3 mb-1">Tokens</div>
+          <div className="text-xl font-bold text-ink-0">{tokenBalance}</div>
+          {tokenBalance < 10 && (
+            <div className="text-xs text-red-500 mt-1">Low balance</div>
+          )}
+        </div>
       </div>
+
+      <Table
+        columns={assignmentColumns}
+        dataSource={effectiveAssignments}
+        rowKey={a => a.id}
+        expandable={{
+          expandedRowRender,
+          rowExpandable: record => (effectiveIssuesGrouped[record.id]?.length || 0) > 0,
+          defaultExpandedRowKeys: effectiveAssignments
+            .filter(m => (effectiveIssuesGrouped[m.id]?.length || 0) > 0)
+            .map(m => m.id),
+        }}
+        rowHoverable={false}
+        pagination={false}
+        size="middle"
+        bordered={true}
+        scroll={{ x: 'max-content' }}
+      />
     </div>
   );
 };

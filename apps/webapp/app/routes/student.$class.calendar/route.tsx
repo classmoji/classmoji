@@ -111,7 +111,7 @@ const StudentCalendar = ({ loaderData }: Route.ComponentProps) => {
   return (
     <div className="min-h-full">
       <div className="flex items-center justify-between gap-3 mt-2 mb-4">
-        <h1 className="text-base font-semibold text-gray-600 dark:text-gray-400">Calendar</h1>
+        <h1 className="text-base font-semibold text-ink-2">Calendar</h1>
         <CalendarSubscriptionCard subscriptionUrl={subscriptionUrl} />
       </div>
 

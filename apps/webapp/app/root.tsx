@@ -14,7 +14,7 @@ import axios from 'axios';
 
 import React, { useEffect } from 'react';
 import dayjs from 'dayjs';
-import { ConfigProvider, theme } from 'antd';
+import { ConfigProvider, theme, App as AntdApp } from 'antd';
 import { IconMoodSad } from '@tabler/icons-react';
 import { auth as triggerAuth } from '@trigger.dev/sdk';
 
@@ -354,7 +354,7 @@ const App = ({ loaderData }: Route.ComponentProps) => {
         <link rel="preconnect" href="https://fonts.googleapis.com" />
         <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
         <link
-          href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:ital,wght@0,100..800;1,100..800&display=swap"
+          href="https://fonts.googleapis.com/css2?family=DM+Mono:ital,wght@0,300;0,400;0,500;1,300;1,400;1,500&family=DM+Sans:ital,opsz,wght@0,9..40,100..1000;1,9..40,100..1000&display=swap"
           rel="stylesheet"
         />
         <Meta />
@@ -439,20 +439,22 @@ const App = ({ loaderData }: Route.ComponentProps) => {
               </div>
             )}
           >
-            <UserContext.Provider value={{ user }}>
-              <CalloutProvider>
-                <FetcherProvider>
-                  <ImpersonationBanner
-                    key={(session as Record<string, Record<string, string>>)?.session?.id}
-                    session={session}
-                  />
-                  <Outlet />
-                  <SyllabusBotRoot />
-                  <ScrollRestoration />
-                  <Scripts />
-                </FetcherProvider>
-              </CalloutProvider>
-            </UserContext.Provider>
+            <AntdApp>
+              <UserContext.Provider value={{ user }}>
+                <CalloutProvider>
+                  <FetcherProvider>
+                    <ImpersonationBanner
+                      key={(session as Record<string, Record<string, string>>)?.session?.id}
+                      session={session}
+                    />
+                    <Outlet />
+                    <SyllabusBotRoot />
+                    <ScrollRestoration />
+                    <Scripts />
+                  </FetcherProvider>
+                </CalloutProvider>
+              </UserContext.Provider>
+            </AntdApp>
           </ConfigProvider>
         </RenderErrorBoundary>
       </body>
@@ -598,10 +600,10 @@ export function ErrorBoundary() {
                     />
                   </svg>
                 </div>
-                <h1 className="text-2xl font-semibold text-gray-900 dark:text-gray-100 mb-2">
+                <h1 className="text-2xl font-semibold text-ink-0 mb-2">
                   Something went wrong
                 </h1>
-                <p className="text-gray-600 dark:text-gray-400">
+                <p className="text-ink-2">
                   {errorMessage ||
                     'We encountered an unexpected error. Our team has been notified and is working on a fix.'}
                 </p>
@@ -610,7 +612,7 @@ export function ErrorBoundary() {
               <div className="flex flex-col sm:flex-row gap-3 justify-center">
                 <button
                   onClick={() => (window.location.href = '/')}
-                  className="px-5 py-2.5 text-sm font-medium rounded-lg border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 bg-white dark:bg-neutral-800 hover:bg-gray-50 dark:hover:bg-neutral-700 transition-colors"
+                  className="px-5 py-2.5 text-sm font-medium rounded-lg border border-gray-300 dark:border-gray-600 text-ink-1 bg-white dark:bg-neutral-800 hover:bg-gray-50 dark:hover:bg-neutral-700 transition-colors"
                 >
                   Back to Home
                 </button>

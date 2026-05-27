@@ -4,22 +4,26 @@
 
 export type LandingRole = 'OWNER' | 'ASSISTANT' | 'STUDENT' | 'PENDING INVITE';
 
-export type TermBucketId = 'spring' | 'summer' | 'fall' | 'winter' | 'sandbox';
-
 export interface LandingClass {
   id: string;
+  /** Bare classroom UUID for API calls (pin/reorder, archive). `id` is composite `${classroomId}:${role}` for UI dedup. */
+  classroomId: string;
+  /** Underlying DB role on the membership (OWNER/ASSISTANT/STUDENT/TEACHER) used to disambiguate pin/archive calls for users with multiple memberships per classroom. */
+  membershipRole: string;
   name: string;
   subtitle: string;
   slug: string;
   role: LandingRole;
-  term: TermBucketId;
-  termLabel: string;
   hue: number;
   students: number;
   pending: number;
   progress: number;
   updated: string;
   archived: boolean;
+  pin_order: number | null;
+  status: 'ACTIVE' | 'LOCKED' | 'UNPUBLISHED';
+  is_archived: boolean;
+  updated_at: string | Date;
   // Pass-through for navigation handler
   organization: {
     id: string;
@@ -27,11 +31,4 @@ export interface LandingClass {
     name?: string | null;
   };
   hasAcceptedInvite: boolean;
-}
-
-export interface TermSection {
-  id: TermBucketId;
-  label: string;
-  meta: string;
-  classes: LandingClass[];
 }

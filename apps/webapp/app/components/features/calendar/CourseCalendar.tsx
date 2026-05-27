@@ -270,11 +270,11 @@ const CourseCalendar = ({
     return (
       <div>
         {/* Header - Days of week */}
-        <div className="grid grid-cols-7 border-b border-stone-200 dark:border-neutral-800">
+        <div className="grid grid-cols-7 border-b border-line">
           {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map(day => (
             <div
               key={day}
-              className="p-2 text-center text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider"
+              className="p-2 text-center text-xs font-medium text-ink-3 uppercase tracking-wider"
             >
               {day}
             </div>
@@ -312,7 +312,7 @@ const CourseCalendar = ({
                           isTodayDate
                             ? 'bg-secondary text-white'
                             : isInCurrentMonth
-                              ? 'text-gray-900 dark:text-gray-100'
+                              ? 'text-ink-0'
                               : 'text-gray-400 dark:text-gray-600'
                         }`}
                       >
@@ -351,7 +351,7 @@ const CourseCalendar = ({
                           >
                             <span className="font-medium truncate">{event.title}</span>
                             {event.is_unpublished && (
-                              <span className="shrink-0 text-[10px] px-1 rounded bg-yellow-200 dark:bg-yellow-800 text-yellow-800 dark:text-yellow-200">
+                              <span className="shrink-0 text-xs px-1 rounded bg-yellow-200 dark:bg-yellow-800 text-yellow-800 dark:text-yellow-200">
                                 Draft
                               </span>
                             )}
@@ -388,7 +388,7 @@ const CourseCalendar = ({
       <div>
         {/* Header */}
         <div
-          className="grid border-b border-stone-200 dark:border-neutral-800"
+          className="grid border-b border-line"
           style={{ gridTemplateColumns: '4rem 1fr 1fr 1fr 1fr 1fr 1fr 1fr' }}
         >
           <div className="p-2 border-r border-gray-200 dark:border-neutral-700" />
@@ -400,13 +400,13 @@ const CourseCalendar = ({
                 className="p-3 border-r border-gray-200 dark:border-neutral-700 last:border-r-0 text-center"
               >
                 <div
-                  className={`text-xs font-medium uppercase tracking-wider ${isTodayDate ? 'text-secondary' : 'text-gray-500 dark:text-gray-400'}`}
+                  className={`text-xs font-medium uppercase tracking-wider ${isTodayDate ? 'text-secondary' : 'text-ink-3'}`}
                 >
                   {getShortDayName(date)}
                 </div>
                 <div
                   className={`text-lg font-semibold mt-1 ${
-                    isTodayDate ? 'text-secondary' : 'text-gray-900 dark:text-gray-100'
+                    isTodayDate ? 'text-secondary' : 'text-ink-0'
                   }`}
                 >
                   {date.getDate()}
@@ -421,7 +421,7 @@ const CourseCalendar = ({
           className="grid border-b border-gray-200 dark:border-neutral-700"
           style={{ gridTemplateColumns: '4rem 1fr 1fr 1fr 1fr 1fr 1fr 1fr' }}
         >
-          <div className="px-1 py-1.5 border-r border-gray-200 dark:border-neutral-700 text-xs text-gray-500 dark:text-gray-400 bg-gray-50/50 dark:bg-neutral-800/30">
+          <div className="px-1 py-1.5 border-r border-gray-200 dark:border-neutral-700 text-xs text-ink-3 bg-gray-50/50 dark:bg-neutral-800/30">
             All day
           </div>
           {dates.map((date, dayIdx) => {
@@ -464,7 +464,7 @@ const CourseCalendar = ({
                       >
                         <span className="font-medium truncate">{event.title}</span>
                         {event.is_unpublished && (
-                          <span className="shrink-0 text-[10px] px-1 rounded bg-yellow-200 dark:bg-yellow-800 text-yellow-800 dark:text-yellow-200">
+                          <span className="shrink-0 text-xs px-1 rounded bg-yellow-200 dark:bg-yellow-800 text-yellow-800 dark:text-yellow-200">
                             Draft
                           </span>
                         )}
@@ -472,7 +472,7 @@ const CourseCalendar = ({
                     </DraggableEvent>
                   ))}
                   {allDayEvents.length > 3 && (
-                    <div className="text-xs text-gray-500 dark:text-gray-400 px-1">
+                    <div className="text-xs text-ink-3 px-1">
                       +{allDayEvents.length - 3} more
                     </div>
                   )}
@@ -501,7 +501,7 @@ const CourseCalendar = ({
               {timeSlots.map(hour => (
                 <div
                   key={hour}
-                  className="h-16 px-1 py-1 text-xs text-gray-500 dark:text-gray-400 border-b border-gray-200 dark:border-neutral-700 text-right"
+                  className="h-16 px-1 py-1 text-xs text-ink-3 border-b border-gray-200 dark:border-neutral-700 text-right"
                 >
                   {hour < 12 ? `${hour} AM` : hour === 12 ? '12 PM' : `${hour - 12} PM`}
                 </div>
@@ -540,7 +540,7 @@ const CourseCalendar = ({
                       <DroppableCell
                         key={hour}
                         id={dropId}
-                        className={`h-16 border-b border-gray-200 dark:border-neutral-700 cursor-pointer transition-colors hover:bg-gray-100 dark:hover:bg-neutral-800/50`}
+                        className={`h-16 border-b border-gray-200 dark:border-neutral-700 cursor-pointer transition-colors hover:bg-nav-hover/50`}
                         onClick={() => {
                           const cellDate = new Date(date);
                           cellDate.setHours(hour, 0, 0, 0);
@@ -645,7 +645,7 @@ const CourseCalendar = ({
       onDragEnd={handleDragEnd}
       onDragCancel={handleDragCancel}
     >
-      <section className="rounded-2xl bg-panel ring-1 ring-stone-200 dark:ring-neutral-800 overflow-hidden min-h-[calc(100vh-10rem)]">
+      <section className="rounded-2xl bg-panel ring-1 ring-line overflow-hidden min-h-[calc(100vh-10rem)]">
         {/* Header: nav + range label + view toggle */}
         <header className="flex flex-wrap items-center justify-between gap-3 px-5 sm:px-6 pt-5 sm:pt-6 pb-4">
           <div className="flex items-center gap-2">
@@ -653,14 +653,14 @@ const CourseCalendar = ({
               type="button"
               onClick={handlePrevious}
               aria-label="Previous"
-              className="p-1.5 rounded-full text-gray-500 hover:text-gray-900 dark:text-gray-400 dark:hover:text-gray-100 hover:bg-stone-100 dark:hover:bg-neutral-800 transition-colors"
+              className="p-1.5 rounded-full text-gray-500 hover:text-gray-900 dark:text-gray-400 dark:hover:text-gray-100 hover:bg-nav-hover transition-colors"
             >
               <IconChevronLeft size={18} />
             </button>
             <button
               type="button"
               onClick={handleToday}
-              className="px-2.5 py-1 text-xs font-medium text-gray-600 dark:text-gray-300 rounded-full hover:bg-stone-100 dark:hover:bg-neutral-800 transition-colors"
+              className="px-2.5 py-1 text-xs font-medium text-gray-600 dark:text-gray-300 rounded-full hover:bg-nav-hover transition-colors"
             >
               Today
             </button>
@@ -668,28 +668,28 @@ const CourseCalendar = ({
               type="button"
               onClick={handleNext}
               aria-label="Next"
-              className="p-1.5 rounded-full text-gray-500 hover:text-gray-900 dark:text-gray-400 dark:hover:text-gray-100 hover:bg-stone-100 dark:hover:bg-neutral-800 transition-colors"
+              className="p-1.5 rounded-full text-gray-500 hover:text-gray-900 dark:text-gray-400 dark:hover:text-gray-100 hover:bg-nav-hover transition-colors"
             >
               <IconChevronRight size={18} />
             </button>
-            <h2 className="ml-2 text-base sm:text-lg font-semibold text-gray-900 dark:text-gray-100 tracking-tight">
+            <h2 className="ml-2 text-base sm:text-lg font-semibold text-ink-0 tracking-tight">
               {getMonthName(currentDate)} {getYear(currentDate)}
               {view === 'week' && (
-                <span className="ml-2 text-sm font-normal text-gray-500 dark:text-gray-400">
+                <span className="ml-2 text-sm font-normal text-ink-3">
                   {getWeekRangeText()}
                 </span>
               )}
             </h2>
           </div>
 
-          <div className="flex items-center bg-stone-100 dark:bg-neutral-800 rounded-full p-0.5">
+          <div className="flex items-center bg-nav-hover rounded-full p-0.5">
             <button
               type="button"
               onClick={() => setView('week')}
               className={`px-3.5 py-1 text-xs font-medium rounded-full transition-all ${
                 view === 'week'
-                  ? 'bg-white dark:bg-neutral-700 text-gray-900 dark:text-gray-100 shadow-sm'
-                  : 'text-gray-500 dark:text-gray-400'
+                  ? 'bg-white dark:bg-neutral-700 text-ink-0 shadow-sm'
+                  : 'text-ink-3'
               }`}
             >
               Week
@@ -699,8 +699,8 @@ const CourseCalendar = ({
               onClick={() => setView('month')}
               className={`px-3.5 py-1 text-xs font-medium rounded-full transition-all ${
                 view === 'month'
-                  ? 'bg-white dark:bg-neutral-700 text-gray-900 dark:text-gray-100 shadow-sm'
-                  : 'text-gray-500 dark:text-gray-400'
+                  ? 'bg-white dark:bg-neutral-700 text-ink-0 shadow-sm'
+                  : 'text-ink-3'
               }`}
             >
               Month
@@ -734,7 +734,7 @@ const CourseCalendar = ({
           })}
         </div>
 
-        <div className="border-t border-stone-200 dark:border-neutral-800 overflow-x-auto">
+        <div className="border-t border-line overflow-x-auto">
           {view === 'month' ? renderMonthView() : renderWeekView()}
         </div>
       </section>

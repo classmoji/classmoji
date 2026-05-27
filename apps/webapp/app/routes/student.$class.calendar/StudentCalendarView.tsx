@@ -140,7 +140,7 @@ const StudentCalendarView = ({ events, onEventClick, onMonthChange }: StudentCal
       <div>
         {/* Day header row */}
         <div
-          className="grid border-b border-stone-200 dark:border-neutral-800"
+          className="grid border-b border-line"
           style={{ gridTemplateColumns: '4rem repeat(7, minmax(0, 1fr))' }}
         >
           <div />
@@ -148,12 +148,12 @@ const StudentCalendarView = ({ events, onEventClick, onMonthChange }: StudentCal
             const isDayToday = isToday(d);
             return (
               <div key={idx} className="flex flex-col items-center py-4">
-                <span className="text-[10px] font-semibold tracking-[0.16em] text-gray-400 dark:text-gray-500">
+                <span className="text-xs font-semibold tracking-[0.16em] text-ink-4">
                   {DAY_LABELS[idx]}
                 </span>
                 <span
                   className={`mt-2 flex items-center justify-center w-8 h-8 rounded-full text-sm font-semibold ${
-                    isDayToday ? 'text-white' : 'text-gray-800 dark:text-gray-200'
+                    isDayToday ? 'text-white' : 'text-ink-1'
                   }`}
                   style={isDayToday ? { backgroundColor: 'var(--accent)' } : undefined}
                 >
@@ -167,7 +167,7 @@ const StudentCalendarView = ({ events, onEventClick, onMonthChange }: StudentCal
         {/* All-day / deadline strip */}
         {hasAnyAllDay && (
           <div
-            className="grid border-b border-stone-200 dark:border-neutral-800"
+            className="grid border-b border-line"
             style={{ gridTemplateColumns: '4rem repeat(7, minmax(0, 1fr))' }}
           >
             <div />
@@ -176,7 +176,7 @@ const StudentCalendarView = ({ events, onEventClick, onMonthChange }: StudentCal
               return (
                 <div
                   key={dayIdx}
-                  className="px-1.5 py-1.5 border-l border-stone-200/70 dark:border-neutral-800 first:border-l-0 flex flex-col gap-1 min-h-[2.25rem]"
+                  className="px-1.5 py-1.5 border-l border-line first:border-l-0 flex flex-col gap-1 min-h-[2.25rem]"
                 >
                   {allDay.map(event => {
                     const type = event.is_deadline ? 'DEADLINE' : (event.event_type ?? 'OTHER');
@@ -188,11 +188,11 @@ const StudentCalendarView = ({ events, onEventClick, onMonthChange }: StudentCal
                         onClick={() => onEventClick?.(event)}
                         className={`text-left rounded-md px-2 py-1 ${getEventTypeLightBg(type)} ${getEventTypeDarkText(type)} hover:shadow-sm transition-shadow`}
                       >
-                        <div className="text-[12px] font-semibold leading-tight truncate">
+                        <div className="text-xs font-semibold leading-tight truncate">
                           {event.title}
                         </div>
                         {event.is_deadline && (
-                          <div className="text-[10px] opacity-80 leading-tight truncate">
+                          <div className="text-xs opacity-80 leading-tight truncate">
                             due {dayjs(start).format(start.getMinutes() === 0 ? 'h A' : 'h:mm A')}
                           </div>
                         )}
@@ -220,7 +220,7 @@ const StudentCalendarView = ({ events, onEventClick, onMonthChange }: StudentCal
               return (
                 <div
                   key={hour}
-                  className="absolute right-3 text-[11px] font-medium text-gray-400 dark:text-gray-500 flex flex-col items-end leading-tight"
+                  className="absolute right-3 text-xs font-medium text-ink-4 flex flex-col items-end leading-tight"
                   style={{ top: `${i * HOUR_HEIGHT_PX + 4}px` }}
                 >
                   <span>{h}</span>
@@ -239,7 +239,7 @@ const StudentCalendarView = ({ events, onEventClick, onMonthChange }: StudentCal
               i === 0 ? null : (
                 <div
                   key={hour}
-                  className="absolute left-0 right-0 border-t border-stone-200/70 dark:border-neutral-800"
+                  className="absolute left-0 right-0 border-t border-line"
                   style={{ top: `${i * HOUR_HEIGHT_PX}px` }}
                 />
               )
@@ -253,7 +253,7 @@ const StudentCalendarView = ({ events, onEventClick, onMonthChange }: StudentCal
             return (
               <div
                 key={dayIdx}
-                className="relative border-l border-stone-200/70 dark:border-neutral-800 first:border-l-0"
+                className="relative border-l border-line first:border-l-0"
                 style={{ gridColumn: dayIdx + 2 }}
               >
                 {dayEvents.map(event => {
@@ -275,10 +275,10 @@ const StudentCalendarView = ({ events, onEventClick, onMonthChange }: StudentCal
                       className={`absolute left-2 right-2 rounded-lg px-2.5 py-1.5 text-left overflow-hidden transition-all hover:shadow-sm focus:outline-hidden focus:ring-2 focus:ring-violet-400/50 ${getEventTypeLightBg(type)} ${getEventTypeDarkText(type)}`}
                       style={{ top: `${top}px`, height: `${height}px` }}
                     >
-                      <div className="text-[13px] font-semibold leading-tight truncate">
+                      <div className="text-sm font-semibold leading-tight truncate">
                         {event.title}
                       </div>
-                      <div className="text-[11px] opacity-80 leading-tight truncate mt-0.5">
+                      <div className="text-xs opacity-80 leading-tight truncate mt-0.5">
                         {dayjs(start).format(start.getMinutes() === 0 ? 'h A' : 'h:mm A')}
                       </div>
                     </button>
@@ -312,11 +312,11 @@ const StudentCalendarView = ({ events, onEventClick, onMonthChange }: StudentCal
 
     return (
       <div>
-        <div className="grid grid-cols-7 border-b border-stone-200 dark:border-neutral-800">
+        <div className="grid grid-cols-7 border-b border-line">
           {['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'].map(d => (
             <div
               key={d}
-              className="py-3 text-center text-[10px] font-semibold tracking-[0.16em] text-gray-400 dark:text-gray-500"
+              className="py-3 text-center text-xs font-semibold tracking-[0.16em] text-ink-4"
             >
               {d}
             </div>
@@ -326,7 +326,7 @@ const StudentCalendarView = ({ events, onEventClick, onMonthChange }: StudentCal
           {weeks.map((week, wIdx) => (
             <div
               key={wIdx}
-              className="grid grid-cols-7 border-b border-stone-200 dark:border-neutral-800 last:border-b-0"
+              className="grid grid-cols-7 border-b border-line last:border-b-0"
             >
               {week.map((date, dIdx) => {
                 const dayEvents = getEventsForDate(date);
@@ -337,7 +337,7 @@ const StudentCalendarView = ({ events, onEventClick, onMonthChange }: StudentCal
                 return (
                   <div
                     key={dIdx}
-                    className={`min-h-[110px] p-2 border-l border-stone-200/70 dark:border-neutral-800 first:border-l-0 flex flex-col gap-1 ${
+                    className={`min-h-[110px] p-2 border-l border-line first:border-l-0 flex flex-col gap-1 ${
                       !inMonth ? 'bg-stone-50/70 dark:bg-neutral-900/40' : ''
                     }`}
                   >
@@ -347,7 +347,7 @@ const StudentCalendarView = ({ events, onEventClick, onMonthChange }: StudentCal
                           isDayToday
                             ? 'text-white'
                             : inMonth
-                              ? 'text-gray-800 dark:text-gray-200'
+                              ? 'text-ink-1'
                               : 'text-gray-400 dark:text-gray-600'
                         }`}
                         style={isDayToday ? { backgroundColor: 'var(--accent)' } : undefined}
@@ -363,14 +363,14 @@ const StudentCalendarView = ({ events, onEventClick, onMonthChange }: StudentCal
                             type="button"
                             key={event.id}
                             onClick={() => onEventClick?.(event)}
-                            className={`text-left text-[11px] rounded px-1.5 py-1 truncate ${getEventTypeLightBg(type)} ${getEventTypeDarkText(type)}`}
+                            className={`text-left text-xs rounded px-1.5 py-1 truncate ${getEventTypeLightBg(type)} ${getEventTypeDarkText(type)}`}
                           >
                             {event.title}
                           </button>
                         );
                       })}
                       {overflow > 0 && (
-                        <span className="text-[10px] text-gray-500 dark:text-gray-400 pl-1">
+                        <span className="text-xs text-ink-3 pl-1">
                           +{overflow} more
                         </span>
                       )}
@@ -386,21 +386,21 @@ const StudentCalendarView = ({ events, onEventClick, onMonthChange }: StudentCal
   };
 
   return (
-    <section className="rounded-2xl bg-panel ring-1 ring-stone-200 dark:ring-neutral-800 overflow-hidden min-h-[calc(100vh-10rem)]">
+    <section className="rounded-2xl bg-panel ring-1 ring-line overflow-hidden min-h-[calc(100vh-10rem)]">
       <header className="flex flex-wrap items-center justify-between gap-3 px-5 sm:px-6 pt-5 sm:pt-6 pb-4">
         <div className="flex items-center gap-2">
           <button
             type="button"
             onClick={handlePrev}
             aria-label="Previous"
-            className="p-1.5 rounded-full text-gray-500 hover:text-gray-900 dark:text-gray-400 dark:hover:text-gray-100 hover:bg-stone-100 dark:hover:bg-neutral-800 transition-colors"
+            className="p-1.5 rounded-full text-gray-500 hover:text-gray-900 dark:text-gray-400 dark:hover:text-gray-100 hover:bg-nav-hover transition-colors"
           >
             <IconChevronLeft size={18} />
           </button>
           <button
             type="button"
             onClick={handleToday}
-            className="px-2.5 py-1 text-xs font-medium text-gray-600 dark:text-gray-300 rounded-full hover:bg-stone-100 dark:hover:bg-neutral-800 transition-colors"
+            className="px-2.5 py-1 text-xs font-medium text-gray-600 dark:text-gray-300 rounded-full hover:bg-nav-hover transition-colors"
           >
             Today
           </button>
@@ -408,23 +408,23 @@ const StudentCalendarView = ({ events, onEventClick, onMonthChange }: StudentCal
             type="button"
             onClick={handleNext}
             aria-label="Next"
-            className="p-1.5 rounded-full text-gray-500 hover:text-gray-900 dark:text-gray-400 dark:hover:text-gray-100 hover:bg-stone-100 dark:hover:bg-neutral-800 transition-colors"
+            className="p-1.5 rounded-full text-gray-500 hover:text-gray-900 dark:text-gray-400 dark:hover:text-gray-100 hover:bg-nav-hover transition-colors"
           >
             <IconChevronRight size={18} />
           </button>
-          <h2 className="ml-2 text-base sm:text-lg font-semibold text-gray-900 dark:text-gray-100 tracking-tight">
+          <h2 className="ml-2 text-base sm:text-lg font-semibold text-ink-0 tracking-tight">
             {view === 'week' ? weekRangeLabel : monthLabel}
           </h2>
         </div>
 
-        <div className="flex items-center bg-stone-100 dark:bg-neutral-800 rounded-full p-0.5">
+        <div className="flex items-center bg-nav-hover rounded-full p-0.5">
           <button
             type="button"
             onClick={() => setView('week')}
             className={`px-3.5 py-1 text-xs font-medium rounded-full transition-all ${
               view === 'week'
-                ? 'bg-white dark:bg-neutral-700 text-gray-900 dark:text-gray-100 shadow-sm'
-                : 'text-gray-500 dark:text-gray-400'
+                ? 'bg-white dark:bg-neutral-700 text-ink-0 shadow-sm'
+                : 'text-ink-3'
             }`}
           >
             Week
@@ -434,8 +434,8 @@ const StudentCalendarView = ({ events, onEventClick, onMonthChange }: StudentCal
             onClick={() => setView('month')}
             className={`px-3.5 py-1 text-xs font-medium rounded-full transition-all ${
               view === 'month'
-                ? 'bg-white dark:bg-neutral-700 text-gray-900 dark:text-gray-100 shadow-sm'
-                : 'text-gray-500 dark:text-gray-400'
+                ? 'bg-white dark:bg-neutral-700 text-ink-0 shadow-sm'
+                : 'text-ink-3'
             }`}
           >
             Month
@@ -454,7 +454,7 @@ const StudentCalendarView = ({ events, onEventClick, onMonthChange }: StudentCal
         </div>
       )}
 
-      <div className="border-t border-stone-200 dark:border-neutral-800 overflow-x-auto">
+      <div className="border-t border-line overflow-x-auto">
         {view === 'week' ? renderWeek() : renderMonth()}
       </div>
     </section>

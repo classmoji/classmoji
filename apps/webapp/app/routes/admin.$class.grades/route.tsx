@@ -5,7 +5,7 @@ import { Skeleton } from 'antd';
 import GradesTable from './GradesTable';
 import { ClassmojiService } from '@classmoji/services';
 import { addAuditLog } from '~/utils/helpers';
-import { requireClassroomAdmin } from '~/utils/routeAuth.server';
+import { requireClassroomAdmin, assertClassroomMutationAllowed } from '~/utils/routeAuth.server';
 import type { Route } from './+types/route';
 
 export const loader = async ({ request, params }: Route.LoaderArgs) => {
@@ -46,7 +46,7 @@ const Grades = ({ loaderData }: Route.ComponentProps) => {
       <Suspense
         fallback={
           <div className="min-h-full">
-            <h1 className="mt-2 mb-4 text-base font-semibold text-gray-600 dark:text-gray-400">
+            <h1 className="mt-2 mb-4 text-base font-semibold text-ink-2">
               Grades
             </h1>
             <Skeleton active />
@@ -86,10 +86,11 @@ const Grades = ({ loaderData }: Route.ComponentProps) => {
 export const action = async ({ request, params }: Route.ActionArgs) => {
   const { class: classSlug } = params;
 
-  await requireClassroomAdmin(request, classSlug!, {
+  const { classroom, membership } = await requireClassroomAdmin(request, classSlug!, {
     resourceType: 'GRADES',
     action: 'update_grades',
   });
+  assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
 
   const data = await request.json();
   const { membership_id, letter_grade } = data;

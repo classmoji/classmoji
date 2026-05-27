@@ -4,11 +4,11 @@ interface GradeBadgeProps {
 
 const GradeBadge = ({ grade }: GradeBadgeProps) => {
   if (grade === null || grade === undefined || isNaN(grade)) {
-    return <span className="text-sm text-gray-400 dark:text-gray-500">—</span>;
+    return <span className="text-sm text-ink-4">—</span>;
   }
 
   return (
-    <span className="text-sm font-medium text-gray-800 dark:text-gray-200 tabular-nums">
+    <span className="text-sm font-medium text-ink-1 tabular-nums">
       {grade.toFixed(1)}%
     </span>
   );

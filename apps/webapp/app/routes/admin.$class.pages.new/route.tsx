@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { useNavigate, useFetcher } from 'react-router';
 import { Form, Button, Alert, Modal, Tabs } from 'antd';
 import { FileTextOutlined, UploadOutlined } from '@ant-design/icons';
-import { assertClassroomAccess } from '~/utils/helpers';
+import { assertClassroomAccess, assertClassroomMutationAllowed } from '~/utils/helpers';
 import { ClassmojiService, getGitProvider } from '@classmoji/services';
 import { useCallout } from '@classmoji/ui-components';
 import { ContentService } from '@classmoji/content';
@@ -11,7 +11,6 @@ import { wrapHtmlContent } from '~/utils/htmlWrapper';
 import ImportTab from './ImportTab';
 import CreateBlankTab from './CreateBlankTab';
 import BatchImportTab from './BatchImportTab';
-import { generateTermString } from '@classmoji/utils';
 import { useRouteDrawer } from '~/hooks';
 import { generatePageTemplate } from './utils';
 import type { Route } from './+types/route';
@@ -27,12 +26,11 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
     attemptedAction: 'create_page',
   });
 
-  // Generate term from classroom settings
-  const term = generateTermString(classroom.term ?? undefined, classroom.year ?? undefined);
+  const contentNamespace = classroom.content_namespace;
 
   // Include slug for navigation and gitOrgLogin for API calls
   return {
-    term,
+    contentNamespace,
     classroom: {
       ...classroom,
       slug: classroom.slug, // For navigation URLs
@@ -46,13 +44,14 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
   const formData = await request.formData();
   const intent = formData.get('intent');
 
-  const { classroom, userId } = await assertClassroomAccess({
+  const { classroom, userId, membership } = await assertClassroomAccess({
     request,
     classroomSlug: classSlug!,
     allowedRoles: ['OWNER', 'TEACHER'],
     resourceType: 'PAGES',
     attemptedAction: 'create_page',
   });
+  assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
 
   // Use git_organization.login for GitHub API calls, not the classroom slug
   const gitOrgLogin = classroom.git_organization?.login;
@@ -60,7 +59,10 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
     return { error: 'Git organization not configured' };
   }
 
-  const term = formData.get('term');
+  const contentNamespace = classroom.content_namespace;
+  if (!contentNamespace) {
+    return { error: 'Classroom content namespace not configured' };
+  }
 
   // Single page import/create
   const title = formData.get('title') as string;
@@ -71,8 +73,8 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-|-$/g, '');
 
-  // Content repo name: content-{gitOrgLogin}-{term}
-  const repoName = `content-${gitOrgLogin}-${term}`;
+  // Content repo name: content-{gitOrgLogin}-{contentNamespace}
+  const repoName = `content-${gitOrgLogin}-${contentNamespace}`;
 
   // Flat content path: pages/{slug}
   const contentPath = `pages/${slug}`;
@@ -86,7 +88,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
         await gitProvider.createPublicRepository(
           gitOrgLogin,
           repoName,
-          `Course content for ${classroom.name || gitOrgLogin} - ${term}`
+          `Course content for ${classroom.name || gitOrgLogin} - ${contentNamespace}`
         );
 
         // Give GitHub a moment to initialize the repo
@@ -275,7 +277,7 @@ interface BatchPage {
 }
 
 export default function NewPage({ loaderData }: Route.ComponentProps) {
-  const { term, classroom } = loaderData;
+  const { contentNamespace, classroom } = loaderData;
   const fetcher = useFetcher();
   const navigate = useNavigate();
   const { opened, close } = useRouteDrawer({});
@@ -329,7 +331,7 @@ export default function NewPage({ loaderData }: Route.ComponentProps) {
       const initFormData = new FormData();
       initFormData.append('intent', 'batch-init');
       initFormData.append('classSlug', classroom.slug);
-      initFormData.append('term', String(term));
+      initFormData.append('contentNamespace', String(contentNamespace ?? ''));
 
       const initResponse = await fetch('/api/pages/batch', {
         method: 'POST',
@@ -352,7 +354,7 @@ export default function NewPage({ loaderData }: Route.ComponentProps) {
         const formData = new FormData();
         formData.append('intent', 'batch-import-single');
         formData.append('classSlug', classroom.slug);
-        formData.append('term', String(term));
+        formData.append('contentNamespace', String(contentNamespace ?? ''));
         formData.append('title', page.title);
         if (page.repository) formData.append('repository', page.repository);
         if (page.assignmentId) formData.append('assignmentId', page.assignmentId);
@@ -412,7 +414,7 @@ export default function NewPage({ loaderData }: Route.ComponentProps) {
 
   const handleSubmit = (values: Record<string, string>) => {
     const formData = new FormData();
-    formData.append('term', String(term));
+    formData.append('contentNamespace', String(contentNamespace ?? ''));
 
     if (activeTab === 'batch') {
       // Handle batch import with progress
@@ -456,7 +458,9 @@ export default function NewPage({ loaderData }: Route.ComponentProps) {
     {
       key: 'batch',
       label: 'Batch Import',
-      children: <BatchImportTab term={term ?? ''} onPagesChange={setBatchPages} />,
+      children: (
+        <BatchImportTab contentNamespace={contentNamespace ?? ''} onPagesChange={setBatchPages} />
+      ),
     },
   ];
 
@@ -471,17 +475,17 @@ export default function NewPage({ loaderData }: Route.ComponentProps) {
       closable={false}
       maskClosable={!isCreating}
       styles={{
-        content: { padding: 0, borderRadius: 16, overflow: 'hidden' },
+        content: { padding: 0, borderRadius: 16, overflow: 'hidden', maxWidth: '90vw' },
         body: { padding: 0 },
         header: { display: 'none' },
         footer: { display: 'none' },
       }}
     >
       {/* Gmail-style header */}
-      <div className="flex items-center justify-between gap-3 px-5 py-3 bg-stone-50 dark:bg-neutral-800/60 border-b border-stone-200 dark:border-neutral-800">
+      <div className="flex items-center justify-between gap-3 px-5 py-3 bg-stone-50 dark:bg-neutral-800/60 border-b border-line">
         <div className="flex flex-col">
-          <span className="text-sm font-semibold text-gray-900 dark:text-gray-100">New page</span>
-          <span className="text-[11px] font-normal text-gray-500 dark:text-gray-400">
+          <span className="text-sm font-semibold text-ink-0">New page</span>
+          <span className="text-xs font-normal text-ink-3">
             Create a blank page, import from markdown, or batch import.
           </span>
         </div>
@@ -490,7 +494,7 @@ export default function NewPage({ loaderData }: Route.ComponentProps) {
           onClick={close}
           aria-label="Close"
           disabled={isCreating}
-          className="p-1 rounded hover:bg-stone-200 dark:hover:bg-neutral-700 text-gray-500 dark:text-gray-400 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+          className="p-1 rounded hover:bg-line text-ink-3 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
         >
           <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
             <path

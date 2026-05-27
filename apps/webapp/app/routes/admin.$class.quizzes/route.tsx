@@ -4,7 +4,7 @@ import { IconSend, IconBook, IconCalendar, IconTrash } from '@tabler/icons-react
 import { TableActionButtons, EditableCell, ButtonNew } from '~/components';
 import { ClassmojiService } from '@classmoji/services';
 import { namedAction } from 'remix-utils/named-action';
-import { assertClassroomAccess } from '~/utils/helpers';
+import { assertClassroomAccess, assertClassroomMutationAllowed, assertProTier } from '~/utils/helpers';
 import type { Route } from './+types/route';
 import type React from 'react';
 import type { TablerIconsProps } from '@tabler/icons-react';
@@ -53,6 +53,8 @@ export async function loader({ params, request }: Route.LoaderArgs) {
     resourceType: 'ADMIN_QUIZ_ACCESS',
     attemptedAction: 'view_admin_quizzes',
   });
+
+  await assertProTier(classSlug);
 
   // Get classroom settings
   const settings = await ClassmojiService.classroom.getClassroomSettingsForServer(classroom.id);
@@ -124,7 +126,7 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
 
   const data = await request.json();
 
-  const { userId, classroom } = await assertClassroomAccess({
+  const { userId, classroom, membership } = await assertClassroomAccess({
     request,
     classroomSlug: classSlug,
     allowedRoles: ['OWNER', 'ASSISTANT'],
@@ -134,6 +136,8 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
       quiz_id: data.id || null,
     },
   });
+  assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
+  await assertProTier(classSlug);
 
   // Create FormData with the action from the JSON
   const formData = new FormData();
@@ -294,7 +298,7 @@ export default function AdminQuizzes({ loaderData }: Route.ComponentProps) {
       width: '25%',
       sorter: (a: AdminQuiz, b: AdminQuiz) => a.name.localeCompare(b.name),
       render: (name: string) => (
-        <span className="font-medium text-gray-800 dark:text-gray-200">{name}</span>
+        <span className="font-medium text-ink-1">{name}</span>
       ),
     },
     {
@@ -305,7 +309,7 @@ export default function AdminQuizzes({ loaderData }: Route.ComponentProps) {
       sorter: (a: AdminQuiz, b: AdminQuiz) => a.moduleTitle.localeCompare(b.moduleTitle),
       render: (title: string) => (
         <Space>
-          <IconBook size={17} className="text-gray-400" />
+          <IconBook size={16} className="text-gray-400" />
           <Text type="secondary">{title}</Text>
         </Space>
       ),
@@ -337,7 +341,7 @@ export default function AdminQuizzes({ loaderData }: Route.ComponentProps) {
       render: (dueDate: string | null) =>
         dueDate ? (
           <Space>
-            <IconCalendar size={17} className="text-gray-400" />
+            <IconCalendar size={16} className="text-gray-400" />
             <Text>{new Date(dueDate).toLocaleDateString()}</Text>
           </Space>
         ) : (
@@ -418,7 +422,7 @@ export default function AdminQuizzes({ loaderData }: Route.ComponentProps) {
       <Outlet />
 
       <div className="flex items-center justify-between gap-3 mt-2 mb-4">
-        <h1 className="text-base font-semibold text-gray-600 dark:text-gray-400">Quizzes</h1>
+        <h1 className="text-base font-semibold text-ink-2">Quizzes</h1>
 
         <Space>
           <Popconfirm

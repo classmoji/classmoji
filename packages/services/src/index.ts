@@ -19,7 +19,6 @@ export {
   getGitHubProvider,
   getTeamNameForClassroom,
   ensureClassroomTeam,
-  getTermCode,
   Octokit,
 } from './git/index.ts';
 

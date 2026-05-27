@@ -7,7 +7,7 @@ import { useGlobalFetcher, useDisclosure } from '~/hooks';
 import { ClassmojiService, getGitProvider, GitHubProvider } from '@classmoji/services';
 import { GetTeamAvatarQuery } from './queries';
 import { ActionTypes } from '~/constants';
-import { requireClassroomAdmin } from '~/utils/routeAuth.server';
+import { requireClassroomAdmin, assertClassroomMutationAllowed } from '~/utils/routeAuth.server';
 import type { Route } from './+types/route';
 
 export const loader = async ({ params, request }: Route.LoaderArgs) => {
@@ -115,10 +115,11 @@ const AdminNewTeam = ({ loaderData }: Route.ComponentProps) => {
 export const action = async ({ request, params }: Route.ActionArgs) => {
   const classSlug = params.class!;
 
-  const { classroom } = await requireClassroomAdmin(request, classSlug, {
+  const { classroom, membership } = await requireClassroomAdmin(request, classSlug, {
     resourceType: 'TEAMS',
     action: 'create_team',
   });
+  assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
 
   const data = await request.json();
   const { name, visibility: _visibility, tags } = data;

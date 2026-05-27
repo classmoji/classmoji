@@ -40,7 +40,7 @@ export function generateCalendarSignature(slug: string) {
   if (!CALENDAR_SECRET) {
     return null;
   }
-  return crypto.createHmac('sha256', CALENDAR_SECRET).update(slug).digest('hex').slice(0, 16);
+  return crypto.createHmac('sha256', CALENDAR_SECRET).update(slug).digest('hex');
 }
 
 /**

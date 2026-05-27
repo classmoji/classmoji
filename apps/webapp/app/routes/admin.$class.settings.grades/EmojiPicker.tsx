@@ -22,27 +22,25 @@ const EmojiPicker = ({ setEmoji, emoji }: EmojiPickerProps) => {
   });
 
   return (
-    <div className="relative w-full">
-      <div
+    <div className="relative">
+      <button
+        type="button"
         onClick={() => setIsOpen(true)}
-        className="h-[75px]  border border-gray-300 rounded-md cursor-pointer"
+        className="h-9 min-w-[120px] px-3 border border-line rounded-lg cursor-pointer bg-panel hover:bg-panel-hover transition-colors flex items-center gap-2"
       >
         {emoji ? (
-          <Emoji
-            emoji={emoji}
-            fontSize={40}
-            className="flex items-center justify-center w-full h-full"
-          />
+          <>
+            <Emoji emoji={emoji} size="sm" />
+            <span className="text-sm text-ink-1">{emoji}</span>
+          </>
         ) : (
-          <p className="text-gray-500 text-center flex items-center justify-center h-full">
-            Choose an emoji
-          </p>
+          <span className="text-sm text-ink-4">Pick emoji...</span>
         )}
-      </div>
+      </button>
 
       {isOpen && (
         <div
-          className="absolute top-[85px] transform z-10 shadow-lg"
+          className="absolute top-11 z-10 shadow-lg rounded-xl overflow-hidden"
           ref={ref as React.RefObject<HTMLDivElement>}
         >
           <Picker data={data} onEmojiSelect={handleEmojiSelect} />

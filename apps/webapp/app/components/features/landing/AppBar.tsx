@@ -1,4 +1,5 @@
-import { Logo, IconSupport, IconChevron } from '@classmoji/ui-components';
+import { Link } from 'react-router';
+import { Logo, IconDocs, IconChevron } from '@classmoji/ui-components';
 import ProfileDropdown from '~/components/features/profile/ProfileDropdown';
 import { getInitials } from '~/utils/hue';
 import {
@@ -14,68 +15,25 @@ interface AppBarProps {
   membershipRoles?: Record<string, NotificationRole[]>;
 }
 
-const tabBtn = (active: boolean): React.CSSProperties => ({
-  padding: '6px 14px',
-  borderRadius: 6,
-  fontSize: 13.5,
-  fontWeight: active ? 600 : 500,
-  color: active ? 'var(--ink-0)' : 'var(--ink-2)',
-  background: 'transparent',
-  cursor: 'pointer',
-  border: 'none',
-});
-
-const iconBtn: React.CSSProperties = {
-  width: 36,
-  height: 36,
-  borderRadius: 8,
-  display: 'grid',
-  placeItems: 'center',
-  color: 'var(--ink-2)',
-  background: 'transparent',
-  border: 'none',
-  cursor: 'pointer',
-};
-
 export function AppBar({ user, notifications, unreadCount, membershipRoles }: AppBarProps) {
   const initials = getInitials(user?.name, user?.login);
   return (
-    <header
-      style={{
-        position: 'sticky',
-        top: 0,
-        zIndex: 10,
-        display: 'flex',
-        justifyContent: 'space-between',
-        alignItems: 'center',
-        gap: 24,
-        padding: '0 28px',
-        height: 60,
-        borderBottom: '1px solid var(--line)',
-        background: 'var(--bg-1)',
-      }}
-    >
-      {/* Left group: brand + primary nav */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 22 }}>
+    <div className="sticky top-0 z-10 pt-3 max-w-[1280px] mx-auto px-8">
+    <header className="flex items-center justify-between h-[52px] px-6 rounded-2xl bg-white/80 dark:bg-neutral-900/80 backdrop-blur-xl ring-1 ring-line shadow-sm">
+      <Link to="/select-organization" className="flex items-center gap-2 text-[#0d0d10] dark:text-white">
         <Logo variant="full" size={24} theme="current" />
+      </Link>
 
-        <nav style={{ display: 'flex', gap: 2 }}>
-          <button type="button" style={tabBtn(true)}>
-            Classes
-          </button>
-          <button type="button" style={tabBtn(false)}>
-            Inbox
-          </button>
-          <button type="button" style={tabBtn(false)}>
-            Explore
-          </button>
-        </nav>
-      </div>
-
-      {/* Right group: help / bell / user */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-        <button type="button" title="What's new" style={iconBtn}>
-          <IconSupport size={16} />
+      <div className="flex items-center gap-1.5">
+        <button
+          type="button"
+          title="Help & docs"
+          className="w-9 h-9 rounded-lg grid place-items-center text-ink-3 hover:bg-nav-hover transition-colors cursor-pointer border-none bg-transparent"
+          onClick={() =>
+            window.open('https://classmoji.io/docs', '_blank', 'noopener,noreferrer')
+          }
+        >
+          <IconDocs size={16} />
         </button>
         <NotificationBell
           initialItems={notifications ?? []}
@@ -86,38 +44,18 @@ export function AppBar({ user, notifications, unreadCount, membershipRoles }: Ap
         <ProfileDropdown>
           <button
             type="button"
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: 8,
-              padding: '3px 10px 3px 3px',
-              borderRadius: 24,
-              border: '1px solid var(--line)',
-              background: 'var(--bg-1)',
-              fontSize: 13,
-              cursor: 'pointer',
-              marginLeft: 4,
-            }}
+            className="flex items-center gap-2 py-0.5 pl-0.5 pr-2.5 rounded-full border border-line bg-panel hover:bg-nav-hover cursor-pointer ml-1 transition-colors text-sm"
           >
             {user?.avatar_url ? (
               <img
                 src={user.avatar_url}
                 alt={user?.name ?? user?.login ?? 'User'}
-                style={{ width: 28, height: 28, borderRadius: '50%' }}
+                className="w-7 h-7 rounded-full"
               />
             ) : (
               <span
-                style={{
-                  width: 28,
-                  height: 28,
-                  borderRadius: '50%',
-                  background: 'linear-gradient(135deg, oklch(80% 0.1 310), oklch(60% 0.18 310))',
-                  color: 'white',
-                  display: 'grid',
-                  placeItems: 'center',
-                  fontSize: 12,
-                  fontWeight: 600,
-                }}
+                className="w-7 h-7 rounded-full grid place-items-center text-white text-xs font-semibold"
+                style={{ background: 'linear-gradient(135deg, oklch(80% 0.1 310), oklch(60% 0.18 310))' }}
               >
                 {initials}
               </span>
@@ -127,5 +65,6 @@ export function AppBar({ user, notifications, unreadCount, membershipRoles }: Ap
         </ProfileDropdown>
       </div>
     </header>
+    </div>
   );
 }

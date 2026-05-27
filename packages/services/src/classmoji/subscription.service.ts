@@ -82,8 +82,11 @@ export const deleteByUserId = async (userId: string): Promise<SubscriptionRecord
 };
 
 export const getByClassroom = async (classroomSlug: string): Promise<CurrentSubscription> => {
-  // organizationLogin is now classroomSlug
-  const classroom = await getPrisma().classroom.findUnique({
+  // Classroom slug is unique per git_organization (compound unique), not globally,
+  // so we use findFirst here. Callers reach this via authenticated routes that have
+  // already constrained the user to a specific classroom, making a same-slug
+  // collision in another org irrelevant to the result.
+  const classroom = await getPrisma().classroom.findFirst({
     where: { slug: classroomSlug },
     include: {
       memberships: {

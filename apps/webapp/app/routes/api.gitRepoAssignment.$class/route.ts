@@ -4,7 +4,7 @@ import { tasks } from '@trigger.dev/sdk';
 
 import { ClassmojiService, HelperService } from '@classmoji/services';
 import { ActionTypes } from '~/constants';
-import { assertClassroomAccess, waitForRunCompletion } from '~/utils/helpers';
+import { assertClassroomAccess, waitForRunCompletion, assertClassroomMutationAllowed } from '~/utils/helpers';
 import type { Route } from './+types/route';
 
 export const action = async ({ params, request }: Route.ActionArgs) => {
@@ -13,7 +13,7 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
 
   return namedAction(request, {
     async autograde() {
-      const { userId: _userId, classroom: _classroom } = await assertClassroomAccess({
+      const { userId: _userId, classroom, membership } = await assertClassroomAccess({
         request,
         classroomSlug: classSlug,
         allowedRoles: ['OWNER', 'TEACHER'],
@@ -21,6 +21,7 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
         attemptedAction: 'autograde',
         metadata: { workflowName: data.workflowName },
       });
+      assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
 
       try {
         const run = await tasks.trigger('dispatch_autograde_workflow', {
@@ -43,7 +44,7 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
     },
 
     async addGrade() {
-      const { userId: _userId, classroom } = await assertClassroomAccess({
+      const { userId: _userId, classroom, membership } = await assertClassroomAccess({
         request,
         classroomSlug: classSlug,
         allowedRoles: ['OWNER', 'TEACHER', 'ASSISTANT'],
@@ -51,6 +52,7 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
         attemptedAction: 'add_grade',
         metadata: { assignment_id: data.gitRepoAssignment?.assignment_id },
       });
+      assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
 
       const { gitRepoAssignment, graderId, grade, studentId, teamId } = data;
 
@@ -70,7 +72,7 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
     },
 
     async removeGrade() {
-      const { userId: _userId2, classroom } = await assertClassroomAccess({
+      const { userId: _userId2, classroom, membership } = await assertClassroomAccess({
         request,
         classroomSlug: classSlug,
         allowedRoles: ['OWNER', 'TEACHER', 'ASSISTANT'],
@@ -78,6 +80,7 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
         attemptedAction: 'remove_grade',
         metadata: { assignment_id: data.gitRepoAssignment?.assignment_id },
       });
+      assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
 
       const { grade, gitRepoAssignment } = data;
 
@@ -94,7 +97,7 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
     },
 
     async updateLateOverride() {
-      const { userId: _userId3, classroom: _classroom2 } = await assertClassroomAccess({
+      const { userId: _userId3, classroom, membership } = await assertClassroomAccess({
         request,
         classroomSlug: classSlug,
         allowedRoles: ['OWNER', 'TEACHER'],
@@ -102,6 +105,7 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
         attemptedAction: 'update_late_override',
         metadata: { git_repo_assignment_id: data.git_repo_assignment_id },
       });
+      assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
 
       const { git_repo_assignment_id, is_late_override } = data;
       const message = is_late_override ? 'Added override' : 'Removed override';
@@ -117,7 +121,7 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
     },
 
     async updateGradeRelease() {
-      const { classroom: _classroom3 } = await assertClassroomAccess({
+      const { classroom, membership } = await assertClassroomAccess({
         request,
         classroomSlug: classSlug,
         allowedRoles: ['OWNER', 'TEACHER'],
@@ -125,6 +129,7 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
         attemptedAction: 'update_grade_release',
         metadata: { assignment_id: data.assignment_id },
       });
+      assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
 
       const { assignment_id, grades_released } = data;
       const message = grades_released

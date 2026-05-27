@@ -1,5 +1,3 @@
-import { Divider } from 'antd';
-
 import { action } from './action';
 import { ClassmojiService } from '@classmoji/services';
 import { requireClassroomAdmin } from '~/utils/routeAuth.server';
@@ -33,13 +31,12 @@ const SettingsGrading = ({ loaderData }: Route.ComponentProps) => {
   const { emojiMappings, letterGradeMappings, orphanedEmojis, settings } = loaderData;
 
   return (
-    <div className="">
+    <div className="divide-y divide-line">
       <GradingSettingsOptions
         settings={
           settings as unknown as React.ComponentProps<typeof GradingSettingsOptions>['settings']
         }
       />
-      <Divider />
       <EmojiMapping
         emojiMappings={
           emojiMappings as unknown as Array<{
@@ -52,7 +49,6 @@ const SettingsGrading = ({ loaderData }: Route.ComponentProps) => {
         }
         orphanedEmojis={orphanedEmojis}
       />
-      <Divider />
       <LetterGradeMapping letterGradeMappings={letterGradeMappings} />
     </div>
   );

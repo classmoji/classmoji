@@ -81,7 +81,7 @@ const RegradeRequestsTable = ({ requests, emojiMappings, org }: RegradeRequestsT
       key: 'assignment',
       width: role === 'STUDENT' ? '25%' : '20%',
       render: (title: string) => (
-        <div className="truncate font-medium text-gray-800 dark:text-gray-200">{title}</div>
+        <div className="truncate font-medium text-ink-1">{title}</div>
       ),
     },
     {
@@ -197,7 +197,7 @@ const RegradeRequestsTable = ({ requests, emojiMappings, org }: RegradeRequestsT
   return (
     <div className="min-h-full">
       <div className="flex items-center justify-between gap-3 mt-2 mb-4">
-        <h1 className="text-base font-semibold text-gray-600 dark:text-gray-400">
+        <h1 className="text-base font-semibold text-ink-2">
           Resubmit Requests
         </h1>
         {role === 'STUDENT' && (
