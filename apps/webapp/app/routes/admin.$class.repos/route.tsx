@@ -95,7 +95,7 @@ const AdminAssignments = ({ loaderData }: Route.ComponentProps) => {
       JSON.stringify({
         deleteFromGithub: false,
         repositories: repositoriesToDelete,
-        classroomSlug: classSlug,
+        classSlug,
       }),
       {
         method: 'post',

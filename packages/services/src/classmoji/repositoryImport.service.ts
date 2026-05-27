@@ -195,13 +195,20 @@ export const cloneModule = async (
     data: {
       classroom_id: targetClassroomId,
       title: titleToIdentifier(sourceModule.title),
+      slug: sourceModule.slug,
       template: sourceModule.template,
+      description: sourceModule.description,
       is_published: false,
       weight: sourceModule.weight,
       type: sourceModule.type,
       tag_id: targetTagId,
       is_extra_credit: sourceModule.is_extra_credit,
       drop_lowest_count: sourceModule.drop_lowest_count,
+      team_formation_mode: sourceModule.team_formation_mode,
+      team_formation_deadline: sourceModule.team_formation_deadline,
+      max_team_size: sourceModule.max_team_size,
+      project_template_id: sourceModule.project_template_id,
+      project_template_title: sourceModule.project_template_title,
     },
   });
 
