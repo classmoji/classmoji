@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeAll, beforeEach } from 'vitest';
 import crypto from 'node:crypto';
 import Fastify, { type FastifyInstance } from 'fastify';
+import fastifyRawBody from 'fastify-raw-body';
 
 const GITHUB_SECRET = 'test-gh-secret';
 
@@ -30,6 +31,12 @@ const sign = (body: string): string => {
 
 const buildApp = async (): Promise<FastifyInstance> => {
   const app = Fastify();
+  await app.register(fastifyRawBody, {
+    field: 'rawBody',
+    global: false,
+    encoding: 'utf8',
+    runFirst: true,
+  });
   const { default: githubRoutes } = await import('../src/routes/github.ts');
   await app.register(githubRoutes, { prefix: '/webhooks/callback' });
   return app;

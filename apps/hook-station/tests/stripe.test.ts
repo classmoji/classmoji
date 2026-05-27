@@ -9,6 +9,17 @@ const subGetCurrent = vi.fn();
 const subUpdate = vi.fn();
 const subCreate = vi.fn();
 const subFindBy = vi.fn();
+const processedFindUnique = vi.fn();
+const processedCreate = vi.fn();
+
+vi.mock('@classmoji/database', () => ({
+  getPrisma: () => ({
+    processedWebhookEvent: {
+      findUnique: processedFindUnique,
+      create: processedCreate,
+    },
+  }),
+}));
 
 vi.mock('@classmoji/services', () => ({
   StripeService: { constructWebhookEvent },
@@ -50,9 +61,18 @@ const post = async (
 
 describe('stripe webhook route', () => {
   beforeEach(() => {
-    [constructWebhookEvent, userFindBy, subGetCurrent, subUpdate, subCreate, subFindBy].forEach(m =>
-      m.mockReset()
-    );
+    [
+      constructWebhookEvent,
+      userFindBy,
+      subGetCurrent,
+      subUpdate,
+      subCreate,
+      subFindBy,
+      processedFindUnique,
+      processedCreate,
+    ].forEach(m => m.mockReset());
+    processedFindUnique.mockResolvedValue(null);
+    processedCreate.mockResolvedValue({});
     vi.spyOn(console, 'error').mockImplementation(() => {});
   });
 
