@@ -71,39 +71,41 @@ async function selectClassroom() {
   return classrooms[index];
 }
 
-async function selectModule(classroomId) {
-  const modules = await prisma.module.findMany({
+async function selectRepository(classroomId) {
+  const repositories = await prisma.repository.findMany({
     where: { classroom_id: classroomId },
     include: { assignments: true },
     orderBy: { title: 'asc' },
   });
 
-  if (modules.length === 0) {
-    console.log('❌ No modules found for this classroom');
+  if (repositories.length === 0) {
+    console.log('❌ No repositories found for this classroom');
     return null;
   }
 
-  console.log('\n📦 Available Modules:\n');
-  modules.forEach((m, i) => console.log(`  ${i + 1}. ${m.title} (${m.assignments.length} assignments)`));
+  console.log('\n📦 Available Repositories:\n');
+  repositories.forEach((r, i) =>
+    console.log(`  ${i + 1}. ${r.title} (${r.assignments.length} assignments)`)
+  );
 
-  const choice = await prompt('\nSelect module number: ');
+  const choice = await prompt('\nSelect repository number: ');
   const index = parseInt(choice) - 1;
 
-  if (index < 0 || index >= modules.length) {
+  if (index < 0 || index >= repositories.length) {
     console.log('❌ Invalid selection');
     return null;
   }
 
-  return modules[index];
+  return repositories[index];
 }
 
-async function auditAndRepair(classroom, module) {
+async function auditAndRepair(classroom, repository) {
   const gitProvider = getGitProvider(classroom.git_organization);
   const orgLogin = classroom.git_organization.login;
 
-  // Get all repos for this module
-  const repos = await prisma.repository.findMany({
-    where: { module_id: module.id, classroom_id: classroom.id },
+  // Get all git repos linked to this content repository
+  const repos = await prisma.gitRepo.findMany({
+    where: { repository_id: repository.id, classroom_id: classroom.id },
     include: {
       assignments: true,
       student: true,
@@ -168,9 +170,9 @@ async function auditAndRepair(classroom, module) {
       }
     }
 
-    // 4. Check for missing issues (assignment exists but no RepositoryAssignment)
+    // 4. Check for missing issues (assignment exists but no GitRepoAssignment)
     const existingAssignmentIds = repo.assignments.map(a => a.assignment_id);
-    for (const assignment of module.assignments) {
+    for (const assignment of repository.assignments) {
       if (!existingAssignmentIds.includes(assignment.id)) {
         issues.missingIssues.push({ repo, assignment });
       }
@@ -244,26 +246,26 @@ async function auditAndRepair(classroom, module) {
   // Repair stale repos (delete DB records)
   for (const repo of issues.staleRepos) {
     console.log(`  Deleting stale repo record: ${repo.name}`);
-    await prisma.repository.delete({ where: { id: repo.id } });
+    await prisma.gitRepo.delete({ where: { id: repo.id } });
   }
 
   // Repair stale issues (delete DB records)
   for (const { record, repoName } of issues.staleIssues) {
     console.log(`  Deleting stale issue record: ${repoName} #${record.provider_issue_number}`);
-    await prisma.repositoryAssignment.delete({ where: { id: record.id } });
+    await prisma.gitRepoAssignment.delete({ where: { id: record.id } });
   }
 
   // Repair ID mismatches (update DB to match GitHub)
   for (const mismatch of issues.idMismatches) {
     if (mismatch.type === 'repo') {
       console.log(`  Fixing repo ID: ${mismatch.record.name} → ${mismatch.githubId}`);
-      await prisma.repository.update({
+      await prisma.gitRepo.update({
         where: { id: mismatch.record.id },
         data: { provider_id: mismatch.githubId },
       });
     } else {
       console.log(`  Fixing issue ID: ${mismatch.repoName} #${mismatch.record.provider_issue_number} → ${mismatch.githubId}`);
-      await prisma.repositoryAssignment.update({
+      await prisma.gitRepoAssignment.update({
         where: { id: mismatch.record.id },
         data: { provider_id: mismatch.githubId },
       });
@@ -283,15 +285,15 @@ async function main() {
     return;
   }
 
-  const module = await selectModule(classroom.id);
-  if (!module) {
+  const repository = await selectRepository(classroom.id);
+  if (!repository) {
     await prisma.$disconnect();
     return;
   }
 
-  console.log(`\n📍 Selected: ${classroom.name} → ${module.title}`);
+  console.log(`\n📍 Selected: ${classroom.name} → ${repository.title}`);
 
-  await auditAndRepair(classroom, module);
+  await auditAndRepair(classroom, repository);
 
   await prisma.$disconnect();
 }
