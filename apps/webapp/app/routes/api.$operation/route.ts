@@ -162,7 +162,7 @@ export const action = checkAuth(async ({ request }: { request: Request }) => {
         classroom_id: storedTransaction.classroom_id,
         student_id: storedTransaction.student_id,
         amount: storedTransaction.amount,
-        repository_assignment_id: storedTransaction.repository_assignment_id ?? '',
+        git_repo_assignment_id: storedTransaction.git_repo_assignment_id ?? '',
         hours_purchased: storedTransaction.hours_purchased ?? 0,
       });
 
