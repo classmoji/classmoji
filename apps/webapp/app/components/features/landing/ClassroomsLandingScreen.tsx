@@ -281,6 +281,8 @@ export function ClassroomsLandingScreen({
               type="button"
               onClick={() => setView('grid')}
               title="Grid"
+              aria-label="Grid view"
+              aria-pressed={view === 'grid'}
               className={`px-2.5 py-1.5 text-xs border-none cursor-pointer inline-flex items-center transition-colors ${
                 view === 'grid'
                   ? 'bg-nav-hover text-ink-0'
@@ -293,6 +295,8 @@ export function ClassroomsLandingScreen({
               type="button"
               onClick={() => setView('list')}
               title="List"
+              aria-label="List view"
+              aria-pressed={view === 'list'}
               className={`px-2.5 py-1.5 text-xs border-none cursor-pointer inline-flex items-center transition-colors ${
                 view === 'list'
                   ? 'bg-nav-hover text-ink-0'

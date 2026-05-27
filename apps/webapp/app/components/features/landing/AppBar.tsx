@@ -28,6 +28,7 @@ export function AppBar({ user, notifications, unreadCount, membershipRoles }: Ap
         <button
           type="button"
           title="Help & docs"
+          aria-label="Help and docs"
           className="w-9 h-9 rounded-lg grid place-items-center text-ink-3 hover:bg-nav-hover transition-colors cursor-pointer border-none bg-transparent"
           onClick={() =>
             window.open('https://classmoji.io/docs', '_blank', 'noopener,noreferrer')
@@ -44,6 +45,7 @@ export function AppBar({ user, notifications, unreadCount, membershipRoles }: Ap
         <ProfileDropdown>
           <button
             type="button"
+            aria-label="Open profile menu"
             className="flex items-center gap-2 py-0.5 pl-0.5 pr-2.5 rounded-full border border-line bg-panel hover:bg-nav-hover cursor-pointer ml-1 transition-colors text-sm"
           >
             {user?.avatar_url ? (
