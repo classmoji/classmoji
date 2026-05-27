@@ -475,7 +475,7 @@ export default function NewPage({ loaderData }: Route.ComponentProps) {
       closable={false}
       maskClosable={!isCreating}
       styles={{
-        content: { padding: 0, borderRadius: 16, overflow: 'hidden' },
+        content: { padding: 0, borderRadius: 16, overflow: 'hidden', maxWidth: '90vw' },
         body: { padding: 0 },
         header: { display: 'none' },
         footer: { display: 'none' },
