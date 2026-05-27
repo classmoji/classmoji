@@ -197,8 +197,15 @@ export const update = async (id: string, updates: Prisma.ClassroomUpdateInput) =
  * @returns {Promise<Object>}
  */
 export const updateBySlug = async (slug: string, updates: Prisma.ClassroomUpdateInput) => {
-  return getPrisma().classroom.update({
+  const classroom = await getPrisma().classroom.findFirst({
     where: { slug },
+    select: { id: true },
+  });
+  if (!classroom) {
+    throw new Error(`Classroom with slug "${slug}" not found`);
+  }
+  return getPrisma().classroom.update({
+    where: { id: classroom.id },
     data: updates,
     include: {
       git_organization: true,
@@ -224,8 +231,15 @@ export const deleteById = async (id: string) => {
  * @returns {Promise<Object>}
  */
 export const deleteBySlug = async (slug: string) => {
-  return getPrisma().classroom.delete({
+  const classroom = await getPrisma().classroom.findFirst({
     where: { slug },
+    select: { id: true },
+  });
+  if (!classroom) {
+    throw new Error(`Classroom with slug "${slug}" not found`);
+  }
+  return getPrisma().classroom.delete({
+    where: { id: classroom.id },
   });
 };
 

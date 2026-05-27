@@ -105,7 +105,7 @@ export const findBySlugAndTitle = async (
   title: string,
   options: RepositoryQueryOptions = {}
 ) => {
-  const classroom = await getPrisma().classroom.findUnique({
+  const classroom = await getPrisma().classroom.findFirst({
     where: { slug: classroomSlug },
     select: { id: true },
   });
@@ -149,7 +149,7 @@ export const findByClassroomSlugAndModuleSlug = async (
   repositorySlug: string,
   options: RepositoryQueryOptions = {}
 ) => {
-  const classroom = await getPrisma().classroom.findUnique({
+  const classroom = await getPrisma().classroom.findFirst({
     where: { slug: classroomSlug },
     select: { id: true },
   });
@@ -306,7 +306,7 @@ export const createFromForm = async (values: RepositoryFormValues) => {
     branch,
   } = values;
 
-  const classroom = await getPrisma().classroom.findUnique({
+  const classroom = await getPrisma().classroom.findFirst({
     where: { slug: classroomSlug },
   });
 
