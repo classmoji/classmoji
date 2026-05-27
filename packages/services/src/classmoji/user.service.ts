@@ -1,10 +1,10 @@
 import _ from 'lodash';
 import getPrisma from '@classmoji/database';
-import type { GitProvider, Prisma, Repository, Role } from '@prisma/client';
+import type { GitProvider, Prisma, GitRepo, Role } from '@prisma/client';
 import type {
-  Module as GradeModule,
-  Repository as GradeRepository,
-  RepositoryAssignment as GradeRepositoryAssignment,
+  Repository as GradeModule,
+  GitRepo as GradeRepository,
+  GitRepoAssignment as GradeRepositoryAssignment,
 } from '@classmoji/utils';
 
 interface UserCreateClassroomContext {
@@ -28,7 +28,7 @@ interface RepositoryModuleSummary extends GradeModule {
   type: string;
 }
 
-interface RepositoryAssignmentRelation extends GradeRepositoryAssignment {
+interface GitRepoAssignmentRelation extends GradeRepositoryAssignment {
   assignment: {
     id: string;
     weight: number;
@@ -36,15 +36,15 @@ interface RepositoryAssignmentRelation extends GradeRepositoryAssignment {
   [key: string]: unknown;
 }
 
-type RepositoryWithRelations = Repository &
+type RepositoryWithRelations = GitRepo &
   GradeRepository & {
-    module: RepositoryModuleSummary;
-    assignments: RepositoryAssignmentRelation[];
+    repository: RepositoryModuleSummary;
+    assignments: GitRepoAssignmentRelation[];
   };
 
 interface TeamMembershipWithRepositories {
   team: {
-    repositories: RepositoryWithRelations[];
+    git_repos: RepositoryWithRelations[];
   };
 }
 
@@ -53,7 +53,7 @@ interface StudentRepositoriesRecord {
   name?: string | null;
   avatar_url?: string;
   login?: string | null;
-  repositories?: RepositoryWithRelations[];
+  git_repos?: RepositoryWithRelations[];
   team_memberships?: TeamMembershipWithRepositories[];
   [key: string]: unknown;
 }
@@ -65,7 +65,7 @@ interface UserWithMemberships {
       status: 'ACTIVE' | 'LOCKED' | 'UNPUBLISHED';
       is_archived: boolean;
       _count?: {
-        modules?: number;
+        repositories?: number;
       };
       memberships: unknown[];
       [key: string]: unknown;
@@ -143,9 +143,9 @@ export const deleteByLogin = async (login: string) => {
 
 export const findRepositoriesPerStudent = async (classroom: StudentRepositoryClassroomContext) => {
   const includeRepos = {
-    repositories: {
+    git_repos: {
       include: {
-        module: true,
+        repository: true,
         assignments: {
           include: {
             token_transactions: true,
@@ -196,12 +196,12 @@ export const findRepositoriesPerStudent = async (classroom: StudentRepositoryCla
     .map(items => {
       const [studentData, teamData] = items as StudentRepositoriesRecord[];
       const teamRepos = (teamData?.team_memberships || []).map(
-        ({ team }: TeamMembershipWithRepositories) => team.repositories
+        ({ team }: TeamMembershipWithRepositories) => team.git_repos
       );
 
       return {
         ...studentData,
-        repositories: [...(studentData?.repositories || []), ...teamRepos.flat()],
+        git_repos: [...(studentData?.git_repos || []), ...teamRepos.flat()],
       };
     })
     .value();
@@ -213,27 +213,27 @@ export const findRepositoriesPerStudent = async (classroom: StudentRepositoryCla
   });
 
   // Transform data to match expected shape for grades page
-  // New schema: Repository.module, Repository.assignments (RepositoryAssignment[])
-  // Expected: repository.assignment_id, repository.assignment, repository.issues
+  // New schema: GitRepo.repository, GitRepo.assignments (GitRepoAssignment[])
+  // Expected: gitRepo.assignment_id, gitRepo.assignment, gitRepo.issues
   return combined.map(student => ({
     ...student,
-    repositories: (student.repositories || []).map((repo: RepositoryWithRelations) => ({
+    git_repos: (student.git_repos || []).map((repo: RepositoryWithRelations) => ({
       ...repo,
-      // Map module to assignment for backward compatibility with grades UI
-      assignment_id: repo.module?.id,
-      assignment: repo.module
+      // Map repository to assignment for backward compatibility with grades UI
+      assignment_id: repo.repository?.id,
+      assignment: repo.repository
         ? {
-            id: repo.module.id,
-            title: repo.module.title,
-            weight: repo.module.weight,
-            is_extra_credit: repo.module.is_extra_credit,
-            drop_lowest_count: repo.module.drop_lowest_count,
-            type: repo.module.type,
+            id: repo.repository.id,
+            title: repo.repository.title,
+            weight: repo.repository.weight,
+            is_extra_credit: repo.repository.is_extra_credit,
+            drop_lowest_count: repo.repository.drop_lowest_count,
+            type: repo.repository.type,
           }
         : null,
-      // RepositoryAssignments with their Assignment data
+      // GitRepoAssignments with their Assignment data
       repositoryAssignments: (repo.assignments || []).map(
-        (repoAssignment: RepositoryAssignmentRelation) => ({
+        (repoAssignment: GitRepoAssignmentRelation) => ({
           ...repoAssignment,
           assignment_id: repoAssignment.assignment?.id,
           // Note: 'assignment' is already included via spread from Prisma include
@@ -259,7 +259,7 @@ export const findById = async (id: string, options: { includeMemberships?: boole
                     where: { role: 'OWNER' },
                   },
                   _count: {
-                    select: { modules: true },
+                    select: { repositories: true },
                   },
                 },
               },
@@ -282,8 +282,8 @@ export const findById = async (id: string, options: { includeMemberships?: boole
           ...m.classroom,
           login: m.classroom.slug, // Use slug as "login" for URL compatibility
           status: m.classroom.status,
-        is_archived: m.classroom.is_archived,
-          assignments: { _count: m.classroom._count?.modules || 0 },
+          is_archived: m.classroom.is_archived,
+          assignments: { _count: m.classroom._count?.repositories || 0 },
           memberships: m.classroom.memberships,
         },
       })),
@@ -307,7 +307,7 @@ export const findByLogin = async (login: string) => {
                 where: { role: 'OWNER' },
               },
               _count: {
-                select: { modules: true },
+                select: { repositories: true },
               },
             },
           },
@@ -329,7 +329,7 @@ export const findByLogin = async (login: string) => {
         login: m.classroom.slug, // Use slug as "login" for URL compatibility
         status: m.classroom.status,
         is_archived: m.classroom.is_archived,
-        assignments: { _count: m.classroom._count?.modules || 0 },
+        assignments: { _count: m.classroom._count?.repositories || 0 },
         memberships: m.classroom.memberships,
       },
     })),

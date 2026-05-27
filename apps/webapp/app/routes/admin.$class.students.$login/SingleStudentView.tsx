@@ -32,7 +32,7 @@ interface StudentAssignment {
   student_deadline: string;
 }
 
-interface StudentModule {
+interface StudentRepository {
   id: string;
   title: string;
   type: string;
@@ -69,47 +69,43 @@ interface Student {
 }
 
 interface SingleStudentViewProps {
-  assignments?: StudentModule[];
   student: Student | null;
-  issuesGroupedByAssignment?: Record<string, StudentRepoAssignment[]>;
   emojiMappings: unknown;
   settings: unknown;
   letterGradeMappings: unknown;
   tokenBalance: number;
-  modules?: StudentModule[];
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Prisma query shapes vary across grouped assignment views
-  repositoryAssignmentsGroupedByModule?: Record<string, any[]>;
+  repositories?: StudentRepository[];
+  assignmentsByRepository?: Record<string, StudentRepoAssignment[]>;
   classroom?: Record<string, unknown>;
 }
 
 const SingleStudentView = (props: SingleStudentViewProps) => {
   const {
-    assignments,
     student,
-    issuesGroupedByAssignment,
     emojiMappings,
     settings,
     letterGradeMappings,
     tokenBalance,
-    modules,
-    repositoryAssignmentsGroupedByModule,
+    repositories,
+    assignmentsByRepository,
   } = props;
 
   const { classroom } = useStore();
 
-  const effectiveAssignments = assignments || modules || [];
-  const effectiveIssuesGrouped =
-    issuesGroupedByAssignment || repositoryAssignmentsGroupedByModule || {};
+  const effectiveAssignments = repositories || [];
+  const effectiveIssuesGrouped = assignmentsByRepository || {};
 
-  const repositories = effectiveAssignments
-    .map(module => {
-      const assignments = effectiveIssuesGrouped[module.id] || [];
-      return { module, assignments };
+  // Build repositories array for grade calculation
+  // calculateGrades expects { repository, assignments } where assignments is array of repository assignments
+  const gradeRepositories = effectiveAssignments
+    .map(repository => {
+      const assignments = effectiveIssuesGrouped[repository.id] || [];
+      return { repository, assignments };
     })
     .filter(repo => repo.assignments.length > 0);
 
   const { finalNumericGrade, finalLetterGrade, rawNumericGrade, rawLetterGrade } = calculateGrades(
-    repositories,
+    gradeRepositories,
     emojiMappings as Record<string, number>,
     settings as OrganizationSettings,
     letterGradeMappings as LetterGradeMappingEntry[]
@@ -117,9 +113,9 @@ const SingleStudentView = (props: SingleStudentViewProps) => {
 
   const assignmentColumns = [
     {
-      title: 'Module',
+      title: 'Repository',
       dataIndex: 'title',
-      key: 'module',
+      key: 'repository',
       render: (title: string) => (
         <div className="flex items-center gap-2">
           <div className="w-1 h-4 bg-primary dark:bg-primary rounded-full"></div>
@@ -148,20 +144,20 @@ const SingleStudentView = (props: SingleStudentViewProps) => {
     {
       title: 'Repository Grade',
       key: 'repositoryGrade',
-      render: (_: unknown, module: StudentModule) => {
-        const repositoryAssignments = effectiveIssuesGrouped[module.id];
+      render: (_: unknown, repository: StudentRepository) => {
+        const repositoryAssignments = effectiveIssuesGrouped[repository.id];
         const grade = calculateRepositoryGrade(
           repositoryAssignments,
           emojiMappings as Record<string, number>,
           settings as OrganizationSettings,
-          module
+          repository
         );
 
         if (grade === -1) return <Tag color="red">No Grade</Tag>;
 
-        if (module.is_extra_credit) {
+        if (repository.is_extra_credit) {
           return (
-            <span className="font-bold text-green-600">+ {(grade * module.weight) / 100}</span>
+            <span className="font-bold text-green-600">+ {(grade * repository.weight) / 100}</span>
           );
         }
 
@@ -171,7 +167,7 @@ const SingleStudentView = (props: SingleStudentViewProps) => {
   ];
 
   const getRepositoryAssignmentColumns = (
-    moduleAssignment: StudentModule,
+    moduleAssignment: StudentRepository,
     allRepositoryAssignments: StudentRepoAssignment[]
   ) => [
     {
@@ -278,7 +274,7 @@ const SingleStudentView = (props: SingleStudentViewProps) => {
     },
   ];
 
-  const expandedRowRender = (record: StudentModule) => {
+  const expandedRowRender = (record: StudentRepository) => {
     const repositoryAssignments = effectiveIssuesGrouped[record.id] || [];
 
     const sortedRepositoryAssignments = repositoryAssignments.sort(

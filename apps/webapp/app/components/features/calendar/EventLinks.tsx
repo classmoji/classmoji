@@ -30,7 +30,7 @@ interface EventLinksProps {
  * - Meeting links open in a new tab (external)
  * - Pages open in a new tab (external pages app)
  * - Slides open in a new tab (external slides viewer)
- * - Assignments: GitHub issue for students with repo assignment, modules page with hash anchor otherwise
+ * - Assignments: GitHub issue for students with repo assignment, repositories page with hash anchor otherwise
  * - GitHub issue links open in a new tab (for deadline events)
  *
  * @param {object} event - The calendar event
@@ -110,9 +110,9 @@ const EventLinks = ({
           </a>
         ))}
 
-      {/* Assignments - GitHub issue for students with repo, modules page otherwise */}
+      {/* Assignments - GitHub issue for students with repo, repositories page otherwise */}
       {hasAssignments &&
-        (event.assignments ?? []).map(({ assignment, module }) => {
+        (event.assignments ?? []).map(({ assignment, repository }) => {
           // Check if user has a repo assignment with a GitHub issue
           const repoAssignment = repoAssignmentsByAssignmentId[assignment.id];
           const hasGitHubIssue =
@@ -136,11 +136,11 @@ const EventLinks = ({
             );
           }
 
-          // Fallback: link to modules page with hash anchor
+          // Fallback: link to repositories page with hash anchor
           return (
             <NavLink
               key={assignment.id}
-              to={`/${rolePrefix}/${resolvedClassSlug}/modules#${module?.slug || ''}`}
+              to={`/${rolePrefix}/${resolvedClassSlug}/repos#${repository?.slug || ''}`}
               className="flex items-center gap-2 text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300 text-sm"
             >
               <IconClipboardList size={18} className="text-ink-3" />

@@ -301,7 +301,7 @@ export const action = checkAuth(async ({ request }: { request: Request }) => {
     organization_login: string;
   };
 
-  const classroom = await getPrisma().classroom.findUnique({
+  const classroom = await getPrisma().classroom.findFirst({
     where: { slug: organization_login },
     include: { git_organization: true },
   });

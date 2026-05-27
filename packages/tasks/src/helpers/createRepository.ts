@@ -44,7 +44,7 @@ export const createRepository = async (payload: CreateRepositoryPayload): Promis
       error.status === 422 &&
       error.message?.includes('name already exists')
     ) {
-      logger.info(`Repository ${gitOrgLogin}/${repoName} already exists, fetching existing repo`);
+      logger.info(`GitRepo ${gitOrgLogin}/${repoName} already exists, fetching existing repo`);
       const existingRepo = await gitProvider.getRepository(gitOrgLogin, repoName);
       repoId = existingRepo.id;
     } else {
@@ -78,7 +78,7 @@ export const createRepository = async (payload: CreateRepositoryPayload): Promis
     await repoGit.checkout('main');
 
     const classmojiPath = path.join(localPath, 'CLASSMOJI.md');
-    fs.writeFileSync(classmojiPath, 'Hello! This is your repository for the assignment. 📝\n');
+    fs.writeFileSync(classmojiPath, 'Hello! This is your gitRepo for the assignment. 📝\n');
 
     await repoGit.add('CLASSMOJI.md');
     await repoGit.commit('Add Classmoji welcome message');

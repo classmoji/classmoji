@@ -39,7 +39,7 @@ const DangerZone = () => {
         okButtonProps={{ danger: true }}
       >
         <p>
-          The following data will be removed: modules, student enrollments, grades, quizzes, and
+          The following data will be removed: repositories, student enrollments, grades, quizzes, and
           classroom settings.
         </p>
         <p className="pt-3">Are you sure you want to proceed?</p>

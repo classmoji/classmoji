@@ -91,8 +91,8 @@ export async function loader({ params, request }: Route.LoaderArgs) {
     return {
       id: quiz.id, // Already a string UUID
       name: quiz.name,
-      moduleId: quiz.module_id?.toString() || null,
-      moduleTitle: quiz.module?.title || 'Unlinked',
+      moduleId: quiz.repository_id?.toString() || null,
+      moduleTitle: quiz.repository?.title || 'Unlinked',
       systemPrompt: quiz.system_prompt,
       rubricPrompt: quiz.rubric_prompt,
       subject: quiz.subject || '',
@@ -302,9 +302,9 @@ export default function AdminQuizzes({ loaderData }: Route.ComponentProps) {
       ),
     },
     {
-      title: 'Module',
+      title: 'Repository',
       dataIndex: 'moduleTitle',
-      key: 'module',
+      key: 'repository',
       width: '20%',
       sorter: (a: AdminQuiz, b: AdminQuiz) => a.moduleTitle.localeCompare(b.moduleTitle),
       render: (title: string) => (

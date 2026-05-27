@@ -112,8 +112,8 @@ async function main() {
     if (u.role === 'STUDENT') studentUsers.push(user);
   }
 
-  // ── Module + Assignments ────────────────────────────────────────────────
-  const module = await prisma.module.upsert({
+  // ── Repository + Assignments ────────────────────────────────────────────
+  const repository = await prisma.repository.upsert({
     where: { classroom_id_title: { classroom_id: classroom.id, title: 'hello-world' } },
     update: {},
     create: {
@@ -129,10 +129,10 @@ async function main() {
   const assignments = [];
   for (const [i, title] of ['Hello World Part 1', 'Hello World Part 2'].entries()) {
     const a = await prisma.assignment.upsert({
-      where: { module_id_title: { module_id: module.id, title } },
+      where: { repository_id_title: { repository_id: repository.id, title } },
       update: { grades_released: i === 0 }, // Part 1 grades visible to students
       create: {
-        module_id: module.id,
+        repository_id: repository.id,
         title,
         weight: 50,
         is_published: true,
@@ -176,24 +176,24 @@ async function main() {
     });
   }
 
-  // ── Repositories + Grades + Token Transactions ──────────────────────────
+  // ── GitRepos + Grades + Token Transactions ──────────────────────────────
   // Grade each student on Part 1 with different emojis
   const gradeEmojis = ['🟢', '🟡', '🔴'];
-  let firstRepoAssignment = null;
+  let firstGitRepoAssignment = null;
 
   for (let i = 0; i < studentUsers.length; i++) {
     const student = studentUsers[i];
     const emoji = gradeEmojis[i];
     const gradeValue = emojiMappings.find(m => m.emoji === emoji).grade;
 
-    const repo = await prisma.repository.upsert({
+    const gitRepo = await prisma.gitRepo.upsert({
       where: {
         provider_provider_id: { provider: 'GITHUB', provider_id: `fake-repo-${student.login}` },
       },
       update: {},
       create: {
         classroom_id: classroom.id,
-        module_id: module.id,
+        repository_id: repository.id,
         provider: 'GITHUB',
         provider_id: `fake-repo-${student.login}`,
         name: `${student.login}-hello-world`,
@@ -201,13 +201,13 @@ async function main() {
       },
     });
 
-    const repoAssignment = await prisma.repositoryAssignment.upsert({
+    const gitRepoAssignment = await prisma.gitRepoAssignment.upsert({
       where: {
         provider_provider_id: { provider: 'GITHUB', provider_id: `fake-issue-${student.login}` },
       },
       update: {},
       create: {
-        repository_id: repo.id,
+        git_repo_id: gitRepo.id,
         assignment_id: assignment1.id,
         provider: 'GITHUB',
         provider_id: `fake-issue-${student.login}`,
@@ -216,15 +216,15 @@ async function main() {
       },
     });
 
-    if (i === 0) firstRepoAssignment = repoAssignment;
+    if (i === 0) firstGitRepoAssignment = gitRepoAssignment;
 
     const existingGrade = await prisma.assignmentGrade.findFirst({
-      where: { repository_assignment_id: repoAssignment.id },
+      where: { git_repo_assignment_id: gitRepoAssignment.id },
     });
     if (!existingGrade) {
       await prisma.assignmentGrade.create({
         data: {
-          repository_assignment_id: repoAssignment.id,
+          git_repo_assignment_id: gitRepoAssignment.id,
           grader_id: taUser.id,
           emoji,
         },
@@ -233,7 +233,7 @@ async function main() {
         data: {
           classroom_id: classroom.id,
           student_id: student.id,
-          repository_assignment_id: repoAssignment.id,
+          git_repo_assignment_id: gitRepoAssignment.id,
           amount: gradeValue,
           type: 'GAIN',
           balance_after: gradeValue,
@@ -242,13 +242,13 @@ async function main() {
     }
 
     // Part 2: submitted but ungraded — fills the TA grading queue
-    await prisma.repositoryAssignment.upsert({
+    await prisma.gitRepoAssignment.upsert({
       where: {
         provider_provider_id: { provider: 'GITHUB', provider_id: `fake-issue-p2-${student.login}` },
       },
       update: {},
       create: {
-        repository_id: repo.id,
+        git_repo_id: gitRepo.id,
         assignment_id: assignment2.id,
         provider: 'GITHUB',
         provider_id: `fake-issue-p2-${student.login}`,
@@ -288,14 +288,14 @@ async function main() {
 
   // ── Regrade Request ─────────────────────────────────────────────────────
   // Student 1 (lowest grade 🔴) requests a regrade
-  if (firstRepoAssignment) {
+  if (firstGitRepoAssignment) {
     const existingRegrade = await prisma.regradeRequest.findFirst({
-      where: { repository_assignment_id: firstRepoAssignment.id },
+      where: { git_repo_assignment_id: firstGitRepoAssignment.id },
     });
     if (!existingRegrade) {
       await prisma.regradeRequest.create({
         data: {
-          repository_assignment_id: firstRepoAssignment.id,
+          git_repo_assignment_id: firstGitRepoAssignment.id,
           classroom_id: classroom.id,
           student_id: studentUsers[0].id,
           status: 'IN_REVIEW',
@@ -310,7 +310,7 @@ async function main() {
   console.log(`   Org:         ${org.login}`);
   console.log(`   Classroom:   ${classroom.name} (${classroom.slug})`);
   console.log(`   Fake users:  1 TA + 3 students`);
-  console.log(`   Module:      hello-world (2 assignments)`);
+  console.log(`   Repository:  hello-world (2 assignments)`);
   console.log(`   Emoji scale: 🔴 🟡 🟢 ⭐`);
   console.log(`   Grades:      Part 1 graded — 🟢 🟡 🔴 (released)`);
   console.log(`   TA queue:    3 Part 2 submissions awaiting grading`);

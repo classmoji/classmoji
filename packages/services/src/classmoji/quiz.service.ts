@@ -5,7 +5,7 @@ import * as notificationService from './notification.service.ts';
 interface QuizCreateInput {
   name: string;
   classroomId: string;
-  moduleId?: string | null;
+  repositoryId?: string | null;
   systemPrompt?: string | null;
   rubricPrompt: string;
   subject?: string | null;
@@ -21,7 +21,7 @@ interface QuizCreateInput {
 
 interface QuizUpdateInput {
   name?: string;
-  moduleId?: string | null;
+  repositoryId?: string | null;
   systemPrompt?: string | null;
   rubricPrompt?: string;
   subject?: string | null;
@@ -47,7 +47,7 @@ export const create = async (data: QuizCreateInput) => {
     data: {
       name: data.name,
       classroom_id: data.classroomId,
-      module_id: data.moduleId || null,
+      repository_id: data.repositoryId || null,
       system_prompt: data.systemPrompt || null,
       rubric_prompt: data.rubricPrompt,
       subject: data.subject || null,
@@ -61,7 +61,7 @@ export const create = async (data: QuizCreateInput) => {
       grading_strategy: data.gradingStrategy || 'HIGHEST',
     },
     include: {
-      module: true,
+      repository: true,
       attempts: {
         include: {
           user: true,
@@ -75,12 +75,12 @@ export const update = async (quizId: string, data: QuizUpdateInput) => {
   const updateData: Prisma.QuizUpdateInput = {};
 
   if (data.name !== undefined) updateData.name = data.name;
-  if (data.moduleId !== undefined) {
-    // Use relation syntax for updating module
-    if (data.moduleId === null) {
-      updateData.module = { disconnect: true };
+  if (data.repositoryId !== undefined) {
+    // Use relation syntax for updating repository
+    if (data.repositoryId === null) {
+      updateData.repository = { disconnect: true };
     } else {
-      updateData.module = { connect: { id: data.moduleId } };
+      updateData.repository = { connect: { id: data.repositoryId } };
     }
   }
   if (data.systemPrompt !== undefined) updateData.system_prompt = data.systemPrompt;
@@ -106,7 +106,7 @@ export const update = async (quizId: string, data: QuizUpdateInput) => {
     where: { id: quizId },
     data: updateData,
     include: {
-      module: true,
+      repository: true,
       attempts: {
         include: {
           user: true,
@@ -127,7 +127,7 @@ export const findById = async (quizId: string) => {
   return getPrisma().quiz.findUnique({
     where: { id: quizId },
     include: {
-      module: true,
+      repository: true,
       classroom: true,
       attempts: {
         include: {
@@ -163,7 +163,7 @@ export const getQuizzesByOrganization = async (
   const quizzes = await getPrisma().quiz.findMany({
     where: { classroom_id: classroomId },
     include: {
-      module: true,
+      repository: true,
       attempts: {
         include: {
           user: true,
@@ -227,7 +227,7 @@ export const getQuizzesForStudent = async (
       status: 'PUBLISHED',
     },
     include: {
-      module: true,
+      repository: true,
       attempts: {
         where: { user_id: userId },
         orderBy: { started_at: 'desc' }, // Most recent first

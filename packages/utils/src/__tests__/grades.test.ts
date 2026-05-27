@@ -9,9 +9,9 @@ import {
   getDroppedRepositoryAssignments,
   isRepositoryAssignmentDropped,
   calculateGrades,
-  type RepositoryAssignment,
-  type Module,
+  type GitRepoAssignment,
   type Repository,
+  type GitRepo,
   type OrganizationSettings,
 } from '../grades.ts';
 import type { LetterGradeMappingEntry } from '../emojis.ts';
@@ -29,14 +29,14 @@ const NO_PENALTY: OrganizationSettings = { late_penalty_points_per_hour: 0 };
 const PENALTY_5: OrganizationSettings = { late_penalty_points_per_hour: 5 };
 
 const ra = (
-  overrides: Partial<RepositoryAssignment> & { id?: string } = {}
-): RepositoryAssignment => ({
+  overrides: Partial<GitRepoAssignment> & { id?: string } = {}
+): GitRepoAssignment => ({
   id: overrides.id ?? 'ra-1',
   assignment: { weight: 100 },
   ...overrides,
 });
 
-const mod = (overrides: Partial<Module> = {}): Module => ({
+const mod = (overrides: Partial<Repository> = {}): Repository => ({
   weight: 100,
   is_extra_credit: false,
   ...overrides,
@@ -136,7 +136,7 @@ describe('calculateRepositoryGrade', () => {
     ).toBe(90);
   });
 
-  it('extra_credit modules sum without dividing by total weight', () => {
+  it('extra_credit repositories sum without dividing by total weight', () => {
     const assignments = [ra({ id: 'a', grades: [{ emoji: 'heart' }], assignment: { weight: 50 } })];
     expect(
       calculateRepositoryGrade(
@@ -150,17 +150,17 @@ describe('calculateRepositoryGrade', () => {
 });
 
 describe('calculateStudentFinalGrade', () => {
-  const repo = (assignments: RepositoryAssignment[], module: Module): Repository => ({
+  const repo = (assignments: GitRepoAssignment[], repository: Repository): GitRepo => ({
     assignments,
-    module,
+    repository,
   });
 
-  it('returns -1 if no graded modules', () => {
+  it('returns -1 if no graded repositories', () => {
     expect(calculateStudentFinalGrade([], EMOJI_MAP, NO_PENALTY)).toBe(-1);
   });
 
-  it('combines weighted module grades', () => {
-    const repos: Repository[] = [
+  it('combines weighted repository grades', () => {
+    const repos: GitRepo[] = [
       repo([ra({ grades: [{ emoji: 'heart' }] })], mod({ weight: 50 })),
       repo([ra({ id: 'b', grades: [{ emoji: 'eyes' }] })], mod({ weight: 50 })),
     ];
@@ -168,16 +168,16 @@ describe('calculateStudentFinalGrade', () => {
     expect(calculateStudentFinalGrade(repos, EMOJI_MAP, NO_PENALTY)).toBe(90);
   });
 
-  it('skips GROUP modules when includeGroupAssignment=false', () => {
-    const repos: Repository[] = [
+  it('skips GROUP repositories when includeGroupAssignment=false', () => {
+    const repos: GitRepo[] = [
       repo([ra({ grades: [{ emoji: 'heart' }] })], mod({ weight: 50, type: 'GROUP' })),
       repo([ra({ id: 'b', grades: [{ emoji: 'eyes' }] })], mod({ weight: 50 })),
     ];
     expect(calculateStudentFinalGrade(repos, EMOJI_MAP, NO_PENALTY, true, false)).toBe(80);
   });
 
-  it('adds extra credit module on top when penalty included', () => {
-    const repos: Repository[] = [
+  it('adds extra credit repository on top when penalty included', () => {
+    const repos: GitRepo[] = [
       repo([ra({ grades: [{ emoji: 'eyes' }] })], mod({ weight: 100 })),
       repo(
         [ra({ id: 'x', grades: [{ emoji: 'heart' }] })],
@@ -222,7 +222,7 @@ describe('getDroppedRepositoryAssignments', () => {
     ).toEqual([]);
   });
 
-  it('returns empty for extra credit modules', () => {
+  it('returns empty for extra credit repositories', () => {
     const assignments = [
       ra({ id: 'a', grades: [{ emoji: 'heart' }] }),
       ra({ id: 'b', grades: [{ emoji: '-1' }] }),
@@ -252,9 +252,9 @@ describe('isRepositoryAssignmentDropped', () => {
 
 describe('calculateGrades', () => {
   it('returns numeric and letter grades for raw and final', () => {
-    const repos: Repository[] = [
+    const repos: GitRepo[] = [
       {
-        module: mod({ weight: 100 }),
+        repository: mod({ weight: 100 }),
         assignments: [
           ra({ grades: [{ emoji: 'heart' }], num_late_hours: 2, is_late_override: false }),
         ],

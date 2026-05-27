@@ -17,7 +17,7 @@ interface SeedNotification {
   id: string;
   title: string;
   read: boolean;
-  type?: 'QUIZ_PUBLISHED' | 'MODULE_PUBLISHED' | 'ASSIGNMENT_GRADED';
+  type?: 'QUIZ_PUBLISHED' | 'REPOSITORY_PUBLISHED' | 'ASSIGNMENT_GRADED';
 }
 
 async function seedNotifications(

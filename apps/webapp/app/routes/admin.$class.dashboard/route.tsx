@@ -43,18 +43,18 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
   }
 
   const prisma = getPrisma();
-  const totalRepoAssignmentsPromise = prisma.repositoryAssignment.count({
-    where: { repository: { classroom: { slug: classSlug! } } },
+  const totalRepoAssignmentsPromise = prisma.gitRepoAssignment.count({
+    where: { git_repo: { classroom: { slug: classSlug! } } },
   });
-  const submittedRepoAssignmentsPromise = prisma.repositoryAssignment.count({
+  const submittedRepoAssignmentsPromise = prisma.gitRepoAssignment.count({
     where: {
-      repository: { classroom: { slug: classSlug! } },
+      git_repo: { classroom: { slug: classSlug! } },
       status: 'CLOSED',
     },
   });
-  const lateRepoAssignmentsPromise = prisma.repositoryAssignment
+  const lateRepoAssignmentsPromise = prisma.gitRepoAssignment
     .findMany({
-      where: { repository: { classroom: { slug: classSlug! } } },
+      where: { git_repo: { classroom: { slug: classSlug! } } },
       select: {
         closed_at: true,
         is_late_override: true,
@@ -77,16 +77,16 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
   const dataPromise = Promise.all([
     ClassmojiService.classroomMembership.findUsersByRole(classroom.id, 'STUDENT'),
     ClassmojiService.helper.calculateClassLeaderboard(classSlug!),
-    ClassmojiService.repositoryAssignment.getGradingProgress(classSlug!),
-    ClassmojiService.repositoryAssignment.getCompletionProgress(classSlug!),
-    ClassmojiService.repositoryAssignment.getLatePercentage(classSlug!),
-    ClassmojiService.repositoryAssignment.findRecentlyClosed(
+    ClassmojiService.gitRepoAssignment.getGradingProgress(classSlug!),
+    ClassmojiService.gitRepoAssignment.getCompletionProgress(classSlug!),
+    ClassmojiService.gitRepoAssignment.getLatePercentage(classSlug!),
+    ClassmojiService.gitRepoAssignment.findRecentlyClosed(
       classSlug!,
       dayjs().subtract(10, 'day').toDate(),
       dayjs().toDate()
     ),
     ClassmojiService.helper.findClassroomGradingProgressPerAssignment(classroom.id),
-    ClassmojiService.repositoryAssignmentGrader.findGradersProgress(classroom.id),
+    ClassmojiService.gitRepoAssignmentGrader.findGradersProgress(classroom.id),
     totalRepoAssignmentsPromise,
     submittedRepoAssignmentsPromise,
     lateRepoAssignmentsPromise,

@@ -1,5 +1,7 @@
 -- Remove unused ENTERPRISE value from SubscriptionTier enum.
--- No data migration needed: zero rows have tier = 'ENTERPRISE' (verified on dev).
+-- Defensively backfill any ENTERPRISE rows to FREE before dropping the enum value
+-- so this migration is safe on any environment where the value was ever used.
+UPDATE "subscriptions" SET "tier" = 'FREE' WHERE "tier" = 'ENTERPRISE';
 ALTER TYPE "SubscriptionTier" RENAME TO "SubscriptionTier_old";
 CREATE TYPE "SubscriptionTier" AS ENUM ('FREE', 'PRO');
 ALTER TABLE "subscriptions"

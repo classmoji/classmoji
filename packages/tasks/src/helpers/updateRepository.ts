@@ -87,7 +87,7 @@ export const updateRepository = async (
       state: 'open',
     });
 
-    const description = `${prDescription}\n\n---\n\n## Template Update\n\nThis PR brings the latest changes from the template repository.\n\n### ✅ To Merge\n\n1. Review the changes in the "Files changed" tab\n2. Click "Merge pull request" below\n3. If conflicts occur, resolve them in your editor`;
+    const description = `${prDescription}\n\n---\n\n## Template Update\n\nThis PR brings the latest changes from the template gitRepo.\n\n### ✅ To Merge\n\n1. Review the changes in the "Files changed" tab\n2. Click "Merge pull request" below\n3. If conflicts occur, resolve them in your editor`;
 
     let prUrl: string;
     if (existingPRs.length > 0) {
@@ -119,7 +119,7 @@ export const updateRepository = async (
       hasChanges: true,
     };
   } catch (error: unknown) {
-    logger.error('Update repository error:', {
+    logger.error('Update gitRepo error:', {
       error: error instanceof Error ? error.message : String(error),
     });
     throw error;

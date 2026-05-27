@@ -169,9 +169,9 @@ export const action = async ({ request }: Route.ActionArgs) => {
         created_by: userId,
       });
 
-      // Link to module if specified
+      // Link to repository if specified
       if (moduleId) {
-        await ClassmojiService.page.linkPage(page.id, { moduleId });
+        await ClassmojiService.page.linkPage(page.id, { repositoryId: moduleId });
       }
 
       // Update manifest after creating page

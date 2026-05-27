@@ -57,14 +57,12 @@ export const loader = async ({ request }: { request: Request }) => {
     throw new Response('Git organization not configured for this classroom', { status: 400 });
   }
 
-  // Get modules for dropdown
-  const modules = await ClassmojiService.module.findByClassroomSlug(classroomSlug);
+  // Get repositories for dropdown
+  const repositories = await ClassmojiService.repository.findByClassroomSlug(classroomSlug);
 
-  // Get content repo name using utility (same as slidesComImporter)
-  const repoName = getContentRepoName({
-    login: gitOrgLogin,
-    content_namespace: classroom.content_namespace ?? undefined,
-  });
+  const repoName = classroom.content_namespace
+    ? `content-${gitOrgLogin}-${classroom.content_namespace}`
+    : getContentRepoName({ login: gitOrgLogin });
   const savedThemes = await listSavedThemes(gitOrgLogin, repoName);
 
   return {
@@ -72,7 +70,7 @@ export const loader = async ({ request }: { request: Request }) => {
     contentNamespace: classroom.content_namespace,
     gitOrgLogin,
     classroom,
-    modules: modules.map(m => ({ id: m.id, title: m.title })),
+    repositories: repositories.map(m => ({ id: m.id, title: m.title })),
     savedThemes,
     slidesUrl: process.env.SLIDES_URL || 'http://localhost:6500',
     webappUrl: process.env.WEBAPP_URL || 'http://localhost:3000',
@@ -83,13 +81,13 @@ export const loader = async ({ request }: { request: Request }) => {
 // and stream progress via SSE
 
 export default function ImportPage() {
-  const { classroomSlug, classroom, modules, savedThemes, webappUrl } =
+  const { classroomSlug, classroom, repositories, savedThemes, webappUrl } =
     useLoaderData<typeof loader>();
   const userContext = useUser();
   const user = userContext?.user;
   const navigate = useNavigate();
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
-  const [selectedModule, setSelectedModule] = useState<{ id: string; title: string } | null>(null);
+  const [selectedRepository, setSelectedRepository] = useState<{ id: string; title: string } | null>(null);
   const [themeOption, setThemeOption] = useState('default');
   const [saveThemeName, setSaveThemeName] = useState('');
   const [dropzoneError, setDropzoneError] = useState<string | null>(null);
@@ -434,31 +432,31 @@ export default function ImportPage() {
               />
             </div>
 
-            {/* Module (optional) */}
+            {/* Repository (optional) */}
             <div className="mb-6">
               <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                Link to Module <span className="text-gray-400 text-xs">(optional)</span>
+                Link to Repository <span className="text-gray-400 text-xs">(optional)</span>
               </label>
-              <input type="hidden" name="moduleId" value={selectedModule?.id || ''} />
+              <input type="hidden" name="repositoryId" value={selectedRepository?.id || ''} />
               <select
-                value={selectedModule?.id || ''}
+                value={selectedRepository?.id || ''}
                 onChange={e => {
-                  const mod = modules.find(
+                  const repo = repositories.find(
                     m => m.id === (e.target as unknown as HTMLInputElement).value
                   );
-                  setSelectedModule(mod || null);
+                  setSelectedRepository(repo || null);
                 }}
                 className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-md dark:bg-gray-700 dark:text-white focus:ring-2 focus:ring-blue-500 focus:border-transparent"
               >
-                <option value="">No module (standalone)</option>
-                {modules.map(m => (
+                <option value="">No repository (standalone)</option>
+                {repositories.map(m => (
                   <option key={m.id} value={m.id}>
                     {m.title}
                   </option>
                 ))}
               </select>
               <p className="mt-1 text-xs text-gray-400 dark:text-gray-500">
-                You can link this slide to a module later
+                You can link this slide to a repository later
               </p>
             </div>
 

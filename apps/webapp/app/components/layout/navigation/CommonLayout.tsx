@@ -480,7 +480,7 @@ const CommonLayout = ({
         <div
           className={`flex-1 overflow-auto relative min-w-0 ${
             pathname.includes('/dashboard') ||
-            pathname.includes('/modules') ||
+            pathname.includes('/repos') ||
             pathname.includes('/quizzes') ||
             pathname.includes('/calendar') ||
             pathname.includes('/assignments') ||
@@ -496,7 +496,7 @@ const CommonLayout = ({
             pathname.match(/\/slides(\/|$)/) ||
             pathname.match(/\/pages(\/|$)/) ||
             pathname.match(/\/grades(\/|$)/) ||
-            pathname.match(/\/repositories(\/|$)/)
+            pathname.match(/\/gitrepos(\/|$)/)
               ? ''
               : 'bg-panel rounded-2xl ring-1 ring-line'
           }`}

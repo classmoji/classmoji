@@ -159,7 +159,7 @@ ${slidesContent}
  * @param {Object} options
  * @param {File|Blob} options.zipFile - The ZIP file to import
  * @param {string} options.title - Title for the slide
- * @param {string} [options.moduleId] - Module UUID for optional linking
+ * @param {string} [options.repositoryId] - Repository UUID for optional linking
  * @param {boolean} options.importTheme - Whether to import custom theme CSS (ignored if useSavedTheme is set)
  * @param {string} [options.useSavedTheme] - Name of saved theme to use (skips lib/ extraction)
  * @param {string} [options.saveThemeAs] - Save extracted theme with this name to .slidesthemes/
@@ -175,7 +175,7 @@ ${slidesContent}
 export async function processZipImport({
   zipFile,
   title,
-  moduleId,
+  repositoryId,
   importTheme,
   useSavedTheme,
   saveThemeAs,
@@ -189,7 +189,7 @@ export async function processZipImport({
 }: {
   zipFile: File | Blob;
   title: string;
-  moduleId?: string | null;
+  repositoryId?: string | null;
   importTheme: boolean;
   useSavedTheme?: string | null;
   saveThemeAs?: string | null;
@@ -253,12 +253,9 @@ export async function processZipImport({
   // 5. Flat content path: slides/{slug}-{timestamp}
   const timestamp = Date.now();
   const contentPath = `slides/${slug}-${timestamp}`;
-  // Build organization-like object for getContentRepoName, using the
-  // classroom's stable content_namespace as the namespace.
-  const repoName = getContentRepoName({
-    login: classroom.git_organization.login,
-    content_namespace: classroom.content_namespace,
-  });
+  const repoName = classroom.content_namespace
+    ? `content-${classroom.git_organization.login}-${classroom.content_namespace}`
+    : getContentRepoName({ login: classroom.git_organization.login });
 
   // 6. Ensure content repo exists (org is git org login for GitHub API)
   const repoExists = await gitProvider.repositoryExists(org, repoName);
@@ -718,12 +715,12 @@ export async function processZipImport({
     },
   });
 
-  // Link slide to module
-  if (moduleId) {
+  // Link slide to repository
+  if (repositoryId) {
     await getPrisma().slideLink.create({
       data: {
         slide_id: slide.id,
-        module_id: moduleId,
+        repository_id: repositoryId,
       },
     });
   }

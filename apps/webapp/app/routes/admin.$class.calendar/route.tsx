@@ -74,8 +74,8 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
       orderBy: { title: 'asc' },
     }),
     getPrisma().assignment.findMany({
-      where: { module: { classroom_id: classroom.id }, is_published: true },
-      select: { id: true, title: true, module: { select: { title: true, slug: true } } },
+      where: { repository: { classroom_id: classroom.id }, is_published: true },
+      select: { id: true, title: true, repository: { select: { title: true, slug: true } } },
       orderBy: { title: 'asc' },
     }),
   ]);
@@ -265,8 +265,8 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
       return data({ success: false, error: 'Assignment not found' }, { status: 404 });
     }
 
-    // Verify assignment belongs to this classroom (through its module)
-    if (assignment.module.classroom_id !== classroom.id) {
+    // Verify assignment belongs to this classroom (through its repository)
+    if (assignment.repository.classroom_id !== classroom.id) {
       return data(
         { success: false, error: 'Assignment does not belong to this classroom' },
         { status: 403 }

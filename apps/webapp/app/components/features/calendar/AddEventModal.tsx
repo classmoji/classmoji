@@ -39,7 +39,7 @@ interface SlideOption {
 interface AssignmentOption {
   id: string;
   title: string;
-  module?: { title: string };
+  repository?: { title: string };
 }
 
 interface AddEventModalProps {
@@ -377,7 +377,7 @@ const AddEventModal = ({
                         onChange={setLinkedAssignmentIds}
                         options={assignments.map(a => ({
                           value: a.id,
-                          label: a.module?.title ? `${a.module.title}: ${a.title}` : a.title,
+                          label: a.repository?.title ? `${a.repository.title}: ${a.title}` : a.title,
                         }))}
                         optionFilterProp="label"
                         allowClear

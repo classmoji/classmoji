@@ -32,8 +32,8 @@ export const ActionTypes = {
   ADD_GRADER: 'add-grader',
   REMOVE_GRADER: 'remove-grader',
 
-  ADD_GRADE_TO_REPOSITORY_ASSIGNMENT: 'add-grade-to-repository-assignment',
-  REMOVE_GRADE_FROM_REPOSITORY_ASSIGNMENT: 'remove-grade-from-repository-assignment',
+  ADD_GRADE_TO_GIT_REPO_ASSIGNMENT: 'add-grade-to-git-repo-assignment',
+  REMOVE_GRADE_FROM_GIT_REPO_ASSIGNMENT: 'remove-grade-from-git-repo-assignment',
 
   UPDATE_EXTENSION: 'update-extension',
   REQUEST_EXTENSION: 'create-extension',

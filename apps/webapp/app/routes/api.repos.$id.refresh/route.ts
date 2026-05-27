@@ -7,7 +7,7 @@ import type { Route } from './+types/route';
 /**
  * POST /api/repos/:id/refresh
  *
- * Enqueue a `refresh-repo-analytics` run for the given repository_assignment_id.
+ * Enqueue a `refresh-repo-analytics` run for the given git_repo_assignment_id.
  * Scoped to the owning classroom — only OWNER/TEACHER/ASSISTANT may trigger.
  */
 export const action = async ({ params, request }: Route.ActionArgs) => {
@@ -22,7 +22,7 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
 
   // Resolve the owning classroom so we can run auth against its slug.
   const repoAssignment =
-    await ClassmojiService.repositoryAssignment.findById(repositoryAssignmentId);
+    await ClassmojiService.gitRepoAssignment.findById(repositoryAssignmentId);
 
   if (!repoAssignment) {
     return new Response('Repository assignment not found', {
@@ -32,7 +32,7 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
   }
 
   const classroom = await ClassmojiService.classroom.findById(
-    repoAssignment.repository.classroom_id
+    repoAssignment.git_repo.classroom_id
   );
 
   if (!classroom) {
@@ -48,7 +48,7 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
     allowedRoles: ['OWNER', 'TEACHER', 'ASSISTANT'],
     resourceType: 'REPOSITORY_ASSIGNMENT',
     attemptedAction: 'refresh_repo_analytics',
-    metadata: { repository_assignment_id: repositoryAssignmentId },
+    metadata: { git_repo_assignment_id: repositoryAssignmentId },
   });
   assertClassroomMutationAllowed({ status: accessClassroom.status, role: membership!.role });
 

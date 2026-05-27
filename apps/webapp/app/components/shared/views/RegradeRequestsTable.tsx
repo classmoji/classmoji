@@ -27,10 +27,10 @@ interface RegradeRequest {
     image?: string | null;
     _count: { regrade_requests: number };
   };
-  repository_assignment: {
+  git_repo_assignment: {
     id: string;
     assignment: { title: string; [key: string]: unknown };
-    repository: { name: string; [key: string]: unknown } | null;
+    git_repo: { name: string; [key: string]: unknown } | null;
     grades: RegradeGrade[];
     provider_issue_number?: number | null;
     studentId?: string;
@@ -77,7 +77,7 @@ const RegradeRequestsTable = ({ requests, emojiMappings, org }: RegradeRequestsT
     },
     {
       title: 'Assignment',
-      dataIndex: ['repository_assignment', 'assignment', 'title'],
+      dataIndex: ['git_repo_assignment', 'assignment', 'title'],
       key: 'assignment',
       width: role === 'STUDENT' ? '25%' : '20%',
       render: (title: string) => (
@@ -100,10 +100,10 @@ const RegradeRequestsTable = ({ requests, emojiMappings, org }: RegradeRequestsT
     },
     {
       title: 'New Grade',
-      dataIndex: 'repository_assignment',
+      dataIndex: 'git_repo_assignment',
       key: 'new_grade',
       width: '12%',
-      render: (repositoryAssignment: RegradeRequest['repository_assignment']) => (
+      render: (repositoryAssignment: RegradeRequest['git_repo_assignment']) => (
         <div className="flex justify-center">
           <EmojisDisplay grades={repositoryAssignment?.grades} />
         </div>
@@ -144,12 +144,12 @@ const RegradeRequestsTable = ({ requests, emojiMappings, org }: RegradeRequestsT
       render: (_: unknown, request: RegradeRequest) => (
         <TableActionButtons
           onView={
-            org && request.repository_assignment?.repository
+            org && request.git_repo_assignment?.git_repo
               ? () =>
                   openRepositoryAssignmentInGithub(org, {
-                    ...request.repository_assignment,
+                    ...request.git_repo_assignment,
                     provider_issue_number:
-                      request.repository_assignment.provider_issue_number ?? undefined,
+                      request.git_repo_assignment.provider_issue_number ?? undefined,
                   })
               : undefined
           }
@@ -157,7 +157,7 @@ const RegradeRequestsTable = ({ requests, emojiMappings, org }: RegradeRequestsT
           {role !== 'STUDENT' && (
             <EmojiGrader
               repositoryAssignment={{
-                ...request.repository_assignment,
+                ...request.git_repo_assignment,
                 studentId: request.student_id,
               }}
               emojiMappings={emojiMappings ?? {}}
@@ -171,8 +171,8 @@ const RegradeRequestsTable = ({ requests, emojiMappings, org }: RegradeRequestsT
                     request: {
                       id: request.id,
                       student_id: request.student_id,
-                      repository_assignment: {
-                        id: request.repository_assignment.id,
+                      git_repo_assignment: {
+                        id: request.git_repo_assignment.id,
                       },
                     },
                     status: 'APPROVED',

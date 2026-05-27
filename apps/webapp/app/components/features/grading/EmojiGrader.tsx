@@ -41,7 +41,7 @@ const EmojiGrader = ({ repositoryAssignment, emojiMappings }: EmojiGraderProps) 
   }) as React.RefObject<HTMLDivElement>;
 
   const assignGrade = (emoji: string) => {
-    notify(ActionTypes.ADD_GRADE_TO_REPOSITORY_ASSIGNMENT, 'Assigning grade...');
+    notify(ActionTypes.ADD_GRADE_TO_GIT_REPO_ASSIGNMENT, 'Assigning grade...');
 
     const { repository, ...assignmentWithoutCircular } = repositoryAssignment;
     const assignmentData = {
@@ -54,7 +54,7 @@ const EmojiGrader = ({ repositoryAssignment, emojiMappings }: EmojiGraderProps) 
     fetcher!.submit(
       {
         repoName: repository?.name ?? null,
-        repositoryAssignment: assignmentData,
+        gitRepoAssignment: assignmentData,
         graderId: user!.id,
         grade: emoji,
         studentId: repositoryAssignment.studentId ?? null,
@@ -62,14 +62,14 @@ const EmojiGrader = ({ repositoryAssignment, emojiMappings }: EmojiGraderProps) 
       },
       {
         method: 'post',
-        action: `/api/repositoryAssignment/${classroom?.slug}?action=addGrade`,
+        action: `/api/gitRepoAssignment/${classroom?.slug}?action=addGrade`,
         encType: 'application/json',
       }
     );
   };
 
   const removeGrade = (emoji: string) => {
-    notify(ActionTypes.REMOVE_GRADE_FROM_REPOSITORY_ASSIGNMENT, 'Removing grade...');
+    notify(ActionTypes.REMOVE_GRADE_FROM_GIT_REPO_ASSIGNMENT, 'Removing grade...');
 
     const { repository, ...assignmentWithoutCircular } = repositoryAssignment;
     const assignmentData = {
@@ -85,7 +85,7 @@ const EmojiGrader = ({ repositoryAssignment, emojiMappings }: EmojiGraderProps) 
     fetcher!.submit(
       {
         repoName: repository?.name ?? null,
-        repositoryAssignment: assignmentData,
+        gitRepoAssignment: assignmentData,
         grade: gradeToRemove
           ? {
               id: gradeToRemove.id,
@@ -96,7 +96,7 @@ const EmojiGrader = ({ repositoryAssignment, emojiMappings }: EmojiGraderProps) 
       },
       {
         method: 'post',
-        action: `/api/repositoryAssignment/${classroom?.slug}?action=removeGrade`,
+        action: `/api/gitRepoAssignment/${classroom?.slug}?action=removeGrade`,
         encType: 'application/json',
       }
     );

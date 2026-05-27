@@ -152,7 +152,7 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
           login: true,
         },
       },
-      modules: {
+      repositories: {
         select: {
           id: true,
           title: true,
@@ -272,7 +272,7 @@ const CreateClassroom = ({ loaderData }: Route.ComponentProps) => {
     if (importEnabled && sourceClassroomId && selectedModules.size > 0) {
       importConfig = {
         sourceClassroomId,
-        modules: Array.from(selectedModules.entries()).map(([id, config]) => ({
+        repositories: Array.from(selectedModules.entries()).map(([id, config]) => ({
           id,
           includeQuizzes: config.includeQuizzes || false,
         })),

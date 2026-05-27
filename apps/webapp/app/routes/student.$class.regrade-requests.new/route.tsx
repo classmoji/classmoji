@@ -47,7 +47,7 @@ const NewRegradeRequest = ({ loaderData }: Route.ComponentProps) => {
     fetcher!.submit(
       {
         student_comment: comment,
-        repository_assignment_id: assignment,
+        git_repo_assignment_id: assignment,
       },
       {
         method: 'POST',
@@ -117,15 +117,15 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
   assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
 
   const data = await request.json();
-  const repositoryAssignment = await ClassmojiService.repositoryAssignment.findById(
-    data.repository_assignment_id
+  const repositoryAssignment = await ClassmojiService.gitRepoAssignment.findById(
+    data.git_repo_assignment_id
   );
 
   // Verify assignment belongs to this classroom AND this user (IDOR protection)
   if (
     !repositoryAssignment ||
-    repositoryAssignment.repository.classroom_id !== classroom.id ||
-    repositoryAssignment.repository.student_id !== userId
+    repositoryAssignment.git_repo.classroom_id !== classroom.id ||
+    repositoryAssignment.git_repo.student_id !== userId
   ) {
     throw new Response('Assignment not found or not yours', { status: 403 });
   }

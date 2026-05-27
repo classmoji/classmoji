@@ -18,7 +18,7 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
 
   const promises = {
     emojiMappings: ClassmojiService.emojiMapping.findByClassroomId(classroom.id),
-    modules: ClassmojiService.module.findByClassroomSlug(classSlug!),
+    repositories: ClassmojiService.repository.findByClassroomSlug(classSlug!),
     students: ClassmojiService.user.findRepositoriesPerStudent(classroom),
     settings: ClassmojiService.classroom.getClassroomSettingsForServer(classroom.id),
     letterGradeMappings: ClassmojiService.letterGradeMapping.findByClassroomId(classroom.id),
@@ -66,8 +66,8 @@ const Grades = ({ loaderData }: Route.ComponentProps) => {
               emojiMappings={
                 resolvedEmojiMappings as Parameters<typeof GradesTable>[0]['emojiMappings']
               }
-              modules={resolvedModules as Parameters<typeof GradesTable>[0]['modules']}
-              students={resolvedStudents as Parameters<typeof GradesTable>[0]['students']}
+              repositories={resolvedModules as Parameters<typeof GradesTable>[0]['repositories']}
+              students={resolvedStudents as unknown as Parameters<typeof GradesTable>[0]['students']}
               settings={resolvedSettings as Parameters<typeof GradesTable>[0]['settings']}
               letterGradeMappings={
                 resolvedLetterGradeMappings as Parameters<

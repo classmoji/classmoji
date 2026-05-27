@@ -52,7 +52,7 @@ test.describe('Assistant Navigation', () => {
     // Assistant should have access to these
     await expect(page.getByRole('link', { name: 'Dashboard' })).toBeVisible();
     await expect(page.getByRole('link', { name: 'Calendar' })).toBeVisible();
-    await expect(page.getByRole('link', { name: 'Modules' })).toBeVisible();
+    await expect(page.getByRole('link', { name: 'Repositories' })).toBeVisible();
     await expect(page.getByRole('link', { name: 'Resubmits' })).toBeVisible();
 
     // Assistant should NOT have access to these (owner-only)
@@ -60,11 +60,11 @@ test.describe('Assistant Navigation', () => {
     await expect(page.getByRole('link', { name: 'Class Settings' })).not.toBeVisible();
   });
 
-  test('can navigate to modules', async ({ authenticatedPage: page, testOrg }) => {
-    await page.getByRole('link', { name: 'Modules' }).click();
-    await page.waitForURL(`**/assistant/${testOrg}/modules`);
+  test('can navigate to repositories', async ({ authenticatedPage: page, testOrg }) => {
+    await page.getByRole('link', { name: 'Repositories' }).click();
+    await page.waitForURL(`**/assistant/${testOrg}/repos`);
     await waitForDataLoad(page);
-    await expect(page).toHaveURL(new RegExp(`/assistant/${testOrg}/modules`));
+    await expect(page).toHaveURL(new RegExp(`/assistant/${testOrg}/repos`));
   });
 
   test('can navigate to regrade requests', async ({ authenticatedPage: page, testOrg }) => {

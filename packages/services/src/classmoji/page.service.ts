@@ -43,7 +43,7 @@ export async function create(values: Prisma.PageUncheckedCreateInput) {
       creator: true,
       links: {
         include: {
-          module: true,
+          repository: true,
           assignment: true,
         },
       },
@@ -73,7 +73,7 @@ export async function findById(pageId: string, options: PageQueryOptions = {}) {
         (options.includeLinks ?? false)
           ? {
               include: {
-                module: true,
+                repository: true,
                 assignment: true,
               },
             }
@@ -106,7 +106,7 @@ export async function findByClassroomId(classroomId: string, options: PageQueryO
         (options.includeLinks ?? false)
           ? {
               include: {
-                module: true,
+                repository: true,
                 assignment: true,
               },
             }
@@ -121,12 +121,12 @@ export async function findByClassroomId(classroomId: string, options: PageQueryO
 }
 
 /**
- * Find pages linked to a module
+ * Find pages linked to a repository
  */
-export async function findByModule(moduleId: string) {
+export async function findByRepository(repositoryId: string) {
   const pageLinks = await getPrisma().pageLink.findMany({
     where: {
-      module_id: moduleId,
+      repository_id: repositoryId,
     },
     include: {
       page: {
@@ -177,26 +177,26 @@ export async function findByAssignment(assignmentId: string) {
 }
 
 /**
- * Link a page to a module or assignment
+ * Link a page to a repository or assignment
  */
 export async function linkPage(
   pageId: string,
   {
-    moduleId,
+    repositoryId,
     assignmentId,
     order = 0,
-  }: { moduleId?: string; assignmentId?: string; order?: number }
+  }: { repositoryId?: string; assignmentId?: string; order?: number }
 ) {
   const link = await getPrisma().pageLink.create({
     data: {
       page_id: pageId,
-      module_id: moduleId || null,
+      repository_id: repositoryId || null,
       assignment_id: assignmentId || null,
       order,
     },
     include: {
       page: true,
-      module: true,
+      repository: true,
       assignment: true,
     },
   });
@@ -205,16 +205,16 @@ export async function linkPage(
 }
 
 /**
- * Unlink a page from a module or assignment
+ * Unlink a page from a repository or assignment
  */
 export async function unlinkPage(
   pageId: string,
-  { moduleId, assignmentId }: { moduleId?: string; assignmentId?: string }
+  { repositoryId, assignmentId }: { repositoryId?: string; assignmentId?: string }
 ) {
   const link = await getPrisma().pageLink.deleteMany({
     where: {
       page_id: pageId,
-      module_id: moduleId || null,
+      repository_id: repositoryId || null,
       assignment_id: assignmentId || null,
     },
   });
@@ -246,7 +246,7 @@ export async function update(
       creator: true,
       links: {
         include: {
-          module: true,
+          repository: true,
           assignment: true,
         },
       },
@@ -349,7 +349,7 @@ export async function findByContentPath(
         (options.includeLinks ?? false)
           ? {
               include: {
-                module: true,
+                repository: true,
                 assignment: true,
               },
             }

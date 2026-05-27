@@ -42,11 +42,11 @@ export default function StudentSlides({ loaderData }: Route.ComponentProps) {
       render: (title: string) => <p className="font-medium">{title}</p>,
     },
     {
-      title: 'Module',
-      dataIndex: 'module',
-      key: 'module',
-      render: (module: string | null) =>
-        module || <span className="text-ink-4">—</span>,
+      title: 'Repository',
+      dataIndex: 'repository',
+      key: 'repository',
+      render: (repository: string | null) =>
+        repository || <span className="text-ink-4">—</span>,
     },
     {
       title: 'Actions',

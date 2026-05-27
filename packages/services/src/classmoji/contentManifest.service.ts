@@ -34,7 +34,7 @@ export async function saveManifest(classroomId: string): Promise<void> {
   }
 
   // Build manifest from database
-  const modules = await getPrisma().module.findMany({
+  const repositories = await getPrisma().repository.findMany({
     where: { classroom_id: classroomId },
     include: {
       pages: { include: { page: true } },
@@ -61,13 +61,13 @@ export async function saveManifest(classroomId: string): Promise<void> {
 
   // Build manifest using slugs as keys
   const manifest: {
-    modules: Record<string, ManifestModuleEntry>;
+    repositories: Record<string, ManifestModuleEntry>;
     general: { pages: string[]; slides: string[] };
-  } = { modules: {}, general: { pages: [], slides: [] } };
+  } = { repositories: {}, general: { pages: [], slides: [] } };
 
-  for (const mod of modules) {
+  for (const mod of repositories) {
     const modSlug = mod.slug ?? String(mod.id);
-    manifest.modules[modSlug] = {
+    manifest.repositories[modSlug] = {
       pages: mod.pages.map(l => l.page.slug ?? String(l.page.id)),
       slides: mod.slides.map(l => l.slide.slug ?? String(l.slide.id)),
       assignments: {},
@@ -75,7 +75,7 @@ export async function saveManifest(classroomId: string): Promise<void> {
 
     for (const assignment of mod.assignments) {
       const assignmentSlug = assignment.slug ?? String(assignment.id);
-      manifest.modules[modSlug].assignments[assignmentSlug] = {
+      manifest.repositories[modSlug].assignments[assignmentSlug] = {
         pages: assignment.pages.map(l => l.page.slug ?? String(l.page.id)),
         slides: assignment.slides.map(l => l.slide.slug ?? String(l.slide.id)),
       };

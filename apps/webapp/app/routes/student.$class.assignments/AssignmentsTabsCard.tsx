@@ -9,7 +9,7 @@ export type AssignmentStatus = 'current' | 'completed';
 export interface AssignmentRow {
   id: string;
   assignmentTitle: string;
-  moduleTitle: string;
+  repositoryTitle: string;
   moduleType: string | null;
   status: AssignmentStatus;
   gradesReleased: boolean;
@@ -122,7 +122,7 @@ const AssignmentsTabsCard = ({ rows }: AssignmentsTabsCardProps) => {
             <table className="w-full text-sm">
               <thead className="text-xs font-semibold tracking-[0.08em] uppercase text-ink-3">
                 <tr className="border-b border-line">
-                  <th className="text-left px-4 py-3 font-semibold">Module</th>
+                  <th className="text-left px-4 py-3 font-semibold">Repository</th>
                   <th className="text-left px-4 py-3 font-semibold">Assignment</th>
                   <th className="text-left px-4 py-3 font-semibold hidden md:table-cell">Type</th>
                   <th className="text-left px-4 py-3 font-semibold">Status</th>
@@ -149,7 +149,7 @@ const AssignmentsTabsCard = ({ rows }: AssignmentsTabsCardProps) => {
                     >
                       <td className="px-4 py-3 text-gray-600 dark:text-gray-300">
                         <span className="block truncate max-w-[12rem]">
-                          {row.moduleTitle || '—'}
+                          {row.repositoryTitle || '—'}
                         </span>
                       </td>
                       <td className="px-4 py-3">

@@ -5,7 +5,7 @@ import KanbanCard from './KanbanCard';
 
 interface ResourceLink {
   id: string;
-  module_id: string | null;
+  repository_id: string | null;
   assignment_id: string | null;
 }
 
@@ -142,7 +142,7 @@ const AssignmentSection = ({
 };
 
 interface ModuleColumnProps {
-  module: { id: string; title: string };
+  repository: { id: string; title: string };
   modulePages: Resource[];
   moduleSlides: Resource[];
   assignments: AssignmentRef[];
@@ -157,7 +157,7 @@ interface ModuleColumnProps {
 }
 
 const ModuleColumn = ({
-  module,
+  repository,
   modulePages,
   moduleSlides,
   assignments,
@@ -174,45 +174,45 @@ const ModuleColumn = ({
 
   return (
     <div className="flex flex-col flex-shrink-0 min-w-[300px] max-w-[340px] bg-white dark:bg-neutral-800 rounded-lg border border-gray-200 dark:border-neutral-700 shadow-sm">
-      {/* Module Header */}
+      {/* Repository Header */}
       <div className="px-4 py-3 border-b border-gray-100 dark:border-neutral-700 flex items-center gap-2">
         <IconFolder size={18} className="text-ink-3" />
         <span className="flex-1 font-medium text-ink-1 truncate">
-          {module.title}
+          {repository.title}
         </span>
         <span className="text-xs text-gray-400 bg-gray-100 dark:bg-neutral-700 px-2 py-0.5 rounded-full">
           {totalCount}
         </span>
       </div>
 
-      {/* Module-level drop zone */}
+      {/* Repository-level drop zone */}
       <div className="px-2 pt-2">
         <div className="text-xs text-ink-4 px-1 mb-1 uppercase tracking-wide">
-          Module Level
+          Repository Level
         </div>
         <DropZone
-          id={`module-${module.id}`}
-          targetType="module"
-          targetId={module.id}
+          id={`repository-${repository.id}`}
+          targetType="repository"
+          targetId={repository.id}
           isOver={isOver}
           hasResources={moduleCount > 0}
         >
           {modulePages.map(page => (
             <KanbanCard
-              key={`page-${page.id}-module-${module.id}`}
+              key={`page-${page.id}-repository-${repository.id}`}
               resource={page}
               resourceType="page"
-              linkId={getLinkId(page, 'module', module.id)}
+              linkId={getLinkId(page, 'repository', repository.id)}
               onRemove={onRemoveLink}
               draggable={false}
             />
           ))}
           {moduleSlides.map(slide => (
             <KanbanCard
-              key={`slide-${slide.id}-module-${module.id}`}
+              key={`slide-${slide.id}-repository-${repository.id}`}
               resource={slide}
               resourceType="slide"
-              linkId={getLinkId(slide, 'module', module.id)}
+              linkId={getLinkId(slide, 'repository', repository.id)}
               onRemove={onRemoveLink}
               draggable={false}
             />
@@ -232,7 +232,7 @@ const ModuleColumn = ({
               <AssignmentSection
                 key={assignment.id}
                 assignment={assignment}
-                moduleId={module.id}
+                moduleId={repository.id}
                 pages={pages}
                 slides={slides}
                 getLinkId={getLinkId}

@@ -58,8 +58,8 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
 
   // Get user's repository assignments for assignment link navigation
   // This allows linking directly to GitHub issues for assignments
-  const repoAssignments = await ClassmojiService.repositoryAssignment.findForUser({
-    repository: { student_id: userId, classroom_id: classroom!.id },
+  const repoAssignments = await ClassmojiService.gitRepoAssignment.findForUser({
+    git_repo: { student_id: userId, classroom_id: classroom!.id },
   });
 
   // Build map of assignment_id -> repository assignment (with repo info)

@@ -66,7 +66,7 @@ export const loader = async ({ request }: { request: Request }) => {
       },
       links: {
         include: {
-          module: true,
+          repository: true,
         },
         take: 1,
       },
@@ -254,7 +254,7 @@ export const action = async ({ request }: { request: Request }) => {
             select: { slug: true, name: true },
           },
           links: {
-            include: { module: true },
+            include: { repository: true },
             take: 1,
           },
         },
@@ -412,7 +412,7 @@ export default function SlidesIndex() {
                       {slide.title}
                     </h3>
                     <p className="mt-1 text-sm text-gray-500 dark:text-gray-400 truncate">
-                      {slide.links?.[0]?.module?.title || '—'}
+                      {slide.links?.[0]?.repository?.title || '—'}
                     </p>
                     <div className="mt-2 text-xs text-gray-400 dark:text-gray-500">
                       {slide.classroom?.content_namespace}

@@ -60,7 +60,7 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
     const devClassroom = await getPrisma().classroom.findFirst({
       where: { slug: 'classmoji-dev-winter-2025' },
       include: {
-        modules: {
+        repositories: {
           include: {
             assignments: { orderBy: { created_at: 'asc' } },
           },
@@ -88,13 +88,13 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
       }
 
       // Seed student data for the real user so the student view is non-empty
-      const helloWorldModule = devClassroom.modules.find(m => m.title === 'hello-world');
+      const helloWorldModule = devClassroom.repositories.find(m => m.title === 'hello-world');
       const [assignment1, assignment2] = helloWorldModule?.assignments ?? [];
       const fakeTA = await getPrisma().user.findFirst({ where: { login: 'fake-ta' } });
 
       if (helloWorldModule && assignment1 && fakeTA) {
         // Repo for the real user
-        const repo = await getPrisma().repository.upsert({
+        const repo = await getPrisma().gitRepo.upsert({
           where: {
             provider_provider_id: {
               provider: 'GITHUB',
@@ -104,7 +104,7 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
           update: {},
           create: {
             classroom_id: devClassroom.id,
-            module_id: helloWorldModule.id,
+            repository_id: helloWorldModule.id,
             provider: 'GITHUB',
             provider_id: `fake-repo-${githubUser.login}`,
             name: `${githubUser.login}-hello-world`,
@@ -113,7 +113,7 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
         });
 
         // Part 1: closed + graded ⭐
-        const repoAssignment1 = await getPrisma().repositoryAssignment.upsert({
+        const repoAssignment1 = await getPrisma().gitRepoAssignment.upsert({
           where: {
             provider_provider_id: {
               provider: 'GITHUB',
@@ -122,7 +122,7 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
           },
           update: {},
           create: {
-            repository_id: repo.id,
+            git_repo_id: repo.id,
             assignment_id: assignment1.id,
             provider: 'GITHUB',
             provider_id: `fake-issue-${githubUser.login}`,
@@ -132,12 +132,12 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
         });
 
         const existingGrade = await getPrisma().assignmentGrade.findFirst({
-          where: { repository_assignment_id: repoAssignment1.id },
+          where: { git_repo_assignment_id: repoAssignment1.id },
         });
         if (!existingGrade) {
           await getPrisma().assignmentGrade.create({
             data: {
-              repository_assignment_id: repoAssignment1.id,
+              git_repo_assignment_id: repoAssignment1.id,
               grader_id: fakeTA.id,
               emoji: '⭐',
             },
@@ -146,7 +146,7 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
             data: {
               classroom_id: devClassroom.id,
               student_id: user.id,
-              repository_assignment_id: repoAssignment1.id,
+              git_repo_assignment_id: repoAssignment1.id,
               amount: 110,
               type: 'GAIN',
               balance_after: 110,
@@ -156,7 +156,7 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
 
         // Part 2: open (unsubmitted) — something still to do as a student
         if (assignment2) {
-          await getPrisma().repositoryAssignment.upsert({
+          await getPrisma().gitRepoAssignment.upsert({
             where: {
               provider_provider_id: {
                 provider: 'GITHUB',
@@ -165,7 +165,7 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
             },
             update: {},
             create: {
-              repository_id: repo.id,
+              git_repo_id: repo.id,
               assignment_id: assignment2.id,
               provider: 'GITHUB',
               provider_id: `fake-issue-p2-${githubUser.login}`,

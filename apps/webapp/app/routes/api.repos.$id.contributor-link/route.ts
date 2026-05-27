@@ -6,8 +6,8 @@ import type { Route } from './+types/route';
 /**
  * POST /api/repos/:id/contributor-link
  *
- * `:id` is the Repository.id (NOT the repository_assignment id — the
- * `RepositoryContributorLink` table is keyed on `(repository_id, github_login)`).
+ * `:id` is the Repository.id (NOT the git_repo_assignment id — the
+ * `RepositoryContributorLink` table is keyed on `(git_repo_id, github_login)`).
  *
  * Body: `{ github_login: string, user_id: string | null }`.
  *
@@ -26,7 +26,7 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
   const repositoryId = params.id!;
 
   // Resolve the owning classroom so we can run auth against its slug.
-  const repo = await getPrisma().repository.findUnique({
+  const repo = await getPrisma().gitRepo.findUnique({
     where: { id: repositoryId },
     select: { id: true, classroom: { select: { id: true, slug: true } } },
   });
@@ -44,7 +44,7 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
     allowedRoles: ['OWNER', 'TEACHER', 'ASSISTANT'],
     resourceType: 'REPOSITORY',
     attemptedAction: 'link_contributor',
-    metadata: { repository_id: repositoryId },
+    metadata: { git_repo_id: repositoryId },
   });
   assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
 

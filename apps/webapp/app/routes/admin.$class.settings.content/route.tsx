@@ -37,10 +37,9 @@ const SettingsContent = ({ loaderData }: Route.ComponentProps) => {
 
   // Generate repo name and URL for display
   const gitOrgLogin = organization.git_organization?.login || classSlug || '';
-  const repoName = getContentRepoName({
-    login: gitOrgLogin,
-    content_namespace: organization.content_namespace ?? undefined,
-  });
+  const repoName = organization.content_namespace
+    ? `content-${gitOrgLogin}-${organization.content_namespace}`
+    : getContentRepoName({ login: gitOrgLogin });
   const repoUrl = `https://github.com/${gitOrgLogin}/${repoName}`;
 
   // Handler for customizable repo name (currently disabled in UI)

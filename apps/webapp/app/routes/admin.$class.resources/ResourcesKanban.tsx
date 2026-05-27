@@ -17,11 +17,11 @@ import KanbanCard from './KanbanCard';
 interface Resource {
   id: string;
   title: string;
-  links?: Array<{ id: string; module_id: string | null; assignment_id: string | null }>;
+  links?: Array<{ id: string; repository_id: string | null; assignment_id: string | null }>;
   [key: string]: unknown;
 }
 
-interface Module {
+interface Repository {
   id: string;
   title: string;
   assignments?: Array<{ id: string; title: string; [key: string]: unknown }>;
@@ -29,12 +29,12 @@ interface Module {
 }
 
 interface ResourcesKanbanProps {
-  modules: Module[];
+  repositories: Repository[];
   pages: Resource[];
   slides: Resource[];
 }
 
-const ResourcesKanban = ({ modules, pages, slides }: ResourcesKanbanProps) => {
+const ResourcesKanban = ({ repositories, pages, slides }: ResourcesKanbanProps) => {
   const fetcher = useFetcher();
   const revalidator = useRevalidator();
 
@@ -53,7 +53,7 @@ const ResourcesKanban = ({ modules, pages, slides }: ResourcesKanbanProps) => {
     setShowPages,
     showSlides,
     setShowSlides,
-  } = useResourcesBoard(modules, pages, slides);
+  } = useResourcesBoard(repositories, pages, slides);
 
   const sensors = useSensors(
     useSensor(PointerSensor, {
@@ -164,17 +164,17 @@ const ResourcesKanban = ({ modules, pages, slides }: ResourcesKanbanProps) => {
             <SourceColumn pages={allPages} slides={allSlides} />
           </div>
 
-          {/* Scrollable modules area */}
+          {/* Scrollable repositories area */}
           <div className="flex-1 flex gap-4 p-4 overflow-x-auto overflow-y-auto">
-            {modules.map((module: Module) => {
-              const { pages: modPages, slides: modSlides } = getModuleResources(module.id);
+            {repositories.map((repository: Repository) => {
+              const { pages: modPages, slides: modSlides } = getModuleResources(repository.id);
               return (
                 <ModuleColumn
-                  key={module.id}
-                  module={module}
+                  key={repository.id}
+                  repository={repository}
                   modulePages={modPages}
                   moduleSlides={modSlides}
-                  assignments={module.assignments || []}
+                  assignments={repository.assignments || []}
                   getAssignmentResources={getAssignmentResources}
                   getLinkId={getLinkId}
                   onRemoveLink={handleRemoveLink}
@@ -182,9 +182,9 @@ const ResourcesKanban = ({ modules, pages, slides }: ResourcesKanbanProps) => {
                 />
               );
             })}
-            {modules.length === 0 && (
+            {repositories.length === 0 && (
               <div className="flex items-center justify-center flex-1 text-sm text-ink-3">
-                No modules available. Create a module first.
+                No repositories available. Create a repository first.
               </div>
             )}
           </div>

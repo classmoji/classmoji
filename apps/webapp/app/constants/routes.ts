@@ -29,7 +29,7 @@ import {
 export const routeCategories = {
   content: {
     label: 'Content',
-    items: ['modules', 'assignments', 'slides', 'pages', 'quizzes'],
+    items: ['repositories', 'assignments', 'slides', 'pages', 'quizzes'],
   },
   assessment: {
     label: 'Assessment',
@@ -41,7 +41,7 @@ export const routeCategories = {
   },
   integrations: {
     label: 'Integrations',
-    items: ['repositories', 'repo-health'],
+    items: ['gitrepos', 'repo-health'],
   },
   settings: {
     label: 'Settings',
@@ -69,9 +69,9 @@ export const routes = {
   },
 
   // Content
-  modules: {
-    link: '/modules',
-    label: 'Modules',
+  repositories: {
+    link: '/repos',
+    label: 'Repositories',
     icon: IconFileText,
     roles: ['OWNER', 'ASSISTANT', 'STUDENT'],
     category: 'content',
@@ -160,9 +160,9 @@ export const routes = {
   },
 
   // Integrations
-  repositories: {
-    link: '/repositories',
-    label: 'Repositories',
+  gitrepos: {
+    link: '/gitrepos',
+    label: 'GitHub Repos',
     icon: IconBrandGithub,
     roles: ['OWNER'],
     category: 'integrations',

@@ -39,7 +39,7 @@ interface StudentQuiz {
   id: string;
   name: string;
   assignmentTitle: string;
-  module_id: string | null;
+  repository_id: string | null;
   include_code_context: boolean;
   dueDate: string | Date | null;
   status: string;
@@ -102,8 +102,8 @@ export async function loader({ params, request }: Route.LoaderArgs) {
     return {
       id: quiz.id?.toString() || quiz.id,
       name: quiz.name,
-      assignmentTitle: quiz.module?.title || 'Unlinked',
-      module_id: quiz.module_id,
+      assignmentTitle: quiz.repository?.title || 'Unlinked',
+      repository_id: quiz.repository_id,
       include_code_context: quiz.include_code_context,
       dueDate: quiz.due_date,
       status: quiz.status,
@@ -453,9 +453,9 @@ export default function StudentQuizzes({ loaderData }: Route.ComponentProps) {
       ),
     },
     {
-      title: 'Module',
+      title: 'Repository',
       dataIndex: 'assignmentTitle',
-      key: 'module',
+      key: 'repository',
       render: (title: string) => <Text type="secondary">{title}</Text>,
     },
     {

@@ -31,7 +31,7 @@ export interface OwnedClassroom {
     avatar_url?: string | null;
     [key: string]: unknown;
   } | null;
-  modules?: ClassroomModule[];
+  repositories?: ClassroomModule[];
 }
 
 export interface ModuleConfig {

@@ -1,20 +1,20 @@
 /**
  * RepoAnalytics Service
  *
- * Builds, links, and persists `RepoAnalyticsSnapshot` rows for a
- * `RepositoryAssignment`. A snapshot is a cached, authored summary of the
+ * Builds, links, and persists `GitRepoAnalyticsSnapshot` rows for a
+ * `GitRepoAssignment`. A snapshot is a cached, authored summary of the
  * underlying repo's commits, contributors, languages, and PR counts — used by
  * the TA cockpit and owner dashboards.
  *
  * High-level flow (see `refreshOne`):
- *   1. Load the RepositoryAssignment → Repository → Classroom → GitOrganization.
+ *   1. Load the GitRepoAssignment → GitRepo → Classroom → GitOrganization.
  *   2. Build a GitProvider from the org's installation/credentials.
  *   3. Call `buildSnapshot` to fetch commits / contributors / languages / PR summary.
  *      GitHub's contributor-stats endpoint returns 202 while warming its cache; we
  *      surface that as `pending: true` and still write the row but mark it `stale`
  *      so the Trigger.dev task retries.
  *   4. Resolve GitHub logins → classroom User ids via ClassroomMembership.user.login,
- *      with `RepositoryContributorLink` rows taking precedence as manual overrides.
+ *      with `GitRepoContributorLink` rows taking precedence as manual overrides.
  *   5. Upsert the snapshot row (JSON columns + aggregate totals + stale/error flags).
  */
 import getPrisma from '@classmoji/database';
@@ -119,7 +119,7 @@ export async function buildSnapshot(
 // Upsert
 
 /**
- * Upsert a snapshot row for a `RepositoryAssignment`. Safe to call with
+ * Upsert a snapshot row for a `GitRepoAssignment`. Safe to call with
  * `payload: null` when recording a hard error — in that case the JSON columns
  * are reset to their empty defaults, `stale: true` is forced, and the error
  * message is persisted.
@@ -171,10 +171,10 @@ export async function upsertSnapshot(
     error,
   };
 
-  await prisma.repoAnalyticsSnapshot.upsert({
-    where: { repository_assignment_id: repositoryAssignmentId },
+  await prisma.gitRepoAnalyticsSnapshot.upsert({
+    where: { git_repo_assignment_id: repositoryAssignmentId },
     create: {
-      repository_assignment_id: repositoryAssignmentId,
+      git_repo_assignment_id: repositoryAssignmentId,
       ...data,
     },
     update: data,
@@ -184,9 +184,9 @@ export async function upsertSnapshot(
 // Link map builder
 
 /**
- * Build a `githubLogin → userId` map for a repository. Starts with every
+ * Build a `githubLogin → userId` map for a gitRepo. Starts with every
  * `ClassroomMembership.user.login` in the classroom, then overlays any
- * `RepositoryContributorLink` rows for this repo (manual overrides win).
+ * `GitRepoContributorLink` rows for this repo (manual overrides win).
  */
 async function buildLoginToUserIdMap(
   classroomId: string,
@@ -198,8 +198,8 @@ async function buildLoginToUserIdMap(
       where: { classroom_id: classroomId },
       include: { user: { select: { id: true, login: true } } },
     }),
-    prisma.repositoryContributorLink.findMany({
-      where: { repository_id: repositoryId, user_id: { not: null } },
+    prisma.gitRepoContributorLink.findMany({
+      where: { git_repo_id: repositoryId, user_id: { not: null } },
     }),
   ]);
 
@@ -220,7 +220,7 @@ async function buildLoginToUserIdMap(
 // Orchestrator
 
 /**
- * End-to-end refresh for a single RepositoryAssignment. Intended to be called
+ * End-to-end refresh for a single GitRepoAssignment. Intended to be called
  * by the Trigger.dev workflow (Task 7). Never throws — errors are persisted on
  * the snapshot row and returned via `{ stale: true, error }` so the task can
  * decide whether to retry.
@@ -230,10 +230,10 @@ export async function refreshOne(
 ): Promise<{ stale: boolean; error?: string }> {
   const prisma = getPrisma();
   try {
-    const ra = await prisma.repositoryAssignment.findUnique({
+    const ra = await prisma.gitRepoAssignment.findUnique({
       where: { id: repositoryAssignmentId },
       include: {
-        repository: {
+        git_repo: {
           include: {
             classroom: {
               include: { git_organization: true },
@@ -243,11 +243,11 @@ export async function refreshOne(
       },
     });
 
-    if (!ra) throw new Error(`RepositoryAssignment ${repositoryAssignmentId} not found`);
-    const repo = ra.repository;
-    if (!repo) throw new Error('Repository not attached to RepositoryAssignment');
+    if (!ra) throw new Error(`GitRepoAssignment ${repositoryAssignmentId} not found`);
+    const repo = ra.git_repo;
+    if (!repo) throw new Error('GitRepo not attached to GitRepoAssignment');
     const classroom = repo.classroom;
-    if (!classroom) throw new Error('Classroom not attached to Repository');
+    if (!classroom) throw new Error('Classroom not attached to GitRepo');
     const gitOrg = classroom.git_organization;
     if (!gitOrg) throw new Error('GitOrganization not attached to Classroom');
     if (!gitOrg.login) throw new Error('GitOrganization.login is required');
@@ -281,7 +281,7 @@ export async function refreshOne(
 // Manual contributor → user linking
 
 /**
- * Upsert a `RepositoryContributorLink` for the given `(repository_id, github_login)`.
+ * Upsert a `GitRepoContributorLink` for the given `(git_repo_id, github_login)`.
  * Passing `userId: null` unlinks (records the mapping with no user). When a
  * `userId` is supplied, the user MUST be a member of the classroom that owns
  * the repo — otherwise this throws.
@@ -297,11 +297,11 @@ export async function linkContributor(
 ): Promise<void> {
   const prisma = getPrisma();
 
-  const repo = await prisma.repository.findUnique({
+  const repo = await prisma.gitRepo.findUnique({
     where: { id: repositoryId },
     select: { id: true, classroom_id: true },
   });
-  if (!repo) throw new Error(`Repository ${repositoryId} not found`);
+  if (!repo) throw new Error(`GitRepo ${repositoryId} not found`);
 
   if (userId) {
     const membership = await prisma.classroomMembership.findFirst({
@@ -309,19 +309,19 @@ export async function linkContributor(
       select: { id: true },
     });
     if (!membership) {
-      throw new Error(`User ${userId} is not a member of the classroom that owns this repository`);
+      throw new Error(`User ${userId} is not a member of the classroom that owns this gitRepo`);
     }
   }
 
-  await prisma.repositoryContributorLink.upsert({
+  await prisma.gitRepoContributorLink.upsert({
     where: {
-      repository_id_github_login: {
-        repository_id: repositoryId,
+      git_repo_id_github_login: {
+        git_repo_id: repositoryId,
         github_login: githubLogin,
       },
     },
     create: {
-      repository_id: repositoryId,
+      git_repo_id: repositoryId,
       github_login: githubLogin,
       user_id: userId,
     },
@@ -334,14 +334,14 @@ export async function linkContributor(
 // Team aggregation
 
 /**
- * Shape of a stored snapshot row plus its associated repository name/id — the
+ * Shape of a stored snapshot row plus its associated gitRepo name/id — the
  * subset we expose to the Team Contributions view. Keeps `repoAnalytics.types`
  * Prisma-free; we redeclare here rather than importing Prisma types.
  */
 export type TeamRepoSnapshot = {
-  repository_id: string;
+  git_repo_id: string;
   repository_name: string;
-  repository_assignment_id: string;
+  git_repo_assignment_id: string;
   fetched_at: string;
   stale: boolean;
   error: string | null;
@@ -365,19 +365,19 @@ export type TeamAggregate = {
 };
 
 /**
- * Aggregate the latest analytics snapshot across every repository owned by a
- * team. For each repo we pick its most recent `RepoAnalyticsSnapshot` (ordered
+ * Aggregate the latest analytics snapshot across every gitRepo owned by a
+ * team. For each repo we pick its most recent `GitRepoAnalyticsSnapshot` (ordered
  * by `fetched_at`) and merge:
  *   - `commits` via simple concatenation
  *   - `contributors` summed by `login` (commits/additions/deletions); `user_id`
  *     preserved from the first snapshot that had one.
  *
- * Returns `null` when the team owns no repositories with any snapshots.
+ * Returns `null` when the team owns no gitRepos with any snapshots.
  */
 export async function aggregateForTeam(teamId: string): Promise<TeamAggregate | null> {
   const prisma = getPrisma();
 
-  const repos = await prisma.repository.findMany({
+  const repos = await prisma.gitRepo.findMany({
     where: { team_id: teamId },
     select: {
       id: true,
@@ -403,7 +403,7 @@ export async function aggregateForTeam(teamId: string): Promise<TeamAggregate | 
     const latestSnapshot = pickLatestSnapshot(
       repo.assignments,
       ra => ra.analytics_snapshot,
-      (snap, ra) => ({ ...snap, repository_assignment_id: ra.id })
+      (snap, ra) => ({ ...snap, git_repo_assignment_id: ra.id })
     );
 
     if (!latestSnapshot) continue;
@@ -418,9 +418,9 @@ export async function aggregateForTeam(teamId: string): Promise<TeamAggregate | 
     }) as unknown as PRSummary;
 
     snapshotsByRepoId[repo.id] = {
-      repository_id: repo.id,
+      git_repo_id: repo.id,
       repository_name: repo.name,
-      repository_assignment_id: latestSnapshot.repository_assignment_id,
+      git_repo_assignment_id: latestSnapshot.git_repo_assignment_id,
       fetched_at: latestSnapshot.fetched_at.toISOString(),
       stale: latestSnapshot.stale,
       error: latestSnapshot.error,
@@ -503,7 +503,7 @@ export interface ClassroomRepoHealth {
 export async function classroomRepoHealth(classroomId: string): Promise<ClassroomRepoHealth> {
   const prisma = getPrisma();
 
-  const reposRaw = await prisma.repository.findMany({
+  const reposRaw = await prisma.gitRepo.findMany({
     where: { classroom_id: classroomId },
     select: {
       id: true,
@@ -584,7 +584,7 @@ export async function classroomRepoHealth(classroomId: string): Promise<Classroo
 }
 
 /**
- * Return RepositoryAssignment IDs for assignments whose `student_deadline` is
+ * Return GitRepoAssignment IDs for assignments whose `student_deadline` is
  * within the last {@link ACTIVE_WINDOW_DAYS} days or in the future. Used by
  * the 6-hour refresh cron to bound its work.
  */
@@ -592,7 +592,7 @@ export async function listActiveAssignmentIds(): Promise<string[]> {
   const prisma = getPrisma();
   const cutoff = new Date(Date.now() - ACTIVE_WINDOW_DAYS * 24 * 60 * 60 * 1000);
 
-  const rows = await prisma.repositoryAssignment.findMany({
+  const rows = await prisma.gitRepoAssignment.findMany({
     where: {
       assignment: {
         OR: [{ student_deadline: null }, { student_deadline: { gte: cutoff } }],

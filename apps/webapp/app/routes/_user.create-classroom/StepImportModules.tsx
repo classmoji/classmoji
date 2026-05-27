@@ -20,7 +20,7 @@ interface StepImportModulesProps {
   sourceClassroomId: string | null;
   setSourceClassroomId: (id: string | null) => void;
   selectedModules: Map<string, ModuleConfig>;
-  setSelectedModules: (modules: Map<string, ModuleConfig>) => void;
+  setSelectedModules: (repositories: Map<string, ModuleConfig>) => void;
 }
 
 const StepImportModules = ({
@@ -35,7 +35,7 @@ const StepImportModules = ({
   const [drawerOpen, setDrawerOpen] = useState(false);
 
   const sourceClassroom = ownedClassrooms.find(c => c.id === sourceClassroomId);
-  const modules = sourceClassroom?.modules || [];
+  const repositories = sourceClassroom?.repositories || [];
 
   const handleModuleToggle = (moduleId: string, checked: boolean) => {
     const newSelected = new Map(selectedModules);
@@ -61,7 +61,7 @@ const StepImportModules = ({
 
   const handleSelectAll = () => {
     const newSelected = new Map();
-    modules.forEach(m => {
+    repositories.forEach(m => {
       newSelected.set(m.id, { includeQuizzes: false });
     });
     setSelectedModules(newSelected);
@@ -75,7 +75,7 @@ const StepImportModules = ({
   let totalAssignments = 0;
   let totalQuizzes = 0;
   if (sourceClassroom && selectedModules.size > 0) {
-    sourceClassroom.modules?.forEach((m: ClassroomModule) => {
+    sourceClassroom.repositories?.forEach((m: ClassroomModule) => {
       if (selectedModules.has(m.id)) {
         totalAssignments += m._count?.assignments || 0;
         const config = selectedModules.get(m.id);
@@ -92,7 +92,7 @@ const StepImportModules = ({
         <div>
           <div className="font-medium">Import from existing classroom</div>
           <div className="text-sm text-gray-500">
-            Copy modules and assignments from another classroom you own
+            Copy repositories and assignments from another classroom you own
           </div>
         </div>
         <Switch checked={importEnabled} onChange={setImportEnabled} />
@@ -134,7 +134,7 @@ const StepImportModules = ({
                         )}
                         <span>{classroom.name}</span>
                         <span className="text-gray-400 ml-auto">
-                          {classroom.modules?.length || 0} modules
+                          {classroom.repositories?.length || 0} repositories
                         </span>
                       </div>
                     </Select.Option>
@@ -145,14 +145,14 @@ const StepImportModules = ({
               {sourceClassroomId && (
                 <div className="p-4 border border-gray-200 dark:border-neutral-700 rounded-lg">
                   <div className="flex items-center justify-between mb-3">
-                    <span className="font-medium">Modules to Import</span>
+                    <span className="font-medium">Repositories to Import</span>
                     <Button
                       type="link"
                       icon={<EditOutlined />}
                       onClick={() => setDrawerOpen(true)}
                       className="p-0"
                     >
-                      Select Modules
+                      Select Repositories
                     </Button>
                   </div>
 
@@ -163,7 +163,7 @@ const StepImportModules = ({
                         color="blue"
                         style={{ minWidth: 100, textAlign: 'center' }}
                       >
-                        {selectedModules.size} module{selectedModules.size !== 1 ? 's' : ''}
+                        {selectedModules.size} repository{selectedModules.size !== 1 ? 's' : ''}
                       </Tag>
                       <Tag
                         icon={<FileTextOutlined />}
@@ -184,20 +184,20 @@ const StepImportModules = ({
                     </div>
                   ) : (
                     <div className="text-gray-500 text-sm">
-                      No modules selected.{' '}
+                      No repositories selected.{' '}
                       <button
                         type="button"
                         onClick={() => setDrawerOpen(true)}
                         className="text-blue-500 hover:underline"
                       >
-                        Select modules
+                        Select repositories
                       </button>
                     </div>
                   )}
 
                   {selectedModules.size > 0 && (
                     <div className="mt-3 text-xs text-gray-500">
-                      Deadlines will be removed. Modules and quizzes will start unpublished.
+                      Deadlines will be removed. Repositories and quizzes will start unpublished.
                     </div>
                   )}
                 </div>
@@ -206,7 +206,7 @@ const StepImportModules = ({
               <ModuleSelectionDrawer
                 open={drawerOpen}
                 onClose={() => setDrawerOpen(false)}
-                modules={modules}
+                repositories={repositories}
                 selectedModules={selectedModules}
                 onModuleToggle={handleModuleToggle}
                 onQuizToggle={handleQuizToggle}

@@ -40,7 +40,7 @@ interface TriggerPayload {
   student?: { name: string };
   user?: { name: string };
   payload?: { to: string };
-  pageData?: { title: string; type?: string; module?: string };
+  pageData?: { title: string; type?: string; repository?: string };
   repoName?: string;
   issue?: { title: string };
   name?: string;
@@ -706,7 +706,7 @@ const LogContent = ({ data }: { data: TriggerRun }) => {
   if (payload.pageData) {
     log.page = payload.pageData.title;
     if (payload.pageData.type) log.type = payload.pageData.type;
-    if (payload.pageData.module) log.module = payload.pageData.module;
+    if (payload.pageData.repository) log.repository = payload.pageData.repository;
   }
 
   return (

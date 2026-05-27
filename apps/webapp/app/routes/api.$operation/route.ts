@@ -162,7 +162,7 @@ export const action = checkAuth(async ({ request }: { request: Request }) => {
         classroom_id: storedTransaction.classroom_id,
         student_id: storedTransaction.student_id,
         amount: storedTransaction.amount,
-        repository_assignment_id: storedTransaction.repository_assignment_id ?? '',
+        git_repo_assignment_id: storedTransaction.git_repo_assignment_id ?? '',
         hours_purchased: storedTransaction.hours_purchased ?? 0,
       });
 
@@ -192,7 +192,7 @@ export const action = checkAuth(async ({ request }: { request: Request }) => {
       const sessionId = nanoid();
       const payloads = await Promise.all(
         repositories.map(async (repo: { name: string }) => {
-          const repository = await ClassmojiService.repository.find({
+          const repository = await ClassmojiService.gitRepo.find({
             name: repo.name,
             classroom_id: classroom.id,
           });
@@ -221,7 +221,7 @@ export const action = checkAuth(async ({ request }: { request: Request }) => {
 
       const numReposToDelete = repositories.length;
 
-      await tasks.batchTrigger('delete_repository', payloads);
+      await tasks.batchTrigger('delete_git_repo', payloads);
 
       return {
         triggerSession: { accessToken, id: sessionId, numReposToDelete },
@@ -235,10 +235,10 @@ const cancelTokenTransactionHandler = async (transaction: {
   classroom_id: string;
   student_id: string;
   amount: number;
-  repository_assignment_id: string;
+  git_repo_assignment_id: string;
   hours_purchased: number;
 }) => {
-  const { classroom_id, student_id, amount, repository_assignment_id, hours_purchased } =
+  const { classroom_id, student_id, amount, git_repo_assignment_id, hours_purchased } =
     transaction;
 
   await ClassmojiService.token.updateTransaction(transaction.id, {
@@ -248,7 +248,7 @@ const cancelTokenTransactionHandler = async (transaction: {
   await ClassmojiService.token.updateExtension({
     classroom_id,
     student_id,
-    repository_assignment_id,
+    git_repo_assignment_id,
     amount: Math.abs(amount),
     hours_purchased: hours_purchased * -1,
     type: 'REFUND',

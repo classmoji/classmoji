@@ -63,10 +63,12 @@ export async function loader({ params, request }: Route.LoaderArgs) {
   const isInstructor = ['OWNER', 'TEACHER'].includes(membership!.role);
 
   // Check if we have a content repo (either explicitly set or can be derived)
-  const contentRepoName = getContentRepoName({
-    login: classroom.git_organization?.login,
-    content_namespace: classroom.content_namespace ?? undefined,
-  });
+  const gitOrgLogin = classroom.git_organization?.login;
+  const contentRepoName = classroom.content_namespace
+    ? `content-${gitOrgLogin}-${classroom.content_namespace}`
+    : gitOrgLogin
+      ? getContentRepoName({ login: gitOrgLogin })
+      : '';
 
   return jsonResponse({
     enabled: settings?.syllabus_bot_enabled ?? false,
@@ -150,12 +152,14 @@ async function handleInitConversation(request: Request, classSlug: string, formD
 
   // If content repo is configured, add clone info
   // Use settings override or generate from classroom/git_org
+  const gitOrgLoginForClone = classroom.git_organization?.login;
   const contentRepoNameForClone =
     settings?.content_repo_name ||
-    getContentRepoName({
-      login: classroom.git_organization?.login,
-      content_namespace: classroom.content_namespace ?? undefined,
-    });
+    (classroom.content_namespace
+      ? `content-${gitOrgLoginForClone}-${classroom.content_namespace}`
+      : gitOrgLoginForClone
+        ? getContentRepoName({ login: gitOrgLoginForClone })
+        : '');
   if (contentRepoNameForClone && classroom.git_organization?.github_installation_id) {
     try {
       const accessToken = await getInstallationToken(classroom.git_organization);

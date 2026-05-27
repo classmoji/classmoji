@@ -95,17 +95,17 @@ export const action = checkAuth(async ({ request }: { request: Request }) => {
     return classroom;
   });
 
-  // Import modules if configured
+  // Import repositories if configured
   let importResult = null;
-  if (importConfig?.modules?.length > 0) {
+  if (importConfig?.repositories?.length > 0) {
     try {
-      importResult = await ClassmojiService.moduleImport.cloneModulesWithRelations(
+      importResult = await ClassmojiService.repositoryImport.cloneModulesWithRelations(
         classroom.id,
-        importConfig.modules,
+        importConfig.repositories,
         { stripDeadlines: true }
       );
     } catch (error: unknown) {
-      console.error('Error importing modules:', error);
+      console.error('Error importing repositories:', error);
       // Don't fail classroom creation, just log the error
     }
   }
@@ -133,9 +133,9 @@ export const action = checkAuth(async ({ request }: { request: Request }) => {
   let successMessage = 'Classroom created successfully!';
   if (importResult) {
     const parts = [];
-    if (importResult.modules.length > 0) {
+    if (importResult.repositories.length > 0) {
       parts.push(
-        `${importResult.modules.length} module${importResult.modules.length !== 1 ? 's' : ''}`
+        `${importResult.repositories.length} repository${importResult.repositories.length !== 1 ? 's' : ''}`
       );
     }
     if (importResult.assignments.length > 0) {

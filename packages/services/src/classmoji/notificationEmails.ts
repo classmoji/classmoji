@@ -19,10 +19,10 @@ const subjectFor = (ctx: EmailContext): string => {
   switch (ctx.type) {
     case 'QUIZ_PUBLISHED':
     case 'PAGE_PUBLISHED':
-    case 'MODULE_PUBLISHED':
+    case 'REPOSITORY_PUBLISHED':
       return `${SUBJECT_PREFIX}${scope} - ${ctx.title}`;
     case 'PAGE_UNPUBLISHED':
-    case 'MODULE_UNPUBLISHED':
+    case 'REPOSITORY_UNPUBLISHED':
       return `${SUBJECT_PREFIX}${scope} - ${ctx.title}`;
     case 'ASSIGNMENT_DUE_DATE_CHANGED':
       return `${SUBJECT_PREFIX}${scope} - Due date changed`;

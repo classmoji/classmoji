@@ -6,8 +6,8 @@ const STUDENT_NOTIFICATION_TYPES = new Set([
   'QUIZ_PUBLISHED',
   'PAGE_PUBLISHED',
   'PAGE_UNPUBLISHED',
-  'MODULE_PUBLISHED',
-  'MODULE_UNPUBLISHED',
+  'REPOSITORY_PUBLISHED',
+  'REPOSITORY_UNPUBLISHED',
   'ASSIGNMENT_DUE_DATE_CHANGED',
   'ASSIGNMENT_GRADED',
 ]);
@@ -50,11 +50,11 @@ export const notificationLink = (
     case 'assignment':
       // Only the student route tree has an assignments list page.
       return prefix === 'student' ? `/${prefix}/${slug}/assignments` : `/${prefix}/${slug}`;
-    case 'module':
-      return `/${prefix}/${slug}/modules`;
+    case 'repository':
+      return `/${prefix}/${slug}/repos`;
     case 'page':
       return `/${prefix}/${slug}/pages/${n.resource_id}`;
-    case 'repository_assignment':
+    case 'git_repo_assignment':
       // TA grading queue only exists under the assistant route tree.
       return prefix === 'assistant' ? `/${prefix}/${slug}/grading` : `/${prefix}/${slug}`;
     case 'regrade_request':

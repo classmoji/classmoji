@@ -7,7 +7,7 @@ export { loader } from './loader';
 export { action } from './action';
 
 export default function ResourcesPage({ loaderData }: Route.ComponentProps) {
-  const { modules, pages, slides } = loaderData;
+  const { repositories, pages, slides } = loaderData;
   const navigate = useNavigate();
 
   const handleClose = () => {
@@ -53,7 +53,7 @@ export default function ResourcesPage({ loaderData }: Route.ComponentProps) {
             Link resources
           </span>
           <span className="text-xs font-normal text-ink-3">
-            Drag pages and slide decks onto modules or assignments to link them.
+            Drag pages and slide decks onto repositories or assignments to link them.
           </span>
         </div>
         <button
@@ -74,7 +74,7 @@ export default function ResourcesPage({ loaderData }: Route.ComponentProps) {
       </div>
 
       <div className="flex-1 min-h-0 flex flex-col">
-        <ResourcesKanban modules={modules} pages={pages} slides={slides} />
+        <ResourcesKanban repositories={repositories} pages={pages} slides={slides} />
       </div>
     </Modal>
   );

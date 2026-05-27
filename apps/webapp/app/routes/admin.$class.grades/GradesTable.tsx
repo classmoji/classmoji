@@ -10,7 +10,7 @@ import { createAssignmentColumns } from './columns/assignmentColumns';
 import { createStudentGradeColumns } from './columns/studentGradeColumns';
 import { calculateStudentFinalGrade } from '@classmoji/utils';
 import type { TableProps } from 'antd';
-import type { Repository, OrganizationSettings, LetterGradeMappingEntry } from '@classmoji/utils';
+import type { GitRepo, OrganizationSettings, LetterGradeMappingEntry } from '@classmoji/utils';
 import { useGlobalFetcher } from '~/hooks';
 
 interface ModuleData {
@@ -28,7 +28,7 @@ interface Student {
   login: string;
   email?: string;
   provider_email?: string;
-  repositories: Repository[];
+  git_repos: GitRepo[];
   [key: string]: unknown;
 }
 
@@ -43,7 +43,7 @@ type EmojiMappings = Record<string, number>;
 
 interface GradesTableProps {
   emojiMappings: EmojiMappings;
-  modules: ModuleData[];
+  repositories: ModuleData[];
   students: Student[];
   settings: OrganizationSettings;
   letterGradeMappings: LetterGradeMappingEntry[];
@@ -53,7 +53,7 @@ interface GradesTableProps {
 const GradesTable = (props: GradesTableProps) => {
   const {
     emojiMappings,
-    modules: assignments,
+    repositories: assignments,
     students,
     settings,
     letterGradeMappings: initialLetterGradeMappings,
@@ -180,8 +180,8 @@ const GradesTable = (props: GradesTableProps) => {
       0
     );
     const cols = assignmentColumns ?? [];
-    const assignmentColumnsWidth = cols.reduce((sum: number, module) => {
-      const mod = module as { width?: number; children?: Array<{ width?: number }> };
+    const assignmentColumnsWidth = cols.reduce((sum: number, repository) => {
+      const mod = repository as { width?: number; children?: Array<{ width?: number }> };
       if (!mod.children?.length) return sum + (Number(mod.width) || 140);
       return (
         sum +
@@ -198,10 +198,10 @@ const GradesTable = (props: GradesTableProps) => {
     }
 
     const finalIndividualNumericGrades = pageData.map((student: Student) => {
-      return calculateStudentFinalGrade(student.repositories, emojiMappings, settings, true, false);
+      return calculateStudentFinalGrade(student.git_repos, emojiMappings, settings, true, false);
     });
     const finalNumericGrades = pageData.map((student: Student) => {
-      return calculateStudentFinalGrade(student.repositories, emojiMappings, settings);
+      return calculateStudentFinalGrade(student.git_repos, emojiMappings, settings);
     });
 
     // Filter out invalid grades for statistics

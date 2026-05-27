@@ -71,8 +71,8 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
       .map(ra => {
         const status = classifyStatus(ra);
         const issueUrl =
-          gitOrgLogin && ra.repository?.name && ra.provider_issue_number
-            ? `https://github.com/${gitOrgLogin}/${ra.repository.name}/issues/${ra.provider_issue_number}`
+          gitOrgLogin && ra.git_repo?.name && ra.provider_issue_number
+            ? `https://github.com/${gitOrgLogin}/${ra.git_repo.name}/issues/${ra.provider_issue_number}`
             : null;
         const gradersSummary = (ra.graders ?? [])
           .map(g => g.grader?.name)
@@ -81,8 +81,8 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
         return {
           id: ra.id,
           assignmentTitle: ra.assignment?.title ?? 'Assignment',
-          moduleTitle: ra.repository?.module?.title ?? '',
-          moduleType: ra.repository?.module?.type ?? null,
+          repositoryTitle: ra.git_repo?.repository?.title ?? '',
+          moduleType: ra.git_repo?.repository?.type ?? null,
           status,
           gradesReleased: Boolean(ra.assignment?.grades_released && (ra.grades?.length ?? 0) > 0),
           studentDeadline: ra.assignment?.student_deadline

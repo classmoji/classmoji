@@ -27,9 +27,9 @@ export {
   gitOrganizationService,
   classroomService,
   classroomMembershipService,
-  moduleService,
+  repositoryService,
   assignmentService,
-  repositoryAssignmentService,
+  gitRepoAssignmentService,
   notificationService,
 } from './classmoji/index.ts';
 

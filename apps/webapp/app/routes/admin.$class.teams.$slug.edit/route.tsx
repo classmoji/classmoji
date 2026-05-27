@@ -31,7 +31,7 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
   const teamMembers = team!.memberships.map(({ user }) => user);
   const tags = await ClassmojiService.organizationTag.findByClassroomId(classroom.id);
   const teamWithRepos = await ClassmojiService.team.findByIdWithRepositories(team!.id);
-  const repositoryCount = teamWithRepos?.repositories.length ?? 0;
+  const repositoryCount = teamWithRepos?.git_repos.length ?? 0;
   const canRenameTeam = classroom.git_organization?.provider === 'GITHUB';
 
   return { team, students: studentsObjects, teamMembers, tags, repositoryCount, canRenameTeam };

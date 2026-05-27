@@ -26,10 +26,10 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
 
   return {
     data: Promise.all([
-      ClassmojiService.repositoryAssignmentGrader.findAssignedByGrader(userId, classroom.id),
-      ClassmojiService.repositoryAssignment.findByClassroomId(classroom.id),
+      ClassmojiService.gitRepoAssignmentGrader.findAssignedByGrader(userId, classroom.id),
+      ClassmojiService.gitRepoAssignment.findByClassroomId(classroom.id),
       ClassmojiService.helper.findClassroomGradingProgressPerAssignment(classroom.id),
-      ClassmojiService.repositoryAssignmentGrader.findGradersProgress(classroom.id),
+      ClassmojiService.gitRepoAssignmentGrader.findGradersProgress(classroom.id),
     ]),
     cockpit: cockpitPromise,
   };
@@ -75,7 +75,7 @@ const AssistantDashboard = ({ loaderData }: Route.ComponentProps) => {
           {(resolved: unknown) => {
             const [assignments, repoAssignments, gradingProgress, assistantsProgress] =
               resolved as [
-                Array<{ repository_assignment?: { grades?: unknown[] }; [key: string]: unknown }>,
+                Array<{ git_repo_assignment?: { grades?: unknown[] }; [key: string]: unknown }>,
                 unknown[],
                 Array<{
                   id?: string;
@@ -87,7 +87,7 @@ const AssistantDashboard = ({ loaderData }: Route.ComponentProps) => {
                 Array<{ id: string; login: string; name: string | null; progress: number }>,
               ];
             const numUngradedAssignments = assignments.filter(
-              a => a.repository_assignment?.grades?.length === 0
+              a => a.git_repo_assignment?.grades?.length === 0
             ).length;
             const totalClass = repoAssignments?.length ?? 0;
             const myAssigned = assignments?.length ?? 0;

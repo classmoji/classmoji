@@ -115,7 +115,7 @@ interface PageRecord {
   is_public: boolean;
   show_in_student_menu: boolean;
   updated_at: string;
-  links?: Array<{ module?: { title: string } | null; [key: string]: unknown }>;
+  links?: Array<{ repository?: { title: string } | null; [key: string]: unknown }>;
   [key: string]: unknown;
 }
 
@@ -161,12 +161,12 @@ export default function AdminPages({ loaderData }: Route.ComponentProps) {
     }
   }, [fetcher.state, fetcher.data]);
 
-  // Helper to get first linked module title
-  const getLinkedModuleTitle = (page: PageRecord) => {
+  // Helper to get first linked repository title
+  const getLinkedRepositoryTitle = (page: PageRecord) => {
     const moduleLink = page.links?.find(
-      (link: { module?: { title: string } | null }) => link.module
+      (link: { repository?: { title: string } | null }) => link.repository
     );
-    return moduleLink?.module?.title || null;
+    return moduleLink?.repository?.title || null;
   };
 
   // Handle field updates (for inline editing)
@@ -176,21 +176,21 @@ export default function AdminPages({ loaderData }: Route.ComponentProps) {
 
   const filteredPages = pages
     .filter(page => {
-      const moduleTitle = getLinkedModuleTitle(page as unknown as PageRecord);
+      const repositoryTitle = getLinkedRepositoryTitle(page as unknown as PageRecord);
       const matchesSearch =
         page.title.toLowerCase().includes(searchText.toLowerCase()) ||
-        (moduleTitle && moduleTitle.toLowerCase().includes(searchText.toLowerCase()));
+        (repositoryTitle && repositoryTitle.toLowerCase().includes(searchText.toLowerCase()));
 
       return matchesSearch;
     })
     .sort((a, b) => {
-      // Sort by module first (nulls last), then by title
-      const moduleA = getLinkedModuleTitle(a as unknown as PageRecord) || '';
-      const moduleB = getLinkedModuleTitle(b as unknown as PageRecord) || '';
-      const moduleCompare = moduleA.localeCompare(moduleB);
+      // Sort by repository first (nulls last), then by title
+      const repositoryA = getLinkedRepositoryTitle(a as unknown as PageRecord) || '';
+      const repositoryB = getLinkedRepositoryTitle(b as unknown as PageRecord) || '';
+      const repositoryCompare = repositoryA.localeCompare(repositoryB);
 
-      if (moduleCompare !== 0) {
-        return moduleCompare;
+      if (repositoryCompare !== 0) {
+        return repositoryCompare;
       }
 
       return a.title.localeCompare(b.title);

@@ -111,7 +111,7 @@ test.describe('Owner Dashboard Navigation', () => {
   test('has all expected navigation sections', async ({ authenticatedPage: page }) => {
     // Content section
     await expect(page.getByText('CONTENT')).toBeVisible();
-    await expect(page.getByRole('link', { name: 'Modules' })).toBeVisible();
+    await expect(page.getByRole('link', { name: 'Repositories' })).toBeVisible();
     // Note: Slides is feature-flagged (slides_enabled org setting)
     await expect(page.getByRole('link', { name: 'Pages' })).toBeVisible();
     await expect(page.getByRole('link', { name: 'Quizzes' })).toBeVisible();
@@ -132,11 +132,11 @@ test.describe('Owner Dashboard Navigation', () => {
     await expect(page.getByRole('link', { name: 'Class Settings' })).toBeVisible();
   });
 
-  test('can navigate to modules', async ({ authenticatedPage: page, testOrg }) => {
-    await page.getByRole('link', { name: 'Modules' }).click();
-    await page.waitForURL(`**/admin/${testOrg}/modules`);
+  test('can navigate to repositories', async ({ authenticatedPage: page, testOrg }) => {
+    await page.getByRole('link', { name: 'Repositories' }).click();
+    await page.waitForURL(`**/admin/${testOrg}/repos`);
     await waitForDataLoad(page);
-    await expect(page).toHaveURL(new RegExp(`/admin/${testOrg}/modules`));
+    await expect(page).toHaveURL(new RegExp(`/admin/${testOrg}/repos`));
   });
 
   test('can navigate to quizzes', async ({ authenticatedPage: page, testOrg }) => {
