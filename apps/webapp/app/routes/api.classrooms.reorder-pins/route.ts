@@ -14,6 +14,7 @@
 
 import { requireAuth } from '@classmoji/auth/server';
 import getPrisma from '@classmoji/database';
+import type { Role } from '@prisma/client';
 import type { Route } from './+types/route';
 
 interface ReorderItem {
@@ -59,7 +60,7 @@ export const action = async ({ request }: Route.ActionArgs) => {
   await prisma.$transaction(
     items.map((item, idx) =>
       prisma.classroomMembership.updateMany({
-        where: { user_id: userId, classroom_id: item.classroom_id, role: item.role },
+        where: { user_id: userId, classroom_id: item.classroom_id, role: item.role as Role },
         data: { pin_order: idx + 1 },
       })
     )

@@ -15,6 +15,7 @@
 
 import { requireAuth } from '@classmoji/auth/server';
 import getPrisma from '@classmoji/database';
+import type { Role } from '@prisma/client';
 import type { Route } from './+types/route';
 
 export const action = async ({ request, params }: Route.ActionArgs) => {
@@ -41,7 +42,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
 
   const prisma = getPrisma();
   const membership = await prisma.classroomMembership.findUnique({
-    where: { classroom_id_user_id_role: { classroom_id: classroomId, user_id: userId, role } },
+    where: { classroom_id_user_id_role: { classroom_id: classroomId, user_id: userId, role: role as Role } },
     select: { id: true, pin_order: true },
   });
   if (!membership) {
