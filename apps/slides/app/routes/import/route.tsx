@@ -60,11 +60,9 @@ export const loader = async ({ request }: { request: Request }) => {
   // Get repositories for dropdown
   const repositories = await ClassmojiService.repository.findByClassroomSlug(classroomSlug);
 
-  // Get content repo name using utility (same as slidesComImporter)
-  const repoName = getContentRepoName({
-    login: gitOrgLogin,
-    content_namespace: classroom.content_namespace ?? undefined,
-  });
+  const repoName = classroom.content_namespace
+    ? `content-${gitOrgLogin}-${classroom.content_namespace}`
+    : getContentRepoName({ login: gitOrgLogin });
   const savedThemes = await listSavedThemes(gitOrgLogin, repoName);
 
   return {

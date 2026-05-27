@@ -253,12 +253,9 @@ export async function processZipImport({
   // 5. Flat content path: slides/{slug}-{timestamp}
   const timestamp = Date.now();
   const contentPath = `slides/${slug}-${timestamp}`;
-  // Build organization-like object for getContentRepoName, using the
-  // classroom's stable content_namespace as the namespace.
-  const repoName = getContentRepoName({
-    login: classroom.git_organization.login,
-    content_namespace: classroom.content_namespace,
-  });
+  const repoName = classroom.content_namespace
+    ? `content-${classroom.git_organization.login}-${classroom.content_namespace}`
+    : getContentRepoName({ login: classroom.git_organization.login });
 
   // 6. Ensure content repo exists (org is git org login for GitHub API)
   const repoExists = await gitProvider.repositoryExists(org, repoName);
