@@ -537,8 +537,12 @@ export const action = async ({ request }: Route.ActionArgs) => {
     data: { user_id: user.id },
   });
 
-  // Claim any pending classroom invites matching email
-  const invites = await ClassmojiService.classroomInvite.findInvitesByEmail(formData.email);
+  // Claim any pending classroom invites — match against the school email the student entered
+  // AND the email on their GitHub account, since instructors invite by either.
+  const invites = await ClassmojiService.classroomInvite.findInvitesByAnyEmail([
+    formData.email,
+    formData.githubEmail,
+  ]);
   if (invites.length > 0) {
     for (const invite of invites) {
       await ClassmojiService.classroomMembership.create({
