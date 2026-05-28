@@ -23,13 +23,14 @@ export const sendEmailTask = task({
       throw new Error('sendEmailTask must run on the server');
     }
 
-    const nodemailer = await import('nodemailer');
+    const nodemailerModule = await import('nodemailer');
+    const nodemailer = nodemailerModule.default ?? nodemailerModule;
     const payload = extractPayload(input);
 
     const transporter = nodemailer.createTransport({
-      host: 'mail.privateemail.com',
-      port: 465,
-      secure: true,
+      host: process.env.EMAIL_HOST || 'mail.privateemail.com',
+      port: Number(process.env.EMAIL_PORT) || 465,
+      secure: (process.env.EMAIL_SECURE ?? 'true') !== 'false',
       auth: {
         user: process.env.EMAIL,
         pass: process.env.EMAIL_PASSWORD,
