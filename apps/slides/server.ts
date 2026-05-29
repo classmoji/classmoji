@@ -6,6 +6,7 @@ import compression from 'compression';
 import morgan from 'morgan';
 import getPrisma from '@classmoji/database';
 import { auth } from '@classmoji/auth/server';
+import { RoomStateStore } from '@classmoji/utils';
 
 // Helper to get session from socket cookie header
 async function getSocketAuthSession(cookieHeader: string) {
@@ -113,13 +114,10 @@ io.use(async (socket, next) => {
 // Multiplex namespace for slide sync
 const multiplex = io.of('/multiplex');
 
-// Track current slide position per room for late joiners to catch up
-interface RoomState {
-  indexh: number;
-  indexv: number;
-  fragmentIndex?: number;
-}
-const roomStates = new Map<string, RoomState>();
+// Track current slide position per room for late joiners to catch up.
+// RoomStateStore evicts a room's state once its last viewer leaves, so this
+// does not grow unbounded over the server's lifetime.
+const roomStates = new RoomStateStore();
 
 // Same auth middleware for namespace
 multiplex.use(async (socket, next) => {
@@ -253,6 +251,8 @@ multiplex.on('connection', socket => {
       const room = multiplex.adapter.rooms.get(data.slideId);
       const viewerCount = room ? room.size : 0;
       multiplex.to(data.slideId).emit('viewercount', { count: viewerCount });
+      // Free stored slide position once the last viewer leaves the room.
+      roomStates.releaseIfEmpty(data.slideId, viewerCount);
     }
   });
 });
