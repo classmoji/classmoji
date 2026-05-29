@@ -77,13 +77,13 @@ export const TEST_CLASSROOM = process.env.TEST_CLASSROOM || 'classmoji-dev-winte
  * Test classroom name - displayed on classroom cards in the UI
  * Used to identify the correct classroom when users have multiple classrooms
  */
-export const TEST_CLASSROOM_NAME = process.env.TEST_CLASSROOM_NAME || 'Classmoji Dev';
+export const TEST_CLASSROOM_NAME = process.env.TEST_CLASSROOM_NAME || 'Dev Classroom';
 
 /**
  * Test git organization login - displayed on classroom cards in the UI
  * The select-organization page shows @{git-org-login} on the cards
  */
-export const TEST_GIT_ORG = process.env.TEST_GIT_ORG || 'classmoji-development';
+export const TEST_GIT_ORG = process.env.TEST_GIT_ORG || 'dev-org';
 
 /**
  * @deprecated Use TEST_CLASSROOM for URLs or TEST_GIT_ORG for UI text matching

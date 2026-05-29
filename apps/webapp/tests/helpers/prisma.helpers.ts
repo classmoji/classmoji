@@ -362,6 +362,71 @@ export async function setGradesReleased(
   });
 }
 
+export interface SeededTAGrading extends SeededStudentSubmission {
+  graderAssignmentId: string;
+  gradeId: string;
+}
+
+/**
+ * Seed a self-contained submission, assign `graderId` (a TA) as its grader, and
+ * record a grade so the TA shows up on the grading leaderboard with non-zero
+ * activity. The leaderboard is driven by `git_repo_assignment_graders` rows
+ * (assigned graders), with `completed` counting assignments that have at least
+ * one `assignment_grades` row — see gitRepoAssignmentGrader.findGradersProgress.
+ * Idempotent on `title` (deletes any prior repository, which cascades).
+ */
+export async function seedTAGradedSubmission(
+  classroomId: string,
+  studentId: string,
+  graderId: string,
+  title: string
+): Promise<SeededTAGrading> {
+  const prisma = getTestPrisma();
+  const submission = await seedStudentSubmission(classroomId, studentId, title, {
+    status: 'CLOSED',
+  });
+
+  const grade = await prisma.assignmentGrade.create({
+    data: {
+      git_repo_assignment_id: submission.gitRepoAssignmentId,
+      emoji: '⭐',
+      grader_id: graderId,
+    },
+    select: { id: true },
+  });
+
+  const graderAssignment = await prisma.gitRepoAssignmentGrader.upsert({
+    where: {
+      git_repo_assignment_id_grader_id: {
+        git_repo_assignment_id: submission.gitRepoAssignmentId,
+        grader_id: graderId,
+      },
+    },
+    create: {
+      git_repo_assignment_id: submission.gitRepoAssignmentId,
+      grader_id: graderId,
+    },
+    update: {},
+    select: { id: true },
+  });
+
+  return { ...submission, graderAssignmentId: graderAssignment.id, gradeId: grade.id };
+}
+
+/** Count `git_repo_assignment_graders` rows for a grader within a classroom. */
+export async function countGraderAssignments(
+  classroomId: string,
+  graderId: string
+): Promise<number> {
+  const prisma = getTestPrisma();
+  return prisma.gitRepoAssignmentGrader.count({
+    where: {
+      grader_id: graderId,
+      git_repo_assignment: { git_repo: { classroom_id: classroomId } },
+    },
+  });
+}
+
 // Quiz helpers.
 // The dev seed creates no quizzes, so quiz specs seed their own uniquely-named
 // rows and clean up afterwards. A Quiz maps to the `quizzes` table.
@@ -402,6 +467,46 @@ export async function seedQuiz(
   });
 
   return quiz;
+}
+
+/**
+ * Ensure the classroom's OWNER has an active PRO subscription so Pro-gated
+ * features (quizzes, pages) render instead of throwing the 403 "requires a Pro
+ * subscription" boundary. Pro tier is resolved off the owner membership's user,
+ * matching ClassmojiService.subscription.getByClassroom. Idempotent.
+ */
+export async function ensureClassroomProTier(classroomSlug: string): Promise<void> {
+  const prisma = getTestPrisma();
+  const classroom = await prisma.classroom.findFirst({
+    where: { slug: classroomSlug },
+    include: {
+      memberships: {
+        where: { role: 'OWNER' },
+        select: { user_id: true },
+      },
+    },
+  });
+  const ownerUserId = classroom?.memberships[0]?.user_id;
+  if (!ownerUserId) {
+    throw new Error(`No OWNER membership found for classroom slug "${classroomSlug}"`);
+  }
+
+  const existing = await prisma.subscription.findFirst({
+    where: { user_id: ownerUserId },
+    orderBy: { created_at: 'desc' },
+    select: { id: true },
+  });
+
+  if (existing) {
+    await prisma.subscription.update({
+      where: { id: existing.id },
+      data: { tier: 'PRO', ends_at: null, cancelled_at: null },
+    });
+  } else {
+    await prisma.subscription.create({
+      data: { user_id: ownerUserId, tier: 'PRO' },
+    });
+  }
 }
 
 /** Delete a quiz by id. Safe to call in cleanup even if already deleted. */
