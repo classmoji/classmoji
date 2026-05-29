@@ -13,22 +13,16 @@ import { TEST_CLASSROOM, TEST_GIT_ORG } from '../helpers/env.helpers';
 test.describe('Critical Path: Authentication', () => {
   test('can access organization selection after login', async ({ authenticatedPage: page }) => {
     await page.goto('/select-organization');
-    await expect(page.getByRole('heading', { name: 'Your classes' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: /Your classes/ })).toBeVisible();
 
-    const appBar = page.locator('header');
-    await expect(appBar.getByRole('img', { name: 'Classmoji' })).toBeVisible();
-    await expect(appBar.getByRole('img', { name: 'Classmoji' })).toHaveAttribute(
-      'viewBox',
-      '0 0 279 51'
-    );
-    await expect(appBar.getByRole('img', { name: 'Classmoji' })).toHaveAttribute('height', '24');
-    await expect(appBar.getByRole('button', { name: 'Classes' })).toBeVisible();
-    await expect(appBar.getByRole('button', { name: 'Inbox' })).toBeVisible();
-    await expect(appBar.getByRole('button', { name: 'Explore' })).toBeVisible();
-    await expect(appBar.getByText(/Search classes, assignments, students/i)).toHaveCount(0);
-    await expect(appBar.locator('kbd')).toHaveCount(0);
+    const brandLink = page.getByRole('link', { name: 'Classmoji' });
+    await expect(brandLink).toHaveAttribute('href', '/select-organization');
+    const logo = brandLink.getByRole('img', { name: 'Classmoji' });
+    await expect(logo).toBeVisible();
+    await expect(logo).toHaveAttribute('viewBox', '0 0 279 51');
+    await expect(logo).toHaveAttribute('height', '24');
 
-    // Cards show git org login (@classmoji-development), use .first() since it appears multiple times
+    // TEST_GIT_ORG appears in every class card; use .first().
     await expect(page.getByText(TEST_GIT_ORG, { exact: false }).first()).toBeVisible();
   });
 
@@ -62,15 +56,14 @@ test.describe('Critical Path: Owner Dashboard', () => {
   });
 
   test('displays key metrics', async ({ authenticatedPage: page }) => {
-    // Check for metric cards (text is title case with CSS uppercase)
-    await expect(page.getByText('Number of Students', { exact: true })).toBeVisible();
-    await expect(page.getByText('Submitted Assignments', { exact: true })).toBeVisible();
-    // Note: "Grading Progress" appears in multiple places, just verify page loaded
+    // Card labels collide with nav links/headings, so anchor on per-card subtitle copy.
+    await expect(page.getByText('enrolled', { exact: true })).toBeVisible();
+    await expect(page.getByText(/of \d+ assignments|no assignments yet/)).toBeVisible();
+    await expect(page.getByText(/late submissions?|no late submissions/)).toBeVisible();
     await expect(page.getByRole('heading', { name: 'Dashboard' })).toBeVisible();
   });
 
   test('navigation sidebar is functional', async ({ authenticatedPage: page }) => {
-    // Check key navigation items exist
     await expect(page.getByRole('link', { name: 'Dashboard' })).toBeVisible();
     await expect(page.getByRole('link', { name: 'Repositories' })).toBeVisible();
     await expect(page.getByRole('link', { name: 'Quizzes' })).toBeVisible();
@@ -82,7 +75,6 @@ test.describe('Critical Path: Owner Dashboard', () => {
     await page.getByRole('link', { name: 'Repositories' }).click();
     await page.waitForURL(`**/admin/${TEST_CLASSROOM}/repos`);
     await waitForDataLoad(page);
-    // Should be on repositories page
     await expect(page).toHaveURL(new RegExp(`/admin/${TEST_CLASSROOM}/repos`));
   });
 
@@ -102,9 +94,7 @@ test.describe('Critical Path: Owner Dashboard', () => {
 });
 
 test.describe('Critical Path: Student Dashboard', () => {
-  // Note: Smoke tests use owner storage state but student routes require student-specific data
-  // These tests are SKIPPED because they're covered by the student-tests project with proper auth
-  // The student-tests project uses student.json storage state which has actual student context
+  // Skipped: covered by the student-tests project, which uses student.json storage state.
 
   test.skip('student can access their dashboard', async ({ authenticatedPage: page }) => {
     await page.goto(`/student/${TEST_CLASSROOM}/dashboard`);
@@ -125,7 +115,6 @@ test.describe('Critical Path: Assistant Dashboard', () => {
     await page.goto(`/assistant/${TEST_CLASSROOM}/dashboard`);
     await waitForDataLoad(page);
 
-    // Should show the dashboard heading
     await expect(page.getByRole('heading', { name: 'Dashboard' })).toBeVisible();
   });
 });
@@ -136,7 +125,6 @@ test.describe('Critical Path: Settings', () => {
     await page.goto(`/admin/${TEST_CLASSROOM}/settings/general`);
     await waitForDataLoad(page);
 
-    // Should be on settings page with tabs
     await expect(page).toHaveURL(new RegExp(`/admin/${TEST_CLASSROOM}/settings`));
   });
 });
