@@ -71,7 +71,7 @@ const AssistantDashboard = ({ loaderData }: Route.ComponentProps) => {
       </h1>
 
       <Suspense fallback={<Skeleton active />}>
-        <Await resolve={data}>
+        <Await resolve={data} errorElement={null}>
           {(resolved: unknown) => {
             const [assignments, repoAssignments, gradingProgress, assistantsProgress] =
               resolved as [

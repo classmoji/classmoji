@@ -135,7 +135,7 @@ const StudentAssignments = ({ loaderData }: Route.ComponentProps) => {
       </h1>
 
       <Suspense fallback={<Skeleton active paragraph={{ rows: 6 }} />}>
-        <Await resolve={data}>
+        <Await resolve={data} errorElement={null}>
           {(d: AssignmentsData) => (
             <div className="flex flex-col gap-5">
               <ProgressSummaryCard

@@ -215,7 +215,7 @@ const StudentDashboard = ({ loaderData }: Route.ComponentProps) => {
       </h1>
 
       <Suspense fallback={<Skeleton active paragraph={{ rows: 8 }} />}>
-        <Await resolve={data}>
+        <Await resolve={data} errorElement={null}>
           {(d: DashboardData) => (
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 lg:gap-7 lg:grid-rows-[auto_1fr] lg:min-h-[calc(100vh-10rem)]">
               <div className="lg:col-span-2">

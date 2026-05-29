@@ -205,7 +205,7 @@ const AdminDashboard = ({ loaderData }: Route.ComponentProps) => {
       )}
 
       <Suspense fallback={<Skeleton active />}>
-        <Await resolve={data}>
+        <Await resolve={data} errorElement={null}>
           {([
             students,
             leaderbord,
