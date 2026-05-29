@@ -28,10 +28,8 @@ export async function mockQuizAPI(page: Page, options: LLMMockOptions = {}): Pro
     finalScore = 85,
   } = options;
 
-  // Track message count for quiz progression
   let messageCount = 0;
 
-  // Mock the main quiz API endpoint
   await page.route('**/api/quiz', async (route: Route) => {
     const request = route.request();
     const postData = request.postDataJSON?.() || {};
@@ -44,7 +42,6 @@ export async function mockQuizAPI(page: Page, options: LLMMockOptions = {}): Pro
       });
     }
 
-    // Add artificial delay
     if (delay > 0) {
       await new Promise(r => setTimeout(r, delay));
     }
@@ -113,36 +110,65 @@ export async function mockQuizAPI(page: Page, options: LLMMockOptions = {}): Pro
 }
 
 /**
- * Mock prompt assistant endpoint
+ * Mock prompt assistant endpoint.
+ *
+ * The flow is SSE: the POST returns a session id, then the client opens an
+ * EventSource on the stream path. Mocks both the initiating POST and the
+ * text/event-stream endpoint.
  */
 export async function mockPromptAssistant(page: Page): Promise<void> {
-  await page.route('**/api/quiz.prompt-assistant', async route => {
+  const suggestions = [
+    'Try breaking down your explanation into smaller parts.',
+    'Consider providing a specific example from the material.',
+    'Think about how this concept connects to others we discussed.',
+  ];
+
+  // Stream endpoint must be registered first so the more specific path wins.
+  await page.route('**/api/quiz/prompt-assistant/stream/**', async route => {
+    const sse = suggestions.map(s => `data: ${JSON.stringify({ delta: s })}\n\n`).join('') + 'data: [DONE]\n\n';
+    return route.fulfill({
+      status: 200,
+      contentType: 'text/event-stream',
+      headers: { 'Cache-Control': 'no-cache', Connection: 'keep-alive' },
+      body: sse,
+    });
+  });
+
+  await page.route('**/api/quiz/prompt-assistant', async route => {
     return route.fulfill({
       status: 200,
       contentType: 'application/json',
-      body: JSON.stringify({
-        suggestions: [
-          'Try breaking down your explanation into smaller parts.',
-          'Consider providing a specific example from the material.',
-          'Think about how this concept connects to others we discussed.',
-        ],
-      }),
+      body: JSON.stringify({ sessionId: `test-pa-${Date.now()}`, suggestions }),
     });
   });
 }
 
 /**
- * Mock syllabus bot endpoint
+ * Mock syllabus bot endpoint.
+ *
+ * The hook streams via EventSource on the stream path. Mocks both the
+ * initiating request and the text/event-stream endpoint.
  */
 export async function mockSyllabusBot(page: Page): Promise<void> {
-  await page.route('**/api/syllabus-bot.*', async route => {
+  const answer =
+    "Based on the syllabus, here's what I found: The course covers fundamental programming concepts including variables, functions, and data structures.";
+
+  // Stream endpoint must be registered first so the more specific path wins.
+  await page.route('**/api/syllabus-bot/stream/**', async route => {
+    const sse = `data: ${JSON.stringify({ delta: answer })}\n\n` + 'data: [DONE]\n\n';
+    return route.fulfill({
+      status: 200,
+      contentType: 'text/event-stream',
+      headers: { 'Cache-Control': 'no-cache', Connection: 'keep-alive' },
+      body: sse,
+    });
+  });
+
+  await page.route('**/api/syllabus-bot/**', async route => {
     return route.fulfill({
       status: 200,
       contentType: 'application/json',
-      body: JSON.stringify({
-        response:
-          "Based on the syllabus, here's what I found: The course covers fundamental programming concepts including variables, functions, and data structures.",
-      }),
+      body: JSON.stringify({ conversationId: `test-syl-${Date.now()}`, response: answer }),
     });
   });
 }
@@ -152,6 +178,8 @@ export async function mockSyllabusBot(page: Page): Promise<void> {
  */
 export async function clearLLMMocks(page: Page): Promise<void> {
   await page.unroute('**/api/quiz');
-  await page.unroute('**/api/quiz.prompt-assistant');
-  await page.unroute('**/api/syllabus-bot.*');
+  await page.unroute('**/api/quiz/prompt-assistant/stream/**');
+  await page.unroute('**/api/quiz/prompt-assistant');
+  await page.unroute('**/api/syllabus-bot/stream/**');
+  await page.unroute('**/api/syllabus-bot/**');
 }

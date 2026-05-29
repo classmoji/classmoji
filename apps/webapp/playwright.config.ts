@@ -92,6 +92,37 @@ export default defineConfig({
       },
     },
 
+    // Auth flow tests - manage their own context; logged-in cases call /test-login
+    {
+      name: 'auth-tests',
+      testDir: './tests/auth',
+      dependencies: ['auth-setup'],
+      use: {
+        ...devices['Desktop Chrome'],
+      },
+    },
+
+    // Access control tests - specs set storageState per describe; unauth uses clean context
+    {
+      name: 'access-control-tests',
+      testDir: './tests/access-control',
+      dependencies: ['auth-setup'],
+      use: {
+        ...devices['Desktop Chrome'],
+      },
+    },
+
+    // Regression tests - owner auth by default; specs override per-test for other roles
+    {
+      name: 'regression-tests',
+      testDir: './tests/regression',
+      dependencies: ['auth-setup'],
+      use: {
+        ...devices['Desktop Chrome'],
+        storageState: './tests/.auth/owner.json',
+      },
+    },
+
     // Mobile tests (optional)
     {
       name: 'mobile-tests',

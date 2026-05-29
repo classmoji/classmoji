@@ -36,10 +36,11 @@ interface GitHubRepo {
 }
 
 /**
- * Mock GitHub API responses
+ * Mock GitHub API responses.
  *
- * The webapp uses @octokit/rest which calls api.github.com
- * This intercepts those requests and returns mock data.
+ * page.route only intercepts browser-context requests, so it cannot touch the
+ * server-side octokit.request calls in GitHubProvider.ts. Kept because consuming
+ * specs import it; a real mock needs a server-side seam.
  */
 export async function mockGitHubAPI(page: Page, options: GitHubMockOptions = {}): Promise<void> {
   const { simulateErrors = false } = options;
@@ -48,7 +49,6 @@ export async function mockGitHubAPI(page: Page, options: GitHubMockOptions = {})
     const url = route.request().url();
     const method = route.request().method();
 
-    // Simulate errors if requested
     if (simulateErrors) {
       return route.fulfill({
         status: 500,
@@ -159,7 +159,6 @@ export async function mockGitHubAPI(page: Page, options: GitHubMockOptions = {})
       });
     }
 
-    // Default: return empty success
     console.log(`[GitHub Mock] Unhandled request: ${method} ${url}`);
     return route.fulfill({
       status: 200,
@@ -170,7 +169,11 @@ export async function mockGitHubAPI(page: Page, options: GitHubMockOptions = {})
 }
 
 /**
- * Mock GitHub roster sync operations
+ * Mock GitHub roster sync operations.
+ *
+ * The membership PUT and invitation POST are issued server-side by
+ * GitHubProvider.ts, so these browser-context routes never fire. Kept because
+ * consuming specs import it.
  */
 export async function mockGitHubRosterSync(page: Page): Promise<void> {
   await page.route('**/api.github.com/orgs/*/memberships/*', async route => {
