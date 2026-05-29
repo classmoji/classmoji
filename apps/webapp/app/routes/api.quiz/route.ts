@@ -370,11 +370,7 @@ export async function action({ request }: Route.ActionArgs) {
 
           // Check if this is a code-aware quiz (linked to a repository with code context enabled)
           if (attempt.quiz.repository_id && attempt.quiz.include_code_context) {
-            // Process in background to allow SSE connection
-            // Note: ai-agent now handles welcome message generation and publishing
-            // runBackgroundTask guards the fire-and-forget boundary: a rejection
-            // here (including from the catch block's own DB writes) would otherwise
-            // become an unhandledRejection and crash the whole SSR process.
+            // Generate the first question in the background so the SSE connection isn't blocked.
             setTimeout(() => {
               runBackgroundTask('startQuiz:codeAware', async () => {
               try {
@@ -488,11 +484,7 @@ export async function action({ request }: Route.ActionArgs) {
               headers: { 'Content-Type': 'application/json' },
             });
 
-            // Generate first question in background via ai-agent
-            // Note: ai-agent now handles welcome message generation and publishing
-            // runBackgroundTask guards the fire-and-forget boundary: a rejection
-            // here (including from the catch block's own DB writes) would otherwise
-            // become an unhandledRejection and crash the whole SSR process.
+            // Generate the first question in the background so the SSE connection isn't blocked.
             setTimeout(() => {
               runBackgroundTask('startQuiz:standard', async () => {
               try {

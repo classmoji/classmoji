@@ -1,17 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { runBackgroundTask } from '../backgroundTask.server';
 
-/**
- * Regression coverage for the intermittent production crash where a
- * fire-and-forget `setTimeout(async () => { ... })` (see api.quiz/route.ts)
- * whose body — INCLUDING its own catch block — rejects, escaped as an
- * `unhandledRejection`. The global handler in @classmoji/database turns any
- * unhandledRejection into `process.exit(1)`, so a single failed background DB
- * write took down the entire SSR process for every user.
- *
- * runBackgroundTask must guarantee a rejected task can never become an
- * unhandled rejection.
- */
+// A rejected fire-and-forget task must never surface as an unhandledRejection,
+// which the global handler turns into a process exit.
 describe('runBackgroundTask', () => {
   let unhandled: unknown[];
   const record = (reason: unknown) => unhandled.push(reason);
