@@ -81,7 +81,11 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
         student_id: userId,
         classroom_id: classroom.id,
       }),
-      ClassmojiService.helper.findAllAssignmentsForStudent(userId, classSlug),
+      ClassmojiService.helper
+        .findAllAssignmentsForStudent(userId, classSlug)
+        .catch(
+          () => [] as Awaited<ReturnType<typeof ClassmojiService.helper.findAllAssignmentsForStudent>>
+        ),
     ]);
 
     const weekEvents: WeekEvent[] = (weekEventsRaw as Array<Record<string, unknown>>).map(e => ({
