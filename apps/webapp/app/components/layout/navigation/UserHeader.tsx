@@ -1,13 +1,24 @@
-import { Link } from 'react-router';
+import { Link, useRouteLoaderData } from 'react-router';
 import { useUser } from '~/hooks';
 import { Logo, IconDocs, IconChevron } from '@classmoji/ui-components';
 import ProfileDropdown from '~/components/features/profile/ProfileDropdown';
-import { NotificationBell } from '~/components/features/notifications';
+import {
+  NotificationBell,
+  type BellNotification,
+  type NotificationRole,
+} from '~/components/features/notifications';
 import { getInitials } from '~/utils/hue';
+
+interface UserLayoutData {
+  notifications: BellNotification[];
+  unreadCount: number;
+  membershipRoles: Record<string, NotificationRole[]>;
+}
 
 const UserHeader = () => {
   const { user } = useUser();
   const initials = getInitials(user?.name, user?.login);
+  const layoutData = useRouteLoaderData('routes/_user') as UserLayoutData | undefined;
 
   return (
     <div className="sticky top-0 z-50 pt-3 sm:pt-7 pb-4 bg-gradient-to-b from-[#EDEDED] from-70% to-transparent dark:from-[#1d1d1d]">
@@ -29,9 +40,9 @@ const UserHeader = () => {
             <IconDocs size={16} />
           </button>
           <NotificationBell
-            initialItems={[]}
-            initialUnreadCount={0}
-            membershipRoles={{}}
+            initialItems={layoutData?.notifications ?? []}
+            initialUnreadCount={layoutData?.unreadCount ?? 0}
+            membershipRoles={layoutData?.membershipRoles ?? {}}
           />
 
           <ProfileDropdown>
