@@ -315,16 +315,16 @@ const RepositoryAssignmentsTable = ({
   const columns = [
     {
       title: 'Owner',
-      dataIndex: ['repository'],
+      dataIndex: ['git_repo'],
       key: 'student',
       render: (repo: RepositoryInfo) => {
-        const user = repo.student ?? repo.team ?? undefined;
+        const user = repo?.student ?? repo?.team ?? undefined;
         return <UserThumbnailView user={user} />;
       },
     },
     {
       title: 'Repository',
-      dataIndex: ['repository', 'repository', 'title'],
+      dataIndex: ['git_repo', 'repository', 'title'],
       key: 'repository',
       filters:
         active === 'all'
