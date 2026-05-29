@@ -1,6 +1,6 @@
 import { test, expect } from '../../fixtures/auth.fixture';
 import { mockGitHubAPI } from '../../fixtures/mocks/github.mock';
-import { waitForDataLoad, waitForModal, waitForModalClose } from '../../helpers/wait.helpers';
+import { waitForDataLoad, waitForModal } from '../../helpers/wait.helpers';
 
 /**
  * Calendar Event Modals (Add + Edit).
@@ -45,7 +45,9 @@ test.describe('Add Event Modal', () => {
 
   test('Discard closes the modal', async ({ authenticatedPage: page }) => {
     await page.locator('.ant-modal').getByRole('button', { name: 'Discard' }).click();
-    await waitForModalClose(page);
+    // AntD keeps the .ant-modal wrapper mounted (hidden) after close instead of
+    // removing it, so assert the modal is no longer visible rather than absent.
+    await expect(page.locator('.ant-modal')).toBeHidden();
   });
 });
 

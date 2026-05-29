@@ -103,7 +103,7 @@ test.describe('Repository Create', () => {
     await expect(modal.getByText('New repository', { exact: true })).toBeVisible();
     await expect(modal.getByText('Basic Information', { exact: true })).toBeVisible();
     await expect(modal.getByText('Template Repository', { exact: true })).toBeVisible();
-    await expect(modal.getByText('Title', { exact: true })).toBeVisible();
+    await expect(modal.locator('label[for="title"]')).toBeVisible();
   });
 
   test('create form renders a Type selector and Create/Discard actions', async ({
@@ -200,9 +200,9 @@ test.describe('Repository Actions', () => {
 
       const row = page.getByRole('row').filter({ hasText: title });
       await expect(row).toBeVisible();
-      await expect(row.getByText('Draft')).toBeVisible();
-      await expect(row.getByText('Publish')).toBeVisible();
-      await expect(row.getByText('Unpublish')).toHaveCount(0);
+      await expect(row.getByText('Draft', { exact: true })).toBeVisible();
+      await expect(row.getByText('Publish', { exact: true })).toBeVisible();
+      await expect(row.getByText('Unpublish', { exact: true })).toHaveCount(0);
     } finally {
       await deleteRepositoryById(seeded.repositoryId);
     }
@@ -361,9 +361,12 @@ test.describe('Assignment form (nested modal)', () => {
 
   test('add assignment modal has deadline fields', async ({ authenticatedPage: page }) => {
     await openAdd(page);
-    await expect(page.getByText('Schedule & Deadlines')).toBeVisible({ timeout: 10000 });
-    await expect(page.getByText('Student Deadline')).toBeVisible();
-    await expect(page.getByText('Grader Deadline')).toBeVisible();
+    const modal = page.locator('.ant-modal-content');
+    await expect(modal.getByText('Schedule & Deadlines')).toBeVisible({ timeout: 10000 });
+    // "Student Deadline" / "Grader Deadline" appear both as a field label (span)
+    // and as a table column header; scope to the field label to stay unambiguous.
+    await expect(modal.locator('span.font-medium', { hasText: 'Student Deadline' })).toBeVisible();
+    await expect(modal.locator('span.font-medium', { hasText: 'Grader Deadline' })).toBeVisible();
   });
 
   test('add assignment modal has save and discard buttons', async ({ authenticatedPage: page }) => {

@@ -191,7 +191,7 @@ test.describe('Owner Classroom — delete', () => {
       page.waitForResponse(
         res =>
           res.url().includes(`/admin/${slug}/settings/danger-zone`) &&
-          res.request().method() === 'POST'
+          res.request().method() === 'DELETE'
       ),
       modal.getByRole('button', { name: 'Remove', exact: true }).click(),
     ]);

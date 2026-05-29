@@ -79,16 +79,16 @@ test.describe('Calendar Filters & Views', () => {
   });
 
   test('shows event-type filter buttons', async ({ authenticatedPage: page }) => {
-    await expect(page.getByRole('button', { name: 'Office Hours' })).toBeVisible();
-    await expect(page.getByRole('button', { name: 'Lecture' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Office Hours', exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Lecture', exact: true })).toBeVisible();
     await expect(page.getByRole('button', { name: 'Lab', exact: true })).toBeVisible();
-    await expect(page.getByRole('button', { name: 'Assessment' })).toBeVisible();
-    await expect(page.getByRole('button', { name: 'Deadline' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Assessment', exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Deadline', exact: true })).toBeVisible();
   });
 
   test('shows Week and Month view toggles', async ({ authenticatedPage: page }) => {
-    await expect(page.getByRole('button', { name: 'Week' })).toBeVisible();
-    await expect(page.getByRole('button', { name: 'Month' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Week', exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Month', exact: true })).toBeVisible();
   });
 
   test('shows the Today button', async ({ authenticatedPage: page }) => {
@@ -97,7 +97,7 @@ test.describe('Calendar Filters & Views', () => {
 
   test('renders a seeded event on the calendar', async ({ authenticatedPage: page }) => {
     // Switch to Month view so the seeded event isn't missed by the week window.
-    await page.getByRole('button', { name: 'Month' }).click();
+    await page.getByRole('button', { name: 'Month', exact: true }).click();
     await expect(page.getByText('Week 1 Lecture').first()).toBeVisible();
   });
 });

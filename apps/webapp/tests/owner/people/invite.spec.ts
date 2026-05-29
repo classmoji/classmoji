@@ -56,9 +56,11 @@ test.describe('Owner invites a student to the classroom', () => {
       await page.getByRole('button', { name: 'Parse students' }).click();
 
       await expect(page.getByText('Ready to add')).toBeVisible();
-      await expect(page.locator('.ant-modal').getByText(invite.email, { exact: false })).toBeVisible();
+      await expect(page.locator('.ant-modal').getByText(invite.email, { exact: true })).toBeVisible();
 
-      await page.getByRole('button', { name: /^Add 1 student$/ }).click();
+      // The submit button carries a leading PlusOutlined icon, so the accessible
+      // name is "plus Add 1 student" — match on the trailing visible text only.
+      await page.getByRole('button', { name: /Add 1 student$/ }).click();
 
       await expect
         .poll(async () => (await findInvite(invite.email)) !== null, { timeout: 15000 })

@@ -46,9 +46,10 @@ async function seedNotifications(
 
 async function purgeNotifications(userId: string): Promise<void> {
   const prisma = getTestPrisma();
-  await prisma.notification.deleteMany({
-    where: { user_id: userId, metadata: { path: ['test_tag'], equals: TAG } },
-  });
+  // Clear ALL of the user's notifications (not just TAG-tagged ones): the app
+  // creates real notifications during other specs in the run, so the bell's
+  // unread count is only deterministic if we start from zero.
+  await prisma.notification.deleteMany({ where: { user_id: userId } });
 }
 
 test.describe('Notification bell', () => {
@@ -107,11 +108,12 @@ test.describe('Notification bell', () => {
     const markAll = page.getByRole('button', { name: 'Mark all as read' });
     await expect(markAll).toBeEnabled();
 
-    const readReq = page.waitForResponse(
-      r => r.url().includes('/api/notifications/read') && r.request().method() === 'POST'
-    );
-    await markAll.click();
-    await readReq;
+    await Promise.all([
+      page.waitForResponse(
+        r => r.url().includes('/api/notifications/read') && r.request().method() === 'POST'
+      ),
+      markAll.click(),
+    ]);
 
     // Optimistic UI: badge gone, button disabled.
     await expect(page.getByRole('button', { name: /^Notifications$/ })).toBeVisible();
@@ -141,13 +143,15 @@ test.describe('Notification bell', () => {
 
     await page.getByRole('button', { name: /^Notifications/ }).click();
     const dialog = page.getByRole('dialog');
-    const row = dialog.getByText(`${TAG} dismissable`).locator('..').locator('..');
+    await expect(dialog.getByText(`${TAG} dismissable`)).toBeVisible();
+    const row = dialog.getByRole('button').filter({ hasText: `${TAG} dismissable` });
 
-    const dismissReq = page.waitForResponse(
-      r => r.url().includes('/api/notifications/dismiss') && r.request().method() === 'POST'
-    );
-    await row.getByRole('button', { name: 'Dismiss' }).click();
-    await dismissReq;
+    await Promise.all([
+      page.waitForResponse(
+        r => r.url().includes('/api/notifications/dismiss') && r.request().method() === 'POST'
+      ),
+      row.getByRole('button', { name: 'Dismiss' }).click(),
+    ]);
 
     await expect(dialog.getByText(`${TAG} dismissable`)).toHaveCount(0);
 

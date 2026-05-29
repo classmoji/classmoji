@@ -5,6 +5,7 @@ import {
   getClassroomBySlug,
   getTestPrisma,
   seedQuiz,
+  ensureClassroomProTier,
   deleteQuizzesByNamePrefix,
   type SeededQuiz,
 } from '../../helpers/prisma.helpers';
@@ -26,6 +27,7 @@ test.describe('Quiz List', () => {
   test.beforeAll(async () => {
     const classroom = await getClassroomBySlug(TEST_CLASSROOM);
     classroomId = classroom.id;
+    await ensureClassroomProTier(TEST_CLASSROOM);
     await seedQuiz(classroomId, PRIMARY_QUIZ_NAME, { status: 'PUBLISHED', weight: 10 });
   });
 
@@ -58,9 +60,9 @@ test.describe('Quiz List', () => {
   test('quiz table has expected column headers', async ({ authenticatedPage: page }) => {
     const table = page.locator('table');
     await expect(table).toBeVisible();
-    await expect(table.getByText('Quiz Name')).toBeVisible();
-    await expect(table.getByText('Repository', { exact: true })).toBeVisible();
-    await expect(table.getByText('Status', { exact: true })).toBeVisible();
+    await expect(table.getByRole('columnheader', { name: 'Quiz Name' })).toBeVisible();
+    await expect(table.getByRole('columnheader', { name: 'Repository' })).toBeVisible();
+    await expect(table.getByRole('columnheader', { name: 'Status' })).toBeVisible();
   });
 
   test('a published quiz shows a Published status badge', async ({ authenticatedPage: page }) => {
@@ -78,6 +80,10 @@ test.describe('Quiz List', () => {
 });
 
 test.describe('Quiz Create Drawer', () => {
+  test.beforeAll(async () => {
+    await ensureClassroomProTier(TEST_CLASSROOM);
+  });
+
   test.afterAll(async () => {
     const classroom = await getClassroomBySlug(TEST_CLASSROOM);
     await deleteQuizzesByNamePrefix(classroom.id, QUIZ_PREFIX);
@@ -128,9 +134,21 @@ test.describe('Quiz Create Drawer', () => {
     await drawer.getByLabel('Subject').fill('JavaScript Fundamentals');
     await drawer.getByLabel('Rubric Prompt').fill('Assess understanding of closures and scope.');
 
-    await drawer.getByRole('button', { name: /^Create$/ }).click();
+    const [createResponse] = await Promise.all([
+      page.waitForResponse(
+        res =>
+          res.url().includes(`/admin/${testOrg}/quizzes`) &&
+          res.request().method() === 'POST',
+        { timeout: 10000 }
+      ),
+      drawer.getByRole('button', { name: /^Create$/ }).click(),
+    ]);
+    expect(createResponse.ok()).toBeTruthy();
 
-    await page.waitForURL(new RegExp(`/admin/${testOrg}/quizzes/[^/]+$`), { timeout: 10000 });
+    // The create action redirects to the new quiz's detail page (not /form).
+    await page.waitForURL(new RegExp(`/admin/${testOrg}/quizzes/(?!form)[^/]+$`), {
+      timeout: 10000,
+    });
 
     const persisted = await getTestPrisma().quiz.findFirst({
       where: { classroom_id: classroom.id, name: newName },
@@ -168,6 +186,7 @@ test.describe('Quiz Detail View', () => {
   test.beforeAll(async () => {
     const classroom = await getClassroomBySlug(TEST_CLASSROOM);
     classroomId = classroom.id;
+    await ensureClassroomProTier(TEST_CLASSROOM);
     quiz = await seedQuiz(classroomId, PRIMARY_QUIZ_NAME, { status: 'PUBLISHED', weight: 10 });
   });
 
@@ -197,8 +216,8 @@ test.describe('Quiz Detail View', () => {
     await page.waitForURL(new RegExp(`/quizzes/${quiz.id}`), { timeout: 10000 });
 
     await expect(page.getByText('Quiz Statistics')).toBeVisible();
-    await expect(page.getByText('Total Attempts')).toBeVisible();
-    await expect(page.getByText('Student Attempts')).toBeVisible();
+    await expect(page.getByText('Total Attempts', { exact: true })).toBeVisible();
+    await expect(page.getByText('Student Attempts', { exact: true })).toBeVisible();
   });
 
   test('detail page can navigate back to the quiz list', async ({ authenticatedPage: page }) => {
@@ -218,6 +237,7 @@ test.describe('Quiz Edit Drawer', () => {
   test.beforeAll(async () => {
     const classroom = await getClassroomBySlug(TEST_CLASSROOM);
     classroomId = classroom.id;
+    await ensureClassroomProTier(TEST_CLASSROOM);
     await seedQuiz(classroomId, PRIMARY_QUIZ_NAME, { status: 'PUBLISHED', weight: 10 });
   });
 
@@ -276,6 +296,10 @@ test.describe('Quiz Edit Drawer', () => {
 });
 
 test.describe('Quiz Navigation', () => {
+  test.beforeAll(async () => {
+    await ensureClassroomProTier(TEST_CLASSROOM);
+  });
+
   test('can navigate from dashboard to quizzes via sidebar', async ({
     authenticatedPage: page,
     testOrg,

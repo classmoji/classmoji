@@ -63,7 +63,13 @@ test.describe('Owner Dashboard — null-safety regression', () => {
       e =>
         !/Failed to load resource/i.test(e) &&
         !/^WebSocket/i.test(e) &&
-        !/non-passive event listener/i.test(e)
+        !/non-passive event listener/i.test(e) &&
+        // recharts' <ResponsiveContainer> momentarily renders its <svg> with
+        // width/height="auto" while the container dimensions are still being
+        // measured on first paint. This is a benign 3rd-party (recharts) DOM
+        // attribute warning, not app code, and resolves itself once the chart
+        // lays out. See SubmissionChart.tsx (ResponsiveContainer height="100%").
+        !/<svg> attribute (width|height): Expected length, "auto"/i.test(e)
     );
     expect(fatal, fatal.join('\n')).toEqual([]);
   });

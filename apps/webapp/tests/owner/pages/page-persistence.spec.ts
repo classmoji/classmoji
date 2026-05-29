@@ -90,12 +90,10 @@ test.describe('Pages publish/unpublish persistence', () => {
     const statusSelect = row.locator('.ant-select');
     await expect(statusSelect).toContainText(/Draft/i);
 
-    const statusReq = page.waitForResponse(
-      r => r.url().includes(`/admin/${testOrg}/pages`) && r.request().method() === 'POST'
-    );
     await statusSelect.click();
-    await page.getByRole('option', { name: 'Public' }).click();
-    await statusReq;
+    // The onChange handler submits via fetcher; rather than racing a specific
+    // response (single-fetch posts to a .data URL), assert the persisted DB state.
+    await page.locator('.ant-select-item-option').filter({ hasText: 'Public' }).first().click();
 
     const prisma = getTestPrisma();
     await expect
@@ -125,12 +123,8 @@ test.describe('Pages publish/unpublish persistence', () => {
     const statusSelect = row.locator('.ant-select');
     await expect(statusSelect).toContainText(/Public/i);
 
-    const statusReq = page.waitForResponse(
-      r => r.url().includes(`/admin/${testOrg}/pages`) && r.request().method() === 'POST'
-    );
     await statusSelect.click();
-    await page.getByRole('option', { name: 'Draft' }).click();
-    await statusReq;
+    await page.locator('.ant-select-item-option').filter({ hasText: 'Draft' }).first().click();
 
     const prisma = getTestPrisma();
     await expect
@@ -159,12 +153,8 @@ test.describe('Pages publish/unpublish persistence', () => {
     await expect(row).toBeVisible();
     const statusSelect = row.locator('.ant-select');
 
-    const statusReq = page.waitForResponse(
-      r => r.url().includes(`/admin/${testOrg}/pages`) && r.request().method() === 'POST'
-    );
     await statusSelect.click();
-    await page.getByRole('option', { name: 'Private' }).click();
-    await statusReq;
+    await page.locator('.ant-select-item-option').filter({ hasText: 'Private' }).first().click();
 
     const prisma = getTestPrisma();
     await expect
@@ -200,11 +190,12 @@ test.describe('Pages publish/unpublish persistence', () => {
     const menuSwitch = row.getByRole('switch');
     await expect(menuSwitch).not.toBeChecked();
 
-    const toggleReq = page.waitForResponse(
-      r => r.url().includes(`/admin/${testOrg}/pages`) && r.request().method() === 'POST'
-    );
-    await menuSwitch.click();
-    await toggleReq;
+    await Promise.all([
+      page.waitForResponse(
+        r => r.url().includes(`/admin/${testOrg}/pages`) && r.request().method() === 'POST'
+      ),
+      menuSwitch.click(),
+    ]);
 
     const prisma = getTestPrisma();
     await expect
@@ -246,11 +237,12 @@ test.describe('Pages deletion persistence', () => {
     await expect(row).toBeVisible();
 
     await row.getByText('Delete', { exact: true }).click();
-    const deleteReq = page.waitForResponse(
-      r => r.url().includes(`/admin/${testOrg}/pages`) && r.request().method() === 'POST'
-    );
-    await page.getByRole('button', { name: 'Delete' }).click();
-    await deleteReq;
+    await Promise.all([
+      page.waitForResponse(
+        r => r.url().includes(`/admin/${testOrg}/pages`) && r.request().method() === 'POST'
+      ),
+      page.getByRole('button', { name: 'Delete' }).click(),
+    ]);
 
     const prisma = getTestPrisma();
     await expect

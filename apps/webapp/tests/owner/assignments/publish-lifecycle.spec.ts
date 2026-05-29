@@ -200,7 +200,7 @@ test.describe('Owner publishes and unpublishes an assignment', () => {
 
       const row = page.getByRole('row').filter({ hasText: title });
       await expect(row).toBeVisible();
-      await expect(row.getByText('Draft')).toBeVisible();
+      await expect(row.getByText('Draft', { exact: true })).toBeVisible();
       await expect(row.getByText('Publish', { exact: true })).toBeVisible();
       await expect(row.getByText('Unpublish', { exact: true })).toHaveCount(0);
 

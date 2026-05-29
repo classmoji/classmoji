@@ -58,7 +58,7 @@ test.describe('Student views the assignment list', () => {
 
     const row = page.getByRole('row').filter({ hasText: seeded.assignmentTitle });
     await expect(row).toBeVisible();
-    await expect(row.getByText(seeded.title)).toBeVisible();
+    await expect(row.getByText(seeded.title, { exact: true })).toBeVisible();
     await expect(row.getByText('Not submitted')).toBeVisible();
 
     expect(await getSubmissionStatus(seeded.gitRepoAssignmentId)).toBe('OPEN');
@@ -103,13 +103,12 @@ test.describe('Student submits an assignment', () => {
 
       await page.reload();
       await waitForDataLoad(page);
-      const after = page.getByRole('row').filter({ hasText: seeded.assignmentTitle });
-      await expect(after.getByText('Submitted')).toBeVisible();
 
+      // A CLOSED submission is "completed" and leaves the default Current tab.
       await page.getByRole('button', { name: /^Completed/ }).click();
-      await expect(
-        page.getByRole('row').filter({ hasText: seeded.assignmentTitle })
-      ).toBeVisible();
+      const after = page.getByRole('row').filter({ hasText: seeded.assignmentTitle });
+      await expect(after).toBeVisible();
+      await expect(after.getByText('Submitted')).toBeVisible();
     } finally {
       await deleteRepositoryById(seeded.repositoryId);
     }

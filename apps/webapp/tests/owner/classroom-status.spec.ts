@@ -74,14 +74,10 @@ test.describe('Owner Classroom Status — Settings', () => {
     await expect(radios.nth(0)).toBeChecked();
 
     const lockedLabel = page.locator('label', { hasText: 'Locked (read-only)' }).first();
-    await Promise.all([
-      page.waitForLoadState('load'),
-      lockedLabel.click(),
-    ]);
-    await waitForDataLoad(page);
-
-    const state = await readClassroomState();
-    expect(state?.status).toBe('LOCKED');
+    // The radio onChange POSTs to /api/classrooms/:id/status via fetch (no
+    // navigation), so poll the DB for the persisted change rather than racing it.
+    await lockedLabel.click();
+    await expect.poll(async () => (await readClassroomState())?.status).toBe('LOCKED');
 
     await expect(radios.nth(1)).toBeChecked();
   });
@@ -98,13 +94,13 @@ test.describe('Owner Classroom Status — Settings', () => {
     const modal = await waitForModal(page, /Archive class\?/);
     await expect(modal).toBeVisible();
 
+    const patch = page.waitForResponse(
+      r => r.url().includes('/archive') && r.request().method() === 'PATCH'
+    );
     await modal.getByRole('button', { name: 'Archive', exact: true }).click();
+    await patch;
 
-    await page.waitForLoadState('load');
-    await waitForDataLoad(page);
-
-    const state = await readClassroomState();
-    expect(state?.is_archived).toBe(true);
+    await expect.poll(async () => (await readClassroomState())?.is_archived).toBe(true);
   });
 
   test('no native window.confirm fires during archive', async ({
@@ -122,15 +118,15 @@ test.describe('Owner Classroom Status — Settings', () => {
 
     await page.getByRole('button', { name: 'Archive class' }).click();
     const modal = await waitForModal(page, /Archive class\?/);
+    const patch = page.waitForResponse(
+      r => r.url().includes('/archive') && r.request().method() === 'PATCH'
+    );
     await modal.getByRole('button', { name: 'Archive', exact: true }).click();
-
-    await page.waitForLoadState('load');
-    await waitForDataLoad(page);
+    await patch;
 
     expect(dialogFired).toBe(false);
 
-    const state = await readClassroomState();
-    expect(state?.is_archived).toBe(true);
+    await expect.poll(async () => (await readClassroomState())?.is_archived).toBe(true);
   });
 });
 
@@ -150,7 +146,9 @@ test.describe('Owner Classroom Status — Landing', () => {
     const archivedHeader = page.getByRole('button', { name: /Archived/ });
     await expect(archivedHeader).toBeVisible();
     await expect(archivedHeader).toContainText('Archived');
-    await expect(archivedHeader).toContainText('1');
+    // The count reflects however many of this owner's classrooms are archived
+    // (the shared DB may carry others); just assert a positive count is shown.
+    await expect(archivedHeader).toContainText(/[1-9]/);
     await expect(archivedHeader).toHaveAttribute('aria-expanded', 'false');
 
     // Card is hidden while the section is collapsed.

@@ -124,7 +124,9 @@ test.describe('Grading Table Columns', () => {
     const table = page.locator('table');
     await expect(table).toBeVisible();
 
-    await expect(page.getByRole('row').filter({ hasText: 'fake-student-1' })).toBeVisible();
+    await expect(
+      page.getByRole('row').filter({ hasText: 'fake-student-1' }).first()
+    ).toBeVisible();
 
     await expect(page.getByRole('columnheader', { name: /Owner/i })).toBeVisible();
     await expect(page.getByRole('columnheader', { name: /Repository/i })).toBeVisible();
