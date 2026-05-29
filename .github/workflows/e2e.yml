@@ -1,0 +1,105 @@
+name: E2E Tests
+
+# End-to-end + integration suite (Playwright for the webapp, Vitest for the
+# hook-station webhook verification). Runs against a throwaway Postgres service
+# container and a production build of the webapp served with the dev-only
+# /test-login route enabled, so no real GitHub OAuth is needed — the test users
+# are pre-seeded with their tokens (DB-first /test-login lookup).
+
+on:
+  push:
+    branches: [tests, dev, staging, main]
+  pull_request:
+
+# Synthetic, non-secret values. /test-login resolves the seeded account by token
+# from the DB, so these never hit GitHub. BETTER_AUTH_SECRET / GITHUB_WEBHOOK_SECRET
+# only need to be stable, not real.
+env:
+  DATABASE_URL: postgresql://classmoji:classmoji@localhost:5433/classmoji
+  BETTER_AUTH_SECRET: test-secret-not-for-prod
+  ENABLE_TEST_LOGIN: 'true'
+  NODE_ENV: development
+  WEBAPP_URL: http://localhost:3000
+  PORT: '3000'
+  GITHUB_PROF_TOKEN: e2e_prof_token_owner
+  GITHUB_TA_TOKEN: e2e_ta_token_assistant_only
+  GITHUB_STUDENT_TOKEN: e2e_student_token_student_only
+  TEST_TA_USER_ID: '10000001'
+  TEST_TA_USER_LOGIN: fake-ta
+  TEST_STUDENT_USER_ID: '10000002'
+  TEST_STUDENT_USER_LOGIN: fake-student-1
+  GITHUB_WEBHOOK_SECRET: test-webhook-secret
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: classmoji
+          POSTGRES_PASSWORD: classmoji
+          POSTGRES_DB: classmoji
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd "pg_isready -U classmoji"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Generate Prisma client
+        run: npm run db:generate
+
+      - name: Apply migrations
+        run: npx prisma migrate deploy --schema packages/database/schema.prisma
+
+      - name: Seed database (fixtures + E2E test users)
+        run: |
+          node packages/database/scripts/seed.js
+          node packages/database/scripts/seed-test-user.js
+
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps chromium
+
+      - name: Build webapp
+        run: npm run web:build
+
+      - name: Start webapp (prod build, test-login enabled)
+        run: |
+          node_modules/.bin/react-router-serve apps/webapp/build/server/index.js &
+          echo "WEBAPP_PID=$!" >> "$GITHUB_ENV"
+          npx wait-on http://localhost:3000 --timeout 120000
+
+      - name: Run webapp E2E (Playwright)
+        working-directory: apps/webapp
+        run: npx playwright test
+
+      - name: Run hook-station webhook tests (Vitest)
+        working-directory: apps/hook-station
+        run: npx vitest run
+
+      - name: Stop webapp
+        if: always()
+        run: kill "$WEBAPP_PID" || true
+
+      - name: Upload Playwright report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: apps/webapp/playwright-report
+          retention-days: 7
