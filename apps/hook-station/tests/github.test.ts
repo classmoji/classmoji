@@ -183,4 +183,63 @@ describe('github webhook route', () => {
     expect(res.statusCode).toBe(200);
     expect(Object.values(triggers).every(t => t.mock.calls.length === 0)).toBe(true);
   });
+
+  // HMAC is verified over the raw request body, not JSON.stringify(body).
+  describe('REGRESSION: GitHub webhook HMAC over raw body still works after TS migration', () => {
+    it('accepts a signature computed over the EXACT raw bytes (whitespace-padded JSON)', async () => {
+      // Whitespace-padded JSON that JSON.stringify(parse(...)) would not reproduce.
+      const rawBody = '{\n  "action": "closed",\n  "issue": { "id": 1, "number": 7 }\n}';
+      const res = await app.inject({
+        method: 'POST',
+        url: '/webhooks/callback/github',
+        headers: { 'x-hub-signature-256': sign(rawBody), 'content-type': 'application/json' },
+        payload: rawBody,
+      });
+      expect(res.statusCode).toBe(200);
+      expect(triggers.closed).toHaveBeenCalledTimes(1);
+    });
+
+    it('rejects a signature computed over a re-serialized body (the main-branch bug)', async () => {
+      const rawBody = '{\n  "action": "closed",\n  "issue": { "id": 1, "number": 7 }\n}';
+      const reSerialized = JSON.stringify(JSON.parse(rawBody));
+      const res = await app.inject({
+        method: 'POST',
+        url: '/webhooks/callback/github',
+        headers: {
+          'x-hub-signature-256': sign(reSerialized),
+          'content-type': 'application/json',
+        },
+        payload: rawBody,
+      });
+      expect(res.statusCode).toBe(401);
+      expect(triggers.closed).not.toHaveBeenCalled();
+    });
+
+    it('accepts a signature over a non-ASCII (multibyte UTF-8) raw body', async () => {
+      const payload = { action: 'closed', issue: { id: 1, number: 7, title: 'café — 日本語 — 🎓' } };
+      const rawBody = JSON.stringify(payload);
+      expect(Buffer.byteLength(rawBody, 'utf8')).toBeGreaterThan(rawBody.length);
+
+      const res = await app.inject({
+        method: 'POST',
+        url: '/webhooks/callback/github',
+        headers: { 'x-hub-signature-256': sign(rawBody), 'content-type': 'application/json' },
+        payload: rawBody,
+      });
+      expect(res.statusCode).toBe(200);
+      expect(triggers.closed).toHaveBeenCalledTimes(1);
+    });
+
+    it('returns 401 when the x-hub-signature-256 header is absent even with a valid body', async () => {
+      const rawBody = JSON.stringify({ action: 'closed', issue: { id: 1, number: 7 } });
+      const res = await app.inject({
+        method: 'POST',
+        url: '/webhooks/callback/github',
+        headers: { 'content-type': 'application/json' },
+        payload: rawBody,
+      });
+      expect(res.statusCode).toBe(401);
+      expect(triggers.closed).not.toHaveBeenCalled();
+    });
+  });
 });

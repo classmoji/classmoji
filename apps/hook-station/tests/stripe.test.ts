@@ -210,7 +210,7 @@ describe('stripe webhook route', () => {
       type: 'customer.subscription.deleted',
       data: { object: { id: 'sub_z', customer: 'cus_1' } },
     });
-    userFindBy.mockResolvedValue(null); // not needed for deleted handler
+    userFindBy.mockResolvedValue(null);
     subFindBy.mockResolvedValue({ id: 'sub-internal' });
 
     const app = await buildApp();
@@ -236,5 +236,39 @@ describe('stripe webhook route', () => {
 
     expect(res.statusCode).toBe(200);
     expect(subUpdate).not.toHaveBeenCalled();
+  });
+
+  describe('REGRESSION: Stripe webhook idempotency still works after TS migration', () => {
+    it('a duplicate delivery of the same event.id is processed once', async () => {
+      constructWebhookEvent.mockReturnValue({
+        id: 'evt_dup_1',
+        type: 'customer.subscription.created',
+        data: { object: { id: 'sub_new', customer: 'cus_1' } },
+      });
+      userFindBy.mockResolvedValue({ id: 'user-1' });
+      subGetCurrent.mockResolvedValue(null);
+
+      // Mirrors the table's unique constraint: findUnique returns a row once create has run.
+      const processed = new Set<string>();
+      processedFindUnique.mockImplementation(async ({ where }: { where: { event_id: string } }) =>
+        processed.has(where.event_id) ? { event_id: where.event_id } : null
+      );
+      processedCreate.mockImplementation(async ({ data }: { data: { event_id: string } }) => {
+        processed.add(data.event_id);
+        return data;
+      });
+
+      const app = await buildApp();
+
+      const first = await post(app, {}, { 'stripe-signature': 'sig' });
+      expect(first.statusCode).toBe(200);
+      expect(JSON.parse(first.body)).not.toHaveProperty('duplicate');
+      expect(subCreate).toHaveBeenCalledTimes(1);
+
+      const second = await post(app, {}, { 'stripe-signature': 'sig' });
+      expect(second.statusCode).toBe(200);
+      expect(JSON.parse(second.body)).toMatchObject({ duplicate: true });
+      expect(subCreate).toHaveBeenCalledTimes(1);
+    });
   });
 });
