@@ -48,7 +48,12 @@ const SettingsGeneral = () => {
 
         {/* Form Section */}
         <div>
-          <h4 className="text-lg font-semibold text-gray-800 dark:text-gray-100 mb-6">Profile Information</h4>
+          <h4
+            data-onboarding="settings-general"
+            className="text-lg font-semibold text-gray-800 dark:text-gray-100 mb-6"
+          >
+            Profile Information
+          </h4>
 
           <Form
             form={form}

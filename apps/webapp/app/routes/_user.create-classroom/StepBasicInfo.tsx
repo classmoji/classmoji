@@ -87,28 +87,30 @@ const StepBasicInfo = ({
             control={control}
             rules={{ required: 'Please select a GitHub organization' }}
             render={({ field }) => (
-              <Select
-                {...field}
-                placeholder="Select GitHub Organization"
-                className="w-full"
-                status={errors.git_org_id ? 'error' : ''}
-                dropdownRender={dropdownRender}
-              >
-                {gitOrgs.map(org => (
-                  <Select.Option key={org.id} value={org.id}>
-                    <div className="flex items-center gap-2">
-                      <Avatar src={org.avatar_url} size={20} />
-                      <span>{org.login}</span>
-                      {org.classrooms.length > 0 && (
-                        <span className="text-gray-400">
-                          ({org.classrooms.length} classroom{org.classrooms.length !== 1 ? 's' : ''}
-                          )
-                        </span>
-                      )}
-                    </div>
-                  </Select.Option>
-                ))}
-              </Select>
+              <span data-onboarding="create-class">
+                <Select
+                  {...field}
+                  placeholder="Select GitHub Organization"
+                  className="w-full"
+                  status={errors.git_org_id ? 'error' : ''}
+                  dropdownRender={dropdownRender}
+                >
+                  {gitOrgs.map(org => (
+                    <Select.Option key={org.id} value={org.id}>
+                      <div className="flex items-center gap-2">
+                        <Avatar src={org.avatar_url} size={20} />
+                        <span>{org.login}</span>
+                        {org.classrooms.length > 0 && (
+                          <span className="text-gray-400">
+                            ({org.classrooms.length} classroom
+                            {org.classrooms.length !== 1 ? 's' : ''})
+                          </span>
+                        )}
+                      </div>
+                    </Select.Option>
+                  ))}
+                </Select>
+              </span>
             )}
           />
           {errors.git_org_id && (

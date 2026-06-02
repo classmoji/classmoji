@@ -229,7 +229,9 @@ const AdminAssistants = ({ loaderData }: Route.ComponentProps) => {
             placeholder="Search assistants..."
             className="w-80"
           />
-          <ButtonNew action={show}>New assistant</ButtonNew>
+          <span data-tour="assistants-new">
+            <ButtonNew action={show}>New assistant</ButtonNew>
+          </span>
         </div>
       </div>
 
@@ -244,7 +246,10 @@ const AdminAssistants = ({ loaderData }: Route.ComponentProps) => {
         <FormAssistant close={close} token={token} />
       </Modal>
 
-      <div className="rounded-2xl bg-panel ring-1 ring-line p-5 sm:p-6 min-h-[calc(100vh-10rem)]">
+      <div
+
+        className="rounded-2xl bg-panel ring-1 ring-line p-5 sm:p-6 min-h-[calc(100vh-10rem)]"
+      >
         <Table
           columns={columns}
           dataSource={filteredAssistants}

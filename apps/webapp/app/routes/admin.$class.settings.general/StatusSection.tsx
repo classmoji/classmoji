@@ -86,7 +86,7 @@ const StatusSection = ({ classroomId, status, isArchived }: StatusSectionProps) 
         title="Archive"
         description="Move this class out of the way on your landing page. Archiving does not change access."
       >
-        <Button onClick={() => setArchived(!isArchived)}>
+        <Button onClick={() => setArchived(!isArchived)} data-tour="settings-archive">
           {isArchived ? 'Unarchive class' : 'Archive class'}
         </Button>
       </SettingSection>

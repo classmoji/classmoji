@@ -35,7 +35,7 @@ const GradingTabsCard = ({ gradingProgress, assistantsProgress }: GradingTabsCar
 
   return (
     <div className="flex flex-col">
-      <div className="flex -mb-px relative">
+      <div data-tour="dashboard-grading-tabs" className="flex -mb-px relative">
         {TABS.map((tab, idx) => {
           const isActive = tab.key === active;
           const baseZ = TABS.length - idx;

@@ -33,7 +33,7 @@ const ProfileSection = ({ organization }: ProfileSectionProps) => {
           <Input value={name} onChange={e => setName(e.target.value)} />
         </Form.Item>
 
-        <Button type="primary" onClick={saveProfile}>
+        <Button type="primary" onClick={saveProfile} data-tour="settings-save-profile">
           Save
         </Button>
       </Form>

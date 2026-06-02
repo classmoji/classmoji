@@ -85,6 +85,7 @@ const TweaksSection = () => {
             Theme
           </div>
           <div
+            data-tour="settings-theme"
             role="radiogroup"
             aria-label="Theme"
             className="@container grid grid-cols-3 w-full max-w-sm p-1 rounded-xl bg-nav-hover gap-1"
@@ -130,7 +131,7 @@ const TweaksSection = () => {
           <div className="text-xs font-semibold uppercase tracking-wider text-ink-3 mb-2">
             Accent
           </div>
-          <div className="flex flex-wrap gap-3">
+          <div data-tour="settings-accent" className="flex flex-wrap gap-3">
             {ACCENTS.map(a => {
               const isActive = !isCustom && accent.toLowerCase() === a.hex.toLowerCase();
               return (
@@ -245,6 +246,7 @@ const TweaksSection = () => {
           <button
             type="button"
             role="switch"
+            data-tour="settings-translucent-sidebar"
             aria-checked={translucentSidebar}
             onClick={() => setTranslucentSidebar(!translucentSidebar)}
             className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-[var(--accent)] focus:ring-offset-white dark:focus:ring-offset-neutral-900 ${

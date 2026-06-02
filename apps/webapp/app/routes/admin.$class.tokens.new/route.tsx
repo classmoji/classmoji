@@ -161,6 +161,7 @@ const AdminTokensNew = ({ loaderData }: Route.ComponentProps) => {
             className="!mb-3"
           >
             <InputNumber
+              data-tour="tokens-new-amount"
               min={1}
               variant="borderless"
               placeholder="Number of tokens"
@@ -181,7 +182,11 @@ const AdminTokensNew = ({ loaderData }: Route.ComponentProps) => {
 
           <InlineRow icon={IconUsers}>
             <Form.Item className="!mb-1 !mt-1">
-              <Checkbox checked={allStudents} onChange={handleAllStudentsChange}>
+              <Checkbox
+                data-tour="tokens-new-all-students"
+                checked={allStudents}
+                onChange={handleAllStudentsChange}
+              >
                 <span className="text-sm">Assign to all students</span>
               </Checkbox>
             </Form.Item>
@@ -193,6 +198,7 @@ const AdminTokensNew = ({ loaderData }: Route.ComponentProps) => {
                 rules={[{ validator: validateStudents }]}
               >
                 <Select
+                  data-tour="tokens-new-students"
                   mode="multiple"
                   placeholder="Search and select students…"
                   showSearch
@@ -232,6 +238,7 @@ const AdminTokensNew = ({ loaderData }: Route.ComponentProps) => {
             Discard
           </Button>
           <Button
+            data-tour="tokens-new-submit"
             type="primary"
             htmlType="submit"
             loading={isLoading}

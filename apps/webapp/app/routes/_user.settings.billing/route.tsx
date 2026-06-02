@@ -163,7 +163,10 @@ const SettingsSubscription = ({ loaderData }: Route.ComponentProps) => {
                   />
                 </div>
                 <div>
-                  <h2 className="text-xl font-bold text-ink-0">
+                  <h2
+                    data-onboarding="settings-billing"
+                    className="text-xl font-bold text-ink-0"
+                  >
                     {isFreeTier ? 'Free' : 'Pro'}
                   </h2>
                 </div>

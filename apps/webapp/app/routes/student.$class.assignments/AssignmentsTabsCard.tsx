@@ -76,7 +76,7 @@ const AssignmentsTabsCard = ({ rows }: AssignmentsTabsCardProps) => {
 
   return (
     <div className="h-full flex flex-col">
-      <div className="flex -mb-px relative">
+      <div data-tour="assignments-tabs" className="flex -mb-px relative">
         {TAB_ORDER.map(({ key, label }, idx) => {
           const isActive = key === active;
           const baseZ = TAB_ORDER.length - idx;

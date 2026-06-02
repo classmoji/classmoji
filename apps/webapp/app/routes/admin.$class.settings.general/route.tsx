@@ -68,10 +68,12 @@ const SettingsGeneral = ({ loaderData }: Route.ComponentProps) => {
             label="Recent Viewers"
             extra="Show who has recently viewed each page in the navbar"
           >
-            <Switch
-              checked={classroom.settings?.recent_viewers_enabled ?? true}
-              onChange={handleRecentViewersToggle}
-            />
+            <span data-tour="settings-recent-viewers">
+              <Switch
+                checked={classroom.settings?.recent_viewers_enabled ?? true}
+                onChange={handleRecentViewersToggle}
+              />
+            </span>
           </Form.Item>
         </Form>
       </SettingSection>
