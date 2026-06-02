@@ -73,6 +73,17 @@ export const test = base.extend<AuthFixtures>({
   },
 
   authenticatedPage: async ({ page }, use) => {
+    // Storage state is applied by the Playwright project config. Assert the
+    // session cookie actually landed so a broken/empty storage state fails here
+    // with a clear message instead of surfacing as a confusing redirect later.
+    const cookies = await page.context().cookies();
+    const session = cookies.find(c => c.name === 'classmoji.session_token');
+    if (!session?.value) {
+      throw new Error(
+        'authenticatedPage: no classmoji.session_token cookie present. ' +
+          'Auth storage state was not applied (check auth.setup and the project storageState).'
+      );
+    }
     await use(page);
   },
 });

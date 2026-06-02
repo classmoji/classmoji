@@ -116,15 +116,20 @@ export const ROLE_TEST_USERS = {
     name: 'Professor',
     tokenEnvVar: 'GITHUB_PROF_TOKEN',
   },
+  // Defaults MUST match packages/database/scripts/seed-test-user.js (fake-ta /
+  // fake-student-1) so that, even with the TEST_*_USER_* env vars unset, the
+  // assistant/student roles resolve to genuinely NON-owner identities. Defaulting
+  // these to prof-classmoji (the owner) would silently collapse every role and
+  // make 403/role-gating assertions pass while exercising owner access.
   assistant: {
-    id: process.env.TEST_TA_USER_ID || '220514774', // Configure in env for real TA user
-    login: process.env.TEST_TA_USER_LOGIN || 'prof-classmoji',
+    id: process.env.TEST_TA_USER_ID || '10000001',
+    login: process.env.TEST_TA_USER_LOGIN || 'fake-ta',
     name: 'Teaching Assistant',
     tokenEnvVar: 'GITHUB_TA_TOKEN',
   },
   student: {
-    id: process.env.TEST_STUDENT_USER_ID || '220514774', // Configure in env for real student user
-    login: process.env.TEST_STUDENT_USER_LOGIN || 'prof-classmoji',
+    id: process.env.TEST_STUDENT_USER_ID || '10000002',
+    login: process.env.TEST_STUDENT_USER_LOGIN || 'fake-student-1',
     name: 'Student',
     tokenEnvVar: 'GITHUB_STUDENT_TOKEN',
   },
