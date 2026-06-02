@@ -157,7 +157,9 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
       // Verify event exists and user owns it
       const event = await ClassmojiService.calendar.getEventById(eventId as string);
 
-      if (!event) {
+      // Must exist AND belong to this classroom (prevents cross-classroom edits
+      // via a crafted eventId).
+      if (!event || event.classroom_id !== classroom.id) {
         console.error(`[Calendar Update] Event not found: ${eventId}`);
         return data({ success: false, error: 'Event not found' }, { status: 404 });
       }
@@ -231,7 +233,9 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
       // Verify user owns this event
       const event = await ClassmojiService.calendar.getEventById(eventId as string);
 
-      if (!event) {
+      // Must exist AND belong to this classroom (prevents cross-classroom
+      // deletes via a crafted eventId).
+      if (!event || event.classroom_id !== classroom.id) {
         return data({ success: false, error: 'Event not found' }, { status: 404 });
       }
 
