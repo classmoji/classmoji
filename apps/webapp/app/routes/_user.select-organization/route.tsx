@@ -13,7 +13,6 @@ import {
   getGitProvider,
   ensureClassroomTeam,
   notificationService,
-  provisionExampleClassroom,
 } from '@classmoji/services';
 import { ActionTypes, roleSettings } from '~/constants';
 import useStore from '~/store';
@@ -72,14 +71,6 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
   }
 
   if (user) {
-    if (user.login) {
-      await provisionExampleClassroom({ ownerUserId: user.id, ownerLogin: user.login });
-      const refreshedUser = await ClassmojiService.user.findById(user.id, {
-        includeMemberships: true,
-      });
-      if (refreshedUser) user = refreshedUser;
-    }
-
     const typedUser = user as AppUser;
     // Surface ALL memberships — including archived classrooms — so the
     // landing screen can show them in the Archived section.
