@@ -11,7 +11,7 @@ import { createStudentGradeColumns } from './columns/studentGradeColumns';
 import { calculateStudentFinalGrade } from '@classmoji/utils';
 import type { TableProps } from 'antd';
 import type { GitRepo, OrganizationSettings, LetterGradeMappingEntry } from '@classmoji/utils';
-import { useGlobalFetcher } from '~/hooks';
+import { useGlobalFetcher, useDarkMode } from '~/hooks';
 
 interface ModuleData {
   id: string | number;
@@ -67,6 +67,7 @@ const GradesTable = (props: GradesTableProps) => {
   const { class: classSlug } = useParams();
   const navigate = useNavigate();
   const { fetcher } = useGlobalFetcher();
+  const { isDarkMode } = useDarkMode();
 
   // Filter students based on search query
   const filteredStudents = useMemo(() => {
@@ -266,10 +267,18 @@ const GradesTable = (props: GradesTableProps) => {
           )}
         </div>
         <div className="flex items-center gap-3 flex-wrap">
-          <Checkbox checked={showIssues} onChange={() => setShowIssues(!showIssues)}>
+          <Checkbox
+            checked={showIssues}
+            onChange={() => setShowIssues(!showIssues)}
+            data-tour="grades-show-assignments"
+          >
             Show Assignments
           </Checkbox>
-          <Checkbox checked={showComments} onChange={() => setShowComments(!showComments)}>
+          <Checkbox
+            checked={showComments}
+            onChange={() => setShowComments(!showComments)}
+            data-tour="grades-show-comments"
+          >
             Show Comments
           </Checkbox>
           <div className="h-6 w-px bg-line" />
@@ -321,6 +330,7 @@ const GradesTable = (props: GradesTableProps) => {
             value={searchQuery}
             onChange={e => setSearchQuery(e.target.value)}
             style={{ width: 320 }}
+            data-tour="grades-search"
           />
         </div>
       </div>
@@ -340,8 +350,10 @@ const GradesTable = (props: GradesTableProps) => {
               theme={{
                 components: {
                   Table: {
-                    headerBg: '#fafafa',
-                    headerColor: '#374151',
+                    // In dark mode, match the global slate header tokens; the
+                    // light values would otherwise leak through as a white header.
+                    headerBg: isDarkMode ? '#1c2030' : '#fafafa',
+                    headerColor: isDarkMode ? '#d9dbe3' : '#374151',
                   },
                 },
               }}

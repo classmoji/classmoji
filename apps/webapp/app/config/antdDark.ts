@@ -45,18 +45,20 @@ const darkTheme = {
       dangerShadow: 'none',
     },
     Table: {
-      headerBg: '#262626',
-      headerColor: '#e5e5e5',
-      headerSortActiveBg: '#404040',
-      headerSortHoverBg: '#404040',
-      bodySortBg: '#171717',
-      rowSelectedBg: '#404040',
-      rowSelectedHoverBg: '#525252',
-      rowHoverBg: '#262626',
-      colorBgContainer: '#171717',
-      colorText: '#e5e5e5',
-      colorTextHeading: '#e5e5e5',
-      borderColor: '#404040',
+      // Aligned to the slate panel design tokens (--panel/--line) so the table
+      // blends into its `bg-panel` card instead of reading as a flat neutral block.
+      headerBg: '#1c2030', // --panel-tint, a subtle lift over the card
+      headerColor: '#d9dbe3', // --ink-1
+      headerSortActiveBg: '#1f2333', // --nav-hover
+      headerSortHoverBg: '#1f2333',
+      bodySortBg: '#171a25', // --panel
+      rowSelectedBg: '#1f2333',
+      rowSelectedHoverBg: '#23283a',
+      rowHoverBg: '#1e2232', // --panel-hover
+      colorBgContainer: '#171a25', // --panel: body matches the card surface
+      colorText: '#d9dbe3',
+      colorTextHeading: '#d9dbe3',
+      borderColor: '#262a38', // --line
       headerBorderRadius: 8,
     },
     Tabs: {
