@@ -132,8 +132,8 @@ export async function provisionExampleClassroom(params: {
         else studentUsers.push({ id: user.id, login: p.login });
       }
 
-      // Module + two assignments (Part 1 graded + released, Part 2 awaiting grading).
-      const courseModule = await tx.module.create({
+      // Repository + two assignments (Part 1 graded + released, Part 2 awaiting grading).
+      const courseRepository = await tx.repository.create({
         data: {
           classroom_id: classroom.id,
           title: 'hello-world',
@@ -143,19 +143,23 @@ export async function provisionExampleClassroom(params: {
           is_published: true,
         },
       });
-      const primaryRepo = await tx.moduleRepo.create({
+      const assignment1 = await tx.assignment.create({
         data: {
-          module_id: courseModule.id,
-          name: 'classmoji-examples/hello-world-template',
-          provider: 'GITHUB',
-          position: 0,
+          repository_id: courseRepository.id,
+          title: 'Hello World Part 1',
+          weight: 50,
+          is_published: true,
+          grades_released: true,
         },
       });
-      const assignment1 = await tx.assignment.create({
-        data: { module_id: courseModule.id, module_repo_id: primaryRepo.id, title: 'Hello World Part 1', weight: 50, is_published: true, grades_released: true },
-      });
       const assignment2 = await tx.assignment.create({
-        data: { module_id: courseModule.id, module_repo_id: primaryRepo.id, title: 'Hello World Part 2', weight: 50, is_published: true, grades_released: false },
+        data: {
+          repository_id: courseRepository.id,
+          title: 'Hello World Part 2',
+          weight: 50,
+          is_published: true,
+          grades_released: false,
+        },
       });
 
       // Grade scales.
@@ -168,25 +172,25 @@ export async function provisionExampleClassroom(params: {
 
       // Per-student repos, Part 1 grades + token gains, ungraded Part 2 for the queue.
       const gradeEmojis = ['🟢', '🟡', '🔴'];
-      let firstRepoAssignment: { id: string } | null = null;
+      let firstGitRepoAssignment: { id: string } | null = null;
       for (let i = 0; i < studentUsers.length; i++) {
         const student = studentUsers[i];
         const emoji = gradeEmojis[i];
         const gradeValue = EMOJI_SCALE.find(m => m.emoji === emoji)?.grade ?? 0;
 
-        const repo = await tx.repository.create({
+        const gitRepo = await tx.gitRepo.create({
           data: {
             classroom_id: classroom.id,
-            module_id: courseModule.id,
+            repository_id: courseRepository.id,
             provider: 'GITHUB',
             provider_id: `example-repo-${ownerLogin}-${student.login}`,
             name: `${student.login}-hello-world`,
             student_id: student.id,
           },
         });
-        const repoAssignment = await tx.repositoryAssignment.create({
+        const gitRepoAssignment = await tx.gitRepoAssignment.create({
           data: {
-            repository_id: repo.id,
+            git_repo_id: gitRepo.id,
             assignment_id: assignment1.id,
             provider: 'GITHUB',
             provider_id: `example-issue-${ownerLogin}-${student.login}`,
@@ -194,24 +198,24 @@ export async function provisionExampleClassroom(params: {
             status: 'CLOSED',
           },
         });
-        if (i === 0) firstRepoAssignment = repoAssignment;
+        if (i === 0) firstGitRepoAssignment = gitRepoAssignment;
 
         await tx.assignmentGrade.create({
-          data: { repository_assignment_id: repoAssignment.id, grader_id: taUser?.id ?? null, emoji },
+          data: { git_repo_assignment_id: gitRepoAssignment.id, grader_id: taUser?.id ?? null, emoji },
         });
         await tx.tokenTransaction.create({
           data: {
             classroom_id: classroom.id,
             student_id: student.id,
-            repository_assignment_id: repoAssignment.id,
+            git_repo_assignment_id: gitRepoAssignment.id,
             amount: gradeValue,
             type: 'GAIN',
             balance_after: gradeValue,
           },
         });
-        await tx.repositoryAssignment.create({
+        await tx.gitRepoAssignment.create({
           data: {
-            repository_id: repo.id,
+            git_repo_id: gitRepo.id,
             assignment_id: assignment2.id,
             provider: 'GITHUB',
             provider_id: `example-issue-p2-${ownerLogin}-${student.login}`,
@@ -223,19 +227,19 @@ export async function provisionExampleClassroom(params: {
 
       // The owner's OWN student submissions, so their student-view dashboard,
       // assignments, grades, and tokens are populated (graded Part 1 + open Part 2).
-      const selfRepo = await tx.repository.create({
+      const selfGitRepo = await tx.gitRepo.create({
         data: {
           classroom_id: classroom.id,
-          module_id: courseModule.id,
+          repository_id: courseRepository.id,
           provider: 'GITHUB',
           provider_id: `example-repo-${ownerLogin}-self`,
           name: `${ownerLogin}-hello-world`,
           student_id: ownerUserId,
         },
       });
-      const selfPart1 = await tx.repositoryAssignment.create({
+      const selfPart1 = await tx.gitRepoAssignment.create({
         data: {
-          repository_id: selfRepo.id,
+          git_repo_id: selfGitRepo.id,
           assignment_id: assignment1.id,
           provider: 'GITHUB',
           provider_id: `example-issue-${ownerLogin}-self`,
@@ -244,21 +248,21 @@ export async function provisionExampleClassroom(params: {
         },
       });
       await tx.assignmentGrade.create({
-        data: { repository_assignment_id: selfPart1.id, grader_id: taUser?.id ?? null, emoji: '⭐' },
+        data: { git_repo_assignment_id: selfPart1.id, grader_id: taUser?.id ?? null, emoji: '⭐' },
       });
       await tx.tokenTransaction.create({
         data: {
           classroom_id: classroom.id,
           student_id: ownerUserId,
-          repository_assignment_id: selfPart1.id,
+          git_repo_assignment_id: selfPart1.id,
           amount: 110,
           type: 'GAIN',
           balance_after: 110,
         },
       });
-      await tx.repositoryAssignment.create({
+      await tx.gitRepoAssignment.create({
         data: {
-          repository_id: selfRepo.id,
+          git_repo_id: selfGitRepo.id,
           assignment_id: assignment2.id,
           provider: 'GITHUB',
           provider_id: `example-issue-p2-${ownerLogin}-self`,
@@ -291,10 +295,10 @@ export async function provisionExampleClassroom(params: {
       }
 
       // One pending regrade request from the lowest-graded student.
-      if (firstRepoAssignment && studentUsers[0]) {
+      if (firstGitRepoAssignment && studentUsers[0]) {
         await tx.regradeRequest.create({
           data: {
-            repository_assignment_id: firstRepoAssignment.id,
+            git_repo_assignment_id: firstGitRepoAssignment.id,
             classroom_id: classroom.id,
             student_id: studentUsers[0].id,
             status: 'IN_REVIEW',

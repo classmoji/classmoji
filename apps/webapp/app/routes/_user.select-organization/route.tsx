@@ -13,6 +13,7 @@ import {
   getGitProvider,
   ensureClassroomTeam,
   notificationService,
+  provisionExampleClassroom,
 } from '@classmoji/services';
 import { ActionTypes, roleSettings } from '~/constants';
 import useStore from '~/store';
@@ -71,10 +72,34 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
   }
 
   if (user) {
-    const typedUser = user as AppUser;
+    let typedUser = user as AppUser;
     // Surface ALL memberships — including archived classrooms — so the
     // landing screen can show them in the Archived section.
     typedUser.memberships = (typedUser.memberships ?? []) as SelectOrganizationMembership[];
+
+    const hasExampleClassroom = typedUser.memberships.some(
+      m => (m.organization as { is_example?: boolean }).is_example === true
+    );
+    if (!hasExampleClassroom && typedUser.login) {
+      try {
+        const exampleClassroom = await provisionExampleClassroom({
+          ownerUserId: typedUser.id,
+          ownerLogin: typedUser.login,
+        });
+        if (exampleClassroom) {
+          const refreshedUser = await ClassmojiService.user.findById(typedUser.id, {
+            includeMemberships: true,
+          });
+          if (refreshedUser) {
+            user = refreshedUser;
+            typedUser = user as AppUser;
+            typedUser.memberships = (typedUser.memberships ?? []) as SelectOrganizationMembership[];
+          }
+        }
+      } catch (error) {
+        console.error('Failed to provision example classroom:', error);
+      }
+    }
 
     const { items, unreadCount } = await notificationService.getForBell(typedUser.id);
     const notifications = items.map(n => ({
