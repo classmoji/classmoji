@@ -122,15 +122,15 @@ const AdminTeams = ({ loaderData }: Route.ComponentProps) => {
   return (
     <div className="min-h-full relative">
       <Outlet />
-      <div className="flex items-center justify-between gap-3 mt-2 mb-4">
+      <div className="flex flex-wrap items-center justify-between gap-3 mt-2 mb-4">
         <h1 className="text-base font-semibold text-ink-2">Teams</h1>
 
-        <div className="flex gap-3">
+        <div className="flex gap-3 w-full sm:w-auto">
           <SearchInput
             query={query}
             setQuery={setQuery}
             placeholder="Search teams by name..."
-            className="w-64"
+            className="flex-1 sm:flex-none sm:w-64"
           />
 
           <span data-tour="teams-new" className="inline-flex">
