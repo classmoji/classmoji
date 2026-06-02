@@ -273,7 +273,7 @@ const GradesTable = (props: GradesTableProps) => {
             Show Comments
           </Checkbox>
           <div className="h-6 w-px bg-line" />
-          <div className="flex items-center gap-1.5">
+          <div className="flex items-center gap-1.5" data-tour="grades-view-toggle">
             <ConfigProvider
               theme={{
                 token: {

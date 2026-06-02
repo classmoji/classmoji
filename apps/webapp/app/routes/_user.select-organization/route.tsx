@@ -148,6 +148,7 @@ function buildLandingClasses(memberships: SelectOrganizationMembership[]): Landi
 
     const status = (org.status ?? 'ACTIVE') as 'ACTIVE' | 'LOCKED' | 'UNPUBLISHED';
     const archived = org.is_archived === true;
+    const isExample = (org as { is_example?: boolean }).is_example === true;
     const updatedAt =
       org.settings?.updated_at ?? (org as { updated_at?: Date | string | null }).updated_at;
     const updatedTs = updatedAt ? new Date(updatedAt as string | Date).getTime() || 0 : 0;
@@ -171,6 +172,7 @@ function buildLandingClasses(memberships: SelectOrganizationMembership[]): Landi
         pin_order: pinOrder,
         status,
         is_archived: archived,
+        is_example: isExample,
         updated_at: (updatedAt as string | Date | null) ?? new Date(0),
         organization: { id: org.id, login: orgLogin, name: org.name },
         hasAcceptedInvite: m.has_accepted_invite,
@@ -197,7 +199,7 @@ function buildLandingClasses(memberships: SelectOrganizationMembership[]): Landi
 const SelectOrganization = ({ loaderData }: Route.ComponentProps) => {
   const { memberships, notifications, unreadCount, membershipRoles } = loaderData;
   const { user } = useUser();
-  const { classroom, setClassroom } = useStore();
+  const { classroom, setClassroom, startFullTour } = useStore();
   const { fetcher, notify } = useGlobalFetcher();
   const { show, close, visible } = useDisclosure();
   const navigate = useNavigate();
@@ -244,6 +246,14 @@ const SelectOrganization = ({ loaderData }: Route.ComponentProps) => {
     navigate(`${roleSettings[c.role].path}/${c.organization.login}${suffix}`);
   };
 
+  // The Example Course is hidden from the grid and the org switcher; the
+  // "Take a tour" button is the only way it's reached. Clicking it starts the
+  // guided sequence: the landing tour runs here, then hands off into the Example
+  // Course for the instructor and student tours, then returns here.
+  const exampleClass =
+    classes.find(c => c.is_example && c.role === 'OWNER') ?? classes.find(c => c.is_example);
+  const onTakeTour = () => startFullTour();
+
   return (
     <>
       <Modal
@@ -285,8 +295,10 @@ const SelectOrganization = ({ loaderData }: Route.ComponentProps) => {
               }
             : null
         }
-        classes={classes}
+        classes={classes.filter(c => !c.is_example)}
         onOpenClass={onOpenClass}
+        onTakeTour={onTakeTour}
+        tourAvailable={!!exampleClass}
         notifications={notifications}
         unreadCount={unreadCount}
         membershipRoles={membershipRoles}

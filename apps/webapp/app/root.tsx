@@ -35,6 +35,7 @@ import { FetcherContext, UserContext } from '~/contexts';
 
 import RenderErrorBoundary from './components/ErrorBoundary';
 import { SyllabusBotRoot } from './components/features/syllabus-bot';
+import { OnboardingTour, InClassroomTour } from './components/features/onboarding';
 import ImpersonationBanner from './components/features/admin/ImpersonationBanner';
 
 import relativeTime from 'dayjs/plugin/relativeTime';
@@ -449,6 +450,8 @@ const App = ({ loaderData }: Route.ComponentProps) => {
                     />
                     <Outlet />
                     <SyllabusBotRoot />
+                    <OnboardingTour />
+                    <InClassroomTour />
                     <ScrollRestoration />
                     <Scripts />
                   </FetcherProvider>
