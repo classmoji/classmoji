@@ -1310,6 +1310,41 @@ html[data-theme='dark'] .bar .fill.done {
   margin: 0;
 }
 
+/* Tip callout — a soft accent card below a step's paragraph. Uses the accent
+   tokens so it picks up the user's chosen accent and adapts to light/dark. */
+.cm-tour-tip {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin-top: 14px;
+  margin-bottom: 10px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+  border: 1px solid var(--accent-soft-2);
+  font-size: 13px;
+  line-height: 1.5;
+}
+.cm-tour-key {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 5px;
+  margin: 0 1px;
+  border-radius: 6px;
+  background: var(--panel);
+  border: 1px solid var(--accent-soft-2);
+  box-shadow: 0 1px 0 var(--accent-soft-2);
+  font-size: 12px;
+  font-weight: 600;
+  font-family: var(--font-sans);
+  color: var(--accent-ink);
+  vertical-align: baseline;
+}
+
 /* Smooth, delightful step-to-step movement. The spotlight cutout is an SVG path,
    which Chromium can animate via `transition: d`, so it glides between targets;
    the popover eases to its new position instead of snapping. */
