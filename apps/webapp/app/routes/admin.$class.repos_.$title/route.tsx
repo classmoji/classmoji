@@ -4,6 +4,7 @@ import {
   IconChevronLeft,
   IconList,
   IconTable,
+  IconPlus,
   IconBrandGithub,
 } from '@tabler/icons-react';
 import { useParams, useRevalidator, useNavigate, Outlet } from 'react-router';
@@ -256,6 +257,14 @@ const SingleRepository = ({ loaderData }: Route.ComponentProps) => {
     {
       key: 'repositories',
       label: 'Repositories',
+      extra: (
+        <Button
+          icon={<IconBrandGithub size={16} />}
+          onClick={() => navigate(`/admin/${classSlug}/repos/form?title=${repository!.title}`)}
+        >
+          Edit repository
+        </Button>
+      ),
       children: (
         <RepositoriesTab
           repos={repos as Parameters<typeof RepositoriesTab>[0]['repos']}
@@ -269,10 +278,10 @@ const SingleRepository = ({ loaderData }: Route.ComponentProps) => {
       label: 'Assignments',
       extra: (
         <Button
-          icon={<IconBrandGithub size={16} />}
+          icon={<IconPlus size={16} />}
           onClick={() => navigate(`/admin/${classSlug}/repos/form?title=${repository!.title}`)}
         >
-          Edit repository
+          New assignment
         </Button>
       ),
       children: (
