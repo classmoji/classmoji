@@ -110,14 +110,16 @@ const StudentRepositories = ({ loaderData }: Route.ComponentProps) => {
           </p>
         </div>
       ) : (
-        <ModuleAccordion
-          repositories={repositories}
-          repoAssignmentsByAssignmentId={repoAssignmentsByAssignmentId}
-          userTeamsByModuleSlug={userTeamsByModuleSlug}
-          classSlug={classSlug}
-          slidesUrl={slidesUrl}
-          pagesUrl={pagesUrl}
-        />
+        <div data-tour="repos-card">
+          <ModuleAccordion
+            repositories={repositories}
+            repoAssignmentsByAssignmentId={repoAssignmentsByAssignmentId}
+            userTeamsByModuleSlug={userTeamsByModuleSlug}
+            classSlug={classSlug}
+            slidesUrl={slidesUrl}
+            pagesUrl={pagesUrl}
+          />
+        </div>
       )}
     </div>
   );

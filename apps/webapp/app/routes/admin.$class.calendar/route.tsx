@@ -509,7 +509,12 @@ const AdminCalendar = ({ loaderData }: Route.ComponentProps) => {
         <div className="flex gap-2">
           <CalendarSubscriptionCard subscriptionUrl={subscriptionUrl} />
           {canEdit && (
-            <Button type="primary" icon={<PlusOutlined />} onClick={() => setAddModalOpen(true)}>
+            <Button
+              type="primary"
+              icon={<PlusOutlined />}
+              onClick={() => setAddModalOpen(true)}
+              data-tour="calendar-add-event"
+            >
               Add Event
             </Button>
           )}
