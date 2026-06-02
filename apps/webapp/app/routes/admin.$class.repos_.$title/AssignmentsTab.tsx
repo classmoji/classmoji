@@ -85,6 +85,7 @@ const AssignmentsTab = ({ classSlug, repositoryTitle, assignments }: Assignments
       rowKey="id"
       rowHoverable={false}
       size="middle"
+      scroll={{ x: 'max-content' }}
       pagination={false}
       locale={{
         emptyText: (

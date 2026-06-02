@@ -115,6 +115,7 @@ const RepositoriesTab = ({ repos, repository, gitOrgLogin }: RepositoriesTabProp
       rowKey="id"
       rowHoverable={false}
       size="middle"
+      scroll={{ x: 'max-content' }}
       pagination={false}
       locale={{
         emptyText: (

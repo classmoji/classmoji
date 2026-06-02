@@ -427,6 +427,7 @@ export default function StudentQuizzes({ loaderData }: Route.ComponentProps) {
         rowKey="id"
         pagination={false}
         size="small"
+        scroll={{ x: 'max-content' }}
       />
     );
   };
@@ -612,6 +613,7 @@ export default function StudentQuizzes({ loaderData }: Route.ComponentProps) {
           rowKey="id"
           rowHoverable={false}
           size="small"
+          scroll={{ x: 'max-content' }}
           pagination={{ pageSize: activeTab === 'all' ? 50 : 25 }}
           expandable={{
             expandedRowRender: renderAttempts,

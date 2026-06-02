@@ -227,6 +227,7 @@ const AddStudents = ({ loaderData }: Route.ComponentProps) => {
                   columns={validColumns}
                   dataSource={categorized.valid}
                   size="small"
+                  scroll={{ x: 'max-content' }}
                   rowKey="key"
                   pagination={false}
                   rowClassName="bg-green-50 dark:bg-emerald-500/[0.06]"
@@ -247,6 +248,7 @@ const AddStudents = ({ loaderData }: Route.ComponentProps) => {
                   columns={skippedColumns}
                   dataSource={categorized.skipped}
                   size="small"
+                  scroll={{ x: 'max-content' }}
                   rowKey="key"
                   pagination={false}
                   rowClassName="bg-gray-50 dark:bg-neutral-800/40 opacity-70"
