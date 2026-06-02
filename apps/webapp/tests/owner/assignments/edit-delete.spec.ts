@@ -1,9 +1,7 @@
 import { test, expect } from '../../fixtures/auth.fixture';
-import { mockGitHubAPI } from '../../fixtures/mocks/github.mock';
 import { waitForDataLoad } from '../../helpers/wait.helpers';
 import { TEST_CLASSROOM } from '../../helpers/env.helpers';
 import {
-  getTestPrisma,
   getClassroomBySlug,
   getRepositoryByTitle,
   seedRepositoryWithAssignment,
@@ -19,9 +17,6 @@ import {
 const REPOS_PATH = (org: string) => `/admin/${org}/repos`;
 
 test.describe('Owner edits an assignment weight', () => {
-  test.beforeEach(async ({ authenticatedPage: page }) => {
-    await mockGitHubAPI(page);
-  });
 
   test('owner editing the weight cell persists the new weight to the repositories row', async ({
     authenticatedPage: page,
@@ -60,9 +55,6 @@ test.describe('Owner edits an assignment weight', () => {
 });
 
 test.describe('Owner deletes an assignment', () => {
-  test.beforeEach(async ({ authenticatedPage: page }) => {
-    await mockGitHubAPI(page);
-  });
 
   test('owner deleting an assignment removes its repositories row from the DB', async ({
     authenticatedPage: page,
@@ -104,15 +96,8 @@ test.describe('Owner creates an assignment', () => {
     'MISSING: create-via-form needs a GitHub template-search mock for ProjectTemplateSelect before it can be driven + DB-asserted'
   );
 
-  test('owner creates an assignment and a repositories row is persisted', async ({
-    authenticatedPage: page,
-    testOrg,
-  }) => {
-    // Intentionally unimplemented — see test.fixme above.
-    await page.goto(REPOS_PATH(testOrg));
-    await waitForDataLoad(page);
-    const prisma = getTestPrisma();
-    expect(prisma).toBeTruthy();
-    expect(testOrg).toBeTruthy();
+  test('owner creates an assignment and a repositories row is persisted', async () => {
+    // Body intentionally empty — gated by test.fixme above until the
+    // ProjectTemplateSelect GitHub template-search mock exists.
   });
 });

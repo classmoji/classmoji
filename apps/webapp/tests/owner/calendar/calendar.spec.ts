@@ -1,5 +1,4 @@
 import { test, expect } from '../../fixtures/auth.fixture';
-import { mockGitHubAPI } from '../../fixtures/mocks/github.mock';
 import { waitForDataLoad } from '../../helpers/wait.helpers';
 
 /**
@@ -11,7 +10,6 @@ import { waitForDataLoad } from '../../helpers/wait.helpers';
 
 test.describe('Calendar Display', () => {
   test.beforeEach(async ({ authenticatedPage: page, testOrg }) => {
-    await mockGitHubAPI(page);
     await page.goto(`/admin/${testOrg}/calendar`);
     await waitForDataLoad(page);
   });
@@ -46,7 +44,6 @@ test.describe('Calendar Display', () => {
 
 test.describe('Calendar Navigation', () => {
   test.beforeEach(async ({ authenticatedPage: page, testOrg }) => {
-    await mockGitHubAPI(page);
     await page.goto(`/admin/${testOrg}/calendar`);
     await waitForDataLoad(page);
   });
@@ -73,7 +70,6 @@ test.describe('Calendar Navigation', () => {
 
 test.describe('Calendar Filters & Views', () => {
   test.beforeEach(async ({ authenticatedPage: page, testOrg }) => {
-    await mockGitHubAPI(page);
     await page.goto(`/admin/${testOrg}/calendar`);
     await waitForDataLoad(page);
   });

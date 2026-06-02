@@ -1,5 +1,4 @@
 import { test, expect } from '../../fixtures/auth.fixture';
-import { mockGitHubAPI } from '../../fixtures/mocks/github.mock';
 import { waitForDataLoad } from '../../helpers/wait.helpers';
 import { TEST_CLASSROOM } from '../../helpers/env.helpers';
 import {
@@ -25,7 +24,6 @@ const SEED_REPO = 'hello-world';
 
 test.describe('Repository List', () => {
   test.beforeEach(async ({ authenticatedPage: page, testOrg }) => {
-    await mockGitHubAPI(page);
     await page.goto(`/admin/${testOrg}/repos`);
     await waitForDataLoad(page);
   });
@@ -34,25 +32,23 @@ test.describe('Repository List', () => {
     await expect(page.getByRole('heading', { name: 'Repositories' })).toBeVisible();
   });
 
-  test('shows new repository button', async ({ authenticatedPage: page }) => {
+  test('list page smoke: header controls, table columns, type tag and seeded row', async ({
+    authenticatedPage: page,
+  }) => {
+    // Header controls (owner-only).
     await expect(page.getByRole('button', { name: /New repository/i })).toBeVisible();
-  });
+    await expect(page.getByRole('button', { name: /Cleanup repos/i })).toBeVisible();
 
-  test('displays the seeded repository in the table', async ({ authenticatedPage: page }) => {
-    const table = page.locator('table');
-    await expect(table.getByText(SEED_REPO, { exact: true })).toBeVisible();
-  });
-
-  test('repository table has expected columns', async ({ authenticatedPage: page }) => {
+    // Table columns.
     const table = page.locator('table');
     await expect(table).toBeVisible();
     await expect(table.getByText('Repository', { exact: true })).toBeVisible();
     await expect(table.getByText('Type', { exact: true })).toBeVisible();
     await expect(table.getByText('Weight (%)', { exact: true })).toBeVisible();
     await expect(table.getByText('Status', { exact: true })).toBeVisible();
-  });
 
-  test('shows the Individual type tag', async ({ authenticatedPage: page }) => {
+    // Seeded row + its Individual type tag.
+    await expect(table.getByText(SEED_REPO, { exact: true })).toBeVisible();
     await expect(page.getByText('Individual').first()).toBeVisible();
   });
 
@@ -83,7 +79,6 @@ test.describe('Repository List', () => {
 
 test.describe('Repository Create', () => {
   test.beforeEach(async ({ authenticatedPage: page, testOrg }) => {
-    await mockGitHubAPI(page);
     await page.goto(`/admin/${testOrg}/repos`);
     await waitForDataLoad(page);
   });
@@ -123,7 +118,6 @@ test.describe('Repository Create', () => {
 
 test.describe('Repository Detail View', () => {
   test.beforeEach(async ({ authenticatedPage: page, testOrg }) => {
-    await mockGitHubAPI(page);
     await page.goto(`/admin/${testOrg}/repos`);
     await waitForDataLoad(page);
   });
@@ -134,9 +128,8 @@ test.describe('Repository Detail View', () => {
     const repoRow = page.getByRole('row').filter({ hasText: SEED_REPO });
     await expect(repoRow).toBeVisible();
 
-    // TableActionButtons renders View first, then Edit, then row controls.
-    const actionsCell = repoRow.getByRole('cell').last();
-    await actionsCell.locator('svg').first().click();
+    // Select the View control by its stable test id (TableActionButtons).
+    await repoRow.getByTestId('table-action-view').click();
 
     await page.waitForURL(new RegExp(`/repos/${SEED_REPO}`), { timeout: 10000 });
     await expect(page.getByText(SEED_REPO).first()).toBeVisible();
@@ -153,29 +146,17 @@ test.describe('Repository Detail View', () => {
 
 test.describe('Repository Actions', () => {
   test.beforeEach(async ({ authenticatedPage: page, testOrg }) => {
-    await mockGitHubAPI(page);
     await page.goto(`/admin/${testOrg}/repos`);
     await waitForDataLoad(page);
   });
 
-  test('repository row has action icons', async ({ authenticatedPage: page }) => {
-    const repoRow = page.getByRole('row').filter({ hasText: SEED_REPO });
-    await expect(repoRow).toBeVisible();
-    expect(await repoRow.locator('svg').count()).toBeGreaterThan(0);
-  });
-
   test('can open the edit form from a repository row', async ({ authenticatedPage: page }) => {
     const repoRow = page.getByRole('row').filter({ hasText: SEED_REPO });
-    const actionsCell = repoRow.getByRole('cell').last();
-    // Edit is the second action icon (View, Edit, ...).
-    await actionsCell.locator('svg').nth(1).click();
+    // Select the Edit control by its stable test id (TableActionButtons).
+    await repoRow.getByTestId('table-action-edit').click();
 
     await page.waitForURL(new RegExp(`/repos/form\\?title=${SEED_REPO}`), { timeout: 10000 });
     await expect(page.locator('.ant-modal-content').getByText('Edit repository', { exact: true })).toBeVisible();
-  });
-
-  test('cleanup repos button is visible for owners', async ({ authenticatedPage: page }) => {
-    await expect(page.getByRole('button', { name: /Cleanup repos/i })).toBeVisible();
   });
 
   test('published repository shows Sync and Unpublish controls', async ({
@@ -227,7 +208,6 @@ test.describe('Repository Navigation', () => {
     authenticatedPage: page,
     testOrg,
   }) => {
-    await mockGitHubAPI(page);
     await page.goto(`/admin/${testOrg}/dashboard`);
     await waitForDataLoad(page);
 
@@ -240,7 +220,6 @@ test.describe('Repository Navigation', () => {
     authenticatedPage: page,
     testOrg,
   }) => {
-    await mockGitHubAPI(page);
     await page.goto(`/admin/${testOrg}/repos/${SEED_REPO}`);
     await waitForDataLoad(page);
 
@@ -252,7 +231,6 @@ test.describe('Repository Navigation', () => {
 
 test.describe('Repository Weight Display', () => {
   test('weight cell shows the seeded weight value', async ({ authenticatedPage: page, testOrg }) => {
-    await mockGitHubAPI(page);
     const classroom = await getClassroomBySlug(TEST_CLASSROOM);
     const title = `qa-weight-${Date.now()}`;
     // EditableCell renders the weight as "5 %".
@@ -273,7 +251,6 @@ test.describe('Repository Weight Display', () => {
   });
 
   test('table shows a Total summary row', async ({ authenticatedPage: page, testOrg }) => {
-    await mockGitHubAPI(page);
     await page.goto(`/admin/${testOrg}/repos`);
     await waitForDataLoad(page);
     await expect(page.getByText('Total')).toBeVisible();
@@ -282,52 +259,29 @@ test.describe('Repository Weight Display', () => {
 
 test.describe('Assignment Management (within Repository form modal)', () => {
   test.beforeEach(async ({ authenticatedPage: page, testOrg }) => {
-    await mockGitHubAPI(page);
     await page.goto(`/admin/${testOrg}/repos/form?title=${SEED_REPO}`);
     await waitForDataLoad(page);
   });
 
-  test('repository edit form modal opens', async ({ authenticatedPage: page }) => {
+  test('edit form modal smoke: assignments section, columns, rows and row actions', async ({
+    authenticatedPage: page,
+  }) => {
     const modal = page.locator('.ant-modal-content');
     await expect(modal).toBeVisible({ timeout: 5000 });
+
+    // Modal title + Assignments section + Add control.
     await expect(modal.getByText('Edit repository', { exact: true })).toBeVisible();
-  });
-
-  test('shows the Assignments section', async ({ authenticatedPage: page }) => {
-    const modal = page.locator('.ant-modal-content');
-    await expect(modal).toBeVisible({ timeout: 5000 });
     await expect(modal.getByText('Assignments', { exact: true })).toBeVisible();
-  });
+    await expect(modal.getByRole('button', { name: /Add assignment/i })).toBeVisible();
 
-  test('shows existing assignments in the table', async ({ authenticatedPage: page }) => {
-    const modal = page.locator('.ant-modal-content');
-    await expect(modal).toBeVisible({ timeout: 5000 });
-    await expect(modal.getByText('Hello World Part 1')).toBeVisible();
-  });
-
-  test('assignments table has expected columns', async ({ authenticatedPage: page }) => {
-    const modal = page.locator('.ant-modal-content');
-    await expect(modal).toBeVisible({ timeout: 5000 });
+    // Assignments table columns.
     await expect(modal.getByRole('columnheader', { name: 'Title' })).toBeVisible();
     await expect(modal.getByRole('columnheader', { name: 'Weight' })).toBeVisible();
     await expect(modal.getByRole('columnheader', { name: 'Status' })).toBeVisible();
-  });
 
-  test('has an Add assignment button', async ({ authenticatedPage: page }) => {
-    const modal = page.locator('.ant-modal-content');
-    await expect(modal).toBeVisible({ timeout: 5000 });
-    await expect(modal.getByRole('button', { name: /Add assignment/i })).toBeVisible();
-  });
-
-  test('assignments show a Published status tag', async ({ authenticatedPage: page }) => {
-    const modal = page.locator('.ant-modal-content');
-    await expect(modal).toBeVisible({ timeout: 5000 });
+    // Seeded assignment row, its Published tag, and per-row Edit/Delete actions.
+    await expect(modal.getByText('Hello World Part 1')).toBeVisible();
     await expect(modal.getByText('Published').first()).toBeVisible();
-  });
-
-  test('each assignment row has Edit and Delete actions', async ({ authenticatedPage: page }) => {
-    const modal = page.locator('.ant-modal-content');
-    await expect(modal).toBeVisible({ timeout: 5000 });
     await expect(modal.getByRole('button', { name: 'Edit' }).first()).toBeVisible();
     await expect(modal.getByRole('button', { name: 'Delete' }).first()).toBeVisible();
   });
@@ -335,7 +289,6 @@ test.describe('Assignment Management (within Repository form modal)', () => {
 
 test.describe('Assignment form (nested modal)', () => {
   test.beforeEach(async ({ authenticatedPage: page, testOrg }) => {
-    await mockGitHubAPI(page);
     await page.goto(`/admin/${testOrg}/repos/form?title=${SEED_REPO}`);
     await waitForDataLoad(page);
   });
@@ -420,7 +373,6 @@ test.describe('Assignment form (nested modal)', () => {
 
 test.describe('Repository Detail - Overview & Actions', () => {
   test.beforeEach(async ({ authenticatedPage: page, testOrg }) => {
-    await mockGitHubAPI(page);
     await page.goto(`/admin/${testOrg}/repos/${SEED_REPO}`);
     await waitForDataLoad(page);
   });

@@ -1,11 +1,10 @@
 import { test, expect } from '../fixtures/auth.fixture';
-import { mockGitHubAPI } from '../fixtures/mocks/github.mock';
 import { waitForDataLoad } from '../helpers/wait.helpers';
 import { TEST_CLASSROOM_NAME } from '../helpers/env.helpers';
+import { getTestPrisma, getClassroomBySlug } from '../helpers/prisma.helpers';
 
 test.describe('Owner Dashboard', () => {
   test.beforeEach(async ({ authenticatedPage: page, testOrg }) => {
-    await mockGitHubAPI(page);
     await page.goto(`/admin/${testOrg}/dashboard`);
     await waitForDataLoad(page);
   });
@@ -14,12 +13,28 @@ test.describe('Owner Dashboard', () => {
     await expect(page.getByRole('heading', { name: 'Dashboard' })).toBeVisible();
   });
 
-  test('displays all stat cards', async ({ authenticatedPage: page }) => {
-    await expect(page.getByText('Students', { exact: true }).first()).toBeVisible();
-    await expect(page.getByText('Submitted', { exact: true })).toBeVisible();
-    await expect(page.getByText('Late', { exact: true })).toBeVisible();
-    await expect(page.getByText('Grading', { exact: true })).toBeVisible();
-    await expect(page.locator('svg[aria-hidden="true"]').first()).toBeVisible();
+  test('stat cards render values; Students matches the DB roster', async ({
+    authenticatedPage: page,
+    testOrg,
+  }) => {
+    const classroom = await getClassroomBySlug(testOrg);
+    const expectedStudents = await getTestPrisma().classroomMembership.count({
+      where: { classroom_id: classroom.id, role: 'STUDENT' },
+    });
+
+    // All four stat values render via stable data-testids.
+    await expect(page.getByTestId('stat-value-submitted')).toBeVisible();
+    await expect(page.getByTestId('stat-value-late')).toBeVisible();
+    await expect(page.getByTestId('stat-value-grading')).toBeVisible();
+
+    // The Students value must equal the seeded DB count.
+    await expect
+      .poll(async () => {
+        const text = (await page.getByTestId('stat-value-students').textContent()) ?? '';
+        const digits = text.replace(/[^0-9]/g, '');
+        return digits.length ? Number(digits) : NaN;
+      })
+      .toBe(expectedStudents);
   });
 
   test('displays submission history chart', async ({ authenticatedPage: page }) => {
@@ -54,7 +69,6 @@ test.describe('Owner Dashboard — null-safety regression', () => {
       if (msg.type() === 'error') errors.push(msg.text());
     });
 
-    await mockGitHubAPI(page);
     await page.goto(`/admin/${testOrg}/dashboard`);
     await waitForDataLoad(page);
 
@@ -78,7 +92,6 @@ test.describe('Owner Dashboard — null-safety regression', () => {
     authenticatedPage: page,
     testOrg,
   }) => {
-    await mockGitHubAPI(page);
     await page.goto(`/admin/${testOrg}/dashboard`);
     await waitForDataLoad(page);
 
@@ -96,7 +109,6 @@ test.describe('Owner Dashboard — null-safety regression', () => {
 
 test.describe('Owner Dashboard Navigation', () => {
   test.beforeEach(async ({ authenticatedPage: page, testOrg }) => {
-    await mockGitHubAPI(page);
     await page.goto(`/admin/${testOrg}/dashboard`);
     await waitForDataLoad(page);
   });

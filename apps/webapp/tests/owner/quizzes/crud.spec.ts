@@ -1,5 +1,4 @@
 import { test, expect } from '../../fixtures/auth.fixture';
-import { mockGitHubAPI } from '../../fixtures/mocks/github.mock';
 import { waitForDataLoad } from '../../helpers/wait.helpers';
 import {
   getClassroomBySlug,
@@ -36,7 +35,6 @@ test.describe('Quiz List', () => {
   });
 
   test.beforeEach(async ({ authenticatedPage: page, testOrg }) => {
-    await mockGitHubAPI(page);
     await page.goto(`/admin/${testOrg}/quizzes`);
     await waitForDataLoad(page);
   });
@@ -90,7 +88,6 @@ test.describe('Quiz Create Drawer', () => {
   });
 
   test.beforeEach(async ({ authenticatedPage: page, testOrg }) => {
-    await mockGitHubAPI(page);
     await page.goto(`/admin/${testOrg}/quizzes`);
     await waitForDataLoad(page);
   });
@@ -195,7 +192,6 @@ test.describe('Quiz Detail View', () => {
   });
 
   test.beforeEach(async ({ authenticatedPage: page, testOrg }) => {
-    await mockGitHubAPI(page);
     await page.goto(`/admin/${testOrg}/quizzes`);
     await waitForDataLoad(page);
   });
@@ -249,7 +245,6 @@ test.describe('Quiz Edit Drawer', () => {
     authenticatedPage: page,
     testOrg,
   }) => {
-    await mockGitHubAPI(page);
     await page.goto(`/admin/${testOrg}/quizzes`);
     await waitForDataLoad(page);
 
@@ -271,7 +266,6 @@ test.describe('Quiz Edit Drawer', () => {
     const quiz = await seedQuiz(classroomId, PRIMARY_QUIZ_NAME, { status: 'PUBLISHED', weight: 10 });
     const editedName = `${QUIZ_PREFIX} Edited`;
 
-    await mockGitHubAPI(page);
     await page.goto(`/admin/${testOrg}/quizzes`);
     await waitForDataLoad(page);
 
@@ -304,7 +298,6 @@ test.describe('Quiz Navigation', () => {
     authenticatedPage: page,
     testOrg,
   }) => {
-    await mockGitHubAPI(page);
     await page.goto(`/admin/${testOrg}/dashboard`);
     await waitForDataLoad(page);
 

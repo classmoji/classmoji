@@ -2,7 +2,6 @@ import { test, expect } from '../../fixtures/auth.fixture';
 import { getTestPrisma, getClassroomBySlug } from '../../helpers/prisma.helpers';
 import { TEST_CLASSROOM } from '../../helpers/env.helpers';
 import { waitForDataLoad } from '../../helpers/wait.helpers';
-import { mockGitHubAPI } from '../../fixtures/mocks/github.mock';
 
 const STUDENTS_PATH = (org: string) => `/admin/${org}/students`;
 
@@ -32,9 +31,6 @@ async function findInvite(email: string) {
 }
 
 test.describe('Owner invites a student to the classroom', () => {
-  test.beforeEach(async ({ authenticatedPage: page }) => {
-    await mockGitHubAPI(page);
-  });
 
   test('owner bulk-adds a new student and a classroom_invites row is created in the DB', async ({
     authenticatedPage: page,
@@ -88,7 +84,6 @@ test.describe('Owner revokes a pending student invite', () => {
     const prisma = getTestPrisma();
     const classroom = await getClassroomBySlug(TEST_CLASSROOM);
 
-    await mockGitHubAPI(page);
 
     await deleteInviteByEmail(invite.email);
     const created = await prisma.classroomInvite.create({

@@ -2,7 +2,6 @@ import { test, expect } from '../../fixtures/auth.fixture';
 import { getTestPrisma, getClassroomBySlug } from '../../helpers/prisma.helpers';
 import { TEST_CLASSROOM } from '../../helpers/env.helpers';
 import { waitForDataLoad } from '../../helpers/wait.helpers';
-import { mockGitHubAPI } from '../../fixtures/mocks/github.mock';
 
 const ASSISTANTS_PATH = (org: string) => `/admin/${org}/assistants`;
 
@@ -80,7 +79,6 @@ test.describe('Owner changes a teaching-team member role', () => {
     const { classroomId, userId } = await seedAssistant({ isGrader: false });
     expect(await readIsGrader(classroomId, userId)).toBe(false);
 
-    await mockGitHubAPI(page);
     await page.goto(ASSISTANTS_PATH(testOrg));
     await waitForDataLoad(page);
 
@@ -100,7 +98,6 @@ test.describe('Owner changes a teaching-team member role', () => {
     const { classroomId, userId } = await seedAssistant({ isGrader: true });
     expect(await readIsGrader(classroomId, userId)).toBe(true);
 
-    await mockGitHubAPI(page);
     await page.goto(ASSISTANTS_PATH(testOrg));
     await waitForDataLoad(page);
 

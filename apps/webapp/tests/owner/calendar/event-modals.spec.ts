@@ -1,6 +1,7 @@
 import { test, expect } from '../../fixtures/auth.fixture';
-import { mockGitHubAPI } from '../../fixtures/mocks/github.mock';
 import { waitForDataLoad, waitForModal } from '../../helpers/wait.helpers';
+import { getTestPrisma, getClassroomBySlug } from '../../helpers/prisma.helpers';
+import { TEST_CLASSROOM } from '../../helpers/env.helpers';
 
 /**
  * Calendar Event Modals (Add + Edit).
@@ -9,9 +10,25 @@ import { waitForDataLoad, waitForModal } from '../../helpers/wait.helpers';
  * clicking it opens the Edit modal.
  */
 
+async function deleteEventsByTitle(title: string): Promise<void> {
+  const prisma = getTestPrisma();
+  const classroom = await getClassroomBySlug(TEST_CLASSROOM);
+  await prisma.calendarEvent.deleteMany({
+    where: { classroom_id: classroom.id, title },
+  });
+}
+
+async function findEventByTitle(title: string) {
+  const prisma = getTestPrisma();
+  const classroom = await getClassroomBySlug(TEST_CLASSROOM);
+  return prisma.calendarEvent.findFirst({
+    where: { classroom_id: classroom.id, title },
+    select: { id: true, title: true, location: true },
+  });
+}
+
 test.describe('Add Event Modal', () => {
   test.beforeEach(async ({ authenticatedPage: page, testOrg }) => {
-    await mockGitHubAPI(page);
     await page.goto(`/admin/${testOrg}/calendar`);
     await waitForDataLoad(page);
     await page.getByRole('button', { name: 'Add Event' }).click();
@@ -49,11 +66,39 @@ test.describe('Add Event Modal', () => {
     // removing it, so assert the modal is no longer visible rather than absent.
     await expect(page.locator('.ant-modal')).toBeHidden();
   });
+
+  test('saving the Add Event modal persists a calendar_events row', async ({
+    authenticatedPage: page,
+  }) => {
+    const title = `QA Event ${Date.now()}`;
+    const location = 'QA Room 101';
+    try {
+      const modal = page.locator('.ant-modal');
+      await modal.getByPlaceholder('Add title').fill(title);
+      await modal.getByPlaceholder('Add location').fill(location);
+
+      // The Add modal prefills sensible default start/end times, so Save is enough.
+      await Promise.all([
+        page.waitForResponse(
+          r => r.url().includes('/calendar') && r.request().method() === 'POST'
+        ),
+        modal.getByRole('button', { name: 'Save', exact: true }).click(),
+      ]);
+
+      // Assert the row landed in the DB with the title (and location) we entered.
+      await expect
+        .poll(async () => (await findEventByTitle(title))?.title ?? null, { timeout: 10000 })
+        .toBe(title);
+      const persisted = await findEventByTitle(title);
+      expect(persisted?.location).toBe(location);
+    } finally {
+      await deleteEventsByTitle(title);
+    }
+  });
 });
 
 test.describe('Recurring "Ends" toggle (Add modal)', () => {
   test.beforeEach(async ({ authenticatedPage: page, testOrg }) => {
-    await mockGitHubAPI(page);
     await page.goto(`/admin/${testOrg}/calendar`);
     await waitForDataLoad(page);
     await page.getByRole('button', { name: 'Add Event' }).click();
@@ -93,7 +138,6 @@ test.describe('Recurring "Ends" toggle (Add modal)', () => {
 
 test.describe('Edit Event Modal redesign', () => {
   test.beforeEach(async ({ authenticatedPage: page, testOrg }) => {
-    await mockGitHubAPI(page);
     await page.goto(`/admin/${testOrg}/calendar`);
     await waitForDataLoad(page);
     await page.getByRole('button', { name: 'Month' }).click();

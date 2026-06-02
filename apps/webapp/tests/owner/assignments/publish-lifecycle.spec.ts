@@ -1,5 +1,4 @@
 import { test, expect } from '../../fixtures/auth.fixture';
-import { mockGitHubAPI } from '../../fixtures/mocks/github.mock';
 import { waitForDataLoad } from '../../helpers/wait.helpers';
 import { TEST_CLASSROOM } from '../../helpers/env.helpers';
 import {
@@ -86,9 +85,6 @@ async function seedRepoWithGitRepo(
 }
 
 test.describe('Owner publishes and unpublishes an assignment', () => {
-  test.beforeEach(async ({ authenticatedPage: page }) => {
-    await mockGitHubAPI(page);
-  });
 
   test('owner unpublishing a published assignment flips is_published to false in the DB', async ({
     authenticatedPage: page,

@@ -1,6 +1,5 @@
 import type { Page } from '@playwright/test';
 import { test, expect } from '../fixtures/auth.fixture';
-import { mockGitHubAPI } from '../fixtures/mocks/github.mock';
 import { waitForDataLoad } from '../helpers/wait.helpers';
 import {
   getClassroomBySlug,
@@ -57,7 +56,6 @@ async function openTAActivity(page: Page) {
 
 test.describe('TA Leaderboard (owner dashboard)', () => {
   test.beforeEach(async ({ authenticatedPage: page, testOrg }) => {
-    await mockGitHubAPI(page);
     await page.goto(`/admin/${testOrg}/dashboard`);
     await waitForDataLoad(page);
   });
@@ -108,7 +106,6 @@ test.describe('TA Leaderboard on Assistant Dashboard', () => {
     authenticatedPage: page,
     testOrg,
   }) => {
-    await mockGitHubAPI(page);
     await page.goto(`/assistant/${testOrg}/dashboard`);
     await waitForDataLoad(page);
 
@@ -116,7 +113,6 @@ test.describe('TA Leaderboard on Assistant Dashboard', () => {
   });
 
   test('assistant can open the TA activity tab', async ({ authenticatedPage: page, testOrg }) => {
-    await mockGitHubAPI(page);
     await page.goto(`/assistant/${testOrg}/dashboard`);
     await waitForDataLoad(page);
 

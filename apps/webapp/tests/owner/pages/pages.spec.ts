@@ -1,5 +1,4 @@
 import { test, expect } from '../../fixtures/auth.fixture';
-import { mockGitHubAPI } from '../../fixtures/mocks/github.mock';
 import { waitForDataLoad } from '../../helpers/wait.helpers';
 import { TEST_CLASSROOM } from '../../helpers/env.helpers';
 import {
@@ -17,7 +16,6 @@ import {
 
 test.describe('Pages List', () => {
   test.beforeEach(async ({ authenticatedPage: page, testOrg }) => {
-    await mockGitHubAPI(page);
     await page.goto(`/admin/${testOrg}/pages`);
     await waitForDataLoad(page);
   });
@@ -50,7 +48,6 @@ test.describe('Pages List', () => {
 
 test.describe('Pages Search', () => {
   test.beforeEach(async ({ authenticatedPage: page, testOrg }) => {
-    await mockGitHubAPI(page);
     await page.goto(`/admin/${testOrg}/pages`);
     await waitForDataLoad(page);
   });
@@ -77,7 +74,6 @@ test.describe('Pages Search', () => {
 
 test.describe('New Page Modal', () => {
   test.beforeEach(async ({ authenticatedPage: page, testOrg }) => {
-    await mockGitHubAPI(page);
     await page.goto(`/admin/${testOrg}/pages`);
     await waitForDataLoad(page);
   });
@@ -159,7 +155,6 @@ test.describe('Pages Table', () => {
     authenticatedPage: page,
     testOrg,
   }) => {
-    await mockGitHubAPI(page);
     await page.goto(`/admin/${testOrg}/pages`);
     await waitForDataLoad(page);
 
@@ -175,7 +170,6 @@ test.describe('Page Actions', () => {
   const ACTIONS_TAG = 'e2e-page-actions';
 
   test.beforeEach(async ({ authenticatedPage: page }) => {
-    await mockGitHubAPI(page);
     const classroom = await getClassroomBySlug(TEST_CLASSROOM);
     await getTestPrisma().page.deleteMany({
       where: { classroom_id: classroom.id, content_path: { startsWith: `pages/${ACTIONS_TAG}/` } },
@@ -224,7 +218,6 @@ test.describe('Pages List reflects DB state', () => {
   const LIST_TAG = 'e2e-page-list';
 
   test.beforeEach(async ({ authenticatedPage: page }) => {
-    await mockGitHubAPI(page);
     const classroom = await getClassroomBySlug(TEST_CLASSROOM);
     await getTestPrisma().page.deleteMany({
       where: { classroom_id: classroom.id, content_path: { startsWith: `pages/${LIST_TAG}/` } },
@@ -272,7 +265,6 @@ test.describe('Pages List reflects DB state', () => {
 
 test.describe('Navigation', () => {
   test('can navigate to pages from sidebar', async ({ authenticatedPage: page, testOrg }) => {
-    await mockGitHubAPI(page);
     await page.goto(`/admin/${testOrg}/dashboard`);
     await waitForDataLoad(page);
 

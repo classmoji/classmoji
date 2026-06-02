@@ -1,5 +1,4 @@
 import { test, expect } from '../../fixtures/auth.fixture';
-import { mockGitHubAPI } from '../../fixtures/mocks/github.mock';
 import { waitForDataLoad } from '../../helpers/wait.helpers';
 import { TEST_CLASSROOM } from '../../helpers/env.helpers';
 import { getTestPrisma, getUserByLogin, getClassroomBySlug } from '../../helpers/prisma.helpers';
@@ -61,7 +60,6 @@ async function purgePages(classroomId: string): Promise<void> {
 
 test.describe('Pages publish/unpublish persistence', () => {
   test.beforeEach(async ({ authenticatedPage: page }) => {
-    await mockGitHubAPI(page);
     const classroom = await getClassroomBySlug(TEST_CLASSROOM);
     await purgePages(classroom.id);
   });
@@ -209,7 +207,6 @@ test.describe('Pages publish/unpublish persistence', () => {
 
 test.describe('Pages deletion persistence', () => {
   test.beforeEach(async ({ authenticatedPage: page }) => {
-    await mockGitHubAPI(page);
     const classroom = await getClassroomBySlug(TEST_CLASSROOM);
     await purgePages(classroom.id);
   });

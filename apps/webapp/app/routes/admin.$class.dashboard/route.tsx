@@ -112,15 +112,20 @@ interface StatItemProps {
   subtitle?: string;
   valueColor?: string;
   accent?: React.ReactNode;
+  statKey?: string;
 }
 
-const StatItem = ({ label, value, subtitle, valueColor, accent }: StatItemProps) => (
-  <div className="flex-1 min-w-0 flex items-start justify-between gap-3 px-4 sm:px-5 py-4">
+const StatItem = ({ label, value, subtitle, valueColor, accent, statKey }: StatItemProps) => (
+  <div
+    className="flex-1 min-w-0 flex items-start justify-between gap-3 px-4 sm:px-5 py-4"
+    data-stat={statKey}
+  >
     <div className="min-w-0">
       <div className="text-xs font-medium text-ink-3">{label}</div>
       <div
         className="mt-1 text-2xl sm:text-3xl font-semibold tracking-tight leading-tight"
         style={valueColor ? { color: valueColor } : undefined}
+        data-testid={statKey ? `stat-value-${statKey}` : undefined}
       >
         {value}
       </div>
@@ -229,19 +234,27 @@ const AdminDashboard = ({ loaderData }: Route.ComponentProps) => {
             return (
               <>
                 <div className="rounded-2xl bg-panel ring-1 ring-line overflow-hidden flex flex-col sm:flex-row divide-y sm:divide-y-0 sm:divide-x divide-line">
-                  <StatItem label="Students" value={students?.length || 0} subtitle="enrolled" />
                   <StatItem
+                    statKey="students"
+                    label="Students"
+                    value={students?.length || 0}
+                    subtitle="enrolled"
+                  />
+                  <StatItem
+                    statKey="submitted"
                     label="Submitted"
                     value={`${completedAssignmentsProgress || 0}%`}
                     valueColor="#619462"
                     subtitle={submittedSubtitle}
                   />
                   <StatItem
+                    statKey="late"
                     label="Late"
                     value={`${lateSubmissionsPercent || 0}%`}
                     subtitle={lateSubtitle}
                   />
                   <StatItem
+                    statKey="grading"
                     label="Grading"
                     value={`${gradingProgress || 0}%`}
                     valueColor="#D4A289"

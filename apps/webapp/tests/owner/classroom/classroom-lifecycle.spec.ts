@@ -1,5 +1,4 @@
 import { test, expect } from '../../fixtures/auth.fixture';
-import { mockGitHubAPI } from '../../fixtures/mocks/github.mock';
 import { waitForDataLoad, waitForModal } from '../../helpers/wait.helpers';
 import {
   getTestPrisma,
@@ -112,7 +111,6 @@ test.describe('Owner Classroom — edit settings', () => {
   let originalName: string | null = null;
 
   test.beforeEach(async ({ authenticatedPage: page }) => {
-    await mockGitHubAPI(page);
     originalName = await readClassroomName(TEST_CLASSROOM);
   });
 
@@ -163,7 +161,6 @@ test.describe('Owner Classroom — delete', () => {
   let disposable: { id: string; slug: string } | null = null;
 
   test.beforeEach(async ({ authenticatedPage: page }) => {
-    await mockGitHubAPI(page);
     disposable = await createDisposableClassroom();
   });
 
@@ -201,9 +198,6 @@ test.describe('Owner Classroom — delete', () => {
 });
 
 test.describe('Owner Classroom — dashboard data', () => {
-  test.beforeEach(async ({ authenticatedPage: page }) => {
-    await mockGitHubAPI(page);
-  });
 
   test('owner dashboard renders the student count that matches the database roster', async ({
     authenticatedPage: page,
@@ -216,15 +210,9 @@ test.describe('Owner Classroom — dashboard data', () => {
 
     await expect(page.getByRole('heading', { name: 'Dashboard' })).toBeVisible();
 
-    // The "Students" stat label is distinct from "Top Students"/"Bottom Students".
-    const studentsLabel = page
-      .locator('div.text-xs.font-medium.text-ink-3')
-      .filter({ hasText: /^Students$/ })
-      .first();
-    await expect(studentsLabel).toBeVisible();
-
-    const statItem = studentsLabel.locator('xpath=ancestor::div[contains(@class,"min-w-0")][1]');
-    const valueNode = statItem.locator('div.text-2xl').first();
+    // Select the "Students" stat value by stable test id (data-stat="students"),
+    // distinct from "Top Students"/"Bottom Students" elsewhere on the page.
+    const valueNode = page.getByTestId('stat-value-students');
     await expect(valueNode).toBeVisible();
 
     await expect
@@ -241,9 +229,6 @@ test.describe('Owner Classroom — dashboard data', () => {
 });
 
 test.describe('Owner Classroom — create', () => {
-  test.beforeEach(async ({ authenticatedPage: page }) => {
-    await mockGitHubAPI(page);
-  });
 
   test('create-classroom wizard renders the basic-info step for an authenticated owner', async ({
     authenticatedPage: page,
