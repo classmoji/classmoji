@@ -83,6 +83,20 @@ describe('stripe webhook route', () => {
     expect(constructWebhookEvent).not.toHaveBeenCalled();
   });
 
+  it('returns 401 when the body is missing despite a valid-looking signature header', async () => {
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'POST',
+      url: '/webhooks/callback/stripe',
+      // text/plain + empty payload avoids fastify's JSON parse 400 so we exercise
+      // the route's own missing-rawBody guard, not the body parser.
+      headers: { 'content-type': 'text/plain', 'stripe-signature': 't=1,v1=abc' },
+      payload: '',
+    });
+    expect(res.statusCode).toBe(401);
+    expect(constructWebhookEvent).not.toHaveBeenCalled();
+  });
+
   it('returns 401 when signature verification throws', async () => {
     constructWebhookEvent.mockImplementation(() => {
       throw new Error('bad sig');
@@ -142,19 +156,58 @@ describe('stripe webhook route', () => {
     expect(subCreate).not.toHaveBeenCalled();
   });
 
-  it('subscription.updated: ignores brand-new subscriptions (<30s old)', async () => {
+  it('subscription.updated: ignores brand-new subscriptions just under the 30s cutoff (29s old)', async () => {
+    // Pin created_at relative to a captured "now" so the 30s cutoff is exercised
+    // deterministically. fastify-raw-body and app.inject rely on real timers, so
+    // we offset created_at rather than faking the system clock.
+    const now = Date.now();
     constructWebhookEvent.mockReturnValue({
       type: 'customer.subscription.updated',
       data: { object: { id: 'sub_x', customer: 'cus_1', canceled_at: dayjs().unix() } },
     });
     userFindBy.mockResolvedValue({ id: 'user-1' });
-    subGetCurrent.mockResolvedValue({ id: 'sub-cur', created_at: new Date() });
+    // 29s old: strictly under the 30s cutoff, so the route must skip.
+    subGetCurrent.mockResolvedValue({
+      id: 'sub-cur',
+      created_at: new Date(now - 29_000),
+    });
 
     const app = await buildApp();
-    await post(app, {}, { 'stripe-signature': 'sig' });
+    const res = await post(app, {}, { 'stripe-signature': 'sig' });
 
+    expect(res.statusCode).toBe(200);
     expect(subUpdate).not.toHaveBeenCalled();
     expect(subCreate).not.toHaveBeenCalled();
+  });
+
+  it('subscription.updated: processes subscriptions just past the 30s cutoff (31s old)', async () => {
+    const now = Date.now();
+    constructWebhookEvent.mockReturnValue({
+      type: 'customer.subscription.updated',
+      data: {
+        object: {
+          id: 'sub_x',
+          customer: 'cus_1',
+          canceled_at: dayjs().unix(),
+          cancellation_details: { reason: 'cancellation_requested' },
+        },
+      },
+    });
+    userFindBy.mockResolvedValue({ id: 'user-1' });
+    // 31s old: strictly over the cutoff, so the route must process it.
+    subGetCurrent.mockResolvedValue({
+      id: 'sub-cur',
+      created_at: new Date(now - 31_000),
+    });
+
+    const app = await buildApp();
+    const res = await post(app, {}, { 'stripe-signature': 'sig' });
+
+    expect(res.statusCode).toBe(200);
+    expect(subUpdate).toHaveBeenCalledTimes(1);
+    expect(subCreate).toHaveBeenCalledWith(
+      expect.objectContaining({ user_id: 'user-1', tier: 'FREE' })
+    );
   });
 
   it('subscription.updated: cancels and creates FREE tier when older than 30s', async () => {

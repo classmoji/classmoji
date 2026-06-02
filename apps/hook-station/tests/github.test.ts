@@ -1,8 +1,9 @@
-import { describe, it, expect, vi, beforeAll, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import crypto from 'node:crypto';
 import Fastify, { type FastifyInstance } from 'fastify';
 import fastifyRawBody from 'fastify-raw-body';
 
+// Must match the secret set in tests/setup.ts before any route import.
 const GITHUB_SECRET = 'test-gh-secret';
 
 const triggers = {
@@ -44,10 +45,6 @@ const buildApp = async (): Promise<FastifyInstance> => {
 
 describe('github webhook route', () => {
   let app: FastifyInstance;
-
-  beforeAll(() => {
-    process.env.GITHUB_WEBHOOK_SECRET = GITHUB_SECRET;
-  });
 
   beforeEach(async () => {
     Object.values(triggers).forEach(t => t.mockClear());
@@ -237,6 +234,34 @@ describe('github webhook route', () => {
         url: '/webhooks/callback/github',
         headers: { 'content-type': 'application/json' },
         payload: rawBody,
+      });
+      expect(res.statusCode).toBe(401);
+      expect(triggers.closed).not.toHaveBeenCalled();
+    });
+
+    it('rejects a forged all-zeros signature over an otherwise valid body', async () => {
+      const rawBody = JSON.stringify({ action: 'closed', issue: { id: 1, number: 7 } });
+      const res = await app.inject({
+        method: 'POST',
+        url: '/webhooks/callback/github',
+        headers: {
+          'x-hub-signature-256':
+            'sha256=0000000000000000000000000000000000000000000000000000000000000000',
+          'content-type': 'application/json',
+        },
+        payload: rawBody,
+      });
+      expect(res.statusCode).toBe(401);
+      expect(triggers.closed).not.toHaveBeenCalled();
+    });
+
+    it('returns 401 when the body (rawBody) is missing despite a signature header', async () => {
+      // No payload at all -> fastify-raw-body never captures a rawBody, so the
+      // route's `typeof rawBody !== 'string'` guard must reject before verifying.
+      const res = await app.inject({
+        method: 'POST',
+        url: '/webhooks/callback/github',
+        headers: { 'x-hub-signature-256': 'sha256=deadbeef' },
       });
       expect(res.statusCode).toBe(401);
       expect(triggers.closed).not.toHaveBeenCalled();
