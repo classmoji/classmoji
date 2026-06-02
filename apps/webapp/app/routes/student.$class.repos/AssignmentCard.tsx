@@ -1,6 +1,8 @@
 import dayjs from 'dayjs';
-import { IconBrandGithub } from '@tabler/icons-react';
+import { motion, useReducedMotion } from 'framer-motion';
+import { IconBrandGithub, IconCheck } from '@tabler/icons-react';
 import { EmojisDisplay } from '~/components';
+import { POP_SPRING } from '~/utils/motion';
 import ResourceLinks from './ResourceLinks';
 
 interface AssignmentCardAssignment {
@@ -46,11 +48,13 @@ const getStatusPill = (repoAssignment?: AssignmentCardRepositoryAssignment | nul
   if (repoAssignment.status === 'CLOSED') {
     return {
       label: 'Submitted',
+      tone: 'submitted' as const,
       className: 'bg-[#619462]/15 text-[#3f6a40] dark:bg-[#619462]/20 dark:text-[#9BC39C]',
     };
   }
   return {
     label: 'Not submitted',
+    tone: 'pending' as const,
     className: 'bg-[#D4A289]/15 text-[#8a5b3a] dark:bg-[#D4A289]/20 dark:text-[#E8C4AC]',
   };
 };
@@ -63,6 +67,7 @@ const AssignmentCard = ({
   pagesUrl,
   rolePrefix = 'student',
 }: AssignmentCardProps) => {
+  const reducedMotion = useReducedMotion();
   const statusPill = getStatusPill(repoAssignment);
   const showGrades = assignment.grades_released && (repoAssignment?.grades?.length ?? 0) > 0;
 
@@ -76,13 +81,31 @@ const AssignmentCard = ({
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 flex-wrap">
             <h4 className="font-medium text-ink-0">{assignment.title}</h4>
-            {statusPill && (
-              <span
-                className={`inline-flex items-center text-xs font-semibold px-2 py-0.5 rounded-full ${statusPill.className}`}
-              >
-                {statusPill.label}
-              </span>
-            )}
+            {statusPill &&
+              (statusPill.tone === 'submitted' ? (
+                <motion.span
+                  initial={reducedMotion ? false : { scale: 0.6, opacity: 0 }}
+                  animate={{ scale: 1, opacity: 1 }}
+                  transition={POP_SPRING}
+                  className={`inline-flex items-center gap-1 text-xs font-semibold px-2 py-0.5 rounded-full ${statusPill.className}`}
+                >
+                  <motion.span
+                    initial={reducedMotion ? false : { scale: 0, rotate: -25 }}
+                    animate={{ scale: 1, rotate: 0 }}
+                    transition={reducedMotion ? undefined : { ...POP_SPRING, delay: 0.08 }}
+                    className="inline-flex"
+                  >
+                    <IconCheck size={12} stroke={3} />
+                  </motion.span>
+                  {statusPill.label}
+                </motion.span>
+              ) : (
+                <span
+                  className={`inline-flex items-center text-xs font-semibold px-2 py-0.5 rounded-full ${statusPill.className}`}
+                >
+                  {statusPill.label}
+                </span>
+              ))}
           </div>
           <ResourceLinks
             pages={assignment.pages}

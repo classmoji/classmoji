@@ -1,8 +1,10 @@
 import { useState } from 'react';
 import { Link, useParams } from 'react-router';
 import dayjs from 'dayjs';
-import { IconBrandGithub } from '@tabler/icons-react';
+import { motion, useReducedMotion } from 'framer-motion';
+import { IconBrandGithub, IconCheck } from '@tabler/icons-react';
 import Emoji from '~/components/ui/display/Emoji';
+import { POP_SPRING } from '~/utils/motion';
 
 export type AssignmentStatus = 'current' | 'completed';
 
@@ -64,6 +66,7 @@ const formatDeadline = (deadline: string) => {
 
 const AssignmentsTabsCard = ({ rows }: AssignmentsTabsCardProps) => {
   const [active, setActive] = useState<TabKey>('current');
+  const reducedMotion = useReducedMotion();
   const { class: classSlug } = useParams();
 
   const counts: Record<TabKey, number> = {
@@ -180,11 +183,23 @@ const AssignmentsTabsCard = ({ rows }: AssignmentsTabsCardProps) => {
                         )}
                       </td>
                       <td className="px-4 py-3">
-                        <span
-                          className={`inline-flex items-center text-xs font-semibold px-2 py-0.5 rounded-full ${statusPillStyle[row.status]}`}
-                        >
-                          {statusPillLabel[row.status]}
-                        </span>
+                        {row.status === 'completed' ? (
+                          <motion.span
+                            initial={reducedMotion ? false : { scale: 0.6, opacity: 0 }}
+                            animate={{ scale: 1, opacity: 1 }}
+                            transition={POP_SPRING}
+                            className={`inline-flex items-center gap-1 text-xs font-semibold px-2 py-0.5 rounded-full ${statusPillStyle[row.status]}`}
+                          >
+                            <IconCheck size={12} stroke={3} />
+                            {statusPillLabel[row.status]}
+                          </motion.span>
+                        ) : (
+                          <span
+                            className={`inline-flex items-center text-xs font-semibold px-2 py-0.5 rounded-full ${statusPillStyle[row.status]}`}
+                          >
+                            {statusPillLabel[row.status]}
+                          </span>
+                        )}
                       </td>
                       <td className="px-4 py-3 hidden lg:table-cell">
                         {row.status === 'completed' &&
