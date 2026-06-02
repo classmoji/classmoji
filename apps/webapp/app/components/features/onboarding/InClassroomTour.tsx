@@ -56,6 +56,14 @@ const OWNER_STEPS: FeatureStep[] = [
       'These cards give you the health of the course in one look: how many students are enrolled, the submission rate, how much work is late, and how much grading is still left. They update as students submit and you grade, so you can spot problems early.',
   },
   {
+    link: '/dashboard',
+    selector: '[data-tour="dashboard-grading-tabs"]',
+    placement: 'top',
+    title: 'Grading tabs',
+    description:
+      'Switch between per-assignment grading progress and TA grading activity.',
+  },
+  {
     link: '/repos',
     title: 'Repositories',
     description:
@@ -68,6 +76,49 @@ const OWNER_STEPS: FeatureStep[] = [
     title: 'Create a repository',
     description:
       'Use New repository to add a unit of work from a template. The assignments inside become GitHub issues that Classmoji opens in each student’s copy of the repo, and you control release dates, due dates, and weighting per assignment.',
+  },
+  {
+    link: '/repos/form',
+    selector: '[data-tour="repos-form-title"]',
+    placement: 'bottom',
+    title: 'Name the repository',
+    description: 'Type the repository title, which becomes the GitHub repo name in lowercase with dashes.',
+  },
+  {
+    link: '/repos/form',
+    selector: '[data-tour="repos-form-type"]',
+    placement: 'bottom',
+    title: 'Pick a type',
+    description: 'Choose Individual or Group to control whether students work solo or in teams.',
+  },
+  {
+    link: '/repos/form',
+    selector: '[data-tour="repos-form-add-assignment"]',
+    placement: 'left',
+    title: 'Add assignments',
+    description: 'Open the assignment editor to define each gradable assignment in this repository.',
+  },
+  {
+    link: '/repos/form',
+    selector: '[data-tour="repos-form-submit"]',
+    placement: 'top',
+    title: 'Create repository',
+    description: 'Save everything to create the repository with its assignments and linked content.',
+  },
+  {
+    link: '/repos',
+    selector: '[data-tour="repos-cleanup"]',
+    placement: 'bottom',
+    title: 'Cleanup repos',
+    description:
+      'Finds students no longer on your roster so you can remove their leftover repos; nothing is deleted until you confirm.',
+  },
+  {
+    link: '/repos',
+    selector: '[data-tour="repos-link-resources"]',
+    placement: 'bottom',
+    title: 'Link resources',
+    description: 'Attach pages, slides, or other resources to your repositories.',
   },
   {
     link: '/students',
@@ -84,16 +135,72 @@ const OWNER_STEPS: FeatureStep[] = [
       'Add Students lets you paste a list of names and emails, one per line, often straight from your school’s system. Existing Classmoji users are enrolled right away, while new users get an email to join first, and on their first visit students accept a GitHub org invite to get repo access.',
   },
   {
+    link: '/students/add',
+    selector: '[data-tour="students-add-roster"]',
+    placement: 'bottom',
+    title: 'Paste your roster',
+    description: 'Paste one student per line as name, email, so they can all be added at once.',
+  },
+  {
+    link: '/students/add',
+    selector: '[data-tour="students-add-parse"]',
+    placement: 'top',
+    title: 'Parse students',
+    description: 'Validates your pasted text and previews who is ready to add and who was skipped.',
+  },
+  {
+    link: '/students',
+    selector: '[data-tour="students-search"]',
+    placement: 'bottom',
+    title: 'Search roster',
+    description: 'Filter the roster by name, login, or email to find someone quickly.',
+  },
+  {
     link: '/teams',
     title: 'Teams for group work',
     description:
       'Teams let you run group projects instead of individual work. A group repository gives each team a single shared repo rather than one per student, and you can assign teams yourself or let students form their own, plus set a maximum team size.',
   },
   {
+    link: '/teams',
+    selector: '[data-tour="teams-new"]',
+    placement: 'bottom',
+    title: 'Create a team',
+    description: 'Add a new team to this classroom; nothing is created until you submit.',
+  },
+  {
+    link: '/teams/new',
+    selector: '[data-tour="teams-new-name"]',
+    placement: 'bottom',
+    title: 'Team name',
+    description: 'Type the name for the new team, which GitHub turns into the team slug.',
+  },
+  {
+    link: '/teams/new',
+    selector: '[data-tour="teams-new-visibility"]',
+    placement: 'top',
+    title: 'Team visibility',
+    description: 'Choose whether the team is secret (members only) or visible to the whole organization.',
+  },
+  {
+    link: '/teams/new',
+    selector: '[data-tour="teams-new-submit"]',
+    placement: 'top',
+    title: 'Create team',
+    description: 'Click to create the team in your GitHub organization and add it to the classroom.',
+  },
+  {
     link: '/assistants',
     title: 'Teaching assistants',
     description:
       'Assistants help you run and grade the class. You add a TA by GitHub username, then assign them specific submissions to grade from the repository view. This spreads grading across your staff so it scales even in a large course.',
+  },
+  {
+    link: '/assistants',
+    selector: '[data-tour="assistants-new"]',
+    placement: 'bottom',
+    title: 'Add assistant',
+    description: 'Invite a new teaching assistant to this classroom.',
   },
   {
     link: '/grades',
@@ -110,6 +217,27 @@ const OWNER_STEPS: FeatureStep[] = [
       'Classmoji grades with emojis instead of bare numbers, and each emoji maps to a numeric value from 0 to 100 that you set in settings. A submission’s grade is the average of the emoji values you apply. Use this toggle to read the gradebook as expressive emoji or as the exact numbers behind them.',
   },
   {
+    link: '/grades',
+    selector: '[data-tour="grades-show-assignments"]',
+    placement: 'bottom',
+    title: 'Show assignments',
+    description: 'Expand each repository into its individual assignment grade columns.',
+  },
+  {
+    link: '/grades',
+    selector: '[data-tour="grades-show-comments"]',
+    placement: 'bottom',
+    title: 'Show comments',
+    description: 'Reveal the per-student comment column alongside grades.',
+  },
+  {
+    link: '/grades',
+    selector: '[data-tour="grades-search"]',
+    placement: 'bottom',
+    title: 'Search students',
+    description: 'Filter the grades table to matching students by name, username, or email.',
+  },
+  {
     link: '/tokens',
     title: 'Extension tokens',
     description:
@@ -122,6 +250,27 @@ const OWNER_STEPS: FeatureStep[] = [
     title: 'Hand out tokens',
     description:
       'Assign Tokens lets you grant tokens to one student or the whole class at once. Students spend them to extend their own deadlines, and you set the price, the tokens per hour of extension, in Settings under Extension. Allocations take effect immediately and appear in the token log.',
+  },
+  {
+    link: '/tokens/new',
+    selector: '[data-tour="tokens-new-amount"]',
+    placement: 'bottom',
+    title: 'Token amount',
+    description: 'Enter how many tokens each selected student will receive.',
+  },
+  {
+    link: '/tokens/new',
+    selector: '[data-tour="tokens-new-all-students"]',
+    placement: 'bottom',
+    title: 'All students',
+    description: 'Check this to grant the tokens to every student in the class at once.',
+  },
+  {
+    link: '/tokens/new',
+    selector: '[data-tour="tokens-new-submit"]',
+    placement: 'top',
+    title: 'Assign tokens',
+    description: 'Click to grant the tokens to the chosen students.',
   },
   {
     link: '/calendar',
@@ -144,10 +293,45 @@ const OWNER_STEPS: FeatureStep[] = [
       'Pages are course material you write and publish for students, such as the syllabus, lecture notes, assignment specs, or reference guides. They are served through GitHub Pages, so your content lives in the same Git-native setup as the rest of the class.',
   },
   {
+    link: '/pages',
+    selector: '[data-tour="pages-new"]',
+    placement: 'bottom',
+    title: 'New page',
+    description: 'Create a new content page; nothing is published until you save.',
+  },
+  {
+    link: '/pages/new',
+    selector: '[data-tour="pages-new-title"]',
+    placement: 'bottom',
+    title: 'Page title',
+    description: 'Type the page name; its slug and content path are generated from this title.',
+  },
+  {
+    link: '/pages/new',
+    selector: '[data-tour="pages-new-mode"]',
+    placement: 'bottom',
+    title: 'Creation mode',
+    description: 'Start a blank page, import one markdown file, or batch import many.',
+  },
+  {
+    link: '/pages/new',
+    selector: '[data-tour="pages-new-submit"]',
+    placement: 'top',
+    title: 'Create page',
+    description: 'Click to create the page in your content repo and save it to the course.',
+  },
+  {
     link: '/gitrepos',
     title: 'GitHub repos',
     description:
       'This page mirrors every student and team repository created from your published coursework, pulled from your GitHub organization, so you can jump to any repo and confirm copies were created. This example course uses mock data with no real GitHub org, so the list here is empty.',
+  },
+  {
+    link: '/gitrepos',
+    selector: '[data-tour="gitrepos-refresh"]',
+    placement: 'bottom',
+    title: 'Refresh repositories',
+    description: 'Pull the latest repository list from your linked GitHub organization.',
   },
   {
     link: '/repo-health',
@@ -157,17 +341,65 @@ const OWNER_STEPS: FeatureStep[] = [
   },
   {
     link: '/settings/general',
-    title: 'Class settings',
+    selector: '[data-tour="settings-tab-general"]',
+    placement: 'bottom',
+    title: 'Settings, tab by tab',
     description:
-      'Settings is where you tune how the class works: the emoji-to-number grade scale and letter-grade ranges, the token cost per hour of extension, late penalties, team formation rules, and more. These choices drive grading and deadlines across every repository.',
+      'Settings is split into tabs along the top, and we will click through the key ones. This first tab, General, holds the class name, its status, and the page students land on first.',
   },
   {
     link: '/settings/general',
-    selector: '[data-tour="settings-status"]',
+    selector: '[data-tour="settings-save-profile"]',
     placement: 'bottom',
-    title: 'Read-only and archive',
+    title: 'Rename the class',
+    description: 'Edit the class display name and click Save to apply it.',
+  },
+  {
+    link: '/settings/general',
+    selector: '[data-tour="settings-archive"]',
+    placement: 'bottom',
+    title: 'Archive the class',
     description:
-      'From settings you can also change the overall status of the class. Flipping it to read-only or unpublished freezes changes, which is useful at the end of a term or while you prepare the next cohort without disrupting the current one.',
+      'When a term ends, archiving tucks the class out of the active classroom list so it stops cluttering everyone’s dashboard. Nothing is deleted, no one loses access, and you can unarchive it anytime.',
+  },
+  {
+    link: '/settings/grades',
+    selector: '[data-tour="settings-tab-grades"]',
+    placement: 'bottom',
+    title: 'Grades tab',
+    description:
+      'Define the emoji-to-number scale (what each emoji is worth) and the letter-grade ranges that turn those numbers into final grades.',
+  },
+  {
+    link: '/settings/quizzes',
+    selector: '[data-tour="settings-tab-quizzes"]',
+    placement: 'bottom',
+    title: 'Quizzes tab',
+    description: 'Turn AI-graded quizzes on or off for the class and set their defaults.',
+  },
+  {
+    link: '/settings/team',
+    selector: '[data-tour="settings-tab-team"]',
+    placement: 'bottom',
+    title: 'Team tab',
+    description:
+      'Group-work rules live here: the maximum team size and whether students form their own teams or you assign them.',
+  },
+  {
+    link: '/settings/extension',
+    selector: '[data-tour="settings-tab-extension"]',
+    placement: 'bottom',
+    title: 'Extension tab',
+    description:
+      'Controls deadline-extension tokens: how many tokens a student spends to buy one extra hour past a due date.',
+  },
+  {
+    link: '/settings/danger-zone',
+    selector: '[data-tour="settings-tab-danger-zone"]',
+    placement: 'bottom',
+    title: 'Danger zone',
+    description:
+      'Irreversible actions like resetting all grades or deleting the class are isolated on this last tab so you never trigger them by accident.',
   },
   {
     title: 'Ask Moji',
@@ -197,6 +429,20 @@ const STUDENT_STEPS: FeatureStep[] = [
       'This spotlight highlights your current repository and what is coming up next so you always know what to work on. It saves you from hunting through every repo to find the next thing due.',
   },
   {
+    link: '/dashboard',
+    selector: '[data-tour="dashboard-view-calendar"]',
+    placement: 'bottom',
+    title: 'View calendar',
+    description: 'Jump to your full class calendar of upcoming events and deadlines.',
+  },
+  {
+    link: '/dashboard',
+    selector: '[data-tour="dashboard-activity-tabs"]',
+    placement: 'top',
+    title: 'Activity tabs',
+    description: 'Switch between your recent feedback, team, and regrade activity.',
+  },
+  {
     link: '/repos',
     title: 'Your repositories',
     description:
@@ -204,7 +450,7 @@ const STUDENT_STEPS: FeatureStep[] = [
   },
   {
     link: '/repos',
-    selector: '[data-tour="repos-card"]',
+    selector: '[data-tour="repos-toggle"]',
     placement: 'bottom',
     title: 'Inside a repository',
     description:
@@ -225,18 +471,17 @@ const STUDENT_STEPS: FeatureStep[] = [
       'This bar shows how much of your work is submitted and graded at a glance, and the tabs below switch between current and completed assignments. You submit an assignment by closing its GitHub issue in your repo, which marks it as turned in here automatically.',
   },
   {
+    link: '/assignments',
+    selector: '[data-tour="assignments-tabs"]',
+    placement: 'bottom',
+    title: 'Filter assignments',
+    description: 'Filter between current, completed, and all assignments.',
+  },
+  {
     link: '/tokens',
     title: 'Your tokens',
     description:
       'Tokens are how you give yourself extra time on a deadline without emailing your instructor. Your instructor grants you a balance, and once an assignment is past due you can spend tokens to extend it, paying a set number of tokens per hour.',
-  },
-  {
-    link: '/tokens',
-    selector: '[data-tour="tokens-log"]',
-    placement: 'top',
-    title: 'Your token ledger',
-    description:
-      'This ledger is the full history of your tokens: every grant you receive and every extension you buy, with your running balance. It keeps things transparent so you always know how many hours of extension you can still afford.',
   },
   {
     link: '/regrade-requests',
@@ -259,10 +504,38 @@ const STUDENT_STEPS: FeatureStep[] = [
       'The calendar shows the full course schedule: lectures, labs, office hours, and assessments your instructor has posted. You can subscribe to it from your own calendar app so events and changes sync automatically.',
   },
   {
+    link: '/calendar',
+    selector: '[data-tour="calendar-view-toggle"]',
+    placement: 'bottom',
+    title: 'Week / month view',
+    description: 'Switch the calendar between weekly and monthly views.',
+  },
+  {
     link: '/settings',
     title: 'Make it yours',
     description:
       'Settings let you personalize how Classmoji looks for you, including light or dark mode, an accent color, and a background. These are your own preferences and do not affect anyone else in the class.',
+  },
+  {
+    link: '/settings',
+    selector: '[data-tour="settings-theme"]',
+    placement: 'bottom',
+    title: 'Theme',
+    description: 'Switch between light, dark, or system appearance.',
+  },
+  {
+    link: '/settings',
+    selector: '[data-tour="settings-accent"]',
+    placement: 'bottom',
+    title: 'Accent color',
+    description: 'Pick the accent color used across buttons and highlights.',
+  },
+  {
+    link: '/settings',
+    selector: '[data-tour="settings-translucent-sidebar"]',
+    placement: 'left',
+    title: 'Translucent sidebar',
+    description: 'Toggle a frosted, see-through sidebar look.',
   },
   {
     title: 'Ask Moji',
@@ -460,21 +733,50 @@ export function InClassroomTour() {
 
   if (!active) return null;
 
-  const steps: TourProps['steps'] = featureSteps.map(s => ({
-    title: s.title,
-    description: s.description,
-    target: s.selector ? selTarget(s.selector) : s.link ? navTarget(s.link) : undefined,
-    placement: s.placement ?? (s.selector || s.link ? 'right' : undefined),
-  }));
+  const steps: TourProps['steps'] = featureSteps.map(s => {
+    const hasTarget = !!(s.selector || s.link);
+    return {
+      title: s.title,
+      description: s.description,
+      target: s.selector ? selTarget(s.selector) : s.link ? navTarget(s.link) : undefined,
+      placement: s.placement ?? (hasTarget ? 'right' : undefined),
+      // Informational steps with nothing to anchor get a darker full-screen mask
+      // so they read as a deliberate "read this" moment instead of a tooltip whose
+      // target failed to load. Anchored steps keep the default spotlight mask.
+      mask: hasTarget ? undefined : { color: 'rgba(0, 0, 0, 0.8)' },
+    };
+  });
 
   return (
     <Tour
+      rootClassName="cm-tour"
       open={active}
       current={tourStep}
       onChange={setTourStep}
       onClose={skip}
       onFinish={finishPhase}
       steps={steps}
+      indicatorsRender={(current, total) => (
+        <div
+          style={{
+            width: '100%',
+            height: 6,
+            borderRadius: 9999,
+            background: 'rgba(128,128,128,0.2)',
+            overflow: 'hidden',
+          }}
+        >
+          <div
+            style={{
+              height: '100%',
+              width: `${((current + 1) / total) * 100}%`,
+              background: 'var(--accent, #c0392b)',
+              borderRadius: 9999,
+              transition: 'width 0.5s cubic-bezier(0.22, 1, 0.36, 1)',
+            }}
+          />
+        </div>
+      )}
       // The instructor tour continues into the student tour, so its last step
       // shows Skip/Next instead of the default "Finish". The student tour's last
       // step keeps the default "Finish" (it really does end the sequence).
