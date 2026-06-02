@@ -1323,6 +1323,14 @@ html[data-theme='dark'] .bar .fill.done {
     inset-inline-start 0.4s cubic-bezier(0.22, 1, 0.36, 1),
     inset-inline-end 0.4s cubic-bezier(0.22, 1, 0.36, 1);
 }
+/* Keep the tour popover inside the viewport with a gutter to the screen edges.
+   Unconditional: on desktop the natural width is far below this cap, so it only
+   bites on narrow/phone screens, where antd's default width would otherwise run
+   flush to (or past) the borders. */
+.cm-tour .ant-tour,
+.cm-tour .ant-tour-inner {
+  max-width: calc(100vw - 2rem);
+}
 
 /* "Take a tour" button: lift the route icon on hover, spin it on click. */
 .cm-take-tour svg {
