@@ -233,7 +233,10 @@ const AdminDashboard = ({ loaderData }: Route.ComponentProps) => {
 
             return (
               <>
-                <div className="rounded-2xl bg-panel ring-1 ring-line overflow-hidden flex flex-col sm:flex-row divide-y sm:divide-y-0 sm:divide-x divide-line">
+                <div
+                  data-tour="dashboard-stats"
+                  className="rounded-2xl bg-panel ring-1 ring-line overflow-hidden flex flex-col sm:flex-row divide-y sm:divide-y-0 sm:divide-x divide-line"
+                >
                   <StatItem
                     statKey="students"
                     label="Students"

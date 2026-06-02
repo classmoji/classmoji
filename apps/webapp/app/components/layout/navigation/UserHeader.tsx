@@ -39,15 +39,18 @@ const UserHeader = () => {
           >
             <IconDocs size={16} />
           </button>
-          <NotificationBell
-            initialItems={layoutData?.notifications ?? []}
-            initialUnreadCount={layoutData?.unreadCount ?? 0}
-            membershipRoles={layoutData?.membershipRoles ?? {}}
-          />
+          <span data-onboarding="bell" className="inline-flex">
+            <NotificationBell
+              initialItems={layoutData?.notifications ?? []}
+              initialUnreadCount={layoutData?.unreadCount ?? 0}
+              membershipRoles={layoutData?.membershipRoles ?? {}}
+            />
+          </span>
 
           <ProfileDropdown>
             <button
               type="button"
+              data-onboarding="profile"
               className="flex items-center gap-2 py-0.5 pl-0.5 pr-2.5 rounded-full border border-line bg-panel hover:bg-panel-hover cursor-pointer ml-1 transition-colors text-sm"
             >
               {user?.avatar_url ? (

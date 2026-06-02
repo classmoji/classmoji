@@ -204,6 +204,7 @@ const RegradeRequestsTable = ({ requests, emojiMappings, org }: RegradeRequestsT
           <Button
             onClick={() => navigate(`/student/${classSlug}/regrade-requests/new`)}
             type="primary"
+            data-tour="regrade-new"
           >
             Request Resubmit
           </Button>

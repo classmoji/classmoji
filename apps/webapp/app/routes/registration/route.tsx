@@ -9,7 +9,7 @@ import { Logo } from '@classmoji/ui-components';
 import { getAuthSession } from '@classmoji/auth/server';
 import getPrisma from '@classmoji/database';
 import { generateId } from '@classmoji/utils';
-import { GitHubProvider, ClassmojiService } from '@classmoji/services';
+import { GitHubProvider, ClassmojiService, provisionExampleClassroom } from '@classmoji/services';
 import Tasks from '@classmoji/tasks';
 
 export const loader = async ({ request }: Route.LoaderArgs) => {
@@ -553,6 +553,14 @@ export const action = async ({ request }: Route.ActionArgs) => {
       });
     }
     await ClassmojiService.classroomInvite.deleteManyInvites(invites.map(i => i.id));
+  }
+
+  // Give every brand-new user a populated "Example Course" sandbox to explore
+  // (the in-classroom onboarding tour runs here). Never let this break signup.
+  try {
+    await provisionExampleClassroom({ ownerUserId: user.id, ownerLogin: formData.login });
+  } catch (err) {
+    console.error('Failed to provision example classroom:', err);
   }
 
   return redirect('/select-organization');

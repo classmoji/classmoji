@@ -24,7 +24,10 @@ const StudentTokensLog = ({ loaderData }: Route.ComponentProps) => {
         <h1 className="text-base font-semibold text-ink-2">Tokens</h1>
       </div>
 
-      <div className="rounded-2xl bg-panel ring-1 ring-line p-5 sm:p-6 min-h-[calc(100vh-10rem)]">
+      <div
+        data-tour="tokens-log"
+        className="rounded-2xl bg-panel ring-1 ring-line p-5 sm:p-6 min-h-[calc(100vh-10rem)]"
+      >
         <TokensLog transactions={transactions} />
       </div>
     </div>

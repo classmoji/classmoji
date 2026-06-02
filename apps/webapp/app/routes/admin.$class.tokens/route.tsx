@@ -41,9 +41,11 @@ const AdminTokensLog = ({ loaderData }: Route.ComponentProps) => {
       <div className="flex items-center justify-between gap-3 mt-2 mb-4">
         <h1 className="text-base font-semibold text-ink-2">Tokens</h1>
 
-        <ButtonNew action={() => navigate('../tokens/new', { relative: 'path' })}>
-          Assign tokens
-        </ButtonNew>
+        <span data-tour="tokens-assign">
+          <ButtonNew action={() => navigate('../tokens/new', { relative: 'path' })}>
+            Assign tokens
+          </ButtonNew>
+        </span>
       </div>
 
       <div className="rounded-2xl bg-panel ring-1 ring-line p-5 sm:p-6 min-h-[calc(100vh-10rem)]">

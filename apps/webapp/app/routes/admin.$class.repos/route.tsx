@@ -131,7 +131,7 @@ const AdminAssignments = ({ loaderData }: Route.ComponentProps) => {
             <NavLink to={`/admin/${classSlug}/resources`}>
               <Button icon={<IconLink size={16} />}>Link Resources</Button>
             </NavLink>
-            <NavLink to={`${pathname}/form`}>
+            <NavLink to={`${pathname}/form`} data-tour="repos-new">
               <ButtonNew>New repository</ButtonNew>
             </NavLink>
           </div>

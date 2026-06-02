@@ -86,6 +86,7 @@ const StudentsScreen = ({ loaderData }: Route.ComponentProps) => {
               icon={<PlusCircleOutlined />}
               onClick={() => navigate(`/admin/${classSlug}/students/add`)}
               type="primary"
+              data-tour="students-add"
             >
               Add Students
             </Button>

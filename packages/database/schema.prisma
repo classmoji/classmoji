@@ -203,6 +203,10 @@ model User {
   created_at         DateTime @default(now())
   updated_at         DateTime @default(now()) @updatedAt
 
+  // Null = the first-sign-in onboarding tour has not been completed yet.
+  // A timestamp records that the user finished (or skipped) the tour.
+  onboarding_completed_at DateTime?
+
   // Relations
   accounts                      Account[]
   sessions                      Session[]                 @relation("SessionUser")
@@ -279,6 +283,9 @@ model Classroom {
   content_namespace String
   status            ClassroomStatus @default(ACTIVE)
   is_archived       Boolean         @default(false)
+  // True for the auto-provisioned per-user "Example Course" sandbox used by the
+  // in-classroom onboarding tour. Backed by a mock GitOrganization (no live GitHub).
+  is_example        Boolean         @default(false)
   created_at        DateTime @default(now())
   updated_at        DateTime @default(now()) @updatedAt
 
@@ -346,6 +353,9 @@ model ClassroomMembership {
   comment             String?
   letter_grade        String?
   pin_order           Int?
+  // Null = this user has not finished the in-classroom guided tour for this
+  // classroom; a timestamp records completion (per user, per classroom, per role).
+  tour_completed_at   DateTime?
   created_at          DateTime @default(now())
   updated_at          DateTime @default(now()) @updatedAt
 

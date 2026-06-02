@@ -61,7 +61,7 @@ const StatusSection = ({ classroomId, status, isArchived }: StatusSectionProps) 
         title="Class status"
         description="Applies to teaching assistants and students only — owners always retain full access."
       >
-        <div className="space-y-3">
+        <div className="space-y-3" data-tour="settings-status">
           {STATUS_OPTIONS.map(opt => (
             <label
               key={opt.value}

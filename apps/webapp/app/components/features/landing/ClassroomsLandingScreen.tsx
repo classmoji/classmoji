@@ -2,6 +2,7 @@ import { useState, useMemo, useEffect, useRef } from 'react';
 import { Link } from 'react-router';
 import { motion, AnimatePresence, LayoutGroup } from 'framer-motion';
 import { Button, IconGithub, IconPlus } from '@classmoji/ui-components';
+import { IconRoute } from '@tabler/icons-react';
 import { ClassroomCard } from './ClassroomCard';
 import { ClassroomRow, ClassroomRowHeader } from './ClassroomRow';
 import type { LandingClass } from './types';
@@ -11,6 +12,10 @@ interface Props {
   user: { name?: string | null; login?: string | null; avatar_url?: string | null } | null;
   classes: LandingClass[];
   onOpenClass: (c: LandingClass) => void;
+  /** Launch the guided tour (walks the hidden Example Course). */
+  onTakeTour?: () => void;
+  /** Whether an Example Course exists to tour. */
+  tourAvailable?: boolean;
   notifications?: BellNotification[];
   unreadCount?: number;
   membershipRoles?: Record<string, NotificationRole[]>;
@@ -56,6 +61,8 @@ export function ClassroomsLandingScreen({
   user,
   classes,
   onOpenClass,
+  onTakeTour,
+  tourAvailable,
   notifications,
   unreadCount,
   membershipRoles,
@@ -261,10 +268,15 @@ export function ClassroomsLandingScreen({
             </h1>
           </div>
           <div className="flex flex-wrap gap-2">
-            <Button>
+            {tourAvailable && onTakeTour && (
+              <Button data-onboarding="take-tour" onClick={onTakeTour}>
+                <IconRoute size={14} /> Take a tour
+              </Button>
+            )}
+            <Button data-onboarding="import">
               <IconGithub size={14} /> Import from GitHub Classroom
             </Button>
-            <Link to="/create-classroom">
+            <Link to="/create-classroom" data-onboarding="new-class">
               <Button variant="primary">
                 <IconPlus size={14} /> New class
               </Button>

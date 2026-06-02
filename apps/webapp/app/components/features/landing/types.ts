@@ -23,6 +23,8 @@ export interface LandingClass {
   pin_order: number | null;
   status: 'ACTIVE' | 'LOCKED' | 'UNPUBLISHED';
   is_archived: boolean;
+  /** True for the auto-provisioned "Example Course" sandbox (onboarding hand-off target). */
+  is_example: boolean;
   updated_at: string | Date;
   // Pass-through for navigation handler
   organization: {

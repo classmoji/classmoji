@@ -35,6 +35,9 @@ export {
 
 export { ClassmojiService, HelperService, StripeService, MarkdownImporter };
 
+// Example-classroom provisioning (server-only; touches Prisma)
+export { provisionExampleClassroom } from './classmoji/exampleClassroom.service.ts';
+
 // Models list (moved from @classmoji/llm)
 export { getAllModels, getAnthropicModels } from './classmoji/modelsList.ts';
 

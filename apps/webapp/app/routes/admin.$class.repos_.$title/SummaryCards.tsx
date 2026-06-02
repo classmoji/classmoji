@@ -1,90 +1,142 @@
-import { Tag, Button, Progress } from 'antd';
-import { IconBrandGithub } from '@tabler/icons-react';
-import { useFetcher, useParams } from 'react-router';
-import { ClassmojiService } from '@classmoji/services';
+import { Tag } from 'antd';
+import dayjs from 'dayjs';
+import relativeTime from 'dayjs/plugin/relativeTime';
+import { calculateRepositoryGrade } from '@classmoji/utils';
+import { GradeBadge } from '~/components';
 
-type RepositoryWithAssignments = NonNullable<
-  Awaited<ReturnType<typeof ClassmojiService.repository.findBySlugAndTitle>>
->;
-type GitRepoWithAssignments = Awaited<
-  ReturnType<typeof ClassmojiService.gitRepo.findByRepository>
->[number];
+dayjs.extend(relativeTime);
 
 interface CardProps {
   title: string;
+  extra?: React.ReactNode;
   children: React.ReactNode;
-  icon?: React.ReactNode;
 }
 
-const Card = ({ title, children, icon }: CardProps) => (
-  <div className="bg-white dark:bg-neutral-800 p-6 rounded-lg border border-gray-200 dark:border-neutral-700 shadow-xs">
-    <div className="flex items-center gap-2 mb-2">
-      {icon}
+const Card = ({ title, extra, children }: CardProps) => (
+  <div className="bg-white dark:bg-neutral-900 p-6 rounded-2xl ring-1 ring-stone-200 dark:ring-neutral-800">
+    <div className="flex items-center justify-between mb-4">
       <h3 className="text-lg font-semibold text-ink-1">{title}</h3>
+      {extra}
     </div>
-    <div className="space-y-2">{children}</div>
+    <div className="divide-y divide-stone-100 dark:divide-neutral-800">{children}</div>
   </div>
 );
 
-interface StatItemProps {
-  label: string;
-  value: React.ReactNode;
+const StatItem = ({ label, value }: { label: string; value: React.ReactNode }) => (
+  <div className="flex items-center justify-between py-2.5">
+    <span className="text-ink-2">{label}</span>
+    <span className="font-semibold text-ink-0">{value}</span>
+  </div>
+);
+
+interface RepoAssignment {
+  status: string;
+  is_late_override?: boolean;
+  closed_at?: string | Date | null;
+  grades?: unknown[];
+  [key: string]: unknown;
 }
 
-const StatItem = ({ label, value }: StatItemProps) => (
-  <div className="flex justify-between">
-    <span className="text-ink-2">{label}:</span>
-    <span className="font-medium text-ink-0">{value}</span>
-  </div>
-);
+interface Repo {
+  assignments?: RepoAssignment[];
+  [key: string]: unknown;
+}
+
+interface RepositoryAssignment {
+  id: string;
+  student_deadline?: string | Date | null;
+}
+
+interface RepositoryData {
+  type: string;
+  weight: number;
+  is_published: boolean;
+  is_extra_credit?: boolean;
+  drop_lowest_count?: number;
+  assignments?: RepositoryAssignment[];
+}
 
 interface SummaryCardsProps {
-  repository: RepositoryWithAssignments;
-  repos: GitRepoWithAssignments[];
+  repository: RepositoryData;
+  repos: Repo[];
+  studentsCount: number;
+  teamsCount: number;
+  emojiMappings: Parameters<typeof calculateRepositoryGrade>[1];
+  settings: Parameters<typeof calculateRepositoryGrade>[2];
 }
 
-const SummaryCards = ({ repository, repos }: SummaryCardsProps) => {
-  const fetcher = useFetcher();
-  const { class: classSlug, title } = useParams();
+const SummaryCards = ({
+  repository,
+  repos,
+  studentsCount,
+  teamsCount,
+  emojiMappings,
+  settings,
+}: SummaryCardsProps) => {
+  const assignments = repository.assignments || [];
+  // In the current model the "repositories" of a coursework unit are the
+  // per-student / per-team GitRepo instances, i.e. the loader's `repos`.
+  const repoCount = repos.length;
 
-  // Count total submissions across all assignments in the repository
-  const allAssignments = repository.assignments || [];
-  const totalSubmissions = allAssignments.reduce(
-    (total, assignment) =>
-      total +
-      repos.filter(repo =>
-        repo.assignments?.some(
-          repoAssignment =>
-            repoAssignment.assignment_id === assignment.id && repoAssignment.status === 'CLOSED'
-        )
-      ).length,
-    0
-  );
+  // Earliest assignment deadline = repository "due date"
+  const deadlines = assignments
+    .map(a => (a.student_deadline ? dayjs(a.student_deadline) : null))
+    .filter((d): d is dayjs.Dayjs => !!d && d.isValid());
+  const earliestDeadline = deadlines.length
+    ? deadlines.reduce((min, d) => (d.isBefore(min) ? d : min))
+    : null;
 
-  // Count repos with projects
-  const reposWithProjects = repos.filter(repo => repo.project_id).length;
-  const showProjectsCard = repository.type === 'GROUP' && repository.project_template_id;
-
-  const handleCreateProjects = () => {
-    fetcher.submit(
-      {
-        repositoryId: repository.id,
-      },
-      {
-        action: `/admin/${classSlug}/repos/${title}?/createProjects`,
-        method: 'post',
-        encType: 'application/json',
+  // Submission stats from GitRepoAssignment rows
+  let totalSubmissions = 0;
+  let onTime = 0;
+  let lateOrMissing = 0;
+  let lastActivity: dayjs.Dayjs | null = null;
+  for (const repo of repos) {
+    for (const ra of repo.assignments || []) {
+      if (ra.status === 'CLOSED') {
+        totalSubmissions += 1;
+        if (!ra.is_late_override) onTime += 1;
+        else lateOrMissing += 1;
+      } else if (ra.is_late_override) {
+        lateOrMissing += 1;
       }
-    );
-  };
+      if (ra.closed_at) {
+        const closed = dayjs(ra.closed_at);
+        if (closed.isValid() && (!lastActivity || closed.isAfter(lastActivity))) {
+          lastActivity = closed;
+        }
+      }
+    }
+  }
 
-  const isCreating = fetcher.state === 'submitting';
+  // Average grade across repos that have a computable grade
+  const repositoryGradeConfig = {
+    is_extra_credit: repository.is_extra_credit ?? false,
+    drop_lowest_count: repository.drop_lowest_count ?? 0,
+    weight: 0,
+  };
+  const grades = repos
+    .map(repo =>
+      calculateRepositoryGrade(
+        (repo.assignments || []) as unknown as Parameters<typeof calculateRepositoryGrade>[0],
+        emojiMappings,
+        settings,
+        repositoryGradeConfig as unknown as Parameters<typeof calculateRepositoryGrade>[3]
+      )
+    )
+    .filter(g => g >= 0);
+  const averageGrade = grades.length ? grades.reduce((a, b) => a + b, 0) / grades.length : null;
 
   return (
-    <div
-      className={`grid grid-cols-1 ${showProjectsCard ? 'md:grid-cols-3' : 'md:grid-cols-2'} gap-6 mb-8`}
-    >
-      <Card title="Repository Overview">
+    <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+      <Card
+        title="Repository overview"
+        extra={
+          <Tag color={repository.is_published ? 'green' : 'orange'} className="font-semibold">
+            {repository.is_published ? 'Published' : 'Draft'}
+          </Tag>
+        }
+      >
         <StatItem
           label="Type"
           value={
@@ -94,41 +146,39 @@ const SummaryCards = ({ repository, repos }: SummaryCardsProps) => {
           }
         />
         <StatItem label="Weight" value={`${repository.weight}%`} />
-        <StatItem label="Repositories" value={repos.length} />
+        <StatItem label="Repositories" value={repoCount} />
+        <StatItem
+          label="Due date"
+          value={earliestDeadline ? earliestDeadline.format('MMM D, YYYY') : '—'}
+        />
       </Card>
 
-      <Card title="Assignments Overview">
-        <StatItem label="Number of Assignments" value={allAssignments.length} />
-        <StatItem label="Total Submissions" value={totalSubmissions} />
+      <Card title="Assignments overview">
+        <StatItem label="Number of assignments" value={assignments.length} />
+        <StatItem label="Total submissions" value={totalSubmissions} />
+        <StatItem
+          label="Submitted on time"
+          value={<span className="text-green-600 dark:text-green-400">{onTime}</span>}
+        />
+        <StatItem
+          label="Late / missing"
+          value={
+            <span className={lateOrMissing > 0 ? 'text-rose-600 dark:text-rose-400' : ''}>
+              {lateOrMissing}
+            </span>
+          }
+        />
       </Card>
 
-      {showProjectsCard && (
-        <Card
-          title="GitHub Projects"
-          icon={<IconBrandGithub size={20} className="text-ink-2" />}
-        >
-          <StatItem label="Repos with Projects" value={`${reposWithProjects} / ${repos.length}`} />
-          <Progress
-            percent={repos.length ? Math.round((reposWithProjects / repos.length) * 100) : 0}
-            size="small"
-            status={reposWithProjects === repos.length ? 'success' : 'active'}
-          />
-          {reposWithProjects < repos.length && repos.length > 0 && (
-            <Button
-              type="primary"
-              size="small"
-              onClick={handleCreateProjects}
-              loading={isCreating}
-              className="mt-2 w-full"
-            >
-              Create Projects ({repos.length - reposWithProjects} remaining)
-            </Button>
-          )}
-          {reposWithProjects === repos.length && repos.length > 0 && (
-            <p className="text-green-600 text-sm mt-2">All repos have projects</p>
-          )}
-        </Card>
-      )}
+      <Card title="Class snapshot">
+        <StatItem label="Students enrolled" value={studentsCount} />
+        <StatItem label="Teams" value={teamsCount} />
+        <StatItem
+          label="Average grade"
+          value={averageGrade !== null ? <GradeBadge grade={averageGrade} /> : '—'}
+        />
+        <StatItem label="Last activity" value={lastActivity ? lastActivity.fromNow() : '—'} />
+      </Card>
     </div>
   );
 };

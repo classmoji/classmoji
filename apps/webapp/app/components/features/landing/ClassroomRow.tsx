@@ -44,6 +44,13 @@ export function ClassroomRow({ c, onOpen }: { c: LandingClass; onOpen: () => voi
       onClick={onOpen}
       role="button"
       tabIndex={0}
+      data-onboarding={
+        c.role === 'PENDING INVITE'
+          ? 'pending-invite'
+          : c.is_example
+            ? 'example-course'
+            : undefined
+      }
       onKeyDown={e => {
         if (e.key === 'Enter' || e.key === ' ') {
           e.preventDefault();
