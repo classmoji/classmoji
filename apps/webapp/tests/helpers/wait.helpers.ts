@@ -1,10 +1,21 @@
 import { Page, expect, Locator } from '@playwright/test';
 
 /**
- * Wait for the page to finish loading data
- * Checks for common loading indicators (Ant Design Skeleton, Spin, etc.)
+ * Wait for the page to finish loading data.
+ *
+ * Skeleton-absence alone is not enough: on a fast initial render the page can be
+ * momentarily empty (no skeleton mounted yet), so the count===0 assertion passes
+ * instantly before the deferred data resolves. Always pass an `anchor` (a concrete
+ * post-load element) so we wait for real content, not just the absence of loaders.
+ *
+ * @param anchor optional locator/selector that must be visible once data loaded
  */
-export async function waitForDataLoad(page: Page, timeout = 15000): Promise<void> {
+export async function waitForDataLoad(
+  page: Page,
+  options: { timeout?: number; anchor?: string | Locator } = {}
+): Promise<void> {
+  const { timeout = 15000, anchor } = options;
+
   // Wait for Ant Design Skeleton components to disappear
   await expect(page.locator('.ant-skeleton')).toHaveCount(0, { timeout });
 
@@ -13,6 +24,12 @@ export async function waitForDataLoad(page: Page, timeout = 15000): Promise<void
 
   // Wait for React Router loading states
   await expect(page.locator('[data-loading="true"]')).toHaveCount(0, { timeout });
+
+  // Wait for a concrete content anchor so we don't return on a momentarily-empty page.
+  if (anchor) {
+    const locator = typeof anchor === 'string' ? page.locator(anchor) : anchor;
+    await expect(locator.first()).toBeVisible({ timeout });
+  }
 }
 
 /**
