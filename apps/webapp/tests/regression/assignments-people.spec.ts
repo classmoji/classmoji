@@ -1,14 +1,43 @@
 import { test, expect } from '../fixtures/auth.fixture';
-import { mockGitHubAPI } from '../fixtures/mocks/github.mock';
 import { waitForDataLoad } from '../helpers/wait.helpers';
-import { TEST_CLASSROOM } from '../helpers/env.helpers';
+import { TEST_CLASSROOM, ROLE_TEST_USERS } from '../helpers/env.helpers';
 import {
   getClassroomBySlug,
   getTestPrisma,
+  getUserByLogin,
   seedRepositoryWithAssignment,
   getRepositoryPublishedState,
   deleteRepositoryById,
 } from '../helpers/prisma.helpers';
+
+/**
+ * Deterministically enrol the known fake-student-1 user as a STUDENT in the test
+ * classroom so the people-search test always has a real row to filter on (no
+ * skip-on-missing-data, which would turn a real regression into a green pass).
+ * Idempotent via upsert on the (classroom_id, user_id) membership constraint.
+ */
+async function ensureEnrolledStudent(
+  classroomId: string
+): Promise<{ id: string; name: string | null; login: string }> {
+  const prisma = getTestPrisma();
+  const user = (await getUserByLogin(ROLE_TEST_USERS.student.login)) as {
+    id: string;
+    login: string;
+    name?: string | null;
+  };
+  await prisma.classroomMembership.upsert({
+    where: {
+      classroom_id_user_id_role: {
+        classroom_id: classroomId,
+        user_id: user.id,
+        role: 'STUDENT',
+      },
+    },
+    create: { classroom_id: classroomId, user_id: user.id, role: 'STUDENT' },
+    update: {},
+  });
+  return { id: user.id, name: user.name ?? null, login: user.login };
+}
 
 /**
  * Regressions for the assignments/people area after the modules->repos rename.
@@ -20,24 +49,16 @@ import {
  */
 
 test.describe('REGRESSION: admin students search still works after TS migration', () => {
-  test.beforeEach(async ({ authenticatedPage: page }) => {
-    await mockGitHubAPI(page);
-    await page.goto(`/admin/${TEST_CLASSROOM}/students`);
-    await waitForDataLoad(page);
-  });
-
   test('a known student name filters the roster and gibberish shows the empty state', async ({
     authenticatedPage: page,
   }) => {
     const classroom = await getClassroomBySlug(TEST_CLASSROOM);
-    const prisma = getTestPrisma();
+    // Seed a deterministic enrolment so the search always has a real row — never
+    // skip on missing data (a skip would mask a genuine search regression).
+    const student = await ensureEnrolledStudent(classroom.id);
 
-    const membership = await prisma.classroomMembership.findFirst({
-      where: { classroom_id: classroom.id, role: 'STUDENT' },
-      include: { user: true },
-    });
-    test.skip(!membership?.user, 'No STUDENT enrolled in the test classroom to filter on.');
-    const student = membership!.user!;
+    await page.goto(`/admin/${TEST_CLASSROOM}/students`);
+    await waitForDataLoad(page, { anchor: 'table' });
 
     const table = page.locator('table');
     await expect(table).toBeVisible();
@@ -45,11 +66,10 @@ test.describe('REGRESSION: admin students search still works after TS migration'
     const search = page.getByPlaceholder('Search by name or login...');
     await expect(search).toBeVisible();
 
-    const needle = (student.name || student.login || '').slice(0, 4);
-    test.skip(!needle, 'Student has no name/login to derive a search needle.');
+    const needle = (student.name || student.login).slice(0, 4);
     await search.fill(needle);
 
-    const matchText = student.name || student.login!;
+    const matchText = student.name || student.login;
     await expect(table.getByText(matchText, { exact: false }).first()).toBeVisible();
 
     await search.fill('zzz-no-such-student-zzz');
@@ -78,16 +98,23 @@ test.describe('REGRESSION: repository assignment unpublish still works after TS 
     });
     repoId = seeded.repositoryId;
 
-    await mockGitHubAPI(page);
     await page.goto(`/admin/${TEST_CLASSROOM}/repos`);
-    await waitForDataLoad(page);
+    await waitForDataLoad(page, { anchor: page.getByRole('row').filter({ hasText: TITLE }) });
 
     const row = page.getByRole('row').filter({ hasText: TITLE });
     await expect(row).toBeVisible();
     await expect(row.getByText('Published')).toBeVisible();
 
     await row.getByText('Unpublish', { exact: true }).click();
-    await page.getByRole('button', { name: 'Unpublish' }).click();
+
+    // The confirm is an Ant Popconfirm (a popover, not a dialog). Scope the
+    // confirm click to the visible popover so we don't re-click the row's own
+    // "Unpublish" trigger (both match the accessible name).
+    const popover = page
+      .locator('.ant-popover')
+      .filter({ hasText: 'Unpublish Assignment' });
+    await expect(popover).toBeVisible();
+    await popover.getByRole('button', { name: 'Unpublish' }).click();
 
     await expect(row.getByText('Draft')).toBeVisible();
 
@@ -137,9 +164,10 @@ test.describe('REGRESSION: modules->repos rename preserved assignment data after
     });
     repoId = seeded.repositoryId;
 
-    await mockGitHubAPI(page);
     await page.goto(`/admin/${TEST_CLASSROOM}/repos`);
-    await waitForDataLoad(page);
+    await waitForDataLoad(page, {
+      anchor: page.getByRole('heading', { name: 'Repositories' }),
+    });
 
     await expect(page.getByRole('heading', { name: 'Repositories' })).toBeVisible();
 

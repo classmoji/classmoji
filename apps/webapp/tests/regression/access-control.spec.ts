@@ -147,19 +147,28 @@ test.describe('REGRESSION: deleteRepositories namedAction still works after TS m
     authenticatedPage: page,
   }) => {
     // Empty repositories list so no real delete batch hits GitHub, while the
-    // auth + mutation gate + triggerSession shape are still exercised.
+    // auth + mutation gate are still exercised.
     const res = await page.request.post('/api/operation?action=deleteRepositories', {
       data: { deleteFromGithub: false, repositories: [], classSlug: TEST_CLASSROOM },
     });
-    expect(res.status()).not.toBe(403);
-    expect(res.status()).not.toBe(404);
+    const text = await res.text();
 
+    // The owner must pass the OWNER + mutation gate. A bare "not 403/not 404"
+    // check would also pass on a pre-gate 500, so we additionally assert the
+    // request reached the POST-GATE deletion/trigger step: either the 200 success
+    // branch (with a triggerSession), or a downstream Trigger.dev batch error
+    // (which only fires AFTER the gate — Trigger rejects an empty batch with
+    // "runCount must be > 0" in this environment). A gate rejection (403/404) or a
+    // pre-gate crash that never reaches the trigger step now fails the test.
+    expect([403, 404], text).not.toContain(res.status());
     if (res.status() === 200) {
-      const body = await res.json();
+      const body = JSON.parse(text);
       expect(body.triggerSession).toBeTruthy();
       expect(body.triggerSession).toHaveProperty('accessToken');
       expect(body.triggerSession).toHaveProperty('id');
       expect(body.triggerSession.numReposToDelete).toBe(0);
+    } else {
+      expect(text).toMatch(/batch|runCount|trigger/i);
     }
   });
 

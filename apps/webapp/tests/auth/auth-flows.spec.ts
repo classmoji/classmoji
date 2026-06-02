@@ -43,6 +43,17 @@ async function loginAs(page: Page, role: 'admin' | 'ta' | 'student'): Promise<vo
   await page.waitForURL(new RegExp(`/(admin|assistant|student)/${TEST_CLASSROOM}`));
 }
 
+/**
+ * Environment-agnostic "signed out" assertion. The previous checks keyed on the
+ * dev-only 'Development Login' text, which doesn't render in staging/prod and
+ * thus proved nothing there. Instead assert the visitor landed on the public
+ * root AND no authenticated-only surface (the dashboard heading) is visible.
+ */
+async function expectSignedOut(page: Page): Promise<void> {
+  await expect(page).toHaveURL(/\/$/);
+  await expect(page.getByRole('heading', { name: 'Dashboard' })).toBeHidden();
+}
+
 test.describe('Authentication: signing in', () => {
   test('a new instructor signs in through GitHub (mocked) and lands on their dashboard', async ({
     page,
@@ -62,8 +73,8 @@ test.describe('Authentication: signing in', () => {
 
   test('the sign-in page offers a GitHub login when no session exists', async ({ page }) => {
     await page.goto('/');
-    await expect(page).toHaveURL(/\/$/);
-    await expect(page.getByText('Development Login')).toBeVisible();
+    await expectSignedOut(page);
+    // The public sign-in surface offers the (environment-agnostic) GitHub login.
     await expect(page.getByRole('button', { name: 'GitHub OAuth' })).toBeVisible();
   });
 });
@@ -94,8 +105,7 @@ test.describe('Authentication: signing out', () => {
     await loginAs(page, 'admin');
 
     await page.goto('/logout');
-    await expect(page).toHaveURL(/\/$/);
-    await expect(page.getByText('Development Login')).toBeVisible();
+    await expectSignedOut(page);
   });
 
   test('after signing out, a protected route bounces back to the sign-in page', async ({
@@ -107,8 +117,7 @@ test.describe('Authentication: signing out', () => {
     await page.context().clearCookies();
 
     await page.goto(PROTECTED_ROUTES.owner);
-    await expect(page).toHaveURL(/\/$/);
-    await expect(page.getByText('Development Login')).toBeVisible();
+    await expectSignedOut(page);
   });
 });
 
@@ -118,8 +127,7 @@ test.describe('Authentication: unauthenticated access is denied', () => {
       page,
     }) => {
       await page.goto(path);
-      await expect(page).toHaveURL(/\/$/);
-      await expect(page.getByText('Development Login')).toBeVisible();
+      await expectSignedOut(page);
     });
   }
 
@@ -127,8 +135,7 @@ test.describe('Authentication: unauthenticated access is denied', () => {
     page,
   }) => {
     await page.goto(`/admin/${TEST_CLASSROOM}/students`);
-    await expect(page).toHaveURL(/\/$/);
-    await expect(page.getByText('Development Login')).toBeVisible();
+    await expectSignedOut(page);
   });
 
   test('the non-existent /login path returns a 404, not a server error', async ({ page }) => {
@@ -157,8 +164,7 @@ test.describe('Authentication: invalid / expired session', () => {
 
     const response = await page.goto(PROTECTED_ROUTES.owner);
     expect(response?.status() ?? 200).toBeLessThan(500);
-    await expect(page).toHaveURL(/\/$/);
-    await expect(page.getByText('Development Login')).toBeVisible();
+    await expectSignedOut(page);
   });
 
   test('the dev test-login backdoor refuses an unknown role instead of crashing the session', async ({

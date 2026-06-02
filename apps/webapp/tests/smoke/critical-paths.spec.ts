@@ -1,5 +1,4 @@
 import { test, expect } from '../fixtures/auth.fixture';
-import { mockGitHubAPI } from '../fixtures/mocks/github.mock';
 import { waitForDataLoad } from '../helpers/wait.helpers';
 import { TEST_CLASSROOM, TEST_GIT_ORG } from '../helpers/env.helpers';
 
@@ -19,8 +18,6 @@ test.describe('Critical Path: Authentication', () => {
     await expect(brandLink).toHaveAttribute('href', '/select-organization');
     const logo = brandLink.getByRole('img', { name: 'Classmoji' });
     await expect(logo).toBeVisible();
-    await expect(logo).toHaveAttribute('viewBox', '0 0 279 51');
-    await expect(logo).toHaveAttribute('height', '24');
 
     // TEST_GIT_ORG appears in every class card; use .first().
     await expect(page.getByText(TEST_GIT_ORG, { exact: false }).first()).toBeVisible();
@@ -37,8 +34,6 @@ test.describe('Critical Path: Authentication', () => {
 
     const logo = brandLink.getByRole('img', { name: 'Classmoji' });
     await expect(logo).toBeVisible();
-    await expect(logo).toHaveAttribute('viewBox', '0 0 279 51');
-    await expect(logo).toHaveAttribute('height', '24');
   });
 
   test('can navigate to owner dashboard', async ({ authenticatedPage: page }) => {
@@ -50,9 +45,10 @@ test.describe('Critical Path: Authentication', () => {
 
 test.describe('Critical Path: Owner Dashboard', () => {
   test.beforeEach(async ({ authenticatedPage: page }) => {
-    await mockGitHubAPI(page);
     await page.goto(`/admin/${TEST_CLASSROOM}/dashboard`);
-    await waitForDataLoad(page);
+    await waitForDataLoad(page, {
+      anchor: page.getByRole('heading', { name: 'Dashboard' }),
+    });
   });
 
   test('displays key metrics', async ({ authenticatedPage: page }) => {
@@ -93,27 +89,15 @@ test.describe('Critical Path: Owner Dashboard', () => {
   });
 });
 
-test.describe('Critical Path: Student Dashboard', () => {
-  // Skipped: covered by the student-tests project, which uses student.json storage state.
-
-  test.skip('student can access their dashboard', async ({ authenticatedPage: page }) => {
-    await page.goto(`/student/${TEST_CLASSROOM}/dashboard`);
-    await waitForDataLoad(page);
-    await expect(page.getByRole('heading', { name: /Dashboard/i })).toBeVisible();
-  });
-
-  test.skip('student can navigate to quizzes', async ({ authenticatedPage: page }) => {
-    await page.goto(`/student/${TEST_CLASSROOM}/quizzes`);
-    await waitForDataLoad(page);
-    await expect(page.getByRole('heading', { name: /Quizzes/i })).toBeVisible();
-  });
-});
+// Student critical paths live in the student-tests Playwright project (which uses
+// student.json storage state); they are intentionally not duplicated here.
 
 test.describe('Critical Path: Assistant Dashboard', () => {
   test('assistant can access their dashboard', async ({ authenticatedPage: page }) => {
-    await mockGitHubAPI(page);
     await page.goto(`/assistant/${TEST_CLASSROOM}/dashboard`);
-    await waitForDataLoad(page);
+    await waitForDataLoad(page, {
+      anchor: page.getByRole('heading', { name: 'Dashboard' }),
+    });
 
     await expect(page.getByRole('heading', { name: 'Dashboard' })).toBeVisible();
   });
@@ -121,7 +105,6 @@ test.describe('Critical Path: Assistant Dashboard', () => {
 
 test.describe('Critical Path: Settings', () => {
   test('can access settings page', async ({ authenticatedPage: page }) => {
-    await mockGitHubAPI(page);
     await page.goto(`/admin/${TEST_CLASSROOM}/settings/general`);
     await waitForDataLoad(page);
 

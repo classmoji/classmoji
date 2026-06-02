@@ -1,5 +1,4 @@
 import { test, expect } from '../fixtures/auth.fixture';
-import { mockGitHubAPI } from '../fixtures/mocks/github.mock';
 import { waitForDataLoad } from '../helpers/wait.helpers';
 import { TEST_CLASSROOM } from '../helpers/env.helpers';
 
@@ -20,9 +19,10 @@ test.describe('Access Control: owner repositories page exposes instructor contro
   test.use({ storageState: './tests/.auth/owner.json' });
 
   test.beforeEach(async ({ authenticatedPage: page }) => {
-    await mockGitHubAPI(page);
     await page.goto(`/admin/${TEST_CLASSROOM}/repos`);
-    await waitForDataLoad(page);
+    await waitForDataLoad(page, {
+      anchor: page.getByRole('button', { name: 'New repository' }),
+    });
   });
 
   test('an owner sees the "New repository" create button on the repositories page', async ({
@@ -36,9 +36,10 @@ test.describe('Access Control: student repositories page hides instructor contro
   test.use({ storageState: './tests/.auth/student.json' });
 
   test.beforeEach(async ({ authenticatedPage: page }) => {
-    await mockGitHubAPI(page);
     await page.goto(`/student/${TEST_CLASSROOM}/repos`);
-    await waitForDataLoad(page);
+    await waitForDataLoad(page, {
+      anchor: page.getByRole('heading', { name: 'Repositories', level: 1 }),
+    });
   });
 
   test('a student does not see any "New repository" create button on their repositories page', async ({

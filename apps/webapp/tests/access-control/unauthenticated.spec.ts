@@ -61,7 +61,9 @@ test.describe('Access Control: an unauthenticated visitor cannot view protected 
       `/api/get-org-subscription?orgLogin=${TEST_CLASSROOM}`,
       { maxRedirects: 0 }
     );
-    expect(res.ok(), 'unauthenticated subscription read must not succeed').toBeFalsy();
-    expect(res.status(), 'should redirect (3xx) or be unauthorized, never 200').not.toBe(200);
+    expect(
+      [302, 303, 401, 403],
+      'unauthenticated subscription read must redirect or be rejected, never 200 / 4xx-not-found / 5xx'
+    ).toContain(res.status());
   });
 });
