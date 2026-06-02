@@ -1,5 +1,4 @@
 import { test, expect } from '../../fixtures/auth.fixture';
-import { mockGitHubAPI } from '../../fixtures/mocks/github.mock';
 import { waitForDataLoad } from '../../helpers/wait.helpers';
 import {
   getClassroomBySlug,
@@ -26,10 +25,6 @@ const GRADE_GLYPH = '❤️';
 test.describe('Student views a released grade on their assignments page', () => {
   let seeded: Awaited<ReturnType<typeof seedStudentSubmission>> | null = null;
 
-  test.beforeEach(async ({ authenticatedPage: page }) => {
-    await mockGitHubAPI(page);
-  });
-
   test.afterEach(async () => {
     if (seeded) {
       await deleteRepositoryById(seeded.repositoryId);
@@ -53,9 +48,9 @@ test.describe('Student views a released grade on their assignments page', () => 
     await setGradesReleased(seeded.assignmentId, true);
 
     await page.goto(`/student/${testOrg}/assignments`);
-    await waitForDataLoad(page);
-
-    await expect(page.getByRole('heading', { name: 'Assignments' })).toBeVisible();
+    await waitForDataLoad(page, {
+      anchor: page.getByRole('heading', { name: 'Assignments' }),
+    });
 
     await page.getByRole('button', { name: /Completed/i }).click();
 
@@ -81,7 +76,9 @@ test.describe('Student views a released grade on their assignments page', () => 
     await setGradesReleased(seeded.assignmentId, false);
 
     await page.goto(`/student/${testOrg}/assignments`);
-    await waitForDataLoad(page);
+    await waitForDataLoad(page, {
+      anchor: page.getByRole('heading', { name: 'Assignments' }),
+    });
 
     await page.getByRole('button', { name: /Completed/i }).click();
 

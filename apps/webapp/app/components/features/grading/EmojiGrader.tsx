@@ -108,7 +108,10 @@ const EmojiGrader = ({ repositoryAssignment, emojiMappings }: EmojiGraderProps) 
     return (
       <button
         key={key}
-        className={`cursor-pointer px-2 py-1 rounded-md hover:bg-slate-200 `}
+        data-testid={`emoji-grade-option-${key}`}
+        data-selected={isSelected ? 'true' : 'false'}
+        aria-pressed={isSelected}
+        className={`cursor-pointer px-2 py-1 rounded-md hover:bg-slate-200 dark:hover:bg-neutral-700`}
         style={{
           backgroundColor: isSelected ? '#ffebc2' : 'transparent',
         }}
@@ -126,14 +129,18 @@ const EmojiGrader = ({ repositoryAssignment, emojiMappings }: EmojiGraderProps) 
   return (
     <div className="relative" ref={ref}>
       <div
+        data-testid="emoji-grade-trigger"
         onClick={() => setShow(true)}
-        className="flex items-center gap-1 text-gray-600 hover:text-gray-800 cursor-pointer"
+        className="flex items-center gap-1 text-gray-600 hover:text-gray-800 dark:text-gray-300 dark:hover:text-gray-100 cursor-pointer"
       >
         <IconMoodHappy size={16} />
         <span>Grade</span>
       </div>
       {show && (
-        <div className="absolute py-3 px-4 border bg-white rounded-md shadow-sm top-0 right-0 -translate-y-[65px] z-10">
+        <div
+          data-testid="emoji-grade-popover"
+          className="absolute py-3 px-4 border border-gray-200 dark:border-neutral-700 bg-white dark:bg-neutral-900 rounded-md shadow-sm top-0 right-0 -translate-y-[65px] z-10"
+        >
           <div className="flex gap-2 z-10">{emojiList}</div>
         </div>
       )}

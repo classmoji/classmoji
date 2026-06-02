@@ -1,19 +1,24 @@
 import { test, expect } from '../fixtures/auth.fixture';
-import { mockGitHubAPI } from '../fixtures/mocks/github.mock';
 import { waitForDataLoad } from '../helpers/wait.helpers';
+import {
+  getClassroomBySlug,
+  getUserByLogin,
+  seedStudentSubmission,
+  deleteRepositoryById,
+} from '../helpers/prisma.helpers';
 
 /**
  * Assistant Grading Queue Tests
  *
  * Covers /assistant/$class/grading: header, search, the "My assigned only" Ant
- * Switch (checked by default), and the plain <button> tabs (Overview, Submitted,
- * Unsubmitted, Needs grading, Graded, Overdue, All) — the active tab carries
- * `bg-panel`. Includes empty-state fallbacks.
+ * Switch (checked by default), and the role="tab" <button>s (Overview,
+ * Submitted, Unsubmitted, Needs grading, Graded, Overdue, All) — the active tab
+ * carries aria-selected="true" / data-active="true". Includes empty-state
+ * fallbacks.
  */
 
 test.describe('Assistant Grading Page', () => {
   test.beforeEach(async ({ authenticatedPage: page, testOrg }) => {
-    await mockGitHubAPI(page);
     await page.goto(`/assistant/${testOrg}/grading`);
     await waitForDataLoad(page);
   });
@@ -34,60 +39,49 @@ test.describe('Assistant Grading Page', () => {
 
 test.describe('Grading Queue Tabs', () => {
   test.beforeEach(async ({ authenticatedPage: page, testOrg }) => {
-    await mockGitHubAPI(page);
     await page.goto(`/assistant/${testOrg}/grading`);
     await waitForDataLoad(page);
   });
 
   test('displays all grading queue tabs', async ({ authenticatedPage: page }) => {
-    // Tabs include a trailing count span, so match by a leading-text regex.
-    await expect(page.getByRole('button', { name: /^Overview/ })).toBeVisible();
-    await expect(page.getByRole('button', { name: /^Submitted/ })).toBeVisible();
-    await expect(page.getByRole('button', { name: /^Unsubmitted/ })).toBeVisible();
-    await expect(page.getByRole('button', { name: /^Needs grading/ })).toBeVisible();
-    await expect(page.getByRole('button', { name: /^Graded/ })).toBeVisible();
-    await expect(page.getByRole('button', { name: /^Overdue/ })).toBeVisible();
-    await expect(page.getByRole('button', { name: /^All/ })).toBeVisible();
+    for (const key of [
+      'overview',
+      'submitted',
+      'unsubmitted',
+      'ungraded',
+      'graded',
+      'overdue',
+      'all',
+    ]) {
+      await expect(page.getByTestId(`grading-tab-${key}`)).toBeVisible();
+    }
   });
 
   test('Overview tab is active by default', async ({ authenticatedPage: page }) => {
-    await expect(page.getByRole('button', { name: /^Overview/ })).toHaveClass(/bg-panel/);
+    await expect(page.getByTestId('grading-tab-overview')).toHaveAttribute(
+      'aria-selected',
+      'true'
+    );
   });
 
-  test('can switch to Submitted tab', async ({ authenticatedPage: page }) => {
-    await page.getByRole('button', { name: /^Submitted/ }).click();
-    await expect(page.getByRole('button', { name: /^Submitted/ })).toHaveClass(/bg-panel/);
-  });
-
-  test('can switch to Unsubmitted tab', async ({ authenticatedPage: page }) => {
-    await page.getByRole('button', { name: /^Unsubmitted/ }).click();
-    await expect(page.getByRole('button', { name: /^Unsubmitted/ })).toHaveClass(/bg-panel/);
-  });
-
-  test('can switch to Needs grading tab', async ({ authenticatedPage: page }) => {
-    await page.getByRole('button', { name: /^Needs grading/ }).click();
-    await expect(page.getByRole('button', { name: /^Needs grading/ })).toHaveClass(/bg-panel/);
-  });
-
-  test('can switch to Graded tab', async ({ authenticatedPage: page }) => {
-    await page.getByRole('button', { name: /^Graded/ }).click();
-    await expect(page.getByRole('button', { name: /^Graded/ })).toHaveClass(/bg-panel/);
-  });
-
-  test('can switch to Overdue tab', async ({ authenticatedPage: page }) => {
-    await page.getByRole('button', { name: /^Overdue/ }).click();
-    await expect(page.getByRole('button', { name: /^Overdue/ })).toHaveClass(/bg-panel/);
-  });
-
-  test('can switch to All tab', async ({ authenticatedPage: page }) => {
-    await page.getByRole('button', { name: /^All/ }).click();
-    await expect(page.getByRole('button', { name: /^All/ })).toHaveClass(/bg-panel/);
-  });
+  // Each non-default tab: clicking it marks it active and the previous one inactive.
+  for (const key of ['submitted', 'unsubmitted', 'ungraded', 'graded', 'overdue', 'all']) {
+    test(`can switch to the ${key} tab`, async ({ authenticatedPage: page }) => {
+      await page.getByTestId(`grading-tab-${key}`).click();
+      await expect(page.getByTestId(`grading-tab-${key}`)).toHaveAttribute(
+        'aria-selected',
+        'true'
+      );
+      await expect(page.getByTestId('grading-tab-overview')).toHaveAttribute(
+        'aria-selected',
+        'false'
+      );
+    });
+  }
 });
 
 test.describe('Issues Toggle Functionality', () => {
   test.beforeEach(async ({ authenticatedPage: page, testOrg }) => {
-    await mockGitHubAPI(page);
     await page.goto(`/assistant/${testOrg}/grading`);
     await waitForDataLoad(page);
   });
@@ -108,25 +102,43 @@ test.describe('Issues Toggle Functionality', () => {
 });
 
 test.describe('Grading Table Columns', () => {
+  let seeded: Awaited<ReturnType<typeof seedStudentSubmission>> | null = null;
+
   test.beforeEach(async ({ authenticatedPage: page, testOrg }) => {
-    await mockGitHubAPI(page);
+    // Seed a known CLOSED submission so the All tab has a deterministic row,
+    // rather than depending on whatever the shared seed happens to contain.
+    const classroom = await getClassroomBySlug(testOrg);
+    const student = await getUserByLogin('fake-student-1');
+    seeded = await seedStudentSubmission(classroom.id, student.id, 'E2E Grading Columns', {
+      status: 'CLOSED',
+    });
+
     await page.goto(`/assistant/${testOrg}/grading`);
     await waitForDataLoad(page);
+  });
+
+  test.afterEach(async () => {
+    if (seeded) {
+      await deleteRepositoryById(seeded.repositoryId);
+      seeded = null;
+    }
   });
 
   test('All tab renders the classroom-wide assignment table with all headers', async ({
     authenticatedPage: page,
   }) => {
+    const sub = seeded!;
     // Turn off the my-assigned filter so classroom-wide data shows.
-    await page.locator('.ant-switch').click();
-    await page.getByRole('button', { name: /^All/ }).click();
+    await page.getByRole('switch').click();
+    await page.getByTestId('grading-tab-all').click();
 
     const table = page.locator('table');
     await expect(table).toBeVisible();
 
-    await expect(
-      page.getByRole('row').filter({ hasText: 'fake-student-1' }).first()
-    ).toBeVisible();
+    // The seeded submission's row must be present (specific, not "any table").
+    const seededRow = page.getByRole('row').filter({ hasText: sub.assignmentTitle });
+    await expect(seededRow).toBeVisible();
+    await expect(seededRow.getByTestId('grading-owner-cell')).toBeVisible();
 
     await expect(page.getByRole('columnheader', { name: /Owner/i })).toBeVisible();
     await expect(page.getByRole('columnheader', { name: /Repository/i })).toBeVisible();
@@ -138,34 +150,47 @@ test.describe('Grading Table Columns', () => {
   });
 });
 
-test.describe('Empty States', () => {
+test.describe('Grading Queue with a seeded ungraded submission', () => {
+  let seeded: Awaited<ReturnType<typeof seedStudentSubmission>> | null = null;
+
   test.beforeEach(async ({ authenticatedPage: page, testOrg }) => {
-    await mockGitHubAPI(page);
+    // A CLOSED, ungraded submission is exactly what the Overview queue surfaces,
+    // letting us assert the SPECIFIC table-with-seeded-row branch instead of an
+    // "either table or empty state" OR.
+    const classroom = await getClassroomBySlug(testOrg);
+    const student = await getUserByLogin('fake-student-1');
+    seeded = await seedStudentSubmission(classroom.id, student.id, 'E2E Overview Queue Row', {
+      status: 'CLOSED',
+    });
+
     await page.goto(`/assistant/${testOrg}/grading`);
     await waitForDataLoad(page);
+    // Reveal classroom-wide submissions (the fresh row has no assigned grader).
+    await page.getByRole('switch').click();
   });
 
-  test('Overview shows a queue table or the "All caught up!" empty state', async ({
+  test.afterEach(async () => {
+    if (seeded) {
+      await deleteRepositoryById(seeded.repositoryId);
+      seeded = null;
+    }
+  });
+
+  test('Overview renders the queue table containing the seeded ungraded submission', async ({
     authenticatedPage: page,
   }) => {
-    const table = page.locator('table');
-    const allCaughtUp = page.getByText('All caught up!', { exact: true });
-
-    const hasTable = await table.isVisible().catch(() => false);
-    const hasCaughtUp = await allCaughtUp.isVisible().catch(() => false);
-
-    expect(hasTable || hasCaughtUp).toBeTruthy();
-  });
-
-  test('Overdue tab renders content correctly', async ({ authenticatedPage: page }) => {
-    await page.getByRole('button', { name: /^Overdue/ }).click();
-    await expect(page.getByRole('button', { name: /^Overdue/ })).toHaveClass(/bg-panel/);
+    const sub = seeded!;
+    await expect(page.getByTestId('grading-tab-overview')).toHaveAttribute(
+      'aria-selected',
+      'true'
+    );
 
     const table = page.locator('table');
-    const emptyState = page.getByText('No overdue grading', { exact: true });
-    const hasTable = await table.isVisible().catch(() => false);
-    const hasEmptyState = await emptyState.isVisible().catch(() => false);
+    await expect(table).toBeVisible();
 
-    expect(hasTable || hasEmptyState).toBeTruthy();
+    const seededRow = page.getByRole('row').filter({ hasText: sub.assignmentTitle });
+    await expect(seededRow).toBeVisible();
+    // The "All caught up!" empty state must NOT be present when a row exists.
+    await expect(page.getByText('All caught up!', { exact: true })).toHaveCount(0);
   });
 });

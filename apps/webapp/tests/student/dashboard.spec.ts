@@ -12,7 +12,9 @@ import { waitForDataLoad } from '../helpers/wait.helpers';
 test.describe('Student Dashboard', () => {
   test.beforeEach(async ({ authenticatedPage: page, testOrg }) => {
     await page.goto(`/student/${testOrg}/dashboard`);
-    await waitForDataLoad(page);
+    await waitForDataLoad(page, {
+      anchor: page.getByRole('heading', { name: 'Dashboard', level: 1 }),
+    });
   });
 
   test('shows the Dashboard heading and the retro card tabs', async ({
@@ -44,7 +46,9 @@ test.describe('Student Dashboard', () => {
 test.describe('Student Navigation', () => {
   test.beforeEach(async ({ authenticatedPage: page, testOrg }) => {
     await page.goto(`/student/${testOrg}/dashboard`);
-    await waitForDataLoad(page);
+    await waitForDataLoad(page, {
+      anchor: page.getByRole('heading', { name: 'Dashboard', level: 1 }),
+    });
   });
 
   test('sidebar shows the student role label', async ({ authenticatedPage: page }) => {

@@ -1,5 +1,4 @@
 import { test, expect } from '../fixtures/auth.fixture';
-import { mockGitHubAPI } from '../fixtures/mocks/github.mock';
 import { waitForDataLoad } from '../helpers/wait.helpers';
 
 /**
@@ -13,9 +12,10 @@ import { waitForDataLoad } from '../helpers/wait.helpers';
 
 test.describe('Assistant Dashboard', () => {
   test.beforeEach(async ({ authenticatedPage: page, testOrg }) => {
-    await mockGitHubAPI(page);
     await page.goto(`/assistant/${testOrg}/dashboard`);
-    await waitForDataLoad(page);
+    await waitForDataLoad(page, {
+      anchor: page.getByRole('heading', { name: 'Dashboard', level: 1 }),
+    });
   });
 
   test('displays dashboard heading', async ({ authenticatedPage: page }) => {
@@ -39,9 +39,10 @@ test.describe('Assistant Dashboard', () => {
 
 test.describe('Assistant Navigation', () => {
   test.beforeEach(async ({ authenticatedPage: page, testOrg }) => {
-    await mockGitHubAPI(page);
     await page.goto(`/assistant/${testOrg}/dashboard`);
-    await waitForDataLoad(page);
+    await waitForDataLoad(page, {
+      anchor: page.getByRole('heading', { name: 'Dashboard', level: 1 }),
+    });
   });
 
   test('org switcher exposes the Assistant role for this membership', async ({
