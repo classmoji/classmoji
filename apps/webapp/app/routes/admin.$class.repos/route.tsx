@@ -121,6 +121,7 @@ const AdminAssignments = ({ loaderData }: Route.ComponentProps) => {
             />
 
             <Button
+              data-tour="repos-cleanup"
               icon={<IconCopyX size={16} />}
               onClick={() => {
                 findUnenrolledStudents();
@@ -128,10 +129,10 @@ const AdminAssignments = ({ loaderData }: Route.ComponentProps) => {
             >
               Cleanup repos
             </Button>
-            <NavLink to={`/admin/${classSlug}/resources`}>
+            <NavLink to={`/admin/${classSlug}/resources`} data-tour="repos-link-resources">
               <Button icon={<IconLink size={16} />}>Link Resources</Button>
             </NavLink>
-            <NavLink to={`${pathname}/form`}>
+            <NavLink to={`${pathname}/form`} data-tour="repos-new">
               <ButtonNew>New repository</ButtonNew>
             </NavLink>
           </div>

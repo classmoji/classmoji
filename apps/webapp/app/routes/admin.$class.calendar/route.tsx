@@ -151,8 +151,16 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
 
     const event = await ClassmojiService.calendar.getEventById(eventId);
 
+    // Event must exist and belong to THIS classroom. The role check above only
+    // proves the caller is staff in this classroom, not that the target event
+    // is in it, so without this a staff member could edit another class's event
+    // via a crafted eventId.
+    if (!event || event.classroom_id !== classroom.id) {
+      return data({ success: false, error: 'Event not found' }, { status: 404 });
+    }
+
     // OWNER/TEACHER can edit any event, ASSISTANT can only edit their own
-    if (!isAdmin && String(event!.created_by) !== String(userId)) {
+    if (!isAdmin && String(event.created_by) !== String(userId)) {
       return data(
         { success: false, error: 'Unauthorized - you can only edit your own events' },
         { status: 403 }
@@ -213,7 +221,9 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
     try {
       const event = await ClassmojiService.calendar.getEventById(eventId);
 
-      if (!event) {
+      // Event must exist and belong to THIS classroom (prevents cross-classroom
+      // deletes via a crafted eventId).
+      if (!event || event.classroom_id !== classroom.id) {
         return data({ success: false, error: 'Event not found' }, { status: 404 });
       }
 
@@ -391,8 +401,10 @@ const AdminCalendar = ({ loaderData }: Route.ComponentProps) => {
   };
 
   const handleEventDrop = (event: CalendarEvent, newStartTime: Date, newEndTime: Date) => {
-    // OWNER/TEACHER can drag any event, others can only drag their own
-    const canDragEvent = isAdmin || Number(event.created_by) === Number(userId);
+    // OWNER/TEACHER can drag any event, others can only drag their own.
+    // IDs are UUID strings, so compare as strings (Number(uuid) is NaN, which
+    // would make this always false and block users from moving their own events).
+    const canDragEvent = isAdmin || String(event.created_by) === String(userId);
 
     if (!canDragEvent) {
       callout.show({ variant: 'error', title: 'You can only move your own events' });
@@ -471,12 +483,9 @@ const AdminCalendar = ({ loaderData }: Route.ComponentProps) => {
   };
 
   const handleEventClick = (event: CalendarEvent) => {
-    // Convert both to numbers for comparison (handle string/number mismatch)
-    const eventOwnerId = Number(event.created_by);
-    const currentUserId = Number(userId);
-
-    // OWNER/TEACHER can edit any event, others can only edit their own
-    const canEditEvent = isAdmin || eventOwnerId === currentUserId;
+    // OWNER/TEACHER can edit any event, others can only edit their own.
+    // IDs are UUID strings, so compare as strings (Number(uuid) is NaN).
+    const canEditEvent = isAdmin || String(event.created_by) === String(userId);
 
     if (event.is_deadline) {
       // Deadlines are read-only, just show info
@@ -498,9 +507,16 @@ const AdminCalendar = ({ loaderData }: Route.ComponentProps) => {
       <div className="flex items-center justify-between gap-3 mt-2 mb-4">
         <h1 className="text-base font-semibold text-ink-2">Calendar</h1>
         <div className="flex gap-2">
-          <CalendarSubscriptionCard subscriptionUrl={subscriptionUrl} />
+          <span data-tour="calendar-subscribe">
+            <CalendarSubscriptionCard subscriptionUrl={subscriptionUrl} />
+          </span>
           {canEdit && (
-            <Button type="primary" icon={<PlusOutlined />} onClick={() => setAddModalOpen(true)}>
+            <Button
+              type="primary"
+              icon={<PlusOutlined />}
+              onClick={() => setAddModalOpen(true)}
+              data-tour="calendar-add-event"
+            >
               Add Event
             </Button>
           )}

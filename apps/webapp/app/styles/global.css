@@ -1291,3 +1291,54 @@ html[data-theme='dark'] .bar .fill.done {
   border-top: 1px solid var(--line-cool);
   background: var(--panel-tint);
 }
+
+/* ============ ONBOARDING TOUR FOOTER ============ */
+/* Stack the antd Tour footer: full-width progress bar on top, nav buttons on
+   their own row below (default is bar-left / buttons-right on a single line). */
+.cm-tour .ant-tour-footer {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 14px;
+}
+.cm-tour .ant-tour-indicators {
+  width: 100%;
+}
+.cm-tour .ant-tour-buttons {
+  display: flex;
+  justify-content: flex-end;
+  margin: 0;
+}
+
+/* Smooth, delightful step-to-step movement. The spotlight cutout is an SVG path,
+   which Chromium can animate via `transition: d`, so it glides between targets;
+   the popover eases to its new position instead of snapping. */
+.cm-tour .ant-tour-mask path {
+  transition: d 0.45s cubic-bezier(0.22, 1, 0.36, 1);
+}
+.cm-tour .ant-tour {
+  transition:
+    transform 0.4s cubic-bezier(0.22, 1, 0.36, 1),
+    top 0.4s cubic-bezier(0.22, 1, 0.36, 1),
+    left 0.4s cubic-bezier(0.22, 1, 0.36, 1),
+    inset-inline-start 0.4s cubic-bezier(0.22, 1, 0.36, 1),
+    inset-inline-end 0.4s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+/* "Take a tour" button: lift the route icon on hover, spin it on click. */
+.cm-take-tour svg {
+  transition: transform 0.2s ease;
+}
+.cm-take-tour:hover svg {
+  transform: scale(1.18) rotate(-8deg);
+}
+@keyframes cm-route-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+.cm-route-spin {
+  animation: cm-route-spin 0.45s cubic-bezier(0.22, 1, 0.36, 1);
+}

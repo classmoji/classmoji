@@ -133,9 +133,11 @@ const AdminTeams = ({ loaderData }: Route.ComponentProps) => {
             className="w-64"
           />
 
-          <ButtonNew action={() => navigate('../teams/new', { relative: 'path' })}>
-            New team
-          </ButtonNew>
+          <span data-tour="teams-new" className="inline-flex">
+            <ButtonNew action={() => navigate('../teams/new', { relative: 'path' })}>
+              New team
+            </ButtonNew>
+          </span>
         </div>
       </div>
 

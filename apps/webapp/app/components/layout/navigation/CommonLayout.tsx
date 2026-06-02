@@ -141,6 +141,7 @@ const CommonLayout = ({
             ...(active ? { backgroundColor: 'var(--accent-soft)' } : {}),
           }}
           data-active={active || undefined}
+          data-tour-nav={item.link}
         >
           {collapsed ? (
             <Tooltip title={item.label} placement="right">

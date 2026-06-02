@@ -203,6 +203,7 @@ const AddStudents = ({ loaderData }: Route.ComponentProps) => {
         />
 
         <Input.TextArea
+          data-tour="students-add-roster"
           value={inputText}
           onChange={e => setInputText(e.target.value)}
           placeholder={`John Doe, john@school.edu\nJane Smith, jane@school.edu`}
@@ -277,6 +278,7 @@ const AddStudents = ({ loaderData }: Route.ComponentProps) => {
         </Button>
         {parsed === null ? (
           <Button
+            data-tour="students-add-parse"
             type="primary"
             onClick={handleParse}
             disabled={!inputText.trim()}
@@ -286,6 +288,7 @@ const AddStudents = ({ loaderData }: Route.ComponentProps) => {
           </Button>
         ) : (
           <Button
+            data-tour="students-add-submit"
             type="primary"
             icon={<PlusOutlined />}
             onClick={handleSubmit}

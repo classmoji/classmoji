@@ -49,6 +49,7 @@ const OrgSettings = () => {
               <button
                 key={tab.key}
                 type="button"
+                data-tour={`settings-tab-${tab.key}`}
                 onClick={() => navigate(`/admin/${classSlug}/settings/${tab.key}`)}
                 style={activeStyle}
                 className={`relative px-4 py-2 text-sm font-medium rounded-t-2xl border whitespace-nowrap transition-colors ${

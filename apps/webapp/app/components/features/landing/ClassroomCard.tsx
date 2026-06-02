@@ -100,6 +100,13 @@ export function ClassroomCard({
       onClick={handleOpenGuarded}
       role="button"
       tabIndex={0}
+      data-onboarding={
+        c.role === 'PENDING INVITE'
+          ? 'pending-invite'
+          : c.is_example
+            ? 'example-course'
+            : undefined
+      }
       draggable={draggable}
       onDragStart={onDragStart}
       onDragOver={onDragOver}

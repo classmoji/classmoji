@@ -91,7 +91,8 @@ const OrgSelect = ({ memberships }: OrgSelectProps) => {
           },
         }}
         options={memberships
-          ?.sort((a, b) => a.organization.name?.localeCompare(b.organization.name))
+          ?.filter(m => !(m.organization as { is_example?: boolean }).is_example)
+          .sort((a, b) => a.organization.name?.localeCompare(b.organization.name))
           .map(m => ({
             value: m.id.toString(),
             label: m.organization.name,

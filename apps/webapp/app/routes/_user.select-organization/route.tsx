@@ -13,6 +13,7 @@ import {
   getGitProvider,
   ensureClassroomTeam,
   notificationService,
+  provisionExampleClassroom,
 } from '@classmoji/services';
 import { ActionTypes, roleSettings } from '~/constants';
 import useStore from '~/store';
@@ -71,10 +72,34 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
   }
 
   if (user) {
-    const typedUser = user as AppUser;
+    let typedUser = user as AppUser;
     // Surface ALL memberships — including archived classrooms — so the
     // landing screen can show them in the Archived section.
     typedUser.memberships = (typedUser.memberships ?? []) as SelectOrganizationMembership[];
+
+    const hasExampleClassroom = typedUser.memberships.some(
+      m => (m.organization as { is_example?: boolean }).is_example === true
+    );
+    if (!hasExampleClassroom && typedUser.login) {
+      try {
+        const exampleClassroom = await provisionExampleClassroom({
+          ownerUserId: typedUser.id,
+          ownerLogin: typedUser.login,
+        });
+        if (exampleClassroom) {
+          const refreshedUser = await ClassmojiService.user.findById(typedUser.id, {
+            includeMemberships: true,
+          });
+          if (refreshedUser) {
+            user = refreshedUser;
+            typedUser = user as AppUser;
+            typedUser.memberships = (typedUser.memberships ?? []) as SelectOrganizationMembership[];
+          }
+        }
+      } catch (error) {
+        console.error('Failed to provision example classroom:', error);
+      }
+    }
 
     const { items, unreadCount } = await notificationService.getForBell(typedUser.id);
     const notifications = items.map(n => ({
@@ -148,6 +173,7 @@ function buildLandingClasses(memberships: SelectOrganizationMembership[]): Landi
 
     const status = (org.status ?? 'ACTIVE') as 'ACTIVE' | 'LOCKED' | 'UNPUBLISHED';
     const archived = org.is_archived === true;
+    const isExample = (org as { is_example?: boolean }).is_example === true;
     const updatedAt =
       org.settings?.updated_at ?? (org as { updated_at?: Date | string | null }).updated_at;
     const updatedTs = updatedAt ? new Date(updatedAt as string | Date).getTime() || 0 : 0;
@@ -171,6 +197,7 @@ function buildLandingClasses(memberships: SelectOrganizationMembership[]): Landi
         pin_order: pinOrder,
         status,
         is_archived: archived,
+        is_example: isExample,
         updated_at: (updatedAt as string | Date | null) ?? new Date(0),
         organization: { id: org.id, login: orgLogin, name: org.name },
         hasAcceptedInvite: m.has_accepted_invite,
@@ -197,7 +224,7 @@ function buildLandingClasses(memberships: SelectOrganizationMembership[]): Landi
 const SelectOrganization = ({ loaderData }: Route.ComponentProps) => {
   const { memberships, notifications, unreadCount, membershipRoles } = loaderData;
   const { user } = useUser();
-  const { classroom, setClassroom } = useStore();
+  const { classroom, setClassroom, startFullTour } = useStore();
   const { fetcher, notify } = useGlobalFetcher();
   const { show, close, visible } = useDisclosure();
   const navigate = useNavigate();
@@ -244,6 +271,14 @@ const SelectOrganization = ({ loaderData }: Route.ComponentProps) => {
     navigate(`${roleSettings[c.role].path}/${c.organization.login}${suffix}`);
   };
 
+  // The Example Course is hidden from the grid and the org switcher; the
+  // "Take a tour" button is the only way it's reached. Clicking it starts the
+  // guided sequence: the landing tour runs here, then hands off into the Example
+  // Course for the instructor and student tours, then returns here.
+  const exampleClass =
+    classes.find(c => c.is_example && c.role === 'OWNER') ?? classes.find(c => c.is_example);
+  const onTakeTour = () => startFullTour();
+
   return (
     <>
       <Modal
@@ -285,8 +320,10 @@ const SelectOrganization = ({ loaderData }: Route.ComponentProps) => {
               }
             : null
         }
-        classes={classes}
+        classes={classes.filter(c => !c.is_example)}
         onOpenClass={onOpenClass}
+        onTakeTour={onTakeTour}
+        tourAvailable={!!exampleClass}
         notifications={notifications}
         unreadCount={unreadCount}
         membershipRoles={membershipRoles}

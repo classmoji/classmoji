@@ -522,13 +522,16 @@ export default function NewPage({ loaderData }: Route.ComponentProps) {
             )}
 
             <Form form={form} layout="vertical" onFinish={handleSubmit} initialValues={{}}>
-              <Tabs activeKey={activeTab} onChange={setActiveTab} items={tabItems} />
+              <span data-tour="pages-new-mode" className="block">
+                <Tabs activeKey={activeTab} onChange={setActiveTab} items={tabItems} />
+              </span>
 
               <div className="flex justify-end gap-3 mt-6 items-center">
                 <Button type="default" onClick={close}>
                   Cancel
                 </Button>
                 <Button
+                  data-tour="pages-new-submit"
                   type="primary"
                   htmlType={activeTab === 'batch' ? 'button' : 'submit'}
                   onClick={activeTab === 'batch' ? () => handleSubmit({}) : undefined}

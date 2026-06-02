@@ -1,16 +1,22 @@
+// Default smee.io proxy used by `npm run hook:github` so local installs receive
+// webhook events without manual configuration. Override with SMEE_WEBHOOK_URL
+// when running multiple devs against separate channels.
+const DEFAULT_LOCALHOST_SMEE_URL = 'https://smee.io/MSiPH2YxKmpkTOIT';
+
 export function buildManifest(baseUrl: string, name: string) {
   const isLocalhost = baseUrl.includes('localhost') || baseUrl.includes('127.0.0.1');
+  const webhookUrl = isLocalhost
+    ? process.env.SMEE_WEBHOOK_URL || DEFAULT_LOCALHOST_SMEE_URL
+    : `${baseUrl}/api/github-webhook`;
   return {
     name: name.toLowerCase(),
     url: baseUrl,
-    ...(isLocalhost
-      ? {}
-      : {
-          hook_attributes: { url: `${baseUrl}/api/github-webhook`, active: true },
-          default_events: ['issues', 'organization'],
-        }),
+    hook_attributes: { url: webhookUrl, active: true },
+    default_events: ['issues', 'organization'],
     redirect_url: `${baseUrl}/setup/callback`,
     callback_urls: [`${baseUrl}/api/auth/callback/github`],
+    setup_url: `${baseUrl}/login/callback`,
+    setup_on_update: true,
     description: 'GitHub App for Classmoji classroom management',
     public: true,
     default_permissions: {

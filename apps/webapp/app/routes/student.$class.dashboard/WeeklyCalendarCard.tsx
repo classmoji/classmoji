@@ -62,6 +62,7 @@ const WeeklyCalendarCard = ({ events, weekStart, classSlug }: WeeklyCalendarCard
         </h2>
         <Link
           to={`/student/${classSlug}/calendar`}
+          data-tour="dashboard-view-calendar"
           className="inline-flex items-center gap-1.5 text-xs sm:text-sm font-medium text-gray-700 dark:text-gray-200 px-3 py-1.5 rounded-full ring-1 ring-line bg-panel hover:bg-nav-hover transition-colors"
         >
           View calendar

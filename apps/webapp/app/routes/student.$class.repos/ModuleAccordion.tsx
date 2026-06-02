@@ -205,6 +205,7 @@ const ModuleCard = ({
     >
       <button
         type="button"
+        data-tour={ordinal === 1 ? 'repos-toggle' : undefined}
         onClick={() => hasExpandableContent && setOpen(v => !v)}
         className={`w-full text-left p-5 sm:p-6 ${
           hasExpandableContent

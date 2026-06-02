@@ -26,7 +26,7 @@ const ProgressSummaryCard = ({
   const currentPct = total === 0 ? 0 : (current / total) * 100;
 
   return (
-    <section className="rounded-2xl bg-panel ring-1 ring-line p-5 sm:p-6">
+    <section data-tour="assignments-progress" className="rounded-2xl bg-panel ring-1 ring-line p-5 sm:p-6">
       <div className="flex items-start justify-between gap-4">
         <div className="min-w-0">
           <h2 className="text-lg sm:text-xl font-semibold text-ink-0 tracking-tight truncate">

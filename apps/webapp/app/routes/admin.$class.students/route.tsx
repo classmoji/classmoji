@@ -74,18 +74,21 @@ const StudentsScreen = ({ loaderData }: Route.ComponentProps) => {
         <h1 className="text-base font-semibold text-ink-2">Students</h1>
 
         <div className="flex gap-3">
-          <SearchInput
-            query={query}
-            setQuery={setQuery}
-            placeholder="Search by name or login..."
-            className="w-64"
-          />
+          <span data-tour="students-search">
+            <SearchInput
+              query={query}
+              setQuery={setQuery}
+              placeholder="Search by name or login..."
+              className="w-64"
+            />
+          </span>
 
           <RequireRole roles={['OWNER']}>
             <Button
               icon={<PlusCircleOutlined />}
               onClick={() => navigate(`/admin/${classSlug}/students/add`)}
               type="primary"
+              data-tour="students-add"
             >
               Add Students
             </Button>

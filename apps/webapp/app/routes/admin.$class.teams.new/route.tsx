@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router';
 import { namedAction } from 'remix-utils/named-action';
 import { Input, Modal, Form, Radio, Select } from 'antd';
+import type { ButtonProps } from 'antd';
 
 import { useGlobalFetcher, useDisclosure } from '~/hooks';
 import { ClassmojiService, getGitProvider, GitHubProvider } from '@classmoji/services';
@@ -65,6 +66,7 @@ const AdminNewTeam = ({ loaderData }: Route.ComponentProps) => {
         open={visible}
         title="Create new team"
         okText="Create"
+        okButtonProps={{ 'data-tour': 'teams-new-submit' } as unknown as ButtonProps}
         onOk={createTeam}
         onCancel={() => {
           close();
@@ -77,7 +79,11 @@ const AdminNewTeam = ({ loaderData }: Route.ComponentProps) => {
             validateStatus={nameError ? 'error' : undefined}
             help={nameError ? 'Team name is required' : undefined}
           >
-            <Input placeholder="Enter team name" onChange={e => setName(e.currentTarget.value)} />
+            <Input
+              data-tour="teams-new-name"
+              placeholder="Enter team name"
+              onChange={e => setName(e.currentTarget.value)}
+            />
           </Form.Item>
 
           <Form.Item label="Tag">
@@ -96,6 +102,7 @@ const AdminNewTeam = ({ loaderData }: Route.ComponentProps) => {
             <p className="font-medium pb-2">Team visibility</p>
 
             <Radio.Group
+              data-tour="teams-new-visibility"
               value={visibility}
               onChange={e => setVisibility(e.target.value)}
               className="flex flex-col gap-2"

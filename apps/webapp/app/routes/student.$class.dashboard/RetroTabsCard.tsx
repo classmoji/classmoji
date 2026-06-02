@@ -318,7 +318,7 @@ const RetroTabsCard = ({ feedback, team, needsTeam, resubmits, classSlug }: Retr
 
   return (
     <div className="h-full flex flex-col">
-      <div className="flex -mb-px relative">
+      <div data-tour="dashboard-activity-tabs" className="flex -mb-px relative">
         {TAB_ORDER.map(({ key, label }, idx) => {
           const isActive = key === active;
           const activeIdx = TAB_ORDER.findIndex(t => t.key === active);

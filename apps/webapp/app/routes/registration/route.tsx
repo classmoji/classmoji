@@ -9,7 +9,7 @@ import { Logo } from '@classmoji/ui-components';
 import { getAuthSession } from '@classmoji/auth/server';
 import getPrisma from '@classmoji/database';
 import { generateId } from '@classmoji/utils';
-import { GitHubProvider, ClassmojiService } from '@classmoji/services';
+import { GitHubProvider, ClassmojiService, provisionExampleClassroom } from '@classmoji/services';
 import Tasks from '@classmoji/tasks';
 
 export const loader = async ({ request }: Route.LoaderArgs) => {
@@ -537,8 +537,12 @@ export const action = async ({ request }: Route.ActionArgs) => {
     data: { user_id: user.id },
   });
 
-  // Claim any pending classroom invites matching email
-  const invites = await ClassmojiService.classroomInvite.findInvitesByEmail(formData.email);
+  // Claim any pending classroom invites — match against the school email the student entered
+  // AND the email on their GitHub account, since instructors invite by either.
+  const invites = await ClassmojiService.classroomInvite.findInvitesByAnyEmail([
+    formData.email,
+    formData.githubEmail,
+  ]);
   if (invites.length > 0) {
     for (const invite of invites) {
       await ClassmojiService.classroomMembership.create({
@@ -549,6 +553,14 @@ export const action = async ({ request }: Route.ActionArgs) => {
       });
     }
     await ClassmojiService.classroomInvite.deleteManyInvites(invites.map(i => i.id));
+  }
+
+  // Give every brand-new user a populated "Example Course" sandbox to explore
+  // (the in-classroom onboarding tour runs here). Never let this break signup.
+  try {
+    await provisionExampleClassroom({ ownerUserId: user.id, ownerLogin: formData.login });
+  } catch (err) {
+    console.error('Failed to provision example classroom:', err);
   }
 
   return redirect('/select-organization');

@@ -374,6 +374,7 @@ const FormModule = ({
                 }}
               >
                 <Input
+                  data-tour="repos-form-title"
                   placeholder="React fundamentals"
                   onChange={e => {
                     const value = e.target.value.toLowerCase().replace(/\s/g, '-');
@@ -383,7 +384,7 @@ const FormModule = ({
               </FormItem>
 
               <FormItem control={control} name="type" label="Type">
-                <Select className="w-full" placeholder="Select type">
+                <Select data-tour="repos-form-type" className="w-full" placeholder="Select type">
                   <Select.Option value="INDIVIDUAL">Individual</Select.Option>
                   <Select.Option value="GROUP">Group</Select.Option>
                 </Select>
@@ -553,7 +554,12 @@ const FormModule = ({
               />
 
               <Tooltip title="Add new assignment">
-                <Button type="primary" icon={<PlusOutlined />} onClick={openIssueModal}>
+                <Button
+                  data-tour="repos-form-add-assignment"
+                  type="primary"
+                  icon={<PlusOutlined />}
+                  onClick={openIssueModal}
+                >
                   Add assignment
                 </Button>
               </Tooltip>
@@ -753,6 +759,7 @@ const FormModule = ({
             Discard
           </Button>
           <Button
+            data-tour="repos-form-submit"
             type="primary"
             htmlType="submit"
             style={{ backgroundColor: '#619462', borderColor: '#619462' }}

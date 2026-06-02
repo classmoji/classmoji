@@ -53,10 +53,12 @@ const Toggle = ({
   prefKey,
   label,
   checked,
+  onboardingKey,
 }: {
   prefKey: EmailPrefKey;
   label: string;
   checked: boolean;
+  onboardingKey?: string;
 }) => {
   const fetcher = useFetcher();
   const optimistic =
@@ -71,6 +73,7 @@ const Toggle = ({
         <button
           type="submit"
           aria-pressed={optimistic}
+          data-onboarding={onboardingKey}
           className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${
             optimistic ? 'bg-[var(--accent)]' : 'bg-stone-300 dark:bg-neutral-700'
           }`}
@@ -101,8 +104,14 @@ const SettingsNotifications = ({ loaderData }: Route.ComponentProps) => {
           As a student
         </h2>
         <div className="rounded-xl border border-line px-4">
-          {STUDENT_PREFS.map(p => (
-            <Toggle key={p.key} prefKey={p.key} label={p.label} checked={Boolean(prefs[p.key])} />
+          {STUDENT_PREFS.map((p, i) => (
+            <Toggle
+              key={p.key}
+              prefKey={p.key}
+              label={p.label}
+              checked={Boolean(prefs[p.key])}
+              onboardingKey={i === 0 ? 'settings-notifications' : undefined}
+            />
           ))}
         </div>
       </section>

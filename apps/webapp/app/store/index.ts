@@ -6,6 +6,7 @@ import type {
   MembershipOrganization,
   MembershipWithOrganization,
   AppSubscription,
+  TourPhase,
 } from '~/types';
 import type { Role } from '@prisma/client';
 
@@ -75,11 +76,56 @@ const createAskMojiSlice = (set: SetState) => ({
   setAskMojiActive: (askMojiActive: boolean) => set({ askMojiActive }),
 });
 
+// Guided tour orchestration. "Take a tour" calls startFullTour() -> phase
+// 'landing'; OnboardingTour runs the landing steps and hands off to 'instructor'
+// (the owner class tour), which hands off to 'student', which ends the sequence.
+// Phase + step are persisted so a refresh resumes the tour in place. We use
+// sessionStorage (not localStorage) on purpose: it survives a refresh but clears
+// on tab close, so "resume" means resume-this-session, never a half-finished tour
+// re-popping on the landing page days later.
+const TOUR_STORAGE_KEY = 'cm-tour';
+
+const persistTour = (tourPhase: TourPhase, tourStep: number) => {
+  try {
+    if (tourPhase === 'idle') sessionStorage.removeItem(TOUR_STORAGE_KEY);
+    else
+      sessionStorage.setItem(TOUR_STORAGE_KEY, JSON.stringify({ phase: tourPhase, step: tourStep }));
+  } catch {
+    /* sessionStorage unavailable (SSR / private mode) */
+  }
+};
+
+const createTourSlice = (set: SetState) => ({
+  tourPhase: 'idle' as TourPhase,
+  tourStep: 0,
+  startFullTour: () =>
+    set(() => {
+      persistTour('landing', 0);
+      return { tourPhase: 'landing', tourStep: 0 };
+    }),
+  setTourPhase: (tourPhase: TourPhase) =>
+    set((state: StoreState) => {
+      persistTour(tourPhase, state.tourStep);
+      return { tourPhase };
+    }),
+  setTourStep: (tourStep: number) =>
+    set((state: StoreState) => {
+      persistTour(state.tourPhase, tourStep);
+      return { tourStep };
+    }),
+  endTour: () =>
+    set(() => {
+      persistTour('idle', 0);
+      return { tourPhase: 'idle', tourStep: 0 };
+    }),
+});
+
 const useStore = create<StoreState>()(
   devtools(set => ({
     ...createUserSlice(set),
     ...createAppSlice(set),
     ...createAskMojiSlice(set),
+    ...createTourSlice(set),
   }))
 );
 
