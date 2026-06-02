@@ -56,6 +56,25 @@ describe('createOneShotShutdown', () => {
     expect(exit).toHaveBeenCalledExactlyOnceWith(1);
   });
 
+  it('unref()s the force-exit timer so it never keeps an idle process alive', () => {
+    vi.useFakeTimers();
+    const unref = vi.fn();
+    // Capture the timer object returned by setTimeout and attach a spy on unref.
+    const setTimeoutSpy = vi.spyOn(globalThis, 'setTimeout').mockImplementation(() => {
+      return { unref } as unknown as ReturnType<typeof setTimeout>;
+    });
+
+    const cleanup = vi.fn(() => new Promise<void>(() => {})); // never resolves
+    const exit = vi.fn();
+
+    const shutdown = createOneShotShutdown(cleanup, exit);
+    shutdown(1);
+
+    expect(setTimeoutSpy).toHaveBeenCalledOnce();
+    // Removing the unref() guard (re-introducing the process-hang bug) fails this.
+    expect(unref).toHaveBeenCalledOnce();
+  });
+
   it('is re-entrant safe: repeated calls run cleanup and exit only once', async () => {
     const cleanup = vi.fn(async () => {});
     const exit = vi.fn();
@@ -68,5 +87,28 @@ describe('createOneShotShutdown', () => {
 
     expect(cleanup).toHaveBeenCalledOnce();
     expect(exit).toHaveBeenCalledOnce();
+  });
+
+  // Mirrors @classmoji/database/index.ts wiring: ONE shutdown instance is shared
+  // between the uncaughtException and unhandledRejection handlers. If both fire
+  // (e.g. an uncaught error followed by a rejection during teardown), cleanup
+  // and exit must still each run exactly once.
+  it('shares one instance across two trigger paths and runs cleanup/exit once', async () => {
+    const cleanup = vi.fn(async () => {});
+    const exit = vi.fn();
+
+    const shutdownWithFailure = createOneShotShutdown(cleanup, exit, { timeoutMs: 5000 });
+
+    const onUncaughtException = () => shutdownWithFailure(1);
+    const onUnhandledRejection = () => shutdownWithFailure(1);
+
+    // Two distinct trigger paths invoke the shared instance.
+    onUncaughtException();
+    onUnhandledRejection();
+
+    await vi.waitFor(() => expect(exit).toHaveBeenCalled());
+
+    expect(cleanup).toHaveBeenCalledOnce();
+    expect(exit).toHaveBeenCalledExactlyOnceWith(1);
   });
 });

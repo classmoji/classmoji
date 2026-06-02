@@ -16,6 +16,12 @@ describe('RoomStateStore', () => {
     expect(store.get('slide-1')).toEqual({ indexh: 2, indexv: 0 });
   });
 
+  it('stores and returns a fragmentIndex alongside the slide position', () => {
+    const store = new RoomStateStore();
+    store.set('slide-1', { indexh: 4, indexv: 1, fragmentIndex: 3 });
+    expect(store.get('slide-1')).toEqual({ indexh: 4, indexv: 1, fragmentIndex: 3 });
+  });
+
   it('keeps state while viewers remain', () => {
     const store = new RoomStateStore();
     store.set('slide-1', { indexh: 1, indexv: 1 });
@@ -34,6 +40,23 @@ describe('RoomStateStore', () => {
 
     expect(store.get('slide-1')).toBeUndefined();
     expect(store.size).toBe(0);
+  });
+
+  it('survives a re-join after the room was evicted', () => {
+    const store = new RoomStateStore();
+
+    // First session: someone presents, then the last viewer leaves -> evicted.
+    store.set('slide-1', { indexh: 1, indexv: 1 });
+    store.releaseIfEmpty('slide-1', 0);
+    expect(store.get('slide-1')).toBeUndefined();
+
+    // Re-join: a new session sets position again; while viewers remain the
+    // store must retain it so the next late joiner can catch up.
+    store.set('slide-1', { indexh: 5, indexv: 2, fragmentIndex: 1 });
+    store.releaseIfEmpty('slide-1', 2);
+
+    expect(store.get('slide-1')).toEqual({ indexh: 5, indexv: 2, fragmentIndex: 1 });
+    expect(store.size).toBe(1);
   });
 
   it('does not grow unbounded across many short-lived rooms', () => {

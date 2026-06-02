@@ -4,8 +4,15 @@ import { runBackgroundTask } from '../backgroundTask.server';
 // A rejected fire-and-forget task must never surface as an unhandledRejection,
 // which the global handler turns into a process exit.
 describe('runBackgroundTask', () => {
+  // Tag-scoped listener: only count rejections this test deliberately produces,
+  // so a foreign rejection leaking from another test can never flake us.
+  const TAG = '__backgroundTask_test__';
   let unhandled: unknown[];
-  const record = (reason: unknown) => unhandled.push(reason);
+  const record = (reason: unknown) => {
+    if (reason instanceof Error && reason.message.includes(TAG)) {
+      unhandled.push(reason);
+    }
+  };
 
   beforeEach(() => {
     unhandled = [];
@@ -17,29 +24,33 @@ describe('runBackgroundTask', () => {
     vi.restoreAllMocks();
   });
 
-  const flush = () => new Promise(resolve => setTimeout(resolve, 10));
+  // Deterministic settle: wait until the suppression console.error has fired (or
+  // the success spy has run), then flush the microtask queue once more so any
+  // would-be unhandledRejection has had its chance to be emitted.
+  const microtaskFlush = () => new Promise<void>(resolve => queueMicrotask(() => resolve()));
 
   it('does not emit an unhandledRejection when the task rejects', async () => {
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
 
     runBackgroundTask('test', async () => {
-      throw new Error('background DB write failed');
+      throw new Error(`${TAG} background DB write failed`);
     });
 
-    await flush();
+    await vi.waitFor(() => expect(errorSpy).toHaveBeenCalled());
+    await microtaskFlush();
 
     expect(unhandled).toHaveLength(0);
-    expect(errorSpy).toHaveBeenCalled();
   });
 
   it('does not emit an unhandledRejection when a synchronous throw occurs', async () => {
-    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
 
     runBackgroundTask('test', () => {
-      throw new Error('synchronous boom');
+      throw new Error(`${TAG} synchronous boom`);
     });
 
-    await flush();
+    await vi.waitFor(() => expect(errorSpy).toHaveBeenCalled());
+    await microtaskFlush();
 
     expect(unhandled).toHaveLength(0);
   });
@@ -48,9 +59,10 @@ describe('runBackgroundTask', () => {
     const work = vi.fn(async () => {});
 
     runBackgroundTask('test', work);
-    await flush();
 
-    expect(work).toHaveBeenCalledOnce();
+    await vi.waitFor(() => expect(work).toHaveBeenCalledOnce());
+    await microtaskFlush();
+
     expect(unhandled).toHaveLength(0);
   });
 });
