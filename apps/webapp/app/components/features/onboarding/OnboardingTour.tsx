@@ -47,7 +47,7 @@ const LANDING_STEPS: NonNullable<TourProps['steps']> = [
   {
     title: 'Import an existing course',
     description:
-      'Already taught a course in Classmoji? Start a new classroom from a previous one and bring its modules along. Imported content arrives with deadlines stripped and modules unpublished, so you can reuse coursework without exposing anything to students until you are ready.',
+      'Already taught a course in Classmoji? Start a new classroom from a previous one and bring its repositories along. Imported content arrives with deadlines stripped and repositories unpublished, so you can reuse coursework without exposing anything to students until you are ready.',
     target: target('import'),
     placement: 'bottom',
   },

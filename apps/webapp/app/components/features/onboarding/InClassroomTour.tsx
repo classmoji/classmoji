@@ -56,18 +56,18 @@ const OWNER_STEPS: FeatureStep[] = [
       'These cards give you the health of the course in one look: how many students are enrolled, the submission rate, how much work is late, and how much grading is still left. They update as students submit and you grade, so you can spot problems early.',
   },
   {
-    link: '/modules',
-    title: 'Modules',
+    link: '/repos',
+    title: 'Repositories',
     description:
-      'Modules are the units of coursework in your class, such as a lab, a project, or a weekly problem set. Each module is backed by a GitHub repository created from a template, and when you publish it Classmoji copies that repo to every student, or every team for group work.',
+      'Repositories are the units of coursework in your class, such as a lab, a project, or a weekly problem set. Each one is created from a GitHub template repository, and when you publish it Classmoji copies that repo to every student, or every team for group work.',
   },
   {
-    link: '/modules',
-    selector: '[data-tour="modules-new"]',
+    link: '/repos',
+    selector: '[data-tour="repos-new"]',
     placement: 'bottom',
-    title: 'Create a module',
+    title: 'Create a repository',
     description:
-      'Use New module to add a unit of work backed by a template repository. The assignments inside become GitHub issues that Classmoji opens in each student’s copy of the repo, and you control release dates, due dates, and weighting per assignment.',
+      'Use New repository to add a unit of work from a template. The assignments inside become GitHub issues that Classmoji opens in each student’s copy of the repo, and you control release dates, due dates, and weighting per assignment.',
   },
   {
     link: '/students',
@@ -87,19 +87,19 @@ const OWNER_STEPS: FeatureStep[] = [
     link: '/teams',
     title: 'Teams for group work',
     description:
-      'Teams let you run group projects instead of individual work. A group module gives each team a single shared repository rather than one repo per student, and you can assign teams yourself or let students form their own, plus set a maximum team size.',
+      'Teams let you run group projects instead of individual work. A group repository gives each team a single shared repo rather than one per student, and you can assign teams yourself or let students form their own, plus set a maximum team size.',
   },
   {
     link: '/assistants',
     title: 'Teaching assistants',
     description:
-      'Assistants help you run and grade the class. You add a TA by GitHub username, then assign them specific submissions to grade from the module view. This spreads grading across your staff so it scales even in a large course.',
+      'Assistants help you run and grade the class. You add a TA by GitHub username, then assign them specific submissions to grade from the repository view. This spreads grading across your staff so it scales even in a large course.',
   },
   {
     link: '/grades',
     title: 'The gradebook',
     description:
-      'The Grades page is a full gradebook with students as rows and assignments as columns. Grades are hidden from students by default and released per assignment when you are ready, and assignment grades roll up into module grades and a final grade using the weighting you configure.',
+      'The Grades page is a full gradebook with students as rows and assignments as columns. Grades are hidden from students by default and released per assignment when you are ready, and assignment grades roll up into repository grades and a final grade using the weighting you configure.',
   },
   {
     link: '/grades',
@@ -127,7 +127,7 @@ const OWNER_STEPS: FeatureStep[] = [
     link: '/calendar',
     title: 'Course calendar',
     description:
-      'The calendar holds your course schedule in one place: lectures, labs, office hours, and assessments. It gives you and your students a shared view of what is happening and when, alongside the deadlines coming from your modules.',
+      'The calendar holds your course schedule in one place: lectures, labs, office hours, and assessments. It gives you and your students a shared view of what is happening and when, alongside the deadlines coming from your repositories.',
   },
   {
     link: '/calendar',
@@ -144,10 +144,10 @@ const OWNER_STEPS: FeatureStep[] = [
       'Pages are course material you write and publish for students, such as the syllabus, lecture notes, assignment specs, or reference guides. They are served through GitHub Pages, so your content lives in the same Git-native setup as the rest of the class.',
   },
   {
-    link: '/repositories',
-    title: 'Repositories',
+    link: '/gitrepos',
+    title: 'GitHub repos',
     description:
-      'This page mirrors every student and team repository created from your published modules, pulled from your GitHub organization, so you can jump to any repo and confirm copies were created. This example course uses mock data with no real GitHub org, so the list here is empty.',
+      'This page mirrors every student and team repository created from your published coursework, pulled from your GitHub organization, so you can jump to any repo and confirm copies were created. This example course uses mock data with no real GitHub org, so the list here is empty.',
   },
   {
     link: '/repo-health',
@@ -159,7 +159,7 @@ const OWNER_STEPS: FeatureStep[] = [
     link: '/settings/general',
     title: 'Class settings',
     description:
-      'Settings is where you tune how the class works: the emoji-to-number grade scale and letter-grade ranges, the token cost per hour of extension, late penalties, team formation rules, and more. These choices drive grading and deadlines across every module.',
+      'Settings is where you tune how the class works: the emoji-to-number grade scale and letter-grade ranges, the token cost per hour of extension, late penalties, team formation rules, and more. These choices drive grading and deadlines across every repository.',
   },
   {
     link: '/settings/general',
@@ -177,7 +177,7 @@ const OWNER_STEPS: FeatureStep[] = [
   {
     title: 'That’s the instructor side',
     description:
-      'You have seen how an instructor sets up modules, grades with emoji, manages the roster, and runs the class. Next we will reopen the same example course as a student so you can see exactly what your students see. Click Next to switch.',
+      'You have seen how an instructor sets up repositories, grades with emoji, manages the roster, and runs the class. Next we will reopen the same example course as a student so you can see exactly what your students see. Click Next to switch.',
   },
 ];
 
@@ -194,27 +194,27 @@ const STUDENT_STEPS: FeatureStep[] = [
     placement: 'bottom',
     title: 'What’s next',
     description:
-      'This spotlight highlights your current module and what is coming up next so you always know what to work on. It saves you from hunting through every module to find the next thing due.',
+      'This spotlight highlights your current repository and what is coming up next so you always know what to work on. It saves you from hunting through every repo to find the next thing due.',
   },
   {
-    link: '/modules',
-    title: 'Your modules',
+    link: '/repos',
+    title: 'Your repositories',
     description:
-      'Modules are the units of coursework in the class, like labs, projects, and problem sets. Each module is backed by your own GitHub repository, and the assignments inside it are GitHub issues you complete in that repo.',
+      'Repositories are the units of coursework in the class, like labs, projects, and problem sets. Each one is your own GitHub repository, and the assignments inside it are GitHub issues you complete in that repo.',
   },
   {
-    link: '/modules',
-    selector: '[data-tour="modules-card"]',
+    link: '/repos',
+    selector: '[data-tour="repos-card"]',
     placement: 'bottom',
-    title: 'Inside a module',
+    title: 'Inside a repository',
     description:
-      'Each module is one of your GitHub repositories of coursework. Expand a module to see its assignments and the resources your instructor attached, track how far along you are, then open the repo to start working.',
+      'Each repository is one of your coursework repos. Expand it to see its assignments and the resources your instructor attached, track how far along you are, then open the repo to start working.',
   },
   {
     link: '/assignments',
     title: 'Assignments',
     description:
-      'This page lists all of your assignments across every module in one place. Each assignment is a GitHub issue in your repo, with a due date and its current status, so you can see everything you owe without opening each module separately.',
+      'This page lists all of your assignments across every repository in one place. Each assignment is a GitHub issue in your repo, with a due date and its current status, so you can see everything you owe without opening each repo separately.',
   },
   {
     link: '/assignments',
