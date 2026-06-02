@@ -68,6 +68,7 @@ export function ClassroomsLandingScreen({
   membershipRoles,
 }: Props) {
   const [view, setView] = useState<'grid' | 'list'>('grid');
+  const [tourSpin, setTourSpin] = useState(false);
 
   const [archivedExpanded, setArchivedExpanded] = useState(false);
 
@@ -269,8 +270,21 @@ export function ClassroomsLandingScreen({
           </div>
           <div className="flex flex-wrap gap-2">
             {tourAvailable && onTakeTour && (
-              <Button data-onboarding="take-tour" onClick={onTakeTour}>
-                <IconRoute size={14} /> Take a tour
+              <Button
+                data-onboarding="take-tour"
+                className="cm-take-tour"
+                onClick={() => {
+                  setTourSpin(true);
+                  // Let the icon spin briefly before the tour mask covers the page.
+                  window.setTimeout(() => onTakeTour?.(), 350);
+                }}
+              >
+                <IconRoute
+                  size={14}
+                  className={tourSpin ? 'cm-route-spin' : ''}
+                  onAnimationEnd={() => setTourSpin(false)}
+                />{' '}
+                Take a tour
               </Button>
             )}
             <Button data-onboarding="import">

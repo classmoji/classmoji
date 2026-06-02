@@ -1323,3 +1323,22 @@ html[data-theme='dark'] .bar .fill.done {
     inset-inline-start 0.4s cubic-bezier(0.22, 1, 0.36, 1),
     inset-inline-end 0.4s cubic-bezier(0.22, 1, 0.36, 1);
 }
+
+/* "Take a tour" button: lift the route icon on hover, spin it on click. */
+.cm-take-tour svg {
+  transition: transform 0.2s ease;
+}
+.cm-take-tour:hover svg {
+  transform: scale(1.18) rotate(-8deg);
+}
+@keyframes cm-route-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+.cm-route-spin {
+  animation: cm-route-spin 0.45s cubic-bezier(0.22, 1, 0.36, 1);
+}
