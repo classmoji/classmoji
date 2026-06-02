@@ -159,7 +159,7 @@ const OWNER_STEPS: FeatureStep[] = [
     link: '/teams',
     title: 'Teams for group work',
     description:
-      'Teams let you run group projects instead of individual work. A group repository gives each team a single shared repo rather than one per student, and you can assign teams yourself or let students form their own, plus set a maximum team size.',
+      'Teams let you run group projects instead of individual work. A group repository gives each team a single shared repo instead of one per student, and you can assign teams yourself or let students form their own, plus set a maximum team size.',
   },
   {
     link: '/teams',
