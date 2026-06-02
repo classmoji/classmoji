@@ -283,9 +283,17 @@ test.describe('Security Edge Cases', () => {
     }
   });
 
-  test('test-login route only works in development', async ({ page }) => {
+  test('test-login route logs in and redirects away in development', async ({ page }) => {
+    // The test-login route is guarded by `NODE_ENV !== 'development'` (it throws
+    // a 404 Response in production — see app/routes/test-login/route.tsx). That
+    // prod branch cannot be exercised against the dev server this suite runs on,
+    // so here we assert the dev behaviour: a successful login redirects off the
+    // /test-login URL rather than rendering it.
     await page.goto('/test-login?role=owner');
 
     expect(page.url()).not.toContain('test-login');
+
+    const cookies = await page.context().cookies();
+    expect(cookies.find(c => c.name === 'classmoji.session_token')).toBeTruthy();
   });
 });

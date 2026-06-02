@@ -158,6 +158,7 @@ multiplex.on('connection', socket => {
 
       if (!slide) {
         console.log(`[multiplex] Slide ${slideId} not found`);
+        socket.emit('join_error', { reason: 'slide_not_found' });
         return;
       }
 
@@ -167,6 +168,7 @@ multiplex.on('connection', socket => {
         if (slide.multiplex_id !== data.shareCode) {
           console.log(`[multiplex] Invalid shareCode for slide ${slideId}`);
           socket.emit('error', { message: 'Invalid share code' });
+          socket.emit('join_error', { reason: 'invalid_share_code' });
           return;
         }
         // Public follower - can join but not broadcast
@@ -181,17 +183,23 @@ multiplex.on('connection', socket => {
           console.log(
             `[multiplex] User ${data.user.login} not a member of classroom ${slide.classroom_id}`
           );
+          socket.emit('join_error', { reason: 'not_a_member' });
           return;
         }
 
         data.canBroadcast = membership.role === 'OWNER' || membership.role === 'TEACHER';
       } else {
         // No auth at all
+        socket.emit('join_error', { reason: 'unauthenticated' });
         return;
       }
 
       socket.join(slideId);
       data.slideId = slideId;
+
+      // Per-socket ack so clients can resolve their own join deterministically
+      // (the room-wide `viewercount` below can be triggered by other clients).
+      socket.emit('joined', { slideId, canBroadcast: data.canBroadcast });
 
       console.log(
         `[multiplex] ${data.user?.login || 'anonymous'} joined ${slideId} (canBroadcast: ${data.canBroadcast})`

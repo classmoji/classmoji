@@ -31,6 +31,7 @@ export {
   connectMultiplex,
   joinRoom,
   waitForEvent,
+  expectNoEvent,
   closeSocket,
   cookieHeaderFromContext,
   type SlideChangedEvent,

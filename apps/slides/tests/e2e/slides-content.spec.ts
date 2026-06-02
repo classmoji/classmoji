@@ -158,29 +158,30 @@ test.describe('Slides Content & Styling', () => {
     await page.waitForTimeout(100);
 
     await page.click('button:has-text("B")');
-    await page.waitForTimeout(300);
 
-    // The editor may use <strong>, <b>, or a CSS font-weight.
-    const boldElement = page
-      .locator(
-        'section.present[contenteditable="true"] strong, section.present[contenteditable="true"] b'
+    // Bold must produce a concrete outcome: a semantic <strong>/<b> on the
+    // selected run, OR a computed font-weight >= 600 on the text run. If
+    // neither holds, the formatting was a no-op and the test must fail.
+    await expect
+      .poll(
+        async () => {
+          const hasSemantic =
+            (await page
+              .locator(
+                'section.present[contenteditable="true"] strong, section.present[contenteditable="true"] b'
+              )
+              .count()) > 0;
+          if (hasSemantic) return true;
+          return slideContent.evaluate(el => {
+            const text = el.querySelector('p, span, div');
+            if (!text) return false;
+            const style = window.getComputedStyle(text);
+            return parseInt(style.fontWeight, 10) >= 600 || style.fontWeight === 'bold';
+          });
+        },
+        { timeout: 3000, message: 'bold formatting produced neither a semantic tag nor font-weight>=600' }
       )
-      .first();
-    const hasBoldElement = (await boldElement.count()) > 0;
-
-    if (hasBoldElement) {
-      await expect(boldElement).toBeVisible();
-    } else {
-      const isBold = await slideContent.evaluate(el => {
-        const text = el.querySelector('p, span, div');
-        if (text) {
-          const style = window.getComputedStyle(text);
-          return parseInt(style.fontWeight) >= 700 || style.fontWeight === 'bold';
-        }
-        return false;
-      });
-      expect(isBold).toBe(true);
-    }
+      .toBe(true);
   });
 
   test('can apply italic formatting', async ({ page }) => {
@@ -202,28 +203,27 @@ test.describe('Slides Content & Styling', () => {
     await page.waitForTimeout(100);
 
     await page.click('button:has-text("I")');
-    await page.waitForTimeout(300);
 
-    const italicElement = page
-      .locator(
-        'section.present[contenteditable="true"] em, section.present[contenteditable="true"] i'
+    // Italic must produce a semantic <em>/<i> OR computed font-style: italic.
+    await expect
+      .poll(
+        async () => {
+          const hasSemantic =
+            (await page
+              .locator(
+                'section.present[contenteditable="true"] em, section.present[contenteditable="true"] i'
+              )
+              .count()) > 0;
+          if (hasSemantic) return true;
+          return slideContent.evaluate(el => {
+            const text = el.querySelector('p, span, div');
+            if (!text) return false;
+            return window.getComputedStyle(text).fontStyle === 'italic';
+          });
+        },
+        { timeout: 3000, message: 'italic formatting produced neither a semantic tag nor font-style:italic' }
       )
-      .first();
-    const hasItalicElement = (await italicElement.count()) > 0;
-
-    if (hasItalicElement) {
-      await expect(italicElement).toBeVisible();
-    } else {
-      const isItalic = await slideContent.evaluate(el => {
-        const text = el.querySelector('p, span, div');
-        if (text) {
-          const style = window.getComputedStyle(text);
-          return style.fontStyle === 'italic';
-        }
-        return false;
-      });
-      expect(isItalic).toBe(true);
-    }
+      .toBe(true);
   });
 
   test('can apply underline formatting', async ({ page }) => {
@@ -245,24 +245,23 @@ test.describe('Slides Content & Styling', () => {
     await page.waitForTimeout(100);
 
     await page.click('button:has-text("U")');
-    await page.waitForTimeout(300);
 
-    const underlineElement = page.locator('section.present[contenteditable="true"] u').first();
-    const hasUnderlineElement = (await underlineElement.count()) > 0;
-
-    if (hasUnderlineElement) {
-      await expect(underlineElement).toBeVisible();
-    } else {
-      const hasUnderline = await slideContent.evaluate(el => {
-        const text = el.querySelector('p, span, div');
-        if (text) {
-          const style = window.getComputedStyle(text);
-          return style.textDecoration.includes('underline');
-        }
-        return false;
-      });
-      expect(hasUnderline).toBe(true);
-    }
+    // Underline must produce a semantic <u> OR computed underline decoration.
+    await expect
+      .poll(
+        async () => {
+          const hasSemantic =
+            (await page.locator('section.present[contenteditable="true"] u').count()) > 0;
+          if (hasSemantic) return true;
+          return slideContent.evaluate(el => {
+            const text = el.querySelector('p, span, div');
+            if (!text) return false;
+            return window.getComputedStyle(text).textDecoration.includes('underline');
+          });
+        },
+        { timeout: 3000, message: 'underline formatting produced neither a <u> tag nor underline decoration' }
+      )
+      .toBe(true);
   });
 
   test('can apply strikethrough formatting', async ({ page }) => {
@@ -284,28 +283,28 @@ test.describe('Slides Content & Styling', () => {
     await page.waitForTimeout(100);
 
     await page.click('button:has-text("S")');
-    await page.waitForTimeout(300);
 
-    const strikethroughElement = page
-      .locator(
-        'section.present[contenteditable="true"] s, section.present[contenteditable="true"] del, section.present[contenteditable="true"] strike'
+    // Strikethrough must produce a semantic <s>/<del>/<strike> OR a computed
+    // line-through decoration.
+    await expect
+      .poll(
+        async () => {
+          const hasSemantic =
+            (await page
+              .locator(
+                'section.present[contenteditable="true"] s, section.present[contenteditable="true"] del, section.present[contenteditable="true"] strike'
+              )
+              .count()) > 0;
+          if (hasSemantic) return true;
+          return slideContent.evaluate(el => {
+            const text = el.querySelector('p, span, div');
+            if (!text) return false;
+            return window.getComputedStyle(text).textDecoration.includes('line-through');
+          });
+        },
+        { timeout: 3000, message: 'strikethrough produced neither a semantic tag nor line-through decoration' }
       )
-      .first();
-    const hasStrikethroughElement = (await strikethroughElement.count()) > 0;
-
-    if (hasStrikethroughElement) {
-      await expect(strikethroughElement).toBeVisible();
-    } else {
-      const hasStrikethrough = await slideContent.evaluate(el => {
-        const text = el.querySelector('p, span, div');
-        if (text) {
-          const style = window.getComputedStyle(text);
-          return style.textDecoration.includes('line-through');
-        }
-        return false;
-      });
-      expect(hasStrikethrough).toBe(true);
-    }
+      .toBe(true);
   });
 
   test('content persists after save and reload', async ({ page }) => {

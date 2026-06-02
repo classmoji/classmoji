@@ -68,27 +68,52 @@ export function connectMultiplex(opts: ConnectOptions = {}): Promise<Socket> {
   });
 }
 
+interface JoinedAck {
+  slideId: string;
+  canBroadcast: boolean;
+}
+
 /**
- * Emit `join` for a slide room and wait until the join has been acknowledged.
+ * Emit `join` for a slide room and wait until *this* socket's join has been
+ * acknowledged.
  *
- * The server has no explicit join ack, but it emits a `viewercount` to the
- * room on every join. We resolve on the first `viewercount` (or `error`) we
- * see after emitting, which proves the server processed our join.
+ * The server emits a per-socket `joined` ack on success, and a `join_error`
+ * (with a `reason`) on every silent-reject path (slide not found, invalid
+ * share code, non-member, unauthenticated). We resolve on `joined` and reject
+ * fast on `join_error` — we deliberately do NOT resolve on `viewercount`,
+ * which is a room-wide broadcast that another client's join can trigger and
+ * which is never emitted on the reject paths (so it would hang the timeout).
  */
-export function joinRoom(socket: Socket, slideId: string): Promise<{ count: number }> {
+export function joinRoom(socket: Socket, slideId: string): Promise<JoinedAck> {
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
+      cleanup();
       reject(new Error(`Timed out joining slide room ${slideId}`));
     }, 10_000);
 
-    socket.once('viewercount', (payload: { count: number }) => {
-      clearTimeout(timer);
+    const onJoined = (payload: JoinedAck) => {
+      cleanup();
       resolve(payload);
-    });
-    socket.once('error', (payload: { message?: string }) => {
-      clearTimeout(timer);
+    };
+    const onJoinError = (payload: { reason?: string }) => {
+      cleanup();
+      reject(new Error(`Server rejected join: ${payload?.reason ?? 'unknown'}`));
+    };
+    const onError = (payload: { message?: string }) => {
+      cleanup();
       reject(new Error(`Server rejected join: ${payload?.message ?? 'unknown error'}`));
-    });
+    };
+
+    function cleanup() {
+      clearTimeout(timer);
+      socket.off('joined', onJoined);
+      socket.off('join_error', onJoinError);
+      socket.off('error', onError);
+    }
+
+    socket.once('joined', onJoined);
+    socket.once('join_error', onJoinError);
+    socket.once('error', onError);
 
     socket.emit('join', { slideId });
   });
@@ -110,6 +135,32 @@ export function waitForEvent<T = unknown>(
       clearTimeout(timer);
       resolve(payload);
     });
+  });
+}
+
+/**
+ * Assert that a given event is NOT received within `windowMs`. Resolves if the
+ * window elapses with no event, rejects if the event arrives. Used to prove
+ * the server suppresses a broadcast (e.g. a follower's `slidechanged`) or that
+ * room state was evicted (no `currentstate` on a fresh join).
+ */
+export function expectNoEvent(
+  socket: Socket,
+  event: string,
+  windowMs = 1_500
+): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    const onEvent = (payload: unknown) => {
+      clearTimeout(timer);
+      reject(
+        new Error(`Expected NO "${event}" but received: ${JSON.stringify(payload)}`)
+      );
+    };
+    const timer = setTimeout(() => {
+      socket.off(event, onEvent);
+      resolve();
+    }, windowMs);
+    socket.on(event, onEvent);
   });
 }
 

@@ -94,7 +94,6 @@ test.describe('Slides Theme Switching', () => {
       .filter({ hasText: 'Presentation Themes' });
     const themeSelect = themesSection.locator('.ant-select').first();
     await themeSelect.click();
-    await page.waitForTimeout(300);
 
     await expect(page.locator('.ant-select-dropdown')).toBeVisible();
   });
@@ -111,16 +110,16 @@ test.describe('Slides Theme Switching', () => {
       .filter({ hasText: 'Presentation Themes' });
     const themeDropdown = themesSection.locator('.ant-select').first();
     await themeDropdown.click();
-    await page.waitForTimeout(200);
 
     // Ant Design renders options in a portal.
     const blackOption = page.locator(
       '.ant-select-dropdown .ant-select-item-option-content:has-text("Black")'
     );
+    await expect(blackOption).toBeVisible();
     await blackOption.click();
-    await page.waitForTimeout(500);
 
-    // The editor sets data-theme on the .reveal container when the theme changes.
+    // The editor sets data-theme on the .reveal container when the theme
+    // changes; toHaveAttribute auto-retries until it applies.
     const reveal = page.locator('.reveal');
     await expect(reveal).toHaveAttribute('data-theme', 'black');
     await expect(reveal).toBeVisible();
@@ -138,13 +137,12 @@ test.describe('Slides Theme Switching', () => {
       .filter({ hasText: 'Presentation Themes' });
     const themeDropdown = themesSection.locator('.ant-select').first();
     await themeDropdown.click();
-    await page.waitForTimeout(200);
 
     const whiteOption = page.locator(
       '.ant-select-dropdown .ant-select-item-option-content:has-text("White")'
     );
+    await expect(whiteOption).toBeVisible();
     await whiteOption.click();
-    await page.waitForTimeout(500);
 
     const reveal = page.locator('.reveal');
     await expect(reveal).toHaveAttribute('data-theme', 'white');
@@ -163,7 +161,6 @@ test.describe('Slides Theme Switching', () => {
       .filter({ hasText: 'Presentation Themes' });
     const themeDropdown = themesSection.locator('.ant-select').first();
     await themeDropdown.click();
-    await page.waitForTimeout(200);
 
     // Night is near the bottom of the list, so scroll the dropdown into view.
     const dropdown = page.locator('.ant-select-dropdown');
@@ -172,13 +169,12 @@ test.describe('Slides Theme Switching', () => {
     await dropdown.locator('.rc-virtual-list-holder').evaluate(el => {
       el.scrollTop = el.scrollHeight;
     });
-    await page.waitForTimeout(200);
 
     const nightOption = page.locator(
       '.ant-select-dropdown .ant-select-item-option-content:has-text("Night")'
     );
+    await expect(nightOption).toBeVisible();
     await nightOption.click();
-    await page.waitForTimeout(500);
 
     const reveal = page.locator('.reveal');
     await expect(reveal).toHaveAttribute('data-theme', 'night');
@@ -202,17 +198,22 @@ test.describe('Slides Theme Switching', () => {
     // Code Theme is the second .ant-select in the Themes section.
     const codeThemeDropdown = themesSection.locator('.ant-select').nth(1);
     await codeThemeDropdown.click();
-    await page.waitForTimeout(200);
 
     const githubDark = page.locator(
       '.ant-select-dropdown .ant-select-item-option-content:has-text("GitHub Dark")'
     );
-    if (await githubDark.isVisible()) {
-      await githubDark.click();
-    } else {
-      await page.keyboard.press('Escape');
-    }
-    await page.waitForTimeout(300);
+    // GitHub Dark is a built-in code theme that must always be offered.
+    await expect(githubDark).toBeVisible();
+    await githubDark.click();
+
+    // The editor mirrors the selected code theme onto the .reveal container as
+    // data-code-theme (RevealSlides.tsx). Assert that concrete post-state
+    // rather than treating a missing option as a pass.
+    await expect(page.locator('.reveal')).toHaveAttribute('data-code-theme', 'github-dark');
+    // Selection is reflected in the dropdown's displayed value too.
+    await expect(codeThemeDropdown.locator('.ant-select-selection-item')).toContainText(
+      /GitHub Dark/i
+    );
   });
 
   test('theme persists after save and reload', async ({ page }) => {
@@ -227,18 +228,17 @@ test.describe('Slides Theme Switching', () => {
       .filter({ hasText: 'Presentation Themes' });
     const themeDropdown = themesSection.locator('.ant-select').first();
     await themeDropdown.click();
-    await page.waitForTimeout(200);
 
     const beigeOption = page.locator(
       '.ant-select-dropdown .ant-select-item-option-content:has-text("Beige")'
     );
+    await expect(beigeOption).toBeVisible();
     await beigeOption.click();
-    await page.waitForTimeout(500);
+    await expect(page.locator('.reveal')).toHaveAttribute('data-theme', 'beige');
 
     await saveSlide(page);
 
     await viewSlide(page, testSlideId);
-    await page.waitForTimeout(500);
     await editSlide(page, testSlideId);
 
     await expect(page.locator('.properties-sidebar')).toBeVisible({ timeout: 10000 });
@@ -268,14 +268,29 @@ test.describe('Slides Theme Switching', () => {
       .filter({ hasText: 'Presentation Themes' });
     const themeDropdown = themesSection.locator('.ant-select').first();
     await themeDropdown.click();
-    await page.waitForTimeout(200);
 
-    // Shared themes are prefixed with 📦.
+    // Shared themes are prefixed with 📦. They are sourced from GitHub theme
+    // folders server-side (route.tsx loader), not from the test DB, so they
+    // cannot be deterministically seeded here. If none are present we skip
+    // with an explicit, logged reason rather than silently passing.
+    await expect(page.locator('.ant-select-dropdown')).toBeVisible();
     const sharedThemeOptions = page.locator('[role="option"]:has-text("📦")');
     const count = await sharedThemeOptions.count();
 
-    if (count > 0) {
-      await expect(sharedThemeOptions.first()).toBeVisible();
+    if (count === 0) {
+      await page.keyboard.press('Escape');
+      test.skip(
+        true,
+        'No shared (📦) themes available in this environment (sourced from GitHub theme repos, not seeded). Skipping shared-theme assertion.'
+      );
+      return;
+    }
+
+    // When shared themes ARE available, every 📦-prefixed option must render
+    // with the emoji prefix and be visible/selectable.
+    expect(count).toBeGreaterThan(0);
+    for (let i = 0; i < count; i++) {
+      await expect(sharedThemeOptions.nth(i)).toContainText('📦');
     }
 
     await page.keyboard.press('Escape');

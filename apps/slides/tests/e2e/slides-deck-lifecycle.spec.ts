@@ -91,7 +91,9 @@ test.describe('Slides deck lifecycle', () => {
     await expect(page.locator('.reveal .slides')).toBeVisible();
     await expect(page.locator('section.present[contenteditable="true"]')).toHaveCount(0);
 
-    await expect(page.getByText('Press S for speaker view')).toBeVisible();
+    // Assert a stable signal that we are in present mode: the route is
+    // /<slideId>/present (rather than relying on translatable helper copy).
+    await expect(page).toHaveURL(/\/present(\?|$)/);
   });
 
   test('a shared deck can be opened via its public follow link', async ({ browser }) => {
