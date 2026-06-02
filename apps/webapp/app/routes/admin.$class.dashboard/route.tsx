@@ -108,18 +108,22 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
     githubOrganization,
   };
 };
-const statsContainerVariants = {
-  hidden: {},
-  show: { transition: { staggerChildren: 0.08, delayChildren: 0.05 } },
-};
-
-const statItemVariants = {
-  hidden: { opacity: 0, y: 14 },
-  show: { opacity: 1, y: 0, transition: { duration: 0.65, ease: EASE_OUT_QUINT } },
-};
+// Larger classes count up a touch faster; clamped so it never snaps instantly.
+const STATS_DURATION_BASE = 1.9;
+const STATS_DURATION_MIN = 1.3;
+const statsDurationFor = (studentCount: number) =>
+  Math.max(STATS_DURATION_MIN, STATS_DURATION_BASE - studentCount * 0.01);
 
 // Counts a number up from 0 to `value` on mount; static when reduced motion is on.
-const AnimatedNumber = ({ value, suffix }: { value: number; suffix?: string }) => {
+const AnimatedNumber = ({
+  value,
+  suffix,
+  duration = STATS_DURATION_BASE,
+}: {
+  value: number;
+  suffix?: string;
+  duration?: number;
+}) => {
   const reduced = useReducedMotion();
   const [display, setDisplay] = useState(reduced ? value : 0);
 
@@ -129,12 +133,12 @@ const AnimatedNumber = ({ value, suffix }: { value: number; suffix?: string }) =
       return;
     }
     const controls = animate(0, value, {
-      duration: 1.4,
+      duration,
       ease: EASE_OUT_QUINT,
       onUpdate: latest => setDisplay(Math.round(latest)),
     });
     return () => controls.stop();
-  }, [value, reduced]);
+  }, [value, reduced, duration]);
 
   return (
     <>
@@ -151,20 +155,18 @@ interface StatItemProps {
   subtitle?: string;
   valueColor?: string;
   accent?: React.ReactNode;
+  duration?: number;
 }
 
-const StatItem = ({ label, value, suffix, subtitle, valueColor, accent }: StatItemProps) => (
-  <motion.div
-    variants={statItemVariants}
-    className="flex-1 min-w-0 flex items-start justify-between gap-3 px-4 sm:px-5 py-4"
-  >
+const StatItem = ({ label, value, suffix, subtitle, valueColor, accent, duration }: StatItemProps) => (
+  <div className="flex-1 min-w-0 flex items-start justify-between gap-3 px-4 sm:px-5 py-4">
     <div className="min-w-0">
       <div className="text-xs font-medium text-ink-3">{label}</div>
       <div
         className="mt-1 text-2xl sm:text-3xl font-semibold tracking-tight leading-tight"
         style={valueColor ? { color: valueColor } : undefined}
       >
-        <AnimatedNumber value={value} suffix={suffix} />
+        <AnimatedNumber value={value} suffix={suffix} duration={duration} />
       </div>
       {subtitle && (
         <div className="mt-0.5 text-xs text-ink-3 truncate">
@@ -173,10 +175,18 @@ const StatItem = ({ label, value, suffix, subtitle, valueColor, accent }: StatIt
       )}
     </div>
     {accent && <div className="shrink-0 self-center">{accent}</div>}
-  </motion.div>
+  </div>
 );
 
-const RingChart = ({ pct, color }: { pct: number; color: string }) => {
+const RingChart = ({
+  pct,
+  color,
+  duration = STATS_DURATION_BASE,
+}: {
+  pct: number;
+  color: string;
+  duration?: number;
+}) => {
   const reduced = useReducedMotion();
   const size = 44;
   const stroke = 5;
@@ -205,7 +215,7 @@ const RingChart = ({ pct, color }: { pct: number; color: string }) => {
         strokeDasharray={c}
         initial={reduced ? false : { strokeDashoffset: c }}
         animate={{ strokeDashoffset: c - dash }}
-        transition={reduced ? undefined : { duration: 1.3, ease: EASE_OUT_QUINT, delay: 0.25 }}
+        transition={reduced ? undefined : { duration, ease: EASE_OUT_QUINT }}
         transform={`rotate(-90 ${size / 2} ${size / 2})`}
       />
     </svg>
@@ -215,7 +225,6 @@ const RingChart = ({ pct, color }: { pct: number; color: string }) => {
 const AdminDashboard = ({ loaderData }: Route.ComponentProps) => {
   const { data, analytics, githubOrganization } = loaderData;
   const { class: classSlug } = useParams();
-  const reducedMotion = useReducedMotion();
   const [bannerDismissed, setBannerDismissed] = useState(false);
 
   const showBanner =
@@ -273,37 +282,44 @@ const AdminDashboard = ({ loaderData }: Route.ComponentProps) => {
               ? `${lateRepoAssignments} late submission${lateRepoAssignments === 1 ? '' : 's'}`
               : 'no late submissions';
 
+            const statsDuration = statsDurationFor(students?.length || 0);
+
             return (
               <>
-                <motion.div
+                <div
                   data-tour="dashboard-stats"
-                  variants={reducedMotion ? undefined : statsContainerVariants}
-                  initial={reducedMotion ? false : 'hidden'}
-                  animate={reducedMotion ? false : 'show'}
                   className="rounded-2xl bg-panel ring-1 ring-line overflow-hidden flex flex-col sm:flex-row divide-y sm:divide-y-0 sm:divide-x divide-line"
                 >
-                  <StatItem label="Students" value={students?.length || 0} subtitle="enrolled" />
+                  <StatItem
+                    label="Students"
+                    value={students?.length || 0}
+                    subtitle="enrolled"
+                    duration={statsDuration}
+                  />
                   <StatItem
                     label="Submitted"
                     value={completedAssignmentsProgress || 0}
                     suffix="%"
                     valueColor="#619462"
                     subtitle={submittedSubtitle}
+                    duration={statsDuration}
                   />
                   <StatItem
                     label="Late"
                     value={lateSubmissionsPercent || 0}
                     suffix="%"
                     subtitle={lateSubtitle}
+                    duration={statsDuration}
                   />
                   <StatItem
                     label="Grading"
                     value={gradingProgress || 0}
                     suffix="%"
                     valueColor="#D4A289"
-                    accent={<RingChart pct={gradingProgress || 0} color="#D4A289" />}
+                    accent={<RingChart pct={gradingProgress || 0} color="#D4A289" duration={statsDuration} />}
+                    duration={statsDuration}
                   />
-                </motion.div>
+                </div>
 
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
                   <section className="rounded-2xl bg-panel ring-1 ring-line p-4 sm:p-5">
