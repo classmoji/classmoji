@@ -20,6 +20,12 @@ describe('StripeService.constructWebhookEvent (real signature verification)', ()
     process.env.STRIPE_WEBHOOK_SECRET = WEBHOOK_SECRET;
     // Stripe SDK is only used here for its signing helper; no network calls.
     stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
+    // NOTE on the module-level _stripe cache in packages/services/src/stripe:
+    // constructWebhookEvent() reads STRIPE_WEBHOOK_SECRET at CALL time (not from
+    // the cached client), and the cached client only needs *some* secret key to
+    // exist. Vitest isolates module registries per test file, so the cache is
+    // fresh here and this beforeAll runs before any `it`. Verification is
+    // therefore order-independent and needs no cache reset.
   });
 
   it('constructs the event for a validly-signed body', () => {

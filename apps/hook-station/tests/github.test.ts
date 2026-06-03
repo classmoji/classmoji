@@ -83,6 +83,12 @@ describe('github webhook route', () => {
     expect(res.statusCode).toBe(200);
     expect(JSON.parse(res.body)).toEqual({ success: true });
     expect(triggers.closed).toHaveBeenCalledTimes(1);
+    // The handler must receive the parsed webhook payload (action + issue), not
+    // an empty/placeholder object — otherwise the downstream task can't resolve
+    // which assignment closed.
+    expect(triggers.closed).toHaveBeenCalledWith(
+      expect.objectContaining({ action: 'closed', issue: { id: 1, number: 7 } })
+    );
   });
 
   it('does not trigger closed handler when payload has no issue', async () => {
