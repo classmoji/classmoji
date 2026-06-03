@@ -101,13 +101,9 @@ test.describe('REGRESSION: api.$operation get-user-by-id still works after TS mi
 });
 
 test.describe('REGRESSION: api.gitRepoAssignment autograde authorization still works after TS migration', () => {
-  // RW-07 contract = authorization + the modules->repos endpoint rename. We assert
-  // the OWNER is authorized past the OWNER gate (status is NOT 403) and the renamed
-  // endpoint resolves (NOT 404). We deliberately do NOT assert a 200: a successful
-  // autograde dispatches a Trigger.dev task, which is not configured in the test
-  // env and 500s — that is an environment limitation, not an authz regression, and
-  // it occurs strictly AFTER the OWNER gate, so a non-403/non-404 status still
-  // proves the gate let the owner through.
+  // RW-07 contract = authorization + the modules->repos endpoint rename. We
+  // accept either the success branch or the known downstream Trigger.dev failure,
+  // but not a generic 500/pre-gate crash.
   test('owner is authorized for the renamed autograde endpoint and the old path is gone', async ({
     authenticatedPage: page,
   }) => {
@@ -115,8 +111,11 @@ test.describe('REGRESSION: api.gitRepoAssignment autograde authorization still w
       `/api/gitRepoAssignment/${TEST_CLASSROOM}?action=autograde`,
       { data: { workflowName: 'noop-regression-probe' } }
     );
-    expect(res.status()).not.toBe(403); // owner passed the OWNER authorization gate
-    expect(res.status()).not.toBe(404); // the renamed endpoint resolves
+    const text = await res.text();
+    expect([403, 404], text).not.toContain(res.status());
+    if (res.status() !== 200) {
+      expect(text).toMatch(/trigger|workflow|batch|run/i);
+    }
 
     // The pre-rename path (api.repositoryAssignment.$class) must no longer resolve -> 404.
     const oldPath = await page.request.post(

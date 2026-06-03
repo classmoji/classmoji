@@ -11,10 +11,13 @@ import { getBaseUrl } from './tests/helpers/env.helpers';
  */
 export default defineConfig({
   testDir: './tests',
-  fullyParallel: true,
+  // Webapp E2E specs share one database and a small pool of role identities.
+  // Run them serially to prevent one spec's cleanup from deleting another spec's
+  // seeded rows or notifications.
+  fullyParallel: false,
+  workers: 1,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 2 : 0,
-  workers: process.env.CI ? 1 : undefined,
 
   reporter: [
     ['html', { open: 'never', outputFolder: 'playwright-report' }],
