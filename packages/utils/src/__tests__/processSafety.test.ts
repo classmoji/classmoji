@@ -51,6 +51,12 @@ describe('createOneShotShutdown', () => {
     const shutdown = createOneShotShutdown(cleanup, exit, { timeoutMs: 5000 });
     shutdown(1);
 
+    // Cleanup is invoked in a microtask (Promise.resolve().then(cleanup)); flush
+    // the microtask queue before asserting. Cleanup must be ATTEMPTED before the
+    // timeout fires — otherwise the timeout path could be reached by skipping
+    // cleanup entirely and the test would still pass.
+    await vi.advanceTimersByTimeAsync(0);
+    expect(cleanup).toHaveBeenCalledOnce();
     expect(exit).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(5000);
     expect(exit).toHaveBeenCalledExactlyOnceWith(1);
@@ -87,6 +93,23 @@ describe('createOneShotShutdown', () => {
 
     expect(cleanup).toHaveBeenCalledOnce();
     expect(exit).toHaveBeenCalledOnce();
+  });
+
+  // The FIRST trigger's exit code wins. A later trigger carrying a different
+  // code (e.g. uncaughtException=1 then a SIGTERM=0 racing through the same
+  // instance) must not change the code the process exits with. Without the
+  // `started` guard locking `code` at first entry, this would exit with 2.
+  it('locks the exit code to the first trigger', async () => {
+    const cleanup = vi.fn(async () => {});
+    const exit = vi.fn();
+
+    const shutdown = createOneShotShutdown(cleanup, exit);
+    shutdown(1);
+    shutdown(2);
+    await vi.waitFor(() => expect(exit).toHaveBeenCalled());
+
+    expect(cleanup).toHaveBeenCalledOnce();
+    expect(exit).toHaveBeenCalledExactlyOnceWith(1);
   });
 
   // Mirrors @classmoji/database/index.ts wiring: ONE shutdown instance is shared

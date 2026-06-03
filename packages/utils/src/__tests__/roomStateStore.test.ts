@@ -16,7 +16,11 @@ describe('RoomStateStore', () => {
     expect(store.get('slide-1')).toEqual({ indexh: 2, indexv: 0 });
   });
 
-  it('stores and returns a fragmentIndex alongside the slide position', () => {
+  // Contract test for the optional `fragmentIndex` field on RoomPosition. NOTE:
+  // the current slides server (server.ts:229) only writes { indexh, indexv }; this
+  // pins the store's round-trip contract so that wiring fragment persistence later
+  // (so late joiners catch up mid-fragment) requires no store change.
+  it('round-trips an optional fragmentIndex (store contract)', () => {
     const store = new RoomStateStore();
     store.set('slide-1', { indexh: 4, indexv: 1, fragmentIndex: 3 });
     expect(store.get('slide-1')).toEqual({ indexh: 4, indexv: 1, fragmentIndex: 3 });
@@ -37,6 +41,19 @@ describe('RoomStateStore', () => {
     store.set('slide-1', { indexh: 1, indexv: 1 });
 
     store.releaseIfEmpty('slide-1', 0);
+
+    expect(store.get('slide-1')).toBeUndefined();
+    expect(store.size).toBe(0);
+  });
+
+  // socket.io reports room.size, which can momentarily be read as 0 or, under a
+  // race, never negative — but the guard uses `<= 0` defensively. Pin that any
+  // non-positive count evicts so the guard can't be narrowed to `=== 0`.
+  it('evicts on a non-positive (negative) viewer count', () => {
+    const store = new RoomStateStore();
+    store.set('slide-1', { indexh: 1, indexv: 1 });
+
+    store.releaseIfEmpty('slide-1', -1);
 
     expect(store.get('slide-1')).toBeUndefined();
     expect(store.size).toBe(0);
