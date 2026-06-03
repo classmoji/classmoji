@@ -268,7 +268,9 @@ const CourseCalendar = ({
     }
 
     return (
-      <div>
+      // Keep day cells legible on phones: hold a minimum width and let the
+      // calendar scroll horizontally instead of squishing columns to nothing.
+      <div className="min-w-[44rem]">
         {/* Header - Days of week */}
         <div className="grid grid-cols-7 border-b border-line">
           {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map(day => (
@@ -385,7 +387,9 @@ const CourseCalendar = ({
     };
 
     return (
-      <div>
+      // Min width keeps the 7 day columns + time gutter readable on phones; the
+      // outer wrapper scrolls horizontally rather than collapsing columns.
+      <div className="min-w-[48rem]">
         {/* Header */}
         <div
           className="grid border-b border-line"
@@ -482,8 +486,9 @@ const CourseCalendar = ({
           })}
         </div>
 
-        {/* Grid */}
-        <div className="overflow-x-auto relative">
+        {/* Grid — horizontal scroll is handled by the shared outer wrapper so the
+            header, all-day row, and time grid stay column-aligned when scrolled. */}
+        <div className="relative">
           {/* Current time line across all columns */}
           {currentTime.getHours() >= 8 && currentTime.getHours() < 22 && (
             <div

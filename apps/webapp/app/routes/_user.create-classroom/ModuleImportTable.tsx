@@ -97,6 +97,7 @@ const ModuleImportTable = ({
       rowKey="id"
       pagination={false}
       size="small"
+      scroll={{ x: 'max-content' }}
       className="border border-gray-200 dark:border-neutral-700 rounded-lg"
     />
   );

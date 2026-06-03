@@ -19,7 +19,7 @@
  * Copy is sourced from https://classmoji.io/docs and matches the current flow.
  */
 
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { useFetcher, useLocation, useNavigate } from 'react-router';
 import { Tour, Button } from 'antd';
 import type { TourProps } from 'antd';
@@ -31,41 +31,92 @@ import type { TourPhase } from '~/types';
 const target = (key: string) =>
   (() => document.querySelector<HTMLElement>(`[data-onboarding="${key}"]`)) as () => HTMLElement;
 
-const LANDING_STEPS: NonNullable<TourProps['steps']> = [
+type Placement = NonNullable<TourProps['steps']>[number]['placement'];
+
+interface LandingStep {
+  /** Account route this step lives on; the tour navigates here when it opens. */
+  link: string;
+  /** data-onboarding key to spotlight (omit -> centered informational step). */
+  onboarding?: string;
+  placement?: Placement;
+  title: string;
+  description: string;
+  /** Optional highlighted callout rendered below the description. */
+  tip?: ReactNode;
+}
+
+const SELECT_ORG = '/select-organization';
+
+const LANDING_STEPS: LandingStep[] = [
   {
-    title: 'Welcome to Classmoji 👋',
+    link: SELECT_ORG,
+    title: 'Welcome to Classmoji',
     description:
-      'Classmoji is a Git-native learning platform for CS courses, similar to GitHub Classroom but built around how programming is actually taught and graded. This quick tour covers the basics on this screen first, then walks you through a sample course twice, once as the instructor and once as a student, so you see both sides.',
+      'Classmoji is a Git-native learning platform for CS courses, similar to GitHub Classroom but built around how programming is actually taught and graded. This quick tour covers your account and this screen first, then walks you through a sample course twice, once as the instructor and once as a student, so you see both sides.',
+    tip: (
+      <>
+        <strong>Tip:</strong> use the <kbd className="cm-tour-key">←</kbd> and{' '}
+        <kbd className="cm-tour-key">→</kbd> arrow keys to move between steps.
+      </>
+    ),
   },
   {
+    link: SELECT_ORG,
+    onboarding: 'new-class',
+    placement: 'bottom',
     title: 'Create a classroom',
     description:
       'A classroom is backed by a GitHub organization, and you can run several classrooms (for example, different semesters of the same course) under one org. To create one you pick an org where you are an admin and have the Classmoji GitHub app installed, then name the class; the URL slug is generated from the name and cannot be changed later.',
-    target: target('new-class'),
-    placement: 'bottom',
   },
   {
+    link: SELECT_ORG,
+    onboarding: 'import',
+    placement: 'bottom',
     title: 'Import an existing course',
     description:
       'Already taught a course in Classmoji? Start a new classroom from a previous one and bring its repositories along. Imported content arrives with deadlines stripped and repositories unpublished, so you can reuse coursework without exposing anything to students until you are ready.',
-    target: target('import'),
-    placement: 'bottom',
   },
   {
+    link: SELECT_ORG,
+    onboarding: 'bell',
+    placement: 'bottomRight',
     title: 'Notifications',
     description:
       'The bell collects activity that needs your attention across your classrooms. Instructors see new submissions and grading to do, while students see released grades and new assignments, so important updates are in one place instead of buried in email.',
-    target: target('bell'),
-    placement: 'bottomRight',
   },
   {
+    link: SELECT_ORG,
+    onboarding: 'profile',
+    placement: 'bottomRight',
     title: 'Your profile',
-    description:
-      'Open your profile to manage your account, sign out, and personalize the interface. This is where you set light or dark mode, an accent color, and other display preferences that follow you across every classroom.',
-    target: target('profile'),
-    placement: 'bottomRight',
+    description: 'Open your profile to reach your account settings and sign out.',
   },
   {
+    link: '/settings/general',
+    onboarding: 'settings-general',
+    placement: 'right',
+    title: 'Your account',
+    description:
+      'Your profile basics, name, email, and GitHub username, live on the General tab. They are synced from GitHub and shown read-only here.',
+  },
+  {
+    link: '/settings/notifications',
+    onboarding: 'settings-notifications',
+    placement: 'left',
+    title: 'Notification preferences',
+    description:
+      'In your account settings, the Notifications tab lets you choose exactly which events email you. Toggle any of them on or off here.',
+  },
+  {
+    link: '/settings/billing',
+    onboarding: 'settings-billing',
+    placement: 'bottom',
+    title: 'Plans and billing',
+    description:
+      'Classmoji has a free tier and a paid Pro tier (Pro unlocks AI quizzes and more). This badge shows your current plan, and you can upgrade or manage billing from the Billing tab.',
+  },
+  {
+    link: SELECT_ORG,
     title: 'Step into a sample course',
     description:
       'Next you will enter a built-in example course to see Classmoji in action. You will tour it first as the instructor, then as a student, so you understand exactly what each role can do and what your students will experience.',
@@ -88,7 +139,10 @@ export function OnboardingTour() {
   const initRef = useRef(false);
 
   const onLanding = location.pathname.startsWith('/select-organization');
-  const active = tourPhase === 'landing' && onLanding;
+  // The landing tour now also visits the user's account settings, so it stays
+  // active across /select-organization and /settings.
+  const onAccountRoute = onLanding || location.pathname.startsWith('/settings');
+  const active = tourPhase === 'landing' && onAccountRoute;
 
   // Initialize the landing tour exactly once on mount, two ways in (in order):
   //  - Resume: a landing tour was already running and you refreshed — pick it back
@@ -120,6 +174,37 @@ export function OnboardingTour() {
       fetcher.submit(null, { method: 'POST', action: '/api/onboarding/complete' });
     }
   }, [user, onLanding, tourPhase, startFullTour, setTourPhase, setTourStep, fetcher]);
+
+  // Each step lives on a specific account route; navigate there when it opens.
+  useEffect(() => {
+    if (!active) return;
+    const want = LANDING_STEPS[tourStep]?.link;
+    if (want && location.pathname !== want) navigate(want);
+  }, [active, tourStep, location.pathname, navigate]);
+
+  // Re-resolve the spotlight target after navigation/mount so antd anchors to it
+  // instead of centering (the target may be on a just-navigated-to page).
+  const [, setResolveNonce] = useState(0);
+  useEffect(() => {
+    if (!active) return;
+    const key = LANDING_STEPS[tourStep]?.onboarding;
+    if (!key) return;
+    const sel = `[data-onboarding="${key}"]`;
+    let tries = 0;
+    const id = window.setInterval(() => {
+      tries += 1;
+      const el = document.querySelector(sel);
+      if (el) {
+        el.scrollIntoView({ block: 'center', behavior: 'instant' });
+        setResolveNonce(n => n + 1);
+        window.dispatchEvent(new Event('resize'));
+        window.clearInterval(id);
+      } else if (tries >= 14) {
+        window.clearInterval(id);
+      }
+    }, 150);
+    return () => window.clearInterval(id);
+  }, [active, tourStep, location.pathname]);
 
   // Slug of the hidden Example Course (the user owns it).
   const exampleSlug =
@@ -167,12 +252,47 @@ export function OnboardingTour() {
 
   return (
     <Tour
+      rootClassName="cm-tour"
       open={active}
       current={tourStep}
       onChange={setTourStep}
       onClose={endTour}
       onFinish={finishLanding}
-      steps={LANDING_STEPS}
+      steps={LANDING_STEPS.map(s => ({
+        title: s.title,
+        description: s.tip ? (
+          <>
+            <p style={{ margin: 0 }}>{s.description}</p>
+            <div className="cm-tour-tip">{s.tip}</div>
+          </>
+        ) : (
+          s.description
+        ),
+        target: s.onboarding ? target(s.onboarding) : undefined,
+        placement: s.placement,
+        mask: s.onboarding ? undefined : { color: 'rgba(0, 0, 0, 0.8)' },
+      }))}
+      indicatorsRender={(current, total) => (
+        <div
+          style={{
+            width: '100%',
+            height: 6,
+            borderRadius: 9999,
+            background: 'rgba(128,128,128,0.2)',
+            overflow: 'hidden',
+          }}
+        >
+          <div
+            style={{
+              height: '100%',
+              width: `${((current + 1) / total) * 100}%`,
+              background: 'var(--accent, #c0392b)',
+              borderRadius: 9999,
+              transition: 'width 0.5s cubic-bezier(0.22, 1, 0.36, 1)',
+            }}
+          />
+        </div>
+      )}
       actionsRender={(origin, info) =>
         info.current === lastStep ? (
           <div style={{ display: 'flex', gap: 8 }}>

@@ -62,7 +62,7 @@ const DefaultPageSection = ({ currentDefault, menuPages }: DefaultPageSectionPro
           )}
         </p>
 
-        <Button type="primary" onClick={saveDefaultPage}>
+        <Button type="primary" onClick={saveDefaultPage} data-tour="settings-save-default-page">
           Save
         </Button>
       </Form>

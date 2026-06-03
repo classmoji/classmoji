@@ -176,6 +176,7 @@ const TokensLog = ({ transactions, students }: TokensLogProps) => {
       columns={columns}
       rowHoverable={false}
       size="small"
+      scroll={{ x: 'max-content' }}
       pagination={{ defaultPageSize: 20 }}
       rowKey={record => (record as unknown as Record<string, string>).id}
       locale={{

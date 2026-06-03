@@ -112,14 +112,18 @@ const StudentCalendar = ({ loaderData }: Route.ComponentProps) => {
     <div className="min-h-full">
       <div className="flex items-center justify-between gap-3 mt-2 mb-4">
         <h1 className="text-base font-semibold text-ink-2">Calendar</h1>
-        <CalendarSubscriptionCard subscriptionUrl={subscriptionUrl} />
+        <span data-tour="calendar-subscribe">
+          <CalendarSubscriptionCard subscriptionUrl={subscriptionUrl} />
+        </span>
       </div>
 
-      <StudentCalendarView
-        events={events}
-        onEventClick={handleEventClick}
-        onMonthChange={handleMonthChange}
-      />
+      <div>
+        <StudentCalendarView
+          events={events}
+          onEventClick={handleEventClick}
+          onMonthChange={handleMonthChange}
+        />
+      </div>
 
       <Modal
         title="Event Details"

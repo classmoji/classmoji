@@ -219,17 +219,19 @@ const AdminAssistants = ({ loaderData }: Route.ComponentProps) => {
     <div className="min-h-full relative">
       <Outlet />
 
-      <div className="flex items-center justify-between gap-3 mt-2 mb-4">
+      <div className="flex flex-wrap items-center justify-between gap-3 mt-2 mb-4">
         <h1 className="text-base font-semibold text-ink-2">Assistants</h1>
 
-        <div className="flex gap-3">
+        <div className="flex gap-3 w-full sm:w-auto">
           <SearchInput
             query={query}
             setQuery={setQuery}
             placeholder="Search assistants..."
-            className="w-80"
+            className="flex-1 sm:flex-none sm:w-80"
           />
-          <ButtonNew action={show}>New assistant</ButtonNew>
+          <span data-tour="assistants-new">
+            <ButtonNew action={show}>New assistant</ButtonNew>
+          </span>
         </div>
       </div>
 
@@ -244,7 +246,10 @@ const AdminAssistants = ({ loaderData }: Route.ComponentProps) => {
         <FormAssistant close={close} token={token} />
       </Modal>
 
-      <div className="rounded-2xl bg-panel ring-1 ring-line p-5 sm:p-6 min-h-[calc(100vh-10rem)]">
+      <div
+
+        className="rounded-2xl bg-panel ring-1 ring-line p-5 sm:p-6 min-h-[calc(100vh-10rem)]"
+      >
         <Table
           columns={columns}
           dataSource={filteredAssistants}

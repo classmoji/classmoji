@@ -492,6 +492,7 @@ const GithubRepositories = ({ loaderData }: Route.ComponentProps) => {
             style={{ width: 260 }}
           />
           <Button
+            data-tour="gitrepos-refresh"
             icon={<IconRefresh size={16} />}
             type="primary"
             loading={isLoading}

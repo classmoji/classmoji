@@ -415,6 +415,7 @@ const EmojiMapping = ({ emojiMappings, orphanedEmojis }: EmojiMappingProps) => {
           dataSource={emojiMappings?.length ? emojiMappings : []}
           columns={emojiMappingColumns}
           size="small"
+          scroll={{ x: 'max-content' }}
           pagination={false}
           rowHoverable={false}
           rowKey="emoji"

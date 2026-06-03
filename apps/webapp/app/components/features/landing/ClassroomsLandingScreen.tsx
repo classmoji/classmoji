@@ -68,6 +68,7 @@ export function ClassroomsLandingScreen({
   membershipRoles,
 }: Props) {
   const [view, setView] = useState<'grid' | 'list'>('grid');
+  const [tourSpin, setTourSpin] = useState(false);
 
   const [archivedExpanded, setArchivedExpanded] = useState(false);
 
@@ -236,7 +237,7 @@ export function ClassroomsLandingScreen({
 
   const renderList = (items: LandingClass[]) => (
     <div className="overflow-x-auto -mx-4 px-4 sm:mx-0 sm:px-0">
-      <div className="bg-panel ring-1 ring-line rounded-2xl overflow-hidden min-w-[700px]">
+      <div className="bg-panel ring-1 ring-line rounded-2xl overflow-hidden sm:min-w-[700px]">
         <ClassroomRowHeader />
         {items.map(c => (
           <ClassroomRow key={c.id} c={c} onOpen={() => onOpenClass(c)} />
@@ -269,8 +270,21 @@ export function ClassroomsLandingScreen({
           </div>
           <div className="flex flex-wrap gap-2">
             {tourAvailable && onTakeTour && (
-              <Button data-onboarding="take-tour" onClick={onTakeTour}>
-                <IconRoute size={14} /> Take a tour
+              <Button
+                data-onboarding="take-tour"
+                className="cm-take-tour"
+                onClick={() => {
+                  setTourSpin(true);
+                  // Let the icon spin briefly before the tour mask covers the page.
+                  window.setTimeout(() => onTakeTour?.(), 350);
+                }}
+              >
+                <IconRoute
+                  size={14}
+                  className={tourSpin ? 'cm-route-spin' : ''}
+                  onAnimationEnd={() => setTourSpin(false)}
+                />{' '}
+                Take a tour
               </Button>
             )}
             <Button data-onboarding="import">

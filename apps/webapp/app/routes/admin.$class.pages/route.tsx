@@ -330,7 +330,7 @@ export default function AdminPages({ loaderData }: Route.ComponentProps) {
             onChange={e => setSearchText(e.target.value)}
             style={{ width: 260 }}
           />
-          <Link to={`/admin/${classSlug}/pages/new`}>
+          <Link to={`/admin/${classSlug}/pages/new`} data-tour="pages-new">
             <Button type="primary" icon={<IconPlus size={16} />}>
               New Page
             </Button>
@@ -338,7 +338,10 @@ export default function AdminPages({ loaderData }: Route.ComponentProps) {
         </div>
       </div>
 
-      <div className="rounded-2xl overflow-hidden bg-panel min-h-[calc(100vh-10rem)] p-5 sm:p-6">
+      <div
+
+        className="rounded-2xl overflow-hidden bg-panel min-h-[calc(100vh-10rem)] p-5 sm:p-6"
+      >
         <Table
           columns={columns as Parameters<typeof Table>[0]['columns']}
           dataSource={filteredPages}

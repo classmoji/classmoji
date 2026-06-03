@@ -76,7 +76,7 @@ const TeamFormationBanner = ({ repository, userTeam, classSlug }: TeamFormationB
         type="success"
         icon={<IconCheck size={16} />}
         message={
-          <div className="flex justify-between items-center">
+          <div className="flex flex-wrap items-center justify-between gap-y-2">
             <div className="flex items-center gap-3">
               <span>
                 You are on team: <strong>{userTeam.name}</strong>
@@ -125,7 +125,7 @@ const TeamFormationBanner = ({ repository, userTeam, classSlug }: TeamFormationB
       type="warning"
       icon={<IconUsers size={16} />}
       message={
-        <div className="flex justify-between items-center">
+        <div className="flex flex-wrap items-center justify-between gap-y-2">
           <span>
             You need to join or create a team for this repository
             {repository.team_formation_deadline && (
@@ -205,6 +205,7 @@ const ModuleCard = ({
     >
       <button
         type="button"
+        data-tour={ordinal === 1 ? 'repos-toggle' : undefined}
         onClick={() => hasExpandableContent && setOpen(v => !v)}
         className={`w-full text-left p-5 sm:p-6 ${
           hasExpandableContent

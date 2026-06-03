@@ -417,7 +417,7 @@ const StudentCalendarView = ({ events, onEventClick, onMonthChange }: StudentCal
           </h2>
         </div>
 
-        <div className="flex items-center bg-nav-hover rounded-full p-0.5">
+        <div data-tour="calendar-view-toggle" className="flex items-center bg-nav-hover rounded-full p-0.5">
           <button
             type="button"
             onClick={() => setView('week')}

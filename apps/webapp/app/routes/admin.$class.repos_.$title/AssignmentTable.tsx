@@ -315,6 +315,7 @@ const AssignmentTable = ({
         dataSource={repos}
         columns={columns as Parameters<typeof Table>[0]['columns']}
         rowHoverable={false}
+        scroll={{ x: 'max-content' }}
         pagination={{ pageSize: 100 }}
       />
     </ConfigProvider>

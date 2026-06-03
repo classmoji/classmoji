@@ -70,16 +70,18 @@ const StudentsScreen = ({ loaderData }: Route.ComponentProps) => {
   return (
     <div className="min-h-full relative">
       <Outlet />
-      <div className="flex items-center justify-between gap-3 mt-2 mb-4">
+      <div className="flex flex-col gap-3 mt-2 mb-4 sm:flex-row sm:items-center sm:justify-between">
         <h1 className="text-base font-semibold text-ink-2">Students</h1>
 
-        <div className="flex gap-3">
-          <SearchInput
-            query={query}
-            setQuery={setQuery}
-            placeholder="Search by name or login..."
-            className="w-64"
-          />
+        <div className="flex flex-wrap items-center gap-3">
+          <span data-tour="students-search" className="w-full sm:w-auto">
+            <SearchInput
+              query={query}
+              setQuery={setQuery}
+              placeholder="Search by name or login..."
+              className="w-full sm:w-64"
+            />
+          </span>
 
           <RequireRole roles={['OWNER']}>
             <Button

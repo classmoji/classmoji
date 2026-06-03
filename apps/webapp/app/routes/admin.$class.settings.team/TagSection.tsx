@@ -75,7 +75,12 @@ const TagSection = ({ tags }: TagSectionProps) => {
           </Button>
         </div>
 
-        <Table dataSource={tags} columns={columns} rowHoverable={false} />
+        <Table
+          dataSource={tags}
+          columns={columns}
+          rowHoverable={false}
+          scroll={{ x: 'max-content' }}
+        />
       </div>
     </SettingSection>
   );

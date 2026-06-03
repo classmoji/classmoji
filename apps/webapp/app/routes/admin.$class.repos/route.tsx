@@ -108,19 +108,20 @@ const AdminAssignments = ({ loaderData }: Route.ComponentProps) => {
   return (
     <div className="min-h-full relative">
       <Outlet />
-      <div className="flex items-center justify-between gap-3 mt-2 mb-4">
+      <div className="flex flex-col gap-3 mt-2 mb-4 sm:flex-row sm:items-center sm:justify-between">
         <h1 className="text-base font-semibold text-ink-2">Repositories</h1>
 
         <RequireRole roles={['OWNER']}>
-          <div className="flex items-center gap-3">
+          <div className="flex flex-wrap items-center gap-3">
             <SearchInput
               query={query}
               setQuery={setQuery}
               placeholder="Search by title"
-              className=""
+              className="w-full sm:w-56"
             />
 
             <Button
+              data-tour="repos-cleanup"
               icon={<IconCopyX size={16} />}
               onClick={() => {
                 findUnenrolledStudents();
@@ -128,7 +129,7 @@ const AdminAssignments = ({ loaderData }: Route.ComponentProps) => {
             >
               Cleanup repos
             </Button>
-            <NavLink to={`/admin/${classSlug}/resources`}>
+            <NavLink to={`/admin/${classSlug}/resources`} data-tour="repos-link-resources">
               <Button icon={<IconLink size={16} />}>Link Resources</Button>
             </NavLink>
             <NavLink to={`${pathname}/form`} data-tour="repos-new">

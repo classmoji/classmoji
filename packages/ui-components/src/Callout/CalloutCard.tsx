@@ -1,3 +1,4 @@
+import { motion, useReducedMotion } from 'framer-motion';
 import { Button } from '../Button/Button.tsx';
 import { IconButton } from '../IconButton/IconButton.tsx';
 import { IconX } from '../icons/index.tsx';
@@ -12,6 +13,7 @@ export interface CalloutCardProps {
 export function CalloutCard({ payload, onDismiss }: CalloutCardProps) {
   const { variant, title, message, icon, action, progress } = payload;
   const config = VARIANT_CONFIG[variant];
+  const reducedMotion = useReducedMotion();
 
   const isAlert = variant === 'error';
   const role = isAlert ? 'alert' : 'status';
@@ -33,11 +35,18 @@ export function CalloutCard({ payload, onDismiss }: CalloutCardProps) {
       />
 
       {/* Icon */}
-      <div
+      <motion.div
+        initial={reducedMotion ? false : { scale: 0.4, rotate: -12 }}
+        animate={{ scale: 1, rotate: 0 }}
+        transition={
+          reducedMotion
+            ? undefined
+            : { type: 'spring', stiffness: 500, damping: 18, mass: 0.6, delay: 0.05 }
+        }
         className={`flex-shrink-0 flex items-center justify-center w-6 h-6 ${config.iconColorClassName}`}
       >
         {icon ?? config.defaultIcon}
-      </div>
+      </motion.div>
 
       {/* Text block */}
       <div className="min-w-0 flex-1">
