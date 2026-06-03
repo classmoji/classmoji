@@ -155,8 +155,15 @@ test.describe('Owner Classroom Status — Landing', () => {
     const card = page.getByRole('button', { name: new RegExp(TEST_CLASSROOM_NAME) });
     await expect(card).toHaveCount(0);
 
-    await archivedHeader.click();
-    await expect(archivedHeader).toHaveAttribute('aria-expanded', 'true');
+    // The landing list revalidates shortly after load (subscription/state sync),
+    // which can detach the header mid-click. Retry the expand toggle until it
+    // sticks — clicking only while still collapsed so we never toggle it back.
+    await expect(async () => {
+      if ((await archivedHeader.getAttribute('aria-expanded')) !== 'true') {
+        await archivedHeader.click();
+      }
+      await expect(archivedHeader).toHaveAttribute('aria-expanded', 'true');
+    }).toPass({ timeout: 15000 });
     await expect(card.first()).toBeVisible();
   });
 
