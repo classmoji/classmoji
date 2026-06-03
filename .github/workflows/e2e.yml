@@ -29,6 +29,8 @@ env:
   TEST_STUDENT_USER_ID: '10000002'
   TEST_STUDENT_USER_LOGIN: fake-student-1
   GITHUB_WEBHOOK_SECRET: test-webhook-secret
+  AI_AGENT_URL: http://localhost:6000
+  AI_AGENT_SHARED_SECRET: test-ai-agent-secret
 
 jobs:
   e2e:
@@ -77,6 +79,18 @@ jobs:
 
       - name: Build webapp
         run: npm run web:build
+
+      - name: Run webapp unit tests (Vitest)
+        working-directory: apps/webapp
+        run: npx vitest run
+
+      - name: Run utils unit tests (Vitest)
+        working-directory: packages/utils
+        run: npx vitest run
+
+      - name: Run services unit tests (Vitest)
+        working-directory: packages/services
+        run: npx vitest run
 
       - name: Start webapp (prod build, test-login enabled)
         run: |
