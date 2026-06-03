@@ -9,6 +9,7 @@ import {
   getRepositoryPublishedState,
   deleteRepositoryById,
 } from '../helpers/prisma.helpers';
+import { repositoryRow } from '../helpers/repos.helpers';
 
 /**
  * Deterministically enrol the known fake-student-1 user as a STUDENT in the test
@@ -99,9 +100,9 @@ test.describe('REGRESSION: repository assignment unpublish still works after TS 
     repoId = seeded.repositoryId;
 
     await page.goto(`/admin/${TEST_CLASSROOM}/repos`);
-    await waitForDataLoad(page, { anchor: page.getByRole('row').filter({ hasText: TITLE }) });
+    await waitForDataLoad(page, { anchor: repositoryRow(page, TITLE) });
 
-    const row = page.getByRole('row').filter({ hasText: TITLE });
+    const row = repositoryRow(page, TITLE);
     await expect(row).toBeVisible();
     await expect(row.getByText('Published')).toBeVisible();
 
@@ -112,7 +113,7 @@ test.describe('REGRESSION: repository assignment unpublish still works after TS 
     // "Unpublish" trigger (both match the accessible name).
     const popover = page
       .locator('.ant-popover')
-      .filter({ hasText: 'Unpublish Assignment' });
+      .filter({ hasText: 'Unpublish repository' });
     await expect(popover).toBeVisible();
     await popover.getByRole('button', { name: 'Unpublish' }).click();
 
@@ -171,7 +172,7 @@ test.describe('REGRESSION: modules->repos rename preserved assignment data after
 
     await expect(page.getByRole('heading', { name: 'Repositories' })).toBeVisible();
 
-    const row = page.getByRole('row').filter({ hasText: PARITY_TITLE });
+    const row = repositoryRow(page, PARITY_TITLE);
     await expect(row).toBeVisible();
     await expect(page.getByText(PARITY_TITLE, { exact: false }).first()).toBeVisible();
   });

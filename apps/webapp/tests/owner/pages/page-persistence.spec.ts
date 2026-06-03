@@ -234,11 +234,17 @@ test.describe('Pages deletion persistence', () => {
     await expect(row).toBeVisible();
 
     await row.getByText('Delete', { exact: true }).click();
+    // The confirm "Delete" lives in an Ant Popconfirm popover; scope to it so we
+    // don't collide with the row's own "Delete" trigger (same accessible name).
+    const confirm = page
+      .locator('.ant-popconfirm, .ant-popover')
+      .getByRole('button', { name: 'Delete' });
+    await expect(confirm).toBeVisible();
     await Promise.all([
       page.waitForResponse(
         r => r.url().includes(`/admin/${testOrg}/pages`) && r.request().method() === 'POST'
       ),
-      page.getByRole('button', { name: 'Delete' }).click(),
+      confirm.click(),
     ]);
 
     const prisma = getTestPrisma();

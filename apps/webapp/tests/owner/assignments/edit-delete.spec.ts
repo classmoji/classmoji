@@ -7,6 +7,7 @@ import {
   seedRepositoryWithAssignment,
   deleteRepositoryById,
 } from '../../helpers/prisma.helpers';
+import { repositoryRow } from '../../helpers/repos.helpers';
 
 /**
  * Owner edits and deletes an assignment (Repository row) on /admin/<org>/repos.
@@ -33,7 +34,7 @@ test.describe('Owner edits an assignment weight', () => {
       await page.goto(REPOS_PATH(testOrg));
       await waitForDataLoad(page);
 
-      const row = page.getByRole('row').filter({ hasText: title });
+      const row = repositoryRow(page, title);
       await expect(row).toBeVisible();
 
       const weightButton = row.getByRole('button').filter({ hasText: '%' });
@@ -70,7 +71,7 @@ test.describe('Owner deletes an assignment', () => {
       await page.goto(REPOS_PATH(testOrg));
       await waitForDataLoad(page);
 
-      const row = page.getByRole('row').filter({ hasText: title });
+      const row = repositoryRow(page, title);
       await expect(row).toBeVisible();
 
       await row.getByText('Delete', { exact: true }).click();

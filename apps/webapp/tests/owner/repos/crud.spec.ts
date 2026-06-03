@@ -6,6 +6,7 @@ import {
   seedRepositoryWithAssignment,
   deleteRepositoryById,
 } from '../../helpers/prisma.helpers';
+import { repositoryRow } from '../../helpers/repos.helpers';
 
 /**
  * Repository CRUD tests for admin.$class.repos*.
@@ -40,20 +41,22 @@ test.describe('Repository List', () => {
     await expect(page.getByRole('button', { name: /Cleanup repos/i })).toBeVisible();
 
     // Table columns.
-    const table = page.locator('table');
+    const table = page.locator('table').first();
     await expect(table).toBeVisible();
-    await expect(table.getByText('Repository', { exact: true })).toBeVisible();
-    await expect(table.getByText('Type', { exact: true })).toBeVisible();
-    await expect(table.getByText('Weight (%)', { exact: true })).toBeVisible();
-    await expect(table.getByText('Status', { exact: true })).toBeVisible();
+    // antd renders a measurement copy of the header row, so each column title
+    // appears twice — assert the first (visible) columnheader of each.
+    await expect(page.getByRole('columnheader', { name: 'Repository', exact: true }).first()).toBeVisible();
+    await expect(page.getByRole('columnheader', { name: 'Type', exact: true }).first()).toBeVisible();
+    await expect(page.getByRole('columnheader', { name: 'Weight (%)', exact: true }).first()).toBeVisible();
+    await expect(page.getByRole('columnheader', { name: 'Status', exact: true }).first()).toBeVisible();
 
     // Seeded row + its Individual type tag.
-    await expect(table.getByText(SEED_REPO, { exact: true })).toBeVisible();
+    await expect(repositoryRow(page, SEED_REPO).getByText(SEED_REPO, { exact: true })).toBeVisible();
     await expect(page.getByText('Individual').first()).toBeVisible();
   });
 
   test('shows the Published status tag for the seeded repo', async ({ authenticatedPage: page }) => {
-    const row = page.getByRole('row').filter({ hasText: SEED_REPO });
+    const row = repositoryRow(page, SEED_REPO);
     await expect(row.getByText('Published')).toBeVisible();
   });
 
@@ -69,8 +72,8 @@ test.describe('Repository List', () => {
       await expect(searchInput).toBeVisible();
 
       await searchInput.fill(title);
-      await expect(page.getByRole('row').filter({ hasText: title })).toBeVisible();
-      await expect(page.getByRole('row').filter({ hasText: SEED_REPO })).toHaveCount(0);
+      await expect(repositoryRow(page, title)).toBeVisible();
+      await expect(repositoryRow(page, SEED_REPO)).toHaveCount(0);
     } finally {
       await deleteRepositoryById(seeded.repositoryId);
     }
@@ -125,11 +128,11 @@ test.describe('Repository Detail View', () => {
   test('can navigate to the repository detail page via the View action', async ({
     authenticatedPage: page,
   }) => {
-    const repoRow = page.getByRole('row').filter({ hasText: SEED_REPO });
+    const repoRow = repositoryRow(page, SEED_REPO);
     await expect(repoRow).toBeVisible();
 
     // Select the View control by its stable test id (TableActionButtons).
-    await repoRow.getByTestId('table-action-view').click();
+    await repoRow.getByRole('button', { name: 'View', exact: true }).click();
 
     await page.waitForURL(new RegExp(`/repos/${SEED_REPO}`), { timeout: 10000 });
     await expect(page.getByText(SEED_REPO).first()).toBeVisible();
@@ -139,6 +142,8 @@ test.describe('Repository Detail View', () => {
     await page.goto(`/admin/${testOrg}/repos/${SEED_REPO}`);
     await waitForDataLoad(page);
 
+    // The per-assignment tabs live under the "Grades" folder tab.
+    await page.getByRole('button', { name: 'Grades', exact: true }).click();
     await expect(page.getByRole('tablist')).toBeVisible({ timeout: 5000 });
     await expect(page.getByRole('tab', { name: /Hello World Part 1/i })).toBeVisible();
   });
@@ -151,9 +156,9 @@ test.describe('Repository Actions', () => {
   });
 
   test('can open the edit form from a repository row', async ({ authenticatedPage: page }) => {
-    const repoRow = page.getByRole('row').filter({ hasText: SEED_REPO });
+    const repoRow = repositoryRow(page, SEED_REPO);
     // Select the Edit control by its stable test id (TableActionButtons).
-    await repoRow.getByTestId('table-action-edit').click();
+    await repoRow.getByRole('button', { name: 'Edit', exact: true }).click();
 
     await page.waitForURL(new RegExp(`/repos/form\\?title=${SEED_REPO}`), { timeout: 10000 });
     await expect(page.locator('.ant-modal-content').getByText('Edit repository', { exact: true })).toBeVisible();
@@ -162,7 +167,7 @@ test.describe('Repository Actions', () => {
   test('published repository shows Sync and Unpublish controls', async ({
     authenticatedPage: page,
   }) => {
-    const repoRow = page.getByRole('row').filter({ hasText: SEED_REPO });
+    const repoRow = repositoryRow(page, SEED_REPO);
     await expect(repoRow).toBeVisible();
     await expect(repoRow.getByText('Sync')).toBeVisible();
     await expect(repoRow.getByText('Unpublish')).toBeVisible();
@@ -179,7 +184,7 @@ test.describe('Repository Actions', () => {
       await page.goto(`/admin/${testOrg}/repos`);
       await waitForDataLoad(page);
 
-      const row = page.getByRole('row').filter({ hasText: title });
+      const row = repositoryRow(page, title);
       await expect(row).toBeVisible();
       await expect(row.getByText('Draft', { exact: true })).toBeVisible();
       await expect(row.getByText('Publish', { exact: true })).toBeVisible();
@@ -190,10 +195,10 @@ test.describe('Repository Actions', () => {
   });
 
   test('unpublish shows a confirmation popover', async ({ authenticatedPage: page }) => {
-    const repoRow = page.getByRole('row').filter({ hasText: SEED_REPO });
+    const repoRow = repositoryRow(page, SEED_REPO);
     await repoRow.getByText('Unpublish').click();
 
-    await expect(page.getByText('This will hide the assignment from students')).toBeVisible();
+    await expect(page.getByText('hides the repository from students')).toBeVisible();
     const popover = page.locator('.ant-popconfirm, .ant-popover');
     await expect(popover.getByRole('button', { name: 'Unpublish' })).toBeVisible();
     await expect(popover.getByRole('button', { name: 'Cancel' })).toBeVisible();
@@ -242,7 +247,7 @@ test.describe('Repository Weight Display', () => {
       await page.goto(`/admin/${testOrg}/repos`);
       await waitForDataLoad(page);
 
-      const row = page.getByRole('row').filter({ hasText: title });
+      const row = repositoryRow(page, title);
       await expect(row).toBeVisible();
       await expect(row.getByText('5 %')).toBeVisible();
     } finally {
@@ -382,16 +387,18 @@ test.describe('Repository Detail - Overview & Actions', () => {
   });
 
   test('shows assignment tabs', async ({ authenticatedPage: page }) => {
+    // Per-assignment tabs live under the "Grades" folder tab.
+    await page.getByRole('button', { name: 'Grades', exact: true }).click();
     await expect(page.getByRole('tablist')).toBeVisible({ timeout: 5000 });
     await expect(page.getByRole('tab', { name: /Hello World Part 1/i })).toBeVisible();
   });
 
   test('shows the Repository Overview card', async ({ authenticatedPage: page }) => {
-    await expect(page.getByText('Repository Overview', { exact: true })).toBeVisible();
+    await expect(page.getByText('Repository overview', { exact: true })).toBeVisible();
   });
 
   test('shows the Assignments Overview card', async ({ authenticatedPage: page }) => {
-    await expect(page.getByText('Assignments Overview', { exact: true })).toBeVisible();
+    await expect(page.getByText('Assignments overview', { exact: true })).toBeVisible();
   });
 
   test('has an Actions dropdown', async ({ authenticatedPage: page }) => {
@@ -406,10 +413,13 @@ test.describe('Repository Detail - Overview & Actions', () => {
   test('shows the Grade Management card for the selected assignment', async ({
     authenticatedPage: page,
   }) => {
+    // Grade Management lives under the "Grades" folder tab.
+    await page.getByRole('button', { name: 'Grades', exact: true }).click();
     await expect(page.getByText('Grade Management')).toBeVisible();
   });
 
   test('shows the grade visibility tag (Hidden/Released)', async ({ authenticatedPage: page }) => {
+    await page.getByRole('button', { name: 'Grades', exact: true }).click();
     await expect(page.getByText(/Hidden|Released/).first()).toBeVisible();
   });
 });

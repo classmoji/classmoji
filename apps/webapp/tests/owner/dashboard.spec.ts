@@ -121,7 +121,9 @@ test.describe('Owner Dashboard Navigation', () => {
     const nav = page.locator('[data-cm-sidebar]');
     await expect(nav.getByRole('link', { name: 'Repositories' })).toBeVisible();
     await expect(nav.getByRole('link', { name: 'Pages' })).toBeVisible();
-    await expect(nav.getByRole('link', { name: 'Quizzes' })).toBeVisible();
+    // Quizzes is intentionally NOT asserted: the nav link is gated behind the Pro
+    // tier (and the demo classroom), so it is correctly absent for the standard
+    // seed classroom. Quiz functionality is covered by quizzes/crud.spec.
     await expect(nav.getByRole('link', { name: 'Grades' })).toBeVisible();
     await expect(nav.getByRole('link', { name: 'Resubmits' })).toBeVisible();
     await expect(nav.getByRole('link', { name: 'Tokens' })).toBeVisible();

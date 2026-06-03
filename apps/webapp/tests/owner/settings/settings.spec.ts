@@ -120,11 +120,13 @@ test.describe('Quiz Settings Tab', () => {
   });
 
   test('shows api-key status badge', async ({ authenticatedPage: page }) => {
-    const systemDefaultsBadge = page.getByText(/Using System Environment Variables/i);
-    const orgKeyBadge = page.getByText(/Using Organization API Key/i);
-    const hasSystemBadge = await systemDefaultsBadge.isVisible().catch(() => false);
-    const hasOrgBadge = await orgKeyBadge.isVisible().catch(() => false);
-    expect(hasSystemBadge || hasOrgBadge).toBeTruthy();
+    // Exactly one badge always renders (system-defaults vs org key). Poll with a
+    // single .or() locator instead of an instant isVisible() so a late-rendering
+    // badge doesn't flake the assertion.
+    const badge = page
+      .getByText(/Using System Environment Variables/i)
+      .or(page.getByText(/Using Organization API Key/i));
+    await expect(badge.first()).toBeVisible();
   });
 });
 

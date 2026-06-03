@@ -9,6 +9,7 @@ import {
   deleteRepositoryById,
   type SeededRepository,
 } from '../../helpers/prisma.helpers';
+import { repositoryRow } from '../../helpers/repos.helpers';
 
 /**
  * Assignment publish / unpublish round-trips and persists in the DB.
@@ -97,16 +98,16 @@ test.describe('Owner publishes and unpublishes an assignment', () => {
       await page.goto(REPOS_PATH(testOrg));
       await waitForDataLoad(page);
 
-      const row = page.getByRole('row').filter({ hasText: title });
+      const row = repositoryRow(page, title);
       await expect(row).toBeVisible();
       await expect(row.getByText('Published')).toBeVisible();
 
       await row.getByText('Unpublish', { exact: true }).click();
 
       await expect(
-        page.getByText('This will hide the assignment from students')
+        page.getByText('hides the repository from students')
       ).toBeVisible();
-      await page.getByRole('button', { name: 'Unpublish', exact: true }).click();
+      await page.locator('.ant-popconfirm, .ant-popover').getByRole('button', { name: 'Unpublish', exact: true }).click();
 
       await expect(row.getByText('Draft')).toBeVisible();
 
@@ -129,7 +130,7 @@ test.describe('Owner publishes and unpublishes an assignment', () => {
       await page.goto(REPOS_PATH(testOrg));
       await waitForDataLoad(page);
 
-      const row = page.getByRole('row').filter({ hasText: title });
+      const row = repositoryRow(page, title);
       await expect(row).toBeVisible();
       await expect(row.getByText('Draft')).toBeVisible();
 
@@ -137,9 +138,9 @@ test.describe('Owner publishes and unpublishes an assignment', () => {
       await row.getByText('Publish', { exact: true }).click();
 
       await expect(
-        page.getByText('This will make the assignment available to all students')
+        page.getByText('makes the repository available to all students')
       ).toBeVisible();
-      await page.getByRole('button', { name: 'Publish', exact: true }).click();
+      await page.locator('.ant-popconfirm, .ant-popover').getByRole('button', { name: 'Publish', exact: true }).click();
 
       await expect(row.getByText('Published')).toBeVisible();
 
@@ -162,18 +163,18 @@ test.describe('Owner publishes and unpublishes an assignment', () => {
       await page.goto(REPOS_PATH(testOrg));
       await waitForDataLoad(page);
 
-      const row = page.getByRole('row').filter({ hasText: title });
+      const row = repositoryRow(page, title);
       await expect(row).toBeVisible();
 
       await row.getByText('Unpublish', { exact: true }).click();
-      await page.getByRole('button', { name: 'Unpublish', exact: true }).click();
+      await page.locator('.ant-popconfirm, .ant-popover').getByRole('button', { name: 'Unpublish', exact: true }).click();
       await expect(row.getByText('Draft')).toBeVisible();
       await expect
         .poll(async () => getRepositoryPublishedState(seeded.repositoryId))
         .toBe(false);
 
       await row.getByText('Publish', { exact: true }).click();
-      await page.getByRole('button', { name: 'Publish', exact: true }).click();
+      await page.locator('.ant-popconfirm, .ant-popover').getByRole('button', { name: 'Publish', exact: true }).click();
       await expect(row.getByText('Published')).toBeVisible();
       await expect
         .poll(async () => getRepositoryPublishedState(seeded.repositoryId))
@@ -194,7 +195,7 @@ test.describe('Owner publishes and unpublishes an assignment', () => {
       await page.goto(REPOS_PATH(testOrg));
       await waitForDataLoad(page);
 
-      const row = page.getByRole('row').filter({ hasText: title });
+      const row = repositoryRow(page, title);
       await expect(row).toBeVisible();
       await expect(row.getByText('Draft', { exact: true })).toBeVisible();
       await expect(row.getByText('Publish', { exact: true })).toBeVisible();
