@@ -237,7 +237,7 @@ export function ClassroomsLandingScreen({
 
   const renderList = (items: LandingClass[]) => (
     <div className="overflow-x-auto -mx-4 px-4 sm:mx-0 sm:px-0">
-      <div className="bg-panel ring-1 ring-line rounded-2xl overflow-hidden min-w-[700px]">
+      <div className="bg-panel ring-1 ring-line rounded-2xl overflow-hidden sm:min-w-[700px]">
         <ClassroomRowHeader />
         {items.map(c => (
           <ClassroomRow key={c.id} c={c} onOpen={() => onOpenClass(c)} />

@@ -81,7 +81,11 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
         student_id: userId,
         classroom_id: classroom.id,
       }),
-      ClassmojiService.helper.findAllAssignmentsForStudent(userId, classSlug),
+      ClassmojiService.helper
+        .findAllAssignmentsForStudent(userId, classSlug)
+        .catch(
+          () => [] as Awaited<ReturnType<typeof ClassmojiService.helper.findAllAssignmentsForStudent>>
+        ),
     ]);
 
     const weekEvents: WeekEvent[] = (weekEventsRaw as Array<Record<string, unknown>>).map(e => ({
@@ -215,7 +219,7 @@ const StudentDashboard = ({ loaderData }: Route.ComponentProps) => {
       </h1>
 
       <Suspense fallback={<Skeleton active paragraph={{ rows: 8 }} />}>
-        <Await resolve={data}>
+        <Await resolve={data} errorElement={null}>
           {(d: DashboardData) => (
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 lg:gap-7 lg:grid-rows-[auto_1fr] lg:min-h-[calc(100vh-10rem)]">
               <div className="lg:col-span-2">

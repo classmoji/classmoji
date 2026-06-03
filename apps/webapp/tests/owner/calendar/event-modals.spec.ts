@@ -1,34 +1,52 @@
 import { test, expect } from '../../fixtures/auth.fixture';
-import { mockGitHubAPI } from '../../fixtures/mocks/github.mock';
-import { waitForDataLoad, waitForModal, waitForModalClose } from '../../helpers/wait.helpers';
+import { waitForDataLoad, waitForModal } from '../../helpers/wait.helpers';
+import { getTestPrisma, getClassroomBySlug } from '../../helpers/prisma.helpers';
+import { TEST_CLASSROOM } from '../../helpers/env.helpers';
 
 /**
- * Calendar Event Modals (Add + Edit)
+ * Calendar Event Modals (Add + Edit).
  *
- * Covers the redesigned Edit Event modal that now mirrors Add Event's
- * Gmail-style layout, plus the optional "Repeat until" (Never / On date)
- * toggle introduced for both modals.
+ * The seed creates an editable "Week 1 Lecture" event; the owner is an admin, so
+ * clicking it opens the Edit modal.
  */
+
+async function deleteEventsByTitle(title: string): Promise<void> {
+  const prisma = getTestPrisma();
+  const classroom = await getClassroomBySlug(TEST_CLASSROOM);
+  await prisma.calendarEvent.deleteMany({
+    where: { classroom_id: classroom.id, title },
+  });
+}
+
+async function findEventByTitle(title: string) {
+  const prisma = getTestPrisma();
+  const classroom = await getClassroomBySlug(TEST_CLASSROOM);
+  return prisma.calendarEvent.findFirst({
+    where: { classroom_id: classroom.id, title },
+    select: { id: true, title: true, location: true },
+  });
+}
 
 test.describe('Add Event Modal', () => {
   test.beforeEach(async ({ authenticatedPage: page, testOrg }) => {
-    await mockGitHubAPI(page);
     await page.goto(`/admin/${testOrg}/calendar`);
     await waitForDataLoad(page);
     await page.getByRole('button', { name: 'Add Event' }).click();
     await waitForModal(page);
   });
 
-  test('opens with Gmail-style "New event" header', async ({ authenticatedPage: page }) => {
+  test('opens with the Gmail-style "New event" header', async ({ authenticatedPage: page }) => {
     const modal = page.locator('.ant-modal');
     await expect(modal.getByText('New event', { exact: true })).toBeVisible();
   });
 
-  test('shows borderless title input with placeholder', async ({ authenticatedPage: page }) => {
+  test('shows the borderless title input with "Add title" placeholder', async ({
+    authenticatedPage: page,
+  }) => {
     await expect(page.getByPlaceholder('Add title')).toBeVisible();
   });
 
-  test('shows inline icon rows for location, meeting link, description', async ({
+  test('shows inline rows for location, meeting link, and description', async ({
     authenticatedPage: page,
   }) => {
     await expect(page.getByPlaceholder('Add location')).toBeVisible();
@@ -36,7 +54,7 @@ test.describe('Add Event Modal', () => {
     await expect(page.getByPlaceholder('Add description')).toBeVisible();
   });
 
-  test('footer has Discard + Save buttons', async ({ authenticatedPage: page }) => {
+  test('footer has Discard and Save buttons', async ({ authenticatedPage: page }) => {
     const modal = page.locator('.ant-modal');
     await expect(modal.getByRole('button', { name: 'Discard' })).toBeVisible();
     await expect(modal.getByRole('button', { name: 'Save', exact: true })).toBeVisible();
@@ -44,22 +62,51 @@ test.describe('Add Event Modal', () => {
 
   test('Discard closes the modal', async ({ authenticatedPage: page }) => {
     await page.locator('.ant-modal').getByRole('button', { name: 'Discard' }).click();
-    await waitForModalClose(page);
+    // AntD keeps the .ant-modal wrapper mounted (hidden) after close instead of
+    // removing it, so assert the modal is no longer visible rather than absent.
+    await expect(page.locator('.ant-modal')).toBeHidden();
+  });
+
+  test('saving the Add Event modal persists a calendar_events row', async ({
+    authenticatedPage: page,
+  }) => {
+    const title = `QA Event ${Date.now()}`;
+    const location = 'QA Room 101';
+    try {
+      const modal = page.locator('.ant-modal');
+      await modal.getByPlaceholder('Add title').fill(title);
+      await modal.getByPlaceholder('Add location').fill(location);
+
+      // The Add modal prefills sensible default start/end times, so Save is enough.
+      await Promise.all([
+        page.waitForResponse(
+          r => r.url().includes('/calendar') && r.request().method() === 'POST'
+        ),
+        modal.getByRole('button', { name: 'Save', exact: true }).click(),
+      ]);
+
+      // Assert the row landed in the DB with the title (and location) we entered.
+      await expect
+        .poll(async () => (await findEventByTitle(title))?.title ?? null, { timeout: 10000 })
+        .toBe(title);
+      const persisted = await findEventByTitle(title);
+      expect(persisted?.location).toBe(location);
+    } finally {
+      await deleteEventsByTitle(title);
+    }
   });
 });
 
 test.describe('Recurring "Ends" toggle (Add modal)', () => {
   test.beforeEach(async ({ authenticatedPage: page, testOrg }) => {
-    await mockGitHubAPI(page);
     await page.goto(`/admin/${testOrg}/calendar`);
     await waitForDataLoad(page);
     await page.getByRole('button', { name: 'Add Event' }).click();
     await waitForModal(page);
-    // Toggle Repeat on
     await page.getByRole('checkbox', { name: 'Repeat' }).check();
   });
 
-  test('Ends defaults to Never (no end date picker visible)', async ({
+  test('Ends defaults to Never (no end-date picker shown)', async ({
     authenticatedPage: page,
   }) => {
     const modal = page.locator('.ant-modal');
@@ -71,55 +118,43 @@ test.describe('Recurring "Ends" toggle (Add modal)', () => {
   test('selecting "On date" reveals a DatePicker', async ({ authenticatedPage: page }) => {
     const modal = page.locator('.ant-modal');
     await modal.getByRole('radio', { name: 'On date' }).check();
-    // AntD DatePicker has placeholder "Select date" by default
     await expect(modal.locator('.ant-picker').last()).toBeVisible();
   });
 
-  test('switching back to Never hides the DatePicker', async ({ authenticatedPage: page }) => {
+  test('switching back to Never hides the end-date DatePicker', async ({
+    authenticatedPage: page,
+  }) => {
     const modal = page.locator('.ant-modal');
     await modal.getByRole('radio', { name: 'On date' }).check();
     const pickers = modal.locator('.ant-picker');
     const countWithEnd = await pickers.count();
 
     await modal.getByRole('radio', { name: 'Never' }).check();
-    const countWithoutEnd = await pickers.count();
-    expect(countWithoutEnd).toBeLessThan(countWithEnd);
+    await expect(async () => {
+      expect(await pickers.count()).toBeLessThan(countWithEnd);
+    }).toPass();
   });
 });
 
 test.describe('Edit Event Modal redesign', () => {
   test.beforeEach(async ({ authenticatedPage: page, testOrg }) => {
-    await mockGitHubAPI(page);
     await page.goto(`/admin/${testOrg}/calendar`);
     await waitForDataLoad(page);
-    // Make sure we're on Month view to maximize chance of seeing seeded events
     await page.getByRole('button', { name: 'Month' }).click();
   });
 
-  test('clicking an event opens the redesigned modal (centered, not a drawer)', async ({
+  test('clicking a seeded event opens the redesigned (centered, not drawer) edit modal', async ({
     authenticatedPage: page,
   }) => {
-    // Find any seeded event chip — calendar test fixture includes a deadline
-    // event around 2026-01-01. We navigate prev-month if no event is visible
-    // in the current month.
-    const eventCard = page.locator('.evt, [class*="evt-"], button:has-text("Due:")').first();
-    let visible = await eventCard.isVisible().catch(() => false);
-    if (!visible) {
-      const navGroup = page.getByRole('button', { name: 'Today' }).locator('..');
-      await navGroup.locator('button').first().click();
-      visible = await eventCard.isVisible().catch(() => false);
-    }
-    test.skip(!visible, 'no event available to click for edit-modal test');
+    const eventChip = page.getByText('Week 1 Lecture').first();
+    await expect(eventChip).toBeVisible();
+    await eventChip.click();
 
-    await eventCard.click();
     await waitForModal(page, /Edit event/i);
-
     const modal = page.locator('.ant-modal');
-    // Header text matches the Gmail-style label
+
     await expect(modal.getByText('Edit event', { exact: true })).toBeVisible();
-    // Should NOT be a Drawer (drawer container would be present otherwise)
     await expect(page.locator('.ant-drawer-content')).toHaveCount(0);
-    // Footer has Delete on the left, Save changes on the right
     await expect(modal.getByRole('button', { name: /Delete/ })).toBeVisible();
     await expect(modal.getByRole('button', { name: 'Save changes' })).toBeVisible();
   });

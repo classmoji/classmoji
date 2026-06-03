@@ -159,10 +159,14 @@ export const findClassroomGradingProgressPerAssignment = async (classroomId: str
 export const calculateClassLeaderboard = async (classroomSlug: string) => {
   const classroom = await classroomService.findBySlug(classroomSlug);
 
-  const emojiMappings = await findEmojiMappingsByClassroomId(classroom!.id);
-  const students = await findRepositoriesPerStudent(classroom!);
+  if (!classroom) {
+    throw new Response('Classroom not found', { status: 404 });
+  }
 
-  const settings = await classroomService.getClassroomSettingsForServer(classroom!.id);
+  const emojiMappings = await findEmojiMappingsByClassroomId(classroom.id);
+  const students = await findRepositoriesPerStudent(classroom);
+
+  const settings = await classroomService.getClassroomSettingsForServer(classroom.id);
 
   const grades: Array<{
     id: string;

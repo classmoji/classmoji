@@ -67,19 +67,25 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
     return { user: null };
   }
 
-  // Create Trigger.dev public token for task monitoring (non-fatal if not configured)
+  // Create Trigger.dev public token for task monitoring. Only attempt this when a
+  // secret key is actually configured: without it the call cannot mint a usable
+  // token, and running it on every navigation (e.g. across an e2e suite) is pure
+  // waste — and real Trigger.dev API usage wherever a key is present. Gating on
+  // the key keeps production behaviour identical while making CI/e2e a no-op.
   let publicToken = null;
-  try {
-    publicToken = await triggerAuth.createPublicToken({
-      expirationTime: '1hr',
-      scopes: {
-        read: {
-          runs: true,
+  if (process.env.TRIGGER_SECRET_KEY || process.env.TRIGGER_ACCESS_TOKEN) {
+    try {
+      publicToken = await triggerAuth.createPublicToken({
+        expirationTime: '1hr',
+        scopes: {
+          read: {
+            runs: true,
+          },
         },
-      },
-    });
-  } catch {
-    // Trigger.dev not configured - skip public token
+      });
+    } catch {
+      // Trigger.dev not configured correctly - skip public token
+    }
   }
 
   if (url.pathname.endsWith('/invitation')) return { user: null };
@@ -355,7 +361,7 @@ const App = ({ loaderData }: Route.ComponentProps) => {
         <link rel="preconnect" href="https://fonts.googleapis.com" />
         <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
         <link
-          href="https://fonts.googleapis.com/css2?family=DM+Mono:ital,wght@0,300;0,400;0,500;1,300;1,400;1,500&family=DM+Sans:ital,opsz,wght@0,9..40,100..1000;1,9..40,100..1000&display=swap"
+          href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,100..1000;1,9..40,100..1000&display=swap"
           rel="stylesheet"
         />
         <Meta />

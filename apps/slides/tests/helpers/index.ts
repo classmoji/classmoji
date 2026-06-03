@@ -26,6 +26,26 @@ export {
   retry,
 } from './wait.helpers';
 
+// Socket.IO multiplex helpers
+export {
+  connectMultiplex,
+  joinRoom,
+  waitForEvent,
+  expectNoEvent,
+  closeSocket,
+  cookieHeaderFromContext,
+  type SlideChangedEvent,
+} from './socket';
+
+// Prisma DB-assertion helpers
+export {
+  getTestPrisma,
+  getSlideById,
+  getClassroomIdBySlug,
+  ensureSlideShareCode,
+  type SlideRow,
+} from './prisma.helpers';
+
 // Slide helpers
 export {
   createSlide,

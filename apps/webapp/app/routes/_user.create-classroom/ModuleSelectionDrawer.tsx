@@ -27,7 +27,7 @@ const ModuleSelectionDrawer = ({
     <Drawer
       title="Select Repositories to Import"
       placement="right"
-      width={720}
+      width="min(100vw, 720px)"
       open={open}
       onClose={onClose}
       extra={

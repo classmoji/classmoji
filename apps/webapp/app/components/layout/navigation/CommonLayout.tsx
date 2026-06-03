@@ -471,7 +471,7 @@ const CommonLayout = ({
             type="button"
             onClick={() => setMobileOpen(true)}
             aria-label="Open menu"
-            className="fixed top-4 left-4 z-40 p-1 lg:hidden"
+            className="fixed top-[max(0.75rem,env(safe-area-inset-top))] left-[max(0.75rem,env(safe-area-inset-left))] z-40 p-2 lg:hidden"
           >
             <IconMenu2 size={24} className="text-ink-1" strokeWidth={1.75} />
           </button>

@@ -159,7 +159,7 @@ const OWNER_STEPS: FeatureStep[] = [
     link: '/teams',
     title: 'Teams for group work',
     description:
-      'Teams let you run group projects instead of individual work. A group repository gives each team a single shared repo rather than one per student, and you can assign teams yourself or let students form their own, plus set a maximum team size.',
+      'Teams let you run group projects instead of individual work. A group repository gives each team a single shared repo instead of one per student, and you can assign teams yourself or let students form their own, plus set a maximum team size.',
   },
   {
     link: '/teams',
@@ -565,6 +565,18 @@ export function InClassroomTour() {
   // force a re-render so antd re-resolves target() and anchors instead of centering.
   const [, setResolveNonce] = useState(0);
 
+  // Below `lg` the sidebar is a hidden off-screen drawer, so a nav-item spotlight
+  // would anchor to something the user can't see. When that's the case, nav steps
+  // fall back to a centered informational card (same treatment as no-target steps).
+  const [sidebarHidden, setSidebarHidden] = useState(false);
+  useEffect(() => {
+    const mq = window.matchMedia('(max-width: 1023px)');
+    const update = () => setSidebarHidden(mq.matches);
+    update();
+    mq.addEventListener('change', update);
+    return () => mq.removeEventListener('change', update);
+  }, []);
+
   const phaseRole = tourPhase === 'instructor' ? 'OWNER' : tourPhase === 'student' ? 'STUDENT' : null;
   const pathPrefix =
     tourPhase === 'instructor' ? '/admin' : tourPhase === 'student' ? '/student' : null;
@@ -610,7 +622,8 @@ export function InClassroomTour() {
   useEffect(() => {
     if (!active) return;
     const step = featureSteps[tourStep];
-    const sel = step?.selector ?? (step?.link ? `[data-tour-nav="${step.link}"]` : null);
+    const sel =
+      step?.selector ?? (step?.link && !sidebarHidden ? `[data-tour-nav="${step.link}"]` : null);
     if (!sel) return;
     let tries = 0;
     const id = window.setInterval(() => {
@@ -633,7 +646,7 @@ export function InClassroomTour() {
       }
     }, 150);
     return () => window.clearInterval(id);
-  }, [active, tourStep, location.pathname, featureSteps]);
+  }, [active, tourStep, location.pathname, featureSteps, sidebarHidden]);
 
   // Keep the spotlight glued to the live target after it first anchors. rc-tour
   // only re-measures the highlight on window resize or a target-element change —
@@ -647,7 +660,8 @@ export function InClassroomTour() {
   useEffect(() => {
     if (!active) return;
     const step = featureSteps[tourStep];
-    const sel = step?.selector ?? (step?.link ? `[data-tour-nav="${step.link}"]` : null);
+    const sel =
+      step?.selector ?? (step?.link && !sidebarHidden ? `[data-tour-nav="${step.link}"]` : null);
     if (!sel) return;
     let raf = 0;
     let lastTop = Number.NaN;
@@ -678,7 +692,7 @@ export function InClassroomTour() {
       window.clearTimeout(stopPoll);
       if (raf) window.cancelAnimationFrame(raf);
     };
-  }, [active, tourStep, location.pathname, featureSteps]);
+  }, [active, tourStep, location.pathname, featureSteps, sidebarHidden]);
 
   const markComplete = () => {
     if (classroom?.id && phaseRole) {
@@ -734,11 +748,19 @@ export function InClassroomTour() {
   if (!active) return null;
 
   const steps: TourProps['steps'] = featureSteps.map(s => {
-    const hasTarget = !!(s.selector || s.link);
+    // On a phone the sidebar nav is off-screen, so a nav-item step has no visible
+    // anchor — drop its target and let it render centered like an info step.
+    const navOnMobile = !s.selector && !!s.link && sidebarHidden;
+    const target = s.selector
+      ? selTarget(s.selector)
+      : s.link && !navOnMobile
+        ? navTarget(s.link)
+        : undefined;
+    const hasTarget = !!target;
     return {
       title: s.title,
       description: s.description,
-      target: s.selector ? selTarget(s.selector) : s.link ? navTarget(s.link) : undefined,
+      target,
       placement: s.placement ?? (hasTarget ? 'right' : undefined),
       // Informational steps with nothing to anchor get a darker full-screen mask
       // so they read as a deliberate "read this" moment instead of a tooltip whose

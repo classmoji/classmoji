@@ -11,10 +11,13 @@ import { getBaseUrl } from './tests/helpers/env.helpers';
  */
 export default defineConfig({
   testDir: './tests',
-  fullyParallel: true,
+  // Webapp E2E specs share one database and a small pool of role identities.
+  // Run them serially to prevent one spec's cleanup from deleting another spec's
+  // seeded rows or notifications.
+  fullyParallel: false,
+  workers: 1,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 2 : 0,
-  workers: process.env.CI ? 1 : undefined,
 
   reporter: [
     ['html', { open: 'never', outputFolder: 'playwright-report' }],
@@ -85,6 +88,37 @@ export default defineConfig({
     {
       name: 'smoke-tests',
       testDir: './tests/smoke',
+      dependencies: ['auth-setup'],
+      use: {
+        ...devices['Desktop Chrome'],
+        storageState: './tests/.auth/owner.json',
+      },
+    },
+
+    // Auth flow tests - manage their own context; logged-in cases call /test-login
+    {
+      name: 'auth-tests',
+      testDir: './tests/auth',
+      dependencies: ['auth-setup'],
+      use: {
+        ...devices['Desktop Chrome'],
+      },
+    },
+
+    // Access control tests - specs set storageState per describe; unauth uses clean context
+    {
+      name: 'access-control-tests',
+      testDir: './tests/access-control',
+      dependencies: ['auth-setup'],
+      use: {
+        ...devices['Desktop Chrome'],
+      },
+    },
+
+    // Regression tests - owner auth by default; specs override per-test for other roles
+    {
+      name: 'regression-tests',
+      testDir: './tests/regression',
       dependencies: ['auth-setup'],
       use: {
         ...devices['Desktop Chrome'],

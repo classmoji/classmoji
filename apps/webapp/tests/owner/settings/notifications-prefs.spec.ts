@@ -90,8 +90,10 @@ test.describe('Settings → Notifications preferences', () => {
     const toggle = row.locator('button[aria-pressed]');
     await expect(toggle).toHaveAttribute('aria-pressed', 'false');
 
+    // React Router's fetcher.Form posts to the single-fetch endpoint
+    // (".../settings/notifications.data"), so match the pathname loosely.
     const req = page.waitForResponse(
-      r => r.url().endsWith('/settings/notifications') && r.request().method() === 'POST'
+      r => r.url().includes('/settings/notifications') && r.request().method() === 'POST'
     );
     await toggle.click();
     await req;

@@ -19,7 +19,7 @@
  * Copy is sourced from https://classmoji.io/docs and matches the current flow.
  */
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { useFetcher, useLocation, useNavigate } from 'react-router';
 import { Tour, Button } from 'antd';
 import type { TourProps } from 'antd';
@@ -41,6 +41,8 @@ interface LandingStep {
   placement?: Placement;
   title: string;
   description: string;
+  /** Optional highlighted callout rendered below the description. */
+  tip?: ReactNode;
 }
 
 const SELECT_ORG = '/select-organization';
@@ -50,7 +52,13 @@ const LANDING_STEPS: LandingStep[] = [
     link: SELECT_ORG,
     title: 'Welcome to Classmoji',
     description:
-      'Classmoji is a Git-native learning platform for CS courses, similar to GitHub Classroom but built around how programming is actually taught and graded. This quick tour covers your account and this screen first, then walks you through a sample course twice, once as the instructor and once as a student, so you see both sides. Tip: use the Right and Left arrow keys to move to the next and previous step.',
+      'Classmoji is a Git-native learning platform for CS courses, similar to GitHub Classroom but built around how programming is actually taught and graded. This quick tour covers your account and this screen first, then walks you through a sample course twice, once as the instructor and once as a student, so you see both sides.',
+    tip: (
+      <>
+        <strong>Tip:</strong> use the <kbd className="cm-tour-key">←</kbd> and{' '}
+        <kbd className="cm-tour-key">→</kbd> arrow keys to move between steps.
+      </>
+    ),
   },
   {
     link: SELECT_ORG,
@@ -252,7 +260,14 @@ export function OnboardingTour() {
       onFinish={finishLanding}
       steps={LANDING_STEPS.map(s => ({
         title: s.title,
-        description: s.description,
+        description: s.tip ? (
+          <>
+            <p style={{ margin: 0 }}>{s.description}</p>
+            <div className="cm-tour-tip">{s.tip}</div>
+          </>
+        ) : (
+          s.description
+        ),
         target: s.onboarding ? target(s.onboarding) : undefined,
         placement: s.placement,
         mask: s.onboarding ? undefined : { color: 'rgba(0, 0, 0, 0.8)' },

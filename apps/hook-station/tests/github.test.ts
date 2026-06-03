@@ -1,8 +1,9 @@
-import { describe, it, expect, vi, beforeAll, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import crypto from 'node:crypto';
 import Fastify, { type FastifyInstance } from 'fastify';
 import fastifyRawBody from 'fastify-raw-body';
 
+// Must match the secret set in tests/setup.ts before any route import.
 const GITHUB_SECRET = 'test-gh-secret';
 
 const triggers = {
@@ -45,10 +46,6 @@ const buildApp = async (): Promise<FastifyInstance> => {
 describe('github webhook route', () => {
   let app: FastifyInstance;
 
-  beforeAll(() => {
-    process.env.GITHUB_WEBHOOK_SECRET = GITHUB_SECRET;
-  });
-
   beforeEach(async () => {
     Object.values(triggers).forEach(t => t.mockClear());
     app = await buildApp();
@@ -86,6 +83,12 @@ describe('github webhook route', () => {
     expect(res.statusCode).toBe(200);
     expect(JSON.parse(res.body)).toEqual({ success: true });
     expect(triggers.closed).toHaveBeenCalledTimes(1);
+    // The handler must receive the parsed webhook payload (action + issue), not
+    // an empty/placeholder object — otherwise the downstream task can't resolve
+    // which assignment closed.
+    expect(triggers.closed).toHaveBeenCalledWith(
+      expect.objectContaining({ action: 'closed', issue: { id: 1, number: 7 } })
+    );
   });
 
   it('does not trigger closed handler when payload has no issue', async () => {
@@ -182,5 +185,92 @@ describe('github webhook route', () => {
     });
     expect(res.statusCode).toBe(200);
     expect(Object.values(triggers).every(t => t.mock.calls.length === 0)).toBe(true);
+  });
+
+  // HMAC is verified over the raw request body, not JSON.stringify(body).
+  describe('REGRESSION: GitHub webhook HMAC over raw body still works after TS migration', () => {
+    it('accepts a signature computed over the EXACT raw bytes (whitespace-padded JSON)', async () => {
+      // Whitespace-padded JSON that JSON.stringify(parse(...)) would not reproduce.
+      const rawBody = '{\n  "action": "closed",\n  "issue": { "id": 1, "number": 7 }\n}';
+      const res = await app.inject({
+        method: 'POST',
+        url: '/webhooks/callback/github',
+        headers: { 'x-hub-signature-256': sign(rawBody), 'content-type': 'application/json' },
+        payload: rawBody,
+      });
+      expect(res.statusCode).toBe(200);
+      expect(triggers.closed).toHaveBeenCalledTimes(1);
+    });
+
+    it('rejects a signature computed over a re-serialized body (the main-branch bug)', async () => {
+      const rawBody = '{\n  "action": "closed",\n  "issue": { "id": 1, "number": 7 }\n}';
+      const reSerialized = JSON.stringify(JSON.parse(rawBody));
+      const res = await app.inject({
+        method: 'POST',
+        url: '/webhooks/callback/github',
+        headers: {
+          'x-hub-signature-256': sign(reSerialized),
+          'content-type': 'application/json',
+        },
+        payload: rawBody,
+      });
+      expect(res.statusCode).toBe(401);
+      expect(triggers.closed).not.toHaveBeenCalled();
+    });
+
+    it('accepts a signature over a non-ASCII (multibyte UTF-8) raw body', async () => {
+      const payload = { action: 'closed', issue: { id: 1, number: 7, title: 'café — 日本語 — 🎓' } };
+      const rawBody = JSON.stringify(payload);
+      expect(Buffer.byteLength(rawBody, 'utf8')).toBeGreaterThan(rawBody.length);
+
+      const res = await app.inject({
+        method: 'POST',
+        url: '/webhooks/callback/github',
+        headers: { 'x-hub-signature-256': sign(rawBody), 'content-type': 'application/json' },
+        payload: rawBody,
+      });
+      expect(res.statusCode).toBe(200);
+      expect(triggers.closed).toHaveBeenCalledTimes(1);
+    });
+
+    it('returns 401 when the x-hub-signature-256 header is absent even with a valid body', async () => {
+      const rawBody = JSON.stringify({ action: 'closed', issue: { id: 1, number: 7 } });
+      const res = await app.inject({
+        method: 'POST',
+        url: '/webhooks/callback/github',
+        headers: { 'content-type': 'application/json' },
+        payload: rawBody,
+      });
+      expect(res.statusCode).toBe(401);
+      expect(triggers.closed).not.toHaveBeenCalled();
+    });
+
+    it('rejects a forged all-zeros signature over an otherwise valid body', async () => {
+      const rawBody = JSON.stringify({ action: 'closed', issue: { id: 1, number: 7 } });
+      const res = await app.inject({
+        method: 'POST',
+        url: '/webhooks/callback/github',
+        headers: {
+          'x-hub-signature-256':
+            'sha256=0000000000000000000000000000000000000000000000000000000000000000',
+          'content-type': 'application/json',
+        },
+        payload: rawBody,
+      });
+      expect(res.statusCode).toBe(401);
+      expect(triggers.closed).not.toHaveBeenCalled();
+    });
+
+    it('returns 401 when the body (rawBody) is missing despite a signature header', async () => {
+      // No payload at all -> fastify-raw-body never captures a rawBody, so the
+      // route's `typeof rawBody !== 'string'` guard must reject before verifying.
+      const res = await app.inject({
+        method: 'POST',
+        url: '/webhooks/callback/github',
+        headers: { 'x-hub-signature-256': 'sha256=deadbeef' },
+      });
+      expect(res.statusCode).toBe(401);
+      expect(triggers.closed).not.toHaveBeenCalled();
+    });
   });
 });

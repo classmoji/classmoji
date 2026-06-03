@@ -101,7 +101,8 @@
 
   --font-sans:
     'DM Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
-  --font-mono: 'DM Mono', ui-monospace, Menlo, Consolas, monospace;
+  /* Mono dropped — unified on the sans stack so the whole app uses one font. */
+  --font-mono: var(--font-sans);
   --font-display: 'DM Sans', 'Instrument Serif', 'Cormorant Garamond', Georgia, serif;
 }
 
@@ -1309,6 +1310,41 @@ html[data-theme='dark'] .bar .fill.done {
   margin: 0;
 }
 
+/* Tip callout — a soft accent card below a step's paragraph. Uses the accent
+   tokens so it picks up the user's chosen accent and adapts to light/dark. */
+.cm-tour-tip {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin-top: 14px;
+  margin-bottom: 10px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+  border: 1px solid var(--accent-soft-2);
+  font-size: 13px;
+  line-height: 1.5;
+}
+.cm-tour-key {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 5px;
+  margin: 0 1px;
+  border-radius: 6px;
+  background: var(--panel);
+  border: 1px solid var(--accent-soft-2);
+  box-shadow: 0 1px 0 var(--accent-soft-2);
+  font-size: 12px;
+  font-weight: 600;
+  font-family: var(--font-sans);
+  color: var(--accent-ink);
+  vertical-align: baseline;
+}
+
 /* Smooth, delightful step-to-step movement. The spotlight cutout is an SVG path,
    which Chromium can animate via `transition: d`, so it glides between targets;
    the popover eases to its new position instead of snapping. */
@@ -1322,6 +1358,14 @@ html[data-theme='dark'] .bar .fill.done {
     left 0.4s cubic-bezier(0.22, 1, 0.36, 1),
     inset-inline-start 0.4s cubic-bezier(0.22, 1, 0.36, 1),
     inset-inline-end 0.4s cubic-bezier(0.22, 1, 0.36, 1);
+}
+/* Keep the tour popover inside the viewport with a gutter to the screen edges.
+   Unconditional: on desktop the natural width is far below this cap, so it only
+   bites on narrow/phone screens, where antd's default width would otherwise run
+   flush to (or past) the borders. */
+.cm-tour .ant-tour,
+.cm-tour .ant-tour-inner {
+  max-width: calc(100vw - 2rem);
 }
 
 /* "Take a tour" button: lift the route icon on hover, spin it on click. */

@@ -1,5 +1,6 @@
 import { PrismaClient } from '@prisma/client';
 import dayjs, { type Dayjs } from 'dayjs';
+import { createOneShotShutdown } from '@classmoji/utils';
 
 interface TokenTransaction {
   hours_purchased?: number | null;
@@ -180,18 +181,26 @@ if (typeof window === 'undefined') {
     await disconnectPrisma();
   });
 
-  process.on('uncaughtException', async (error: Error) => {
-    console.error('Uncaught Exception:', error);
-    await disconnectPrisma();
+  // Crash handlers must (a) never re-enter if cleanup itself rejects and
+  // (b) always exit even if the Prisma disconnect hangs. A bare
+  // `async () => { await disconnectPrisma(); process.exit(1); }` violated both:
+  // a rejected disconnect spawned a fresh unhandledRejection that re-entered
+  // this handler, and a hung disconnect blocked the exit entirely.
+  const shutdownWithFailure = createOneShotShutdown(
+    disconnectPrisma,
     // eslint-disable-next-line no-process-exit
-    process.exit(1);
+    code => process.exit(code),
+    { timeoutMs: 5000 }
+  );
+
+  process.on('uncaughtException', (error: Error) => {
+    console.error('Uncaught Exception:', error);
+    shutdownWithFailure(1);
   });
 
-  process.on('unhandledRejection', async (reason: unknown, promise: Promise<unknown>) => {
+  process.on('unhandledRejection', (reason: unknown, promise: Promise<unknown>) => {
     console.error('Unhandled Rejection at:', promise, 'reason:', reason);
-    await disconnectPrisma();
-    // eslint-disable-next-line no-process-exit
-    process.exit(1);
+    shutdownWithFailure(1);
   });
 }
 

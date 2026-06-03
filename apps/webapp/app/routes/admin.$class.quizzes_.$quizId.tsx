@@ -695,6 +695,7 @@ const QuizView = ({ loaderData }: Route.ComponentProps) => {
         rowKey="id"
         pagination={false}
         size="small"
+        scroll={{ x: 'max-content' }}
         style={{ marginLeft: 48 }}
       />
     );

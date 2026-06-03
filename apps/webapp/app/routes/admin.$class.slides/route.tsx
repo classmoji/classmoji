@@ -319,6 +319,7 @@ export default function SlidesAdmin({ loaderData }: Route.ComponentProps) {
           rowKey="id"
           rowHoverable={false}
           size="middle"
+          scroll={{ x: 'max-content' }}
           pagination={{
             pageSize: 25,
             showSizeChanger: true,

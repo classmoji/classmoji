@@ -230,6 +230,7 @@ const LetterGradeMapping = ({ letterGradeMappings }: LetterGradeMappingProps) =>
           dataSource={sortedMappings}
           columns={letterGradeMappingColumns}
           size="small"
+          scroll={{ x: 'max-content' }}
           pagination={false}
           rowHoverable={false}
           rowKey="letter_grade"

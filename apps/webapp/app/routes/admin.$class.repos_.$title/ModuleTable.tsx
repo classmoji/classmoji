@@ -97,6 +97,7 @@ const ModuleTable = ({ repository, repos, emojiMappings, settings, org }: Module
         dataSource={repos}
         columns={columns as Parameters<typeof Table>[0]['columns']}
         rowHoverable={false}
+        scroll={{ x: 'max-content' }}
         pagination={false}
       />
     </ConfigProvider>

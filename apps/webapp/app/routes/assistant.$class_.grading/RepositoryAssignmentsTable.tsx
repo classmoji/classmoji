@@ -80,6 +80,16 @@ interface RepositoryAssignmentsTableProps {
     | { emoji: string; grade: number; [key: string]: unknown }[];
 }
 
+/**
+ * Resolve the Owner-cell subject for a grading row. The `git_repo` relation is
+ * required by the DB FK, but loaders can null it out (see the student-loader
+ * git_repo guard), so this must tolerate a null/undefined repo and a repo with
+ * neither student nor team without throwing — yielding `undefined` so the Owner
+ * cell renders empty rather than crashing the table.
+ */
+export const resolveOwner = (repo: RepositoryInfo | null | undefined) =>
+  repo?.student ?? repo?.team ?? undefined;
+
 type TabKey = 'overview' | 'submitted' | 'unsubmitted' | 'ungraded' | 'graded' | 'overdue' | 'all';
 
 const TAB_ORDER: { key: TabKey; label: string }[] = [
@@ -315,16 +325,20 @@ const RepositoryAssignmentsTable = ({
   const columns = [
     {
       title: 'Owner',
-      dataIndex: ['repository'],
+      dataIndex: ['git_repo'],
       key: 'student',
-      render: (repo: RepositoryInfo) => {
-        const user = repo.student ?? repo.team ?? undefined;
-        return <UserThumbnailView user={user} />;
+      render: (repo: RepositoryInfo | null | undefined) => {
+        const user = resolveOwner(repo);
+        return (
+          <span data-testid="grading-owner-cell">
+            <UserThumbnailView user={user} />
+          </span>
+        );
       },
     },
     {
       title: 'Repository',
-      dataIndex: ['repository', 'repository', 'title'],
+      dataIndex: ['git_repo', 'repository', 'title'],
       key: 'repository',
       filters:
         active === 'all'
@@ -503,6 +517,10 @@ const RepositoryAssignmentsTable = ({
             <button
               key={tab.key}
               type="button"
+              role="tab"
+              data-testid={`grading-tab-${tab.key}`}
+              aria-selected={isActive}
+              data-active={isActive ? 'true' : 'false'}
               onClick={() => setActive(tab.key)}
               style={
                 isActive

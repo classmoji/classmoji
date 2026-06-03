@@ -155,16 +155,30 @@ interface StatItemProps {
   subtitle?: string;
   valueColor?: string;
   accent?: React.ReactNode;
+  statKey?: string;
   duration?: number;
 }
 
-const StatItem = ({ label, value, suffix, subtitle, valueColor, accent, duration }: StatItemProps) => (
-  <div className="flex-1 min-w-0 flex items-start justify-between gap-3 px-4 sm:px-5 py-4">
+const StatItem = ({
+  label,
+  value,
+  suffix,
+  subtitle,
+  valueColor,
+  accent,
+  statKey,
+  duration,
+}: StatItemProps) => (
+  <div
+    className="flex-1 min-w-0 flex items-start justify-between gap-3 px-4 sm:px-5 py-4"
+    data-stat={statKey}
+  >
     <div className="min-w-0">
       <div className="text-xs font-medium text-ink-3">{label}</div>
       <div
         className="mt-1 text-2xl sm:text-3xl font-semibold tracking-tight leading-tight"
         style={valueColor ? { color: valueColor } : undefined}
+        data-testid={statKey ? `stat-value-${statKey}` : undefined}
       >
         <AnimatedNumber value={value} suffix={suffix} duration={duration} />
       </div>
@@ -261,7 +275,7 @@ const AdminDashboard = ({ loaderData }: Route.ComponentProps) => {
       )}
 
       <Suspense fallback={<Skeleton active />}>
-        <Await resolve={data}>
+        <Await resolve={data} errorElement={null}>
           {([
             students,
             leaderbord,
@@ -291,12 +305,14 @@ const AdminDashboard = ({ loaderData }: Route.ComponentProps) => {
                   className="rounded-2xl bg-panel ring-1 ring-line overflow-hidden flex flex-col sm:flex-row divide-y sm:divide-y-0 sm:divide-x divide-line"
                 >
                   <StatItem
+                    statKey="students"
                     label="Students"
                     value={students?.length || 0}
                     subtitle="enrolled"
                     duration={statsDuration}
                   />
                   <StatItem
+                    statKey="submitted"
                     label="Submitted"
                     value={completedAssignmentsProgress || 0}
                     suffix="%"
@@ -305,6 +321,7 @@ const AdminDashboard = ({ loaderData }: Route.ComponentProps) => {
                     duration={statsDuration}
                   />
                   <StatItem
+                    statKey="late"
                     label="Late"
                     value={lateSubmissionsPercent || 0}
                     suffix="%"
@@ -312,6 +329,7 @@ const AdminDashboard = ({ loaderData }: Route.ComponentProps) => {
                     duration={statsDuration}
                   />
                   <StatItem
+                    statKey="grading"
                     label="Grading"
                     value={gradingProgress || 0}
                     suffix="%"

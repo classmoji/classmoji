@@ -141,6 +141,7 @@ const AssignmentsTable = ({
   return (
     <Table
       className="mt-4"
+      scroll={{ x: 'max-content' }}
       columns={columns}
       dataSource={(assignments || []).sort(
         (a, b) =>
