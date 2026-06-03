@@ -152,8 +152,42 @@ class HelperService {
     );
   }
 
+  /**
+   * If the assignment has an open (IN_REVIEW) regrade request, remove the grades
+   * that predate the request so a fresh grade replaces — rather than averages
+   * with — the original. Grades applied after the request (deliberate multi-emoji
+   * grading during the re-grade) are left untouched. Token rewards are reversed via
+   * `removeGradeFromGitRepoAssignment`.
+   */
+  static async clearGradesForOpenRegradeRequest(
+    classroom: HelperClassroomRef,
+    gitRepoAssignment: GitRepoAssignmentRef
+  ): Promise<void> {
+    const openRequest = await ClassmojiService.regradeRequest.findOpenByAssignmentId(
+      gitRepoAssignment.id
+    );
+    if (!openRequest) return;
+
+    const grades = await ClassmojiService.assignmentGrade.findByAssignmentId(gitRepoAssignment.id);
+    const staleGrades = grades.filter(
+      grade => grade.created_at <= openRequest.created_at
+    );
+
+    for (const grade of staleGrades) {
+      await this.removeGradeFromGitRepoAssignment({ classroom, gitRepoAssignment, grade });
+    }
+  }
+
   static async addGradeToGitRepoAssignment(payload: GradeAssignmentPayload): Promise<void> {
     const { classroom, gitRepoAssignment, graderId, grade, studentId, teamId } = payload;
+
+    // When a submission has an open resubmit (regrade) request, a new grade should
+    // replace the original grade rather than be averaged with it. Clear the grades
+    // captured at request time before adding the new one. The request's
+    // `previous_grade` snapshot keeps those emojis visible in the "Previous Grade"
+    // column for reference.
+    await this.clearGradesForOpenRegradeRequest(classroom, gitRepoAssignment);
+
     if (await ClassmojiService.assignmentGrade.doesGradeExist(gitRepoAssignment.id, grade)) {
       return;
     }
