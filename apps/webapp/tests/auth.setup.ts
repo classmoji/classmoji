@@ -1,9 +1,17 @@
 import { test as setup, expect } from '@playwright/test';
 import { TEST_USERS } from './helpers/auth.helpers';
 import { TEST_CLASSROOM, TestRole } from './helpers/env.helpers';
-import { existsSync, mkdirSync, statSync, writeFileSync } from 'fs';
+import { getTestPrisma } from './helpers/prisma.helpers';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
+// Cache-validation logic (TTL + identity fingerprint) lives in a helper so it
+// can be unit-tested without a browser (see app/__tests__/authStorageCache.test.ts).
+import {
+  identityFingerprint,
+  fingerprintFile,
+  isStorageStateValid,
+} from './helpers/authCache.helpers';
 
 // ESM compatibility for __dirname
 const __filename = fileURLToPath(import.meta.url);
@@ -13,42 +21,6 @@ const __dirname = dirname(__filename);
 const authDir = join(__dirname, '.auth');
 if (!existsSync(authDir)) {
   mkdirSync(authDir, { recursive: true });
-}
-
-// Cache validity duration (1 hour)
-const CACHE_VALIDITY_MS = 60 * 60 * 1000;
-
-/**
- * Check if a storage state file is valid (exists, is recent, and has real auth)
- */
-function isStorageStateValid(stateFile: string): boolean {
-  if (!existsSync(stateFile)) {
-    return false;
-  }
-
-  try {
-    const stats = statSync(stateFile);
-    const ageMs = Date.now() - stats.mtimeMs;
-
-    // Check if file is recent enough
-    if (ageMs >= CACHE_VALIDITY_MS) {
-      return false;
-    }
-
-    // Check if file has valid content (not a failure marker)
-    const content = require('fs').readFileSync(stateFile, 'utf-8');
-    const parsed = JSON.parse(content);
-
-    // Reject if this is a failed auth marker
-    if (parsed._authFailed) {
-      return false;
-    }
-
-    // Valid storage state has cookies array with at least one cookie
-    return Array.isArray(parsed.cookies) && parsed.cookies.length > 0;
-  } catch {
-    return false;
-  }
 }
 
 // Run auth setup tests sequentially to avoid race conditions
@@ -86,8 +58,8 @@ for (const [role, user] of Object.entries(TEST_USERS) as [
   setup(`setup ${role} state`, async ({ page }) => {
     const stateFile = join(authDir, `${role}.json`);
 
-    // Skip if storage state already exists and is recent (within last hour)
-    if (isStorageStateValid(stateFile)) {
+    // Skip if storage state already exists, is recent, and matches this identity
+    if (isStorageStateValid(stateFile, role)) {
       console.log(`⏭️ Skipping ${role} setup - valid cached state exists`);
       return;
     }
@@ -110,8 +82,10 @@ for (const [role, user] of Object.entries(TEST_USERS) as [
 
       console.log(`✅ ${role} login successful`);
 
-      // Save storage state for this role
+      // Save storage state for this role + its identity fingerprint so a later
+      // token/user rotation invalidates this cache (see isStorageStateValid).
       await page.context().storageState({ path: stateFile });
+      writeFileSync(fingerprintFile(stateFile), identityFingerprint(role));
 
       console.log(`✅ ${role} state saved`);
     } catch (error) {
@@ -132,3 +106,45 @@ for (const [role, user] of Object.entries(TEST_USERS) as [
     }
   });
 }
+
+/**
+ * Guard: the three role sessions MUST resolve to three DISTINCT users.
+ *
+ * This is the backstop for the role-collapse footgun: if the TA/student tokens
+ * (or TEST_*_USER_* config) accidentally point at the same GitHub account as the
+ * owner, every `403 for non-owner` assertion would pass while actually exercising
+ * the OWNER. We read each saved storage state's `classmoji.session_token`, look up
+ * the session's user_id in the DB, and fail loudly on any collision — rather than
+ * letting the whole suite go green against a single identity.
+ *
+ * Runs last (serial mode) so all three state files exist.
+ */
+setup('verify distinct role identities', async () => {
+  const prisma = getTestPrisma();
+  const roles: TestRole[] = ['owner', 'assistant', 'student'];
+  const resolved: Record<string, string> = {};
+
+  for (const role of roles) {
+    const stateFile = join(authDir, `${role}.json`);
+    const parsed = JSON.parse(readFileSync(stateFile, 'utf-8'));
+    const cookie = (parsed.cookies as Array<{ name: string; value: string }>).find(
+      c => c.name === 'classmoji.session_token'
+    );
+    expect(cookie?.value, `${role}.json is missing a classmoji.session_token cookie`).toBeTruthy();
+
+    const session = await prisma.session.findFirst({
+      where: { token: cookie!.value },
+      select: { user_id: true },
+    });
+    expect(session?.user_id, `No DB session row for the ${role} session token`).toBeTruthy();
+    resolved[role] = session!.user_id;
+  }
+
+  const ids = Object.values(resolved);
+  expect(
+    new Set(ids).size,
+    `Role sessions must resolve to distinct users but got ${JSON.stringify(resolved)}. ` +
+      `Check GITHUB_{PROF,TA,STUDENT}_TOKEN and TEST_{TA,STUDENT}_USER_* — at least two roles ` +
+      `share one GitHub identity, which would make every role-gating/403 assertion vacuous.`
+  ).toBe(3);
+});

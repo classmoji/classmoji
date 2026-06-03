@@ -6,6 +6,7 @@ import compression from 'compression';
 import morgan from 'morgan';
 import getPrisma from '@classmoji/database';
 import { auth } from '@classmoji/auth/server';
+import { RoomStateStore } from '@classmoji/utils';
 
 // Helper to get session from socket cookie header
 async function getSocketAuthSession(cookieHeader: string) {
@@ -113,13 +114,10 @@ io.use(async (socket, next) => {
 // Multiplex namespace for slide sync
 const multiplex = io.of('/multiplex');
 
-// Track current slide position per room for late joiners to catch up
-interface RoomState {
-  indexh: number;
-  indexv: number;
-  fragmentIndex?: number;
-}
-const roomStates = new Map<string, RoomState>();
+// Track current slide position per room for late joiners to catch up.
+// RoomStateStore evicts a room's state once its last viewer leaves, so this
+// does not grow unbounded over the server's lifetime.
+const roomStates = new RoomStateStore();
 
 // Same auth middleware for namespace
 multiplex.use(async (socket, next) => {
@@ -160,6 +158,7 @@ multiplex.on('connection', socket => {
 
       if (!slide) {
         console.log(`[multiplex] Slide ${slideId} not found`);
+        socket.emit('join_error', { reason: 'slide_not_found' });
         return;
       }
 
@@ -169,6 +168,7 @@ multiplex.on('connection', socket => {
         if (slide.multiplex_id !== data.shareCode) {
           console.log(`[multiplex] Invalid shareCode for slide ${slideId}`);
           socket.emit('error', { message: 'Invalid share code' });
+          socket.emit('join_error', { reason: 'invalid_share_code' });
           return;
         }
         // Public follower - can join but not broadcast
@@ -183,17 +183,23 @@ multiplex.on('connection', socket => {
           console.log(
             `[multiplex] User ${data.user.login} not a member of classroom ${slide.classroom_id}`
           );
+          socket.emit('join_error', { reason: 'not_a_member' });
           return;
         }
 
         data.canBroadcast = membership.role === 'OWNER' || membership.role === 'TEACHER';
       } else {
         // No auth at all
+        socket.emit('join_error', { reason: 'unauthenticated' });
         return;
       }
 
       socket.join(slideId);
       data.slideId = slideId;
+
+      // Per-socket ack so clients can resolve their own join deterministically
+      // (the room-wide `viewercount` below can be triggered by other clients).
+      socket.emit('joined', { slideId, canBroadcast: data.canBroadcast });
 
       console.log(
         `[multiplex] ${data.user?.login || 'anonymous'} joined ${slideId} (canBroadcast: ${data.canBroadcast})`
@@ -253,6 +259,8 @@ multiplex.on('connection', socket => {
       const room = multiplex.adapter.rooms.get(data.slideId);
       const viewerCount = room ? room.size : 0;
       multiplex.to(data.slideId).emit('viewercount', { count: viewerCount });
+      // Free stored slide position once the last viewer leaves the room.
+      roomStates.releaseIfEmpty(data.slideId, viewerCount);
     }
   });
 });

@@ -53,7 +53,7 @@ const Grades = ({ loaderData }: Route.ComponentProps) => {
           </div>
         }
       >
-        <Await resolve={allData}>
+        <Await resolve={allData} errorElement={null}>
           {([
             resolvedEmojiMappings,
             resolvedModules,

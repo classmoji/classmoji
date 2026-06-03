@@ -53,10 +53,11 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
   const gitOrgLogin = classroom.git_organization?.login ?? null;
 
   const dataPromise = (async (): Promise<AssignmentsData> => {
-    const repoAssignments = await ClassmojiService.helper.findAllAssignmentsForStudent(
-      userId,
-      classSlug
-    );
+    const repoAssignments = await ClassmojiService.helper
+      .findAllAssignmentsForStudent(userId, classSlug)
+      .catch(
+        () => [] as Awaited<ReturnType<typeof ClassmojiService.helper.findAllAssignmentsForStudent>>
+      );
 
     // Deduplicate by assignment_id — team assignments can appear twice
     const byAssignmentId = new Map<string, RepoAssignment>();
@@ -135,7 +136,7 @@ const StudentAssignments = ({ loaderData }: Route.ComponentProps) => {
       </h1>
 
       <Suspense fallback={<Skeleton active paragraph={{ rows: 6 }} />}>
-        <Await resolve={data}>
+        <Await resolve={data} errorElement={null}>
           {(d: AssignmentsData) => (
             <div className="flex flex-col gap-5">
               <ProgressSummaryCard

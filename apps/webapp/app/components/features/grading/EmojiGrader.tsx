@@ -116,6 +116,9 @@ const EmojiGrader = ({ repositoryAssignment, emojiMappings }: EmojiGraderProps) 
     return (
       <motion.span
         key={key}
+        data-testid={`emoji-grade-option-${key}`}
+        data-selected={isSelected ? 'true' : 'false'}
+        aria-pressed={isSelected}
         className="inline-flex"
         animate={isPopped ? { scale: [1, 1.35, 0.92, 1] } : { scale: 1 }}
         transition={isPopped ? { duration: 0.4, ease: EASE_OUT_QUINT } : { duration: 0 }}
@@ -147,8 +150,9 @@ const EmojiGrader = ({ repositoryAssignment, emojiMappings }: EmojiGraderProps) 
   return (
     <div className="relative" ref={ref}>
       <div
+        data-testid="emoji-grade-trigger"
         onClick={() => setShow(true)}
-        className="flex items-center gap-1 text-gray-600 hover:text-gray-800 cursor-pointer"
+        className="flex items-center gap-1 text-gray-600 hover:text-gray-800 dark:text-gray-300 dark:hover:text-gray-100 cursor-pointer"
       >
         <IconMoodHappy size={16} />
         <span>Grade</span>
@@ -156,6 +160,7 @@ const EmojiGrader = ({ repositoryAssignment, emojiMappings }: EmojiGraderProps) 
       <AnimatePresence>
         {show && (
           <motion.div
+            data-testid="emoji-grade-popover"
             initial={reducedMotion ? { opacity: 0, y: -65 } : { opacity: 0, scale: 0.85, y: -55 }}
             animate={reducedMotion ? { opacity: 1, y: -65 } : { opacity: 1, scale: 1, y: -65 }}
             exit={reducedMotion ? { opacity: 0, y: -65 } : { opacity: 0, scale: 0.9, y: -55 }}

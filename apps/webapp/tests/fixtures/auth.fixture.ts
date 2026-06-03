@@ -34,13 +34,21 @@ interface AuthFixtures {
  * ```
  */
 export const test = base.extend<AuthFixtures>({
-  // Determine test user from project name or test file path
   testUser: async ({}, use, testInfo) => {
     const projectName = testInfo.project.name;
-    let role: 'owner' | 'assistant' | 'student' = 'student';
 
-    // Check project name first
-    if (projectName.includes('owner') || projectName.includes('smoke')) {
+    // Resolve role explicitly from file path or project name; throw rather than
+    // default to a role, which would mask authorization bugs.
+    let role: 'owner' | 'assistant' | 'student' | undefined;
+
+    // File path is the most specific signal — check it first.
+    if (testInfo.file.includes('/owner/')) {
+      role = 'owner';
+    } else if (testInfo.file.includes('/assistant/')) {
+      role = 'assistant';
+    } else if (testInfo.file.includes('/student/')) {
+      role = 'student';
+    } else if (projectName.includes('owner') || projectName.includes('smoke')) {
       role = 'owner';
     } else if (projectName.includes('assistant')) {
       role = 'assistant';
@@ -48,13 +56,13 @@ export const test = base.extend<AuthFixtures>({
       role = 'student';
     }
 
-    // Also check file path as fallback
-    if (testInfo.file.includes('/owner/')) {
-      role = 'owner';
-    } else if (testInfo.file.includes('/assistant/')) {
-      role = 'assistant';
-    } else if (testInfo.file.includes('/student/')) {
-      role = 'student';
+    if (!role) {
+      throw new Error(
+        `auth.fixture: could not resolve a test-user role for project "${projectName}" / file "${testInfo.file}". ` +
+          `Refusing to silently default to 'student' (would mask authorization bugs). ` +
+          `Place the spec under tests/{owner,assistant,student}/ or give its Playwright project a name ` +
+          `containing one of: owner, smoke, assistant, student.`
+      );
     }
 
     await use(TEST_USERS[role]);
@@ -64,8 +72,18 @@ export const test = base.extend<AuthFixtures>({
     await use(TEST_CLASSROOM);
   },
 
-  // Simply pass through the page - auth is already applied via storage state
   authenticatedPage: async ({ page }, use) => {
+    // Storage state is applied by the Playwright project config. Assert the
+    // session cookie actually landed so a broken/empty storage state fails here
+    // with a clear message instead of surfacing as a confusing redirect later.
+    const cookies = await page.context().cookies();
+    const session = cookies.find(c => c.name === 'classmoji.session_token');
+    if (!session?.value) {
+      throw new Error(
+        'authenticatedPage: no classmoji.session_token cookie present. ' +
+          'Auth storage state was not applied (check auth.setup and the project storageState).'
+      );
+    }
     await use(page);
   },
 });

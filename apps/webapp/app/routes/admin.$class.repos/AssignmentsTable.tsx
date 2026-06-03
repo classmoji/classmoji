@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { forwardRef, useMemo, useState } from 'react';
 import { Popconfirm, Table, Tag } from 'antd';
 import { useNavigate, useParams } from 'react-router';
 import {
@@ -58,30 +58,35 @@ interface AssignmentTableProps {
 const prettyType = (type?: string) =>
   type ? type.charAt(0) + type.slice(1).toLowerCase() : '';
 
-const ActionLink = ({
-  onClick,
-  danger,
-  children,
-}: {
-  onClick: () => void;
-  danger?: boolean;
-  children: React.ReactNode;
-}) => (
+// forwardRef + prop spread so antd's Popconfirm (which clones the trigger child,
+// injects its own onClick/handlers and attaches a ref to anchor the popover) works.
+// Without this the Sync/Unpublish/Publish/Delete confirmations never open.
+const ActionLink = forwardRef<
+  HTMLButtonElement,
+  {
+    onClick?: (e: React.MouseEvent<HTMLButtonElement>) => void;
+    danger?: boolean;
+    children: React.ReactNode;
+  } & Omit<React.ButtonHTMLAttributes<HTMLButtonElement>, 'onClick'>
+>(({ onClick, danger, children, className, ...rest }, ref) => (
   <button
+    {...rest}
+    ref={ref}
     type="button"
     onClick={e => {
       e.stopPropagation();
-      onClick();
+      onClick?.(e);
     }}
     className={`text-sm font-medium ${
       danger
         ? 'text-rose-600 hover:text-rose-700 dark:text-rose-400 dark:hover:text-rose-300'
         : 'text-sky-600 hover:text-sky-700 dark:text-sky-400 dark:hover:text-sky-300'
-    }`}
+    } ${className ?? ''}`}
   >
     {children}
   </button>
-);
+));
+ActionLink.displayName = 'ActionLink';
 
 const AssignmentTable = ({ assignments: repositories }: AssignmentTableProps) => {
   const navigate = useNavigate();
