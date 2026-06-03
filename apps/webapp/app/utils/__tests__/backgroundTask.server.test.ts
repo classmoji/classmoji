@@ -32,13 +32,20 @@ describe('runBackgroundTask', () => {
   it('does not emit an unhandledRejection when the task rejects', async () => {
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
 
+    const boom = new Error(`${TAG} background DB write failed`);
     runBackgroundTask('test', async () => {
-      throw new Error(`${TAG} background DB write failed`);
+      throw boom;
     });
 
     await vi.waitFor(() => expect(errorSpy).toHaveBeenCalled());
     await microtaskFlush();
 
+    // The suppression log must be label-tagged and carry the original error so
+    // swallowed failures remain diagnosable in production logs.
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.stringMatching(/^\[backgroundTask:test\] background work failed/),
+      boom
+    );
     expect(unhandled).toHaveLength(0);
   });
 

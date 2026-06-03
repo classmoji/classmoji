@@ -60,22 +60,67 @@ describe('student assignments loader — git_repo guard', () => {
     expect(data.classroomTitle).toBe('Test Class');
   });
 
-  it('still maps assignments on the happy path', async () => {
+  it('degrades on any lookup failure, not just FK/relation errors', async () => {
+    // The `.catch(() => [])` is a catch-ALL, deliberately broad: a DB timeout or
+    // any transient service error must also degrade gracefully, not crash the
+    // deferred render. Documents that intent so the catch isn't narrowed later.
+    findAllMock.mockRejectedValue(new Error('connection timeout'));
+
+    const data = await (await loader(loaderArgs())).data;
+
+    expect(data.rows).toEqual([]);
+    expect(data.counts.total).toBe(0);
+  });
+
+  it('maps grades, filters unpublished, and buckets the happy path', async () => {
     findAllMock.mockResolvedValue([
       {
         id: 'ra-1',
         assignment_id: 'a-1',
         status: 'CLOSED',
         provider_issue_number: 1,
-        assignment: { is_published: true, grades_released: true },
-        git_repo: { name: 'repo-1', repository: { title: 'HW1', type: 'INDIVIDUAL' } },
+        assignment: { title: 'HW1', is_published: true, grades_released: true },
+        git_repo: { name: 'repo-1', repository: { title: 'HW1 Repo', type: 'INDIVIDUAL' } },
         grades: [{ id: 'g-1', emoji: '⭐' }],
+      },
+      {
+        // OPEN + published -> unlocked bucket, no released grades.
+        id: 'ra-2',
+        assignment_id: 'a-2',
+        status: 'OPEN',
+        provider_issue_number: 2,
+        assignment: { title: 'HW2', is_published: true, grades_released: false },
+        git_repo: { name: 'repo-2', repository: { title: 'HW2 Repo', type: 'INDIVIDUAL' } },
+        grades: [],
+      },
+      {
+        // Unpublished -> must be excluded from both rows AND counts.
+        id: 'ra-3',
+        assignment_id: 'a-3',
+        status: 'OPEN',
+        provider_issue_number: 3,
+        assignment: { title: 'Draft', is_published: false, grades_released: false },
+        git_repo: { name: 'repo-3', repository: { title: 'Draft Repo', type: 'INDIVIDUAL' } },
+        grades: [],
       },
     ]);
 
     const data = await (await loader(loaderArgs())).data;
-    expect(data.rows).toHaveLength(1);
-    expect(data.counts.total).toBe(1);
-    expect(data.counts.graded).toBe(1);
+
+    // The unpublished assignment is filtered out of rows and counts.
+    expect(data.rows).toHaveLength(2);
+    expect(data.rows.map(r => r.assignmentTitle)).not.toContain('Draft');
+    expect(data.counts).toMatchObject({ total: 2, graded: 1, unlocked: 1 });
+
+    // Grade aggregation: the CLOSED, grades_released row exposes the emoji and
+    // is flagged gradesReleased; the ungraded OPEN row is not.
+    const graded = data.rows.find(r => r.assignmentTitle === 'HW1')!;
+    expect(graded.grades).toEqual([{ id: 'g-1', emoji: '⭐' }]);
+    expect(graded.gradesReleased).toBe(true);
+    const ungraded = data.rows.find(r => r.assignmentTitle === 'HW2')!;
+    expect(ungraded.gradesReleased).toBe(false);
+
+    // Current (OPEN) assignments sort before completed ones.
+    expect(data.rows[0].status).toBe('current');
   });
 });
