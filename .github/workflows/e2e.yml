@@ -8,7 +8,7 @@ name: E2E Tests
 
 on:
   push:
-    branches: [tests, dev, staging, main]
+    branches: [tests, dev, staging, main, e2e-artifact-probe]
   pull_request:
 
 # Synthetic, non-secret values. /test-login resolves the seeded account by token
