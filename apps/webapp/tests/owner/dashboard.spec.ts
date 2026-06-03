@@ -131,38 +131,9 @@ test.describe('Owner Dashboard Navigation', () => {
     await expect(nav.getByRole('link', { name: 'Class Settings' })).toBeVisible();
   });
 
-  test('can navigate to repositories', async ({ authenticatedPage: page, testOrg }) => {
-    await page.locator('[data-cm-sidebar]').getByRole('link', { name: 'Repositories' }).click();
-    await page.waitForURL(`**/admin/${testOrg}/repos`);
-    await waitForDataLoad(page);
-    await expect(page).toHaveURL(new RegExp(`/admin/${testOrg}/repos`));
-  });
-
-  test('can navigate to quizzes', async ({ authenticatedPage: page, testOrg }) => {
-    await page.locator('[data-cm-sidebar]').getByRole('link', { name: 'Quizzes' }).click();
-    await page.waitForURL(`**/admin/${testOrg}/quizzes`);
-    await waitForDataLoad(page);
-    await expect(page).toHaveURL(new RegExp(`/admin/${testOrg}/quizzes`));
-  });
-
-  test('can navigate to grades', async ({ authenticatedPage: page, testOrg }) => {
-    await page.locator('[data-cm-sidebar]').getByRole('link', { name: 'Grades' }).click();
-    await page.waitForURL(`**/admin/${testOrg}/grades`);
-    await waitForDataLoad(page);
-    await expect(page).toHaveURL(new RegExp(`/admin/${testOrg}/grades`));
-  });
-
-  test('can navigate to students', async ({ authenticatedPage: page, testOrg }) => {
-    await page.locator('[data-cm-sidebar]').getByRole('link', { name: 'Students' }).click();
-    await page.waitForURL(`**/admin/${testOrg}/students`);
-    await waitForDataLoad(page);
-    await expect(page).toHaveURL(new RegExp(`/admin/${testOrg}/students`));
-  });
-
-  test('can navigate to settings', async ({ authenticatedPage: page, testOrg }) => {
-    await page.locator('[data-cm-sidebar]').getByRole('link', { name: 'Class Settings' }).click();
-    await page.waitForURL(`**/admin/${testOrg}/settings/**`);
-    await waitForDataLoad(page);
-    await expect(page).toHaveURL(new RegExp(`/admin/${testOrg}/settings`));
-  });
+  // Sidebar click-through navigation (repos/quizzes/grades/students/settings) is
+  // intentionally NOT duplicated here — it is covered by the destination-specific
+  // CRUD specs (owner/repos, owner/quizzes, …) and by the smoke suite
+  // (tests/smoke/critical-paths.spec.ts). This block keeps only the
+  // dashboard-specific structural assertions (classroom name + link presence).
 });

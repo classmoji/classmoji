@@ -6,6 +6,15 @@ import { getTestPrisma, getUserByLogin, getClassroomBySlug } from '../../helpers
 /**
  * Notification bell E2E.
  *
+ * This suite is ALSO the contract coverage for the `routes/_user` loader, which
+ * feeds UserHeader via useRouteLoaderData (notifications + unreadCount). The
+ * loader is exercised end-to-end here:
+ *   - "shows the unread badge with the seeded count" pins the loader's
+ *     unreadCount AND the notifications list (seed DB -> loader -> rendered rows).
+ *   - "empty state renders" pins the loader's zero/empty branch.
+ * There is therefore no separate _user loader unit test: breaking the loader's
+ * count or notifications query fails these specs directly.
+ *
  * Each test seeds its own notifications via Prisma, then asserts UI behavior,
  * then cleans up. Tests do not rely on whatever the seed already inserted —
  * they tag their fixtures with metadata.test_tag so cleanup is deterministic.

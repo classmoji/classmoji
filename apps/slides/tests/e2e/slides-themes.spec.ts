@@ -279,6 +279,12 @@ test.describe('Slides Theme Switching', () => {
 
     if (count === 0) {
       await page.keyboard.press('Escape');
+      // Surface the skip in CI stdout too (not just the HTML report) so a green
+      // run that silently skipped this assertion is visible at a glance.
+      console.warn(
+        '[slides-themes] SKIPPED shared-theme assertion: no 📦 themes available ' +
+          '(sourced from GitHub theme repos, not seeded in this environment).'
+      );
       test.skip(
         true,
         'No shared (📦) themes available in this environment (sourced from GitHub theme repos, not seeded). Skipping shared-theme assertion.'

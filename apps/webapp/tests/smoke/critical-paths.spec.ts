@@ -7,6 +7,12 @@ import { TEST_CLASSROOM, TEST_GIT_ORG } from '../helpers/env.helpers';
  *
  * These tests verify the most important user journeys work end-to-end.
  * They run with owner authentication by default and should complete quickly.
+ *
+ * No external-service mocks (the old fixtures/mocks/{github,llm,stripe}.mock.ts
+ * were removed): auth uses the seeded `/test-login` route which bypasses the
+ * GitHub OAuth round-trip against the test DB, and these smoke paths exercise
+ * only first-party routes/loaders — they make no outbound GitHub/Stripe/LLM
+ * calls, so there is nothing to stub.
  */
 
 test.describe('Critical Path: Authentication', () => {
@@ -25,7 +31,9 @@ test.describe('Critical Path: Authentication', () => {
 
   test('user settings shell shows compact full brand logo', async ({ authenticatedPage: page }) => {
     await page.goto('/settings/general');
-    await waitForDataLoad(page);
+    await waitForDataLoad(page, {
+      anchor: page.getByRole('heading', { name: 'Account Settings' }),
+    });
 
     await expect(page.getByRole('heading', { name: 'Account Settings' })).toBeVisible();
 
@@ -38,7 +46,9 @@ test.describe('Critical Path: Authentication', () => {
 
   test('can navigate to owner dashboard', async ({ authenticatedPage: page }) => {
     await page.goto(`/admin/${TEST_CLASSROOM}/dashboard`);
-    await waitForDataLoad(page);
+    await waitForDataLoad(page, {
+      anchor: page.getByRole('heading', { name: 'Dashboard' }),
+    });
     await expect(page.getByRole('heading', { name: 'Dashboard' })).toBeVisible();
   });
 });
