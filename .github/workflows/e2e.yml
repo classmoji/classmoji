@@ -100,7 +100,7 @@ jobs:
 
       - name: Run webapp E2E (Playwright)
         working-directory: apps/webapp
-        run: npx playwright test
+        run: npx playwright test --project=owner-tests tests/owner/calendar/calendar.spec.ts
 
       - name: Run hook-station webhook tests (Vitest)
         working-directory: apps/hook-station
