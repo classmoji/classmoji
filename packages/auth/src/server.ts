@@ -386,13 +386,70 @@ export const auth = betterAuth({
       clientId: process.env.GITHUB_CLIENT_ID as string,
       clientSecret: process.env.GITHUB_CLIENT_SECRET as string,
       scope: [], // scopes are ignored for GitHub App auth; permissions come from App config
-      mapProfileToUser: profile => {
+      mapProfileToUser: async profile => {
         // GitHub profile includes: login, id, name, email, avatar_url, etc.
-        // Map these to our custom User fields during OAuth sign-in
+        const githubId = String(profile.id);
+        const login = profile.login;
+
+        // ── Link existing users instead of colliding on the unique `login` ──────
+        // Users can already exist in our DB without a linked GitHub account:
+        //  - pre-provisioned by username via ClassmojiService.user.create (login
+        //    set, no provider_id / no account row), e.g. roster/assistant invites
+        //  - a prior login whose account row was removed
+        // This hook runs BEFORE BetterAuth's findOAuthUser lookup. If we link the
+        // account here, findOAuthUser finds it and takes the (non-destructive) link
+        // path — instead of falling through to createOAuthUser, which would throw
+        // `unable to create user` on the `login`/`provider` unique constraints.
+        try {
+          const existing = await getPrisma().user.findFirst({
+            where: {
+              OR: [{ provider: 'GITHUB', provider_id: githubId }, { login }],
+            },
+            include: {
+              accounts: { where: { provider_id: 'github' }, select: { id: true } },
+            },
+          });
+
+          if (existing && existing.accounts.length === 0) {
+            // Backfill provider linkage on the existing record (login-only invites
+            // have a null provider_id) so the (provider, provider_id) unique key and
+            // future lookups resolve correctly.
+            await getPrisma().user.update({
+              where: { id: existing.id },
+              data: {
+                provider: 'GITHUB',
+                provider_id: githubId,
+                login: existing.login ?? login,
+              },
+            });
+
+            // Create the account link BetterAuth looks up by (provider_id, account_id).
+            // Tokens are intentionally left null — BetterAuth fills them on this same
+            // sign-in once it resolves the linked account.
+            await getPrisma().account.upsert({
+              where: {
+                provider_id_account_id: { provider_id: 'github', account_id: githubId },
+              },
+              update: {},
+              create: {
+                user_id: existing.id,
+                provider_id: 'github',
+                account_id: githubId,
+              },
+            });
+          }
+        } catch (error: unknown) {
+          // Never block sign-in on the linking attempt; if it fails, BetterAuth
+          // proceeds with its default behavior and we surface its error as before.
+          console.error('[auth] mapProfileToUser account-link failed', error);
+        }
+
+        // Map these to our custom User fields (used when BetterAuth creates a
+        // genuinely new user — i.e. no existing record was linked above).
         return {
-          login: profile.login, // GitHub username
+          login, // GitHub username
           provider: 'GITHUB',
-          provider_id: String(profile.id), // GitHub user ID as string
+          provider_id: githubId, // GitHub user ID as string
         };
       },
     },
