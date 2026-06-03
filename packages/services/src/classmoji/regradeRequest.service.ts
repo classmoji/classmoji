@@ -96,6 +96,22 @@ export const findMany = async (query: Prisma.RegradeRequestWhereInput) => {
   });
 };
 
+/**
+ * Find the open (IN_REVIEW) regrade request for a GitRepoAssignment, if any.
+ * Returns the most recent one when multiple exist.
+ */
+export const findOpenByAssignmentId = async (gitRepoAssignmentId: string) => {
+  return getPrisma().regradeRequest.findFirst({
+    where: {
+      git_repo_assignment_id: gitRepoAssignmentId,
+      status: 'IN_REVIEW',
+    },
+    orderBy: {
+      created_at: 'desc',
+    },
+  });
+};
+
 export const update = async ({
   id,
   data,
