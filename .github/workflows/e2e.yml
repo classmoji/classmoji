@@ -35,7 +35,7 @@ env:
 jobs:
   e2e:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
 
     services:
       postgres:
@@ -93,10 +93,31 @@ jobs:
         run: npx vitest run
 
       - name: Start webapp (prod build, test-login enabled)
+        # MUST run from apps/webapp: react-router-serve resolves the client
+        # assets dir (build/client) relative to CWD for standard (non-RSC)
+        # builds. Started from the repo root, every /assets/* request 404s, the
+        # client bundle never loads, React never hydrates, and every page renders
+        # a permanent empty shell — which surfaced as a uniform ~13s timeout in
+        # every owner-tests spec.
+        working-directory: apps/webapp
         run: |
-          node_modules/.bin/react-router-serve apps/webapp/build/server/index.js &
+          ../../node_modules/.bin/react-router-serve build/server/index.js &
           echo "WEBAPP_PID=$!" >> "$GITHUB_ENV"
           npx wait-on http://localhost:3000 --timeout 120000
+
+      - name: Verify static assets are served (fail fast, not a 13s timeout)
+        run: |
+          asset=$(curl -fsS http://localhost:3000/ | grep -oE '/assets/entry\.client-[^"]+\.js' | head -1)
+          if [ -z "$asset" ]; then
+            echo "::error::Could not find an entry.client asset URL in the served HTML."
+            exit 1
+          fi
+          code=$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:3000${asset}")
+          echo "entry asset ${asset} -> HTTP ${code}"
+          if [ "$code" != "200" ]; then
+            echo "::error::Static assets are not being served (HTTP ${code} for ${asset}). The webapp is likely started from the wrong working directory."
+            exit 1
+          fi
 
       - name: Run webapp E2E (Playwright)
         working-directory: apps/webapp
