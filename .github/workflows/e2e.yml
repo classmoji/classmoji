@@ -6,10 +6,12 @@ name: E2E Tests
 # /test-login route enabled, so no real GitHub OAuth is needed — the test users
 # are pre-seeded with their tokens (DB-first /test-login lookup).
 
+# Manual-only: this suite does not run on pushes or pull requests. Trigger it on
+# demand from the Actions tab ("Run workflow") or with `gh workflow run e2e.yml`,
+# optionally choosing a branch/ref. This keeps CI minutes (and any downstream
+# usage) off every commit.
 on:
-  push:
-    branches: [tests, dev, staging, main]
-  pull_request:
+  workflow_dispatch:
 
 # Synthetic, non-secret values. /test-login resolves the seeded account by token
 # from the DB, so these never hit GitHub. BETTER_AUTH_SECRET / GITHUB_WEBHOOK_SECRET
