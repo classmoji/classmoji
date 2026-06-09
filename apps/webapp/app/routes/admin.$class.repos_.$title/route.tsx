@@ -253,25 +253,13 @@ const SingleRepository = ({ loaderData }: Route.ComponentProps) => {
       />
     );
 
+  // Grades first — it's where faculty go most often.
   const tabItems = [
     {
-      key: 'repositories',
-      label: 'Repositories',
-      extra: (
-        <Button
-          icon={<IconBrandGithub size={16} />}
-          onClick={() => navigate(`/admin/${classSlug}/repos/form?title=${repository!.title}`)}
-        >
-          Edit repository
-        </Button>
-      ),
-      children: (
-        <RepositoriesTab
-          repos={repos as Parameters<typeof RepositoriesTab>[0]['repos']}
-          repository={repository as Parameters<typeof RepositoriesTab>[0]['repository']}
-          gitOrgLogin={gitOrgLogin}
-        />
-      ),
+      key: 'grades',
+      label: 'Grades',
+      extra: gradesToggle,
+      children: gradesContent,
     },
     {
       key: 'assignments',
@@ -295,10 +283,23 @@ const SingleRepository = ({ loaderData }: Route.ComponentProps) => {
       ),
     },
     {
-      key: 'grades',
-      label: 'Grades',
-      extra: gradesToggle,
-      children: gradesContent,
+      key: 'repositories',
+      label: 'Repositories',
+      extra: (
+        <Button
+          icon={<IconBrandGithub size={16} />}
+          onClick={() => navigate(`/admin/${classSlug}/repos/form?title=${repository!.title}`)}
+        >
+          Edit repository
+        </Button>
+      ),
+      children: (
+        <RepositoriesTab
+          repos={repos as Parameters<typeof RepositoriesTab>[0]['repos']}
+          repository={repository as Parameters<typeof RepositoriesTab>[0]['repository']}
+          gitOrgLogin={gitOrgLogin}
+        />
+      ),
     },
   ];
 
@@ -342,7 +343,7 @@ const SingleRepository = ({ loaderData }: Route.ComponentProps) => {
         settings={settings as Parameters<typeof SummaryCards>[0]['settings']}
       />
 
-      <FolderTabs items={tabItems} defaultActiveKey="repositories" panelClassName="min-h-[300px]" />
+      <FolderTabs items={tabItems} defaultActiveKey="grades" panelClassName="min-h-[300px]" />
 
       <LinkedPages classSlug={classSlug} pages={linkedPages} />
 
