@@ -98,7 +98,7 @@ const StudentsTable = ({ students, query }: StudentsTableProps) => {
       title: 'Student',
       dataIndex: 'name',
       key: 'name',
-      width: '25%',
+      width: 240,
       render: (_: unknown, student: Student) => {
         return <UserThumbnailView user={student} />;
       },
@@ -107,21 +107,21 @@ const StudentsTable = ({ students, query }: StudentsTableProps) => {
       title: 'School ID',
       dataIndex: 'school_id',
       key: 'school_id',
-      width: '15%',
+      width: 130,
       render: (id: string | null) => <span className="font-mono text-sm text-gray-700">{id}</span>,
     },
     {
       title: 'Email',
       dataIndex: 'email',
       key: 'email',
-      width: '25%',
+      width: 240,
       render: (email: string | null) => <span className="text-gray-700">{email}</span>,
     },
     {
       title: 'Status',
       dataIndex: 'has_accepted_invite',
       key: 'has_accepted_invite',
-      width: '15%',
+      width: 110,
       render: (_: unknown, student: Student) => {
         return student.has_accepted_invite ? (
           <Tag color="green" className="font-semibold">
@@ -137,7 +137,7 @@ const StudentsTable = ({ students, query }: StudentsTableProps) => {
     {
       title: 'Actions',
       key: 'actions',
-      width: '20%',
+      width: 260,
       render: (_: unknown, student: Student) => {
         // For invites, only show Remove action
         if (student._isInvite) {
@@ -176,7 +176,7 @@ const StudentsTable = ({ students, query }: StudentsTableProps) => {
                     handleImpersonate(student);
                   }
                 }}
-                className={`flex items-center gap-1 text-gray-600 hover:text-gray-800 cursor-pointer ${impersonating ? 'opacity-50' : ''}`}
+                className={`flex items-center gap-1 whitespace-nowrap text-gray-600 hover:text-gray-800 cursor-pointer ${impersonating ? 'opacity-50' : ''}`}
               >
                 <IconUserSearch size={16} />
                 <span>View as</span>

@@ -15,9 +15,6 @@ export interface LandingClass {
   slug: string;
   role: LandingRole;
   hue: number;
-  students: number;
-  pending: number;
-  progress: number;
   updated: string;
   archived: boolean;
   pin_order: number | null;

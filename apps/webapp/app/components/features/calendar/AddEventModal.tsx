@@ -1,6 +1,6 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Modal, Form, Input, Select, DatePicker, TimePicker, Checkbox, Button, Radio } from 'antd';
-import dayjs from 'dayjs';
+import dayjs, { type Dayjs } from 'dayjs';
 import {
   IconInfoCircle,
   IconCalendarEvent,
@@ -42,6 +42,12 @@ interface AssignmentOption {
   repository?: { title: string };
 }
 
+export interface AddEventDefaults {
+  date?: Dayjs;
+  start_time?: Dayjs;
+  end_time?: Dayjs;
+}
+
 interface AddEventModalProps {
   open: boolean;
   onClose: () => void;
@@ -51,6 +57,8 @@ interface AddEventModalProps {
   pages?: PageOption[];
   slides?: SlideOption[];
   assignments?: AssignmentOption[];
+  /** Prefill date/start/end (e.g. from a drag-selected calendar range). */
+  defaultValues?: AddEventDefaults | null;
 }
 
 const InlineRow = ({
@@ -79,11 +87,20 @@ const AddEventModal = ({
   pages = [],
   slides = [],
   assignments = [],
+  defaultValues = null,
 }: AddEventModalProps) => {
   const eventTypes = allowedEventTypes.length > 0 ? allowedEventTypes : ALL_EVENT_TYPES;
   const [form] = Form.useForm();
   const [isRecurring, setIsRecurring] = useState(false);
   const [hasEndDate, setHasEndDate] = useState(false);
+
+  // antd only applies initialValues on first mount, so push drag-selected
+  // ranges into the form each time the modal opens with defaults.
+  useEffect(() => {
+    if (open && defaultValues) {
+      form.setFieldsValue(defaultValues);
+    }
+  }, [open, defaultValues, form]);
 
   const [linkedPageIds, setLinkedPageIds] = useState<string[]>([]);
   const [linkedSlideIds, setLinkedSlideIds] = useState<string[]>([]);

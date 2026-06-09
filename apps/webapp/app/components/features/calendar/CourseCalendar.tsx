@@ -82,9 +82,18 @@ interface DroppableCellProps {
   children?: React.ReactNode;
   className: string;
   onClick?: () => void;
+  onMouseDown?: (e: React.MouseEvent) => void;
+  onMouseEnter?: () => void;
 }
 
-const DroppableCell = ({ id, children, className, onClick }: DroppableCellProps) => {
+const DroppableCell = ({
+  id,
+  children,
+  className,
+  onClick,
+  onMouseDown,
+  onMouseEnter,
+}: DroppableCellProps) => {
   const { setNodeRef, isOver } = useDroppable({ id });
 
   return (
@@ -92,6 +101,8 @@ const DroppableCell = ({ id, children, className, onClick }: DroppableCellProps)
       ref={setNodeRef}
       className={`${className} ${isOver ? '!bg-blue-50 dark:!bg-blue-900/20' : ''}`}
       onClick={onClick}
+      onMouseDown={onMouseDown}
+      onMouseEnter={onMouseEnter}
     >
       {children}
     </div>
@@ -105,6 +116,8 @@ interface CourseCalendarProps {
   onEventDrop?: ((event: CalendarEvent, newStart: Date, newEnd: Date) => void) | null;
   onDeadlineDrop?: ((event: CalendarEvent, newStart: Date) => void) | null;
   onMonthChange?: ((year: number, month: number) => void) | null;
+  /** Week view: drag across hour cells to pick a time range (click = 1 hour). */
+  onRangeSelect?: ((start: Date, end: Date) => void) | null;
   showCreator?: boolean;
   canDragDeadlines?: boolean;
 }
@@ -116,6 +129,7 @@ const CourseCalendar = ({
   onEventDrop,
   onDeadlineDrop,
   onMonthChange,
+  onRangeSelect,
   showCreator = false,
   canDragDeadlines = false,
 }: CourseCalendarProps) => {
@@ -127,6 +141,13 @@ const CourseCalendar = ({
   const [activeEvent, setActiveEvent] = useState<CalendarEvent | null>(null);
   const [draggedWidth, setDraggedWidth] = useState<number | null>(null);
   const [currentTime, setCurrentTime] = useState(new Date());
+  // Week-view drag-to-select: anchor is the cell where the drag started,
+  // hover tracks the cell under the pointer (same day column only).
+  const [dragSelect, setDragSelect] = useState<{
+    dayIdx: number;
+    anchorHour: number;
+    hoverHour: number;
+  } | null>(null);
 
   // Configure sensors for better drag behavior
   const sensors = useSensors(
@@ -160,6 +181,31 @@ const CourseCalendar = ({
 
     return () => clearInterval(interval);
   }, []);
+
+  // Finish a drag-to-select on mouseup anywhere (the pointer may leave the
+  // grid mid-drag). A plain click yields a one-hour range.
+  useEffect(() => {
+    if (!dragSelect) return;
+
+    const handleMouseUp = () => {
+      const { dayIdx, anchorHour, hoverHour } = dragSelect;
+      setDragSelect(null);
+
+      const day = dates[dayIdx];
+      if (!day || !onRangeSelect) return;
+
+      const startHour = Math.min(anchorHour, hoverHour);
+      const endHour = Math.max(anchorHour, hoverHour) + 1;
+      const start = new Date(day);
+      start.setHours(startHour, 0, 0, 0);
+      const end = new Date(day);
+      end.setHours(endHour, 0, 0, 0);
+      onRangeSelect(start, end);
+    };
+
+    window.addEventListener('mouseup', handleMouseUp);
+    return () => window.removeEventListener('mouseup', handleMouseUp);
+  }, [dragSelect, dates, onRangeSelect]);
 
   const handlePrevious = () => {
     const newDate = view === 'month' ? addMonths(currentDate, -1) : addWeeks(currentDate, -1);
@@ -541,11 +587,32 @@ const CourseCalendar = ({
                 >
                   {timeSlots.map(hour => {
                     const dropId = `week-${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}-${String(hour).padStart(2, '0')}`;
+                    const isInSelection =
+                      dragSelect !== null &&
+                      dragSelect.dayIdx === dayIdx &&
+                      hour >= Math.min(dragSelect.anchorHour, dragSelect.hoverHour) &&
+                      hour <= Math.max(dragSelect.anchorHour, dragSelect.hoverHour);
                     return (
                       <DroppableCell
                         key={hour}
                         id={dropId}
-                        className={`h-16 border-b border-gray-200 dark:border-neutral-700 cursor-pointer transition-colors hover:bg-nav-hover/50`}
+                        className={`h-16 border-b border-gray-200 dark:border-neutral-700 cursor-pointer transition-colors hover:bg-nav-hover/50 ${
+                          isInSelection ? '!bg-blue-100/70 dark:!bg-blue-900/40' : ''
+                        }`}
+                        onMouseDown={
+                          onRangeSelect
+                            ? e => {
+                                if (e.button !== 0) return;
+                                e.preventDefault(); // no text selection while dragging
+                                setDragSelect({ dayIdx, anchorHour: hour, hoverHour: hour });
+                              }
+                            : undefined
+                        }
+                        onMouseEnter={
+                          dragSelect && dragSelect.dayIdx === dayIdx
+                            ? () => setDragSelect(s => (s ? { ...s, hoverHour: hour } : s))
+                            : undefined
+                        }
                         onClick={() => {
                           const cellDate = new Date(date);
                           cellDate.setHours(hour, 0, 0, 0);

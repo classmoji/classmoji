@@ -3,9 +3,9 @@ import { ClassMark } from './ClassMark';
 import { RoleChip } from './RoleChip';
 import type { LandingClass } from './types';
 
-// Desktop table grid — 8 columns. Hidden below `sm`, where rows render as a
+// Desktop table grid — 6 columns. Hidden below `sm`, where rows render as a
 // stacked compact card instead so they fit a phone-width viewport.
-const DESKTOP_COLS = 'sm:grid-cols-[36px_1.8fr_1fr_90px_110px_100px_110px_30px]';
+const DESKTOP_COLS = 'sm:grid-cols-[36px_1.8fr_1fr_90px_110px_30px]';
 
 export function ClassroomRowHeader() {
   return (
@@ -16,8 +16,6 @@ export function ClassroomRowHeader() {
       <span>Class</span>
       <span>Description</span>
       <span>Role</span>
-      <span>Roster</span>
-      <span>Pending</span>
       <span>Updated</span>
       <span />
     </div>
@@ -31,11 +29,7 @@ export function ClassroomRow({ c, onOpen }: { c: LandingClass; onOpen: () => voi
       role="button"
       tabIndex={0}
       data-onboarding={
-        c.role === 'PENDING INVITE'
-          ? 'pending-invite'
-          : c.is_example
-            ? 'example-course'
-            : undefined
+        c.role === 'PENDING INVITE' ? 'pending-invite' : c.is_example ? 'example-course' : undefined
       }
       onKeyDown={e => {
         if (e.key === 'Enter' || e.key === ' ') {
@@ -54,15 +48,6 @@ export function ClassroomRow({ c, onOpen }: { c: LandingClass; onOpen: () => voi
         </div>
         <div className="truncate text-[12.5px] text-[var(--ink-2)]">{c.subtitle || '—'}</div>
         <RoleChip role={c.role} />
-        <div className="font-mono text-[12px] text-[var(--ink-1)]">
-          {c.students} <span className="text-[var(--ink-3)]">students</span>
-        </div>
-        <div
-          className="font-mono text-[12px]"
-          style={{ color: c.pending ? 'var(--violet-ink)' : 'var(--ink-3)' }}
-        >
-          {c.pending || '—'}
-        </div>
         <div className="text-[12px] text-[var(--ink-3)]">updated {c.updated}</div>
         <span className="inline-flex -rotate-90 text-[var(--ink-4)]">
           <IconChevron size={12} />
@@ -77,14 +62,7 @@ export function ClassroomRow({ c, onOpen }: { c: LandingClass; onOpen: () => voi
           <div className="truncate font-mono text-[11.5px] text-[var(--ink-3)]">{c.slug}</div>
           <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1">
             <RoleChip role={c.role} />
-            <span className="font-mono text-[11.5px] text-[var(--ink-3)]">
-              {c.students} students
-            </span>
-            {c.pending ? (
-              <span className="font-mono text-[11.5px] text-[var(--violet-ink)]">
-                {c.pending} pending
-              </span>
-            ) : null}
+            <span className="font-mono text-[11.5px] text-[var(--ink-3)]">updated {c.updated}</span>
           </div>
         </div>
         <span className="inline-flex -rotate-90 text-[var(--ink-4)]">

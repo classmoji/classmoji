@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Button, Modal } from 'antd';
 import { PlusOutlined } from '@ant-design/icons';
+import dayjs from 'dayjs';
 import invariant from 'tiny-invariant';
 import { data, useFetcher, useParams } from 'react-router';
 import { ClassmojiService } from '@classmoji/services';
@@ -12,7 +13,7 @@ import type { Route } from './+types/route';
 import CourseCalendar from '~/components/features/calendar/CourseCalendar';
 import type { CalendarEvent } from '~/components/features/calendar/utils';
 import CalendarSubscriptionCard from '~/components/features/calendar/CalendarSubscriptionCard';
-import AddEventModal from '~/components/features/calendar/AddEventModal';
+import AddEventModal, { type AddEventDefaults } from '~/components/features/calendar/AddEventModal';
 import EditEventModal, { type EventFormData } from '~/components/features/calendar/EditEventModal';
 import EventCard from '~/components/features/calendar/EventCard';
 import EventLinks from '~/components/features/calendar/EventLinks';
@@ -330,6 +331,7 @@ const AdminCalendar = ({ loaderData }: Route.ComponentProps) => {
   const callout = useCallout();
 
   const [addModalOpen, setAddModalOpen] = useState(false);
+  const [addEventDefaults, setAddEventDefaults] = useState<AddEventDefaults | null>(null);
   const [editModalOpen, setEditModalOpen] = useState(false);
   const [selectedEvent, setSelectedEvent] = useState<CalendarEvent | null>(null);
   const [viewModalOpen, setViewModalOpen] = useState(false);
@@ -358,6 +360,7 @@ const AdminCalendar = ({ loaderData }: Route.ComponentProps) => {
       if (fetcher.data.success) {
         setOptimisticEvents(null); // Clear optimistic state, let fresh data take over
         setAddModalOpen(false);
+        setAddEventDefaults(null);
         setEditModalOpen(false);
         setSelectedEvent(null);
         // Refresh events for current view month after mutation
@@ -482,6 +485,16 @@ const AdminCalendar = ({ loaderData }: Route.ComponentProps) => {
     fetcher.submit(formData, { method: 'POST' });
   };
 
+  // Drag-selected time range on the week view → open the add modal prefilled.
+  const handleRangeSelect = (start: Date, end: Date) => {
+    setAddEventDefaults({
+      date: dayjs(start),
+      start_time: dayjs(start),
+      end_time: dayjs(end),
+    });
+    setAddModalOpen(true);
+  };
+
   const handleEventClick = (event: CalendarEvent) => {
     // OWNER/TEACHER can edit any event, others can only edit their own.
     // IDs are UUID strings, so compare as strings (Number(uuid) is NaN).
@@ -514,7 +527,10 @@ const AdminCalendar = ({ loaderData }: Route.ComponentProps) => {
             <Button
               type="primary"
               icon={<PlusOutlined />}
-              onClick={() => setAddModalOpen(true)}
+              onClick={() => {
+                setAddEventDefaults(null);
+                setAddModalOpen(true);
+              }}
               data-tour="calendar-add-event"
             >
               Add Event
@@ -530,6 +546,7 @@ const AdminCalendar = ({ loaderData }: Route.ComponentProps) => {
         onDeadlineDrop={isAdmin ? handleDeadlineDrop : null}
         canDragDeadlines={isAdmin}
         onMonthChange={handleMonthChange}
+        onRangeSelect={canEdit ? handleRangeSelect : null}
         showCreator={true}
       />
 
@@ -537,12 +554,16 @@ const AdminCalendar = ({ loaderData }: Route.ComponentProps) => {
         <>
           <AddEventModal
             open={addModalOpen}
-            onClose={() => setAddModalOpen(false)}
+            onClose={() => {
+              setAddModalOpen(false);
+              setAddEventDefaults(null);
+            }}
             onSubmit={handleAddEvent}
             loading={loading}
             pages={pages}
             slides={slides}
             assignments={assignments}
+            defaultValues={addEventDefaults}
           />
 
           <EditEventModal

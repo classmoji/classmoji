@@ -92,7 +92,11 @@ const OrgSelect = ({ memberships }: OrgSelectProps) => {
         }}
         options={memberships
           ?.filter(m => !(m.organization as { is_example?: boolean }).is_example)
-          .sort((a, b) => a.organization.name?.localeCompare(b.organization.name))
+          .sort(
+            (a, b) =>
+              new Date(b.organization.created_at ?? 0).getTime() -
+              new Date(a.organization.created_at ?? 0).getTime()
+          )
           .map(m => ({
             value: m.id.toString(),
             label: m.organization.name,
@@ -133,8 +137,11 @@ const OrgSelect = ({ memberships }: OrgSelectProps) => {
                     {membershipOption.organization.name}
                   </div>
                 </div>
-                <div className="text-xs text-ink-3 truncate leading-tight">
-                  {roleLabel(membershipOption.role)}
+                <div
+                  className="text-xs text-ink-3 truncate leading-tight"
+                  style={{ fontFamily: 'var(--font-mono)' }}
+                >
+                  {membershipOption.organization.login} · {roleLabel(membershipOption.role)}
                 </div>
               </div>
             </button>

@@ -1,6 +1,6 @@
 import { Avatar, Tooltip } from 'antd';
 import { Link, useParams, useLocation, useRouteLoaderData } from 'react-router';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { IconFileText, IconMenu2, IconApple } from '@tabler/icons-react';
 import useLocalStorageState from 'use-local-storage-state';
 import { Logo, CalloutSlot } from '@classmoji/ui-components';
@@ -58,6 +58,17 @@ const CommonLayout = ({
 
   const location = useLocation();
   const { pathname } = location;
+
+  // The page content scrolls inside an inner overflow-auto div, so the
+  // window-level <ScrollRestoration/> never resets it and scroll positions
+  // bled across nav sections. Reset whenever the section (/role/class/section)
+  // changes; deeper segments (nested modals/drawers over a list) keep scroll.
+  const contentScrollRef = useRef<HTMLDivElement>(null);
+  const sectionKey = pathname.split('/').slice(0, 4).join('/');
+  useEffect(() => {
+    contentScrollRef.current?.scrollTo({ top: 0 });
+  }, [sectionKey]);
+
   const { role } = useRole();
   const roleSettings = useRoleSettings();
   const rootData = useRouteLoaderData('root') as
@@ -395,16 +406,6 @@ const CommonLayout = ({
           </RequireRole>
         )}
 
-        {/* Recent viewers */}
-        {!collapsed && recentViewers?.length >= 2 && (
-          <>
-            <div className="mx-4 h-px bg-line shrink-0" />
-            <div className="px-3 pb-3 pt-3 shrink-0">
-              <RecentViewers viewers={recentViewers} groupByRole={groupViewersByRole} />
-            </div>
-          </>
-        )}
-
         {/* Navigation */}
         <div className="mx-4 h-px bg-line shrink-0" />
         <nav className="flex-1 overflow-y-auto overflow-x-hidden py-2">
@@ -465,6 +466,15 @@ const CommonLayout = ({
         className="flex-1 flex flex-col transition-all duration-300 ease-in-out min-w-0 lg:ml-[calc(var(--sider-width)+1.5rem)]"
         style={{ '--sider-width': `${siderWidth}px` } as React.CSSProperties}
       >
+        {/* Recent viewers — floats at the top right of the content area.
+            It describes the current route, so it lives with the content
+            rather than in the (route-agnostic) sidebar. */}
+        {recentViewers?.length >= 2 && (
+          <div className="hidden md:block fixed top-1.5 right-4 z-30">
+            <RecentViewers viewers={recentViewers} groupByRole={groupViewersByRole} />
+          </div>
+        )}
+
         {/* Mobile-only hamburger (when sidebar is closed) */}
         {!mobileOpen && (
           <button
@@ -479,6 +489,7 @@ const CommonLayout = ({
 
         {/* Content area — bare canvas on dashboard, floating white card elsewhere */}
         <div
+          ref={contentScrollRef}
           className={`flex-1 overflow-auto relative min-w-0 ${
             pathname.includes('/dashboard') ||
             pathname.includes('/repos') ||

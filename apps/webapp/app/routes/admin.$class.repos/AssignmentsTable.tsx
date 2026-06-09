@@ -371,7 +371,7 @@ const AssignmentTable = ({ assignments: repositories }: AssignmentTableProps) =>
                 cancelText="Cancel"
                 onConfirm={() => deleteRepository(r.id)}
               >
-                <ActionLink onClick={() => {}} danger>
+                <ActionLink onClick={() => {}} danger className="ml-2 pl-4 border-l border-line">
                   Delete
                 </ActionLink>
               </Popconfirm>
