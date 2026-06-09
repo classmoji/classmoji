@@ -9,7 +9,7 @@ import { Logo } from '@classmoji/ui-components';
 import { getAuthSession } from '@classmoji/auth/server';
 import getPrisma from '@classmoji/database';
 import { generateId } from '@classmoji/utils';
-import { GitHubProvider, ClassmojiService } from '@classmoji/services';
+import { GitHubProvider, ClassmojiService, provisionExampleClassroom } from '@classmoji/services';
 import Tasks from '@classmoji/tasks';
 
 export const loader = async ({ request }: Route.LoaderArgs) => {
@@ -22,7 +22,9 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
   const { data: githubUser } = await octokit.rest.users.getAuthenticated();
 
   // In local dev, skip the registration form entirely — auto-register using GitHub profile data.
-  if (process.env.NODE_ENV === 'development') {
+  // Gated on an explicit allow flag in addition to NODE_ENV to avoid a misconfigured
+  // production (NODE_ENV unset) silently turning into a no-form auto-register backdoor.
+  if (process.env.NODE_ENV === 'development' && process.env.ENABLE_DEV_AUTO_REGISTER === 'true') {
     const githubId = String(githubUser.id);
     const email = githubUser.email || `${githubUser.login}@dev.local`;
 
@@ -58,7 +60,7 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
     const devClassroom = await getPrisma().classroom.findFirst({
       where: { slug: 'classmoji-dev-winter-2025' },
       include: {
-        modules: {
+        repositories: {
           include: {
             assignments: { orderBy: { created_at: 'asc' } },
           },
@@ -86,13 +88,13 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
       }
 
       // Seed student data for the real user so the student view is non-empty
-      const helloWorldModule = devClassroom.modules.find(m => m.title === 'hello-world');
+      const helloWorldModule = devClassroom.repositories.find(m => m.title === 'hello-world');
       const [assignment1, assignment2] = helloWorldModule?.assignments ?? [];
       const fakeTA = await getPrisma().user.findFirst({ where: { login: 'fake-ta' } });
 
       if (helloWorldModule && assignment1 && fakeTA) {
         // Repo for the real user
-        const repo = await getPrisma().repository.upsert({
+        const repo = await getPrisma().gitRepo.upsert({
           where: {
             provider_provider_id: {
               provider: 'GITHUB',
@@ -102,7 +104,7 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
           update: {},
           create: {
             classroom_id: devClassroom.id,
-            module_id: helloWorldModule.id,
+            repository_id: helloWorldModule.id,
             provider: 'GITHUB',
             provider_id: `fake-repo-${githubUser.login}`,
             name: `${githubUser.login}-hello-world`,
@@ -111,7 +113,7 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
         });
 
         // Part 1: closed + graded ⭐
-        const repoAssignment1 = await getPrisma().repositoryAssignment.upsert({
+        const repoAssignment1 = await getPrisma().gitRepoAssignment.upsert({
           where: {
             provider_provider_id: {
               provider: 'GITHUB',
@@ -120,7 +122,7 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
           },
           update: {},
           create: {
-            repository_id: repo.id,
+            git_repo_id: repo.id,
             assignment_id: assignment1.id,
             provider: 'GITHUB',
             provider_id: `fake-issue-${githubUser.login}`,
@@ -130,12 +132,12 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
         });
 
         const existingGrade = await getPrisma().assignmentGrade.findFirst({
-          where: { repository_assignment_id: repoAssignment1.id },
+          where: { git_repo_assignment_id: repoAssignment1.id },
         });
         if (!existingGrade) {
           await getPrisma().assignmentGrade.create({
             data: {
-              repository_assignment_id: repoAssignment1.id,
+              git_repo_assignment_id: repoAssignment1.id,
               grader_id: fakeTA.id,
               emoji: '⭐',
             },
@@ -144,7 +146,7 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
             data: {
               classroom_id: devClassroom.id,
               student_id: user.id,
-              repository_assignment_id: repoAssignment1.id,
+              git_repo_assignment_id: repoAssignment1.id,
               amount: 110,
               type: 'GAIN',
               balance_after: 110,
@@ -154,7 +156,7 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
 
         // Part 2: open (unsubmitted) — something still to do as a student
         if (assignment2) {
-          await getPrisma().repositoryAssignment.upsert({
+          await getPrisma().gitRepoAssignment.upsert({
             where: {
               provider_provider_id: {
                 provider: 'GITHUB',
@@ -163,7 +165,7 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
             },
             update: {},
             create: {
-              repository_id: repo.id,
+              git_repo_id: repo.id,
               assignment_id: assignment2.id,
               provider: 'GITHUB',
               provider_id: `fake-issue-p2-${githubUser.login}`,
@@ -535,8 +537,12 @@ export const action = async ({ request }: Route.ActionArgs) => {
     data: { user_id: user.id },
   });
 
-  // Claim any pending classroom invites matching email
-  const invites = await ClassmojiService.classroomInvite.findInvitesByEmail(formData.email);
+  // Claim any pending classroom invites — match against the school email the student entered
+  // AND the email on their GitHub account, since instructors invite by either.
+  const invites = await ClassmojiService.classroomInvite.findInvitesByAnyEmail([
+    formData.email,
+    formData.githubEmail,
+  ]);
   if (invites.length > 0) {
     for (const invite of invites) {
       await ClassmojiService.classroomMembership.create({
@@ -547,6 +553,14 @@ export const action = async ({ request }: Route.ActionArgs) => {
       });
     }
     await ClassmojiService.classroomInvite.deleteManyInvites(invites.map(i => i.id));
+  }
+
+  // Give every brand-new user a populated "Example Course" sandbox to explore
+  // (the in-classroom onboarding tour runs here). Never let this break signup.
+  try {
+    await provisionExampleClassroom({ ownerUserId: user.id, ownerLogin: formData.login });
+  } catch (err) {
+    console.error('Failed to provision example classroom:', err);
   }
 
   return redirect('/select-organization');

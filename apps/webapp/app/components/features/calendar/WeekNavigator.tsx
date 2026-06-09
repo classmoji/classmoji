@@ -38,7 +38,7 @@ const WeekNavigator = ({ currentWeek, onWeekChange }: WeekNavigatorProps) => {
         </Space>
       </div>
 
-      <div className="text-lg font-semibold text-gray-700 dark:text-gray-300">
+      <div className="text-lg font-semibold text-ink-1">
         {formatFullDate(firstDay)} - {formatFullDate(lastDay)}
       </div>
     </div>

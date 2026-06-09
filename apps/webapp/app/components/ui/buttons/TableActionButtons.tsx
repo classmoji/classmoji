@@ -33,6 +33,9 @@ const TableActionButtons = ({
       {onView && (
         <div
           onClick={onView}
+          role="button"
+          aria-label="View"
+          data-testid="table-action-view"
           className="flex items-center gap-1 text-gray-600 hover:text-gray-800 cursor-pointer"
         >
           <IconEye size={size} />
@@ -43,6 +46,9 @@ const TableActionButtons = ({
       {onEdit && (
         <div
           onClick={onEdit}
+          role="button"
+          aria-label="Edit"
+          data-testid="table-action-edit"
           className="flex items-center gap-1 text-gray-600 hover:text-gray-800 cursor-pointer"
         >
           <IconPencil size={size} />
@@ -53,6 +59,9 @@ const TableActionButtons = ({
       {onAutograde && (
         <div
           onClick={onAutograde}
+          role="button"
+          aria-label="Autograde"
+          data-testid="table-action-autograde"
           className="flex items-center gap-1 text-gray-600 hover:text-gray-800 cursor-pointer"
         >
           <IconRobot size={size} />
@@ -66,6 +75,9 @@ const TableActionButtons = ({
         (skipDeleteConfirm ? (
           <div
             onClick={onDelete}
+            role="button"
+            aria-label="Delete"
+            data-testid="table-action-delete"
             className="flex items-center gap-1 text-red-600 cursor-pointer hover:text-red-700 delete-react-intro"
           >
             <IconTrash size={size} />
@@ -84,7 +96,12 @@ const TableActionButtons = ({
             okText="Delete"
             cancelText="Cancel"
           >
-            <div className="flex items-center gap-1 text-red-600 cursor-pointer hover:text-red-700 delete-react-intro">
+            <div
+              role="button"
+              aria-label="Delete"
+              data-testid="table-action-delete"
+              className="flex items-center gap-1 text-red-600 cursor-pointer hover:text-red-700 delete-react-intro"
+            >
               <IconTrash size={size} />
               {!hideDeleteText && <span>Delete</span>}
             </div>

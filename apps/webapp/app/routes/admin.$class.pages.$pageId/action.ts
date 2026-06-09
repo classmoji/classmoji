@@ -1,5 +1,5 @@
 import { redirect } from 'react-router';
-import { assertClassroomAccess } from '~/utils/helpers';
+import { assertClassroomAccess, assertClassroomMutationAllowed } from '~/utils/helpers';
 import { ClassmojiService } from '@classmoji/services';
 import { ContentService } from '@classmoji/content';
 import { wrapHtmlContent } from '~/utils/htmlWrapper';
@@ -9,8 +9,6 @@ const extractBodyContent = (html: string): string => {
   const bodyMatch = html.match(/<body[^>]*>([\s\S]*)<\/body>/i);
   return bodyMatch ? bodyMatch[1] : html;
 };
-import { generateTermString } from '@classmoji/utils';
-
 import type { Route } from './+types/route';
 
 interface PageWithClassroom {
@@ -19,8 +17,7 @@ interface PageWithClassroom {
   content_path: string;
   width: number;
   classroom: {
-    term: string | undefined;
-    year: number | undefined;
+    content_namespace: string;
     git_organization: {
       login: string;
       provider: string;
@@ -70,13 +67,14 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
 
       // Wrap assertClassroomAccess in try-catch to ensure we always return JSON
       try {
-        await assertClassroomAccess({
+        const { classroom, membership } = await assertClassroomAccess({
           request,
           classroomSlug: classSlug,
           allowedRoles: ['OWNER', 'TEACHER'],
           resourceType: 'PAGES',
           attemptedAction: 'upload_image',
         });
+        assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
       } catch (authError) {
         console.error('[upload-image action] Authorization failed:', authError);
         return Response.json(
@@ -99,11 +97,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
 
       const pageData = page as unknown as PageWithClassroom;
       const gitOrg = pageData.classroom.git_organization;
-      const term = generateTermString(
-        pageData.classroom.term,
-        pageData.classroom.year ?? undefined
-      );
-      const repo = `content-${gitOrg.login}-${term}`;
+      const repo = `content-${gitOrg.login}-${pageData.classroom.content_namespace}`;
       const assetsFolder = `${page.content_path}/assets`;
 
       console.error('[upload-image action] Uploading to repo:', repo, 'folder:', assetsFolder);
@@ -146,13 +140,14 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
       }
 
       try {
-        await assertClassroomAccess({
+        const { classroom, membership } = await assertClassroomAccess({
           request,
           classroomSlug: classSlug,
           allowedRoles: ['OWNER', 'TEACHER'],
           resourceType: 'PAGES',
           attemptedAction: 'upload_file',
         });
+        assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
       } catch (authError) {
         console.log(authError);
         return Response.json(
@@ -174,11 +169,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
 
       const pageData = page as unknown as PageWithClassroom;
       const gitOrg = pageData.classroom.git_organization;
-      const term = generateTermString(
-        pageData.classroom.term,
-        pageData.classroom.year ?? undefined
-      );
-      const repo = `content-${gitOrg.login}-${term}`;
+      const repo = `content-${gitOrg.login}-${pageData.classroom.content_namespace}`;
       const assetsFolder = `${page.content_path}/assets`;
 
       const buffer = Buffer.from(await file.arrayBuffer());
@@ -210,13 +201,14 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
   }
 
   if (intent === 'delete') {
-    await assertClassroomAccess({
+    const { classroom, membership } = await assertClassroomAccess({
       request,
       classroomSlug: classSlug,
       allowedRoles: ['OWNER', 'TEACHER'],
       resourceType: 'PAGES',
       attemptedAction: 'delete_page',
     });
+    assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
 
     try {
       // Use deletePage to also delete from GitHub and update manifest
@@ -236,13 +228,14 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
     if (!formData) formData = await request.formData();
     const width = parseInt(formData.get('width') as string, 10);
 
-    await assertClassroomAccess({
+    const { classroom, membership } = await assertClassroomAccess({
       request,
       classroomSlug: classSlug,
       allowedRoles: ['OWNER', 'TEACHER'],
       resourceType: 'PAGES',
       attemptedAction: 'update_width',
     });
+    assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
 
     try {
       await ClassmojiService.page.quickUpdate(pageId, {
@@ -261,13 +254,14 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
   }
 
   if (intent === 'toggleStudentMenu') {
-    await assertClassroomAccess({
+    const { classroom, membership } = await assertClassroomAccess({
       request,
       classroomSlug: classSlug,
       allowedRoles: ['OWNER', 'TEACHER'],
       resourceType: 'PAGES',
       attemptedAction: 'toggle_student_menu',
     });
+    assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
 
     try {
       const data = await request.json();
@@ -285,13 +279,14 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
   }
 
   if (intent === 'togglePublic') {
-    await assertClassroomAccess({
+    const { classroom, membership } = await assertClassroomAccess({
       request,
       classroomSlug: classSlug,
       allowedRoles: ['OWNER', 'TEACHER'],
       resourceType: 'PAGES',
       attemptedAction: 'toggle_public',
     });
+    assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
 
     try {
       const data = await request.json();
@@ -321,13 +316,14 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
         );
       }
 
-      await assertClassroomAccess({
+      const { classroom, membership } = await assertClassroomAccess({
         request,
         classroomSlug: classSlug,
         allowedRoles: ['OWNER', 'TEACHER'],
         resourceType: 'PAGES',
         attemptedAction: 'upload_header_image',
       });
+      assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
 
       const page = await ClassmojiService.page.findById(pageId, {
         includeClassroom: true,
@@ -342,11 +338,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
 
       const pageData = page as unknown as PageWithClassroom;
       const gitOrg = pageData.classroom.git_organization;
-      const term = generateTermString(
-        pageData.classroom.term,
-        pageData.classroom.year ?? undefined
-      );
-      const repo = `content-${gitOrg.login}-${term}`;
+      const repo = `content-${gitOrg.login}-${pageData.classroom.content_namespace}`;
 
       // Upload header image to content repo (in page folder, not assets)
       const buffer = Buffer.from(await file.arrayBuffer());
@@ -385,13 +377,14 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
 
   if (intent === 'set-header-image') {
     try {
-      await assertClassroomAccess({
+      const { classroom, membership } = await assertClassroomAccess({
         request,
         classroomSlug: classSlug,
         allowedRoles: ['OWNER', 'TEACHER'],
         resourceType: 'PAGES',
         attemptedAction: 'set_header_image',
       });
+      assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
 
       const data = await request.json();
       const { url, position } = data;
@@ -438,13 +431,14 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
         );
       }
 
-      await assertClassroomAccess({
+      const { classroom, membership } = await assertClassroomAccess({
         request,
         classroomSlug: classSlug,
         allowedRoles: ['OWNER', 'TEACHER'],
         resourceType: 'PAGES',
         attemptedAction: 'import_markdown',
       });
+      assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
 
       const page = await ClassmojiService.page.findById(pageId, {
         includeClassroom: true,
@@ -459,11 +453,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
 
       const pageData = page as unknown as PageWithClassroom;
       const gitOrg = pageData.classroom.git_organization;
-      const term = generateTermString(
-        pageData.classroom.term,
-        pageData.classroom.year ?? undefined
-      );
-      const repo = `content-${gitOrg.login}-${term}`;
+      const repo = `content-${gitOrg.login}-${pageData.classroom.content_namespace}`;
       const assetsFolder = `${page.content_path}/assets`;
 
       // Read markdown content
@@ -596,13 +586,14 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
     const markdownContent = formData.get('content') as string | null;
     const newTitle = formData.get('title') as string | null;
 
-    await assertClassroomAccess({
+    const { classroom, membership } = await assertClassroomAccess({
       request,
       classroomSlug: classSlug,
       allowedRoles: ['OWNER', 'TEACHER'],
       resourceType: 'PAGES',
       attemptedAction: 'edit_page',
     });
+    assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
 
     const page = await ClassmojiService.page.findById(pageId, {
       includeClassroom: true,
@@ -614,11 +605,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
 
     const savePageData = page as unknown as PageWithClassroom;
     const gitOrg = savePageData.classroom.git_organization;
-    const term = generateTermString(
-      savePageData.classroom.term,
-      savePageData.classroom.year ?? undefined
-    );
-    const repo = `content-${gitOrg.login}-${term}`;
+    const repo = `content-${gitOrg.login}-${savePageData.classroom.content_namespace}`;
     const filePath = `${page.content_path}/index.html`;
 
     // Wrap HTML content in full document with the page's width setting

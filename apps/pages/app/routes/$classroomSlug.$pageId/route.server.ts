@@ -93,19 +93,9 @@ export const loader = async ({
     login?: string;
     avatar_url?: string;
   } | null;
-  const term = page.classroom.term;
-  const year = page.classroom.year;
-
-  // Generate term string (format: 25w for Winter 2025)
-  const generateTermString = (term: string | null, year: number | null): string | null => {
-    if (!term || !year) return null;
-    const termMap: Record<string, string> = { Winter: 'w', Spring: 's', Summer: 'u', Fall: 'f' };
-    const yearShort = String(year).slice(-2);
-    return `${yearShort}${termMap[term] || term.charAt(0).toLowerCase()}`;
-  };
-
-  const termString = generateTermString(term, year);
-  const repoName = termString ? `content-${gitOrg?.login}-${termString}` : null;
+  const contentNamespace = page.classroom.content_namespace;
+  const repoName =
+    contentNamespace && gitOrg?.login ? `content-${gitOrg.login}-${contentNamespace}` : null;
 
   return {
     page: {

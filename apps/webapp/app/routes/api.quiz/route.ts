@@ -20,8 +20,10 @@
  * - recordModalOpen: Calculates gap time and adds to unfocused duration when modal reopens
  * - restartQuiz: Deletes and restarts a quiz attempt (dev mode only)
  */
-import { assertClassroomAccess } from '~/utils/helpers';
+import { assertClassroomAccess, assertProTier } from '~/utils/helpers';
+import { assertClassroomMutationAllowed } from '~/utils/routeAuth.server';
 import { isAIAgentConfigured } from '~/utils/aiFeatures.server';
+import { runBackgroundTask } from '~/utils/backgroundTask.server';
 import { getQuestionProgressFromMessage, checkForCompletion } from '@classmoji/utils';
 import type { Role } from '@prisma/client';
 import type { Route } from './+types/route';
@@ -56,7 +58,7 @@ export async function action({ request }: Route.ActionArgs) {
     });
   }
 
-  // Import server-only modules
+  // Import server-only repositories
   const { ClassmojiService } = await import('@classmoji/services');
   const { getInstallationToken } = await import('../student.$class.quizzes/helpers.server');
   const { initializeQuizViaAgent, sendMessageToAgent, endQuizSession } =
@@ -289,6 +291,8 @@ export async function action({ request }: Route.ActionArgs) {
       attemptedAction: data._action,
       metadata: context.metadata,
     });
+    assertClassroomMutationAllowed({ status: access.classroom.status, role: access.membership!.role });
+    await assertProTier(context.classroomSlug);
 
     // Check AI agent availability AFTER auth (preserves audit logging)
     if (!isAIAgentConfigured()) {
@@ -364,11 +368,11 @@ export async function action({ request }: Route.ActionArgs) {
             });
           }
 
-          // Check if this is a code-aware quiz (linked to a module with code context enabled)
-          if (attempt.quiz.module_id && attempt.quiz.include_code_context) {
-            // Process in background to allow SSE connection
-            // Note: ai-agent now handles welcome message generation and publishing
-            setTimeout(async () => {
+          // Check if this is a code-aware quiz (linked to a repository with code context enabled)
+          if (attempt.quiz.repository_id && attempt.quiz.include_code_context) {
+            // Generate the first question in the background so the SSE connection isn't blocked.
+            setTimeout(() => {
+              runBackgroundTask('startQuiz:codeAware', async () => {
               try {
                 // Check if user is an instructor (OWNER or ASSISTANT)
                 const isInstructor = ['OWNER', 'ASSISTANT', 'TEACHER'].includes(
@@ -399,12 +403,12 @@ export async function action({ request }: Route.ActionArgs) {
                   }
                 } else {
                   // Standard flow: find student's repo
-                  const repo = await ClassmojiService.repository.findByStudent(
-                    attempt.quiz.module_id!,
+                  const repo = await ClassmojiService.gitRepo.findByStudent(
+                    attempt.quiz.repository_id!,
                     userId
                   );
                   if (!repo) {
-                    throw new Error('No repository found for this module.');
+                    throw new Error('No repository found for this repository.');
                   }
                   repoName = repo.name;
                 }
@@ -465,6 +469,7 @@ export async function action({ request }: Route.ActionArgs) {
                 );
                 await ClassmojiService.quizAttempt.incrementQuestionsAsked(attempt.id);
               }
+              });
             }, 100); // Small delay to allow response to return first
 
             // Return attemptId immediately — background task saves messages to DB,
@@ -479,9 +484,9 @@ export async function action({ request }: Route.ActionArgs) {
               headers: { 'Content-Type': 'application/json' },
             });
 
-            // Generate first question in background via ai-agent
-            // Note: ai-agent now handles welcome message generation and publishing
-            setTimeout(async () => {
+            // Generate the first question in the background so the SSE connection isn't blocked.
+            setTimeout(() => {
+              runBackgroundTask('startQuiz:standard', async () => {
               try {
                 // Load classroom settings for LLM configuration
                 const classroomSettings = attempt.quiz.classroom?.settings;
@@ -521,6 +526,7 @@ export async function action({ request }: Route.ActionArgs) {
                 );
                 await ClassmojiService.quizAttempt.incrementQuestionsAsked(attempt.id);
               }
+              });
             }, 100); // Small delay to allow response to return first
 
             return responsePromise;

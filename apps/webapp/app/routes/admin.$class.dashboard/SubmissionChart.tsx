@@ -13,7 +13,7 @@ import { useDarkMode } from '~/hooks';
 import theme from '~/config/theme';
 
 interface SubmissionChartProps {
-  recentRepositoryAssignments: { closed_at?: string | Date }[];
+  recentRepositoryAssignments: { closed_at?: string | Date | null }[];
 }
 
 const SubmissionChart = ({ recentRepositoryAssignments }: SubmissionChartProps) => {
@@ -26,8 +26,9 @@ const SubmissionChart = ({ recentRepositoryAssignments }: SubmissionChartProps) 
   const data = lastDays
     .map(day => ({
       name: day.format('MMM D'),
-      count: recentRepositoryAssignments.filter(ra => dayjs(ra.closed_at).isSame(day, 'day'))
-        .length,
+      count: recentRepositoryAssignments.filter(
+        ra => ra.closed_at && dayjs(ra.closed_at).isSame(day, 'day')
+      ).length,
     }))
     .reverse();
 
@@ -42,8 +43,8 @@ const SubmissionChart = ({ recentRepositoryAssignments }: SubmissionChartProps) 
   }) => {
     if (active && payload && payload.length) {
       return (
-        <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-lg p-3">
-          <p className="text-gray-700 dark:text-gray-300 font-medium">{`${label}`}</p>
+        <div className="bg-white dark:bg-neutral-800 border border-gray-200 dark:border-neutral-700 rounded-lg shadow-lg p-3">
+          <p className="text-ink-1 font-medium">{`${label}`}</p>
           <p className="text-primary-600 dark:text-primary-400 font-semibold">
             {`${payload[0].value} submission${payload[0].value !== 1 ? 's' : ''}`}
           </p>

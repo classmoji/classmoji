@@ -247,7 +247,7 @@ const createMarkdownComponents = (
           color: codeTextColor,
           padding: '2px 6px',
           borderRadius: '4px',
-          fontFamily: '"JetBrains Mono", monospace',
+          fontFamily: '"DM Mono", monospace',
           fontSize: '0.9em',
         }}
         {...rest}
@@ -782,7 +782,7 @@ const QuizMessageList = ({
       }
     `}</style>
       <div
-      tabIndex={0} // eslint-disable-line -- Keyboard accessibility: allows scrolling with arrow keys
+        tabIndex={0} // eslint-disable-line -- Keyboard accessibility: allows scrolling with arrow keys
         role="log"
         aria-live="polite"
         aria-label="Quiz conversation"

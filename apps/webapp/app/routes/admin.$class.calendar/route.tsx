@@ -3,11 +3,10 @@ import { Button, Modal } from 'antd';
 import { PlusOutlined } from '@ant-design/icons';
 import invariant from 'tiny-invariant';
 import { data, useFetcher, useParams } from 'react-router';
-import { toast } from 'react-toastify';
-import { PageHeader } from '~/components';
 import { ClassmojiService } from '@classmoji/services';
+import { useCallout } from '@classmoji/ui-components';
 import getPrisma from '@classmoji/database';
-import { assertClassroomAccess } from '~/utils/helpers';
+import { assertClassroomAccess, assertClassroomMutationAllowed } from '~/utils/helpers';
 import { buildCalendarUrl, getCalendarDateRange } from '~/utils/calendar.server';
 import type { Route } from './+types/route';
 import CourseCalendar from '~/components/features/calendar/CourseCalendar';
@@ -75,8 +74,8 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
       orderBy: { title: 'asc' },
     }),
     getPrisma().assignment.findMany({
-      where: { module: { classroom_id: classroom.id }, is_published: true },
-      select: { id: true, title: true, module: { select: { title: true, slug: true } } },
+      where: { repository: { classroom_id: classroom.id }, is_published: true },
+      select: { id: true, title: true, repository: { select: { title: true, slug: true } } },
       orderBy: { title: 'asc' },
     }),
   ]);
@@ -115,6 +114,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
     resourceType: 'CALENDAR',
     attemptedAction: 'modify',
   });
+  assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
 
   const isAdmin = ['OWNER', 'TEACHER'].includes(membership!.role);
 
@@ -151,8 +151,16 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
 
     const event = await ClassmojiService.calendar.getEventById(eventId);
 
+    // Event must exist and belong to THIS classroom. The role check above only
+    // proves the caller is staff in this classroom, not that the target event
+    // is in it, so without this a staff member could edit another class's event
+    // via a crafted eventId.
+    if (!event || event.classroom_id !== classroom.id) {
+      return data({ success: false, error: 'Event not found' }, { status: 404 });
+    }
+
     // OWNER/TEACHER can edit any event, ASSISTANT can only edit their own
-    if (!isAdmin && String(event!.created_by) !== String(userId)) {
+    if (!isAdmin && String(event.created_by) !== String(userId)) {
       return data(
         { success: false, error: 'Unauthorized - you can only edit your own events' },
         { status: 403 }
@@ -213,7 +221,9 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
     try {
       const event = await ClassmojiService.calendar.getEventById(eventId);
 
-      if (!event) {
+      // Event must exist and belong to THIS classroom (prevents cross-classroom
+      // deletes via a crafted eventId).
+      if (!event || event.classroom_id !== classroom.id) {
         return data({ success: false, error: 'Event not found' }, { status: 404 });
       }
 
@@ -265,8 +275,8 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
       return data({ success: false, error: 'Assignment not found' }, { status: 404 });
     }
 
-    // Verify assignment belongs to this classroom (through its module)
-    if (assignment.module.classroom_id !== classroom.id) {
+    // Verify assignment belongs to this classroom (through its repository)
+    if (assignment.repository.classroom_id !== classroom.id) {
       return data(
         { success: false, error: 'Assignment does not belong to this classroom' },
         { status: 403 }
@@ -317,6 +327,7 @@ const AdminCalendar = ({ loaderData }: Route.ComponentProps) => {
   const { class: classSlug } = useParams();
   const fetcher = useFetcher();
   const eventsFetcher = useFetcher();
+  const callout = useCallout();
 
   const [addModalOpen, setAddModalOpen] = useState(false);
   const [editModalOpen, setEditModalOpen] = useState(false);
@@ -353,7 +364,7 @@ const AdminCalendar = ({ loaderData }: Route.ComponentProps) => {
         eventsFetcher.load(`?year=${currentViewYear}&month=${currentViewMonth}`);
       } else if (fetcher.data.error) {
         setOptimisticEvents(null); // Revert on error
-        toast.error(fetcher.data.error);
+        callout.show({ variant: 'error', title: fetcher.data.error });
       }
     }
   }, [fetcher.data, fetcher.state]);
@@ -390,11 +401,13 @@ const AdminCalendar = ({ loaderData }: Route.ComponentProps) => {
   };
 
   const handleEventDrop = (event: CalendarEvent, newStartTime: Date, newEndTime: Date) => {
-    // OWNER/TEACHER can drag any event, others can only drag their own
-    const canDragEvent = isAdmin || Number(event.created_by) === Number(userId);
+    // OWNER/TEACHER can drag any event, others can only drag their own.
+    // IDs are UUID strings, so compare as strings (Number(uuid) is NaN, which
+    // would make this always false and block users from moving their own events).
+    const canDragEvent = isAdmin || String(event.created_by) === String(userId);
 
     if (!canDragEvent) {
-      toast.error('You can only move your own events');
+      callout.show({ variant: 'error', title: 'You can only move your own events' });
       return;
     }
 
@@ -470,12 +483,9 @@ const AdminCalendar = ({ loaderData }: Route.ComponentProps) => {
   };
 
   const handleEventClick = (event: CalendarEvent) => {
-    // Convert both to numbers for comparison (handle string/number mismatch)
-    const eventOwnerId = Number(event.created_by);
-    const currentUserId = Number(userId);
-
-    // OWNER/TEACHER can edit any event, others can only edit their own
-    const canEditEvent = isAdmin || eventOwnerId === currentUserId;
+    // OWNER/TEACHER can edit any event, others can only edit their own.
+    // IDs are UUID strings, so compare as strings (Number(uuid) is NaN).
+    const canEditEvent = isAdmin || String(event.created_by) === String(userId);
 
     if (event.is_deadline) {
       // Deadlines are read-only, just show info
@@ -493,17 +503,25 @@ const AdminCalendar = ({ loaderData }: Route.ComponentProps) => {
   };
 
   return (
-    <div>
-      <PageHeader title="Calendar" routeName="calendar">
+    <div className="min-h-full">
+      <div className="flex items-center justify-between gap-3 mt-2 mb-4">
+        <h1 className="text-base font-semibold text-ink-2">Calendar</h1>
         <div className="flex gap-2">
-          <CalendarSubscriptionCard subscriptionUrl={subscriptionUrl} />
+          <span data-tour="calendar-subscribe">
+            <CalendarSubscriptionCard subscriptionUrl={subscriptionUrl} />
+          </span>
           {canEdit && (
-            <Button type="primary" icon={<PlusOutlined />} onClick={() => setAddModalOpen(true)}>
+            <Button
+              type="primary"
+              icon={<PlusOutlined />}
+              onClick={() => setAddModalOpen(true)}
+              data-tour="calendar-add-event"
+            >
               Add Event
             </Button>
           )}
         </div>
-      </PageHeader>
+      </div>
 
       <CourseCalendar
         events={events}

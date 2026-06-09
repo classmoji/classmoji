@@ -1,6 +1,11 @@
 import { test, expect } from '../../fixtures/auth.fixture';
-import { mockGitHubAPI } from '../../fixtures/mocks/github.mock';
 import { waitForDataLoad } from '../../helpers/wait.helpers';
+import { TEST_CLASSROOM } from '../../helpers/env.helpers';
+import {
+  getTestPrisma,
+  getUserByLogin,
+  getClassroomBySlug,
+} from '../../helpers/prisma.helpers';
 
 /**
  * Pages Management Tests
@@ -11,7 +16,6 @@ import { waitForDataLoad } from '../../helpers/wait.helpers';
 
 test.describe('Pages List', () => {
   test.beforeEach(async ({ authenticatedPage: page, testOrg }) => {
-    await mockGitHubAPI(page);
     await page.goto(`/admin/${testOrg}/pages`);
     await waitForDataLoad(page);
   });
@@ -29,7 +33,6 @@ test.describe('Pages List', () => {
   });
 
   test('displays pages table', async ({ authenticatedPage: page }) => {
-    // Table should be visible (even if empty)
     await expect(page.locator('table')).toBeVisible();
   });
 
@@ -45,7 +48,6 @@ test.describe('Pages List', () => {
 
 test.describe('Pages Search', () => {
   test.beforeEach(async ({ authenticatedPage: page, testOrg }) => {
-    await mockGitHubAPI(page);
     await page.goto(`/admin/${testOrg}/pages`);
     await waitForDataLoad(page);
   });
@@ -54,35 +56,24 @@ test.describe('Pages Search', () => {
     const searchInput = page.getByPlaceholder(/Search page/i);
     await searchInput.fill('nonexistent-page-xyz');
 
-    // Wait for filtering
-    await page.waitForTimeout(300);
-
-    // Should show "no pages found" or filtered results
-    const emptyState = page.getByText(/No pages found matching/i);
-    const hasResults = await page.locator('table tbody tr').count();
-
-    expect((await emptyState.isVisible().catch(() => false)) || hasResults === 0).toBeTruthy();
+    await expect(page.getByText(/No pages found matching/i)).toBeVisible();
+    await expect(page.locator('table tbody tr.ant-table-row')).toHaveCount(0);
   });
 
   test('can clear search to show all pages', async ({ authenticatedPage: page }) => {
     const searchInput = page.getByPlaceholder(/Search page/i);
 
-    // Type something
     await searchInput.fill('test');
-    await page.waitForTimeout(300);
-
-    // Clear the search
+    await expect(searchInput).toHaveValue('test');
     await searchInput.clear();
-    await page.waitForTimeout(300);
+    await expect(searchInput).toHaveValue('');
 
-    // Table should still be visible
     await expect(page.locator('table')).toBeVisible();
   });
 });
 
 test.describe('New Page Modal', () => {
   test.beforeEach(async ({ authenticatedPage: page, testOrg }) => {
-    await mockGitHubAPI(page);
     await page.goto(`/admin/${testOrg}/pages`);
     await waitForDataLoad(page);
   });
@@ -93,11 +84,9 @@ test.describe('New Page Modal', () => {
   }) => {
     await page.getByRole('button', { name: /New Page/i }).click();
 
-    // Should navigate to /pages/new which opens as modal
     await page.waitForURL(`**/admin/${testOrg}/pages/new`);
     await expect(page).toHaveURL(new RegExp(`/admin/${testOrg}/pages/new`));
 
-    // Modal should appear
     await expect(page.locator('.ant-modal')).toBeVisible();
   });
 
@@ -105,7 +94,6 @@ test.describe('New Page Modal', () => {
     await page.goto(`/admin/${testOrg}/pages/new`);
     await waitForDataLoad(page);
 
-    // Check for tab options - all three tabs should be visible
     const tabs = page.locator('.ant-tabs-tab');
     await expect(tabs).toHaveCount(3);
 
@@ -121,7 +109,6 @@ test.describe('New Page Modal', () => {
 
     await page.getByRole('button', { name: /Cancel/i }).click();
 
-    // Should navigate back to pages list
     await page.waitForURL(`**/admin/${testOrg}/pages`);
     await expect(page).toHaveURL(new RegExp(`/admin/${testOrg}/pages$`));
   });
@@ -133,13 +120,11 @@ test.describe('New Page Modal', () => {
     await page.goto(`/admin/${testOrg}/pages/new`);
     await waitForDataLoad(page);
 
-    // Create Blank should be the default tab
     await expect(page.getByRole('tab', { name: /Create Blank/i })).toHaveAttribute(
       'aria-selected',
       'true'
     );
 
-    // Should have form elements for page creation
     await expect(page.getByText(/Title/i).first()).toBeVisible();
     await expect(page.getByRole('button', { name: /Create Page/i })).toBeVisible();
   });
@@ -148,7 +133,6 @@ test.describe('New Page Modal', () => {
     await page.goto(`/admin/${testOrg}/pages/new`);
     await waitForDataLoad(page);
 
-    // Click Import tab (second tab - index 1)
     const importTab = page.locator('.ant-tabs-tab').nth(1);
     await importTab.click();
     await expect(importTab).toHaveClass(/ant-tabs-tab-active/);
@@ -171,55 +155,119 @@ test.describe('Pages Table', () => {
     authenticatedPage: page,
     testOrg,
   }) => {
-    await mockGitHubAPI(page);
     await page.goto(`/admin/${testOrg}/pages`);
     await waitForDataLoad(page);
 
-    // Page should show either:
-    // 1. A table with page data (seed may include pages like "CS 52: Fullstack Web Development")
-    // 2. An empty state message
     const table = page.locator('.ant-table');
     const pageHeading = page.getByRole('heading', { name: /Pages/i });
 
-    // At minimum, the page heading and table structure should be visible
     await expect(pageHeading).toBeVisible();
     await expect(table).toBeVisible();
   });
 });
 
 test.describe('Page Actions', () => {
-  test.beforeEach(async ({ authenticatedPage: page, testOrg }) => {
-    await mockGitHubAPI(page);
-    await page.goto(`/admin/${testOrg}/pages`);
-    await waitForDataLoad(page);
+  const ACTIONS_TAG = 'e2e-page-actions';
+
+  test.beforeEach(async ({ authenticatedPage: page }) => {
+    const classroom = await getClassroomBySlug(TEST_CLASSROOM);
+    await getTestPrisma().page.deleteMany({
+      where: { classroom_id: classroom.id, content_path: { startsWith: `pages/${ACTIONS_TAG}/` } },
+    });
   });
 
-  test('pages table displays correctly', async ({ authenticatedPage: page }) => {
-    // The table should be visible
-    await expect(page.locator('table')).toBeVisible();
+  test.afterEach(async () => {
+    const classroom = await getClassroomBySlug(TEST_CLASSROOM);
+    await getTestPrisma().page.deleteMany({
+      where: { classroom_id: classroom.id, content_path: { startsWith: `pages/${ACTIONS_TAG}/` } },
+    });
+  });
 
-    // If there are pages, verify the table has content
-    const rowCount = await page.locator('table tbody tr').count();
+  test('a known seeded page renders as a row in the table', async ({
+    authenticatedPage: page,
+    testUser,
+    testOrg,
+  }) => {
+    const user = await getUserByLogin(testUser.login);
+    const classroom = await getClassroomBySlug(TEST_CLASSROOM);
+    const pageId = '22222222-2222-4222-8222-000000000002';
+    const title = `${ACTIONS_TAG} seeded row`;
+    await getTestPrisma().page.create({
+      data: {
+        id: pageId,
+        classroom_id: classroom.id,
+        title,
+        slug: 'e2e-actions-seeded-row',
+        content_path: `pages/${ACTIONS_TAG}/${pageId}`,
+        created_by: user.id,
+        is_draft: false,
+        is_public: true,
+      },
+    });
 
-    if (rowCount > 0) {
-      // First row should have cells with content
-      const firstRow = page.locator('table tbody tr').first();
-      await expect(firstRow).toBeVisible();
-    } else {
-      // Empty state message should be visible
-      const emptyText = page.getByText(/No pages created yet/i);
-      await expect(emptyText).toBeVisible();
-    }
+    await page.goto(`/admin/${testOrg}/pages`);
+    await waitForDataLoad(page);
+
+    const row = page.getByRole('row', { name: new RegExp(title) });
+    await expect(row).toBeVisible();
+    await expect(row.getByRole('link', { name: title })).toBeVisible();
+  });
+});
+
+test.describe('Pages List reflects DB state', () => {
+  const LIST_TAG = 'e2e-page-list';
+
+  test.beforeEach(async ({ authenticatedPage: page }) => {
+    const classroom = await getClassroomBySlug(TEST_CLASSROOM);
+    await getTestPrisma().page.deleteMany({
+      where: { classroom_id: classroom.id, content_path: { startsWith: `pages/${LIST_TAG}/` } },
+    });
+  });
+
+  test.afterEach(async () => {
+    const classroom = await getClassroomBySlug(TEST_CLASSROOM);
+    await getTestPrisma().page.deleteMany({
+      where: { classroom_id: classroom.id, content_path: { startsWith: `pages/${LIST_TAG}/` } },
+    });
+  });
+
+  test('a published page from the database shows its title and Public status in the list', async ({
+    authenticatedPage: page,
+    testUser,
+    testOrg,
+  }) => {
+    const user = await getUserByLogin(testUser.login);
+    const classroom = await getClassroomBySlug(TEST_CLASSROOM);
+    const pageId = '22222222-2222-4222-8222-000000000001';
+    const title = `${LIST_TAG} visible published page`;
+    await getTestPrisma().page.create({
+      data: {
+        id: pageId,
+        classroom_id: classroom.id,
+        title,
+        slug: 'e2e-list-visible-published',
+        content_path: `pages/${LIST_TAG}/${pageId}`,
+        created_by: user.id,
+        is_draft: false,
+        is_public: true,
+      },
+    });
+
+    await page.goto(`/admin/${testOrg}/pages`);
+    await waitForDataLoad(page);
+
+    const row = page.getByRole('row', { name: new RegExp(title) });
+    await expect(row).toBeVisible();
+    await expect(row.getByRole('link', { name: title })).toBeVisible();
+    await expect(row.locator('.ant-select')).toContainText(/Public/i);
   });
 });
 
 test.describe('Navigation', () => {
   test('can navigate to pages from sidebar', async ({ authenticatedPage: page, testOrg }) => {
-    await mockGitHubAPI(page);
     await page.goto(`/admin/${testOrg}/dashboard`);
     await waitForDataLoad(page);
 
-    // Click Pages link in sidebar
     await page.getByRole('link', { name: 'Pages' }).click();
     await page.waitForURL(`**/admin/${testOrg}/pages`);
     await expect(page).toHaveURL(new RegExp(`/admin/${testOrg}/pages`));

@@ -1,23 +1,11 @@
 import { Outlet, useNavigate, useLocation } from 'react-router';
 import { useState } from 'react';
-import {
-  Table,
-  Badge,
-  Typography,
-  Button,
-  Modal,
-  Tag,
-  Tabs,
-  Tooltip,
-  Space,
-  Select,
-  Spin,
-} from 'antd';
+import { Table, Badge, Typography, Button, Modal, Tag, Tooltip, Space, Select, Spin } from 'antd';
 import { CheckCircleOutlined, PlayCircleOutlined, TrophyOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import type { Route } from './+types/route';
-import { PageHeader, Countdown } from '~/components';
-import { assertClassroomAccess } from '~/utils/helpers';
+import { Countdown } from '~/components';
+import { assertClassroomAccess, assertProTier } from '~/utils/helpers';
 import { formatDuration } from '~/utils/quizUtils';
 
 const { Text } = Typography;
@@ -51,7 +39,7 @@ interface StudentQuiz {
   id: string;
   name: string;
   assignmentTitle: string;
-  module_id: string | null;
+  repository_id: string | null;
   include_code_context: boolean;
   dueDate: string | Date | null;
   status: string;
@@ -94,6 +82,8 @@ export async function loader({ params, request }: Route.LoaderArgs) {
     attemptedAction: 'view_student_quizzes',
   });
 
+  await assertProTier(classSlug);
+
   // Get classroom settings
   const settings = await ClassmojiService.classroom.getClassroomSettingsForServer(classroom.id);
 
@@ -112,8 +102,8 @@ export async function loader({ params, request }: Route.LoaderArgs) {
     return {
       id: quiz.id?.toString() || quiz.id,
       name: quiz.name,
-      assignmentTitle: quiz.module?.title || 'Unlinked',
-      module_id: quiz.module_id,
+      assignmentTitle: quiz.repository?.title || 'Unlinked',
+      repository_id: quiz.repository_id,
       include_code_context: quiz.include_code_context,
       dueDate: quiz.due_date,
       status: quiz.status,
@@ -437,6 +427,7 @@ export default function StudentQuizzes({ loaderData }: Route.ComponentProps) {
         rowKey="id"
         pagination={false}
         size="small"
+        scroll={{ x: 'max-content' }}
       />
     );
   };
@@ -448,8 +439,7 @@ export default function StudentQuizzes({ loaderData }: Route.ComponentProps) {
       key: 'name',
       render: (name: string, record: StudentQuiz) => (
         <Space>
-          <span style={{ fontSize: '16px' }}>🧑‍💻</span>
-          <span className="font-medium">{name}</span>
+          <span className="font-medium text-ink-1">{name}</span>
           {record.weight === 0 && (
             <Tooltip title="This quiz won't affect your grade">
               <Tag color="gold" style={{ fontSize: '11px', margin: 0 }}>
@@ -464,9 +454,9 @@ export default function StudentQuizzes({ loaderData }: Route.ComponentProps) {
       ),
     },
     {
-      title: 'Module',
+      title: 'Repository',
       dataIndex: 'assignmentTitle',
-      key: 'module',
+      key: 'repository',
       render: (title: string) => <Text type="secondary">{title}</Text>,
     },
     {
@@ -544,91 +534,94 @@ export default function StudentQuizzes({ loaderData }: Route.ComponentProps) {
   const currentCount = filterQuizzes(quizzes, 'current').length;
   const completedCount = filterQuizzes(quizzes, 'completed').length;
 
-  const tabItems = [
-    {
-      key: 'current',
-      label: `📝 Current (${currentCount})`,
-      children: (
-        <Table
-          columns={columns}
-          dataSource={filterQuizzes(quizzes, 'current')}
-          rowKey="id"
-          rowHoverable={false}
-          size="small"
-          pagination={{ pageSize: 25 }}
-          expandable={{
-            expandedRowRender: renderAttempts,
-            rowExpandable: record => record.attemptCount > 0,
-          }}
-          locale={{
-            emptyText: (
-              <div className="text-center py-12 text-gray-500">
-                <div className="text-6xl mb-4">✨</div>
-                <h3 className="text-xl font-semibold text-gray-700 mb-2">All caught up!</h3>
-                <p>No quizzes to complete right now</p>
-              </div>
-            ),
-          }}
-        />
-      ),
-    },
-    {
-      key: 'completed',
-      label: `✅ Completed (${completedCount})`,
-      children: (
-        <Table
-          columns={columns}
-          dataSource={filterQuizzes(quizzes, 'completed')}
-          rowKey="id"
-          rowHoverable={false}
-          size="small"
-          pagination={{ pageSize: 25 }}
-          expandable={{
-            expandedRowRender: renderAttempts,
-            rowExpandable: record => record.attemptCount > 0,
-          }}
-          locale={{
-            emptyText: (
-              <div className="text-center py-12 text-gray-500">
-                <div className="text-6xl mb-4">📝</div>
-                <h3 className="text-xl font-semibold text-gray-700 mb-2">
-                  No completed quizzes yet
-                </h3>
-                <p>Completed quizzes will appear here with your scores</p>
-              </div>
-            ),
-          }}
-        />
-      ),
-    },
-    {
-      key: 'all',
-      label: `📋 All (${publishedQuizzes.length})`,
-      children: (
-        <Table
-          columns={columns}
-          dataSource={publishedQuizzes}
-          rowKey="id"
-          rowHoverable={false}
-          size="small"
-          pagination={{ pageSize: 50 }}
-          expandable={{
-            expandedRowRender: renderAttempts,
-            rowExpandable: record => record.attemptCount > 0,
-          }}
-        />
-      ),
-    },
+  const tabs = [
+    { key: 'current', label: 'Current', count: currentCount },
+    { key: 'completed', label: 'Completed', count: completedCount },
+    { key: 'all', label: 'All', count: publishedQuizzes.length },
   ];
 
+  const dataSource =
+    activeTab === 'all'
+      ? publishedQuizzes
+      : filterQuizzes(quizzes, activeTab as 'current' | 'completed');
+
+  const emptyText =
+    activeTab === 'current' ? (
+      <div className="text-center py-12 text-gray-500">
+        <div className="font-medium">All caught up!</div>
+        <div className="text-sm">No quizzes to complete right now</div>
+      </div>
+    ) : activeTab === 'completed' ? (
+      <div className="text-center py-12 text-gray-500">
+        <div className="font-medium">No completed quizzes yet</div>
+        <div className="text-sm">Completed quizzes will appear here with your scores</div>
+      </div>
+    ) : (
+      <div className="text-center py-12 text-gray-500">
+        <div className="font-medium">No quizzes published yet</div>
+      </div>
+    );
+
   return (
-    <div className="relative">
-      {/* Outlet renders child routes (attempt drawer) */}
+    <div className="min-h-full relative">
       <Outlet />
 
-      <PageHeader title="Interactive Quizzes" routeName="quizzes" />
+      <div className="flex items-center justify-between gap-3 mt-2 mb-4">
+        <h1 className="text-base font-semibold text-ink-2">Quizzes</h1>
+      </div>
 
-      <Tabs activeKey={activeTab} onChange={setActiveTab} items={tabItems} size="large" />
+      <div className="flex -mb-px relative">
+        {tabs.map((tab, idx) => {
+          const isActive = tab.key === activeTab;
+          const baseZ = tabs.length - idx;
+          const zStyle = { zIndex: isActive ? 10 : baseZ };
+          return (
+            <button
+              key={tab.key}
+              type="button"
+              onClick={() => setActiveTab(tab.key)}
+              style={
+                isActive
+                  ? { ...zStyle, color: 'var(--accent)', borderTopColor: 'var(--accent)' }
+                  : zStyle
+              }
+              className={`relative px-4 py-2 text-sm font-medium rounded-t-2xl border whitespace-nowrap transition-colors ${
+                idx > 0 ? '-ml-2' : ''
+              } ${
+                isActive
+                  ? 'bg-panel border-line border-b-transparent'
+                  : 'bg-nav-hover text-ink-3 border-line hover:text-gray-800 dark:hover:text-gray-200'
+              }`}
+            >
+              {tab.label}
+              <span
+                className={`ml-2 text-xs tabular-nums ${
+                  isActive ? 'text-ink-3' : 'text-ink-4'
+                }`}
+              >
+                {tab.count}
+              </span>
+            </button>
+          );
+        })}
+      </div>
+
+      <section className="rounded-2xl rounded-tl-none bg-panel ring-1 ring-line min-h-[calc(100vh-14rem)] p-5 sm:p-6">
+        <Table
+          columns={columns}
+          dataSource={dataSource}
+          rowKey="id"
+          rowHoverable={false}
+          size="small"
+          scroll={{ x: 'max-content' }}
+          pagination={{ pageSize: activeTab === 'all' ? 50 : 25 }}
+          expandable={{
+            expandedRowRender: renderAttempts,
+            rowExpandable: record => record.attemptCount > 0,
+          }}
+          locale={{ emptyText }}
+        />
+      </section>
 
       {/* Repository selection modal for TAs/admins on code-aware quizzes */}
       <Modal

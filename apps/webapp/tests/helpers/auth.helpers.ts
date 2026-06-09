@@ -1,7 +1,7 @@
 import { Cookie } from '@playwright/test';
 import { TEST_USER, TEST_ORG, ROLE_TEST_USERS, TestRole } from './env.helpers';
 // Import the actual cookie from the app to use correct serialization
-import { userCookie } from '../../app/utils/cookies.js';
+import { userCookie } from '../../app/utils/cookies.ts';
 
 export interface TestUser {
   id: string;
@@ -149,7 +149,10 @@ export function parseAuthCookie(cookieValue: string): Partial<TestUser> | null {
 /**
  * Get the dashboard URL for a specific role
  */
-export function getDashboardUrl(role: 'OWNER' | 'ASSISTANT' | 'STUDENT', org: string = TEST_ORG): string {
+export function getDashboardUrl(
+  role: 'OWNER' | 'ASSISTANT' | 'STUDENT',
+  org: string = TEST_ORG
+): string {
   switch (role) {
     case 'OWNER':
       return `/admin/${org}/dashboard`;
@@ -163,7 +166,10 @@ export function getDashboardUrl(role: 'OWNER' | 'ASSISTANT' | 'STUDENT', org: st
 /**
  * Get the base route prefix for a specific role
  */
-export function getRoutePrefix(role: 'OWNER' | 'ASSISTANT' | 'STUDENT', org: string = TEST_ORG): string {
+export function getRoutePrefix(
+  role: 'OWNER' | 'ASSISTANT' | 'STUDENT',
+  org: string = TEST_ORG
+): string {
   switch (role) {
     case 'OWNER':
       return `/admin/${org}`;

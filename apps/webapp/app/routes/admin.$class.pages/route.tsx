@@ -1,12 +1,12 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect } from 'react';
 import { useFetcher, Link, Outlet, useSearchParams, useNavigate } from 'react-router';
 import { Table, Button, Input, Select, Switch, Tooltip } from 'antd';
 import { IconPlus, IconEyeOff, IconLock, IconWorld, IconMenu2 } from '@tabler/icons-react';
-import { toast } from 'react-toastify';
-import { assertClassroomAccess } from '~/utils/helpers';
+import { assertClassroomAccess, assertClassroomMutationAllowed } from '~/utils/helpers';
 import { ClassmojiService } from '@classmoji/services';
+import { useCallout } from '@classmoji/ui-components';
 import getPrisma from '@classmoji/database';
-import { PageHeader, TableActionButtons, RecentViewers } from '~/components';
+import { TableActionButtons, RecentViewers } from '~/components';
 import type { Route } from './+types/route';
 
 export const loader = async ({ request, params }: Route.LoaderArgs) => {
@@ -50,13 +50,14 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
 export const action = async ({ request, params }: Route.ActionArgs) => {
   const { class: classSlug } = params;
 
-  await assertClassroomAccess({
+  const { classroom, membership } = await assertClassroomAccess({
     request,
     classroomSlug: classSlug!,
     allowedRoles: ['OWNER', 'TEACHER'],
     resourceType: 'PAGES',
     attemptedAction: 'manage',
   });
+  assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
 
   const formData = await request.formData();
   const intent = formData.get('intent') as string | null;
@@ -67,7 +68,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
   // Handle delete action
   if (intent === 'delete') {
     await ClassmojiService.page.deletePage(pageId);
-    return { success: true, message: 'Page deleted successfully' };
+    return { success: true, intent: 'delete' };
   }
 
   // Handle status changes (combines is_draft and is_public)
@@ -114,7 +115,7 @@ interface PageRecord {
   is_public: boolean;
   show_in_student_menu: boolean;
   updated_at: string;
-  links?: Array<{ module?: { title: string } | null; [key: string]: unknown }>;
+  links?: Array<{ repository?: { title: string } | null; [key: string]: unknown }>;
   [key: string]: unknown;
 }
 
@@ -129,48 +130,43 @@ export default function AdminPages({ loaderData }: Route.ComponentProps) {
   const fetcher = useFetcher();
   const [searchParams, setSearchParams] = useSearchParams();
   const [searchText, setSearchText] = useState('');
-  const toastIdRef = useRef<string | number | null>(null);
   const navigate = useNavigate();
+  const callout = useCallout();
 
   // Show toast notification after delete (from redirect)
   useEffect(() => {
     if (searchParams.get('deleted') === 'true') {
-      toast.success('Page deleted successfully!');
+      callout.show({ variant: 'success', title: 'Page deleted successfully!' });
       // Remove the query param to prevent showing toast on refresh
       setSearchParams({}, { replace: true });
     }
   }, [searchParams, setSearchParams]);
 
-  // Show loading toast when deleting
+  // Show success/error callout when delete completes
   useEffect(() => {
-    if (fetcher.state === 'submitting') {
-      toastIdRef.current = toast.loading('Deleting page...');
-    } else if (fetcher.state === 'idle' && toastIdRef.current) {
-      if (fetcher.data?.success) {
-        toast.update(toastIdRef.current, {
-          render: fetcher.data.message || 'Page deleted successfully!',
-          type: 'success',
-          isLoading: false,
-          autoClose: 3000,
+    if (fetcher.state === 'idle' && fetcher.data) {
+      if (fetcher.data.intent === 'delete' && fetcher.data.success) {
+        callout.show({
+          variant: 'success',
+          title: 'Page deleted successfully!',
+          autoDismissMs: 3000,
         });
-      } else if (fetcher.data?.error) {
-        toast.update(toastIdRef.current, {
-          render: fetcher.data.error || 'Failed to delete page',
-          type: 'error',
-          isLoading: false,
-          autoClose: 3000,
+      } else if (fetcher.data.error) {
+        callout.show({
+          variant: 'error',
+          title: fetcher.data.error || 'Failed to delete page',
+          autoDismissMs: 3000,
         });
       }
-      toastIdRef.current = null;
     }
   }, [fetcher.state, fetcher.data]);
 
-  // Helper to get first linked module title
-  const getLinkedModuleTitle = (page: PageRecord) => {
+  // Helper to get first linked repository title
+  const getLinkedRepositoryTitle = (page: PageRecord) => {
     const moduleLink = page.links?.find(
-      (link: { module?: { title: string } | null }) => link.module
+      (link: { repository?: { title: string } | null }) => link.repository
     );
-    return moduleLink?.module?.title || null;
+    return moduleLink?.repository?.title || null;
   };
 
   // Handle field updates (for inline editing)
@@ -180,21 +176,21 @@ export default function AdminPages({ loaderData }: Route.ComponentProps) {
 
   const filteredPages = pages
     .filter(page => {
-      const moduleTitle = getLinkedModuleTitle(page as unknown as PageRecord);
+      const repositoryTitle = getLinkedRepositoryTitle(page as unknown as PageRecord);
       const matchesSearch =
         page.title.toLowerCase().includes(searchText.toLowerCase()) ||
-        (moduleTitle && moduleTitle.toLowerCase().includes(searchText.toLowerCase()));
+        (repositoryTitle && repositoryTitle.toLowerCase().includes(searchText.toLowerCase()));
 
       return matchesSearch;
     })
     .sort((a, b) => {
-      // Sort by module first (nulls last), then by title
-      const moduleA = getLinkedModuleTitle(a as unknown as PageRecord) || '';
-      const moduleB = getLinkedModuleTitle(b as unknown as PageRecord) || '';
-      const moduleCompare = moduleA.localeCompare(moduleB);
+      // Sort by repository first (nulls last), then by title
+      const repositoryA = getLinkedRepositoryTitle(a as unknown as PageRecord) || '';
+      const repositoryB = getLinkedRepositoryTitle(b as unknown as PageRecord) || '';
+      const repositoryCompare = repositoryA.localeCompare(repositoryB);
 
-      if (moduleCompare !== 0) {
-        return moduleCompare;
+      if (repositoryCompare !== 0) {
+        return repositoryCompare;
       }
 
       return a.title.localeCompare(b.title);
@@ -322,59 +318,56 @@ export default function AdminPages({ loaderData }: Route.ComponentProps) {
   ];
 
   return (
-    <div>
+    <div className="min-h-full">
       <Outlet />
 
-      <div className="mb-4  items-center">
-        <div className="flex justify-between items-start">
-          <PageHeader title="Pages" routeName="pages" />
-          <div className="flex gap-2 items-center justify-between">
-            <Input
-              placeholder="Search page..."
-              value={searchText}
-              onChange={e => setSearchText(e.target.value)}
-              style={{ width: 300 }}
-            />
-            <Link to={`/admin/${classSlug}/pages/new`}>
-              <Button type="primary" icon={<IconPlus size={16} />}>
-                New Page
-              </Button>
-            </Link>
-          </div>
+      <div className="flex items-center justify-between gap-3 mt-2 mb-4">
+        <h1 className="text-base font-semibold text-ink-2">Pages</h1>
+        <div className="flex items-center gap-2">
+          <Input
+            placeholder="Search page..."
+            value={searchText}
+            onChange={e => setSearchText(e.target.value)}
+            style={{ width: 260 }}
+          />
+          <Link to={`/admin/${classSlug}/pages/new`} data-tour="pages-new">
+            <Button type="primary" icon={<IconPlus size={16} />}>
+              New Page
+            </Button>
+          </Link>
         </div>
       </div>
 
-      <div className="space-y-6">
-        <div className="mt-4">
-          <Table
-            columns={columns as Parameters<typeof Table>[0]['columns']}
-            dataSource={filteredPages}
-            rowKey="id"
-            rowHoverable={false}
-            size="middle"
-            pagination={{
-              defaultPageSize: filteredPages.length || 25,
-              showSizeChanger: true,
-              pageSizeOptions: [25, 50, 100, filteredPages.length || 100],
-              showTotal: (total, range) => `${range[0]}-${range[1]} of ${total} pages`,
-            }}
-            locale={{
-              emptyText: searchText ? (
-                <div className="text-center py-8 text-gray-500">
-                  <div className="text-4xl mb-2">🔍</div>
-                  <div>No pages found matching &quot;{searchText}&quot;</div>
-                  <div className="text-sm">Try adjusting your search terms</div>
-                </div>
-              ) : (
-                <div className="text-center py-8 text-gray-500">
-                  <div className="text-4xl mb-2">📄</div>
-                  <div>No pages created yet</div>
-                  <div className="text-sm">Create your first page to get started!</div>
-                </div>
-              ),
-            }}
-          />
-        </div>
+      <div
+
+        className="rounded-2xl overflow-hidden bg-panel min-h-[calc(100vh-10rem)] p-5 sm:p-6"
+      >
+        <Table
+          columns={columns as Parameters<typeof Table>[0]['columns']}
+          dataSource={filteredPages}
+          rowKey="id"
+          rowHoverable={false}
+          size="middle"
+          scroll={{ x: 'max-content' }}
+          pagination={{
+            defaultPageSize: filteredPages.length || 25,
+            showSizeChanger: false,
+            showTotal: (total, range) => `${range[0]}-${range[1]} of ${total} pages`,
+          }}
+          locale={{
+            emptyText: searchText ? (
+              <div className="text-center py-12 text-gray-500">
+                <div className="font-medium">No pages found matching &quot;{searchText}&quot;</div>
+                <div className="text-sm">Try adjusting your search terms</div>
+              </div>
+            ) : (
+              <div className="text-center py-12 text-gray-500">
+                <div className="font-medium">No pages created yet</div>
+                <div className="text-sm">Create your first page to get started!</div>
+              </div>
+            ),
+          }}
+        />
       </div>
     </div>
   );

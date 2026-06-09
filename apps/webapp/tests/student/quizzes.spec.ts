@@ -1,123 +1,96 @@
 import { test, expect } from '../fixtures/auth.fixture';
-import { mockQuizAPI } from '../fixtures/mocks/llm.mock';
 import { waitForDataLoad } from '../helpers/wait.helpers';
+import {
+  getClassroomBySlug,
+  ensureClassroomProTier,
+  seedQuiz,
+  deleteQuizById,
+} from '../helpers/prisma.helpers';
 
 /**
  * Student Quiz Tests
  *
- * Tests for the student quiz experience at /student/$org/quizzes
- * Uses LLM mocks to simulate quiz interactions.
+ * Covers the student quiz experience at /student/$org/quizzes: list tabs
+ * (Current/Completed/All <button>s) and table headers.
+ *
+ * The quiz-list LOADER only requires Pro tier (assertProTier) — NOT a reachable
+ * ai-agent — so these tests seed a PRO subscription on the classroom owner plus
+ * a PUBLISHED quiz and navigate directly to the route. Attempt creation /
+ * first-question generation does need the agent and is covered instead by the
+ * deterministic action vitest at app/routes/api.quiz/__tests__/startQuiz.test.ts.
  */
 
+const SEEDED_QUIZ_NAME = 'E2E Student Quiz List';
+
 test.describe('Student Quiz List', () => {
+  let classroomId: string;
+  let quizId: string | null = null;
+
   test.beforeEach(async ({ authenticatedPage: page, testOrg }) => {
+    const classroom = await getClassroomBySlug(testOrg);
+    classroomId = classroom.id;
+    await ensureClassroomProTier(testOrg);
+    const quiz = await seedQuiz(classroomId, SEEDED_QUIZ_NAME, { status: 'PUBLISHED' });
+    quizId = quiz.id;
+
     await page.goto(`/student/${testOrg}/quizzes`);
-    await waitForDataLoad(page);
+    await waitForDataLoad(page, {
+      anchor: page.getByRole('button', { name: /^Current/ }),
+    });
   });
 
-  test('displays quiz tabs', async ({ authenticatedPage: page }) => {
-    await expect(page.getByRole('tab', { name: /Current/i })).toBeVisible();
-    await expect(page.getByRole('tab', { name: /Completed/i })).toBeVisible();
-    await expect(page.getByRole('tab', { name: /All/i })).toBeVisible();
-  });
-
-  test('displays quiz table headers', async ({ authenticatedPage: page }) => {
-    // Wait for table to load
-    await expect(page.locator('table')).toBeVisible({ timeout: 10000 });
-
-    // Check for expected column headers
-    const headers = ['Quiz Name', 'Module', 'Due Date'];
-    for (const header of headers) {
-      await expect(
-        page.getByRole('columnheader', { name: new RegExp(header, 'i') })
-      ).toBeVisible();
+  test.afterEach(async () => {
+    if (quizId) {
+      await deleteQuizById(quizId);
+      quizId = null;
     }
   });
 
-  test('can switch between tabs', async ({ authenticatedPage: page }) => {
-    // Click Completed tab
-    await page.getByRole('tab', { name: /Completed/i }).click();
-    await expect(page.getByRole('tab', { name: /Completed/i })).toHaveAttribute(
-      'aria-selected',
-      'true'
-    );
-
-    // Click All tab
-    await page.getByRole('tab', { name: /All/i }).click();
-    await expect(page.getByRole('tab', { name: /All/i })).toHaveAttribute(
-      'aria-selected',
-      'true'
-    );
-
-    // Click back to Current
-    await page.getByRole('tab', { name: /Current/i }).click();
-    await expect(page.getByRole('tab', { name: /Current/i })).toHaveAttribute(
-      'aria-selected',
-      'true'
-    );
-  });
-});
-
-test.describe('Student Quiz Attempt (Mocked)', () => {
-  test.beforeEach(async ({ authenticatedPage: page, testOrg }) => {
-    // Set up LLM mocks before navigating
-    await mockQuizAPI(page);
-    // Navigate to a page so the mocks are applied to the page context
-    await page.goto(`/student/${testOrg}/quizzes`);
+  test('displays quiz tabs', async ({ authenticatedPage: page }) => {
+    await expect(page.getByRole('button', { name: /^Current/ })).toBeVisible();
+    await expect(page.getByRole('button', { name: /^Completed/ })).toBeVisible();
+    await expect(page.getByRole('button', { name: /^All/ })).toBeVisible();
   });
 
-  test('quiz API mock returns success for startQuiz', async ({ authenticatedPage: page }) => {
-    // page.request bypasses route interceptors, so we use page.evaluate with fetch
-    // which goes through the page context and respects mocks
-    const result = await page.evaluate(async () => {
-      const response = await fetch('/api/quiz', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ _action: 'startQuiz', quizId: 'test-quiz' }),
-      });
-      return {
-        ok: response.ok,
-        data: await response.json(),
-      };
-    });
+  test('lists the seeded published quiz with its table headers', async ({
+    authenticatedPage: page,
+  }) => {
+    // Move to the All tab so the published-but-not-yet-due quiz is guaranteed visible.
+    await page.getByRole('button', { name: /^All/ }).click();
 
-    expect(result.ok).toBe(true);
-    expect(result.data.success).toBe(true);
-    expect(result.data.attemptId).toBeDefined();
+    await expect(page.locator('table')).toBeVisible();
+    for (const header of ['Quiz Name', 'Repository', 'Due Date']) {
+      await expect(page.getByRole('columnheader', { name: new RegExp(header, 'i') })).toBeVisible();
+    }
+
+    await expect(
+      page.getByRole('row').filter({ hasText: SEEDED_QUIZ_NAME })
+    ).toBeVisible();
   });
 
-  test('quiz API mock returns success for sendMessage', async ({ authenticatedPage: page }) => {
-    const result = await page.evaluate(async () => {
-      const response = await fetch('/api/quiz', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ _action: 'sendMessage', attemptId: 'test', message: 'My answer' }),
-      });
-      return {
-        ok: response.ok,
-        data: await response.json(),
-      };
-    });
-
-    expect(result.ok).toBe(true);
-    expect(result.data.success).toBe(true);
+  test('Completed tab shows the empty state when there are no attempts', async ({
+    authenticatedPage: page,
+  }) => {
+    await page.getByRole('button', { name: /^Completed/ }).click();
+    await expect(page.getByText('No completed quizzes yet')).toBeVisible();
   });
-
-  // SSE test removed: quiz system was refactored to use DB revalidation instead of SSE streaming.
-  // The /api/quiz/stream endpoint was removed. See llm.mock.ts for current mock setup.
 });
 
 test.describe('Student Quiz Navigation', () => {
+  test.fixme(
+    true,
+    'MISSING: the Quizzes nav item is gated on isProTier AND aiAgentAvailable in CommonLayout. ' +
+      'The ai-agent submodule is empty here (no AI_AGENT_URL), so the nav link stays hidden even ' +
+      'with a PRO subscription. Needs a configured/reachable ai-agent to surface the link.'
+  );
+
   test('can navigate from dashboard to quizzes', async ({ authenticatedPage: page, testOrg }) => {
     await page.goto(`/student/${testOrg}/dashboard`);
     await waitForDataLoad(page);
 
-    // Find and click quizzes link in navigation
     const quizzesLink = page.getByRole('link', { name: /Quizzes/i });
-    if (await quizzesLink.isVisible()) {
-      await quizzesLink.click();
-      await page.waitForURL(`**/student/${testOrg}/quizzes`);
-      await expect(page).toHaveURL(new RegExp(`/student/${testOrg}/quizzes`));
-    }
+    await quizzesLink.click();
+    await page.waitForURL(`**/student/${testOrg}/quizzes`);
+    await expect(page).toHaveURL(new RegExp(`/student/${testOrg}/quizzes`));
   });
 });

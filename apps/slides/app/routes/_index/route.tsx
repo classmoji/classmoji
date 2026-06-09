@@ -61,11 +61,12 @@ export const loader = async ({ request }: { request: Request }) => {
         select: {
           slug: true,
           name: true,
+          content_namespace: true,
         },
       },
       links: {
         include: {
-          module: true,
+          repository: true,
         },
         take: 1,
       },
@@ -197,7 +198,7 @@ export const action = async ({ request }: { request: Request }) => {
         return { error: 'Git organization not configured for this classroom' };
       }
 
-      const repo = `content-${gitOrganization.login}-${slide.term}`;
+      const repo = `content-${gitOrganization.login}-${slide.classroom?.content_namespace}`;
       const newSlug = `${slide.slug}-copy-${Date.now()}`;
       const newContentPath = `slides/${newSlug}`;
 
@@ -240,7 +241,6 @@ export const action = async ({ request }: { request: Request }) => {
         data: {
           title: `${slide.title} (Copy)`,
           slug: newSlug,
-          term: slide.term,
           content_path: newContentPath,
           classroom_id: slide.classroom_id,
           created_by: authData?.userId || slide.created_by,
@@ -254,7 +254,7 @@ export const action = async ({ request }: { request: Request }) => {
             select: { slug: true, name: true },
           },
           links: {
-            include: { module: true },
+            include: { repository: true },
             take: 1,
           },
         },
@@ -412,10 +412,10 @@ export default function SlidesIndex() {
                       {slide.title}
                     </h3>
                     <p className="mt-1 text-sm text-gray-500 dark:text-gray-400 truncate">
-                      {slide.links?.[0]?.module?.title || '—'}
+                      {slide.links?.[0]?.repository?.title || '—'}
                     </p>
                     <div className="mt-2 text-xs text-gray-400 dark:text-gray-500">
-                      {slide.term}
+                      {slide.classroom?.content_namespace}
                     </div>
                   </Link>
                 </div>

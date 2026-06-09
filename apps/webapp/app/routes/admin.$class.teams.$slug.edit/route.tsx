@@ -31,7 +31,7 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
   const teamMembers = team!.memberships.map(({ user }) => user);
   const tags = await ClassmojiService.organizationTag.findByClassroomId(classroom.id);
   const teamWithRepos = await ClassmojiService.team.findByIdWithRepositories(team!.id);
-  const repositoryCount = teamWithRepos?.repositories.length ?? 0;
+  const repositoryCount = teamWithRepos?.git_repos.length ?? 0;
   const canRenameTeam = classroom.git_organization?.provider === 'GITHUB';
 
   return { team, students: studentsObjects, teamMembers, tags, repositoryCount, canRenameTeam };
@@ -195,7 +195,7 @@ const AdminSingleTeamView = ({ loaderData }: Route.ComponentProps) => {
                 Rename
               </Button>
             </div>
-            <p className="mt-2 text-xs text-gray-500 dark:text-gray-400">
+            <p className="mt-2 text-xs text-ink-3">
               Renames the team on GitHub and every linked repository ({repositoryCount} repo
               {repositoryCount === 1 ? '' : 's'}). Local clones need to update their git remote.
             </p>
@@ -217,15 +217,15 @@ const AdminSingleTeamView = ({ loaderData }: Route.ComponentProps) => {
             </Button>
           }
         >
-          <p className="mb-2 text-xs text-gray-500 dark:text-gray-400">
-            The team was renamed but these repositories still have the old suffix on GitHub.
-            Rename them manually or retry by renaming the team again.
+          <p className="mb-2 text-xs text-ink-3">
+            The team was renamed but these repositories still have the old suffix on GitHub. Rename
+            them manually or retry by renaming the team again.
           </p>
           <ul className="text-sm">
             {renameFailures.map(f => (
               <li key={f.name} className="mb-1">
                 <strong>{f.name}</strong>
-                <span className="ml-2 text-gray-500 dark:text-gray-400">— {f.error}</span>
+                <span className="ml-2 text-ink-3">— {f.error}</span>
               </li>
             ))}
           </ul>

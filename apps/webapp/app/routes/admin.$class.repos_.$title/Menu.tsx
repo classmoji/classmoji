@@ -1,0 +1,104 @@
+import { Button, Dropdown } from 'antd';
+import { useNavigate, useParams } from 'react-router';
+import { useCallout } from '@classmoji/ui-components';
+import { useGlobalFetcher } from '~/hooks';
+
+interface MenuProps {
+  repository: {
+    id: string;
+    type: string;
+    assignments?: unknown[];
+    [key: string]: unknown;
+  };
+  assistants: Array<{ id: string }>;
+  repos?: unknown;
+  fetcher?: unknown;
+  notify?: unknown;
+}
+
+const Menu = ({ repository, assistants }: MenuProps) => {
+  const navigate = useNavigate();
+  const { class: classSlug, title: repositoryTitle } = useParams();
+  const { fetcher } = useGlobalFetcher();
+  const callout = useCallout();
+
+  const calculateContributions = () => {
+    if (repository.type === 'INDIVIDUAL') {
+      callout.show({
+        variant: 'error',
+        title: 'Individual assignments do not support calculating contributions',
+      });
+      return;
+    }
+
+    fetcher!.submit(JSON.stringify({ repository }), {
+      method: 'post',
+      action: `/admin/${classSlug}/repos/${repositoryTitle}?action=calculateContributions`,
+      encType: 'application/json',
+    });
+  };
+
+  const items = [
+    {
+      key: 'edit',
+      label: (
+        <button
+          onClick={() => {
+            navigate(`/admin/${classSlug}/repos/form?title=${repositoryTitle}`);
+          }}
+        >
+          Edit repository
+        </button>
+      ),
+    },
+    {
+      key: 'assign-graders',
+      label: (
+        <button
+          onClick={() => {
+            if (!repository.assignments || repository.assignments.length === 0) {
+              callout.show({ variant: 'error', title: 'No assignments to assign graders' });
+              return;
+            }
+
+            if (assistants.length === 0) {
+              callout.show({ variant: 'error', title: 'No graders found' });
+              return;
+            }
+
+            navigate(`/admin/${classSlug}/repos/${repositoryTitle}/assign-graders`);
+          }}
+        >
+          Assign graders
+        </button>
+      ),
+    },
+    {
+      key: 'update-repositories',
+      label: (
+        <button
+          onClick={() => {
+            navigate(`/admin/${classSlug}/repos/${repositoryTitle}/update?id=${repository.id}`);
+          }}
+        >
+          Update repositories
+        </button>
+      ),
+    },
+    repository.type === 'GROUP' && {
+      key: 'calculate-contributions',
+      label: <button onClick={calculateContributions}>Calculate contributions</button>,
+    },
+  ];
+
+  return (
+    <Dropdown
+      menu={{ items: items.filter(Boolean) as Array<{ key: string; label: React.ReactNode }> }}
+      placement="bottomLeft"
+    >
+      <Button>Actions</Button>
+    </Dropdown>
+  );
+};
+
+export default Menu;

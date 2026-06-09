@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - staging
+  workflow_dispatch:
 
 concurrency:
   group: deploy-${{ github.ref }}
@@ -14,13 +15,13 @@ jobs:
   changes:
     runs-on: ubuntu-latest
     outputs:
-      webapp: ${{ steps.filter.outputs.webapp }}
-      ai-agent: ${{ steps.filter.outputs.ai-agent }}
-      hook-station: ${{ steps.filter.outputs.hook-station }}
-      site: ${{ steps.filter.outputs.site }}
-      slides: ${{ steps.filter.outputs.slides }}
-      pages: ${{ steps.filter.outputs.pages }}
-      tasks: ${{ steps.filter.outputs.tasks }}
+      webapp: ${{ steps.filter.outputs.webapp == 'true' || github.event_name == 'workflow_dispatch' }}
+      ai-agent: ${{ steps.filter.outputs.ai-agent == 'true' || github.event_name == 'workflow_dispatch' }}
+      hook-station: ${{ steps.filter.outputs.hook-station == 'true' || github.event_name == 'workflow_dispatch' }}
+      site: ${{ steps.filter.outputs.site == 'true' || github.event_name == 'workflow_dispatch' }}
+      slides: ${{ steps.filter.outputs.slides == 'true' || github.event_name == 'workflow_dispatch' }}
+      pages: ${{ steps.filter.outputs.pages == 'true' || github.event_name == 'workflow_dispatch' }}
+      tasks: ${{ steps.filter.outputs.tasks == 'true' || github.event_name == 'workflow_dispatch' }}
     steps:
       - uses: actions/checkout@v4
       - uses: dorny/paths-filter@v3
@@ -57,6 +58,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: true
+          token: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Heal package-lock.json against submodule workspaces
+        run: npm install --package-lock-only --no-audit --no-fund --legacy-peer-deps
       - uses: superfly/flyctl-actions/setup-flyctl@master
       - name: Deploy webapp
         run: flyctl deploy --config apps/webapp/fly.toml --dockerfile apps/webapp/Dockerfile --remote-only --app classmoji-webapp-staging
@@ -64,14 +73,23 @@ jobs:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
 
   deploy-ai-agent:
-    needs: changes
-    if: needs.changes.outputs.ai-agent == 'true'
+    needs: [changes, deploy-webapp]
+    # Always wait on deploy-webapp so that any pending Prisma migration
+    # (run by the webapp's release_command) has applied before non-webapp
+    # services come up with new code that targets the new schema.
+    # `always()` lets this run even when deploy-webapp was skipped.
+    if: always() && needs.changes.outputs.ai-agent == 'true' && (needs.deploy-webapp.result == 'success' || needs.deploy-webapp.result == 'skipped')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
           submodules: true
           token: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Heal package-lock.json against submodule workspaces
+        run: npm install --package-lock-only --no-audit --no-fund --legacy-peer-deps
       - uses: superfly/flyctl-actions/setup-flyctl@master
       - name: Deploy ai-agent
         run: flyctl deploy --config apps/ai-agent/fly.toml --dockerfile apps/ai-agent/Dockerfile --remote-only --app classmoji-ai-agent-staging
@@ -79,11 +97,19 @@ jobs:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
 
   deploy-hook-station:
-    needs: changes
-    if: needs.changes.outputs.hook-station == 'true'
+    needs: [changes, deploy-webapp]
+    if: always() && needs.changes.outputs.hook-station == 'true' && (needs.deploy-webapp.result == 'success' || needs.deploy-webapp.result == 'skipped')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: true
+          token: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Heal package-lock.json against submodule workspaces
+        run: npm install --package-lock-only --no-audit --no-fund --legacy-peer-deps
       - uses: superfly/flyctl-actions/setup-flyctl@master
       - name: Deploy hook-station
         run: flyctl deploy --config apps/hook-station/fly.toml --dockerfile apps/hook-station/Dockerfile --remote-only --app classmoji-hook-station-staging
@@ -96,19 +122,40 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: true
+          token: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Heal package-lock.json against submodule workspaces
+        run: npm install --package-lock-only --no-audit --no-fund --legacy-peer-deps
       - uses: superfly/flyctl-actions/setup-flyctl@master
       - name: Deploy site
         working-directory: apps/site
-        run: flyctl deploy --remote-only --app classmoji-site-staging
+        run: |
+          if flyctl status --app classmoji-site-staging >/dev/null 2>&1; then
+            flyctl deploy --remote-only --app classmoji-site-staging
+          else
+            echo "::notice::Skipping site deploy because Fly app classmoji-site-staging is not provisioned."
+          fi
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
 
   deploy-slides:
-    needs: changes
-    if: needs.changes.outputs.slides == 'true'
+    needs: [changes, deploy-webapp]
+    if: always() && needs.changes.outputs.slides == 'true' && (needs.deploy-webapp.result == 'success' || needs.deploy-webapp.result == 'skipped')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: true
+          token: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Heal package-lock.json against submodule workspaces
+        run: npm install --package-lock-only --no-audit --no-fund --legacy-peer-deps
       - uses: superfly/flyctl-actions/setup-flyctl@master
       - name: Deploy slides
         run: flyctl deploy --config apps/slides/fly.toml --dockerfile apps/slides/Dockerfile --remote-only --app classmoji-slides-staging
@@ -116,11 +163,19 @@ jobs:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
 
   deploy-pages:
-    needs: changes
-    if: needs.changes.outputs.pages == 'true'
+    needs: [changes, deploy-webapp]
+    if: always() && needs.changes.outputs.pages == 'true' && (needs.deploy-webapp.result == 'success' || needs.deploy-webapp.result == 'skipped')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: true
+          token: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Heal package-lock.json against submodule workspaces
+        run: npm install --package-lock-only --no-audit --no-fund --legacy-peer-deps
       - uses: superfly/flyctl-actions/setup-flyctl@master
       - name: Deploy pages
         run: flyctl deploy --config apps/pages/fly.toml --dockerfile apps/pages/Dockerfile --remote-only --app classmoji-pages-staging
@@ -128,8 +183,8 @@ jobs:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
 
   deploy-trigger:
-    needs: changes
-    if: needs.changes.outputs.tasks == 'true'
+    needs: [changes, deploy-webapp]
+    if: always() && needs.changes.outputs.tasks == 'true' && (needs.deploy-webapp.result == 'success' || needs.deploy-webapp.result == 'skipped')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -143,8 +198,11 @@ jobs:
           node-version: '22'
           cache: 'npm'
 
+      - name: Heal package-lock.json against submodule workspaces
+        run: npm install --package-lock-only --no-audit --no-fund --legacy-peer-deps
+
       - name: Install dependencies
-        run: npm ci
+        run: npm ci --legacy-peer-deps
 
       - name: Deploy to Trigger.dev
         working-directory: packages/tasks

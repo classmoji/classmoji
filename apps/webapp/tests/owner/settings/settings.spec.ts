@@ -2,11 +2,14 @@ import { test, expect } from '../../fixtures/auth.fixture';
 import { waitForDataLoad } from '../../helpers/wait.helpers';
 
 /**
- * Settings Page Tests
+ * Settings page tests.
  *
- * Tests for the admin settings at /admin/$org/settings/*
- * The settings page uses URL-based tab navigation with nested routes.
+ * The settings page renders tabs as plain <button> controls (not role="tab", no
+ * aria-selected), so selection is asserted via the URL rather than aria state.
  */
+
+const tab = (page: import('@playwright/test').Page, name: RegExp) =>
+  page.getByRole('button', { name });
 
 test.describe('Settings Navigation', () => {
   test.beforeEach(async ({ authenticatedPage: page, testOrg }) => {
@@ -15,40 +18,40 @@ test.describe('Settings Navigation', () => {
   });
 
   test('displays settings page header', async ({ authenticatedPage: page }) => {
-    await expect(page.getByRole('heading', { name: /Classroom Settings/i })).toBeVisible();
+    await expect(page.getByRole('heading', { name: /^Settings$/i })).toBeVisible();
   });
 
   test('displays all settings tabs', async ({ authenticatedPage: page }) => {
-    // Core tabs that should always be visible
-    await expect(page.getByRole('tab', { name: /General/i })).toBeVisible();
-    await expect(page.getByRole('tab', { name: /Repositories/i })).toBeVisible();
-    await expect(page.getByRole('tab', { name: /Grades/i })).toBeVisible();
-    await expect(page.getByRole('tab', { name: /Quizzes/i })).toBeVisible();
-    await expect(page.getByRole('tab', { name: /Content/i })).toBeVisible();
-    await expect(page.getByRole('tab', { name: /Extension/i })).toBeVisible();
-    await expect(page.getByRole('tab', { name: /Danger Zone/i })).toBeVisible();
+    await expect(tab(page, /^General$/)).toBeVisible();
+    await expect(tab(page, /^Repositories$/)).toBeVisible();
+    await expect(tab(page, /^Grades$/)).toBeVisible();
+    await expect(tab(page, /^Quizzes$/)).toBeVisible();
+    await expect(tab(page, /^Content$/)).toBeVisible();
+    await expect(tab(page, /^Team$/)).toBeVisible();
+    await expect(tab(page, /^Extension$/)).toBeVisible();
+    await expect(tab(page, /^Danger Zone$/)).toBeVisible();
   });
 
   test('can navigate to Grades tab', async ({ authenticatedPage: page, testOrg }) => {
-    await page.getByRole('tab', { name: /Grades/i }).click();
+    await tab(page, /^Grades$/).click();
     await page.waitForURL(`**/admin/${testOrg}/settings/grades`);
     await expect(page).toHaveURL(new RegExp(`/admin/${testOrg}/settings/grades`));
   });
 
   test('can navigate to Quizzes tab', async ({ authenticatedPage: page, testOrg }) => {
-    await page.getByRole('tab', { name: /Quizzes/i }).click();
+    await tab(page, /^Quizzes$/).click();
     await page.waitForURL(`**/admin/${testOrg}/settings/quizzes`);
     await expect(page).toHaveURL(new RegExp(`/admin/${testOrg}/settings/quizzes`));
   });
 
   test('can navigate to Extension tab', async ({ authenticatedPage: page, testOrg }) => {
-    await page.getByRole('tab', { name: /Extension/i }).click();
+    await tab(page, /^Extension$/).click();
     await page.waitForURL(`**/admin/${testOrg}/settings/extension`);
     await expect(page).toHaveURL(new RegExp(`/admin/${testOrg}/settings/extension`));
   });
 
   test('can navigate to Danger Zone tab', async ({ authenticatedPage: page, testOrg }) => {
-    await page.getByRole('tab', { name: /Danger Zone/i }).click();
+    await tab(page, /^Danger Zone$/).click();
     await page.waitForURL(`**/admin/${testOrg}/settings/danger-zone`);
     await expect(page).toHaveURL(new RegExp(`/admin/${testOrg}/settings/danger-zone`));
   });
@@ -60,16 +63,15 @@ test.describe('General Settings Tab', () => {
     await waitForDataLoad(page);
   });
 
-  test('General tab is selected by default', async ({ authenticatedPage: page }) => {
-    await expect(page.getByRole('tab', { name: /General/i })).toHaveAttribute(
-      'aria-selected',
-      'true'
-    );
+  test('General tab is the active tab on the general URL', async ({
+    authenticatedPage: page,
+    testOrg,
+  }) => {
+    await expect(page).toHaveURL(new RegExp(`/admin/${testOrg}/settings/general`));
+    await expect(tab(page, /^General$/)).toBeVisible();
   });
 
   test('displays profile section', async ({ authenticatedPage: page }) => {
-    // The general settings should have profile-related content
-    // ProfileSection component shows org settings - there are multiple forms on the page
     await expect(page.locator('form').first()).toBeVisible();
   });
 });
@@ -81,12 +83,10 @@ test.describe('Grades Settings Tab', () => {
   });
 
   test('displays emoji mapping section', async ({ authenticatedPage: page }) => {
-    // EmojiMapping component is rendered in grades settings
     await expect(page.getByText(/Emoji/i).first()).toBeVisible();
   });
 
   test('displays letter grade mapping section', async ({ authenticatedPage: page }) => {
-    // LetterGradeMapping component
     await expect(page.getByText(/Letter Grade/i).first()).toBeVisible();
   });
 });
@@ -100,13 +100,11 @@ test.describe('Quiz Settings Tab', () => {
   test('displays quiz functionality toggle', async ({ authenticatedPage: page }) => {
     await expect(page.getByText(/Quiz Functionality/i)).toBeVisible();
     await expect(page.getByText(/Enable Quizzes/i)).toBeVisible();
-    // Switch component should be present
     await expect(page.locator('.ant-switch').first()).toBeVisible();
   });
 
   test('displays API Key section', async ({ authenticatedPage: page }) => {
     await expect(page.getByText(/API Key/i).first()).toBeVisible();
-    // Use exact match to avoid multiple matches
     await expect(page.getByText('Anthropic API Key', { exact: true })).toBeVisible();
   });
 
@@ -118,19 +116,17 @@ test.describe('Quiz Settings Tab', () => {
 
   test('displays code-aware quiz settings', async ({ authenticatedPage: page }) => {
     await expect(page.getByText(/Code-Aware Quiz Settings/i)).toBeVisible();
-    // Use exact match to avoid multiple matches
     await expect(page.getByText('Agent Model', { exact: true })).toBeVisible();
   });
 
-  test('shows system defaults badge when no API key', async ({ authenticatedPage: page }) => {
-    // Without an API key, should show the system defaults badge
-    const systemDefaultsBadge = page.getByText(/Using System Environment Variables/i);
-    const orgKeyBadge = page.getByText(/Using Organization API Key/i);
-
-    // One of these should be visible
-    const hasSystemBadge = await systemDefaultsBadge.isVisible().catch(() => false);
-    const hasOrgBadge = await orgKeyBadge.isVisible().catch(() => false);
-    expect(hasSystemBadge || hasOrgBadge).toBeTruthy();
+  test('shows api-key status badge', async ({ authenticatedPage: page }) => {
+    // Exactly one badge always renders (system-defaults vs org key). Poll with a
+    // single .or() locator instead of an instant isVisible() so a late-rendering
+    // badge doesn't flake the assertion.
+    const badge = page
+      .getByText(/Using System Environment Variables/i)
+      .or(page.getByText(/Using Organization API Key/i));
+    await expect(badge.first()).toBeVisible();
   });
 });
 
@@ -152,70 +148,48 @@ test.describe('Danger Zone Tab', () => {
   });
 
   test('has remove button', async ({ authenticatedPage: page }) => {
-    await expect(page.getByRole('button', { name: /Remove/i })).toBeVisible();
+    await expect(page.getByRole('button', { name: /^Remove$/i })).toBeVisible();
   });
 
   test('clicking remove opens confirmation modal', async ({ authenticatedPage: page, testOrg }) => {
-    await page.getByRole('button', { name: /Remove/i }).click();
+    await page.getByRole('button', { name: /^Remove$/i }).click();
 
-    // Modal should appear with classroom name
-    await expect(page.getByText(`Remove ${testOrg} classroom`)).toBeVisible();
+    // Modal title is `Remove <classSlug> classroom`; testOrg === classSlug.
+    const modal = page.locator('.ant-modal-content');
+    await expect(modal.getByText(`Remove ${testOrg} classroom`)).toBeVisible();
     await expect(
-      page.getByText(/The following data will be removed: modules, student enrollments/i)
+      modal.getByText(/The following data will be removed: repositories, student enrollments/i)
     ).toBeVisible();
 
-    // Cancel button should close the modal
-    await page.getByRole('button', { name: /Cancel/i }).click();
+    await modal.getByRole('button', { name: /Cancel/i }).click();
     await expect(page.getByText(`Remove ${testOrg} classroom`)).not.toBeVisible();
   });
 });
 
-test.describe('Settings Tab State Preservation', () => {
-  test('maintains correct tab selection after navigation', async ({
-    authenticatedPage: page,
-    testOrg,
-  }) => {
-    // Start at general
+// Persistence (profile writes, classroom removal) is covered by the
+// classroom-lifecycle spec with DB assertions; these specs check render + routing only.
+test.describe('Settings Tab Routing (render + URL only)', () => {
+  test('navigating between tabs updates the URL', async ({ authenticatedPage: page, testOrg }) => {
     await page.goto(`/admin/${testOrg}/settings/general`);
     await waitForDataLoad(page);
 
-    // Navigate to grades
-    await page.getByRole('tab', { name: /Grades/i }).click();
+    await tab(page, /^Grades$/).click();
     await page.waitForURL(`**/admin/${testOrg}/settings/grades`);
+    await expect(page).toHaveURL(new RegExp(`/admin/${testOrg}/settings/grades`));
 
-    // Verify grades tab is now selected
-    await expect(page.getByRole('tab', { name: /Grades/i })).toHaveAttribute(
-      'aria-selected',
-      'true'
-    );
-    await expect(page.getByRole('tab', { name: /General/i })).toHaveAttribute(
-      'aria-selected',
-      'false'
-    );
-
-    // Navigate to quizzes
-    await page.getByRole('tab', { name: /Quizzes/i }).click();
+    await tab(page, /^Quizzes$/).click();
     await page.waitForURL(`**/admin/${testOrg}/settings/quizzes`);
-
-    // Verify quizzes tab is selected
-    await expect(page.getByRole('tab', { name: /Quizzes/i })).toHaveAttribute(
-      'aria-selected',
-      'true'
-    );
+    await expect(page).toHaveURL(new RegExp(`/admin/${testOrg}/settings/quizzes`));
   });
 
-  test('direct URL navigation selects correct tab', async ({
+  test('direct URL navigation lands on the requested tab', async ({
     authenticatedPage: page,
     testOrg,
   }) => {
-    // Navigate directly to quizzes settings via URL
     await page.goto(`/admin/${testOrg}/settings/quizzes`);
     await waitForDataLoad(page);
 
-    // Quizzes tab should be selected
-    await expect(page.getByRole('tab', { name: /Quizzes/i })).toHaveAttribute(
-      'aria-selected',
-      'true'
-    );
+    await expect(page).toHaveURL(new RegExp(`/admin/${testOrg}/settings/quizzes`));
+    await expect(page.getByText(/Quiz Functionality/i)).toBeVisible();
   });
 });

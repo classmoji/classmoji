@@ -62,15 +62,15 @@ const TablePagination = ({
   if (totalItems === 0) return null;
 
   return (
-    <div className="flex items-center justify-between px-4 py-3 bg-gray-50 dark:bg-gray-800/50 border-t border-gray-200 dark:border-gray-700">
+    <div className="flex items-center justify-between px-4 py-3 bg-bg-0/50 dark:bg-bg-0/50 border-t border-line dark:border-line">
       <div className="flex items-center gap-3">
-        <span className="text-sm text-gray-700 dark:text-gray-300">
+        <span className="text-sm text-ink-2 dark:text-ink-2">
           {startItem}-{endItem} of {totalItems}
         </span>
         <select
           value={pageSize}
           onChange={e => onPageSizeChange(Number(e.target.value))}
-          className="text-sm border border-gray-300 dark:border-gray-600 rounded px-2 py-1 bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-300 focus:outline-none focus:ring-1 focus:ring-blue-500"
+          className="text-sm border border-line dark:border-line-2 rounded-lg px-2 py-1 bg-bg-1 dark:bg-bg-1 text-ink-1 dark:text-ink-1 focus:outline-none focus:ring-1 focus:ring-accent"
         >
           {pageSizeOptions.map(size => (
             <option key={size} value={size}>
@@ -84,10 +84,10 @@ const TablePagination = ({
         <button
           onClick={() => onPageChange(pageIndex - 1)}
           disabled={!canPreviousPage}
-          className="p-1.5 border border-gray-300 dark:border-gray-600 rounded hover:bg-gray-100 dark:hover:bg-gray-800 disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-transparent"
+          className="p-1.5 border border-line dark:border-line-2 rounded-lg hover:bg-panel-hover dark:hover:bg-panel-hover disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-transparent"
           title="Previous page"
         >
-          <IconChevronLeft size={16} className="text-gray-600 dark:text-gray-400" />
+          <IconChevronLeft size={16} className="text-ink-2 dark:text-ink-3" />
         </button>
 
         {getPageNumbers().map((page, idx) => {
@@ -95,7 +95,7 @@ const TablePagination = ({
             return (
               <span
                 key={`ellipsis-${idx}`}
-                className="px-2 text-gray-400 dark:text-gray-500 text-sm"
+                className="px-2 text-ink-4 dark:text-ink-4 text-sm"
               >
                 ...
               </span>
@@ -106,10 +106,10 @@ const TablePagination = ({
             <button
               key={page}
               onClick={() => onPageChange(page as number)}
-              className={`min-w-[32px] px-2 py-1 text-sm border border-gray-300 dark:border-gray-600 rounded ${
+              className={`min-w-[32px] px-2 py-1 text-sm border rounded-lg ${
                 page === pageIndex
-                  ? 'bg-blue-600 text-white border-blue-600'
-                  : 'text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800'
+                  ? 'bg-accent text-white border-accent'
+                  : 'border-line dark:border-line-2 text-ink-1 dark:text-ink-1 hover:bg-panel-hover dark:hover:bg-panel-hover'
               }`}
             >
               {(page as number) + 1}
@@ -120,10 +120,10 @@ const TablePagination = ({
         <button
           onClick={() => onPageChange(pageIndex + 1)}
           disabled={!canNextPage}
-          className="p-1.5 border border-gray-300 dark:border-gray-600 rounded hover:bg-gray-100 dark:hover:bg-gray-800 disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-transparent"
+          className="p-1.5 border border-line dark:border-line-2 rounded-lg hover:bg-panel-hover dark:hover:bg-panel-hover disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-transparent"
           title="Next page"
         >
-          <IconChevronRight size={16} className="text-gray-600 dark:text-gray-400" />
+          <IconChevronRight size={16} className="text-ink-2 dark:text-ink-3" />
         </button>
       </div>
     </div>

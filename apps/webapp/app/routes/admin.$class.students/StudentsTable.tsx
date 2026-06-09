@@ -5,7 +5,7 @@ import { useState } from 'react';
 
 import { RequireRole, TableActionButtons, UserThumbnailView } from '~/components';
 import { useGlobalFetcher } from '~/hooks';
-import { toast } from 'react-toastify';
+import { useCallout } from '@classmoji/ui-components';
 import { ActionTypes } from '~/constants';
 import { authClient } from '@classmoji/auth/client';
 
@@ -32,10 +32,11 @@ const StudentsTable = ({ students, query }: StudentsTableProps) => {
   const navigate = useNavigate();
   const { fetcher, notify } = useGlobalFetcher();
   const [impersonating, setImpersonating] = useState(false);
+  const callout = useCallout();
 
   const handleImpersonate = async (student: Student) => {
     if (!student.login) {
-      toast.error('Student has not accepted invite.');
+      callout.show({ variant: 'error', title: 'Student has not accepted invite.' });
       return;
     }
 
@@ -55,7 +56,10 @@ const StudentsTable = ({ students, query }: StudentsTableProps) => {
       navigate(`/student/${classSlug}`);
     } catch (error: unknown) {
       console.error('Impersonation failed:', error);
-      toast.error(error instanceof Error ? error.message : 'Failed to view as student');
+      callout.show({
+        variant: 'error',
+        title: error instanceof Error ? error.message : 'Failed to view as student',
+      });
     } finally {
       setImpersonating(false);
     }
@@ -148,7 +152,7 @@ const StudentsTable = ({ students, query }: StudentsTableProps) => {
                 cancelText="Cancel"
               >
                 <div className="flex items-center gap-1 text-red-600 cursor-pointer hover:text-red-700">
-                  <IconTrash size={17} />
+                  <IconTrash size={16} />
                   <span>Remove</span>
                 </div>
               </Popconfirm>
@@ -161,7 +165,7 @@ const StudentsTable = ({ students, query }: StudentsTableProps) => {
             onView={() => {
               if (student.login) {
                 navigate(`${pathname}/${student.login}`);
-              } else toast.error('Student has not accepted invite.');
+              } else callout.show({ variant: 'error', title: 'Student has not accepted invite.' });
             }}
           >
             <RequireRole roles={['OWNER']}>
@@ -174,7 +178,7 @@ const StudentsTable = ({ students, query }: StudentsTableProps) => {
                 }}
                 className={`flex items-center gap-1 text-gray-600 hover:text-gray-800 cursor-pointer ${impersonating ? 'opacity-50' : ''}`}
               >
-                <IconUserSearch size={17} />
+                <IconUserSearch size={16} />
                 <span>View as</span>
               </div>
             </RequireRole>
@@ -188,7 +192,7 @@ const StudentsTable = ({ students, query }: StudentsTableProps) => {
                 cancelText="Cancel"
               >
                 <div className="flex items-center gap-1 text-red-600 cursor-pointer hover:text-red-700">
-                  <IconTrash size={17} />
+                  <IconTrash size={16} />
                   <span>Remove</span>
                 </div>
               </Popconfirm>
@@ -200,13 +204,14 @@ const StudentsTable = ({ students, query }: StudentsTableProps) => {
   ];
 
   return (
-    <div className="mt-4">
+    <div className="rounded-2xl bg-panel ring-1 ring-line shadow-sm p-5 sm:p-6 min-h-[calc(100vh-10rem)]">
       <Table
         columns={columns}
         dataSource={students}
         rowKey={student => student.id}
         rowHoverable={false}
         size="middle"
+        scroll={{ x: 'max-content' }}
         pagination={{
           pageSize: 25,
           showSizeChanger: true,
@@ -215,20 +220,17 @@ const StudentsTable = ({ students, query }: StudentsTableProps) => {
         }}
         locale={{
           emptyText: query ? (
-            <div className="text-center py-8 text-gray-500">
-              <div className="text-4xl mb-2">🔍</div>
-              <div>No students found matching &apos;{query}&apos;</div>
-              <div className="text-sm">Try adjusting your search terms</div>
+            <div className="text-center py-8 text-ink-3">
+              <div className="font-medium">No students found matching &apos;{query}&apos;</div>
+              <div className="text-sm">Try adjusting your search terms.</div>
             </div>
           ) : (
-            <div className="text-center py-8 text-gray-500">
-              <div className="text-4xl mb-2">👨‍🎓</div>
-              <div>No students enrolled yet</div>
-              <div className="text-sm">Add your first student to get started!</div>
+            <div className="text-center py-8 text-ink-3">
+              <div className="font-medium">No students enrolled yet</div>
+              <div className="text-sm">Add your first student to get started.</div>
             </div>
           ),
         }}
-        className="rounded-lg"
       />
     </div>
   );

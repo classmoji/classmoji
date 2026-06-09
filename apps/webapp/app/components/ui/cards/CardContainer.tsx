@@ -8,7 +8,7 @@ interface CardContainerProps {
 const CardContainer = ({ children, className }: CardContainerProps) => {
   return (
     <div
-      className={`shadow-xs border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 p-6 rounded-lg ${className}`}
+      className={`shadow-xs border border-gray-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 p-6 rounded-lg ${className}`}
     >
       {children}
     </div>

@@ -5,7 +5,7 @@ import { useState, useEffect } from 'react';
 import { ClassmojiService } from '@classmoji/services';
 import { useGlobalFetcher } from '~/hooks';
 import { UserThumbnailView } from '~/components';
-import { assertClassroomAccess } from '~/utils/helpers';
+import { assertClassroomAccess, assertClassroomMutationAllowed } from '~/utils/helpers';
 import type { Route } from './+types/route';
 
 export const loader = async ({ params, request }: Route.LoaderArgs) => {
@@ -74,8 +74,8 @@ const GradeComment = ({ loaderData }: Route.ComponentProps) => {
           }
         />
       </div>
-      <p className="pb-4 text-gray-500 text-[13px]">
-        You can provide comments on <span className=" underline text-[13px]">{student?.name}</span>
+      <p className="pb-4 text-gray-500 text-sm">
+        You can provide comments on <span className=" underline text-sm">{student?.name}</span>
         &rsquo;s performance
       </p>
       <Input.TextArea rows={8} value={comment} onChange={e => setComment(e.target.value)} />
@@ -87,13 +87,14 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
   const { class: classSlug } = params;
 
   // Authorize: only OWNER/ASSISTANT can modify student grade comments
-  await assertClassroomAccess({
+  const { classroom, membership } = await assertClassroomAccess({
     request,
     classroomSlug: classSlug!,
     allowedRoles: ['OWNER', 'ASSISTANT'],
     resourceType: 'GRADES',
     attemptedAction: 'modify_student_grade',
   });
+  assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
 
   const data = await request.json();
   const { membershipId, comment } = data;

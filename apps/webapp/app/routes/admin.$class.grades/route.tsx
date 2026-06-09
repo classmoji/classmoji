@@ -4,9 +4,8 @@ import { Skeleton } from 'antd';
 
 import GradesTable from './GradesTable';
 import { ClassmojiService } from '@classmoji/services';
-import { PageHeader } from '~/components';
 import { addAuditLog } from '~/utils/helpers';
-import { requireClassroomAdmin } from '~/utils/routeAuth.server';
+import { requireClassroomAdmin, assertClassroomMutationAllowed } from '~/utils/routeAuth.server';
 import type { Route } from './+types/route';
 
 export const loader = async ({ request, params }: Route.LoaderArgs) => {
@@ -19,7 +18,7 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
 
   const promises = {
     emojiMappings: ClassmojiService.emojiMapping.findByClassroomId(classroom.id),
-    modules: ClassmojiService.module.findByClassroomSlug(classSlug!),
+    repositories: ClassmojiService.repository.findByClassroomSlug(classSlug!),
     students: ClassmojiService.user.findRepositoriesPerStudent(classroom),
     settings: ClassmojiService.classroom.getClassroomSettingsForServer(classroom.id),
     letterGradeMappings: ClassmojiService.letterGradeMapping.findByClassroomId(classroom.id),
@@ -46,13 +45,15 @@ const Grades = ({ loaderData }: Route.ComponentProps) => {
       <Outlet />
       <Suspense
         fallback={
-          <div>
-            <PageHeader title="Grades" routeName="grades" />
+          <div className="min-h-full">
+            <h1 className="mt-2 mb-4 text-base font-semibold text-ink-2">
+              Grades
+            </h1>
             <Skeleton active />
           </div>
         }
       >
-        <Await resolve={allData}>
+        <Await resolve={allData} errorElement={null}>
           {([
             resolvedEmojiMappings,
             resolvedModules,
@@ -65,8 +66,8 @@ const Grades = ({ loaderData }: Route.ComponentProps) => {
               emojiMappings={
                 resolvedEmojiMappings as Parameters<typeof GradesTable>[0]['emojiMappings']
               }
-              modules={resolvedModules as Parameters<typeof GradesTable>[0]['modules']}
-              students={resolvedStudents as Parameters<typeof GradesTable>[0]['students']}
+              repositories={resolvedModules as Parameters<typeof GradesTable>[0]['repositories']}
+              students={resolvedStudents as unknown as Parameters<typeof GradesTable>[0]['students']}
               settings={resolvedSettings as Parameters<typeof GradesTable>[0]['settings']}
               letterGradeMappings={
                 resolvedLetterGradeMappings as Parameters<
@@ -85,10 +86,11 @@ const Grades = ({ loaderData }: Route.ComponentProps) => {
 export const action = async ({ request, params }: Route.ActionArgs) => {
   const { class: classSlug } = params;
 
-  await requireClassroomAdmin(request, classSlug!, {
+  const { classroom, membership } = await requireClassroomAdmin(request, classSlug!, {
     resourceType: 'GRADES',
     action: 'update_grades',
   });
+  assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
 
   const data = await request.json();
   const { membership_id, letter_grade } = data;

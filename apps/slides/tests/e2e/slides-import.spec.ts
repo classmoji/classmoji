@@ -58,7 +58,7 @@ test.describe.skip('Slides.com Import', () => {
     await expect(page.locator('h1:has-text("Import from Slides.com")')).toBeVisible();
     await expect(page.locator('label:has-text("ZIP File")')).toBeVisible();
     await expect(page.locator('label:has-text("Title")')).toBeVisible();
-    await expect(page.locator('label:has-text("Module")')).toBeVisible();
+    await expect(page.locator('label:has-text("Repository")')).toBeVisible();
   });
 
   test('import page shows theme options', async ({ page }) => {
@@ -121,9 +121,9 @@ test.describe.skip('Slides.com Import', () => {
     // 2. Enter title (include unique ID to avoid slug conflicts)
     await page.fill('input[name="title"]', `E2E Import Test ${TEST_RUN_ID}`);
 
-    // 3. Select module (react-fundamentals) by label
-    const moduleSelect = page.locator('select[name="module"]');
-    await moduleSelect.selectOption({ label: 'react-fundamentals' });
+    // 3. Select repository (react-fundamentals) by label
+    const repositorySelect = page.locator('select[name="repository"]');
+    await repositorySelect.selectOption({ label: 'react-fundamentals' });
 
     // 4. Select "Import theme from ZIP"
     await page.click('input[name="themeOption"][value="import"]');

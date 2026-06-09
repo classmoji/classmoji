@@ -10,8 +10,8 @@ import { ClassmojiService } from '@classmoji/services';
 import StudentsTable from './StudentsTable';
 import { ActionTypes } from '~/constants';
 import { waitForRunCompletion } from '~/utils/helpers';
-import { requireClassroomAdmin } from '~/utils/routeAuth.server';
-import { PageHeader, RequireRole, SearchInput } from '~/components';
+import { requireClassroomAdmin, assertClassroomMutationAllowed } from '~/utils/routeAuth.server';
+import { RequireRole, SearchInput } from '~/components';
 import type { Route } from './+types/route';
 
 export const loader = async ({ params, request }: Route.LoaderArgs) => {
@@ -68,24 +68,27 @@ const StudentsScreen = ({ loaderData }: Route.ComponentProps) => {
       });
 
   return (
-    <>
+    <div className="min-h-full relative">
       <Outlet />
-      <div className="flex justify-between items-center">
-        <PageHeader title="Students" routeName="students" />
+      <div className="flex flex-col gap-3 mt-2 mb-4 sm:flex-row sm:items-center sm:justify-between">
+        <h1 className="text-base font-semibold text-ink-2">Students</h1>
 
-        <div className="flex gap-4">
-          <SearchInput
-            query={query}
-            setQuery={setQuery}
-            placeholder="Search by name or login..."
-            className="w-64"
-          />
+        <div className="flex flex-wrap items-center gap-3">
+          <span data-tour="students-search" className="w-full sm:w-auto">
+            <SearchInput
+              query={query}
+              setQuery={setQuery}
+              placeholder="Search by name or login..."
+              className="w-full sm:w-64"
+            />
+          </span>
 
           <RequireRole roles={['OWNER']}>
             <Button
               icon={<PlusCircleOutlined />}
               onClick={() => navigate(`/admin/${classSlug}/students/add`)}
               type="primary"
+              data-tour="students-add"
             >
               Add Students
             </Button>
@@ -94,17 +97,18 @@ const StudentsScreen = ({ loaderData }: Route.ComponentProps) => {
       </div>
 
       <StudentsTable students={filteredStudents} classroom={classroom} query={query} />
-    </>
+    </div>
   );
 };
 
 export const action = async ({ request, params }: Route.ActionArgs) => {
   const classSlug = params.class!;
 
-  const { classroom } = await requireClassroomAdmin(request, classSlug, {
+  const { classroom, membership } = await requireClassroomAdmin(request, classSlug, {
     resourceType: 'STUDENT_ROSTER',
     action: 'remove_student',
   });
+  assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
 
   const data = await request.json();
 

@@ -5,7 +5,7 @@ export default [
   ...nodeConfig,
   ...typescriptConfig,
   {
-    ignores: ['src/scripts/**'],
+    ignores: ['src/scripts/**', '.trigger/**', 'dist/**', 'build/**'],
   },
   {
     rules: {

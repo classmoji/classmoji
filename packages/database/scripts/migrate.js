@@ -65,13 +65,13 @@ async function main() {
 
   for (const g of issueGrades) {
     try {
-      // Find RepositoryAssignment by provider_id (old issue_id)
-      const repoAssignment = await prisma.repositoryAssignment.findFirst({
+      // Find GitRepoAssignment by provider_id (old issue_id)
+      const repoAssignment = await prisma.gitRepoAssignment.findFirst({
         where: { provider_id: String(g.issue_id) },
       });
 
       if (!repoAssignment) {
-        console.log(`⊘ Skipping: repository_assignment ${g.issue_id} not found`);
+        console.log(`⊘ Skipping: git_repo_assignment ${g.issue_id} not found`);
         skipped++;
         continue;
       }
@@ -96,7 +96,7 @@ async function main() {
       // Create AssignmentGrade
       await prisma.assignmentGrade.create({
         data: {
-          repository_assignment_id: repoAssignment.id,
+          git_repo_assignment_id: repoAssignment.id,
           grader_id: graderId,
           emoji: g.grade,
           token_transaction_id: tokenTransactionId,
