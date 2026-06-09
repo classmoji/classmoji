@@ -1,6 +1,6 @@
 import { Avatar, Tooltip } from 'antd';
 import { Link, useParams, useLocation, useRouteLoaderData } from 'react-router';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { IconFileText, IconMenu2, IconApple } from '@tabler/icons-react';
 import useLocalStorageState from 'use-local-storage-state';
 import { Logo, CalloutSlot } from '@classmoji/ui-components';
@@ -58,6 +58,17 @@ const CommonLayout = ({
 
   const location = useLocation();
   const { pathname } = location;
+
+  // The page content scrolls inside an inner overflow-auto div, so the
+  // window-level <ScrollRestoration/> never resets it and scroll positions
+  // bled across nav sections. Reset whenever the section (/role/class/section)
+  // changes; deeper segments (nested modals/drawers over a list) keep scroll.
+  const contentScrollRef = useRef<HTMLDivElement>(null);
+  const sectionKey = pathname.split('/').slice(0, 4).join('/');
+  useEffect(() => {
+    contentScrollRef.current?.scrollTo({ top: 0 });
+  }, [sectionKey]);
+
   const { role } = useRole();
   const roleSettings = useRoleSettings();
   const rootData = useRouteLoaderData('root') as
@@ -479,6 +490,7 @@ const CommonLayout = ({
 
         {/* Content area — bare canvas on dashboard, floating white card elsewhere */}
         <div
+          ref={contentScrollRef}
           className={`flex-1 overflow-auto relative min-w-0 ${
             pathname.includes('/dashboard') ||
             pathname.includes('/repos') ||
