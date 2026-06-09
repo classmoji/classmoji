@@ -29,7 +29,7 @@ const TableActionButtons = ({
   const size = 17;
 
   return (
-    <div className="flex gap-3 items-center">
+    <div className="flex gap-3 items-center whitespace-nowrap">
       {onView && (
         <div
           onClick={onView}
