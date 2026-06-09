@@ -137,8 +137,11 @@ const OrgSelect = ({ memberships }: OrgSelectProps) => {
                     {membershipOption.organization.name}
                   </div>
                 </div>
-                <div className="text-xs text-ink-3 truncate leading-tight">
-                  {roleLabel(membershipOption.role)}
+                <div
+                  className="text-xs text-ink-3 truncate leading-tight"
+                  style={{ fontFamily: 'var(--font-mono)' }}
+                >
+                  {membershipOption.organization.login} · {roleLabel(membershipOption.role)}
                 </div>
               </div>
             </button>
