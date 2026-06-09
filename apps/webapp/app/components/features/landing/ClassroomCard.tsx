@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useFetcher } from 'react-router';
 import { motion, AnimatePresence } from 'framer-motion';
-import { IconGithub } from '@classmoji/ui-components';
 import { ClassMark } from './ClassMark';
 import { RoleChip } from './RoleChip';
 import type { LandingClass } from './types';
@@ -48,13 +47,6 @@ export function ClassroomCard({
   onDrop,
   onDragEnd,
 }: ClassroomCardProps) {
-  const roleVerb =
-    c.role === 'OWNER' || c.role === 'ASSISTANT'
-      ? 'To grade'
-      : c.role === 'STUDENT'
-        ? 'Open'
-        : 'Pending';
-
   const pinFetcher = useFetcher<{ pin_order: number | null }>();
   const [hover, setHover] = useState(false);
   const lastPinStateRef = useRef<typeof pinFetcher.state>('idle');
@@ -180,31 +172,7 @@ export function ClassroomCard({
         </div>
       )}
 
-      <div className="flex gap-3.5 pt-2.5 mt-auto">
-        <div className="flex flex-col gap-px text-xs">
-          <span className="text-ink-4 whitespace-nowrap">Roster</span>
-          <span className="text-xs font-medium text-ink-0">
-            {c.students}
-          </span>
-        </div>
-        <div className="flex flex-col gap-px text-xs">
-          <span className="text-ink-4 whitespace-nowrap">{roleVerb}</span>
-          <span
-            className="text-xs font-medium"
-            style={{
-              color:
-                c.pending === 0 ? 'var(--ink-3)' : c.role === 'STUDENT' ? 'var(--ink-0)' : 'var(--ink-0)',
-            }}
-          >
-            {c.pending}
-          </span>
-        </div>
-      </div>
-
-      <div className="flex items-center gap-2 text-xs text-ink-4">
-        <IconGithub size={12} />
-        <span style={{ fontFamily: 'var(--font-mono)' }}>main</span>
-        <span className="w-1 h-1 rounded-full bg-gray-300 dark:bg-gray-600 inline-block" />
+      <div className="flex items-center gap-2 text-xs text-ink-4 pt-2.5 mt-auto">
         <span>updated {c.updated}</span>
       </div>
     </div>
