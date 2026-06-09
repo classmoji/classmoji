@@ -264,7 +264,7 @@ const AssignmentTable = ({
                 <Button
                   type="text"
                   size="small"
-                  icon={<IconLayoutKanban size={16} />}
+                  icon={<IconLayoutKanban size={16} className="text-gray-600 dark:text-gray-300" />}
                   href={projectUrl}
                   target="_blank"
                 />
