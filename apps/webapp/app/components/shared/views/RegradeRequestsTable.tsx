@@ -84,9 +84,7 @@ const RegradeRequestsTable = ({ requests, emojiMappings, org }: RegradeRequestsT
       dataIndex: ['git_repo_assignment', 'assignment', 'title'],
       key: 'assignment',
       width: 220,
-      render: (title: string) => (
-        <div className="truncate font-medium text-ink-1">{title}</div>
-      ),
+      render: (title: string) => <div className="truncate font-medium text-ink-1">{title}</div>,
     },
     {
       title: 'Status',
@@ -200,9 +198,7 @@ const RegradeRequestsTable = ({ requests, emojiMappings, org }: RegradeRequestsT
   return (
     <div className="min-h-full">
       <div className="flex items-center justify-between gap-3 mt-2 mb-4">
-        <h1 className="text-base font-semibold text-ink-2">
-          Resubmit Requests
-        </h1>
+        <h1 className="text-base font-semibold text-ink-2">Resubmit Requests</h1>
         {role === 'STUDENT' && (
           <Button
             onClick={() => navigate(`/student/${classSlug}/regrade-requests/new`)}

@@ -29,11 +29,7 @@ export function ClassroomRow({ c, onOpen }: { c: LandingClass; onOpen: () => voi
       role="button"
       tabIndex={0}
       data-onboarding={
-        c.role === 'PENDING INVITE'
-          ? 'pending-invite'
-          : c.is_example
-            ? 'example-course'
-            : undefined
+        c.role === 'PENDING INVITE' ? 'pending-invite' : c.is_example ? 'example-course' : undefined
       }
       onKeyDown={e => {
         if (e.key === 'Enter' || e.key === ' ') {
@@ -66,9 +62,7 @@ export function ClassroomRow({ c, onOpen }: { c: LandingClass; onOpen: () => voi
           <div className="truncate font-mono text-[11.5px] text-[var(--ink-3)]">{c.slug}</div>
           <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1">
             <RoleChip role={c.role} />
-            <span className="font-mono text-[11.5px] text-[var(--ink-3)]">
-              updated {c.updated}
-            </span>
+            <span className="font-mono text-[11.5px] text-[var(--ink-3)]">updated {c.updated}</span>
           </div>
         </div>
         <span className="inline-flex -rotate-90 text-[var(--ink-4)]">
