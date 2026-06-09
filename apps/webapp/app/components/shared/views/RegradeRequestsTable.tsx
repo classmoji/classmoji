@@ -61,7 +61,8 @@ const RegradeRequestsTable = ({ requests, emojiMappings, org }: RegradeRequestsT
       title: 'Student',
       dataIndex: 'student',
       key: 'student',
-      width: '20%',
+      width: 220,
+      fixed: 'left' as const,
       hidden: role === 'STUDENT',
       render: (student: RegradeRequest['student']) => <UserThumbnailView user={student} />,
     },
@@ -69,17 +70,20 @@ const RegradeRequestsTable = ({ requests, emojiMappings, org }: RegradeRequestsT
       title: 'Requests',
       dataIndex: 'student',
       key: 'student_count',
-      width: '10%',
+      width: 90,
+      align: 'center' as const,
       hidden: role === 'STUDENT',
       render: (student: RegradeRequest['student']) => (
-        <span className="font-semibold text-gray-700">{student._count.regrade_requests}</span>
+        <span className="font-semibold text-gray-700 dark:text-gray-300">
+          {student._count.regrade_requests}
+        </span>
       ),
     },
     {
       title: 'Assignment',
       dataIndex: ['git_repo_assignment', 'assignment', 'title'],
       key: 'assignment',
-      width: role === 'STUDENT' ? '25%' : '20%',
+      width: 220,
       render: (title: string) => (
         <div className="truncate font-medium text-ink-1">{title}</div>
       ),
@@ -88,7 +92,7 @@ const RegradeRequestsTable = ({ requests, emojiMappings, org }: RegradeRequestsT
       title: 'Status',
       dataIndex: 'status',
       key: 'status',
-      width: '12%',
+      width: 110,
       render: (status: RegradeRequest['status']) => (
         <Tag
           color={status === 'IN_REVIEW' ? 'orange' : status === 'APPROVED' ? 'green' : 'red'}
@@ -102,7 +106,7 @@ const RegradeRequestsTable = ({ requests, emojiMappings, org }: RegradeRequestsT
       title: 'New Grade',
       dataIndex: 'git_repo_assignment',
       key: 'new_grade',
-      width: '12%',
+      width: 120,
       render: (repositoryAssignment: RegradeRequest['git_repo_assignment']) => (
         <div className="flex justify-center">
           <EmojisDisplay grades={repositoryAssignment?.grades} />
@@ -113,7 +117,7 @@ const RegradeRequestsTable = ({ requests, emojiMappings, org }: RegradeRequestsT
       title: 'Previous Grade',
       dataIndex: 'previous_grade',
       key: 'previous_grade',
-      width: '12%',
+      width: 130,
       render: (previousGrade: string[]) => (
         <div className="flex gap-2 justify-center">
           {previousGrade.map((grade: string) => (
@@ -126,9 +130,8 @@ const RegradeRequestsTable = ({ requests, emojiMappings, org }: RegradeRequestsT
       title: 'Student Comment',
       dataIndex: 'student_comment',
       key: 'student_comment',
-      width: role === 'STUDENT' ? '30%' : '20%',
       render: (comment: string | null) => (
-        <div className="text-gray-700 max-w-xs">
+        <div className="text-gray-700 dark:text-gray-300 max-w-xs">
           {comment ? (
             <div className="truncate">{comment}</div>
           ) : (
@@ -140,7 +143,7 @@ const RegradeRequestsTable = ({ requests, emojiMappings, org }: RegradeRequestsT
     {
       title: 'Actions',
       key: 'actions',
-      width: role === 'STUDENT' ? '15%' : '14%',
+      width: 200,
       render: (_: unknown, request: RegradeRequest) => (
         <TableActionButtons
           onView={
