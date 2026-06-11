@@ -72,6 +72,21 @@ export const createRepository = async (payload: CreateRepositoryPayload): Promis
     await repoGit.removeRemote('origin');
     await repoGit.addRemote('origin', studentRepoUrl);
 
+    // Safety guard: only initialize a repo that is still empty. A repo can
+    // exist on GitHub without a DB row (a previous run failed partway), and
+    // Sync will route it back through here — but if it already has branches it
+    // may contain student work, and the force-push below would destroy it.
+    // Skip template initialization and let the rest of the workflow heal the
+    // DB row / collaborators instead.
+    const remoteHeads = await repoGit.listRemote(['--heads', 'origin']);
+    if (remoteHeads.trim().length > 0) {
+      logger.warn(
+        `${gitOrgLogin}/${repoName} already has branches — skipping template initialization to avoid overwriting existing work`,
+        { remoteHeads }
+      );
+      return repoId;
+    }
+
     // Templates may use any default branch (e.g. `master` on older repos). The
     // clone checks out the template's default branch, but every step below — and
     // the feedback PR / branch protection / CLASSMOJI flow — assumes `main`, so
