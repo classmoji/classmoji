@@ -71,7 +71,16 @@ export const updateRepository = async (
       await studentGit.remote(['set-url', 'template', templateRepoUrl]);
     }
 
-    await studentGit.pull('template', 'main', ['-X', 'theirs', '--no-edit']);
+    // Templates may use any default branch (e.g. `master` on older repos) and we
+    // can't rename the instructor's repo, so resolve which branch the template's
+    // HEAD points at instead of assuming `main`. Student repos are normalized to
+    // `main` at creation; pulling template/<master> into the student's `updates`
+    // branch is a normal cross-name merge.
+    const templateSymref = await studentGit.listRemote(['--symref', 'template', 'HEAD']);
+    const templateDefaultBranch =
+      templateSymref.match(/^ref:\s+refs\/heads\/(\S+)\s+HEAD/m)?.[1] ?? 'main';
+
+    await studentGit.pull('template', templateDefaultBranch, ['-X', 'theirs', '--no-edit']);
     await studentGit.push('origin', 'updates', ['--force']);
 
     const { data: repoMeta } = await octokit.rest.repos.get({
