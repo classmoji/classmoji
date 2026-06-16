@@ -144,15 +144,13 @@ const ReadOnlyModulesTree = ({ nodes }: { nodes: ModuleTreeNode[] }) => {
     {
       title: 'Module',
       key: 'name',
-      width: '40%',
+      width: 240,
       render: (_: unknown, record: ModuleTreeNode) => {
         const hasChildren = (record.children?.length ?? 0) > 0;
         const isExpanded = expandedKeys.includes(record.key);
         const toggle = () =>
           setExpandedKeys(keys =>
-            keys.includes(record.key)
-              ? keys.filter(k => k !== record.key)
-              : [...keys, record.key]
+            keys.includes(record.key) ? keys.filter(k => k !== record.key) : [...keys, record.key]
           );
 
         return (
@@ -183,7 +181,9 @@ const ReadOnlyModulesTree = ({ nodes }: { nodes: ModuleTreeNode[] }) => {
                 {record.name}
               </a>
             ) : (
-              <span className={record.kind === 'module' ? 'font-semibold text-ink-1' : 'text-ink-1'}>
+              <span
+                className={record.kind === 'module' ? 'font-semibold text-ink-1' : 'text-ink-1'}
+              >
                 {record.name}
               </span>
             )}
@@ -194,27 +194,35 @@ const ReadOnlyModulesTree = ({ nodes }: { nodes: ModuleTreeNode[] }) => {
     {
       title: 'Type',
       key: 'type',
-      width: '12%',
+      width: 130,
       render: (_: unknown, r: ModuleTreeNode) =>
-        r.typeText ? <span className="text-ink-2">{r.typeText}</span> : <span className="text-ink-3">—</span>,
+        r.typeText ? (
+          <span className="text-ink-2">{r.typeText}</span>
+        ) : (
+          <span className="text-ink-3">—</span>
+        ),
     },
     {
       title: 'Weight (%)',
       key: 'weight',
-      width: '12%',
+      width: 110,
       render: (_: unknown, r: ModuleTreeNode) =>
-        r.weightText ? <span className="text-ink-2">{r.weightText}</span> : <span className="text-ink-3">—</span>,
+        r.weightText ? (
+          <span className="text-ink-2">{r.weightText}</span>
+        ) : (
+          <span className="text-ink-3">—</span>
+        ),
     },
     {
       title: 'Status',
       key: 'status',
-      width: '16%',
+      width: 110,
       render: (_: unknown, r: ModuleTreeNode) => r.statusNode ?? null,
     },
     {
       title: '',
       key: 'actions',
-      width: '20%',
+      width: 200,
       render: (_: unknown, r: ModuleTreeNode) => r.actionNode ?? null,
     },
   ];

@@ -124,7 +124,7 @@ const AdminAssistants = ({ loaderData }: Route.ComponentProps) => {
       title: 'Assistant',
       dataIndex: 'name',
       key: 'name',
-      width: '30%',
+      width: 220,
       render: (_: unknown, assistant: Assistant) => {
         return <UserThumbnailView user={assistant} />;
       },
@@ -133,7 +133,7 @@ const AdminAssistants = ({ loaderData }: Route.ComponentProps) => {
       title: 'Grader Role',
       dataIndex: 'is_grader',
       key: 'is_grader',
-      width: '20%',
+      width: 130,
       render: (_: unknown, assistant: Assistant) => {
         return (
           <Radio.Group
@@ -151,7 +151,7 @@ const AdminAssistants = ({ loaderData }: Route.ComponentProps) => {
       title: 'Status',
       dataIndex: 'has_accepted_invite',
       key: 'has_accepted_invite',
-      width: '15%',
+      width: 110,
       render: (_: unknown, assistant: Assistant) => {
         return assistant.has_accepted_invite ? (
           <Tag color="green" className="font-semibold">
@@ -168,7 +168,7 @@ const AdminAssistants = ({ loaderData }: Route.ComponentProps) => {
       title: 'Actions',
       dataIndex: 'actions',
       key: 'actions',
-      width: '20%',
+      width: 200,
       render: (_: unknown, assistant: Assistant) => {
         return (
           <TableActionButtons
@@ -246,10 +246,7 @@ const AdminAssistants = ({ loaderData }: Route.ComponentProps) => {
         <FormAssistant close={close} token={token} />
       </Modal>
 
-      <div
-
-        className="rounded-2xl bg-panel ring-1 ring-line p-5 sm:p-6 min-h-[calc(100vh-10rem)]"
-      >
+      <div className="rounded-2xl bg-panel ring-1 ring-line p-5 sm:p-6 min-h-[calc(100vh-10rem)]">
         <Table
           columns={columns}
           dataSource={filteredAssistants}

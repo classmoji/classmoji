@@ -64,7 +64,7 @@ const AdminTeams = ({ loaderData }: Route.ComponentProps) => {
       title: 'Team',
       dataIndex: 'name',
       key: 'name',
-      width: '30%',
+      width: 220,
       render: (_: unknown, team: Team) => {
         return <TeamThumbnailView team={team} />;
       },
@@ -73,7 +73,7 @@ const AdminTeams = ({ loaderData }: Route.ComponentProps) => {
       title: 'Tags',
       dataIndex: 'tags',
       key: 'tags',
-      width: '25%',
+      width: 200,
       render: (tags: Team['tags']) => {
         if (tags.length == 0) return <span className="text-gray-500 italic">No tags</span>;
 
@@ -90,7 +90,7 @@ const AdminTeams = ({ loaderData }: Route.ComponentProps) => {
       title: 'Members',
       dataIndex: 'members',
       key: 'members',
-      width: '25%',
+      width: 140,
       render: (_: unknown, team: Team) => {
         const users = team.memberships.map(
           (membership: Team['memberships'][number]) => membership.user
@@ -107,7 +107,7 @@ const AdminTeams = ({ loaderData }: Route.ComponentProps) => {
     {
       title: 'Actions',
       key: 'actions',
-      width: '20%',
+      width: 200,
       render: (_: unknown, team: Team) => {
         return (
           <TableActionButtons

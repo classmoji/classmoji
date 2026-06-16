@@ -44,12 +44,12 @@ const TagSection = ({ tags }: TagSectionProps) => {
     {
       title: 'Tag',
       dataIndex: 'name',
-      width: '50%',
+      width: 200,
       render: (tag: string) => <Tag>#{tag}</Tag>,
     },
     {
       title: 'Action(s)',
-      width: '50%',
+      width: 200,
 
       render: (_: unknown, tag: Tag) => {
         return <TableActionButtons onDelete={() => deleteTag(tag.id)} />;

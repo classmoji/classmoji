@@ -305,7 +305,7 @@ export default function StudentQuizzes({ loaderData }: Route.ComponentProps) {
         title: '#',
         dataIndex: 'attemptNumber',
         key: 'attemptNumber',
-        width: '8%',
+        width: 110,
         render: (num: number, record: QuizAttempt) => (
           <Space>
             {num}
@@ -323,7 +323,7 @@ export default function StudentQuizzes({ loaderData }: Route.ComponentProps) {
         title: 'Status',
         dataIndex: 'status',
         key: 'status',
-        width: '15%',
+        width: 110,
         render: (status: string) => {
           if (status === 'completed') {
             return <Badge status="success" text="Completed" />;
@@ -335,7 +335,7 @@ export default function StudentQuizzes({ loaderData }: Route.ComponentProps) {
         title: 'Score',
         dataIndex: 'partialCreditScore',
         key: 'score',
-        width: '12%',
+        width: 110,
         render: (score: number | null) => {
           const displayScore = score ?? null;
           if (displayScore === null) return <Text type="secondary">-</Text>;
@@ -353,7 +353,7 @@ export default function StudentQuizzes({ loaderData }: Route.ComponentProps) {
       {
         title: 'Time Spent',
         key: 'timeSpent',
-        width: '15%',
+        width: 150,
         render: (_: unknown, record: QuizAttempt) => {
           if (!record.focusMetrics) return <Text type="secondary">-</Text>;
 
@@ -385,7 +385,7 @@ export default function StudentQuizzes({ loaderData }: Route.ComponentProps) {
         title: 'Completed',
         dataIndex: 'completed_at',
         key: 'completed',
-        width: '20%',
+        width: 150,
         render: (completedAt: string | null) => {
           if (!completedAt) return <Text type="secondary">In Progress</Text>;
           // Handle different date formats
@@ -400,7 +400,7 @@ export default function StudentQuizzes({ loaderData }: Route.ComponentProps) {
       {
         title: 'Actions',
         key: 'actions',
-        width: '12%',
+        width: 200,
         render: (_: unknown, record: QuizAttempt) => {
           const buttonText = record.status === 'completed' ? 'Review' : 'Resume';
           const buttonIcon =
@@ -462,7 +462,7 @@ export default function StudentQuizzes({ loaderData }: Route.ComponentProps) {
     {
       title: 'Current Score',
       key: 'currentScore',
-      width: '15%',
+      width: 110,
       render: (_: unknown, record: StudentQuiz) => {
         const { currentScore } = record.attemptsSummary;
         if (currentScore === null) return <Text type="secondary">-</Text>;
@@ -500,7 +500,7 @@ export default function StudentQuizzes({ loaderData }: Route.ComponentProps) {
     {
       title: 'Actions',
       key: 'actions',
-      width: '15%',
+      width: 200,
       render: (_: unknown, record: StudentQuiz) => {
         const isPublished = record.status === 'PUBLISHED';
         const { canCreateNew, count, maxAttempts } = record.attemptsSummary;
@@ -595,9 +595,7 @@ export default function StudentQuizzes({ loaderData }: Route.ComponentProps) {
             >
               {tab.label}
               <span
-                className={`ml-2 text-xs tabular-nums ${
-                  isActive ? 'text-ink-3' : 'text-ink-4'
-                }`}
+                className={`ml-2 text-xs tabular-nums ${isActive ? 'text-ink-3' : 'text-ink-4'}`}
               >
                 {tab.count}
               </span>

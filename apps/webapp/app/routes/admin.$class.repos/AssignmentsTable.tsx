@@ -55,8 +55,7 @@ interface AssignmentTableProps {
   assignments: RepositoryRow[];
 }
 
-const prettyType = (type?: string) =>
-  type ? type.charAt(0) + type.slice(1).toLowerCase() : '';
+const prettyType = (type?: string) => (type ? type.charAt(0) + type.slice(1).toLowerCase() : '');
 
 // forwardRef + prop spread so antd's Popconfirm (which clones the trigger child,
 // injects its own onClick/handlers and attaches a ref to anchor the popover) works.
@@ -215,7 +214,7 @@ const AssignmentTable = ({ assignments: repositories }: AssignmentTableProps) =>
       title: 'Repository',
       dataIndex: 'name',
       key: 'name',
-      width: '34%',
+      width: 240,
       sorter: (a: TreeNode, b: TreeNode) => a.name.localeCompare(b.name),
       render: (_: unknown, record: TreeNode) => {
         const level = record.kind === 'repository' ? 0 : 1;
@@ -268,9 +267,7 @@ const AssignmentTable = ({ assignments: repositories }: AssignmentTableProps) =>
             )}
 
             <span
-              className={
-                record.kind === 'repository' ? 'font-semibold text-ink-1' : 'text-ink-1'
-              }
+              className={record.kind === 'repository' ? 'font-semibold text-ink-1' : 'text-ink-1'}
             >
               {record.name}
             </span>
@@ -287,7 +284,7 @@ const AssignmentTable = ({ assignments: repositories }: AssignmentTableProps) =>
     {
       title: 'Type',
       key: 'type',
-      width: '13%',
+      width: 130,
       render: (_: unknown, record: TreeNode) => (
         <span className="text-ink-2">{prettyType(record.repositoryType)}</span>
       ),
@@ -295,15 +292,13 @@ const AssignmentTable = ({ assignments: repositories }: AssignmentTableProps) =>
     {
       title: 'Weight (%)',
       key: 'weight',
-      width: '13%',
+      width: 110,
       render: (_: unknown, record: TreeNode) =>
         record.kind === 'repository' ? (
           <EditableCell
             record={{ id: record.repository!.id, weight: record.weight ?? 0 }}
             dataIndex="weight"
-            onUpdate={(recordId, value) =>
-              handleUpdateWeight(recordId as string, value as number)
-            }
+            onUpdate={(recordId, value) => handleUpdateWeight(recordId as string, value as number)}
             format="number"
           />
         ) : (
@@ -313,7 +308,7 @@ const AssignmentTable = ({ assignments: repositories }: AssignmentTableProps) =>
     {
       title: 'Status',
       key: 'status',
-      width: '14%',
+      width: 110,
       render: (_: unknown, record: TreeNode) => (
         <Tag color={record.is_published ? 'green' : 'orange'} className="font-semibold">
           {record.is_published ? 'Published' : 'Draft'}
@@ -323,7 +318,7 @@ const AssignmentTable = ({ assignments: repositories }: AssignmentTableProps) =>
     {
       title: 'Actions',
       key: 'actions',
-      width: '26%',
+      width: 200,
       render: (_: unknown, record: TreeNode) => {
         if (record.kind === 'repository') {
           const r = record.repository!;
@@ -384,10 +379,9 @@ const AssignmentTable = ({ assignments: repositories }: AssignmentTableProps) =>
           <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
             <ActionLink
               onClick={() =>
-                navigate(
-                  `/admin/${classSlug}/repos/form?title=${record.repositoryTitle}`,
-                  { state: { assignment: record.repository } }
-                )
+                navigate(`/admin/${classSlug}/repos/form?title=${record.repositoryTitle}`, {
+                  state: { assignment: record.repository },
+                })
               }
             >
               Edit
