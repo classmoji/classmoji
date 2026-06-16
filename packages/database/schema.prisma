@@ -276,7 +276,7 @@ model GitOrganization {
 }
 
 model Classroom {
-  id                String   @id @default(uuid())
+  id                String          @id @default(uuid())
   slug              String // URL slug: "cs101-fall-2025"
   git_org_id        String
   name              String
@@ -286,12 +286,13 @@ model Classroom {
   // True for the auto-provisioned per-user "Example Course" sandbox used by the
   // in-classroom onboarding tour. Backed by a mock GitOrganization (no live GitHub).
   is_example        Boolean         @default(false)
-  created_at        DateTime @default(now())
-  updated_at        DateTime @default(now()) @updatedAt
+  created_at        DateTime        @default(now())
+  updated_at        DateTime        @default(now()) @updatedAt
 
   git_organization      GitOrganization       @relation(fields: [git_org_id], references: [id], onDelete: Cascade)
   settings              ClassroomSettings?
   memberships           ClassroomMembership[]
+  modules               Module[]
   repositories          Repository[]
   git_repos             GitRepo[]
   teams                 Team[]
@@ -344,20 +345,20 @@ model ClassroomSettings {
 }
 
 model ClassroomMembership {
-  id                  String   @id @default(uuid())
+  id                  String    @id @default(uuid())
   classroom_id        String
   user_id             String
-  role                Role     @default(STUDENT)
-  is_grader           Boolean  @default(false)
-  has_accepted_invite Boolean  @default(false)
+  role                Role      @default(STUDENT)
+  is_grader           Boolean   @default(false)
+  has_accepted_invite Boolean   @default(false)
   comment             String?
   letter_grade        String?
   pin_order           Int?
   // Null = this user has not finished the in-classroom guided tour for this
   // classroom; a timestamp records completion (per user, per classroom, per role).
   tour_completed_at   DateTime?
-  created_at          DateTime @default(now())
-  updated_at          DateTime @default(now()) @updatedAt
+  created_at          DateTime  @default(now())
+  updated_at          DateTime  @default(now()) @updatedAt
 
   classroom Classroom @relation(fields: [classroom_id], references: [id], onDelete: Cascade)
   user      User      @relation(fields: [user_id], references: [id], onDelete: Cascade)
@@ -383,6 +384,7 @@ model Repository {
   weight                  Int                @default(100)
   type                    AssignmentType
   tag_id                  String?
+  module_id               String? // Optional grouping under a Module (organizational only)
   is_extra_credit         Boolean            @default(false)
   drop_lowest_count       Int                @default(0)
   team_formation_mode     TeamFormationMode? @default(INSTRUCTOR)
@@ -395,6 +397,7 @@ model Repository {
 
   classroom   Classroom    @relation(fields: [classroom_id], references: [id], onDelete: Cascade)
   tag         Tag?         @relation(fields: [tag_id], references: [id])
+  module      Module?      @relation(fields: [module_id], references: [id], onDelete: SetNull)
   assignments Assignment[]
   git_repos   GitRepo[]
   quizzes     Quiz[]
@@ -403,7 +406,30 @@ model Repository {
 
   @@unique([classroom_id, title])
   @@index([classroom_id])
+  @@index([module_id])
   @@map("repositories")
+}
+
+// A Module groups one or more Repositories into a cohesive unit. It is purely
+// organizational: a title, an optional description, linked pages, and member
+// repositories (via Repository.module_id). It has no grading semantics.
+model Module {
+  id           String   @id @default(uuid())
+  classroom_id String
+  title        String
+  slug         String? // Set once on creation from title, never updated
+  description  String?
+  position     Int      @default(0)
+  created_at   DateTime @default(now())
+  updated_at   DateTime @default(now()) @updatedAt
+
+  classroom    Classroom    @relation(fields: [classroom_id], references: [id], onDelete: Cascade)
+  repositories Repository[]
+  pages        PageLink[]
+
+  @@unique([classroom_id, title])
+  @@index([classroom_id])
+  @@map("modules")
 }
 
 model Assignment {
@@ -861,16 +887,19 @@ model PageLink {
   page_id       String
   repository_id String?
   assignment_id String?
+  module_id     String?
   order         Int      @default(0)
   created_at    DateTime @default(now())
 
   page       Page        @relation(fields: [page_id], references: [id], onDelete: Cascade)
   repository Repository? @relation(fields: [repository_id], references: [id], onDelete: Cascade)
   assignment Assignment? @relation(fields: [assignment_id], references: [id], onDelete: Cascade)
+  module     Module?     @relation(fields: [module_id], references: [id], onDelete: Cascade)
 
-  @@unique([page_id, repository_id, assignment_id])
+  @@unique([page_id, repository_id, assignment_id, module_id])
   @@index([repository_id])
   @@index([assignment_id])
+  @@index([module_id])
   @@map("page_links")
 }
 
