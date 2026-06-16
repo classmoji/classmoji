@@ -432,30 +432,42 @@ export const releaseAssignmentsNowTask = task({
     for await (const assignment of assignments) {
       logger.info('Releasing assignment now', { title: assignment.title });
 
-      const payloads = await Promise.all(
-        logins.map(async login => {
-          const studentRepo = await ClassmojiService.gitRepo.find({
-            name: `${repositorySlug}-${login}`,
-            classroom_id: classroom.id,
-          });
+      const payloads = (
+        await Promise.all(
+          logins.map(async login => {
+            const studentRepo = await ClassmojiService.gitRepo.find({
+              name: `${repositorySlug}-${login}`,
+              classroom_id: classroom.id,
+            });
 
-          if (!studentRepo) {
-            throw new Error(`GitRepo not found for ${repositorySlug}-${login}`);
-          }
+            if (!studentRepo) {
+              throw new Error(`GitRepo not found for ${repositorySlug}-${login}`);
+            }
 
-          return {
-            payload: {
-              assignment,
-              organization: gitOrg,
-              repoName: `${repositorySlug}-${login}`,
-              studentRepo,
-            },
-            options: { tags: ctx.run.tags },
-          };
-        })
-      );
+            // Skip repos that already have this assignment so a re-run (or a
+            // retry after a partial failure) doesn't create duplicate issues.
+            const existing = await ClassmojiService.gitRepoAssignment.findFirst({
+              assignment_id: assignment.id,
+              git_repo_id: studentRepo.id,
+            });
+            if (existing) return null;
 
-      await createGithubRepositoryAssignmentTask.batchTriggerAndWait(payloads);
+            return {
+              payload: {
+                assignment,
+                organization: gitOrg,
+                repoName: `${repositorySlug}-${login}`,
+                studentRepo,
+              },
+              options: { tags: ctx.run.tags },
+            };
+          })
+        )
+      ).filter((p): p is NonNullable<typeof p> => p !== null);
+
+      if (payloads.length > 0) {
+        await createGithubRepositoryAssignmentTask.batchTriggerAndWait(payloads);
+      }
       await ClassmojiService.assignment.update(assignment.id, { is_published: true });
     }
   },

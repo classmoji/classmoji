@@ -25,10 +25,10 @@ interface AssignmentsTabProps {
   assignments: AssignmentRow[];
 }
 
-// An assignment still needs releasing if it isn't published yet, or it's
-// published but its release_at is still in the future.
-const needsRelease = (a: AssignmentRow) =>
-  !a.is_published || (!!a.release_at && dayjs(a.release_at).isAfter(dayjs()));
+// An assignment still needs releasing while it isn't published. The daily cron
+// only publishes once release_at has passed, so a not-yet-published assignment
+// is exactly the "waiting for the scheduled time" case that Release now skips.
+const needsRelease = (a: AssignmentRow) => !a.is_published;
 
 const AssignmentsTab = ({
   classSlug,
