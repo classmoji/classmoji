@@ -5,7 +5,6 @@ import {
   IconList,
   IconTable,
   IconPlus,
-  IconBrandGithub,
 } from '@tabler/icons-react';
 import { useParams, useRevalidator, useNavigate, Outlet } from 'react-router';
 import { useState } from 'react';
@@ -19,7 +18,6 @@ import AssignmentTable from './AssignmentTable';
 import { action } from './action';
 import SummaryCards from './SummaryCards';
 import ModuleTable from './ModuleTable';
-import RepositoriesTab from './RepositoriesTab';
 import AssignmentsTab from './AssignmentsTab';
 import LinkedPages, { type LinkedPage } from './LinkedPages';
 import { requireClassroomAdmin } from '~/utils/routeAuth.server';
@@ -279,25 +277,6 @@ const SingleRepository = ({ loaderData }: Route.ComponentProps) => {
           assignments={
             repository!.assignments as Parameters<typeof AssignmentsTab>[0]['assignments']
           }
-        />
-      ),
-    },
-    {
-      key: 'repositories',
-      label: 'Repositories',
-      extra: (
-        <Button
-          icon={<IconBrandGithub size={16} />}
-          onClick={() => navigate(`/admin/${classSlug}/repos/form?title=${repository!.title}`)}
-        >
-          Edit repository
-        </Button>
-      ),
-      children: (
-        <RepositoriesTab
-          repos={repos as Parameters<typeof RepositoriesTab>[0]['repos']}
-          repository={repository as Parameters<typeof RepositoriesTab>[0]['repository']}
-          gitOrgLogin={gitOrgLogin}
         />
       ),
     },
