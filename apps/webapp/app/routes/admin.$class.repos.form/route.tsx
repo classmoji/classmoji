@@ -22,6 +22,7 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
   const url = new URL(request.url);
   const moduleTitle = url.searchParams.get('title');
   const tags = await ClassmojiService.organizationTag.findByClassroomId(classroom.id);
+  const modules = await ClassmojiService.module.findByClassroomSlug(classSlug!);
 
   let repository = null;
   let hasReposWithProjects = false;
@@ -63,6 +64,7 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
     repository,
     isNew: !repository,
     tags,
+    modules,
     classroom,
     pages,
     slides,
@@ -71,7 +73,17 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
 };
 
 const ModuleForm = ({ loaderData }: Route.ComponentProps) => {
-  const { token, repository, isNew, tags, classroom, pages, slides, hasReposWithProjects } = loaderData;
+  const {
+    token,
+    repository,
+    isNew,
+    tags,
+    modules,
+    classroom,
+    pages,
+    slides,
+    hasReposWithProjects,
+  } = loaderData;
   const { opened, close } = useRouteDrawer({});
 
   return (
@@ -128,6 +140,7 @@ const ModuleForm = ({ loaderData }: Route.ComponentProps) => {
           isNew={isNew}
           close={close}
           tags={tags}
+          modules={modules}
           classroom={classroom as Parameters<typeof FormModule>[0]['classroom']}
           pages={pages}
           slides={slides}
@@ -141,7 +154,11 @@ const ModuleForm = ({ loaderData }: Route.ComponentProps) => {
 export const action = async ({ request, params }: Route.ActionArgs) => {
   const { class: classSlug } = params;
 
-  const { classroom, userId: _userId, membership } = await requireClassroomAdmin(request, classSlug!, {
+  const {
+    classroom,
+    userId: _userId,
+    membership,
+  } = await requireClassroomAdmin(request, classSlug!, {
     resourceType: 'REPOSITORIES',
     action: 'create_repository',
   });
