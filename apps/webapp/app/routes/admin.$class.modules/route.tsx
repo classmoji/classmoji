@@ -38,6 +38,8 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
     title?: string;
     description?: string | null;
     linkedPageIds?: string[];
+    moduleId?: string;
+    repositoryIds?: string[];
   };
 
   return namedAction(request, {
@@ -74,6 +76,18 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
       } catch (error: unknown) {
         console.error('Module delete error:', error);
         return { error: 'Failed to delete module. Please try again.' };
+      }
+    },
+    async setRepositories() {
+      try {
+        await ClassmojiService.module.setModuleRepositories(
+          data.moduleId!,
+          data.repositoryIds ?? []
+        );
+        return { success: 'Module repositories updated' };
+      } catch (error: unknown) {
+        console.error('Module setRepositories error:', error);
+        return { error: 'Failed to update module repositories. Please try again.' };
       }
     },
   });
@@ -129,10 +143,7 @@ const ModulesIndex = ({ loaderData }: Route.ComponentProps) => {
       key: 'actions',
       width: 200,
       render: (_: unknown, m: ModuleRow) => (
-        <TableActionButtons
-          onView={() => navigate(moduleHref(m))}
-          onEdit={() => openEdit(m)}
-        />
+        <TableActionButtons onView={() => navigate(moduleHref(m))} onEdit={() => openEdit(m)} />
       ),
     },
   ];

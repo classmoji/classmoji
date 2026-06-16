@@ -130,3 +130,32 @@ export const assignRepository = async (repositoryId: string, moduleId: string | 
     data: { module_id: moduleId },
   });
 };
+
+/**
+ * Set the exact set of repositories that belong to a module. Selected repos are
+ * attached (moved from another module if needed); repos currently in this
+ * module but not selected are detached (module_id → null).
+ */
+export const setModuleRepositories = async (moduleId: string, repositoryIds: string[]) => {
+  const prisma = getPrisma();
+
+  if (repositoryIds.length === 0) {
+    await prisma.repository.updateMany({
+      where: { module_id: moduleId },
+      data: { module_id: null },
+    });
+    return;
+  }
+
+  // Detach repos that are no longer selected.
+  await prisma.repository.updateMany({
+    where: { module_id: moduleId, id: { notIn: repositoryIds } },
+    data: { module_id: null },
+  });
+
+  // Attach the selected repos to this module.
+  await prisma.repository.updateMany({
+    where: { id: { in: repositoryIds } },
+    data: { module_id: moduleId },
+  });
+};
