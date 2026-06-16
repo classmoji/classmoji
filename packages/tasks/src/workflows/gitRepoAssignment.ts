@@ -357,3 +357,106 @@ export const dailyRepositoryAssignmentsReleaseTask = schedules.task({
     }
   },
 });
+
+interface ReleaseAssignmentsNowPayload {
+  repositoryId: string;
+  // When omitted, every not-yet-released assignment in the repository is released.
+  assignmentIds?: string[];
+}
+
+/**
+ * Release a repository's assignment(s) on demand — the same work the daily
+ * release cron does, but immediately and scoped to one repository. Ensures the
+ * student/team repos exist (creating them from the template if needed), then
+ * creates the assignment issue on each repo and marks each assignment released.
+ * The caller is expected to have already set release_at on the target
+ * assignments so the student-facing release gate (is_published AND release_at)
+ * is satisfied.
+ */
+export const releaseAssignmentsNowTask = task({
+  id: 'release_git_repo_assignments_now',
+  run: async (payload: ReleaseAssignmentsNowPayload, { ctx }: GitRepoAssignmentTaskContext) => {
+    const assignments = (await ClassmojiService.assignment.findForReleaseByRepository(
+      payload.repositoryId,
+      payload.assignmentIds
+    )) as ReleaseAssignmentRecord[];
+
+    if (assignments.length === 0) {
+      logger.info('No assignments to release now', { repositoryId: payload.repositoryId });
+      return;
+    }
+
+    const repository = assignments[0].repository;
+    const classroom = repository.classroom;
+    const gitOrg = classroom.git_organization;
+
+    let logins: string[] = [];
+    if (repository.type === 'INDIVIDUAL') {
+      const students: StudentRecord[] = await ClassmojiService.classroomMembership.findUsersByRole(
+        classroom.id,
+        'STUDENT'
+      );
+      logins = students.map(user => user.login || '').filter(login => login !== '');
+    } else if (repository.tag_id) {
+      const teams: TeamRecord[] = await ClassmojiService.organizationTag.findTeamsByTag(
+        repository.tag_id
+      );
+      logins = teams.map(team => team.slug);
+    }
+
+    if (logins.length === 0) {
+      logger.info('No recipients to release to', { repositoryId: payload.repositoryId });
+      return;
+    }
+
+    // Ensure the student/team repos exist. createRepositoriesTask also marks the
+    // repository published. If repos already exist we skip straight to issues.
+    const existingRepos = await ClassmojiService.gitRepo.findByRepository(
+      classroom.slug,
+      repository.id
+    );
+    if (existingRepos.length === 0) {
+      await createRepositoriesTask.triggerAndWait(
+        {
+          logins,
+          assignmentTitle: repository.title,
+          org: classroom.slug,
+          sessionId: nanoid(),
+        },
+        { concurrencyKey: classroom.slug }
+      );
+    }
+
+    const repositorySlug = repository.slug || titleToIdentifier(repository.title);
+
+    for await (const assignment of assignments) {
+      logger.info('Releasing assignment now', { title: assignment.title });
+
+      const payloads = await Promise.all(
+        logins.map(async login => {
+          const studentRepo = await ClassmojiService.gitRepo.find({
+            name: `${repositorySlug}-${login}`,
+            classroom_id: classroom.id,
+          });
+
+          if (!studentRepo) {
+            throw new Error(`GitRepo not found for ${repositorySlug}-${login}`);
+          }
+
+          return {
+            payload: {
+              assignment,
+              organization: gitOrg,
+              repoName: `${repositorySlug}-${login}`,
+              studentRepo,
+            },
+            options: { tags: ctx.run.tags },
+          };
+        })
+      );
+
+      await createGithubRepositoryAssignmentTask.batchTriggerAndWait(payloads);
+      await ClassmojiService.assignment.update(assignment.id, { is_published: true });
+    }
+  },
+});

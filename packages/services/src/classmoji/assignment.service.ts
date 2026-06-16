@@ -151,6 +151,39 @@ export const findReadyForRelease = async (beforeDate: Date = new Date()) => {
 };
 
 /**
+ * Find a repository's not-yet-released assignments for an on-demand "release now"
+ * (ignores release_at — the caller is forcing immediate release). Optionally
+ * limit to specific assignment ids. Uses the same include shape as
+ * findReadyForRelease so the release workflow can consume it directly.
+ * @param {string} repositoryId - UUID of the Repository
+ * @param {string[]} [assignmentIds] - Restrict to these assignment ids
+ * @returns {Promise<Object[]>}
+ */
+export const findForReleaseByRepository = async (
+  repositoryId: string,
+  assignmentIds?: string[]
+) => {
+  return getPrisma().assignment.findMany({
+    where: {
+      repository_id: repositoryId,
+      is_published: false,
+      ...(assignmentIds && assignmentIds.length > 0 ? { id: { in: assignmentIds } } : {}),
+    },
+    include: {
+      repository: {
+        include: {
+          classroom: {
+            include: {
+              git_organization: true,
+            },
+          },
+        },
+      },
+    },
+  });
+};
+
+/**
  * Create an Assignment
  * @param {Object} data - Assignment data
  * @param {string} data.repository_id - UUID of the Repository
