@@ -64,7 +64,6 @@ const AdminTeams = ({ loaderData }: Route.ComponentProps) => {
       title: 'Team',
       dataIndex: 'name',
       key: 'name',
-      width: 220,
       render: (_: unknown, team: Team) => {
         return <TeamThumbnailView team={team} />;
       },
@@ -154,7 +153,6 @@ const AdminTeams = ({ loaderData }: Route.ComponentProps) => {
             showTotal: (total, range) => `${range[0]}-${range[1]} of ${total} teams`,
           }}
           size="middle"
-          scroll={{ x: 'max-content' }}
           locale={{
             emptyText: query ? (
               <div className="text-center py-8 text-ink-3">
