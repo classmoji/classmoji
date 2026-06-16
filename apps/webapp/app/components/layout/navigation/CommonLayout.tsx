@@ -114,9 +114,7 @@ const CommonLayout = ({
       <span className="text-sm font-medium text-ink-2">Available Tokens</span>
       <div className="flex items-center gap-1.5">
         <img src={tokenImage} alt="token" className="h-4 w-4" />
-        <span className="text-sm font-semibold text-ink-0">
-          {tokenBalance}
-        </span>
+        <span className="text-sm font-semibold text-ink-0">{tokenBalance}</span>
       </div>
     </div>
   );
@@ -236,7 +234,9 @@ const CommonLayout = ({
     if (!askMojiEnabled) return null;
 
     const baseClasses = `group flex items-center gap-2.5 rounded-md transition-colors duration-150 ${
-      collapsed ? 'justify-center p-2 mx-1.5 w-[calc(100%-12px)]' : 'px-2 py-1.5 mx-1.5 w-[calc(100%-12px)] text-left'
+      collapsed
+        ? 'justify-center p-2 mx-1.5 w-[calc(100%-12px)]'
+        : 'px-2 py-1.5 mx-1.5 w-[calc(100%-12px)] text-left'
     } ${isAskMojiOpen ? '' : 'hover:bg-nav-hover'}`;
 
     return (
@@ -378,11 +378,7 @@ const CommonLayout = ({
               >
                 <rect x="3" y="3" width="18" height="18" rx="3" />
                 <path d="M9 3L9 21" />
-                {collapsed ? (
-                  <path d="M15 9L18 12L15 15" />
-                ) : (
-                  <path d="M16 9L13 12L16 15" />
-                )}
+                {collapsed ? <path d="M15 9L18 12L15 15" /> : <path d="M16 9L13 12L16 15" />}
               </svg>
             </button>
           </Tooltip>
@@ -466,15 +462,6 @@ const CommonLayout = ({
         className="flex-1 flex flex-col transition-all duration-300 ease-in-out min-w-0 lg:ml-[calc(var(--sider-width)+1.5rem)]"
         style={{ '--sider-width': `${siderWidth}px` } as React.CSSProperties}
       >
-        {/* Recent viewers — floats at the top right of the content area.
-            It describes the current route, so it lives with the content
-            rather than in the (route-agnostic) sidebar. */}
-        {recentViewers?.length >= 2 && (
-          <div className="hidden md:block fixed top-1.5 right-4 z-30">
-            <RecentViewers viewers={recentViewers} groupByRole={groupViewersByRole} />
-          </div>
-        )}
-
         {/* Mobile-only hamburger (when sidebar is closed) */}
         {!mobileOpen && (
           <button
@@ -523,6 +510,14 @@ const CommonLayout = ({
           >
             <CalloutSlot />
             {classroom?.status === 'LOCKED' && role !== 'OWNER' && <LockedBanner />}
+            {/* Recently-viewed: route-specific, so it lives with the content
+                (not the left nav). Rendered in-flow at the top-right above the
+                page so it never overlaps a page's header action buttons. */}
+            {recentViewers?.length >= 2 && (
+              <div className="hidden sm:flex justify-end -mt-1 mb-1">
+                <RecentViewers viewers={recentViewers} groupByRole={groupViewersByRole} />
+              </div>
+            )}
             {children}
           </div>
         </div>
