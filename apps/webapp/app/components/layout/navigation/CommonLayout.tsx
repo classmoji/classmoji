@@ -492,6 +492,7 @@ const CommonLayout = ({
           ref={contentScrollRef}
           className={`flex-1 overflow-auto relative min-w-0 ${
             pathname.includes('/dashboard') ||
+            pathname.includes('/modules') ||
             pathname.includes('/repos') ||
             pathname.includes('/quizzes') ||
             pathname.includes('/calendar') ||

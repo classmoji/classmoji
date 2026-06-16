@@ -1,10 +1,6 @@
 import getPrisma from '@classmoji/database';
 import { titleToIdentifier } from '@classmoji/utils';
-
-interface ModuleQueryOptions {
-  includeRepositories?: boolean;
-  includePages?: boolean;
-}
+import type { Prisma } from '@prisma/client';
 
 interface ModuleWriteInput {
   title: string;
@@ -13,24 +9,12 @@ interface ModuleWriteInput {
   linkedPageIds?: string[];
 }
 
-const repositoriesInclude = {
-  repositories: {
-    orderBy: { title: 'asc' as const },
-  },
-};
-
-const pagesInclude = {
-  pages: {
-    where: { module_id: { not: null } },
-    include: { page: true },
-    orderBy: { order: 'asc' as const },
-  },
-};
-
-const buildInclude = (options: ModuleQueryOptions) => ({
-  ...(options.includeRepositories ? repositoriesInclude : {}),
-  ...(options.includePages ? pagesInclude : {}),
-});
+// Literal include so Prisma infers the nested `repositories` and `pages.page`
+// relations on the returned type (a conditional/spread include erases them).
+const DETAIL_INCLUDE = {
+  repositories: { orderBy: { title: 'asc' } },
+  pages: { include: { page: true }, orderBy: { order: 'asc' } },
+} satisfies Prisma.ModuleInclude;
 
 /**
  * List every Module in a classroom (by classroom slug), ordered for display.
@@ -46,19 +30,22 @@ export const findByClassroomSlug = async (classroomSlug: string) => {
 
   return getPrisma().module.findMany({
     where: { classroom_id: classroom.id },
-    include: { _count: { select: { repositories: true } } },
+    include: {
+      _count: { select: { repositories: true } },
+      // Page ids so the edit form can prefill (and avoid wiping) linked pages.
+      pages: { select: { page_id: true } },
+    },
     orderBy: [{ position: 'asc' }, { created_at: 'asc' }],
   });
 };
 
 /**
  * Find a single Module within a classroom by its slug (falls back to title),
- * for the detail page.
+ * with member repositories and linked pages, for the detail page.
  */
 export const findByClassroomSlugAndModuleSlug = async (
   classroomSlug: string,
-  moduleSlug: string,
-  options: ModuleQueryOptions = {}
+  moduleSlug: string
 ) => {
   const classroom = await getPrisma().classroom.findFirst({
     where: { slug: classroomSlug },
@@ -72,14 +59,14 @@ export const findByClassroomSlugAndModuleSlug = async (
       classroom_id: classroom.id,
       OR: [{ slug: moduleSlug }, { title: moduleSlug }],
     },
-    include: buildInclude(options),
+    include: DETAIL_INCLUDE,
   });
 };
 
-export const findById = async (id: string, options: ModuleQueryOptions = {}) => {
+export const findById = async (id: string) => {
   return getPrisma().module.findUnique({
     where: { id },
-    include: buildInclude(options),
+    include: DETAIL_INCLUDE,
   });
 };
 
