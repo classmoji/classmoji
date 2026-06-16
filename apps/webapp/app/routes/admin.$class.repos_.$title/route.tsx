@@ -273,6 +273,7 @@ const SingleRepository = ({ loaderData }: Route.ComponentProps) => {
       children: (
         <AssignmentsTab
           classSlug={classSlug}
+          repositoryId={repository!.id}
           repositoryTitle={repository!.title}
           assignments={
             repository!.assignments as Parameters<typeof AssignmentsTab>[0]['assignments']

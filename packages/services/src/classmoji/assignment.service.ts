@@ -159,6 +159,24 @@ export const findReadyForRelease = async (beforeDate: Date = new Date()) => {
  * @param {string[]} [assignmentIds] - Restrict to these assignment ids
  * @returns {Promise<Object[]>}
  */
+/**
+ * Stamp release_at = now on a repository's not-yet-released assignments so the
+ * student-facing release gate (is_published AND release_at) can pass on an
+ * on-demand "release now". Optionally limit to specific assignment ids.
+ * @param {string} repositoryId - UUID of the Repository
+ * @param {string[]} [assignmentIds] - Restrict to these assignment ids
+ */
+export const setReleaseNow = async (repositoryId: string, assignmentIds?: string[]) => {
+  return getPrisma().assignment.updateMany({
+    where: {
+      repository_id: repositoryId,
+      is_published: false,
+      ...(assignmentIds && assignmentIds.length > 0 ? { id: { in: assignmentIds } } : {}),
+    },
+    data: { release_at: new Date() },
+  });
+};
+
 export const findForReleaseByRepository = async (
   repositoryId: string,
   assignmentIds?: string[]
