@@ -62,8 +62,18 @@ describe('addGradeToGitRepoAssignment with an open regrade request', () => {
 
     // One stale grade (predates the request) and one applied during the re-grade.
     findByAssignmentIdMock.mockResolvedValue([
-      { id: 'old-grade', emoji: '❌', created_at: new Date('2026-05-30T00:00:00Z'), token_transaction: null },
-      { id: 'fresh-grade', emoji: '✅', created_at: new Date('2026-06-02T00:00:00Z'), token_transaction: null },
+      {
+        id: 'old-grade',
+        emoji: '❌',
+        created_at: new Date('2026-05-30T00:00:00Z'),
+        token_transaction: null,
+      },
+      {
+        id: 'fresh-grade',
+        emoji: '✅',
+        created_at: new Date('2026-06-02T00:00:00Z'),
+        token_transaction: null,
+      },
     ]);
 
     await HelperService.addGradeToGitRepoAssignment({

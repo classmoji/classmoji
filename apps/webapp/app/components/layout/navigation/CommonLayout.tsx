@@ -34,12 +34,24 @@ interface NavItem {
   isProTier?: boolean;
 }
 
+interface NavVisibility {
+  showModules?: boolean;
+  showPages?: boolean;
+  showRepos?: boolean;
+}
+
 interface CommonLayoutProps {
   children: React.ReactNode;
   menuPages?: MenuPage[];
   recentViewers?: Viewer[];
   groupViewersByRole?: boolean;
   pagesUrl?: string;
+  /**
+   * Student-nav visibility, passed fresh from the layout loader. Preferred over
+   * the Zustand store so the sidebar reflects a settings change on the next
+   * navigation/revalidation rather than depending on the root-loader→store sync.
+   */
+  navVisibility?: NavVisibility;
 }
 
 const CommonLayout = ({
@@ -48,6 +60,7 @@ const CommonLayout = ({
   recentViewers = [],
   groupViewersByRole = false,
   pagesUrl: _pagesUrl = 'http://localhost:7100',
+  navVisibility,
 }: CommonLayoutProps) => {
   const [collapsed, setCollapsed] = useLocalStorageState('classmoji-collapsed', {
     defaultValue: false,
@@ -86,6 +99,17 @@ const CommonLayout = ({
   const askMojiActive = useStore(s => s.askMojiActive);
   const setAskMojiOpen = useStore(s => s.setAskMojiOpen);
   const { isDarkMode, background: tweaksBackground } = useDarkMode();
+
+  // Effective student-nav visibility: prefer the fresh value from the layout
+  // loader (navVisibility), fall back to the store. Defaults match the schema
+  // (modules off, pages/repos on).
+  const storeSettings = classroom?.settings as
+    | { show_modules?: boolean; show_pages?: boolean; show_repos?: boolean }
+    | undefined;
+  const showModules = navVisibility?.showModules ?? storeSettings?.show_modules ?? false;
+  const showPages = navVisibility?.showPages ?? storeSettings?.show_pages ?? true;
+  const showRepos = navVisibility?.showRepos ?? storeSettings?.show_repos ?? true;
+
   const themeColors = getThemeByKey(classroom?.settings?.theme);
   const themeBackground = isDarkMode ? themeColors.darkBackground : themeColors.background;
   // When a non-default personal background preset is picked, let the preset's
@@ -134,6 +158,11 @@ const CommonLayout = ({
 
     // Hide slides if disabled in classroom settings
     if (item.link === '/slides' && classroom?.settings?.slides_enabled === false) return null;
+
+    // Student navigation visibility toggles. OWNER always sees these to manage
+    // them; students/assistants only when the instructor enables them.
+    if (item.link === '/modules' && role !== 'OWNER' && !showModules) return null;
+    if (item.link === '/repos' && role !== 'OWNER' && !showRepos) return null;
 
     return (
       <RequireRole roles={item.roles} key={key}>
@@ -188,6 +217,10 @@ const CommonLayout = ({
     if (item.link === '/quizzes' && classroom?.settings?.quizzes_enabled === false) return false;
     if (item.link === '/quizzes' && !aiAgentAvailable) return false;
 
+    // Student navigation visibility toggles (OWNER always retains access).
+    if (item.link === '/modules' && role !== 'OWNER' && !showModules) return false;
+    if (item.link === '/repos' && role !== 'OWNER' && !showRepos) return false;
+
     return true;
   };
 
@@ -195,6 +228,8 @@ const CommonLayout = ({
   const renderMenuPages = () => {
     if (!menuPages || menuPages.length === 0) return null;
     if (role !== 'STUDENT' && role !== 'ASSISTANT') return null;
+    // Instructors can hide student-facing pages from the sidebar.
+    if (!showPages) return null;
 
     const menuPageItems = menuPages.map((page: MenuPage) => {
       return (

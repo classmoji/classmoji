@@ -169,9 +169,7 @@ class HelperService {
     if (!openRequest) return;
 
     const grades = await ClassmojiService.assignmentGrade.findByAssignmentId(gitRepoAssignment.id);
-    const staleGrades = grades.filter(
-      grade => grade.created_at <= openRequest.created_at
-    );
+    const staleGrades = grades.filter(grade => grade.created_at <= openRequest.created_at);
 
     for (const grade of staleGrades) {
       await this.removeGradeFromGitRepoAssignment({ classroom, gitRepoAssignment, grade });

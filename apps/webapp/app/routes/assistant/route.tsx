@@ -3,13 +3,14 @@ import type { Route } from './+types/route';
 import { CommonLayout, RequireRole } from '~/components';
 import { ClassmojiService } from '@classmoji/services';
 import { requireClassroomTeachingTeam } from '~/utils/routeAuth.server';
+import { DEFAULT_NAV_VISIBILITY, navVisibilityFromSettings } from '~/utils/navVisibility';
 
 export const loader = async ({ params, request }: Route.LoaderArgs) => {
   const { class: classSlug } = params;
 
   // Handle case where class param might not be present yet (e.g., at /assistant)
   if (!classSlug) {
-    return { menuPages: [], recentViewers: [] };
+    return { menuPages: [], recentViewers: [], navVisibility: DEFAULT_NAV_VISIBILITY };
   }
 
   try {
@@ -56,6 +57,7 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
       recentViewers,
       isTeachingTeam: true,
       pagesUrl: process.env.PAGES_URL || 'http://localhost:7100',
+      navVisibility: navVisibilityFromSettings(classroom.settings),
     };
   } catch {
     // If classroom access fails, return empty menu pages
@@ -63,12 +65,13 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
       menuPages: [],
       recentViewers: [],
       pagesUrl: process.env.PAGES_URL || 'http://localhost:7100',
+      navVisibility: DEFAULT_NAV_VISIBILITY,
     };
   }
 };
 
 const Assistant = ({ loaderData }: Route.ComponentProps) => {
-  const { menuPages, recentViewers, isTeachingTeam, pagesUrl } = loaderData;
+  const { menuPages, recentViewers, isTeachingTeam, pagesUrl, navVisibility } = loaderData;
 
   return (
     <CommonLayout
@@ -76,6 +79,7 @@ const Assistant = ({ loaderData }: Route.ComponentProps) => {
       recentViewers={recentViewers}
       groupViewersByRole={isTeachingTeam}
       pagesUrl={pagesUrl}
+      navVisibility={navVisibility}
     >
       <RequireRole roles={['ASSISTANT']}>
         <Outlet />

@@ -325,6 +325,9 @@ model ClassroomSettings {
   slides_enabled               Boolean  @default(false)
   syllabus_bot_enabled         Boolean  @default(false)
   recent_viewers_enabled       Boolean  @default(true)
+  show_modules                 Boolean  @default(false)
+  show_pages                   Boolean  @default(true)
+  show_repos                   Boolean  @default(true)
   syllabus_bot_model           String?
   llm_provider                 String?
   llm_model                    String?
@@ -384,7 +387,6 @@ model Repository {
   weight                  Int                @default(100)
   type                    AssignmentType
   tag_id                  String?
-  module_id               String? // Optional grouping under a Module (organizational only)
   is_extra_credit         Boolean            @default(false)
   drop_lowest_count       Int                @default(0)
   team_formation_mode     TeamFormationMode? @default(INSTRUCTOR)
@@ -395,24 +397,22 @@ model Repository {
   created_at              DateTime           @default(now())
   updated_at              DateTime           @default(now()) @updatedAt
 
-  classroom   Classroom    @relation(fields: [classroom_id], references: [id], onDelete: Cascade)
-  tag         Tag?         @relation(fields: [tag_id], references: [id])
-  module      Module?      @relation(fields: [module_id], references: [id], onDelete: SetNull)
-  assignments Assignment[]
-  git_repos   GitRepo[]
-  quizzes     Quiz[]
-  pages       PageLink[]
-  slides      SlideLink[]
+  classroom    Classroom    @relation(fields: [classroom_id], references: [id], onDelete: Cascade)
+  tag          Tag?         @relation(fields: [tag_id], references: [id])
+  assignments  Assignment[]
+  git_repos    GitRepo[]
+  quizzes      Quiz[]
+  pages        PageLink[]
+  slides       SlideLink[]
+  module_items ModuleItem[]
 
   @@unique([classroom_id, title])
   @@index([classroom_id])
-  @@index([module_id])
   @@map("repositories")
 }
 
-// A Module groups one or more Repositories into a cohesive unit. It is purely
-// organizational: a title, an optional description, linked pages, and member
-// repositories (via Repository.module_id). It has no grading semantics.
+// A Module is a single ordered list of mixed content items (pages, repos,
+// quizzes, slides). Membership and ordering live on ModuleItem.
 model Module {
   id           String   @id @default(uuid())
   classroom_id String
@@ -420,16 +420,52 @@ model Module {
   slug         String? // Set once on creation from title, never updated
   description  String?
   position     Int      @default(0)
+  is_published Boolean  @default(false)
   created_at   DateTime @default(now())
   updated_at   DateTime @default(now()) @updatedAt
 
-  classroom    Classroom    @relation(fields: [classroom_id], references: [id], onDelete: Cascade)
-  repositories Repository[]
-  pages        PageLink[]
+  classroom Classroom    @relation(fields: [classroom_id], references: [id], onDelete: Cascade)
+  items     ModuleItem[]
 
   @@unique([classroom_id, title])
   @@index([classroom_id])
   @@map("modules")
+}
+
+enum ModuleItemType {
+  PAGE
+  REPOSITORY
+  QUIZ
+  SLIDE
+}
+
+// A single ordered entry in a Module's content list. Exactly one of the four
+// *_id fields is set (enforced in the service layer + a CHECK migration).
+// An item may appear in multiple modules, but not twice in the same module.
+model ModuleItem {
+  id            String         @id @default(uuid())
+  module_id     String
+  item_type     ModuleItemType
+  position      Int            @default(0)
+  page_id       String?
+  repository_id String?
+  quiz_id       String?
+  slide_id      String?
+  created_at    DateTime       @default(now())
+  updated_at    DateTime       @default(now()) @updatedAt
+
+  module     Module      @relation(fields: [module_id], references: [id], onDelete: Cascade)
+  page       Page?       @relation(fields: [page_id], references: [id], onDelete: Cascade)
+  repository Repository? @relation(fields: [repository_id], references: [id], onDelete: Cascade)
+  quiz       Quiz?       @relation(fields: [quiz_id], references: [id], onDelete: Cascade)
+  slide      Slide?      @relation(fields: [slide_id], references: [id], onDelete: Cascade)
+
+  @@unique([module_id, page_id])
+  @@unique([module_id, repository_id])
+  @@unique([module_id, quiz_id])
+  @@unique([module_id, slide_id])
+  @@index([module_id])
+  @@map("module_items")
 }
 
 model Assignment {
@@ -782,9 +818,10 @@ model Quiz {
   created_at           DateTime            @default(now())
   updated_at           DateTime            @default(now()) @updatedAt
 
-  classroom  Classroom     @relation(fields: [classroom_id], references: [id], onDelete: Cascade)
-  repository Repository?   @relation(fields: [repository_id], references: [id])
-  attempts   QuizAttempt[]
+  classroom    Classroom     @relation(fields: [classroom_id], references: [id], onDelete: Cascade)
+  repository   Repository?   @relation(fields: [repository_id], references: [id])
+  attempts     QuizAttempt[]
+  module_items ModuleItem[]
 
   @@index([classroom_id])
   @@index([repository_id])
@@ -849,6 +886,7 @@ model Slide {
   creator            User                     @relation(fields: [created_by], references: [id])
   links              SlideLink[]
   calendarEventLinks CalendarEventSlideLink[]
+  module_items       ModuleItem[]
 
   @@unique([classroom_id, slug])
   @@index([classroom_id])
@@ -876,6 +914,7 @@ model Page {
   creator            User                    @relation(fields: [created_by], references: [id])
   links              PageLink[]
   calendarEventLinks CalendarEventPageLink[]
+  module_items       ModuleItem[]
 
   @@unique([classroom_id, title])
   @@index([classroom_id])
@@ -887,19 +926,16 @@ model PageLink {
   page_id       String
   repository_id String?
   assignment_id String?
-  module_id     String?
   order         Int      @default(0)
   created_at    DateTime @default(now())
 
   page       Page        @relation(fields: [page_id], references: [id], onDelete: Cascade)
   repository Repository? @relation(fields: [repository_id], references: [id], onDelete: Cascade)
   assignment Assignment? @relation(fields: [assignment_id], references: [id], onDelete: Cascade)
-  module     Module?     @relation(fields: [module_id], references: [id], onDelete: Cascade)
 
-  @@unique([page_id, repository_id, assignment_id, module_id])
+  @@unique([page_id, repository_id, assignment_id])
   @@index([repository_id])
   @@index([assignment_id])
-  @@index([module_id])
   @@map("page_links")
 }
 

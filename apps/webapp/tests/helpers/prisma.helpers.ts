@@ -525,3 +525,112 @@ export async function deleteQuizzesByNamePrefix(
     where: { classroom_id: classroomId, name: { startsWith: prefix } },
   });
 }
+
+// ---------------------------------------------------------------------------
+// Modules
+// ---------------------------------------------------------------------------
+
+export interface SeededModule {
+  moduleId: string;
+  title: string;
+}
+
+type ModuleItemKind = 'PAGE' | 'REPOSITORY' | 'QUIZ' | 'SLIDE';
+
+const MODULE_ITEM_COLUMN: Record<ModuleItemKind, 'page_id' | 'repository_id' | 'quiz_id' | 'slide_id'> =
+  {
+    PAGE: 'page_id',
+    REPOSITORY: 'repository_id',
+    QUIZ: 'quiz_id',
+    SLIDE: 'slide_id',
+  };
+
+/**
+ * Create a Module for a classroom. Idempotent by title (deletes any prior row
+ * of the same title first, cascading to its items).
+ */
+export async function seedModule(
+  classroomId: string,
+  title: string,
+  options: { isPublished?: boolean } = {}
+): Promise<SeededModule> {
+  const prisma = getTestPrisma();
+  await prisma.module
+    .delete({ where: { classroom_id_title: { classroom_id: classroomId, title } } })
+    .catch(() => undefined);
+
+  const module = await prisma.module.create({
+    data: {
+      classroom_id: classroomId,
+      title,
+      slug: title.toLowerCase().replace(/\s+/g, '-'),
+      is_published: options.isPublished ?? false,
+    },
+  });
+  return { moduleId: module.id, title: module.title };
+}
+
+/** Append an item of the given type to a module at the given position. */
+export async function addModuleItem(
+  moduleId: string,
+  type: ModuleItemKind,
+  targetId: string,
+  position = 0
+): Promise<{ id: string }> {
+  const prisma = getTestPrisma();
+  const item = await prisma.moduleItem.create({
+    data: { module_id: moduleId, item_type: type, position, [MODULE_ITEM_COLUMN[type]]: targetId },
+  });
+  return { id: item.id };
+}
+
+/** The ordered item ids of a module (for asserting reorder). */
+export async function getModuleItemOrder(moduleId: string): Promise<string[]> {
+  const prisma = getTestPrisma();
+  const items = await prisma.moduleItem.findMany({
+    where: { module_id: moduleId },
+    orderBy: { position: 'asc' },
+    select: { id: true },
+  });
+  return items.map(i => i.id);
+}
+
+export async function getModulePublishedState(moduleId: string): Promise<boolean> {
+  const prisma = getTestPrisma();
+  const module = await prisma.module.findUnique({
+    where: { id: moduleId },
+    select: { is_published: true },
+  });
+  return module?.is_published ?? false;
+}
+
+/** Delete a module by id. Safe to call in cleanup even if already deleted. */
+export async function deleteModuleById(id: string): Promise<void> {
+  const prisma = getTestPrisma();
+  await prisma.module.delete({ where: { id } }).catch(() => undefined);
+}
+
+/** Upsert the three student-navigation visibility toggles for a classroom. */
+export async function setClassroomNavVisibility(
+  classroomSlug: string,
+  flags: { showModules?: boolean; showPages?: boolean; showRepos?: boolean }
+): Promise<void> {
+  const prisma = getTestPrisma();
+  const classroom = await prisma.classroom.findFirst({
+    where: { slug: classroomSlug },
+    select: { id: true },
+  });
+  if (!classroom) throw new Error(`No classroom for slug "${classroomSlug}"`);
+
+  const data = {
+    ...(flags.showModules !== undefined ? { show_modules: flags.showModules } : {}),
+    ...(flags.showPages !== undefined ? { show_pages: flags.showPages } : {}),
+    ...(flags.showRepos !== undefined ? { show_repos: flags.showRepos } : {}),
+  };
+
+  await prisma.classroomSettings.upsert({
+    where: { classroom_id: classroom.id },
+    create: { classroom_id: classroom.id, ...data },
+    update: data,
+  });
+}

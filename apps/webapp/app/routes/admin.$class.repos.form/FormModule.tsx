@@ -65,7 +65,6 @@ interface ModuleData {
   is_extra_credit?: boolean;
   is_published?: boolean;
   drop_lowest_count?: number;
-  module_id?: string | null;
   description?: string;
   team_formation_mode?: string;
   team_formation_deadline?: string | null;
@@ -95,7 +94,6 @@ interface FormModuleProps {
   repository: ModuleData | null;
   close: () => void;
   tags: TagRef[];
-  modules?: { id: string; title: string }[];
   classroom: { slug: string; settings: Record<string, unknown>; [key: string]: unknown };
   pages?: PageRef[];
   slides?: SlideRef[];
@@ -108,7 +106,6 @@ const FormModule = ({
   repository,
   close,
   tags,
-  modules = [],
   classroom,
   pages = [],
   slides = [],
@@ -151,7 +148,6 @@ const FormModule = ({
     tag: repository?.tag_id,
     is_extra_credit: repository?.is_extra_credit,
     drop_lowest_count: repository?.drop_lowest_count ?? 0,
-    module_id: repository?.module_id ?? null,
     description: repository?.description || '',
     team_formation_mode: repository?.team_formation_mode || 'INSTRUCTOR',
     team_formation_deadline: repository?.team_formation_deadline
@@ -183,7 +179,6 @@ const FormModule = ({
     assignments: [],
     weight: 0,
     drop_lowest_count: 0,
-    module_id: null,
     description: '',
     team_formation_mode: 'INSTRUCTOR',
     team_formation_deadline: null,
@@ -524,15 +519,6 @@ const FormModule = ({
               size="md"
               className="mb-4"
             />
-            <FormItem control={control} name="module_id" label="Module">
-              <Select
-                className="w-full mb-4"
-                allowClear
-                placeholder="Group this repository under a module (optional)"
-                optionFilterProp="label"
-                options={modules.map(m => ({ value: m.id, label: m.title }))}
-              />
-            </FormItem>
             <FormItem control={control} name="description">
               <Input.TextArea
                 rows={4}
