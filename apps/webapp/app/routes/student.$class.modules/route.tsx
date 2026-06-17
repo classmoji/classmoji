@@ -58,9 +58,13 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
     return { enabled: false as const };
   }
 
-  const modules = await ClassmojiService.module.listForClassroom(classSlug, {
-    includeUnpublished: isStaff,
-  });
+  // The module list and the student's own repo-assignments are independent —
+  // fetch them in parallel. (Rich repo data depends on the module list, so it
+  // follows.)
+  const [modules, repoAssignments] = await Promise.all([
+    ClassmojiService.module.listForClassroom(classSlug, { includeUnpublished: isStaff }),
+    ClassmojiService.helper.findAllAssignmentsForStudent(userId, classSlug),
+  ]);
 
   // Fetch the rich repository data for every repository referenced by an item.
   const repoIds = [
@@ -73,15 +77,14 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
     ),
   ];
   const richRepos = repoIds.length
-    ? await getPrisma().repository.findMany({ where: { id: { in: repoIds } }, include: REPO_INCLUDE })
+    ? await getPrisma().repository.findMany({
+        where: { id: { in: repoIds } },
+        include: REPO_INCLUDE,
+      })
     : [];
   const repoById = Object.fromEntries(richRepos.map(r => [r.id, r]));
 
   // The student's own repo-assignments power submission status / issue links.
-  const repoAssignments = await ClassmojiService.helper.findAllAssignmentsForStudent(
-    userId,
-    classSlug
-  );
   const raByAssignmentId: Record<string, (typeof repoAssignments)[number]> = {};
   repoAssignments.forEach(ra => {
     raByAssignmentId[ra.assignment_id] = ra;

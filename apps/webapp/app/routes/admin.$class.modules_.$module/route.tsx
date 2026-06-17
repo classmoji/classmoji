@@ -30,23 +30,20 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
     action: 'view_modules',
   });
 
-  const module = await ClassmojiService.module.findByClassroomSlugAndModuleSlug(
-    classSlug!,
-    moduleSlug!
-  );
+  // The module and the picker's candidate content are independent — fetch in parallel.
+  const [module, candidates] = await Promise.all([
+    ClassmojiService.module.findByClassroomSlugAndModuleSlug(classSlug!, moduleSlug!),
+    ClassmojiService.module.getCandidateContent(classroom.id),
+  ]);
 
   if (!module) {
     throw data('Module not found', { status: 404 });
   }
 
-  // Candidate content for the "add item" picker.
-  const candidates = await ClassmojiService.module.getCandidateContent(classroom.id);
-
   return { module, candidates };
 };
 
 type ModuleItem = Route.ComponentProps['loaderData']['module']['items'][number];
-type Candidates = Route.ComponentProps['loaderData']['candidates'];
 
 const TYPE_META: Record<ModuleItemType, { label: string; icon: Icon }> = {
   PAGE: { label: 'Page', icon: IconFileText },
@@ -55,33 +52,28 @@ const TYPE_META: Record<ModuleItemType, { label: string; icon: Icon }> = {
   SLIDE: { label: 'Slides', icon: IconPresentation },
 };
 
-// Derive the display label + publish state for an item from its target.
-const describeItem = (item: ModuleItem): { label: string; published: boolean } => {
+const itemLabel = (item: ModuleItem): string => {
   switch (item.item_type) {
     case 'PAGE':
-      return {
-        label: item.page?.title ?? '(deleted page)',
-        published: !!item.page && !item.page.is_draft,
-      };
+      return item.page?.title ?? '(deleted page)';
     case 'REPOSITORY':
-      return {
-        label: item.repository?.title ?? '(deleted repository)',
-        published: !!item.repository && item.repository.is_published,
-      };
+      return item.repository?.title ?? '(deleted repository)';
     case 'QUIZ':
-      return {
-        label: item.quiz?.name ?? '(deleted quiz)',
-        published: !!item.quiz && item.quiz.status !== 'DRAFT',
-      };
+      return item.quiz?.name ?? '(deleted quiz)';
     case 'SLIDE':
-      return {
-        label: item.slide?.title ?? '(deleted slides)',
-        published: !!item.slide && !item.slide.is_draft,
-      };
+      return item.slide?.title ?? '(deleted slides)';
     default:
-      return { label: 'Unknown', published: false };
+      return 'Unknown';
   }
 };
+
+// Display label + student-visibility for an item. Publish state delegates to the
+// service's isItemPublished so the admin "Published/Draft" pill can never drift
+// from what students actually see.
+const describeItem = (item: ModuleItem): { label: string; published: boolean } => ({
+  label: itemLabel(item),
+  published: ClassmojiService.module.isItemPublished(item),
+});
 
 const ModuleDetail = ({ loaderData }: Route.ComponentProps) => {
   const { module, candidates } = loaderData;

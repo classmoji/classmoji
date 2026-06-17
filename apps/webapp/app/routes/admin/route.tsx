@@ -2,16 +2,15 @@ import { Outlet } from 'react-router';
 import { CommonLayout, RequireRole } from '~/components';
 import { ClassmojiService } from '@classmoji/services';
 import { requireClassroomAdmin } from '~/utils/routeAuth.server';
+import { DEFAULT_NAV_VISIBILITY, navVisibilityFromSettings } from '~/utils/navVisibility';
 import type { Route } from './+types/route';
 
 export const loader = async ({ params, request }: Route.LoaderArgs) => {
   const { class: classSlug } = params;
 
-  const defaultNavVisibility = { showModules: false, showPages: true, showRepos: true };
-
   // Handle case where class param might not be present yet (e.g., at /admin)
   if (!classSlug) {
-    return { menuPages: [], recentViewers: [], navVisibility: defaultNavVisibility };
+    return { menuPages: [], recentViewers: [], navVisibility: DEFAULT_NAV_VISIBILITY };
   }
 
   try {
@@ -55,11 +54,7 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
       recentViewers,
       isAdmin: true,
       pagesUrl: process.env.PAGES_URL || 'http://localhost:7100',
-      navVisibility: {
-        showModules: classroom.settings?.show_modules === true,
-        showPages: classroom.settings?.show_pages !== false,
-        showRepos: classroom.settings?.show_repos !== false,
-      },
+      navVisibility: navVisibilityFromSettings(classroom.settings),
     };
   } catch {
     // If classroom access fails, return empty data
@@ -67,7 +62,7 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
       menuPages: [],
       recentViewers: [],
       pagesUrl: process.env.PAGES_URL || 'http://localhost:7100',
-      navVisibility: defaultNavVisibility,
+      navVisibility: DEFAULT_NAV_VISIBILITY,
     };
   }
 };

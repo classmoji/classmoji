@@ -2,6 +2,7 @@ import { Tag } from 'antd';
 import Emoji from '~/components/ui/display/Emoji';
 import {
   type ModuleTreeNode,
+  buildResourceLeaves,
   prettyType,
   repoGithubUrl,
 } from '~/components/features/modules/ReadOnlyModulesTree';
@@ -34,13 +35,13 @@ export const submittedPill = (status?: string) => {
   );
 };
 
-/** Turn a node's linked pages / slides / quizzes into read-only resource leaves. */
+/**
+ * Turn a node's linked pages / slides / quizzes into read-only resource leaves.
+ * Delegates to the shared {@link buildResourceLeaves}, supplying the student
+ * quizzes route as the quiz href.
+ */
 export const resourceLeaves = (
-  {
-    pages,
-    slides,
-    quizzes,
-  }: {
+  input: {
     pages?: Array<{ page: { id: string; title: string } }>;
     slides?: Array<{ slide: { id: string; title: string } }>;
     quizzes?: Array<{ id: string; name: string }>;
@@ -48,40 +49,11 @@ export const resourceLeaves = (
   level: number,
   keyPrefix: string,
   ctx: StudentTreeCtx
-): ModuleTreeNode[] => {
-  const out: ModuleTreeNode[] = [];
-  (pages ?? []).forEach(({ page }) =>
-    out.push({
-      key: `${keyPrefix}-page-${page.id}`,
-      kind: 'resource',
-      level,
-      resourceIcon: 'page',
-      name: page.title,
-      href: `${ctx.pagesUrl}/${ctx.classSlug}/${page.id}`,
-    })
-  );
-  (slides ?? []).forEach(({ slide }) =>
-    out.push({
-      key: `${keyPrefix}-slide-${slide.id}`,
-      kind: 'resource',
-      level,
-      resourceIcon: 'slide',
-      name: slide.title,
-      href: `${ctx.slidesUrl}/${slide.id}`,
-    })
-  );
-  (quizzes ?? []).forEach(q =>
-    out.push({
-      key: `${keyPrefix}-quiz-${q.id}`,
-      kind: 'resource',
-      level,
-      resourceIcon: 'quiz',
-      name: q.name,
-      href: `/student/${ctx.classSlug}/quizzes`,
-    })
-  );
-  return out;
-};
+): ModuleTreeNode[] =>
+  buildResourceLeaves(input, level, keyPrefix, {
+    ...ctx,
+    quizzesHref: `/student/${ctx.classSlug}/quizzes`,
+  });
 
 /**
  * Build the read-only subtree for a single repository: the repository node
@@ -149,7 +121,10 @@ export const buildRepositoryNode = (
 
   // Group the student's assignments by the per-student git repo their RA belongs to.
   const NONE = '__none__';
-  const buckets = new Map<string, { gitRepo: AnyRepoAssignment | undefined; items: AnyRepository[] }>();
+  const buckets = new Map<
+    string,
+    { gitRepo: AnyRepoAssignment | undefined; items: AnyRepository[] }
+  >();
   for (const a of assignments) {
     const ra = raByAssignmentId[String(a.id)];
     const key = ra?.git_repo?.id ?? NONE;
