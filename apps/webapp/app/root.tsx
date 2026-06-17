@@ -24,6 +24,7 @@ import { auth, getAuthSession } from '@classmoji/auth/server';
 import { isAIAgentConfigured } from '~/utils/aiFeatures.server';
 import type { Route } from './+types/root';
 import type { MembershipWithOrganization, AppUser, Role } from '~/types';
+import { CLASSROOM_SETTINGS_SELECT } from '~/types';
 import type { ThemeConfig } from 'antd';
 import { useNotifiedFetcher, useDarkMode } from './hooks';
 import antdTheme from './config/antd';
@@ -133,14 +134,7 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
             classroom: {
               include: {
                 git_organization: true,
-                settings: {
-                  select: {
-                    quizzes_enabled: true,
-                    slides_enabled: true,
-                    theme: true,
-                    updated_at: true,
-                  },
-                },
+                settings: { select: CLASSROOM_SETTINGS_SELECT },
               },
             },
           },
@@ -165,14 +159,7 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
               classroom: {
                 include: {
                   git_organization: true,
-                  settings: {
-                    select: {
-                      quizzes_enabled: true,
-                      slides_enabled: true,
-                      theme: true,
-                      updated_at: true,
-                    },
-                  },
+                  settings: { select: CLASSROOM_SETTINGS_SELECT },
                 },
               },
             },
@@ -213,14 +200,7 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
                 classroom: {
                   include: {
                     git_organization: true,
-                    settings: {
-                      select: {
-                        quizzes_enabled: true,
-                        slides_enabled: true,
-                        theme: true,
-                        updated_at: true,
-                      },
-                    },
+                    settings: { select: CLASSROOM_SETTINGS_SELECT },
                   },
                 },
               },
@@ -611,9 +591,7 @@ export function ErrorBoundary() {
                     />
                   </svg>
                 </div>
-                <h1 className="text-2xl font-semibold text-ink-0 mb-2">
-                  Something went wrong
-                </h1>
+                <h1 className="text-2xl font-semibold text-ink-0 mb-2">Something went wrong</h1>
                 <p className="text-ink-2">
                   {errorMessage ||
                     'We encountered an unexpected error. Our team has been notified and is working on a fix.'}

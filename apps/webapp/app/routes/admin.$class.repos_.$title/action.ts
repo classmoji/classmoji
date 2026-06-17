@@ -78,6 +78,16 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
       // releases every not-yet-released assignment in the repository.
       const repositoryId = data.repositoryId as string;
       const assignmentIds = data.assignmentId ? [data.assignmentId as string] : undefined;
+      const repository = repositoryId
+        ? await ClassmojiService.repository.findById(repositoryId)
+        : null;
+
+      if (!repository || repository.classroom_id !== classroom.id) {
+        return {
+          action: 'RELEASE_NOW',
+          error: 'Repository not found for this classroom.',
+        };
+      }
 
       // Stamp release_at=now first so the student release gate passes once the
       // task marks them published.

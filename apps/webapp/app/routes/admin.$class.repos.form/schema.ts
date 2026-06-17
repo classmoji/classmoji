@@ -30,7 +30,6 @@ export const schema = z
       .min(0)
       .default(0),
     description: z.string().nullable().optional(),
-    module_id: z.string().nullable().optional(),
     team_formation_mode: z.enum(['INSTRUCTOR', 'SELF_FORMED']).nullable().optional(),
     team_formation_deadline: dayjsSchema,
     max_team_size: z.number().int().positive().nullable().optional(),

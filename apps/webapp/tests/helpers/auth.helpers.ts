@@ -100,6 +100,7 @@ export async function createAuthCookieAsync(user: TestUser): Promise<Cookie> {
     httpOnly: false,
     secure: false,
     sameSite: 'Lax',
+    expires: -1,
   };
 }
 
@@ -125,6 +126,7 @@ export function createAuthCookie(user: TestUser): Cookie {
     httpOnly: false,
     secure: false,
     sameSite: 'Lax',
+    expires: -1,
   };
 }
 
