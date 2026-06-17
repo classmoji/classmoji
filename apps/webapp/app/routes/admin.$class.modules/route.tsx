@@ -60,7 +60,7 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
     },
     async update() {
       try {
-        await ClassmojiService.module.update(data.id!, {
+        await ClassmojiService.module.updateForClassroom(data.id!, classroom.id, {
           title: data.title!,
           description: data.description ?? null,
         });
@@ -72,7 +72,7 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
     },
     async delete() {
       try {
-        await ClassmojiService.module.deleteById(data.id!);
+        await ClassmojiService.module.deleteById(data.id!, classroom.id);
         return { success: 'Module deleted' };
       } catch (error: unknown) {
         console.error('Module delete error:', error);
@@ -81,7 +81,11 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
     },
     async setPublished() {
       try {
-        await ClassmojiService.module.setPublished(data.id!, Boolean(data.isPublished));
+        await ClassmojiService.module.setPublished(
+          data.id!,
+          Boolean(data.isPublished),
+          classroom.id
+        );
         return { success: data.isPublished ? 'Module published' : 'Module unpublished' };
       } catch (error: unknown) {
         console.error('Module setPublished error:', error);
@@ -90,7 +94,12 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
     },
     async addItem() {
       try {
-        await ClassmojiService.module.addItem(data.moduleId!, data.itemType!, data.targetId!);
+        await ClassmojiService.module.addItem(
+          data.moduleId!,
+          data.itemType!,
+          data.targetId!,
+          classroom.id
+        );
         return { success: 'Item added to module' };
       } catch (error: unknown) {
         console.error('Module addItem error:', error);
@@ -99,7 +108,7 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
     },
     async removeItem() {
       try {
-        await ClassmojiService.module.removeItem(data.moduleItemId!);
+        await ClassmojiService.module.removeItem(data.moduleItemId!, classroom.id);
         return { success: 'Item removed from module' };
       } catch (error: unknown) {
         console.error('Module removeItem error:', error);
@@ -108,7 +117,11 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
     },
     async reorderItems() {
       try {
-        await ClassmojiService.module.reorderItems(data.moduleId!, data.orderedItemIds ?? []);
+        await ClassmojiService.module.reorderItems(
+          data.moduleId!,
+          data.orderedItemIds ?? [],
+          classroom.id
+        );
         return { success: 'Module order updated' };
       } catch (error: unknown) {
         console.error('Module reorderItems error:', error);

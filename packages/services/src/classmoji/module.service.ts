@@ -61,6 +61,21 @@ export const isItemPublished = (item: ModuleItemWithTargets): boolean => {
   }
 };
 
+const isItemTargetInClassroom = (item: ModuleItemWithTargets, classroomId: string): boolean => {
+  switch (item.item_type) {
+    case 'PAGE':
+      return item.page?.classroom_id === classroomId;
+    case 'SLIDE':
+      return item.slide?.classroom_id === classroomId;
+    case 'REPOSITORY':
+      return item.repository?.classroom_id === classroomId;
+    case 'QUIZ':
+      return item.quiz?.classroom_id === classroomId;
+    default:
+      return false;
+  }
+};
+
 const findClassroomIdBySlug = async (classroomSlug: string) => {
   const classroom = await getPrisma().classroom.findFirst({
     where: { slug: classroomSlug },
@@ -95,13 +110,19 @@ export const findByClassroomSlugAndModuleSlug = async (
   const classroomId = await findClassroomIdBySlug(classroomSlug);
   if (!classroomId) return null;
 
-  return getPrisma().module.findFirst({
+  const module = await getPrisma().module.findFirst({
     where: {
       classroom_id: classroomId,
       OR: [{ slug: moduleSlug }, { title: moduleSlug }],
     },
     include: DETAIL_INCLUDE,
   });
+  if (!module) return null;
+
+  return {
+    ...module,
+    items: module.items.filter(item => isItemTargetInClassroom(item, classroomId)),
+  };
 };
 
 export const findById = async (id: string) => {
@@ -129,11 +150,16 @@ export const listForClassroom = async (
     orderBy: [{ position: 'asc' }, { created_at: 'asc' }],
   });
 
-  if (includeUnpublished) return modules;
+  const modulesWithScopedItems = modules.map(m => ({
+    ...m,
+    items: m.items.filter(item => isItemTargetInClassroom(item, classroomId)),
+  }));
+
+  if (includeUnpublished) return modulesWithScopedItems;
 
   // Drop items whose target is not published. Module-level publish is already
   // filtered in the query above.
-  return modules.map(m => ({ ...m, items: m.items.filter(isItemPublished) }));
+  return modulesWithScopedItems.map(m => ({ ...m, items: m.items.filter(isItemPublished) }));
 };
 
 /**
@@ -186,12 +212,70 @@ export const update = async (id: string, input: ModuleWriteInput) => {
   });
 };
 
-export const deleteById = async (id: string) => {
+const assertModuleInClassroom = async (moduleId: string, classroomId: string) => {
+  const module = await getPrisma().module.findFirst({
+    where: { id: moduleId, classroom_id: classroomId },
+    select: { id: true },
+  });
+  if (!module) throw new Error('Module not found in classroom');
+};
+
+const assertTargetInClassroom = async (
+  type: ModuleItemType,
+  targetId: string,
+  classroomId: string
+) => {
+  const prisma = getPrisma();
+  const select = { id: true };
+  let target: { id: string } | null = null;
+
+  switch (type) {
+    case ModuleItemType.PAGE:
+      target = await prisma.page.findFirst({
+        where: { id: targetId, classroom_id: classroomId },
+        select,
+      });
+      break;
+    case ModuleItemType.REPOSITORY:
+      target = await prisma.repository.findFirst({
+        where: { id: targetId, classroom_id: classroomId },
+        select,
+      });
+      break;
+    case ModuleItemType.QUIZ:
+      target = await prisma.quiz.findFirst({
+        where: { id: targetId, classroom_id: classroomId },
+        select,
+      });
+      break;
+    case ModuleItemType.SLIDE:
+      target = await prisma.slide.findFirst({
+        where: { id: targetId, classroom_id: classroomId },
+        select,
+      });
+      break;
+  }
+
+  if (!target) throw new Error('Module item target not found in classroom');
+};
+
+export const updateForClassroom = async (
+  id: string,
+  classroomId: string,
+  input: ModuleWriteInput
+) => {
+  await assertModuleInClassroom(id, classroomId);
+  return update(id, input);
+};
+
+export const deleteById = async (id: string, classroomId?: string) => {
+  if (classroomId) await assertModuleInClassroom(id, classroomId);
   // ModuleItem rows cascade; the underlying pages/repos/quizzes/slides remain.
   return getPrisma().module.delete({ where: { id } });
 };
 
-export const setPublished = async (id: string, isPublished: boolean) => {
+export const setPublished = async (id: string, isPublished: boolean, classroomId?: string) => {
+  if (classroomId) await assertModuleInClassroom(id, classroomId);
   return getPrisma().module.update({
     where: { id },
     data: { is_published: isPublished },
@@ -202,8 +286,17 @@ export const setPublished = async (id: string, isPublished: boolean) => {
  * Append an item of the given type to a module (at max position + 1). The
  * unique (module, target) constraint prevents adding the same item twice.
  */
-export const addItem = async (moduleId: string, type: ModuleItemType, targetId: string) => {
+export const addItem = async (
+  moduleId: string,
+  type: ModuleItemType,
+  targetId: string,
+  classroomId?: string
+) => {
   const prisma = getPrisma();
+  if (classroomId) {
+    await assertModuleInClassroom(moduleId, classroomId);
+    await assertTargetInClassroom(type, targetId, classroomId);
+  }
   const last = await prisma.moduleItem.findFirst({
     where: { module_id: moduleId },
     orderBy: { position: 'desc' },
@@ -221,7 +314,14 @@ export const addItem = async (moduleId: string, type: ModuleItemType, targetId: 
   });
 };
 
-export const removeItem = async (moduleItemId: string) => {
+export const removeItem = async (moduleItemId: string, classroomId?: string) => {
+  if (classroomId) {
+    const moduleItem = await getPrisma().moduleItem.findFirst({
+      where: { id: moduleItemId, module: { classroom_id: classroomId } },
+      select: { id: true },
+    });
+    if (!moduleItem) throw new Error('Module item not found in classroom');
+  }
   return getPrisma().moduleItem.delete({ where: { id: moduleItemId } });
 };
 
@@ -230,8 +330,26 @@ export const removeItem = async (moduleItemId: string) => {
  * list of ModuleItem ids in their new order; each row's position becomes its
  * index.
  */
-export const reorderItems = async (moduleId: string, orderedItemIds: string[]) => {
+export const reorderItems = async (
+  moduleId: string,
+  orderedItemIds: string[],
+  classroomId?: string
+) => {
   const prisma = getPrisma();
+  if (classroomId) await assertModuleInClassroom(moduleId, classroomId);
+
+  const existingItems = await prisma.moduleItem.findMany({
+    where: { module_id: moduleId },
+    select: { id: true },
+  });
+  const existingIds = new Set(existingItems.map(item => item.id));
+  const orderedIds = new Set(orderedItemIds);
+  const hasExactSet =
+    existingIds.size === orderedItemIds.length &&
+    orderedIds.size === orderedItemIds.length &&
+    orderedItemIds.every(id => existingIds.has(id));
+  if (!hasExactSet) throw new Error('Ordered item ids must match module items');
+
   await prisma.$transaction(
     orderedItemIds.map((id, index) =>
       prisma.moduleItem.update({

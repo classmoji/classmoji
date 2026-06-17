@@ -67,13 +67,26 @@ const itemLabel = (item: ModuleItem): string => {
   }
 };
 
-// Display label + student-visibility for an item. Publish state delegates to the
-// service's isItemPublished so the admin "Published/Draft" pill can never drift
-// from what students actually see.
-const describeItem = (item: ModuleItem): { label: string; published: boolean } => ({
-  label: itemLabel(item),
-  published: ClassmojiService.module.isItemPublished(item),
-});
+// Display label + student-visibility for an item. Keep this client-safe: route
+// components cannot call server services without pulling Node-only code into
+// the browser bundle.
+const describeItem = (item: ModuleItem): { label: string; published: boolean } => {
+  switch (item.item_type) {
+    case 'PAGE':
+      return { label: itemLabel(item), published: !!item.page && !item.page.is_draft };
+    case 'REPOSITORY':
+      return {
+        label: itemLabel(item),
+        published: !!item.repository && item.repository.is_published,
+      };
+    case 'QUIZ':
+      return { label: itemLabel(item), published: !!item.quiz && item.quiz.status !== 'DRAFT' };
+    case 'SLIDE':
+      return { label: itemLabel(item), published: !!item.slide && !item.slide.is_draft };
+    default:
+      return { label: itemLabel(item), published: false };
+  }
+};
 
 const ModuleDetail = ({ loaderData }: Route.ComponentProps) => {
   const { module, candidates } = loaderData;

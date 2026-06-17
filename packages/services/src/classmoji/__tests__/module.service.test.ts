@@ -3,6 +3,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const classroomFindFirst = vi.fn();
 const moduleFindMany = vi.fn();
 const itemFindFirst = vi.fn();
+const itemFindMany = vi.fn();
 const itemCreate = vi.fn();
 const itemUpdate = vi.fn();
 const transaction = vi.fn();
@@ -11,16 +12,20 @@ vi.mock('@classmoji/database', () => ({
   default: () => ({
     classroom: { findFirst: classroomFindFirst },
     module: { findMany: moduleFindMany },
-    moduleItem: { findFirst: itemFindFirst, create: itemCreate, update: itemUpdate },
+    moduleItem: {
+      findFirst: itemFindFirst,
+      findMany: itemFindMany,
+      create: itemCreate,
+      update: itemUpdate,
+    },
     $transaction: transaction,
   }),
 }));
 
 vi.mock('@classmoji/utils', () => ({ titleToIdentifier: (s: string) => s.toLowerCase() }));
 
-const { isItemPublished, addItem, reorderItems, listForClassroom } = await import(
-  '../module.service.ts'
-);
+const { isItemPublished, addItem, reorderItems, listForClassroom } =
+  await import('../module.service.ts');
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -79,9 +84,14 @@ describe('addItem', () => {
 
 describe('reorderItems', () => {
   it('sets each item position to its index, scoped to the module', async () => {
+    itemFindMany.mockResolvedValue([{ id: 'a' }, { id: 'b' }, { id: 'c' }]);
     transaction.mockResolvedValue([]);
     await reorderItems('mod1', ['b', 'a', 'c']);
 
+    expect(itemFindMany).toHaveBeenCalledWith({
+      where: { module_id: 'mod1' },
+      select: { id: true },
+    });
     expect(itemUpdate).toHaveBeenNthCalledWith(1, {
       where: { id: 'b', module_id: 'mod1' },
       data: { position: 0 },
@@ -96,6 +106,24 @@ describe('reorderItems', () => {
     });
     expect(transaction).toHaveBeenCalledOnce();
   });
+
+  it('rejects incomplete item order payloads', async () => {
+    itemFindMany.mockResolvedValue([{ id: 'a' }, { id: 'b' }]);
+
+    await expect(reorderItems('mod1', ['b'])).rejects.toThrow(
+      'Ordered item ids must match module items'
+    );
+    expect(transaction).not.toHaveBeenCalled();
+  });
+
+  it('rejects duplicate item ids in order payloads', async () => {
+    itemFindMany.mockResolvedValue([{ id: 'a' }, { id: 'b' }]);
+
+    await expect(reorderItems('mod1', ['a', 'a'])).rejects.toThrow(
+      'Ordered item ids must match module items'
+    );
+    expect(transaction).not.toHaveBeenCalled();
+  });
 });
 
 describe('listForClassroom', () => {
@@ -108,9 +136,9 @@ describe('listForClassroom', () => {
       {
         id: 'm1',
         items: [
-          { item_type: 'PAGE', page: { is_draft: false } },
-          { item_type: 'PAGE', page: { is_draft: true } },
-          { item_type: 'REPOSITORY', repository: { is_published: true } },
+          { item_type: 'PAGE', page: { classroom_id: 'c1', is_draft: false } },
+          { item_type: 'PAGE', page: { classroom_id: 'c1', is_draft: true } },
+          { item_type: 'REPOSITORY', repository: { classroom_id: 'c1', is_published: true } },
         ],
       },
     ]);
@@ -124,7 +152,9 @@ describe('listForClassroom', () => {
   });
 
   it('returns everything unfiltered for the teaching team', async () => {
-    const modules = [{ id: 'm1', items: [{ item_type: 'PAGE', page: { is_draft: true } }] }];
+    const modules = [
+      { id: 'm1', items: [{ item_type: 'PAGE', page: { classroom_id: 'c1', is_draft: true } }] },
+    ];
     moduleFindMany.mockResolvedValue(modules);
 
     const result = await listForClassroom('cls', { includeUnpublished: true });

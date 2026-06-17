@@ -352,4 +352,3 @@ export const updateSettings = async (
     update: updates,
   });
 };
-
