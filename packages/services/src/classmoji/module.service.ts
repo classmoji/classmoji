@@ -136,6 +136,37 @@ export const listForClassroom = async (
   return modules.map(m => ({ ...m, items: m.items.filter(isItemPublished) }));
 };
 
+/**
+ * The four content types a module item can point at, with the minimal fields
+ * the admin "add item" picker needs (id, label, and publish state for a pill).
+ */
+export const getCandidateContent = async (classroomId: string) => {
+  const prisma = getPrisma();
+  const [repositories, pages, slides, quizzes] = await Promise.all([
+    prisma.repository.findMany({
+      where: { classroom_id: classroomId },
+      select: { id: true, title: true, is_published: true },
+      orderBy: { title: 'asc' },
+    }),
+    prisma.page.findMany({
+      where: { classroom_id: classroomId },
+      select: { id: true, title: true, is_draft: true },
+      orderBy: { title: 'asc' },
+    }),
+    prisma.slide.findMany({
+      where: { classroom_id: classroomId },
+      select: { id: true, title: true, is_draft: true },
+      orderBy: { title: 'asc' },
+    }),
+    prisma.quiz.findMany({
+      where: { classroom_id: classroomId },
+      select: { id: true, name: true, status: true },
+      orderBy: { name: 'asc' },
+    }),
+  ]);
+  return { repositories, pages, slides, quizzes };
+};
+
 export const create = async (classroomId: string, input: ModuleWriteInput) => {
   return getPrisma().module.create({
     data: {

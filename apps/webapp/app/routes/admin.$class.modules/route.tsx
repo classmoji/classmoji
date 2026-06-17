@@ -5,6 +5,7 @@ import { namedAction } from 'remix-utils/named-action';
 
 import { SearchInput, ButtonNew, RequireRole, TableActionButtons } from '~/components';
 import { ClassmojiService } from '@classmoji/services';
+import type { ModuleItemType } from '@prisma/client';
 import { requireClassroomAdmin } from '~/utils/routeAuth.server';
 import { assertClassroomMutationAllowed } from '~/utils/helpers';
 import ModuleFormModal, { type ModuleFormModule } from './ModuleFormModal';
@@ -13,15 +14,14 @@ import type { Route } from './+types/route';
 export const loader = async ({ params, request }: Route.LoaderArgs) => {
   const { class: classSlug } = params;
 
-  const { classroom } = await requireClassroomAdmin(request, classSlug!, {
+  await requireClassroomAdmin(request, classSlug!, {
     resourceType: 'REPOSITORIES',
     action: 'view_modules',
   });
 
   const modules = await ClassmojiService.module.findByClassroomSlug(classSlug!);
-  const pages = await ClassmojiService.page.findByClassroomId(classroom.id);
 
-  return { modules, pages };
+  return { modules };
 };
 
 export const action = async ({ params, request }: Route.ActionArgs) => {
@@ -37,9 +37,12 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
     id?: string;
     title?: string;
     description?: string | null;
-    linkedPageIds?: string[];
+    isPublished?: boolean;
     moduleId?: string;
-    repositoryIds?: string[];
+    moduleItemId?: string;
+    itemType?: ModuleItemType;
+    targetId?: string;
+    orderedItemIds?: string[];
   };
 
   return namedAction(request, {
@@ -48,7 +51,6 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
         await ClassmojiService.module.create(classroom.id, {
           title: data.title!,
           description: data.description ?? null,
-          linkedPageIds: data.linkedPageIds ?? [],
         });
         return { success: 'Module created' };
       } catch (error: unknown) {
@@ -61,7 +63,6 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
         await ClassmojiService.module.update(data.id!, {
           title: data.title!,
           description: data.description ?? null,
-          linkedPageIds: data.linkedPageIds ?? [],
         });
         return { success: 'Module updated' };
       } catch (error: unknown) {
@@ -78,16 +79,40 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
         return { error: 'Failed to delete module. Please try again.' };
       }
     },
-    async setRepositories() {
+    async setPublished() {
       try {
-        await ClassmojiService.module.setModuleRepositories(
-          data.moduleId!,
-          data.repositoryIds ?? []
-        );
-        return { success: 'Module repositories updated' };
+        await ClassmojiService.module.setPublished(data.id!, Boolean(data.isPublished));
+        return { success: data.isPublished ? 'Module published' : 'Module unpublished' };
       } catch (error: unknown) {
-        console.error('Module setRepositories error:', error);
-        return { error: 'Failed to update module repositories. Please try again.' };
+        console.error('Module setPublished error:', error);
+        return { error: 'Failed to update module visibility. Please try again.' };
+      }
+    },
+    async addItem() {
+      try {
+        await ClassmojiService.module.addItem(data.moduleId!, data.itemType!, data.targetId!);
+        return { success: 'Item added to module' };
+      } catch (error: unknown) {
+        console.error('Module addItem error:', error);
+        return { error: 'Failed to add item. It may already be in this module.' };
+      }
+    },
+    async removeItem() {
+      try {
+        await ClassmojiService.module.removeItem(data.moduleItemId!);
+        return { success: 'Item removed from module' };
+      } catch (error: unknown) {
+        console.error('Module removeItem error:', error);
+        return { error: 'Failed to remove item. Please try again.' };
+      }
+    },
+    async reorderItems() {
+      try {
+        await ClassmojiService.module.reorderItems(data.moduleId!, data.orderedItemIds ?? []);
+        return { success: 'Module order updated' };
+      } catch (error: unknown) {
+        console.error('Module reorderItems error:', error);
+        return { error: 'Failed to reorder items. Please try again.' };
       }
     },
   });
@@ -96,7 +121,7 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
 type ModuleRow = Route.ComponentProps['loaderData']['modules'][number];
 
 const ModulesIndex = ({ loaderData }: Route.ComponentProps) => {
-  const { modules, pages } = loaderData;
+  const { modules } = loaderData;
   const { class: classSlug } = useParams();
   const navigate = useNavigate();
   const [query, setQuery] = useState('');
@@ -109,7 +134,7 @@ const ModulesIndex = ({ loaderData }: Route.ComponentProps) => {
   };
 
   const openEdit = (m: ModuleRow) => {
-    setEditing({ id: m.id, title: m.title, description: m.description, pages: m.pages });
+    setEditing({ id: m.id, title: m.title, description: m.description });
     setFormOpen(true);
   };
 
@@ -130,18 +155,29 @@ const ModulesIndex = ({ loaderData }: Route.ComponentProps) => {
       ),
     },
     {
-      title: 'Repositories',
-      key: 'repositories',
-      width: 140,
+      title: 'Items',
+      key: 'items',
+      width: 100,
       align: 'center' as const,
       render: (_: unknown, m: ModuleRow) => (
-        <Tag color={m._count.repositories > 0 ? 'blue' : undefined}>{m._count.repositories}</Tag>
+        <Tag color={m._count.items > 0 ? 'blue' : undefined}>{m._count.items}</Tag>
+      ),
+    },
+    {
+      title: 'Visibility',
+      key: 'visibility',
+      width: 120,
+      align: 'center' as const,
+      render: (_: unknown, m: ModuleRow) => (
+        <Tag color={m.is_published ? 'green' : 'orange'}>
+          {m.is_published ? 'Published' : 'Draft'}
+        </Tag>
       ),
     },
     {
       title: 'Actions',
       key: 'actions',
-      width: 200,
+      width: 160,
       render: (_: unknown, m: ModuleRow) => (
         <TableActionButtons onView={() => navigate(moduleHref(m))} onEdit={() => openEdit(m)} />
       ),
@@ -192,7 +228,8 @@ const ModulesIndex = ({ loaderData }: Route.ComponentProps) => {
               <div className="text-center py-12 text-gray-500">
                 <div className="font-medium">No modules yet</div>
                 <div className="text-sm">
-                  Group related repositories into a module to organize your course.
+                  Group pages, repositories, quizzes and slides into a module to organize your
+                  course.
                 </div>
               </div>
             ),
@@ -200,12 +237,7 @@ const ModulesIndex = ({ loaderData }: Route.ComponentProps) => {
         />
       </div>
 
-      <ModuleFormModal
-        open={formOpen}
-        module={editing}
-        pages={pages}
-        onClose={() => setFormOpen(false)}
-      />
+      <ModuleFormModal open={formOpen} module={editing} onClose={() => setFormOpen(false)} />
     </div>
   );
 };

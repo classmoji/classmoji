@@ -1,16 +1,23 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { data, useFetcher, useNavigate, useParams } from 'react-router';
-import { Button, Table, Tag, Popconfirm, Modal, Select } from 'antd';
+import { Button, Tag, Popconfirm, Modal, Select, Segmented, Switch, Tooltip } from 'antd';
 import {
   IconChevronLeft,
   IconStack2,
   IconPencil,
   IconTrash,
   IconFileText,
+  IconFolder,
+  IconPresentation,
+  IconHelpCircle,
+  IconArrowUp,
+  IconArrowDown,
   IconPlus,
+  type Icon,
 } from '@tabler/icons-react';
 
 import { ClassmojiService } from '@classmoji/services';
+import type { ModuleItemType } from '@prisma/client';
 import { requireClassroomAdmin } from '~/utils/routeAuth.server';
 import ModuleFormModal, { type ModuleFormModule } from '../admin.$class.modules/ModuleFormModal';
 import type { Route } from './+types/route';
@@ -32,139 +39,157 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
     throw data('Module not found', { status: 404 });
   }
 
-  const pages = await ClassmojiService.page.findByClassroomId(classroom.id);
+  // Candidate content for the "add item" picker.
+  const candidates = await ClassmojiService.module.getCandidateContent(classroom.id);
 
-  // All repositories in the classroom, for the "manage repositories" picker.
-  const allRepos = await ClassmojiService.repository.findByClassroomSlug(classSlug!);
-  const repositories = allRepos.map(r => ({
-    id: r.id,
-    title: r.title,
-    module_id: (r as { module_id?: string | null }).module_id ?? null,
-  }));
+  return { module, candidates };
+};
 
-  return { module, pages, repositories };
+type ModuleItem = Route.ComponentProps['loaderData']['module']['items'][number];
+type Candidates = Route.ComponentProps['loaderData']['candidates'];
+
+const TYPE_META: Record<ModuleItemType, { label: string; icon: Icon }> = {
+  PAGE: { label: 'Page', icon: IconFileText },
+  REPOSITORY: { label: 'Repository', icon: IconFolder },
+  QUIZ: { label: 'Quiz', icon: IconHelpCircle },
+  SLIDE: { label: 'Slides', icon: IconPresentation },
+};
+
+// Derive the display label + publish state for an item from its target.
+const describeItem = (item: ModuleItem): { label: string; published: boolean } => {
+  switch (item.item_type) {
+    case 'PAGE':
+      return {
+        label: item.page?.title ?? '(deleted page)',
+        published: !!item.page && !item.page.is_draft,
+      };
+    case 'REPOSITORY':
+      return {
+        label: item.repository?.title ?? '(deleted repository)',
+        published: !!item.repository && item.repository.is_published,
+      };
+    case 'QUIZ':
+      return {
+        label: item.quiz?.name ?? '(deleted quiz)',
+        published: !!item.quiz && item.quiz.status !== 'DRAFT',
+      };
+    case 'SLIDE':
+      return {
+        label: item.slide?.title ?? '(deleted slides)',
+        published: !!item.slide && !item.slide.is_draft,
+      };
+    default:
+      return { label: 'Unknown', published: false };
+  }
 };
 
 const ModuleDetail = ({ loaderData }: Route.ComponentProps) => {
-  const { module, pages, repositories } = loaderData;
+  const { module, candidates } = loaderData;
   const { class: classSlug } = useParams();
   const navigate = useNavigate();
-  const fetcher = useFetcher<{ success?: string; error?: string }>();
-  // Separate fetcher for repo changes so it revalidates in place instead of
-  // navigating away like the delete fetcher does.
-  const repoFetcher = useFetcher<{ success?: string; error?: string }>();
-  const [editOpen, setEditOpen] = useState(false);
-  const [manageOpen, setManageOpen] = useState(false);
-  const [selectedRepoIds, setSelectedRepoIds] = useState<string[]>([]);
 
-  // After a successful delete, return to the modules list.
+  // Navigates away after delete; item ops revalidate in place.
+  const deleteFetcher = useFetcher<{ success?: string; error?: string }>();
+  const itemFetcher = useFetcher<{ success?: string; error?: string }>();
+
+  const [editOpen, setEditOpen] = useState(false);
+  const [addOpen, setAddOpen] = useState(false);
+  const [addType, setAddType] = useState<ModuleItemType>('PAGE');
+  const [addTargetId, setAddTargetId] = useState<string | undefined>();
+
+  const items = module.items;
+  const busy = itemFetcher.state !== 'idle';
+
+  // Return to the list once the module is deleted.
   useEffect(() => {
-    if (fetcher.state === 'idle' && fetcher.data?.success) {
+    if (deleteFetcher.state === 'idle' && deleteFetcher.data?.success) {
       navigate(`/admin/${classSlug}/modules`);
     }
-  }, [fetcher.state, fetcher.data, classSlug, navigate]);
+  }, [deleteFetcher.state, deleteFetcher.data, classSlug, navigate]);
 
-  // Close the manage modal once a repo change settles.
+  // Close + reset the add modal once an add settles successfully.
   useEffect(() => {
-    if (repoFetcher.state === 'idle' && repoFetcher.data?.success) {
-      setManageOpen(false);
+    if (itemFetcher.state === 'idle' && itemFetcher.data?.success && addOpen) {
+      setAddOpen(false);
+      setAddTargetId(undefined);
     }
-  }, [repoFetcher.state, repoFetcher.data]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [itemFetcher.state, itemFetcher.data]);
 
-  const saving = repoFetcher.state !== 'idle';
-
-  const submitRepositories = (repositoryIds: string[]) => {
-    repoFetcher.submit(JSON.stringify({ moduleId: module.id, repositoryIds }), {
+  const post = (action: string, payload: Record<string, unknown>) =>
+    itemFetcher.submit(JSON.stringify(payload), {
       method: 'post',
-      action: `/admin/${classSlug}/modules?/setRepositories`,
+      action: `/admin/${classSlug}/modules?/${action}`,
       encType: 'application/json',
     });
+
+  const addItem = () => {
+    if (!addTargetId) return;
+    post('addItem', { moduleId: module.id, itemType: addType, targetId: addTargetId });
   };
 
-  const openManage = () => {
-    setSelectedRepoIds(module.repositories.map(r => r.id));
-    setManageOpen(true);
+  const removeItem = (moduleItemId: string) => post('removeItem', { moduleItemId });
+
+  const setPublished = (checked: boolean) =>
+    post('setPublished', { id: module.id, isPublished: checked });
+
+  // Move an item up/down by one and persist the full new order.
+  const move = (index: number, dir: -1 | 1) => {
+    const next = index + dir;
+    if (next < 0 || next >= items.length) return;
+    const ordered = items.map(i => i.id);
+    [ordered[index], ordered[next]] = [ordered[next], ordered[index]];
+    post('reorderItems', { moduleId: module.id, orderedItemIds: ordered });
   };
 
-  const removeRepository = (repoId: string) => {
-    submitRepositories(module.repositories.map(r => r.id).filter(id => id !== repoId));
-  };
-
-  const deleteModule = () => {
-    fetcher.submit(JSON.stringify({ id: module.id }), {
+  const deleteModule = () =>
+    deleteFetcher.submit(JSON.stringify({ id: module.id }), {
       method: 'post',
       action: `/admin/${classSlug}/modules?/delete`,
       encType: 'application/json',
     });
-  };
 
-  // Label other-module members so it's clear selecting them will move them here.
-  const otherModuleIds = new Set(
-    repositories.filter(r => r.module_id && r.module_id !== module.id).map(r => r.id)
+  // Target ids already in this module, so the picker can exclude them.
+  const addedIds = useMemo(
+    () => ({
+      PAGE: new Set(items.filter(i => i.item_type === 'PAGE').map(i => i.page_id)),
+      REPOSITORY: new Set(
+        items.filter(i => i.item_type === 'REPOSITORY').map(i => i.repository_id)
+      ),
+      QUIZ: new Set(items.filter(i => i.item_type === 'QUIZ').map(i => i.quiz_id)),
+      SLIDE: new Set(items.filter(i => i.item_type === 'SLIDE').map(i => i.slide_id)),
+    }),
+    [items]
   );
+
+  const candidateOptions = (type: ModuleItemType) => {
+    switch (type) {
+      case 'PAGE':
+        return candidates.pages
+          .filter(p => !addedIds.PAGE.has(p.id))
+          .map(p => ({ value: p.id, label: p.title }));
+      case 'REPOSITORY':
+        return candidates.repositories
+          .filter(r => !addedIds.REPOSITORY.has(r.id))
+          .map(r => ({ value: r.id, label: r.title }));
+      case 'QUIZ':
+        return candidates.quizzes
+          .filter(q => !addedIds.QUIZ.has(q.id))
+          .map(q => ({ value: q.id, label: q.name }));
+      case 'SLIDE':
+        return candidates.slides
+          .filter(s => !addedIds.SLIDE.has(s.id))
+          .map(s => ({ value: s.id, label: s.title }));
+      default:
+        return [];
+    }
+  };
 
   const editModule: ModuleFormModule = {
     id: module.id,
     title: module.title,
     description: module.description,
-    pages: module.pages.map(pl => ({ page_id: pl.page_id })),
   };
-
-  const repoColumns = [
-    {
-      title: 'Repository',
-      key: 'title',
-      render: (_: unknown, repo: (typeof module.repositories)[number]) => (
-        <span className="font-medium text-ink-1">{repo.title}</span>
-      ),
-    },
-    {
-      title: 'Type',
-      key: 'type',
-      width: 140,
-      render: (_: unknown, repo: (typeof module.repositories)[number]) => (
-        <Tag>{repo.type === 'INDIVIDUAL' ? 'Individual' : 'Group'}</Tag>
-      ),
-    },
-    {
-      title: 'Status',
-      key: 'status',
-      width: 120,
-      render: (_: unknown, repo: (typeof module.repositories)[number]) => (
-        <Tag color={repo.is_published ? 'green' : 'orange'}>
-          {repo.is_published ? 'Published' : 'Draft'}
-        </Tag>
-      ),
-    },
-    {
-      title: '',
-      key: 'actions',
-      width: 160,
-      render: (_: unknown, repo: (typeof module.repositories)[number]) => (
-        <div className="flex items-center gap-3 justify-end whitespace-nowrap">
-          <Button
-            type="link"
-            size="small"
-            className="px-0"
-            onClick={() => navigate(`/admin/${classSlug}/repos/${encodeURIComponent(repo.title)}`)}
-          >
-            Open
-          </Button>
-          <Popconfirm
-            title="Remove from module"
-            description="This removes the repository from this module. The repository itself is kept."
-            okText="Remove"
-            cancelText="Cancel"
-            onConfirm={() => removeRepository(repo.id)}
-          >
-            <Button type="link" size="small" danger className="px-0">
-              Remove
-            </Button>
-          </Popconfirm>
-        </div>
-      ),
-    },
-  ];
 
   return (
     <div className="min-h-full relative">
@@ -191,13 +216,24 @@ const ModuleDetail = ({ loaderData }: Route.ComponentProps) => {
           <span className="font-semibold text-ink-1">{module.title}</span>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-4">
+          <Tooltip title="When on, students see this module (published items only).">
+            <label className="flex items-center gap-2 text-sm text-ink-2 cursor-pointer">
+              <Switch
+                size="small"
+                checked={module.is_published}
+                onChange={setPublished}
+                loading={busy}
+              />
+              Visible to students
+            </label>
+          </Tooltip>
           <Button icon={<IconPencil size={16} />} onClick={() => setEditOpen(true)}>
             Edit
           </Button>
           <Popconfirm
             title="Delete module"
-            description="This removes the module. Its repositories are kept and become ungrouped."
+            description="This removes the module. Its items (pages, repositories, quizzes, slides) are kept."
             okText="Delete"
             okButtonProps={{ danger: true }}
             cancelText="Cancel"
@@ -216,90 +252,112 @@ const ModuleDetail = ({ loaderData }: Route.ComponentProps) => {
         </div>
       )}
 
-      {/* Member repositories */}
-      <div className="rounded-2xl bg-panel ring-1 ring-line p-5 sm:p-6 mb-4">
+      {/* Ordered content list */}
+      <div className="rounded-2xl bg-panel ring-1 ring-line p-5 sm:p-6">
         <div className="flex items-center justify-between mb-3">
-          <h2 className="text-sm font-semibold text-ink-2">Repositories</h2>
-          <Button size="small" icon={<IconPlus size={15} />} onClick={openManage}>
-            Add repositories
+          <h2 className="text-sm font-semibold text-ink-2">Content</h2>
+          <Button size="small" icon={<IconPlus size={15} />} onClick={() => setAddOpen(true)}>
+            Add item
           </Button>
         </div>
-        <Table
-          columns={repoColumns}
-          dataSource={module.repositories}
-          rowKey="id"
-          rowHoverable={false}
-          size="middle"
-          pagination={false}
-          scroll={{ x: 'max-content' }}
-          locale={{
-            emptyText: (
-              <div className="text-center py-10 text-gray-500">
-                <div className="font-medium">No repositories in this module</div>
-                <div className="text-sm">
-                  Use “Add repositories” to put repositories in this module.
-                </div>
-              </div>
-            ),
-          }}
-        />
-      </div>
 
-      {/* Linked pages */}
-      <div className="rounded-2xl bg-panel ring-1 ring-line p-5 sm:p-6">
-        <h2 className="text-sm font-semibold text-ink-2 mb-3">Pages</h2>
-        {module.pages.length === 0 ? (
-          <div className="text-sm text-ink-3">No pages linked to this module.</div>
-        ) : (
-          <div className="flex flex-col gap-2">
-            {module.pages.map(pl => (
-              <button
-                key={pl.id}
-                type="button"
-                onClick={() => navigate(`/admin/${classSlug}/pages/${pl.page.id}`)}
-                className="flex items-center gap-2 text-sm text-ink-1 hover:text-ink-0 text-left"
-              >
-                <IconFileText size={16} className="text-gray-400 shrink-0" />
-                <span className="truncate">{pl.page.title}</span>
-              </button>
-            ))}
+        {items.length === 0 ? (
+          <div className="text-center py-10 text-gray-500">
+            <div className="font-medium">No items in this module</div>
+            <div className="text-sm">
+              Use “Add item” to place pages, repositories, quizzes or slides in order.
+            </div>
           </div>
+        ) : (
+          <ul className="flex flex-col divide-y divide-line">
+            {items.map((item, index) => {
+              const meta = TYPE_META[item.item_type];
+              const ItemIcon = meta.icon;
+              const { label, published } = describeItem(item);
+              return (
+                <li key={item.id} className="flex items-center gap-3 py-2.5">
+                  <div className="flex flex-col">
+                    <button
+                      type="button"
+                      aria-label="Move up"
+                      disabled={index === 0 || busy}
+                      onClick={() => move(index, -1)}
+                      className="text-gray-400 hover:text-ink-1 disabled:opacity-30 disabled:hover:text-gray-400"
+                    >
+                      <IconArrowUp size={15} />
+                    </button>
+                    <button
+                      type="button"
+                      aria-label="Move down"
+                      disabled={index === items.length - 1 || busy}
+                      onClick={() => move(index, 1)}
+                      className="text-gray-400 hover:text-ink-1 disabled:opacity-30 disabled:hover:text-gray-400"
+                    >
+                      <IconArrowDown size={15} />
+                    </button>
+                  </div>
+
+                  <ItemIcon size={18} className="text-gray-400 shrink-0" />
+                  <span className="min-w-0 flex-1 truncate text-ink-1">{label}</span>
+
+                  <Tag className="shrink-0">{meta.label}</Tag>
+                  <Tag color={published ? 'green' : 'orange'} className="shrink-0">
+                    {published ? 'Published' : 'Draft'}
+                  </Tag>
+
+                  <Popconfirm
+                    title="Remove from module"
+                    description="This removes the item from this module. The item itself is kept."
+                    okText="Remove"
+                    cancelText="Cancel"
+                    onConfirm={() => removeItem(item.id)}
+                  >
+                    <Button type="text" size="small" danger icon={<IconTrash size={15} />} />
+                  </Popconfirm>
+                </li>
+              );
+            })}
+          </ul>
         )}
       </div>
 
-      <ModuleFormModal
-        open={editOpen}
-        module={editModule}
-        pages={pages}
-        onClose={() => setEditOpen(false)}
-      />
+      <ModuleFormModal open={editOpen} module={editModule} onClose={() => setEditOpen(false)} />
 
       <Modal
-        open={manageOpen}
-        onCancel={() => setManageOpen(false)}
-        title="Add repositories to module"
-        okText="Save"
-        onOk={() => submitRepositories(selectedRepoIds)}
-        confirmLoading={saving}
-        cancelButtonProps={{ disabled: saving }}
+        open={addOpen}
+        onCancel={() => setAddOpen(false)}
+        title="Add item to module"
+        okText="Add"
+        onOk={addItem}
+        okButtonProps={{ disabled: !addTargetId }}
+        confirmLoading={busy}
+        cancelButtonProps={{ disabled: busy }}
       >
-        <p className="text-sm text-ink-3 mb-3">
-          Select the repositories that belong to this module. Unchecking one removes it from the
-          module (the repository itself is kept).
-        </p>
-        <Select
-          mode="multiple"
-          allowClear
-          className="w-full"
-          placeholder="Select repositories…"
-          optionFilterProp="label"
-          value={selectedRepoIds}
-          onChange={setSelectedRepoIds}
-          options={repositories.map(r => ({
-            value: r.id,
-            label: otherModuleIds.has(r.id) ? `${r.title} (in another module)` : r.title,
-          }))}
-        />
+        <div className="flex flex-col gap-3 mt-2">
+          <Segmented
+            block
+            value={addType}
+            onChange={value => {
+              setAddType(value as ModuleItemType);
+              setAddTargetId(undefined);
+            }}
+            options={(Object.keys(TYPE_META) as ModuleItemType[]).map(t => ({
+              value: t,
+              label: TYPE_META[t].label,
+            }))}
+          />
+          <Select
+            showSearch
+            allowClear
+            className="w-full"
+            placeholder={`Select a ${TYPE_META[addType].label.toLowerCase()}…`}
+            optionFilterProp="label"
+            value={addTargetId}
+            onChange={setAddTargetId}
+            options={candidateOptions(addType)}
+            notFoundContent="Nothing available to add"
+          />
+        </div>
       </Modal>
     </div>
   );

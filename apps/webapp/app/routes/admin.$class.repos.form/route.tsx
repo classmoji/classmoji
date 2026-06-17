@@ -22,7 +22,6 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
   const url = new URL(request.url);
   const moduleTitle = url.searchParams.get('title');
   const tags = await ClassmojiService.organizationTag.findByClassroomId(classroom.id);
-  const modules = await ClassmojiService.module.findByClassroomSlug(classSlug!);
 
   let repository = null;
   let hasReposWithProjects = false;
@@ -64,7 +63,6 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
     repository,
     isNew: !repository,
     tags,
-    modules,
     classroom,
     pages,
     slides,
@@ -78,7 +76,6 @@ const ModuleForm = ({ loaderData }: Route.ComponentProps) => {
     repository,
     isNew,
     tags,
-    modules,
     classroom,
     pages,
     slides,
@@ -140,7 +137,6 @@ const ModuleForm = ({ loaderData }: Route.ComponentProps) => {
           isNew={isNew}
           close={close}
           tags={tags}
-          modules={modules}
           classroom={classroom as Parameters<typeof FormModule>[0]['classroom']}
           pages={pages}
           slides={slides}
