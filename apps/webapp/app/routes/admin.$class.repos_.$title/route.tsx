@@ -5,7 +5,6 @@ import {
   IconList,
   IconTable,
   IconPlus,
-  IconBrandGithub,
 } from '@tabler/icons-react';
 import { useParams, useRevalidator, useNavigate, Outlet } from 'react-router';
 import { useState } from 'react';
@@ -19,7 +18,6 @@ import AssignmentTable from './AssignmentTable';
 import { action } from './action';
 import SummaryCards from './SummaryCards';
 import ModuleTable from './ModuleTable';
-import RepositoriesTab from './RepositoriesTab';
 import AssignmentsTab from './AssignmentsTab';
 import LinkedPages, { type LinkedPage } from './LinkedPages';
 import { requireClassroomAdmin } from '~/utils/routeAuth.server';
@@ -253,25 +251,13 @@ const SingleRepository = ({ loaderData }: Route.ComponentProps) => {
       />
     );
 
+  // Grades first — it's where faculty go most often.
   const tabItems = [
     {
-      key: 'repositories',
-      label: 'Repositories',
-      extra: (
-        <Button
-          icon={<IconBrandGithub size={16} />}
-          onClick={() => navigate(`/admin/${classSlug}/repos/form?title=${repository!.title}`)}
-        >
-          Edit repository
-        </Button>
-      ),
-      children: (
-        <RepositoriesTab
-          repos={repos as Parameters<typeof RepositoriesTab>[0]['repos']}
-          repository={repository as Parameters<typeof RepositoriesTab>[0]['repository']}
-          gitOrgLogin={gitOrgLogin}
-        />
-      ),
+      key: 'grades',
+      label: 'Grades',
+      extra: gradesToggle,
+      children: gradesContent,
     },
     {
       key: 'assignments',
@@ -287,18 +273,13 @@ const SingleRepository = ({ loaderData }: Route.ComponentProps) => {
       children: (
         <AssignmentsTab
           classSlug={classSlug}
+          repositoryId={repository!.id}
           repositoryTitle={repository!.title}
           assignments={
             repository!.assignments as Parameters<typeof AssignmentsTab>[0]['assignments']
           }
         />
       ),
-    },
-    {
-      key: 'grades',
-      label: 'Grades',
-      extra: gradesToggle,
-      children: gradesContent,
     },
   ];
 
@@ -342,7 +323,7 @@ const SingleRepository = ({ loaderData }: Route.ComponentProps) => {
         settings={settings as Parameters<typeof SummaryCards>[0]['settings']}
       />
 
-      <FolderTabs items={tabItems} defaultActiveKey="repositories" panelClassName="min-h-[300px]" />
+      <FolderTabs items={tabItems} defaultActiveKey="grades" panelClassName="min-h-[300px]" />
 
       <LinkedPages classSlug={classSlug} pages={linkedPages} />
 

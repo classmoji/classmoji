@@ -279,7 +279,7 @@ export default function SlidesAdmin({ loaderData }: Route.ComponentProps) {
             href={`${slidesUrl}/${record.id}/present`}
             target="_blank"
             rel="noopener noreferrer"
-            className="flex items-center gap-1 !text-gray-600 hover:text-gray-800 no-underline cursor-pointer"
+            className="flex items-center gap-1 !text-gray-600 hover:text-gray-800 dark:!text-gray-300 dark:hover:!text-gray-100 no-underline cursor-pointer"
           >
             <IconPresentation size={16} />
             <span>Present</span>

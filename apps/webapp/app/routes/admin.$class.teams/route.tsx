@@ -64,7 +64,6 @@ const AdminTeams = ({ loaderData }: Route.ComponentProps) => {
       title: 'Team',
       dataIndex: 'name',
       key: 'name',
-      width: '30%',
       render: (_: unknown, team: Team) => {
         return <TeamThumbnailView team={team} />;
       },
@@ -73,7 +72,7 @@ const AdminTeams = ({ loaderData }: Route.ComponentProps) => {
       title: 'Tags',
       dataIndex: 'tags',
       key: 'tags',
-      width: '25%',
+      width: 200,
       render: (tags: Team['tags']) => {
         if (tags.length == 0) return <span className="text-gray-500 italic">No tags</span>;
 
@@ -90,7 +89,7 @@ const AdminTeams = ({ loaderData }: Route.ComponentProps) => {
       title: 'Members',
       dataIndex: 'members',
       key: 'members',
-      width: '25%',
+      width: 140,
       render: (_: unknown, team: Team) => {
         const users = team.memberships.map(
           (membership: Team['memberships'][number]) => membership.user
@@ -107,7 +106,7 @@ const AdminTeams = ({ loaderData }: Route.ComponentProps) => {
     {
       title: 'Actions',
       key: 'actions',
-      width: '20%',
+      width: 200,
       render: (_: unknown, team: Team) => {
         return (
           <TableActionButtons
@@ -122,18 +121,18 @@ const AdminTeams = ({ loaderData }: Route.ComponentProps) => {
   return (
     <div className="min-h-full relative">
       <Outlet />
-      <div className="flex flex-wrap items-center justify-between gap-3 mt-2 mb-4">
-        <h1 className="text-base font-semibold text-ink-2">Teams</h1>
+      <div className="flex items-center justify-between gap-3 mt-2 mb-4">
+        <h1 className="text-base font-semibold text-ink-2 shrink-0">Teams</h1>
 
-        <div className="flex gap-3 w-full sm:w-auto">
+        <div className="flex gap-3 min-w-0">
           <SearchInput
             query={query}
             setQuery={setQuery}
             placeholder="Search teams by name..."
-            className="flex-1 sm:flex-none sm:w-64"
+            className="min-w-0 flex-1 sm:flex-initial sm:w-64"
           />
 
-          <span data-tour="teams-new" className="inline-flex">
+          <span data-tour="teams-new" className="inline-flex shrink-0">
             <ButtonNew action={() => navigate('../teams/new', { relative: 'path' })}>
               New team
             </ButtonNew>
@@ -147,6 +146,10 @@ const AdminTeams = ({ loaderData }: Route.ComponentProps) => {
           dataSource={filteredTeams}
           rowHoverable={false}
           rowKey={record => record.id}
+          // Fixed metadata columns (Tags/Members/Actions) plus a min for the
+          // flexing Team column. Below this the table scrolls inside its card
+          // instead of widening the page; above it the Team column fills.
+          scroll={{ x: 760 }}
           pagination={{
             pageSize: 20,
             showSizeChanger: true,
@@ -154,7 +157,6 @@ const AdminTeams = ({ loaderData }: Route.ComponentProps) => {
             showTotal: (total, range) => `${range[0]}-${range[1]} of ${total} teams`,
           }}
           size="middle"
-          scroll={{ x: 'max-content' }}
           locale={{
             emptyText: query ? (
               <div className="text-center py-8 text-ink-3">

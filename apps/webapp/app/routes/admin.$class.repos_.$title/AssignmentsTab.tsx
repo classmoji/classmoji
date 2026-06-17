@@ -1,7 +1,9 @@
-import { Table, Tag } from 'antd';
+import { Table, Tag, Popconfirm } from 'antd';
 import dayjs from 'dayjs';
 import { IconFileText } from '@tabler/icons-react';
 import { useNavigate } from 'react-router';
+
+import { useGlobalFetcher } from '~/hooks';
 
 interface AssignmentRow {
   id: string;
@@ -18,15 +20,39 @@ interface AssignmentRow {
 
 interface AssignmentsTabProps {
   classSlug?: string;
+  repositoryId: string;
   repositoryTitle: string;
   assignments: AssignmentRow[];
 }
 
-const AssignmentsTab = ({ classSlug, repositoryTitle, assignments }: AssignmentsTabProps) => {
-  const navigate = useNavigate();
+// An assignment still needs releasing while it isn't published. The daily cron
+// only publishes once release_at has passed, so a not-yet-published assignment
+// is exactly the "waiting for the scheduled time" case that Release now skips.
+const needsRelease = (a: AssignmentRow) => !a.is_published;
 
-  const editAssignments = () =>
-    navigate(`/admin/${classSlug}/repos/form?title=${repositoryTitle}`);
+const AssignmentsTab = ({
+  classSlug,
+  repositoryId,
+  repositoryTitle,
+  assignments,
+}: AssignmentsTabProps) => {
+  const navigate = useNavigate();
+  const { fetcher, notify } = useGlobalFetcher();
+
+  const editAssignments = () => navigate(`/admin/${classSlug}/repos/form?title=${repositoryTitle}`);
+
+  // Release one assignment (id given) or all not-yet-released assignments in
+  // the repository (id omitted).
+  const releaseNow = (assignmentId?: string) => {
+    notify('RELEASE_NOW', assignmentId ? 'Releasing assignment…' : 'Releasing assignments…');
+    fetcher!.submit(JSON.stringify({ repositoryId, ...(assignmentId ? { assignmentId } : {}) }), {
+      method: 'post',
+      action: '?/releaseNow',
+      encType: 'application/json',
+    });
+  };
+
+  const releasableCount = assignments.filter(needsRelease).length;
 
   const columns = [
     {
@@ -65,39 +91,77 @@ const AssignmentsTab = ({ classSlug, repositoryTitle, assignments }: Assignments
     {
       title: 'Actions',
       key: 'actions',
-      width: 120,
-      render: () => (
-        <button
-          type="button"
-          className="text-sm font-medium text-sky-600 hover:text-sky-700 dark:text-sky-400"
-          onClick={editAssignments}
-        >
-          Edit
-        </button>
+      width: 200,
+      render: (_: unknown, a: AssignmentRow) => (
+        <div className="flex items-center gap-4 whitespace-nowrap">
+          <button
+            type="button"
+            className="text-sm font-medium text-sky-600 hover:text-sky-700 dark:text-sky-400"
+            onClick={editAssignments}
+          >
+            Edit
+          </button>
+          {needsRelease(a) && (
+            <Popconfirm
+              title="Release now"
+              description="This releases the assignment to students immediately, creating it in their repositories. It won't wait for the scheduled release time."
+              okText="Release"
+              cancelText="Cancel"
+              onConfirm={() => releaseNow(a.id)}
+            >
+              <button
+                type="button"
+                className="text-sm font-medium text-emerald-600 hover:text-emerald-700 dark:text-emerald-400"
+              >
+                Release now
+              </button>
+            </Popconfirm>
+          )}
+        </div>
       ),
     },
   ];
 
   return (
-    <Table
-      columns={columns}
-      dataSource={assignments}
-      rowKey="id"
-      rowHoverable={false}
-      size="middle"
-      scroll={{ x: 'max-content' }}
-      pagination={false}
-      locale={{
-        emptyText: (
-          <div className="text-center py-12 text-gray-500">
-            <div className="font-medium">No assignments yet</div>
-            <div className="text-sm">
-              Add assignments to this repository from the edit form.
+    <div>
+      {releasableCount > 0 && (
+        <div className="flex justify-end mb-3">
+          <Popconfirm
+            title="Release all now"
+            description={`This releases all ${releasableCount} unreleased assignment${
+              releasableCount === 1 ? '' : 's'
+            } to students immediately, creating them in student repositories.`}
+            okText="Release all"
+            cancelText="Cancel"
+            onConfirm={() => releaseNow()}
+          >
+            <button
+              type="button"
+              className="text-sm font-medium text-emerald-600 hover:text-emerald-700 dark:text-emerald-400"
+            >
+              Release all now
+            </button>
+          </Popconfirm>
+        </div>
+      )}
+      <Table
+        columns={columns}
+        dataSource={assignments}
+        rowKey="id"
+        rowHoverable={false}
+        size="middle"
+        scroll={{ x: 'max-content' }}
+        pagination={false}
+        locale={{
+          emptyText: (
+            <div className="text-center py-12 text-gray-500">
+              <div className="font-medium">No assignments yet</div>
+              <div className="text-sm">Add assignments to this repository from the edit form.</div>
             </div>
-          </div>
-        ),
-      }}
-    />
+          ),
+        }}
+      />
+    </div>
   );
 };
 

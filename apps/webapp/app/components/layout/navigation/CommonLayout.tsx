@@ -1,6 +1,6 @@
 import { Avatar, Tooltip } from 'antd';
 import { Link, useParams, useLocation, useRouteLoaderData } from 'react-router';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { IconFileText, IconMenu2, IconApple } from '@tabler/icons-react';
 import useLocalStorageState from 'use-local-storage-state';
 import { Logo, CalloutSlot } from '@classmoji/ui-components';
@@ -58,6 +58,17 @@ const CommonLayout = ({
 
   const location = useLocation();
   const { pathname } = location;
+
+  // The page content scrolls inside an inner overflow-auto div, so the
+  // window-level <ScrollRestoration/> never resets it and scroll positions
+  // bled across nav sections. Reset whenever the section (/role/class/section)
+  // changes; deeper segments (nested modals/drawers over a list) keep scroll.
+  const contentScrollRef = useRef<HTMLDivElement>(null);
+  const sectionKey = pathname.split('/').slice(0, 4).join('/');
+  useEffect(() => {
+    contentScrollRef.current?.scrollTo({ top: 0 });
+  }, [sectionKey]);
+
   const { role } = useRole();
   const roleSettings = useRoleSettings();
   const rootData = useRouteLoaderData('root') as
@@ -103,9 +114,7 @@ const CommonLayout = ({
       <span className="text-sm font-medium text-ink-2">Available Tokens</span>
       <div className="flex items-center gap-1.5">
         <img src={tokenImage} alt="token" className="h-4 w-4" />
-        <span className="text-sm font-semibold text-ink-0">
-          {tokenBalance}
-        </span>
+        <span className="text-sm font-semibold text-ink-0">{tokenBalance}</span>
       </div>
     </div>
   );
@@ -225,7 +234,9 @@ const CommonLayout = ({
     if (!askMojiEnabled) return null;
 
     const baseClasses = `group flex items-center gap-2.5 rounded-md transition-colors duration-150 ${
-      collapsed ? 'justify-center p-2 mx-1.5 w-[calc(100%-12px)]' : 'px-2 py-1.5 mx-1.5 w-[calc(100%-12px)] text-left'
+      collapsed
+        ? 'justify-center p-2 mx-1.5 w-[calc(100%-12px)]'
+        : 'px-2 py-1.5 mx-1.5 w-[calc(100%-12px)] text-left'
     } ${isAskMojiOpen ? '' : 'hover:bg-nav-hover'}`;
 
     return (
@@ -367,11 +378,7 @@ const CommonLayout = ({
               >
                 <rect x="3" y="3" width="18" height="18" rx="3" />
                 <path d="M9 3L9 21" />
-                {collapsed ? (
-                  <path d="M15 9L18 12L15 15" />
-                ) : (
-                  <path d="M16 9L13 12L16 15" />
-                )}
+                {collapsed ? <path d="M15 9L18 12L15 15" /> : <path d="M16 9L13 12L16 15" />}
               </svg>
             </button>
           </Tooltip>
@@ -393,16 +400,6 @@ const CommonLayout = ({
               <TokenSection />
             </div>
           </RequireRole>
-        )}
-
-        {/* Recent viewers */}
-        {!collapsed && recentViewers?.length >= 2 && (
-          <>
-            <div className="mx-4 h-px bg-line shrink-0" />
-            <div className="px-3 pb-3 pt-3 shrink-0">
-              <RecentViewers viewers={recentViewers} groupByRole={groupViewersByRole} />
-            </div>
-          </>
         )}
 
         {/* Navigation */}
@@ -479,8 +476,14 @@ const CommonLayout = ({
 
         {/* Content area — bare canvas on dashboard, floating white card elsewhere */}
         <div
-          className={`flex-1 overflow-auto relative min-w-0 ${
+          ref={contentScrollRef}
+          // overflow-x-hidden: the page itself must never scroll sideways, so a
+          // too-wide child (e.g. a dense table) can't push a page header's
+          // action buttons off-screen. Wide tables scroll inside their own card
+          // via antd's scroll.x; vertical page scroll stays on this container.
+          className={`flex-1 overflow-y-auto overflow-x-hidden relative min-w-0 ${
             pathname.includes('/dashboard') ||
+            pathname.includes('/modules') ||
             pathname.includes('/repos') ||
             pathname.includes('/quizzes') ||
             pathname.includes('/calendar') ||
@@ -511,6 +514,14 @@ const CommonLayout = ({
           >
             <CalloutSlot />
             {classroom?.status === 'LOCKED' && role !== 'OWNER' && <LockedBanner />}
+            {/* Recently-viewed: route-specific, so it lives with the content
+                (not the left nav). Rendered in-flow at the top-right above the
+                page so it never overlaps a page's header action buttons. */}
+            {recentViewers?.length >= 2 && (
+              <div className="hidden sm:flex justify-end -mt-1 mb-1">
+                <RecentViewers viewers={recentViewers} groupByRole={groupViewersByRole} />
+              </div>
+            )}
             {children}
           </div>
         </div>

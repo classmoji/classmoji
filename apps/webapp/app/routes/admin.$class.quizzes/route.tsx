@@ -4,7 +4,11 @@ import { IconSend, IconBook, IconCalendar, IconTrash } from '@tabler/icons-react
 import { TableActionButtons, EditableCell, ButtonNew } from '~/components';
 import { ClassmojiService } from '@classmoji/services';
 import { namedAction } from 'remix-utils/named-action';
-import { assertClassroomAccess, assertClassroomMutationAllowed, assertProTier } from '~/utils/helpers';
+import {
+  assertClassroomAccess,
+  assertClassroomMutationAllowed,
+  assertProTier,
+} from '~/utils/helpers';
 import type { Route } from './+types/route';
 import type React from 'react';
 import type { TablerIconsProps } from '@tabler/icons-react';
@@ -295,17 +299,15 @@ export default function AdminQuizzes({ loaderData }: Route.ComponentProps) {
       title: 'Quiz Name',
       dataIndex: 'name',
       key: 'name',
-      width: '25%',
+      width: 240,
       sorter: (a: AdminQuiz, b: AdminQuiz) => a.name.localeCompare(b.name),
-      render: (name: string) => (
-        <span className="font-medium text-ink-1">{name}</span>
-      ),
+      render: (name: string) => <span className="font-medium text-ink-1">{name}</span>,
     },
     {
       title: 'Repository',
       dataIndex: 'moduleTitle',
       key: 'repository',
-      width: '20%',
+      width: 240,
       sorter: (a: AdminQuiz, b: AdminQuiz) => a.moduleTitle.localeCompare(b.moduleTitle),
       render: (title: string) => (
         <Space>
@@ -317,7 +319,7 @@ export default function AdminQuizzes({ loaderData }: Route.ComponentProps) {
     {
       title: 'Weight (%)',
       key: 'weight',
-      width: '10%',
+      width: 110,
       sorter: (a: AdminQuiz, b: AdminQuiz) => a.weight - b.weight,
       render: (quiz: AdminQuiz) => (
         <EditableCell
@@ -332,7 +334,7 @@ export default function AdminQuizzes({ loaderData }: Route.ComponentProps) {
       title: 'Due Date',
       dataIndex: 'dueDate',
       key: 'dueDate',
-      width: '15%',
+      width: 150,
       sorter: (a: AdminQuiz, b: AdminQuiz) => {
         if (!a.dueDate) return 1;
         if (!b.dueDate) return -1;
@@ -352,7 +354,7 @@ export default function AdminQuizzes({ loaderData }: Route.ComponentProps) {
       title: 'Status',
       dataIndex: 'status',
       key: 'status',
-      width: '10%',
+      width: 110,
       sorter: (a: AdminQuiz, b: AdminQuiz) => a.status.localeCompare(b.status),
       render: (status: string) => {
         const statusConfig: Record<string, { color: string; text: string }> = {
@@ -371,7 +373,7 @@ export default function AdminQuizzes({ loaderData }: Route.ComponentProps) {
     {
       title: 'Attempts',
       key: 'attempts',
-      width: '10%',
+      width: 110,
       render: (_: unknown, record: AdminQuiz) =>
         record.status === 'PUBLISHED' ? (
           <Space direction="vertical" size={0}>

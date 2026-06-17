@@ -128,9 +128,7 @@ const SettingsSubscription = ({ loaderData }: Route.ComponentProps) => {
                   Upgrade Plan
                 </Button>
                 <div className="text-right">
-                  <p className="text-sm text-ink-2 mb-1">
-                    Want to learn more?
-                  </p>
+                  <p className="text-sm text-ink-2 mb-1">Want to learn more?</p>
                   <Button
                     type="text"
                     size="small"
@@ -156,17 +154,10 @@ const SettingsSubscription = ({ loaderData }: Route.ComponentProps) => {
                     isProTier ? 'bg-secondary' : 'bg-gray-100 dark:bg-neutral-700'
                   }`}
                 >
-                  <IconCrown
-                    className={`w-5 h-5 ${
-                      isProTier ? 'text-black' : 'text-ink-4'
-                    }`}
-                  />
+                  <IconCrown className={`w-5 h-5 ${isProTier ? 'text-black' : 'text-ink-4'}`} />
                 </div>
                 <div>
-                  <h2
-                    data-onboarding="settings-billing"
-                    className="text-xl font-bold text-ink-0"
-                  >
+                  <h2 data-onboarding="settings-billing" className="text-xl font-bold text-ink-0">
                     {isFreeTier ? 'Free' : 'Pro'}
                   </h2>
                 </div>
@@ -194,9 +185,7 @@ const SettingsSubscription = ({ loaderData }: Route.ComponentProps) => {
           <InfoCard title="Subscription renews on">
             <p
               className={`text-2xl font-bold ${
-                classmojiSubscription.cancelled_at
-                  ? 'text-red-500'
-                  : 'text-ink-0'
+                classmojiSubscription.cancelled_at ? 'text-red-500' : 'text-ink-0'
               }`}
             >
               {nextBillingDate}
@@ -206,21 +195,20 @@ const SettingsSubscription = ({ loaderData }: Route.ComponentProps) => {
 
         {/* Current Usage Table */}
         <Card className="bg-white dark:bg-neutral-800 border border-gray-200 dark:border-neutral-700">
-          <h3 className="text-lg font-semibold text-ink-0 mb-6">
-            Current usage
-          </h3>
+          <h3 className="text-lg font-semibold text-ink-0 mb-6">Current usage</h3>
           <Table
             dataSource={usageData}
             pagination={false}
             className="pb-8"
             rowKey="key"
             size="small"
+            scroll={{ x: 'max-content' }}
             columns={[
               {
                 title: 'FEATURE',
                 dataIndex: 'feature',
                 key: 'feature',
-                width: '33%',
+                width: 280,
                 render: (text, record) => (
                   <div className="flex items-center gap-2">
                     <span className="text-ink-0 font-medium">{text}</span>
@@ -236,7 +224,7 @@ const SettingsSubscription = ({ loaderData }: Route.ComponentProps) => {
                 title: 'ALLOWED',
                 dataIndex: 'allowed',
                 key: 'allowed',
-                width: '33%',
+                width: 110,
                 render: value => {
                   if (value === true) {
                     return <IconCheck size={18} className="text-green-600 dark:text-green-500" />;
@@ -244,16 +232,14 @@ const SettingsSubscription = ({ loaderData }: Route.ComponentProps) => {
                   if (value === false) {
                     return <IconX size={18} className="text-red-600 dark:text-red-500" />;
                   }
-                  return (
-                    <span className="text-ink-0 font-medium">{value}</span>
-                  );
+                  return <span className="text-ink-0 font-medium">{value}</span>;
                 },
               },
               {
                 title: 'USED',
                 dataIndex: 'used',
                 key: 'used',
-                width: '33%',
+                width: 110,
                 render: value => {
                   if (value === true) {
                     return <IconCheck size={18} className="text-green-600 dark:text-green-500" />;
@@ -261,9 +247,7 @@ const SettingsSubscription = ({ loaderData }: Route.ComponentProps) => {
                   if (value === null || value === false) {
                     return <span className="text-ink-3">-</span>;
                   }
-                  return (
-                    <span className="text-ink-0 font-medium">{value}</span>
-                  );
+                  return <span className="text-ink-0 font-medium">{value}</span>;
                 },
               },
             ]}

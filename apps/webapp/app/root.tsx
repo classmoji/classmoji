@@ -37,6 +37,7 @@ import RenderErrorBoundary from './components/ErrorBoundary';
 import { SyllabusBotRoot } from './components/features/syllabus-bot';
 import { OnboardingTour, InClassroomTour } from './components/features/onboarding';
 import ImpersonationBanner from './components/features/admin/ImpersonationBanner';
+import NavigationProgress from './components/layout/NavigationProgress';
 
 import relativeTime from 'dayjs/plugin/relativeTime';
 import isSameOrBefore from 'dayjs/plugin/isSameOrBefore';
@@ -450,6 +451,7 @@ const App = ({ loaderData }: Route.ComponentProps) => {
               <UserContext.Provider value={{ user }}>
                 <CalloutProvider>
                   <FetcherProvider>
+                    <NavigationProgress />
                     <ImpersonationBanner
                       key={(session as Record<string, Record<string, string>>)?.session?.id}
                       session={session}

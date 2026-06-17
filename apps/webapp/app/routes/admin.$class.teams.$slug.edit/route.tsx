@@ -144,7 +144,7 @@ const AdminSingleTeamView = ({ loaderData }: Route.ComponentProps) => {
       title: 'Name',
       dataIndex: ['tag', 'name'],
       key: 'name',
-      width: '80%',
+      width: 200,
 
       render: (name: string) => <Tag>#{name}</Tag>,
     },
@@ -160,7 +160,7 @@ const AdminSingleTeamView = ({ loaderData }: Route.ComponentProps) => {
     {
       title: 'Student',
       dataIndex: 'name',
-      width: '80%',
+      width: 220,
       key: 'name',
       render: (
         _: unknown,
@@ -275,6 +275,7 @@ const AdminSingleTeamView = ({ loaderData }: Route.ComponentProps) => {
           rowHoverable={false}
           size="small"
           className="mt-4"
+          scroll={{ x: 'max-content' }}
         />
       </Card>
 
@@ -314,6 +315,7 @@ const AdminSingleTeamView = ({ loaderData }: Route.ComponentProps) => {
           className="mt-8"
           rowHoverable={false}
           size="small"
+          scroll={{ x: 'max-content' }}
         />
       </Card>
     </Drawer>

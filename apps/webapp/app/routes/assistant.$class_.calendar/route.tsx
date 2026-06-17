@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Button, Modal } from 'antd';
 import { PlusOutlined } from '@ant-design/icons';
+import dayjs from 'dayjs';
 import invariant from 'tiny-invariant';
 import { data, useFetcher, useParams } from 'react-router';
 import type { Route } from './+types/route';
@@ -11,7 +12,7 @@ import { assertClassroomAccess, assertClassroomMutationAllowed } from '~/utils/h
 import { buildCalendarUrl, getCalendarDateRange } from '~/utils/calendar.server';
 import CourseCalendar from '~/components/features/calendar/CourseCalendar';
 import CalendarSubscriptionCard from '~/components/features/calendar/CalendarSubscriptionCard';
-import AddEventModal from '~/components/features/calendar/AddEventModal';
+import AddEventModal, { type AddEventDefaults } from '~/components/features/calendar/AddEventModal';
 import EditEventModal, { type EventFormData } from '~/components/features/calendar/EditEventModal';
 import EventCard from '~/components/features/calendar/EventCard';
 import EventLinks from '~/components/features/calendar/EventLinks';
@@ -288,6 +289,7 @@ const AssistantCalendar = ({ loaderData }: Route.ComponentProps) => {
   const callout = useCallout();
   const { showStatusErrorFromResponse } = useClassroomStatusModals();
   const [addModalOpen, setAddModalOpen] = useState(false);
+  const [addEventDefaults, setAddEventDefaults] = useState<AddEventDefaults | null>(null);
   const [editModalOpen, setEditModalOpen] = useState(false);
   const [selectedEvent, setSelectedEvent] = useState<CalendarEventWithLinks | null>(null);
   const [viewModalOpen, setViewModalOpen] = useState(false);
@@ -317,6 +319,7 @@ const AssistantCalendar = ({ loaderData }: Route.ComponentProps) => {
       if (fetcher.data.success) {
         setOptimisticEvents(null); // Clear optimistic state, let fresh data take over
         setAddModalOpen(false);
+        setAddEventDefaults(null);
         setEditModalOpen(false);
         setSelectedEvent(null);
         // Refresh events for current view month after mutation
@@ -416,6 +419,16 @@ const AssistantCalendar = ({ loaderData }: Route.ComponentProps) => {
     fetcher.submit(formData, { method: 'POST' });
   };
 
+  // Drag-selected time range on the week view → open the add modal prefilled.
+  const handleRangeSelect = (start: Date, end: Date) => {
+    setAddEventDefaults({
+      date: dayjs(start),
+      start_time: dayjs(start),
+      end_time: dayjs(end),
+    });
+    setAddModalOpen(true);
+  };
+
   const handleEventClick = (event: CalendarEventWithLinks) => {
     // Compare as strings (UUIDs)
     const isOwnEvent = String(event.created_by) === String(userId);
@@ -441,7 +454,14 @@ const AssistantCalendar = ({ loaderData }: Route.ComponentProps) => {
         <h1 className="text-base font-semibold text-ink-2">Calendar</h1>
         <div className="flex gap-2">
           <CalendarSubscriptionCard subscriptionUrl={subscriptionUrl} />
-          <Button type="primary" icon={<PlusOutlined />} onClick={() => setAddModalOpen(true)}>
+          <Button
+            type="primary"
+            icon={<PlusOutlined />}
+            onClick={() => {
+              setAddEventDefaults(null);
+              setAddModalOpen(true);
+            }}
+          >
             Add Event
           </Button>
         </div>
@@ -452,18 +472,23 @@ const AssistantCalendar = ({ loaderData }: Route.ComponentProps) => {
         onEventClick={handleEventClick}
         onEventDrop={handleEventDrop}
         onMonthChange={handleMonthChange}
+        onRangeSelect={handleRangeSelect}
         showCreator={true}
       />
 
       <AddEventModal
         open={addModalOpen}
-        onClose={() => setAddModalOpen(false)}
+        onClose={() => {
+          setAddModalOpen(false);
+          setAddEventDefaults(null);
+        }}
         onSubmit={handleAddEvent}
         loading={loading}
         allowedEventTypes={['OFFICE_HOURS']}
         pages={pages}
         slides={slides}
         assignments={assignments}
+        defaultValues={addEventDefaults}
       />
 
       <EditEventModal

@@ -17,7 +17,7 @@ const GradeSettings = ({ letterGradeMappings, changeLetterGradeMapping }: GradeS
       title: 'Letter',
       dataIndex: 'letter_grade',
       key: 'letter_grade',
-      width: '50%',
+      width: 110,
       render: (_: unknown, record: LetterGradeMapping) => {
         return <p>{record.letter_grade}</p>;
       },
@@ -51,6 +51,7 @@ const GradeSettings = ({ letterGradeMappings, changeLetterGradeMapping }: GradeS
           size="small"
           pagination={false}
           rowHoverable={false}
+          scroll={{ x: 'max-content' }}
         />
       </Card>
     </div>

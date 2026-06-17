@@ -223,6 +223,13 @@ html.ui-contrast-active [data-cm-sidebar] {
   filter: contrast(calc(100% + (var(--ui-contrast, 50) - 50) * 0.2%));
 }
 
+/* Buttons always get a pointer cursor. Tailwind v4 preflight resets
+   <button> to `cursor: default`, which made action links (Edit, View, …)
+   feel inert. Disabled buttons keep their default cursor. */
+button:not(:disabled) {
+  cursor: pointer;
+}
+
 /* Pointer cursors: force pointer on common interactive elements.
    Skip disabled controls so they keep the not-allowed cursor. */
 html.pointer-cursors button:not(:disabled),

@@ -137,9 +137,7 @@ const SingleStudentView = (props: SingleStudentViewProps) => {
       title: 'Weight',
       dataIndex: 'weight',
       key: 'weight',
-      render: (weight: number) => (
-        <span className="font-medium text-ink-0">{weight}%</span>
-      ),
+      render: (weight: number) => <span className="font-medium text-ink-0">{weight}%</span>,
     },
     {
       title: 'Repository Grade',
@@ -174,25 +172,21 @@ const SingleStudentView = (props: SingleStudentViewProps) => {
       title: 'Assignment',
       dataIndex: ['assignment', 'title'],
       key: 'assignment',
-      width: '20%',
-      render: (title: string) => (
-        <span className="font-medium text-ink-1">{title}</span>
-      ),
+      width: 280,
+      render: (title: string) => <span className="font-medium text-ink-1">{title}</span>,
     },
     {
       title: 'Weight',
       dataIndex: ['assignment', 'weight'],
       key: 'weight',
-      width: '10%',
-      render: (weight: number) => (
-        <span className="font-medium text-ink-0">{weight}%</span>
-      ),
+      width: 110,
+      render: (weight: number) => <span className="font-medium text-ink-0">{weight}%</span>,
     },
     {
       title: 'Emoji Grade',
       key: 'emojiGrade',
       dataIndex: ['grades'],
-      width: '10%',
+      width: 110,
       render: (grades: StudentGrade[]) => {
         if (!grades.length) return <span className="text-ink-3 italic">No grades yet</span>;
         return <EmojisDisplay grades={grades} />;
@@ -202,7 +196,7 @@ const SingleStudentView = (props: SingleStudentViewProps) => {
       title: 'Grade',
       key: 'grade',
       dataIndex: ['grades'],
-      width: '10%',
+      width: 110,
       render: (grades: StudentGrade[], repositoryAssignment: StudentRepoAssignment) => {
         if (!grades.length) return <span className="text-ink-3 italic">No grades yet</span>;
         const rawGrade = calculateNumericGrade(
@@ -229,7 +223,7 @@ const SingleStudentView = (props: SingleStudentViewProps) => {
     {
       title: 'Status',
       key: 'status',
-      width: '25%',
+      width: 110,
       render: (repoAssignment: StudentRepoAssignment) => {
         const dropped = isRepositoryAssignmentDropped(
           repoAssignment?.id,
@@ -247,7 +241,7 @@ const SingleStudentView = (props: SingleStudentViewProps) => {
       title: 'Actions',
       key: 'actions',
       dataIndex: 'actions',
-      width: '20%',
+      width: 200,
       render: (_: unknown, record: StudentRepoAssignment) => {
         return (
           <TableActionButtons
@@ -325,26 +319,32 @@ const SingleStudentView = (props: SingleStudentViewProps) => {
       <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
         <div className="rounded-xl ring-1 ring-line p-3 text-center">
           <div className="text-xs font-medium text-ink-3 mb-1">Raw Letter</div>
-          <div className="text-xl font-bold text-ink-0">{rawNumericGrade >= 0 ? rawLetterGrade : 'N/A'}</div>
+          <div className="text-xl font-bold text-ink-0">
+            {rawNumericGrade >= 0 ? rawLetterGrade : 'N/A'}
+          </div>
         </div>
         <div className="rounded-xl ring-1 ring-line p-3 text-center">
           <div className="text-xs font-medium text-ink-3 mb-1">Final Letter</div>
-          <div className="text-xl font-bold text-ink-0">{finalNumericGrade >= 0 ? finalLetterGrade : 'N/A'}</div>
+          <div className="text-xl font-bold text-ink-0">
+            {finalNumericGrade >= 0 ? finalLetterGrade : 'N/A'}
+          </div>
         </div>
         <div className="rounded-xl ring-1 ring-line p-3 text-center">
           <div className="text-xs font-medium text-ink-3 mb-1">Raw Score</div>
-          <div className="text-xl font-bold text-ink-0">{rawNumericGrade >= 0 ? rawNumericGrade : 'N/A'}</div>
+          <div className="text-xl font-bold text-ink-0">
+            {rawNumericGrade >= 0 ? rawNumericGrade : 'N/A'}
+          </div>
         </div>
         <div className="rounded-xl ring-1 ring-line p-3 text-center">
           <div className="text-xs font-medium text-ink-3 mb-1">Final Score</div>
-          <div className="text-xl font-bold text-ink-0">{finalNumericGrade >= 0 ? finalNumericGrade : 'N/A'}</div>
+          <div className="text-xl font-bold text-ink-0">
+            {finalNumericGrade >= 0 ? finalNumericGrade : 'N/A'}
+          </div>
         </div>
         <div className="rounded-xl ring-1 ring-line p-3 text-center">
           <div className="text-xs font-medium text-ink-3 mb-1">Tokens</div>
           <div className="text-xl font-bold text-ink-0">{tokenBalance}</div>
-          {tokenBalance < 10 && (
-            <div className="text-xs text-red-500 mt-1">Low balance</div>
-          )}
+          {tokenBalance < 10 && <div className="text-xs text-red-500 mt-1">Low balance</div>}
         </div>
       </div>
 

@@ -152,7 +152,7 @@ const AssignmentTable = ({
       title: `${isIndividualAssignment ? 'Student' : 'Team'}`,
       key: 'member',
       fixed: 'left',
-      width: '20%',
+      width: 240,
       render: (_: unknown, repo: Repo) => (
         <>
           {isIndividualAssignment ? (
@@ -172,7 +172,7 @@ const AssignmentTable = ({
     {
       title: 'Grade',
       key: 'grade',
-      width: '20%',
+      width: 200,
       render: (_: unknown, record: Repo) => {
         const repoAssignment = getRepoAssignment(record);
         const grades = repoAssignment?.grades;
@@ -183,7 +183,7 @@ const AssignmentTable = ({
     {
       title: 'Grader(s)',
       key: 'graders',
-      width: '20%',
+      width: 200,
       hidden: isFreeTier,
       onCell: () => {
         return {
@@ -222,7 +222,7 @@ const AssignmentTable = ({
     {
       title: 'Status',
       key: 'status',
-      width: '20%',
+      width: 110,
       render: (_: unknown, record: Repo) => {
         const repoAssignment = getRepoAssignment(record);
 
@@ -243,7 +243,7 @@ const AssignmentTable = ({
     {
       title: 'Actions',
       key: 'actions',
-      width: '20%',
+      width: 200,
       render: (_: unknown, record: Repo) => {
         const repoAssignment = getRepoAssignment(record);
 
@@ -264,7 +264,7 @@ const AssignmentTable = ({
                 <Button
                   type="text"
                   size="small"
-                  icon={<IconLayoutKanban size={16} />}
+                  icon={<IconLayoutKanban size={16} className="text-gray-600 dark:text-gray-300" />}
                   href={projectUrl}
                   target="_blank"
                 />
