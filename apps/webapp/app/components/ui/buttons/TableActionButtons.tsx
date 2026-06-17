@@ -36,7 +36,7 @@ const TableActionButtons = ({
           role="button"
           aria-label="View"
           data-testid="table-action-view"
-          className="flex items-center gap-1 text-gray-600 hover:text-gray-800 cursor-pointer"
+          className="flex items-center gap-1 text-gray-600 hover:text-gray-800 dark:text-gray-300 dark:hover:text-gray-100 cursor-pointer"
         >
           <IconEye size={size} />
           {!hideViewText && <span>View</span>}
@@ -49,7 +49,7 @@ const TableActionButtons = ({
           role="button"
           aria-label="Edit"
           data-testid="table-action-edit"
-          className="flex items-center gap-1 text-gray-600 hover:text-gray-800 cursor-pointer"
+          className="flex items-center gap-1 text-gray-600 hover:text-gray-800 dark:text-gray-300 dark:hover:text-gray-100 cursor-pointer"
         >
           <IconPencil size={size} />
           <span>Edit</span>
@@ -62,7 +62,7 @@ const TableActionButtons = ({
           role="button"
           aria-label="Autograde"
           data-testid="table-action-autograde"
-          className="flex items-center gap-1 text-gray-600 hover:text-gray-800 cursor-pointer"
+          className="flex items-center gap-1 text-gray-600 hover:text-gray-800 dark:text-gray-300 dark:hover:text-gray-100 cursor-pointer"
         >
           <IconRobot size={size} />
           <span>Autograde</span>
@@ -78,7 +78,7 @@ const TableActionButtons = ({
             role="button"
             aria-label="Delete"
             data-testid="table-action-delete"
-            className="flex items-center gap-1 text-red-600 cursor-pointer hover:text-red-700 delete-react-intro"
+            className="flex items-center gap-1 text-red-600 hover:text-red-700 dark:text-red-400 dark:hover:text-red-300 cursor-pointer delete-react-intro"
           >
             <IconTrash size={size} />
             {!hideDeleteText && <span>Delete</span>}
@@ -100,7 +100,7 @@ const TableActionButtons = ({
               role="button"
               aria-label="Delete"
               data-testid="table-action-delete"
-              className="flex items-center gap-1 text-red-600 cursor-pointer hover:text-red-700 delete-react-intro"
+              className="flex items-center gap-1 text-red-600 hover:text-red-700 dark:text-red-400 dark:hover:text-red-300 cursor-pointer delete-react-intro"
             >
               <IconTrash size={size} />
               {!hideDeleteText && <span>Delete</span>}

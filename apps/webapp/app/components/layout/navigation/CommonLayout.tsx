@@ -477,7 +477,11 @@ const CommonLayout = ({
         {/* Content area — bare canvas on dashboard, floating white card elsewhere */}
         <div
           ref={contentScrollRef}
-          className={`flex-1 overflow-auto relative min-w-0 ${
+          // overflow-x-hidden: the page itself must never scroll sideways, so a
+          // too-wide child (e.g. a dense table) can't push a page header's
+          // action buttons off-screen. Wide tables scroll inside their own card
+          // via antd's scroll.x; vertical page scroll stays on this container.
+          className={`flex-1 overflow-y-auto overflow-x-hidden relative min-w-0 ${
             pathname.includes('/dashboard') ||
             pathname.includes('/modules') ||
             pathname.includes('/repos') ||

@@ -1,13 +1,19 @@
 import { forwardRef, useMemo, useState } from 'react';
-import { Popconfirm, Table, Tag } from 'antd';
+import { App, Dropdown, Table, Tag } from 'antd';
+import type { MenuProps } from 'antd';
 import { useNavigate, useParams } from 'react-router';
 import {
   IconChevronDown,
   IconChevronUp,
+  IconCloudUpload,
+  IconDotsVertical,
+  IconEyeOff,
   IconFileText,
   IconFolder,
   IconFolderOpen,
+  IconRefresh,
   IconStarFilled,
+  IconTrash,
 } from '@tabler/icons-react';
 
 import { EditableCell } from '~/components';
@@ -57,9 +63,8 @@ interface AssignmentTableProps {
 
 const prettyType = (type?: string) => (type ? type.charAt(0) + type.slice(1).toLowerCase() : '');
 
-// forwardRef + prop spread so antd's Popconfirm (which clones the trigger child,
-// injects its own onClick/handlers and attaches a ref to anchor the popover) works.
-// Without this the Sync/Unpublish/Publish/Delete confirmations never open.
+// forwardRef + prop spread so antd overlays that clone the trigger child (and
+// attach a ref to anchor a popover/tooltip) keep working if one ever wraps it.
 const ActionLink = forwardRef<
   HTMLButtonElement,
   {
@@ -91,6 +96,7 @@ const AssignmentTable = ({ assignments: repositories }: AssignmentTableProps) =>
   const navigate = useNavigate();
   const { class: classSlug } = useParams();
   const { fetcher, notify } = useGlobalFetcher();
+  const { modal } = App.useApp();
 
   // Controlled expansion so the folder icon can react to expanded state.
   // Default to fully expanded so the structure is visible.
@@ -177,6 +183,70 @@ const AssignmentTable = ({ assignments: repositories }: AssignmentTableProps) =>
     navigate(`/admin/${classSlug}/repos/form?title=${record.title}`, {
       state: { assignment: record },
     });
+
+  // ---- overflow ("⋯") menu: secondary + destructive actions, kept clear of
+  // the inline View/Edit links. Confirmations use modal.confirm since antd
+  // Popconfirm doesn't compose inside a Dropdown menu item.
+  const confirmSync = (id: string) =>
+    modal.confirm({
+      title: 'Sync repository',
+      content: 'This updates all student repositories with the latest changes.',
+      okText: 'Sync',
+      cancelText: 'Cancel',
+      onOk: () => syncRepository(id),
+    });
+
+  const confirmPublish = (id: string) =>
+    modal.confirm({
+      title: 'Publish repository',
+      content: 'This makes the repository available to all students.',
+      okText: 'Publish',
+      cancelText: 'Cancel',
+      onOk: () => publishRepository(id),
+    });
+
+  const confirmUnpublish = (id: string) =>
+    modal.confirm({
+      title: 'Unpublish repository',
+      content: 'This hides the repository from students. Repositories are not deleted.',
+      okText: 'Unpublish',
+      cancelText: 'Cancel',
+      onOk: () => unpublishRepository(id),
+    });
+
+  const confirmDelete = (id: string) =>
+    modal.confirm({
+      title: 'Delete repository',
+      content: 'This permanently deletes the repository and its assignments.',
+      okText: 'Delete',
+      okButtonProps: { danger: true },
+      cancelText: 'Cancel',
+      onOk: () => deleteRepository(id),
+    });
+
+  const repoMenuItems = (r: RepositoryRow): MenuProps['items'] => [
+    ...(r.is_published
+      ? [
+          { key: 'sync', label: 'Sync', icon: <IconRefresh size={15} /> },
+          { key: 'unpublish', label: 'Unpublish', icon: <IconEyeOff size={15} /> },
+        ]
+      : [{ key: 'publish', label: 'Publish', icon: <IconCloudUpload size={15} /> }]),
+    { type: 'divider' },
+    { key: 'delete', label: 'Delete', danger: true, icon: <IconTrash size={15} /> },
+  ];
+
+  const onRepoMenuClick = (r: RepositoryRow, key: string) => {
+    switch (key) {
+      case 'sync':
+        return confirmSync(r.id);
+      case 'publish':
+        return confirmPublish(r.id);
+      case 'unpublish':
+        return confirmUnpublish(r.id);
+      case 'delete':
+        return confirmDelete(r.id);
+    }
+  };
 
   // ---- build the tree (Repository -> Assignment) ----
   const treeData: TreeNode[] = repositories.map(r => {
@@ -318,65 +388,41 @@ const AssignmentTable = ({ assignments: repositories }: AssignmentTableProps) =>
     {
       title: 'Actions',
       key: 'actions',
-      width: 200,
+      width: 150,
       render: (_: unknown, record: TreeNode) => {
         if (record.kind === 'repository') {
           const r = record.repository!;
           return (
-            <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
+            <div className="flex items-center gap-x-4 whitespace-nowrap">
               <ActionLink onClick={() => viewRepository(r)}>View</ActionLink>
               <ActionLink onClick={() => editRepository(r)}>Edit</ActionLink>
-              {r.is_published ? (
-                <>
-                  <Popconfirm
-                    title="Sync repository"
-                    description="This updates all student repositories with the latest changes."
-                    okText="Sync"
-                    cancelText="Cancel"
-                    onConfirm={() => syncRepository(r.id)}
-                  >
-                    <ActionLink onClick={() => {}}>Sync</ActionLink>
-                  </Popconfirm>
-                  <Popconfirm
-                    title="Unpublish repository"
-                    description="This hides the repository from students. Repositories are not deleted."
-                    okText="Unpublish"
-                    cancelText="Cancel"
-                    onConfirm={() => unpublishRepository(r.id)}
-                  >
-                    <ActionLink onClick={() => {}}>Unpublish</ActionLink>
-                  </Popconfirm>
-                </>
-              ) : (
-                <Popconfirm
-                  title="Publish repository"
-                  description="This makes the repository available to all students."
-                  okText="Publish"
-                  cancelText="Cancel"
-                  onConfirm={() => publishRepository(r.id)}
-                >
-                  <ActionLink onClick={() => {}}>Publish</ActionLink>
-                </Popconfirm>
-              )}
-              <Popconfirm
-                title="Delete repository"
-                description="This permanently deletes the repository and its assignments."
-                okText="Delete"
-                okButtonProps={{ danger: true }}
-                cancelText="Cancel"
-                onConfirm={() => deleteRepository(r.id)}
+              <Dropdown
+                trigger={['click']}
+                placement="bottomRight"
+                menu={{
+                  items: repoMenuItems(r),
+                  onClick: ({ key, domEvent }) => {
+                    domEvent.stopPropagation();
+                    onRepoMenuClick(r, key);
+                  },
+                }}
               >
-                <ActionLink onClick={() => {}} danger className="ml-2 pl-4 border-l border-line">
-                  Delete
-                </ActionLink>
-              </Popconfirm>
+                <button
+                  type="button"
+                  aria-label="More actions"
+                  onClick={e => e.stopPropagation()}
+                  className="inline-flex h-7 w-7 items-center justify-center rounded-md text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-600 dark:hover:bg-neutral-800 dark:hover:text-gray-200"
+                >
+                  <IconDotsVertical size={18} />
+                </button>
+              </Dropdown>
             </div>
           );
         }
 
         // assignment — edited through its parent repository's form
         return (
-          <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
+          <div className="flex items-center gap-x-4 whitespace-nowrap">
             <ActionLink
               onClick={() =>
                 navigate(`/admin/${classSlug}/repos/form?title=${record.repositoryTitle}`, {

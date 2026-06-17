@@ -188,7 +188,7 @@ const AdminAssistants = ({ loaderData }: Route.ComponentProps) => {
                     handleImpersonate(assistant);
                   }
                 }}
-                className={`flex items-center gap-1 text-gray-600 hover:text-gray-800 cursor-pointer ${impersonating ? 'opacity-50' : ''}`}
+                className={`flex items-center gap-1 text-gray-600 hover:text-gray-800 dark:text-gray-300 dark:hover:text-gray-100 cursor-pointer ${impersonating ? 'opacity-50' : ''}`}
               >
                 <IconUserSearch size={16} />
                 <span>View as</span>
@@ -203,7 +203,7 @@ const AdminAssistants = ({ loaderData }: Route.ComponentProps) => {
                 okText="Remove"
                 cancelText="Cancel"
               >
-                <div className="flex items-center gap-1 text-red-600 cursor-pointer hover:text-red-700">
+                <div className="flex items-center gap-1 text-red-600 hover:text-red-700 dark:text-red-400 dark:hover:text-red-300 cursor-pointer">
                   <IconTrash size={16} />
                   <span>Remove</span>
                 </div>
@@ -219,17 +219,17 @@ const AdminAssistants = ({ loaderData }: Route.ComponentProps) => {
     <div className="min-h-full relative">
       <Outlet />
 
-      <div className="flex flex-wrap items-center justify-between gap-3 mt-2 mb-4">
-        <h1 className="text-base font-semibold text-ink-2">Assistants</h1>
+      <div className="flex items-center justify-between gap-3 mt-2 mb-4">
+        <h1 className="text-base font-semibold text-ink-2 shrink-0">Assistants</h1>
 
-        <div className="flex gap-3 w-full sm:w-auto">
+        <div className="flex gap-3 min-w-0">
           <SearchInput
             query={query}
             setQuery={setQuery}
             placeholder="Search assistants..."
-            className="flex-1 sm:flex-none sm:w-80"
+            className="min-w-0 flex-1 sm:flex-initial sm:w-80"
           />
-          <span data-tour="assistants-new">
+          <span data-tour="assistants-new" className="shrink-0">
             <ButtonNew action={show}>New assistant</ButtonNew>
           </span>
         </div>

@@ -121,18 +121,18 @@ const AdminTeams = ({ loaderData }: Route.ComponentProps) => {
   return (
     <div className="min-h-full relative">
       <Outlet />
-      <div className="flex flex-wrap items-center justify-between gap-3 mt-2 mb-4">
-        <h1 className="text-base font-semibold text-ink-2">Teams</h1>
+      <div className="flex items-center justify-between gap-3 mt-2 mb-4">
+        <h1 className="text-base font-semibold text-ink-2 shrink-0">Teams</h1>
 
-        <div className="flex gap-3 w-full sm:w-auto">
+        <div className="flex gap-3 min-w-0">
           <SearchInput
             query={query}
             setQuery={setQuery}
             placeholder="Search teams by name..."
-            className="flex-1 sm:flex-none sm:w-64"
+            className="min-w-0 flex-1 sm:flex-initial sm:w-64"
           />
 
-          <span data-tour="teams-new" className="inline-flex">
+          <span data-tour="teams-new" className="inline-flex shrink-0">
             <ButtonNew action={() => navigate('../teams/new', { relative: 'path' })}>
               New team
             </ButtonNew>
@@ -146,6 +146,10 @@ const AdminTeams = ({ loaderData }: Route.ComponentProps) => {
           dataSource={filteredTeams}
           rowHoverable={false}
           rowKey={record => record.id}
+          // Fixed metadata columns (Tags/Members/Actions) plus a min for the
+          // flexing Team column. Below this the table scrolls inside its card
+          // instead of widening the page; above it the Team column fills.
+          scroll={{ x: 760 }}
           pagination={{
             pageSize: 20,
             showSizeChanger: true,
