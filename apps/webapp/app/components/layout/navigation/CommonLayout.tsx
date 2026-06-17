@@ -135,6 +135,13 @@ const CommonLayout = ({
     // Hide slides if disabled in classroom settings
     if (item.link === '/slides' && classroom?.settings?.slides_enabled === false) return null;
 
+    // Student navigation visibility toggles. OWNER always sees these to manage
+    // them; students/assistants only when the instructor enables them.
+    if (item.link === '/modules' && role !== 'OWNER' && classroom?.settings?.show_modules !== true)
+      return null;
+    if (item.link === '/repos' && role !== 'OWNER' && classroom?.settings?.show_repos === false)
+      return null;
+
     return (
       <RequireRole roles={item.roles} key={key}>
         <Link
@@ -188,6 +195,12 @@ const CommonLayout = ({
     if (item.link === '/quizzes' && classroom?.settings?.quizzes_enabled === false) return false;
     if (item.link === '/quizzes' && !aiAgentAvailable) return false;
 
+    // Student navigation visibility toggles (OWNER always retains access).
+    if (item.link === '/modules' && role !== 'OWNER' && classroom?.settings?.show_modules !== true)
+      return false;
+    if (item.link === '/repos' && role !== 'OWNER' && classroom?.settings?.show_repos === false)
+      return false;
+
     return true;
   };
 
@@ -195,6 +208,8 @@ const CommonLayout = ({
   const renderMenuPages = () => {
     if (!menuPages || menuPages.length === 0) return null;
     if (role !== 'STUDENT' && role !== 'ASSISTANT') return null;
+    // Instructors can hide student-facing pages from the sidebar.
+    if (classroom?.settings?.show_pages === false) return null;
 
     const menuPageItems = menuPages.map((page: MenuPage) => {
       return (

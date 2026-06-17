@@ -74,7 +74,9 @@ export const routes = {
     link: '/modules',
     label: 'Modules',
     icon: IconStack2,
-    roles: ['OWNER'],
+    // OWNER always sees Modules to build them; students/assistants only when
+    // the instructor enables it (gated by show_modules in CommonLayout).
+    roles: ['OWNER', 'ASSISTANT', 'STUDENT'],
     category: 'content',
   },
   repositories: {

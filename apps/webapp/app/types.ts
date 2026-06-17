@@ -12,6 +12,9 @@ type UserInclude = {
               select: {
                 quizzes_enabled: true;
                 slides_enabled: true;
+                show_modules: true;
+                show_pages: true;
+                show_repos: true;
                 theme: true;
                 updated_at: true;
               };
