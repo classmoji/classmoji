@@ -21,6 +21,7 @@ import {
   IconChecklist,
   IconClipboardList,
   IconHeartRateMonitor,
+  IconStack2,
 } from '@tabler/icons-react';
 
 /**
@@ -29,7 +30,7 @@ import {
 export const routeCategories = {
   content: {
     label: 'Content',
-    items: ['repositories', 'assignments', 'slides', 'pages', 'quizzes'],
+    items: ['modules', 'repositories', 'assignments', 'slides', 'pages', 'quizzes'],
   },
   assessment: {
     label: 'Assessment',
@@ -69,6 +70,13 @@ export const routes = {
   },
 
   // Content
+  modules: {
+    link: '/modules',
+    label: 'Modules',
+    icon: IconStack2,
+    roles: ['OWNER'],
+    category: 'content',
+  },
   repositories: {
     link: '/repos',
     label: 'Repositories',

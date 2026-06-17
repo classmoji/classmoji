@@ -2,6 +2,7 @@
 import * as gitOrganizationService from './gitOrganization.service.ts';
 import * as classroomService from './classroom.service.ts';
 import * as classroomMembershipService from './classroomMembership.service.ts';
+import * as moduleService from './module.service.ts';
 import * as repositoryService from './repository.service.ts';
 import * as assignmentService from './assignment.service.ts';
 import * as gitRepoAssignmentService from './gitRepoAssignment.service.ts';
@@ -41,6 +42,7 @@ const ClassmojiService = {
   gitOrganization: gitOrganizationService,
   classroom: classroomService,
   classroomMembership: classroomMembershipService,
+  module: moduleService,
   repository: repositoryService,
   assignment: assignmentService,
   gitRepoAssignment: gitRepoAssignmentService,
@@ -85,6 +87,7 @@ export {
   gitOrganizationService,
   classroomService,
   classroomMembershipService,
+  moduleService,
   repositoryService,
   assignmentService,
   gitRepoAssignmentService,

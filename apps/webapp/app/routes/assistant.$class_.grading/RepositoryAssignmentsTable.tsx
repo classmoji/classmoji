@@ -502,7 +502,7 @@ const RepositoryAssignmentsTable = ({
             query={userQuery}
             setQuery={setUserQuery}
             placeholder="Search by name or login..."
-            className="flex-1 min-w-0 sm:flex-none sm:w-64"
+            className="flex-1 min-w-0 sm:flex-initial sm:w-64"
           />
         </div>
       </div>

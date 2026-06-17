@@ -74,7 +74,7 @@ const EventLinks = ({
         >
           <VideoCameraOutlined className="text-lg" />
           <span className="underline">Join Meeting</span>
-          <IconExternalLink size={14} className="text-gray-400" />
+          <IconExternalLink size={14} className="text-ink-3" />
         </a>
       )}
 
@@ -90,7 +90,7 @@ const EventLinks = ({
           >
             <IconFileText size={18} className="text-ink-3" />
             <span className="underline">{page.title}</span>
-            <IconExternalLink size={14} className="text-gray-400" />
+            <IconExternalLink size={14} className="text-ink-3" />
           </a>
         ))}
 
@@ -106,7 +106,7 @@ const EventLinks = ({
           >
             <IconPresentation size={18} className="text-ink-3" />
             <span className="underline">{slide.title}</span>
-            <IconExternalLink size={14} className="text-gray-400" />
+            <IconExternalLink size={14} className="text-ink-3" />
           </a>
         ))}
 
@@ -131,7 +131,7 @@ const EventLinks = ({
               >
                 <IconClipboardList size={18} className="text-ink-3" />
                 <span className="underline">{assignment.title}</span>
-                <IconExternalLink size={14} className="text-gray-400" />
+                <IconExternalLink size={14} className="text-ink-3" />
               </a>
             );
           }
@@ -159,7 +159,7 @@ const EventLinks = ({
         >
           <GithubOutlined className="text-lg" />
           <span className="underline">View on GitHub</span>
-          <IconExternalLink size={14} className="text-gray-400" />
+          <IconExternalLink size={14} className="text-ink-3" />
         </a>
       )}
     </div>

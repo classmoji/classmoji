@@ -280,16 +280,14 @@ const RepositoriesTable = ({
       title: 'Repository Name',
       dataIndex: 'name',
       key: 'name',
-      width: '70%',
-      render: (name: string) => (
-        <span className="font-medium text-ink-1">{name}</span>
-      ),
+      width: 280,
+      render: (name: string) => <span className="font-medium text-ink-1">{name}</span>,
     },
     {
       title: 'Actions',
       dataIndex: 'actions',
       key: 'actions',
-      width: '30%',
+      width: 200,
       render: (_: unknown, record: { name: string }) => {
         return (
           <TableActionButtons
@@ -480,9 +478,7 @@ const GithubRepositories = ({ loaderData }: Route.ComponentProps) => {
   return (
     <div className="min-h-full">
       <div className="flex items-center justify-between gap-3 mt-2 mb-4 flex-wrap">
-        <h1 className="text-base font-semibold text-ink-2">
-          GitHub Repositories
-        </h1>
+        <h1 className="text-base font-semibold text-ink-2">GitHub Repositories</h1>
         <div className="flex items-center gap-2">
           <Input
             placeholder="Search repositories..."
@@ -535,7 +531,11 @@ const GithubRepositories = ({ loaderData }: Route.ComponentProps) => {
 export const action = async ({ request, params }: Route.ActionArgs) => {
   const classSlug = params.class!;
 
-  const { classroom, userId: _userId, membership } = await requireClassroomAdmin(request, classSlug, {
+  const {
+    classroom,
+    userId: _userId,
+    membership,
+  } = await requireClassroomAdmin(request, classSlug, {
     resourceType: 'REPOSITORIES',
     action: 'manage_repositories',
   });

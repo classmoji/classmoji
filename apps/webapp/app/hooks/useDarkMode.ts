@@ -40,7 +40,7 @@ const DEFAULT_TWEAKS: TweaksState = {
   uiFontSize: FONT_SIZE_DEFAULT,
   translucentSidebar: false,
   uiContrast: CONTRAST_DEFAULT,
-  pointerCursors: false,
+  pointerCursors: true,
 };
 
 export type BackgroundKey = 'default' | 'aurora' | 'mint' | 'peach' | 'slate' | 'dusk' | 'accent';
@@ -428,7 +428,8 @@ function readStored(): TweaksState {
       uiFontSize,
       translucentSidebar: parsed.translucentSidebar === true,
       uiContrast,
-      pointerCursors: parsed.pointerCursors === true,
+      // Default ON: only an explicit opt-out (saved `false`) disables it.
+      pointerCursors: parsed.pointerCursors !== false,
     };
   } catch {
     return DEFAULT_TWEAKS;

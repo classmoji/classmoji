@@ -124,7 +124,7 @@ const AdminAssistants = ({ loaderData }: Route.ComponentProps) => {
       title: 'Assistant',
       dataIndex: 'name',
       key: 'name',
-      width: '30%',
+      width: 220,
       render: (_: unknown, assistant: Assistant) => {
         return <UserThumbnailView user={assistant} />;
       },
@@ -133,7 +133,7 @@ const AdminAssistants = ({ loaderData }: Route.ComponentProps) => {
       title: 'Grader Role',
       dataIndex: 'is_grader',
       key: 'is_grader',
-      width: '20%',
+      width: 130,
       render: (_: unknown, assistant: Assistant) => {
         return (
           <Radio.Group
@@ -151,7 +151,7 @@ const AdminAssistants = ({ loaderData }: Route.ComponentProps) => {
       title: 'Status',
       dataIndex: 'has_accepted_invite',
       key: 'has_accepted_invite',
-      width: '15%',
+      width: 110,
       render: (_: unknown, assistant: Assistant) => {
         return assistant.has_accepted_invite ? (
           <Tag color="green" className="font-semibold">
@@ -168,7 +168,7 @@ const AdminAssistants = ({ loaderData }: Route.ComponentProps) => {
       title: 'Actions',
       dataIndex: 'actions',
       key: 'actions',
-      width: '20%',
+      width: 200,
       render: (_: unknown, assistant: Assistant) => {
         return (
           <TableActionButtons
@@ -188,7 +188,7 @@ const AdminAssistants = ({ loaderData }: Route.ComponentProps) => {
                     handleImpersonate(assistant);
                   }
                 }}
-                className={`flex items-center gap-1 text-gray-600 hover:text-gray-800 cursor-pointer ${impersonating ? 'opacity-50' : ''}`}
+                className={`flex items-center gap-1 text-gray-600 hover:text-gray-800 dark:text-gray-300 dark:hover:text-gray-100 cursor-pointer ${impersonating ? 'opacity-50' : ''}`}
               >
                 <IconUserSearch size={16} />
                 <span>View as</span>
@@ -203,7 +203,7 @@ const AdminAssistants = ({ loaderData }: Route.ComponentProps) => {
                 okText="Remove"
                 cancelText="Cancel"
               >
-                <div className="flex items-center gap-1 text-red-600 cursor-pointer hover:text-red-700">
+                <div className="flex items-center gap-1 text-red-600 hover:text-red-700 dark:text-red-400 dark:hover:text-red-300 cursor-pointer">
                   <IconTrash size={16} />
                   <span>Remove</span>
                 </div>
@@ -219,17 +219,17 @@ const AdminAssistants = ({ loaderData }: Route.ComponentProps) => {
     <div className="min-h-full relative">
       <Outlet />
 
-      <div className="flex flex-wrap items-center justify-between gap-3 mt-2 mb-4">
-        <h1 className="text-base font-semibold text-ink-2">Assistants</h1>
+      <div className="flex items-center justify-between gap-3 mt-2 mb-4">
+        <h1 className="text-base font-semibold text-ink-2 shrink-0">Assistants</h1>
 
-        <div className="flex gap-3 w-full sm:w-auto">
+        <div className="flex gap-3 min-w-0">
           <SearchInput
             query={query}
             setQuery={setQuery}
             placeholder="Search assistants..."
-            className="flex-1 sm:flex-none sm:w-80"
+            className="min-w-0 flex-1 sm:flex-initial sm:w-80"
           />
-          <span data-tour="assistants-new">
+          <span data-tour="assistants-new" className="shrink-0">
             <ButtonNew action={show}>New assistant</ButtonNew>
           </span>
         </div>
@@ -246,10 +246,7 @@ const AdminAssistants = ({ loaderData }: Route.ComponentProps) => {
         <FormAssistant close={close} token={token} />
       </Modal>
 
-      <div
-
-        className="rounded-2xl bg-panel ring-1 ring-line p-5 sm:p-6 min-h-[calc(100vh-10rem)]"
-      >
+      <div className="rounded-2xl bg-panel ring-1 ring-line p-5 sm:p-6 min-h-[calc(100vh-10rem)]">
         <Table
           columns={columns}
           dataSource={filteredAssistants}

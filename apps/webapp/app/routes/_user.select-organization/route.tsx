@@ -176,7 +176,8 @@ function buildLandingClasses(memberships: SelectOrganizationMembership[]): Landi
     const isExample = (org as { is_example?: boolean }).is_example === true;
     const updatedAt =
       org.settings?.updated_at ?? (org as { updated_at?: Date | string | null }).updated_at;
-    const updatedTs = updatedAt ? new Date(updatedAt as string | Date).getTime() || 0 : 0;
+    const createdAt = (org as { created_at?: Date | string | null }).created_at;
+    const createdTs = createdAt ? new Date(createdAt as string | Date).getTime() || 0 : 0;
     const pinOrder = (m as { pin_order?: number | null }).pin_order ?? null;
 
     return {
@@ -189,9 +190,6 @@ function buildLandingClasses(memberships: SelectOrganizationMembership[]): Landi
         slug: `@${gitLogin}/${orgLogin}`,
         role: deriveRole(m.role, m.has_accepted_invite),
         hue: hashHue(org.id),
-        students: 0,
-        pending: 0,
-        progress: 0,
         updated: archived ? 'archived' : formatUpdated(updatedAt),
         archived,
         pin_order: pinOrder,
@@ -202,19 +200,19 @@ function buildLandingClasses(memberships: SelectOrganizationMembership[]): Landi
         organization: { id: org.id, login: orgLogin, name: org.name },
         hasAcceptedInvite: m.has_accepted_invite,
       } satisfies LandingClass,
-      updatedTs,
+      createdTs,
       pinOrder,
     };
   });
 
-  // Sort: pin_order ASC NULLS LAST, then updated_at DESC
+  // Sort: pin_order ASC NULLS LAST, then newest classroom first
   items.sort((a, b) => {
     const ap = a.pinOrder;
     const bp = b.pinOrder;
     if (ap != null && bp != null && ap !== bp) return ap - bp;
     if (ap != null && bp == null) return -1;
     if (ap == null && bp != null) return 1;
-    return b.updatedTs - a.updatedTs;
+    return b.createdTs - a.createdTs;
   });
   return items.map(i => i.landing);
 }

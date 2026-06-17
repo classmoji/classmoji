@@ -1,4 +1,5 @@
 import { ConfigProvider, Table } from 'antd';
+import { IconBrandGithub } from '@tabler/icons-react';
 import { UserThumbnailView, TeamThumbnailView, GradeBadge } from '~/components';
 
 import { calculateRepositoryGrade } from '@classmoji/utils';
@@ -35,7 +36,7 @@ const ModuleTable = ({ repository, repos, emojiMappings, settings, org }: Module
       title: `${isIndividualAssignment ? 'Student' : 'Team'}`,
       key: 'member',
       fixed: 'left',
-      width: '25%',
+      width: 240,
       render: (_: unknown, repo: ModuleTableRepo) => (
         <>
           {isIndividualAssignment ? (
@@ -53,9 +54,20 @@ const ModuleTable = ({ repository, repos, emojiMappings, settings, org }: Module
       ),
     },
     {
+      title: 'Repository',
+      key: 'name',
+      width: 280,
+      render: (_: unknown, repo: ModuleTableRepo) => (
+        <div className="flex items-center gap-2 min-w-0">
+          <IconBrandGithub size={16} className="text-gray-400 shrink-0" />
+          <span className="text-ink-1 truncate">{repo.name}</span>
+        </div>
+      ),
+    },
+    {
       title: 'Overall Grade',
       key: 'grade',
-      width: '35%',
+      width: 200,
       render: (_: unknown, repo: ModuleTableRepo) => {
         // For repository-level view, use a default assignment config (no extra credit, no drop lowest)
         const moduleAssignment = { is_extra_credit: false, drop_lowest_count: 0, weight: 0 };
@@ -78,7 +90,7 @@ const ModuleTable = ({ repository, repos, emojiMappings, settings, org }: Module
     {
       title: 'Actions',
       key: 'actions',
-      width: '20%',
+      width: 160,
       render: (_: unknown, repo: ModuleTableRepo) => {
         return <RepoActions repo={repo} org={org} />;
       },

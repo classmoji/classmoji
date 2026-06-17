@@ -27,6 +27,7 @@ export {
   gitOrganizationService,
   classroomService,
   classroomMembershipService,
+  moduleService,
   repositoryService,
   assignmentService,
   gitRepoAssignmentService,
