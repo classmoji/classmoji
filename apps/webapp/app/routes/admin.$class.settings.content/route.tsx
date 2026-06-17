@@ -89,10 +89,44 @@ const SettingsContent = ({ loaderData }: Route.ComponentProps) => {
     );
   };
 
+  // Toggle which course sections appear in the student/assistant sidebar.
+  const handleNavToggle =
+    (key: 'show_modules' | 'show_pages' | 'show_repos') => (checked: boolean) => {
+      fetcher!.submit(
+        { _action: 'saveContentSettings', [key]: checked },
+        {
+          method: 'POST',
+          encType: 'application/json',
+          action: `/admin/${classSlug}/settings/content`,
+        }
+      );
+    };
+
   const settings = organization.settings || {};
 
   return (
     <div className="space-y-8">
+      {/* Student Navigation visibility */}
+      <SettingSection
+        title="Student Navigation"
+        description="Choose which course sections students and assistants see in the sidebar. Turn these on in any combination."
+      >
+        <Form layout="vertical" className="w-3/4">
+          <Form.Item label="Show Modules">
+            <Switch
+              checked={settings.show_modules ?? false}
+              onChange={handleNavToggle('show_modules')}
+            />
+          </Form.Item>
+          <Form.Item label="Show Pages">
+            <Switch checked={settings.show_pages ?? true} onChange={handleNavToggle('show_pages')} />
+          </Form.Item>
+          <Form.Item label="Show Repositories">
+            <Switch checked={settings.show_repos ?? true} onChange={handleNavToggle('show_repos')} />
+          </Form.Item>
+        </Form>
+      </SettingSection>
+
       {/* Content Repository Link */}
       <SettingSection
         title="Content Repository"
