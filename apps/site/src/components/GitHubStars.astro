@@ -1,17 +1,26 @@
 ---
 const GITHUB_REPO = 'classmoji/classmoji';
 
-// Fetch star count at build time
+// Fetch star count at build time. Unauthenticated GitHub API requests are
+// rate-limited to 60/hour per IP, so frequent local rebuilds hit a 403. Pass a
+// token (GitHub Actions provides GITHUB_TOKEN automatically) to lift the limit
+// to 5,000/hour. Missing token / failure degrades gracefully to no badge.
 async function getStarCount() {
+  const token = process.env.GITHUB_TOKEN || process.env.GH_TOKEN;
   try {
     const response = await fetch(`https://api.github.com/repos/${GITHUB_REPO}`, {
       headers: {
         Accept: 'application/vnd.github.v3+json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
       },
     });
 
     if (!response.ok) {
-      console.warn('Failed to fetch GitHub stars:', response.status);
+      const hint =
+        response.status === 403 && !token
+          ? ' (rate-limited — set GITHUB_TOKEN to raise the limit)'
+          : '';
+      console.warn(`Failed to fetch GitHub stars: ${response.status}${hint}`);
       return null;
     }
 

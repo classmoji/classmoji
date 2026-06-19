@@ -14,8 +14,8 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
     attemptedAction: 'view_resources',
   });
 
-  const [modules, pages, slides] = await Promise.all([
-    ClassmojiService.module.findByClassroomSlug(classSlug, { includeAssignments: true }),
+  const [repositories, pages, slides] = await Promise.all([
+    ClassmojiService.repository.findByClassroomSlug(classSlug, { includeAssignments: true }),
     ClassmojiService.page.findByClassroomId(classroom.id, { includeLinks: true }),
     getPrisma().slide.findMany({
       where: { classroom_id: classroom.id },
@@ -24,5 +24,5 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
     }),
   ]);
 
-  return { modules, pages, slides };
+  return { repositories, pages, slides };
 };

@@ -25,11 +25,16 @@ enum Role {
   ASSISTANT
 }
 
-enum Term {
-  FALL
-  SPRING
-  SUMMER
-  WINTER
+enum NotificationType {
+  QUIZ_PUBLISHED
+  PAGE_PUBLISHED
+  PAGE_UNPUBLISHED
+  REPOSITORY_PUBLISHED
+  REPOSITORY_UNPUBLISHED
+  ASSIGNMENT_DUE_DATE_CHANGED
+  ASSIGNMENT_GRADED
+  TA_GRADING_ASSIGNED
+  TA_REGRADE_ASSIGNED
 }
 
 enum AssignmentType {
@@ -62,7 +67,6 @@ enum QuizGradingStrategy {
 enum SubscriptionTier {
   FREE
   PRO
-  ENTERPRISE
 }
 
 enum TokenTransactionType {
@@ -109,6 +113,12 @@ enum EventType {
   LECTURE
   LAB
   ASSESSMENT
+}
+
+enum ClassroomStatus {
+  ACTIVE
+  LOCKED
+  UNPUBLISHED
 }
 
 // ============================================================================
@@ -193,14 +203,18 @@ model User {
   created_at         DateTime @default(now())
   updated_at         DateTime @default(now()) @updatedAt
 
+  // Null = the first-sign-in onboarding tour has not been completed yet.
+  // A timestamp records that the user finished (or skipped) the tour.
+  onboarding_completed_at DateTime?
+
   // Relations
   accounts                      Account[]
-  sessions                      Session[]                    @relation("SessionUser")
-  impersonated_sessions         Session[]                    @relation("ImpersonatedBy")
+  sessions                      Session[]                 @relation("SessionUser")
+  impersonated_sessions         Session[]                 @relation("ImpersonatedBy")
   subscriptions                 Subscription[]
   classroom_memberships         ClassroomMembership[]
-  repositories                  Repository[]                 @relation("StudentRepositories")
-  graded_repository_assignments RepositoryAssignmentGrader[]
+  git_repos                     GitRepo[]                 @relation("StudentRepositories")
+  graded_repository_assignments GitRepoAssignmentGrader[]
   grades_given                  AssignmentGrade[]
   quiz_attempts                 QuizAttempt[]
   regrade_requests              RegradeRequest[]
@@ -212,6 +226,9 @@ model User {
   calendar_events               CalendarEvent[]
   ai_conversations              AIConversation[]
   resource_views                ResourceView[]
+  contributor_links             GitRepoContributorLink[]
+  notifications                 Notification[]
+  notification_preference       NotificationPreference?
 
   @@unique([provider, provider_id])
   @@index([provider, login])
@@ -259,21 +276,25 @@ model GitOrganization {
 }
 
 model Classroom {
-  id         String   @id @default(uuid())
-  slug       String   @unique // URL slug: "cs101-fall-2025"
-  git_org_id String
-  name       String
-  term       Term?
-  year       Int?
-  is_active  Boolean  @default(true)
-  created_at DateTime @default(now())
-  updated_at DateTime @default(now()) @updatedAt
+  id                String          @id @default(uuid())
+  slug              String // URL slug: "cs101-fall-2025"
+  git_org_id        String
+  name              String
+  content_namespace String
+  status            ClassroomStatus @default(ACTIVE)
+  is_archived       Boolean         @default(false)
+  // True for the auto-provisioned per-user "Example Course" sandbox used by the
+  // in-classroom onboarding tour. Backed by a mock GitOrganization (no live GitHub).
+  is_example        Boolean         @default(false)
+  created_at        DateTime        @default(now())
+  updated_at        DateTime        @default(now()) @updatedAt
 
   git_organization      GitOrganization       @relation(fields: [git_org_id], references: [id], onDelete: Cascade)
   settings              ClassroomSettings?
   memberships           ClassroomMembership[]
   modules               Module[]
   repositories          Repository[]
+  git_repos             GitRepo[]
   teams                 Team[]
   tags                  Tag[]
   quizzes               Quiz[]
@@ -288,7 +309,9 @@ model Classroom {
   ai_conversations      AIConversation[]
   classroom_invites     ClassroomInvite[]
   resource_views        ResourceView[]
+  notifications         Notification[]
 
+  @@unique([git_org_id, slug])
   @@index([git_org_id])
   @@map("classrooms")
 }
@@ -302,6 +325,9 @@ model ClassroomSettings {
   slides_enabled               Boolean  @default(false)
   syllabus_bot_enabled         Boolean  @default(false)
   recent_viewers_enabled       Boolean  @default(true)
+  show_modules                 Boolean  @default(false)
+  show_pages                   Boolean  @default(true)
+  show_repos                   Boolean  @default(true)
   syllabus_bot_model           String?
   llm_provider                 String?
   llm_model                    String?
@@ -312,6 +338,7 @@ model ClassroomSettings {
   code_aware_model             String?
   content_repo_name            String?
   default_student_page         String   @default("dashboard")
+  theme                        String   @default("stone")
   created_at                   DateTime @default(now())
   updated_at                   DateTime @default(now()) @updatedAt
 
@@ -321,16 +348,20 @@ model ClassroomSettings {
 }
 
 model ClassroomMembership {
-  id                  String   @id @default(uuid())
+  id                  String    @id @default(uuid())
   classroom_id        String
   user_id             String
-  role                Role     @default(STUDENT)
-  is_grader           Boolean  @default(false)
-  has_accepted_invite Boolean  @default(false)
+  role                Role      @default(STUDENT)
+  is_grader           Boolean   @default(false)
+  has_accepted_invite Boolean   @default(false)
   comment             String?
   letter_grade        String?
-  created_at          DateTime @default(now())
-  updated_at          DateTime @default(now()) @updatedAt
+  pin_order           Int?
+  // Null = this user has not finished the in-classroom guided tour for this
+  // classroom; a timestamp records completion (per user, per classroom, per role).
+  tour_completed_at   DateTime?
+  created_at          DateTime  @default(now())
+  updated_at          DateTime  @default(now()) @updatedAt
 
   classroom Classroom @relation(fields: [classroom_id], references: [id], onDelete: Cascade)
   user      User      @relation(fields: [user_id], references: [id], onDelete: Cascade)
@@ -342,10 +373,10 @@ model ClassroomMembership {
 }
 
 // ============================================================================
-// MODULE & ASSIGNMENT (formerly Assignment & Issue)
+// REPOSITORY & ASSIGNMENT (formerly Assignment & Issue)
 // ============================================================================
 
-model Module {
+model Repository {
   id                      String             @id @default(uuid())
   classroom_id            String
   title                   String
@@ -369,19 +400,77 @@ model Module {
   classroom    Classroom    @relation(fields: [classroom_id], references: [id], onDelete: Cascade)
   tag          Tag?         @relation(fields: [tag_id], references: [id])
   assignments  Assignment[]
-  repositories Repository[]
+  git_repos    GitRepo[]
   quizzes      Quiz[]
   pages        PageLink[]
   slides       SlideLink[]
+  module_items ModuleItem[]
+
+  @@unique([classroom_id, title])
+  @@index([classroom_id])
+  @@map("repositories")
+}
+
+// A Module is a single ordered list of mixed content items (pages, repos,
+// quizzes, slides). Membership and ordering live on ModuleItem.
+model Module {
+  id           String   @id @default(uuid())
+  classroom_id String
+  title        String
+  slug         String? // Set once on creation from title, never updated
+  description  String?
+  position     Int      @default(0)
+  is_published Boolean  @default(false)
+  created_at   DateTime @default(now())
+  updated_at   DateTime @default(now()) @updatedAt
+
+  classroom Classroom    @relation(fields: [classroom_id], references: [id], onDelete: Cascade)
+  items     ModuleItem[]
 
   @@unique([classroom_id, title])
   @@index([classroom_id])
   @@map("modules")
 }
 
+enum ModuleItemType {
+  PAGE
+  REPOSITORY
+  QUIZ
+  SLIDE
+}
+
+// A single ordered entry in a Module's content list. Exactly one of the four
+// *_id fields is set (enforced in the service layer + a CHECK migration).
+// An item may appear in multiple modules, but not twice in the same module.
+model ModuleItem {
+  id            String         @id @default(uuid())
+  module_id     String
+  item_type     ModuleItemType
+  position      Int            @default(0)
+  page_id       String?
+  repository_id String?
+  quiz_id       String?
+  slide_id      String?
+  created_at    DateTime       @default(now())
+  updated_at    DateTime       @default(now()) @updatedAt
+
+  module     Module      @relation(fields: [module_id], references: [id], onDelete: Cascade)
+  page       Page?       @relation(fields: [page_id], references: [id], onDelete: Cascade)
+  repository Repository? @relation(fields: [repository_id], references: [id], onDelete: Cascade)
+  quiz       Quiz?       @relation(fields: [quiz_id], references: [id], onDelete: Cascade)
+  slide      Slide?      @relation(fields: [slide_id], references: [id], onDelete: Cascade)
+
+  @@unique([module_id, page_id])
+  @@unique([module_id, repository_id])
+  @@unique([module_id, quiz_id])
+  @@unique([module_id, slide_id])
+  @@index([module_id])
+  @@map("module_items")
+}
+
 model Assignment {
   id               String    @id @default(uuid())
-  module_id        String
+  repository_id    String
   title            String
   slug             String? // Set once on creation from title, never updated
   weight           Int       @default(100)
@@ -395,14 +484,14 @@ model Assignment {
   created_at       DateTime  @default(now())
   updated_at       DateTime  @default(now()) @updatedAt
 
-  module                 Module                        @relation(fields: [module_id], references: [id], onDelete: Cascade)
-  repository_assignments RepositoryAssignment[]
-  pages                  PageLink[]
-  slides                 SlideLink[]
-  calendarEventLinks     CalendarEventAssignmentLink[]
+  repository           Repository                    @relation(fields: [repository_id], references: [id], onDelete: Cascade)
+  git_repo_assignments GitRepoAssignment[]
+  pages                PageLink[]
+  slides               SlideLink[]
+  calendarEventLinks   CalendarEventAssignmentLink[]
 
-  @@unique([module_id, title])
-  @@index([module_id])
+  @@unique([repository_id, title])
+  @@index([repository_id])
   @@map("assignments")
 }
 
@@ -410,13 +499,13 @@ model Assignment {
 // REPOSITORY & REPOSITORY ASSIGNMENT (formerly RepositoryIssue)
 // ============================================================================
 
-model Repository {
+model GitRepo {
   id             String      @id @default(uuid())
   provider       GitProvider
   provider_id    String // GitHub repo ID
   name           String
   classroom_id   String
-  module_id      String
+  repository_id  String
   student_id     String?
   team_id        String?
   contributions  String?
@@ -425,25 +514,26 @@ model Repository {
   created_at     DateTime    @default(now())
   updated_at     DateTime    @default(now()) @updatedAt
 
-  classroom   Classroom              @relation(fields: [classroom_id], references: [id], onDelete: Cascade)
-  module      Module                 @relation(fields: [module_id], references: [id], onDelete: Cascade)
-  student     User?                  @relation("StudentRepositories", fields: [student_id], references: [id], onDelete: Cascade)
-  team        Team?                  @relation(fields: [team_id], references: [id], onDelete: Cascade)
-  assignments RepositoryAssignment[]
+  classroom         Classroom                @relation(fields: [classroom_id], references: [id], onDelete: Cascade)
+  repository        Repository               @relation(fields: [repository_id], references: [id], onDelete: Cascade)
+  student           User?                    @relation("StudentRepositories", fields: [student_id], references: [id], onDelete: Cascade)
+  team              Team?                    @relation(fields: [team_id], references: [id], onDelete: Cascade)
+  assignments       GitRepoAssignment[]
+  contributor_links GitRepoContributorLink[]
 
   @@unique([provider, provider_id])
   @@index([classroom_id])
-  @@index([module_id])
+  @@index([repository_id])
   @@index([student_id])
-  @@map("repositories")
+  @@map("git_repos")
 }
 
-model RepositoryAssignment {
+model GitRepoAssignment {
   id                    String      @id @default(uuid())
   provider              GitProvider
   provider_id           String // GitHub issue ID
   provider_issue_number Int // Issue #number
-  repository_id         String
+  git_repo_id           String
   assignment_id         String
   status                IssueStatus @default(OPEN)
   closed_at             DateTime?
@@ -451,68 +541,107 @@ model RepositoryAssignment {
   created_at            DateTime    @default(now())
   updated_at            DateTime    @default(now()) @updatedAt
 
-  repository         Repository                   @relation(fields: [repository_id], references: [id], onDelete: Cascade)
-  assignment         Assignment                   @relation(fields: [assignment_id], references: [id], onDelete: Cascade)
+  git_repo           GitRepo                   @relation(fields: [git_repo_id], references: [id], onDelete: Cascade)
+  assignment         Assignment                @relation(fields: [assignment_id], references: [id], onDelete: Cascade)
   grades             AssignmentGrade[]
-  graders            RepositoryAssignmentGrader[]
+  graders            GitRepoAssignmentGrader[]
   regrade_requests   RegradeRequest[]
   token_transactions TokenTransaction[]
+  analytics_snapshot GitRepoAnalyticsSnapshot?
 
   @@unique([provider, provider_id])
-  @@index([repository_id])
+  @@index([git_repo_id])
   @@index([assignment_id])
-  @@map("repository_assignments")
+  @@map("git_repo_assignments")
+}
+
+model GitRepoAnalyticsSnapshot {
+  id                     String            @id @default(uuid())
+  git_repo_assignment_id String            @unique
+  git_repo_assignment    GitRepoAssignment @relation(fields: [git_repo_assignment_id], references: [id], onDelete: Cascade)
+  fetched_at             DateTime
+  default_branch         String?
+  total_commits          Int               @default(0)
+  total_additions        Int               @default(0)
+  total_deletions        Int               @default(0)
+  first_commit_at        DateTime?
+  last_commit_at         DateTime?
+  commits                Json              @default("[]")
+  contributors           Json              @default("[]")
+  languages              Json              @default("{}")
+  pr_summary             Json              @default("{}")
+  stale                  Boolean           @default(false)
+  error                  String?
+  created_at             DateTime          @default(now())
+  updated_at             DateTime          @default(now()) @updatedAt
+
+  @@index([fetched_at])
+  @@map("git_repo_analytics_snapshots")
+}
+
+model GitRepoContributorLink {
+  id           String   @id @default(uuid())
+  git_repo_id  String
+  git_repo     GitRepo  @relation(fields: [git_repo_id], references: [id], onDelete: Cascade)
+  github_login String
+  user_id      String?
+  user         User?    @relation(fields: [user_id], references: [id], onDelete: SetNull)
+  created_at   DateTime @default(now())
+
+  @@unique([git_repo_id, github_login])
+  @@index([user_id])
+  @@map("git_repo_contributor_links")
 }
 
 // ============================================================================
 // GRADING
 // ============================================================================
 
-model RepositoryAssignmentGrader {
-  id                       String   @id @default(uuid())
-  repository_assignment_id String
-  grader_id                String
-  created_at               DateTime @default(now())
-  updated_at               DateTime @default(now()) @updatedAt
+model GitRepoAssignmentGrader {
+  id                     String   @id @default(uuid())
+  git_repo_assignment_id String
+  grader_id              String
+  created_at             DateTime @default(now())
+  updated_at             DateTime @default(now()) @updatedAt
 
-  repository_assignment RepositoryAssignment @relation(fields: [repository_assignment_id], references: [id], onDelete: Cascade)
-  grader                User                 @relation(fields: [grader_id], references: [id], onDelete: Cascade)
+  git_repo_assignment GitRepoAssignment @relation(fields: [git_repo_assignment_id], references: [id], onDelete: Cascade)
+  grader              User              @relation(fields: [grader_id], references: [id], onDelete: Cascade)
 
-  @@unique([repository_assignment_id, grader_id])
-  @@map("repository_assignment_graders")
+  @@unique([git_repo_assignment_id, grader_id])
+  @@map("git_repo_assignment_graders")
 }
 
 model AssignmentGrade {
-  id                       String   @id @default(uuid())
-  repository_assignment_id String
-  grader_id                String?
-  emoji                    String
-  token_transaction_id     String?  @unique
-  created_at               DateTime @default(now())
-  updated_at               DateTime @default(now()) @updatedAt
+  id                     String   @id @default(uuid())
+  git_repo_assignment_id String
+  grader_id              String?
+  emoji                  String
+  token_transaction_id   String?  @unique
+  created_at             DateTime @default(now())
+  updated_at             DateTime @default(now()) @updatedAt
 
-  repository_assignment RepositoryAssignment @relation(fields: [repository_assignment_id], references: [id], onDelete: Cascade)
-  grader                User?                @relation(fields: [grader_id], references: [id])
-  token_transaction     TokenTransaction?    @relation(fields: [token_transaction_id], references: [id], onDelete: SetNull)
+  git_repo_assignment GitRepoAssignment @relation(fields: [git_repo_assignment_id], references: [id], onDelete: Cascade)
+  grader              User?             @relation(fields: [grader_id], references: [id])
+  token_transaction   TokenTransaction? @relation(fields: [token_transaction_id], references: [id], onDelete: SetNull)
 
   @@map("assignment_grades")
 }
 
 model RegradeRequest {
-  id                       String               @id @default(uuid())
-  repository_assignment_id String
-  classroom_id             String
-  student_id               String
-  student_comment          String?
-  grader_comment           String?
-  previous_grade           String[]
-  status                   RegradeRequestStatus @default(IN_REVIEW)
-  created_at               DateTime             @default(now())
-  updated_at               DateTime             @default(now()) @updatedAt
+  id                     String               @id @default(uuid())
+  git_repo_assignment_id String
+  classroom_id           String
+  student_id             String
+  student_comment        String?
+  grader_comment         String?
+  previous_grade         String[]
+  status                 RegradeRequestStatus @default(IN_REVIEW)
+  created_at             DateTime             @default(now())
+  updated_at             DateTime             @default(now()) @updatedAt
 
-  repository_assignment RepositoryAssignment @relation(fields: [repository_assignment_id], references: [id], onDelete: Cascade)
-  classroom             Classroom            @relation(fields: [classroom_id], references: [id], onDelete: Cascade)
-  student               User                 @relation(fields: [student_id], references: [id], onDelete: Cascade)
+  git_repo_assignment GitRepoAssignment @relation(fields: [git_repo_assignment_id], references: [id], onDelete: Cascade)
+  classroom           Classroom         @relation(fields: [classroom_id], references: [id], onDelete: Cascade)
+  student             User              @relation(fields: [student_id], references: [id], onDelete: Cascade)
 
   @@index([classroom_id])
   @@index([student_id])
@@ -564,10 +693,10 @@ model Team {
   created_at   DateTime     @default(now())
   updated_at   DateTime     @default(now()) @updatedAt
 
-  classroom    Classroom        @relation(fields: [classroom_id], references: [id], onDelete: Cascade)
-  repositories Repository[]
-  memberships  TeamMembership[]
-  tags         TeamTag[]
+  classroom   Classroom        @relation(fields: [classroom_id], references: [id], onDelete: Cascade)
+  git_repos   GitRepo[]
+  memberships TeamMembership[]
+  tags        TeamTag[]
 
   @@unique([classroom_id, slug])
   @@unique([provider, provider_id])
@@ -595,9 +724,9 @@ model Tag {
   created_at   DateTime @default(now())
   updated_at   DateTime @default(now()) @updatedAt
 
-  classroom Classroom @relation(fields: [classroom_id], references: [id], onDelete: Cascade)
-  modules   Module[]
-  teams     TeamTag[]
+  classroom    Classroom    @relation(fields: [classroom_id], references: [id], onDelete: Cascade)
+  repositories Repository[]
+  teams        TeamTag[]
 
   @@unique([classroom_id, name])
   @@map("tags")
@@ -622,23 +751,23 @@ model TeamTag {
 // ============================================================================
 
 model TokenTransaction {
-  id                       String               @id @default(uuid())
-  classroom_id             String
-  student_id               String
-  repository_assignment_id String?
-  amount                   Int
-  type                     TokenTransactionType
-  hours_purchased          Int?
-  balance_after            Int
-  description              String               @default("")
-  is_cancelled             Boolean              @default(false)
-  created_at               DateTime             @default(now())
-  updated_at               DateTime             @default(now()) @updatedAt
+  id                     String               @id @default(uuid())
+  classroom_id           String
+  student_id             String
+  git_repo_assignment_id String?
+  amount                 Int
+  type                   TokenTransactionType
+  hours_purchased        Int?
+  balance_after          Int
+  description            String               @default("")
+  is_cancelled           Boolean              @default(false)
+  created_at             DateTime             @default(now())
+  updated_at             DateTime             @default(now()) @updatedAt
 
-  classroom             Classroom             @relation(fields: [classroom_id], references: [id], onDelete: Cascade)
-  student               User                  @relation(fields: [student_id], references: [id], onDelete: Cascade)
-  repository_assignment RepositoryAssignment? @relation(fields: [repository_assignment_id], references: [id], onDelete: Cascade)
-  assignment_grade      AssignmentGrade?
+  classroom           Classroom          @relation(fields: [classroom_id], references: [id], onDelete: Cascade)
+  student             User               @relation(fields: [student_id], references: [id], onDelete: Cascade)
+  git_repo_assignment GitRepoAssignment? @relation(fields: [git_repo_assignment_id], references: [id], onDelete: Cascade)
+  assignment_grade    AssignmentGrade?
 
   @@index([classroom_id])
   @@index([student_id])
@@ -673,7 +802,7 @@ model AuditLog {
 model Quiz {
   id                   String              @id @default(uuid())
   classroom_id         String
-  module_id            String?
+  repository_id        String?
   name                 String
   system_prompt        String?
   rubric_prompt        String
@@ -689,12 +818,13 @@ model Quiz {
   created_at           DateTime            @default(now())
   updated_at           DateTime            @default(now()) @updatedAt
 
-  classroom Classroom     @relation(fields: [classroom_id], references: [id], onDelete: Cascade)
-  module    Module?       @relation(fields: [module_id], references: [id])
-  attempts  QuizAttempt[]
+  classroom    Classroom     @relation(fields: [classroom_id], references: [id], onDelete: Cascade)
+  repository   Repository?   @relation(fields: [repository_id], references: [id])
+  attempts     QuizAttempt[]
+  module_items ModuleItem[]
 
   @@index([classroom_id])
-  @@index([module_id])
+  @@index([repository_id])
   @@map("quizzes")
 }
 
@@ -741,7 +871,6 @@ model Slide {
   classroom_id       String
   title              String
   slug               String
-  term               String
   content_path       String
   multiplex_id       String?
   multiplex_secret   String?
@@ -757,6 +886,7 @@ model Slide {
   creator            User                     @relation(fields: [created_by], references: [id])
   links              SlideLink[]
   calendarEventLinks CalendarEventSlideLink[]
+  module_items       ModuleItem[]
 
   @@unique([classroom_id, slug])
   @@index([classroom_id])
@@ -784,6 +914,7 @@ model Page {
   creator            User                    @relation(fields: [created_by], references: [id])
   links              PageLink[]
   calendarEventLinks CalendarEventPageLink[]
+  module_items       ModuleItem[]
 
   @@unique([classroom_id, title])
   @@index([classroom_id])
@@ -793,17 +924,17 @@ model Page {
 model PageLink {
   id            String   @id @default(uuid())
   page_id       String
-  module_id     String?
+  repository_id String?
   assignment_id String?
   order         Int      @default(0)
   created_at    DateTime @default(now())
 
   page       Page        @relation(fields: [page_id], references: [id], onDelete: Cascade)
-  module     Module?     @relation(fields: [module_id], references: [id], onDelete: Cascade)
+  repository Repository? @relation(fields: [repository_id], references: [id], onDelete: Cascade)
   assignment Assignment? @relation(fields: [assignment_id], references: [id], onDelete: Cascade)
 
-  @@unique([page_id, module_id, assignment_id])
-  @@index([module_id])
+  @@unique([page_id, repository_id, assignment_id])
+  @@index([repository_id])
   @@index([assignment_id])
   @@map("page_links")
 }
@@ -811,17 +942,17 @@ model PageLink {
 model SlideLink {
   id            String   @id @default(uuid())
   slide_id      String
-  module_id     String?
+  repository_id String?
   assignment_id String?
   order         Int      @default(0)
   created_at    DateTime @default(now())
 
   slide      Slide       @relation(fields: [slide_id], references: [id], onDelete: Cascade)
-  module     Module?     @relation(fields: [module_id], references: [id], onDelete: Cascade)
+  repository Repository? @relation(fields: [repository_id], references: [id], onDelete: Cascade)
   assignment Assignment? @relation(fields: [assignment_id], references: [id], onDelete: Cascade)
 
-  @@unique([slide_id, module_id, assignment_id])
-  @@index([module_id])
+  @@unique([slide_id, repository_id, assignment_id])
+  @@index([repository_id])
   @@index([assignment_id])
   @@map("slide_links")
 }
@@ -1001,4 +1132,57 @@ model ResourceView {
   @@index([classroom_id, resource_path])
   @@index([last_viewed_at])
   @@map("resource_views")
+}
+
+// ============================================================================
+// NOTIFICATIONS
+// ============================================================================
+
+model Notification {
+  id            String           @id @default(uuid())
+  user_id       String
+  classroom_id  String?
+  type          NotificationType
+  resource_type String
+  resource_id   String
+  title         String
+  metadata      Json?
+  read_at       DateTime?
+  expires_at    DateTime
+  created_at    DateTime         @default(now())
+
+  user      User       @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  classroom Classroom? @relation(fields: [classroom_id], references: [id], onDelete: Cascade)
+
+  @@index([user_id, read_at, created_at])
+  @@index([expires_at])
+  @@map("notifications")
+}
+
+model NotificationPreference {
+  user_id                           String   @id
+  email_quiz_published              Boolean  @default(true)
+  email_page_published              Boolean  @default(false)
+  email_page_unpublished            Boolean  @default(false)
+  email_repository_published        Boolean  @default(true)
+  email_repository_unpublished      Boolean  @default(false)
+  email_assignment_due_date_changed Boolean  @default(true)
+  email_assignment_graded           Boolean  @default(true)
+  email_ta_grading_assigned         Boolean  @default(true)
+  email_ta_regrade_assigned         Boolean  @default(true)
+  created_at                        DateTime @default(now())
+  updated_at                        DateTime @default(now()) @updatedAt
+
+  user User @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@map("notification_preferences")
+}
+
+model ProcessedWebhookEvent {
+  event_id     String   @id
+  source       String
+  processed_at DateTime @default(now())
+
+  @@index([source, processed_at])
+  @@map("processed_webhook_events")
 }

@@ -1,226 +1,258 @@
-import { NavLink, useLocation, Outlet, useParams } from 'react-router';
-import { Button, Modal, Checkbox } from 'antd';
-import { useState, useEffect } from 'react';
-import { IconCopyX, IconLink } from '@tabler/icons-react';
+import { useNavigate, useParams } from 'react-router';
+import { useState } from 'react';
+import { Table, Tag } from 'antd';
+import { namedAction } from 'remix-utils/named-action';
 
-import AssignmentTable from './AssignmentsTable';
-import {
-  SearchInput,
-  ButtonNew,
-  PageHeader,
-  RequireRole,
-  TriggerProgress,
-  UserThumbnailView,
-} from '~/components';
-import { useGlobalFetcher, useDisclosure } from '~/hooks';
+import { SearchInput, ButtonNew, RequireRole, TableActionButtons } from '~/components';
 import { ClassmojiService } from '@classmoji/services';
+import type { ModuleItemType } from '@prisma/client';
 import { requireClassroomAdmin } from '~/utils/routeAuth.server';
+import { assertClassroomMutationAllowed } from '~/utils/helpers';
+import ModuleFormModal, { type ModuleFormModule } from './ModuleFormModal';
 import type { Route } from './+types/route';
 
 export const loader = async ({ params, request }: Route.LoaderArgs) => {
   const { class: classSlug } = params;
 
   await requireClassroomAdmin(request, classSlug!, {
-    resourceType: 'MODULES',
+    resourceType: 'REPOSITORIES',
     action: 'view_modules',
   });
 
   const modules = await ClassmojiService.module.findByClassroomSlug(classSlug!);
+
   return { modules };
 };
 
-const AdminAssignments = ({ loaderData }: Route.ComponentProps) => {
-  const { pathname } = useLocation();
-  const { class: classSlug } = useParams();
+export const action = async ({ params, request }: Route.ActionArgs) => {
+  const { class: classSlug } = params;
+
+  const { classroom, membership } = await requireClassroomAdmin(request, classSlug!, {
+    resourceType: 'REPOSITORIES',
+    action: 'manage_modules',
+  });
+  assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
+
+  const data = (await request.json()) as {
+    id?: string;
+    title?: string;
+    description?: string | null;
+    isPublished?: boolean;
+    moduleId?: string;
+    moduleItemId?: string;
+    itemType?: ModuleItemType;
+    targetId?: string;
+    orderedItemIds?: string[];
+  };
+
+  return namedAction(request, {
+    async create() {
+      try {
+        await ClassmojiService.module.create(classroom.id, {
+          title: data.title!,
+          description: data.description ?? null,
+        });
+        return { success: 'Module created' };
+      } catch (error: unknown) {
+        console.error('Module create error:', error);
+        return { error: 'Failed to create module. Please try again.' };
+      }
+    },
+    async update() {
+      try {
+        await ClassmojiService.module.updateForClassroom(data.id!, classroom.id, {
+          title: data.title!,
+          description: data.description ?? null,
+        });
+        return { success: 'Module updated' };
+      } catch (error: unknown) {
+        console.error('Module update error:', error);
+        return { error: 'Failed to update module. Please try again.' };
+      }
+    },
+    async delete() {
+      try {
+        await ClassmojiService.module.deleteById(data.id!, classroom.id);
+        return { success: 'Module deleted' };
+      } catch (error: unknown) {
+        console.error('Module delete error:', error);
+        return { error: 'Failed to delete module. Please try again.' };
+      }
+    },
+    async setPublished() {
+      try {
+        await ClassmojiService.module.setPublished(
+          data.id!,
+          Boolean(data.isPublished),
+          classroom.id
+        );
+        return { success: data.isPublished ? 'Module published' : 'Module unpublished' };
+      } catch (error: unknown) {
+        console.error('Module setPublished error:', error);
+        return { error: 'Failed to update module visibility. Please try again.' };
+      }
+    },
+    async addItem() {
+      try {
+        await ClassmojiService.module.addItem(
+          data.moduleId!,
+          data.itemType!,
+          data.targetId!,
+          classroom.id
+        );
+        return { success: 'Item added to module' };
+      } catch (error: unknown) {
+        console.error('Module addItem error:', error);
+        return { error: 'Failed to add item. It may already be in this module.' };
+      }
+    },
+    async removeItem() {
+      try {
+        await ClassmojiService.module.removeItem(data.moduleItemId!, classroom.id);
+        return { success: 'Item removed from module' };
+      } catch (error: unknown) {
+        console.error('Module removeItem error:', error);
+        return { error: 'Failed to remove item. Please try again.' };
+      }
+    },
+    async reorderItems() {
+      try {
+        await ClassmojiService.module.reorderItems(
+          data.moduleId!,
+          data.orderedItemIds ?? [],
+          classroom.id
+        );
+        return { success: 'Module order updated' };
+      } catch (error: unknown) {
+        console.error('Module reorderItems error:', error);
+        return { error: 'Failed to reorder items. Please try again.' };
+      }
+    },
+  });
+};
+
+type ModuleRow = Route.ComponentProps['loaderData']['modules'][number];
+
+const ModulesIndex = ({ loaderData }: Route.ComponentProps) => {
   const { modules } = loaderData;
-  const { fetcher } = useGlobalFetcher();
+  const { class: classSlug } = useParams();
+  const navigate = useNavigate();
   const [query, setQuery] = useState('');
-  const { show, close, visible } = useDisclosure();
-  const [unenrolledStudents, setUnenrolledStudents] = useState<Array<Record<string, unknown>>>([]);
-  const [selectedStudents, setSelectedStudents] = useState<Array<Record<string, unknown>>>([]);
-  const [repositories, setRepositories] = useState<string[]>([]);
-  const fetcherData = fetcher!.data as
-    | {
-        students?: Array<Record<string, unknown>>;
-        repositories?: string[];
-        triggerSession?: {
-          numReposToDelete?: number;
-          numReposToCreate?: number;
-          numIssuesToCreate?: number;
-        };
-      }
-    | undefined;
+  const [formOpen, setFormOpen] = useState(false);
+  const [editing, setEditing] = useState<ModuleFormModule | null>(null);
 
-  useEffect(() => {
-    if (!visible) {
-      setUnenrolledStudents([]);
-      setSelectedStudents([]);
-    }
-  }, [visible]);
-
-  useEffect(() => {
-    if (fetcherData) {
-      setUnenrolledStudents(fetcherData.students || []);
-      setRepositories(fetcherData.repositories || []);
-    }
-  }, [fetcher!.data]);
-
-  const findUnenrolledStudents = () => {
-    fetcher!.submit(
-      {
-        action: 'FIND_UNENROLLED_STUDENTS',
-      },
-      {
-        method: 'post',
-        action: '?/findUnenrolledStudents',
-        encType: 'application/json',
-      }
-    );
-    show();
+  const openCreate = () => {
+    setEditing(null);
+    setFormOpen(true);
   };
 
-  const deleteRepositories = () => {
-    const loginNames = new Set(selectedStudents.map(s => s.login as string));
-
-    const repositoriesToDelete: { name: string }[] = [];
-
-    loginNames.forEach(login => {
-      repositories.forEach(repository => {
-        if (repository.includes(login)) {
-          repositoriesToDelete.push({ name: repository });
-        }
-      });
-    });
-
-    fetcher!.submit(
-      JSON.stringify({
-        deleteFromGithub: false,
-        repositories: repositoriesToDelete,
-        classroomSlug: classSlug,
-      }),
-      {
-        method: 'post',
-        action: `/api/operation/?action=deleteRepositories`,
-        encType: 'application/json',
-      }
-    );
+  const openEdit = (m: ModuleRow) => {
+    setEditing({ id: m.id, title: m.title, description: m.description });
+    setFormOpen(true);
   };
+
+  const moduleHref = (m: ModuleRow) =>
+    `/admin/${classSlug}/modules/${encodeURIComponent(m.slug ?? m.id)}`;
+
+  const columns = [
+    {
+      title: 'Module',
+      key: 'module',
+      render: (_: unknown, m: ModuleRow) => (
+        <div className="min-w-0">
+          <div className="font-medium text-ink-1 truncate">{m.title}</div>
+          {m.description && (
+            <div className="text-xs text-ink-3 truncate max-w-md">{m.description}</div>
+          )}
+        </div>
+      ),
+    },
+    {
+      title: 'Items',
+      key: 'items',
+      width: 100,
+      align: 'center' as const,
+      render: (_: unknown, m: ModuleRow) => (
+        <Tag color={m._count.items > 0 ? 'blue' : undefined}>{m._count.items}</Tag>
+      ),
+    },
+    {
+      title: 'Visibility',
+      key: 'visibility',
+      width: 120,
+      align: 'center' as const,
+      render: (_: unknown, m: ModuleRow) => (
+        <Tag color={m.is_published ? 'green' : 'orange'}>
+          {m.is_published ? 'Published' : 'Draft'}
+        </Tag>
+      ),
+    },
+    {
+      title: 'Actions',
+      key: 'actions',
+      width: 160,
+      render: (_: unknown, m: ModuleRow) => (
+        <TableActionButtons onView={() => navigate(moduleHref(m))} onEdit={() => openEdit(m)} />
+      ),
+    },
+  ];
+
+  const filtered = modules.filter(m => m.title.toLowerCase().includes(query.toLowerCase()));
 
   return (
-    <div className="relative">
-      <Outlet />
-      <div className="flex justify-between items-start">
-        <PageHeader title="Modules" routeName="modules" />
+    <div className="min-h-full relative">
+      <div className="flex flex-col gap-3 mt-2 mb-4 sm:flex-row sm:items-center sm:justify-between">
+        <h1 className="text-lg font-semibold text-ink-1">Modules</h1>
 
         <RequireRole roles={['OWNER']}>
-          <div className="flex gap-3">
-            <SearchInput query={query} setQuery={setQuery} placeholder="Search by title" />
-
-            <Button
-              icon={<IconCopyX size={16} />}
-              onClick={() => {
-                findUnenrolledStudents();
-              }}
-            >
-              Cleanup repos
-            </Button>
-            <NavLink to={`/admin/${classSlug}/resources`}>
-              <Button icon={<IconLink size={16} />}>Link Resources</Button>
-            </NavLink>
-            <NavLink to={`${pathname}/form`}>
-              <ButtonNew>New module</ButtonNew>
-            </NavLink>
+          <div className="flex items-center gap-3">
+            <SearchInput
+              query={query}
+              setQuery={setQuery}
+              placeholder="Search by title"
+              className="flex-1 min-w-0 sm:grow-0 sm:basis-56"
+            />
+            <ButtonNew action={openCreate}>New module</ButtonNew>
           </div>
         </RequireRole>
       </div>
 
-      <Modal
-        open={visible}
-        className="max-h-[600px] overflow-y-scroll"
-        title={
-          fetcher!.state !== 'idle'
-            ? 'Finding unenrolled students...'
-            : 'List of unenrolled students'
-        }
-        onCancel={() => {
-          close();
-        }}
-        footer={
-          <div className="flex gap-2 justify-end">
-            <Button onClick={close}>Close</Button>
-            <Button
-              disabled={selectedStudents.length === 0}
-              onClick={() => {
-                close();
-                deleteRepositories();
-                setUnenrolledStudents([]);
-              }}
-            >
-              Remove repos
-            </Button>
-          </div>
-        }
-      >
-        {fetcher!.state === 'idle' && (
-          <>
-            {' '}
-            <p>The following students are not on the roster:</p>
-            <div className="flex flex-col gap-2 mt-6">
-              {(unenrolledStudents || []).map(student => {
-                const isSelected = selectedStudents.some(s => s.id === student.id);
-                return (
-                  <div
-                    key={student.id as string}
-                    className={`rounded-md p-2 cursor-pointer ${isSelected ? 'bg-[#FFF0CC]' : ''}`}
-                  >
-                    <Checkbox
-                      className="w-full"
-                      onChange={e => {
-                        setSelectedStudents(
-                          e.target.checked
-                            ? [...selectedStudents, student]
-                            : selectedStudents.filter(s => s.id !== student.id)
-                        );
-                      }}
-                    >
-                      <UserThumbnailView key={student.id as string} user={student} />
-                    </Checkbox>
-                  </div>
-                );
-              })}
-            </div>
-          </>
-        )}
-      </Modal>
-      <>
-        {fetcherData?.triggerSession?.numReposToDelete && (
-          <TriggerProgress operation="DELETE_REPOS" validIdentifiers={['delete_repository']} />
-        )}
-
-        {(fetcherData?.triggerSession?.numReposToCreate ||
-          fetcherData?.triggerSession?.numIssuesToCreate) && (
-          <TriggerProgress
-            operation="PUBLISH_OR_SYNC_ASSIGNMENT"
-            validIdentifiers={[
-              'gh-create_repository',
-              'cf-create_repository',
-              'gh-create_issue',
-              'cf-create_issue',
-              'gh-add_collaborator_to_repo',
-            ]}
-          />
-        )}
-
-        <AssignmentTable
-          assignments={modules.filter((module: { title: string }) =>
-            module.title.toLowerCase().includes(query.toLowerCase())
-          )}
+      <div className="rounded-2xl bg-panel ring-1 ring-line p-5 sm:p-6 min-h-[calc(100vh-10rem)]">
+        <Table
+          columns={columns}
+          dataSource={filtered}
+          rowKey="id"
+          rowHoverable={false}
+          size="middle"
+          onRow={m => ({ onClick: () => navigate(moduleHref(m)), className: 'cursor-pointer' })}
+          pagination={{
+            pageSize: 25,
+            showSizeChanger: true,
+            showTotal: (total, range) => `${range[0]}-${range[1]} of ${total} modules`,
+          }}
+          scroll={{ x: 'max-content' }}
+          locale={{
+            emptyText: query ? (
+              <div className="text-center py-12 text-gray-500">
+                <div className="font-medium">No modules found matching &apos;{query}&apos;</div>
+                <div className="text-sm">Try adjusting your search terms.</div>
+              </div>
+            ) : (
+              <div className="text-center py-12 text-gray-500">
+                <div className="font-medium">No modules yet</div>
+                <div className="text-sm">
+                  Group pages, repositories, quizzes and slides into a module to organize your
+                  course.
+                </div>
+              </div>
+            ),
+          }}
         />
-      </>
+      </div>
+
+      <ModuleFormModal open={formOpen} module={editing} onClose={() => setFormOpen(false)} />
     </div>
   );
 };
 
-export { action } from './action';
-
-export default AdminAssignments;
+export default ModulesIndex;

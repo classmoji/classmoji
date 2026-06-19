@@ -1,22 +1,22 @@
 import { findTeamsByUserId } from './teamMembership.service.ts';
-import { findMany as findRepositories } from './repository.service.ts';
+import { findMany as findRepositories } from './gitRepo.service.ts';
 import { findByClassroomId as findEmojiMappingsByClassroomId } from './emojiMapping.service.ts';
 import { findRepositoriesPerStudent } from './user.service.ts';
 import * as classroomService from './classroom.service.ts';
 import * as assignmentService from './assignment.service.ts';
-import * as repositoryAssignmentService from './repositoryAssignment.service.ts';
-import * as repositoryAssignmentGraderService from './repositoryAssignmentGrader.service.ts';
+import * as gitRepoAssignmentService from './gitRepoAssignment.service.ts';
+import * as gitRepoAssignmentGraderService from './gitRepoAssignmentGrader.service.ts';
 
 import getPrisma from '@classmoji/database';
 import { calculateStudentFinalGrade } from '@classmoji/utils';
-import type { OrganizationSettings, Repository } from '@classmoji/utils';
+import type { OrganizationSettings, GitRepo } from '@classmoji/utils';
 
 // Re-export grader progress function for convenience
-export const findAssignmentGradersProgress = repositoryAssignmentGraderService.findGradersProgress;
+export const findAssignmentGradersProgress = gitRepoAssignmentGraderService.findGradersProgress;
 
 export const findTeamRepositoriesForStudent = async (userId: string, classroomSlug: string) => {
   const teams = await findTeamsByUserId(userId);
-  const repositories = [];
+  const gitRepos = [];
 
   for (const team of teams) {
     const teamRepos = await findRepositories({
@@ -24,10 +24,10 @@ export const findTeamRepositoriesForStudent = async (userId: string, classroomSl
       classroom: { slug: classroomSlug },
     });
 
-    repositories.push(...teamRepos);
+    gitRepos.push(...teamRepos);
   }
 
-  return repositories;
+  return gitRepos;
 };
 
 export const findTeamAssignmentsForStudent = async (userId: string, classroomSlug: string) => {
@@ -35,8 +35,8 @@ export const findTeamAssignmentsForStudent = async (userId: string, classroomSlu
   const repoAssignments = [];
 
   for (const team of teams) {
-    const teamAssignments = await repositoryAssignmentService.findForUser({
-      repository: {
+    const teamAssignments = await gitRepoAssignmentService.findForUser({
+      git_repo: {
         team_id: team.team_id,
         classroom: { slug: classroomSlug },
       },
@@ -48,8 +48,8 @@ export const findTeamAssignmentsForStudent = async (userId: string, classroomSlu
 };
 
 export const findAllAssignmentsForStudent = async (userId: string, classroomSlug: string) => {
-  const studentAssignments = await repositoryAssignmentService.findForUser({
-    repository: {
+  const studentAssignments = await gitRepoAssignmentService.findForUser({
+    git_repo: {
       student_id: userId,
       classroom: { slug: classroomSlug },
     },
@@ -62,10 +62,10 @@ export const findAllAssignmentsForStudent = async (userId: string, classroomSlug
 };
 
 export const findClassroomGradingProgressPerAssignment = async (classroomId: string) => {
-  let numberOfAssignments = await getPrisma().repositoryAssignment.groupBy({
+  let numberOfAssignments = await getPrisma().gitRepoAssignment.groupBy({
     where: {
       assignment: {
-        module: {
+        repository: {
           classroom_id: classroomId,
           is_extra_credit: false,
         },
@@ -75,11 +75,11 @@ export const findClassroomGradingProgressPerAssignment = async (classroomId: str
     _count: true,
   });
 
-  const numExtraCreditAssignments = await getPrisma().repositoryAssignment.groupBy({
+  const numExtraCreditAssignments = await getPrisma().gitRepoAssignment.groupBy({
     where: {
       status: 'CLOSED',
       assignment: {
-        module: {
+        repository: {
           classroom_id: classroomId,
           is_extra_credit: true,
         },
@@ -91,10 +91,10 @@ export const findClassroomGradingProgressPerAssignment = async (classroomId: str
 
   numberOfAssignments = [...numberOfAssignments, ...numExtraCreditAssignments];
 
-  let gradedAssignments = await getPrisma().repositoryAssignment.groupBy({
+  let gradedAssignments = await getPrisma().gitRepoAssignment.groupBy({
     where: {
       assignment: {
-        module: {
+        repository: {
           classroom_id: classroomId,
           is_extra_credit: false,
         },
@@ -107,11 +107,11 @@ export const findClassroomGradingProgressPerAssignment = async (classroomId: str
     _count: true,
   });
 
-  const extraCreditGradedAssignments = await getPrisma().repositoryAssignment.groupBy({
+  const extraCreditGradedAssignments = await getPrisma().gitRepoAssignment.groupBy({
     where: {
       status: 'CLOSED',
       assignment: {
-        module: {
+        repository: {
           classroom_id: classroomId,
           is_extra_credit: true,
         },
@@ -159,10 +159,14 @@ export const findClassroomGradingProgressPerAssignment = async (classroomId: str
 export const calculateClassLeaderboard = async (classroomSlug: string) => {
   const classroom = await classroomService.findBySlug(classroomSlug);
 
-  const emojiMappings = await findEmojiMappingsByClassroomId(classroom!.id);
-  const students = await findRepositoriesPerStudent(classroom!);
+  if (!classroom) {
+    throw new Response('Classroom not found', { status: 404 });
+  }
 
-  const settings = await classroomService.getClassroomSettingsForServer(classroom!.id);
+  const emojiMappings = await findEmojiMappingsByClassroomId(classroom.id);
+  const students = await findRepositoriesPerStudent(classroom);
+
+  const settings = await classroomService.getClassroomSettingsForServer(classroom.id);
 
   const grades: Array<{
     id: string;
@@ -174,7 +178,7 @@ export const calculateClassLeaderboard = async (classroomSlug: string) => {
 
   students.forEach(student => {
     const grade = calculateStudentFinalGrade(
-      student.repositories as Repository[],
+      student.git_repos as GitRepo[],
       emojiMappings as Record<string, number>,
       settings as OrganizationSettings
     );

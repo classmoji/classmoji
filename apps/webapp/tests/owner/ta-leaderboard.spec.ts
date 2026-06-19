@@ -1,106 +1,122 @@
+import type { Page } from '@playwright/test';
 import { test, expect } from '../fixtures/auth.fixture';
-import { mockGitHubAPI } from '../fixtures/mocks/github.mock';
 import { waitForDataLoad } from '../helpers/wait.helpers';
+import {
+  getClassroomBySlug,
+  getUserByLogin,
+  seedTAGradedSubmission,
+  countGraderAssignments,
+  deleteRepositoryById,
+} from '../helpers/prisma.helpers';
+import { TEST_CLASSROOM } from '../helpers/env.helpers';
 
-/**
- * TA Leaderboard Tests
- *
- * Tests for the TA Grading Leaderboard on the admin dashboard.
- *
- * Seed data creates:
- * - ta-classmoji (ID: 250561690): Graded 3 issues (100% completion)
- * - prof-classmoji (ID: 220514774): Graded 1 issue (100% completion)
- */
+// The TA grading leaderboard is driven by `git_repo_assignment_graders` rows
+// (assigned graders), not by raw `assignment_grades.grader_id`. The dev seed
+// assigns no graders, so the leaderboard starts empty ("No TAs assigned yet").
+// Each entry's name resolves from the grader User (name || login); it only
+// falls back to "Unknown" if a grader has neither — which a real user never
+// hits. These specs seed a throwaway submission graded BY fake-ta ("Dev TA")
+// so the leaderboard has a real, non-empty entry to assert on.
 
-test.describe('TA Leaderboard', () => {
-  test.beforeEach(async ({ authenticatedPage: page, testOrg }) => {
-    await mockGitHubAPI(page);
-    await page.goto(`/admin/${testOrg}/dashboard`);
-    await waitForDataLoad(page);
-  });
+const SEED_TITLE = `e2e-ta-leaderboard-${Date.now()}`;
 
-  test('displays TA leaderboard section', async ({ authenticatedPage: page }) => {
-    await expect(page.getByText('TA Grading Leaderboard')).toBeVisible();
-  });
+let repositoryId: string;
+let classroomId: string;
 
-  test('shows grading progress percentages', async ({ authenticatedPage: page }) => {
-    // The leaderboard should show percentage indicators
-    const leaderboard = page.locator('text=TA Grading Leaderboard').locator('..');
+test.beforeAll(async () => {
+  const classroom = await getClassroomBySlug(TEST_CLASSROOM);
+  classroomId = classroom.id;
+  const ta = await getUserByLogin('fake-ta');
+  const student = await getUserByLogin('fake-student-1');
 
-    // Should have percentage values visible
-    await expect(page.getByText('%').first()).toBeVisible();
-  });
+  const seeded = await seedTAGradedSubmission(classroomId, student.id, ta.id, SEED_TITLE);
+  repositoryId = seeded.repositoryId;
 
-  test('displays ranked entries', async ({ authenticatedPage: page }) => {
-    // The leaderboard shows avatar images for each ranked TA
-    // Each entry has a ranking number, avatar, and percentage
-    // Avatar images come from GitHub avatars URL
-    const avatars = page.locator('img[src*="avatars.githubusercontent.com"]');
-
-    // With seed data we should have multiple entries
-    const count = await avatars.count();
-    expect(count).toBeGreaterThan(0);
-  });
-
-  test('shows TA avatars', async ({ authenticatedPage: page }) => {
-    // Each TA entry should have an avatar image from GitHub
-    const avatarImages = page.locator('img[src*="avatars.githubusercontent.com"]');
-
-    // With seed data, we should have at least 2 TAs
-    await expect(avatarImages.first()).toBeVisible();
-  });
+  // Assert the write landed: fake-ta now has a grader assignment in this class.
+  expect(await countGraderAssignments(classroomId, ta.id)).toBeGreaterThan(0);
 });
 
-test.describe('TA Leaderboard Data Validation', () => {
+test.afterAll(async () => {
+  if (repositoryId) await deleteRepositoryById(repositoryId);
+});
+
+// The TA-activity tab panel is rendered bare (no header, no "graded this week"
+// line), so anchor the card on its actual content: an entry for "Dev TA", or
+// the explicit empty state.
+function taActivityCard(page: Page) {
+  return page
+    .locator('section')
+    .filter({ hasText: /Dev TA|No TAs assigned yet/ })
+    .first();
+}
+
+async function openTAActivity(page: Page) {
+  await page.getByRole('button', { name: 'TA activity' }).click();
+}
+
+test.describe('TA Leaderboard (owner dashboard)', () => {
   test.beforeEach(async ({ authenticatedPage: page, testOrg }) => {
-    await mockGitHubAPI(page);
     await page.goto(`/admin/${testOrg}/dashboard`);
     await waitForDataLoad(page);
   });
 
-  test('leaderboard shows correct TA names from seed data', async ({ authenticatedPage: page }) => {
-    // NOTE: This test may fail if the leaderboard has a bug showing "Unknown" instead of TA names
-    // Seed data has:
-    // - ta-classmoji: Teaching Assistant Tester (3 grades)
-    // - prof-classmoji: Professor (1 grade)
-
-    const leaderboard = page.locator('text=TA Grading Leaderboard').locator('xpath=ancestor::div[contains(@class, "card") or contains(@class, "Card")]').first();
-
-    // Check if actual TA names appear (not "Unknown")
-    // If this fails, there's a bug where grader names aren't being fetched
-    const unknownCount = await page.locator('text=Unknown').count();
-    const hasKnownTAs = await page.getByText(/ta-classmoji|Teaching Assistant|Professor|prof-classmoji/).first().isVisible().catch(() => false);
-
-    // Log for debugging
-    if (unknownCount > 0 && !hasKnownTAs) {
-      console.log(`WARNING: Leaderboard shows ${unknownCount} "Unknown" entries - possible bug in grader name resolution`);
-    }
-
-    // At minimum, the section should be visible
-    await expect(page.getByText('TA Grading Leaderboard')).toBeVisible();
+  test('exposes a TA activity tab', async ({ authenticatedPage: page }) => {
+    await expect(page.getByRole('button', { name: 'TA activity' })).toBeVisible();
   });
 
-  test('leaderboard section is visible', async ({ authenticatedPage: page }) => {
-    // Verify the leaderboard section renders correctly
-    // NOTE: Actual leaderboard data requires seed data with graded assignments
-    await expect(page.getByText('TA Grading Leaderboard')).toBeVisible();
+  test('TA activity tab shows ranked TAs', async ({ authenticatedPage: page }) => {
+    await openTAActivity(page);
+    await expect(taActivityCard(page)).toBeVisible();
+  });
+
+  test('TA activity entries render an initials chip and a total', async ({
+    authenticatedPage: page,
+  }) => {
+    await openTAActivity(page);
+
+    const card = taActivityCard(page);
+    const entries = card.locator('ul > li');
+
+    // fake-ta ("Dev TA") was seeded as a grader, so an entry must render.
+    await expect.poll(() => entries.count()).toBeGreaterThan(0);
+    await expect(entries.first()).toBeVisible();
+    await expect(entries.first().locator('.tabular-nums')).toBeVisible();
+    await expect(card.getByText('Dev TA', { exact: true })).toBeVisible();
+  });
+
+  test('TA activity does not regress to "Unknown" grader names', async ({
+    authenticatedPage: page,
+  }) => {
+    await openTAActivity(page);
+
+    const card = taActivityCard(page);
+    await expect(card).toBeVisible();
+
+    const entries = card.locator('ul > li');
+    await expect.poll(() => entries.count()).toBeGreaterThan(0);
+    await expect(card.getByText('Dev TA', { exact: true })).toBeVisible();
+
+    // If grader-name resolution regresses, entries fall back to "Unknown".
+    await expect(card.getByText('Unknown', { exact: true })).toHaveCount(0);
   });
 });
 
 test.describe('TA Leaderboard on Assistant Dashboard', () => {
-  test.beforeEach(async ({ authenticatedPage: page, testOrg }) => {
-    await mockGitHubAPI(page);
+  test('assistant dashboard also exposes the TA activity tab', async ({
+    authenticatedPage: page,
+    testOrg,
+  }) => {
     await page.goto(`/assistant/${testOrg}/dashboard`);
     await waitForDataLoad(page);
+
+    await expect(page.getByRole('button', { name: 'TA activity' })).toBeVisible();
   });
 
-  test('assistant dashboard also shows TA leaderboard', async ({ authenticatedPage: page }) => {
-    await expect(page.getByText('TA Grading Leaderboard')).toBeVisible();
-  });
+  test('assistant can open the TA activity tab', async ({ authenticatedPage: page, testOrg }) => {
+    await page.goto(`/assistant/${testOrg}/dashboard`);
+    await waitForDataLoad(page);
 
-  test('assistant can view the leaderboard section', async ({ authenticatedPage: page }) => {
-    // The leaderboard should be visible to assistants
-    // NOTE: Actual ranking data requires seed data with graded assignments
-    await expect(page.getByText('TA Grading Leaderboard')).toBeVisible();
+    await openTAActivity(page);
+    await expect(taActivityCard(page)).toBeVisible();
   });
 });

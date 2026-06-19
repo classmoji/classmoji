@@ -27,7 +27,7 @@ export const createExtensionTask = task({
       amount: -tokenCost,
       student_id: studentId,
       classroom_id: classroomId,
-      repository_assignment_id: repositoryAssignmentId,
+      git_repo_assignment_id: repositoryAssignmentId,
       description: description || `Extension: ${hours} hour(s)`,
     });
   },
@@ -42,7 +42,7 @@ export const updateExtensionTask = task({
     transactionId: string;
     status: string;
     student?: { login: string; email?: string };
-    repositoryAssignment?: { assignment?: { title?: string } };
+    gitRepoAssignment?: { assignment?: { title?: string } };
   }) => {
     const { transactionId, status } = payload;
 
@@ -57,15 +57,15 @@ export const updateExtensionTask = task({
       transactionId: string;
       status: string;
       student?: { login: string; email?: string };
-      repositoryAssignment?: { assignment?: { title?: string } };
+      gitRepoAssignment?: { assignment?: { title?: string } };
     };
   }) => {
-    const { student, repositoryAssignment, status } = payload;
+    const { student, gitRepoAssignment, status } = payload;
 
     if (!student?.email) return;
 
     const html = `<p>Hi @${student.login}.</p>
-      <p>Your extension request for "${repositoryAssignment?.assignment?.title || 'assignment'}" has been <span style="font-weight:bold">${status.toLowerCase()}</span>.</p>
+      <p>Your extension request for "${gitRepoAssignment?.assignment?.title || 'assignment'}" has been <span style="font-weight:bold">${status.toLowerCase()}</span>.</p>
     `;
 
     await sendEmailTask.triggerAndWait({

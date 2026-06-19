@@ -18,7 +18,6 @@ import { PrismaClient } from '@prisma/client';
 const CLASSROOM_SLUG = 'classmoji-dev-winter-2025';
 const REPO_OWNER = 'classmoji-development';
 const REPO_NAME = 'content-classmoji-development-25w';
-const TERM_STRING = '25w';
 
 const prisma = new PrismaClient();
 
@@ -64,7 +63,7 @@ async function uniqueTitle(classroomId, base) {
 async function main() {
   const classroom = await prisma.classroom.findUnique({
     where: { slug: CLASSROOM_SLUG },
-    select: { id: true, term: true, year: true },
+    select: { id: true, content_namespace: true },
   });
   if (!classroom) {
     throw new Error(`Classroom "${CLASSROOM_SLUG}" not found`);
@@ -146,7 +145,6 @@ async function main() {
         classroom_id: classroom.id,
         title,
         slug,
-        term: TERM_STRING,
         content_path: contentPath,
         created_by: userId,
         is_draft: false,

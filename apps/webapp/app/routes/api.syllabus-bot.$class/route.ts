@@ -15,6 +15,7 @@
  */
 
 import { assertClassroomAccess } from '~/utils/helpers';
+import { assertClassroomMutationAllowed } from '~/utils/routeAuth.server';
 import { isAIAgentConfigured } from '~/utils/aiFeatures.server';
 import { getContentRepoName } from '@classmoji/utils';
 import { sendRequest } from '~/services/aiAgentConnection.server';
@@ -62,11 +63,12 @@ export async function loader({ params, request }: Route.LoaderArgs) {
   const isInstructor = ['OWNER', 'TEACHER'].includes(membership!.role);
 
   // Check if we have a content repo (either explicitly set or can be derived)
-  const contentRepoName = getContentRepoName({
-    login: classroom.git_organization?.login,
-    term: classroom.term ?? undefined,
-    year: classroom.year ?? undefined,
-  });
+  const gitOrgLogin = classroom.git_organization?.login;
+  const contentRepoName = classroom.content_namespace
+    ? `content-${gitOrgLogin}-${classroom.content_namespace}`
+    : gitOrgLogin
+      ? getContentRepoName({ login: gitOrgLogin })
+      : '';
 
   return jsonResponse({
     enabled: settings?.syllabus_bot_enabled ?? false,
@@ -75,7 +77,6 @@ export async function loader({ params, request }: Route.LoaderArgs) {
     isInstructor,
     orgName: classroom.name,
     courseName: (settings as { course_name?: string })?.course_name,
-    term: classroom.term,
     slidesUrl: process.env.SLIDES_URL || 'http://localhost:6500',
   });
 }
@@ -116,6 +117,7 @@ async function handleInitConversation(request: Request, classSlug: string, formD
     resourceType: 'SYLLABUS_BOT',
     attemptedAction: 'init_conversation',
   });
+  assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
 
   const settings = await ClassmojiService.classroom.getClassroomSettingsForServer(classroom.id);
 
@@ -135,7 +137,6 @@ async function handleInitConversation(request: Request, classSlug: string, formD
     gitOrgLogin: classroom.git_organization?.login, // GitHub org for content repo cloning
     orgName: classroom.name,
     courseName: (settings as { course_name?: string })?.course_name || classroom.name,
-    term: classroom.term || 'Current',
     userRole: contextRole,
   };
 
@@ -151,13 +152,14 @@ async function handleInitConversation(request: Request, classSlug: string, formD
 
   // If content repo is configured, add clone info
   // Use settings override or generate from classroom/git_org
+  const gitOrgLoginForClone = classroom.git_organization?.login;
   const contentRepoNameForClone =
     settings?.content_repo_name ||
-    getContentRepoName({
-      login: classroom.git_organization?.login,
-      term: classroom.term ?? undefined,
-      year: classroom.year ?? undefined,
-    });
+    (classroom.content_namespace
+      ? `content-${gitOrgLoginForClone}-${classroom.content_namespace}`
+      : gitOrgLoginForClone
+        ? getContentRepoName({ login: gitOrgLoginForClone })
+        : '');
   if (contentRepoNameForClone && classroom.git_organization?.github_installation_id) {
     try {
       const accessToken = await getInstallationToken(classroom.git_organization);
@@ -219,13 +221,14 @@ async function handleSendMessage(request: Request, classSlug: string, formData: 
   const content = formData.get('content') as string | null;
 
   // Verify user has access
-  await assertClassroomAccess({
+  const { classroom: smClassroom, membership: smMembership } = await assertClassroomAccess({
     request,
     classroomSlug: classSlug,
     allowedRoles: ['OWNER', 'TEACHER', 'ASSISTANT', 'STUDENT'],
     resourceType: 'SYLLABUS_BOT',
     attemptedAction: 'send_message',
   });
+  assertClassroomMutationAllowed({ status: smClassroom.status, role: smMembership!.role });
 
   if (!conversationId || !content) {
     return jsonResponse({ error: 'Missing conversationId or content' }, 400);

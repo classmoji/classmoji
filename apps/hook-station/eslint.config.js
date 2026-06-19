@@ -12,4 +12,10 @@ export default [
       'no-console': 'off',
     },
   },
+  {
+    files: ['vitest.config.ts'],
+    rules: {
+      'import/no-unresolved': 'off',
+    },
+  },
 ];

@@ -31,7 +31,7 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
   const teamMembers = team!.memberships.map(({ user }) => user);
   const tags = await ClassmojiService.organizationTag.findByClassroomId(classroom.id);
   const teamWithRepos = await ClassmojiService.team.findByIdWithRepositories(team!.id);
-  const repositoryCount = teamWithRepos?.repositories.length ?? 0;
+  const repositoryCount = teamWithRepos?.git_repos.length ?? 0;
   const canRenameTeam = classroom.git_organization?.provider === 'GITHUB';
 
   return { team, students: studentsObjects, teamMembers, tags, repositoryCount, canRenameTeam };
@@ -144,7 +144,7 @@ const AdminSingleTeamView = ({ loaderData }: Route.ComponentProps) => {
       title: 'Name',
       dataIndex: ['tag', 'name'],
       key: 'name',
-      width: '80%',
+      width: 200,
 
       render: (name: string) => <Tag>#{name}</Tag>,
     },
@@ -160,7 +160,7 @@ const AdminSingleTeamView = ({ loaderData }: Route.ComponentProps) => {
     {
       title: 'Student',
       dataIndex: 'name',
-      width: '80%',
+      width: 220,
       key: 'name',
       render: (
         _: unknown,
@@ -182,7 +182,7 @@ const AdminSingleTeamView = ({ loaderData }: Route.ComponentProps) => {
     <Drawer onClose={close} title={`@${slug}`} open={Boolean(open)} width="50%">
       {canRenameTeam && (
         <>
-          <p className="pb-2 font-semibold text-xl">Rename team</p>
+          <p className="pb-2 font-semibold text-base">Rename team</p>
 
           <Card className="mb-8">
             <div className="flex items-center gap-4">
@@ -195,7 +195,7 @@ const AdminSingleTeamView = ({ loaderData }: Route.ComponentProps) => {
                 Rename
               </Button>
             </div>
-            <p className="mt-2 text-xs text-gray-500 dark:text-gray-400">
+            <p className="mt-2 text-xs text-ink-3">
               Renames the team on GitHub and every linked repository ({repositoryCount} repo
               {repositoryCount === 1 ? '' : 's'}). Local clones need to update their git remote.
             </p>
@@ -217,15 +217,15 @@ const AdminSingleTeamView = ({ loaderData }: Route.ComponentProps) => {
             </Button>
           }
         >
-          <p className="mb-2 text-xs text-gray-500 dark:text-gray-400">
-            The team was renamed but these repositories still have the old suffix on GitHub.
-            Rename them manually or retry by renaming the team again.
+          <p className="mb-2 text-xs text-ink-3">
+            The team was renamed but these repositories still have the old suffix on GitHub. Rename
+            them manually or retry by renaming the team again.
           </p>
           <ul className="text-sm">
             {renameFailures.map(f => (
               <li key={f.name} className="mb-1">
                 <strong>{f.name}</strong>
-                <span className="ml-2 text-gray-500 dark:text-gray-400">— {f.error}</span>
+                <span className="ml-2 text-ink-3">— {f.error}</span>
               </li>
             ))}
           </ul>
@@ -248,7 +248,7 @@ const AdminSingleTeamView = ({ loaderData }: Route.ComponentProps) => {
         </p>
       </Modal>
 
-      <p className="pb-2 font-semibold text-xl">Tags</p>
+      <p className="pb-2 font-semibold text-base">Tags</p>
 
       <Card className="mb-8 ">
         <div className="flex items-center gap-4">
@@ -275,10 +275,11 @@ const AdminSingleTeamView = ({ loaderData }: Route.ComponentProps) => {
           rowHoverable={false}
           size="small"
           className="mt-4"
+          scroll={{ x: 'max-content' }}
         />
       </Card>
 
-      <p className="pb-2 font-semibold text-xl">Add team members</p>
+      <p className="pb-2 font-semibold text-base">Add team members</p>
 
       <Card>
         <div className="flex w-full items-end gap-4">
@@ -314,6 +315,7 @@ const AdminSingleTeamView = ({ loaderData }: Route.ComponentProps) => {
           className="mt-8"
           rowHoverable={false}
           size="small"
+          scroll={{ x: 'max-content' }}
         />
       </Card>
     </Drawer>

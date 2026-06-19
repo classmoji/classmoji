@@ -1,6 +1,6 @@
 ---
 title: 'Welcome to Classmoji'
-description: 'Introducing Classmoji — the GitHub-native LMS designed for modern CS education.'
+description: 'Introducing Classmoji, the Github-native platform designed for modern CS education.'
 pubDate: 2025-08-13
 author: 'Tim'
 tags: [welcome, grading, pedagogy, computer science]

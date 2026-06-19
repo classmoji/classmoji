@@ -19,9 +19,9 @@ export function getDevContext(): DevContext {
   // 1. From repo root: .dev-context
   // 2. From apps/webapp: ../../.dev-context
   const possiblePaths = [
-    join(process.cwd(), '.dev-context'),           // Repo root
-    join(process.cwd(), '../../.dev-context'),     // From apps/webapp
-    join(process.cwd(), '../../../.dev-context'),  // From apps/webapp/tests
+    join(process.cwd(), '.dev-context'), // Repo root
+    join(process.cwd(), '../../.dev-context'), // From apps/webapp
+    join(process.cwd(), '../../../.dev-context'), // From apps/webapp/tests
   ];
 
   let devContextPath: string | null = null;
@@ -77,13 +77,13 @@ export const TEST_CLASSROOM = process.env.TEST_CLASSROOM || 'classmoji-dev-winte
  * Test classroom name - displayed on classroom cards in the UI
  * Used to identify the correct classroom when users have multiple classrooms
  */
-export const TEST_CLASSROOM_NAME = process.env.TEST_CLASSROOM_NAME || 'Classmoji Dev';
+export const TEST_CLASSROOM_NAME = process.env.TEST_CLASSROOM_NAME || 'Dev Classroom';
 
 /**
  * Test git organization login - displayed on classroom cards in the UI
  * The select-organization page shows @{git-org-login} on the cards
  */
-export const TEST_GIT_ORG = process.env.TEST_GIT_ORG || 'classmoji-development';
+export const TEST_GIT_ORG = process.env.TEST_GIT_ORG || 'dev-org';
 
 /**
  * @deprecated Use TEST_CLASSROOM for URLs or TEST_GIT_ORG for UI text matching
@@ -116,15 +116,20 @@ export const ROLE_TEST_USERS = {
     name: 'Professor',
     tokenEnvVar: 'GITHUB_PROF_TOKEN',
   },
+  // Defaults MUST match packages/database/scripts/seed-test-user.js (fake-ta /
+  // fake-student-1) so that, even with the TEST_*_USER_* env vars unset, the
+  // assistant/student roles resolve to genuinely NON-owner identities. Defaulting
+  // these to prof-classmoji (the owner) would silently collapse every role and
+  // make 403/role-gating assertions pass while exercising owner access.
   assistant: {
-    id: process.env.TEST_TA_USER_ID || '220514774', // Configure in env for real TA user
-    login: process.env.TEST_TA_USER_LOGIN || 'prof-classmoji',
+    id: process.env.TEST_TA_USER_ID || '10000001',
+    login: process.env.TEST_TA_USER_LOGIN || 'fake-ta',
     name: 'Teaching Assistant',
     tokenEnvVar: 'GITHUB_TA_TOKEN',
   },
   student: {
-    id: process.env.TEST_STUDENT_USER_ID || '220514774', // Configure in env for real student user
-    login: process.env.TEST_STUDENT_USER_LOGIN || 'prof-classmoji',
+    id: process.env.TEST_STUDENT_USER_ID || '10000002',
+    login: process.env.TEST_STUDENT_USER_LOGIN || 'fake-student-1',
     name: 'Student',
     tokenEnvVar: 'GITHUB_STUDENT_TOKEN',
   },

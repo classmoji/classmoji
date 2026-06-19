@@ -3,20 +3,18 @@ import { useState } from 'react';
 
 import { IconUserSearch, IconTrash } from '@tabler/icons-react';
 import { Table, Radio, Popconfirm, Modal, Tag } from 'antd';
-import { toast } from 'react-toastify';
 
 import { getAuthSession } from '@classmoji/auth/server';
 import { authClient } from '@classmoji/auth/client';
 import {
   ButtonNew,
-  PageHeader,
   UserThumbnailView,
   SearchInput,
-  ProTierFeature,
   RequireRole,
   TableActionButtons,
 } from '~/components';
 import { ClassmojiService } from '@classmoji/services';
+import { useCallout } from '@classmoji/ui-components';
 export { action } from './action';
 import FormAssistant from './FormAssistant';
 
@@ -58,10 +56,11 @@ const AdminAssistants = ({ loaderData }: Route.ComponentProps) => {
   const { show, close, visible } = useDisclosure();
   const [query, setQuery] = useState('');
   const [impersonating, setImpersonating] = useState(false);
+  const callout = useCallout();
 
   const handleImpersonate = async (assistant: Assistant) => {
     if (!assistant.login) {
-      toast.error('Assistant has not accepted invite.');
+      callout.show({ variant: 'error', title: 'Assistant has not accepted invite.' });
       return;
     }
 
@@ -78,7 +77,10 @@ const AdminAssistants = ({ loaderData }: Route.ComponentProps) => {
       navigate(`/assistant/${classSlug}`);
     } catch (error: unknown) {
       console.error('Impersonation failed:', error);
-      toast.error(error instanceof Error ? error.message : 'Failed to view as assistant');
+      callout.show({
+        variant: 'error',
+        title: error instanceof Error ? error.message : 'Failed to view as assistant',
+      });
     } finally {
       setImpersonating(false);
     }
@@ -122,7 +124,7 @@ const AdminAssistants = ({ loaderData }: Route.ComponentProps) => {
       title: 'Assistant',
       dataIndex: 'name',
       key: 'name',
-      width: '30%',
+      width: 220,
       render: (_: unknown, assistant: Assistant) => {
         return <UserThumbnailView user={assistant} />;
       },
@@ -131,7 +133,7 @@ const AdminAssistants = ({ loaderData }: Route.ComponentProps) => {
       title: 'Grader Role',
       dataIndex: 'is_grader',
       key: 'is_grader',
-      width: '20%',
+      width: 130,
       render: (_: unknown, assistant: Assistant) => {
         return (
           <Radio.Group
@@ -149,7 +151,7 @@ const AdminAssistants = ({ loaderData }: Route.ComponentProps) => {
       title: 'Status',
       dataIndex: 'has_accepted_invite',
       key: 'has_accepted_invite',
-      width: '15%',
+      width: 110,
       render: (_: unknown, assistant: Assistant) => {
         return assistant.has_accepted_invite ? (
           <Tag color="green" className="font-semibold">
@@ -166,7 +168,7 @@ const AdminAssistants = ({ loaderData }: Route.ComponentProps) => {
       title: 'Actions',
       dataIndex: 'actions',
       key: 'actions',
-      width: '20%',
+      width: 200,
       render: (_: unknown, assistant: Assistant) => {
         return (
           <TableActionButtons
@@ -174,7 +176,7 @@ const AdminAssistants = ({ loaderData }: Route.ComponentProps) => {
               if (assistant.login) {
                 navigate(`/admin/${classSlug}/assistants/${assistant.login}`);
               } else {
-                toast.error('Assistant has not accepted invite.');
+                callout.show({ variant: 'error', title: 'Assistant has not accepted invite.' });
               }
             }}
           >
@@ -186,9 +188,9 @@ const AdminAssistants = ({ loaderData }: Route.ComponentProps) => {
                     handleImpersonate(assistant);
                   }
                 }}
-                className={`flex items-center gap-1 text-gray-600 hover:text-gray-800 cursor-pointer ${impersonating ? 'opacity-50' : ''}`}
+                className={`flex items-center gap-1 text-gray-600 hover:text-gray-800 dark:text-gray-300 dark:hover:text-gray-100 cursor-pointer ${impersonating ? 'opacity-50' : ''}`}
               >
-                <IconUserSearch size={17} />
+                <IconUserSearch size={16} />
                 <span>View as</span>
               </div>
             </RequireRole>
@@ -201,8 +203,8 @@ const AdminAssistants = ({ loaderData }: Route.ComponentProps) => {
                 okText="Remove"
                 cancelText="Cancel"
               >
-                <div className="flex items-center gap-1 text-red-600 cursor-pointer hover:text-red-700">
-                  <IconTrash size={17} />
+                <div className="flex items-center gap-1 text-red-600 hover:text-red-700 dark:text-red-400 dark:hover:text-red-300 cursor-pointer">
+                  <IconTrash size={16} />
                   <span>Remove</span>
                 </div>
               </Popconfirm>
@@ -214,66 +216,66 @@ const AdminAssistants = ({ loaderData }: Route.ComponentProps) => {
   ];
 
   return (
-    <ProTierFeature>
-      <div>
-        <Outlet />
+    <div className="min-h-full relative">
+      <Outlet />
 
-        <div className="flex justify-between items-start">
-          <PageHeader title="Assistants" routeName="assistants" />
-          <div className="flex gap-2 ">
-            <SearchInput
-              query={query}
-              setQuery={setQuery}
-              placeholder="Search assistants..."
-              className="w-80"
-            />
+      <div className="flex items-center justify-between gap-3 mt-2 mb-4">
+        <h1 className="text-lg font-semibold text-ink-1 shrink-0">Assistants</h1>
+
+        <div className="flex gap-3 min-w-0">
+          <SearchInput
+            query={query}
+            setQuery={setQuery}
+            placeholder="Search assistants..."
+            className="min-w-0 flex-1 sm:flex-initial sm:w-80"
+          />
+          <span data-tour="assistants-new" className="shrink-0">
             <ButtonNew action={show}>New assistant</ButtonNew>
-          </div>
-        </div>
-
-        <Modal
-          title="Add New Assistant"
-          open={visible}
-          onOk={close}
-          onCancel={close}
-          footer={null}
-          className="rounded-lg"
-        >
-          <FormAssistant close={close} token={token} />
-        </Modal>
-
-        <div className="space-y-6">
-          <div>
-            <Table
-              columns={columns}
-              dataSource={filteredAssistants}
-              rowHoverable={false}
-              pagination={{
-                pageSize: 25,
-                showSizeChanger: true,
-                showTotal: (total, range) => `${range[0]}-${range[1]} of ${total} assistants`,
-              }}
-              size="middle"
-              locale={{
-                emptyText: query ? (
-                  <div className="text-center py-8 text-gray-500">
-                    <div className="text-4xl mb-2">🔍</div>
-                    <div>No assistants found matching &ldquo;{query}&rdquo;</div>
-                    <div className="text-sm">Try adjusting your search terms</div>
-                  </div>
-                ) : (
-                  <div className="text-center py-8 text-gray-500">
-                    <div className="text-4xl mb-2">👨‍🏫</div>
-                    <div>No assistants added yet</div>
-                    <div className="text-sm">Add your first teaching assistant to get started!</div>
-                  </div>
-                ),
-              }}
-            />
-          </div>
+          </span>
         </div>
       </div>
-    </ProTierFeature>
+
+      <Modal
+        title="Add New Assistant"
+        open={visible}
+        onOk={close}
+        onCancel={close}
+        footer={null}
+        className="rounded-lg"
+      >
+        <FormAssistant close={close} token={token} />
+      </Modal>
+
+      <div className="rounded-2xl bg-panel ring-1 ring-line p-5 sm:p-6 min-h-[calc(100vh-10rem)]">
+        <Table
+          columns={columns}
+          dataSource={filteredAssistants}
+          rowHoverable={false}
+          pagination={{
+            pageSize: 25,
+            showSizeChanger: true,
+            showTotal: (total, range) => `${range[0]}-${range[1]} of ${total} assistants`,
+          }}
+          size="middle"
+          scroll={{ x: 'max-content' }}
+          locale={{
+            emptyText: query ? (
+              <div className="text-center py-12 text-gray-500">
+                <div className="font-medium">
+                  No assistants found matching &ldquo;{query}&rdquo;
+                </div>
+                <div className="text-sm">Try adjusting your search terms</div>
+              </div>
+            ) : (
+              <div className="text-center py-12 text-gray-500">
+                <div className="font-medium">No assistants added yet</div>
+                <div className="text-sm">Add your first teaching assistant to get started!</div>
+              </div>
+            ),
+          }}
+        />
+      </div>
+    </div>
   );
 };
 

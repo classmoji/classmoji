@@ -8,7 +8,7 @@ export default function CreateBlankTab() {
         name="title"
         rules={[{ required: true, message: 'Please enter a title' }]}
       >
-        <Input placeholder="Course Overview" />
+        <Input placeholder="Course Overview" data-tour="pages-new-title" />
       </Form.Item>
 
       {/* Hidden inputs */}

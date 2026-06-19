@@ -49,19 +49,19 @@ const EventCard = ({ event, onClick, showCreator = false, compact = false }: Eve
         </div>
 
         {/* Time */}
-        <div className="flex items-center gap-1.5 text-xs text-gray-600 dark:text-gray-400">
+        <div className="flex items-center gap-1.5 text-xs text-ink-2">
           <ClockCircleOutlined className="text-gray-400" />
           <span>
             {formatTime(event.start_time)} - {formatTime(event.end_time)}
           </span>
           {!compact && (
-            <span className="text-gray-400 dark:text-gray-500">• {formatDuration(duration)}</span>
+            <span className="text-ink-4">• {formatDuration(duration)}</span>
           )}
         </div>
 
         {/* Location/Virtual for compact view (office hours and lectures) */}
         {compact && ['OFFICE_HOURS', 'LECTURE', 'LAB'].includes(event.event_type) && (
-          <div className="flex items-center gap-1.5 text-xs text-gray-600 dark:text-gray-400">
+          <div className="flex items-center gap-1.5 text-xs text-ink-2">
             {event.meeting_link ? (
               <>
                 <VideoCameraOutlined className="text-blue-500" />
@@ -81,7 +81,7 @@ const EventCard = ({ event, onClick, showCreator = false, compact = false }: Eve
           <>
             {/* Location */}
             {event.location && (
-              <div className="flex items-center gap-1.5 text-xs text-gray-600 dark:text-gray-400">
+              <div className="flex items-center gap-1.5 text-xs text-ink-2">
                 <EnvironmentOutlined className="text-gray-400" />
                 <span className="truncate">{event.location}</span>
               </div>
@@ -110,7 +110,7 @@ const EventCard = ({ event, onClick, showCreator = false, compact = false }: Eve
               )}
 
               {event.is_recurring && (
-                <span className="text-xs px-2 py-0.5 rounded-full bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400">
+                <span className="text-xs px-2 py-0.5 rounded-full bg-gray-100 dark:bg-neutral-700 text-ink-2">
                   Recurring
                 </span>
               )}
@@ -130,14 +130,14 @@ const EventCard = ({ event, onClick, showCreator = false, compact = false }: Eve
 
             {/* Creator */}
             {showCreator && event.creator && (
-              <div className="text-xs text-gray-500 dark:text-gray-500 pt-1 border-t border-gray-100 dark:border-gray-700">
+              <div className="text-xs text-gray-500 dark:text-gray-500 pt-1 border-t border-gray-100 dark:border-neutral-700">
                 Created by {event.creator.name || event.creator.login}
               </div>
             )}
 
             {/* Deadline description */}
             {event.is_deadline && event.description && (
-              <div className="text-xs text-gray-600 dark:text-gray-400 italic pt-1">
+              <div className="text-xs text-ink-2 italic pt-1">
                 {event.description}
               </div>
             )}

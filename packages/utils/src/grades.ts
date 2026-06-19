@@ -4,7 +4,7 @@ export interface GradeEntry {
   emoji: string;
 }
 
-export interface RepositoryAssignment {
+export interface GitRepoAssignment {
   id: string;
   should_be_zero?: boolean;
   grades?: GradeEntry[];
@@ -15,16 +15,16 @@ export interface RepositoryAssignment {
   };
 }
 
-export interface Module {
+export interface Repository {
   type?: string;
   weight: number;
   is_extra_credit?: boolean;
   drop_lowest_count?: number;
 }
 
-export interface Repository {
-  assignments: RepositoryAssignment[];
-  module: Module;
+export interface GitRepo {
+  assignments: GitRepoAssignment[];
+  repository: Repository;
 }
 
 export interface OrganizationSettings {
@@ -39,7 +39,7 @@ export interface GradeResult {
 }
 
 interface AssignmentGradeEntry {
-  repoAssignment: RepositoryAssignment;
+  repoAssignment: GitRepoAssignment;
   numericGrade: number;
   weight: number;
   repositoryAssignmentId: string;
@@ -59,7 +59,7 @@ export const calculateLetterGrade = (
 };
 
 export const calculateStudentFinalGrade = (
-  repositories: Repository[],
+  gitRepos: GitRepo[],
   emojiToNumberMap: Record<string, number>,
   settings: OrganizationSettings,
   includeLatePenalty = true,
@@ -69,24 +69,24 @@ export const calculateStudentFinalGrade = (
   let totalWeight = 0;
   let extraCredit = 0;
 
-  for (const repo of repositories) {
-    if (includeGroupAssignment == false && repo.module.type === 'GROUP') continue;
+  for (const repo of gitRepos) {
+    if (includeGroupAssignment == false && repo.repository.type === 'GROUP') continue;
 
     const repositoryGrade = calculateRepositoryGrade(
       repo.assignments,
       emojiToNumberMap,
       settings,
-      repo.module,
+      repo.repository,
       includeLatePenalty
     );
 
     if (repositoryGrade === -1) continue;
 
-    if (repo.module.is_extra_credit == false) {
-      totalWeight += repo.module.weight;
-      finalGrade += repositoryGrade * (repo.module.weight / 100);
+    if (repo.repository.is_extra_credit == false) {
+      totalWeight += repo.repository.weight;
+      finalGrade += repositoryGrade * (repo.repository.weight / 100);
     } else {
-      extraCredit += repositoryGrade * (repo.module.weight / 100);
+      extraCredit += repositoryGrade * (repo.repository.weight / 100);
     }
   }
 
@@ -98,7 +98,7 @@ export const calculateStudentFinalGrade = (
 };
 
 /**
- * Find the optimal set of repository assignments to keep when dropping N lowest.
+ * Find the optimal set of gitRepo assignments to keep when dropping N lowest.
  * Tries all possible combinations and returns the set that maximizes the weighted grade.
  */
 const findOptimalRepositoryAssignmentsToKeep = (
@@ -148,10 +148,10 @@ const findOptimalRepositoryAssignmentsToKeep = (
 };
 
 export const calculateRepositoryGrade = (
-  repositoryAssignments: RepositoryAssignment[],
+  repositoryAssignments: GitRepoAssignment[],
   emojiToNumberMap: Record<string, number>,
   settings: OrganizationSettings,
-  module: Module,
+  repository: Repository,
   includeLatePenalty = true
 ): number => {
   let grade = 0;
@@ -186,14 +186,14 @@ export const calculateRepositoryGrade = (
     });
   }
 
-  if (module.is_extra_credit) {
+  if (repository.is_extra_credit) {
     for (const { numericGrade, weight } of assignmentGrades) {
       grade = grade + numericGrade * (weight / 100);
     }
     return grade;
   }
 
-  const dropCount = module.drop_lowest_count || 0;
+  const dropCount = repository.drop_lowest_count || 0;
   let assignmentsToInclude: AssignmentGradeEntry[] = assignmentGrades;
 
   if (dropCount > 0 && assignmentGrades.length > dropCount) {
@@ -225,13 +225,13 @@ export const calculateNumericGrade = (
 };
 
 /**
- * Apply late penalty to a numeric grade for a repository assignment.
+ * Apply late penalty to a numeric grade for a gitRepo assignment.
  * num_late_hours already accounts for extension hours, so no additional
  * adjustment is needed here.
  */
 export const applyLatePenalty = (
   numericGrade: number,
-  repoAssignment: RepositoryAssignment,
+  repoAssignment: GitRepoAssignment,
   settings: OrganizationSettings
 ): number => {
   if ((repoAssignment.num_late_hours ?? 0) > 0 && repoAssignment.is_late_override == false) {
@@ -259,14 +259,14 @@ export const convertEmojiToNumber = (
 };
 
 export const calculateGrades = (
-  repositories: Repository[],
+  gitRepos: GitRepo[],
   emojiMappings: Record<string, number>,
   settings: OrganizationSettings,
   letterGradeMappings: LetterGradeMappingEntry[]
 ): GradeResult => {
-  const finalNumericGrade = calculateStudentFinalGrade(repositories, emojiMappings, settings, true);
+  const finalNumericGrade = calculateStudentFinalGrade(gitRepos, emojiMappings, settings, true);
   const finalLetterGrade = calculateLetterGrade(finalNumericGrade, letterGradeMappings);
-  const rawNumericGrade = calculateStudentFinalGrade(repositories, emojiMappings, settings, false);
+  const rawNumericGrade = calculateStudentFinalGrade(gitRepos, emojiMappings, settings, false);
   const rawLetterGrade = calculateLetterGrade(rawNumericGrade, letterGradeMappings);
 
   return {
@@ -278,17 +278,17 @@ export const calculateGrades = (
 };
 
 /**
- * Get the list of dropped repository assignment IDs for a repository based on drop_lowest_count
+ * Get the list of dropped gitRepo assignment IDs for a gitRepo based on drop_lowest_count
  */
 export const getDroppedRepositoryAssignments = (
-  repositoryAssignments: RepositoryAssignment[],
+  repositoryAssignments: GitRepoAssignment[],
   emojiToNumberMap: Record<string, number>,
   settings: OrganizationSettings,
-  module: Module
+  repository: Repository
 ): string[] => {
   if (!repositoryAssignments || repositoryAssignments.length === 0) return [];
-  if (!module.drop_lowest_count || module.drop_lowest_count === 0) return [];
-  if (module.is_extra_credit) return [];
+  if (!repository.drop_lowest_count || repository.drop_lowest_count === 0) return [];
+  if (repository.is_extra_credit) return [];
 
   const assignmentGrades: AssignmentGradeEntry[] = [];
 
@@ -314,11 +314,11 @@ export const getDroppedRepositoryAssignments = (
     });
   }
 
-  if (assignmentGrades.length <= module.drop_lowest_count) return [];
+  if (assignmentGrades.length <= repository.drop_lowest_count) return [];
 
   const assignmentsToKeep = findOptimalRepositoryAssignmentsToKeep(
     assignmentGrades,
-    module.drop_lowest_count
+    repository.drop_lowest_count
   );
   const keptAssignmentIds = new Set(
     assignmentsToKeep.map(({ repositoryAssignmentId }) => repositoryAssignmentId)
@@ -330,20 +330,20 @@ export const getDroppedRepositoryAssignments = (
 };
 
 /**
- * Check if a specific repository assignment is dropped for a repository
+ * Check if a specific gitRepo assignment is dropped for a gitRepo
  */
 export const isRepositoryAssignmentDropped = (
   repositoryAssignmentId: string,
-  allRepositoryAssignments: RepositoryAssignment[],
+  allRepositoryAssignments: GitRepoAssignment[],
   emojiToNumberMap: Record<string, number>,
   settings: OrganizationSettings,
-  module: Module
+  repository: Repository
 ): boolean => {
   const droppedRepositoryAssignmentIds = getDroppedRepositoryAssignments(
     allRepositoryAssignments,
     emojiToNumberMap,
     settings,
-    module
+    repository
   );
   return droppedRepositoryAssignmentIds.includes(repositoryAssignmentId);
 };

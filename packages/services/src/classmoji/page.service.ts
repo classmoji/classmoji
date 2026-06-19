@@ -1,7 +1,8 @@
 import getPrisma from '@classmoji/database';
-import { titleToIdentifier, generateTermString } from '@classmoji/utils';
+import { titleToIdentifier } from '@classmoji/utils';
 import { ContentService } from '@classmoji/content';
 import * as contentManifestService from './contentManifest.service.ts';
+import * as notificationService from './notification.service.ts';
 import type { Prisma } from '@prisma/client';
 
 interface PageQueryOptions {
@@ -42,7 +43,7 @@ export async function create(values: Prisma.PageUncheckedCreateInput) {
       creator: true,
       links: {
         include: {
-          module: true,
+          repository: true,
           assignment: true,
         },
       },
@@ -72,7 +73,7 @@ export async function findById(pageId: string, options: PageQueryOptions = {}) {
         (options.includeLinks ?? false)
           ? {
               include: {
-                module: true,
+                repository: true,
                 assignment: true,
               },
             }
@@ -105,7 +106,7 @@ export async function findByClassroomId(classroomId: string, options: PageQueryO
         (options.includeLinks ?? false)
           ? {
               include: {
-                module: true,
+                repository: true,
                 assignment: true,
               },
             }
@@ -120,12 +121,12 @@ export async function findByClassroomId(classroomId: string, options: PageQueryO
 }
 
 /**
- * Find pages linked to a module
+ * Find pages linked to a repository
  */
-export async function findByModule(moduleId: string) {
+export async function findByRepository(repositoryId: string) {
   const pageLinks = await getPrisma().pageLink.findMany({
     where: {
-      module_id: moduleId,
+      repository_id: repositoryId,
     },
     include: {
       page: {
@@ -176,26 +177,26 @@ export async function findByAssignment(assignmentId: string) {
 }
 
 /**
- * Link a page to a module or assignment
+ * Link a page to a repository or assignment
  */
 export async function linkPage(
   pageId: string,
   {
-    moduleId,
+    repositoryId,
     assignmentId,
     order = 0,
-  }: { moduleId?: string; assignmentId?: string; order?: number }
+  }: { repositoryId?: string; assignmentId?: string; order?: number }
 ) {
   const link = await getPrisma().pageLink.create({
     data: {
       page_id: pageId,
-      module_id: moduleId || null,
+      repository_id: repositoryId || null,
       assignment_id: assignmentId || null,
       order,
     },
     include: {
       page: true,
-      module: true,
+      repository: true,
       assignment: true,
     },
   });
@@ -204,16 +205,16 @@ export async function linkPage(
 }
 
 /**
- * Unlink a page from a module or assignment
+ * Unlink a page from a repository or assignment
  */
 export async function unlinkPage(
   pageId: string,
-  { moduleId, assignmentId }: { moduleId?: string; assignmentId?: string }
+  { repositoryId, assignmentId }: { repositoryId?: string; assignmentId?: string }
 ) {
   const link = await getPrisma().pageLink.deleteMany({
     where: {
       page_id: pageId,
-      module_id: moduleId || null,
+      repository_id: repositoryId || null,
       assignment_id: assignmentId || null,
     },
   });
@@ -245,7 +246,7 @@ export async function update(
       creator: true,
       links: {
         include: {
-          module: true,
+          repository: true,
           assignment: true,
         },
       },
@@ -291,11 +292,7 @@ export async function deletePage(pageId: string) {
 
   // Delete from GitHub if configured
   if (gitOrgLogin && page.content_path) {
-    const term = generateTermString(
-      page.classroom.term ?? undefined,
-      page.classroom.year ?? undefined
-    );
-    const repoName = `content-${gitOrgLogin}-${term}`;
+    const repoName = `content-${gitOrgLogin}-${page.classroom.content_namespace}`;
 
     try {
       await ContentService.deleteFolder({
@@ -352,7 +349,7 @@ export async function findByContentPath(
         (options.includeLinks ?? false)
           ? {
               include: {
-                module: true,
+                repository: true,
                 assignment: true,
               },
             }
@@ -367,6 +364,14 @@ export async function findByContentPath(
  * Quick update for specific fields
  */
 export async function quickUpdate(pageId: string, updates: Prisma.PageUncheckedUpdateInput) {
+  const previous =
+    'is_draft' in updates
+      ? await getPrisma().page.findUnique({
+          where: { id: pageId },
+          select: { is_draft: true },
+        })
+      : null;
+
   const page = await getPrisma().page.update({
     where: { id: pageId },
     data: {
@@ -374,6 +379,20 @@ export async function quickUpdate(pageId: string, updates: Prisma.PageUncheckedU
       updated_at: new Date(),
     },
   });
+
+  if (previous && previous.is_draft !== page.is_draft) {
+    await notificationService.runSafely('page publish notification', async () => {
+      const studentIds = await notificationService.getStudentsInClassroom(page.classroom_id);
+      await notificationService.createNotifications({
+        type: page.is_draft ? 'PAGE_UNPUBLISHED' : 'PAGE_PUBLISHED',
+        classroomId: page.classroom_id,
+        recipientUserIds: studentIds,
+        resourceType: 'page',
+        resourceId: page.id,
+        title: page.is_draft ? `Page unpublished: ${page.title}` : `Page published: ${page.title}`,
+      });
+    });
+  }
 
   return page;
 }

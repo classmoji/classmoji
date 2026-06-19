@@ -10,9 +10,9 @@ import {
   IconNotes,
 } from '@tabler/icons-react';
 import getPrisma from '@classmoji/database';
-import { assertClassroomAccess } from '~/utils/helpers';
+import { assertClassroomAccess, assertClassroomMutationAllowed } from '~/utils/helpers';
 import { ClassmojiService } from '@classmoji/services';
-import { PageHeader, TableActionButtons, RecentViewers } from '~/components';
+import { TableActionButtons, RecentViewers } from '~/components';
 import type { Route } from './+types/route';
 
 interface Slide {
@@ -70,13 +70,14 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
   const value = formData.get('value') as string;
 
   // Authorization: require OWNER or TEACHER to modify slide settings
-  await assertClassroomAccess({
+  const { classroom, membership } = await assertClassroomAccess({
     request,
     classroomSlug: classSlug,
     allowedRoles: ['OWNER', 'TEACHER'],
     resourceType: 'SLIDES',
     attemptedAction: 'update_slide_visibility',
   });
+  assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
 
   // Handle status changes (combines is_draft and is_public)
   if (field === 'status') {
@@ -278,9 +279,9 @@ export default function SlidesAdmin({ loaderData }: Route.ComponentProps) {
             href={`${slidesUrl}/${record.id}/present`}
             target="_blank"
             rel="noopener noreferrer"
-            className="flex items-center gap-1 !text-gray-600 hover:text-gray-800 no-underline cursor-pointer"
+            className="flex items-center gap-1 !text-gray-600 hover:text-gray-800 dark:!text-gray-300 dark:hover:!text-gray-100 no-underline cursor-pointer"
           >
-            <IconPresentation size={17} />
+            <IconPresentation size={16} />
             <span>Present</span>
           </a>
         </TableActionButtons>
@@ -289,9 +290,9 @@ export default function SlidesAdmin({ loaderData }: Route.ComponentProps) {
   ];
 
   return (
-    <div>
-      <div className="mb-2 flex justify-between items-start">
-        <PageHeader title="Slides" routeName="slides" />
+    <div className="min-h-full relative">
+      <div className="flex items-center justify-between gap-3 mt-2 mb-4">
+        <h1 className="text-lg font-semibold text-ink-1">Slides</h1>
         <div className="flex items-center gap-3">
           <Button
             onClick={() => {
@@ -311,30 +312,28 @@ export default function SlidesAdmin({ loaderData }: Route.ComponentProps) {
         </div>
       </div>
 
-      <div className="space-y-6">
-        <div className="">
-          <Table
-            columns={columns as Parameters<typeof Table>[0]['columns']}
-            dataSource={slides}
-            rowKey="id"
-            rowHoverable={false}
-            size="middle"
-            pagination={{
-              pageSize: 25,
-              showSizeChanger: true,
-              showTotal: (total, range) => `${range[0]}-${range[1]} of ${total} slides`,
-            }}
-            locale={{
-              emptyText: (
-                <div className="text-center py-8 text-gray-500">
-                  <div className="text-4xl mb-2">🎞️</div>
-                  <div>No slides created yet</div>
-                  <div className="text-sm">Create your first slide deck to get started!</div>
-                </div>
-              ),
-            }}
-          />
-        </div>
+      <div className="rounded-2xl bg-panel ring-1 ring-line p-5 sm:p-6 min-h-[calc(100vh-10rem)]">
+        <Table
+          columns={columns as Parameters<typeof Table>[0]['columns']}
+          dataSource={slides}
+          rowKey="id"
+          rowHoverable={false}
+          size="middle"
+          scroll={{ x: 'max-content' }}
+          pagination={{
+            pageSize: 25,
+            showSizeChanger: true,
+            showTotal: (total, range) => `${range[0]}-${range[1]} of ${total} slides`,
+          }}
+          locale={{
+            emptyText: (
+              <div className="text-center py-12 text-gray-500">
+                <div className="font-medium">No slides created yet</div>
+                <div className="text-sm">Create your first slide deck to get started!</div>
+              </div>
+            ),
+          }}
+        />
       </div>
     </div>
   );

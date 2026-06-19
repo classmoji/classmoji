@@ -5,7 +5,7 @@ import { sleep } from '~/utils/helpers';
 import getPrisma from '@classmoji/database';
 import { ClassmojiService, getGitProvider } from '@classmoji/services';
 import { ActionTypes } from '~/constants';
-import { requireClassroomAdmin } from '~/utils/routeAuth.server';
+import { requireClassroomAdmin, assertClassroomMutationAllowed } from '~/utils/routeAuth.server';
 import type { Route } from './+types/route';
 
 interface RepoRename {
@@ -19,10 +19,11 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
 
   invariant(slug, 'Team slug is required');
 
-  const { classroom } = await requireClassroomAdmin(request, classSlug, {
+  const { classroom, membership } = await requireClassroomAdmin(request, classSlug, {
     resourceType: 'TEAMS',
     action: 'edit_team',
   });
+  assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
 
   const data = await request.json();
 
@@ -118,7 +119,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
       }
 
       const teamWithRepos = await ClassmojiService.team.findByIdWithRepositories(team.id);
-      const repositories = teamWithRepos?.repositories ?? [];
+      const repositories = teamWithRepos?.git_repos ?? [];
 
       const gitProvider = getGitProvider(classroom.git_organization);
 
@@ -133,10 +134,9 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
           classroom.id
         );
         if (existing && existing.id !== team.id) {
-          throw new Response(
-            `A team with slug "${newSlug}" already exists in this classroom`,
-            { status: 409 }
-          );
+          throw new Response(`A team with slug "${newSlug}" already exists in this classroom`, {
+            status: 409,
+          });
         }
       }
 

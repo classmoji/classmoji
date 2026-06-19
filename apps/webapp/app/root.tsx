@@ -14,16 +14,17 @@ import axios from 'axios';
 
 import React, { useEffect } from 'react';
 import dayjs from 'dayjs';
-import { ToastContainer } from 'react-toastify';
-import { ConfigProvider, theme } from 'antd';
+import { ConfigProvider, theme, App as AntdApp } from 'antd';
 import { IconMoodSad } from '@tabler/icons-react';
 import { auth as triggerAuth } from '@trigger.dev/sdk';
 
 import { GitHubProvider, ClassmojiService } from '@classmoji/services';
+import { CalloutProvider, CalloutSlot } from '@classmoji/ui-components';
 import { auth, getAuthSession } from '@classmoji/auth/server';
 import { isAIAgentConfigured } from '~/utils/aiFeatures.server';
 import type { Route } from './+types/root';
 import type { MembershipWithOrganization, AppUser, Role } from '~/types';
+import { CLASSROOM_SETTINGS_SELECT } from '~/types';
 import type { ThemeConfig } from 'antd';
 import { useNotifiedFetcher, useDarkMode } from './hooks';
 import antdTheme from './config/antd';
@@ -35,7 +36,9 @@ import { FetcherContext, UserContext } from '~/contexts';
 
 import RenderErrorBoundary from './components/ErrorBoundary';
 import { SyllabusBotRoot } from './components/features/syllabus-bot';
+import { OnboardingTour, InClassroomTour } from './components/features/onboarding';
 import ImpersonationBanner from './components/features/admin/ImpersonationBanner';
+import NavigationProgress from './components/layout/NavigationProgress';
 
 import relativeTime from 'dayjs/plugin/relativeTime';
 import isSameOrBefore from 'dayjs/plugin/isSameOrBefore';
@@ -43,8 +46,9 @@ dayjs.extend(relativeTime);
 dayjs.extend(isSameOrBefore);
 
 import getPrisma from '@classmoji/database';
+import '@fontsource-variable/mona-sans';
 import '@fontsource/quicksand/700.css';
-import 'react-toastify/dist/ReactToastify.css';
+import '@fontsource/fredoka/600.css';
 import '~/styles/tailwind.css';
 import '~/styles/global.css';
 
@@ -67,19 +71,25 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
     return { user: null };
   }
 
-  // Create Trigger.dev public token for task monitoring (non-fatal if not configured)
+  // Create Trigger.dev public token for task monitoring. Only attempt this when a
+  // secret key is actually configured: without it the call cannot mint a usable
+  // token, and running it on every navigation (e.g. across an e2e suite) is pure
+  // waste — and real Trigger.dev API usage wherever a key is present. Gating on
+  // the key keeps production behaviour identical while making CI/e2e a no-op.
   let publicToken = null;
-  try {
-    publicToken = await triggerAuth.createPublicToken({
-      expirationTime: '1hr',
-      scopes: {
-        read: {
-          runs: true,
+  if (process.env.TRIGGER_SECRET_KEY || process.env.TRIGGER_ACCESS_TOKEN) {
+    try {
+      publicToken = await triggerAuth.createPublicToken({
+        expirationTime: '1hr',
+        scopes: {
+          read: {
+            runs: true,
+          },
         },
-      },
-    });
-  } catch {
-    // Trigger.dev not configured - skip public token
+      });
+    } catch {
+      // Trigger.dev not configured correctly - skip public token
+    }
   }
 
   if (url.pathname.endsWith('/invitation')) return { user: null };
@@ -126,13 +136,7 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
             classroom: {
               include: {
                 git_organization: true,
-                settings: {
-                  select: {
-                    quizzes_enabled: true,
-                    slides_enabled: true,
-                    updated_at: true,
-                  },
-                },
+                settings: { select: CLASSROOM_SETTINGS_SELECT },
               },
             },
           },
@@ -157,13 +161,7 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
               classroom: {
                 include: {
                   git_organization: true,
-                  settings: {
-                    select: {
-                      quizzes_enabled: true,
-                      slides_enabled: true,
-                      updated_at: true,
-                    },
-                  },
+                  settings: { select: CLASSROOM_SETTINGS_SELECT },
                 },
               },
             },
@@ -204,13 +202,7 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
                 classroom: {
                   include: {
                     git_organization: true,
-                    settings: {
-                      select: {
-                        quizzes_enabled: true,
-                        slides_enabled: true,
-                        updated_at: true,
-                      },
-                    },
+                    settings: { select: CLASSROOM_SETTINGS_SELECT },
                   },
                 },
               },
@@ -267,10 +259,16 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
   };
 };
 
-const App = ({ loaderData }: Route.ComponentProps) => {
+// Provides FetcherContext; must live inside CalloutProvider since
+// useNotifiedFetcher reads useCallout().
+const FetcherProvider = ({ children }: { children: React.ReactNode }) => {
   const { fetcher, notify } = useNotifiedFetcher();
+  return <FetcherContext.Provider value={{ fetcher, notify }}>{children}</FetcherContext.Provider>;
+};
+
+const App = ({ loaderData }: Route.ComponentProps) => {
   const { user, session } = loaderData;
-  const { isDarkMode } = useDarkMode();
+  const { isDarkMode, accent } = useDarkMode();
   const { pathname } = useLocation();
   const {
     setClassroom,
@@ -343,12 +341,6 @@ const App = ({ loaderData }: Route.ComponentProps) => {
       <head>
         <meta charSet="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
-        <link rel="preconnect" href="https://fonts.googleapis.com" />
-        <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
-        <link
-          href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:ital,wght@0,100..800;1,100..800&display=swap"
-          rel="stylesheet"
-        />
         <Meta />
         <Links />
         <script
@@ -356,11 +348,37 @@ const App = ({ loaderData }: Route.ComponentProps) => {
             __html: `
               (function() {
                 try {
-                  var isDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-                  if (isDark) {
-                    document.documentElement.classList.add('dark');
+                  var root = document.documentElement;
+                  var saved = null;
+                  try { saved = JSON.parse(localStorage.getItem('cm-tweaks') || 'null'); } catch (e) {}
+                  var theme;
+                  if (saved && (saved.theme === 'light' || saved.theme === 'dark')) {
+                    theme = saved.theme;
+                  } else {
+                    theme = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
                   }
-                } catch (error: unknown) { console.log(error); }
+                  root.setAttribute('data-theme', theme);
+                  if (theme === 'dark') root.classList.add('dark');
+                  var accent = (saved && typeof saved.accent === 'string') ? saved.accent : '#21883d';
+                  var legacyAccents = { '#6d5efc': 1, '#0ea5e9': 1 };
+                  var ver = (saved && typeof saved._v === 'number') ? saved._v : 0;
+                  if (ver < 2 && legacyAccents[(accent || '').toLowerCase()]) accent = '#21883d';
+                  root.style.setProperty('--accent', accent);
+                  var bgKey = (saved && typeof saved.background === 'string') ? saved.background : 'default';
+                  var PRESETS = {
+                    aurora: { light: ['#ffc9dd','#b9c9ff','#e4d4ff','#dce5ff','#ffcedd','#fbeaf2','#f0e3fa','#fdf4f8'], dark: ['#3a1a44','#0e0a26','#17102c','#241a44','#0e0a22','#170f1e','#1e1530','#1a1226'] },
+                    mint:   { light: ['#b9e7cc','#a8dec1','#cfe8d8','#dcecdf','#b7d9c4','#e8f3ec','#d9ebe1','#f2f8f4'], dark: ['#123629','#061510','#0c2118','#102c22','#04100b','#0a1812','#0e2119','#0c1b14'] },
+                    peach:  { light: ['#ffcea1','#ffb589','#ffdcbd','#ffe4cc','#ffc395','#fcebd8','#f6dcbf','#fdf3e7'], dark: ['#3b1f12','#160b07','#1e1109','#26160d','#0f0805','#1a110a','#261a10','#1d140c'] },
+                    slate:  { light: ['#d6dce6','#c3cbd9','#d0d7e1','#dde2eb','#c6ccd8','#edf0f5','#e0e5ee','#f5f7fa'], dark: ['#21252f','#0a0c14','#10131c','#171a24','#0a0b10','#0f1117','#161a22','#111319'] },
+                    dusk:   { light: ['#b4c3f0','#8fa3db','#bcc7e7','#c9d2ed','#9dadd8','#dfe6f7','#ced8ef','#ecf0fa'], dark: ['#232a5a','#050825','#0a1030','#121a40','#050720','#0c1029','#131838','#0e1330'] }
+                  };
+                  var keys = ['--bg-stop-1','--bg-stop-2','--bg-stop-3a','--bg-stop-3b','--bg-stop-3c','--paper','--paper-2','--sidebar'];
+                  if (PRESETS[bgKey]) {
+                    var arr = PRESETS[bgKey][theme === 'dark' ? 'dark' : 'light'];
+                    for (var i = 0; i < 8; i++) root.style.setProperty(keys[i], arr[i]);
+                  }
+                  root.setAttribute('data-bg', bgKey);
+                } catch (error) { /* noop */ }
               })();
             `,
           }}
@@ -372,6 +390,32 @@ const App = ({ loaderData }: Route.ComponentProps) => {
             theme={
               {
                 ...(isDarkMode ? antdDarkTheme : antdTheme),
+                token: {
+                  ...(isDarkMode ? antdDarkTheme : antdTheme).token,
+                  colorPrimary: accent,
+                  colorLink: accent,
+                },
+                components: {
+                  ...(isDarkMode ? antdDarkTheme : antdTheme).components,
+                  Button: {
+                    ...((isDarkMode ? antdDarkTheme : antdTheme).components?.Button ?? {}),
+                    colorPrimary: accent,
+                    colorPrimaryHover: accent,
+                    colorPrimaryActive: accent,
+                  },
+                  Tabs: {
+                    ...((isDarkMode ? antdDarkTheme : antdTheme).components?.Tabs ?? {}),
+                    inkBarColor: accent,
+                    itemSelectedColor: accent,
+                    itemHoverColor: accent,
+                  },
+                  Switch: {
+                    ...(((isDarkMode ? antdDarkTheme : antdTheme) as ThemeConfig).components
+                      ?.Switch ?? {}),
+                    colorPrimary: accent,
+                    colorPrimaryHover: accent,
+                  },
+                },
                 algorithm: isDarkMode ? theme.darkAlgorithm : theme.defaultAlgorithm,
               } as ThemeConfig
             }
@@ -382,30 +426,31 @@ const App = ({ loaderData }: Route.ComponentProps) => {
               </div>
             )}
           >
-            <UserContext.Provider value={{ user }}>
-              <FetcherContext.Provider value={{ fetcher, notify }}>
-                <ToastContainer
-                  position="top-center"
-                  autoClose={3000}
-                  hideProgressBar
-                  newestOnTop={false}
-                  closeOnClick
-                  pauseOnFocusLoss
-                  draggable
-                  pauseOnHover
-                  theme="colored"
-                />
-
-                <ImpersonationBanner
-                  key={(session as Record<string, Record<string, string>>)?.session?.id}
-                  session={session}
-                />
-                <Outlet />
-                <SyllabusBotRoot />
-                <ScrollRestoration />
-                <Scripts />
-              </FetcherContext.Provider>
-            </UserContext.Provider>
+            <AntdApp>
+              <UserContext.Provider value={{ user }}>
+                <CalloutProvider>
+                  <FetcherProvider>
+                    {/* Global callout slot: callouts are fixed-position viewport
+                        overlays and the fetcher/notify system is global, so the
+                        slot must be too. Without this, callouts fired outside a
+                        classroom layout (landing, registration, select-organization)
+                        are buffered then silently dropped. */}
+                    <CalloutSlot />
+                    <NavigationProgress />
+                    <ImpersonationBanner
+                      key={(session as Record<string, Record<string, string>>)?.session?.id}
+                      session={session}
+                    />
+                    <Outlet />
+                    <SyllabusBotRoot />
+                    <OnboardingTour />
+                    <InClassroomTour />
+                    <ScrollRestoration />
+                    <Scripts />
+                  </FetcherProvider>
+                </CalloutProvider>
+              </UserContext.Provider>
+            </AntdApp>
           </ConfigProvider>
         </RenderErrorBoundary>
       </body>
@@ -459,11 +504,37 @@ export function ErrorBoundary() {
             __html: `
               (function() {
                 try {
-                  var isDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-                  if (isDark) {
-                    document.documentElement.classList.add('dark');
+                  var root = document.documentElement;
+                  var saved = null;
+                  try { saved = JSON.parse(localStorage.getItem('cm-tweaks') || 'null'); } catch (e) {}
+                  var theme;
+                  if (saved && (saved.theme === 'light' || saved.theme === 'dark')) {
+                    theme = saved.theme;
+                  } else {
+                    theme = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
                   }
-                } catch (error: unknown) { console.log(error); }
+                  root.setAttribute('data-theme', theme);
+                  if (theme === 'dark') root.classList.add('dark');
+                  var accent = (saved && typeof saved.accent === 'string') ? saved.accent : '#21883d';
+                  var legacyAccents = { '#6d5efc': 1, '#0ea5e9': 1 };
+                  var ver = (saved && typeof saved._v === 'number') ? saved._v : 0;
+                  if (ver < 2 && legacyAccents[(accent || '').toLowerCase()]) accent = '#21883d';
+                  root.style.setProperty('--accent', accent);
+                  var bgKey = (saved && typeof saved.background === 'string') ? saved.background : 'default';
+                  var PRESETS = {
+                    aurora: { light: ['#ffc9dd','#b9c9ff','#e4d4ff','#dce5ff','#ffcedd','#fbeaf2','#f0e3fa','#fdf4f8'], dark: ['#3a1a44','#0e0a26','#17102c','#241a44','#0e0a22','#170f1e','#1e1530','#1a1226'] },
+                    mint:   { light: ['#b9e7cc','#a8dec1','#cfe8d8','#dcecdf','#b7d9c4','#e8f3ec','#d9ebe1','#f2f8f4'], dark: ['#123629','#061510','#0c2118','#102c22','#04100b','#0a1812','#0e2119','#0c1b14'] },
+                    peach:  { light: ['#ffcea1','#ffb589','#ffdcbd','#ffe4cc','#ffc395','#fcebd8','#f6dcbf','#fdf3e7'], dark: ['#3b1f12','#160b07','#1e1109','#26160d','#0f0805','#1a110a','#261a10','#1d140c'] },
+                    slate:  { light: ['#d6dce6','#c3cbd9','#d0d7e1','#dde2eb','#c6ccd8','#edf0f5','#e0e5ee','#f5f7fa'], dark: ['#21252f','#0a0c14','#10131c','#171a24','#0a0b10','#0f1117','#161a22','#111319'] },
+                    dusk:   { light: ['#b4c3f0','#8fa3db','#bcc7e7','#c9d2ed','#9dadd8','#dfe6f7','#ced8ef','#ecf0fa'], dark: ['#232a5a','#050825','#0a1030','#121a40','#050720','#0c1029','#131838','#0e1330'] }
+                  };
+                  var keys = ['--bg-stop-1','--bg-stop-2','--bg-stop-3a','--bg-stop-3b','--bg-stop-3c','--paper','--paper-2','--sidebar'];
+                  if (PRESETS[bgKey]) {
+                    var arr = PRESETS[bgKey][theme === 'dark' ? 'dark' : 'light'];
+                    for (var i = 0; i < 8; i++) root.style.setProperty(keys[i], arr[i]);
+                  }
+                  root.setAttribute('data-bg', bgKey);
+                } catch (error) { /* noop */ }
               })();
             `,
           }}
@@ -528,10 +599,8 @@ export function ErrorBoundary() {
                     />
                   </svg>
                 </div>
-                <h1 className="text-2xl font-semibold text-gray-900 dark:text-gray-100 mb-2">
-                  Something went wrong
-                </h1>
-                <p className="text-gray-600 dark:text-gray-400">
+                <h1 className="text-2xl font-semibold text-ink-0 mb-2">Something went wrong</h1>
+                <p className="text-ink-2">
                   {errorMessage ||
                     'We encountered an unexpected error. Our team has been notified and is working on a fix.'}
                 </p>
@@ -540,7 +609,7 @@ export function ErrorBoundary() {
               <div className="flex flex-col sm:flex-row gap-3 justify-center">
                 <button
                   onClick={() => (window.location.href = '/')}
-                  className="px-5 py-2.5 text-sm font-medium rounded-lg border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-800 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
+                  className="px-5 py-2.5 text-sm font-medium rounded-lg border border-gray-300 dark:border-gray-600 text-ink-1 bg-white dark:bg-neutral-800 hover:bg-gray-50 dark:hover:bg-neutral-700 transition-colors"
                 >
                   Back to Home
                 </button>
@@ -554,7 +623,7 @@ export function ErrorBoundary() {
 
               {isDevelopment && !!error && (
                 <div className="mt-8" key="dev-error">
-                  <pre className="p-4 bg-gray-900 dark:bg-gray-950 rounded-lg text-xs overflow-auto max-h-80 border border-gray-200 dark:border-gray-800">
+                  <pre className="p-4 bg-gray-900 dark:bg-neutral-950 rounded-lg text-xs overflow-auto max-h-80 border border-gray-200 dark:border-neutral-800">
                     <code className="text-red-400">
                       {errorStatus
                         ? `Response ${errorStatus}: ${errorMessage}`

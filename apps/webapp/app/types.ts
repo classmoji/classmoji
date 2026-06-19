@@ -1,5 +1,18 @@
 import type { Prisma, Role, SubscriptionTier } from '@prisma/client';
 
+// Classroom-settings projection shared by the root loader's user queries. Single
+// source of truth so adding a field is one edit, not four. Only non-sensitive
+// fields the client nav/theme needs (never API keys).
+export const CLASSROOM_SETTINGS_SELECT = {
+  quizzes_enabled: true,
+  slides_enabled: true,
+  show_modules: true,
+  show_pages: true,
+  show_repos: true,
+  theme: true,
+  updated_at: true,
+} as const satisfies Prisma.ClassroomSettingsSelect;
+
 // The Prisma include shape used in root.tsx loader for User queries
 type UserInclude = {
   include: {
@@ -8,13 +21,7 @@ type UserInclude = {
         classroom: {
           include: {
             git_organization: true;
-            settings: {
-              select: {
-                quizzes_enabled: true;
-                slides_enabled: true;
-                updated_at: true;
-              };
-            };
+            settings: { select: typeof CLASSROOM_SETTINGS_SELECT };
           };
         };
       };
@@ -91,7 +98,27 @@ export interface StoreState {
   // App slice
   showSpinner: boolean;
   setShowSpinner: (showSpinner: boolean) => void;
+
+  // Ask Moji (course assistant) slice
+  isAskMojiOpen: boolean;
+  setAskMojiOpen: (open: boolean) => void;
+  askMojiEnabled: boolean;
+  setAskMojiEnabled: (enabled: boolean) => void;
+  askMojiActive: boolean;
+  setAskMojiActive: (active: boolean) => void;
+
+  // Guided tour orchestration: a single "Take a tour" runs the landing tour,
+  // then the instructor class tour, then the student class tour, in sequence.
+  // Phase + step are persisted so a refresh resumes the tour where it left off.
+  tourPhase: TourPhase;
+  tourStep: number;
+  startFullTour: () => void;
+  setTourPhase: (phase: TourPhase) => void;
+  setTourStep: (step: number) => void;
+  endTour: () => void;
 }
+
+export type TourPhase = 'idle' | 'landing' | 'instructor' | 'student';
 
 // Template assignment shape from GitHub issues API
 export interface TemplateAssignment {

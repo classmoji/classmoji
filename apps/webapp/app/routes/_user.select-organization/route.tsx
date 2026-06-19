@@ -1,31 +1,37 @@
-import { redirect, useNavigate, Link } from 'react-router';
-import { useEffect } from 'react';
-import { Modal, Button } from 'antd';
+import { redirect, useNavigate } from 'react-router';
+import { useEffect, useMemo, useState } from 'react';
+import { Modal, Button as AntdButton } from 'antd';
 
 import { useUser, useDisclosure, useGlobalFetcher } from '~/hooks';
 import { getAuthSession, clearRevokedToken } from '@classmoji/auth/server';
 import { checkAuth } from '~/utils/helpers';
-import ClassroomCard from './ClassroomCard';
+import { hashHue } from '~/utils/hue';
 
 import {
   ClassmojiService,
   GitHubProvider,
   getGitProvider,
   ensureClassroomTeam,
+  notificationService,
+  provisionExampleClassroom,
 } from '@classmoji/services';
 import { ActionTypes, roleSettings } from '~/constants';
 import useStore from '~/store';
 import getPrisma from '@classmoji/database';
 import type { Route } from './+types/route';
 import type { AppUser, MembershipOrganization, MembershipWithOrganization } from '~/types';
-
-type SelectOrganizationRole = keyof typeof roleSettings;
-type SelectOrganizationCardRole = SelectOrganizationRole | 'TEACHER';
+import {
+  ClassroomsLandingScreen,
+  type LandingClass,
+  type LandingRole,
+} from '~/components/features/landing';
+import type { NotificationRole } from '~/components/features/notifications';
 
 interface SelectOrganizationMembership extends MembershipWithOrganization {
   has_accepted_invite: boolean;
   organization: MembershipOrganization & {
-    is_active?: boolean;
+    status?: 'ACTIVE' | 'LOCKED' | 'UNPUBLISHED';
+    is_archived?: boolean;
   };
 }
 
@@ -54,7 +60,6 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
       authenticatedUser = data;
     } catch (error: unknown) {
       console.log(error);
-      // If bad credentials, clear revoked token from cache AND database
       const err = error as Record<string, unknown>;
       if (err?.status === 401 || (err?.message as string)?.includes('Bad credentials')) {
         await clearRevokedToken(authData.userId);
@@ -67,49 +72,173 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
   }
 
   if (user) {
-    const typedUser = user as AppUser;
-    const memberships = (typedUser.memberships ?? []) as SelectOrganizationMembership[];
-    typedUser.memberships = memberships.filter(
-      ({ organization }) => organization.is_active !== false
+    let typedUser = user as AppUser;
+    // Surface ALL memberships — including archived classrooms — so the
+    // landing screen can show them in the Archived section.
+    typedUser.memberships = (typedUser.memberships ?? []) as SelectOrganizationMembership[];
+
+    const hasExampleClassroom = typedUser.memberships.some(
+      m => (m.organization as { is_example?: boolean }).is_example === true
     );
-    const groupedMemberships = (typedUser.memberships ?? []).reduce<
-      Record<string, SelectOrganizationMembership[]>
-    >((groups, membership) => {
-      const period = `${membership.organization.year ?? 'Unknown'} ${membership.organization.term ?? 'Unknown'}`;
-      if (!groups[period]) {
-        groups[period] = [];
+    if (!hasExampleClassroom && typedUser.login) {
+      try {
+        const exampleClassroom = await provisionExampleClassroom({
+          ownerUserId: typedUser.id,
+          ownerLogin: typedUser.login,
+        });
+        if (exampleClassroom) {
+          const refreshedUser = await ClassmojiService.user.findById(typedUser.id, {
+            includeMemberships: true,
+          });
+          if (refreshedUser) {
+            user = refreshedUser;
+            typedUser = user as AppUser;
+            typedUser.memberships = (typedUser.memberships ?? []) as SelectOrganizationMembership[];
+          }
+        }
+      } catch (error) {
+        console.error('Failed to provision example classroom:', error);
       }
-      groups[period].push(membership);
-      return groups;
-    }, {});
+    }
+
+    const { items, unreadCount } = await notificationService.getForBell(typedUser.id);
+    const notifications = items.map(n => ({
+      id: n.id,
+      type: n.type,
+      title: n.title,
+      resource_type: n.resource_type,
+      resource_id: n.resource_id,
+      read_at: n.read_at ? n.read_at.toISOString() : null,
+      created_at: n.created_at.toISOString(),
+      classroom: n.classroom,
+      metadata: (n.metadata ?? null) as Record<string, unknown> | null,
+    }));
+
+    const membershipRoles: Record<string, NotificationRole[]> = {};
+    for (const m of typedUser.memberships ?? []) {
+      const orgId = (m as SelectOrganizationMembership).organization?.id;
+      const role = m.role as NotificationRole;
+      if (orgId && !membershipRoles[orgId]?.includes(role)) {
+        membershipRoles[orgId] = [...(membershipRoles[orgId] ?? []), role];
+      }
+    }
 
     return {
       user,
-      memberships: groupedMemberships,
+      memberships: typedUser.memberships as SelectOrganizationMembership[],
       githubAppName: process.env.GITHUB_APP_NAME,
+      notifications,
+      unreadCount,
+      membershipRoles,
     };
   } else {
-    // User not found by GitHub login - redirect to connect account flow
-    // where they can link their GitHub to their pre-registered school account
     return redirect('/registration');
   }
 };
 
+// ───────── helpers ─────────
+
+function deriveRole(role: string, hasAcceptedInvite: boolean): LandingRole {
+  if (!hasAcceptedInvite && role !== 'OWNER') return 'PENDING INVITE';
+  if (role === 'TEACHER' || role === 'OWNER') return 'OWNER';
+  if (role === 'ASSISTANT') return 'ASSISTANT';
+  return 'STUDENT';
+}
+
+function formatUpdated(d: Date | string | null | undefined): string {
+  if (!d) return '—';
+  const date = typeof d === 'string' ? new Date(d) : d;
+  if (Number.isNaN(date.getTime())) return '—';
+  const diffMs = Date.now() - date.getTime();
+  const minutes = Math.floor(diffMs / 60_000);
+  if (minutes < 1) return 'just now';
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  if (days < 30) return `${days}d ago`;
+  const months = Math.floor(days / 30);
+  if (months < 12) return `${months}mo ago`;
+  const years = Math.floor(months / 12);
+  return `${years}y ago`;
+}
+
+function buildLandingClasses(memberships: SelectOrganizationMembership[]): LandingClass[] {
+  const items = memberships.map(m => {
+    const org = m.organization as SelectOrganizationMembership['organization'] & {
+      updated_at?: Date | string | null;
+    };
+    const orgLogin = org.login;
+    const gitLogin = org.git_organization?.login ?? orgLogin;
+
+    const status = (org.status ?? 'ACTIVE') as 'ACTIVE' | 'LOCKED' | 'UNPUBLISHED';
+    const archived = org.is_archived === true;
+    const isExample = (org as { is_example?: boolean }).is_example === true;
+    const updatedAt =
+      org.settings?.updated_at ?? (org as { updated_at?: Date | string | null }).updated_at;
+    const createdAt = (org as { created_at?: Date | string | null }).created_at;
+    const createdTs = createdAt ? new Date(createdAt as string | Date).getTime() || 0 : 0;
+    const pinOrder = (m as { pin_order?: number | null }).pin_order ?? null;
+
+    return {
+      landing: {
+        id: `${org.id}:${m.role}`,
+        classroomId: org.id,
+        membershipRole: m.role,
+        name: org.name ?? orgLogin,
+        subtitle: '',
+        slug: `@${gitLogin}/${orgLogin}`,
+        githubOrg: gitLogin,
+        role: deriveRole(m.role, m.has_accepted_invite),
+        hue: hashHue(org.id),
+        avatar:
+          (org.git_organization as { avatar_url?: string | null } | undefined)?.avatar_url ?? null,
+        updated: archived ? 'archived' : formatUpdated(updatedAt),
+        archived,
+        pin_order: pinOrder,
+        status,
+        is_archived: archived,
+        is_example: isExample,
+        updated_at: (updatedAt as string | Date | null) ?? new Date(0),
+        organization: { id: org.id, login: orgLogin, name: org.name },
+        hasAcceptedInvite: m.has_accepted_invite,
+      } satisfies LandingClass,
+      createdTs,
+      pinOrder,
+    };
+  });
+
+  // Sort: pin_order ASC NULLS LAST, then newest classroom first
+  items.sort((a, b) => {
+    const ap = a.pinOrder;
+    const bp = b.pinOrder;
+    if (ap != null && bp != null && ap !== bp) return ap - bp;
+    if (ap != null && bp == null) return -1;
+    if (ap == null && bp != null) return 1;
+    return b.createdTs - a.createdTs;
+  });
+  return items.map(i => i.landing);
+}
+
+// ───────── component ─────────
+
 const SelectOrganization = ({ loaderData }: Route.ComponentProps) => {
-  const { memberships, githubAppName: _githubAppName } = loaderData;
+  const { memberships, notifications, unreadCount, membershipRoles } = loaderData;
   const { user } = useUser();
-  const { classroom, setClassroom } = useStore();
+  const { classroom, setClassroom, startFullTour } = useStore();
   const { fetcher, notify } = useGlobalFetcher();
   const { show, close, visible } = useDisclosure();
   const navigate = useNavigate();
+  const [pendingClassroom, setPendingClassroom] = useState<MembershipOrganization | null>(null);
 
   useEffect(() => {
     setClassroom(null);
   }, [setClassroom]);
 
-  if (!user) {
-    return null;
-  }
+  const memberList = memberships as SelectOrganizationMembership[];
+  const classes = useMemo(() => buildLandingClasses(memberList), [memberList]);
+
+  if (!user) return null;
 
   const acceptInvite = (organization: MembershipOrganization | null) => {
     if (!organization || !user.login) return;
@@ -124,95 +253,82 @@ const SelectOrganization = ({ loaderData }: Route.ComponentProps) => {
     );
     close();
   };
-  const onCardClick = (
-    role: SelectOrganizationCardRole,
-    classroomData: MembershipOrganization,
-    hasAcceptedInvite: boolean
-  ) => {
-    const resolvedRole = role === 'TEACHER' ? 'OWNER' : role;
 
-    if (hasAcceptedInvite || resolvedRole === 'OWNER') {
-      // Students go to class root (let student.$class._index handle default page redirect)
-      // Admins/Assistants go directly to dashboard
-      const suffix = resolvedRole === 'STUDENT' ? '' : '/dashboard';
-      navigate(`${roleSettings[resolvedRole].path}/${classroomData.login}${suffix}`);
-    } else {
-      // show modal to send Github invite
-      setClassroom(classroomData);
+  const onOpenClass = (c: LandingClass) => {
+    // Use the card's own role — looking up membership by org id is ambiguous
+    // when a user has multiple memberships for the same classroom (e.g. OWNER
+    // + STUDENT in a dev sandbox), and would always pick the first match.
+    if (c.role === 'PENDING INVITE') {
+      const membership = memberList.find(
+        m => m.organization.id === c.organization.id && !m.has_accepted_invite
+      );
+      if (!membership) return;
+      setPendingClassroom(membership.organization);
+      setClassroom(membership.organization);
       show();
+      return;
     }
+    const suffix = c.role === 'STUDENT' ? '' : '/dashboard';
+    navigate(`${roleSettings[c.role].path}/${c.organization.login}${suffix}`);
   };
 
-  const membershipsByPeriod = memberships as Record<string, SelectOrganizationMembership[]>;
-  const formattedMemberships = Object.keys(membershipsByPeriod)
-    .reverse()
-    .map(period => {
-      return (
-        <div key={period}>
-          {!period.includes('null') && (
-            <h1 className="text-xl mb-5 dark:text-gray-200">{period}</h1>
-          )}
-          <div className="flex flex-wrap gap-12 items-center">
-            {membershipsByPeriod[period].map(
-              ({ organization, role, has_accepted_invite }, i: number) => {
-                const displayRole =
-                  has_accepted_invite || role === 'OWNER'
-                    ? (role as SelectOrganizationCardRole)
-                    : 'PENDING INVITE';
-                return (
-                  <div
-                    key={organization.id + i}
-                    className="w-[375px]"
-                    id={role.toLowerCase() + '-card'}
-                  >
-                    <button
-                      className="cursor-pointer w-full"
-                      onClick={() =>
-                        onCardClick(
-                          role as SelectOrganizationCardRole,
-                          organization,
-                          has_accepted_invite
-                        )
-                      }
-                    >
-                      <ClassroomCard classroom={organization} role={displayRole} />
-                    </button>
-                  </div>
-                );
-              }
-            )}
-          </div>
-        </div>
-      );
-    });
+  // The Example Course is hidden from the grid and the org switcher; the
+  // "Take a tour" button is the only way it's reached. Clicking it starts the
+  // guided sequence: the landing tour runs here, then hands off into the Example
+  // Course for the instructor and student tours, then returns here.
+  const exampleClass =
+    classes.find(c => c.is_example && c.role === 'OWNER') ?? classes.find(c => c.is_example);
+  const onTakeTour = () => startFullTour();
 
   return (
     <>
       <Modal
         open={visible}
-        onOk={() => acceptInvite(classroom)}
+        onOk={() => acceptInvite(pendingClassroom ?? classroom)}
         onCancel={close}
-        title={`Join ${classroom?.name || classroom?.login}`}
+        title={`Join ${(pendingClassroom ?? classroom)?.name || (pendingClassroom ?? classroom)?.login}`}
         okText="Accept"
         width={425}
+        footer={[
+          <AntdButton key="cancel" onClick={close}>
+            Cancel
+          </AntdButton>,
+          <AntdButton
+            key="ok"
+            type="primary"
+            onClick={() => acceptInvite(pendingClassroom ?? classroom)}
+          >
+            Accept
+          </AntdButton>,
+        ]}
       >
         <p>
           You have been invited to join{' '}
-          <span className="underline">{classroom?.name || classroom?.login}</span>. Once you accept,
-          you will be sent a Github invitation to join the organization.
+          <span className="underline">
+            {(pendingClassroom ?? classroom)?.name || (pendingClassroom ?? classroom)?.login}
+          </span>
+          . Once you accept, you will be sent a Github invitation to join the organization.
         </p>
       </Modal>
-      <div className="flex flex-col items-start justify-start gap-4 pb-16">
-        <div className="flex items-center justify-between w-full">
-          <h1 className="text-2xl font-bold pb-4 dark:text-gray-100">Your Classes</h1>
-          <Link to="/create-classroom">
-            <Button type="primary">+ Create new class</Button>
-          </Link>
-        </div>
-        <div className="w-full flex flex-col justify-start flex-wrap gap-16" id="memberships">
-          {formattedMemberships}
-        </div>
-      </div>
+
+      <ClassroomsLandingScreen
+        user={
+          user
+            ? {
+                name: user.name ?? null,
+                login: user.login ?? null,
+                avatar_url: user.avatar_url ?? null,
+              }
+            : null
+        }
+        classes={classes.filter(c => !c.is_example)}
+        onOpenClass={onOpenClass}
+        onTakeTour={onTakeTour}
+        tourAvailable={!!exampleClass}
+        notifications={notifications}
+        unreadCount={unreadCount}
+        membershipRoles={membershipRoles}
+      />
     </>
   );
 };
@@ -223,10 +339,8 @@ export const action = checkAuth(async ({ request }: { request: Request }) => {
     organization_login: string;
   };
 
-  // organization is actually a classroom (mapped for backward compat)
-  // Need to get the actual git organization login for GitHub API
-  const classroom = await getPrisma().classroom.findUnique({
-    where: { slug: organization_login }, // organization_login is actually classroom.slug
+  const classroom = await getPrisma().classroom.findFirst({
+    where: { slug: organization_login },
     include: { git_organization: true },
   });
 
@@ -234,7 +348,6 @@ export const action = checkAuth(async ({ request }: { request: Request }) => {
     return { error: 'Classroom not found' };
   }
 
-  // Ensure classroom-specific team exists (e.g., "cs101-25w-students")
   const gitProvider = getGitProvider(
     classroom.git_organization as {
       provider: string;

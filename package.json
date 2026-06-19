@@ -31,6 +31,7 @@
     "db:generate": "dotenv -e .env -- turbo run db:generate",
     "db:seed": "dotenv -e .env -- ./scripts/devport.sh run turbo run db:seed",
     "db:reset": "dotenv -e .env -- ./scripts/devport.sh run turbo run db:reset",
+    "db:reset:noseed": "dotenv -e .env -- ./scripts/devport.sh run turbo run db:reset:noseed",
     "db:deploy": "dotenv -e .env -- turbo run db:deploy",
     "db:start": "docker compose up -d",
     "slides:dev": "dotenv -e .env -- turbo run slides:dev --filter=@classmoji/slides --log-prefix=none",
@@ -58,8 +59,8 @@
     "commit": "cz"
   },
   "dependencies": {
-    "@infisical/sdk": "^3.0.91",
-    "@trigger.dev/sdk": "4.4.0",
+    "@infisical/sdk": "^5.0.2",
+    "@trigger.dev/sdk": "^4.4.4",
     "dayjs": "^1.11.13",
     "dotenv": "^16.4.5",
     "highlight.js": "^11.11.1",
@@ -70,6 +71,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^9.36.0",
+    "@trigger.dev/build": "^4.4.4",
     "@types/async": "^3.2.25",
     "@types/js-cookie": "^3.0.6",
     "@types/jsonwebtoken": "^9.0.10",
@@ -100,7 +102,8 @@
     "node": ">=22.12.0"
   },
   "overrides": {
-    "p-map": "^4.0.0"
+    "p-map": "^4.0.0",
+    "protobufjs": "^7.5.8"
   },
   "config": {
     "commitizen": {

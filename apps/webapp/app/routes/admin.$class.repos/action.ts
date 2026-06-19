@@ -1,0 +1,94 @@
+import { namedAction } from 'remix-utils/named-action';
+
+import { ClassmojiService } from '@classmoji/services';
+import { publishAssignment, syncAssignment } from './helpers';
+import { ActionTypes } from '~/constants';
+import { requireClassroomAdmin, assertClassroomMutationAllowed } from '~/utils/routeAuth.server';
+import type { Route } from './+types/route';
+
+export const action = async ({ request, params }: Route.ActionArgs) => {
+  const classSlug = params.class!;
+
+  const { classroom, userId, membership } = await requireClassroomAdmin(request, classSlug, {
+    resourceType: 'REPOSITORIES',
+    action: 'manage_repositories',
+  });
+  assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
+
+  const data = await request.json();
+  const assignmentId = data.assignment_id;
+
+  return namedAction(request, {
+    async delete() {
+      await ClassmojiService.repository.deleteById(assignmentId);
+
+      return {
+        success: 'Repository deleted',
+        action: ActionTypes.DELETE_ASSIGNMENT,
+      };
+    },
+
+    async publish() {
+      return publishAssignment(classSlug, assignmentId, userId);
+    },
+
+    async unpublish() {
+      await ClassmojiService.repository.setPublished(assignmentId, false);
+      return { success: 'Repository unpublished' };
+    },
+
+    async sync() {
+      const res = await syncAssignment(classSlug, assignmentId, userId);
+      const {
+        triggerSession: { numReposToCreate, numIssuesToCreate },
+      } = res;
+
+      if (numReposToCreate + numIssuesToCreate == 0)
+        return {
+          info: 'No missing repo or issue',
+        };
+
+      return res;
+    },
+
+    async updateAssignment() {
+      const { weight } = data;
+
+      const result = await ClassmojiService.repository.update(assignmentId, { weight });
+
+      return result;
+    },
+
+    async findUnenrolledStudents() {
+      const students = await ClassmojiService.classroomMembership.findUsersByRole(
+        classroom.id,
+        'STUDENT'
+      );
+      const student_ids = students.map(({ id }) => id);
+      const repositories = await ClassmojiService.gitRepo.findMany({
+        classroom_id: classroom.id,
+      });
+
+      const repositoriesToRemove: string[] = [];
+
+      const unenrolledStudents = new Map();
+
+      repositories.forEach(repo => {
+        if (!repo.student) return;
+        if (!student_ids.includes(repo.student.id)) {
+          unenrolledStudents.set(repo.student.id, repo.student);
+          repositoriesToRemove.push(repo.name);
+        }
+      });
+
+      return {
+        success:
+          unenrolledStudents.size > 0
+            ? 'Unenrolled students found'
+            : 'No unenrolled students found',
+        students: Array.from(unenrolledStudents.values()),
+        repositories: repositoriesToRemove,
+      };
+    },
+  });
+};

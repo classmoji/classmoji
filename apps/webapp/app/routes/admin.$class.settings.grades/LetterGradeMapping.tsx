@@ -1,10 +1,10 @@
-import { Input, InputNumber, Button, Table, Card, Form, Popconfirm } from 'antd';
-import { toast } from 'react-toastify';
+import { Input, InputNumber, Button, Table, Popconfirm } from 'antd';
 import { useState } from 'react';
 
 import { DeleteOutlined } from '@ant-design/icons';
 
 import { SettingSection } from '~/components';
+import { useCallout } from '@classmoji/ui-components';
 import { useGlobalFetcher } from '~/hooks';
 
 interface LetterGradeMap {
@@ -20,13 +20,12 @@ const LetterGradeMapping = ({ letterGradeMappings }: LetterGradeMappingProps) =>
   const [letterGrade, setLetterGrade] = useState('');
   const [minGrade, setMinGrade] = useState<string | null>(null);
 
-  // Inline editing state
   const [editingCell, setEditingCell] = useState<{ letterGrade: string } | null>(null);
   const [editValue, setEditValue] = useState<number | null>(null);
 
   const { notify, fetcher } = useGlobalFetcher();
+  const callout = useCallout();
 
-  // Handle inline cell update
   const handleCellUpdate = (letterGradeKey: string, newMinGrade: number | null) => {
     fetcher!.submit(
       {
@@ -43,7 +42,6 @@ const LetterGradeMapping = ({ letterGradeMappings }: LetterGradeMappingProps) =>
     setEditValue(null);
   };
 
-  // Start editing a cell
   const startEditing = (letterGradeKey: string, currentValue: number) => {
     setEditingCell({ letterGrade: letterGradeKey });
     setEditValue(currentValue);
@@ -51,7 +49,10 @@ const LetterGradeMapping = ({ letterGradeMappings }: LetterGradeMappingProps) =>
 
   const createLetterGradeMapping = () => {
     if (!letterGrade || !minGrade) {
-      return toast.error('Please enter a letter grade and a minimum numeric value.');
+      return callout.show({
+        variant: 'error',
+        title: 'Please enter a letter grade and a minimum numeric value.',
+      });
     }
 
     notify('Creating letter grade mapping...');
@@ -105,19 +106,19 @@ const LetterGradeMapping = ({ letterGradeMappings }: LetterGradeMappingProps) =>
       title: 'Letter Grade',
       dataIndex: 'letter_grade',
       key: 'letter_grade',
-      width: '30%',
+      width: 120,
       render: (grade: string) => (
         <span
-          className={`font-bold  px-3 py-1 rounded-lg ${
+          className={`font-bold px-3 py-1 rounded-lg text-sm ${
             grade === 'A'
-              ? 'bg-green-100 text-green-700'
+              ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400'
               : grade === 'B'
-                ? 'bg-blue-100 text-blue-700'
+                ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400'
                 : grade === 'C'
-                  ? 'bg-yellow-100 text-yellow-700'
+                  ? 'bg-yellow-100 text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-400'
                   : grade === 'D'
-                    ? 'bg-orange-100 text-orange-700'
-                    : 'bg-red-100 text-red-700'
+                    ? 'bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-400'
+                    : 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400'
           }`}
         >
           {grade}
@@ -128,7 +129,6 @@ const LetterGradeMapping = ({ letterGradeMappings }: LetterGradeMappingProps) =>
       title: 'Minimum Grade',
       dataIndex: 'min_grade',
       key: 'min_grade',
-      width: '40%',
       render: (grade: number, record: LetterGradeMap) => {
         const isEditing = editingCell?.letterGrade === record.letter_grade;
         if (isEditing) {
@@ -150,7 +150,7 @@ const LetterGradeMapping = ({ letterGradeMappings }: LetterGradeMappingProps) =>
           <button
             type="button"
             onClick={() => startEditing(record.letter_grade, grade)}
-            className="font-medium text-gray-700 cursor-pointer bg-transparent border-none p-0 m-0 hover:underline"
+            className="font-medium text-ink-1 cursor-pointer bg-transparent border-none p-0 m-0 hover:underline"
           >
             {grade}%
           </button>
@@ -158,15 +158,15 @@ const LetterGradeMapping = ({ letterGradeMappings }: LetterGradeMappingProps) =>
       },
     },
     {
-      title: 'Actions',
+      title: '',
       key: 'actions',
-      width: '30%',
+      width: 48,
       render: (_: unknown, record: LetterGradeMap) => (
         <Button
           type="text"
           icon={<DeleteOutlined />}
           onClick={() => deleteMapping(record)}
-          className="text-red-500 hover:text-red-700 hover:bg-red-50"
+          className="text-red-500 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-900/20"
           size="small"
         />
       ),
@@ -183,52 +183,13 @@ const LetterGradeMapping = ({ letterGradeMappings }: LetterGradeMappingProps) =>
       title="Letter Grade Mapping"
       description="Define the letter grades and their corresponding minimum numeric values."
     >
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-        {/* Form Section */}
-        <Card className="h-fit">
-          <div className="flex items-center gap-3 mb-6">
-            <div className="w-1 h-6 bg-yellow-400 rounded-full"></div>
-            <h3 className="text-lg font-semibold text-gray-900">Add Grade Mapping</h3>
-          </div>
-
-          <Form layout="vertical" className="space-y-4">
-            <Form.Item label="Letter Grade" className="mb-4">
-              <Input
-                placeholder="Letter grade (e.g., A, B, C)"
-                value={letterGrade}
-                onChange={e => setLetterGrade(e.target.value.toUpperCase())}
-                className="rounded-lg"
-                maxLength={2}
-              />
-            </Form.Item>
-
-            <Form.Item label="Minimum Numeric Value" className="mb-6">
-              <Input
-                placeholder="Min numeric value (0-100)"
-                value={minGrade ?? undefined}
-                onChange={e => setMinGrade(e.target.value)}
-                type="number"
-                min={0}
-                max={100}
-                addonAfter="%"
-                className="rounded-lg"
-              />
-            </Form.Item>
-
-            <Button type="primary" onClick={createLetterGradeMapping}>
-              Save
-            </Button>
-          </Form>
-        </Card>
-
-        {/* Table Section */}
-        <Card>
-          <div className="flex items-center justify-between mb-6">
-            <div className="flex items-center gap-3">
-              <div className="w-1 h-6 bg-yellow-400 rounded-full"></div>
-              <h3 className="text-lg font-semibold text-gray-900">Current Mappings</h3>
-              <span className="text-sm text-gray-500 bg-gray-100 px-2 py-1 rounded-full">
-                {sortedMappings.length} total
+      <div className="rounded-2xl ring-1 ring-line overflow-hidden">
+        <div className="px-4 sm:px-5 py-4 border-b border-line bg-panel">
+          <div className="flex items-center justify-between mb-4">
+            <div className="flex items-center gap-2">
+              <span className="text-sm font-semibold text-ink-0">Letter Grades</span>
+              <span className="text-xs text-ink-3 bg-nav-hover px-2 py-0.5 rounded-full tabular-nums">
+                {sortedMappings.length}
               </span>
             </div>
             <Popconfirm
@@ -238,30 +199,50 @@ const LetterGradeMapping = ({ letterGradeMappings }: LetterGradeMappingProps) =>
               okText="Yes, reset"
               cancelText="Cancel"
             >
-              <Button type="primary" size="small">
-                Populate Defaults
-              </Button>
+              <Button size="small">Populate Defaults</Button>
             </Popconfirm>
           </div>
+          <div className="flex flex-wrap items-end gap-3">
+            <Input
+              placeholder="Letter (e.g. A)"
+              value={letterGrade}
+              onChange={e => setLetterGrade(e.target.value.toUpperCase())}
+              maxLength={2}
+              className="!w-28"
+            />
+            <Input
+              placeholder="Min value"
+              value={minGrade ?? undefined}
+              onChange={e => setMinGrade(e.target.value)}
+              type="number"
+              min={0}
+              max={100}
+              addonAfter="%"
+              className="!w-32"
+            />
+            <Button type="primary" onClick={createLetterGradeMapping}>
+              Add
+            </Button>
+          </div>
+        </div>
 
-          <Table
-            dataSource={sortedMappings}
-            columns={letterGradeMappingColumns}
-            size="middle"
-            pagination={false}
-            rowHoverable={false}
-            locale={{
-              emptyText: (
-                <div className="text-center py-8 text-gray-500">
-                  <div className="text-4xl mb-2">📝</div>
-                  <div>No letter grade mappings yet</div>
-                  <div className="text-sm">Add your first mapping to get started!</div>
-                </div>
-              ),
-            }}
-            className="rounded-lg"
-          />
-        </Card>
+        <Table
+          dataSource={sortedMappings}
+          columns={letterGradeMappingColumns}
+          size="small"
+          scroll={{ x: 'max-content' }}
+          pagination={false}
+          rowHoverable={false}
+          rowKey="letter_grade"
+          locale={{
+            emptyText: (
+              <div className="text-center py-8">
+                <div className="font-medium text-ink-3">No letter grade mappings yet</div>
+                <div className="text-sm text-ink-4">Add your first mapping above</div>
+              </div>
+            ),
+          }}
+        />
       </div>
     </SettingSection>
   );

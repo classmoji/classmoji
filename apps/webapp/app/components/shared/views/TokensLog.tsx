@@ -176,13 +176,13 @@ const TokensLog = ({ transactions, students }: TokensLogProps) => {
       columns={columns}
       rowHoverable={false}
       size="small"
+      scroll={{ x: 'max-content' }}
       pagination={{ defaultPageSize: 20 }}
       rowKey={record => (record as unknown as Record<string, string>).id}
       locale={{
         emptyText: (
-          <div className="text-center py-8 text-gray-500">
-            <div className="text-4xl mb-2">🪙</div>
-            <div>No token transactions yet</div>
+          <div className="text-center py-12 text-gray-500">
+            <div className="font-medium">No token transactions yet</div>
             <div className="text-sm">
               Token transactions will appear here once students make purchases or spend tokens
             </div>

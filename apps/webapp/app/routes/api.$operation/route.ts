@@ -5,7 +5,7 @@ import { nanoid } from 'nanoid';
 import { getAuthSession } from '@classmoji/auth/server';
 
 import { ClassmojiService } from '@classmoji/services';
-import { checkAuth, waitForRunCompletion, assertClassroomAccess } from '~/utils/helpers';
+import { checkAuth, waitForRunCompletion, assertClassroomAccess, assertClassroomMutationAllowed } from '~/utils/helpers';
 
 export const loader = checkAuth(
   async ({ request, params }: { request: Request; params: Record<string, string | undefined> }) => {
@@ -15,10 +15,20 @@ export const loader = checkAuth(
 
     switch (operation) {
       case 'get-org-subscription': {
-        const subscription = await ClassmojiService.subscription.getByClassroom(
-          searchParams.get('orgLogin') as string
-        );
+        const orgLogin = searchParams.get('orgLogin');
+        if (!orgLogin) {
+          return data({ error: 'orgLogin is required' }, { status: 400 });
+        }
 
+        await assertClassroomAccess({
+          request,
+          classroomSlug: orgLogin,
+          allowedRoles: ['OWNER'],
+          resourceType: 'CLASSROOM_SUBSCRIPTION',
+          attemptedAction: 'read_subscription',
+        });
+
+        const subscription = await ClassmojiService.subscription.getByClassroom(orgLogin);
         return subscription;
       }
       case 'get-tc-installation-token': {
@@ -106,8 +116,23 @@ export const action = checkAuth(async ({ request }: { request: Request }) => {
       }
     },
     async cancelTokenTransaction() {
-      // First, get the classroom from the transaction's classroom_id
-      const classroom = await ClassmojiService.classroom.findById(body.transaction.classroom_id);
+      // Re-derive every authorization-relevant and financial field from the DB.
+      // Body fields other than transaction.id are NOT trusted (prior bug: a
+      // caller could inflate refund amount by setting body.transaction.amount).
+      const transactionId = body?.transaction?.id;
+      if (typeof transactionId !== 'string' || !transactionId) {
+        return data({ error: 'transaction.id is required' }, { status: 400 });
+      }
+
+      const [storedTransaction] = await ClassmojiService.token.findTransactions({
+        id: transactionId,
+      });
+
+      if (!storedTransaction) {
+        return data({ error: 'Transaction not found' }, { status: 404 });
+      }
+
+      const classroom = await ClassmojiService.classroom.findById(storedTransaction.classroom_id);
 
       if (!classroom) {
         return data({ error: 'Classroom not found' }, { status: 404 });
@@ -126,13 +151,20 @@ export const action = checkAuth(async ({ request }: { request: Request }) => {
         resourceType: 'TOKEN_TRANSACTION',
         attemptedAction: 'cancel_transaction',
         metadata: {
-          transaction_id: body.transaction.id,
+          transaction_id: storedTransaction.id,
         },
-        resourceOwnerId: body.transaction.student_id,
+        resourceOwnerId: storedTransaction.student_id,
         selfAccessRoles: ['STUDENT'], // Students can cancel their own
       });
 
-      await cancelTokenTransactionHandler(body.transaction);
+      await cancelTokenTransactionHandler({
+        id: storedTransaction.id,
+        classroom_id: storedTransaction.classroom_id,
+        student_id: storedTransaction.student_id,
+        amount: storedTransaction.amount,
+        git_repo_assignment_id: storedTransaction.git_repo_assignment_id ?? '',
+        hours_purchased: storedTransaction.hours_purchased ?? 0,
+      });
 
       return {
         action: 'CANCEL_TOKEN_TRANSACTION',
@@ -148,10 +180,19 @@ export const action = checkAuth(async ({ request }: { request: Request }) => {
         return data({ error: 'Classroom not found' }, { status: 404 });
       }
 
+      const { classroom: accessClassroom, membership } = await assertClassroomAccess({
+        request,
+        classroomSlug: classroom.slug,
+        allowedRoles: ['OWNER'],
+        resourceType: 'REPOSITORY',
+        attemptedAction: 'delete_repositories',
+      });
+      assertClassroomMutationAllowed({ status: accessClassroom.status, role: membership!.role });
+
       const sessionId = nanoid();
       const payloads = await Promise.all(
         repositories.map(async (repo: { name: string }) => {
-          const repository = await ClassmojiService.repository.find({
+          const repository = await ClassmojiService.gitRepo.find({
             name: repo.name,
             classroom_id: classroom.id,
           });
@@ -180,7 +221,7 @@ export const action = checkAuth(async ({ request }: { request: Request }) => {
 
       const numReposToDelete = repositories.length;
 
-      await tasks.batchTrigger('delete_repository', payloads);
+      await tasks.batchTrigger('delete_git_repo', payloads);
 
       return {
         triggerSession: { accessToken, id: sessionId, numReposToDelete },
@@ -194,10 +235,10 @@ const cancelTokenTransactionHandler = async (transaction: {
   classroom_id: string;
   student_id: string;
   amount: number;
-  repository_assignment_id: string;
+  git_repo_assignment_id: string;
   hours_purchased: number;
 }) => {
-  const { classroom_id, student_id, amount, repository_assignment_id, hours_purchased } =
+  const { classroom_id, student_id, amount, git_repo_assignment_id, hours_purchased } =
     transaction;
 
   await ClassmojiService.token.updateTransaction(transaction.id, {
@@ -207,7 +248,7 @@ const cancelTokenTransactionHandler = async (transaction: {
   await ClassmojiService.token.updateExtension({
     classroom_id,
     student_id,
-    repository_assignment_id,
+    git_repo_assignment_id,
     amount: Math.abs(amount),
     hours_purchased: hours_purchased * -1,
     type: 'REFUND',

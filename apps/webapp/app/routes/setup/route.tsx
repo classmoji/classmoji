@@ -2,7 +2,7 @@ import { useOutlet, redirect } from 'react-router';
 import { Button } from 'antd';
 import type { Route } from './+types/route';
 import { Logo } from '@classmoji/ui-components';
-import { buildManifest } from './manifest.js';
+import { buildManifest } from './manifest.ts';
 
 export const loader = async ({ request }: Route.LoaderArgs) => {
   if (!process.env.SETUP_GITHUB_APP) {
@@ -34,13 +34,13 @@ const SetupPage = ({ loaderData }: Route.ComponentProps) => {
   const { manifest, error } = loaderData;
 
   return (
-    <div className="min-h-screen bg-gray-50 dark:bg-gray-950 flex flex-col items-center justify-center p-4">
+    <div className="min-h-screen bg-gray-50 dark:bg-neutral-950 flex flex-col items-center justify-center p-4">
       <div className="w-full max-w-[450px]">
         <div className="text-center mb-8">
           <div className="flex justify-center mb-4">
             <Logo size={48} />
           </div>
-          <p className="text-gray-600 dark:text-gray-400">
+          <p className="text-ink-2">
             Classmoji requires a GitHub App to manage classroom repositories, issues, and workflows.
             Click below to create one automatically.
           </p>

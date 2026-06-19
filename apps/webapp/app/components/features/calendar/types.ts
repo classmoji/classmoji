@@ -22,7 +22,7 @@ export interface CalendarLinkedAssignment {
     id: string;
     title: string;
   };
-  module?: {
+  repository?: {
     slug?: string | null;
   } | null;
 }

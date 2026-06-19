@@ -14,14 +14,12 @@ interface GradingSettingsOptionsProps {
 }
 
 const GradingSettingsOptions = ({ settings }: GradingSettingsOptionsProps) => {
-  const { fetcher, notify } = useGlobalFetcher();
+  const { fetcher } = useGlobalFetcher();
   const [showGradesToStudents, setShowGradesToStudents] = useState(
     settings.show_grades_to_students
   );
 
   const onFinish = (values: { late_penalty_points_per_hour: number }) => {
-    notify('SAVE_GRADING_SETTINGS', 'Saving grading settings...');
-
     fetcher!.submit(
       {
         late_penalty_points_per_hour: values.late_penalty_points_per_hour,
@@ -42,7 +40,7 @@ const GradingSettingsOptions = ({ settings }: GradingSettingsOptionsProps) => {
     >
       <Form
         layout="vertical"
-        className="w-[50%]"
+        className="max-w-md"
         onFinish={onFinish}
         initialValues={{
           late_penalty_points_per_hour: settings.late_penalty_points_per_hour,

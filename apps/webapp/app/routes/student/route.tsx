@@ -3,14 +3,14 @@ import type { Route } from './+types/route';
 import { CommonLayout, RequireRole } from '~/components';
 import { ClassmojiService } from '@classmoji/services';
 import { requireClassroomMember } from '~/utils/routeAuth.server';
-import { SHARED_CONTENT_PATHS } from '~/constants';
+import { DEFAULT_NAV_VISIBILITY, navVisibilityFromSettings } from '~/utils/navVisibility';
 
 export const loader = async ({ params, request }: Route.LoaderArgs) => {
   const { class: classSlug } = params;
 
   // Handle case where class param might not be present yet
   if (!classSlug) {
-    return { menuPages: [], recentViewers: [] };
+    return { menuPages: [], recentViewers: [], navVisibility: DEFAULT_NAV_VISIBILITY };
   }
 
   try {
@@ -44,22 +44,17 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
     });
 
     if (recentViewersEnabled) {
-      // Only DISPLAY recent viewers for shared content (pages, slides, modules, calendar)
-      // Skip personal routes like dashboard, grades, tokens to avoid privacy confusion
-      const isSharedContent = SHARED_CONTENT_PATHS.some(p => resourcePath.startsWith(p));
-
-      if (isSharedContent) {
-        recentViewers = await ClassmojiService.resourceView.getRecentViewers({
-          resourcePath,
-          classroomId: classroom.id,
-        });
-      }
+      recentViewers = await ClassmojiService.resourceView.getRecentViewers({
+        resourcePath,
+        classroomId: classroom.id,
+      });
     }
 
     return {
       menuPages,
       recentViewers,
       pagesUrl: process.env.PAGES_URL || 'http://localhost:7100',
+      navVisibility: navVisibilityFromSettings(classroom.settings),
     };
   } catch {
     // If classroom access fails, return empty data
@@ -67,15 +62,21 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
       menuPages: [],
       recentViewers: [],
       pagesUrl: process.env.PAGES_URL || 'http://localhost:7100',
+      navVisibility: DEFAULT_NAV_VISIBILITY,
     };
   }
 };
 
 const Student = ({ loaderData }: Route.ComponentProps) => {
-  const { menuPages, recentViewers, pagesUrl } = loaderData;
+  const { menuPages, recentViewers, pagesUrl, navVisibility } = loaderData;
 
   return (
-    <CommonLayout menuPages={menuPages} recentViewers={recentViewers} pagesUrl={pagesUrl}>
+    <CommonLayout
+      menuPages={menuPages}
+      recentViewers={recentViewers}
+      pagesUrl={pagesUrl}
+      navVisibility={navVisibility}
+    >
       <RequireRole roles={['STUDENT', 'OWNER']} tag="student">
         <Outlet />
       </RequireRole>

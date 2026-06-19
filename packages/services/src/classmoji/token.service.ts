@@ -73,7 +73,7 @@ export const findTransactions = async (query: Prisma.TokenTransactionWhereInput)
     where: query,
     include: {
       student: true,
-      repository_assignment: {
+      git_repo_assignment: {
         include: {
           assignment: true,
         },
@@ -109,7 +109,7 @@ export const assignToStudent = async (data: AssignToStudentInput) => {
         student_id: data.studentId,
         classroom_id: data.classroomId,
         description: data.description,
-        repository_assignment_id: data.repositoryAssignmentId,
+        git_repo_assignment_id: data.repositoryAssignmentId,
       },
     });
   });

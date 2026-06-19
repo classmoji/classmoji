@@ -7,7 +7,7 @@ import { ClassmojiService } from '@classmoji/services';
 import { SettingSection } from '~/components';
 import { ActionTypes } from '~/constants';
 import { useGlobalFetcher } from '~/hooks';
-import { assertClassroomAccess } from '~/utils/helpers';
+import { assertClassroomAccess, assertClassroomMutationAllowed } from '~/utils/helpers';
 import type { Route } from './+types/route';
 
 export const loader = async ({ params, request }: Route.LoaderArgs) => {
@@ -34,11 +34,9 @@ const SettingsExtensions = ({ loaderData }: Route.ComponentProps) => {
     String(settings.default_tokens_per_hour ?? '')
   );
 
-  const { notify, fetcher } = useGlobalFetcher();
+  const { fetcher } = useGlobalFetcher();
 
   const saveExtensionSettings = () => {
-    notify(ActionTypes.SAVE_EXTENSION_SETTINGS, 'Saving extension configuration...');
-
     fetcher!.submit(
       {
         default_tokens_per_hour: parseInt(tokensPerHour),
@@ -81,13 +79,14 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
   const classSlug = params.class!;
 
   // Authorize: only OWNER can modify extension settings
-  const { classroom } = await assertClassroomAccess({
+  const { classroom, membership } = await assertClassroomAccess({
     request,
     classroomSlug: classSlug,
     allowedRoles: ['OWNER'],
     resourceType: 'SETTINGS',
     attemptedAction: 'modify_extension_settings',
   });
+  assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
 
   const data = await request.json();
 

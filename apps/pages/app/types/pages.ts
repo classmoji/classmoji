@@ -41,8 +41,7 @@ export interface PageForContent {
     id: string;
     slug: string;
     name: string;
-    term: string | null;
-    year: number | null;
+    content_namespace: string;
     avatar_url?: string | null;
     git_organization?: {
       login: string;
@@ -69,8 +68,7 @@ export interface PagesUser {
 export interface ClassroomListItem {
   slug: string;
   name: string;
-  term: string | null;
-  year: number | null;
+  content_namespace: string;
   role: string;
 }
 

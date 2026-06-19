@@ -31,8 +31,13 @@ const LoginCallback = () => {
               if (window.opener) {
                 window.close();
               } else {
-                // If not a popup (user navigated directly), redirect to create-classroom
-                window.location.href = '/create-classroom';
+                // If not a popup (user navigated directly), redirect to create-classroom.
+                // Always tag the URL with installed=1 (a reliable "just installed" signal,
+                // independent of whether GitHub passes installation_id) plus any GitHub
+                // params, so the loader/page knows to wait for the org to provision.
+                var search = window.location.search;
+                var sep = search ? '&' : '?';
+                window.location.href = '/create-classroom' + search + sep + 'installed=1';
               }
             `,
           }}

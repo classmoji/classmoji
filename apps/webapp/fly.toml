@@ -9,7 +9,12 @@ primary_region = 'iad'
 [build]
 
 [deploy]
-  release_command = "sh -c 'cd packages/database && npx prisma migrate deploy'"
+  # Run migrations over Neon's DIRECT (unpooled) endpoint — strip "-pooler" from
+  # the host. Prisma's advisory lock is session-scoped and breaks under the
+  # pooler's transaction pooling (intermittent P1002 lock timeouts). Retry a few
+  # times to ride out Neon compute cold-starts. The app still uses the pooled
+  # DATABASE_URL at runtime; only this migration step uses the direct connection.
+  release_command = "sh -c 'cd packages/database && export DATABASE_URL=$(echo \"$DATABASE_URL\" | sed s/-pooler//); for i in 1 2 3; do npx prisma migrate deploy && exit 0; echo \"migrate attempt $i failed, retrying in 10s\"; sleep 10; done; exit 1'"
 
 [http_service]
   internal_port = 8080

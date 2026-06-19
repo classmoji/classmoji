@@ -37,6 +37,30 @@ export const findInvitesByEmail = async (
 };
 
 /**
+ * Find invites matching any of the given emails (case-insensitive).
+ * Used during registration to claim invites issued to either the student's
+ * school email or the email on their GitHub profile.
+ */
+export const findInvitesByAnyEmail = async (
+  emails: (string | null | undefined)[]
+): Promise<Prisma.ClassroomInviteGetPayload<{ include: { classroom: true } }>[]> => {
+  const candidates = Array.from(
+    new Set(emails.filter((e): e is string => !!e && e.trim().length > 0).map(e => e.trim()))
+  );
+  if (candidates.length === 0) return [];
+  return getPrisma().classroomInvite.findMany({
+    where: {
+      OR: candidates.map(email => ({
+        school_email: { equals: email, mode: 'insensitive' as const },
+      })),
+    },
+    include: {
+      classroom: true,
+    },
+  });
+};
+
+/**
  * Find all invites for a classroom - admin view
  * @param {string} classroomId - UUID of the Classroom
  * @returns {Promise<Object[]>}

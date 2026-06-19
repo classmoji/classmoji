@@ -40,7 +40,7 @@ interface TriggerPayload {
   student?: { name: string };
   user?: { name: string };
   payload?: { to: string };
-  pageData?: { title: string; type?: string; module?: string };
+  pageData?: { title: string; type?: string; repository?: string };
   repoName?: string;
   issue?: { title: string };
   name?: string;
@@ -117,7 +117,11 @@ const TriggerProgress = ({ callback, validIdentifiers, operation }: TriggerProgr
 
   const shouldShow = session && (totalNumRuns as Record<string, number>)[operation] > 0;
   const totalCount = (totalNumRuns as Record<string, number>)[operation];
-  const progressPercent = Math.floor((completedCount / totalCount) * 100);
+  // totalCount is a heuristic estimate of how many Trigger.dev runs will spawn,
+  // so completedCount can exceed it (each repo fans out into several runs).
+  // Clamp to [0,100] so the bar never shows an impossible value like 125%.
+  const progressPercent =
+    totalCount > 0 ? Math.min(100, Math.floor((completedCount / totalCount) * 100)) : 0;
 
   // Calculate status counts from logs
   const statusCounts = useMemo(() => {
@@ -264,9 +268,7 @@ const TriggerProgress = ({ callback, validIdentifiers, operation }: TriggerProgr
             {statusCounts.queued > 0 && (
               <div className="flex items-center gap-2">
                 <span className="w-2 h-2 rounded-full bg-gray-400"></span>
-                <span className="text-sm font-medium text-gray-600 dark:text-gray-400">
-                  {statusCounts.queued} Queued
-                </span>
+                <span className="text-sm font-medium text-ink-2">{statusCounts.queued} Queued</span>
               </div>
             )}
           </div>
@@ -661,10 +663,10 @@ const LogLabel = ({ data, isDarkMode }: LogLabelProps) => {
 
   return (
     <div
-      className="flex items-center gap-2 py-1.5 px-2 -mx-2 rounded hover:bg-gray-200/50 dark:hover:bg-gray-700/50 transition-colors"
+      className="flex items-center gap-2 py-1.5 px-2 -mx-2 rounded hover:bg-gray-200/50 dark:hover:bg-neutral-700/50 transition-colors"
       style={{ borderLeft: `3px solid ${getLeftBorderColor()}` }}
     >
-      <span className="text-gray-500 dark:text-gray-400 text-xs font-mono min-w-[60px]">
+      <span className="text-ink-3 text-xs font-mono min-w-[60px]">
         {dayjs(updatedAt).format('HH:mm:ss')}
       </span>
 
@@ -706,7 +708,7 @@ const LogContent = ({ data }: { data: TriggerRun }) => {
   if (payload.pageData) {
     log.page = payload.pageData.title;
     if (payload.pageData.type) log.type = payload.pageData.type;
-    if (payload.pageData.module) log.module = payload.pageData.module;
+    if (payload.pageData.repository) log.repository = payload.pageData.repository;
   }
 
   return (

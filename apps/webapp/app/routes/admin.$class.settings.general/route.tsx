@@ -6,8 +6,10 @@ import { SettingSection } from '~/components';
 import { ActionTypes } from '~/constants';
 import { useGlobalFetcher } from '~/hooks';
 import ProfileSection from './ProfileSection';
+import StatusSection from './StatusSection';
 import DefaultPageSection from './DefaultPageSection';
-import { assertClassroomAccess } from '~/utils/helpers';
+import TweaksSection from '~/components/features/tweaks/TweaksSection';
+import { assertClassroomAccess, assertClassroomMutationAllowed } from '~/utils/helpers';
 import type { Route } from './+types/route';
 
 export const loader = async ({ params, request }: Route.LoaderArgs) => {
@@ -31,10 +33,9 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
 
 const SettingsGeneral = ({ loaderData }: Route.ComponentProps) => {
   const { classroom, menuPages } = loaderData;
-  const { notify, fetcher } = useGlobalFetcher();
+  const { fetcher } = useGlobalFetcher();
 
   const handleRecentViewersToggle = (checked: boolean) => {
-    notify(ActionTypes.SAVE_EXTENSION_SETTINGS, 'Saving...');
     fetcher!.submit(
       { recent_viewers_enabled: checked },
       { action: '?/saveExtensionSettings', method: 'POST', encType: 'application/json' }
@@ -46,14 +47,18 @@ const SettingsGeneral = ({ loaderData }: Route.ComponentProps) => {
       <ProfileSection
         organization={{
           name: classroom.name,
-          term: classroom.term ?? '',
-          year: String(classroom.year ?? ''),
         }}
+      />
+      <StatusSection
+        classroomId={classroom.id}
+        status={classroom.status as 'ACTIVE' | 'LOCKED' | 'UNPUBLISHED'}
+        isArchived={classroom.is_archived}
       />
       <DefaultPageSection
         currentDefault={classroom.settings?.default_student_page || 'dashboard'}
         menuPages={menuPages}
       />
+      <TweaksSection />
       <SettingSection
         title="Features"
         description="Enable or disable optional features for this classroom."
@@ -63,10 +68,12 @@ const SettingsGeneral = ({ loaderData }: Route.ComponentProps) => {
             label="Recent Viewers"
             extra="Show who has recently viewed each page in the navbar"
           >
-            <Switch
-              checked={classroom.settings?.recent_viewers_enabled ?? true}
-              onChange={handleRecentViewersToggle}
-            />
+            <span data-tour="settings-recent-viewers">
+              <Switch
+                checked={classroom.settings?.recent_viewers_enabled ?? true}
+                onChange={handleRecentViewersToggle}
+              />
+            </span>
           </Form.Item>
         </Form>
       </SettingSection>
@@ -78,13 +85,14 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
   const classSlug = params.class!;
 
   // Authorize: only OWNER can modify general settings
-  const { classroom } = await assertClassroomAccess({
+  const { classroom, membership } = await assertClassroomAccess({
     request,
     classroomSlug: classSlug,
     allowedRoles: ['OWNER'],
     resourceType: 'SETTINGS',
     attemptedAction: 'modify_general_settings',
   });
+  assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
 
   const data = await request.json();
 

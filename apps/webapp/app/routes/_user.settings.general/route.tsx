@@ -30,13 +30,13 @@ const SettingsGeneral = () => {
               size={120}
               className="shadow-sm"
               style={{
-                border: '4px solid #f3f4f6',
+                border: '4px solid var(--line)',
               }}
             />
           </div>
           <div className="flex-1">
-            <h3 className="text-xl font-bold text-gray-800 mb-2">{user?.name || 'User Name'}</h3>
-            <p className="text-gray-600 text-base mb-3">{user?.email}</p>
+            <h3 className="text-lg font-semibold text-gray-800 dark:text-gray-100 mb-2">{user?.name || 'User Name'}</h3>
+            <p className="text-ink-2 text-base mb-3">{user?.email}</p>
             <div className="flex items-center gap-2 text-sm text-gray-500">
               <GithubOutlined className="text-gray-400" />
               <span>@{user?.login}</span>
@@ -44,11 +44,16 @@ const SettingsGeneral = () => {
           </div>
         </div>
 
-        <div className="border-t border-gray-200 my-8"></div>
+        <div className="border-t border-gray-200 dark:border-neutral-700 my-8"></div>
 
         {/* Form Section */}
         <div>
-          <h4 className="text-lg font-semibold text-gray-800 mb-6">Profile Information</h4>
+          <h4
+            data-onboarding="settings-general"
+            className="text-base font-semibold text-gray-800 dark:text-gray-100 mb-6"
+          >
+            Profile Information
+          </h4>
 
           <Form
             form={form}
@@ -62,7 +67,7 @@ const SettingsGeneral = () => {
           >
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
               <Form.Item
-                label={<span className="text-gray-700 font-medium text-sm">Full Name</span>}
+                label={<span className="text-ink-1 font-medium text-sm">Full Name</span>}
                 name="name"
                 className="mb-6"
               >
@@ -74,7 +79,7 @@ const SettingsGeneral = () => {
               </Form.Item>
 
               <Form.Item
-                label={<span className="text-gray-700 font-medium text-sm">Email Address</span>}
+                label={<span className="text-ink-1 font-medium text-sm">Email Address</span>}
                 name="email"
                 className="mb-6"
               >
@@ -86,7 +91,7 @@ const SettingsGeneral = () => {
               </Form.Item>
 
               <Form.Item
-                label={<span className="text-gray-700 font-medium text-sm">GitHub Username</span>}
+                label={<span className="text-ink-1 font-medium text-sm">GitHub Username</span>}
                 name="github_username"
                 className="md:col-span-2 mb-6"
               >

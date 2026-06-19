@@ -24,7 +24,7 @@ export const pageStyles = `
   .page-content code,
   .page-content pre,
   .page-content pre * {
-    font-family: 'JetBrains Mono', 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace !important;
+    font-family: 'DM Mono', 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace !important;
   }
   /* Set 16px for ALL elements except headings and code */
   .page-content *:not(h1):not(h2):not(h3):not(h4):not(h5):not(h6):not(code):not(pre) {
@@ -108,7 +108,7 @@ export const pageStyles = `
     color: #eb5757;
     padding: 0.125rem 0.375rem;
     border-radius: 0.25rem;
-    font-family: 'JetBrains Mono', 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace !important;
+    font-family: 'DM Mono', 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace !important;
     font-size: 0.9em;
   }
   .dark .page-content code {
@@ -160,7 +160,7 @@ export const pageStyles = `
     text-align: right;
     user-select: none;
     color: #6b7280;
-    font-family: 'JetBrains Mono', 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace !important;
+    font-family: 'DM Mono', 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace !important;
     font-size: 16px !important;
     line-height: 26px;
   }
@@ -577,7 +577,7 @@ export const pageStyles = `
     box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
   }
   .page-content .terminal-block .terminal-header {
-    background: linear-gradient(180deg, #3c3c3c 0%, #2d2d2d 100%);
+    background: #2d2d2d;
     padding: 0.5rem 1rem;
     display: flex;
     align-items: center;
@@ -608,7 +608,7 @@ export const pageStyles = `
     background: transparent !important;
     margin: 0;
     padding: 1.25rem 1.5rem !important;
-    font-family: 'JetBrains Mono', 'SF Mono', 'Monaco', 'Menlo', 'Consolas', monospace;
+    font-family: 'DM Mono', 'SF Mono', 'Monaco', 'Menlo', 'Consolas', monospace;
     font-size: 16px;
     line-height: 1.6;
     white-space: pre-wrap;

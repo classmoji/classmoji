@@ -64,6 +64,11 @@ export const LogoIcon = ({ size = 'md', className = '' }: LogoIconProps): React.
 interface LogoProps {
   variant?: 'full' | 'icon' | 'text';
   size?: SizeKey | number;
+  /**
+   * @deprecated No longer affects color. The wordmark is always ink
+   * (black in light mode, white in dark) via the `--cm-logo-ink` token.
+   * Kept for backwards-compatibility with existing call sites.
+   */
   theme?: 'light' | 'dark' | 'current';
   className?: string;
 }
@@ -74,7 +79,6 @@ interface LogoProps {
 export const Logo = ({
   variant = 'full',
   size = 'md',
-  theme = 'light',
   className = '',
 }: LogoProps): React.JSX.Element => {
   const isCustomSize = typeof size === 'number';
@@ -87,12 +91,6 @@ export const Logo = ({
   const customTextSize = isCustomSize ? { fontSize: `${Math.round(size * 0.7)}px` } : {};
 
   const gapClass = showIcon && showText ? 'gap-1.5' : '';
-  const themeClass =
-    theme === 'current'
-      ? 'text-current'
-      : theme === 'dark'
-        ? 'text-white'
-        : 'text-[#1a1a1a] dark:text-white';
 
   return (
     <div
@@ -105,10 +103,11 @@ export const Logo = ({
         <span
           style={{
             ...customTextSize,
-            fontFamily: 'Noto Sans, sans-serif',
-            fontWeight: 800,
+            fontFamily: 'Fredoka, sans-serif',
+            fontWeight: 600,
+            color: 'var(--cm-logo-ink, #1a1a1a)',
           }}
-          className={`leading-none lowercase select-none ${textSizeClass} ${themeClass}`}
+          className={`leading-none lowercase select-none ${textSizeClass}`}
         >
           classmoji
         </span>

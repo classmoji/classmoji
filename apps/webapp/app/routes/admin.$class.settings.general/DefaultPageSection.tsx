@@ -3,7 +3,6 @@ import { useState } from 'react';
 
 import { useGlobalFetcher } from '~/hooks';
 import { SettingSection } from '~/components';
-import { ActionTypes } from '~/constants';
 
 interface DefaultPageSectionProps {
   currentDefault: string;
@@ -13,11 +12,9 @@ interface DefaultPageSectionProps {
 const DefaultPageSection = ({ currentDefault, menuPages }: DefaultPageSectionProps) => {
   const [defaultPage, setDefaultPage] = useState(currentDefault);
 
-  const { notify, fetcher } = useGlobalFetcher();
+  const { fetcher } = useGlobalFetcher();
 
   const saveDefaultPage = () => {
-    notify(ActionTypes.SAVE_DEFAULT_PAGE, 'Saving default page...');
-
     fetcher!.submit(
       {
         default_student_page: defaultPage,
@@ -30,10 +27,10 @@ const DefaultPageSection = ({ currentDefault, menuPages }: DefaultPageSectionPro
     );
   };
 
-  // Build options: Dashboard, Modules, then any menu pages
+  // Build options: Dashboard, Repositories, then any menu pages
   const pageOptions = [
     { value: 'dashboard', label: 'Dashboard' },
-    { value: 'modules', label: 'Modules' },
+    { value: 'repositories', label: 'Repositories' },
     ...menuPages.map(page => ({
       value: `page:${page.id}`,
       label: page.title,
@@ -65,7 +62,7 @@ const DefaultPageSection = ({ currentDefault, menuPages }: DefaultPageSectionPro
           )}
         </p>
 
-        <Button type="primary" onClick={saveDefaultPage}>
+        <Button type="primary" onClick={saveDefaultPage} data-tour="settings-save-default-page">
           Save
         </Button>
       </Form>

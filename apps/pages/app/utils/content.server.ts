@@ -1,5 +1,4 @@
 import { ContentService } from '@classmoji/content';
-import { generateTermString } from '@classmoji/utils';
 import type { PageForContent } from '~/types/pages.ts';
 
 interface CoverImage {
@@ -18,11 +17,7 @@ interface PageContentResult {
  */
 function getRepoName(page: PageForContent): string {
   const gitOrg = page.classroom.git_organization!;
-  const term = generateTermString(
-    page.classroom.term ?? undefined,
-    page.classroom.year ?? undefined
-  );
-  return `content-${gitOrg.login}-${term}`;
+  return `content-${gitOrg.login}-${page.classroom.content_namespace}`;
 }
 
 /**

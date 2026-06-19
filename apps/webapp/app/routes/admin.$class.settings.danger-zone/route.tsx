@@ -6,7 +6,7 @@ import { useNavigate, useParams } from 'react-router';
 import { useGlobalFetcher, useDisclosure } from '~/hooks';
 import { ClassmojiService } from '@classmoji/services';
 import { ActionTypes } from '~/constants';
-import { requireClassroomAdmin } from '~/utils/routeAuth.server';
+import { requireClassroomAdmin, assertClassroomMutationAllowed } from '~/utils/routeAuth.server';
 import type { Route } from './+types/route';
 
 const DangerZone = () => {
@@ -39,14 +39,14 @@ const DangerZone = () => {
         okButtonProps={{ danger: true }}
       >
         <p>
-          The following data will be removed: modules, student enrollments, grades, quizzes, and
+          The following data will be removed: repositories, student enrollments, grades, quizzes, and
           classroom settings.
         </p>
         <p className="pt-3">Are you sure you want to proceed?</p>
       </Modal>
       <div>
         <p>Woah! I hope you know what you are doing.</p>
-        <p className="pt-6 font-bold text-lg">Remove Classroom </p>
+        <p className="pt-6 font-bold text-base">Remove Classroom </p>
         <p className="w-1/2 pb-4 pt-1">
           This action will remove the classroom and all its associated data. There is no going back.
         </p>
@@ -61,10 +61,11 @@ const DangerZone = () => {
 export const action = async ({ request, params }: Route.ActionArgs) => {
   const classSlug = params.class!;
 
-  const { classroom } = await requireClassroomAdmin(request, classSlug, {
+  const { classroom, membership } = await requireClassroomAdmin(request, classSlug, {
     resourceType: 'SETTINGS',
     action: 'delete_classroom',
   });
+  assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
 
   return namedAction(request, {
     async removeClassroom() {

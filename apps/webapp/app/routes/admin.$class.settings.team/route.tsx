@@ -2,7 +2,7 @@ import { namedAction } from 'remix-utils/named-action';
 
 import { ClassmojiService } from '@classmoji/services';
 import TagSection from './TagSection';
-import { requireClassroomAdmin } from '~/utils/routeAuth.server';
+import { requireClassroomAdmin, assertClassroomMutationAllowed } from '~/utils/routeAuth.server';
 import type { Route } from './+types/route';
 
 export const loader = async ({ params, request }: Route.LoaderArgs) => {
@@ -30,10 +30,11 @@ const SettingsTeams = ({ loaderData }: Route.ComponentProps) => {
 export const action = async ({ request, params }: Route.ActionArgs) => {
   const classSlug = params.class!;
 
-  const { classroom } = await requireClassroomAdmin(request, classSlug, {
+  const { classroom, membership } = await requireClassroomAdmin(request, classSlug, {
     resourceType: 'SETTINGS',
     action: 'update_team_settings',
   });
+  assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
 
   const data = await request.json();
 

@@ -1,459 +1,281 @@
 import getPrisma from '@classmoji/database';
 import { titleToIdentifier } from '@classmoji/utils';
-import type { AssignmentType, Prisma } from '@prisma/client';
+import { ModuleItemType, type Prisma } from '@prisma/client';
 
-interface ModuleQueryOptions {
-  includeAssignments?: boolean;
-  includePages?: boolean;
-  includeSlides?: boolean;
-  includeQuizzes?: boolean;
-}
-
-interface ModuleAssignmentInput extends Prisma.AssignmentUncheckedCreateWithoutModuleInput {
-  linkedPageIds?: string[];
-  linkedSlideIds?: string[];
-  branch?: string | null;
-  workflow_file?: string | null;
-}
-
-type ModuleCreateInput = Prisma.ModuleUncheckedCreateInput & {
-  assignments?: ModuleAssignmentInput[];
-};
-
-interface ModuleFormValues {
+interface ModuleWriteInput {
   title: string;
-  type: AssignmentType;
-  template: string;
-  classroomSlug: string;
-  assignments: ModuleAssignmentInput[];
-  weight?: number | string | null;
-  tag?: string | null;
-  tokens_per_hour?: number;
-  branch?: string | null;
+  description?: string | null;
 }
 
-interface ModuleAssignmentUpdateInput extends Prisma.AssignmentUncheckedCreateWithoutModuleInput {
-  id?: string;
-  title: string;
-  linkedPageIds?: string[];
-  linkedSlideIds?: string[];
-  branch?: string | null;
-  workflow_file?: string | null;
-  student_deadline?: Date | string | null;
-  grader_deadline?: Date | string | null;
-  release_at?: Date | string | null;
-}
-
-type ModuleUpdateValues = {
-  id: string;
-  assignments?: ModuleAssignmentUpdateInput[];
-  assignmentsToRemove?: Array<{ id: string }>;
-  tag?: string | null;
-  weight?: number | string | null;
-  team_formation_deadline?: Date | string | null;
-  type?: AssignmentType;
-  [key: string]: unknown;
+/** ModuleItemType → the nullable target column it populates on ModuleItem. */
+const ITEM_TYPE_COLUMN: Record<
+  ModuleItemType,
+  'page_id' | 'repository_id' | 'quiz_id' | 'slide_id'
+> = {
+  PAGE: 'page_id',
+  REPOSITORY: 'repository_id',
+  QUIZ: 'quiz_id',
+  SLIDE: 'slide_id',
 };
 
-/**
- * Find a Module by ID
- * @param {string} id - UUID of the Module
- * @returns {Promise<Object|null>}
- */
-export const findById = async (id: string) => {
-  return getPrisma().module.findUnique({
-    where: { id },
+// Items carry their full target plus, for repositories, the nested assignments
+// and attached resources the read-only tree needs. A literal include keeps
+// Prisma's inferred types on the returned shape.
+const ITEM_INCLUDE = {
+  page: true,
+  slide: true,
+  quiz: true,
+  repository: {
     include: {
-      assignments: true,
-      classroom: true,
-      tag: true,
+      assignments: { orderBy: { title: 'asc' } },
+      pages: { include: { page: true }, orderBy: { order: 'asc' } },
+      slides: { include: { slide: true }, orderBy: { order: 'asc' } },
+      quizzes: true,
     },
-  });
-};
+  },
+} satisfies Prisma.ModuleItemInclude;
+
+const DETAIL_INCLUDE = {
+  items: { orderBy: { position: 'asc' }, include: ITEM_INCLUDE },
+} satisfies Prisma.ModuleInclude;
+
+type ModuleItemWithTargets = Prisma.ModuleItemGetPayload<{ include: typeof ITEM_INCLUDE }>;
 
 /**
- * Find a Module by classroom and title
- * @param {string} classroomId - UUID of the Classroom
- * @param {string} title - Module title
- * @returns {Promise<Object|null>}
+ * Whether a module item should be visible to students, based on the publish
+ * state of its underlying target (the single source of truth for item
+ * visibility, mirrored by the plan's visibility rules).
  */
-export const findByClassroomAndTitle = async (classroomId: string, title: string) => {
-  return getPrisma().module.findUnique({
-    where: {
-      classroom_id_title: {
-        classroom_id: classroomId,
-        title,
-      },
-    },
-    include: {
-      assignments: true,
-      tag: true,
-    },
-  });
+export const isItemPublished = (item: ModuleItemWithTargets): boolean => {
+  switch (item.item_type) {
+    case 'PAGE':
+      return !!item.page && !item.page.is_draft;
+    case 'SLIDE':
+      return !!item.slide && !item.slide.is_draft;
+    case 'REPOSITORY':
+      return !!item.repository && item.repository.is_published;
+    case 'QUIZ':
+      return !!item.quiz && item.quiz.status !== 'DRAFT';
+    default:
+      return false;
+  }
 };
 
-/**
- * Find a Module by classroom slug and title
- * @param {string} classroomSlug - Classroom slug
- * @param {string} title - Module title
- * @param {Object} [options] - Additional options
- * @returns {Promise<Object|null>}
- */
-export const findBySlugAndTitle = async (
-  classroomSlug: string,
-  title: string,
-  options: ModuleQueryOptions = {}
-) => {
-  const classroom = await getPrisma().classroom.findUnique({
+const isItemTargetInClassroom = (item: ModuleItemWithTargets, classroomId: string): boolean => {
+  switch (item.item_type) {
+    case 'PAGE':
+      return item.page?.classroom_id === classroomId;
+    case 'SLIDE':
+      return item.slide?.classroom_id === classroomId;
+    case 'REPOSITORY':
+      return item.repository?.classroom_id === classroomId;
+    case 'QUIZ':
+      return item.quiz?.classroom_id === classroomId;
+    default:
+      return false;
+  }
+};
+
+const findClassroomIdBySlug = async (classroomSlug: string) => {
+  const classroom = await getPrisma().classroom.findFirst({
     where: { slug: classroomSlug },
     select: { id: true },
   });
+  return classroom?.id ?? null;
+};
 
-  if (!classroom) return null;
+/**
+ * List every Module in a classroom (by slug), ordered for display, with an
+ * item count for the index.
+ */
+export const findByClassroomSlug = async (classroomSlug: string) => {
+  const classroomId = await findClassroomIdBySlug(classroomSlug);
+  if (!classroomId) return [];
 
-  return getPrisma().module.findUnique({
-    where: {
-      classroom_id_title: {
-        classroom_id: classroom.id,
-        title,
-      },
-    },
-    include: {
-      assignments:
-        options.includeAssignments !== false
-          ? {
-              include: {
-                pages: options.includePages === true ? { include: { page: true } } : false,
-                slides: options.includeSlides === true ? { include: { slide: true } } : false,
-              },
-            }
-          : false,
-      tag: true,
-      quizzes: options.includeQuizzes === true,
-      pages: options.includePages === true ? { include: { page: true } } : false,
-      slides: options.includeSlides === true ? { include: { slide: true } } : false,
-    },
+  return getPrisma().module.findMany({
+    where: { classroom_id: classroomId },
+    include: { _count: { select: { items: true } } },
+    orderBy: [{ position: 'asc' }, { created_at: 'asc' }],
   });
 };
 
 /**
- * Find a Module by classroom slug and module slug
- * @param {string} classroomSlug - Classroom slug
- * @param {string} moduleSlug - Module slug
- * @param {Object} [options] - Additional options
- * @returns {Promise<Object|null>}
+ * Find a single Module within a classroom by its slug (falls back to title),
+ * with its ordered items, for the admin builder and the detail page.
  */
 export const findByClassroomSlugAndModuleSlug = async (
   classroomSlug: string,
-  moduleSlug: string,
-  options: ModuleQueryOptions = {}
+  moduleSlug: string
 ) => {
-  const classroom = await getPrisma().classroom.findUnique({
-    where: { slug: classroomSlug },
-    select: { id: true },
-  });
+  const classroomId = await findClassroomIdBySlug(classroomSlug);
+  if (!classroomId) return null;
 
-  if (!classroom) return null;
-
-  return getPrisma().module.findFirst({
-    where: {
-      classroom_id: classroom.id,
-      slug: moduleSlug,
-    },
-    include: {
-      assignments:
-        options.includeAssignments !== false
-          ? {
-              include: {
-                pages: options.includePages === true ? { include: { page: true } } : false,
-                slides: options.includeSlides === true ? { include: { slide: true } } : false,
-              },
-            }
-          : false,
-      tag: true,
-      quizzes: options.includeQuizzes === true,
-      pages: options.includePages === true ? { include: { page: true } } : false,
-      slides: options.includeSlides === true ? { include: { slide: true } } : false,
-    },
-  });
-};
-
-/**
- * Find all Modules for a classroom
- * @param {string} classroomId - UUID of the Classroom
- * @returns {Promise<Object[]>}
- */
-export const findByClassroomId = async (classroomId: string) => {
-  return getPrisma().module.findMany({
-    where: { classroom_id: classroomId },
-    include: {
-      assignments: true,
-      tag: true,
-    },
-    orderBy: { title: 'asc' },
-  });
-};
-
-/**
- * Find all Modules for a classroom by slug
- * @param {string} classroomSlug - Classroom slug
- * @returns {Promise<Object[]>}
- */
-export const findByClassroomSlug = async (
-  classroomSlug: string,
-  _options?: { includeAssignments?: boolean }
-) => {
-  return getPrisma().module.findMany({
-    where: {
-      classroom: { slug: classroomSlug },
-    },
-    include: {
-      assignments: true,
-      tag: true,
-    },
-    orderBy: { title: 'asc' },
-  });
-};
-
-/**
- * Find published Modules for a classroom
- * @param {string} classroomId - UUID of the Classroom
- * @returns {Promise<Object[]>}
- */
-export const findPublished = async (classroomId: string) => {
-  return getPrisma().module.findMany({
+  const module = await getPrisma().module.findFirst({
     where: {
       classroom_id: classroomId,
-      is_published: true,
+      OR: [{ slug: moduleSlug }, { title: moduleSlug }],
     },
-    include: {
-      assignments: {
-        where: { is_published: true },
-      },
-      tag: true,
-    },
-    orderBy: { title: 'asc' },
+    include: DETAIL_INCLUDE,
   });
+  if (!module) return null;
+
+  return {
+    ...module,
+    items: module.items.filter(item => isItemTargetInClassroom(item, classroomId)),
+  };
+};
+
+export const findById = async (id: string) => {
+  return getPrisma().module.findUnique({ where: { id }, include: DETAIL_INCLUDE });
 };
 
 /**
- * Create a Module with assignments
- * @param {Object} data - Module data
- * @param {string} data.classroom_id - UUID of the Classroom
- * @param {string} data.title - Module title
- * @param {string} data.template - Template repo name
- * @param {string} data.type - INDIVIDUAL or GROUP
- * @param {number} [data.weight] - Weight for grading
- * @param {string} [data.tag_id] - Tag UUID
- * @param {Object[]} [data.assignments] - Assignments to create
- * @returns {Promise<Object>}
+ * List a classroom's modules with their ordered items for the read-only
+ * student/assistant tree. Students (`includeUnpublished = false`) see only
+ * published modules and published items; the teaching team sees everything.
  */
-export const create = async (data: ModuleCreateInput) => {
-  const { assignments, ...moduleData } = data;
+export const listForClassroom = async (
+  classroomSlug: string,
+  { includeUnpublished = false }: { includeUnpublished?: boolean } = {}
+) => {
+  const classroomId = await findClassroomIdBySlug(classroomSlug);
+  if (!classroomId) return [];
 
-  // Generate slug from title (set once, never updated)
-  const slug = titleToIdentifier(moduleData.title);
-
-  // Filter out non-Prisma fields from assignments and add slugs
-  const cleanedAssignments = assignments?.map((assignment: ModuleAssignmentInput) => {
-    const {
-      linkedPageIds: _linkedPageIds,
-      linkedSlideIds: _linkedSlideIds,
-      branch: _branch,
-      workflow_file: _workflow_file,
-      ...assignmentData
-    } = assignment;
-    return {
-      ...assignmentData,
-      slug: titleToIdentifier(assignmentData.title),
-    };
+  const modules = await getPrisma().module.findMany({
+    where: {
+      classroom_id: classroomId,
+      ...(includeUnpublished ? {} : { is_published: true }),
+    },
+    include: DETAIL_INCLUDE,
+    orderBy: [{ position: 'asc' }, { created_at: 'asc' }],
   });
 
+  const modulesWithScopedItems = modules.map(m => ({
+    ...m,
+    items: m.items.filter(item => isItemTargetInClassroom(item, classroomId)),
+  }));
+
+  if (includeUnpublished) return modulesWithScopedItems;
+
+  // Drop items whose target is not published. Module-level publish is already
+  // filtered in the query above.
+  return modulesWithScopedItems.map(m => ({ ...m, items: m.items.filter(isItemPublished) }));
+};
+
+/**
+ * The four content types a module item can point at, with the minimal fields
+ * the admin "add item" picker needs (id, label, and publish state for a pill).
+ */
+export const getCandidateContent = async (classroomId: string) => {
+  const prisma = getPrisma();
+  const [repositories, pages, slides, quizzes] = await Promise.all([
+    prisma.repository.findMany({
+      where: { classroom_id: classroomId },
+      select: { id: true, title: true, is_published: true },
+      orderBy: { title: 'asc' },
+    }),
+    prisma.page.findMany({
+      where: { classroom_id: classroomId },
+      select: { id: true, title: true, is_draft: true },
+      orderBy: { title: 'asc' },
+    }),
+    prisma.slide.findMany({
+      where: { classroom_id: classroomId },
+      select: { id: true, title: true, is_draft: true },
+      orderBy: { title: 'asc' },
+    }),
+    prisma.quiz.findMany({
+      where: { classroom_id: classroomId },
+      select: { id: true, name: true, status: true },
+      orderBy: { name: 'asc' },
+    }),
+  ]);
+  return { repositories, pages, slides, quizzes };
+};
+
+export const create = async (classroomId: string, input: ModuleWriteInput) => {
   return getPrisma().module.create({
     data: {
-      ...moduleData,
-      slug,
-      weight: Number(moduleData.weight ?? 100),
-      ...(cleanedAssignments && {
-        assignments: {
-          create: cleanedAssignments,
-        },
-      }),
-    },
-    include: {
-      assignments: true,
-      tag: true,
+      classroom_id: classroomId,
+      title: input.title,
+      slug: titleToIdentifier(input.title),
+      description: input.description ?? null,
     },
   });
 };
 
-/**
- * Create a Module from form data (legacy compat)
- * @param {Object} values - Form values
- * @returns {Promise<Object>}
- */
-export const createFromForm = async (values: ModuleFormValues) => {
-  const {
-    title,
-    type,
-    template,
-    classroomSlug,
-    assignments,
-    weight,
-    tag,
-    tokens_per_hour,
-    branch,
-  } = values;
-
-  const classroom = await getPrisma().classroom.findUnique({
-    where: { slug: classroomSlug },
-  });
-
-  if (!classroom) {
-    throw new Error('Classroom not found');
-  }
-
-  // Generate slug from title (set once, never updated)
-  const slug = titleToIdentifier(title);
-
-  return getPrisma().module.create({
-    data: {
-      title,
-      slug,
-      type,
-      template,
-      weight: Number(weight ?? 100),
-      classroom_id: classroom.id,
-      ...(tag && { tag_id: tag }),
-      assignments: {
-        create: assignments.map((a: ModuleAssignmentInput) => ({
-          ...a,
-          slug: titleToIdentifier(a.title),
-          tokens_per_hour: tokens_per_hour || 0,
-          branch: branch || null,
-        })),
-      },
-    },
-    include: {
-      assignments: true,
-      tag: true,
-    },
-  });
-};
-
-/**
- * Update a Module
- * @param {string} id - UUID of the Module
- * @param {Object} updates - Fields to update
- * @returns {Promise<Object>}
- */
-export const update = async (id: string, updates: Prisma.ModuleUncheckedUpdateInput) => {
+export const update = async (id: string, input: ModuleWriteInput) => {
+  // Slug is set once on creation and never updated, matching Repository/Assignment.
   return getPrisma().module.update({
     where: { id },
-    data: updates,
-    include: {
-      assignments: true,
-      tag: true,
-    },
+    data: { title: input.title, description: input.description ?? null },
   });
 };
 
-/**
- * Update a Module with assignment changes
- * @param {Object} values - Update values
- * @returns {Promise<Object>}
- */
-export const updateWithAssignments = async (values: ModuleUpdateValues) => {
-  const { id, assignments, assignmentsToRemove, tag, weight, ...updateData } = values;
-
-  // Coerce module-level dates
-  if (updateData.team_formation_deadline && !(updateData.team_formation_deadline instanceof Date)) {
-    updateData.team_formation_deadline = new Date(updateData.team_formation_deadline);
-  }
-
-  const moduleUpdateData = {
-    ...(updateData as Prisma.ModuleUncheckedUpdateInput),
-    weight: Number(weight ?? 100),
-    ...(updateData.type === 'GROUP' && tag && { tag_id: tag }),
-  } satisfies Prisma.ModuleUncheckedUpdateInput;
-
-  // Update module
-  await getPrisma().module.update({
-    where: { id },
-    data: moduleUpdateData,
+const assertModuleInClassroom = async (moduleId: string, classroomId: string) => {
+  const module = await getPrisma().module.findFirst({
+    where: { id: moduleId, classroom_id: classroomId },
+    select: { id: true },
   });
+  if (!module) throw new Error('Module not found in classroom');
+};
 
-  // Delete removed assignments
-  if (assignmentsToRemove?.length) {
-    await getPrisma().assignment.deleteMany({
-      where: {
-        id: { in: assignmentsToRemove.map((a: { id: string }) => a.id) },
-      },
-    });
-  }
+const assertTargetInClassroom = async (
+  type: ModuleItemType,
+  targetId: string,
+  classroomId: string
+) => {
+  const prisma = getPrisma();
+  const select = { id: true };
+  let target: { id: string } | null = null;
 
-  // Upsert assignments
-  if (assignments?.length) {
-    for (const assignment of assignments) {
-      // Extract fields that shouldn't go to Prisma
-      const {
-        id: assignmentId,
-        linkedPageIds: _linkedPageIds,
-        linkedSlideIds: _linkedSlideIds,
-        branch: _branch,
-        workflow_file: _workflow_file,
-        ...assignmentData
-      } = assignment;
-      const assignmentMutationData = assignmentData as Prisma.AssignmentUncheckedUpdateInput;
-
-      // Coerce assignment date fields to Date objects
-      const dateFields = ['student_deadline', 'grader_deadline', 'release_at'] as const;
-      for (const field of dateFields) {
-        if (assignmentMutationData[field] && !(assignmentMutationData[field] instanceof Date)) {
-          assignmentMutationData[field] = new Date(assignmentMutationData[field] as string | Date);
-        }
-      }
-
-      await getPrisma().assignment.upsert({
-        where: { id: assignmentId || crypto.randomUUID() },
-        update: assignmentMutationData,
-        create: {
-          id: assignmentId || undefined,
-          ...(assignmentMutationData as Prisma.AssignmentUncheckedCreateWithoutModuleInput),
-          slug: titleToIdentifier(assignment.title),
-          module_id: id,
-        },
+  switch (type) {
+    case ModuleItemType.PAGE:
+      target = await prisma.page.findFirst({
+        where: { id: targetId, classroom_id: classroomId },
+        select,
       });
-    }
+      break;
+    case ModuleItemType.REPOSITORY:
+      target = await prisma.repository.findFirst({
+        where: { id: targetId, classroom_id: classroomId },
+        select,
+      });
+      break;
+    case ModuleItemType.QUIZ:
+      target = await prisma.quiz.findFirst({
+        where: { id: targetId, classroom_id: classroomId },
+        select,
+      });
+      break;
+    case ModuleItemType.SLIDE:
+      target = await prisma.slide.findFirst({
+        where: { id: targetId, classroom_id: classroomId },
+        select,
+      });
+      break;
   }
 
-  return getPrisma().module.findUnique({
-    where: { id },
-    include: {
-      assignments: true,
-      tag: true,
-    },
-  });
+  if (!target) throw new Error('Module item target not found in classroom');
 };
 
-/**
- * Delete a Module
- * @param {string} id - UUID of the Module
- * @returns {Promise<Object>}
- */
-export const deleteById = async (id: string) => {
-  return getPrisma().module.delete({
-    where: { id },
-  });
+export const updateForClassroom = async (
+  id: string,
+  classroomId: string,
+  input: ModuleWriteInput
+) => {
+  await assertModuleInClassroom(id, classroomId);
+  return update(id, input);
 };
 
-/**
- * Publish or unpublish a Module
- * @param {string} id - UUID of the Module
- * @param {boolean} isPublished - Whether to publish
- * @returns {Promise<Object>}
- */
-export const setPublished = async (id: string, isPublished: boolean) => {
+export const deleteById = async (id: string, classroomId?: string) => {
+  if (classroomId) await assertModuleInClassroom(id, classroomId);
+  // ModuleItem rows cascade; the underlying pages/repos/quizzes/slides remain.
+  return getPrisma().module.delete({ where: { id } });
+};
+
+export const setPublished = async (id: string, isPublished: boolean, classroomId?: string) => {
+  if (classroomId) await assertModuleInClassroom(id, classroomId);
   return getPrisma().module.update({
     where: { id },
     data: { is_published: isPublished },
@@ -461,33 +283,88 @@ export const setPublished = async (id: string, isPublished: boolean) => {
 };
 
 /**
- * Get Modules with repository status for a student
- * @param {string} classroomId - UUID of the Classroom
- * @param {string} studentId - UUID of the student
- * @returns {Promise<Object[]>}
+ * Append an item of the given type to a module (at max position + 1). The
+ * unique (module, target) constraint prevents adding the same item twice.
  */
-export const findWithStudentStatus = async (classroomId: string, studentId: string) => {
-  return getPrisma().module.findMany({
-    where: {
-      classroom_id: classroomId,
-      is_published: true,
+export const addItem = async (
+  moduleId: string,
+  type: ModuleItemType,
+  targetId: string,
+  classroomId?: string
+) => {
+  const prisma = getPrisma();
+  if (classroomId) {
+    await assertModuleInClassroom(moduleId, classroomId);
+    await assertTargetInClassroom(type, targetId, classroomId);
+  }
+  const last = await prisma.moduleItem.findFirst({
+    where: { module_id: moduleId },
+    orderBy: { position: 'desc' },
+    select: { position: true },
+  });
+  const position = last ? last.position + 1 : 0;
+
+  return prisma.moduleItem.create({
+    data: {
+      module_id: moduleId,
+      item_type: type,
+      position,
+      [ITEM_TYPE_COLUMN[type]]: targetId,
     },
-    include: {
-      assignments: {
-        where: { is_published: true },
-      },
-      repositories: {
-        where: { student_id: studentId },
-        include: {
-          assignments: {
-            include: {
-              grades: true,
-            },
-          },
-        },
-      },
-      tag: true,
-    },
-    orderBy: { title: 'asc' },
   });
 };
+
+export const removeItem = async (moduleItemId: string, classroomId?: string) => {
+  if (classroomId) {
+    const moduleItem = await getPrisma().moduleItem.findFirst({
+      where: { id: moduleItemId, module: { classroom_id: classroomId } },
+      select: { id: true },
+    });
+    if (!moduleItem) throw new Error('Module item not found in classroom');
+  }
+  return getPrisma().moduleItem.delete({ where: { id: moduleItemId } });
+};
+
+/**
+ * Persist a new ordering for a module's items. `orderedItemIds` is the full
+ * list of ModuleItem ids in their new order; each row's position becomes its
+ * index.
+ */
+export const reorderItems = async (
+  moduleId: string,
+  orderedItemIds: string[],
+  classroomId?: string
+) => {
+  const prisma = getPrisma();
+  if (classroomId) await assertModuleInClassroom(moduleId, classroomId);
+
+  const existingItems = await prisma.moduleItem.findMany({
+    where: { module_id: moduleId },
+    select: { id: true },
+  });
+  const existingIds = new Set(existingItems.map(item => item.id));
+  const orderedIds = new Set(orderedItemIds);
+  const hasExactSet =
+    existingIds.size === orderedItemIds.length &&
+    orderedIds.size === orderedItemIds.length &&
+    orderedItemIds.every(id => existingIds.has(id));
+  if (!hasExactSet) throw new Error('Ordered item ids must match module items');
+
+  await prisma.$transaction(
+    orderedItemIds.map((id, index) =>
+      prisma.moduleItem.update({
+        where: { id, module_id: moduleId },
+        data: { position: index },
+      })
+    )
+  );
+};
+
+// `export const ModuleItemTypes` mirror so callers (routes/UI) can reference the
+// canonical set without importing Prisma directly.
+export const MODULE_ITEM_TYPES: ModuleItemType[] = [
+  ModuleItemType.PAGE,
+  ModuleItemType.REPOSITORY,
+  ModuleItemType.QUIZ,
+  ModuleItemType.SLIDE,
+];

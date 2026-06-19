@@ -47,7 +47,9 @@ export const loader = async ({
 
   // Build the GitHub paths that will be deleted
   const gitOrgLogin = slideInfo.slide.classroom?.git_organization?.login;
-  const repoName = gitOrgLogin ? `content-${gitOrgLogin}-${slideInfo.slide.term}` : null;
+  const contentNamespace = slideInfo.slide.classroom?.content_namespace;
+  const repoName =
+    gitOrgLogin && contentNamespace ? `content-${gitOrgLogin}-${contentNamespace}` : null;
   const contentPath = slideInfo.slide.content_path;
 
   return {
@@ -56,7 +58,6 @@ export const loader = async ({
     slide: {
       id: slideInfo.slide.id,
       title: slideInfo.slide.title,
-      term: slideInfo.slide.term,
       contentPath,
     },
     github: repoName

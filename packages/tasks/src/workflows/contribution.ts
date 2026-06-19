@@ -18,7 +18,7 @@ async function calculateContributions(org: string, repoName: string): Promise<st
   const git = simpleGit();
   await git.cwd(repoName);
 
-  // Get the list of files (recursively) from the Git repository
+  // Get the list of files (recursively) from the Git gitRepo
   const files = await git.raw(['ls-tree', '--name-only', '-r', 'HEAD']);
   const fileList = files
     .split('\n')
@@ -49,12 +49,12 @@ async function calculateContributions(org: string, repoName: string): Promise<st
   return result;
 }
 
-// Function to remove the Git repository directory
+// Function to remove the Git gitRepo directory
 function removeRepo(repoName: string): void {
-  const repoDir = path.join(process.cwd(), repoName); // Path to your Git repository
+  const repoDir = path.join(process.cwd(), repoName); // Path to your Git gitRepo
   fs.rm(repoDir, { recursive: true, force: true }, (err: NodeJS.ErrnoException | null) => {
     if (err) {
-      console.error(`Error removing repository: ${err.message}`);
+      console.error(`Error removing gitRepo: ${err.message}`);
     }
   });
 }
@@ -69,9 +69,9 @@ export const calculateContributionsTask = task({
     await cloneRepo(orgLogin, repoName, accessToken);
     const result = await calculateContributions(orgLogin, repoName);
 
-    const repository = await ClassmojiService.repository.findByName(orgLogin, repoName);
+    const gitRepo = await ClassmojiService.gitRepo.findByName(orgLogin, repoName);
 
-    await ClassmojiService.repository.update(repository!.id, {
+    await ClassmojiService.gitRepo.update(gitRepo!.id, {
       contributions: result,
     });
 

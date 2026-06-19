@@ -3,9 +3,10 @@ import * as gitOrganizationService from './gitOrganization.service.ts';
 import * as classroomService from './classroom.service.ts';
 import * as classroomMembershipService from './classroomMembership.service.ts';
 import * as moduleService from './module.service.ts';
+import * as repositoryService from './repository.service.ts';
 import * as assignmentService from './assignment.service.ts';
-import * as repositoryAssignmentService from './repositoryAssignment.service.ts';
-import * as repositoryAssignmentGraderService from './repositoryAssignmentGrader.service.ts';
+import * as gitRepoAssignmentService from './gitRepoAssignment.service.ts';
+import * as gitRepoAssignmentGraderService from './gitRepoAssignmentGrader.service.ts';
 import * as assignmentGradeService from './assignmentGrade.service.ts';
 
 // Supporting services
@@ -18,7 +19,7 @@ import * as helperService from './helper.service.ts';
 import * as letterGradeMappingService from './letterGradeMapping.service.ts';
 import * as organizationTagService from './organizationTag.service.ts';
 import * as regradeRequestService from './regradeRequest.service.ts';
-import * as repositoryService from './repository.service.ts';
+import * as gitRepoService from './gitRepo.service.ts';
 import * as subscriptionService from './subscription.service.ts';
 import * as teamMembershipService from './teamMembership.service.ts';
 import * as teamService from './team.service.ts';
@@ -27,10 +28,14 @@ import * as tokenService from './token.service.ts';
 import * as userService from './user.service.ts';
 import * as quizService from './quiz.service.ts';
 import * as quizAttemptService from './quizAttempt.service.ts';
-import * as moduleImportService from './moduleImport.service.ts';
+import * as repositoryImportService from './repositoryImport.service.ts';
 import * as classroomInviteService from './classroomInvite.service.ts';
 import * as contentManifestService from './contentManifest.service.ts';
 import * as resourceViewService from './resourceView.service.ts';
+import * as gitRepoAnalyticsService from './repoAnalytics.service.ts';
+import * as dashboardService from './dashboard.service.ts';
+import * as taDashboardService from './taDashboard.service.ts';
+import * as notificationService from './notification.service.ts';
 
 const ClassmojiService = {
   // All services namespaced for consistency
@@ -38,9 +43,10 @@ const ClassmojiService = {
   classroom: classroomService,
   classroomMembership: classroomMembershipService,
   module: moduleService,
+  repository: repositoryService,
   assignment: assignmentService,
-  repositoryAssignment: repositoryAssignmentService,
-  repositoryAssignmentGrader: repositoryAssignmentGraderService,
+  gitRepoAssignment: gitRepoAssignmentService,
+  gitRepoAssignmentGrader: gitRepoAssignmentGraderService,
   assignmentGrade: assignmentGradeService,
   audit: auditService,
   calendar: calendarService,
@@ -51,7 +57,7 @@ const ClassmojiService = {
   letterGradeMapping: letterGradeMappingService,
   organizationTag: organizationTagService,
   regradeRequest: regradeRequestService,
-  repository: repositoryService,
+  gitRepo: gitRepoService,
   subscription: subscriptionService,
   teamMembership: teamMembershipService,
   team: teamService,
@@ -60,10 +66,14 @@ const ClassmojiService = {
   user: userService,
   quiz: quizService,
   quizAttempt: quizAttemptService,
-  moduleImport: moduleImportService,
+  repositoryImport: repositoryImportService,
   classroomInvite: classroomInviteService,
   contentManifest: contentManifestService,
   resourceView: resourceViewService,
+  repoAnalytics: gitRepoAnalyticsService,
+  dashboard: dashboardService,
+  taDashboard: taDashboardService,
+  notification: notificationService,
   // Alias for AI conversation functions (delegates to quizAttempt)
   aiConversation: {
     addMessage: quizAttemptService.addMessage,
@@ -78,9 +88,10 @@ export {
   classroomService,
   classroomMembershipService,
   moduleService,
+  repositoryService,
   assignmentService,
-  repositoryAssignmentService,
-  repositoryAssignmentGraderService,
+  gitRepoAssignmentService,
+  gitRepoAssignmentGraderService,
   assignmentGradeService,
   auditService,
   calendarService,
@@ -91,7 +102,7 @@ export {
   letterGradeMappingService,
   organizationTagService,
   regradeRequestService,
-  repositoryService,
+  gitRepoService,
   subscriptionService,
   teamMembershipService,
   teamService,
@@ -100,8 +111,12 @@ export {
   userService,
   quizService,
   quizAttemptService,
-  moduleImportService,
+  repositoryImportService,
   classroomInviteService,
   contentManifestService,
   resourceViewService,
+  gitRepoAnalyticsService,
+  dashboardService,
+  taDashboardService,
+  notificationService,
 };

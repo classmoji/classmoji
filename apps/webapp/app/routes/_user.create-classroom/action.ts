@@ -5,10 +5,10 @@ import {
   GitHubProvider,
   getGitProvider,
   ensureClassroomTeam,
-  classroomService,
 } from '@classmoji/services';
 import { ActionTypes } from '~/constants';
 import getPrisma from '@classmoji/database';
+import { slugify } from './utils';
 
 export const action = checkAuth(async ({ request }: { request: Request }) => {
   const authData = await getAuthSession(request);
@@ -22,10 +22,10 @@ export const action = checkAuth(async ({ request }: { request: Request }) => {
     return { error: 'Unauthorized' };
   }
 
-  const { git_org_id, name, term, year, importConfig } = await request.json();
+  const { git_org_id, name, slug: slugInput, importConfig } = await request.json();
 
-  if (!term || !year) {
-    return { error: 'Term and year are required' };
+  if (!name) {
+    return { error: 'Classroom name is required' };
   }
 
   // Get GitOrganization
@@ -65,8 +65,8 @@ export const action = checkAuth(async ({ request }: { request: Request }) => {
     };
   }
 
-  // Generate unique slug (name, term, year - no gitOrg)
-  const slug = await classroomService.generateSlug(name, term, year);
+  // Slug: prefer client-provided (user override / suggestion) when present, else derive from name.
+  const slug = slugInput && typeof slugInput === 'string' ? slugify(slugInput) : slugify(name);
 
   // Create Classroom, Settings, and Membership in transaction
   const classroom = await getPrisma().$transaction(async tx => {
@@ -75,8 +75,7 @@ export const action = checkAuth(async ({ request }: { request: Request }) => {
         git_org_id,
         slug,
         name,
-        term,
-        year: Number(year),
+        content_namespace: slug,
       },
     });
 
@@ -96,17 +95,17 @@ export const action = checkAuth(async ({ request }: { request: Request }) => {
     return classroom;
   });
 
-  // Import modules if configured
+  // Import repositories if configured
   let importResult = null;
-  if (importConfig?.modules?.length > 0) {
+  if (importConfig?.repositories?.length > 0) {
     try {
-      importResult = await ClassmojiService.moduleImport.cloneModulesWithRelations(
+      importResult = await ClassmojiService.repositoryImport.cloneModulesWithRelations(
         classroom.id,
-        importConfig.modules,
+        importConfig.repositories,
         { stripDeadlines: true }
       );
     } catch (error: unknown) {
-      console.error('Error importing modules:', error);
+      console.error('Error importing repositories:', error);
       // Don't fail classroom creation, just log the error
     }
   }
@@ -134,9 +133,9 @@ export const action = checkAuth(async ({ request }: { request: Request }) => {
   let successMessage = 'Classroom created successfully!';
   if (importResult) {
     const parts = [];
-    if (importResult.modules.length > 0) {
+    if (importResult.repositories.length > 0) {
       parts.push(
-        `${importResult.modules.length} module${importResult.modules.length !== 1 ? 's' : ''}`
+        `${importResult.repositories.length} repository${importResult.repositories.length !== 1 ? 's' : ''}`
       );
     }
     if (importResult.assignments.length > 0) {
