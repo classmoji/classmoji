@@ -1,5 +1,5 @@
-import { Card, Button, Table, Spin } from 'antd';
-import { IconCrown, IconArrowRight, IconExternalLink, IconCheck, IconX } from '@tabler/icons-react';
+import { Button, Spin } from 'antd';
+import { IconCrown, IconArrowRight, IconExternalLink, IconCheck } from '@tabler/icons-react';
 import { useFetcher, useLocation } from 'react-router';
 import { useEffect, useState, useRef } from 'react';
 import { namedAction } from 'remix-utils/named-action';
@@ -9,7 +9,6 @@ import { ClassmojiService, StripeService } from '@classmoji/services';
 import { useCallout } from '@classmoji/ui-components';
 import { useSubscription } from '~/hooks';
 import InfoCard from './InforCard';
-import { getUsageData } from './utils';
 import { getAuthSession } from '@classmoji/auth/server';
 import type { Route } from './+types/route';
 
@@ -34,7 +33,6 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
 const SettingsSubscription = ({ loaderData }: Route.ComponentProps) => {
   const { stripeSubscription, classmojiSubscription } = loaderData;
   const { isProTier, isFreeTier } = useSubscription('owner');
-  const usageData = getUsageData({ isFreeTier, isProTier });
   const fetcher = useFetcher();
   const [loading, setLoading] = useState(false);
   const { search } = useLocation();
@@ -120,7 +118,7 @@ const SettingsSubscription = ({ loaderData }: Route.ComponentProps) => {
                   Unleash the full power of Classmoji
                 </h3>
                 <p className="text-ink-2">
-                  Get unlimited students, courses, TA management, team projects, and so much more.
+                  Unlock AI Quizzes to auto-generate and grade assessments for your students.
                 </p>
               </div>
               <div className="flex items-center gap-4">
@@ -176,7 +174,7 @@ const SettingsSubscription = ({ loaderData }: Route.ComponentProps) => {
 
           {/* Price */}
           <InfoCard title="Price">
-            <p className="text-2xl font-bold text-ink-0">
+            <p className="text-xl font-bold text-ink-0">
               {isFreeTier || isVIP ? '$0.00' : '$29.00'} / month
             </p>
           </InfoCard>
@@ -184,7 +182,7 @@ const SettingsSubscription = ({ loaderData }: Route.ComponentProps) => {
           {/* Subscription Renews */}
           <InfoCard title="Subscription renews on">
             <p
-              className={`text-2xl font-bold ${
+              className={`text-xl font-bold ${
                 classmojiSubscription.cancelled_at ? 'text-red-500' : 'text-ink-0'
               }`}
             >
@@ -193,66 +191,15 @@ const SettingsSubscription = ({ loaderData }: Route.ComponentProps) => {
           </InfoCard>
         </div>
 
-        {/* Current Usage Table */}
-        <Card className="bg-white dark:bg-neutral-800 border border-gray-200 dark:border-neutral-700">
-          <h3 className="text-lg font-semibold text-ink-0 mb-6">Current usage</h3>
-          <Table
-            dataSource={usageData}
-            pagination={false}
-            className="pb-8"
-            rowKey="key"
-            size="small"
-            scroll={{ x: 'max-content' }}
-            columns={[
-              {
-                title: 'FEATURE',
-                dataIndex: 'feature',
-                key: 'feature',
-                width: 280,
-                render: (text, record) => (
-                  <div className="flex items-center gap-2">
-                    <span className="text-ink-0 font-medium">{text}</span>
-                    {record.feature === 'Students per course' && (
-                      <div className="w-4 h-4 rounded-full bg-gray-200 dark:bg-gray-600 flex items-center justify-center">
-                        <span className="text-xs text-gray-600 dark:text-gray-300">?</span>
-                      </div>
-                    )}
-                  </div>
-                ),
-              },
-              {
-                title: 'ALLOWED',
-                dataIndex: 'allowed',
-                key: 'allowed',
-                width: 110,
-                render: value => {
-                  if (value === true) {
-                    return <IconCheck size={18} className="text-green-600 dark:text-green-500" />;
-                  }
-                  if (value === false) {
-                    return <IconX size={18} className="text-red-600 dark:text-red-500" />;
-                  }
-                  return <span className="text-ink-0 font-medium">{value}</span>;
-                },
-              },
-              {
-                title: 'USED',
-                dataIndex: 'used',
-                key: 'used',
-                width: 110,
-                render: value => {
-                  if (value === true) {
-                    return <IconCheck size={18} className="text-green-600 dark:text-green-500" />;
-                  }
-                  if (value === null || value === false) {
-                    return <span className="text-ink-3">-</span>;
-                  }
-                  return <span className="text-ink-0 font-medium">{value}</span>;
-                },
-              },
-            ]}
-          />
-        </Card>
+        {/* Plan inclusions */}
+        {isProTier && (
+          <InfoCard title="Your plan includes">
+            <div className="flex items-center gap-2">
+              <IconCheck size={18} className="text-green-600 dark:text-green-500" />
+              <span className="text-ink-0 font-medium">AI Quizzes</span>
+            </div>
+          </InfoCard>
+        )}
       </div>
     </>
   );

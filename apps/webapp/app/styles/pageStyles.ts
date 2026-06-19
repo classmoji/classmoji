@@ -577,7 +577,7 @@ export const pageStyles = `
     box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
   }
   .page-content .terminal-block .terminal-header {
-    background: linear-gradient(180deg, #3c3c3c 0%, #2d2d2d 100%);
+    background: #2d2d2d;
     padding: 0.5rem 1rem;
     display: flex;
     align-items: center;

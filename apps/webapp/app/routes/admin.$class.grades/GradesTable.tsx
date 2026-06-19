@@ -257,86 +257,90 @@ const GradesTable = (props: GradesTableProps) => {
 
   return (
     <div className="min-h-full min-w-0">
-      <div className="flex items-center justify-between gap-3 mt-2 mb-4 flex-wrap">
-        <div className="flex items-center gap-3">
-          <h1 className="text-base font-semibold text-ink-2">Grades</h1>
-          {searchQuery && (
-            <span className="text-xs text-ink-3 bg-nav-hover px-2.5 py-1 rounded-full">
-              {filteredStudents.length} of {students.length}
-            </span>
-          )}
-        </div>
-        <div className="flex items-center gap-3 flex-wrap">
-          <Checkbox
-            checked={showIssues}
-            onChange={() => setShowIssues(!showIssues)}
-            data-tour="grades-show-assignments"
-          >
-            Show Assignments
-          </Checkbox>
-          <Checkbox
-            checked={showComments}
-            onChange={() => setShowComments(!showComments)}
-            data-tour="grades-show-comments"
-          >
-            Show Comments
-          </Checkbox>
-          <div className="h-6 w-px bg-line" />
-          <div className="flex items-center gap-1.5" data-tour="grades-view-toggle">
-            <ConfigProvider
-              theme={{
-                token: {
-                  borderRadius: 6,
-                },
-                components: {
-                  Segmented: {
-                    borderRadius: 6,
-                    borderRadiusSM: 4,
-                    itemSelectedBg: '#ffffff',
-                    itemSelectedColor: '#1f2937',
-                    trackPadding: 3,
-                  },
-                },
-              }}
-            >
-              <Segmented
-                value={view}
-                onChange={val => setView(val as string)}
-                options={['Emoji', 'Numeric']}
-              />
-            </ConfigProvider>
-            <Popover
-              trigger="click"
-              placement="bottomRight"
-              content={
-                <GradeSettings
-                  letterGradeMappings={letterGradeMappings}
-                  changeLetterGradeMapping={changeLetterGradeMapping}
-                />
-              }
-            >
-              <button
-                type="button"
-                aria-label="Letter grade breakpoints"
-                className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-sm font-medium text-gray-600 hover:text-gray-900 dark:text-gray-300 dark:hover:text-gray-100 ring-1 ring-line hover:bg-nav-hover transition-colors"
-              >
-                <IconAdjustmentsHorizontal size={16} />
-                Breakpoints
-              </button>
-            </Popover>
+      <div className="flex flex-col gap-3 mt-2 mb-4">
+        <div className="flex items-center justify-between gap-3 flex-wrap">
+          <div className="flex items-center gap-3">
+            <h1 className="text-lg font-semibold text-ink-1">Grades</h1>
+            {searchQuery && (
+              <span className="text-xs text-ink-3 bg-nav-hover px-2.5 py-1 rounded-full">
+                {filteredStudents.length} of {students.length}
+              </span>
+            )}
           </div>
+          <div className="flex items-center gap-3 flex-wrap justify-end">
+            <Checkbox
+              checked={showIssues}
+              onChange={() => setShowIssues(!showIssues)}
+              data-tour="grades-show-assignments"
+            >
+              Show Assignments
+            </Checkbox>
+            <Checkbox
+              checked={showComments}
+              onChange={() => setShowComments(!showComments)}
+              data-tour="grades-show-comments"
+            >
+              Show Comments
+            </Checkbox>
+            <div className="h-6 w-px bg-line" />
+            <div className="flex items-center gap-1.5" data-tour="grades-view-toggle">
+              <ConfigProvider
+                theme={{
+                  token: {
+                    borderRadius: 6,
+                  },
+                  components: {
+                    Segmented: {
+                      borderRadius: 6,
+                      borderRadiusSM: 4,
+                      itemSelectedBg: '#ffffff',
+                      itemSelectedColor: '#1f2937',
+                      trackPadding: 3,
+                    },
+                  },
+                }}
+              >
+                <Segmented
+                  value={view}
+                  onChange={val => setView(val as string)}
+                  options={['Emoji', 'Numeric']}
+                />
+              </ConfigProvider>
+              <Popover
+                trigger="click"
+                placement="bottomRight"
+                content={
+                  <GradeSettings
+                    letterGradeMappings={letterGradeMappings}
+                    changeLetterGradeMapping={changeLetterGradeMapping}
+                  />
+                }
+              >
+                <button
+                  type="button"
+                  aria-label="Letter grade breakpoints"
+                  className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-sm font-medium text-gray-600 hover:text-gray-900 dark:text-gray-300 dark:hover:text-gray-100 ring-1 ring-line hover:bg-nav-hover transition-colors"
+                >
+                  <IconAdjustmentsHorizontal size={16} />
+                  Breakpoints
+                </button>
+              </Popover>
+            </div>
+          </div>
+        </div>
+        <div className="flex">
           <Input
             placeholder="Search by name, username, or email..."
             prefix={<IconSearch size={16} />}
             value={searchQuery}
             onChange={e => setSearchQuery(e.target.value)}
-            className="w-full sm:w-80"
+            className="w-full sm:w-64"
             data-tour="grades-search"
           />
         </div>
       </div>
 
-      <div className="rounded-2xl overflow-hidden bg-panel min-h-[calc(100vh-10rem)] p-5 sm:p-6">
+      <div className="rounded-2xl overflow-hidden bg-panel ring-1 ring-line min-h-[calc(100vh-10rem)] p-5 sm:p-6">
         {searchQuery && filteredStudents.length === 0 ? (
           <div className="text-center py-12 text-gray-500">
             <div className="font-medium">No students found</div>

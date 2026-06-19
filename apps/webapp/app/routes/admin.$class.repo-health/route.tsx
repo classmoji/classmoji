@@ -70,7 +70,7 @@ const RepoHealth = ({ loaderData }: Route.ComponentProps) => {
   return (
     <div className="min-h-full relative" data-testid="repo-health">
       <div className="flex items-center justify-between gap-3 mt-2 mb-4">
-        <h1 className="text-base font-semibold text-ink-2">Repo Health</h1>
+        <h1 className="text-lg font-semibold text-ink-1">Repo Health</h1>
       </div>
 
       <div className="flex flex-col gap-4">
@@ -243,7 +243,7 @@ export function ErrorBoundary() {
   return (
     <div className="min-h-full relative">
       <div className="flex items-center justify-between gap-3 mt-2 mb-4">
-        <h1 className="text-base font-semibold text-ink-2">Repo Health</h1>
+        <h1 className="text-lg font-semibold text-ink-1">Repo Health</h1>
       </div>
 
       <div className="rounded-2xl bg-panel ring-1 ring-line p-6 sm:p-8 min-h-[calc(100vh-10rem)]">

@@ -260,7 +260,7 @@ const ModuleDetail = ({ loaderData }: Route.ComponentProps) => {
       {/* Ordered content list */}
       <div className="rounded-2xl bg-panel ring-1 ring-line p-5 sm:p-6">
         <div className="flex items-center justify-between mb-3">
-          <h2 className="text-sm font-semibold text-ink-2">Content</h2>
+          <h2 className="text-sm font-semibold text-ink-1">Content</h2>
           <Button size="small" icon={<IconPlus size={15} />} onClick={() => setAddOpen(true)}>
             Add item
           </Button>

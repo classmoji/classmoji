@@ -1297,6 +1297,20 @@ export class GitHubProvider extends GitProvider {
   }
 
   /**
+   * Get an app-authenticated (JWT) Octokit instance for app-level endpoints
+   * such as `GET /app/installations/{installation_id}`. Not scoped to a single
+   * installation — use the instance methods for installation-scoped calls.
+   * @returns {Octokit}
+   */
+  static getAppOctokit(): Octokit {
+    const app = new App({
+      appId: process.env.GITHUB_APP_ID!,
+      privateKey: privateKey!,
+    });
+    return app.octokit;
+  }
+
+  /**
    * Get the GitHub App auth instance for OAuth flows
    * @returns {Object} createAppAuth instance
    */

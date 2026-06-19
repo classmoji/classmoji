@@ -20,7 +20,7 @@ const MemberSettings = () => {
   return (
     <div className="min-h-full relative">
       <div className="flex items-center justify-between gap-3 mt-2 mb-4">
-        <h1 className="text-base font-semibold text-ink-2">Settings</h1>
+        <h1 className="text-lg font-semibold text-ink-1">Settings</h1>
       </div>
 
       <div className="rounded-2xl bg-panel ring-1 ring-line p-5 sm:p-6 min-h-[calc(100vh-10rem)]">

@@ -109,15 +109,15 @@ const AdminAssignments = ({ loaderData }: Route.ComponentProps) => {
     <div className="min-h-full relative">
       <Outlet />
       <div className="flex flex-col gap-3 mt-2 mb-4 sm:flex-row sm:items-center sm:justify-between">
-        <h1 className="text-base font-semibold text-ink-2">Repositories</h1>
+        <h1 className="text-lg font-semibold text-ink-1">Repositories</h1>
 
         <RequireRole roles={['OWNER']}>
-          <div className="flex flex-wrap items-center gap-3">
+          <div className="flex items-center gap-3">
             <SearchInput
               query={query}
               setQuery={setQuery}
               placeholder="Search by title"
-              className="w-full sm:w-56"
+              className="flex-1 min-w-0 sm:grow-0 sm:basis-56"
             />
 
             <Button

@@ -21,11 +21,11 @@ const UserHeader = () => {
   const layoutData = useRouteLoaderData('routes/_user') as UserLayoutData | undefined;
 
   return (
-    <div className="sticky top-0 z-50 pt-3 sm:pt-7 pb-4 bg-gradient-to-b from-[#EDEDED] from-70% to-transparent dark:from-[#1d1d1d]">
+    <div className="sticky top-0 z-50 pt-3 sm:pt-7 pb-4">
       <div className="max-w-[1280px] mx-auto px-4 sm:px-8">
       <div className="flex items-center justify-between h-[52px] px-3 sm:px-6 rounded-2xl bg-panel/80 backdrop-blur-xl ring-1 ring-line shadow-sm">
-        <Link to="/select-organization" className="flex items-center gap-2 no-underline !text-[#0d0d10] dark:!text-white">
-          <Logo variant="full" size={24} theme="current" />
+        <Link to="/select-organization" className="flex items-center gap-2 no-underline text-[#0d0d10] dark:text-white">
+          <Logo variant="full" size={28} theme="current" />
         </Link>
 
         <div className="flex items-center gap-1.5">

@@ -1,5 +1,6 @@
 import getPrisma from '@classmoji/database';
 import type { GitProvider, Prisma } from '@prisma/client';
+import type { Octokit } from 'octokit';
 
 /**
  * Find a GitOrganization by its UUID
@@ -115,6 +116,108 @@ export const upsert = async (data: Prisma.GitOrganizationUncheckedCreateInput) =
       classrooms: true,
     },
   });
+};
+
+export interface SyncedInstallation {
+  provider_id: string;
+  login: string;
+  github_installation_id: string;
+  avatar_url: string;
+}
+
+/**
+ * Sync the GitHub App installations accessible to a user into our database.
+ *
+ * Reads installations live from GitHub (`GET /user/installations`) and upserts a
+ * GitOrganization row for each Organization-account installation. This is what
+ * lets the create-classroom flow show a just-installed org immediately, without
+ * waiting for the async `installation.created` webhook (which performs the same
+ * idempotent upsert as a backup and handles uninstall).
+ *
+ * Only Organization accounts are returned — the create-classroom action verifies
+ * org admin rights, so personal-account installations aren't selectable orgs.
+ *
+ * @param {Octokit} octokit - Octokit authenticated with the user's token
+ *   (from `GitHubProvider.getUserOctokit`).
+ * @returns {Promise<SyncedInstallation[]>} the synced Organization installations.
+ */
+export const syncUserInstallations = async (octokit: Octokit): Promise<SyncedInstallation[]> => {
+  const installations = await octokit.paginate(
+    octokit.rest.apps.listInstallationsForAuthenticatedUser,
+    { per_page: 100 }
+  );
+
+  const orgInstallations: SyncedInstallation[] = installations
+    .filter(inst => inst.account && 'type' in inst.account && inst.account.type === 'Organization')
+    .map(inst => {
+      const account = inst.account as { id: number; login: string; avatar_url: string };
+      return {
+        provider_id: String(account.id),
+        login: account.login,
+        github_installation_id: String(inst.id),
+        avatar_url: account.avatar_url,
+      };
+    });
+
+  await Promise.all(
+    orgInstallations.map(inst =>
+      upsert({
+        provider: 'GITHUB',
+        provider_id: inst.provider_id,
+        login: inst.login,
+        github_installation_id: inst.github_installation_id,
+      })
+    )
+  );
+
+  return orgInstallations;
+};
+
+/**
+ * Resolve a single GitHub App installation by its id (app-authenticated) and
+ * upsert it as a GitOrganization.
+ *
+ * Used right after install: the list endpoint (`GET /user/installations`) is
+ * eventually consistent and may not yet include a brand-new installation, but a
+ * direct lookup by id is immediately consistent. GitHub hands us the
+ * `installation_id` in the post-install redirect, so the create-classroom loader
+ * uses this to guarantee the just-installed org appears on first render.
+ *
+ * Returns the synced installation, or null if it isn't an Organization account
+ * or the lookup fails.
+ *
+ * @param {Octokit} appOctokit - App-JWT Octokit (`GitHubProvider.getAppOctokit`).
+ * @param {string|number} installationId - The GitHub App installation id.
+ * @returns {Promise<SyncedInstallation | null>}
+ */
+export const syncInstallationById = async (
+  appOctokit: Octokit,
+  installationId: string | number
+): Promise<SyncedInstallation | null> => {
+  const { data } = await appOctokit.rest.apps.getInstallation({
+    installation_id: Number(installationId),
+  });
+
+  const account = data.account;
+  if (!account || !('type' in account) || account.type !== 'Organization') {
+    return null;
+  }
+
+  const synced: SyncedInstallation = {
+    provider_id: String(account.id),
+    login: account.login,
+    github_installation_id: String(data.id),
+    avatar_url: account.avatar_url,
+  };
+
+  await upsert({
+    provider: 'GITHUB',
+    provider_id: synced.provider_id,
+    login: synced.login,
+    github_installation_id: synced.github_installation_id,
+  });
+
+  return synced;
 };
 
 /**

@@ -424,7 +424,7 @@ export default function AdminQuizzes({ loaderData }: Route.ComponentProps) {
       <Outlet />
 
       <div className="flex items-center justify-between gap-3 mt-2 mb-4">
-        <h1 className="text-base font-semibold text-ink-2">Quizzes</h1>
+        <h1 className="text-lg font-semibold text-ink-1">Quizzes</h1>
 
         <Space>
           <Popconfirm
@@ -444,7 +444,7 @@ export default function AdminQuizzes({ loaderData }: Route.ComponentProps) {
         </Space>
       </div>
 
-      <div className="rounded-2xl overflow-hidden bg-panel min-h-[calc(100vh-10rem)] p-5 sm:p-6">
+      <div className="rounded-2xl overflow-hidden bg-panel ring-1 ring-line min-h-[calc(100vh-10rem)] p-5 sm:p-6">
         <Table
           columns={columns}
           dataSource={quizzes as readonly AdminQuiz[]}

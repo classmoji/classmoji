@@ -246,9 +246,7 @@ const AdminDashboard = ({ loaderData }: Route.ComponentProps) => {
 
   return (
     <div className="min-h-full flex flex-col gap-4">
-      <h1 className="mt-2 mb-1 text-base font-semibold text-ink-2">
-        Dashboard
-      </h1>
+      <h1 className="mt-2 mb-1 text-lg font-semibold text-ink-0">Dashboard</h1>
 
       {showBanner && (
         <div className="flex items-start gap-3 rounded-xl bg-[#FEF3EC] dark:bg-amber-900/20 border border-[#F4D8C5] dark:border-amber-800/40 px-4 py-3 text-sm text-[#8a5b3a] dark:text-amber-200">

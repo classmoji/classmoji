@@ -17,6 +17,7 @@ export function NavigationProgress() {
   const [visible, setVisible] = useState(false);
   const trickleRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const hideRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const delayRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     const clearTrickle = () => {
@@ -25,22 +26,36 @@ export function NavigationProgress() {
         trickleRef.current = null;
       }
     };
+    const clearDelay = () => {
+      if (delayRef.current) {
+        clearTimeout(delayRef.current);
+        delayRef.current = null;
+      }
+    };
 
     if (active) {
       if (hideRef.current) {
         clearTimeout(hideRef.current);
         hideRef.current = null;
       }
-      setVisible(true);
-      // Jump-start so the bar is immediately visible, then ease toward 90%.
-      setProgress(prev => (prev > 0 && prev < 90 ? prev : 12));
-      clearTrickle();
-      trickleRef.current = setInterval(() => {
-        setProgress(prev => (prev < 90 ? prev + (90 - prev) * 0.12 : prev));
-      }, 180);
+      // Hold off for 300ms: fast navigations finish before this fires, so the
+      // bar never flashes on them. Only genuinely slow loaders reach this and
+      // show the bar.
+      clearDelay();
+      delayRef.current = setTimeout(() => {
+        setVisible(true);
+        // Jump-start so the bar is immediately visible, then ease toward 90%.
+        setProgress(prev => (prev > 0 && prev < 90 ? prev : 12));
+        clearTrickle();
+        trickleRef.current = setInterval(() => {
+          setProgress(prev => (prev < 90 ? prev + (90 - prev) * 0.12 : prev));
+        }, 180);
+      }, 300);
     } else {
+      // Navigation settled before the delay elapsed: cancel and stay hidden.
+      clearDelay();
       clearTrickle();
-      // Finish: snap to 100%, then fade out and reset.
+      // Finish: snap to 100% (only if the bar was actually shown), fade out, reset.
       setProgress(prev => (prev > 0 ? 100 : 0));
       hideRef.current = setTimeout(() => {
         setVisible(false);
@@ -48,7 +63,10 @@ export function NavigationProgress() {
       }, 320);
     }
 
-    return clearTrickle;
+    return () => {
+      clearTrickle();
+      clearDelay();
+    };
   }, [active]);
 
   return (

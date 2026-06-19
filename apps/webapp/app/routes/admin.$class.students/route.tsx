@@ -71,7 +71,7 @@ const StudentsScreen = ({ loaderData }: Route.ComponentProps) => {
     <div className="min-h-full relative">
       <Outlet />
       <div className="flex flex-col gap-3 mt-2 mb-4 sm:flex-row sm:items-center sm:justify-between">
-        <h1 className="text-base font-semibold text-ink-2">Students</h1>
+        <h1 className="text-lg font-semibold text-ink-1">Students</h1>
 
         <div className="flex flex-wrap items-center gap-3">
           <span data-tour="students-search" className="w-full sm:w-auto">

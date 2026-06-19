@@ -322,7 +322,7 @@ export default function AdminPages({ loaderData }: Route.ComponentProps) {
       <Outlet />
 
       <div className="flex items-center justify-between gap-3 mt-2 mb-4">
-        <h1 className="text-base font-semibold text-ink-2">Pages</h1>
+        <h1 className="text-lg font-semibold text-ink-1">Pages</h1>
         <div className="flex items-center gap-2">
           <Input
             placeholder="Search page..."
@@ -340,7 +340,7 @@ export default function AdminPages({ loaderData }: Route.ComponentProps) {
 
       <div
 
-        className="rounded-2xl overflow-hidden bg-panel min-h-[calc(100vh-10rem)] p-5 sm:p-6"
+        className="rounded-2xl overflow-hidden bg-panel ring-1 ring-line min-h-[calc(100vh-10rem)] p-5 sm:p-6"
       >
         <Table
           columns={columns as Parameters<typeof Table>[0]['columns']}

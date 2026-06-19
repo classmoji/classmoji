@@ -21,7 +21,7 @@ export function AppBar({ user, notifications, unreadCount, membershipRoles }: Ap
     <div className="sticky top-0 z-10 pt-3 max-w-[1280px] mx-auto px-8">
     <header className="flex items-center justify-between h-[52px] px-6 rounded-2xl bg-white/80 dark:bg-neutral-900/80 backdrop-blur-xl ring-1 ring-line shadow-sm">
       <Link to="/select-organization" className="flex items-center gap-2 text-[#0d0d10] dark:text-white">
-        <Logo variant="full" size={24} theme="current" />
+        <Logo variant="full" size={28} theme="current" />
       </Link>
 
       <div className="flex items-center gap-1.5">

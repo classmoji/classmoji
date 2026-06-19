@@ -13,8 +13,12 @@ export interface LandingClass {
   name: string;
   subtitle: string;
   slug: string;
+  /** GitHub organization login (shown under the class name). */
+  githubOrg: string;
   role: LandingRole;
   hue: number;
+  /** Organization avatar URL (GitHub org image); falls back to the ClassMark when absent. */
+  avatar: string | null;
   updated: string;
   archived: boolean;
   pin_order: number | null;
