@@ -839,7 +839,7 @@ const QuizView = ({ loaderData }: Route.ComponentProps) => {
             onClick={() => navigate(`/admin/${classSlug}/quizzes`)}
             aria-label="Back to quizzes"
           />
-          <h1 className="text-base font-semibold text-ink-2 truncate">
+          <h1 className="text-lg font-semibold text-ink-1 truncate">
             Quiz: {quiz.name}
           </h1>
         </div>

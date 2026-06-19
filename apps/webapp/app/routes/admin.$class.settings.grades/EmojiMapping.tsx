@@ -5,7 +5,7 @@ import { DeleteOutlined, WarningOutlined } from '@ant-design/icons';
 
 import { SettingSection, Emoji } from '~/components';
 import { useCallout } from '@classmoji/ui-components';
-import { useGlobalFetcher, useSubscription } from '~/hooks';
+import { useGlobalFetcher } from '~/hooks';
 
 import tokenImage from '~/assets/images/token.png';
 import EmojiPicker from './EmojiPicker';
@@ -39,7 +39,6 @@ const EmojiMapping = ({ emojiMappings, orphanedEmojis }: EmojiMappingProps) => {
   const [extraTokens, setExtraTokens] = useState(0);
   const [description, setDescription] = useState('');
   const [remapSelections, setRemapSelections] = useState<Record<string, string>>({});
-  const { isFreeTier } = useSubscription();
 
   const [editingCell, setEditingCell] = useState<EditingCell | null>(null);
   const [editValue, setEditValue] = useState<string | number | null>(null);
@@ -220,7 +219,6 @@ const EmojiMapping = ({ emojiMappings, orphanedEmojis }: EmojiMappingProps) => {
     {
       title: 'Tokens',
       dataIndex: 'extra_tokens',
-      hidden: isFreeTier,
       key: 'extra_tokens',
       width: 90,
       render: (_: number, record: EmojiMappingRecord) => {

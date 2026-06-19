@@ -214,7 +214,7 @@ const StudentDashboard = ({ loaderData }: Route.ComponentProps) => {
 
   return (
     <div className="min-h-full">
-      <h1 className="mt-2 mb-4 text-base font-semibold text-ink-2">
+      <h1 className="mt-2 mb-4 text-lg font-semibold text-ink-1">
         Dashboard
       </h1>
 

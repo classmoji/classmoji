@@ -287,8 +287,16 @@ export function ClassroomsLandingScreen({
                 Take a tour
               </Button>
             )}
-            <Button data-onboarding="import">
+            <Button
+              data-onboarding="import"
+              disabled
+              title="Coming soon"
+              className="cursor-not-allowed opacity-60"
+            >
               <IconGithub size={14} /> Import from GitHub Classroom
+              <span className="ml-1.5 rounded-full bg-gray-100 px-1.5 py-0.5 text-[10px] font-medium text-gray-500 dark:bg-neutral-800 dark:text-gray-400">
+                Coming soon
+              </span>
             </Button>
             <Link to="/create-classroom" data-onboarding="new-class">
               <Button variant="primary">

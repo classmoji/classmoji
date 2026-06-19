@@ -169,9 +169,9 @@ const StudentModules = ({ loaderData }: Route.ComponentProps) => {
   if (!loaderData.enabled) {
     return (
       <div className="min-h-full">
-        <h1 className="mt-2 mb-4 text-base font-semibold text-ink-2">Modules</h1>
+        <h1 className="mt-2 mb-4 text-lg font-semibold text-ink-1">Modules</h1>
         <div className="rounded-2xl bg-panel ring-1 ring-line p-8 text-center">
-          <h3 className="text-base font-semibold text-ink-1">Modules aren’t enabled</h3>
+          <h3 className="text-lg font-semibold text-ink-1">Modules aren’t enabled</h3>
           <p className="text-sm text-ink-3 mt-1">
             Your instructor hasn’t turned on the Modules view for this course.
           </p>
@@ -193,11 +193,11 @@ const StudentModules = ({ loaderData }: Route.ComponentProps) => {
 
   return (
     <div className="min-h-full">
-      <h1 className="mt-2 mb-4 text-base font-semibold text-ink-2">Modules</h1>
+      <h1 className="mt-2 mb-4 text-lg font-semibold text-ink-1">Modules</h1>
 
       {nodes.length === 0 ? (
         <div className="rounded-2xl bg-panel ring-1 ring-line p-8 text-center">
-          <h3 className="text-base font-semibold text-ink-1">No modules yet</h3>
+          <h3 className="text-lg font-semibold text-ink-1">No modules yet</h3>
           <p className="text-sm text-ink-3 mt-1">
             Modules will appear here once your instructor publishes them.
           </p>

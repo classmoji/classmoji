@@ -11,7 +11,7 @@ import {
   MultiSelect,
 } from '~/components';
 import { ActionTypes } from '~/constants';
-import { useGlobalFetcher, useSubscription } from '~/hooks';
+import { useGlobalFetcher } from '~/hooks';
 import { openRepositoryAssignmentInGithub } from '~/utils/helpers.client';
 import { isRepositoryAssignmentDropped } from '@classmoji/utils';
 
@@ -105,7 +105,6 @@ const AssignmentTable = ({
   settings,
   org,
 }: AssignmentTableProps) => {
-  const { isFreeTier } = useSubscription();
   const { fetcher, notify } = useGlobalFetcher();
 
   const isIndividualAssignment = repository?.type === 'INDIVIDUAL';
@@ -184,7 +183,6 @@ const AssignmentTable = ({
       title: 'Grader(s)',
       key: 'graders',
       width: 200,
-      hidden: isFreeTier,
       onCell: () => {
         return {
           style: {

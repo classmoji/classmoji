@@ -19,7 +19,7 @@ import { IconMoodSad } from '@tabler/icons-react';
 import { auth as triggerAuth } from '@trigger.dev/sdk';
 
 import { GitHubProvider, ClassmojiService } from '@classmoji/services';
-import { CalloutProvider } from '@classmoji/ui-components';
+import { CalloutProvider, CalloutSlot } from '@classmoji/ui-components';
 import { auth, getAuthSession } from '@classmoji/auth/server';
 import { isAIAgentConfigured } from '~/utils/aiFeatures.server';
 import type { Route } from './+types/root';
@@ -46,6 +46,7 @@ dayjs.extend(relativeTime);
 dayjs.extend(isSameOrBefore);
 
 import getPrisma from '@classmoji/database';
+import '@fontsource-variable/mona-sans';
 import '@fontsource/quicksand/700.css';
 import '@fontsource/fredoka/600.css';
 import '~/styles/tailwind.css';
@@ -340,12 +341,6 @@ const App = ({ loaderData }: Route.ComponentProps) => {
       <head>
         <meta charSet="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
-        <link rel="preconnect" href="https://fonts.googleapis.com" />
-        <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
-        <link
-          href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,100..1000;1,9..40,100..1000&display=swap"
-          rel="stylesheet"
-        />
         <Meta />
         <Links />
         <script
@@ -364,7 +359,10 @@ const App = ({ loaderData }: Route.ComponentProps) => {
                   }
                   root.setAttribute('data-theme', theme);
                   if (theme === 'dark') root.classList.add('dark');
-                  var accent = (saved && typeof saved.accent === 'string') ? saved.accent : '#6d5efc';
+                  var accent = (saved && typeof saved.accent === 'string') ? saved.accent : '#21883d';
+                  var legacyAccents = { '#6d5efc': 1, '#0ea5e9': 1 };
+                  var ver = (saved && typeof saved._v === 'number') ? saved._v : 0;
+                  if (ver < 2 && legacyAccents[(accent || '').toLowerCase()]) accent = '#21883d';
                   root.style.setProperty('--accent', accent);
                   var bgKey = (saved && typeof saved.background === 'string') ? saved.background : 'default';
                   var PRESETS = {
@@ -432,6 +430,12 @@ const App = ({ loaderData }: Route.ComponentProps) => {
               <UserContext.Provider value={{ user }}>
                 <CalloutProvider>
                   <FetcherProvider>
+                    {/* Global callout slot: callouts are fixed-position viewport
+                        overlays and the fetcher/notify system is global, so the
+                        slot must be too. Without this, callouts fired outside a
+                        classroom layout (landing, registration, select-organization)
+                        are buffered then silently dropped. */}
+                    <CalloutSlot />
                     <NavigationProgress />
                     <ImpersonationBanner
                       key={(session as Record<string, Record<string, string>>)?.session?.id}
@@ -511,7 +515,10 @@ export function ErrorBoundary() {
                   }
                   root.setAttribute('data-theme', theme);
                   if (theme === 'dark') root.classList.add('dark');
-                  var accent = (saved && typeof saved.accent === 'string') ? saved.accent : '#6d5efc';
+                  var accent = (saved && typeof saved.accent === 'string') ? saved.accent : '#21883d';
+                  var legacyAccents = { '#6d5efc': 1, '#0ea5e9': 1 };
+                  var ver = (saved && typeof saved._v === 'number') ? saved._v : 0;
+                  if (ver < 2 && legacyAccents[(accent || '').toLowerCase()]) accent = '#21883d';
                   root.style.setProperty('--accent', accent);
                   var bgKey = (saved && typeof saved.background === 'string') ? saved.background : 'default';
                   var PRESETS = {

@@ -2,71 +2,40 @@
 import Layout from '../layouts/Layout.astro';
 import Header from '../components/Header.astro';
 import Footer from '../components/Footer.astro';
-
-const features = [
-  {
-    emoji: '🔗',
-    title: 'GitHub Integration',
-    description: 'Assignments live where your code does. No context switching.',
-  },
-  {
-    emoji: '🤖',
-    title: 'Auto Repo Creation',
-    description: 'Student repos generated from templates instantly.',
-  },
-  {
-    emoji: '👥',
-    title: 'Team Support',
-    description: 'Individual or group projects with shared repositories.',
-  },
-  {
-    emoji: '😊',
-    title: 'Emoji Grading',
-    description: 'Replace intimidating numbers with expressive, motivating feedback.',
-  },
-  {
-    emoji: '🪙',
-    title: 'Token System',
-    description: 'Flexible deadline extensions students manage themselves.',
-  },
-  {
-    emoji: '🧠',
-    title: 'AI Interactive Quizzes',
-    description: 'AI-powered quizzes that adapt to student understanding.',
-  },
-];
+import Logo from '../components/Logo.astro';
+import Screenshot from '../components/Screenshot.astro';
+import heroShot from '../assets/landing-hero.png';
 ---
 
 <Layout>
   <Header />
 
   <!-- Hero Section -->
-  <section class="min-h-screen flex flex-col items-center justify-center px-6 text-center">
-    <div class="max-w-3xl">
+  <section class="px-6 pt-32 pb-20 text-center">
+    <div class="max-w-3xl mx-auto">
       <!-- Logo -->
-      <div class="mb-8">
-        <span class="text-5xl md:text-6xl font-mono font-medium tracking-tight"> 🍎 </span>
+      <div class="mb-8 flex justify-center">
+        <Logo variant="icon" size={60} />
       </div>
 
       <!-- Tagline -->
       <h1 class="text-4xl md:text-5xl font-bold text-gray-900 mb-6">
-        Git-native learning, finally.
+        Teach where the code lives.
       </h1>
 
       <!-- Subtitle -->
       <p class="text-xl text-gray-600 mb-10 max-w-2xl mx-auto">
-        Classmoji is an <span class="font-bold">open source</span> platform that helps CS educators focus
-        on teaching, not tooling, by streamlining repository management, TA coordination, and qualitative
-        student feedback.
+        An open source alternative to Github Classroom. Spin up a Github repository for every
+        assignment with automated workflows, plus built-in slides and pages.
       </p>
 
       <!-- CTA Buttons -->
       <div class="flex items-center justify-center gap-4">
         <a
-          href="https://classmoji.io/docs"
+          href="https://app.classmoji.io"
           class="inline-flex items-center px-6 py-2.5 text-base font-semibold text-white bg-primary hover:bg-primary-dark rounded-lg transition-colors"
         >
-          Get Started
+          Sign In
           <svg class="ml-2 w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path
               stroke-linecap="round"
@@ -76,73 +45,22 @@ const features = [
           </svg>
         </a>
         <a
-          href="https://demo.classmoji.io"
+          href="/docs"
           class="inline-flex items-center px-6 py-2.5 text-base font-semibold text-gray-700 bg-gray-200 hover:bg-gray-300 rounded-lg transition-colors"
         >
-          Try Demo
+          Docs
         </a>
       </div>
     </div>
 
-    <!-- Scroll indicator -->
-    <div class="absolute bottom-8 animate-bounce">
-      <svg class="w-6 h-6 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-        <path
-          stroke-linecap="round"
-          stroke-linejoin="round"
-          stroke-width="2"
-          d="M19 14l-7 7m0 0l-7-7m7 7V3"></path>
-      </svg>
-    </div>
-  </section>
-
-  <!-- Features Section -->
-  <section class="py-24 px-6 bg-gray-50">
-    <div class="max-w-6xl mx-auto">
-      <h2 class="text-3xl md:text-4xl font-bold text-center text-gray-900 mb-4">
-        Everything you need to teach code
-      </h2>
-      <p class="text-lg text-gray-600 text-center mb-16 max-w-2xl mx-auto">
-        The open source alternative to GitHub Classroom, built for how CS courses actually run
-      </p>
-
-      <div class="grid md:grid-cols-2 lg:grid-cols-3 gap-8">
-        {
-          features.map(feature => (
-            <div class="bg-white p-6 rounded-xl shadow-sm border border-gray-100 hover:shadow-md transition-shadow">
-              <span class="text-4xl mb-4 block">{feature.emoji}</span>
-              <h3 class="text-xl font-semibold text-gray-900 mb-2">{feature.title}</h3>
-              <p class="text-gray-600">{feature.description}</p>
-            </div>
-          ))
-        }
-      </div>
-    </div>
-  </section>
-
-  <!-- CTA Section -->
-  <section class="py-24 px-6">
-    <div class="max-w-3xl mx-auto text-center">
-      <h2 class="text-3xl md:text-4xl font-bold text-gray-900 mb-6">
-        Ready to transform your classroom?
-      </h2>
-      <p class="text-lg text-gray-600 mb-10">
-        Join instructors using Classmoji to make coding education more engaging.
-      </p>
-      <a
-        href="https://classmoji.io/docs"
-        class="inline-flex items-center px-6 py-2.5 text-base font-semibold text-white bg-primary hover:bg-primary-dark rounded-lg transition-colors"
-      >
-        Get Started
-        <svg class="ml-2 w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path
-            stroke-linecap="round"
-            stroke-linejoin="round"
-            stroke-width="2"
-            d="M13 7l5 5m0 0l-5 5m5-5H6"></path>
-        </svg>
-      </a>
-    </div>
+    <!-- Product screenshot -->
+    <Screenshot
+      src={heroShot}
+      alt="The Classmoji repositories page showing assignments, weights, and publish status"
+      size="lg"
+      url="app.classmoji.io"
+      frame={true}
+    />
   </section>
 
   <Footer />

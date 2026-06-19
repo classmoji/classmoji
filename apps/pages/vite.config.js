@@ -19,11 +19,18 @@ export default () => {
       dedupe: ['react', 'react-dom', 'react-router', 'react-router-dom'],
     },
     optimizeDeps: {
+      // Pre-bundle the heavy editor deps on startup. Without this they're
+      // discovered lazily on first page-editor load, which triggers a
+      // mid-session dep re-optimization + reload; an in-flight SSR request can
+      // then transiently fail to resolve server-only @prisma/client.
       include: [
         'react',
         'react-dom',
         'react-router',
         'react-router-dom',
+        '@mantine/core',
+        '@tabler/icons-react',
+        'use-local-storage-state',
       ],
       entries: ['./app/root.jsx'],
       exclude: [

@@ -3,7 +3,7 @@ import { Link, useParams, useLocation, useRouteLoaderData } from 'react-router';
 import { useEffect, useRef, useState } from 'react';
 import { IconFileText, IconMenu2, IconApple } from '@tabler/icons-react';
 import useLocalStorageState from 'use-local-storage-state';
-import { Logo, CalloutSlot } from '@classmoji/ui-components';
+import { Logo } from '@classmoji/ui-components';
 import { RequireRole, RecentViewers } from '~/components';
 import { useRoleSettings, useSubscription, useRole, useDarkMode } from '~/hooks';
 import { routes, routeCategories, DEMO_ORG_ID, getThemeByKey } from '~/constants';
@@ -164,6 +164,9 @@ const CommonLayout = ({
     if (item.link === '/modules' && role !== 'OWNER' && !showModules) return null;
     if (item.link === '/repos' && role !== 'OWNER' && !showRepos) return null;
 
+    // Students see the repositories section framed as "Modules".
+    const displayLabel = item.link === '/repos' && role === 'STUDENT' ? 'Modules' : item.label;
+
     return (
       <RequireRole roles={item.roles} key={key}>
         <Link
@@ -182,7 +185,7 @@ const CommonLayout = ({
           data-tour-nav={item.link}
         >
           {collapsed ? (
-            <Tooltip title={item.label} placement="right">
+            <Tooltip title={displayLabel} placement="right">
               <div className="flex flex-col items-center">
                 <item.icon size={20} strokeWidth={1.75} />
                 {isDemoClassroom && item.isProTier && (
@@ -193,7 +196,7 @@ const CommonLayout = ({
           ) : (
             <>
               <item.icon size={20} strokeWidth={1.75} className="shrink-0" />
-              <span className="flex-1">{item.label}</span>
+              <span className="flex-1">{displayLabel}</span>
               {isDemoClassroom && item.isProTier && (
                 <span className="text-xs text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-900/30 px-1.5 py-0.5 rounded-sm">
                   Pro
@@ -547,7 +550,6 @@ const CommonLayout = ({
                 : 'px-4 pt-14 pb-4 sm:px-6 lg:px-8 lg:pt-6 lg:pb-6 min-h-full'
             }
           >
-            <CalloutSlot />
             {classroom?.status === 'LOCKED' && role !== 'OWNER' && <LockedBanner />}
             {/* Recently-viewed: route-specific, so it lives with the content
                 (not the left nav). Rendered in-flow at the top-right above the

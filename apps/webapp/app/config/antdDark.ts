@@ -1,8 +1,14 @@
 import { BRAND, BRAND_LIGHT, BRAND_DARK, BRAND_TEXT, PRIMARY } from './theme.ts';
 
+// Keep in sync with --font-sans (see config/antd.ts). Ant components otherwise
+// fall back to the default system font stack instead of Mona Sans.
+const FONT_SANS =
+  "'Mona Sans Variable', 'Mona Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif";
+
 const darkTheme = {
   token: {
     colorPrimary: BRAND,
+    fontFamily: FONT_SANS,
     colorTextBase: '#e5e5e5',
     colorBgBase: '#262626',
     colorBgContainer: '#171717',

@@ -27,6 +27,13 @@ export interface TweaksState {
 }
 
 const STORAGE_KEY = 'cm-tweaks';
+// Bump when a stored default needs a one-time migration. Persisted payloads are
+// stamped with `_v`; anything older (or unstamped) is treated as pre-migration.
+const TWEAKS_VERSION = 2;
+// Accents previously shipped as the default. For pre-v2 payloads we remap these
+// to the current default so existing users pick up the new accent. Colors a
+// user explicitly chose after v2 are left untouched (they're stamped current).
+const LEGACY_DEFAULT_ACCENTS = new Set(['#6d5efc', '#0ea5e9']);
 export const FONT_SIZE_MIN = 14;
 export const FONT_SIZE_MAX = 20;
 export const FONT_SIZE_DEFAULT = 17;
@@ -35,7 +42,7 @@ export const CONTRAST_MAX = 100;
 export const CONTRAST_DEFAULT = 50;
 const DEFAULT_TWEAKS: TweaksState = {
   theme: 'system',
-  accent: '#0ea5e9',
+  accent: '#21883d',
   background: 'default',
   uiFontSize: FONT_SIZE_DEFAULT,
   translucentSidebar: false,
@@ -254,6 +261,7 @@ interface AccentTints {
 }
 
 const ACCENTS: AccentTints[] = [
+  { hex: '#21883d', hover: '#1b7334', soft: '#e6f4ea', soft2: '#c8e6d2', ink: '#14532d' },
   { hex: '#6d5efc', hover: '#5a4cf0', soft: '#ece9ff', soft2: '#dedaff', ink: '#4a3fbb' },
   { hex: '#4f46e5', hover: '#4338ca', soft: '#e0e7ff', soft2: '#c7d2fe', ink: '#3730a3' },
   { hex: '#0ea5e9', hover: '#0284c7', soft: '#e0f2fe', soft2: '#bae6fd', ink: '#075985' },
@@ -396,8 +404,13 @@ function readStored(): TweaksState {
   try {
     const raw = window.localStorage.getItem(STORAGE_KEY);
     if (!raw) return DEFAULT_TWEAKS;
-    const parsed = JSON.parse(raw) as Partial<TweaksState> | null;
+    const parsed = JSON.parse(raw) as (Partial<TweaksState> & { _v?: number }) | null;
     if (!parsed || typeof parsed !== 'object') return DEFAULT_TWEAKS;
+    const storedVersion = typeof parsed._v === 'number' ? parsed._v : 0;
+    let accent = typeof parsed.accent === 'string' ? parsed.accent : DEFAULT_TWEAKS.accent;
+    if (storedVersion < TWEAKS_VERSION && LEGACY_DEFAULT_ACCENTS.has(accent.toLowerCase())) {
+      accent = DEFAULT_TWEAKS.accent;
+    }
     const validBg: BackgroundKey[] = [
       'default',
       'aurora',
@@ -423,7 +436,7 @@ function readStored(): TweaksState {
         parsed.theme === 'dark' || parsed.theme === 'light' || parsed.theme === 'system'
           ? parsed.theme
           : DEFAULT_TWEAKS.theme,
-      accent: typeof parsed.accent === 'string' ? parsed.accent : DEFAULT_TWEAKS.accent,
+      accent,
       background: bg,
       uiFontSize,
       translucentSidebar: parsed.translucentSidebar === true,
@@ -439,7 +452,7 @@ function readStored(): TweaksState {
 function persist(state: TweaksState): void {
   if (typeof window === 'undefined') return;
   try {
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify({ ...state, _v: TWEAKS_VERSION }));
   } catch {
     /* ignore quota errors */
   }

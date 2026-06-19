@@ -122,7 +122,7 @@ const AdminTeams = ({ loaderData }: Route.ComponentProps) => {
     <div className="min-h-full relative">
       <Outlet />
       <div className="flex items-center justify-between gap-3 mt-2 mb-4">
-        <h1 className="text-base font-semibold text-ink-2 shrink-0">Teams</h1>
+        <h1 className="text-lg font-semibold text-ink-1 shrink-0">Teams</h1>
 
         <div className="flex gap-3 min-w-0">
           <SearchInput

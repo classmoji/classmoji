@@ -478,7 +478,7 @@ const GithubRepositories = ({ loaderData }: Route.ComponentProps) => {
   return (
     <div className="min-h-full">
       <div className="flex items-center justify-between gap-3 mt-2 mb-4 flex-wrap">
-        <h1 className="text-base font-semibold text-ink-2">GitHub Repositories</h1>
+        <h1 className="text-lg font-semibold text-ink-1">GitHub Repositories</h1>
         <div className="flex items-center gap-2">
           <Input
             placeholder="Search repositories..."

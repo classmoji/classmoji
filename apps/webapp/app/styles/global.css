@@ -8,11 +8,11 @@
   --cm-logo-ink: #1a1a1a;
 
   /* Accent — set by Tweaks panel */
-  --accent: #6d5efc;
-  --accent-hover: #5a4cf0;
-  --accent-soft: #ece9ff;
-  --accent-soft-2: #dedaff;
-  --accent-ink: #4a3fbb;
+  --accent: #21883d;
+  --accent-hover: #1b7334;
+  --accent-soft: #e6f4ea;
+  --accent-soft-2: #c8e6d2;
+  --accent-ink: #14532d;
 
   /* Legacy aliases — keep working */
   --violet: var(--accent);
@@ -37,8 +37,10 @@
   --ink-0: #14151a;
   --ink-1: #2b2d35;
   --ink-2: #5b5f69;
-  --ink-3: #868994;
-  --ink-4: #b4b7be;
+  /* ink-3/4 darkened for legibility: previously #868994 (~3.3:1) and #b4b7be
+     (~1.9:1) were below the readable-contrast threshold on white. */
+  --ink-3: #6d707b;
+  --ink-4: #8a8d97;
 
   --nav-hover: #eef1f8;
   --bar-track: #e4e8f1;
@@ -100,13 +102,15 @@
   --r-2xl: 16px;
 
   --font-sans:
-    'DM Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+    'Mona Sans Variable', 'Mona Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica,
+    Arial, sans-serif;
   /* Mono dropped — unified on the sans stack so the whole app uses one font. */
   --font-mono: var(--font-sans);
-  --font-display: 'DM Sans', 'Instrument Serif', 'Cormorant Garamond', Georgia, serif;
+  --font-display: 'Mona Sans Variable', 'Mona Sans', 'Instrument Serif', 'Cormorant Garamond',
+    Georgia, serif;
 }
 
-/* Ensure DM Sans is the default everywhere (overrides legacy Noto Sans rules below) */
+/* Ensure Mona Sans is the default everywhere (overrides legacy Noto Sans rules below) */
 html,
 body,
 button,
@@ -114,7 +118,8 @@ input,
 select,
 textarea {
   font-family:
-    'DM Sans',
+    'Mona Sans Variable',
+    'Mona Sans',
     -apple-system,
     BlinkMacSystemFont,
     'Segoe UI',
@@ -139,8 +144,9 @@ html[data-theme='dark'] {
   --ink-0: #f1f2f6;
   --ink-1: #d9dbe3;
   --ink-2: #a4a9b8;
-  --ink-3: #7a7f8e;
-  --ink-4: #545a6a;
+  /* ink-3/4 lightened for legibility on dark panels (were ~4.0:1 and ~2.0:1). */
+  --ink-3: #9398a6;
+  --ink-4: #767c8c;
   --nav-hover: #1f2333;
   --bar-track: #252a3b;
   --chip-neutral-bg: #242839;
@@ -256,9 +262,14 @@ body {
   color: var(--ink-0);
   background: var(--bg-page);
   background-attachment: fixed;
-  -webkit-font-smoothing: antialiased;
+  /* No -webkit-font-smoothing: antialiased — on macOS it thins strokes so dark
+     text reads as gray. Default (subpixel) smoothing renders crisper/darker. */
   font-size: 0.8125rem;
   line-height: 1.45;
+  /* Mona Sans renders lighter than DM Sans at the same nominal weight. Nudge
+     the default body weight up so regular text doesn't read as too thin.
+     Explicit weights on headings/labels (500–700) are unaffected. */
+  font-weight: 450;
 }
 .display {
   font-family: var(--font-display);

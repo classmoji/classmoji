@@ -66,7 +66,7 @@ const AssistantDashboard = ({ loaderData }: Route.ComponentProps) => {
 
   return (
     <div className="min-h-full flex flex-col gap-4">
-      <h1 className="mt-2 mb-1 text-base font-semibold text-ink-2">
+      <h1 className="mt-2 mb-1 text-lg font-semibold text-ink-1">
         Dashboard
       </h1>
 
