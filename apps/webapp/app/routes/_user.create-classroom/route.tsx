@@ -1,7 +1,7 @@
-import { redirect, useNavigate, useFetcher } from 'react-router';
+import { redirect, useNavigate, useFetcher, useSearchParams, useRevalidator } from 'react-router';
 import { useState, useEffect, useRef } from 'react';
 import { useForm, FormProvider } from 'react-hook-form';
-import { Button, Card, Alert, Steps } from 'antd';
+import { Button, Card, Alert, Steps, Spin } from 'antd';
 
 import { getAuthSession, clearRevokedToken } from '@classmoji/auth/server';
 import { useGlobalFetcher, useGitHubAppInstallPopup } from '~/hooks';
@@ -22,12 +22,28 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
 
   const octokit = GitHubProvider.getUserOctokit(authData.token);
 
-  // Get authenticated user
-  let authenticatedUser;
-  try {
-    const { data } = await octokit.rest.users.getAuthenticated();
-    authenticatedUser = data;
-  } catch (error: unknown) {
+  // Run the two independent GitHub reads in parallel:
+  //  - getAuthenticated: needed for the Classmoji user lookup + revoked-token handling
+  //  - syncUserInstallations: reads the user's app installations live from GitHub and
+  //    upserts a GitOrganization row for each. This decouples the org dropdown from the
+  //    async installation.created webhook, so a just-installed org shows up immediately.
+  //    On failure it resolves to null and we fall back to the GraphQL path below.
+  const [authResult, initialSync] = await Promise.all([
+    octokit.rest.users
+      .getAuthenticated()
+      .then(res => ({ ok: true as const, data: res.data }))
+      .catch((error: unknown) => ({ ok: false as const, error })),
+    ClassmojiService.gitOrganization.syncUserInstallations(octokit).catch((error: unknown) => {
+      console.error(
+        'Error syncing user installations:',
+        error instanceof Error ? error.message : error
+      );
+      return null;
+    }),
+  ]);
+
+  if (!authResult.ok) {
+    const error = authResult.error;
     // If bad credentials, clear revoked token from cache AND database
     if (
       (error as { status?: number })?.status === 401 ||
@@ -38,6 +54,8 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
     }
     throw error;
   }
+  const authenticatedUser = authResult.data;
+  let syncedInstallations = initialSync;
 
   const user = await ClassmojiService.user.findByLogin(authenticatedUser.login);
 
@@ -45,18 +63,43 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
     return redirect('/registration');
   }
 
-  // Get GitHub organizations the user belongs to (admin only)
-  // Use GraphQL for efficient single-query fetch with admin status
-  interface UserOrg {
-    id: number;
-    node_id: string;
-    login: string;
-    avatar_url: string;
-    description: string;
-    url: string;
+  // Just installed? GitHub redirects here with ?installation_id=… . The
+  // /user/installations list is eventually consistent and may not include the
+  // brand-new install yet, so resolve it directly by id (immediately consistent)
+  // and merge it in — guaranteeing the org shows on first render, no empty flash.
+  const installationIdParam = new URL(request.url).searchParams.get('installation_id');
+  if (
+    installationIdParam &&
+    !(syncedInstallations ?? []).some(i => i.github_installation_id === installationIdParam)
+  ) {
+    try {
+      const justInstalled = await ClassmojiService.gitOrganization.syncInstallationById(
+        GitHubProvider.getAppOctokit(),
+        installationIdParam
+      );
+      if (justInstalled) {
+        syncedInstallations = [...(syncedInstallations ?? []), justInstalled];
+      }
+    } catch (error: unknown) {
+      console.error(
+        'Error resolving just-installed installation:',
+        error instanceof Error ? error.message : error
+      );
+    }
   }
-  let userOrgs: UserOrg[] = [];
-  try {
+
+  // Determine which GitOrganization rows to show and their avatars.
+  // Primary path: the live installation sync above already upserted the rows.
+  // Fallback path: if the installations call failed, use the GraphQL admin-org
+  // query and the legacy `github_installation_id: { not: null }` filter.
+  let providerIds: string[];
+  let avatarByProviderId: Map<string, string | null>;
+  let useInstalledFilter = false; // fallback keeps the not:null filter
+
+  if (syncedInstallations) {
+    providerIds = syncedInstallations.map(i => i.provider_id);
+    avatarByProviderId = new Map(syncedInstallations.map(i => [i.provider_id, i.avatar_url]));
+  } else {
     interface GitHubOrgNode {
       id: string;
       databaseId: number;
@@ -67,111 +110,100 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
       url: string;
       viewerCanAdminister: boolean;
     }
-    const { viewer } = await octokit.graphql<{
-      viewer: { organizations: { nodes: GitHubOrgNode[] } };
-    }>(`
-      {
-        viewer {
-          organizations(first: 100) {
-            nodes {
-              id
-              databaseId
-              login
-              name
-              avatarUrl
-              description
-              url
-              viewerCanAdminister
+    let nodes: GitHubOrgNode[] = [];
+    try {
+      const { viewer } = await octokit.graphql<{
+        viewer: { organizations: { nodes: GitHubOrgNode[] } };
+      }>(`
+        {
+          viewer {
+            organizations(first: 100) {
+              nodes {
+                id
+                databaseId
+                login
+                name
+                avatarUrl
+                description
+                url
+                viewerCanAdminister
+              }
             }
           }
         }
-      }
-    `);
-
-    // Map GraphQL response to REST API format and filter to admin-only
-    userOrgs = viewer.organizations.nodes
-      .filter(org => org.viewerCanAdminister)
-      .map(org => ({
-        id: org.databaseId, // GitHub's numeric ID
-        node_id: org.id, // GraphQL global ID
-        login: org.login,
-        avatar_url: org.avatarUrl,
-        description: org.description || '',
-        url: org.url,
-      }));
-  } catch (error: unknown) {
-    console.error('Error fetching user orgs:', error instanceof Error ? error.message : error);
+      `);
+      nodes = viewer.organizations.nodes.filter(org => org.viewerCanAdminister);
+    } catch (error: unknown) {
+      console.error('Error fetching user orgs:', error instanceof Error ? error.message : error);
+    }
+    providerIds = nodes.map(org => String(org.databaseId));
+    avatarByProviderId = new Map(nodes.map(org => [String(org.databaseId), org.avatarUrl]));
+    useInstalledFilter = true;
   }
 
-  // Get provider IDs of user's GitHub orgs
-  const providerIds = userOrgs.map(org => String(org.id));
-
-  // Cross-reference with our GitOrganization table - only show orgs with active GitHub App installations
-  const gitOrgs = await getPrisma().gitOrganization.findMany({
-    where: {
-      provider: 'GITHUB',
-      provider_id: { in: providerIds },
-      github_installation_id: { not: null }, // Only orgs with active installations
-    },
-    include: {
-      classrooms: {
-        select: {
-          id: true,
-          slug: true,
-          name: true,
-        },
+  // Fetch the displayable orgs and the user's owned classrooms in parallel.
+  const [gitOrgs, ownedClassrooms] = await Promise.all([
+    getPrisma().gitOrganization.findMany({
+      where: {
+        provider: 'GITHUB',
+        provider_id: { in: providerIds },
+        ...(useInstalledFilter ? { github_installation_id: { not: null } } : {}),
       },
-    },
-  });
-
-  // Enrich gitOrgs with avatar URLs from GitHub
-  const gitOrgsWithAvatars = gitOrgs.map(org => {
-    const githubOrg = userOrgs.find(o => String(o.id) === org.provider_id);
-    return {
-      ...org,
-      avatar_url: githubOrg?.avatar_url || null,
-    };
-  });
-
-  // Get all classrooms where user is OWNER (for import source)
-  const ownedClassrooms = await getPrisma().classroom.findMany({
-    where: {
-      memberships: {
-        some: {
-          user_id: user.id,
-          role: 'OWNER',
-        },
-      },
-    },
-    select: {
-      id: true,
-      slug: true,
-      name: true,
-      git_organization: {
-        select: {
-          login: true,
-        },
-      },
-      repositories: {
-        select: {
-          id: true,
-          title: true,
-          template: true,
-          type: true,
-          weight: true,
-          is_extra_credit: true,
-          _count: {
-            select: {
-              assignments: true,
-              quizzes: true,
-            },
+      include: {
+        classrooms: {
+          select: {
+            id: true,
+            slug: true,
+            name: true,
           },
         },
-        orderBy: { title: 'asc' },
       },
-    },
-    orderBy: { created_at: 'desc' },
-  });
+    }),
+    getPrisma().classroom.findMany({
+      where: {
+        memberships: {
+          some: {
+            user_id: user.id,
+            role: 'OWNER',
+          },
+        },
+      },
+      select: {
+        id: true,
+        slug: true,
+        name: true,
+        git_organization: {
+          select: {
+            login: true,
+          },
+        },
+        repositories: {
+          select: {
+            id: true,
+            title: true,
+            template: true,
+            type: true,
+            weight: true,
+            is_extra_credit: true,
+            _count: {
+              select: {
+                assignments: true,
+                quizzes: true,
+              },
+            },
+          },
+          orderBy: { title: 'asc' },
+        },
+      },
+      orderBy: { created_at: 'desc' },
+    }),
+  ]);
+
+  // Enrich gitOrgs with avatar URLs from GitHub
+  const gitOrgsWithAvatars = gitOrgs.map(org => ({
+    ...org,
+    avatar_url: avatarByProviderId.get(org.provider_id) ?? null,
+  }));
 
   return {
     user,
@@ -186,6 +218,54 @@ const CreateClassroom = ({ loaderData }: Route.ComponentProps) => {
   const navigate = useNavigate();
   const { fetcher, notify } = useGlobalFetcher();
   const { openInstallPopup, isRefreshing } = useGitHubAppInstallPopup(githubAppName);
+
+  // Post-install wait. After an install the org isn't in the DB / GitHub's
+  // /user/installations list immediately (provisioning + ~1s list lag), so the
+  // loader can return zero orgs. Rather than show a dead "no organizations"
+  // state, poll the loader until the org appears.
+  //
+  // "Just installed" is signalled two ways, covering both entry paths:
+  //  - direct redirect: login.callback tags the URL with ?installed=1 (and
+  //    GitHub's installation_id / setup_action when present)
+  //  - in-app popup: the install hook flips isRefreshing on popup close
+  const [searchParams] = useSearchParams();
+  const revalidator = useRevalidator();
+  const cameFromInstall =
+    searchParams.has('installed') ||
+    searchParams.has('installation_id') ||
+    searchParams.get('setup_action') === 'install';
+  const pollCountRef = useRef(0);
+  const MAX_INSTALL_POLLS = 8; // ~12s at 1.5s intervals
+
+  // Latch "waiting for org" once an install signal is seen, so a single popup
+  // revalidation that loses the race against provisioning keeps polling instead
+  // of falling back to the empty state.
+  const [waitingForInstall, setWaitingForInstall] = useState(cameFromInstall);
+  useEffect(() => {
+    if (cameFromInstall || isRefreshing) setWaitingForInstall(true);
+  }, [cameFromInstall, isRefreshing]);
+  useEffect(() => {
+    if (gitOrgs.length > 0) setWaitingForInstall(false); // org arrived — done
+  }, [gitOrgs.length]);
+
+  useEffect(() => {
+    if (!waitingForInstall) return;
+    if (gitOrgs.length > 0) return;
+    if (revalidator.state !== 'idle') return; // already revalidating
+    if (pollCountRef.current >= MAX_INSTALL_POLLS) {
+      setWaitingForInstall(false); // give up gracefully → show install prompt
+      return;
+    }
+    const handle = setTimeout(() => {
+      pollCountRef.current += 1;
+      revalidator.revalidate();
+    }, 1500);
+    return () => clearTimeout(handle);
+  }, [waitingForInstall, gitOrgs.length, revalidator.state]);
+
+  // Show the loading state (not the "no orgs" alert) while waiting for a
+  // freshly-installed org to provision.
+  const isWaitingForOrg = gitOrgs.length === 0 && waitingForInstall;
 
   // React Hook Form - persists values across step changes
   const methods = useForm({
@@ -295,10 +375,18 @@ const CreateClassroom = ({ loaderData }: Route.ComponentProps) => {
 
   return (
     <div className="max-w-2xl mx-auto">
-      <h1 className="text-2xl font-bold mb-6 dark:text-gray-100">Create New Classroom</h1>
+      <h1 className="text-xl font-semibold mb-6 dark:text-gray-100">Create New Classroom</h1>
 
       {gitOrgs.length === 0 ? (
-        <>
+        isWaitingForOrg ? (
+          // A just-installed org is still being provisioned/synced. Show a loading
+          // state (and keep polling) rather than the misleading "no organizations"
+          // message right after installing.
+          <div className="flex flex-col items-center justify-center py-16 text-center">
+            <Spin />
+            <div className="mt-4 text-gray-500">Setting up your organization…</div>
+          </div>
+        ) : (
           <Alert
             type="warning"
             message="No GitHub Organizations Available"
@@ -319,7 +407,7 @@ const CreateClassroom = ({ loaderData }: Route.ComponentProps) => {
               </div>
             }
           />
-        </>
+        )
       ) : (
         <Card>
           <Steps current={currentStep} items={STEPS} style={{ marginBottom: 24 }} size="small" />

@@ -360,9 +360,6 @@ const CommonLayout = ({
       className="flex h-screen p-2"
       style={{
         backgroundColor: tweaksBgActive ? 'var(--paper)' : themeBackground,
-        backgroundImage: tweaksBgActive
-          ? 'radial-gradient(1200px 800px at 85% -10%, var(--bg-stop-1) 0%, transparent 60%), radial-gradient(900px 700px at -10% 110%, var(--bg-stop-2) 0%, transparent 55%), linear-gradient(175deg, var(--bg-stop-3a) 0%, var(--bg-stop-3b) 55%, var(--bg-stop-3c) 100%)'
-          : undefined,
       }}
     >
       {/* Floating Sidebar */}
@@ -384,11 +381,14 @@ const CommonLayout = ({
             collapsed ? 'flex-col gap-2' : 'justify-between gap-2 h-[53px]'
           }`}
         >
-          <Link to="/select-organization" className="flex items-center">
+          <Link
+            to="/select-organization"
+            className="flex items-center text-[#0d0d10] dark:text-white"
+          >
             {collapsed ? (
-              <Logo size={24} variant="icon" theme={isDarkMode ? 'dark' : 'light'} />
+              <Logo size={28} variant="icon" theme="current" />
             ) : (
-              <Logo size={24} variant="full" theme={isDarkMode ? 'dark' : 'light'} />
+              <Logo size={28} variant="full" theme="current" />
             )}
           </Link>
           <Tooltip

@@ -35,7 +35,7 @@ const SettingsGeneral = () => {
             />
           </div>
           <div className="flex-1">
-            <h3 className="text-xl font-bold text-gray-800 dark:text-gray-100 mb-2">{user?.name || 'User Name'}</h3>
+            <h3 className="text-lg font-semibold text-gray-800 dark:text-gray-100 mb-2">{user?.name || 'User Name'}</h3>
             <p className="text-ink-2 text-base mb-3">{user?.email}</p>
             <div className="flex items-center gap-2 text-sm text-gray-500">
               <GithubOutlined className="text-gray-400" />
@@ -50,7 +50,7 @@ const SettingsGeneral = () => {
         <div>
           <h4
             data-onboarding="settings-general"
-            className="text-lg font-semibold text-gray-800 dark:text-gray-100 mb-6"
+            className="text-base font-semibold text-gray-800 dark:text-gray-100 mb-6"
           >
             Profile Information
           </h4>

@@ -10,7 +10,7 @@ const SettingSection = ({ children, title, description, extra }: SettingSectionP
     <div className="py-6">
       <div className="flex flex-col gap-6 transition-[gap] duration-200 md:flex-row">
         <div className="w-full shrink-0 transition-[width,max-width,min-width] duration-200 md:w-[33%] md:max-w-[400px] md:min-w-[140px]">
-          <h1 className="pb-2 font-bold text-ink-0">{title}</h1>
+          <h1 className="pb-2 text-base font-semibold text-ink-0">{title}</h1>
           <p className="text-sm text-ink-3">{description}</p>
           {extra && <p className="pt-3 text-red-500 dark:text-red-400">{extra}</p>}
         </div>

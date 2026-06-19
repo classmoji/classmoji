@@ -188,8 +188,11 @@ function buildLandingClasses(memberships: SelectOrganizationMembership[]): Landi
         name: org.name ?? orgLogin,
         subtitle: '',
         slug: `@${gitLogin}/${orgLogin}`,
+        githubOrg: gitLogin,
         role: deriveRole(m.role, m.has_accepted_invite),
         hue: hashHue(org.id),
+        avatar:
+          (org.git_organization as { avatar_url?: string | null } | undefined)?.avatar_url ?? null,
         updated: archived ? 'archived' : formatUpdated(updatedAt),
         archived,
         pin_order: pinOrder,

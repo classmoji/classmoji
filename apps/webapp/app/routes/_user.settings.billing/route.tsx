@@ -176,7 +176,7 @@ const SettingsSubscription = ({ loaderData }: Route.ComponentProps) => {
 
           {/* Price */}
           <InfoCard title="Price">
-            <p className="text-2xl font-bold text-ink-0">
+            <p className="text-xl font-bold text-ink-0">
               {isFreeTier || isVIP ? '$0.00' : '$29.00'} / month
             </p>
           </InfoCard>
@@ -184,7 +184,7 @@ const SettingsSubscription = ({ loaderData }: Route.ComponentProps) => {
           {/* Subscription Renews */}
           <InfoCard title="Subscription renews on">
             <p
-              className={`text-2xl font-bold ${
+              className={`text-xl font-bold ${
                 classmojiSubscription.cancelled_at ? 'text-red-500' : 'text-ink-0'
               }`}
             >
@@ -195,7 +195,7 @@ const SettingsSubscription = ({ loaderData }: Route.ComponentProps) => {
 
         {/* Current Usage Table */}
         <Card className="bg-white dark:bg-neutral-800 border border-gray-200 dark:border-neutral-700">
-          <h3 className="text-lg font-semibold text-ink-0 mb-6">Current usage</h3>
+          <h3 className="text-base font-semibold text-ink-0 mb-6">Current usage</h3>
           <Table
             dataSource={usageData}
             pagination={false}

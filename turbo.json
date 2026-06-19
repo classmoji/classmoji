@@ -80,6 +80,7 @@
     },
     "db:seed": {},
     "db:reset": {},
+    "db:reset:noseed": {},
     "db:dev": {},
     "test": {
       "cache": false,

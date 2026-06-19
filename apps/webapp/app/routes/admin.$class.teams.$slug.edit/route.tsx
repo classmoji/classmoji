@@ -182,7 +182,7 @@ const AdminSingleTeamView = ({ loaderData }: Route.ComponentProps) => {
     <Drawer onClose={close} title={`@${slug}`} open={Boolean(open)} width="50%">
       {canRenameTeam && (
         <>
-          <p className="pb-2 font-semibold text-xl">Rename team</p>
+          <p className="pb-2 font-semibold text-base">Rename team</p>
 
           <Card className="mb-8">
             <div className="flex items-center gap-4">
@@ -248,7 +248,7 @@ const AdminSingleTeamView = ({ loaderData }: Route.ComponentProps) => {
         </p>
       </Modal>
 
-      <p className="pb-2 font-semibold text-xl">Tags</p>
+      <p className="pb-2 font-semibold text-base">Tags</p>
 
       <Card className="mb-8 ">
         <div className="flex items-center gap-4">
@@ -279,7 +279,7 @@ const AdminSingleTeamView = ({ loaderData }: Route.ComponentProps) => {
         />
       </Card>
 
-      <p className="pb-2 font-semibold text-xl">Add team members</p>
+      <p className="pb-2 font-semibold text-base">Add team members</p>
 
       <Card>
         <div className="flex w-full items-end gap-4">

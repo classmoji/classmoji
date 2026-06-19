@@ -4,6 +4,9 @@
 /* Raw CSS variables — referenced by Tailwind @theme entries in tailwind.css
    and by the design-system utility classes below. */
 :root {
+  /* Logo wordmark — always black in light mode, white in dark (see .dark) */
+  --cm-logo-ink: #1a1a1a;
+
   /* Accent — set by Tweaks panel */
   --accent: #6d5efc;
   --accent-hover: #5a4cf0;
@@ -43,11 +46,8 @@
   --chip-neutral-border: #d8dde8;
   --chip-neutral-ink: #5b6272;
 
-  --bg-stop-1: #f3f6ff;
-  --bg-stop-2: #dce6fa;
-  --bg-stop-3a: #e6ecf8;
-  --bg-stop-3b: #eef2fb;
-  --bg-stop-3c: #e3ebfa;
+  /* Flat page background (no gradients). */
+  --bg-page: #eef2fb;
 
   --mint-bg: #e3f3e8;
   --mint-bord: #c1dfcb;
@@ -125,6 +125,7 @@ textarea {
 
 html.dark,
 html[data-theme='dark'] {
+  --cm-logo-ink: #ffffff;
   --paper: #0e1016;
   --paper-2: #151824;
   --panel: #171a25;
@@ -145,11 +146,8 @@ html[data-theme='dark'] {
   --chip-neutral-bg: #242839;
   --chip-neutral-border: #323648;
   --chip-neutral-ink: #a4a9b8;
-  --bg-stop-1: #1a1f32;
-  --bg-stop-2: #0a0d17;
-  --bg-stop-3a: #0c0f1a;
-  --bg-stop-3b: #11152a;
-  --bg-stop-3c: #090b14;
+  /* Flat page background (no gradients). */
+  --bg-page: #0a0d17;
   --accent-soft: #23204a;
   --accent-soft-2: #2e2a5e;
   --accent-ink: #b7b0ff;
@@ -256,10 +254,7 @@ html[data-theme='dark'] .ant-card {
 body {
   font-family: var(--font-sans);
   color: var(--ink-0);
-  background:
-    radial-gradient(1200px 800px at 85% -10%, var(--bg-stop-1) 0%, transparent 60%),
-    radial-gradient(900px 700px at -10% 110%, var(--bg-stop-2) 0%, transparent 55%),
-    linear-gradient(175deg, var(--bg-stop-3a) 0%, var(--bg-stop-3b) 55%, var(--bg-stop-3c) 100%);
+  background: var(--bg-page);
   background-attachment: fixed;
   -webkit-font-smoothing: antialiased;
   font-size: 0.8125rem;
@@ -280,8 +275,12 @@ body {
   color: #6b7280; /* gray-500 */
 }
 
+/* Labels match the app body scale (0.8125rem). Previously this was
+   `1rem !important`, which rendered every <label> ~23% larger than body
+   text and overrode Tailwind text utilities placed on labels (e.g. radio
+   option labels in settings). Keep it overridable — no !important. */
 label {
-  font-size: 1rem !important;
+  font-size: 0.8125rem;
 }
 
 .font-header {
@@ -903,9 +902,6 @@ html[data-theme='dark'] .evt:hover {
   background: var(--accent);
   color: #fff;
   border: 1px solid var(--accent);
-  box-shadow:
-    0 1px 0 rgba(255, 255, 255, 0.2) inset,
-    0 1px 2px rgba(80, 60, 200, 0.25);
 }
 .btn-primary:hover {
   background: var(--accent-hover);
@@ -1213,11 +1209,7 @@ html[data-theme='dark'] .bar .fill.done {
   letter-spacing: 0.02em;
   color: var(--ink-1);
   text-align: center;
-  background: linear-gradient(
-    to top,
-    color-mix(in srgb, var(--panel) 85%, transparent),
-    color-mix(in srgb, var(--panel) 0%, transparent)
-  );
+  background: color-mix(in srgb, var(--panel) 85%, transparent);
   backdrop-filter: blur(2px);
 }
 
@@ -1250,7 +1242,6 @@ html[data-theme='dark'] .bar .fill.done {
 .tw-seg-btn.active {
   background: var(--panel);
   color: var(--ink-0);
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
   font-weight: 500;
 }
 

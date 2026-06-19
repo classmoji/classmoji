@@ -253,7 +253,7 @@ const Registration = ({ loaderData }: Route.ComponentProps) => {
           <div className="flex justify-center mb-4">
             <Logo size={48} />
           </div>
-          <h1 className="text-2xl font-bold mb-2">Create Your Account</h1>
+          <h1 className="text-xl font-semibold mb-2">Create Your Account</h1>
           <p className="text-gray-600 text-sm">Complete your profile to get started</p>
         </div>
 

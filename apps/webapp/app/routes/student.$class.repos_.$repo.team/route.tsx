@@ -344,7 +344,7 @@ const StudentTeamPage = ({ loaderData }: Route.ComponentProps) => {
         >
           <div className="flex justify-between items-start">
             <div>
-              <h3 className="text-xl font-semibold mb-2">{userTeam.name}</h3>
+              <h3 className="text-base font-semibold mb-2">{userTeam.name}</h3>
               <div className="flex items-center gap-2 mb-4">
                 <Tag color="blue">
                   {userTeam.memberships.length}

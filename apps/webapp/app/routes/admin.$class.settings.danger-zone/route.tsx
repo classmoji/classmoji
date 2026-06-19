@@ -46,7 +46,7 @@ const DangerZone = () => {
       </Modal>
       <div>
         <p>Woah! I hope you know what you are doing.</p>
-        <p className="pt-6 font-bold text-lg">Remove Classroom </p>
+        <p className="pt-6 font-bold text-base">Remove Classroom </p>
         <p className="w-1/2 pb-4 pt-1">
           This action will remove the classroom and all its associated data. There is no going back.
         </p>

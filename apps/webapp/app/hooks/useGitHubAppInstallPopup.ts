@@ -46,11 +46,11 @@ export const useGitHubAppInstallPopup = (githubAppName: string | undefined) => {
         popupRef.current = null;
         setIsRefreshing(true);
 
-        // Wait for webhook to process before revalidating
-        // GitHub sends webhook async, Trigger.dev processes it (~500ms typical)
-        setTimeout(() => {
-          revalidator.revalidate();
-        }, 1500);
+        // Revalidate immediately. The create-classroom loader syncs the user's
+        // installations live from GitHub (and upserts the GitOrganization rows),
+        // so the just-installed org is available without waiting on the async
+        // installation.created webhook.
+        revalidator.revalidate();
       }
     }, 500);
   }, [githubAppName, revalidator]);

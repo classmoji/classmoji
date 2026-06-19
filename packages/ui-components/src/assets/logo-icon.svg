@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" fill="none">
+  <!-- Green rounded square background -->
+  <rect width="100" height="100" rx="22" fill="#5BBD2B"/>
+
+  <!-- Stylized apple -->
+  <g transform="translate(50, 50)">
+    <!-- Apple body (red) -->
+    <path d="M -15 -8 Q -20 -8 -22 -3 Q -24 3 -20 10 Q -15 16 -8 18 Q 0 20 8 18 Q 15 16 20 10 Q 24 3 22 -3 Q 20 -8 15 -8 Q 10 -10 5 -10 Q 3 -10 0 -9 Q -3 -10 -5 -10 Q -10 -10 -15 -8 Z" fill="#DC2626"/>
+
+    <!-- Leaf (green) -->
+    <path d="M 0 -10 Q 2 -14 5 -16 Q 8 -18 10 -16 Q 12 -14 10 -11 Q 8 -9 5 -10 Q 2 -10 0 -10 Z" fill="#16A34A"/>
+
+    <!-- Stem (brown) -->
+    <rect x="-1" y="-12" width="2" height="4" rx="1" fill="#78350F"/>
+  </g>
+</svg>

@@ -205,12 +205,12 @@ const ModulesIndex = ({ loaderData }: Route.ComponentProps) => {
         <h1 className="text-base font-semibold text-ink-2">Modules</h1>
 
         <RequireRole roles={['OWNER']}>
-          <div className="flex flex-wrap items-center gap-3">
+          <div className="flex items-center gap-3">
             <SearchInput
               query={query}
               setQuery={setQuery}
               placeholder="Search by title"
-              className="w-full sm:w-56"
+              className="flex-1 min-w-0 sm:w-56 sm:flex-none"
             />
             <ButtonNew action={openCreate}>New module</ButtonNew>
           </div>

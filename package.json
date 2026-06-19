@@ -31,6 +31,7 @@
     "db:generate": "dotenv -e .env -- turbo run db:generate",
     "db:seed": "dotenv -e .env -- ./scripts/devport.sh run turbo run db:seed",
     "db:reset": "dotenv -e .env -- ./scripts/devport.sh run turbo run db:reset",
+    "db:reset:noseed": "dotenv -e .env -- ./scripts/devport.sh run turbo run db:reset:noseed",
     "db:deploy": "dotenv -e .env -- turbo run db:deploy",
     "db:start": "docker compose up -d",
     "slides:dev": "dotenv -e .env -- turbo run slides:dev --filter=@classmoji/slides --log-prefix=none",
