@@ -260,7 +260,7 @@ export function ClassroomsLandingScreen({
       <div className="flex flex-col sm:flex-row sm:items-end gap-4 pb-5 mb-6">
         <div className="flex-1">
           <h1 className="text-base font-semibold text-ink-2 m-0">
-            Your classes
+            Your classrooms
             <span className="ml-2 text-sm font-normal text-ink-4">
               {counts.all} active
               <span className="text-gray-300 dark:text-gray-600 mx-1">·</span>
