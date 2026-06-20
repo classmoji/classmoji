@@ -62,6 +62,14 @@ export const publishAssignment = async (
         },
         { concurrencyKey: classroomSlug }
       );
+
+      // Publish = "make available to students" — flip visibility immediately so
+      // the repository shows up for students as soon as the instructor clicks
+      // Publish. Per-student GitHub repos provision in the background above; if
+      // that job is slow or partially fails, the repository is still visible
+      // (instructors can re-run Sync to fill in missing repos). Mirrors the
+      // SELF_FORMED branch below, which already publishes up front.
+      await ClassmojiService.repository.setPublished(repositoryId, true);
     } else if (repository.team_formation_mode === 'SELF_FORMED') {
       // For self-formed teams, just mark repository as published
       // Teams and repos will be created when students form their teams
@@ -95,6 +103,11 @@ export const publishAssignment = async (
         },
         { concurrencyKey: classroomSlug }
       );
+
+      // Publish = "make available to students" — flip visibility immediately
+      // (see the INDIVIDUAL branch above). Team repos provision in the
+      // background; the repository stays visible regardless.
+      await ClassmojiService.repository.setPublished(repositoryId, true);
     }
 
     const accessToken = await auth.createPublicToken({
