@@ -33,7 +33,6 @@
     "@emoji-mart/react": "^1.1.1",
     "@fontsource-variable/mona-sans": "^5.2.8",
     "@fontsource/fredoka": "^5.2.10",
-    "@fontsource/quicksand": "^5.2.10",
     "@hookform/resolvers": "^3.9.0",
     "@lexical/react": "^0.31.0",
     "@mantine/hooks": "^7.6.0",
