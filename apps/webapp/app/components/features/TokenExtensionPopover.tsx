@@ -27,7 +27,7 @@ interface TokenPopupFormProps {
   balance: number | null | undefined;
 }
 
-const TokenPopupForm = ({ repositoryAssignment, balance }: TokenPopupFormProps) => {
+const TokenExtensionPopover = ({ repositoryAssignment, balance }: TokenPopupFormProps) => {
   const [hours, setHours] = useState(1);
   const { fetcher, notify } = useNotifiedFetcher();
   const [open, setOpen] = useState(false);
@@ -177,4 +177,4 @@ const TokenPopupForm = ({ repositoryAssignment, balance }: TokenPopupFormProps) 
   );
 };
 
-export default TokenPopupForm;
+export default TokenExtensionPopover;

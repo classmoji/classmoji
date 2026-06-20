@@ -3,9 +3,14 @@ title: Create a classroom
 description: How to set up your first Classmoji classroom
 ---
 
+import Screenshot from '~/components/Screenshot.astro';
+import dashboardImg from './img-dashboard.png';
+
 ### Before you start
 
 You need to be the admin of a Github organization. If that sentence stressed you out, don't worry. [You can make one in about 30 seconds.](https://docs.github.com/en/organizations/collaborating-with-groups-in-organizations/creating-a-new-organization-from-scratch)
+
+Already running your course on Github Classroom? You can [import it instead](/docs/instructors/import-github-classroom) and bring your assignments, roster, and grades along.
 
 ### Step 1: Basic info
 
@@ -32,6 +37,8 @@ If this is your first rodeo, skip it.
 ### Step 3: Review and create
 
 Give everything a final look and hit **Create classroom**. You'll land on the admin dashboard.
+
+<Screenshot src={dashboardImg} alt="Classmoji admin dashboard with class stats, a submissions chart, and the student leaderboard" frame url="app.classmoji.io/admin/cs-101/dashboard" size="lg" />
 
 ### What's next
 

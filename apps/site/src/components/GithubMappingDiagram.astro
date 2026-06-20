@@ -1,0 +1,62 @@
+---
+// Black-and-white structural diagram for the Fundamentals page: a GitHub
+// organization > repository > issues maps to a Classmoji classroom >
+// repository > assignments. Pure outline drawing in `currentColor`, so it
+// renders dark-on-light in light mode and light-on-dark in dark mode with a
+// single asset and no extra dependency. No fills/gradients (flat B&W only).
+interface Props {
+  class?: string;
+}
+
+const { class: className } = Astro.props;
+---
+
+<figure class:list={['my-8 mx-auto max-w-2xl', className]}>
+  <svg
+    viewBox="0 0 720 300"
+    width="100%"
+    role="img"
+    aria-labelledby="ghmap-title ghmap-desc"
+    style="color: inherit; font-family: var(--sl-font, 'DM Sans', sans-serif);"
+    fill="none"
+    stroke="currentColor"
+    stroke-width="1.5"
+  >
+    <title id="ghmap-title">How Classmoji maps to GitHub</title>
+    <desc id="ghmap-desc">
+      A GitHub organization maps to a Classmoji classroom. A GitHub repository
+      maps to a Classmoji repository. GitHub issues inside a repository map to
+      Classmoji assignments.
+    </desc>
+
+    <!-- Column headers -->
+    <text x="170" y="38" text-anchor="middle" fill="currentColor" stroke="none"
+      font-size="12" letter-spacing="1.5" opacity="0.6">GITHUB</text>
+    <text x="550" y="38" text-anchor="middle" fill="currentColor" stroke="none"
+      font-size="12" letter-spacing="1.5" opacity="0.6">CLASSMOJI</text>
+
+    <!-- Left stack: Organization > Repository > Issue, Issue -->
+    <rect x="40" y="56" width="260" height="208" rx="10" />
+    <text x="56" y="82" fill="currentColor" stroke="none" font-size="15" font-weight="600">Organization</text>
+    <rect x="60" y="96" width="220" height="152" rx="8" />
+    <text x="74" y="120" fill="currentColor" stroke="none" font-size="13" font-weight="500">Repository</text>
+    <rect x="78" y="138" width="184" height="42" rx="6" />
+    <text x="94" y="164" fill="currentColor" stroke="none" font-size="13">Issue</text>
+    <rect x="78" y="190" width="184" height="42" rx="6" />
+    <text x="94" y="216" fill="currentColor" stroke="none" font-size="13">Issue</text>
+
+    <!-- Arrow -->
+    <line x1="320" y1="160" x2="394" y2="160" />
+    <polygon points="404,160 392,153 392,167" fill="currentColor" stroke="none" />
+
+    <!-- Right stack: Classroom > Repository > Assignment, Assignment -->
+    <rect x="420" y="56" width="260" height="208" rx="10" />
+    <text x="436" y="82" fill="currentColor" stroke="none" font-size="15" font-weight="600">Classroom</text>
+    <rect x="440" y="96" width="220" height="152" rx="8" />
+    <text x="454" y="120" fill="currentColor" stroke="none" font-size="13" font-weight="500">Repository</text>
+    <rect x="458" y="138" width="184" height="42" rx="6" />
+    <text x="474" y="164" fill="currentColor" stroke="none" font-size="13">Assignment</text>
+    <rect x="458" y="190" width="184" height="42" rx="6" />
+    <text x="474" y="216" fill="currentColor" stroke="none" font-size="13">Assignment</text>
+  </svg>
+</figure>

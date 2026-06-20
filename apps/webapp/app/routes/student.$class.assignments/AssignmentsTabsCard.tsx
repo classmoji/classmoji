@@ -4,6 +4,7 @@ import dayjs from 'dayjs';
 import { motion, useReducedMotion } from 'framer-motion';
 import { IconBrandGithub, IconCheck } from '@tabler/icons-react';
 import Emoji from '~/components/ui/display/Emoji';
+import TokenExtensionPopover from '~/components/features/TokenExtensionPopover';
 import { POP_SPRING } from '~/utils/motion';
 
 export type AssignmentStatus = 'current' | 'completed';
@@ -19,10 +20,14 @@ export interface AssignmentRow {
   issueUrl: string | null;
   grades: { id: string; emoji: string }[];
   gradersSummary: string;
+  numLateHours: number;
+  isLateOverride: boolean;
+  tokensPerHour: number;
 }
 
 interface AssignmentsTabsCardProps {
   rows: AssignmentRow[];
+  balance: number;
 }
 
 type TabKey = 'current' | 'completed' | 'all';
@@ -64,7 +69,7 @@ const formatDeadline = (deadline: string) => {
   return target.format('MMM D');
 };
 
-const AssignmentsTabsCard = ({ rows }: AssignmentsTabsCardProps) => {
+const AssignmentsTabsCard = ({ rows, balance }: AssignmentsTabsCardProps) => {
   const [active, setActive] = useState<TabKey>('current');
   const reducedMotion = useReducedMotion();
   const { class: classSlug } = useParams();
@@ -145,6 +150,8 @@ const AssignmentsTabsCard = ({ rows }: AssignmentsTabsCardProps) => {
                 {filtered.map(row => {
                   const canRequestRegrade =
                     row.status === 'completed' && row.gradesReleased && !!classSlug;
+                  const isLate =
+                    row.status === 'current' && row.numLateHours > 0 && !row.isLateOverride;
                   return (
                     <tr
                       key={row.id}
@@ -194,11 +201,18 @@ const AssignmentsTabsCard = ({ rows }: AssignmentsTabsCardProps) => {
                             {statusPillLabel[row.status]}
                           </motion.span>
                         ) : (
-                          <span
-                            className={`inline-flex items-center text-xs font-semibold px-2 py-0.5 rounded-full ${statusPillStyle[row.status]}`}
-                          >
-                            {statusPillLabel[row.status]}
-                          </span>
+                          <div className="flex items-center gap-1.5">
+                            <span
+                              className={`inline-flex items-center text-xs font-semibold px-2 py-0.5 rounded-full ${statusPillStyle[row.status]}`}
+                            >
+                              {statusPillLabel[row.status]}
+                            </span>
+                            {isLate && (
+                              <span className="inline-flex items-center text-xs font-semibold px-2 py-0.5 rounded-full bg-orange-500/15 text-orange-700 dark:text-orange-300">
+                                {row.numLateHours}h late
+                              </span>
+                            )}
+                          </div>
                         )}
                       </td>
                       <td className="px-4 py-3 hidden lg:table-cell">
@@ -239,6 +253,22 @@ const AssignmentsTabsCard = ({ rows }: AssignmentsTabsCardProps) => {
                           >
                             Request regrade
                           </Link>
+                        ) : isLate ? (
+                          <span className="inline-flex items-center gap-1.5 text-xs font-medium text-gray-700 dark:text-gray-200">
+                            Extend
+                            <TokenExtensionPopover
+                              repositoryAssignment={{
+                                id: row.id,
+                                num_late_hours: row.numLateHours,
+                                is_late_override: row.isLateOverride,
+                                assignment: {
+                                  student_deadline: row.studentDeadline ?? '',
+                                  tokens_per_hour: row.tokensPerHour,
+                                },
+                              }}
+                              balance={balance}
+                            />
+                          </span>
                         ) : (
                           <span className="text-gray-400 dark:text-gray-600">—</span>
                         )}

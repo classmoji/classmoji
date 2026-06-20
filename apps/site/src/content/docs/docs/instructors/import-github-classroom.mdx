@@ -1,0 +1,90 @@
+---
+title: Import from Github Classroom
+description: Bring your existing Github Classroom classrooms, assignments, rosters, and grades into Classmoji
+---
+
+import Screenshot from '~/components/Screenshot.astro';
+import Video from '~/components/Video.astro';
+import importUploadImg from './img-import-upload.png';
+import importSelectImg from './img-import-select.png';
+import importReviewImg from './img-import-review.png';
+import importReposImg from './img-import-repositories.png';
+import importModulesImg from './img-import-modules.png';
+
+Already running your course on Github Classroom? You don't have to rebuild it by hand. Classmoji can import your existing classrooms, assignments, student rosters, repositories, and recorded grades in a few clicks.
+
+### How it works
+
+The import reads an export of your Github Classroom data. It makes **zero Github API calls** and nothing is sent to Github. Your export is read entirely in your browser, then the normalized data is saved to your Classmoji account.
+
+You don't need to install the Classmoji Github app to import. Classrooms come in fully usable, and you can install the app later if you want the Github-connected views (live grading, repository syncing) to light up. No re-import needed.
+
+### Step 1: Export your data from Github Classroom
+
+Use Github's official [Classroom export utility](https://github.com/github-education-resources/classroom-export-utility) to download your classrooms, assignments, and rosters as a folder. Open the link and follow its instructions.
+
+<Video
+  id="5iuNAERm9cQ"
+  title="Exporting your data from Github Classroom"
+  caption="Watch: export your data from Github Classroom"
+  size="lg"
+/>
+
+**Get the script:** [github.com/github-education-resources/classroom-export-utility](https://github.com/github-education-resources/classroom-export-utility) — clone or download `export-classrooms.sh` from this repo and follow its README.
+
+When it finishes, you'll have a timestamped folder like `classroom-export-20260619-190913` containing a `classrooms.json` file and a subfolder per classroom. **Zip that folder** so you have a single `.zip` to upload.
+
+### Step 2: Upload the export
+
+Head to [app.classmoji.io](https://app.classmoji.io) and click **Import from Github Classroom** on your classrooms screen. Then drag your `.zip` onto the upload area (or click to browse).
+
+Classmoji parses the archive in your browser and shows what it found. If the file isn't a valid export, you'll get a clear error explaining what's missing.
+
+<Screenshot src={importUploadImg} alt="The import wizard's upload step with a drag-and-drop area for the export .zip" frame url="app.classmoji.io/import-classroom" size="lg" />
+
+### Step 3: Select classrooms
+
+A single export can contain many classrooms. Pick the ones you want to bring over. Each row shows the classroom name, its Github organization, and how many assignments, students, and grades it has.
+
+<Screenshot src={importSelectImg} alt="The select step listing exported classrooms with organization, assignment, student, and grade counts" frame url="app.classmoji.io/import-classroom" size="lg" />
+
+### Step 4: Review and import
+
+For each selected classroom you can edit its **slug** (the part of the URL, e.g. `cs-101`). Slugs are auto-generated from the classroom name and must be unique within your Github organization. Any warnings from the export (skipped files, students with grades but no repo) are listed here too.
+
+Click **Import** and Classmoji creates everything. A single classroom drops you straight into its admin dashboard; importing several returns you to your classrooms list.
+
+<Screenshot src={importReviewImg} alt="The review step showing each classroom's editable slug before importing" frame url="app.classmoji.io/import-classroom" size="lg" />
+
+### What gets imported
+
+- **Classrooms** under the matching Github organization.
+- **Assignments and their repositories**, brought in **unpublished** so nothing is visible to students until you're ready.
+- **Students**, enrolled as classroom members. Because they already accepted in Github Classroom, they're added as active members, not pending invites.
+- **Repositories**, linked to each student.
+- **Grades and submission info** from the export (points awarded/available, commit count, submitted/passing status, original repo URL), stored on each student's repository.
+
+Each assignment lands as its own repository, **unpublished** and **unweighted**, ready for you to publish and weight when you are.
+
+<Screenshot src={importReposImg} alt="An imported classroom's Repositories list showing each assignment as a draft, unweighted repository" frame url="app.classmoji.io/admin/cs-101/repos" size="lg" />
+
+### Things to know
+
+- **Grades are read-only.** Imported scores are kept for viewing only. They are not pushed into Classmoji's live emoji/issue grading pipeline, so they won't conflict with a future real sync.
+- **Assignments start unweighted.** Imported assignments have a grading weight of `0`. Set weights when you configure the [gradebook](/docs/instructors/grading).
+- **Group assignments** are recognized, but in this version only individual-assignment repositories are linked to students. Group repos are counted and noted.
+- **Re-importing is safe.** The import is idempotent. Uploading the same export again updates records in place rather than creating duplicates, and it won't overwrite edits you've made in Classmoji.
+- **Students with grades but no repository** (graded in Github Classroom but never accepted the assignment) are skipped, with a warning so you know who was left out.
+
+### Organize into modules
+
+Imported assignments come in as individual repositories. To give students a guided path through them, group them into a [module](/docs/instructors/modules). A published module presents your imported work in the order you choose.
+
+<Screenshot src={importModulesImg} alt="A module grouping the imported assignments into a guided sequence" frame url="app.classmoji.io/admin/cs-101/modules" size="lg" />
+
+### What's next
+
+- [Manage your roster](/docs/instructors/roster)
+- [Set up repositories and assignments](/docs/instructors/modules-and-assignments)
+- [Build modules](/docs/instructors/modules)
+- [Grade assignments](/docs/instructors/grading)

@@ -3,19 +3,32 @@ title: Grading
 description: How emoji grading works and how to grade assignments
 ---
 
+import Screenshot from '~/components/Screenshot.astro';
+import GradeCalculationDiagram from '~/components/GradeCalculationDiagram.astro';
+import gradesImg from './img-grades.png';
+import gradingImg from './img-grading.png';
+import gradingQueueImg from './img-grading-queue.png';
+import settingsGradesImg from './img-settings-grades.png';
+
 Classmoji replaces numeric scores with emojis. Each emoji maps to a numeric value you configure, so grading stays expressive without losing precision.
 
 ### Emoji mappings
 
 Before grading, set up your emoji mappings in **Settings > Grades**. Each emoji you add gets assigned a numeric value (0–100). You can click **Populate defaults** to start with a sensible set.
 
+<Screenshot src={settingsGradesImg} alt="Settings > Grades showing the emoji-to-value mappings and the Populate defaults button" frame url="app.classmoji.io/admin/cs-101/settings/grades" size="lg" />
+
 When you grade a submission, you pick from these emojis. If you assign multiple emojis to a submission, the grade is the average of their values.
 
 ### Grading an assignment
 
-Open a repository from the sidebar and find the assignment you want to grade. Each student or team row has an emoji picker — click it to open, then click an emoji to add a grade. Click the same emoji again to remove it.
+Open a repository from the sidebar and find the assignment you want to grade. Each student or team row has an emoji picker, click it to open, then click an emoji to add a grade. Click the same emoji again to remove it. Each row is one submission: a student's repository, their work on that assignment, and its status.
 
-Assignments are graded per submission (one repository per student or team). You can assign graders to specific submissions from the repository view, so grading responsibilities stay organized across large classes.
+<Screenshot src={gradingImg} alt="A repository's grading view with per-student submission rows, emoji grades, graders, and a release toggle" frame url="app.classmoji.io/admin/cs-101/repos/hello-world" size="lg" />
+
+Assignments are graded per submission (one repository per student or team). You can assign graders to specific submissions from the repository view, so grading responsibilities stay organized across large classes. Assistants get a dedicated grading queue that gathers every submission across the class, with tabs for what still needs grading.
+
+<Screenshot src={gradingQueueImg} alt="The assistant grading queue listing submissions by owner, repository, and assignment with status tabs" frame url="app.classmoji.io/assistant/cs-101/grading" size="lg" />
 
 ### Releasing grades
 
@@ -24,6 +37,10 @@ Grades are hidden from students by default. Each assignment has a **release togg
 Releasing is per-assignment, so you can release one assignment while keeping others hidden.
 
 ### Grade calculations
+
+Grades nest from the emoji values you apply all the way up to the final grade:
+
+<GradeCalculationDiagram />
 
 **Assignment grade** — the average of all emoji values applied to that submission.
 
@@ -42,5 +59,7 @@ You can apply a late penalty per assignment. When enabled, submissions after the
 ### Gradebook
 
 The **Grades** page shows a full gradebook: every student as a row, every assignment as a column. You can toggle between emoji view and numeric view, search by student name or login, and edit letter grades inline.
+
+<Screenshot src={gradesImg} alt="The gradebook showing students with letter grades, raw grades, and final grade columns" frame url="app.classmoji.io/admin/cs-101/grades" size="lg" />
 
 For each student you can also leave a grade comment — open the comment panel from the gradebook row to add notes visible only to staff.

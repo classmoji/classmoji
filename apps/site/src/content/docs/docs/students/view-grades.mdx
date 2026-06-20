@@ -3,4 +3,39 @@ title: View grades
 description: How to find your grades and understand emoji feedback
 ---
 
-Coming soon.
+import Screenshot from '~/components/Screenshot.astro';
+import studentDashImg from './img-student-dashboard.png';
+
+### Where to find your grades
+
+Released grades show up in two places:
+
+- **Assignments > Completed**: each submitted assignment shows its grade
+- **Dashboard**: the **Recent feedback** card lists your most recently graded work
+
+<Screenshot src={studentDashImg} alt="A student dashboard with the Recent feedback card showing a released emoji grade" frame url="app.classmoji.io/student/cs-101/dashboard" size="lg" />
+
+### Emoji grades
+
+Classmoji grades with emoji instead of numbers. Each emoji your grader gives carries a value they set up, and the mix of emoji on an assignment is your grade. As a student you see the emoji, not a raw number, so feedback reads as expressive rather than punitive.
+
+A rough guide to the common set:
+
+- **🔥 / 🚀**: above and beyond, mastery, standout work
+- **👍**: solid work that meets expectations
+- **👀**: not yet there
+- **👎 / 😭**: needs significant rework
+
+Your instructor can customize which emoji they use and what each one means, so check your course's grading guide if it differs.
+
+### Released vs pending
+
+Grades stay hidden until your instructor releases them, and releasing happens per assignment. A submitted assignment that hasn't been released yet shows as **Pending**. Once it's released, the emoji appear, along with who graded it. An assignment can be graded internally well before you see it.
+
+### Feedback
+
+The real feedback lives in the Github issue and pull request for your work, where graders leave specific comments. The emoji is the quick signal. The comments are where you learn what to improve.
+
+### What's next
+
+- [Use tokens](/docs/students/use-tokens)

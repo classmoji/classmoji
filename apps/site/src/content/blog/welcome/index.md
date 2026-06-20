@@ -24,14 +24,14 @@ Classmoji isn't just about streamlining repository management, assignment creati
 
 Back to Classmoji. The goal is to better support project-based courses, especially in the AI age. Let's run through some of the features:
 
-- GitHub-native to support code and technical assignments
+- Github-native to support code and technical assignments
 - Feedback focused grading system
 - Gamified late policy
 - Iterative resubmissions encouraged to promote mastery
 - TA assignment and load balancing
 - Team project support end-to-end
 - Individual team project contribution accounting
-- AI driven "oral" assessments (coming soon)
+- AI driven "oral" assessments (now live)
 
 Today, we'll focus on 🐘 grades.
 
@@ -94,7 +94,7 @@ Recent studies confirm that expressive feedback, including emoji, can make instr
 - ⏳ **Soft late penalties** – Reduces the panic that can drive academic dishonesty and encourages honest submissions. When I first started teaching my mentor said "give them a 0 at 12:01am -- it keeps the median down". Talk about perverse incentives. We all need deadlines, but let's think about how to make them helpful to learning. In Classmoji we encourage soft penalties that can be bought out with earned tokens.
 - 🎮 **Gamified extra credit** – How can you earn some tokens to give you more leeway on assignments. Students earn tokens to “buy back” late penalties or offset quiz grades, making extra effort feel rewarding. Extra effort is also the only way to show true mastery and get that 🔥.
 - 🧑‍🤝‍🧑 **TA load balancing** – Leaderboards and tracking to keep teaching teams engaged and fair. We auto assign grades, allow graders to pitch in and help each other, and a little bit of social pressure to keep on track with grading deadlines.
-- 🤖 **(Coming soon) AI interactive quizzes** – Automated, adaptive questioning inspired by the benefits of oral exams. Research shows oral-style assessment can reduce plagiarism, verify understanding, and build communication skills ([Fenton, 2025](https://doi.org/10.3102/0013189X251333638))—our AI-driven version aims to deliver these benefits at scale.
+- 🤖 **(Now live) AI interactive quizzes** – Automated, adaptive questioning inspired by the benefits of oral exams. Research shows oral-style assessment can reduce plagiarism, verify understanding, and build communication skills ([Fenton, 2025](https://doi.org/10.3102/0013189X251333638))—our AI-driven version aims to deliver these benefits at scale.
 
 ## Why This Matters
 

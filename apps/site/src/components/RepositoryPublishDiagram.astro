@@ -1,0 +1,64 @@
+---
+// Black-and-white left-to-right flow for the Repositories & assignments page:
+// publishing a repository clones the template into one repo per student/team,
+// and the assignments land as Github issues. The footnote captures the
+// temporal bit (future-dated assignments appear on their release date). Pure
+// outline drawing in `currentColor` so it flips black/white with the theme.
+interface Props {
+  class?: string;
+}
+
+const { class: className } = Astro.props;
+---
+
+<figure class:list={['my-8 mx-auto max-w-2xl', className]}>
+  <svg
+    viewBox="0 0 660 240"
+    width="100%"
+    role="img"
+    aria-labelledby="publish-title publish-desc"
+    style="color: inherit; font-family: var(--sl-font, 'DM Sans', sans-serif);"
+    fill="none"
+    stroke="currentColor"
+    stroke-width="1.5"
+  >
+    <title id="publish-title">What happens when you publish a repository</title>
+    <desc id="publish-desc">
+      Publishing a repository copies the template repo into one repository per
+      student or team, with each assignment loaded as a Github issue.
+      Assignments with a future release date appear automatically on that date.
+    </desc>
+
+    <!-- Template repo -->
+    <rect x="24" y="60" width="160" height="80" rx="10" />
+    <text x="104" y="96" text-anchor="middle" fill="currentColor" stroke="none" font-size="14" font-weight="600">Template repo</text>
+    <text x="104" y="116" text-anchor="middle" fill="currentColor" stroke="none" font-size="11" opacity="0.6">starter code + issues</text>
+
+    <!-- Arrow 1: publish -->
+    <text x="208" y="92" text-anchor="middle" fill="currentColor" stroke="none" font-size="11" opacity="0.6">publish</text>
+    <line x1="190" y1="100" x2="224" y2="100" />
+    <polygon points="234,100 222,93 222,107" fill="currentColor" stroke="none" />
+
+    <!-- Student / team repos (stacked to show "one per student") -->
+    <rect x="252" y="54" width="160" height="80" rx="10" opacity="0.5" />
+    <rect x="246" y="60" width="160" height="80" rx="10" fill="var(--sl-color-bg, #fff)" />
+    <text x="326" y="96" text-anchor="middle" fill="currentColor" stroke="none" font-size="14" font-weight="600">Student / team repos</text>
+    <text x="326" y="116" text-anchor="middle" fill="currentColor" stroke="none" font-size="11" opacity="0.6">one copy each</text>
+
+    <!-- Arrow 2: loads -->
+    <text x="430" y="92" text-anchor="middle" fill="currentColor" stroke="none" font-size="11" opacity="0.6">loads</text>
+    <line x1="414" y1="100" x2="448" y2="100" />
+    <polygon points="458,100 446,93 446,107" fill="currentColor" stroke="none" />
+
+    <!-- Assignments as issues -->
+    <rect x="476" y="60" width="160" height="80" rx="10" />
+    <text x="556" y="96" text-anchor="middle" fill="currentColor" stroke="none" font-size="14" font-weight="600">Assignments</text>
+    <text x="556" y="116" text-anchor="middle" fill="currentColor" stroke="none" font-size="11" opacity="0.6">= Github issues</text>
+
+    <!-- Footnote: scheduled release -->
+    <circle cx="176" cy="196" r="9" />
+    <line x1="176" y1="196" x2="176" y2="190" />
+    <line x1="176" y1="196" x2="181" y2="199" />
+    <text x="196" y="200" fill="currentColor" stroke="none" font-size="12" opacity="0.7">Future-dated assignments appear automatically on their release date</text>
+  </svg>
+</figure>

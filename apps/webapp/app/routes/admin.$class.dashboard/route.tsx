@@ -9,6 +9,7 @@ import getPrisma from '@classmoji/database';
 import { ClassmojiService, getGitProvider } from '@classmoji/services';
 import { requireClassroomAdmin } from '~/utils/routeAuth.server';
 import { EASE_OUT_QUINT } from '~/utils/motion';
+import InstallAppBanner from '~/components/features/InstallAppBanner';
 import SubmissionChart from './SubmissionChart';
 import Leaderboard from './Leaderboard';
 import GradingTabsCard from './GradingTabsCard';
@@ -106,6 +107,12 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
     data: dataPromise,
     analytics: analyticsPromise,
     githubOrganization,
+    // Just-in-time install prompt: imported classrooms have no app installation
+    // (github_installation_id is null) and aren't the example sandbox.
+    appInstalled: Boolean(classroom.git_organization?.github_installation_id),
+    isExample: classroom.is_example,
+    gitOrgLogin: classroom.git_organization?.login ?? null,
+    githubAppName: process.env.GITHUB_APP_NAME,
   };
 };
 // Larger classes count up a touch faster; clamped so it never snaps instantly.
@@ -182,11 +189,7 @@ const StatItem = ({
       >
         <AnimatedNumber value={value} suffix={suffix} duration={duration} />
       </div>
-      {subtitle && (
-        <div className="mt-0.5 text-xs text-ink-3 truncate">
-          {subtitle}
-        </div>
-      )}
+      {subtitle && <div className="mt-0.5 text-xs text-ink-3 truncate">{subtitle}</div>}
     </div>
     {accent && <div className="shrink-0 self-center">{accent}</div>}
   </div>
@@ -237,7 +240,15 @@ const RingChart = ({
 };
 
 const AdminDashboard = ({ loaderData }: Route.ComponentProps) => {
-  const { data, analytics, githubOrganization } = loaderData;
+  const {
+    data,
+    analytics,
+    githubOrganization,
+    appInstalled,
+    isExample,
+    gitOrgLogin,
+    githubAppName,
+  } = loaderData;
   const { class: classSlug } = useParams();
   const [bannerDismissed, setBannerDismissed] = useState(false);
 
@@ -247,6 +258,10 @@ const AdminDashboard = ({ loaderData }: Route.ComponentProps) => {
   return (
     <div className="min-h-full flex flex-col gap-4">
       <h1 className="mt-2 mb-1 text-lg font-semibold text-ink-0">Dashboard</h1>
+
+      {!appInstalled && !isExample && gitOrgLogin && (
+        <InstallAppBanner orgLogin={gitOrgLogin} githubAppName={githubAppName} />
+      )}
 
       {showBanner && (
         <div className="flex items-start gap-3 rounded-xl bg-[#FEF3EC] dark:bg-amber-900/20 border border-[#F4D8C5] dark:border-amber-800/40 px-4 py-3 text-sm text-[#8a5b3a] dark:text-amber-200">
@@ -332,7 +347,13 @@ const AdminDashboard = ({ loaderData }: Route.ComponentProps) => {
                     value={gradingProgress || 0}
                     suffix="%"
                     valueColor="#D4A289"
-                    accent={<RingChart pct={gradingProgress || 0} color="#D4A289" duration={statsDuration} />}
+                    accent={
+                      <RingChart
+                        pct={gradingProgress || 0}
+                        color="#D4A289"
+                        duration={statsDuration}
+                      />
+                    }
                     duration={statsDuration}
                   />
                 </div>
@@ -340,12 +361,8 @@ const AdminDashboard = ({ loaderData }: Route.ComponentProps) => {
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
                   <section className="rounded-2xl bg-panel ring-1 ring-line p-4 sm:p-5">
                     <div className="flex items-center justify-between mb-2">
-                      <h3 className="text-sm font-semibold text-ink-0">
-                        Submissions
-                      </h3>
-                      <span className="text-xs text-ink-3">
-                        Last 10 days
-                      </span>
+                      <h3 className="text-sm font-semibold text-ink-0">Submissions</h3>
+                      <span className="text-xs text-ink-3">Last 10 days</span>
                     </div>
                     <div className="h-[340px] sm:h-[380px]">
                       <SubmissionChart

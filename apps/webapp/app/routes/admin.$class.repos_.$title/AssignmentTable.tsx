@@ -14,6 +14,7 @@ import { ActionTypes } from '~/constants';
 import { useGlobalFetcher } from '~/hooks';
 import { openRepositoryAssignmentInGithub } from '~/utils/helpers.client';
 import { isRepositoryAssignmentDropped } from '@classmoji/utils';
+import ImportedBadge from './ImportedBadge';
 
 interface AssignmentGrade {
   emoji: string;
@@ -76,6 +77,7 @@ interface Repo {
   team?: { avatar_url: string; name: string; slug: string; [key: string]: unknown } | null;
   assignments?: RepoAssignmentEntry[];
   project_number?: number | null;
+  metadata?: unknown;
   [key: string]: unknown;
 }
 
@@ -108,6 +110,8 @@ const AssignmentTable = ({
   const { fetcher, notify } = useGlobalFetcher();
 
   const isIndividualAssignment = repository?.type === 'INDIVIDUAL';
+  // Only surface the "Imported" column when at least one repo carries imported data.
+  const anyImported = repos.some(r => r.metadata != null && typeof r.metadata === 'object');
 
   const getRepoAssignment = (repo: Repo) => {
     return repo.assignments?.find(a => a.assignment_id === assignment.id);
@@ -179,6 +183,16 @@ const AssignmentTable = ({
         return <EmojisDisplay grades={grades} />;
       },
     },
+    ...(anyImported
+      ? [
+          {
+            title: 'Imported',
+            key: 'imported',
+            width: 140,
+            render: (_: unknown, record: Repo) => <ImportedBadge metadata={record.metadata} />,
+          },
+        ]
+      : []),
     {
       title: 'Grader(s)',
       key: 'graders',

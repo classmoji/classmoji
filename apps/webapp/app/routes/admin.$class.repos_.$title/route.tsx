@@ -127,7 +127,7 @@ const SingleRepository = ({ loaderData }: Route.ComponentProps) => {
   const { class: classSlug } = useParams();
   const navigate = useNavigate();
   const { revalidate } = useRevalidator();
-  const [viewMode, setViewMode] = useState('assignment'); // 'repository' or 'assignment'
+  const [viewMode, setViewMode] = useState('repository'); // 'repository' or 'assignment'
 
   const gitOrgLogin = classroom.git_organization?.login;
 
