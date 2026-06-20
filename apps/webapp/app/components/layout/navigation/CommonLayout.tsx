@@ -425,7 +425,9 @@ const CommonLayout = ({
               {category.label}
             </div>
           )}
-          <div className="space-y-0.5">{categoryItems}</div>
+          {/* Lean nav is a flat, short list with no section labels, so give the
+              items more breathing room; the grouped full nav stays tight. */}
+          <div className={leanNav ? 'space-y-1.5' : 'space-y-0.5'}>{categoryItems}</div>
         </div>
       );
     }),
@@ -522,7 +524,7 @@ const CommonLayout = ({
         {/* Navigation — the bordered class selector above already separates this
             zone, so no top divider here (the footer keeps its divider). */}
         <nav className="flex-1 overflow-y-auto overflow-x-hidden py-0.5 no-scrollbar">
-          <div className="space-y-0.5">{tabs}</div>
+          <div className={leanNav ? 'space-y-1.5' : 'space-y-0.5'}>{tabs}</div>
         </nav>
 
         {/* Bottom row: profile + GitHub + collapse */}
