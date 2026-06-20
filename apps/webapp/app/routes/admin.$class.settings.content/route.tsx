@@ -114,7 +114,7 @@ const SettingsContent = ({ loaderData }: Route.ComponentProps) => {
         <Form layout="vertical" className="w-3/4">
           <Form.Item label="Show Modules">
             <Switch
-              checked={settings.show_modules ?? false}
+              checked={settings.show_modules ?? true}
               onChange={handleNavToggle('show_modules')}
             />
           </Form.Item>

@@ -363,6 +363,23 @@ export const action = checkAuth(async ({ request }: { request: Request }) => {
     classroom,
     'STUDENT'
   );
+  // If the student is ALREADY a member of the GitHub org (common when migrating
+  // from GitHub Classroom), GitHub rejects a fresh org invitation with a 422,
+  // which used to error the whole join. In that case skip the invite and add them
+  // straight to the class team — they're already in the org.
+  const alreadyMember = await gitProvider.isUserMemberOfOrganization(
+    classroom.git_organization.login,
+    student_login
+  );
+
+  if (alreadyMember) {
+    await gitProvider.addTeamMember(classroom.git_organization.login, team.slug, student_login);
+    return {
+      success: 'Already in the organization — added you to the class.',
+      action: ActionTypes.SEND_INVITATION,
+    };
+  }
+
   const githubUser = await gitProvider.getUserByLogin(student_login);
   await gitProvider.inviteToOrganization(classroom.git_organization.login, String(githubUser.id), [
     team.id,

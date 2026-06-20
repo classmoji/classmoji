@@ -5,6 +5,15 @@ import fs from 'fs';
 
 import { getGitProvider } from '@classmoji/services';
 
+// Public fallback template used when an instructor's configured template repo has
+// no commits. An empty repo can't seed a student/team repo (the clone lands on an
+// unborn branch and every push fails with "src refspec main does not match any"),
+// so we seed from this shared repo instead. It must stay PUBLIC — the clone runs
+// with the instructor's org installation token, which can't read classmoji-org
+// private repos.
+const FALLBACK_TEMPLATE_REPO = 'classmoji/empty-template';
+const FALLBACK_TEMPLATE_URL = `https://github.com/${FALLBACK_TEMPLATE_REPO}.git`;
+
 type GitOrganizationLike = Parameters<typeof getGitProvider>[0] & { login: string | null };
 
 interface ClassroomForRepositoryCreation {
@@ -87,12 +96,38 @@ export const createRepository = async (payload: CreateRepositoryPayload): Promis
       return repoId;
     }
 
-    // Templates may use any default branch (e.g. `master` on older repos). The
-    // clone checks out the template's default branch, but every step below — and
-    // the feedback PR / branch protection / CLASSMOJI flow — assumes `main`, so
-    // force-rename whatever was checked out to `main` before the first push.
-    // Without this, `push origin main` fails with "src refspec main does not match any".
-    await repoGit.branch(['-M', 'main']);
+    // Does the cloned template have any commits? An *empty* template (no commits
+    // at all — e.g. a freshly created "BlankProject") leaves the clone on an
+    // unborn branch, so `git branch -M main` / `git push origin main` below would
+    // fail with "src refspec main does not match any" and the student/team repo
+    // would be created empty and broken.
+    let templateHasCommits = true;
+    try {
+      await repoGit.raw(['rev-parse', '--verify', 'HEAD']);
+    } catch {
+      templateHasCommits = false;
+    }
+
+    if (templateHasCommits) {
+      // Templates may use any default branch (e.g. `master` on older repos). The
+      // clone checks out the template's default branch, but every step below — and
+      // the feedback PR / branch protection / CLASSMOJI flow — assumes `main`, so
+      // force-rename whatever was checked out to `main` before the first push.
+      await repoGit.branch(['-M', 'main']);
+    } else {
+      // Empty template (no commits — e.g. a freshly created "BlankProject"). Seed
+      // from Classmoji's shared, public empty-template repo (which ships a README)
+      // so the student/team repo gets a real `main` with content instead of an
+      // empty-tree commit. The CLASSMOJI.md commit further down still adds the
+      // welcome file on top.
+      logger.warn(
+        `Template ${templateOwner}/${templateRepo} has no commits; seeding from ${FALLBACK_TEMPLATE_REPO}`
+      );
+      await repoGit.addRemote('seed', FALLBACK_TEMPLATE_URL);
+      await repoGit.fetch('seed', 'main');
+      await repoGit.checkout(['-B', 'main', 'seed/main']);
+      await repoGit.removeRemote('seed');
+    }
 
     await repoGit.push('origin', 'main', ['--force']);
     await repoGit.checkoutLocalBranch('feedback');

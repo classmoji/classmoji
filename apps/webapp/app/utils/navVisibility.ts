@@ -1,8 +1,8 @@
 /**
  * Student-navigation visibility flags, derived from classroom settings and
  * shared by the role layout loaders (admin/student/assistant) so the nav reads
- * a single, fresh source. Defaults match the Prisma schema: modules off,
- * pages/repos on.
+ * a single, fresh source. Defaults match the Prisma schema: modules, pages,
+ * and repos all on.
  */
 export interface NavVisibility {
   showModules: boolean;
@@ -11,7 +11,7 @@ export interface NavVisibility {
 }
 
 export const DEFAULT_NAV_VISIBILITY: NavVisibility = {
-  showModules: false,
+  showModules: true,
   showPages: true,
   showRepos: true,
 };
@@ -21,7 +21,7 @@ export const DEFAULT_NAV_VISIBILITY: NavVisibility = {
 export const navVisibilityFromSettings = (
   settings?: { show_modules?: unknown; show_pages?: unknown; show_repos?: unknown } | null
 ): NavVisibility => ({
-  showModules: settings?.show_modules === true,
+  showModules: settings?.show_modules !== false,
   showPages: settings?.show_pages !== false,
   showRepos: settings?.show_repos !== false,
 });
