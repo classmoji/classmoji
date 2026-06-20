@@ -6,11 +6,13 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // deferred render. These tests drive that rejection directly — something no E2E
 // can do, since the git_repo FK is required and can't be orphaned in the DB.
 const findAllMock = vi.fn();
+const getBalanceMock = vi.fn();
 const assertAccessMock = vi.fn();
 
 vi.mock('@classmoji/services', () => ({
   ClassmojiService: {
     helper: { findAllAssignmentsForStudent: (...a: unknown[]) => findAllMock(...a) },
+    token: { getBalance: (...a: unknown[]) => getBalanceMock(...a) },
   },
 }));
 
@@ -35,10 +37,12 @@ const loaderArgs = () =>
 describe('student assignments loader — git_repo guard', () => {
   beforeEach(() => {
     findAllMock.mockReset();
+    getBalanceMock.mockReset();
     assertAccessMock.mockReset();
+    getBalanceMock.mockResolvedValue(50);
     assertAccessMock.mockResolvedValue({
       userId: 'student-1',
-      classroom: { name: 'Test Class', git_organization: { login: 'test-org' } },
+      classroom: { id: 'class-1', name: 'Test Class', git_organization: { login: 'test-org' } },
     });
   });
 
@@ -122,5 +126,69 @@ describe('student assignments loader — git_repo guard', () => {
 
     // Current (OPEN) assignments sort before completed ones.
     expect(data.rows[0].status).toBe('current');
+
+    // The student's token balance is surfaced for the extend flow.
+    expect(data.balance).toBe(50);
+  });
+
+  it('computes late hours net of purchased extensions for OPEN assignments', async () => {
+    const sixHoursAgo = new Date(Date.now() - 6 * 60 * 60 * 1000).toISOString();
+    findAllMock.mockResolvedValue([
+      {
+        id: 'ra-late',
+        assignment_id: 'a-late',
+        status: 'OPEN',
+        provider_issue_number: 9,
+        is_late_override: false,
+        assignment: {
+          title: 'Late Lab',
+          is_published: true,
+          grades_released: false,
+          student_deadline: sixHoursAgo,
+          tokens_per_hour: 5,
+        },
+        git_repo: { name: 'repo-late', repository: { title: 'Late Repo', type: 'INDIVIDUAL' } },
+        grades: [],
+        // Already bought 2 extension hours -> net late hours should drop by 2.
+        token_transactions: [
+          { type: 'PURCHASE', hours_purchased: 1 },
+          { type: 'PURCHASE', hours_purchased: 1 },
+          { type: 'GAIN', hours_purchased: null },
+        ],
+      },
+    ]);
+
+    const data = await (await loader(loaderArgs())).data;
+    const row = data.rows.find(r => r.assignmentTitle === 'Late Lab')!;
+
+    // ~6h late minus 2 purchased extension hours -> still late by ~4h.
+    expect(row.numLateHours).toBeGreaterThanOrEqual(3);
+    expect(row.tokensPerHour).toBe(5);
+    expect(row.isLateOverride).toBe(false);
+  });
+
+  it('reports zero late hours for submitted (CLOSED) assignments', async () => {
+    findAllMock.mockResolvedValue([
+      {
+        id: 'ra-closed',
+        assignment_id: 'a-closed',
+        status: 'CLOSED',
+        provider_issue_number: 10,
+        is_late_override: false,
+        assignment: {
+          title: 'Done',
+          is_published: true,
+          grades_released: false,
+          student_deadline: new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString(),
+          tokens_per_hour: 5,
+        },
+        git_repo: { name: 'repo-done', repository: { title: 'Done Repo', type: 'INDIVIDUAL' } },
+        grades: [],
+        token_transactions: [],
+      },
+    ]);
+
+    const data = await (await loader(loaderArgs())).data;
+    expect(data.rows.find(r => r.assignmentTitle === 'Done')!.numLateHours).toBe(0);
   });
 });

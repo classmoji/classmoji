@@ -1,7 +1,7 @@
 import { Avatar, Tooltip } from 'antd';
 import { Link, useParams, useLocation, useRouteLoaderData } from 'react-router';
 import { useEffect, useRef, useState } from 'react';
-import { IconFileText, IconMenu2, IconApple } from '@tabler/icons-react';
+import { IconFileText, IconMenu2, IconApple, IconSparkles } from '@tabler/icons-react';
 import useLocalStorageState from 'use-local-storage-state';
 import { Logo } from '@classmoji/ui-components';
 import { RequireRole, RecentViewers } from '~/components';
@@ -14,6 +14,20 @@ import githubLogo from '~/assets/images/github_logo.svg';
 import ProfileDropdown from '../../features/profile/ProfileDropdown';
 import { LockedBanner } from '~/components/features/classroom/LockedBanner';
 import type { AppUser, MembershipWithOrganization } from '~/types';
+
+// Lean owner navigation. New/imported instructors land in a small core that
+// maps to the GitHub-Classroom mental model (roster + repos + grades); the rest
+// of the platform stays one click away behind the "Show all features" toggle.
+// Other roles (student/assistant) are never reduced. Keyed by `route.link`.
+const OWNER_CORE_LINKS = new Set([
+  '/dashboard',
+  '/repos',
+  '/students',
+  '/teams',
+  '/assistants',
+  '/grades',
+  '/settings/general',
+]);
 
 interface MenuPage {
   id: string;
@@ -65,6 +79,11 @@ const CommonLayout = ({
   const [collapsed, setCollapsed] = useLocalStorageState('classmoji-collapsed', {
     defaultValue: false,
   });
+  // Owner-only "Show all features" toggle. Defaults to the lean core so a fresh
+  // classroom isn't a wall of links; sticky once expanded.
+  const [showAllNav, setShowAllNav] = useLocalStorageState('classmoji-nav-show-all', {
+    defaultValue: false,
+  });
   const [mobileOpen, setMobileOpen] = useState(false);
   const { classroom } = useStore();
   const params = useParams();
@@ -83,6 +102,9 @@ const CommonLayout = ({
   }, [sectionKey]);
 
   const { role } = useRole();
+  // Owner viewing the reduced core nav (no "Show all features"). Drives both the
+  // item filtering and the flat, divider-less layout for the short list.
+  const leanNav = role === 'OWNER' && !showAllNav;
   const roleSettings = useRoleSettings();
   const rootData = useRouteLoaderData('root') as
     | {
@@ -151,6 +173,10 @@ const CommonLayout = ({
 
     const isDemoClassroom = Number(classroom?.id) === DEMO_ORG_ID;
 
+    // Lean owner nav: until "Show all features" is on, the OWNER sees only the
+    // core set. Other roles keep their full nav.
+    if (leanNav && !OWNER_CORE_LINKS.has(item.link)) return null;
+
     if (item.isProTier && !isProTier && isDemoClassroom === false) return null;
     if (item.link === '/quizzes' && !isProTier && isDemoClassroom === false) return null;
     if (item.link === '/quizzes' && classroom?.settings?.quizzes_enabled === false) return null;
@@ -215,6 +241,8 @@ const CommonLayout = ({
     if (!item.roles || !role || !item.roles.includes(role)) return false;
 
     const isDemoClassroom = Number(classroom?.id) === DEMO_ORG_ID;
+    // Lean owner nav (mirror of renderNavItem) so empty categories collapse.
+    if (leanNav && !OWNER_CORE_LINKS.has(item.link)) return false;
     if (item.isProTier && !isProTier && !isDemoClassroom) return false;
     if (item.link === '/quizzes' && !isProTier && !isDemoClassroom) return false;
     if (item.link === '/quizzes' && classroom?.settings?.quizzes_enabled === false) return false;
@@ -263,7 +291,7 @@ const CommonLayout = ({
     return (
       <div key="menu-pages" className={collapsed ? 'pt-3' : 'pt-4'}>
         <hr className="mx-4 mb-3 border-t border-gray-200 dark:border-gray-700" />
-        <div className="space-y-1">{menuPageItems}</div>
+        <div className="space-y-1.5">{menuPageItems}</div>
       </div>
     );
   };
@@ -322,6 +350,40 @@ const CommonLayout = ({
     );
   };
 
+  // Owner-only reveal at the foot of the nav. Lives next to the items it
+  // controls so a missing feature is discoverable here, not buried in Settings.
+  const renderShowAllToggle = () => {
+    if (role !== 'OWNER') return null;
+
+    const label = showAllNav ? 'Show fewer' : 'Show all features';
+
+    return (
+      <div key="show-all-toggle" className={leanNav ? '' : collapsed ? 'pt-3' : 'pt-4'}>
+        {!leanNav && <hr className="mx-4 mb-3 border-t border-gray-200 dark:border-gray-700" />}
+        <button
+          type="button"
+          onClick={() => setShowAllNav(!showAllNav)}
+          aria-pressed={showAllNav}
+          className={`group flex items-center gap-2.5 rounded-md transition-colors duration-150 w-[calc(100%-12px)] ${
+            collapsed ? 'justify-center p-2 mx-1.5' : 'px-2 py-1.5 mx-1.5 text-left'
+          } hover:bg-nav-hover`}
+          style={{ color: 'var(--ink-1)' }}
+        >
+          {collapsed ? (
+            <Tooltip title={label} placement="right">
+              <IconSparkles size={20} strokeWidth={1.75} />
+            </Tooltip>
+          ) : (
+            <>
+              <IconSparkles size={20} strokeWidth={1.75} className="shrink-0" />
+              <span className="flex-1">{label}</span>
+            </>
+          )}
+        </button>
+      </div>
+    );
+  };
+
   const tabs = [
     // Dashboard (uncategorized)
     renderNavItem(routes.dashboard, 'dashboard'),
@@ -346,16 +408,21 @@ const CommonLayout = ({
         renderNavItem(item, `${categoryKey}-${index}`)
       );
 
+      // Lean nav is a short, flat list — skip the category dividers/spacing that
+      // only make sense when the full set is grouped into sections.
       return (
-        <div key={categoryKey} className={collapsed ? 'pt-3' : 'pt-4'}>
-          <hr className="mx-4 mb-3 border-t border-gray-200 dark:border-gray-700" />
-          <div className="space-y-1">{categoryItems}</div>
+        <div key={categoryKey} className={leanNav ? '' : collapsed ? 'pt-3' : 'pt-4'}>
+          {!leanNav && <hr className="mx-4 mb-3 border-t border-gray-200 dark:border-gray-700" />}
+          <div className="space-y-1.5">{categoryItems}</div>
         </div>
       );
     }),
 
     // Add dynamic menu pages after Assessment category (for students only)
     renderMenuPages(),
+
+    // Owner-only "Show all features" reveal at the foot of the nav
+    renderShowAllToggle(),
   ];
 
   return (
@@ -440,10 +507,10 @@ const CommonLayout = ({
           </RequireRole>
         )}
 
-        {/* Navigation */}
-        <div className="mx-4 h-px bg-line shrink-0" />
-        <nav className="flex-1 overflow-y-auto overflow-x-hidden py-2">
-          <div className="space-y-1">{tabs}</div>
+        {/* Navigation — the bordered class selector above already separates this
+            zone, so no top divider here (the footer keeps its divider). */}
+        <nav className="flex-1 overflow-y-auto overflow-x-hidden py-0.5 no-scrollbar">
+          <div className="space-y-1.5">{tabs}</div>
         </nav>
 
         {/* Bottom row: profile + GitHub + collapse */}

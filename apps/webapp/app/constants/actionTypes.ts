@@ -45,6 +45,7 @@ export const ActionTypes = {
   UPDATE_GRADE_RELEASE: 'update-grade-release',
 
   CREATE_CLASSROOM: 'create-classroom',
+  IMPORT_CLASSROOM: 'import-classroom',
 };
 
 export default ActionTypes;

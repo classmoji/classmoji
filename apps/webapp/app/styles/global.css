@@ -525,6 +525,17 @@ label {
   border: 2px solid transparent;
 }
 
+/* Hide the scrollbar while keeping the element scrollable (e.g. sidebar nav). */
+.no-scrollbar {
+  scrollbar-width: none; /* Firefox */
+  -ms-overflow-style: none; /* IE / old Edge */
+}
+.no-scrollbar::-webkit-scrollbar {
+  display: none; /* Chrome / Safari / WebKit */
+  width: 0;
+  height: 0;
+}
+
 /* Focus */
 :focus-visible {
   outline: 2px solid var(--violet);
@@ -887,9 +898,13 @@ html[data-theme='dark'] .evt:hover {
   align-items: center;
   justify-content: center;
   gap: 6px;
-  padding: 6px 12px;
+  padding: 4px 12px;
   border-radius: 8px;
   font-size: 0.875rem;
+  /* Explicit line-height so the box doesn't inherit the body's 1.45 and grow
+     past min-height — keeps .btn at a true 32px to match the Antd buttons used
+     in page headers elsewhere. */
+  line-height: 1.4;
   font-weight: 500;
   border: 1px solid var(--line-2);
   background: var(--panel);
@@ -929,7 +944,7 @@ html[data-theme='dark'] .evt:hover {
 }
 
 .btn-sm {
-  padding: 4px 9px;
+  padding: 3px 9px;
   min-height: 26px;
   font-size: 0.8125rem;
   border-radius: 7px;

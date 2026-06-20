@@ -3,15 +3,16 @@ title: Fundamentals
 description: Core concepts you need to understand Classmoji
 ---
 
+import GithubMappingDiagram from '~/components/GithubMappingDiagram.astro';
+import RolesDiagram from '~/components/RolesDiagram.astro';
+
 ### How Classmoji maps to Github
 
-If you've used Github before, Classmoji will feel familiar. Everything in Classmoji has a Github counterpart:
+If you've used Github before, Classmoji will feel familiar. Every Classmoji concept has a Github counterpart, and they nest the same way: an organization holds repositories, which hold issues.
 
-| Github | Classmoji | What it means |
-|---|---|---|
-| Organization | Classroom(s) | One org can hold multiple classrooms, e.g. different semesters of the same course. |
-| Repository | Repository | Each Classmoji repository maps to a Github repo, grouping related assignments together. |
-| Issue | Assignment | Each assignment is a Github issue, tied to the repository. |
+<GithubMappingDiagram />
+
+A Github organization is a Classmoji classroom, a Github repository is a Classmoji repository, and the issues inside a repository are your assignments. On the people side, org members are your students and Github teams are your teams.
 
 Everything stays in Github where your code already lives.
 
@@ -21,7 +22,11 @@ A classroom is scoped to a Github organization, but one org can hold multiple cl
 
 ### Repositories
 
-Repositories group related assignments, quizzes, pages, and slides together, similar to a unit or week. You can weight repositories for grading and mark them as extra credit.
+A repository is a unit of work backed by a Github repo, like a lab, a project, or a weekly problem set. Repositories hold assignments, and you can weight them for grading or mark them as extra credit.
+
+### Modules
+
+Modules are an ordered layer on top of your content. A module groups repositories, pages, slides, and quizzes into a sequence students move through, like a week or a unit. Unlike a repository, a module isn't backed by a Github repo. It's a Classmoji-only way to organize what students see and the order they see it in. Modules stay hidden until you publish them.
 
 ### Assignments
 
@@ -33,8 +38,10 @@ Instead of numeric scores, Classmoji uses emoji to represent grades. Each emoji 
 
 ### Tokens
 
-Tokens are a flexible deadline extension system. Students get a set number of tokens per term and spend them to push due dates, no email required. Assign them at the start of the semester — either way, your inbox stays quiet.
+Tokens are a flexible deadline extension system. Students get a set number of tokens per term and spend them to push due dates, no email required. Assign them at the start of the semester and your inbox stays quiet.
 
 ### Memberships and Roles
 
-Everyone in a classroom has a role: Admin, Assistant, or Student. Roles control what each person can see and do. Assistants can grade but not configure the classroom; students can only access their own work.
+Everyone in a classroom has a role: Owner, Teacher, Assistant, or Student. Roles control what each person can see and do. The Owner created the classroom and has full control. Teachers are teaching staff with broad access to run the classroom. Assistants can grade but not configure the classroom. Students can only access their own work.
+
+<RolesDiagram />

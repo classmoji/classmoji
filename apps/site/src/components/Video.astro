@@ -1,0 +1,77 @@
+---
+interface Props {
+  /** YouTube video id, e.g. "5iuNAERm9cQ" (the part after youtu.be/). */
+  id: string;
+  title?: string;
+  caption?: string;
+  size?: 'sm' | 'md' | 'lg';
+  /** Optional poster override. Defaults to the video's YouTube thumbnail. */
+  poster?: string;
+}
+
+const { id, title = 'Video walkthrough', caption, size = 'md', poster } = Astro.props;
+
+// Custom preview: the video's own thumbnail. maxres is sharpest; fall back to hq
+// (which always exists) if a maxres frame wasn't generated.
+const thumb = poster ?? `https://i.ytimg.com/vi/${id}/maxresdefault.jpg`;
+const thumbFallback = `https://i.ytimg.com/vi/${id}/hqdefault.jpg`;
+
+const sizeClasses = {
+  sm: 'max-w-md',
+  md: 'max-w-2xl',
+  lg: 'max-w-4xl',
+};
+---
+
+<figure class:list={['my-8 mx-auto', sizeClasses[size]]}>
+  {/* Click-to-load facade: shows the thumbnail, swaps in the player on first click. */}
+  <div
+    class="cm-yt"
+    data-id={id}
+    style="position: relative; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 24px rgba(0,0,0,0.12); border: 1px solid rgba(128,128,128,0.2); aspect-ratio: 16 / 9; background: #000; cursor: pointer;"
+  >
+    <img
+      src={thumb}
+      alt={title}
+      loading="lazy"
+      onerror={`this.onerror=null;this.src='${thumbFallback}'`}
+      style="width: 100%; height: 100%; object-fit: cover; display: block; margin: 0;"
+    />
+    <button
+      type="button"
+      aria-label={`Play: ${title}`}
+      style="position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; background: rgba(0,0,0,0.15); border: 0; cursor: pointer;"
+    >
+      <span
+        style="display: flex; align-items: center; justify-content: center; width: 68px; height: 48px; border-radius: 14px; background: rgba(0,0,0,0.62);"
+      >
+        <svg width="26" height="26" viewBox="0 0 24 24" fill="#fff" aria-hidden="true">
+          <path d="M8 5v14l11-7z"></path>
+        </svg>
+      </span>
+    </button>
+  </div>
+  {caption && <figcaption class="text-center text-sm text-gray-500 mt-2">{caption}</figcaption>}
+</figure>
+
+<script>
+  // Replace the thumbnail facade with the privacy-friendly YouTube player on click.
+  document.querySelectorAll('.cm-yt').forEach(el => {
+    el.addEventListener(
+      'click',
+      () => {
+        const id = el.getAttribute('data-id');
+        if (!id) return;
+        const iframe = document.createElement('iframe');
+        iframe.src = `https://www.youtube-nocookie.com/embed/${id}?autoplay=1&rel=0`;
+        iframe.title = 'YouTube video player';
+        iframe.allow =
+          'accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share';
+        iframe.allowFullscreen = true;
+        iframe.style.cssText = 'position: absolute; inset: 0; width: 100%; height: 100%; border: 0;';
+        el.replaceChildren(iframe);
+      },
+      { once: true }
+    );
+  });
+</script>

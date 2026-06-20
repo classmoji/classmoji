@@ -1,6 +1,59 @@
 ---
-title: Docker compose
-description: How to self-host Classmoji using Docker
---- 
+title: Self-hosting with Docker
+description: How to self-host Classmoji with Docker
+---
 
-Coming soon.
+Classmoji ships a production Dockerfile for every app, so you can build and run it yourself. What it does not ship yet is a single turnkey `docker compose up` that brings up the whole stack. You either run each image with your own orchestration, or use the Fly.io setup the project already includes. This page is honest about both.
+
+### What ships in the repo
+
+- **A production Dockerfile per app**: `webapp`, `slides`, `pages`, `hook-station`, `site`, and `ai-agent`. Each builds on Node 22 Alpine, generates the Prisma client at build time, and builds the app.
+- **A root `docker-compose.yml`, for local development only**. It runs Postgres, plus an optional `ai-agent` service behind a profile. It does not run the webapp, slides, pages, hook-station, or site. `npm run db:start` is just `docker compose up -d`.
+
+There is no compose or Kubernetes file that wires all the services together for production. You bring your own.
+
+### The services in a full deployment
+
+- **Postgres**: the only datastore
+- **webapp**: the main app
+- **slides** and **pages**: companion apps for presentations and content
+- **hook-station**: receives Github and Stripe webhooks
+- **site**: this marketing and docs site (optional)
+- **ai-agent**: optional, only needed for AI features. It lives in a private module and may be unavailable to you.
+
+### Database
+
+Postgres is the only database. For local work, `npm run db:start` brings up the dev Postgres defined in `docker-compose.yml`. For a real deployment, point `DATABASE_URL` at a managed Postgres. The hosted version runs on Neon.
+
+### Migrations
+
+Each image generates the Prisma client at build time, but you still need to apply migrations to your database. Run `prisma migrate deploy` against `DATABASE_URL` before serving traffic. In the hosted setup, the webapp runs `migrate deploy` automatically as a release step on every deploy, so you don't have to do it by hand there.
+
+### Building an image yourself
+
+Build any app from the repo root, passing the app's Dockerfile:
+
+```bash
+docker build -f apps/webapp/Dockerfile -t classmoji-webapp .
+```
+
+Then run it with the environment variables that app needs. Because there's no bundled orchestration, you're responsible for networking the services together, supplying secrets, and putting a reverse proxy in front. Compose, Kubernetes, or a PaaS all work.
+
+### The supported path today: Fly.io
+
+The project includes a `fly.toml` and a deploy script for each app, and this is the most worn path. With the Fly CLI installed and authenticated:
+
+```bash
+npm run fly:webapp
+npm run fly:slides
+npm run fly:pages
+npm run fly:hooks
+npm run fly:site
+npm run fly:ai
+```
+
+The webapp's release command runs database migrations on each deploy.
+
+### Configuration
+
+Every service reads its config from environment variables. See [Environment variables](/docs/self-hosting/environment-variables) for the full list and which are required for which feature.

@@ -3,9 +3,15 @@ title: Repositories & assignments
 description: How to create and manage repositories and assignments
 ---
 
+import Screenshot from '~/components/Screenshot.astro';
+import RepositoryPublishDiagram from '~/components/RepositoryPublishDiagram.astro';
+import repositoriesImg from './img-repositories.png';
+
 ### What is a repository?
 
 A repository is a unit of work. Think a lab, a project, or a weekly problem set. Every repository is backed by a Github repo. When you publish a repository, Classmoji creates a copy of a template repo for each student (or team), with all the assignments already loaded as issues.
+
+<Screenshot src={repositoriesImg} alt="The Repositories list showing a repository expanded to its weighted assignments and publish status" frame url="app.classmoji.io/admin/cs-101/repos" size="lg" />
 
 ### Creating a repository
 
@@ -43,6 +49,8 @@ When you publish:
 - Classmoji creates a copy of the template repo for every student (or team) in your roster
 - Each repo gets the assignments loaded as Github issues
 - Assignments with a future release date are not created yet; they appear automatically when their date hits
+
+<RepositoryPublishDiagram />
 
 ### Syncing a repository
 

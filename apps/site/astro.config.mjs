@@ -35,8 +35,14 @@ export default defineConfig({
           label: '👨‍🏫 For Instructors',
           items: [
             { label: 'Create a classroom', slug: 'docs/instructors/create-classroom' },
+            {
+              label: 'Github Classroom',
+              slug: 'docs/instructors/import-github-classroom',
+              badge: { text: 'New', variant: 'tip' },
+            },
             { label: 'Manage your roster', slug: 'docs/instructors/roster' },
-            { label: 'Modules & assignments', slug: 'docs/instructors/modules-and-assignments' },
+            { label: 'Repositories & assignments', slug: 'docs/instructors/modules-and-assignments' },
+            { label: 'Build modules', slug: 'docs/instructors/modules' },
             { label: 'Grade assignments', slug: 'docs/instructors/grading' },
             { label: 'Configure tokens', slug: 'docs/instructors/tokens' },
             { label: 'Build pages', slug: 'docs/instructors/pages' },

@@ -1,0 +1,51 @@
+---
+// Black-and-white nested diagram for the Grading page: how grades aggregate.
+// Read inside-out — emoji values average into an assignment grade, assignment
+// grades average into a repository grade (optionally dropping the lowest), and
+// repository grades average into the final grade (optionally weighted). Pure
+// outline drawing in `currentColor` so it flips black/white with the theme.
+interface Props {
+  class?: string;
+}
+
+const { class: className } = Astro.props;
+---
+
+<figure class:list={['my-8 mx-auto max-w-2xl', className]}>
+  <svg
+    viewBox="0 0 620 300"
+    width="100%"
+    role="img"
+    aria-labelledby="gradecalc-title gradecalc-desc"
+    style="color: inherit; font-family: var(--sl-font, 'DM Sans', sans-serif);"
+    fill="none"
+    stroke="currentColor"
+    stroke-width="1.5"
+  >
+    <title id="gradecalc-title">How Classmoji grades aggregate</title>
+    <desc id="gradecalc-desc">
+      Emoji values average into an assignment grade. Assignment grades average
+      into a repository grade, optionally dropping the lowest. Repository grades
+      average into the final grade, optionally weighted.
+    </desc>
+
+    <!-- Outer: Final grade -->
+    <rect x="24" y="30" width="572" height="250" rx="12" />
+    <text x="44" y="58" fill="currentColor" stroke="none" font-size="15" font-weight="600">Final grade</text>
+    <text x="44" y="78" fill="currentColor" stroke="none" font-size="11" opacity="0.6">average of all repository grades · weights optional</text>
+
+    <!-- Middle: Repository grade -->
+    <rect x="56" y="96" width="508" height="170" rx="10" />
+    <text x="76" y="124" fill="currentColor" stroke="none" font-size="14" font-weight="600">Repository grade</text>
+    <text x="76" y="144" fill="currentColor" stroke="none" font-size="11" opacity="0.6">average of its assignment grades · drop-lowest optional</text>
+
+    <!-- Inner: Assignment grade -->
+    <rect x="88" y="162" width="444" height="92" rx="8" />
+    <text x="108" y="190" fill="currentColor" stroke="none" font-size="13" font-weight="600">Assignment grade</text>
+    <text x="108" y="210" fill="currentColor" stroke="none" font-size="11" opacity="0.6">average of the emoji values you applied</text>
+
+    <!-- Emoji values (innermost) — Classmoji's default grading emoji -->
+    <text x="110" y="238" stroke="none" font-size="17">❤️ 👍 👀</text>
+    <text x="196" y="236" fill="currentColor" stroke="none" font-size="11" opacity="0.6">emoji values</text>
+  </svg>
+</figure>

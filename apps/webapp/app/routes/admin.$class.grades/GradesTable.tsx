@@ -334,7 +334,7 @@ const GradesTable = (props: GradesTableProps) => {
             prefix={<IconSearch size={16} />}
             value={searchQuery}
             onChange={e => setSearchQuery(e.target.value)}
-            className="w-full sm:w-64"
+            className="w-full max-w-[260px]"
             data-tour="grades-search"
           />
         </div>
