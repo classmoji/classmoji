@@ -511,6 +511,9 @@ model GitRepo {
   contributions  String?
   project_id     String? // GitHub Projects V2 node_id of created project
   project_number Int? // Project number for URL building
+  // Read-only provider data captured at import time (e.g. GitHub Classroom
+  // points / commit count). Not part of live grading — for viewing only.
+  metadata       Json?
   created_at     DateTime    @default(now())
   updated_at     DateTime    @default(now()) @updatedAt
 

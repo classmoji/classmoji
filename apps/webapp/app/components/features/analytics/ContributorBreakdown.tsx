@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useFetcher, useRevalidator } from 'react-router';
 import { Button, Input, Modal } from 'antd';
+import { IconSearch } from '@tabler/icons-react';
 import {
   ResponsiveContainer,
   PieChart,
@@ -244,6 +245,7 @@ const ContributorBreakdown = ({
       >
         <div className="space-y-3">
           <Input
+            prefix={<IconSearch size={16} />}
             placeholder="Search by name or GitHub login"
             value={search}
             onChange={e => setSearch(e.target.value)}

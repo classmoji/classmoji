@@ -40,11 +40,15 @@ export function CalloutSlot({ id = DEFAULT_CALLOUT_SLOT_ID, className }: Callout
   };
 
   const baseClass =
-    'pointer-events-none fixed top-4 left-1/2 z-50 w-full max-w-2xl -translate-x-1/2 px-4';
+    'pointer-events-none fixed top-4 left-1/2 w-full max-w-2xl -translate-x-1/2 px-4';
   const wrapperClass = className ? `${baseClass} ${className}` : baseClass;
 
   return (
-    <div className={wrapperClass}>
+    // zIndex is set inline (not via a Tailwind class) so it applies even though this
+    // shared package's source isn't scanned by the consumer's Tailwind build. 60 keeps
+    // the callout above the sticky app header (z-50) so notifications aren't hidden
+    // behind the menu, while staying below antd modals (z-1000+).
+    <div className={wrapperClass} style={{ zIndex: 60 }}>
       <AnimatePresence mode="popLayout">
         {active ? (
           <motion.div

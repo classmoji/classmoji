@@ -7,7 +7,7 @@ description: How to create and manage content pages in your classroom
 
 A page is a piece of course content you write and host for your students. Think lecture notes, project specs, reference guides, or any structured material you want to share alongside assignments.
 
-Pages live in a Github repository that Classmoji creates automatically for your classroom (`content-{org}-{term}`). Each page is stored as an HTML file and served from Github Pages. Students access them directly from the classroom.
+Pages live in a Github repository that Classmoji creates automatically for your classroom (named `content-{org}-{namespace}`). Each page is stored as a structured JSON file in the editor's block format, and Classmoji reads it back through the Github content API to render it. Students access pages directly from the classroom.
 
 ### Creating a page
 
@@ -24,7 +24,7 @@ Creates an empty page you fill in with the editor. Good for writing content from
 Convert an existing Markdown file into a hosted page.
 
 - **Title**: the page name
-- **Markdown file**: upload a `.md` file and it gets converted to styled HTML
+- **Markdown file**: upload a `.md` file and it gets converted into an editable page
 - **Images**: optionally upload image files alongside the markdown. Classmoji matches references in the markdown to the uploaded files and rewrites the paths automatically
 
 **Batch import**

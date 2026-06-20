@@ -1,12 +1,11 @@
 import { Suspense } from 'react';
 import { Await, useParams } from 'react-router';
-import { namedAction } from 'remix-utils/named-action';
 import { Skeleton } from 'antd';
 import dayjs from 'dayjs';
 import getPrisma from '@classmoji/database';
 import { ClassmojiService } from '@classmoji/services';
 import type { Route } from './+types/route';
-import { assertClassroomAccess, assertClassroomMutationAllowed } from '~/utils/helpers';
+import { assertClassroomAccess } from '~/utils/helpers';
 import WeeklyCalendarCard, { type WeekEvent } from './WeeklyCalendarCard';
 import ModuleSpotlightCard, { type SpotlightModule } from './ModuleSpotlightCard';
 import RetroTabsCard, {
@@ -243,49 +242,6 @@ const StudentDashboard = ({ loaderData }: Route.ComponentProps) => {
       </Suspense>
     </div>
   );
-};
-
-export const action = async ({ request, params }: Route.ActionArgs) => {
-  const data = await request.json();
-  const classSlug = params.class!;
-
-  return namedAction(request, {
-    async purchaseExtensionHours() {
-      const { classroom, membership } = await assertClassroomAccess({
-        request,
-        classroomSlug: classSlug,
-        allowedRoles: ['OWNER', 'TEACHER'],
-        resourceType: 'TOKEN_PURCHASE',
-        attemptedAction: 'purchase_extension_hours',
-        metadata: {
-          hours_requested: data.hours_purchased,
-          repository_issue_id: data.repository_issue_id,
-        },
-        resourceOwnerId: data.student_id,
-        selfAccessRoles: ['STUDENT'],
-      });
-      assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
-
-      if (!data.hours_purchased || data.hours_purchased <= 0) {
-        throw new Error('Invalid hours: Must be a positive number.');
-      }
-      if (!data.amount || data.amount >= 0) {
-        throw new Error('Invalid amount: Token spending amount must be negative.');
-      }
-      if (!data.git_repo_assignment_id) {
-        throw new Error('Missing repository assignment ID.');
-      }
-      if (String(data.classroom_id) !== String(classroom.id)) {
-        throw new Error('Invalid classroom ID.');
-      }
-
-      await ClassmojiService.token.updateExtension(data);
-      return {
-        action: 'PURCHASE_EXTENSION_HOURS',
-        success: 'Successfully purchased hour(s).',
-      };
-    },
-  });
 };
 
 export default StudentDashboard;

@@ -22,6 +22,14 @@
     padding-top: 10px;
 }
 
+/* The black theme caps the docs content column at 42rem (.main in the theme's
+   TwoColumnContent override), which is what actually controls width here — the
+   Starlight `--sl-content-width` variable has no effect. Widen it so the intro
+   paragraph, body text, and tables aren't so narrow. */
+.container-main .main {
+  max-width: 49rem;
+}
+
 /* =============================================================================
    Aside / callout overrides — match custom card design
    ============================================================================= */

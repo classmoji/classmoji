@@ -1,0 +1,50 @@
+---
+// Black-and-white role hierarchy for the Fundamentals page. Bars narrow from
+// Owner down to Student to encode access scope narrowing. Pure outline drawing
+// in `currentColor` so it flips black/white with the theme.
+interface Props {
+  class?: string;
+}
+
+const { class: className } = Astro.props;
+---
+
+<figure class:list={['my-8 mx-auto max-w-xl', className]}>
+  <svg
+    viewBox="0 0 540 296"
+    width="100%"
+    role="img"
+    aria-labelledby="roles-title roles-desc"
+    style="color: inherit; font-family: var(--sl-font, 'DM Sans', sans-serif);"
+    fill="none"
+    stroke="currentColor"
+    stroke-width="1.5"
+  >
+    <title id="roles-title">Classmoji roles and access</title>
+    <desc id="roles-desc">
+      Four roles ordered by access: Owner has full control, Teacher runs the
+      classroom, Assistant can grade but not configure, and Student sees only
+      their own work.
+    </desc>
+
+    <text x="60" y="24" fill="currentColor" stroke="none" font-size="11" letter-spacing="0.5" opacity="0.6">MOST ACCESS</text>
+
+    <!-- Owner -->
+    <rect x="60" y="34" width="440" height="48" rx="8" />
+    <text x="80" y="63" fill="currentColor" stroke="none" font-size="13"><tspan font-weight="600">Owner</tspan> — full control, created the classroom</text>
+
+    <!-- Teacher -->
+    <rect x="60" y="92" width="380" height="48" rx="8" />
+    <text x="80" y="121" fill="currentColor" stroke="none" font-size="13"><tspan font-weight="600">Teacher</tspan> — runs the classroom</text>
+
+    <!-- Assistant -->
+    <rect x="60" y="150" width="320" height="48" rx="8" />
+    <text x="80" y="179" fill="currentColor" stroke="none" font-size="13"><tspan font-weight="600">Assistant</tspan> — grades, can't configure</text>
+
+    <!-- Student -->
+    <rect x="60" y="208" width="260" height="48" rx="8" />
+    <text x="80" y="237" fill="currentColor" stroke="none" font-size="13"><tspan font-weight="600">Student</tspan> — only their own work</text>
+
+    <text x="60" y="278" fill="currentColor" stroke="none" font-size="11" letter-spacing="0.5" opacity="0.6">LEAST ACCESS</text>
+  </svg>
+</figure>

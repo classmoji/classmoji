@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useFetcher, Link, Outlet, useSearchParams, useNavigate } from 'react-router';
 import { Table, Button, Input, Select, Switch, Tooltip } from 'antd';
-import { IconPlus, IconEyeOff, IconLock, IconWorld, IconMenu2 } from '@tabler/icons-react';
+import { IconPlus, IconEyeOff, IconLock, IconWorld, IconMenu2, IconSearch } from '@tabler/icons-react';
 import { assertClassroomAccess, assertClassroomMutationAllowed } from '~/utils/helpers';
 import { ClassmojiService } from '@classmoji/services';
 import { useCallout } from '@classmoji/ui-components';
@@ -325,6 +325,7 @@ export default function AdminPages({ loaderData }: Route.ComponentProps) {
         <h1 className="text-lg font-semibold text-ink-1">Pages</h1>
         <div className="flex items-center gap-2">
           <Input
+            prefix={<IconSearch size={16} />}
             placeholder="Search page..."
             value={searchText}
             onChange={e => setSearchText(e.target.value)}

@@ -4,6 +4,7 @@ import { UserThumbnailView, TeamThumbnailView, GradeBadge } from '~/components';
 
 import { calculateRepositoryGrade } from '@classmoji/utils';
 import RepoActions from './RepoActions';
+import ImportedBadge from './ImportedBadge';
 
 type RepositoryAssignments = Parameters<typeof calculateRepositoryGrade>[0];
 type EmojiMappings = Parameters<typeof calculateRepositoryGrade>[1];
@@ -16,6 +17,7 @@ interface ModuleTableRepo {
   assignments: RepositoryAssignments;
   student?: Parameters<typeof UserThumbnailView>[0]['user'];
   team?: Parameters<typeof TeamThumbnailView>[0]['team'];
+  metadata?: unknown;
 }
 
 interface ModuleTableProps {
@@ -28,8 +30,14 @@ interface ModuleTableProps {
   org: string;
 }
 
+const hasImportedMetadata = (repo: { metadata?: unknown }) =>
+  repo.metadata != null && typeof repo.metadata === 'object';
+
 const ModuleTable = ({ repository, repos, emojiMappings, settings, org }: ModuleTableProps) => {
   const isIndividualAssignment = repository.type === 'INDIVIDUAL';
+  // Only surface the "Imported" column when at least one repo actually carries
+  // imported GitHub Classroom data.
+  const anyImported = repos.some(hasImportedMetadata);
 
   const columns = [
     {
@@ -87,6 +95,18 @@ const ModuleTable = ({ repository, repos, emojiMappings, settings, org }: Module
         );
       },
     },
+    ...(anyImported
+      ? [
+          {
+            title: 'Imported',
+            key: 'imported',
+            width: 140,
+            render: (_: unknown, repo: ModuleTableRepo) => (
+              <ImportedBadge metadata={repo.metadata} />
+            ),
+          },
+        ]
+      : []),
     {
       title: 'Actions',
       key: 'actions',

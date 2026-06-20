@@ -3,6 +3,10 @@ title: Manage your roster
 description: How to add students and assistants to your classroom
 ---
 
+import Screenshot from '~/components/Screenshot.astro';
+import studentsImg from './img-students.png';
+import assistantsImg from './img-assistants.png';
+
 ### Adding students
 
 Go to the **Students** tab and click **Add Students** in the top right.
@@ -17,6 +21,8 @@ Jane Smith, jane@school.edu
 
 Before adding, you'll see a preview: valid entries in green, skipped ones in gray with a reason (invalid email, already enrolled, etc.). Confirm to add them all.
 
+<Screenshot src={studentsImg} alt="The Students roster showing enrolled students with status and per-row actions" frame url="app.classmoji.io/admin/cs-101/students" size="lg" />
+
 What happens next depends on whether they're already on Classmoji:
 
 - **Already on Classmoji**: automatically added to the classroom.
@@ -29,6 +35,8 @@ When a student accesses the classroom for the first time, they'll receive a Gith
 Go to the **Assistants** tab and click **New assistant**.
 
 Enter their Github username, name, and email, then confirm.
+
+<Screenshot src={assistantsImg} alt="The Assistants list showing a TA with a grader-role toggle and status" frame url="app.classmoji.io/admin/cs-101/assistants" size="lg" />
 
 ### Removing someone
 
