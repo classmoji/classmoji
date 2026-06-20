@@ -190,8 +190,10 @@ const CommonLayout = ({
     if (item.link === '/modules' && role !== 'OWNER' && !showModules) return null;
     if (item.link === '/repos' && role !== 'OWNER' && !showRepos) return null;
 
-    // Students see the repositories section framed as "Modules".
-    const displayLabel = item.link === '/repos' && role === 'STUDENT' ? 'Modules' : item.label;
+    // Repos keeps its own label now that students have a real Modules tab.
+    // (Previously the repos section was framed as "Modules" for students, which
+    // now collides with the actual Modules tab.)
+    const displayLabel = item.label;
 
     return (
       <RequireRole roles={item.roles} key={key}>
@@ -423,7 +425,9 @@ const CommonLayout = ({
               {category.label}
             </div>
           )}
-          <div className="space-y-0.5">{categoryItems}</div>
+          {/* Lean nav is a flat, short list with no section labels, so give the
+              items more breathing room; the grouped full nav stays tight. */}
+          <div className={leanNav ? 'space-y-1.5' : 'space-y-0.5'}>{categoryItems}</div>
         </div>
       );
     }),
@@ -520,7 +524,7 @@ const CommonLayout = ({
         {/* Navigation — the bordered class selector above already separates this
             zone, so no top divider here (the footer keeps its divider). */}
         <nav className="flex-1 overflow-y-auto overflow-x-hidden py-0.5 no-scrollbar">
-          <div className="space-y-0.5">{tabs}</div>
+          <div className={leanNav ? 'space-y-1.5' : 'space-y-0.5'}>{tabs}</div>
         </nav>
 
         {/* Bottom row: profile + GitHub + collapse */}
