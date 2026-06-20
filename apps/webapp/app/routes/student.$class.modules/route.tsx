@@ -50,7 +50,7 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
     attemptedAction: 'view_modules',
   });
 
-  const showModules = Boolean(classroom.settings?.show_modules);
+  const showModules = classroom.settings?.show_modules !== false;
   // Staff may preview drafts; students only see published modules and items.
   const isStaff = !!membership && membership.role !== 'STUDENT';
 

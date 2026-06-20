@@ -77,8 +77,22 @@ export const updateRepository = async (
     // `main` at creation; pulling template/<master> into the student's `updates`
     // branch is a normal cross-name merge.
     const templateSymref = await studentGit.listRemote(['--symref', 'template', 'HEAD']);
-    const templateDefaultBranch =
-      templateSymref.match(/^ref:\s+refs\/heads\/(\S+)\s+HEAD/m)?.[1] ?? 'main';
+    const templateDefaultBranch = templateSymref.match(/^ref:\s+refs\/heads\/(\S+)\s+HEAD/m)?.[1];
+
+    // An *empty* template (no commits at all — e.g. a freshly created
+    // "BlankProject") has no HEAD ref, so there is nothing to pull. Attempting
+    // `git pull template main` here would throw "couldn't find remote ref main".
+    // Treat it as a clean no-op so a sync against an empty template doesn't error.
+    if (!templateDefaultBranch) {
+      logger.warn(
+        `Template ${templateOwner}/${templateRepo} has no commits; skipping update for ${orgLogin}/${repoName}`
+      );
+      return {
+        message: 'Template is empty — nothing to sync',
+        prUrl: '',
+        hasChanges: false,
+      };
+    }
 
     await studentGit.pull('template', templateDefaultBranch, ['-X', 'theirs', '--no-edit']);
     await studentGit.push('origin', 'updates', ['--force']);

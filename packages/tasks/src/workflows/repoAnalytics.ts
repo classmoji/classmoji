@@ -1,4 +1,4 @@
-import { task, schedules, logger } from '@trigger.dev/sdk';
+import { task, logger } from '@trigger.dev/sdk';
 import { ClassmojiService } from '@classmoji/services';
 
 interface RefreshRepoAnalyticsPayload {
@@ -63,23 +63,30 @@ export const refreshRepoAnalytics = task({
 
 /**
  * Cron: refresh analytics for every active gitRepo assignment every 6h.
+ *
+ * TEMPORARILY DISABLED — the 6h fan-out was churning Trigger runs against
+ * stale/fake/deleted repos. A declarative `schedules.task` cron can ONLY be
+ * turned off by removing it from code and redeploying packages/tasks (it cannot
+ * be toggled in the Trigger.dev dashboard or via the API). To re-enable: restore
+ * `schedules` to the import above, uncomment this block, and redeploy.
+ * The on-demand `refresh-repo-analytics` task is unaffected.
  */
-export const refreshAllActiveRepoAnalytics = schedules.task({
-  id: 'refresh-repo-analytics-all',
-  cron: '0 */6 * * *',
-  run: async () => {
-    const ids = await ClassmojiService.repoAnalytics.listActiveAssignmentIds();
-
-    logger.info('Refreshing active repo analytics', {
-      count: ids.length,
-      first: ids[0] ?? null,
-      last: ids[ids.length - 1] ?? null,
-    });
-
-    for (const id of ids) {
-      await refreshRepoAnalytics.trigger({ repositoryAssignmentId: id });
-    }
-
-    return { count: ids.length };
-  },
-});
+// export const refreshAllActiveRepoAnalytics = schedules.task({
+//   id: 'refresh-repo-analytics-all',
+//   cron: '0 */6 * * *',
+//   run: async () => {
+//     const ids = await ClassmojiService.repoAnalytics.listActiveAssignmentIds();
+//
+//     logger.info('Refreshing active repo analytics', {
+//       count: ids.length,
+//       first: ids[0] ?? null,
+//       last: ids[ids.length - 1] ?? null,
+//     });
+//
+//     for (const id of ids) {
+//       await refreshRepoAnalytics.trigger({ repositoryAssignmentId: id });
+//     }
+//
+//     return { count: ids.length };
+//   },
+// });

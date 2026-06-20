@@ -325,7 +325,7 @@ model ClassroomSettings {
   slides_enabled               Boolean  @default(false)
   syllabus_bot_enabled         Boolean  @default(false)
   recent_viewers_enabled       Boolean  @default(true)
-  show_modules                 Boolean  @default(false)
+  show_modules                 Boolean  @default(true)
   show_pages                   Boolean  @default(true)
   show_repos                   Boolean  @default(true)
   syllabus_bot_model           String?
