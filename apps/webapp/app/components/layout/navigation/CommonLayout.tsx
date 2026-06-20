@@ -124,11 +124,11 @@ const CommonLayout = ({
 
   // Effective student-nav visibility: prefer the fresh value from the layout
   // loader (navVisibility), fall back to the store. Defaults match the schema
-  // (modules off, pages/repos on).
+  // (modules, pages, repos all on).
   const storeSettings = classroom?.settings as
     | { show_modules?: boolean; show_pages?: boolean; show_repos?: boolean }
     | undefined;
-  const showModules = navVisibility?.showModules ?? storeSettings?.show_modules ?? false;
+  const showModules = navVisibility?.showModules ?? storeSettings?.show_modules ?? true;
   const showPages = navVisibility?.showPages ?? storeSettings?.show_pages ?? true;
   const showRepos = navVisibility?.showRepos ?? storeSettings?.show_repos ?? true;
 
@@ -289,9 +289,13 @@ const CommonLayout = ({
     });
 
     return (
-      <div key="menu-pages" className={collapsed ? 'pt-3' : 'pt-4'}>
-        <hr className="mx-4 mb-3 border-t border-gray-200 dark:border-gray-700" />
-        <div className="space-y-1.5">{menuPageItems}</div>
+      <div key="menu-pages" className={collapsed ? 'pt-3' : 'pt-5'}>
+        {!collapsed && (
+          <div className="px-3.5 mb-1 text-[11px] font-semibold uppercase tracking-wider text-ink-4 select-none">
+            Pages
+          </div>
+        )}
+        <div className="space-y-0.5">{menuPageItems}</div>
       </div>
     );
   };
@@ -359,7 +363,6 @@ const CommonLayout = ({
 
     return (
       <div key="show-all-toggle" className={leanNav ? '' : collapsed ? 'pt-3' : 'pt-4'}>
-        {!leanNav && <hr className="mx-4 mb-3 border-t border-gray-200 dark:border-gray-700" />}
         <button
           type="button"
           onClick={() => setShowAllNav(!showAllNav)}
@@ -408,12 +411,19 @@ const CommonLayout = ({
         renderNavItem(item, `${categoryKey}-${index}`)
       );
 
-      // Lean nav is a short, flat list — skip the category dividers/spacing that
-      // only make sense when the full set is grouped into sections.
+      // Lean nav is a short, flat list — skip the section labels/spacing that
+      // only make sense when the full set is grouped into sections. Expanded nav
+      // groups each category under a small muted label (no full-width rule);
+      // collapsed (icon-only) mode has no room for a label, so the extra top
+      // spacing alone carries the grouping.
       return (
-        <div key={categoryKey} className={leanNav ? '' : collapsed ? 'pt-3' : 'pt-4'}>
-          {!leanNav && <hr className="mx-4 mb-3 border-t border-gray-200 dark:border-gray-700" />}
-          <div className="space-y-1.5">{categoryItems}</div>
+        <div key={categoryKey} className={leanNav ? '' : collapsed ? 'pt-3' : 'pt-5'}>
+          {!leanNav && !collapsed && (
+            <div className="px-3.5 mb-1 text-[11px] font-semibold uppercase tracking-wider text-ink-4 select-none">
+              {category.label}
+            </div>
+          )}
+          <div className="space-y-0.5">{categoryItems}</div>
         </div>
       );
     }),
@@ -510,7 +520,7 @@ const CommonLayout = ({
         {/* Navigation — the bordered class selector above already separates this
             zone, so no top divider here (the footer keeps its divider). */}
         <nav className="flex-1 overflow-y-auto overflow-x-hidden py-0.5 no-scrollbar">
-          <div className="space-y-1.5">{tabs}</div>
+          <div className="space-y-0.5">{tabs}</div>
         </nav>
 
         {/* Bottom row: profile + GitHub + collapse */}
