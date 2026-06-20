@@ -190,8 +190,10 @@ const CommonLayout = ({
     if (item.link === '/modules' && role !== 'OWNER' && !showModules) return null;
     if (item.link === '/repos' && role !== 'OWNER' && !showRepos) return null;
 
-    // Students see the repositories section framed as "Modules".
-    const displayLabel = item.link === '/repos' && role === 'STUDENT' ? 'Modules' : item.label;
+    // Repos keeps its own label now that students have a real Modules tab.
+    // (Previously the repos section was framed as "Modules" for students, which
+    // now collides with the actual Modules tab.)
+    const displayLabel = item.label;
 
     return (
       <RequireRole roles={item.roles} key={key}>

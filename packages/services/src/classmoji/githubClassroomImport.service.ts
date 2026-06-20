@@ -300,7 +300,10 @@ export async function importGithubClassroom(
             slug: a.slug || null,
             template: a.starterRepoFullName,
             type,
-            is_published: false,
+            // Imported assignments are published on arrival: the student repos
+            // already exist on Github, so there is nothing to provision and no
+            // reason to hide them as drafts.
+            is_published: true,
             // Imported assignments start unweighted; the teacher sets grading
             // weights when they configure the gradebook.
             weight: 0,
@@ -318,7 +321,8 @@ export async function importGithubClassroom(
             title: a.title,
             slug: a.slug || null,
             student_deadline: a.deadline ? new Date(a.deadline) : null,
-            is_published: false,
+            // Published on arrival, same as the repository above (repos exist).
+            is_published: true,
           },
           update: {},
         });
