@@ -14,6 +14,8 @@ export interface ListedClassroom {
   archived: boolean;
   /** null only if the classroom has no organization (can't be imported). */
   organization: { id: number; login: string } | null;
+  /** True if a Classmoji classroom already exists for this one. */
+  alreadyImported: boolean;
 }
 
 /** Slugify a classroom name. Mirrors `_user.create-classroom/utils.ts` so slugs

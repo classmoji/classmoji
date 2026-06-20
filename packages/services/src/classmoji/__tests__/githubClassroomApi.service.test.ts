@@ -1,4 +1,14 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
+
+// listAdminClassrooms checks the DB for already-imported classrooms; stub it out
+// (no existing orgs → nothing marked imported).
+vi.mock('@classmoji/database', () => ({
+  default: () => ({
+    gitOrganization: { findMany: async () => [] },
+    classroom: { findMany: async () => [] },
+  }),
+}));
+
 import { GitHubProvider } from '../../git/index.ts';
 import {
   listAdminClassrooms,
@@ -57,8 +67,14 @@ describe('listAdminClassrooms', () => {
 
     const result = await listAdminClassrooms('tok');
     expect(result).toEqual([
-      { githubId: 1, name: 'CS1', archived: false, organization: { id: 100, login: 'org-one' } },
-      { githubId: 2, name: 'CS2', archived: true, organization: null },
+      {
+        githubId: 1,
+        name: 'CS1',
+        archived: false,
+        organization: { id: 100, login: 'org-one' },
+        alreadyImported: false,
+      },
+      { githubId: 2, name: 'CS2', archived: true, organization: null, alreadyImported: false },
     ]);
   });
 });

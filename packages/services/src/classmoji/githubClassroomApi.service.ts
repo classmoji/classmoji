@@ -17,6 +17,7 @@
  *      submissions, and grades, normalized for the importer.
  */
 
+import getPrisma from '@classmoji/database';
 import { GitHubProvider } from '../git/index.ts';
 import type {
   ImportClassroom,
@@ -92,7 +93,17 @@ export interface ListedClassroom {
   archived: boolean;
   /** null only if the classroom has no organization (can't be imported). */
   organization: { id: number; login: string } | null;
+  /** True if a Classmoji classroom already exists for this one (org + default slug). */
+  alreadyImported: boolean;
 }
+
+/** Slugify a classroom name. MUST match the webapp's `slugify` (and create-classroom),
+ * because that's the slug the importer keys on. */
+const slugifyName = (str: string): string =>
+  str
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
 
 /**
  * List the classrooms the authenticated user administers, enriched with their
@@ -128,10 +139,49 @@ export async function listAdminClassrooms(token: string): Promise<ListedClassroo
         name: c.name,
         archived: Boolean(c.archived),
         organization: org ? { id: org.id, login: org.login } : null,
+        alreadyImported: false,
       });
     });
   }
+
+  await annotateAlreadyImported(result);
   return result;
+}
+
+/**
+ * Mark which listed classrooms already exist in Classmoji. A classroom is
+ * "already imported" when a Classroom row exists under the matching
+ * GitOrganization with the default slug (slugify of the name) — the same natural
+ * key the importer upserts on. Imports under a custom slug aren't detected (rare);
+ * re-importing with the default slug would update in place anyway.
+ */
+async function annotateAlreadyImported(classrooms: ListedClassroom[]): Promise<void> {
+  const orgProviderIds = [
+    ...new Set(classrooms.flatMap(c => (c.organization ? [String(c.organization.id)] : []))),
+  ];
+  if (orgProviderIds.length === 0) return;
+
+  const prisma = getPrisma();
+  const orgs = await prisma.gitOrganization.findMany({
+    where: { provider: 'GITHUB', provider_id: { in: orgProviderIds } },
+    select: { id: true, provider_id: true },
+  });
+  if (orgs.length === 0) return;
+
+  const gitOrgIdByProvider = new Map(orgs.map(o => [o.provider_id, o.id]));
+  const existing = await prisma.classroom.findMany({
+    where: { git_org_id: { in: orgs.map(o => o.id) } },
+    select: { git_org_id: true, slug: true },
+  });
+  const existingKey = new Set(existing.map(c => `${c.git_org_id}::${c.slug}`));
+
+  for (const c of classrooms) {
+    if (!c.organization) continue;
+    const gitOrgId = gitOrgIdByProvider.get(String(c.organization.id));
+    if (gitOrgId && existingKey.has(`${gitOrgId}::${slugifyName(c.name)}`)) {
+      c.alreadyImported = true;
+    }
+  }
 }
 
 // ── Phase 2: heavy per-classroom fetch + normalize ────────────────────────────

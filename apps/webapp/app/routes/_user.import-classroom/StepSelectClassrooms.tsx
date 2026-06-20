@@ -24,8 +24,13 @@ export default function StepSelectClassrooms({
       key: 'name',
       width: 320,
       render: (name: string, row: ListedClassroom) => (
-        <span>
+        <span className={row.alreadyImported ? 'text-gray-400 dark:text-gray-500' : undefined}>
           {name}{' '}
+          {row.alreadyImported && (
+            <Tag color="green" className="ml-1">
+              Already imported
+            </Tag>
+          )}
           {row.archived && (
             <Tag color="default" className="ml-1">
               Archived
@@ -76,7 +81,9 @@ export default function StepSelectClassrooms({
           rowSelection={{
             selectedRowKeys: Array.from(selectedIds),
             onChange: keys => onSelectionChange(new Set(keys as number[])),
-            getCheckboxProps: (row: ListedClassroom) => ({ disabled: !row.organization }),
+            getCheckboxProps: (row: ListedClassroom) => ({
+              disabled: !row.organization || row.alreadyImported,
+            }),
           }}
           scroll={{ y: 360 }}
         />

@@ -50,7 +50,9 @@ const ImportClassroom = ({ loaderData }: Route.ComponentProps) => {
   // When phase-1 list loads, seed selection/slugs and move to the picker.
   const handleClassrooms = (loaded: ListedClassroom[]) => {
     setClassrooms(loaded);
-    setSelectedIds(new Set(loaded.filter(c => c.organization).map(c => c.githubId)));
+    setSelectedIds(
+      new Set(loaded.filter(c => c.organization && !c.alreadyImported).map(c => c.githubId))
+    );
     setSlugByClassroom(new Map(loaded.map(c => [c.githubId, slugify(c.name)])));
     if (loaded.length > 0) setCurrentStep(1);
   };
