@@ -295,7 +295,7 @@ label {
 }
 
 .font-header {
-  font-family: 'Inter', sans-serif !important;
+  font-family: var(--font-sans) !important;
 }
 
 .weight-cell {

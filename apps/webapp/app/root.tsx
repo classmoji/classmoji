@@ -47,8 +47,7 @@ dayjs.extend(isSameOrBefore);
 
 import getPrisma from '@classmoji/database';
 import '@fontsource-variable/mona-sans';
-import '@fontsource/quicksand/700.css';
-import '@fontsource/fredoka/600.css';
+import '@fontsource/fredoka/600.css'; // logo wordmark font (see @classmoji/ui-components Logo)
 import '~/styles/tailwind.css';
 import '~/styles/global.css';
 
