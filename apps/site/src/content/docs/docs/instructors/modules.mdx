@@ -4,6 +4,7 @@ description: How to organize your course into modules students move through
 ---
 
 import Screenshot from '~/components/Screenshot.astro';
+import ModulesDiagram from '~/components/ModulesDiagram.astro';
 import modulesImg from './img-modules.png';
 
 ### What is a module?
@@ -11,6 +12,8 @@ import modulesImg from './img-modules.png';
 A module is an ordered collection of course content. Group repositories, pages, slides, and quizzes into a single sequence students move through, like a week or a unit. Modules don't replace repositories. They sit on top of them as a way to organize what students see and the order they see it in.
 
 Unlike a repository, a module isn't backed by a Github repo. It lives entirely in Classmoji.
+
+<ModulesDiagram />
 
 <Screenshot src={modulesImg} alt="The Modules list showing a published module with items and a draft module" frame url="app.classmoji.io/admin/cs-101/modules" size="lg" />
 

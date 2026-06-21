@@ -52,6 +52,8 @@ interface NavVisibility {
   showModules?: boolean;
   showPages?: boolean;
   showRepos?: boolean;
+  /** Whether the class has any modules; hides the empty Modules tab from non-owners. */
+  hasModules?: boolean;
 }
 
 interface CommonLayoutProps {
@@ -131,6 +133,10 @@ const CommonLayout = ({
   const showModules = navVisibility?.showModules ?? storeSettings?.show_modules ?? true;
   const showPages = navVisibility?.showPages ?? storeSettings?.show_pages ?? true;
   const showRepos = navVisibility?.showRepos ?? storeSettings?.show_repos ?? true;
+  // Hide the Modules tab from non-owners when the class has no modules, so profs
+  // who never use the feature don't show students an empty tab. Defaults true
+  // when unknown (store fallback / pre-loader render) to avoid hiding wrongly.
+  const hasModules = navVisibility?.hasModules ?? true;
 
   const themeColors = getThemeByKey(classroom?.settings?.theme);
   const themeBackground = isDarkMode ? themeColors.darkBackground : themeColors.background;
@@ -186,8 +192,9 @@ const CommonLayout = ({
     if (item.link === '/slides' && classroom?.settings?.slides_enabled === false) return null;
 
     // Student navigation visibility toggles. OWNER always sees these to manage
-    // them; students/assistants only when the instructor enables them.
-    if (item.link === '/modules' && role !== 'OWNER' && !showModules) return null;
+    // them; students/assistants only when the instructor enables them. Modules
+    // also hides when the class has none, so the tab never shows up empty.
+    if (item.link === '/modules' && role !== 'OWNER' && (!showModules || !hasModules)) return null;
     if (item.link === '/repos' && role !== 'OWNER' && !showRepos) return null;
 
     // Repos keeps its own label now that students have a real Modules tab.
@@ -251,7 +258,7 @@ const CommonLayout = ({
     if (item.link === '/quizzes' && !aiAgentAvailable) return false;
 
     // Student navigation visibility toggles (OWNER always retains access).
-    if (item.link === '/modules' && role !== 'OWNER' && !showModules) return false;
+    if (item.link === '/modules' && role !== 'OWNER' && (!showModules || !hasModules)) return false;
     if (item.link === '/repos' && role !== 'OWNER' && !showRepos) return false;
 
     return true;

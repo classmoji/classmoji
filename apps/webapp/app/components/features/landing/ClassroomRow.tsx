@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { IconChevron } from '@classmoji/ui-components';
 import { ClassMark } from './ClassMark';
 import { RoleChip } from './RoleChip';
@@ -6,6 +7,23 @@ import type { LandingClass } from './types';
 // Desktop table grid — 6 columns. Hidden below `sm`, where rows render as a
 // stacked compact card instead so they fit a phone-width viewport.
 const DESKTOP_COLS = 'sm:grid-cols-[36px_1.8fr_1fr_90px_110px_30px]';
+
+// Org avatar (GitHub org image) with the initials ClassMark as fallback. Kept a
+// rounded square so it slots in next to the ClassMark fallback seamlessly.
+function RowMark({ c }: { c: LandingClass }) {
+  const [errored, setErrored] = useState(false);
+  if (c.avatar && !errored) {
+    return (
+      <img
+        src={c.avatar}
+        alt=""
+        onError={() => setErrored(true)}
+        className="h-7 w-7 rounded-md object-cover ring-1 ring-[var(--line)] bg-panel-tint"
+      />
+    );
+  }
+  return <ClassMark hue={c.hue} name={c.name} />;
+}
 
 export function ClassroomRowHeader() {
   return (
@@ -41,7 +59,7 @@ export function ClassroomRow({ c, onOpen }: { c: LandingClass; onOpen: () => voi
     >
       {/* Desktop: full 8-column table row */}
       <div className={`hidden sm:grid ${DESKTOP_COLS} items-center gap-4 px-3.5 py-2.5`}>
-        <ClassMark hue={c.hue} name={c.name} />
+        <RowMark c={c} />
         <div className="min-w-0">
           <div className="font-medium">{c.name}</div>
           <div className="font-mono text-[11.5px] text-[var(--ink-3)]">{c.slug}</div>
@@ -56,7 +74,7 @@ export function ClassroomRow({ c, onOpen }: { c: LandingClass; onOpen: () => voi
 
       {/* Mobile: stacked compact row (mark · name/slug/meta · chevron) */}
       <div className="grid grid-cols-[36px_1fr_auto] items-center gap-3 px-3.5 py-3 sm:hidden">
-        <ClassMark hue={c.hue} name={c.name} />
+        <RowMark c={c} />
         <div className="min-w-0">
           <div className="truncate font-medium">{c.name}</div>
           <div className="truncate font-mono text-[11.5px] text-[var(--ink-3)]">{c.slug}</div>

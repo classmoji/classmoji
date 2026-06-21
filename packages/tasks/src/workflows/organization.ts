@@ -28,6 +28,117 @@ interface RemoveUserPayload {
   payload?: RemoveUserPayload;
 }
 
+/**
+ * Flip `has_accepted_invite` to true and provision any missing student repos for
+ * every membership this user holds in the given git organization.
+ *
+ * This is the single source of truth for "the user is confirmed in the org, so
+ * activate them." It is idempotent: repos that already exist are skipped, so it is
+ * safe to call more than once (webhook redelivery, retries, re-joins).
+ *
+ * Called from:
+ *  - memberAddedHandlerTask — GitHub `member_added` webhook (brand-new org members)
+ *  - the self-join / add-assistant flows when the user is ALREADY in the org, where
+ *    no `member_added` webhook ever fires and they'd otherwise be stuck pending.
+ */
+async function activateMembership({
+  login,
+  gitOrganizationId,
+}: {
+  login: string;
+  gitOrganizationId: string;
+}) {
+  const user = await ClassmojiService.user.findByLogin(login);
+  if (!user) {
+    console.log(`[activateMembership] User not found for login: ${login}`);
+    return;
+  }
+
+  const gitOrganization = await ClassmojiService.gitOrganization.findById(gitOrganizationId);
+  if (!gitOrganization) {
+    console.log(`[activateMembership] GitOrganization not found: ${gitOrganizationId}`);
+    return;
+  }
+
+  // Find all user's memberships in classrooms linked to this git organization
+  const userMemberships = await ClassmojiService.classroomMembership.findByUserId(user.id);
+  const relevantMemberships = userMemberships.filter(
+    m => m.classroom.git_org_id === gitOrganizationId
+  );
+
+  if (relevantMemberships.length === 0) {
+    console.log(
+      `[activateMembership] No memberships found for ${login} in git org ${gitOrganization.login}`
+    );
+    return;
+  }
+
+  for (const membership of relevantMemberships) {
+    await ClassmojiService.classroomMembership.update(membership.classroom_id, user.id, {
+      has_accepted_invite: true,
+    });
+
+    // Only students get assignment repos
+    if (membership.role !== 'STUDENT' || !user.login) {
+      continue;
+    }
+
+    const repositories = await ClassmojiService.repository.findByClassroomSlug(
+      membership.classroom.slug
+    );
+    const assignments = repositories.flatMap(repository =>
+      repository.assignments
+        .filter(a => a.is_published === true && 'type' in a && a.type === 'INDIVIDUAL')
+        .map(assignment => ({ ...assignment, repository }))
+    );
+
+    // Skip assignments whose student repo already exists so re-runs (and users who
+    // were already in the org) don't try to re-create repos they already have.
+    const existingByRepository = new Map<string, { student_id: string | null }[]>();
+    for (const { repository } of assignments) {
+      if (!existingByRepository.has(repository.id)) {
+        existingByRepository.set(
+          repository.id,
+          await ClassmojiService.gitRepo.findByRepository(membership.classroom.slug, repository.id)
+        );
+      }
+    }
+    const missingAssignments = assignments.filter(assignment => {
+      const existing = existingByRepository.get(assignment.repository.id) ?? [];
+      return !existing.some(repo => repo.student_id === user.id);
+    });
+
+    await Promise.all(
+      missingAssignments.map(assignment => {
+        const [templateOwner, templateRepo] = assignment.repository.template.split('/');
+        return createRepositoryTask.trigger(
+          {
+            templateOwner,
+            templateRepo,
+            organization: membership.classroom,
+            repoName: `${assignment.repository.slug}-${user.login}`,
+            assignment,
+            student: user,
+          },
+          { concurrencyKey: gitOrganization.login }
+        );
+      })
+    );
+  }
+}
+
+/**
+ * Task wrapper so non-task callers (webapp routes) can activate a membership via
+ * `tasks.trigger('activate_membership', { login, gitOrganizationId })`. Used by the
+ * self-join and add-assistant flows when the user is already in the org.
+ */
+export const activateMembershipTask = task({
+  id: 'activate_membership',
+  run: async (payload: { login: string; gitOrganizationId: string }) => {
+    await activateMembership(payload);
+  },
+});
+
 export const memberAddedHandlerTask = task({
   id: 'webhook-member_added_handler',
   run: async (payload: MemberAddedPayload) => {
@@ -35,13 +146,6 @@ export const memberAddedHandlerTask = task({
       membership: { user: githubUser },
       organization: githubOrg,
     } = payload;
-
-    // Find the user by their GitHub login
-    const user = await ClassmojiService.user.findByLogin(githubUser.login);
-    if (!user) {
-      console.log(`[member_added] User not found for login: ${githubUser.login}`);
-      return;
-    }
 
     // Look up GitOrganization by GitHub's provider_id
     const gitOrganization = await ClassmojiService.gitOrganization.findByProviderId(
@@ -54,57 +158,7 @@ export const memberAddedHandlerTask = task({
       return;
     }
 
-    // Find all user's memberships in classrooms linked to this git organization
-    const userMemberships = await ClassmojiService.classroomMembership.findByUserId(user.id);
-    const relevantMemberships = userMemberships.filter(
-      m => m.classroom.git_org_id === gitOrganization.id
-    );
-
-    if (relevantMemberships.length === 0) {
-      console.log(
-        `[member_added] No memberships found for user ${user.login} in git org ${gitOrganization.login}`
-      );
-      return;
-    }
-
-    // Update all relevant memberships
-    for (const membership of relevantMemberships) {
-      await ClassmojiService.classroomMembership.update(membership.classroom_id, user.id, {
-        has_accepted_invite: true,
-      });
-
-      // Create existing assignments for new students
-      if (membership.role === 'STUDENT') {
-        const repositories = await ClassmojiService.repository.findByClassroomSlug(
-          membership.classroom.slug
-        );
-        const assignments = repositories.flatMap(repository =>
-          repository.assignments
-            .filter(a => a.is_published === true && 'type' in a && a.type === 'INDIVIDUAL')
-            .map(assignment => ({ ...assignment, repository }))
-        );
-
-        const promises = assignments.map(async assignment => {
-          const [templateOwner, templateRepo] = assignment.repository.template.split('/');
-          const repoName = `${assignment.repository.slug}-${user.login}`;
-
-          const createRepoTaskData = {
-            templateOwner,
-            templateRepo,
-            organization: membership.classroom,
-            repoName,
-            assignment,
-            student: user,
-          };
-
-          return createRepositoryTask.trigger(createRepoTaskData, {
-            concurrencyKey: gitOrganization.login,
-          });
-        });
-
-        await Promise.all(promises);
-      }
-    }
+    await activateMembership({ login: githubUser.login, gitOrganizationId: gitOrganization.id });
   },
 });
 

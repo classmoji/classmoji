@@ -22,7 +22,7 @@ const ROLE_CLASSES: Record<LandingRole, { label: string; classes: string }> = {
 export function RoleChip({ role }: { role: LandingRole }) {
   const m = ROLE_CLASSES[role];
   return (
-    <span className={`inline-flex items-center gap-1 text-xs font-semibold tracking-[0.04em] px-1.5 py-px rounded-full uppercase border ${m.classes}`}>
+    <span className={`inline-flex items-center justify-center leading-none text-xs font-semibold tracking-[0.04em] px-1.5 py-0.5 rounded-full uppercase border ${m.classes}`}>
       {m.label}
     </span>
   );

@@ -20,6 +20,7 @@ interface AssistantClassroom {
   id: string;
   slug: string;
   git_organization: {
+    id: string;
     login: string;
     provider: string;
     github_installation_id?: string | null;
@@ -125,12 +126,26 @@ export const addAssistantHandler = async ({
     'ASSISTANT'
   );
 
-  try {
-    await gitProvider.inviteToOrganization(classroom.git_organization.login, String(assistant.id), [
-      team.id,
-    ]);
-  } catch (error: unknown) {
-    console.error('Error inviting assistant to organization:', error);
+  // If the assistant is already in the org, a fresh invite 422s and no `member_added`
+  // webhook fires — so just add them to the assistant team and activate them below.
+  // Otherwise send the org invite as usual.
+  const alreadyMember = await gitProvider.isUserMemberOfOrganization(
+    classroom.git_organization.login,
+    assistant.login
+  );
+
+  if (alreadyMember) {
+    await gitProvider.addTeamMember(classroom.git_organization.login, team.slug, assistant.login);
+  } else {
+    try {
+      await gitProvider.inviteToOrganization(
+        classroom.git_organization.login,
+        String(assistant.id),
+        [team.id]
+      );
+    } catch (error: unknown) {
+      console.error('Error inviting assistant to organization:', error);
+    }
   }
 
   // Upsert user and membership using connectOrCreate
@@ -172,4 +187,13 @@ export const addAssistantHandler = async ({
       role: 'ASSISTANT',
     },
   });
+
+  // Already-in-org assistants get no `member_added` webhook, so flip
+  // has_accepted_invite now that the membership exists.
+  if (alreadyMember) {
+    await tasks.trigger('activate_membership', {
+      login: assistant.login,
+      gitOrganizationId: classroom.git_organization.id,
+    });
+  }
 };

@@ -284,7 +284,7 @@ const AddStudents = ({ loaderData }: Route.ComponentProps) => {
             type="primary"
             onClick={handleParse}
             disabled={!inputText.trim()}
-            style={{ backgroundColor: '#619462', borderColor: '#619462' }}
+            style={{ backgroundColor: '#1f883d', borderColor: '#1f883d' }}
           >
             Parse students
           </Button>
@@ -296,7 +296,7 @@ const AddStudents = ({ loaderData }: Route.ComponentProps) => {
             onClick={handleSubmit}
             disabled={!canAdd}
             loading={submitting}
-            style={{ backgroundColor: '#619462', borderColor: '#619462' }}
+            style={{ backgroundColor: '#1f883d', borderColor: '#1f883d' }}
           >
             Add {categorized.valid.length} student{categorized.valid.length !== 1 && 's'}
           </Button>

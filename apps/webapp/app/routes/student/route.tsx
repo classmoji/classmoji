@@ -54,7 +54,11 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
       menuPages,
       recentViewers,
       pagesUrl: process.env.PAGES_URL || 'http://localhost:7100',
-      navVisibility: navVisibilityFromSettings(classroom.settings),
+      navVisibility: {
+        ...navVisibilityFromSettings(classroom.settings),
+        // Students only see published modules — hide the tab when there are none.
+        hasModules: await ClassmojiService.module.hasModulesForClassroom(classSlug),
+      },
     };
   } catch {
     // If classroom access fails, return empty data
