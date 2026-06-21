@@ -719,7 +719,7 @@ const FormModule = ({
                   </Button>
                   <Button
                     type="primary"
-                    style={{ backgroundColor: '#619462', borderColor: '#619462' }}
+                    style={{ backgroundColor: '#1f883d', borderColor: '#1f883d' }}
                     onClick={() => {
                       if (!assignment.title.length)
                         return callout.show({
@@ -764,7 +764,7 @@ const FormModule = ({
             data-tour="repos-form-submit"
             type="primary"
             htmlType="submit"
-            style={{ backgroundColor: '#619462', borderColor: '#619462' }}
+            style={{ backgroundColor: '#1f883d', borderColor: '#1f883d' }}
           >
             {isNew ? 'Create repository' : 'Update repository'}
           </Button>

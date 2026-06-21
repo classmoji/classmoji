@@ -1,0 +1,65 @@
+---
+import Layout from '../layouts/Layout.astro';
+import Header from '../components/Header.astro';
+import Footer from '../components/Footer.astro';
+
+const venue = 'Proc. 57th ACM Technical Symposium on Computer Science Education (SIGCSE TS 2026), V.2';
+
+// Keep paper titles verbatim (they are citations).
+const publications = [
+  {
+    title: 'Classmoji: A GitHub-Native LMS for Flexible CS Education',
+    authors: 'Pape Sow Traore, Tim Tregubov',
+    venueShort: 'SIGCSE TS 2026',
+    url: 'https://dl.acm.org/doi/abs/10.1145/3770761.3777264',
+  },
+  {
+    title: 'AI-Driven Oral Examinations for Code Assessment: Evaluating Understanding Beyond the Commit',
+    authors: 'Tim Tregubov, Pape Sow Traore',
+    venueShort: 'SIGCSE TS 2026',
+    url: 'https://dl.acm.org/doi/abs/10.1145/3770761.3777032',
+  },
+];
+---
+
+<Layout title="Research - Classmoji" description="Peer-reviewed research behind Classmoji.">
+  <Header />
+
+  <section class="px-6 pt-32 pb-20">
+    <div class="max-w-3xl mx-auto">
+      <h1 class="text-4xl md:text-5xl font-bold text-gray-900 mb-10">Research</h1>
+
+      <ul class="space-y-4">
+        {
+          publications.map(pub => (
+            <li>
+              <a
+                href={pub.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                class="block group rounded-2xl ring-1 ring-gray-200 hover:ring-gray-300 hover:shadow-sm transition-all p-6"
+              >
+                <div class="text-xs font-semibold uppercase tracking-wide text-primary mb-2">
+                  {pub.venueShort}
+                </div>
+                <h2 class="text-lg font-semibold text-gray-900 group-hover:text-primary transition-colors">
+                  {pub.title}
+                </h2>
+                <p class="text-sm text-gray-600 mt-1">{pub.authors}</p>
+                <p class="text-sm text-gray-500 mt-2">{venue}</p>
+                <span class="inline-flex items-center gap-1 text-sm font-medium text-primary mt-3">
+                  View on ACM
+                  <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7l5 5m0 0l-5 5m5-5H6" />
+                  </svg>
+                </span>
+              </a>
+            </li>
+          ))
+        }
+      </ul>
+    </div>
+  </section>
+
+  <Footer />
+</Layout>

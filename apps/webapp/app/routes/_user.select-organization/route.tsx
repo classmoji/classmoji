@@ -18,6 +18,7 @@ import {
 import { ActionTypes, roleSettings } from '~/constants';
 import useStore from '~/store';
 import getPrisma from '@classmoji/database';
+import { tasks } from '@trigger.dev/sdk';
 import type { Route } from './+types/route';
 import type { AppUser, MembershipOrganization, MembershipWithOrganization } from '~/types';
 import {
@@ -374,6 +375,13 @@ export const action = checkAuth(async ({ request }: { request: Request }) => {
 
   if (alreadyMember) {
     await gitProvider.addTeamMember(classroom.git_organization.login, team.slug, student_login);
+    // No `member_added` webhook fires for users already in the org, so activate the
+    // membership here (flip has_accepted_invite + provision repos) — otherwise they
+    // stay stuck pending and never receive their assignment repos.
+    await tasks.trigger('activate_membership', {
+      login: student_login,
+      gitOrganizationId: classroom.git_organization.id,
+    });
     return {
       success: 'Already in the organization — added you to the class.',
       action: ActionTypes.SEND_INVITATION,

@@ -163,6 +163,26 @@ export const listForClassroom = async (
 };
 
 /**
+ * Cheap existence check used to drive student/assistant nav: does this classroom
+ * have any modules? Students gate on published modules; staff (who preview
+ * drafts) pass `includeUnpublished` to count drafts too.
+ */
+export const hasModulesForClassroom = async (
+  classroomSlug: string,
+  { includeUnpublished = false }: { includeUnpublished?: boolean } = {}
+): Promise<boolean> => {
+  const classroomId = await findClassroomIdBySlug(classroomSlug);
+  if (!classroomId) return false;
+  const count = await getPrisma().module.count({
+    where: {
+      classroom_id: classroomId,
+      ...(includeUnpublished ? {} : { is_published: true }),
+    },
+  });
+  return count > 0;
+};
+
+/**
  * The four content types a module item can point at, with the minimal fields
  * the admin "add item" picker needs (id, label, and publish state for a pill).
  */

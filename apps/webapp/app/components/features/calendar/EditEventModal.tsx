@@ -599,7 +599,7 @@ const EditEventModal = ({
               type="primary"
               loading={loading}
               onClick={handleSubmit}
-              style={{ backgroundColor: '#619462', borderColor: '#619462' }}
+              style={{ backgroundColor: '#1f883d', borderColor: '#1f883d' }}
             >
               Save changes
             </Button>

@@ -9,10 +9,6 @@ import {
   type AnyRepoAssignment,
 } from '~/components/features/modules/studentTree';
 
-type UserTeamResult = NonNullable<
-  Awaited<ReturnType<typeof ClassmojiService.team.findUserTeamByTag>>
->;
-
 export const loader = async ({ params, request }: Route.LoaderArgs) => {
   const classSlug = params.class!;
 
@@ -21,7 +17,7 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
     classroomSlug: classSlug,
     allowedRoles: ['OWNER', 'TEACHER', 'ASSISTANT', 'STUDENT'],
     resourceType: 'STUDENT_REPOSITORIES',
-    attemptedAction: 'view_modules',
+    attemptedAction: 'view_repos',
   });
 
   const repositories = await getPrisma().repository.findMany({
@@ -53,21 +49,6 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
     orderBy: { created_at: 'asc' },
   });
 
-  // For self-formed team repositories, check if user has a team
-  const userTeamsByModuleSlug: Record<string, UserTeamResult> = {};
-  const selfFormedModules = repositories.filter(m => m.team_formation_mode === 'SELF_FORMED');
-
-  for (const repository of selfFormedModules) {
-    const tag = await ClassmojiService.organizationTag.findByClassroomIdAndName(
-      classroom.id,
-      repository.slug!
-    );
-    if (tag) {
-      const userTeam = await ClassmojiService.team.findUserTeamByTag(classroom.id, tag.id, userId);
-      if (userTeam) userTeamsByModuleSlug[repository.slug!] = userTeam;
-    }
-  }
-
   // Fetch both individual AND team assignments so View Issue button works for group assignments
   const repoAssignments = await ClassmojiService.helper.findAllAssignmentsForStudent(
     userId,
@@ -79,10 +60,20 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
     repoAssignmentsByAssignmentId[ra.assignment_id] = ra;
   });
 
+  // Org login powers the repository "View" link's fallback to the source repo
+  // when the viewer has no personal repo yet (e.g. instructors previewing).
+  const gitOrgLogin =
+    (
+      await getPrisma().classroom.findUnique({
+        where: { id: classroom.id },
+        select: { git_organization: { select: { login: true } } },
+      })
+    )?.git_organization?.login ?? null;
+
   return {
     repositories,
     repoAssignmentsByAssignmentId,
-    userTeamsByModuleSlug,
+    gitOrgLogin,
     slidesUrl: process.env.SLIDES_URL || 'http://localhost:6500',
     pagesUrl: process.env.PAGES_URL || 'http://localhost:7100',
     classSlug,
@@ -90,10 +81,10 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
 };
 
 const StudentRepositories = ({ loaderData }: Route.ComponentProps) => {
-  const { repositories, repoAssignmentsByAssignmentId, slidesUrl, pagesUrl, classSlug } =
+  const { repositories, repoAssignmentsByAssignmentId, gitOrgLogin, slidesUrl, pagesUrl, classSlug } =
     loaderData;
 
-  const ctx = { classSlug, slidesUrl, pagesUrl };
+  const ctx = { classSlug, slidesUrl, pagesUrl, gitOrgLogin };
   const nodes = (repositories as AnyRepository[]).map(r =>
     buildRepositoryNode(
       r,
@@ -105,18 +96,18 @@ const StudentRepositories = ({ loaderData }: Route.ComponentProps) => {
 
   return (
     <div className="min-h-full">
-      <h1 className="mt-2 mb-4 text-lg font-semibold text-ink-1">Modules</h1>
+      <h1 className="mt-2 mb-4 text-lg font-semibold text-ink-1">Repositories</h1>
 
       {repositories.length === 0 ? (
         <div className="rounded-2xl bg-panel ring-1 ring-line p-8 text-center">
-          <h3 className="text-lg font-semibold text-ink-1">No published modules yet</h3>
+          <h3 className="text-lg font-semibold text-ink-1">No published repositories yet</h3>
           <p className="text-sm text-ink-3 mt-1">
-            Modules will appear here once your instructor publishes them.
+            Repositories will appear here once your instructor publishes them.
           </p>
         </div>
       ) : (
         <div data-tour="repos-card">
-          <ReadOnlyModulesTree key={classSlug} nodes={nodes} />
+          <ReadOnlyModulesTree key={classSlug} nodes={nodes} nameColumnTitle="Repository" />
         </div>
       )}
     </div>

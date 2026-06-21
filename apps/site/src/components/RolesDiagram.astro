@@ -9,7 +9,7 @@ interface Props {
 const { class: className } = Astro.props;
 ---
 
-<figure class:list={['my-8 mx-auto max-w-xl', className]}>
+<figure class:list={[className]} style="max-width: 500px; margin: 2rem auto;">
   <svg
     viewBox="0 0 540 296"
     width="100%"
