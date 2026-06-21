@@ -1,15 +1,16 @@
 import { Table, Tag, ConfigProvider } from 'antd';
-import type { ParsedClassroom } from './utils';
+import type { ListedClassroom } from './utils';
 
 interface Props {
-  classrooms: ParsedClassroom[];
+  classrooms: ListedClassroom[];
   selectedIds: Set<number>;
   onSelectionChange: (ids: Set<number>) => void;
 }
 
 /**
- * Step 2 — pick which of the exported classrooms to import. A bundle commonly
- * contains many; each selected one becomes its own Classmoji classroom.
+ * Step 2 — pick which classrooms to import. Each selected one becomes its own
+ * Classmoji classroom. Assignments, rosters, and grades are fetched per
+ * classroom during the import itself, so only name/org are shown here.
  */
 export default function StepSelectClassrooms({
   classrooms,
@@ -21,10 +22,15 @@ export default function StepSelectClassrooms({
       title: 'Classroom',
       dataIndex: 'name',
       key: 'name',
-      width: 260,
-      render: (name: string, row: ParsedClassroom) => (
-        <span>
+      width: 320,
+      render: (name: string, row: ListedClassroom) => (
+        <span className={row.alreadyImported ? 'text-gray-400 dark:text-gray-500' : undefined}>
           {name}{' '}
+          {row.alreadyImported && (
+            <Tag color="green" className="ml-1">
+              Already imported
+            </Tag>
+          )}
           {row.archived && (
             <Tag color="default" className="ml-1">
               Archived
@@ -36,32 +42,13 @@ export default function StepSelectClassrooms({
     {
       title: 'Organization',
       key: 'org',
-      width: 220,
-      render: (_: unknown, row: ParsedClassroom) => (
-        <span className="text-gray-500 dark:text-gray-400">{row.organization.login}</span>
-      ),
-    },
-    {
-      title: 'Assignments',
-      dataIndex: 'assignmentCount',
-      key: 'assignments',
-      align: 'right' as const,
-      width: 96,
-    },
-    {
-      title: 'Students',
-      dataIndex: 'studentCount',
-      key: 'students',
-      align: 'right' as const,
-      width: 84,
-    },
-    {
-      title: 'Grades',
-      key: 'grades',
-      align: 'right' as const,
-      width: 96,
-      render: (_: unknown, row: ParsedClassroom) =>
-        row.grades.length ? row.grades.length : <span className="text-gray-400">—</span>,
+      width: 240,
+      render: (_: unknown, row: ListedClassroom) =>
+        row.organization ? (
+          <span className="text-gray-500 dark:text-gray-400">{row.organization.login}</span>
+        ) : (
+          <span className="text-red-500">No organization</span>
+        ),
     },
   ];
 
@@ -69,7 +56,7 @@ export default function StepSelectClassrooms({
     <div>
       <p className="text-sm text-gray-600 dark:text-gray-300 mb-4">
         Select the classrooms to bring into Classmoji. Each becomes a new classroom with its roster,
-        assignments, and student repositories.
+        assignments, and student repositories, fetched live from GitHub during import.
       </p>
       {/* Brand green is the antd primary, so the default selected-row fill comes
           out as a solid, hard-to-read green. Tone it down to a faint translucent
@@ -94,6 +81,9 @@ export default function StepSelectClassrooms({
           rowSelection={{
             selectedRowKeys: Array.from(selectedIds),
             onChange: keys => onSelectionChange(new Set(keys as number[])),
+            getCheckboxProps: (row: ListedClassroom) => ({
+              disabled: !row.organization || row.alreadyImported,
+            }),
           }}
           scroll={{ y: 360 }}
         />

@@ -30,6 +30,8 @@ import * as quizService from './quiz.service.ts';
 import * as quizAttemptService from './quizAttempt.service.ts';
 import * as repositoryImportService from './repositoryImport.service.ts';
 import * as githubClassroomImportService from './githubClassroomImport.service.ts';
+import * as githubClassroomApiService from './githubClassroomApi.service.ts';
+import * as githubUserTokenService from './githubUserToken.service.ts';
 import * as classroomInviteService from './classroomInvite.service.ts';
 import * as contentManifestService from './contentManifest.service.ts';
 import * as resourceViewService from './resourceView.service.ts';
@@ -69,6 +71,8 @@ const ClassmojiService = {
   quizAttempt: quizAttemptService,
   repositoryImport: repositoryImportService,
   githubClassroomImport: githubClassroomImportService,
+  githubClassroomApi: githubClassroomApiService,
+  githubUserToken: githubUserTokenService,
   classroomInvite: classroomInviteService,
   contentManifest: contentManifestService,
   resourceView: resourceViewService,
@@ -115,6 +119,8 @@ export {
   quizAttemptService,
   repositoryImportService,
   githubClassroomImportService,
+  githubClassroomApiService,
+  githubUserTokenService,
   classroomInviteService,
   contentManifestService,
   resourceViewService,

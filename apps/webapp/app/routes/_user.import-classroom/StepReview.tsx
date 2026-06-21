@@ -1,12 +1,11 @@
 import { useEffect, useState } from 'react';
-import { Input, Tag, Alert } from 'antd';
-import type { ParsedClassroom } from './utils';
+import { Input, Tag } from 'antd';
+import type { ListedClassroom } from './utils';
 
 interface Props {
-  classrooms: ParsedClassroom[]; // only the selected ones
+  classrooms: ListedClassroom[]; // only the selected ones
   slugByClassroom: Map<number, string>;
   onSlugChange: (githubId: number, slug: string) => void;
-  bundleWarnings: string[];
 }
 
 interface SlugStatus {
@@ -20,12 +19,7 @@ interface SlugStatus {
  * availability is checked per classroom against the (possibly not-yet-created)
  * GitHub org via the availability endpoint's `org_provider_id` path.
  */
-export default function StepReview({
-  classrooms,
-  slugByClassroom,
-  onSlugChange,
-  bundleWarnings,
-}: Props) {
+export default function StepReview({ classrooms, slugByClassroom, onSlugChange }: Props) {
   const [status, setStatus] = useState<Map<number, SlugStatus>>(new Map());
 
   // Debounced availability check whenever a slug changes.
@@ -35,8 +29,8 @@ export default function StepReview({
       await Promise.all(
         classrooms.map(async c => {
           const slug = slugByClassroom.get(c.githubId) ?? '';
-          if (!slug) {
-            next.set(c.githubId, { checking: false, available: false });
+          if (!slug || !c.organization) {
+            next.set(c.githubId, { checking: false, available: !!c.organization });
             return;
           }
           try {
@@ -74,22 +68,6 @@ export default function StepReview({
         to enable live syncing and grading.
       </p>
 
-      {bundleWarnings.length > 0 && (
-        <Alert
-          className="mb-4"
-          type="warning"
-          showIcon
-          message="Some items were skipped while reading the export"
-          description={
-            <ul className="list-disc ml-5">
-              {bundleWarnings.slice(0, 8).map((w, i) => (
-                <li key={i}>{w}</li>
-              ))}
-            </ul>
-          }
-        />
-      )}
-
       <div className="space-y-3">
         {classrooms.map(c => {
           const slug = slugByClassroom.get(c.githubId) ?? '';
@@ -102,8 +80,7 @@ export default function StepReview({
             >
               <div className="font-medium dark:text-gray-100">{c.name}</div>
               <div className="text-xs text-gray-500 dark:text-gray-400 mb-2">
-                {c.organization.login} · {c.assignmentCount} assignments · {c.studentCount} students
-                {c.grades.length ? ` · ${c.grades.length} grades` : ''}
+                {c.organization?.login ?? 'No organization'}
               </div>
               <div className="flex items-center gap-2">
                 <span className="text-xs text-gray-500 dark:text-gray-400">/admin/</span>
@@ -126,7 +103,7 @@ export default function StepReview({
               </div>
               {taken && (
                 <div className="text-xs text-red-500 mt-1">
-                  A classroom with this slug already exists in {c.organization.login}.
+                  A classroom with this slug already exists in {c.organization?.login}.
                 </div>
               )}
             </div>

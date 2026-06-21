@@ -1,93 +1,80 @@
-import { ClassmojiService } from '@classmoji/services';
+import { auth } from '@trigger.dev/sdk';
+import Tasks from '@classmoji/tasks';
 import { checkAuth } from '~/utils/helpers';
-import { ActionTypes } from '~/constants';
 
-type ImportInputs = Parameters<
-  typeof ClassmojiService.githubClassroomImport.importGithubClassrooms
->[1];
+interface Selection {
+  classroomId: number;
+  name: string;
+  slug: string;
+}
+
+const isTriggerConfigured = () =>
+  Boolean(process.env.TRIGGER_SECRET_KEY || process.env.TRIGGER_ACCESS_TOKEN);
 
 /**
- * Import one or more GitHub Classroom classrooms from an uploaded export bundle.
+ * Kick off a live GitHub Classroom import.
  *
- * The bundle is parsed client-side; the request body carries the normalized,
- * already-selected classrooms (each with a resolved slug). The import is fast,
- * GitHub-free DB work, so it runs synchronously here (no background job) and
- * records a durable `AuditLog` row per classroom for observability.
+ * The body carries the selected classrooms (each with a resolved slug). We fan
+ * out one background job per classroom (so progress is trackable per classroom),
+ * tagged with a shared session id, and return a Trigger.dev public token the UI
+ * uses to subscribe to live progress. The heavy GitHub fetch + DB import happens
+ * in the job (`import_github_classroom`); see its workflow for details.
  */
 export const action = checkAuth(async ({ request, user }) => {
-  let body: { classrooms?: ImportInputs };
+  if (!isTriggerConfigured()) {
+    return {
+      error:
+        'Importing requires the background job service (Trigger.dev), which isn’t configured here.',
+    };
+  }
+
+  let body: { selections?: Selection[] };
   try {
     body = await request.json();
   } catch {
     return { error: 'Invalid request body.' };
   }
 
-  const classrooms = body.classrooms;
-  if (!Array.isArray(classrooms) || classrooms.length === 0) {
+  const selections = (body.selections ?? []).filter(
+    s => s && typeof s.classroomId === 'number' && s.slug
+  );
+  if (selections.length === 0) {
     return { error: 'No classrooms selected to import.' };
   }
 
-  let results: Awaited<
-    ReturnType<typeof ClassmojiService.githubClassroomImport.importGithubClassrooms>
-  >['results'];
-  let errors: Awaited<
-    ReturnType<typeof ClassmojiService.githubClassroomImport.importGithubClassrooms>
-  >['errors'];
+  const sessionId = crypto.randomUUID();
+  const tag = `session_${sessionId}`;
+
   try {
-    ({ results, errors } = await ClassmojiService.githubClassroomImport.importGithubClassrooms(
-      user.id,
-      classrooms
-    ));
-  } catch (error: unknown) {
-    console.error('github classroom import failed:', error);
-    return { error: error instanceof Error ? error.message : 'Import failed. Please try again.' };
-  }
-
-  // Durable audit record per imported classroom (the importer is the OWNER).
-  for (const r of results) {
-    try {
-      await ClassmojiService.audit.create({
-        user_id: user.id,
-        classroom_id: r.classroomId,
-        role: 'OWNER',
-        action: 'CREATE',
-        resource_type: 'GITHUB_CLASSROOM_IMPORT',
-        resource_id: r.classroomSlug,
-        data: {
-          classroomName: r.classroomName,
-          organizationLogin: r.organizationLogin,
-          appInstalled: r.appInstalled,
-          repositoriesImported: r.repositoriesImported,
-          assignmentsImported: r.assignmentsImported,
-          studentsEnrolled: r.studentsEnrolled,
-          reposLinked: r.reposLinked,
-          gradesRecorded: r.gradesRecorded,
-          teamsImported: r.teamsImported,
-          teamMembershipsImported: r.teamMembershipsImported,
-          groupReposLinked: r.groupReposLinked,
-          warnings: r.warnings,
+    await Tasks.importGithubClassroomTask.batchTrigger(
+      selections.map(s => ({
+        payload: {
+          userId: user.id,
+          sessionId,
+          classroomId: s.classroomId,
+          name: s.name,
+          slug: s.slug,
         },
-      });
-    } catch (auditError: unknown) {
-      console.error('audit log (classroom import) failed:', auditError);
-    }
+        options: { tags: [tag] },
+      })) as unknown as Parameters<typeof Tasks.importGithubClassroomTask.batchTrigger>[0]
+    );
+  } catch (error: unknown) {
+    console.error('failed to trigger github classroom import:', error);
+    return { error: 'Could not start the import. Please try again.' };
   }
 
-  if (results.length === 0) {
-    return { error: errors[0]?.message ?? 'Import failed.', errors };
-  }
-
-  const totalStudents = results.reduce((n, r) => n + r.studentsEnrolled, 0);
-  const plural = results.length === 1 ? '' : 's';
+  const accessToken = await auth.createPublicToken({
+    scopes: { read: { tags: [tag] } },
+  });
 
   return {
-    success: `Imported ${results.length} classroom${plural} with ${totalStudents} student${
-      totalStudents === 1 ? '' : 's'
-    }.`,
-    action: ActionTypes.IMPORT_CLASSROOM,
-    results,
-    errors,
-    // Single-classroom import → navigate straight to its dashboard.
-    classroomSlug: results.length === 1 ? results[0].classroomSlug : undefined,
+    triggerSession: {
+      accessToken,
+      id: sessionId,
+      expected: selections.length,
+      // For a single import we know the destination slug up front (the importer
+      // uses it verbatim); multi-import lands back on the org picker.
+      singleSlug: selections.length === 1 ? selections[0].slug : null,
+    },
   };
 });

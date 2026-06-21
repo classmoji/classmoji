@@ -2,7 +2,7 @@ import { betterAuth } from 'better-auth';
 import { prismaAdapter } from 'better-auth/adapters/prisma';
 import { admin } from 'better-auth/plugins';
 import getPrisma from '@classmoji/database';
-import type { Account as PrismaAccount, Role, ClassroomStatus } from '@prisma/client';
+import type { Role, ClassroomStatus } from '@prisma/client';
 import { ClassmojiService } from '@classmoji/services';
 
 // Use explicit secret for consistent session signing
@@ -28,13 +28,6 @@ interface TokenCacheEntry<T = unknown> {
 interface GitHubTokenResult {
   token: string;
   expiresAt: Date | null;
-}
-
-interface RefreshedTokens {
-  accessToken: string;
-  refreshToken: string | undefined;
-  accessTokenExpiresAt: Date | null;
-  refreshTokenExpiresAt: Date | null;
 }
 
 interface AuthSessionResult {
@@ -187,191 +180,30 @@ export function clearTokenCache(userId: string | null = null): void {
  * @param {string} userId - The user ID whose token was revoked
  */
 export async function clearRevokedToken(userId: string): Promise<void> {
-  // Clear from memory cache
+  // Clear from memory cache (webapp session-layer cache, not the shared service).
   clearTokenCache(userId);
 
-  // Set access_token to null and expires_at to epoch (not null!) so that
-  // BetterAuth's refresh detection still triggers: it checks
-  // `account.accessTokenExpiresAt && expires < now`. Setting to null would
-  // skip the refresh entirely, leaving the user permanently locked out.
-  await getPrisma().account.updateMany({
-    where: { user_id: userId, provider_id: 'github' },
-    data: { access_token: null, access_token_expires_at: new Date(0) },
-  });
+  // DB clear (sets access_token=null, expires_at=epoch so refresh still fires)
+  // lives in the shared token service so workers can reuse it.
+  await ClassmojiService.githubUserToken.clearRevokedTokenForUser(userId);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// GitHub App token refresh — bypasses BetterAuth's broken refresh mechanism.
+// GitHub App token refresh — delegated to the shared token service.
 //
-// BetterAuth uses `betterFetch` which only checks HTTP status codes for errors.
-// GitHub's OAuth endpoint returns HTTP 200 for ALL responses, including errors
-// like `bad_refresh_token`. This means BetterAuth silently swallows refresh
-// failures and returns undefined tokens. We handle refresh ourselves with proper
-// error detection and a per-user mutex to prevent race conditions (GitHub App
-// refresh tokens are one-time-use with rotation).
+// The DB-read + refresh + per-user mutex logic now lives in
+// `@classmoji/services` (`githubUserToken.service.ts`) so it can be reused from
+// Trigger.dev workers without dragging in betterAuth. We keep this thin wrapper
+// (same name/signature) because `getAuthSession` below layers its own in-memory
+// session cache on top of it.
+//
+// (Why we refresh ourselves at all: BetterAuth's `betterFetch` only checks HTTP
+// status, but GitHub's OAuth endpoint returns HTTP 200 even for errors like
+// `bad_refresh_token` — so BetterAuth silently swallows refresh failures.)
 // ─────────────────────────────────────────────────────────────────────────────
 
-// Per-user mutex to prevent concurrent refresh attempts.
-// GitHub App refresh tokens (ghr_*) are one-time-use: if two requests try to
-// refresh simultaneously, the second gets `bad_refresh_token` because the first
-// already consumed and invalidated the old token.
-const refreshLocks = new Map<string, Promise<GitHubTokenResult | null>>();
-
-async function withRefreshLock(
-  userId: string,
-  fn: () => Promise<GitHubTokenResult | null>
-): Promise<GitHubTokenResult | null> {
-  // If another refresh is in flight for this user, wait for it
-  const existing = refreshLocks.get(userId);
-  if (existing) {
-    return existing;
-  }
-
-  const promise = fn().finally(() => {
-    refreshLocks.delete(userId);
-  });
-  refreshLocks.set(userId, promise);
-  return promise;
-}
-
-/**
- * Refresh a GitHub App user access token using the refresh token.
- * Properly handles GitHub's HTTP 200 error responses (which betterFetch misses).
- *
- * @param {Object} account - The account record from DB
- * @returns {Promise<{accessToken: string, refreshToken: string, accessTokenExpiresAt: Date, refreshTokenExpiresAt: Date} | null>}
- */
-async function refreshGitHubToken(
-  account: Pick<PrismaAccount, 'refresh_token'>
-): Promise<RefreshedTokens | null> {
-  if (!account.refresh_token) {
-    return null;
-  }
-
-  const clientId = process.env.GITHUB_CLIENT_ID;
-  const clientSecret = process.env.GITHUB_CLIENT_SECRET;
-  if (!clientId || !clientSecret) {
-    console.error('[auth] Missing GITHUB_CLIENT_ID or GITHUB_CLIENT_SECRET for token refresh');
-    return null;
-  }
-
-  const body = new URLSearchParams({
-    client_id: clientId,
-    client_secret: clientSecret,
-    grant_type: 'refresh_token',
-    refresh_token: account.refresh_token,
-  });
-
-  const response = await fetch('https://github.com/login/oauth/access_token', {
-    method: 'POST',
-    headers: {
-      'content-type': 'application/x-www-form-urlencoded',
-      accept: 'application/json',
-    },
-    body,
-  });
-
-  const data = await response.json();
-
-  // GitHub returns HTTP 200 for errors! Must check the body.
-  if (data.error) {
-    console.error(`[auth] GitHub token refresh failed: ${data.error} - ${data.error_description}`);
-    return null;
-  }
-
-  if (!data.access_token) {
-    console.error('[auth] GitHub token refresh returned no access_token');
-    return null;
-  }
-
-  const now = Date.now();
-  return {
-    accessToken: data.access_token,
-    refreshToken: data.refresh_token,
-    accessTokenExpiresAt: data.expires_in ? new Date(now + data.expires_in * 1000) : null,
-    refreshTokenExpiresAt: data.refresh_token_expires_in
-      ? new Date(now + data.refresh_token_expires_in * 1000)
-      : null,
-  };
-}
-
-/**
- * Get a valid GitHub access token for a user, refreshing if needed.
- * Uses a per-user mutex to prevent race conditions with one-time-use refresh tokens.
- *
- * @param {string} userId - The user ID
- * @returns {Promise<{token: string, expiresAt: Date} | null>}
- */
 async function getValidGitHubToken(userId: string): Promise<GitHubTokenResult | null> {
-  return withRefreshLock(userId, async () => {
-    const account = await getPrisma().account.findFirst({
-      where: { user_id: userId, provider_id: 'github' },
-      select: {
-        id: true,
-        access_token: true,
-        refresh_token: true,
-        access_token_expires_at: true,
-      },
-    });
-
-    if (!account) return null;
-
-    // Check if the current token is still valid (with proactive buffer)
-    const isExpired =
-      !account.access_token ||
-      !account.access_token_expires_at ||
-      new Date(account.access_token_expires_at).getTime() - Date.now() < REFRESH_BUFFER_MS;
-
-    if (!isExpired) {
-      return { token: account.access_token as string, expiresAt: account.access_token_expires_at };
-    }
-
-    // Token expired or expiring soon — refresh it
-    const newTokens = await refreshGitHubToken(account);
-    if (!newTokens) {
-      // Refresh failed — another Fly machine may have already refreshed.
-      // Re-read from DB to pick up tokens written by a concurrent winner.
-      const freshAccount = await getPrisma().account.findFirst({
-        where: { user_id: userId, provider_id: 'github' },
-        select: { access_token: true, access_token_expires_at: true },
-      });
-      if (
-        freshAccount?.access_token &&
-        freshAccount.access_token_expires_at &&
-        new Date(freshAccount.access_token_expires_at) > new Date()
-      ) {
-        return {
-          token: freshAccount.access_token as string,
-          expiresAt: freshAccount.access_token_expires_at,
-        };
-      }
-      return null;
-    }
-
-    // Store the new tokens in the DB
-    const updateData: Partial<
-      Pick<
-        PrismaAccount,
-        'access_token' | 'access_token_expires_at' | 'refresh_token' | 'refresh_token_expires_at'
-      >
-    > = {
-      access_token: newTokens.accessToken,
-      access_token_expires_at: newTokens.accessTokenExpiresAt,
-    };
-    if (newTokens.refreshToken) {
-      updateData.refresh_token = newTokens.refreshToken;
-    }
-    if (newTokens.refreshTokenExpiresAt) {
-      updateData.refresh_token_expires_at = newTokens.refreshTokenExpiresAt;
-    }
-
-    await getPrisma().account.update({
-      where: { id: account.id },
-      data: updateData,
-    });
-
-    return { token: newTokens.accessToken, expiresAt: newTokens.accessTokenExpiresAt };
-  });
+  return ClassmojiService.githubUserToken.getGitHubTokenForUser(userId);
 }
 
 export const auth = betterAuth({
