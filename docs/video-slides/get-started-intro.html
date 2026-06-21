@@ -1,0 +1,261 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Classmoji · Getting started (intro slide)</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Noto+Sans:wght@400;500;600;700;800;900&display=swap"
+      rel="stylesheet"
+    />
+    <style>
+      :root {
+        --bg: #fdfdfd;
+        --ink: #1a1a1a;
+        --ink-soft: #4b5563; /* gray-600 */
+        --ink-faint: #9ca3af; /* gray-400 */
+        --line: #e7e5e4; /* stone-200 */
+        --card: #ffffff;
+        --green: #21883d; /* brand green */
+        --green-deep: #21883d; /* same green; already dark enough for small text */
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+      }
+      body {
+        background: #000; /* letterbox bars when aspect doesn't match */
+        font-family: 'Noto Sans', system-ui, -apple-system, sans-serif;
+        color: var(--ink);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        overflow: hidden;
+      }
+
+      /* Fixed 16:9 stage that scales to fit any viewport. 1280x720 design space. */
+      .stage {
+        position: relative;
+        width: 1280px;
+        height: 720px;
+        flex: 0 0 auto;
+        background: var(--bg);
+        overflow: hidden;
+        transform-origin: center center;
+      }
+
+      /* Thin top accent bar */
+      .accent {
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        height: 6px;
+        background: var(--green);
+      }
+
+      .frame {
+        position: absolute;
+        inset: 0;
+        padding: 72px 80px 44px;
+        display: flex;
+        flex-direction: column;
+        justify-content: space-between;
+      }
+
+      /* Wordmark (matches the app logo) */
+      .wordmark {
+        display: inline-flex;
+        align-items: center;
+        gap: 14px;
+      }
+      .wordmark .apple {
+        font-size: 44px;
+        line-height: 1;
+      }
+      .wordmark .name {
+        font-weight: 800;
+        font-size: 38px;
+        letter-spacing: -0.01em;
+        color: var(--ink);
+        text-transform: lowercase;
+      }
+
+      .eyebrow {
+        font-size: 18px;
+        font-weight: 700;
+        letter-spacing: 0.18em;
+        text-transform: uppercase;
+        color: var(--green-deep);
+        margin: 0 0 22px;
+      }
+
+      h1 {
+        margin: 0;
+        font-size: 60px;
+        line-height: 1.08;
+        font-weight: 800;
+        letter-spacing: -0.02em;
+        color: var(--ink);
+        max-width: none;
+      }
+
+      .subhead {
+        margin: 28px 0 0;
+        font-size: 26px;
+        line-height: 1.5;
+        font-weight: 400;
+        color: var(--ink-soft);
+        max-width: 60ch;
+      }
+
+      /* The "email -> code -> you're in" step motif */
+      .flow {
+        margin-top: 52px;
+        display: inline-flex;
+        align-items: center;
+        gap: 22px;
+      }
+      .pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 12px;
+        background: var(--card);
+        border: 1px solid var(--line);
+        border-radius: 9999px;
+        padding: 14px 24px;
+        font-size: 24px;
+        font-weight: 600;
+        color: var(--ink);
+        box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+      }
+      .pill .ico {
+        font-size: 26px;
+        line-height: 1;
+      }
+      .pill .name {
+        font-weight: 800;
+        text-transform: lowercase;
+        letter-spacing: -0.01em;
+      }
+      .arrow {
+        color: var(--green);
+        font-size: 40px;
+        font-weight: 800;
+        line-height: 1;
+      }
+
+      .footer {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        font-size: 20px;
+        font-weight: 500;
+        color: var(--ink-faint);
+      }
+      .footer .url {
+        color: var(--ink-soft);
+        font-weight: 600;
+      }
+
+      /* Auto-hiding hint, never shows in fullscreen */
+      .hint {
+        position: fixed;
+        bottom: 18px;
+        left: 50%;
+        transform: translateX(-50%);
+        background: rgba(0, 0, 0, 0.72);
+        color: #fff;
+        font-family: 'Noto Sans', system-ui, sans-serif;
+        font-size: 13px;
+        font-weight: 500;
+        padding: 8px 14px;
+        border-radius: 9999px;
+        opacity: 0.9;
+        transition: opacity 0.4s ease;
+        z-index: 10;
+      }
+      .hint.gone {
+        opacity: 0;
+        pointer-events: none;
+      }
+      :fullscreen .hint {
+        display: none;
+      }
+    </style>
+  </head>
+  <body>
+    <main class="stage" id="stage">
+      <div class="accent"></div>
+      <div class="frame">
+        <!-- top: wordmark -->
+        <div class="wordmark">
+          <span class="apple">🍎</span>
+          <span class="name">classmoji</span>
+        </div>
+
+        <!-- middle: title block -->
+        <div>
+          <p class="eyebrow">Get started</p>
+          <h1>Getting started with Classmoji</h1>
+          <p class="subhead">Set up your Classmoji account in minutes.</p>
+
+          <div class="flow">
+            <span class="pill">
+              <span class="ico">✉️</span>
+              <span>School email</span>
+            </span>
+            <span class="arrow">&rarr;</span>
+            <span class="pill">
+              <span class="ico">🔑</span>
+              <span>Verify code</span>
+            </span>
+            <span class="arrow">&rarr;</span>
+            <span class="pill">
+              <span class="ico">🍎</span>
+              <span class="name">classmoji</span>
+            </span>
+          </div>
+        </div>
+
+        <!-- bottom: footer -->
+        <div class="footer">
+          <span class="url">docs.classmoji.io</span>
+          <span>Sign in &middot; verify &middot; you're in</span>
+        </div>
+      </div>
+    </main>
+
+    <div class="hint" id="hint">Press <strong>F</strong> for fullscreen</div>
+
+    <script>
+      // Scale the fixed 1280x720 stage to fit the viewport while preserving 16:9.
+      const stage = document.getElementById('stage');
+      function fit() {
+        const scale = Math.min(window.innerWidth / 1280, window.innerHeight / 720);
+        stage.style.transform = `scale(${scale})`;
+      }
+      window.addEventListener('resize', fit);
+      fit();
+
+      // F toggles fullscreen for clean recording.
+      document.addEventListener('keydown', e => {
+        if (e.key === 'f' || e.key === 'F') {
+          if (!document.fullscreenElement) document.documentElement.requestFullscreen?.();
+          else document.exitFullscreen?.();
+        }
+      });
+
+      // Fade the hint away so it never lingers on screen.
+      const hint = document.getElementById('hint');
+      setTimeout(() => hint.classList.add('gone'), 4000);
+    </script>
+  </body>
+</html>
