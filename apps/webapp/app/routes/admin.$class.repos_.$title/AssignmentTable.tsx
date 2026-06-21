@@ -259,7 +259,21 @@ const AssignmentTable = ({
       render: (_: unknown, record: Repo) => {
         const repoAssignment = getRepoAssignment(record);
 
-        if (!repoAssignment) return <p className="text-red-500 text-sm">No Github issue found</p>;
+        if (!repoAssignment) {
+          // Imported repos have no RepositoryAssignment/issue (grades live in
+          // metadata, not the issue pipeline), but the repo still exists on
+          // GitHub — let staff open it instead of dead-ending on an error.
+          const isImported = record.metadata != null && typeof record.metadata === 'object';
+          if (isImported && record.name) {
+            return (
+              <TableActionButtons
+                onView={() => window.open(`https://github.com/${org}/${record.name}`, '_blank')}
+                hideViewText
+              />
+            );
+          }
+          return <p className="text-red-500 text-sm">No Github issue found</p>;
+        }
 
         repoAssignment.repository = record;
         repoAssignment.studentId = record.student_id;

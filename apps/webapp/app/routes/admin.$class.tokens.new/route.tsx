@@ -243,7 +243,7 @@ const AdminTokensNew = ({ loaderData }: Route.ComponentProps) => {
             htmlType="submit"
             loading={isLoading}
             disabled={students.length === 0}
-            style={{ backgroundColor: '#619462', borderColor: '#619462' }}
+            style={{ backgroundColor: '#1f883d', borderColor: '#1f883d' }}
           >
             {isLoading ? 'Assigning…' : 'Assign tokens'}
           </Button>

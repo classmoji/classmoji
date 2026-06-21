@@ -29,6 +29,11 @@ export default defineConfig({
             { label: 'Welcome', slug: 'docs' },
             { label: 'Getting started', slug: 'docs/introduction/getting-started' },
             { label: 'Core concepts', slug: 'docs/introduction/fundamentals' },
+            {
+              label: 'Video tutorials',
+              slug: 'docs/video-tutorials',
+              badge: { text: 'New', variant: 'tip' },
+            },
           ],
         },
         {
@@ -42,10 +47,10 @@ export default defineConfig({
             },
             { label: 'Manage your roster', slug: 'docs/instructors/roster' },
             { label: 'Repositories & assignments', slug: 'docs/instructors/modules-and-assignments' },
+            { label: 'Build pages', slug: 'docs/instructors/pages' },
             { label: 'Build modules', slug: 'docs/instructors/modules' },
             { label: 'Grade assignments', slug: 'docs/instructors/grading' },
             { label: 'Configure tokens', slug: 'docs/instructors/tokens' },
-            { label: 'Build pages', slug: 'docs/instructors/pages' },
           ],
         },
         {

@@ -1,0 +1,68 @@
+---
+// Black-and-white structural diagram for modules: a module is a container that
+// groups all the content for ONE topic (e.g. HTML) — the repository, slides,
+// page, and quiz that all belong to that topic — in one place. Not a linear
+// sequence; a grouping. Pure outline drawing in `currentColor`, so it renders
+// dark-on-light in light mode and light-on-dark in dark mode with a single
+// asset. No fills/gradients (flat B&W only), matching the other diagrams.
+interface Props {
+  class?: string;
+}
+
+const { class: className } = Astro.props;
+---
+
+<figure class:list={[className]} style="max-width: 500px; margin: 2rem auto;">
+  <svg
+    viewBox="0 0 520 340"
+    width="100%"
+    role="img"
+    aria-labelledby="modules-title modules-desc"
+    style="color: inherit; font-family: var(--sl-font, 'Mona Sans Variable', 'Mona Sans', sans-serif);"
+    fill="none"
+    stroke="currentColor"
+    stroke-width="1.5"
+  >
+    <title id="modules-title">What a module groups together</title>
+    <desc id="modules-desc">
+      A module is a container for one topic. The HTML Basics module groups its
+      repository, slides, page, and quiz — all about HTML — in one place.
+    </desc>
+
+    <!-- Module container -->
+    <rect x="20" y="20" width="480" height="300" rx="14" />
+
+    <!-- Header: this module is one topic -->
+    <text x="44" y="44" fill="currentColor" stroke="none" font-size="10" letter-spacing="1.5" opacity="0.6">MODULE</text>
+    <text x="44" y="66" fill="currentColor" stroke="none" font-size="16" font-weight="600">HTML Basics</text>
+    <text x="44" y="86" fill="currentColor" stroke="none" font-size="11" opacity="0.6">Everything for one topic, grouped together</text>
+
+    <!-- Status pill -->
+    <rect x="386" y="44" width="94" height="24" rx="12" />
+    <text x="433" y="60" text-anchor="middle" fill="currentColor" stroke="none" font-size="11">Published</text>
+
+    <!-- Divider -->
+    <line x1="36" y1="102" x2="484" y2="102" opacity="0.25" />
+
+    <!-- Grouped content, all about the same topic (HTML) -->
+    <!-- Repository -->
+    <rect x="40" y="116" width="212" height="84" rx="10" />
+    <text x="58" y="150" fill="currentColor" stroke="none" font-size="14" font-weight="600">Repository</text>
+    <text x="58" y="173" fill="currentColor" stroke="none" font-size="12" opacity="0.7">index.html starter</text>
+
+    <!-- Slides -->
+    <rect x="268" y="116" width="212" height="84" rx="10" />
+    <text x="286" y="150" fill="currentColor" stroke="none" font-size="14" font-weight="600">Slides</text>
+    <text x="286" y="173" fill="currentColor" stroke="none" font-size="12" opacity="0.7">Intro to HTML deck</text>
+
+    <!-- Page -->
+    <rect x="40" y="214" width="212" height="84" rx="10" />
+    <text x="58" y="248" fill="currentColor" stroke="none" font-size="14" font-weight="600">Page</text>
+    <text x="58" y="271" fill="currentColor" stroke="none" font-size="12" opacity="0.7">HTML notes &amp; reading</text>
+
+    <!-- Quiz -->
+    <rect x="268" y="214" width="212" height="84" rx="10" />
+    <text x="286" y="248" fill="currentColor" stroke="none" font-size="14" font-weight="600">Quiz</text>
+    <text x="286" y="271" fill="currentColor" stroke="none" font-size="12" opacity="0.7">HTML basics check</text>
+  </svg>
+</figure>

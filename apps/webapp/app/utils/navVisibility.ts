@@ -8,12 +8,20 @@ export interface NavVisibility {
   showModules: boolean;
   showPages: boolean;
   showRepos: boolean;
+  /**
+   * Whether the classroom actually has any modules (published for students,
+   * any for staff). The Modules nav item is hidden from non-owners when false,
+   * so profs who never use modules don't show students an empty tab. Optional
+   * so existing callers and error fallbacks default to showing it.
+   */
+  hasModules?: boolean;
 }
 
 export const DEFAULT_NAV_VISIBILITY: NavVisibility = {
   showModules: true,
   showPages: true,
   showRepos: true,
+  hasModules: true,
 };
 
 // Settings arrive loosely typed (sanitized to Record<string, unknown>), so the

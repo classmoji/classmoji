@@ -19,7 +19,7 @@ import {
  */
 export interface ModuleTreeNode {
   key: string;
-  kind: 'module' | 'repo' | 'assignment' | 'resource';
+  kind: 'module' | 'repository' | 'repo' | 'assignment' | 'resource';
   level: number;
   name: React.ReactNode;
   typeText?: string;
@@ -121,6 +121,11 @@ const NodeIcon = ({ node, isExpanded }: { node: ModuleTreeNode; isExpanded: bool
       </span>
     );
   }
+  if (node.kind === 'repository') {
+    // Top-level repository (the standalone Repositories tab): a prominent repo
+    // header, mirroring the folder icon's role for modules.
+    return <IconBrandGithub size={18} className="text-gray-400 shrink-0" />;
+  }
   if (node.kind === 'repo') {
     return <IconBrandGithub size={16} className="text-gray-400 shrink-0" />;
   }
@@ -136,15 +141,21 @@ const NodeIcon = ({ node, isExpanded }: { node: ModuleTreeNode; isExpanded: bool
   return <Icon size={15} className="text-ink-3 shrink-0" />;
 };
 
-const ReadOnlyModulesTree = ({ nodes }: { nodes: ModuleTreeNode[] }) => {
+const ReadOnlyModulesTree = ({
+  nodes,
+  nameColumnTitle = 'Module',
+}: {
+  nodes: ModuleTreeNode[];
+  /** First-column header. Defaults to 'Module'; the repos tab passes 'Repository'. */
+  nameColumnTitle?: string;
+}) => {
   const allKeys = useMemo(() => collectExpandableKeys(nodes), [nodes]);
   const [expandedKeys, setExpandedKeys] = useState<string[]>(allKeys);
 
   const columns = [
     {
-      title: 'Module',
+      title: nameColumnTitle,
       key: 'name',
-      width: 240,
       render: (_: unknown, record: ModuleTreeNode) => {
         const hasChildren = (record.children?.length ?? 0) > 0;
         const isExpanded = expandedKeys.includes(record.key);
@@ -182,7 +193,11 @@ const ReadOnlyModulesTree = ({ nodes }: { nodes: ModuleTreeNode[] }) => {
               </a>
             ) : (
               <span
-                className={record.kind === 'module' ? 'font-semibold text-ink-1' : 'text-ink-1'}
+                className={
+                  record.kind === 'module' || record.kind === 'repository'
+                    ? 'font-semibold text-ink-1'
+                    : 'text-ink-1'
+                }
               >
                 {record.name}
               </span>
@@ -194,7 +209,6 @@ const ReadOnlyModulesTree = ({ nodes }: { nodes: ModuleTreeNode[] }) => {
     {
       title: 'Type',
       key: 'type',
-      width: 130,
       render: (_: unknown, r: ModuleTreeNode) =>
         r.typeText ? (
           <span className="text-ink-2">{r.typeText}</span>
@@ -205,7 +219,6 @@ const ReadOnlyModulesTree = ({ nodes }: { nodes: ModuleTreeNode[] }) => {
     {
       title: 'Weight (%)',
       key: 'weight',
-      width: 110,
       render: (_: unknown, r: ModuleTreeNode) =>
         r.weightText ? (
           <span className="text-ink-2">{r.weightText}</span>
@@ -216,13 +229,14 @@ const ReadOnlyModulesTree = ({ nodes }: { nodes: ModuleTreeNode[] }) => {
     {
       title: 'Status',
       key: 'status',
-      width: 110,
+    
       render: (_: unknown, r: ModuleTreeNode) => r.statusNode ?? null,
     },
     {
-      title: '',
+      title: 'Actions',
       key: 'actions',
-      width: 200,
+      // No fixed width: the column hugs its content ("View" / "Open repo" /
+      // "Open issue"), left-aligned, instead of reserving a wide empty gap.
       render: (_: unknown, r: ModuleTreeNode) => r.actionNode ?? null,
     },
   ];

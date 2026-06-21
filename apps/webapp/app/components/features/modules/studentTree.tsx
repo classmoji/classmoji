@@ -18,6 +18,8 @@ export interface StudentTreeCtx {
   classSlug: string;
   slidesUrl: string;
   pagesUrl: string;
+  /** Org login, used to build the repository "View" fallback to the source repo. */
+  gitOrgLogin?: string | null;
 }
 
 export const submittedPill = (status?: string) => {
@@ -181,16 +183,43 @@ export const buildRepositoryNode = (
     )
   );
 
+  // The top-level "View" link on the standalone Repositories tab: open the
+  // viewer's own repo for this unit when they have one, otherwise fall back to
+  // the repository's source/template repo so the link is always available
+  // (e.g. instructors previewing, or students who haven't accepted yet).
+  const ownGitRepo =
+    realRepoKeys.length > 0 ? buckets.get(realRepoKeys[0])?.gitRepo : undefined;
+  const ownRepoUrl = ownGitRepo
+    ? repoGithubUrl(ownGitRepo.name, ownGitRepo?.classroom?.git_organization?.login)
+    : null;
+  const sourceRepoUrl = repository.template
+    ? repoGithubUrl(repository.template, ctx.gitOrgLogin)
+    : null;
+  const repositoryUrl = ownRepoUrl ?? sourceRepoUrl;
+
   const total = assignments.length;
   const done = assignments.filter(a => raByAssignmentId[String(a.id)]?.status === 'CLOSED').length;
 
   return {
     key: `repository-${repository.id}`,
-    kind: baseLevel === 0 ? 'module' : 'repo',
+    // Top-level (standalone Repositories tab) reads as a repository header;
+    // nested inside a module it's a plain repo row.
+    kind: baseLevel === 0 ? 'repository' : 'repo',
     level: baseLevel,
     name: repository.title,
     typeText: repositoryType,
     weightText: repository.weight != null ? `${repository.weight}%` : undefined,
+    actionNode:
+      baseLevel === 0 && repositoryUrl ? (
+        <a
+          href={repositoryUrl}
+          target="_blank"
+          rel="noreferrer"
+          className="text-sm font-medium text-sky-600 hover:text-sky-700 dark:text-sky-400"
+        >
+          View
+        </a>
+      ) : null,
     statusNode:
       total > 0 ? (
         <span className="text-xs font-medium text-ink-2 tabular-nums">
