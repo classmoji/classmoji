@@ -13,8 +13,14 @@ interface RepositoryCreatePayload {
 export const create = async (payload: RepositoryCreatePayload) => {
   const { repositoryId, classroom, repoName, student, team, providerId } = payload;
 
-  return getPrisma().gitRepo.create({
-    data: {
+  return getPrisma().gitRepo.upsert({
+    where: {
+      provider_provider_id: {
+        provider: classroom.git_organization.provider as GitProvider,
+        provider_id: providerId,
+      },
+    },
+    create: {
       name: repoName,
       classroom_id: classroom.id,
       repository_id: repositoryId,
@@ -22,6 +28,13 @@ export const create = async (payload: RepositoryCreatePayload) => {
       student_id: student?.id,
       provider: classroom.git_organization.provider as GitProvider,
       provider_id: providerId,
+    },
+    update: {
+      name: repoName,
+      classroom_id: classroom.id,
+      repository_id: repositoryId,
+      team_id: team?.id,
+      student_id: student?.id,
     },
   });
 };

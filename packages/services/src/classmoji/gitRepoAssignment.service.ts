@@ -14,10 +14,7 @@ interface GitRepoAssignmentCreateData extends Omit<
   provider: GitProvider | string;
 }
 
-interface GitRepoAssignmentUpdateData extends Omit<
-  Prisma.GitRepoAssignmentUpdateInput,
-  'status'
-> {
+interface GitRepoAssignmentUpdateData extends Omit<Prisma.GitRepoAssignmentUpdateInput, 'status'> {
   status?: IssueStatus | string;
 }
 
@@ -220,9 +217,23 @@ export const findForUser = async (query: Prisma.GitRepoAssignmentWhereInput) => 
  * @returns {Promise<Object>}
  */
 export const create = async (data: GitRepoAssignmentCreateData) => {
-  return getPrisma().gitRepoAssignment.create({
-    data: {
+  const provider = data.provider as GitProvider;
+
+  return getPrisma().gitRepoAssignment.upsert({
+    where: {
+      provider_provider_id: {
+        provider,
+        provider_id: data.provider_id,
+      },
+    },
+    create: {
       ...data,
+      provider,
+    },
+    update: {
+      assignment_id: data.assignment_id,
+      git_repo_id: data.git_repo_id,
+      provider_issue_number: data.provider_issue_number,
       provider: data.provider as GitProvider,
     },
     include: {
