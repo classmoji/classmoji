@@ -6,6 +6,8 @@ import {
   prettyType,
   repoGithubUrl,
 } from '~/components/features/modules/ReadOnlyModulesTree';
+import AutogradingResultPill from '~/components/features/AutogradingResultPill';
+import type { AutogradingResultData } from '~/components/features/AutogradingResultCard';
 
 // These trees are assembled from loosely-typed Prisma includes that differ
 // slightly per route; the node builder only touches a well-known subset.
@@ -20,6 +22,14 @@ export interface StudentTreeCtx {
   pagesUrl: string;
   /** Org login, used to build the repository "View" fallback to the source repo. */
   gitOrgLogin?: string | null;
+  /**
+   * The viewer's own git repo per repository unit, keyed by repository id.
+   * Lets the "View" link reach the student's repo even when no GitHub issue
+   * (GitRepoAssignment) has been created yet.
+   */
+  studentRepoByRepositoryId?: Record<string, { name: string }>;
+  /** The viewer's latest autograding result per repository unit, keyed by id. */
+  autogradingByRepositoryId?: Record<string, AutogradingResultData>;
 }
 
 export const submittedPill = (status?: string) => {
@@ -187,15 +197,21 @@ export const buildRepositoryNode = (
   // viewer's own repo for this unit when they have one, otherwise fall back to
   // the repository's source/template repo so the link is always available
   // (e.g. instructors previewing, or students who haven't accepted yet).
-  const ownGitRepo =
-    realRepoKeys.length > 0 ? buckets.get(realRepoKeys[0])?.gitRepo : undefined;
+  // Prefer the student's git repo looked up directly by repository id (works
+  // even before any GitHub issue exists), then any repo found via assignments,
+  // then the template.
+  const directRepo = ctx.studentRepoByRepositoryId?.[String(repository.id)];
+  const directRepoUrl = directRepo ? repoGithubUrl(directRepo.name, ctx.gitOrgLogin) : null;
+  const ownGitRepo = realRepoKeys.length > 0 ? buckets.get(realRepoKeys[0])?.gitRepo : undefined;
   const ownRepoUrl = ownGitRepo
     ? repoGithubUrl(ownGitRepo.name, ownGitRepo?.classroom?.git_organization?.login)
     : null;
   const sourceRepoUrl = repository.template
     ? repoGithubUrl(repository.template, ctx.gitOrgLogin)
     : null;
-  const repositoryUrl = ownRepoUrl ?? sourceRepoUrl;
+  const repositoryUrl = directRepoUrl ?? ownRepoUrl ?? sourceRepoUrl;
+
+  const autogradingResult = ctx.autogradingByRepositoryId?.[String(repository.id)];
 
   const total = assignments.length;
   const done = assignments.filter(a => raByAssignmentId[String(a.id)]?.status === 'CLOSED').length;
@@ -209,6 +225,14 @@ export const buildRepositoryNode = (
     name: repository.title,
     typeText: repositoryType,
     weightText: repository.weight != null ? `${repository.weight}%` : undefined,
+    autogradingNode:
+      baseLevel === 0 && autogradingResult ? (
+        <AutogradingResultPill
+          result={autogradingResult}
+          org={ctx.gitOrgLogin}
+          repoName={directRepo?.name}
+        />
+      ) : null,
     actionNode:
       baseLevel === 0 && repositoryUrl ? (
         <a

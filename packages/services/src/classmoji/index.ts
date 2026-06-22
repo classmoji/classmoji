@@ -4,6 +4,8 @@ import * as classroomService from './classroom.service.ts';
 import * as classroomMembershipService from './classroomMembership.service.ts';
 import * as moduleService from './module.service.ts';
 import * as repositoryService from './repository.service.ts';
+import * as autogradingTestService from './autogradingTest.service.ts';
+import * as autogradingResultService from './autogradingResult.service.ts';
 import * as assignmentService from './assignment.service.ts';
 import * as gitRepoAssignmentService from './gitRepoAssignment.service.ts';
 import * as gitRepoAssignmentGraderService from './gitRepoAssignmentGrader.service.ts';
@@ -47,6 +49,8 @@ const ClassmojiService = {
   classroomMembership: classroomMembershipService,
   module: moduleService,
   repository: repositoryService,
+  autogradingTest: autogradingTestService,
+  autogradingResult: autogradingResultService,
   assignment: assignmentService,
   gitRepoAssignment: gitRepoAssignmentService,
   gitRepoAssignmentGrader: gitRepoAssignmentGraderService,
@@ -95,6 +99,8 @@ export {
   classroomMembershipService,
   moduleService,
   repositoryService,
+  autogradingTestService,
+  autogradingResultService,
   assignmentService,
   gitRepoAssignmentService,
   gitRepoAssignmentGraderService,

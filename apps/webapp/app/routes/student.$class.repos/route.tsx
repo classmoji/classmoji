@@ -2,6 +2,7 @@ import getPrisma from '@classmoji/database';
 import type { Route } from './+types/route';
 import { ClassmojiService } from '@classmoji/services';
 import { assertClassroomAccess } from '~/utils/helpers';
+import type { AutogradingResult } from '@prisma/client';
 import ReadOnlyModulesTree from '~/components/features/modules/ReadOnlyModulesTree';
 import {
   buildRepositoryNode,
@@ -12,7 +13,7 @@ import {
 export const loader = async ({ params, request }: Route.LoaderArgs) => {
   const classSlug = params.class!;
 
-  const { userId, classroom } = await assertClassroomAccess({
+  const { userId, classroom, membership } = await assertClassroomAccess({
     request,
     classroomSlug: classSlug,
     allowedRoles: ['OWNER', 'TEACHER', 'ASSISTANT', 'STUDENT'],
@@ -70,10 +71,47 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
       })
     )?.git_organization?.login ?? null;
 
+  // The viewer's own repos for this classroom (individual + team-based).
+  const studentRepos = await getPrisma().gitRepo.findMany({
+    where: {
+      classroom_id: classroom.id,
+      OR: [{ student_id: userId }, { team: { memberships: { some: { user_id: userId } } } }],
+    },
+    select: { id: true, name: true, repository_id: true, repository: { select: { title: true } } },
+  });
+
+  // Map each repository to the viewer's own git repo (powers the "View" link)
+  // and track which repositories they actually have a repo for.
+  const studentRepoByRepositoryId: Record<string, { name: string }> = {};
+  const ownedRepositoryIds = new Set<string>();
+  studentRepos.forEach(r => {
+    studentRepoByRepositoryId[r.repository_id] = { name: r.name };
+    ownedRepositoryIds.add(r.repository_id);
+  });
+
+  // Students only see repositories they actually have a repo for. Instructors
+  // previewing the student view still see every published repository.
+  const visibleRepositories =
+    membership?.role === 'STUDENT'
+      ? repositories.filter(r => ownedRepositoryIds.has(r.id))
+      : repositories;
+  // Latest autograding result per repository unit — rendered as a pill in the
+  // repos table, with the per-test breakdown one click away in a modal.
+  const latestAutograding = await ClassmojiService.autogradingResult.findLatestByGitRepoIds(
+    studentRepos.map(r => r.id)
+  );
+  const autogradingByRepositoryId: Record<string, AutogradingResult> = {};
+  studentRepos.forEach(r => {
+    const result = latestAutograding.get(r.id);
+    if (result) autogradingByRepositoryId[r.repository_id] = result;
+  });
+
   return {
-    repositories,
+    repositories: visibleRepositories,
     repoAssignmentsByAssignmentId,
     gitOrgLogin,
+    studentRepoByRepositoryId,
+    autogradingByRepositoryId,
     slidesUrl: process.env.SLIDES_URL || 'http://localhost:6500',
     pagesUrl: process.env.PAGES_URL || 'http://localhost:7100',
     classSlug,
@@ -81,10 +119,25 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
 };
 
 const StudentRepositories = ({ loaderData }: Route.ComponentProps) => {
-  const { repositories, repoAssignmentsByAssignmentId, gitOrgLogin, slidesUrl, pagesUrl, classSlug } =
-    loaderData;
+  const {
+    repositories,
+    repoAssignmentsByAssignmentId,
+    gitOrgLogin,
+    studentRepoByRepositoryId,
+    autogradingByRepositoryId,
+    slidesUrl,
+    pagesUrl,
+    classSlug,
+  } = loaderData;
 
-  const ctx = { classSlug, slidesUrl, pagesUrl, gitOrgLogin };
+  const ctx = {
+    classSlug,
+    slidesUrl,
+    pagesUrl,
+    gitOrgLogin,
+    studentRepoByRepositoryId,
+    autogradingByRepositoryId,
+  };
   const nodes = (repositories as AnyRepository[]).map(r =>
     buildRepositoryNode(
       r,

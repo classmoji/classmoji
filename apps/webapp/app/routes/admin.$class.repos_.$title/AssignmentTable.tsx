@@ -15,6 +15,8 @@ import { useGlobalFetcher } from '~/hooks';
 import { openRepositoryAssignmentInGithub } from '~/utils/helpers.client';
 import { isRepositoryAssignmentDropped } from '@classmoji/utils';
 import ImportedBadge from './ImportedBadge';
+import AutogradingResultPill from '~/components/features/AutogradingResultPill';
+import { type AutogradingResultData } from '~/components/features/AutogradingResultCard';
 
 interface AssignmentGrade {
   emoji: string;
@@ -251,6 +253,18 @@ const AssignmentTable = ({
           <RepositoryAssignmentStatus repositoryAssignment={repoAssignment} isDropped={dropped} />
         );
       },
+    },
+    {
+      title: 'Autograding',
+      key: 'autograding',
+      width: 130,
+      render: (_: unknown, record: Repo) => (
+        <AutogradingResultPill
+          result={record.autograding_result as AutogradingResultData | null | undefined}
+          org={org}
+          repoName={record.name}
+        />
+      ),
     },
     {
       title: 'Actions',

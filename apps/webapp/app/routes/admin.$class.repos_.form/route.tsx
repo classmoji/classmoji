@@ -1,12 +1,12 @@
-import { Modal } from 'antd';
 import { namedAction } from 'remix-utils/named-action';
+import { useNavigate, useParams } from 'react-router';
+import { IconChevronLeft, IconFolder } from '@tabler/icons-react';
 
 import { getAuthSession } from '@classmoji/auth/server';
 import { requireClassroomAdmin, assertClassroomMutationAllowed } from '~/utils/routeAuth.server';
 import FormModule from './FormModule';
 import { ClassmojiService } from '@classmoji/services';
 import getPrisma from '@classmoji/database';
-import { useRouteDrawer } from '~/hooks';
 import { ActionTypes } from '~/constants';
 import type { Route } from './+types/route';
 
@@ -41,6 +41,11 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
         },
       });
       hasReposWithProjects = reposWithProjects > 0;
+
+      const autogradingTests = await ClassmojiService.autogradingTest.findByRepositoryId(
+        repository.id
+      );
+      repository = { ...repository, autograding_tests: autogradingTests };
     }
   }
 
@@ -71,79 +76,48 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
 };
 
 const ModuleForm = ({ loaderData }: Route.ComponentProps) => {
-  const {
-    token,
-    repository,
-    isNew,
-    tags,
-    classroom,
-    pages,
-    slides,
-    hasReposWithProjects,
-  } = loaderData;
-  const { opened, close } = useRouteDrawer({});
+  const { token, repository, isNew, tags, classroom, pages, slides, hasReposWithProjects } =
+    loaderData;
+  const navigate = useNavigate();
+  const { class: classSlug } = useParams();
+  const goToRepos = () => navigate(`/admin/${classSlug}/repos`);
+  // FormModule calls `close` on Discard and after a successful save.
+  const close = () => navigate(-1);
 
   return (
-    <Modal
-      open={opened}
-      onCancel={close}
-      title={null}
-      footer={null}
-      width={760}
-      centered
-      closable={false}
-      maskClosable
-      styles={{
-        content: { padding: 0, borderRadius: 16, overflow: 'hidden', maxWidth: '90vw' },
-        body: { padding: 0 },
-        header: { display: 'none' },
-        footer: { display: 'none' },
-      }}
-    >
-      {/* Gmail-style header */}
-      <div className="flex items-center justify-between gap-3 px-5 py-3 bg-stone-50 dark:bg-neutral-800/60 border-b border-line">
-        <div className="flex flex-col">
-          <span className="text-sm font-semibold text-ink-0">
-            {isNew ? 'New repository' : 'Edit repository'}
-          </span>
-          <span className="text-xs font-normal text-ink-3">
-            {isNew
-              ? 'Set up the repository, its assignments, and linked resources.'
-              : 'Update repository details, assignments, and linked resources.'}
-          </span>
-        </div>
+    <div className="min-h-full relative">
+      {/* Breadcrumb header */}
+      <div className="flex items-center gap-2 text-ink-2 mt-2 mb-4">
         <button
           type="button"
-          onClick={close}
-          aria-label="Close"
-          className="p-1 rounded hover:bg-line text-ink-3 transition-colors"
+          onClick={goToRepos}
+          className="hover:text-ink-1"
+          aria-label="Back to repositories"
         >
-          <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
-            <path
-              d="M4 4l8 8M12 4l-8 8"
-              stroke="currentColor"
-              strokeWidth="1.5"
-              strokeLinecap="round"
-            />
-          </svg>
+          <IconChevronLeft size={18} />
         </button>
+        <IconFolder size={18} className="text-gray-400" />
+        <button type="button" onClick={goToRepos} className="hover:text-ink-1">
+          Repositories
+        </button>
+        <span className="text-ink-3">/</span>
+        <span className="font-semibold text-ink-1">
+          {isNew ? 'New repository' : (repository?.title ?? 'Edit repository')}
+        </span>
       </div>
 
-      {/* Body (form handles its own Cancel / Save footer) */}
-      <div className="max-h-[75vh] overflow-y-auto px-6 py-5">
-        <FormModule
-          token={token!}
-          repository={repository as Parameters<typeof FormModule>[0]['repository']}
-          isNew={isNew}
-          close={close}
-          tags={tags}
-          classroom={classroom as Parameters<typeof FormModule>[0]['classroom']}
-          pages={pages}
-          slides={slides}
-          hasReposWithProjects={hasReposWithProjects}
-        />
-      </div>
-    </Modal>
+      <FormModule
+        token={token!}
+        repository={repository as Parameters<typeof FormModule>[0]['repository']}
+        isNew={isNew}
+        close={close}
+        tags={tags}
+        classroom={classroom as Parameters<typeof FormModule>[0]['classroom']}
+        pages={pages}
+        slides={slides}
+        hasReposWithProjects={hasReposWithProjects}
+      />
+    </div>
   );
 };
 
@@ -170,6 +144,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
     tag,
     linkedPageIds,
     linkedSlideIds,
+    autogradingTests,
     ...moduleData
   } = data;
 
@@ -334,6 +309,10 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
         // Sync content links for repository and assignments
         await syncModuleContentLinks(createdModule.id);
         await syncAssignmentContentLinks(assignments);
+        await ClassmojiService.autogradingTest.replaceForRepository(
+          createdModule.id,
+          autogradingTests || []
+        );
 
         // Save content manifest to GitHub repo
         await saveContentManifest();
@@ -362,6 +341,10 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
         // Sync content links for repository and assignments
         await syncModuleContentLinks(moduleData.id);
         await syncAssignmentContentLinks(assignments);
+        await ClassmojiService.autogradingTest.replaceForRepository(
+          moduleData.id,
+          autogradingTests || []
+        );
 
         // Save content manifest to GitHub repo
         await saveContentManifest();

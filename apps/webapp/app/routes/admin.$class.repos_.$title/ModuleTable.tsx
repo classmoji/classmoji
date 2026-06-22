@@ -5,6 +5,8 @@ import { UserThumbnailView, TeamThumbnailView, GradeBadge } from '~/components';
 import { calculateRepositoryGrade } from '@classmoji/utils';
 import RepoActions from './RepoActions';
 import ImportedBadge from './ImportedBadge';
+import AutogradingResultPill from '~/components/features/AutogradingResultPill';
+import { type AutogradingResultData } from '~/components/features/AutogradingResultCard';
 
 type RepositoryAssignments = Parameters<typeof calculateRepositoryGrade>[0];
 type EmojiMappings = Parameters<typeof calculateRepositoryGrade>[1];
@@ -18,6 +20,7 @@ interface ModuleTableRepo {
   student?: Parameters<typeof UserThumbnailView>[0]['user'];
   team?: Parameters<typeof TeamThumbnailView>[0]['team'];
   metadata?: unknown;
+  autograding_result?: AutogradingResultData | null;
 }
 
 interface ModuleTableProps {
@@ -107,6 +110,14 @@ const ModuleTable = ({ repository, repos, emojiMappings, settings, org }: Module
           },
         ]
       : []),
+    {
+      title: 'Autograding',
+      key: 'autograding',
+      width: 130,
+      render: (_: unknown, repo: ModuleTableRepo) => (
+        <AutogradingResultPill result={repo.autograding_result} org={org} repoName={repo.name} />
+      ),
+    },
     {
       title: 'Actions',
       key: 'actions',

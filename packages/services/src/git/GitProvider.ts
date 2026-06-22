@@ -272,6 +272,17 @@ export class GitProvider {
     throw new Error('getOctokit() must be implemented by subclass');
   }
 
+  // ─── Files ─────────────────────────────────────────────────────────────────
+  async putFile(
+    org: string,
+    repo: string,
+    path: string,
+    content: string,
+    message: string
+  ): Promise<{ commit: string; unchanged?: boolean }> {
+    throw new Error('putFile() must be implemented by subclass');
+  }
+
   // ─── Utilities ─────────────────────────────────────────────────────────────
   getCloneUrl(org: string, repo: string, token: string): string {
     throw new Error('getCloneUrl() must be implemented by subclass');
