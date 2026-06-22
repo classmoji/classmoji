@@ -32,6 +32,11 @@ import { useGlobalFetcher } from '~/hooks';
 import { useAssignmentStore } from './store';
 import { SectionHeader } from '~/components';
 import AssignmentsTable from './AssignmentsTable';
+import AutogradingTestsTable from './AutogradingTestsTable';
+import FormAutogradingTest, {
+  emptyAutogradingTest,
+  type AutogradingTestData,
+} from './FormAutogradingTest';
 import dayjs from 'dayjs';
 import { ActionTypes } from '~/constants';
 
@@ -139,6 +144,42 @@ const FormModule = ({
       repository?.slides?.map((link: { slide?: SlideRef }) => link.slide?.id).filter(Boolean) || []
     );
   });
+
+  // Autograding tests (managed locally; persisted with the repository on save).
+  const [autogradingTests, setAutogradingTests] = useState<AutogradingTestData[]>(() =>
+    (
+      (repository as unknown as { autograding_tests?: AutogradingTestData[] })?.autograding_tests ??
+      []
+    ).map(test => ({ ...test }))
+  );
+  const [agOpened, { open: openAgModal, close: closeAgModal }] = useDisclosure();
+  const [editingTest, setEditingTest] = useState<AutogradingTestData>(emptyAutogradingTest());
+  const [editingTestIndex, setEditingTestIndex] = useState<number | null>(null);
+
+  const openNewTest = () => {
+    setEditingTest(emptyAutogradingTest());
+    setEditingTestIndex(null);
+    openAgModal();
+  };
+  const openEditTest = (index: number) => {
+    setEditingTest({ ...autogradingTests[index] });
+    setEditingTestIndex(index);
+    openAgModal();
+  };
+  const removeTest = (index: number) =>
+    setAutogradingTests(prev => prev.filter((_, i) => i !== index));
+  const saveTest = () => {
+    if (!editingTest.name.trim()) {
+      callout.show({ variant: 'error', title: 'Please name the test.' });
+      return;
+    }
+    setAutogradingTests(prev =>
+      editingTestIndex === null
+        ? [...prev, editingTest]
+        : prev.map((test, i) => (i === editingTestIndex ? editingTest : test))
+    );
+    closeAgModal();
+  };
 
   const updateFormDefaultValues = {
     id: repository?.id,
@@ -302,6 +343,7 @@ const FormModule = ({
         assignmentsToRemove,
         linkedPageIds: linkedPageIds.filter((id): id is string => id != null),
         linkedSlideIds: linkedSlideIds.filter((id): id is string => id != null),
+        autogradingTests,
       }),
       {
         method: 'post',
@@ -580,6 +622,28 @@ const FormModule = ({
             />
           </Card>
 
+          {/* Autograding tests */}
+          <Card className="shadow-xs mb-6">
+            <div className="flex justify-between items-start mb-4">
+              <SectionHeader
+                title="Autograding tests"
+                subtitle="Run tests on every push using GitHub Actions"
+                size="md"
+              />
+              <Tooltip title="Add autograding test">
+                <Button type="primary" icon={<PlusOutlined />} onClick={openNewTest}>
+                  Add test
+                </Button>
+              </Tooltip>
+            </div>
+
+            <AutogradingTestsTable
+              tests={autogradingTests}
+              onEdit={openEditTest}
+              onRemove={removeTest}
+            />
+          </Card>
+
           {/* Linked Content */}
           <Card className="shadow-xs mb-6">
             <SectionHeader
@@ -753,6 +817,60 @@ const FormModule = ({
               </>
             );
           })()}
+        </Modal>
+
+        {/* Modal for adding/editing autograding tests */}
+        <Modal
+          open={agOpened}
+          onCancel={closeAgModal}
+          title={null}
+          footer={null}
+          width={600}
+          centered
+          closable={false}
+          maskClosable={false}
+          styles={{
+            mask: { backgroundColor: 'rgba(15, 23, 42, 0.35)' },
+            content: { padding: 0, borderRadius: 16, overflow: 'hidden', maxWidth: '90vw' },
+          }}
+        >
+          <div className="flex items-center justify-between gap-3 px-5 py-3 bg-stone-50 dark:bg-neutral-800/60 border-b border-line">
+            <span className="text-sm font-semibold text-ink-0">
+              {editingTestIndex === null ? 'Add autograding test' : 'Edit autograding test'}
+            </span>
+            <button
+              type="button"
+              onClick={closeAgModal}
+              aria-label="Close"
+              className="p-1 rounded hover:bg-line text-ink-3 transition-colors"
+            >
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
+                <path
+                  d="M4 4l8 8M12 4l-8 8"
+                  stroke="currentColor"
+                  strokeWidth="1.5"
+                  strokeLinecap="round"
+                />
+              </svg>
+            </button>
+          </div>
+
+          <div className="max-h-[70vh] overflow-y-auto px-5 py-4">
+            <FormAutogradingTest value={editingTest} onChange={setEditingTest} />
+          </div>
+
+          <div className="flex items-center justify-end gap-2 px-5 py-3 border-t border-line bg-stone-50/60 dark:bg-neutral-800/40">
+            <Button type="text" onClick={closeAgModal}>
+              Discard
+            </Button>
+            <Button
+              type="primary"
+              style={{ backgroundColor: '#1f883d', borderColor: '#1f883d' }}
+              onClick={saveTest}
+            >
+              {editingTestIndex === null ? 'Add test' : 'Save changes'}
+            </Button>
+          </div>
         </Modal>
 
         {/* Form Actions */}

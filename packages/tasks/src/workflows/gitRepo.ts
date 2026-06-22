@@ -13,6 +13,7 @@ import { titleToIdentifier } from '@classmoji/utils';
 import { createGithubRepositoryAssignmentTask } from './gitRepoAssignment.ts';
 import { updateRepository, type UpdateRepositoryPayload } from '../helpers/updateRepository.ts';
 import { createRepository, type CreateRepositoryPayload } from '../helpers/createRepository.ts';
+import { provisionAutogradeWorkflowForRepo } from './autograde.ts';
 
 type GitOrganizationLike = Parameters<typeof getGitProvider>[0] & { login: string | null };
 type StrictGitOrganizationLike = Parameters<typeof getGitProvider>[0] & { login: string };
@@ -227,6 +228,16 @@ export const createRepositoryTask = task({
         : payload;
       const { classroom } = normalizedPayload;
       const repoId = await createRepository(normalizedPayload);
+
+      // Provision the autograding workflow for this fresh repo (best-effort,
+      // never throws). Done here rather than via the template repo so repo
+      // creation can't be coupled to the App's `workflows` permission.
+      await provisionAutogradeWorkflowForRepo({
+        repositoryId: normalizedPayload.repository.id,
+        repoName: normalizedPayload.repoName,
+        classroomSlug: classroom.slug,
+        gitOrganization: classroom.git_organization,
+      });
 
       await addCollaboratorsToRepoTask.triggerAndWait(
         {
@@ -456,7 +467,9 @@ export const createProjectsForModuleTask = task({
     }> = await ClassmojiService.gitRepo.findByRepository(classroomSlug, repositoryId);
 
     if (!repository || !classroom) {
-      throw new Error(`Unable to load repository or classroom for ${classroomSlug}/${repositoryId}`);
+      throw new Error(
+        `Unable to load repository or classroom for ${classroomSlug}/${repositoryId}`
+      );
     }
 
     const reposWithoutProjects = repos.filter(repo => !repo.project_id);

@@ -36,6 +36,19 @@ export {
 
 export { ClassmojiService, HelperService, StripeService, MarkdownImporter };
 
+// Autograding: workflow (classroom.yml) generator (pure, client-safe)
+export { generateClassroomWorkflow } from './autograding/generateClassroomWorkflow.ts';
+export type {
+  WorkflowTestInput,
+  GenerateWorkflowOptions,
+} from './autograding/generateClassroomWorkflow.ts';
+
+// Autograding: per-classroom HMAC token (server-only; uses crypto + env)
+export {
+  signAutogradeCallbackToken,
+  verifyAutogradeCallbackToken,
+} from './autograding/callbackToken.ts';
+
 // Example-classroom provisioning (server-only; touches Prisma)
 export { provisionExampleClassroom } from './classmoji/exampleClassroom.service.ts';
 

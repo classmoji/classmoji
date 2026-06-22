@@ -1,10 +1,11 @@
-import { Tabs, Switch, Card, Tag, Button } from 'antd';
+import { Tabs, Switch, Card, Tag, Button, Tooltip } from 'antd';
 import {
   IconFolder,
   IconChevronLeft,
   IconList,
   IconTable,
   IconPlus,
+  IconRobot,
 } from '@tabler/icons-react';
 import { useParams, useRevalidator, useNavigate, Outlet } from 'react-router';
 import { useState } from 'react';
@@ -52,6 +53,18 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
     includePages: true,
   });
   const repos = await ClassmojiService.gitRepo.findByRepository(classSlug!, repository!.id);
+
+  // Attach each repo's latest autograding result + the configured test count.
+  const latestAutograding = await ClassmojiService.autogradingResult.findLatestByGitRepoIds(
+    repos.map(r => r.id)
+  );
+  const reposWithAutograding = repos.map(r => ({
+    ...r,
+    autograding_result: latestAutograding.get(r.id) ?? null,
+  }));
+  const autogradingTestCount = (
+    await ClassmojiService.autogradingTest.findByRepositoryId(repository!.id)
+  ).length;
   const assistants = (
     await ClassmojiService.classroomMembership.findUsersByRole(classroom.id, 'ASSISTANT')
   ).filter(({ is_grader }) => is_grader);
@@ -100,7 +113,7 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
 
   return {
     repository,
-    repos,
+    repos: reposWithAutograding,
     assistants,
     emojiMappings,
     settings,
@@ -108,6 +121,7 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
     studentsCount: students.length,
     teamsCount: teams.length,
     linkedPages,
+    autogradingTestCount,
   };
 };
 
@@ -122,14 +136,31 @@ const SingleRepository = ({ loaderData }: Route.ComponentProps) => {
     studentsCount,
     teamsCount,
     linkedPages,
+    autogradingTestCount,
   } = loaderData;
-  const { fetcher } = useGlobalFetcher();
+  const { fetcher, notify } = useGlobalFetcher();
   const { class: classSlug } = useParams();
   const navigate = useNavigate();
   const { revalidate } = useRevalidator();
   const [viewMode, setViewMode] = useState('repository'); // 'repository' or 'assignment'
 
   const gitOrgLogin = classroom.git_organization?.login;
+
+  // Scope the loading state to the autograde request (the fetcher is shared).
+  const isAutograding =
+    fetcher!.state !== 'idle' && (fetcher!.formAction ?? '').includes('/autograde');
+
+  const handleAutograde = () => {
+    notify('AUTOGRADE_GIT_REPO_ASSIGNMENT', 'Provisioning autograding…');
+    fetcher!.submit(
+      { repositoryId: repository!.id, classroomSlug: classSlug! },
+      {
+        action: `/api/gitRepoAssignment/${classSlug}?/autograde`,
+        method: 'post',
+        encType: 'application/json',
+      }
+    );
+  };
 
   const handleGradeRelease = async (assignmentId: string, gradesReleased: boolean) => {
     fetcher!.submit(
@@ -308,10 +339,28 @@ const SingleRepository = ({ loaderData }: Route.ComponentProps) => {
           <span className="font-semibold text-ink-1">{repository!.title}</span>
         </div>
 
-        <Menu
-          repository={repository as Parameters<typeof Menu>[0]['repository']}
-          assistants={assistants as Parameters<typeof Menu>[0]['assistants']}
-        />
+        <div className="flex items-center gap-2">
+          <Tooltip
+            title={
+              autogradingTestCount
+                ? 'Push the autograding workflow to student repos'
+                : 'Add autograding tests to this repository first'
+            }
+          >
+            <Button
+              icon={<IconRobot size={16} />}
+              disabled={!autogradingTestCount}
+              loading={isAutograding}
+              onClick={handleAutograde}
+            >
+              {isAutograding ? 'Provisioning…' : 'Autograde'}
+            </Button>
+          </Tooltip>
+          <Menu
+            repository={repository as Parameters<typeof Menu>[0]['repository']}
+            assistants={assistants as Parameters<typeof Menu>[0]['assistants']}
+          />
+        </div>
       </div>
 
       <SummaryCards
@@ -328,6 +377,12 @@ const SingleRepository = ({ loaderData }: Route.ComponentProps) => {
       <LinkedPages classSlug={classSlug} pages={linkedPages} />
 
       <TriggerProgress operation="UPDATE_REPOS" validIdentifiers={['update_git_repo']} />
+
+      <TriggerProgress
+        operation="AUTOGRADE"
+        validIdentifiers={['dispatch_autograde_workflow', 'gh-commit_autograde_workflow']}
+        callback={() => setTimeout(() => revalidate(), 100)}
+      />
 
       <TriggerProgress
         operation="CALCULATE_REPO_CONTRIBUTIONS"

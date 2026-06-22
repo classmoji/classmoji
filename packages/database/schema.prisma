@@ -397,14 +397,15 @@ model Repository {
   created_at              DateTime           @default(now())
   updated_at              DateTime           @default(now()) @updatedAt
 
-  classroom    Classroom    @relation(fields: [classroom_id], references: [id], onDelete: Cascade)
-  tag          Tag?         @relation(fields: [tag_id], references: [id])
-  assignments  Assignment[]
-  git_repos    GitRepo[]
-  quizzes      Quiz[]
-  pages        PageLink[]
-  slides       SlideLink[]
-  module_items ModuleItem[]
+  classroom         Classroom         @relation(fields: [classroom_id], references: [id], onDelete: Cascade)
+  tag               Tag?              @relation(fields: [tag_id], references: [id])
+  assignments       Assignment[]
+  git_repos         GitRepo[]
+  quizzes           Quiz[]
+  pages             PageLink[]
+  slides            SlideLink[]
+  module_items      ModuleItem[]
+  autograding_tests AutogradingTest[]
 
   @@unique([classroom_id, title])
   @@index([classroom_id])
@@ -517,18 +518,80 @@ model GitRepo {
   created_at     DateTime    @default(now())
   updated_at     DateTime    @default(now()) @updatedAt
 
-  classroom         Classroom                @relation(fields: [classroom_id], references: [id], onDelete: Cascade)
-  repository        Repository               @relation(fields: [repository_id], references: [id], onDelete: Cascade)
-  student           User?                    @relation("StudentRepositories", fields: [student_id], references: [id], onDelete: Cascade)
-  team              Team?                    @relation(fields: [team_id], references: [id], onDelete: Cascade)
-  assignments       GitRepoAssignment[]
-  contributor_links GitRepoContributorLink[]
+  classroom           Classroom                @relation(fields: [classroom_id], references: [id], onDelete: Cascade)
+  repository          Repository               @relation(fields: [repository_id], references: [id], onDelete: Cascade)
+  student             User?                    @relation("StudentRepositories", fields: [student_id], references: [id], onDelete: Cascade)
+  team                Team?                    @relation(fields: [team_id], references: [id], onDelete: Cascade)
+  assignments         GitRepoAssignment[]
+  contributor_links   GitRepoContributorLink[]
+  autograding_results AutogradingResult[]
 
   @@unique([provider, provider_id])
   @@index([classroom_id])
   @@index([repository_id])
   @@index([student_id])
   @@map("git_repos")
+}
+
+enum AutogradingMethod {
+  COMMAND
+  IO
+  PYTHON
+  JAVA
+  NODE
+  C
+  CPP
+}
+
+enum AutogradingComparison {
+  INCLUDED
+  EXACT
+  REGEX
+}
+
+// Instructor-defined autograding test for a Repository (lab). Compiled into a
+// .github/workflows/classroom.yml that runs on push via GitHub Actions using
+// the open-source classroom-resources graders. `points` is stored but unused
+// in the current MVP (no grade mapping yet).
+model AutogradingTest {
+  id                String                @id @default(uuid())
+  repository_id     String
+  name              String
+  method            AutogradingMethod     @default(COMMAND)
+  setup_command     String?
+  run_command       String?
+  input             String? // io-grader stdin
+  expected_output   String? // io-grader expected stdout
+  comparison_method AutogradingComparison @default(INCLUDED)
+  timeout           Int                   @default(10) // minutes
+  points            Int? // stored, unused in MVP (no grade mapping)
+  position          Int                   @default(0)
+  created_at        DateTime              @default(now())
+  updated_at        DateTime              @default(now()) @updatedAt
+
+  repository Repository @relation(fields: [repository_id], references: [id], onDelete: Cascade)
+
+  @@index([repository_id])
+  @@map("autograding_tests")
+}
+
+// Result of an autograding run for a single student repo, reported back by the
+// workflow's callback step after a push. Advisory CI feedback, not a grade.
+model AutogradingResult {
+  id           String   @id @default(uuid())
+  git_repo_id  String
+  commit_sha   String
+  run_id       String? // GitHub Actions run id, for the "view run" link
+  conclusion   String // success | failure | <job.status>
+  total_tests  Int?
+  passed_tests Int?
+  details      Json? // optional per-test breakdown
+  reported_at  DateTime @default(now())
+
+  git_repo GitRepo @relation(fields: [git_repo_id], references: [id], onDelete: Cascade)
+
+  @@index([git_repo_id])
+  @@map("autograding_results")
 }
 
 model GitRepoAssignment {
