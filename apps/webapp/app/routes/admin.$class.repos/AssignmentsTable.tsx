@@ -224,23 +224,17 @@ const AssignmentTable = ({ assignments: repositories }: AssignmentTableProps) =>
       onOk: () => deleteRepository(id),
     });
 
+  // The primary action (Publish / Sync) is surfaced as an inline button; the
+  // overflow menu keeps only secondary + destructive actions.
   const repoMenuItems = (r: RepositoryRow): MenuProps['items'] => [
     ...(r.is_published
-      ? [
-          { key: 'sync', label: 'Sync', icon: <IconRefresh size={15} /> },
-          { key: 'unpublish', label: 'Unpublish', icon: <IconEyeOff size={15} /> },
-        ]
-      : [{ key: 'publish', label: 'Publish', icon: <IconCloudUpload size={15} /> }]),
-    { type: 'divider' },
+      ? [{ key: 'unpublish', label: 'Unpublish', icon: <IconEyeOff size={15} /> }, { type: 'divider' as const }]
+      : []),
     { key: 'delete', label: 'Delete', danger: true, icon: <IconTrash size={15} /> },
   ];
 
   const onRepoMenuClick = (r: RepositoryRow, key: string) => {
     switch (key) {
-      case 'sync':
-        return confirmSync(r.id);
-      case 'publish':
-        return confirmPublish(r.id);
       case 'unpublish':
         return confirmUnpublish(r.id);
       case 'delete':
@@ -396,6 +390,17 @@ const AssignmentTable = ({ assignments: repositories }: AssignmentTableProps) =>
             <div className="flex items-center gap-x-4 whitespace-nowrap">
               <ActionLink onClick={() => viewRepository(r)}>View</ActionLink>
               <ActionLink onClick={() => editRepository(r)}>Edit</ActionLink>
+              {r.is_published ? (
+                <ActionLink className="inline-flex items-center gap-x-1" onClick={() => confirmSync(r.id)}>
+                  <IconRefresh size={15} />
+                  Sync
+                </ActionLink>
+              ) : (
+                <ActionLink className="inline-flex items-center gap-x-1" onClick={() => confirmPublish(r.id)}>
+                  <IconCloudUpload size={15} />
+                  Publish
+                </ActionLink>
+              )}
               <Dropdown
                 trigger={['click']}
                 placement="bottomRight"
