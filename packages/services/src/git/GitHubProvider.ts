@@ -551,6 +551,28 @@ export class GitHubProvider extends GitProvider {
     return { id: String(data.id), number: data.number, url: data.html_url };
   }
 
+  async findIssueByTitle(
+    org: string,
+    repo: string,
+    title: string
+  ): Promise<{ id: string; number: number; url: string } | null> {
+    const octokit = await this.#getOctokit();
+
+    for await (const { data } of octokit.paginate.iterator(octokit.rest.issues.listForRepo, {
+      owner: org,
+      repo,
+      state: 'all',
+      per_page: 100,
+    })) {
+      const issue = data.find(item => !item.pull_request && item.title === title);
+      if (issue) {
+        return { id: String(issue.id), number: issue.number, url: issue.html_url };
+      }
+    }
+
+    return null;
+  }
+
   /**
    * Get an issue by number
    * @param {string} org - Organization login

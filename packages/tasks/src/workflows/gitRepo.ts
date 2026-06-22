@@ -135,6 +135,7 @@ export const createRepositoriesTask = task({
   },
   run: async (payload: CreateRepositoriesTaskPayload) => {
     const { logins, assignmentTitle, org, sessionId } = payload;
+    const uniqueLogins = [...new Set(logins.map(login => login.trim()).filter(Boolean))];
 
     const repository = await ClassmojiService.repository.findBySlugAndTitle(org, assignmentTitle);
     const classroom = await ClassmojiService.classroom.findBySlug(org);
@@ -158,7 +159,7 @@ export const createRepositoriesTask = task({
     // Use slug if available, otherwise generate from title
     const repositorySlug = repository.slug || titleToIdentifier(repository.title);
 
-    const reposData = logins.map(login => {
+    const reposData = uniqueLogins.flatMap(login => {
       const repoName = `${repositorySlug}-${login}`;
       const data: StandardCreateRepositoryTaskPayload = {
         repoName,
@@ -172,20 +173,49 @@ export const createRepositoriesTask = task({
 
       if (repository.type === 'INDIVIDUAL') {
         data.student = students.find(student => student.login === login);
+        if (!data.student) {
+          logger.warn('Skipping repo creation for unknown student login', {
+            classroomSlug: org,
+            repositoryId: repository.id,
+            repoName,
+            login,
+          });
+          return [];
+        }
       } else {
         data.team = teams.find(team => team.slug === login);
+        if (!data.team) {
+          logger.warn('Skipping repo creation for unknown team slug', {
+            classroomSlug: org,
+            repositoryId: repository.id,
+            repoName,
+            login,
+          });
+          return [];
+        }
       }
 
       const tags = [`session_${sessionId}`, `classroom_${org}`];
 
-      return {
-        payload: data,
-        options: {
-          tags,
-          concurrencyKey: org,
+      return [
+        {
+          payload: data,
+          options: {
+            tags,
+            concurrencyKey: org,
+          },
         },
-      };
+      ];
     });
+
+    if (reposData.length === 0) {
+      logger.info('No valid recipients for repository creation', {
+        classroomSlug: org,
+        repositoryId: repository.id,
+        requested: logins.length,
+      });
+      return { created: 0 };
+    }
 
     await createRepositoryTask.batchTriggerAndWait(reposData);
 
@@ -262,7 +292,8 @@ export const createRepositoryTask = task({
 
       if (
         normalizedPayload.repository.type === 'GROUP' &&
-        normalizedPayload.repository.project_template_id
+        normalizedPayload.repository.project_template_id &&
+        !studentRepo.project_id
       ) {
         await createProjectForRepoTask.triggerAndWait(
           {
@@ -399,6 +430,19 @@ export const createProjectForRepoTask = task({
     const { classroom, repository, repoName, repoId, team } = payload;
 
     try {
+      const existingRepo = await ClassmojiService.gitRepo.find({ id: repoId });
+      if (existingRepo?.project_id) {
+        logger.info(`Repo ${repoName} already has a project; skipping project copy`, {
+          projectId: existingRepo.project_id,
+          projectNumber: existingRepo.project_number ?? null,
+        });
+        return {
+          id: existingRepo.project_id,
+          number: existingRepo.project_number ?? 0,
+          url: '',
+        };
+      }
+
       const gitProvider = getGitProvider(classroom.git_organization);
       const org = classroom.git_organization.login;
 
