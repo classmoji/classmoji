@@ -116,6 +116,13 @@ interface TeamRecord {
 const getErrorMessage = (error: unknown): string =>
   error instanceof Error ? error.message : String(error);
 
+const getErrorStatus = (error: unknown): number | undefined =>
+  typeof error === 'object' && error !== null && 'status' in error
+    ? typeof (error as { status?: unknown }).status === 'number'
+      ? (error as { status: number }).status
+      : undefined
+    : undefined;
+
 export const createGithubRepositoryAssignmentTask = task({
   id: 'gh-create_git_repo_assignment',
   queue: {
@@ -135,15 +142,42 @@ export const createGithubRepositoryAssignmentTask = task({
     }
 
     const gitProvider = getGitProvider(organization);
-    const { id, number: issueNumber } = await gitProvider.createIssue(
-      organization.login,
-      repoName,
-      {
+    let issue: { id: string; number: number };
+
+    try {
+      issue = await gitProvider.createIssue(organization.login, repoName, {
         title: assignment.title,
         body: assignment.body ?? undefined,
         description: assignment.description ?? undefined,
+      });
+    } catch (error: unknown) {
+      const status = getErrorStatus(error);
+      const context = {
+        status,
+        organization: organization.login,
+        repoName,
+        assignmentId: assignment.id,
+        assignmentTitle: assignment.title,
+        studentRepoId: studentRepo.id,
+      };
+
+      logger.error('Failed to create GitHub assignment issue', {
+        ...context,
+        error: getErrorMessage(error),
+      });
+
+      if (status === 404) {
+        throw new Error(
+          `Could not create assignment issue in ${organization.login}/${repoName}: repository was not found or is not accessible to the GitHub App. assignmentId=${assignment.id}, studentRepoId=${studentRepo.id}`
+        );
       }
-    );
+
+      throw new Error(
+        `Could not create assignment issue in ${organization.login}/${repoName}: ${getErrorMessage(error)}. assignmentId=${assignment.id}, studentRepoId=${studentRepo.id}`
+      );
+    }
+
+    const { id, number: issueNumber } = issue;
 
     if (studentRepo.project_id) {
       try {
