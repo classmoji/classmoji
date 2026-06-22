@@ -1,0 +1,78 @@
+---
+title: Autograding
+description: Run automated tests on student repositories with GitHub Actions and show pass/fail feedback in Classmoji
+---
+
+Autograding runs automated tests on each student's repository and shows the results back in Classmoji. You define the tests once on a repository, push the workflow to your students' repos, and every time a student pushes their code the tests run on Github Actions and report pass/fail feedback.
+
+Results are advisory feedback, not grades. They give students a quick signal that their code works, but they never change a student's grade. You still grade assignments yourself with [emoji grades](/docs/instructors/grading/).
+
+### How it works
+
+1. You add one or more tests to a repository.
+2. You click **Autograde** to push a Github Actions workflow into every student repository for that lab.
+3. A student pushes their code. The workflow runs the tests on Github's runners.
+4. The results are reported back to Classmoji and shown to the student and to you.
+
+Behind the scenes Classmoji generates a `.github/workflows/classroom.yml` file from your tests and uses the open source [classroom-resources](https://github.com/classroom-resources) graders, the same graders that power Github Classroom. New student repositories get the workflow automatically when they are created, so in most cases you only push manually after editing your tests.
+
+### Adding tests to a repository
+
+Open the repository form (create a new repository or edit an existing one) and scroll to the **Autograding** section. Click **Add test** to open the test editor. Each test has:
+
+- **Test name** (required). A short label shown to students next to the pass or fail mark, for example "Compiles cleanly" or "Returns the sum".
+- **Method**. How the test runs (see below).
+- **Setup command** (optional). Runs before the test, for example `npm install` or `pip install -r requirements.txt`. Used by command and language methods.
+- **Run command** (required). The command that actually runs the test.
+- **Timeout (minutes)**. The test is killed if it runs longer. Default is 10, maximum is 60.
+
+Tests run in the order they appear in the table, and you can edit or delete any test before saving the repository.
+
+### Test methods
+
+| Method | What it does |
+| --- | --- |
+| **Run command** | Runs your command. The test passes if it exits with code 0. Use this for test suites that already report failures through their exit code. |
+| **Input / output** | Runs your program, feeds the **Input** to its stdin, and compares its stdout to the **Expected output**. |
+| **Python**, **Java**, **Node**, **C**, **C++** | Language presets. They prefill sensible setup and run commands (for example Node fills `npm install` and `npm test`), then behave exactly like **Run command**. They are a starting point; edit the commands to fit your assignment. |
+
+### Input / output tests
+
+When you pick the **Input / output** method, you get two extra fields and a comparison setting:
+
+- **Input**. Passed to your program's stdin (leave it empty for programs that take no input).
+- **Expected output**. What stdout should contain or match.
+- **Comparison method**. How the expected output is matched against the program's stdout:
+
+| Comparison | Behavior |
+| --- | --- |
+| **Included** | The expected output must appear somewhere in the program's output. This is the most forgiving and the default. |
+| **Exact** | The program's output must match the expected output exactly. |
+| **Regex** | The expected output is treated as a regular expression and matched against the program's output. |
+
+### Pushing the workflow to student repos
+
+After you save your tests, open the repository's detail page and click **Autograde**. This pushes the generated workflow into every existing student repository for that lab. The button is disabled until the repository has at least one test.
+
+You only need to do this when you add or change tests. Repositories created after the tests exist already receive the workflow when they are provisioned.
+
+### What students see
+
+On their **Repositories** page each student sees an autograding card for their repo showing:
+
+- A summary pill, for example **3/4 passing**, green when everything passes and red when any test fails.
+- A checklist of every test with a green check or a red cross next to each test name.
+- A **View run** link that opens the full logs in Github Actions.
+
+The card makes it clear that results come from Github Actions on the last push and are feedback only, not a grade. If a student has not pushed yet, the card prompts them to push to run the tests.
+
+### What you see
+
+In the repository roster you get a compact **Autograding** column with a pill for each student showing how many tests passed (for example **3/4**), green when all pass and red otherwise. Click a pill to jump straight to that run on Github Actions.
+
+### Things to know
+
+- **Results are not grades.** Autograding never writes to a student's grade. The points field on a test is reserved for future grade mapping and is not used yet.
+- **Tests are advisory, not tamper proof.** The workflow lives in the student's own repository, so a determined student could edit it. Use autograding as fast feedback, and rely on your own review and emoji grades for the grade of record.
+- **Runs happen on Github Actions.** Autograding needs Github Actions enabled for your organization. Each push to any branch triggers a run; pushes made by the `github-classroom[bot]` account are skipped so setup commits do not produce noise.
+- **One result per push.** Classmoji stores the latest run per repository and shows that on the student and instructor views.

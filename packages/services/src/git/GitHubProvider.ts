@@ -291,6 +291,61 @@ export class GitHubProvider extends GitProvider {
     return { name: data.name };
   }
 
+  /**
+   * Create or update a file in a repository (commits to the default branch).
+   * Looks up the existing SHA so it works for both create and update.
+   *
+   * Used to provision the autograding workflow (.github/workflows/classroom.yml).
+   * Writing under .github/workflows/ requires the App's `workflows: write`
+   * permission — a 403 here means the org must re-authorize Classmoji.
+   *
+   * Idempotent: if the file already exists with identical content, it skips the
+   * commit (returns `unchanged: true`), so re-provisioning doesn't spam commits
+   * or trigger redundant Actions runs.
+   * @returns {Promise<{ commit: string; unchanged?: boolean }>}
+   */
+  async putFile(
+    org: string,
+    repo: string,
+    path: string,
+    content: string,
+    message: string
+  ): Promise<{ commit: string; unchanged?: boolean }> {
+    const octokit = await this.#getOctokit();
+
+    // The existing file SHA is required to update; undefined for a fresh create.
+    let sha: string | undefined;
+    try {
+      const { data } = await octokit.request('GET /repos/{owner}/{repo}/contents/{path}', {
+        owner: org,
+        repo,
+        path,
+      });
+      if (!Array.isArray(data) && 'sha' in data) {
+        sha = data.sha;
+        // No-op when content is byte-identical — keeps re-runs from creating an
+        // empty commit (and thus an extra push / Actions run).
+        if ('content' in data && typeof data.content === 'string') {
+          const existing = Buffer.from(data.content, 'base64').toString('utf8');
+          if (existing === content) return { commit: '', unchanged: true };
+        }
+      }
+    } catch (error: unknown) {
+      const status = (error as { status?: number })?.status;
+      if (status !== 404) throw error;
+    }
+
+    const { data } = await octokit.request('PUT /repos/{owner}/{repo}/contents/{path}', {
+      owner: org,
+      repo,
+      path,
+      message,
+      content: Buffer.from(content).toString('base64'),
+      sha,
+    });
+    return { commit: data.commit.sha ?? '' };
+  }
+
   // ─── Branches & PRs ────────────────────────────────────────────────────────
 
   /**

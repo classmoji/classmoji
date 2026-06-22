@@ -26,10 +26,19 @@ export interface ModuleTreeNode {
   weightText?: string;
   statusNode?: React.ReactNode;
   actionNode?: React.ReactNode;
+  autogradingNode?: React.ReactNode;
   href?: string;
   resourceIcon?: 'page' | 'slide' | 'quiz';
   children?: ModuleTreeNode[];
 }
+
+// Whether any node in the tree carries an autograding cell — used to add the
+// "Autograding" column only where it's relevant (e.g. the student repos view),
+// keeping it out of trees that don't use it (e.g. the assistant modules view).
+const hasAutogradingNodes = (nodes: ModuleTreeNode[]): boolean =>
+  nodes.some(
+    n => n.autogradingNode != null || (n.children ? hasAutogradingNodes(n.children) : false)
+  );
 
 export const prettyType = (type?: string | null) =>
   type ? type.charAt(0) + type.slice(1).toLowerCase() : '';
@@ -229,9 +238,18 @@ const ReadOnlyModulesTree = ({
     {
       title: 'Status',
       key: 'status',
-    
+
       render: (_: unknown, r: ModuleTreeNode) => r.statusNode ?? null,
     },
+    ...(hasAutogradingNodes(nodes)
+      ? [
+          {
+            title: 'Autograding',
+            key: 'autograding',
+            render: (_: unknown, r: ModuleTreeNode) => r.autogradingNode ?? null,
+          },
+        ]
+      : []),
     {
       title: 'Actions',
       key: 'actions',
