@@ -12,17 +12,26 @@ interface RepositoryCreatePayload {
 
 export const create = async (payload: RepositoryCreatePayload) => {
   const { repositoryId, classroom, repoName, student, team, providerId } = payload;
+  const provider = classroom.git_organization.provider as GitProvider;
 
-  return getPrisma().gitRepo.create({
-    data: {
-      name: repoName,
-      classroom_id: classroom.id,
-      repository_id: repositoryId,
-      team_id: team?.id,
-      student_id: student?.id,
-      provider: classroom.git_organization.provider as GitProvider,
-      provider_id: providerId,
-    },
+  // Upsert (not create) keyed on the @@unique([provider, provider_id]) constraint so
+  // re-runs heal the row instead of crashing. The GitHub side of repo creation is already
+  // idempotent (existing repos are detected and reused / Sync routes them back through), so
+  // a repo can exist before this row does — e.g. a retry, a Sync, or a run cancelled after
+  // the repo was created but before this insert. A plain create() collides in those cases
+  // with "Unique constraint failed on the fields: (provider, provider_id)".
+  const mutableFields = {
+    name: repoName,
+    classroom_id: classroom.id,
+    repository_id: repositoryId,
+    team_id: team?.id ?? null,
+    student_id: student?.id ?? null,
+  };
+
+  return getPrisma().gitRepo.upsert({
+    where: { provider_provider_id: { provider, provider_id: providerId } },
+    create: { ...mutableFields, provider, provider_id: providerId },
+    update: mutableFields,
   });
 };
 
