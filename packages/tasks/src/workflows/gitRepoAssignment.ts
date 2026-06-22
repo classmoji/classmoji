@@ -200,6 +200,24 @@ export const createGithubRepositoryAssignmentTask = task({
       );
     }
 
+    // Idempotency guard: skip if this repo already has this assignment. createIssue mints a
+    // NEW GitHub issue every run, so a re-trigger (Sync, manual re-run, webhook redelivery)
+    // would otherwise create duplicate issues + rows. Centralizing the guard here protects
+    // every caller (gh-create_git_repo, daily_git_repo_assignments_release, and the
+    // already-guarded release_git_repo_assignments_now).
+    const existingAssignment = await ClassmojiService.gitRepoAssignment.findFirst({
+      assignment_id: assignment.id,
+      git_repo_id: studentRepo.id,
+    });
+    if (existingAssignment) {
+      logger.info('Assignment issue already exists for this repo — skipping', {
+        repoName,
+        assignmentId: assignment.id,
+        gitRepoId: studentRepo.id,
+      });
+      return;
+    }
+
     const gitProvider = getGitProvider(organization);
     const existingAssignment = await ClassmojiService.gitRepoAssignment.findFirst({
       assignment_id: assignment.id,

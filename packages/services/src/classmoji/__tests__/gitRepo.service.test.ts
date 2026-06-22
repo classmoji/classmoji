@@ -40,7 +40,7 @@ describe('gitRepo.create', () => {
         name: 'assignment-alice',
         classroom_id: 'classroom-1',
         repository_id: 'repository-1',
-        team_id: undefined,
+        team_id: null,
         student_id: 'student-1',
         provider: 'GITHUB',
         provider_id: 'github-repo-id',
@@ -49,7 +49,7 @@ describe('gitRepo.create', () => {
         name: 'assignment-alice',
         classroom_id: 'classroom-1',
         repository_id: 'repository-1',
-        team_id: undefined,
+        team_id: null,
         student_id: 'student-1',
       },
     });
