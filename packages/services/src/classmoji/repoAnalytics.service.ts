@@ -31,6 +31,7 @@ import type {
 // Consider a classroom "active" if any of its assignments have a student_deadline
 // within this window (past or future). Used by the cron to limit refresh scope.
 const ACTIVE_WINDOW_DAYS = 30;
+const MAX_ANALYTICS_COMMITS = 250;
 
 function pickLatestSnapshot<T, S extends { fetched_at: Date | string }>(
   items: T[],
@@ -92,7 +93,7 @@ export async function buildSnapshot(
   repoName: string
 ): Promise<{ payload: SnapshotPayload; pending: boolean }> {
   const [commits, contributorsRes, languages, prSummary] = await Promise.all([
-    provider.listCommits(orgLogin, repoName),
+    provider.listCommits(orgLogin, repoName, { maxCommits: MAX_ANALYTICS_COMMITS }),
     provider.getContributorStats(orgLogin, repoName),
     provider.getLanguages(orgLogin, repoName),
     provider.listPulls(orgLogin, repoName),

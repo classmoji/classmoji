@@ -83,7 +83,7 @@ export class GitProvider {
   async listCommits(
     _org: string,
     _repo: string,
-    _opts?: { since?: string; branch?: string }
+    _opts?: { since?: string; branch?: string; maxCommits?: number }
   ): Promise<import('../classmoji/repoAnalytics.types.ts').CommitRecord[]> {
     throw new Error('listCommits() must be implemented by subclass');
   }

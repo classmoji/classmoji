@@ -16,9 +16,10 @@ function makeFakeOctokit(
   pages: FakeCommitSummary[][],
   fullMap: Record<string, { stats: { additions: number; deletions: number } }>
 ) {
-  const calls: { listArgs: unknown; getCommitRefs: string[] } = {
+  const calls: { listArgs: unknown; getCommitRefs: string[]; pagesYielded: number } = {
     listArgs: null,
     getCommitRefs: [],
+    pagesYielded: 0,
   };
 
   const listCommitsMethod = Object.assign(
@@ -40,6 +41,7 @@ function makeFakeOctokit(
         return {
           async *[Symbol.asyncIterator]() {
             for (; i < pages.length; i++) {
+              calls.pagesYielded += 1;
               yield { data: pages[i] };
             }
           },
@@ -154,5 +156,58 @@ describe('GitHubProvider.listCommits', () => {
     expect(commits[0].author_login).toBeNull();
     expect(commits[0].author_email).toBe('stranger@example.com');
     expect(commits[0].parents).toEqual(['bbb222']);
+  });
+
+  it('stops pagination and stat lookups at maxCommits', async () => {
+    const fakeOctokit = makeFakeOctokit(
+      [
+        [
+          {
+            sha: 'aaa111',
+            author: { login: 'alice' },
+            commit: {
+              author: { email: 'alice@example.com', date: '2026-01-01T12:00:00Z' },
+              message: 'first commit',
+            },
+            parents: [],
+          },
+          {
+            sha: 'bbb222',
+            author: { login: 'bob' },
+            commit: {
+              author: { email: 'bob@example.com', date: '2026-01-02T12:00:00Z' },
+              message: 'second commit',
+            },
+            parents: [{ sha: 'aaa111' }],
+          },
+        ],
+        [
+          {
+            sha: 'ccc333',
+            author: { login: 'carol' },
+            commit: {
+              author: { email: 'carol@example.com', date: '2026-01-03T12:00:00Z' },
+              message: 'third commit',
+            },
+            parents: [{ sha: 'bbb222' }],
+          },
+        ],
+      ],
+      {
+        aaa111: { stats: { additions: 10, deletions: 2 } },
+        bbb222: { stats: { additions: 5, deletions: 1 } },
+        ccc333: { stats: { additions: 1, deletions: 1 } },
+      }
+    );
+
+    const provider = new GitHubProvider('1');
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (provider as unknown as { _octokit: unknown })._octokit = fakeOctokit as any;
+
+    const commits = await provider.listCommits('org', 'repo', { maxCommits: 1 });
+
+    expect(commits.map(c => c.sha)).toEqual(['aaa111']);
+    expect(fakeOctokit._calls.getCommitRefs).toEqual(['aaa111']);
+    expect(fakeOctokit._calls.pagesYielded).toBe(1);
   });
 });

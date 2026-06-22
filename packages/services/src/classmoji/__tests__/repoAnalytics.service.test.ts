@@ -1,6 +1,11 @@
 import { describe, it, expect } from 'vitest';
-import { linkAuthorsToUsers, linkContributorsToUsers } from '../repoAnalytics.service.ts';
+import {
+  buildSnapshot,
+  linkAuthorsToUsers,
+  linkContributorsToUsers,
+} from '../repoAnalytics.service.ts';
 import type { CommitRecord, ContributorRecord } from '../repoAnalytics.types.ts';
+import type { GitProvider } from '../../git/GitProvider.ts';
 
 function commit(partial: Partial<CommitRecord>): CommitRecord {
   return {
@@ -40,5 +45,30 @@ describe('linkContributorsToUsers', () => {
     const out = linkContributorsToUsers(contributors, new Map([['alice', 'user-1']]));
     expect(out[0].user_id).toBe('user-1');
     expect(out[1].user_id).toBeNull();
+  });
+});
+
+describe('buildSnapshot', () => {
+  it('bounds commit collection for analytics refreshes', async () => {
+    let listCommitsOpts: { maxCommits?: number } | undefined;
+    const provider = {
+      async listCommits(_org: string, _repo: string, opts?: { maxCommits?: number }) {
+        listCommitsOpts = opts;
+        return [];
+      },
+      async getContributorStats() {
+        return [];
+      },
+      async getLanguages() {
+        return {};
+      },
+      async listPulls() {
+        return { open: 0, merged: 0, closed: 0 };
+      },
+    } as unknown as GitProvider;
+
+    await buildSnapshot(provider, 'org', 'repo');
+
+    expect(listCommitsOpts).toEqual({ maxCommits: 250 });
   });
 });
