@@ -2,17 +2,19 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const countMock = vi.fn();
 const findManyMock = vi.fn();
+const upsertMock = vi.fn();
 
 vi.mock('@classmoji/database', () => ({
   default: () => ({
     gitRepoAssignment: {
       count: countMock,
       findMany: findManyMock,
+      upsert: upsertMock,
     },
   }),
 }));
 
-const { getLatePercentage } = await import('../gitRepoAssignment.service.ts');
+const { create, getLatePercentage } = await import('../gitRepoAssignment.service.ts');
 
 type Row = {
   closed_at: Date | null;
@@ -31,6 +33,7 @@ describe('getLatePercentage', () => {
   beforeEach(() => {
     countMock.mockReset();
     findManyMock.mockReset();
+    upsertMock.mockReset();
   });
 
   it('returns 0 when classroom has no assignments', async () => {
@@ -118,5 +121,47 @@ describe('getLatePercentage', () => {
     ]);
     // 1/3 = 33.333...% → rounded to 0 decimals → 33
     expect(await getLatePercentage('cls')).toBe(33);
+  });
+});
+
+describe('create', () => {
+  it('upserts by provider issue id so retries return the existing assignment', async () => {
+    upsertMock.mockResolvedValue({ id: 'repo-assignment-1' });
+
+    await create({
+      id: 'github-issue-id',
+      assignment_id: 'assignment-1',
+      git_repo_id: 'git-repo-1',
+      provider: 'GITHUB',
+      provider_id: 'github-issue-id',
+      provider_issue_number: 12,
+    });
+
+    expect(upsertMock).toHaveBeenCalledWith({
+      where: {
+        provider_provider_id: {
+          provider: 'GITHUB',
+          provider_id: 'github-issue-id',
+        },
+      },
+      create: {
+        id: 'github-issue-id',
+        assignment_id: 'assignment-1',
+        git_repo_id: 'git-repo-1',
+        provider: 'GITHUB',
+        provider_id: 'github-issue-id',
+        provider_issue_number: 12,
+      },
+      update: {
+        assignment_id: 'assignment-1',
+        git_repo_id: 'git-repo-1',
+        provider_issue_number: 12,
+        provider: 'GITHUB',
+      },
+      include: {
+        assignment: true,
+        git_repo: true,
+      },
+    });
   });
 });

@@ -368,10 +368,15 @@ export class GitHubProvider extends GitProvider {
   async listCommits(
     org: string,
     repo: string,
-    opts: { since?: string; branch?: string } = {}
+    opts: { since?: string; branch?: string; maxCommits?: number } = {}
   ): Promise<CommitRecord[]> {
     const octokit = await this.#getOctokit();
     const commits: CommitRecord[] = [];
+    const maxCommits =
+      typeof opts.maxCommits === 'number' && opts.maxCommits > 0
+        ? Math.floor(opts.maxCommits)
+        : Number.POSITIVE_INFINITY;
+
     for await (const { data } of octokit.paginate.iterator(octokit.rest.repos.listCommits, {
       owner: org,
       repo,
@@ -379,12 +384,11 @@ export class GitHubProvider extends GitProvider {
       since: opts.since,
       per_page: 100,
     })) {
-      for (const c of data) {
-        const { data: full } = await octokit.rest.repos.getCommit({
-          owner: org,
-          repo,
-          ref: c.sha,
-        });
+      const remaining = maxCommits - commits.length;
+      if (remaining <= 0) break;
+
+      for (const c of data.slice(0, remaining)) {
+        const { data: full } = await octokit.rest.repos.getCommit({ owner: org, repo, ref: c.sha });
         commits.push({
           sha: c.sha,
           author_login: c.author?.login ?? null,
@@ -397,6 +401,8 @@ export class GitHubProvider extends GitProvider {
           parents: (c.parents ?? []).map((p: { sha: string }) => p.sha),
         });
       }
+
+      if (commits.length >= maxCommits) break;
     }
     return commits;
   }
@@ -543,6 +549,28 @@ export class GitHubProvider extends GitProvider {
       body: issue.body || issue.description || '',
     });
     return { id: String(data.id), number: data.number, url: data.html_url };
+  }
+
+  async findIssueByTitle(
+    org: string,
+    repo: string,
+    title: string
+  ): Promise<{ id: string; number: number; url: string } | null> {
+    const octokit = await this.#getOctokit();
+
+    for await (const { data } of octokit.paginate.iterator(octokit.rest.issues.listForRepo, {
+      owner: org,
+      repo,
+      state: 'all',
+      per_page: 100,
+    })) {
+      const issue = data.find(item => !item.pull_request && item.title === title);
+      if (issue) {
+        return { id: String(issue.id), number: issue.number, url: issue.html_url };
+      }
+    }
+
+    return null;
   }
 
   /**

@@ -236,6 +236,11 @@ export class GitLabProvider extends GitProvider {
     throw new Error('GitLabProvider.createIssue() not implemented');
   }
 
+  async findIssueByTitle(_group: string, _project: string, _title: string): Promise<never> {
+    // TODO: GET /api/v4/projects/:id/issues?search=...
+    throw new Error('GitLabProvider.findIssueByTitle() not implemented');
+  }
+
   /**
    * Add assignees to an issue
    * @param {string} group - Group path
