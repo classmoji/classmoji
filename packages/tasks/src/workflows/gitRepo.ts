@@ -430,6 +430,9 @@ export const createProjectForRepoTask = task({
     const { classroom, repository, repoName, repoId, team } = payload;
 
     try {
+      // Idempotency guard: copyProjectFromTemplate is not idempotent — a re-run would create
+      // a second GitHub Project and overwrite the first id below, orphaning it. Skip if this
+      // repo already has a project.
       const existingRepo = await ClassmojiService.gitRepo.find({ id: repoId });
       if (existingRepo?.project_id) {
         logger.info(`Repo ${repoName} already has a project; skipping project copy`, {
@@ -448,18 +451,6 @@ export const createProjectForRepoTask = task({
 
       if (!org || !repository.project_template_id) {
         throw new Error(`Missing project configuration for ${repoName}`);
-      }
-
-      // Idempotency guard: copyProjectFromTemplate is not idempotent — a re-run would create
-      // a second GitHub Project and overwrite the first id below, orphaning it. Skip if this
-      // repo already has a project.
-      const existingRepo = await ClassmojiService.gitRepo.find({ id: repoId });
-      if (existingRepo?.project_id) {
-        logger.info(`Repo ${repoName} already has a project — skipping project creation`, {
-          repoId,
-          projectId: existingRepo.project_id,
-        });
-        return null;
       }
 
       const orgNodeId = await gitProvider.getOrganizationNodeId(org);
