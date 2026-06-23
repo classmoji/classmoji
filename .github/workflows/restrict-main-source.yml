@@ -1,0 +1,27 @@
+name: Restrict main PR source
+
+# Only PRs from this repo's `staging` branch may merge into `main`.
+# GitHub cannot restrict a PR's source branch natively, so this gate runs on
+# `pull_request_target` (always evaluated from main's copy of this workflow, so a
+# PR can't tamper with it) and only reads event context (no untrusted code runs).
+# Make `enforce-staging-source` a required status check on `main` to enforce it.
+
+on:
+  pull_request_target:
+    branches: [main]
+
+permissions: {}
+
+jobs:
+  enforce-staging-source:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Only allow PRs from staging
+        run: |
+          HEAD_REPO="${{ github.event.pull_request.head.repo.full_name }}"
+          HEAD_REF="${{ github.head_ref }}"
+          if [ "$HEAD_REPO" != "${{ github.repository }}" ] || [ "$HEAD_REF" != "staging" ]; then
+            echo "::error::PRs into main may only come from the 'staging' branch of ${{ github.repository }} (got '$HEAD_REPO:$HEAD_REF')."
+            exit 1
+          fi
+          echo "Source branch is staging from ${{ github.repository }}"
