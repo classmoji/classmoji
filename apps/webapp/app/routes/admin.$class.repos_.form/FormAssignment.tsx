@@ -202,7 +202,7 @@ const FormAssignment = ({
           </div>
 
           <Alert
-            message={`Assignment will be automatically released at 12:01 AM on ${assignment.release_at ? dayjs(assignment.release_at).format('MMM DD, YYYY') : 'TBD'}`}
+            message={`Assignment will be automatically released on ${assignment.release_at ? dayjs(assignment.release_at).format('MMM DD, YYYY') : 'TBD'} at 12:01 AM US Eastern (04:01 UTC), when scheduled releases run.`}
             type="info"
             showIcon
             className=""
