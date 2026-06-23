@@ -139,6 +139,10 @@ export class GitProvider {
     throw new Error('createIssue() must be implemented by subclass');
   }
 
+  async findIssueByTitle(org: string, repo: string, title: string): Promise<GitIssue | null> {
+    throw new Error('findIssueByTitle() must be implemented by subclass');
+  }
+
   async addIssueAssignees(
     org: string,
     repo: string,

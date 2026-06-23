@@ -113,6 +113,10 @@ interface TeamRecord {
   slug: string;
 }
 
+interface ExistingGitRepoRecord extends StudentRepositoryRecord {
+  name: string;
+}
+
 const getErrorMessage = (error: unknown): string =>
   error instanceof Error ? error.message : String(error);
 
@@ -122,6 +126,61 @@ const getErrorStatus = (error: unknown): number | undefined =>
       ? (error as { status: number }).status
       : undefined
     : undefined;
+
+const uniqueLogins = (logins: string[]): string[] => [
+  ...new Set(logins.map(login => login.trim()).filter(Boolean)),
+];
+
+const repoNameForLogin = (repositorySlug: string, login: string): string =>
+  `${repositorySlug}-${login}`;
+
+const ensureReposForLogins = async (
+  classroom: ClassroomRecord,
+  repository: ReleaseModuleRecord,
+  repositorySlug: string,
+  logins: string[],
+  sessionId: string
+): Promise<ExistingGitRepoRecord[]> => {
+  const recipients = uniqueLogins(logins);
+  if (recipients.length === 0) return [];
+
+  const existingRepos = (await ClassmojiService.gitRepo.findByRepository(
+    classroom.slug,
+    repository.id
+  )) as ExistingGitRepoRecord[];
+
+  const existingNames = new Set(existingRepos.map(repo => repo.name));
+  const missingLogins = recipients.filter(
+    login => !existingNames.has(repoNameForLogin(repositorySlug, login))
+  );
+
+  if (missingLogins.length > 0) {
+    logger.info('Creating missing repos before assignment release', {
+      classroomSlug: classroom.slug,
+      repositoryId: repository.id,
+      repositoryTitle: repository.title,
+      missing: missingLogins.length,
+      existing: existingRepos.length,
+    });
+
+    await createRepositoriesTask.triggerAndWait(
+      {
+        logins: missingLogins,
+        assignmentTitle: repository.title,
+        org: classroom.slug,
+        sessionId,
+      },
+      { concurrencyKey: classroom.slug }
+    );
+
+    return (await ClassmojiService.gitRepo.findByRepository(
+      classroom.slug,
+      repository.id
+    )) as ExistingGitRepoRecord[];
+  }
+
+  return existingRepos;
+};
 
 export const createGithubRepositoryAssignmentTask = task({
   id: 'gh-create_git_repo_assignment',
@@ -141,15 +200,68 @@ export const createGithubRepositoryAssignmentTask = task({
       );
     }
 
+    // Idempotency guard: skip if this repo already has this assignment. createIssue mints a
+    // NEW GitHub issue every run, so a re-trigger (Sync, manual re-run, webhook redelivery)
+    // would otherwise create duplicate issues + rows. Centralizing the guard here protects
+    // every caller (gh-create_git_repo, daily_git_repo_assignments_release, and the
+    // already-guarded release_git_repo_assignments_now).
+    const existingAssignment = await ClassmojiService.gitRepoAssignment.findFirst({
+      assignment_id: assignment.id,
+      git_repo_id: studentRepo.id,
+    });
+    if (existingAssignment) {
+      logger.info('Assignment issue already exists for this repo — skipping', {
+        repoName,
+        assignmentId: assignment.id,
+        gitRepoId: studentRepo.id,
+      });
+      return;
+    }
+
     const gitProvider = getGitProvider(organization);
+    const existingAssignment = await ClassmojiService.gitRepoAssignment.findFirst({
+      assignment_id: assignment.id,
+      git_repo_id: studentRepo.id,
+    });
+
+    if (existingAssignment) {
+      logger.info('GitHub assignment issue already exists; skipping creation', {
+        organization: organization.login,
+        repoName,
+        assignmentId: assignment.id,
+        assignmentTitle: assignment.title,
+        studentRepoId: studentRepo.id,
+        gitRepoAssignmentId: existingAssignment.id,
+      });
+      return existingAssignment;
+    }
+
     let issue: { id: string; number: number };
 
     try {
-      issue = await gitProvider.createIssue(organization.login, repoName, {
-        title: assignment.title,
-        body: assignment.body ?? undefined,
-        description: assignment.description ?? undefined,
-      });
+      const existingIssue = await gitProvider.findIssueByTitle(
+        organization.login,
+        repoName,
+        assignment.title
+      );
+
+      if (existingIssue) {
+        logger.info('Found existing GitHub assignment issue; adopting it', {
+          organization: organization.login,
+          repoName,
+          assignmentId: assignment.id,
+          assignmentTitle: assignment.title,
+          studentRepoId: studentRepo.id,
+          issueNumber: existingIssue.number,
+        });
+        issue = existingIssue;
+      } else {
+        issue = await gitProvider.createIssue(organization.login, repoName, {
+          title: assignment.title,
+          body: assignment.body ?? undefined,
+          description: assignment.description ?? undefined,
+        });
+      }
     } catch (error: unknown) {
       const status = getErrorStatus(error);
       const context = {
@@ -342,9 +454,11 @@ export const dailyRepositoryAssignmentsReleaseTask = schedules.task({
             org: classroom.slug,
           });
 
-          if (logins.length > 0) {
+          const recipients = uniqueLogins(logins);
+
+          if (recipients.length > 0) {
             await createRepositoriesTask.triggerAndWait({
-              logins,
+              logins: recipients,
               assignmentTitle: repository.title,
               org: classroom.slug,
               sessionId: nanoid(),
@@ -352,32 +466,39 @@ export const dailyRepositoryAssignmentsReleaseTask = schedules.task({
           }
         } else {
           const repositorySlug = repository.slug || titleToIdentifier(repository.title);
+          const recipients = uniqueLogins(logins);
+          const repos = await ensureReposForLogins(
+            classroom,
+            repository,
+            repositorySlug,
+            recipients,
+            nanoid()
+          );
+          const reposByName = new Map(repos.map(repo => [repo.name, repo]));
 
           for await (const assignment of moduleAssignments) {
             logger.info('Processing assignment', { title: assignment.title });
 
-            const payloads = await Promise.all(
-              logins.map(async login => {
-                const studentRepo = await ClassmojiService.gitRepo.find({
-                  name: `${repositorySlug}-${login}`,
-                  classroom_id: classroom.id,
-                });
+            const payloads = recipients.map(login => {
+              const repoName = repoNameForLogin(repositorySlug, login);
+              const studentRepo = reposByName.get(repoName);
 
-                if (!studentRepo) {
-                  throw new Error(`GitRepo not found for ${repositorySlug}-${login}`);
-                }
+              if (!studentRepo) {
+                throw new Error(
+                  `GitRepo not found after provisioning for ${repoName} in classroom ${classroom.slug}`
+                );
+              }
 
-                return {
-                  payload: {
-                    assignment,
-                    organization: gitOrg,
-                    repoName: `${repositorySlug}-${login}`,
-                    studentRepo,
-                  },
-                  options: { tags: ctx.run.tags },
-                };
-              })
-            );
+              return {
+                payload: {
+                  assignment,
+                  organization: gitOrg,
+                  repoName,
+                  studentRepo,
+                },
+                options: { tags: ctx.run.tags },
+              };
+            });
 
             await createGithubRepositoryAssignmentTask.batchTriggerAndWait(payloads);
             await ClassmojiService.assignment.update(assignment.id, {
@@ -438,44 +559,36 @@ export const releaseAssignmentsNowTask = task({
       logins = teams.map(team => team.slug);
     }
 
-    if (logins.length === 0) {
+    const recipients = uniqueLogins(logins);
+
+    if (recipients.length === 0) {
       logger.info('No recipients to release to', { repositoryId: payload.repositoryId });
       return;
     }
 
-    // Ensure the student/team repos exist. createRepositoriesTask also marks the
-    // repository published. If repos already exist we skip straight to issues.
-    const existingRepos = await ClassmojiService.gitRepo.findByRepository(
-      classroom.slug,
-      repository.id
-    );
-    if (existingRepos.length === 0) {
-      await createRepositoriesTask.triggerAndWait(
-        {
-          logins,
-          assignmentTitle: repository.title,
-          org: classroom.slug,
-          sessionId: nanoid(),
-        },
-        { concurrencyKey: classroom.slug }
-      );
-    }
-
     const repositorySlug = repository.slug || titleToIdentifier(repository.title);
+    const repos = await ensureReposForLogins(
+      classroom,
+      repository,
+      repositorySlug,
+      recipients,
+      nanoid()
+    );
+    const reposByName = new Map(repos.map(repo => [repo.name, repo]));
 
     for await (const assignment of assignments) {
       logger.info('Releasing assignment now', { title: assignment.title });
 
       const payloads = (
         await Promise.all(
-          logins.map(async login => {
-            const studentRepo = await ClassmojiService.gitRepo.find({
-              name: `${repositorySlug}-${login}`,
-              classroom_id: classroom.id,
-            });
+          recipients.map(async login => {
+            const repoName = repoNameForLogin(repositorySlug, login);
+            const studentRepo = reposByName.get(repoName);
 
             if (!studentRepo) {
-              throw new Error(`GitRepo not found for ${repositorySlug}-${login}`);
+              throw new Error(
+                `GitRepo not found after provisioning for ${repoName} in classroom ${classroom.slug}`
+              );
             }
 
             // Skip repos that already have this assignment so a re-run (or a
@@ -490,7 +603,7 @@ export const releaseAssignmentsNowTask = task({
               payload: {
                 assignment,
                 organization: gitOrg,
-                repoName: `${repositorySlug}-${login}`,
+                repoName,
                 studentRepo,
               },
               options: { tags: ctx.run.tags },

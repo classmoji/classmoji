@@ -40,7 +40,7 @@ export function CalloutSlot({ id = DEFAULT_CALLOUT_SLOT_ID, className }: Callout
   };
 
   const baseClass =
-    'pointer-events-none fixed top-4 left-1/2 w-full max-w-2xl -translate-x-1/2 px-4';
+    'pointer-events-none fixed top-20 left-1/2 w-full max-w-2xl -translate-x-1/2 px-4';
   const wrapperClass = className ? `${baseClass} ${className}` : baseClass;
 
   return (
