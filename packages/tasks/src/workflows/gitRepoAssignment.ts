@@ -387,6 +387,7 @@ export const repositoryAssignmentDeletedHandlerTask = task({
 
 export const dailyRepositoryAssignmentsReleaseTask = schedules.task({
   id: 'daily_git_repo_assignments_release',
+  cron: '1 4 * * *',
   run: async (_payload: ScheduleTaskPayload, { ctx }: GitRepoAssignmentTaskContext) => {
     try {
       const assignmentsToRelease = (await ClassmojiService.assignment.findReadyForRelease(
