@@ -72,7 +72,7 @@ const AssignmentsTable = ({
       dataIndex: 'release_at',
       key: 'release_at',
       render: (date: string | null) => {
-        return date ? dayjs(date).format('MMM DD, YYYY [at] 12:01 A') : '';
+        return date ? dayjs(date).format('MMM DD, YYYY [at] 12:01 AM ET') : '';
       },
     },
 
