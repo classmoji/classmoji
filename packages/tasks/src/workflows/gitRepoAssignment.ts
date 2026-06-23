@@ -387,6 +387,11 @@ export const repositoryAssignmentDeletedHandlerTask = task({
 
 export const dailyRepositoryAssignmentsReleaseTask = schedules.task({
   id: 'daily_git_repo_assignments_release',
+  // Declarative schedule so it stays version-controlled and tied to this task id.
+  // The previous imperative (dashboard) schedule was orphaned when the task id was
+  // renamed (daily_repository_assignments_release -> daily_git_repo_assignments_release),
+  // which left its runs stuck in "Pending Version". Runs daily at 04:01 UTC.
+  cron: '1 4 * * *',
   run: async (_payload: ScheduleTaskPayload, { ctx }: GitRepoAssignmentTaskContext) => {
     try {
       const assignmentsToRelease = (await ClassmojiService.assignment.findReadyForRelease(
