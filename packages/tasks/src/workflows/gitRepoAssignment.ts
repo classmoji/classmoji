@@ -219,22 +219,6 @@ export const createGithubRepositoryAssignmentTask = task({
     }
 
     const gitProvider = getGitProvider(organization);
-    const existingAssignment = await ClassmojiService.gitRepoAssignment.findFirst({
-      assignment_id: assignment.id,
-      git_repo_id: studentRepo.id,
-    });
-
-    if (existingAssignment) {
-      logger.info('GitHub assignment issue already exists; skipping creation', {
-        organization: organization.login,
-        repoName,
-        assignmentId: assignment.id,
-        assignmentTitle: assignment.title,
-        studentRepoId: studentRepo.id,
-        gitRepoAssignmentId: existingAssignment.id,
-      });
-      return existingAssignment;
-    }
 
     let issue: { id: string; number: number };
 
