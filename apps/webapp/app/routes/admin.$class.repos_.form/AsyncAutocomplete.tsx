@@ -1,39 +1,46 @@
 import { useState, useEffect } from 'react';
-import { Octokit } from '@octokit/rest';
 import type { Control, FieldValues } from 'react-hook-form';
 import { FormItem } from 'react-hook-form-antd';
-import { Select, Input, Spin } from 'antd';
+import { Select, Input, Spin, Tag } from 'antd';
 import { useDebounce } from '@uidotdev/usehooks';
 
-const getAsyncData = async (query: string, token: string) => {
+interface TemplateRepository {
+  name: string;
+  full_name: string;
+  description: string | null;
+  updated_at: string | null;
+  private: boolean;
+  language: string | null;
+  stargazers_count: number;
+}
+
+// Search the classroom org's repos (public + private) plus global public repos
+// via the server endpoint, which uses the org installation token. The
+// installation token is never exposed to the browser.
+const getAsyncData = async (query: string, classSlug: string): Promise<TemplateRepository[]> => {
   try {
-    // Search for public template repositories using GitHub's search API
-    const octokit = new Octokit({ auth: token });
+    const params = new URLSearchParams({ classroomSlug: classSlug, q: query });
+    const response = await fetch(`/api/github-repos?${params.toString()}`);
 
-    const searchQuery = query + ' in:name is:public';
+    if (!response.ok) {
+      console.error('Error searching templates:', response.status);
+      return [];
+    }
 
-    const response = await octokit.rest.search.repos({
-      q: searchQuery,
-      sort: 'updated',
-      order: 'desc',
-      per_page: 50,
-    });
-
-    return response.data.items;
+    const data = (await response.json()) as TemplateRepository[] | { error: string };
+    return Array.isArray(data) ? data : [];
   } catch (error: unknown) {
-    console.error('Error searching public templates:', error);
+    console.error('Error searching templates:', error);
     return [];
   }
 };
-
-type PublicTemplateRepository = Awaited<ReturnType<typeof getAsyncData>>[number];
 
 interface AsyncAutocompleteProps {
   template: string;
   isPublished: boolean;
   setTemplate: (template: string) => void;
   control: Control<FieldValues>;
-  token: string;
+  classSlug: string;
 }
 
 const AsyncAutocomplete = ({
@@ -41,10 +48,10 @@ const AsyncAutocomplete = ({
   isPublished,
   setTemplate,
   control,
-  token,
+  classSlug,
 }: AsyncAutocompleteProps) => {
   const [loading, setLoading] = useState(false);
-  const [data, setData] = useState<PublicTemplateRepository[] | null>(null);
+  const [data, setData] = useState<TemplateRepository[] | null>(null);
   const [query, setQuery] = useState('');
   const [value, setValue] = useState(template);
 
@@ -62,7 +69,7 @@ const AsyncAutocomplete = ({
   const fetchOptions = async (q: string) => {
     setLoading(true);
     try {
-      const result = await getAsyncData(q, token);
+      const result = await getAsyncData(q, classSlug);
       setData(result);
     } catch (error: unknown) {
       console.error('Error fetching repositories:', error);
@@ -79,13 +86,13 @@ const AsyncAutocomplete = ({
         <div className="flex gap-2">
           <FormItem
             name="template"
-            label="Search Public Template Repositories"
+            label="Search template repositories"
             className="w-full"
             control={control}
           >
             <Select
               className="w-full"
-              placeholder="Type to search public template repositories..."
+              placeholder="Type to search template repositories..."
               loading={loading}
               value={value}
               onSelect={v => {
@@ -98,21 +105,25 @@ const AsyncAutocomplete = ({
               notFoundContent={
                 loading ? (
                   <div className="text-center py-4">
-                    <Spin size="small" />{' '}
-                    <span className="ml-2">Searching public templates...</span>
+                    <Spin size="small" /> <span className="ml-2">Searching templates...</span>
                   </div>
                 ) : query ? (
                   'No template repositories found'
                 ) : (
-                  'Type to search for public template repositories'
+                  'Type to search for template repositories'
                 )
               }
               options={(data || []).map(d => ({
                 value: d.full_name,
                 label: (
                   <div className="flex items-center justify-between">
-                    <div>
-                      <div className="font-medium">{d.full_name}</div>
+                    <div className="flex items-center gap-2">
+                      <span className="font-medium">{d.full_name}</span>
+                      {d.private && (
+                        <Tag color="gold" className="m-0">
+                          Private
+                        </Tag>
+                      )}
                     </div>
                     <div className="flex items-center gap-2 text-xs text-gray-400">
                       {Number(d.stargazers_count) > 0 && (
