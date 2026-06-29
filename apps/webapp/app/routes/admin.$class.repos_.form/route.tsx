@@ -2,7 +2,6 @@ import { namedAction } from 'remix-utils/named-action';
 import { useNavigate, useParams } from 'react-router';
 import { IconChevronLeft, IconFolder } from '@tabler/icons-react';
 
-import { getAuthSession } from '@classmoji/auth/server';
 import { requireClassroomAdmin, assertClassroomMutationAllowed } from '~/utils/routeAuth.server';
 import FormModule from './FormModule';
 import { ClassmojiService } from '@classmoji/services';
@@ -18,7 +17,6 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
     action: 'view_module_form',
   });
 
-  const authData = await getAuthSession(request);
   const url = new URL(request.url);
   const moduleTitle = url.searchParams.get('title');
   const tags = await ClassmojiService.organizationTag.findByClassroomId(classroom.id);
@@ -64,7 +62,6 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
   });
 
   return {
-    token: authData?.token,
     repository,
     isNew: !repository,
     tags,
@@ -76,8 +73,7 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
 };
 
 const ModuleForm = ({ loaderData }: Route.ComponentProps) => {
-  const { token, repository, isNew, tags, classroom, pages, slides, hasReposWithProjects } =
-    loaderData;
+  const { repository, isNew, tags, classroom, pages, slides, hasReposWithProjects } = loaderData;
   const navigate = useNavigate();
   const { class: classSlug } = useParams();
   const goToRepos = () => navigate(`/admin/${classSlug}/repos`);
@@ -107,7 +103,6 @@ const ModuleForm = ({ loaderData }: Route.ComponentProps) => {
       </div>
 
       <FormModule
-        token={token!}
         repository={repository as Parameters<typeof FormModule>[0]['repository']}
         isNew={isNew}
         close={close}
