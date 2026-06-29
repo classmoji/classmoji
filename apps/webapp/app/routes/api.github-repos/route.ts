@@ -13,6 +13,7 @@
  * Only OWNER and ASSISTANT roles can access this endpoint.
  */
 import { Octokit } from '@octokit/rest';
+import getPrisma from '@classmoji/database';
 import { assertClassroomAccess } from '~/utils/helpers';
 import { getInstallationToken } from '~/routes/student.$class.quizzes/helpers.server';
 import type { Route } from './+types/route';
@@ -70,7 +71,15 @@ export async function loader({ request }: Route.LoaderArgs) {
     // (which include private). Returns a richer shape so the picker can badge
     // private repos.
     if (query.length >= 2) {
-      const repoList = await searchTemplateRepos(octokit, query, gitOrg.login);
+      // Exclude repos Classmoji generated as student/team repos (across every
+      // classroom in this org) so they don't pollute the template picker.
+      const generated = await getPrisma().gitRepo.findMany({
+        where: { classroom: { git_org_id: gitOrg.id } },
+        select: { name: true },
+      });
+      const excluded = new Set(generated.map(r => `${gitOrg.login}/${r.name}`.toLowerCase()));
+
+      const repoList = await searchTemplateRepos(octokit, query, gitOrg.login, excluded);
       return new Response(JSON.stringify(repoList), {
         headers: { 'Content-Type': 'application/json' },
       });
@@ -107,12 +116,14 @@ export async function loader({ request }: Route.LoaderArgs) {
 /**
  * Run two name searches and merge them: any public repo on GitHub, plus repos
  * in the classroom org (public + private, visible to the installation token).
- * Deduped by full_name (the org's public repos match both queries).
+ * Deduped by full_name (the org's public repos match both queries). Repos in
+ * `excluded` (Classmoji-generated student/team repos) are filtered out.
  */
 async function searchTemplateRepos(
   octokit: Octokit,
   query: string,
-  orgLogin: string
+  orgLogin: string,
+  excluded: Set<string>
 ): Promise<RepoSearchItem[]> {
   const [publicResult, orgResult] = await Promise.allSettled([
     octokit.rest.search.repos({
@@ -139,6 +150,7 @@ async function searchTemplateRepos(
     }
     for (const r of result.value.data.items) {
       if (merged.has(r.full_name)) continue;
+      if (excluded.has(r.full_name.toLowerCase())) continue;
       merged.set(r.full_name, {
         name: r.name,
         full_name: r.full_name,
