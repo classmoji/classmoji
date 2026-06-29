@@ -1,6 +1,5 @@
 import _ from 'lodash';
 import { useEffect, useState } from 'react';
-import { Octokit } from '@octokit/rest';
 
 import { useRevalidator } from 'react-router';
 import { useCallout } from '@classmoji/ui-components';
@@ -94,7 +93,6 @@ interface ModuleData {
 }
 
 interface FormModuleProps {
-  token: string;
   isNew: boolean;
   repository: ModuleData | null;
   close: () => void;
@@ -106,7 +104,6 @@ interface FormModuleProps {
 }
 
 const FormModule = ({
-  token,
   isNew,
   repository,
   close,
@@ -271,29 +268,43 @@ const FormModule = ({
 
   useEffect(() => {
     const fetchTemplateRepoIssues = async () => {
-      const ocktokit = new Octokit({ auth: token });
       if (!template) return;
       const [owner, repo] = template.split('/');
+      if (!owner || !repo) return;
 
-      const { data } = await ocktokit.issues.listForRepo({
-        owner,
-        repo,
-      });
-
-      const promises = data.map(async ({ title, body }) => {
-        const data = await fetch('/api/parser', {
-          method: 'POST',
-          headers: {
-            Accept: 'application/json',
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({ markdown: body }),
+      // Fetch the template's issues through the server endpoint, which uses the
+      // org installation token. This works for private templates that the
+      // instructor's personal token can't read. Best-effort: a failure just
+      // means assignment titles won't prefill, so never break the form.
+      try {
+        const params = new URLSearchParams({
+          classroomSlug: classroom.slug,
+          owner,
+          repo,
         });
-        const res = await data.json();
-        return { title: title, body: res.html };
-      });
+        const res = await fetch(`/api/github-repo-issues?${params.toString()}`);
+        if (!res.ok) return;
+        const issues = (await res.json()) as Array<{ title: string; body: string | null }>;
+        if (!Array.isArray(issues)) return;
 
-      Promise.all(promises).then(assignments => setTemplateAssignments(assignments));
+        const promises = issues.map(async ({ title, body }) => {
+          const data = await fetch('/api/parser', {
+            method: 'POST',
+            headers: {
+              Accept: 'application/json',
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ markdown: body }),
+          });
+          const parsed = await data.json();
+          return { title, body: parsed.html };
+        });
+
+        const assignments = await Promise.all(promises);
+        setTemplateAssignments(assignments);
+      } catch (error: unknown) {
+        console.error('Error fetching template repo issues:', error);
+      }
     };
 
     if (template || repository?.template) {
@@ -584,7 +595,7 @@ const FormModule = ({
               template={repository?.template || ''}
               isPublished={repository?.is_published || false}
               setTemplate={setTemplate}
-              token={token}
+              classSlug={classroom.slug}
             />
           </Card>
 
