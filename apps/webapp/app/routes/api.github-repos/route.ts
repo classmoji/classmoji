@@ -81,7 +81,7 @@ export async function loader({ request }: Route.LoaderArgs) {
 
       const repoList = await searchTemplateRepos(octokit, query, gitOrg.login, excluded);
       return new Response(JSON.stringify(repoList), {
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' },
       });
     }
 
