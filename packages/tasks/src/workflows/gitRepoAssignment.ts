@@ -485,7 +485,9 @@ export const dailyRepositoryAssignmentsReleaseTask = schedules.task({
               };
             });
 
-            await createGithubRepositoryAssignmentTask.batchTriggerAndWait(payloads);
+            if (payloads.length > 0) {
+              await createGithubRepositoryAssignmentTask.batchTriggerAndWait(payloads);
+            }
             await ClassmojiService.assignment.update(assignment.id, {
               is_published: true,
             });
