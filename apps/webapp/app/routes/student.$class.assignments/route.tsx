@@ -199,11 +199,9 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
       });
       assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
 
-      if (!data.hours_purchased || data.hours_purchased <= 0) {
-        throw new Error('Invalid hours: Must be a positive number.');
-      }
-      if (!data.amount || data.amount >= 0) {
-        throw new Error('Invalid amount: Token spending amount must be negative.');
+      const hoursPurchased = Number(data.hours_purchased);
+      if (!Number.isInteger(hoursPurchased) || hoursPurchased <= 0) {
+        throw new Error('Invalid hours: Must be a positive whole number.');
       }
       if (!data.git_repo_assignment_id) {
         throw new Error('Missing repository assignment ID.');
@@ -212,7 +210,68 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
         throw new Error('Invalid classroom ID.');
       }
 
-      await ClassmojiService.token.updateExtension(data);
+      // Load the assignment from the DB. Price and eligibility are recomputed
+      // server-side -- the client-supplied `amount` is never trusted, and the
+      // deadline / late-hour / override gates from the popover are re-enforced
+      // here so they cannot be bypassed by posting a crafted request body.
+      const repoAssignment = await ClassmojiService.gitRepoAssignment.findById(
+        data.git_repo_assignment_id
+      );
+      if (!repoAssignment || repoAssignment.git_repo?.classroom_id !== classroom.id) {
+        throw new Error('Repository assignment not found.');
+      }
+      if (repoAssignment.is_late_override) {
+        throw new Error('Extensions are unavailable: a late override is in effect.');
+      }
+
+      const tokensPerHour = repoAssignment.assignment?.tokens_per_hour ?? 0;
+      if (tokensPerHour <= 0) {
+        throw new Error('Token cost not configured for this assignment.');
+      }
+
+      const deadlineMs = repoAssignment.assignment?.student_deadline
+        ? new Date(repoAssignment.assignment.student_deadline).getTime()
+        : null;
+      if (deadlineMs === null || deadlineMs >= Date.now()) {
+        throw new Error('The deadline for this assignment has not passed yet.');
+      }
+
+      // Mirror the popover's num_late_hours cap: hours past the deadline minus
+      // hours already purchased. Only OPEN submissions can accrue late hours.
+      const purchaseTransactions = await ClassmojiService.token.findTransactions({
+        git_repo_assignment_id: repoAssignment.id,
+        student_id: data.student_id,
+        type: 'PURCHASE',
+      });
+      const alreadyPurchasedHours = purchaseTransactions.reduce(
+        (sum, t) => sum + (t.hours_purchased ?? 0),
+        0
+      );
+      const hoursPastDeadline = Math.max(0, Math.ceil((Date.now() - deadlineMs) / 3_600_000));
+      const numLateHours =
+        repoAssignment.status === 'OPEN'
+          ? Math.max(0, hoursPastDeadline - alreadyPurchasedHours)
+          : 0;
+
+      if (numLateHours <= 0) {
+        throw new Error('No purchasable late hours remain for this assignment.');
+      }
+      if (hoursPurchased > numLateHours) {
+        throw new Error(
+          `You can purchase at most ${numLateHours} more late hour(s) for this assignment.`
+        );
+      }
+
+      // Recompute the price; the balance check still runs inside updateExtension.
+      await ClassmojiService.token.updateExtension({
+        classroom_id: classroom.id,
+        student_id: data.student_id,
+        git_repo_assignment_id: repoAssignment.id,
+        amount: -(tokensPerHour * hoursPurchased),
+        hours_purchased: hoursPurchased,
+        type: 'PURCHASE',
+        description: `Purchase of ${hoursPurchased} hour(s).`,
+      });
       return {
         action: 'PURCHASE_EXTENSION_HOURS',
         success: 'Successfully purchased hour(s).',
