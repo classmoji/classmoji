@@ -1,11 +1,9 @@
-import { useState } from 'react';
-import { Form, InputNumber, Button, Switch } from 'antd';
+import { Form, InputNumber, Button } from 'antd';
 
 import { useGlobalFetcher } from '~/hooks';
 import { SettingSection } from '~/components';
 
 interface GradingSettings {
-  show_grades_to_students: boolean;
   late_penalty_points_per_hour: number;
 }
 
@@ -15,15 +13,11 @@ interface GradingSettingsOptionsProps {
 
 const GradingSettingsOptions = ({ settings }: GradingSettingsOptionsProps) => {
   const { fetcher } = useGlobalFetcher();
-  const [showGradesToStudents, setShowGradesToStudents] = useState(
-    settings.show_grades_to_students
-  );
 
   const onFinish = (values: { late_penalty_points_per_hour: number }) => {
     fetcher!.submit(
       {
         late_penalty_points_per_hour: values.late_penalty_points_per_hour,
-        show_grades_to_students: showGradesToStudents,
       },
       {
         action: '?/saveGradingSettings',
@@ -48,15 +42,6 @@ const GradingSettingsOptions = ({ settings }: GradingSettingsOptionsProps) => {
       >
         <Form.Item label="Late penalty points per hour" name="late_penalty_points_per_hour">
           <InputNumber className="w-full" min={0} />
-        </Form.Item>
-
-        <Form.Item label="Show grades to students" name="show_grades_to_students">
-          <Switch
-            checked={showGradesToStudents}
-            onChange={value => {
-              setShowGradesToStudents(value);
-            }}
-          />
         </Form.Item>
 
         <Form.Item label={null}>
