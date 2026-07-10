@@ -63,6 +63,10 @@ export const updateExtension = async (data: UpdateExtensionInput) => {
       data: {
         ...(data as Prisma.TokenTransactionUncheckedCreateInput),
         balance_after: newBalance,
+        // `description` is non-nullable (@default('')); coalesce a possibly-null value from
+        // the spread so it can't trigger Prisma's misleading "Argument `classroom` is
+        // missing" error (same guard as assignToStudent).
+        description: (data.description as string | null | undefined) ?? '',
       },
     });
   });
@@ -108,7 +112,10 @@ export const assignToStudent = async (data: AssignToStudentInput) => {
         balance_after: newBalance,
         student_id: data.studentId,
         classroom_id: data.classroomId,
-        description: data.description,
+        // `description` is a non-nullable column (@default('')). A null here makes
+        // Prisma's create validation fail with a misleading "Argument `classroom`
+        // is missing", so coalesce null/undefined to an empty string.
+        description: data.description ?? '',
         git_repo_assignment_id: data.repositoryAssignmentId,
       },
     });
