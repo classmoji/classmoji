@@ -286,7 +286,8 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
           student: typeof student === 'string' ? JSON.parse(student) : student,
           classroomId: classroom.id,
           amount: parseInt(num_tokens, 10),
-          description: description || null,
+          // Omit when blank; sending null breaks the non-nullable description column.
+          description: description || undefined,
         },
         options: {
           tags: [`session_${sessionId}`],
