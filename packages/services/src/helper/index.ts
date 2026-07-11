@@ -239,7 +239,7 @@ class HelperService {
         studentId: payload.studentId,
         amount: emoji.extra_tokens,
         description: `Tokens for getting a ${grade}.`,
-        gitRepoAssignmentId: gitRepoAssignment.id,
+        repositoryAssignmentId: gitRepoAssignment.id,
       };
 
       const tokenTransaction = await ClassmojiService.token.assignToStudent(data);
@@ -276,7 +276,7 @@ class HelperService {
           studentId: membership.user_id,
           amount: emoji.extra_tokens,
           description: `Tokens for getting a ${grade}.`,
-          gitRepoAssignmentId: gitRepoAssignment.id,
+          repositoryAssignmentId: gitRepoAssignment.id,
         };
 
         const tokenTransaction = await ClassmojiService.token.assignToStudent(data);
@@ -310,7 +310,7 @@ class HelperService {
         studentId,
         amount: grade.token_transaction.amount * -1,
         description: `Removing ${grade.emoji}.`,
-        gitRepoAssignmentId: gitRepoAssignment.id,
+        repositoryAssignmentId: gitRepoAssignment.id,
         type: 'REMOVAL',
       };
 
@@ -325,7 +325,7 @@ class HelperService {
           studentId: membership.user_id,
           amount: grade.token_transaction.amount * -1,
           description: `Removing ${grade.emoji}.`,
-          gitRepoAssignmentId: gitRepoAssignment.id,
+          repositoryAssignmentId: gitRepoAssignment.id,
           type: 'REMOVAL',
         };
 
