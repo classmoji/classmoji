@@ -9,6 +9,37 @@ interface ClassroomMembershipUpsertData {
   comment?: string | null;
 }
 
+const LAST_OWNER_ERROR = 'Cannot remove the last owner of a classroom';
+
+/**
+ * Resolve the target role from a Prisma update input, which may be a bare enum
+ * value or a `{ set }` wrapper. Returns undefined when the update leaves role
+ * untouched.
+ */
+const resolveRoleUpdate = (
+  roleInput: Prisma.ClassroomMembershipUpdateInput['role']
+): Role | undefined => {
+  if (typeof roleInput === 'string') return roleInput as Role;
+  if (roleInput && typeof roleInput === 'object' && 'set' in roleInput) {
+    return (roleInput as { set?: Role }).set ?? undefined;
+  }
+  return undefined;
+};
+
+/**
+ * Guard against orphaning a classroom: throw when it would be left with zero
+ * OWNER memberships. Call before removing an OWNER membership or demoting one.
+ * @param {string} classroomId - UUID of the Classroom
+ */
+const assertNotLastOwner = async (classroomId: string): Promise<void> => {
+  const ownerCount = await getPrisma().classroomMembership.count({
+    where: { classroom_id: classroomId, role: 'OWNER' },
+  });
+  if (ownerCount <= 1) {
+    throw new Error(LAST_OWNER_ERROR);
+  }
+};
+
 /**
  * Find a membership by classroom and user
  * @param {string} classroomId - UUID of the Classroom
@@ -187,6 +218,12 @@ export const update = async (
     where: { classroom_id: classroomId, user_id: userId },
   });
   if (!membership) return null;
+
+  const newRole = resolveRoleUpdate(updates.role);
+  if (membership.role === 'OWNER' && newRole && newRole !== 'OWNER') {
+    await assertNotLastOwner(classroomId);
+  }
+
   return getPrisma().classroomMembership.update({
     where: { id: membership.id },
     data: updates,
@@ -204,6 +241,14 @@ export const update = async (
  * @returns {Promise<Object>}
  */
 export const updateById = async (id: string, updates: Prisma.ClassroomMembershipUpdateInput) => {
+  const newRole = resolveRoleUpdate(updates.role);
+  if (newRole && newRole !== 'OWNER') {
+    const membership = await getPrisma().classroomMembership.findUnique({ where: { id } });
+    if (membership?.role === 'OWNER') {
+      await assertNotLastOwner(membership.classroom_id);
+    }
+  }
+
   return getPrisma().classroomMembership.update({
     where: { id },
     data: updates,
@@ -221,6 +266,13 @@ export const updateById = async (id: string, updates: Prisma.ClassroomMembership
  * @returns {Promise<Object>}
  */
 export const remove = async (classroomId: string, userId: string) => {
+  const ownerMembership = await getPrisma().classroomMembership.findFirst({
+    where: { classroom_id: classroomId, user_id: userId, role: 'OWNER' },
+  });
+  if (ownerMembership) {
+    await assertNotLastOwner(classroomId);
+  }
+
   return getPrisma().classroomMembership.deleteMany({
     where: { classroom_id: classroomId, user_id: userId },
   });
@@ -232,6 +284,11 @@ export const remove = async (classroomId: string, userId: string) => {
  * @returns {Promise<Object>}
  */
 export const removeById = async (id: string) => {
+  const membership = await getPrisma().classroomMembership.findUnique({ where: { id } });
+  if (membership?.role === 'OWNER') {
+    await assertNotLastOwner(membership.classroom_id);
+  }
+
   return getPrisma().classroomMembership.delete({
     where: { id },
   });

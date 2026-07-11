@@ -93,9 +93,55 @@ export const action = checkAuth(async ({ request }: { request: Request }) => {
 
   return namedAction(request, {
     async updateRegradeRequest() {
+      // Authorization is derived from the RegradeRequest record itself, never
+      // from ids in the request body. Load the request, resolve its classroom,
+      // then require the teaching team — assistants resolve regrades from their
+      // queue, so ASSISTANT is included alongside OWNER/TEACHER.
+      const requestId = body?.request?.id;
+      if (typeof requestId !== 'string' || !requestId) {
+        return data({ error: 'request.id is required' }, { status: 400 });
+      }
+
+      const [regradeRequest] = await ClassmojiService.regradeRequest.findMany({
+        id: requestId,
+      });
+
+      if (!regradeRequest) {
+        return data({ error: 'Regrade request not found' }, { status: 404 });
+      }
+
+      const classroom = await ClassmojiService.classroom.findById(regradeRequest.classroom_id);
+
+      if (!classroom) {
+        return data({ error: 'Classroom not found' }, { status: 404 });
+      }
+
+      await assertClassroomAccess({
+        request,
+        classroomSlug: classroom.slug,
+        allowedRoles: ['OWNER', 'TEACHER', 'ASSISTANT'],
+        resourceType: 'REGRADE_REQUEST',
+        attemptedAction: 'update_regrade_request',
+        metadata: {
+          regrade_request_id: regradeRequest.id,
+        },
+      });
+
       try {
+        // Re-derive the task payload from the DB record so the status update and
+        // the resolution email use trusted values, not client-supplied ones.
         const run = await tasks.trigger('update_regrade_request', {
-          request: body.request,
+          request: {
+            id: regradeRequest.id,
+            student: {
+              email: regradeRequest.student?.email,
+            },
+            git_repo_assignment: {
+              assignment: {
+                title: regradeRequest.git_repo_assignment?.assignment?.title,
+              },
+            },
+          },
           data: {
             status: body.status,
           },
