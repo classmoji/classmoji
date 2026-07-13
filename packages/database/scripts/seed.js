@@ -1,4 +1,5 @@
 import { PrismaClient } from '@prisma/client';
+import { seedTeamWithGroupRepo, seedForeignClassroom } from './seed-fixtures.js';
 
 const prisma = new PrismaClient();
 
@@ -20,17 +21,25 @@ async function main() {
   });
 
   // ── Classroom ────────────────────────────────────────────────────────────
-  // Slug must match TEST_CLASSROOM env var default in test-login route
-  const classroom = await prisma.classroom.upsert({
-    where: { git_org_id_slug: { git_org_id: org.id, slug: 'classmoji-dev-winter-2025' } },
-    update: {},
-    create: {
-      git_org_id: org.id,
-      slug: 'classmoji-dev-winter-2025',
-      name: 'Dev Classroom',
-      content_namespace: 'classmoji-dev-winter-2025',
-    },
+  // Slug must match TEST_CLASSROOM env var default in test-login route.
+  // Resolve by slug FIRST (same idiom as seed-test-user.js): long-lived dev
+  // DBs may have this classroom under a REAL GitOrganization instead of the
+  // fake dev-org, and an org-scoped upsert would create a duplicate classroom.
+  // Only create (under dev-org) when no classroom with the slug exists.
+  let classroom = await prisma.classroom.findFirst({
+    where: { slug: 'classmoji-dev-winter-2025' },
+    orderBy: { created_at: 'asc' }, // deterministic if a duplicate slug ever exists
   });
+  if (!classroom) {
+    classroom = await prisma.classroom.create({
+      data: {
+        git_org_id: org.id,
+        slug: 'classmoji-dev-winter-2025',
+        name: 'Dev Classroom',
+        content_namespace: 'classmoji-dev-winter-2025',
+      },
+    });
+  }
 
   // ── ClassroomSettings ───────────────────────────────────────────────────
   await prisma.classroomSettings.upsert({
@@ -46,6 +55,12 @@ async function main() {
   // ── Fake Users + Memberships ────────────────────────────────────────────
   // Fully fake — no real GitHub IDs or tokens needed
   // provider_ids are stable so re-runs don't create duplicate records
+  //
+  // CRITICAL (test integrity): prof-classmoji (seed-test-user.js) holds
+  // OWNER + ASSISTANT + STUDENT and passes EVERY role gate. Non-owner denial
+  // tests MUST use the single-role identities below (fake-ta / fake-teacher /
+  // fake-student-*), never prof-classmoji — or a "denied for non-owner"
+  // assertion passes vacuously via the OWNER membership.
   const fakeUsers = [
     {
       login: 'fake-ta',
@@ -53,6 +68,15 @@ async function main() {
       email: 'ta@dev.local',
       provider_id: '10000001',
       role: 'ASSISTANT',
+    },
+    {
+      // TEACHER is a distinct authz tier (grading + pages allowed;
+      // roster/settings denied) — keep this the only membership for this user
+      login: 'fake-teacher',
+      name: 'Dev Teacher',
+      email: 'teacher@dev.local',
+      provider_id: '10000005',
+      role: 'TEACHER',
     },
     {
       login: 'fake-student-1',
@@ -306,16 +330,33 @@ async function main() {
     }
   }
 
+  // ── Team + GROUP-repository fixture ─────────────────────────────────────
+  // Team Alpha (fake-student-1 + fake-student-2) with a team-owned GitRepo —
+  // target for group-grading and team-scoped authz tests
+  const { team } = await seedTeamWithGroupRepo(prisma, {
+    classroom,
+    students: studentUsers.slice(0, 2),
+  });
+
+  // ── Foreign classroom ───────────────────────────────────────────────────
+  // classmoji-other-class: none of the test identities are members — exercises
+  // "not a member" denials and S1 cross-classroom UUID rejection
+  const { classroom: otherClassroom } = await seedForeignClassroom(prisma, { org });
+
   console.log('✅ Dev seed complete!\n');
   console.log(`   Org:         ${org.login}`);
   console.log(`   Classroom:   ${classroom.name} (${classroom.slug})`);
-  console.log(`   Fake users:  1 TA + 3 students`);
+  console.log(`   Fake users:  1 TA + 1 teacher + 3 students`);
   console.log(`   Repository:  hello-world (2 assignments)`);
   console.log(`   Emoji scale: 🔴 🟡 🟢 ⭐`);
   console.log(`   Grades:      Part 1 graded — 🟢 🟡 🔴 (released)`);
   console.log(`   TA queue:    3 Part 2 submissions awaiting grading`);
   console.log(`   Calendar:    3 events (lecture, lab, office hours)`);
   console.log(`   Regrade:     1 pending request`);
+  console.log(`   Team:        ${team.name} (2 students) + GROUP repo group-project`);
+  console.log(
+    `   Foreign:     ${otherClassroom.slug} (own owner/student — no test-identity members)`
+  );
   console.log(`\nSign in via GitHub OAuth → auto-join as OWNER + ASSISTANT + STUDENT.`);
   console.log(`Your student data (graded Part 1 + open Part 2) is created on first login.`);
 }

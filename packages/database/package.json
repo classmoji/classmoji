@@ -16,7 +16,8 @@
     "format:check": "prettier --check \"**/*.{js,jsx,ts,tsx,json,md}\""
   },
   "exports": {
-    ".": "./index.ts"
+    ".": "./index.ts",
+    "./seed-fixtures": "./scripts/seed-fixtures.js"
   },
   "dependencies": {
     "@classmoji/utils": "*",

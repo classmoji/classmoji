@@ -53,7 +53,10 @@ const ROLES = [
 ];
 
 async function main() {
-  const classroom = await prisma.classroom.findFirst({ where: { slug: TEST_CLASSROOM } });
+  const classroom = await prisma.classroom.findFirst({
+    where: { slug: TEST_CLASSROOM },
+    orderBy: { created_at: 'asc' }, // deterministic if a duplicate slug ever exists
+  });
   if (!classroom) {
     throw new Error(
       `Classroom "${TEST_CLASSROOM}" not found. Run \`npm run db:seed\` first to create it.`
