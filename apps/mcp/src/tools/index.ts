@@ -30,6 +30,7 @@ import {
 } from './calendar.ts';
 import { pageCreateTool, pageUpdateTool, pageDeleteTool } from './pages.ts';
 import { tokenGrantTool } from './tokens.ts';
+import { extensionPurchaseTool } from './extensions.ts';
 
 export function registerAllTools(): void {
   // Identity / bootstrap
@@ -73,4 +74,7 @@ export function registerAllTools(): void {
 
   // Tokens (OWNER)
   registerToolDefinition(tokenGrantTool);
+
+  // Extensions (STUDENT self)
+  registerToolDefinition(extensionPurchaseTool);
 }
