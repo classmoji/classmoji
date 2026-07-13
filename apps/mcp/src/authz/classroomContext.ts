@@ -60,10 +60,15 @@ export async function resolveClassroomContext(
     slug,
     git_organization: { login: { equals: org, mode: 'insensitive' } },
   })) as Classroom[];
-  const classroom = matches[0];
-  if (!classroom) {
+  // Classroom is unique only on (git_org_id, slug). The case-insensitive
+  // org-login match means case-variant twin orgs each owning this slug can
+  // return >1 row, and taking matches[0] would silently resolve to the newest
+  // twin. Refuse an ambiguous reference; a zero-match stays indistinguishable
+  // from it, so a probe never leaks whether a classroom exists (S1).
+  if (matches.length !== 1) {
     throw new ToolError('not_found', `Classroom '${org}/${slug}' not found`);
   }
+  const classroom = matches[0];
 
   // Role-filtered membership lookup — the same idiom as assertClassroomAccess
   // (packages/auth/src/server.ts:582-592). A user can hold several roles in

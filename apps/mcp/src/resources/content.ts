@@ -194,9 +194,19 @@ interface QuizRow {
 }
 
 /** Mirror of the webapp's assertProTier (apps/webapp/app/utils/helpers.ts). */
-async function assertProTier(classroomSlug: string): Promise<void> {
-  // NOTE: subscription.getByClassroom resolves by bare slug, exactly as the
-  // web helper does — mirrored verbatim, ambiguity and all.
+async function assertProTier(classroomSlug: string, classroomId: string): Promise<void> {
+  // subscription.getByClassroom resolves by BARE slug (unique per git org
+  // only). Guard as the leaderboard/modules resources do: if the bare slug
+  // resolves to a different classroom than the one the caller was authorized
+  // for, refuse rather than gate quiz access on a twin classroom's Pro
+  // subscription (S1 — Pro-gating bypass).
+  const bySlug = await ClassmojiService.classroom.findBySlug(classroomSlug);
+  if (!bySlug || bySlug.id !== classroomId) {
+    throw new ToolError(
+      'internal',
+      `Classroom slug '${classroomSlug}' is ambiguous across git orgs — quizzes unavailable for this classroom`
+    );
+  }
   const subscription = await ClassmojiService.subscription.getByClassroom(classroomSlug);
   const isActive = subscription.ends_at ? new Date(subscription.ends_at) > new Date() : true;
   if (subscription.tier !== 'PRO' || !isActive) {
@@ -218,7 +228,7 @@ export const quizzesResource: ResourceDefinition = {
     const { classroomId, role, membership } = classroomCtx(ctx);
 
     // Gate order mirrors the routes: access (done) → Pro tier → quizzes_enabled.
-    await assertProTier(vars.slug);
+    await assertProTier(vars.slug, classroomId);
     if (sanitizedSettings(ctx).quizzes_enabled === false) {
       throw new ToolError('forbidden', 'Quizzes are currently disabled for this classroom');
     }

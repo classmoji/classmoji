@@ -16,6 +16,7 @@
 
 import Fastify, { type FastifyError } from 'fastify';
 import { MCP_PORT, MCP_PUBLIC_URL, WEBAPP_URL } from './config.ts';
+import { registerProcessSafetyNets } from './processSafety.ts';
 import devMintRoutes from './routes/devMint.ts';
 import mcpRoutes from './routes/mcp.ts';
 import wellKnownRoutes from './routes/wellKnown.ts';
@@ -26,6 +27,20 @@ registerAllTools();
 
 const fastify = Fastify({
   logger: true,
+});
+
+// S5 process-level safety nets: a stray detached promise rejection (e.g. the
+// fire-and-forget token reversal on grade_remove) must not crash the server.
+// unhandledRejection → log + keep serving; uncaughtException → log, best-effort
+// close, exit(1) (state may be corrupt; the process manager restarts clean).
+registerProcessSafetyNets(fastify.log, {
+  onFatal: code => {
+    fastify
+      .close()
+      .catch(() => {})
+      // eslint-disable-next-line no-process-exit
+      .finally(() => process.exit(code));
+  },
 });
 
 fastify.get('/health', async (_request, reply) => {

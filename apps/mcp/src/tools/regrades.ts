@@ -111,11 +111,34 @@ export const regradeCreateTool: ToolDefinition<RegradeCreateArgs> = {
       throw scopedNotFound('Submission');
     }
 
+    // Idempotency: if this submission already has an OPEN (IN_REVIEW) regrade
+    // request for this student, return it instead of enqueuing a second run. A
+    // slow `request_regrade` run can materialize the RegradeRequest only AFTER
+    // the 60s client poll below times out; a client retry would then create a
+    // duplicate IN_REVIEW row and a duplicate grader email. This GRA is always
+    // an individual submission (team repos were rejected above, student_id set),
+    // so an open request on it belongs to this student — the student_id check is
+    // defense-in-depth against a shared GRA.
+    const existing = await ClassmojiService.regradeRequest.findOpenByAssignmentId(gra.id);
+    if (existing && existing.student_id === ctx.viewer.userId) {
+      return ok({
+        success: true,
+        regrade_request: {
+          id: existing.id,
+          status: existing.status,
+          previous_grade: existing.previous_grade,
+        },
+      });
+    }
+
     // Build the previous_grade snapshot from the DB — exactly as the route does.
     const previousGrade = gra.grades.map(g => g.emoji);
 
     // Same task + payload as the web action (post payload-key fix): the task's
     // run() is regradeRequest.create; onSuccess emails the assigned graders.
+    // Known limitation: the 60s wait below is a client-side timeout, NOT a
+    // cancel — a run that finishes after it still creates the request (the
+    // idempotency guard above absorbs the resulting retry).
     const run = await tasks.trigger('request_regrade', {
       classroom_id: classroom.classroomId,
       gitRepoAssignment: gra,
