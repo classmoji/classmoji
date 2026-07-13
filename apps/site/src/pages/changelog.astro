@@ -1,0 +1,56 @@
+---
+import Layout from '../layouts/Layout.astro';
+import Header from '../components/Header.astro';
+import Footer from '../components/Footer.astro';
+
+// Add releases here, newest first.
+// Example entry:
+// { version: 'v1.2.0', date: 'March 24, 2026', title: 'What changed', description: 'Short summary.', tags: ['Feature'] }
+const entries = [];
+---
+
+<Layout title="Changelog - Classmoji" description="What's new in Classmoji: features, improvements, and fixes.">
+  <Header />
+
+  <section class="px-6 pt-32 pb-20">
+    <div class="max-w-3xl mx-auto">
+      <h1 class="text-4xl md:text-5xl font-bold text-gray-900 mb-3">Changelog</h1>
+      <p class="text-lg text-gray-600 mb-10">New features, improvements, and fixes.</p>
+
+      {
+        entries.length === 0 ? (
+          <div class="rounded-2xl ring-1 ring-gray-200 p-10 text-center">
+            <p class="text-base font-medium text-gray-700">Nothing here yet</p>
+            <p class="text-sm text-gray-500 mt-1">Check back soon for the latest updates.</p>
+          </div>
+        ) : (
+          <ul class="space-y-4">
+            {entries.map(entry => (
+              <li class="rounded-2xl ring-1 ring-gray-200 p-6">
+                <div class="flex items-center gap-3 mb-2">
+                  <span class="text-xs font-semibold uppercase tracking-wide text-primary">
+                    {entry.version}
+                  </span>
+                  <span class="text-sm text-gray-500">{entry.date}</span>
+                </div>
+                <h2 class="text-lg font-semibold text-gray-900">{entry.title}</h2>
+                <p class="text-sm text-gray-600 mt-1">{entry.description}</p>
+                {entry.tags && (
+                  <div class="flex flex-wrap gap-2 mt-3">
+                    {entry.tags.map(tag => (
+                      <span class="text-xs font-medium text-gray-600 bg-gray-100 rounded-full px-2.5 py-0.5">
+                        {tag}
+                      </span>
+                    ))}
+                  </div>
+                )}
+              </li>
+            ))}
+          </ul>
+        )
+      }
+    </div>
+  </section>
+
+  <Footer />
+</Layout>
