@@ -16,7 +16,9 @@
     "@classmoji/auth": "*",
     "@classmoji/database": "*",
     "@classmoji/services": "*",
+    "@classmoji/tasks": "*",
     "@modelcontextprotocol/sdk": "^1.29.0",
+    "@trigger.dev/sdk": "4.4.0",
     "fastify": "^5.1.0",
     "zod": "^3.25.76"
   },
