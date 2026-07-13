@@ -376,6 +376,16 @@ export const auth = betterAuth({
     // resource server (apps/mcp) validates bearer tokens via auth.api.getMcpSession.
     mcp({
       loginPage: '/', // the landing page is the sign-in page
+      // getMCPProviderMetadata merges only this top-level metadata into the
+      // AS discovery document (1.4.18 plugins/mcp reads options.metadata at
+      // runtime but MCPOptions omits it, hence the spread); the
+      // oidcConfig.metadata below is honored only by the protected-resource
+      // document. Keep both lists identical.
+      ...({
+        metadata: {
+          scopes_supported: ['openid', 'profile', 'email', 'offline_access', 'read', 'write'],
+        },
+      } as Record<string, unknown>),
       oidcConfig: {
         // Required by the OIDCOptions type; the plugin overrides it with the
         // top-level loginPage at runtime, so keep the two identical.
