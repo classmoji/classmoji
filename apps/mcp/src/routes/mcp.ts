@@ -17,6 +17,7 @@ import { MCP_PUBLIC_URL, PROTECTED_RESOURCE_METADATA_PATH } from '../config.ts';
 import { resolveViewer } from '../auth/resolveViewer.ts';
 import { UnauthorizedError } from '../mcp/errors.ts';
 import { buildMcpServer } from '../mcp/registry.ts';
+import { registerAllResources } from '../resources/index.ts';
 
 /** RFC 9728 §5.1: challenge advertises where our protected-resource metadata lives. */
 const WWW_AUTHENTICATE_VALUE = `Bearer resource_metadata="${MCP_PUBLIC_URL}${PROTECTED_RESOURCE_METADATA_PATH}"`;
@@ -44,6 +45,10 @@ function sendUnauthorized(reply: FastifyReply, message: string) {
 }
 
 export default async function mcpRoutes(fastify: FastifyInstance) {
+  // Resource definitions register once alongside route registration
+  // (idempotent; tools register in src/index.ts via registerAllTools).
+  registerAllResources();
+
   fastify.post('/mcp', async (request, reply) => {
     let viewer;
     try {
