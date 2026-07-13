@@ -31,6 +31,7 @@ import {
 import { pageCreateTool, pageUpdateTool, pageDeleteTool } from './pages.ts';
 import { tokenGrantTool } from './tokens.ts';
 import { extensionPurchaseTool } from './extensions.ts';
+import { repoPublishTool, repoUnpublishTool } from './repos.ts';
 
 export function registerAllTools(): void {
   // Identity / bootstrap
@@ -77,4 +78,8 @@ export function registerAllTools(): void {
 
   // Extensions (STUDENT self)
   registerToolDefinition(extensionPurchaseTool);
+
+  // Repos: publish/unpublish + provisioning (OWNER — route-derived)
+  registerToolDefinition(repoPublishTool);
+  registerToolDefinition(repoUnpublishTool);
 }
