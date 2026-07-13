@@ -806,9 +806,17 @@ export async function requireStudentAccess(
   });
 }
 
-export type ClassroomStatusError = 'CLASSROOM_LOCKED' | 'CLASSROOM_UNPUBLISHED';
+// Pure decision logic lives in ./predicates.ts (side-effect-free, shared
+// with apps/mcp); this module keeps the webapp's Response-throwing wrappers.
+export * from './predicates.ts';
 
-type ClassroomStatusInput = { status: ClassroomStatus; role: Role };
+import {
+  canEnterClassroom,
+  canMutateClassroom,
+  type ClassroomStatusError,
+  type ClassroomStatusInput,
+} from './predicates.ts';
+
 
 /**
  * Throws a 403 Response with a JSON body `{ error: ClassroomStatusError, message: string }`.
@@ -825,25 +833,12 @@ const statusErrorResponse = (code: ClassroomStatusError, message: string) =>
  * Block non-owners from entering an UNPUBLISHED classroom.
  * Call after the role check inside loaders. LOCKED never blocks entry.
  */
-export function assertClassroomEntryAllowed({
-  status,
-  role,
-}: ClassroomStatusInput): void {
-  if (status === 'UNPUBLISHED' && role !== 'OWNER') {
-    throw statusErrorResponse(
-      'CLASSROOM_UNPUBLISHED',
-      'This class has been unpublished by the owner.'
-    );
-  }
-}
-
-/** Pure predicate: can this role mutate the classroom in its current state? */
-export function canMutateClassroom({
-  status,
-  role,
-}: ClassroomStatusInput): boolean {
-  if (role === 'OWNER') return true;
-  return status === 'ACTIVE';
+export function assertClassroomEntryAllowed(input: ClassroomStatusInput): void {
+  if (canEnterClassroom(input)) return;
+  throw statusErrorResponse(
+    'CLASSROOM_UNPUBLISHED',
+    'This class has been unpublished by the owner.'
+  );
 }
 
 /** Throw 403 with typed code when the current role cannot mutate. */

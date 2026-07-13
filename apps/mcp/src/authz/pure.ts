@@ -2,22 +2,25 @@
  * Pure authorization predicates — no DB, no I/O, no env (plan §4, §8.1).
  *
  * Every authorization DECISION lives here as a pure function over plain
- * inputs so Phase 1c can unit-test the whole matrix without Prisma.
+ * inputs so unit tests can cover the whole matrix without Prisma.
  * The DB lookups feeding these live in ./classroomContext.ts.
  *
- * `canEnterClassroom` / `canMutateClassroom` mirror the webapp's status
- * gates EXACTLY. They are duplicated (not imported) because
- * `@classmoji/auth/server` constructs the better-auth instance at module
- * load, which would drag env + Prisma into pure unit tests, and its assert*
- * variants throw web `Response` objects. Keep in sync with:
- *   packages/auth/src/server.ts:818-828  (assertClassroomEntryAllowed)
- *   packages/auth/src/server.ts:831-837  (canMutateClassroom)
- * Phase 1c must add a parity test importing both modules and comparing
- * results across the full status × role matrix.
+ * The status gates (`canEnterClassroom` / `canMutateClassroom`) are the
+ * webapp's own — imported from the side-effect-free
+ * `@classmoji/auth/predicates`, the single source of truth shared with
+ * `packages/auth/src/server.ts`. This module only adds the MCP error
+ * presentation (`ToolError`) on top.
  */
 
-import type { ClassroomStatus, Role } from '@prisma/client';
+import type { Role } from '@prisma/client';
+import {
+  canEnterClassroom,
+  canMutateClassroom,
+  type ClassroomStatusInput,
+} from '@classmoji/auth/predicates';
 import { ToolError } from '../mcp/errors.ts';
+
+export { canEnterClassroom, canMutateClassroom, type ClassroomStatusInput };
 
 // ─── Classroom addressing (locked decision 1: composite `org/slug`) ─────────
 
@@ -49,29 +52,6 @@ export function parseClassroomRef(ref: unknown): ClassroomRef {
 }
 
 // ─── Classroom status gates ──────────────────────────────────────────────────
-
-export interface ClassroomStatusInput {
-  status: ClassroomStatus;
-  role: Role;
-}
-
-/**
- * Entry gate: UNPUBLISHED blocks non-owner entry; LOCKED does NOT block entry.
- * Mirror of assertClassroomEntryAllowed (packages/auth/src/server.ts:818-828).
- */
-export function canEnterClassroom({ status, role }: ClassroomStatusInput): boolean {
-  return !(status === 'UNPUBLISHED' && role !== 'OWNER');
-}
-
-/**
- * Mutation gate: non-owners may mutate only when ACTIVE (both LOCKED and
- * UNPUBLISHED block non-owner mutation). Mirror of canMutateClassroom
- * (packages/auth/src/server.ts:831-837).
- */
-export function canMutateClassroom({ status, role }: ClassroomStatusInput): boolean {
-  if (role === 'OWNER') return true;
-  return status === 'ACTIVE';
-}
 
 /** Throwing wrapper over canEnterClassroom with the webapp's typed error codes. */
 export function assertEntryAllowed(input: ClassroomStatusInput): void {
