@@ -162,7 +162,11 @@ async function callTool(client: Client, name: string, args: Record<string, unkno
   return (await client.callTool({ name, arguments: args })) as unknown as ToolCallResult;
 }
 
-function parseErrorResult(result: ToolCallResult): { error: string; code?: string; message: string } {
+function parseErrorResult(result: ToolCallResult): {
+  error: string;
+  code?: string;
+  message: string;
+} {
   expect(result.isError).toBe(true);
   expect(result.content[0]?.type).toBe('text');
   return JSON.parse(result.content[0].text);

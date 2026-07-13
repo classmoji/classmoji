@@ -31,23 +31,14 @@ import Tasks from '@classmoji/tasks';
 import { z } from 'zod';
 import { ToolError } from '../mcp/errors.ts';
 import type { ToolDefinition, ToolContext } from '../mcp/registry.ts';
-import {
-  ok,
-  OWNER_ONLY,
-  requireClassroomCtx,
-  scopedNotFound,
-  writeAudit,
-} from './shared.ts';
+import { ok, OWNER_ONLY, requireClassroomCtx, scopedNotFound, writeAudit } from './shared.ts';
 
 type RepositoryRecord = NonNullable<
   Awaited<ReturnType<typeof ClassmojiService.repository.findById>>
 >;
 
 /** Load a Repository (an assignment container) and verify its classroom_id. */
-async function loadRepositoryInClassroom(
-  id: string,
-  ctx: ToolContext
-): Promise<RepositoryRecord> {
+async function loadRepositoryInClassroom(id: string, ctx: ToolContext): Promise<RepositoryRecord> {
   const record = await ClassmojiService.repository.findById(id);
   if (!record || record.classroom_id !== requireClassroomCtx(ctx).classroomId) {
     throw scopedNotFound('Repo');
