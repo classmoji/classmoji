@@ -177,6 +177,70 @@ model Verification {
   @@map("verifications")
 }
 
+// OAuth provider tables for the BetterAuth `mcp` plugin (OAuth 2.1 authorization
+// server for MCP clients). Field names must stay camelCase — the mcp plugin does
+// not support field-name remapping (its schema is fixed) — so we use @map/@@map
+// to keep the underlying tables/columns snake_case per repo convention.
+
+model OauthApplication {
+  id           String   @id @default(uuid())
+  name         String
+  icon         String?
+  metadata     String?
+  clientId     String   @unique @map("client_id")
+  clientSecret String?  @map("client_secret")
+  redirectUrls String   @map("redirect_urls")
+  type         String
+  disabled     Boolean? @default(false)
+  userId       String?  @map("user_id")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @default(now()) @updatedAt @map("updated_at")
+
+  user          User?              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  access_tokens OauthAccessToken[]
+  consents      OauthConsent[]
+
+  @@index([userId])
+  @@map("oauth_applications")
+}
+
+model OauthAccessToken {
+  id                    String   @id @default(uuid())
+  accessToken           String   @unique @map("access_token")
+  refreshToken          String   @unique @map("refresh_token")
+  accessTokenExpiresAt  DateTime @map("access_token_expires_at")
+  refreshTokenExpiresAt DateTime @map("refresh_token_expires_at")
+  clientId              String   @map("client_id")
+  userId                String?  @map("user_id")
+  scopes                String
+  createdAt             DateTime @default(now()) @map("created_at")
+  updatedAt             DateTime @default(now()) @updatedAt @map("updated_at")
+
+  application OauthApplication @relation(fields: [clientId], references: [clientId], onDelete: Cascade)
+  user        User?            @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([clientId])
+  @@index([userId])
+  @@map("oauth_access_tokens")
+}
+
+model OauthConsent {
+  id           String   @id @default(uuid())
+  clientId     String   @map("client_id")
+  userId       String   @map("user_id")
+  scopes       String
+  consentGiven Boolean  @map("consent_given")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @default(now()) @updatedAt @map("updated_at")
+
+  application OauthApplication @relation(fields: [clientId], references: [clientId], onDelete: Cascade)
+  user        User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([clientId])
+  @@index([userId])
+  @@map("oauth_consents")
+}
+
 // ============================================================================
 // USER & SUBSCRIPTION
 // ============================================================================
@@ -229,6 +293,9 @@ model User {
   contributor_links             GitRepoContributorLink[]
   notifications                 Notification[]
   notification_preference       NotificationPreference?
+  oauth_applications            OauthApplication[]
+  oauth_access_tokens           OauthAccessToken[]
+  oauth_consents                OauthConsent[]
 
   @@unique([provider, provider_id])
   @@index([provider, login])
