@@ -214,9 +214,7 @@ describe('authenticated round-trip (fake-ta, read+write)', () => {
     // initialize
     const init = await rpc(minted.access_token, 'initialize', INITIALIZE_PARAMS);
     expect(init.error).toBeUndefined();
-    expect((init.result as { serverInfo: { name: string } }).serverInfo.name).toBe(
-      'classmoji-mcp'
-    );
+    expect((init.result as { serverInfo: { name: string } }).serverInfo.name).toBe('classmoji-mcp');
 
     // tools/list — stateless server: every POST is standalone, no session id.
     const list = await rpc(minted.access_token, 'tools/list');

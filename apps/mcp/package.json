@@ -4,6 +4,7 @@
   "scripts": {
     "typecheck": "tsc --noEmit",
     "test": "vitest run --passWithNoTests",
+    "test:integration": "vitest run --config vitest.integration.config.ts",
     "mcp:dev": "node --watch --experimental-strip-types src/index.ts",
     "mcp:start": "node --experimental-strip-types src/index.ts",
     "lint": "eslint .",
