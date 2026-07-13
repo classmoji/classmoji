@@ -1,6 +1,5 @@
 import { assertClassroomAccess, assertClassroomMutationAllowed } from '~/utils/helpers';
-import { ClassmojiService, getGitProvider } from '@classmoji/services';
-import { ContentService } from '@classmoji/content';
+import { ClassmojiService } from '@classmoji/services';
 import { processMarkdownImport } from '~/utils/markdownImporter.server';
 import { wrapHtmlContent } from '~/utils/htmlWrapper';
 import type { Route } from './+types/route';
@@ -34,37 +33,12 @@ export const action = async ({ request }: Route.ActionArgs) => {
 
   // Initialize batch import - creates repo if needed
   if (intent === 'batch-init') {
-    const repoName = `content-${gitOrgLogin}-${contentNamespace}`;
-    const gitProvider = getGitProvider(classroom.git_organization);
-
-    const repoExists = await gitProvider.repositoryExists(gitOrgLogin, repoName);
-    if (!repoExists) {
-      try {
-        await gitProvider.createPublicRepository(
-          gitOrgLogin,
-          repoName,
-          `Course content for ${classroom.name || gitOrgLogin} - ${contentNamespace}`
-        );
-        await new Promise(resolve => setTimeout(resolve, 2000));
-      } catch (repoError) {
-        console.error('Failed to create GitHub repository:', repoError);
-        return Response.json({
-          error:
-            'Failed to create GitHub repository. Please check your GitHub organization permissions',
-        });
-      }
-    }
-
-    // Try to enable GitHub Pages
     try {
-      await gitProvider.enableGitHubPages(gitOrgLogin, repoName);
-    } catch (pagesError) {
-      console.warn(
-        `Could not auto-enable GitHub Pages: ${pagesError instanceof Error ? pagesError.message : String(pagesError)}`
-      );
+      const { repoName } = await ClassmojiService.page.ensureContentRepo(classroom.id);
+      return Response.json({ initialized: true, repoName });
+    } catch (error: unknown) {
+      return Response.json({ error: error instanceof Error ? error.message : String(error) });
     }
-
-    return Response.json({ initialized: true, repoName });
   }
 
   // Import a single page
@@ -74,14 +48,8 @@ export const action = async ({ request }: Route.ActionArgs) => {
     const repoName = `content-${gitOrgLogin}-${contentNamespace}`;
 
     try {
-      // Generate slug from title
-      const slug = title
-        .toLowerCase()
-        .replace(/[^a-z0-9]+/g, '-')
-        .replace(/^-|-$/g, '');
-
       // Flat content path: pages/{slug}
-      const contentPath = `pages/${slug}`;
+      const contentPath = ClassmojiService.page.pageContentPath(title);
       const assetsFolder = `${contentPath}/assets`;
 
       // Get markdown and images
@@ -143,39 +111,19 @@ export const action = async ({ request }: Route.ActionArgs) => {
       // Wrap HTML content
       const wrappedHtml = wrapHtmlContent(html, 2);
 
-      // Add HTML content
-      uploadFiles.push({
-        path: `${contentPath}/index.html`,
-        content: wrappedHtml,
-        encoding: 'utf-8',
-      });
-
-      // Upload all files in a single batch
-      if (uploadFiles.length > 0) {
-        await ContentService.uploadBatch({
-          gitOrganization: classroom.git_organization,
-          repo: repoName,
-          files: uploadFiles,
-          branch: 'main',
-          message: `Import page: ${title}`,
-        });
-      }
-
-      // Create the database record
-      const page = await ClassmojiService.page.create({
-        classroom_id: classroom.id,
+      // Orchestrated create: upload (index.html + assets) + DB row + optional
+      // repository link + manifest refresh (packages/services page.createPage).
+      // ensureRepo: false — batch-init already created the content repo.
+      const page = await ClassmojiService.page.createPage({
+        classroomId: classroom.id,
         title,
-        content_path: contentPath,
-        created_by: userId,
+        html: wrappedHtml,
+        files: uploadFiles,
+        createdBy: userId,
+        linkRepositoryId: moduleId,
+        ensureRepo: false,
+        commitMessage: `Import page: ${title}`,
       });
-
-      // Link to repository if specified
-      if (moduleId) {
-        await ClassmojiService.page.linkPage(page.id, { repositoryId: moduleId });
-      }
-
-      // Update manifest after creating page
-      await ClassmojiService.contentManifest.saveManifest(classroom.id);
 
       return Response.json({ created: true, page });
     } catch (error: unknown) {

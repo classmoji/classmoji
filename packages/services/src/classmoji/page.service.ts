@@ -1,6 +1,7 @@
 import getPrisma from '@classmoji/database';
 import { titleToIdentifier } from '@classmoji/utils';
 import { ContentService } from '@classmoji/content';
+import { getGitProvider } from '../git/index.ts';
 import * as contentManifestService from './contentManifest.service.ts';
 import * as notificationService from './notification.service.ts';
 import type { Prisma } from '@prisma/client';
@@ -51,6 +52,209 @@ export async function create(values: Prisma.PageUncheckedCreateInput) {
   });
 
   return page;
+}
+
+// ─── Create-page choreography (extract-first, plan §5.2 gap 2) ──────────────
+// The full "create a page" operation is: ensure the shared per-classroom
+// content repo exists on GitHub → upload the page folder's files (always an
+// index.html, plus any imported assets) → create the DB row → optionally link
+// it to a repository → refresh the content manifest. This used to be
+// duplicated in admin.$class.pages.new/route.tsx and api.pages.batch/route.ts;
+// both now call createPage()/ensureContentRepo() below.
+
+/**
+ * Content-repo folder for a page title: `pages/{slug}`.
+ * NOTE: this slug is the CONTENT PATH slug (route-identical regex) — distinct
+ * from the DB `slug` column, which uses titleToIdentifier.
+ */
+export function pageContentPath(title: string): string {
+  const slug = title
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-|-$/g, '');
+  return `pages/${slug}`;
+}
+
+/** Initial index.html content for a blank page (web "Create Blank" flow). */
+export function generatePageTemplate(_title: string): string {
+  return `Add your content here...\n`;
+}
+
+/** A file to commit alongside the page's index.html (import-flow assets). */
+export interface PageFileUpload {
+  path: string;
+  content: string;
+  encoding: 'utf-8' | 'base64';
+}
+
+/** Load the classroom and derive its content-repo coordinates, or throw. */
+async function resolveContentRepo(classroomId: string) {
+  const classroom = await getPrisma().classroom.findUnique({
+    where: { id: classroomId },
+    include: { git_organization: true },
+  });
+  if (!classroom) {
+    throw new Error('Classroom not found');
+  }
+  const gitOrgLogin = classroom.git_organization?.login;
+  if (!gitOrgLogin) {
+    throw new Error('Git organization not configured');
+  }
+  if (!classroom.content_namespace) {
+    throw new Error('Classroom content namespace not configured');
+  }
+  // Content repo name: content-{gitOrgLogin}-{contentNamespace}
+  return {
+    classroom,
+    gitOrgLogin,
+    repoName: `content-${gitOrgLogin}-${classroom.content_namespace}`,
+  };
+}
+
+type ContentRepoContext = Awaited<ReturnType<typeof resolveContentRepo>>;
+
+async function ensureContentRepoExists({ classroom, gitOrgLogin, repoName }: ContentRepoContext) {
+  const gitProvider = getGitProvider(classroom.git_organization!);
+  const repoExists = await gitProvider.repositoryExists(gitOrgLogin, repoName);
+  if (!repoExists) {
+    try {
+      await gitProvider.createPublicRepository(
+        gitOrgLogin,
+        repoName,
+        `Course content for ${classroom.name || gitOrgLogin} - ${classroom.content_namespace}`
+      );
+
+      // Give GitHub a moment to initialize the repo
+      await new Promise(resolve => setTimeout(resolve, 2000));
+    } catch (repoError) {
+      console.error('Failed to create GitHub repository:', repoError);
+      throw new Error(
+        'Failed to create GitHub repository. Please check your GitHub organization permissions'
+      );
+    }
+  }
+
+  // Always try to enable GitHub Pages (idempotent - skips if already enabled)
+  try {
+    await gitProvider.enableGitHubPages(gitOrgLogin, repoName);
+  } catch (pagesError) {
+    // Pages API requires special permission - log but continue
+    console.warn(
+      `Could not auto-enable GitHub Pages: ${pagesError instanceof Error ? pagesError.message : String(pagesError)}`
+    );
+  }
+}
+
+/**
+ * Make sure the classroom's shared content repo exists on GitHub (creating it
+ * and enabling GitHub Pages when missing). Idempotent.
+ */
+export async function ensureContentRepo(classroomId: string) {
+  const ctx = await resolveContentRepo(classroomId);
+  await ensureContentRepoExists(ctx);
+  return { repoName: ctx.repoName };
+}
+
+/**
+ * Orchestrated page creation: content-repo folder + index.html (+ any extra
+ * files) on GitHub, DB row, optional repository link, manifest refresh.
+ *
+ * @param html   index.html content; defaults to the blank-page template.
+ * @param files  Extra files to commit in the same batch (full repo paths,
+ *               e.g. `pages/{slug}/assets/foo.png`) — the import flow's images.
+ * @param ensureRepo  Skip the exists/create check when the caller already ran
+ *                    ensureContentRepo (batch import).
+ * @param commitMessage  Override the default commit message
+ *                       (`Create page: {title}` / `Import page: {title}`).
+ */
+export async function createPage({
+  classroomId,
+  title,
+  html,
+  files = [],
+  createdBy,
+  linkRepositoryId = null,
+  ensureRepo = true,
+  commitMessage,
+}: {
+  classroomId: string;
+  title: string;
+  html?: string;
+  files?: PageFileUpload[];
+  createdBy: string;
+  linkRepositoryId?: string | null;
+  ensureRepo?: boolean;
+  commitMessage?: string;
+}) {
+  const ctx = await resolveContentRepo(classroomId);
+  if (ensureRepo) {
+    await ensureContentRepoExists(ctx);
+  }
+
+  const contentPath = pageContentPath(title);
+  const htmlPath = `${contentPath}/index.html`;
+  const pageHtml = html ?? generatePageTemplate(title);
+
+  if (files.length > 0) {
+    // Import flow: assets + index.html in a single batch commit.
+    try {
+      await ContentService.uploadBatch({
+        gitOrganization: ctx.classroom.git_organization!,
+        repo: ctx.repoName,
+        files: [...files, { path: htmlPath, content: pageHtml, encoding: 'utf-8' }],
+        branch: 'main',
+        message: commitMessage ?? `Import page: ${title}`,
+      });
+    } catch (uploadError) {
+      console.error('Failed to upload files to GitHub:', uploadError);
+      throw new Error(
+        `Failed to upload files to GitHub: ${uploadError instanceof Error ? uploadError.message : String(uploadError)}`,
+        { cause: uploadError }
+      );
+    }
+  } else {
+    // Blank flow: single-file commit.
+    try {
+      await ContentService.put({
+        gitOrganization: ctx.classroom.git_organization!,
+        repo: ctx.repoName,
+        path: htmlPath,
+        content: pageHtml,
+        message: commitMessage ?? `Create page: ${title}`,
+      });
+    } catch (uploadError) {
+      console.error('Failed to upload file to GitHub:', uploadError);
+      throw new Error(
+        `Failed to upload file to GitHub: ${uploadError instanceof Error ? uploadError.message : String(uploadError)}`,
+        { cause: uploadError }
+      );
+    }
+  }
+
+  try {
+    const page = await create({
+      classroom_id: ctx.classroom.id,
+      title,
+      content_path: contentPath,
+      created_by: createdBy,
+    });
+
+    // Link to repository if specified (batch import)
+    if (linkRepositoryId) {
+      await linkPage(page.id, { repositoryId: linkRepositoryId });
+    }
+
+    // Update manifest after creating page
+    await contentManifestService.saveManifest(ctx.classroom.id);
+
+    return page;
+  } catch (dbError) {
+    console.error('Failed to save page to database:', dbError);
+    throw new Error(
+      `Page created in GitHub but failed to save to database: ${dbError instanceof Error ? dbError.message : String(dbError)}`,
+      { cause: dbError }
+    );
+  }
 }
 
 /**

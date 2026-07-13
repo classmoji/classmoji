@@ -1,20 +1,25 @@
 /**
- * Page tools — page_update / page_delete.
+ * Page tools — page_create / page_update / page_delete.
  *
- * Tier confirmed against apps/webapp/app/routes/admin.$class.pages.$pageId/action.ts:
- * every intent is gated ['OWNER','TEACHER'] (ASSISTANT excluded).
+ * Tier confirmed against apps/webapp/app/routes/admin.$class.pages.$pageId/action.ts
+ * and admin.$class.pages.new/route.tsx: every intent is gated
+ * ['OWNER','TEACHER'] (ASSISTANT excluded).
  *
- * Backbone (plan §5.2 gap 2 — the SAFE half): page.quickUpdate (metadata-only
- * DB update; fires PAGE_PUBLISHED/PAGE_UNPUBLISHED notifications on an
- * is_draft flip) and page.deletePage (orchestrated: removes the page's folder
- * from the shared per-classroom content repo via ContentService.deleteFolder —
+ * Backbone (plan §5.2 gap 2, extract-first — Phase 3): page.createPage is the
+ * choreography extracted from admin.$class.pages.new + api.pages.batch
+ * (content-repo ensure → index.html upload → DB row → manifest refresh); both
+ * webapp paths and this tool now share it. page.quickUpdate (metadata-only DB
+ * update; fires PAGE_PUBLISHED/PAGE_UNPUBLISHED notifications on an is_draft
+ * flip) and page.deletePage (orchestrated: removes the page's folder from the
+ * shared per-classroom content repo via ContentService.deleteFolder —
  * tolerating GitHub failure — then deletes the DB row and refreshes the
- * content manifest). Page CREATION is route-choreographed and deliberately
- * NOT exposed (extract-first, Phase 3).
+ * content manifest) were already orchestrated.
  *
- * S1: the web action trusts the URL pageId without re-verifying the page's
- * classroom; MCP does NOT mirror that hole — the page is loaded and its
- * classroom_id compared to the authorized classroom before mutating.
+ * S1: the web update/delete action trusts the URL pageId without re-verifying
+ * the page's classroom; MCP does NOT mirror that hole — the page is loaded and
+ * its classroom_id compared to the authorized classroom before mutating.
+ * page_create writes only into the authorized classroom by construction
+ * (classroomId comes from the resolved ClassroomContext).
  */
 
 import { ClassmojiService } from '@classmoji/services';
@@ -22,7 +27,88 @@ import type { Prisma } from '@prisma/client';
 import { z } from 'zod';
 import { ToolError } from '../mcp/errors.ts';
 import type { ToolDefinition } from '../mcp/registry.ts';
-import { loadPageInClassroom, ok, OWNER_TEACHER, writeAudit } from './shared.ts';
+import {
+  loadPageInClassroom,
+  ok,
+  OWNER_TEACHER,
+  requireClassroomCtx,
+  writeAudit,
+} from './shared.ts';
+
+/** Prisma unique-violation (P2002) — Page is @@unique([classroom_id, title]). */
+function isUniqueTitleViolation(error: unknown): boolean {
+  let current: unknown = error;
+  while (current instanceof Error) {
+    if ('code' in current && (current as { code?: string }).code === 'P2002') return true;
+    current = current.cause;
+  }
+  return false;
+}
+
+interface PageCreateArgs {
+  classroom: string;
+  title: string;
+  html?: string;
+}
+
+export const pageCreateTool: ToolDefinition<PageCreateArgs> = {
+  name: 'page_create',
+  title: 'Create a page',
+  description:
+    "Creates a new course page: a folder with an index.html in the classroom's shared content " +
+    'repo on GitHub, the database record (created as a draft), and a content-manifest refresh. ' +
+    'Mirrors the web "Create Blank" flow; pass html to seed the initial content. Publish it ' +
+    'later with page_update (is_draft: false).',
+  scope: 'write',
+  roles: OWNER_TEACHER,
+  inputSchema: {
+    classroom: z.string().describe("Classroom reference as 'org/slug'"),
+    title: z.string().min(1).max(200).describe('Page title (unique per classroom)'),
+    html: z
+      .string()
+      .max(500_000)
+      .optional()
+      .describe('Initial index.html content (defaults to a blank-page template)'),
+  },
+  handler: async (args, ctx) => {
+    const classroom = requireClassroomCtx(ctx);
+
+    try {
+      // Orchestrated create (shared with both webapp create-page paths):
+      // ensure content repo → upload index.html → DB row → manifest refresh.
+      const page = await ClassmojiService.page.createPage({
+        classroomId: classroom.classroomId,
+        title: args.title,
+        html: args.html,
+        createdBy: ctx.viewer.userId,
+      });
+
+      await writeAudit(ctx, {
+        resource_type: 'PAGES',
+        resource_id: page.id,
+        action: 'CREATE',
+        data: { tool: 'page_create', title: args.title },
+      });
+
+      return ok({
+        success: true,
+        page: {
+          id: page.id,
+          title: page.title,
+          slug: page.slug,
+          content_path: page.content_path,
+          is_draft: page.is_draft,
+          is_public: page.is_public,
+        },
+      });
+    } catch (error) {
+      if (isUniqueTitleViolation(error)) {
+        throw new ToolError('invalid_params', 'A page with this title already exists');
+      }
+      throw error;
+    }
+  },
+};
 
 interface PageUpdateArgs {
   classroom: string;

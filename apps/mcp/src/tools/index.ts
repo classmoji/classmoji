@@ -28,7 +28,7 @@ import {
   calendarEventUpdateTool,
   calendarEventDeleteTool,
 } from './calendar.ts';
-import { pageUpdateTool, pageDeleteTool } from './pages.ts';
+import { pageCreateTool, pageUpdateTool, pageDeleteTool } from './pages.ts';
 import { tokenGrantTool } from './tokens.ts';
 
 export function registerAllTools(): void {
@@ -67,6 +67,7 @@ export function registerAllTools(): void {
   registerToolDefinition(calendarEventDeleteTool);
 
   // Pages (OWNER+TEACHER)
+  registerToolDefinition(pageCreateTool);
   registerToolDefinition(pageUpdateTool);
   registerToolDefinition(pageDeleteTool);
 
