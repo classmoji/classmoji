@@ -1,6 +1,6 @@
 import { betterAuth } from 'better-auth';
 import { prismaAdapter } from 'better-auth/adapters/prisma';
-import { admin } from 'better-auth/plugins';
+import { admin, mcp } from 'better-auth/plugins';
 import getPrisma from '@classmoji/database';
 import type { Role, ClassroomStatus } from '@prisma/client';
 import { ClassmojiService } from '@classmoji/services';
@@ -370,6 +370,25 @@ export const auth = betterAuth({
       // Allow users with 'admin' role to impersonate
       // OWNER users need to have role='admin' set in the database
       adminRoles: ['admin'],
+    }),
+    // OAuth 2.1 authorization server for MCP clients (discovery, dynamic client
+    // registration, PKCE, consent, DB-backed access/refresh tokens). The MCP
+    // resource server (apps/mcp) validates bearer tokens via auth.api.getMcpSession.
+    mcp({
+      loginPage: '/', // the landing page is the sign-in page
+      oidcConfig: {
+        // Required by the OIDCOptions type; the plugin overrides it with the
+        // top-level loginPage at runtime, so keep the two identical.
+        loginPage: '/',
+        // Merged with the plugin's fixed identity scopes
+        // (openid, profile, email, offline_access). Per-classroom roles do the
+        // fine-grained authorization; scopes only separate read from write.
+        scopes: ['read', 'write'],
+        consentPage: '/oauth/consent',
+        metadata: {
+          scopes_supported: ['openid', 'profile', 'email', 'offline_access', 'read', 'write'],
+        },
+      },
     }),
   ],
 });
