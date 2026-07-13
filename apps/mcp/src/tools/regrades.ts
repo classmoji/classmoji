@@ -1,30 +1,38 @@
 /**
  * Regrade tools — regrade_create (student self) / regrade_resolve (teaching team).
  *
+ * Phase 3 email parity: both web routes wrap these mutations in Trigger.dev
+ * tasks whose onSuccess hooks send the emails (grader "action required" on
+ * create, student "resolved" on resolve). Per the locked gap policy — where a
+ * task is already the orchestrator, MCP triggers the task exactly as the
+ * routes do — these tools now fire the SAME tasks with the SAME re-derived
+ * payloads (string-id `tasks.trigger`, the routes' idiom) and wait for the
+ * run like the routes' waitForRunCompletion. Extracting the email into
+ * packages/services instead would invert the dependency graph
+ * (packages/tasks already imports @classmoji/services), so task-triggering is
+ * the structurally cleaner parity path.
+ *
  * regrade_create mirrors apps/webapp/app/routes/student.$class.regrade-requests.new:
  * requireStudentAccess (STUDENT only) + the action's IDOR check — the target
  * submission's git_repo.student_id must equal the authenticated user (derived
  * from the DB, never the request). Note: the web action rejects TEAM-owned
  * submissions (student_id is null on a team repo), even though its loader
- * lists team assignments in the dropdown — MCP mirrors the action.
- *
- * The `previous_grade` String[] snapshot is built HERE from the submission's
- * current grades — regradeRequest.create does NOT compute it (plan §5.1).
- * regradeRequest.create fires in-app notifications to the submission's
- * assigned graders. (The web path additionally sends grader emails via the
- * `request_regrade` Trigger.dev task; MCP v1 calls the service directly, so
- * emails are skipped — divergence reported in Phase 2c notes.)
+ * lists team assignments in the dropdown — MCP mirrors the action. The
+ * `previous_grade` String[] snapshot is built HERE from the submission's
+ * current grades, exactly as the route builds it (plan §5.1). The task's run
+ * is regradeRequest.create (fires the in-app grader notifications); its
+ * onSuccess emails the assigned graders.
  *
  * regrade_resolve mirrors api.$operation?action=updateRegradeRequest:
  * teaching-team (['OWNER','TEACHER','ASSISTANT']), authorization derived from
- * the RegradeRequest record's classroom. The web wraps the status update in
- * the `update_regrade_request` task whose onSuccess emails the student; MCP
- * v1 performs the same DB update via regradeRequest.update (email skipped —
- * reported). Statuses match the web UI: APPROVED | DENIED.
+ * the RegradeRequest record's classroom, task payload re-derived from the DB
+ * record (never the request). Statuses match the web UI: APPROVED | DENIED.
  */
 
 import { ClassmojiService } from '@classmoji/services';
+import { runs, tasks } from '@trigger.dev/sdk';
 import { z } from 'zod';
+import { ToolError } from '../mcp/errors.ts';
 import type { ToolDefinition } from '../mcp/registry.ts';
 import {
   loadGitRepoAssignmentInClassroom,
@@ -35,6 +43,42 @@ import {
   TEACHING_TEAM,
   writeAudit,
 } from './shared.ts';
+
+const RUN_POLL_INTERVAL_MS = 500;
+const RUN_WAIT_TIMEOUT_MS = 60_000;
+
+/** Success/terminal-failure sets from the SDK's RunStatus enum. */
+const FAILED_RUN_STATUSES = new Set([
+  'CANCELED',
+  'FAILED',
+  'CRASHED',
+  'SYSTEM_FAILURE',
+  'EXPIRED',
+  'TIMED_OUT',
+]);
+
+/**
+ * Wait for a triggered run to finish — the webapp's waitForRunCompletion
+ * semantics (throw on any non-COMPLETED terminal status), implemented as
+ * bounded polling so a stalled run can never hang the MCP request (S5).
+ * Returns the run's output (the task run()'s return value).
+ */
+async function waitForRunCompletion(runId: string): Promise<unknown> {
+  const deadline = Date.now() + RUN_WAIT_TIMEOUT_MS;
+  for (;;) {
+    const run = await runs.retrieve(runId);
+    if (run.status === 'COMPLETED') {
+      return run.output;
+    }
+    if (FAILED_RUN_STATUSES.has(run.status)) {
+      throw new ToolError('internal', `Task failed with status: ${run.status}`);
+    }
+    if (Date.now() >= deadline) {
+      throw new ToolError('internal', 'Timed out waiting for the background task to complete');
+    }
+    await new Promise(resolve => setTimeout(resolve, RUN_POLL_INTERVAL_MS));
+  }
+}
 
 interface RegradeCreateArgs {
   classroom: string;
@@ -47,7 +91,8 @@ export const regradeCreateTool: ToolDefinition<RegradeCreateArgs> = {
   title: 'Request a regrade',
   description:
     'Submits a regrade (resubmit) request for one of YOUR OWN graded submissions. Students ' +
-    'only. Snapshots the current grades as the previous grade and notifies the assigned graders.',
+    'only. Snapshots the current grades as the previous grade and notifies the assigned ' +
+    'graders (in-app and by email).',
   scope: 'write',
   roles: ['STUDENT'],
   inputSchema: {
@@ -66,16 +111,40 @@ export const regradeCreateTool: ToolDefinition<RegradeCreateArgs> = {
       throw scopedNotFound('Submission');
     }
 
-    // Build the previous_grade snapshot from the DB — the service does not.
+    // Build the previous_grade snapshot from the DB — exactly as the route does.
     const previousGrade = gra.grades.map(g => g.emoji);
 
-    const request = await ClassmojiService.regradeRequest.create({
+    // Same task + payload as the web action (post payload-key fix): the task's
+    // run() is regradeRequest.create; onSuccess emails the assigned graders.
+    const run = await tasks.trigger('request_regrade', {
       classroom_id: classroom.classroomId,
-      git_repo_assignment_id: gra.id,
+      gitRepoAssignment: gra,
       student_id: ctx.viewer.userId,
       student_comment: args.comment,
       previous_grade: previousGrade,
     });
+    const output = (await waitForRunCompletion(run.id)) as {
+      id?: string;
+      status?: string;
+      previous_grade?: string[];
+    } | null;
+
+    // The run returns the created RegradeRequest; fall back to the DB if the
+    // output was not materialized in the retrieve response.
+    let request = output && output.id ? output : null;
+    if (!request) {
+      const candidates = await ClassmojiService.regradeRequest.findMany({
+        git_repo_assignment_id: gra.id,
+        student_id: ctx.viewer.userId,
+      });
+      const newest = [...candidates].sort(
+        (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+      )[0];
+      if (!newest) {
+        throw new ToolError('internal', 'Regrade request was not created');
+      }
+      request = { id: newest.id, status: newest.status, previous_grade: newest.previous_grade };
+    }
 
     await writeAudit(ctx, {
       resource_type: 'REGRADE_REQUEST',
@@ -105,8 +174,9 @@ export const regradeResolveTool: ToolDefinition<RegradeResolveArgs> = {
   name: 'regrade_resolve',
   title: 'Resolve a regrade request',
   description:
-    'Approves or denies a pending regrade request. After approving, add the new grade with ' +
-    'grade_add — it will replace the pre-request grades rather than average with them.',
+    'Approves or denies a pending regrade request and emails the student. After approving, add ' +
+    'the new grade with grade_add — it will replace the pre-request grades rather than average ' +
+    'with them.',
   scope: 'write',
   roles: TEACHING_TEAM,
   inputSchema: {
@@ -117,10 +187,26 @@ export const regradeResolveTool: ToolDefinition<RegradeResolveArgs> = {
   handler: async (args, ctx) => {
     const request = await loadRegradeRequestInClassroom(args.regrade_request_id, ctx);
 
-    const updated = await ClassmojiService.regradeRequest.update({
-      id: request.id,
-      data: { status: args.resolution },
+    // Same task + payload as api.$operation updateRegradeRequest: the status
+    // update and the resolution email use values re-derived from the DB
+    // record, never the request body. onSuccess emails the student.
+    const run = await tasks.trigger('update_regrade_request', {
+      request: {
+        id: request.id,
+        student: {
+          email: request.student?.email,
+        },
+        git_repo_assignment: {
+          assignment: {
+            title: request.git_repo_assignment?.assignment?.title,
+          },
+        },
+      },
+      data: {
+        status: args.resolution,
+      },
     });
+    await waitForRunCompletion(run.id);
 
     await writeAudit(ctx, {
       resource_type: 'REGRADE_REQUEST',
@@ -131,7 +217,7 @@ export const regradeResolveTool: ToolDefinition<RegradeResolveArgs> = {
 
     return ok({
       success: true,
-      regrade_request: { id: updated.id, status: updated.status },
+      regrade_request: { id: request.id, status: args.resolution },
     });
   },
 };

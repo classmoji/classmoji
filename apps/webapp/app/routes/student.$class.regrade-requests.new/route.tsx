@@ -131,9 +131,12 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
   }
 
   try {
+    // Payload key must match the task's contract (`gitRepoAssignment` —
+    // packages/tasks/src/workflows/regrades.ts); the old `repositoryAssignment`
+    // key was missed in the repository→gitRepo rename and made every run fail.
     const run = await tasks.trigger('request_regrade', {
       classroom_id: classroom.id,
-      repositoryAssignment: repositoryAssignment,
+      gitRepoAssignment: repositoryAssignment,
       student_id: userId, // Use authenticated userId, NOT data.student_id
       student_comment: data.student_comment,
       previous_grade: repositoryAssignment.grades.map(grade => grade.emoji),
