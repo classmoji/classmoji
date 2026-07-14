@@ -13,22 +13,30 @@
  * the fixed identity scopes).
  */
 
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance, FastifyReply } from 'fastify';
 import { MCP_PUBLIC_URL, PROTECTED_RESOURCE_METADATA_PATH, WEBAPP_URL } from '../config.ts';
 
 export default async function wellKnownRoutes(fastify: FastifyInstance) {
-  fastify.get(PROTECTED_RESOURCE_METADATA_PATH, async (_request, reply) => {
+  const metadata = {
+    resource: MCP_PUBLIC_URL,
+    // better-auth serves the AS metadata under the webapp origin
+    // (…/api/auth/.well-known/oauth-authorization-server) and advertises
+    // the bare origin as its issuer — match that self-description here.
+    authorization_servers: [new URL(WEBAPP_URL).origin],
+    scopes_supported: ['read', 'write'],
+    bearer_methods_supported: ['header'],
+  };
+  const serve = async (_request: unknown, reply: FastifyReply) => {
     return reply
       .header('Access-Control-Allow-Origin', '*')
       .header('Cache-Control', 'public, max-age=300')
-      .send({
-        resource: MCP_PUBLIC_URL,
-        // better-auth serves the AS metadata under the webapp origin
-        // (…/api/auth/.well-known/oauth-authorization-server) and advertises
-        // the bare origin as its issuer — match that self-description here.
-        authorization_servers: [new URL(WEBAPP_URL).origin],
-        scopes_supported: ['read', 'write'],
-        bearer_methods_supported: ['header'],
-      });
-  });
+      .send(metadata);
+  };
+  fastify.get(PROTECTED_RESOURCE_METADATA_PATH, serve);
+  // RFC 9728 path-aware location for the /mcp resource: clients that treat
+  // the endpoint path as part of the resource identifier request
+  // /.well-known/oauth-protected-resource/mcp FIRST (the installed MCP SDK
+  // does exactly this and only falls back to the root form on 404 — some
+  // client versions don't fall back). Serve the same document at both.
+  fastify.get(`${PROTECTED_RESOURCE_METADATA_PATH}/mcp`, serve);
 }
