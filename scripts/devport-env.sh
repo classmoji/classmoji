@@ -19,6 +19,7 @@ if [ -f ".devport" ]; then
   export QUIZ_AGENT_PORT=$((6000 + DEVPORT_ID * 10))
   export SLIDES_PORT=$((6500 + DEVPORT_ID * 10))
   export PAGES_PORT=$((7100 + DEVPORT_ID * 10))
+  export MCP_PORT=$((8100 + DEVPORT_ID * 10))
 
   # Export service URLs (these override .env values if needed)
   export QUIZ_AGENT_URL="http://localhost:$QUIZ_AGENT_PORT"
@@ -26,6 +27,7 @@ if [ -f ".devport" ]; then
   export WEBAPP_URL="http://localhost:$WEBAPP_PORT"
   export SLIDES_URL="http://localhost:$SLIDES_PORT"
   export PAGES_URL="http://localhost:$PAGES_PORT"
+  export MCP_PUBLIC_URL="http://localhost:$MCP_PORT"
 
   # Override DATABASE_URL with feature-specific DB
   DB_NAME="classmoji_${DEVPORT_NAME//-/_}"
@@ -33,7 +35,7 @@ if [ -f ".devport" ]; then
 
   echo "🔌 Devport $DEVPORT_ID ($DEVPORT_NAME) active"
   echo "   Webapp: $WEBAPP_PORT | Hook: $HOOK_PORT"
-  echo "   Quiz: $QUIZ_AGENT_PORT | Slides: $SLIDES_PORT | Pages: $PAGES_PORT | DB: $DB_NAME"
+  echo "   Quiz: $QUIZ_AGENT_PORT | Slides: $SLIDES_PORT | Pages: $PAGES_PORT | MCP: $MCP_PORT | DB: $DB_NAME"
 else
   # Default ports for main repo (ID=0)
   export WEBAPP_PORT=3000
@@ -41,6 +43,7 @@ else
   export QUIZ_AGENT_PORT=6000
   export SLIDES_PORT=6500
   export PAGES_PORT=7100
+  export MCP_PORT=8100
 
   # Service URLs use defaults from .env
   export QUIZ_AGENT_URL="http://localhost:6000"
@@ -48,4 +51,5 @@ else
   export WEBAPP_URL="http://localhost:3000"
   export SLIDES_URL="http://localhost:6500"
   export PAGES_URL="http://localhost:7100"
+  export MCP_PUBLIC_URL="http://localhost:8100"
 fi

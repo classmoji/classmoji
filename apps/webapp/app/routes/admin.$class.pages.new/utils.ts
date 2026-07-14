@@ -85,11 +85,6 @@ export async function extractZipContents(file: File | Blob) {
   };
 }
 
-// Generate initial page content with minimal markdown
-export function generatePageTemplate(_title: string) {
-  return `Add your content here...\n`;
-}
-
 /**
  * Extract first H1 from markdown for use as title (client-side version)
  * Cleans up Notion-specific artifacts like HTML comments

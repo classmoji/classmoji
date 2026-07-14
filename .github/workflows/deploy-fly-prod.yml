@@ -18,6 +18,7 @@ jobs:
       webapp: ${{ steps.filter.outputs.webapp == 'true' || github.event_name == 'workflow_dispatch' }}
       ai-agent: ${{ steps.filter.outputs.ai-agent == 'true' || github.event_name == 'workflow_dispatch' }}
       hook-station: ${{ steps.filter.outputs.hook-station == 'true' || github.event_name == 'workflow_dispatch' }}
+      mcp: ${{ steps.filter.outputs.mcp == 'true' || github.event_name == 'workflow_dispatch' }}
       site: ${{ steps.filter.outputs.site == 'true' || github.event_name == 'workflow_dispatch' }}
       slides: ${{ steps.filter.outputs.slides == 'true' || github.event_name == 'workflow_dispatch' }}
       pages: ${{ steps.filter.outputs.pages == 'true' || github.event_name == 'workflow_dispatch' }}
@@ -36,6 +37,9 @@ jobs:
               - 'packages/**'
             hook-station:
               - 'apps/hook-station/**'
+              - 'packages/**'
+            mcp:
+              - 'apps/mcp/**'
               - 'packages/**'
             site:
               - 'apps/site/**'
@@ -110,6 +114,31 @@ jobs:
       - uses: superfly/flyctl-actions/setup-flyctl@master
       - name: Deploy hook-station
         run: flyctl deploy --config apps/hook-station/fly.toml --dockerfile apps/hook-station/Dockerfile --remote-only
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+
+  deploy-mcp:
+    needs: [changes, deploy-webapp]
+    if: always() && needs.changes.outputs.mcp == 'true' && (needs.deploy-webapp.result == 'success' || needs.deploy-webapp.result == 'skipped')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+          token: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Heal package-lock.json against submodule workspaces
+        run: npm install --package-lock-only --no-audit --no-fund --legacy-peer-deps
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+      - name: Deploy mcp
+        run: |
+          if flyctl status --app classmoji-mcp >/dev/null 2>&1; then
+            flyctl deploy --config apps/mcp/fly.toml --dockerfile apps/mcp/Dockerfile --remote-only
+          else
+            echo "::notice::Skipping mcp deploy because Fly app classmoji-mcp is not provisioned."
+          fi
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
 
