@@ -374,6 +374,14 @@ export const auth = betterAuth({
     // OAuth 2.1 authorization server for MCP clients (discovery, dynamic client
     // registration, PKCE, consent, DB-backed access/refresh tokens). The MCP
     // resource server (apps/mcp) validates bearer tokens via auth.api.getMcpSession.
+    //
+    // SECURITY: better-auth 1.4.18's Dynamic Client Registration schema is
+    // `redirect_uris: z.array(z.string())` with no scheme validation, and this
+    // plugin exposes no option/hook to constrain it. To stop `javascript:`/
+    // `data:` redirect_uris from being registered (open-redirect -> consent-page
+    // XSS), the DCR endpoints are guarded in the route that delegates to
+    // `auth.handler` — see apps/webapp/app/routes/api.auth.$.ts. The consent
+    // screen additionally validates the redirect target at the sink.
     mcp({
       loginPage: '/', // the landing page is the sign-in page
       // getMCPProviderMetadata merges only this top-level metadata into the

@@ -10,7 +10,18 @@ import { useState } from 'react';
 import { redirect, useLoaderData } from 'react-router';
 import { auth } from '@classmoji/auth/server';
 import getPrisma from '@classmoji/database';
+import { isHttpRedirectUri } from '~/utils/oauthRedirect';
 import type { LoaderFunctionArgs } from 'react-router';
+
+/**
+ * Clickjacking protection (U10): this consent screen performs a security-
+ * sensitive action on click, so it must never be framed. Scope the frame
+ * headers to this route only.
+ */
+export const headers = () => ({
+  'X-Frame-Options': 'DENY',
+  'Content-Security-Policy': "frame-ancestors 'none'",
+});
 
 const SCOPE_DESCRIPTIONS: Record<string, string> = {
   read: 'Read your classroom data (rosters, assignments, grades you can see)',
@@ -69,6 +80,14 @@ const OAuthConsent = () => {
       const data = await res.json();
       if (!res.ok || !data?.redirectURI) {
         throw new Error(data?.error_description || 'Consent request failed');
+      }
+      // SECURITY (U1): only ever navigate to an http(s) target. Both the
+      // approve and deny paths return the client's redirect_uri here; a
+      // malicious client with a `javascript:`/`data:` redirect_uri would
+      // otherwise execute in our authenticated origin. This is defense in
+      // depth — Dynamic Client Registration also rejects non-http(s) schemes.
+      if (!isHttpRedirectUri(data.redirectURI)) {
+        throw new Error('The application returned an invalid redirect URL.');
       }
       window.location.href = data.redirectURI;
     } catch (e) {
