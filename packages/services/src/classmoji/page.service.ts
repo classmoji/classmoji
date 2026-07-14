@@ -87,6 +87,9 @@ export interface PageFileUpload {
   encoding: 'utf-8' | 'base64';
 }
 
+/** Error `code` set when a new page's derived content path is already taken. */
+export const PAGE_CONTENT_PATH_CONFLICT = 'PAGE_CONTENT_PATH_CONFLICT';
+
 /** Load the classroom and derive its content-repo coordinates, or throw. */
 async function resolveContentRepo(classroomId: string) {
   const classroom = await getPrisma().classroom.findUnique({
@@ -187,11 +190,31 @@ export async function createPage({
   commitMessage?: string;
 }) {
   const ctx = await resolveContentRepo(classroomId);
+
+  const contentPath = pageContentPath(title);
+
+  // Distinct titles can normalize to the SAME content path ("Lab 1" and
+  // "Lab-1" → pages/lab-1), and content_path carries no unique constraint —
+  // only [classroom_id, title] does. An unchecked create would overwrite the
+  // existing folder's committed content on GitHub before the DB create ever
+  // ran (and same-title dups clobbered GitHub before failing on P2002).
+  // Refuse BEFORE any GitHub write.
+  const collision = await findByContentPath(classroomId, contentPath, {
+    includeClassroom: false,
+  });
+  if (collision) {
+    throw Object.assign(
+      new Error(
+        `A page already uses the content path '${contentPath}' (existing page: "${collision.title}"). Choose a title that maps to a different URL path.`
+      ),
+      { code: PAGE_CONTENT_PATH_CONFLICT }
+    );
+  }
+
   if (ensureRepo) {
     await ensureContentRepoExists(ctx);
   }
 
-  const contentPath = pageContentPath(title);
   const htmlPath = `${contentPath}/index.html`;
   const pageHtml = html ?? generatePageTemplate(title);
 

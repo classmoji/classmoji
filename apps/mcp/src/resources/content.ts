@@ -282,6 +282,115 @@ export const quizzesResource: ResourceDefinition = {
 
 // ─── calendar ────────────────────────────────────────────────────────────────
 
+interface CalendarLinkedPage {
+  page?: { id: string; title?: string | null; is_draft?: boolean } | null;
+}
+interface CalendarLinkedSlide {
+  slide?: { id: string; title?: string | null; is_draft?: boolean } | null;
+}
+interface CalendarLinkedAssignment {
+  assignment?: { id: string; title?: string | null; slug?: string | null } | null;
+  repository?: { id: string; title?: string | null; slug?: string | null } | null;
+}
+
+/** Union row shape: expanded CalendarEvents + synthesized deadline items. */
+interface CalendarRow {
+  id: string;
+  event_type: string;
+  title: string;
+  description?: string | null;
+  start_time: Date | string;
+  end_time: Date | string;
+  location?: string | null;
+  meeting_link?: string | null;
+  is_recurring?: boolean;
+  recurrence_rule?: unknown;
+  occurrence_date?: Date | string;
+  creator?: { id: string; name?: string | null; login?: string | null } | null;
+  is_deadline?: boolean;
+  is_unpublished?: boolean;
+  assignment_id?: string;
+  repository_id?: string;
+  github_issue_url?: string | null;
+  pages?: CalendarLinkedPage[];
+  slides?: CalendarLinkedSlide[];
+  assignments?: CalendarLinkedAssignment[];
+}
+
+/**
+ * Allowlist shaping for calendar rows. getClassroomCalendar returns raw
+ * service rows whose `...event` spread carries the UNFILTERED
+ * pageLinks/slideLinks/assignmentLinks include — draft/unpublished page and
+ * slide titles a student must never see — plus overrides and other edit-UI
+ * internals the web never renders. Emit only what the web calendar actually
+ * shows: the event's own fields and the display-mapped linked content (which
+ * the service already draft-filters for events); drafts are additionally
+ * stripped for non-staff wherever the flag rides along.
+ */
+function shapeCalendarRow(row: CalendarRow, staff: boolean) {
+  const pages = (row.pages ?? [])
+    .map(l => l.page)
+    .filter((p): p is NonNullable<CalendarLinkedPage['page']> =>
+      Boolean(p && (staff || p.is_draft !== true))
+    )
+    .map(p => ({ id: p.id, title: p.title ?? null }));
+  const slides = (row.slides ?? [])
+    .map(l => l.slide)
+    .filter((s): s is NonNullable<CalendarLinkedSlide['slide']> =>
+      Boolean(s && (staff || s.is_draft !== true))
+    )
+    .map(s => ({ id: s.id, title: s.title ?? null }));
+  const assignments = (row.assignments ?? []).flatMap(l =>
+    l.assignment
+      ? [
+          {
+            assignment: {
+              id: l.assignment.id,
+              title: l.assignment.title ?? null,
+              slug: l.assignment.slug ?? null,
+            },
+            repository: l.repository
+              ? {
+                  id: l.repository.id,
+                  title: l.repository.title ?? null,
+                  slug: l.repository.slug ?? null,
+                }
+              : null,
+          },
+        ]
+      : []
+  );
+
+  return {
+    id: row.id,
+    event_type: row.event_type,
+    title: row.title,
+    description: row.description ?? null,
+    start_time: row.start_time,
+    end_time: row.end_time,
+    location: row.location ?? null,
+    meeting_link: row.meeting_link ?? null,
+    is_recurring: row.is_recurring ?? false,
+    recurrence_rule: row.recurrence_rule ?? null,
+    occurrence_date: row.occurrence_date ?? null,
+    creator: row.creator
+      ? { id: row.creator.id, name: row.creator.name ?? null, login: row.creator.login ?? null }
+      : null,
+    ...(row.is_deadline
+      ? {
+          is_deadline: true,
+          assignment_id: row.assignment_id ?? null,
+          repository_id: row.repository_id ?? null,
+          github_issue_url: row.github_issue_url ?? null,
+          ...(staff ? { is_unpublished: row.is_unpublished ?? false } : {}),
+        }
+      : {}),
+    pages,
+    slides,
+    assignments,
+  };
+}
+
 /** Current UTC month expanded to grid-week boundaries ±1 day (web default). */
 function defaultCalendarRange(): { start: Date; end: Date } {
   const now = new Date();
@@ -301,18 +410,18 @@ async function loadCalendar(ctx: ToolContext, start: Date, end: Date) {
   // Mirrors the routes: students get published-only deadlines scoped to
   // themselves; staff see unpublished too (raw link objects are edit-UI
   // concerns and stay off).
-  const events = await ClassmojiService.calendar.getClassroomCalendar(
+  const events = (await ClassmojiService.calendar.getClassroomCalendar(
     classroomId,
     start,
     end,
     staff ? null : ctx.viewer.userId,
     false,
     staff
-  );
+  )) as CalendarRow[];
   return {
     range: { start: start.toISOString(), end: end.toISOString() },
-    count: (events as unknown[]).length,
-    events,
+    count: events.length,
+    events: events.map(e => shapeCalendarRow(e, staff)),
   };
 }
 

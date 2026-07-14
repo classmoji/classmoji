@@ -175,6 +175,21 @@ describe('liveness + metadata', () => {
     expect(body.scopes_supported).toEqual(['read', 'write']);
     expect(body.bearer_methods_supported).toEqual(['header']);
   });
+
+  it('serves the path-aware form (…/oauth-protected-resource/mcp) with the SAME document', async () => {
+    // The installed MCP SDK requests the path-aware location FIRST and some
+    // client versions never fall back to the root form (commit d4faf5c) —
+    // both locations must answer identically.
+    const [root, pathAware] = await Promise.all([
+      fetch(`${BASE}/.well-known/oauth-protected-resource`),
+      fetch(`${BASE}/.well-known/oauth-protected-resource/mcp`),
+    ]);
+    expect(pathAware.status).toBe(200);
+    const rootDoc = (await root.json()) as Record<string, unknown>;
+    const pathDoc = (await pathAware.json()) as Record<string, unknown>;
+    expect(pathDoc).toEqual(rootDoc);
+    expect(pathDoc.resource).toBe(BASE);
+  });
 });
 
 describe('401 boundary', () => {

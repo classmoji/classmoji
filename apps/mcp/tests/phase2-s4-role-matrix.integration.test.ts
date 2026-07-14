@@ -1005,12 +1005,17 @@ describe('resource tiers', () => {
       expect(s).not.toHaveProperty('comment');
     }
 
+    // timofei7 holds OWNER+ASSISTANT+STUDENT — this also pins U6: multi-role
+    // callers must DETERMINISTICALLY resolve to their highest matching role
+    // (OWNER), never an arbitrary ASSISTANT membership that would drop the
+    // OWNER-only fields below.
     const ownerRoster = await readResource(owner, `classmoji://${DEV_REF}/roster`);
     expect(ownerRoster.error).toBeUndefined();
     const ownerStudents = ownerRoster.payload!.students as Array<Record<string, unknown>>;
     expect(ownerStudents[0]).toHaveProperty('email');
     expect(ownerStudents[0]).toHaveProperty('school_id');
     expect(ownerStudents[0]).toHaveProperty('letter_grade');
+    expect(ownerStudents[0]).toHaveProperty('comment');
 
     const denied = await readResource(student1, `classmoji://${DEV_REF}/roster`);
     expect(denied.error?.code).toBe(RESOURCE_FORBIDDEN);
@@ -1165,6 +1170,12 @@ describe('resource tiers', () => {
   it('quizzes: TEACHER is genuinely excluded by the role gate', async () => {
     const denied = await readResource(teacher, `classmoji://${DEV_REF}/quizzes`);
     expect(denied.error?.code).toBe(RESOURCE_FORBIDDEN);
+    // Tie the denial to the ROLE gate specifically: the Pro-tier and
+    // quizzes_enabled gates also answer -32003, so the code alone would keep
+    // passing if TEACHER were ever added to QUIZ_ROLES. INSUFFICIENT_ROLE is
+    // only ever attached by the role gate (authz/pure.ts requireRole).
+    expect((denied.error?.data as { code?: string } | undefined)?.code).toBe('INSUFFICIENT_ROLE');
+    expect(denied.error?.message).toMatch(/Required role/);
   });
 });
 

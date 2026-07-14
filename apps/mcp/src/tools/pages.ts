@@ -37,9 +37,19 @@ import {
 
 /** Prisma unique-violation (P2002) — Page is @@unique([classroom_id, title]). */
 function isUniqueTitleViolation(error: unknown): boolean {
+  return hasErrorCode(error, 'P2002');
+}
+
+/** page.createPage's refuse-before-GitHub-write collision (U3): the new
+ * title normalizes to a content path an existing page already occupies. */
+function isContentPathConflict(error: unknown): boolean {
+  return hasErrorCode(error, 'PAGE_CONTENT_PATH_CONFLICT');
+}
+
+function hasErrorCode(error: unknown, code: string): boolean {
   let current: unknown = error;
   while (current instanceof Error) {
-    if ('code' in current && (current as { code?: string }).code === 'P2002') return true;
+    if ('code' in current && (current as { code?: string }).code === code) return true;
     current = current.cause;
   }
   return false;
@@ -102,6 +112,9 @@ export const pageCreateTool: ToolDefinition<PageCreateArgs> = {
         },
       });
     } catch (error) {
+      if (isContentPathConflict(error)) {
+        throw new ToolError('invalid_params', (error as Error).message);
+      }
       if (isUniqueTitleViolation(error)) {
         throw new ToolError('invalid_params', 'A page with this title already exists');
       }

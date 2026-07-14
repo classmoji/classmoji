@@ -8,8 +8,9 @@
  *     (mirror of assertClassroomEntryAllowed, packages/auth/src/server.ts)
  *   - mutation gate: OWNER always mutates; non-owners mutate only when ACTIVE
  *     (mirror of canMutateClassroom, packages/auth/src/server.ts)
- * Cross-module agreement with the real webapp predicates is pinned separately
- * in ./parity.test.ts.
+ * The predicates under test are imported from @classmoji/auth/predicates —
+ * the same module packages/auth/src/server.ts consumes — so webapp agreement
+ * holds by construction (a single source; no separate parity test needed).
  */
 
 import { describe, expect, it } from 'vitest';

@@ -78,7 +78,7 @@ export const gradeAddTool: ToolDefinition<GradeAddArgs> = {
     const gra = await loadGitRepoAssignmentInClassroom(args.git_repo_assignment_id, ctx);
     await assertEmojiInScale(classroom.classroomId, args.emoji);
 
-    const alreadyGraded = gra.grades.some(g => g.emoji === args.emoji);
+    const priorGrade = gra.grades.find(g => g.emoji === args.emoji);
 
     await HelperService.addGradeToGitRepoAssignment({
       classroom: { id: classroom.classroomId },
@@ -98,11 +98,16 @@ export const gradeAddTool: ToolDefinition<GradeAddArgs> = {
     });
 
     const grades = await ClassmojiService.assignmentGrade.findByAssignmentId(gra.id);
+    // The orchestrator dedups silently — but on the regrade-replace path it
+    // CLEARS the pre-request grade and mints a fresh row for the same emoji,
+    // which is a real mutation, not a no-op. Report deduplicated only when the
+    // pre-existing grade row itself survived (same id before and after).
+    const currentGrade = grades.find(g => g.emoji === args.emoji);
+    const deduplicated = Boolean(priorGrade && currentGrade && priorGrade.id === currentGrade.id);
     return ok({
       success: true,
       git_repo_assignment_id: gra.id,
-      // The orchestrator dedups silently; surface it so the caller knows.
-      deduplicated: alreadyGraded,
+      deduplicated,
       grades: grades.map(g => ({ id: g.id, emoji: g.emoji, grader: g.grader?.login ?? null })),
     });
   },

@@ -693,9 +693,7 @@ export const getDeadlinesForRange = async (
 
   return assignments.map(assignment => {
     const repoAssignment = (
-      'git_repo_assignments' in assignment
-        ? (assignment.git_repo_assignments?.[0] ?? null)
-        : null
+      'git_repo_assignments' in assignment ? (assignment.git_repo_assignments?.[0] ?? null) : null
     ) as DeadlineRepositoryAssignment | null;
     const gitOrgLogin = assignment.repository.classroom?.git_organization?.login;
 
@@ -919,7 +917,10 @@ export const updateEventWithScope = async (
     }
 
     case 'all': {
-      // Update the entire event template
+      // Update the entire event template. When the caller didn't address
+      // recurrence at all (is_recurring undefined), leave recurrence_rule
+      // untouched — forcing JsonNull here would wipe a recurring series on a
+      // partial (e.g. title-only) update while is_recurring stayed true.
       return getPrisma().calendarEvent.update({
         where: { id: eventId },
         data: {
@@ -931,9 +932,12 @@ export const updateEventWithScope = async (
           location: eventData.location,
           meeting_link: eventData.meeting_link,
           is_recurring: eventData.is_recurring,
-          recurrence_rule: eventData.is_recurring
-            ? toNullableJsonInput(eventData.recurrence_rule)
-            : Prisma.JsonNull,
+          recurrence_rule:
+            eventData.is_recurring === undefined
+              ? undefined
+              : eventData.is_recurring
+                ? toNullableJsonInput(eventData.recurrence_rule)
+                : Prisma.JsonNull,
         },
       });
     }

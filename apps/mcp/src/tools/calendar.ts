@@ -219,9 +219,23 @@ export const calendarEventUpdateTool: ToolDefinition<CalendarEventUpdateArgs> = 
 
     const scoped = resolveScope(event.is_recurring, args.edit_scope, args.occurrence_date);
     if (scoped) {
+      // 'all' rewrites the event template, and the service derives
+      // recurrence_rule from is_recurring (undefined → falsy → SQL NULL). This
+      // tool has no recurrence inputs, so a partial update (e.g. title-only)
+      // would silently wipe the rule while is_recurring stayed true, collapsing
+      // the whole series to a single occurrence. Carry the loaded event's
+      // recurrence fields through unchanged.
+      const scopedUpdates =
+        scoped.scope === 'all'
+          ? {
+              ...updates,
+              is_recurring: event.is_recurring,
+              recurrence_rule: event.recurrence_rule as Prisma.InputJsonObject | null,
+            }
+          : updates;
       await ClassmojiService.calendar.updateEventWithScope(
         event.id,
-        updates,
+        scopedUpdates,
         scoped.scope,
         scoped.occurrence
       );

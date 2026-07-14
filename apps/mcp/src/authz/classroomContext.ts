@@ -36,8 +36,18 @@ export interface ClassroomContext {
   status: ClassroomStatus;
   /** The membership that satisfied the tool's role requirement. */
   membership: Membership;
+  /** The caller's HIGHEST-privilege role among those satisfying the gate. */
   role: Role;
+  /**
+   * Every role the caller holds that satisfies the surface's role gate,
+   * highest-privilege first (ClassroomMembership is unique on
+   * (classroom_id, user_id, role) — multi-role users are normal).
+   */
+  roles: Role[];
 }
+
+/** Privilege order for deterministic multi-role resolution (highest first). */
+const ROLE_PRIORITY: readonly Role[] = ['OWNER', 'TEACHER', 'ASSISTANT', 'STUDENT'];
 
 /**
  * Resolve the caller's authorization context in the classroom addressed by
@@ -71,26 +81,39 @@ export async function resolveClassroomContext(
   const classroom = matches[0];
 
   // Role-filtered membership lookup — the same idiom as assertClassroomAccess
-  // (packages/auth/src/server.ts:582-592). A user can hold several roles in
-  // one classroom, so querying WITH the allowed-role filter is what finds the
-  // satisfying membership for multi-role users.
+  // (packages/auth/src/server.ts). A user can hold several roles in one
+  // classroom (ClassroomMembership is unique on (classroom_id, user_id, role)),
+  // and findByClassroomAndUser is an UNORDERED findFirst — a single filtered
+  // lookup would hand back an arbitrary matching role. Resolve each allowed
+  // role explicitly, in privilege order, so multi-role callers deterministically
+  // get their HIGHEST matching role (an OWNER+ASSISTANT reading a role-tiered
+  // resource is genuinely an OWNER) and role-conditional read payloads (e.g.
+  // roster's OWNER-only fields) never under-resolve.
   const rolesFilter = allowedRoles && allowedRoles.length > 0 ? [...allowedRoles] : null;
-  let membership = await ClassmojiService.classroomMembership.findByClassroomAndUser(
-    classroom.id,
-    viewer.userId,
-    rolesFilter
+  const candidateRoles = rolesFilter
+    ? ROLE_PRIORITY.filter(role => rolesFilter.includes(role))
+    : [...ROLE_PRIORITY];
+  const found = await Promise.all(
+    candidateRoles.map(role =>
+      ClassmojiService.classroomMembership.findByClassroomAndUser(classroom.id, viewer.userId, [
+        role,
+      ])
+    )
   );
-  if (!membership && rolesFilter) {
+  let memberships = found.filter((m): m is Membership => Boolean(m));
+  if (memberships.length === 0 && rolesFilter) {
     // Distinguish "not a member" from "insufficient role" for the error message.
-    membership = await ClassmojiService.classroomMembership.findByClassroomAndUser(
+    const any = await ClassmojiService.classroomMembership.findByClassroomAndUser(
       classroom.id,
       viewer.userId,
       null
     );
+    memberships = any ? [any] : [];
   }
 
-  // Pure decisions: role gate, then entry gate.
-  const effective = requireRole(membership ? [membership] : [], allowedRoles);
+  // Pure decisions: role gate (memberships arrive highest-privilege first, so
+  // the pick is deterministic), then entry gate.
+  const effective = requireRole(memberships, allowedRoles);
   assertEntryAllowed({ status: classroom.status, role: effective.role });
 
   return {
@@ -99,5 +122,6 @@ export async function resolveClassroomContext(
     status: classroom.status,
     membership: effective,
     role: effective.role,
+    roles: memberships.map(m => m.role),
   };
 }

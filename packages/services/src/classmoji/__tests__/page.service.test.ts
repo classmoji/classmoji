@@ -9,11 +9,15 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const classroomFindUniqueMock = vi.fn();
 const pageCreateMock = vi.fn();
+const pageFindFirstMock = vi.fn();
 
 vi.mock('@classmoji/database', () => ({
   default: () => ({
     classroom: { findUnique: (...args: unknown[]) => classroomFindUniqueMock(...args) },
-    page: { create: (...args: unknown[]) => pageCreateMock(...args) },
+    page: {
+      create: (...args: unknown[]) => pageCreateMock(...args),
+      findFirst: (...args: unknown[]) => pageFindFirstMock(...args),
+    },
   }),
 }));
 
@@ -71,6 +75,7 @@ describe('page.createPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     classroomFindUniqueMock.mockResolvedValue(classroom);
+    pageFindFirstMock.mockResolvedValue(null); // no content-path collision
     repositoryExistsMock.mockResolvedValue(true);
     putMock.mockResolvedValue({ sha: 'abc', commit: 'c1' });
     uploadBatchMock.mockResolvedValue({ commit: 'c2', filesUploaded: 2 });
@@ -166,6 +171,54 @@ describe('page.createPage', () => {
     await expect(
       createPage({ classroomId: 'class-1', title: 'X', createdBy: 'user-1' })
     ).rejects.toThrow('Classroom content namespace not configured');
+  });
+
+  it('refuses a content-path collision BEFORE any GitHub write (U3)', async () => {
+    // "Lab 1" and "Lab-1" both normalize to pages/lab-1; content_path has no
+    // unique constraint, so without the guard the second create would clobber
+    // the first page's committed content on GitHub.
+    pageFindFirstMock.mockResolvedValue({
+      id: 'page-existing',
+      title: 'Lab 1',
+      content_path: 'pages/lab-1',
+    });
+
+    const failure = await createPage({
+      classroomId: 'class-1',
+      title: 'Lab-1',
+      createdBy: 'user-1',
+    }).catch((e: Error) => e);
+
+    expect(failure).toBeInstanceOf(Error);
+    expect((failure as Error & { code?: string }).code).toBe('PAGE_CONTENT_PATH_CONFLICT');
+    expect((failure as Error).message).toContain("'pages/lab-1'");
+    expect((failure as Error).message).toContain('Lab 1');
+    // The collision was queried against THIS classroom + the derived path…
+    const where = (pageFindFirstMock.mock.calls[0][0] as { where: Record<string, unknown> }).where;
+    expect(where).toMatchObject({ classroom_id: 'class-1', content_path: 'pages/lab-1' });
+    // …and NOTHING was written: no GitHub commit, no DB row, no manifest.
+    expect(putMock).not.toHaveBeenCalled();
+    expect(uploadBatchMock).not.toHaveBeenCalled();
+    expect(pageCreateMock).not.toHaveBeenCalled();
+    expect(saveManifestMock).not.toHaveBeenCalled();
+  });
+
+  it('refuses a same-title duplicate before GitHub too (was: clobber-then-P2002)', async () => {
+    pageFindFirstMock.mockResolvedValue({
+      id: 'page-existing',
+      title: 'Dup',
+      content_path: 'pages/dup',
+    });
+
+    const failure = await createPage({
+      classroomId: 'class-1',
+      title: 'Dup',
+      createdBy: 'user-1',
+    }).catch((e: Error) => e);
+
+    expect((failure as Error & { code?: string }).code).toBe('PAGE_CONTENT_PATH_CONFLICT');
+    expect(putMock).not.toHaveBeenCalled();
+    expect(uploadBatchMock).not.toHaveBeenCalled();
   });
 
   it('wraps upload failures with the route-identical message', async () => {
