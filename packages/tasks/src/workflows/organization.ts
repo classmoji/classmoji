@@ -24,7 +24,7 @@ interface RemoveUserPayload {
   gitOrganization?: GitOrgData;
   classroom?: { id: string; slug: string };
   organization?: { id: string; slug: string; git_organization?: GitOrgData };
-  role?: string;
+  role?: 'OWNER' | 'TEACHER' | 'STUDENT' | 'ASSISTANT';
   payload?: RemoveUserPayload;
 }
 
@@ -199,7 +199,8 @@ export const removeUserFromOrganizationTask = task({
       const shouldRemoveFromOrg = await ClassmojiService.classroomMembership.shouldRemoveFromGitOrg(
         gitOrgData.id,
         user.id,
-        classroomData.id
+        classroomData.id,
+        userRole
       );
 
       // Step 3: Only remove from GitHub org if no other classroom memberships
@@ -212,6 +213,10 @@ export const removeUserFromOrganizationTask = task({
       }
     }
 
-    return ClassmojiService.classroomMembership.remove(classroomData.id, user.id);
+    return ClassmojiService.classroomMembership.remove(
+      classroomData.id,
+      user.id,
+      role || 'STUDENT'
+    );
   },
 });

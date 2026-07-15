@@ -65,6 +65,49 @@ describe('remove', () => {
     expect(countMock).not.toHaveBeenCalled();
     expect(deleteManyMock).toHaveBeenCalledTimes(1);
   });
+
+  it('removes only the requested non-owner role when the user has multiple roles', async () => {
+    await membershipService.remove('c1', 'u1', 'STUDENT');
+
+    expect(findFirstMock).not.toHaveBeenCalled();
+    expect(countMock).not.toHaveBeenCalled();
+    expect(deleteManyMock).toHaveBeenCalledWith({
+      where: { classroom_id: 'c1', user_id: 'u1', role: 'STUDENT' },
+    });
+  });
+
+  it('still protects a targeted owner removal', async () => {
+    findFirstMock.mockResolvedValue({ id: 'm1', role: 'OWNER' });
+    countMock.mockResolvedValue(1);
+
+    await expect(membershipService.remove('c1', 'u1', 'OWNER')).rejects.toThrow(LAST_OWNER_ERROR);
+    expect(deleteManyMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('shouldRemoveFromGitOrg', () => {
+  it('keeps the user in the organization when another role remains in the classroom', async () => {
+    countMock.mockResolvedValue(1);
+
+    await expect(
+      membershipService.shouldRemoveFromGitOrg('g1', 'u1', 'c1', 'STUDENT')
+    ).resolves.toBe(false);
+    expect(countMock).toHaveBeenCalledWith({
+      where: {
+        user_id: 'u1',
+        classroom: { git_org_id: 'g1' },
+        NOT: { classroom_id: 'c1', role: 'STUDENT' },
+      },
+    });
+  });
+
+  it('removes the user from the organization when no other role remains', async () => {
+    countMock.mockResolvedValue(0);
+
+    await expect(
+      membershipService.shouldRemoveFromGitOrg('g1', 'u1', 'c1', 'ASSISTANT')
+    ).resolves.toBe(true);
+  });
 });
 
 describe('removeById', () => {

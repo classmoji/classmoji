@@ -263,18 +263,21 @@ export const updateById = async (id: string, updates: Prisma.ClassroomMembership
  * Delete a membership
  * @param {string} classroomId - UUID of the Classroom
  * @param {string} userId - UUID of the User
+ * @param {Role} [role] - Optional role to remove; omit to remove every role
  * @returns {Promise<Object>}
  */
-export const remove = async (classroomId: string, userId: string) => {
-  const ownerMembership = await getPrisma().classroomMembership.findFirst({
-    where: { classroom_id: classroomId, user_id: userId, role: 'OWNER' },
-  });
-  if (ownerMembership) {
-    await assertNotLastOwner(classroomId);
+export const remove = async (classroomId: string, userId: string, role?: Role) => {
+  if (!role || role === 'OWNER') {
+    const ownerMembership = await getPrisma().classroomMembership.findFirst({
+      where: { classroom_id: classroomId, user_id: userId, role: 'OWNER' },
+    });
+    if (ownerMembership) {
+      await assertNotLastOwner(classroomId);
+    }
   }
 
   return getPrisma().classroomMembership.deleteMany({
-    where: { classroom_id: classroomId, user_id: userId },
+    where: { classroom_id: classroomId, user_id: userId, ...(role ? { role } : {}) },
   });
 };
 
@@ -300,12 +303,14 @@ export const removeById = async (id: string) => {
  * @param {string} gitOrgId - UUID of the GitOrganization
  * @param {string} userId - UUID of the User
  * @param {string} [excludeClassroomId] - Optional classroom to exclude from count
+ * @param {Role} [excludeRole] - Optional role to exclude within the classroom
  * @returns {Promise<number>}
  */
 export const countUserMembershipsInGitOrg = async (
   gitOrgId: string,
   userId: string,
-  excludeClassroomId: string | null = null
+  excludeClassroomId: string | null = null,
+  excludeRole?: Role
 ) => {
   const where: Prisma.ClassroomMembershipWhereInput = {
     user_id: userId,
@@ -314,7 +319,9 @@ export const countUserMembershipsInGitOrg = async (
     },
   };
 
-  if (excludeClassroomId) {
+  if (excludeClassroomId && excludeRole) {
+    where.NOT = { classroom_id: excludeClassroomId, role: excludeRole };
+  } else if (excludeClassroomId) {
     where.classroom_id = { not: excludeClassroomId };
   }
 
@@ -327,14 +334,16 @@ export const countUserMembershipsInGitOrg = async (
  * @param {string} gitOrgId - UUID of the GitOrganization
  * @param {string} userId - UUID of the User
  * @param {string} classroomId - UUID of the classroom being removed from
+ * @param {Role} [role] - Optional role being removed within the classroom
  * @returns {Promise<boolean>}
  */
 export const shouldRemoveFromGitOrg = async (
   gitOrgId: string,
   userId: string,
-  classroomId: string
+  classroomId: string,
+  role?: Role
 ) => {
-  const otherMemberships = await countUserMembershipsInGitOrg(gitOrgId, userId, classroomId);
+  const otherMemberships = await countUserMembershipsInGitOrg(gitOrgId, userId, classroomId, role);
   return otherMemberships === 0;
 };
 
