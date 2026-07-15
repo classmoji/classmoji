@@ -92,9 +92,14 @@ export const calculateStudentFinalGrade = (
 
   if (totalWeight == 0) return -1;
 
-  return (
-    Math.round((finalGrade / totalWeight) * 100 * 10) / 10 + (includeLatePenalty ? extraCredit : 0)
-  );
+  const result =
+    Math.round((finalGrade / totalWeight) * 100 * 10) / 10 + (includeLatePenalty ? extraCredit : 0);
+
+  // Never hand back a non-finite grade: it serializes to `null` over JSON and
+  // renders as a false `F` (NaN >= min_grade is false for every band). Fall
+  // back to the same "no computable grade" sentinel used above so callers'
+  // existing `< 0` / `>= 0` guards handle it uniformly.
+  return Number.isFinite(result) ? result : -1;
 };
 
 /**
@@ -214,14 +219,18 @@ export const calculateNumericGrade = (
   emojis: string[],
   emojiToNumberMap: Record<string, number>
 ): number => {
-  if (emojis.length === 0) {
+  // Ignore emojis that don't resolve to a finite value in this classroom's
+  // scale rather than letting a single unrecognized emoji turn the whole
+  // average (and, downstream, the student's entire final grade) into NaN.
+  const values = emojis
+    .map(emoji => convertEmojiToNumber(emoji, emojiToNumberMap))
+    .filter((value): value is number => Number.isFinite(value));
+
+  if (values.length === 0) {
     return 0;
   }
 
-  return (
-    emojis.reduce((acc, emoji) => acc + convertEmojiToNumber(emoji, emojiToNumberMap), 0) /
-    emojis.length
-  );
+  return values.reduce((acc, value) => acc + value, 0) / values.length;
 };
 
 /**

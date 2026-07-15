@@ -144,6 +144,16 @@ export const deleteByLogin = async (login: string) => {
 export const findRepositoriesPerStudent = async (classroom: StudentRepositoryClassroomContext) => {
   const includeRepos = {
     git_repos: {
+      // Scope to THIS classroom. A user's `git_repos` relation spans every
+      // classroom they belong to (each student also has an auto-provisioned
+      // `example-<login>` course), so without this filter a student's repos
+      // from another classroom bleed into this classroom's grade computation —
+      // and that other classroom's grade emojis (e.g. the example course's ⭐)
+      // aren't in THIS classroom's EmojiMapping, so convertEmojiToNumber
+      // returns undefined and NaN-poisons the student's entire final grade
+      // (surfaces as a false `F` on the grades table / `null` on leaderboards).
+      // Applies to both the student-owned query and the team query below.
+      where: { classroom_id: classroom.id },
       include: {
         repository: true,
         assignments: {
