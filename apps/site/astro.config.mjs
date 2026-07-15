@@ -56,6 +56,11 @@ export default defineConfig({
             { label: 'Build modules', slug: 'docs/instructors/modules' },
             { label: 'Grade assignments', slug: 'docs/instructors/grading' },
             { label: 'Configure tokens', slug: 'docs/instructors/tokens' },
+            {
+              label: 'Connect the MCP server',
+              slug: 'docs/instructors/mcp-server',
+              badge: { text: 'New', variant: 'tip' },
+            },
           ],
         },
         {
