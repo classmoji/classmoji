@@ -13,7 +13,8 @@ interface GitRepoAssignmentGraderRecord {
 
 interface GitRepoAssignmentRecord {
   id: string;
-  issue_number: number;
+  /** GitHub issue #number — matches the Prisma GitRepoAssignment field. */
+  provider_issue_number: number;
   git_repo: {
     name: string;
   };
@@ -76,7 +77,7 @@ export const requestRegradeTask = task({
       return;
     }
 
-    const issueUrl = `https://github.com/${classroom.git_organization.login}/${gitRepoAssignment.git_repo.name}/issues/${gitRepoAssignment.issue_number}`;
+    const issueUrl = `https://github.com/${classroom.git_organization.login}/${gitRepoAssignment.git_repo.name}/issues/${gitRepoAssignment.provider_issue_number}`;
 
     if (gitRepoAssignment.graders && gitRepoAssignment.graders.length > 0) {
       sendEmailTask.batchTrigger(

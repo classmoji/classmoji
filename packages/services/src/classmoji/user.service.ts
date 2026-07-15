@@ -158,10 +158,15 @@ export const findRepositoriesPerStudent = async (classroom: StudentRepositoryCla
   };
 
   // 1. find student repos
+  // Scope by classroom_id, NOT slug: Classroom.slug is unique only per git org
+  // (@@unique([git_org_id, slug])), so a slug filter matches same-slug twin
+  // classrooms across DIFFERENT orgs and would leak another org's students +
+  // grades (cross-org isolation break). The team query below already scopes by
+  // classroom_id — keep both consistent.
   const studentWithRepos = await getPrisma().user.findMany({
     where: {
       classroom_memberships: {
-        some: { classroom: { slug: classroom.slug }, role: 'STUDENT' },
+        some: { classroom_id: classroom.id, role: 'STUDENT' },
       },
     },
     include: includeRepos,

@@ -1,6 +1,6 @@
 import { betterAuth } from 'better-auth';
 import { prismaAdapter } from 'better-auth/adapters/prisma';
-import { admin } from 'better-auth/plugins';
+import { admin, mcp } from 'better-auth/plugins';
 import getPrisma from '@classmoji/database';
 import type { Role, ClassroomStatus } from '@prisma/client';
 import { ClassmojiService } from '@classmoji/services';
@@ -370,6 +370,43 @@ export const auth = betterAuth({
       // Allow users with 'admin' role to impersonate
       // OWNER users need to have role='admin' set in the database
       adminRoles: ['admin'],
+    }),
+    // OAuth 2.1 authorization server for MCP clients (discovery, dynamic client
+    // registration, PKCE, consent, DB-backed access/refresh tokens). The MCP
+    // resource server (apps/mcp) validates bearer tokens via auth.api.getMcpSession.
+    //
+    // SECURITY: better-auth 1.4.18's Dynamic Client Registration schema is
+    // `redirect_uris: z.array(z.string())` with no scheme validation, and this
+    // plugin exposes no option/hook to constrain it. To stop `javascript:`/
+    // `data:` redirect_uris from being registered (open-redirect -> consent-page
+    // XSS), the DCR endpoints are guarded in the route that delegates to
+    // `auth.handler` — see apps/webapp/app/routes/api.auth.$.ts. The consent
+    // screen additionally validates the redirect target at the sink.
+    mcp({
+      loginPage: '/', // the landing page is the sign-in page
+      // getMCPProviderMetadata merges only this top-level metadata into the
+      // AS discovery document (1.4.18 plugins/mcp reads options.metadata at
+      // runtime but MCPOptions omits it, hence the spread); the
+      // oidcConfig.metadata below is honored only by the protected-resource
+      // document. Keep both lists identical.
+      ...({
+        metadata: {
+          scopes_supported: ['openid', 'profile', 'email', 'offline_access', 'read', 'write'],
+        },
+      } as Record<string, unknown>),
+      oidcConfig: {
+        // Required by the OIDCOptions type; the plugin overrides it with the
+        // top-level loginPage at runtime, so keep the two identical.
+        loginPage: '/',
+        // Merged with the plugin's fixed identity scopes
+        // (openid, profile, email, offline_access). Per-classroom roles do the
+        // fine-grained authorization; scopes only separate read from write.
+        scopes: ['read', 'write'],
+        consentPage: '/oauth/consent',
+        metadata: {
+          scopes_supported: ['openid', 'profile', 'email', 'offline_access', 'read', 'write'],
+        },
+      },
     }),
   ],
 });
@@ -777,9 +814,17 @@ export async function requireStudentAccess(
   });
 }
 
-export type ClassroomStatusError = 'CLASSROOM_LOCKED' | 'CLASSROOM_UNPUBLISHED';
+// Pure decision logic lives in ./predicates.ts (side-effect-free, shared
+// with apps/mcp); this module keeps the webapp's Response-throwing wrappers.
+export * from './predicates.ts';
 
-type ClassroomStatusInput = { status: ClassroomStatus; role: Role };
+import {
+  canEnterClassroom,
+  canMutateClassroom,
+  type ClassroomStatusError,
+  type ClassroomStatusInput,
+} from './predicates.ts';
+
 
 /**
  * Throws a 403 Response with a JSON body `{ error: ClassroomStatusError, message: string }`.
@@ -796,25 +841,12 @@ const statusErrorResponse = (code: ClassroomStatusError, message: string) =>
  * Block non-owners from entering an UNPUBLISHED classroom.
  * Call after the role check inside loaders. LOCKED never blocks entry.
  */
-export function assertClassroomEntryAllowed({
-  status,
-  role,
-}: ClassroomStatusInput): void {
-  if (status === 'UNPUBLISHED' && role !== 'OWNER') {
-    throw statusErrorResponse(
-      'CLASSROOM_UNPUBLISHED',
-      'This class has been unpublished by the owner.'
-    );
-  }
-}
-
-/** Pure predicate: can this role mutate the classroom in its current state? */
-export function canMutateClassroom({
-  status,
-  role,
-}: ClassroomStatusInput): boolean {
-  if (role === 'OWNER') return true;
-  return status === 'ACTIVE';
+export function assertClassroomEntryAllowed(input: ClassroomStatusInput): void {
+  if (canEnterClassroom(input)) return;
+  throw statusErrorResponse(
+    'CLASSROOM_UNPUBLISHED',
+    'This class has been unpublished by the owner.'
+  );
 }
 
 /** Throw 403 with typed code when the current role cannot mutate. */

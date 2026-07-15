@@ -3,16 +3,14 @@ import { useNavigate, useFetcher } from 'react-router';
 import { Form, Button, Alert, Modal, Tabs } from 'antd';
 import { FileTextOutlined, UploadOutlined } from '@ant-design/icons';
 import { assertClassroomAccess, assertClassroomMutationAllowed } from '~/utils/helpers';
-import { ClassmojiService, getGitProvider } from '@classmoji/services';
+import { ClassmojiService } from '@classmoji/services';
 import { useCallout } from '@classmoji/ui-components';
-import { ContentService } from '@classmoji/content';
 import { processMarkdownImport } from '~/utils/markdownImporter.server';
 import { wrapHtmlContent } from '~/utils/htmlWrapper';
 import ImportTab from './ImportTab';
 import CreateBlankTab from './CreateBlankTab';
 import BatchImportTab from './BatchImportTab';
 import { useRouteDrawer } from '~/hooks';
-import { generatePageTemplate } from './utils';
 import type { Route } from './+types/route';
 
 export const loader = async ({ request, params }: Route.LoaderArgs) => {
@@ -67,52 +65,17 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
   // Single page import/create
   const title = formData.get('title') as string;
 
-  // Generate slug from title
-  const slug = title
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-|-$/g, '');
-
   // Content repo name: content-{gitOrgLogin}-{contentNamespace}
   const repoName = `content-${gitOrgLogin}-${contentNamespace}`;
 
   // Flat content path: pages/{slug}
-  const contentPath = `pages/${slug}`;
+  const contentPath = ClassmojiService.page.pageContentPath(title);
 
   try {
-    // Step 1: Check if content repo exists, create if not
-    const gitProvider = getGitProvider(classroom.git_organization);
-    const repoExists = await gitProvider.repositoryExists(gitOrgLogin, repoName);
-    if (!repoExists) {
-      try {
-        await gitProvider.createPublicRepository(
-          gitOrgLogin,
-          repoName,
-          `Course content for ${classroom.name || gitOrgLogin} - ${contentNamespace}`
-        );
-
-        // Give GitHub a moment to initialize the repo
-        await new Promise(resolve => setTimeout(resolve, 2000));
-      } catch (repoError) {
-        console.error('Failed to create GitHub repository:', repoError);
-        return {
-          error:
-            'Failed to create GitHub repository. Please check your GitHub organization permissions',
-        };
-      }
-    }
-
-    // Always try to enable GitHub Pages (idempotent - skips if already enabled)
-    try {
-      await gitProvider.enableGitHubPages(gitOrgLogin, repoName);
-    } catch (pagesError) {
-      // Pages API requires special permission - log but continue
-      console.warn(
-        `Could not auto-enable GitHub Pages: ${pagesError instanceof Error ? pagesError.message : String(pagesError)}`
-      );
-    }
-
-    let pageHtml;
+    // index.html content; undefined = blank-page template (service default)
+    let pageHtml: string | undefined;
+    // Extra files (import-flow images) committed alongside index.html
+    const files: Array<{ path: string; content: string; encoding: 'utf-8' | 'base64' }> = [];
     const assetsFolder = `${contentPath}/assets`;
 
     if (intent === 'import') {
@@ -186,76 +149,24 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
             encoding: 'base64' as const,
           }))
         );
+      files.push(...uploadFiles);
 
       // Wrap HTML content
-      const wrappedHtml = wrapHtmlContent(html, 2); // Default width
-      pageHtml = wrappedHtml;
-
-      // Add HTML content
-      const htmlPath = `${contentPath}/index.html`;
-      uploadFiles.push({
-        path: htmlPath,
-        content: wrappedHtml,
-        encoding: 'utf-8',
-      });
-
-      // Upload all files in a single batch
-      if (uploadFiles.length > 0) {
-        try {
-          await ContentService.uploadBatch({
-            gitOrganization: classroom.git_organization,
-            repo: repoName,
-            files: uploadFiles,
-            branch: 'main',
-            message: `Import page: ${title}`,
-          });
-        } catch (uploadError) {
-          console.error('Failed to upload files to GitHub:', uploadError);
-          return {
-            error: `Failed to upload files to GitHub: ${uploadError instanceof Error ? uploadError.message : String(uploadError)}`,
-          };
-        }
-      }
-    } else {
-      // Create blank flow: use template
-      pageHtml = generatePageTemplate(title);
-      const filePath = `${contentPath}/index.html`;
-
-      try {
-        await ContentService.put({
-          gitOrganization: classroom.git_organization,
-          repo: repoName,
-          path: filePath,
-          content: pageHtml,
-          message: `Create page: ${title}`,
-        });
-      } catch (uploadError) {
-        console.error('Failed to upload file to GitHub:', uploadError);
-        return {
-          error: `Failed to upload file to GitHub: ${uploadError instanceof Error ? uploadError.message : String(uploadError)}`,
-        };
-      }
+      pageHtml = wrapHtmlContent(html, 2); // Default width
     }
 
-    // Step 3: Create the database record
-    try {
-      const page = await ClassmojiService.page.create({
-        classroom_id: classroom.id,
-        title,
-        content_path: contentPath,
-        created_by: userId,
-      });
+    // Orchestrated create: content-repo ensure + upload (index.html + assets)
+    // + DB row + manifest refresh (packages/services page.createPage).
+    const page = await ClassmojiService.page.createPage({
+      classroomId: classroom.id,
+      title,
+      html: pageHtml,
+      files,
+      createdBy: userId,
+      ...(intent === 'import' ? { commitMessage: `Import page: ${title}` } : {}),
+    });
 
-      // Update manifest after creating page
-      await ClassmojiService.contentManifest.saveManifest(classroom.id);
-
-      return { created: true, page };
-    } catch (dbError) {
-      console.error('Failed to save page to database:', dbError);
-      return {
-        error: `Page created in GitHub but failed to save to database: ${dbError instanceof Error ? dbError.message : String(dbError)}`,
-      };
-    }
+    return { created: true, page };
   } catch (error: unknown) {
     console.error('Failed to create page:', error);
     return { error: error instanceof Error ? error.message : 'Failed to create page' };

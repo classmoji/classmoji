@@ -50,6 +50,13 @@
     "hook:start": {
       "dependsOn": ["^db:generate"]
     },
+    "mcp:dev": {
+      "persistent": true,
+      "cache": false
+    },
+    "mcp:start": {
+      "dependsOn": ["^db:generate"]
+    },
     "dev": {
       "persistent": true,
       "cache": false
@@ -149,6 +156,9 @@
     "SLIDES_URL",
     "PAGES_URL",
     "PAGES_PORT",
+    "MCP_PUBLIC_URL",
+    "MCP_PORT",
+    "ENABLE_TEST_LOGIN",
     "DEVPORT_ID",
     "DEVPORT_NAME",
     "PORT",

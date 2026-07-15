@@ -1,0 +1,70 @@
+name: MCP Devmint Guard
+
+# S8: apps/mcp has a dev-only token-mint endpoint (POST /dev/mint-token) that
+# mints real oauth_access_tokens rows for seeded users. It must never be able
+# to ship. It is double-gated — registered and served only when
+# NODE_ENV === 'development' AND ENABLE_TEST_LOGIN === 'true' — mirroring the
+# webapp's test-login route. This workflow fails the PR if:
+#   (a) any deploy config under apps/mcp (Dockerfile, fly.toml) mentions
+#       ENABLE_TEST_LOGIN, or
+#   (b) the double-gate in the source is weakened or removed.
+#
+# If the dev mint endpoint is ever removed entirely, delete this workflow
+# along with it.
+
+on:
+  pull_request:
+    branches:
+      - dev
+      - staging
+      - main
+    paths:
+      - 'apps/mcp/**'
+      - '.github/workflows/mcp-devmint-guard.yml'
+
+jobs:
+  mcp-devmint-guard:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Assert deploy config never sets ENABLE_TEST_LOGIN
+        run: |
+          matches=$(grep -RIn 'ENABLE_TEST_LOGIN' \
+            --include='Dockerfile*' --include='fly*.toml' \
+            apps/mcp | grep -v '^[^:]*:[0-9]*:[[:space:]]*#' || true)
+          if [ -n "$matches" ]; then
+            echo "$matches"
+            echo "::error::ENABLE_TEST_LOGIN must never be set in apps/mcp deploy config (S8)."
+            exit 1
+          fi
+          echo "Deploy config clean."
+
+      - name: Assert dev mint double-gate is intact
+        run: |
+          fail() { echo "::error::$1"; exit 1; }
+
+          INDEX=apps/mcp/src/index.ts
+          MINT=apps/mcp/src/routes/devMint.ts
+
+          # Registration-time gate (index.ts): the route is only registered
+          # when BOTH flags are set.
+          REG_GATE="process.env.NODE_ENV === 'development' && process.env.ENABLE_TEST_LOGIN === 'true'"
+          grep -qF "$REG_GATE" "$INDEX" \
+            || fail "S8 registration gate missing from $INDEX (expected: $REG_GATE)"
+          grep -qF 'if (DEV_MINT_ENABLED)' "$INDEX" \
+            || fail "S8: devMint registration in $INDEX is no longer guarded by DEV_MINT_ENABLED"
+
+          # Startup assertion (index.ts): the process refuses to boot if the
+          # mint route exists while the gates are off.
+          grep -qF 'dev mint route registered while gates are off' "$INDEX" \
+            || fail "S8 startup assertion missing from $INDEX"
+
+          # Request-time gate (devMint.ts): belt-and-suspenders re-check on
+          # every request.
+          [ -f "$MINT" ] || fail "S8: $MINT not found — if the dev mint moved, update mcp-devmint-guard.yml"
+          REQ_GATE="process.env.NODE_ENV !== 'development' || process.env.ENABLE_TEST_LOGIN !== 'true'"
+          grep -qF "$REQ_GATE" "$MINT" \
+            || fail "S8 request-time gate missing from $MINT (expected: $REQ_GATE)"
+
+          echo "Dev mint double-gate intact."
