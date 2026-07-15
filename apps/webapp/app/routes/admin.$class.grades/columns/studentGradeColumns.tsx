@@ -48,7 +48,9 @@ const createGradeColumn = ({
   ...(sorter && { sorter }),
   render: (student: StudentRecord) => {
     const grade = calculateGrade(student);
-    if (grade < 0) return null;
+    // `!(grade >= 0)` (not `grade < 0`) so a non-finite grade blanks the cell
+    // instead of falling through to a false `F` from calculateLetterGrade(NaN).
+    if (!(grade >= 0)) return null;
     return renderGrade(grade);
   },
 });
