@@ -1,0 +1,111 @@
+---
+title: Connect the MCP server
+description: Let Claude (and other AI assistants) act on your classroom through the Classmoji MCP server.
+---
+
+The Classmoji **MCP server** lets an AI assistant — Claude, or any Model Context Protocol client — work with your classroom on your behalf: read your roster, grades, assignments, and calendar, and take actions like grading submissions, resolving regrades, and managing pages, modules, and tokens.
+
+:::note
+The assistant acts **as you**, with **exactly your permissions** in each classroom — the same role rules the web app enforces. It can't see or do anything you couldn't already do yourself, and you can disconnect at any time.
+:::
+
+You sign in once with your normal Classmoji (GitHub) account and approve a consent screen; no API keys to copy or manage.
+
+## The server URL
+
+```
+https://mcp.classmoji.io/mcp
+```
+
+That's the only value you need for any client. When a client connects, it discovers everything else automatically and walks you through signing in.
+
+## Connect from Claude (claude.ai & desktop)
+
+1. In **claude.ai** (or the Claude desktop app), open **Settings → Connectors**.
+2. Click **Add custom connector**.
+3. Paste the server URL `https://mcp.classmoji.io/mcp` and click **Add**.
+4. Click **Connect** on the new connector. You'll be sent to Classmoji to sign in with GitHub and approve access (read and write). When it's done, the connector shows **Connected**.
+5. In a chat, click the **+** in the message box → **Connectors**, and toggle **Classmoji** on for that conversation. Claude can now use your classroom's tools.
+
+:::note
+Custom connectors are available on Free, Pro, Max, Team, and Enterprise plans (the Free plan allows one custom connector). On **Team/Enterprise**, an organization **Owner** adds the connector once under **Organization settings → Connectors**, and then each member connects their own Classmoji account. Connectors added on web are automatically available in the desktop and mobile apps — though new connectors can only be *added* from web or desktop, not mobile.
+:::
+
+## Connect from Claude Code
+
+```bash
+claude mcp add --transport http classmoji https://mcp.classmoji.io/mcp
+```
+
+Then, inside a Claude Code session, run `/mcp`, select **classmoji**, and choose **Authenticate** — your browser opens for the Classmoji sign-in and consent. Run `/mcp` again (or `claude mcp list`) to confirm the tools loaded.
+
+Add `--scope project` if you want the server checked into the repo's `.mcp.json` and shared with your team, instead of just your machine.
+
+## Connect from other tools
+
+The server works with any MCP client that supports remote (HTTP) servers with OAuth. The config differs slightly per tool — note the field names, they vary.
+
+**Cursor** — `.cursor/mcp.json` (project) or `~/.cursor/mcp.json` (global):
+
+```json
+{
+  "mcpServers": {
+    "classmoji": { "url": "https://mcp.classmoji.io/mcp" }
+  }
+}
+```
+
+Then open **Settings → MCP Servers**, click **Needs Login** next to Classmoji, and complete the sign-in.
+
+**VS Code** (Copilot agent mode, VS Code 1.101+) — `.vscode/mcp.json`:
+
+```json
+{
+  "servers": {
+    "classmoji": { "type": "http", "url": "https://mcp.classmoji.io/mcp" }
+  }
+}
+```
+
+The root key is `servers` and `"type": "http"` is required. Click the **Auth** CodeLens above the entry to sign in.
+
+**Zed** — `settings.json`, under `context_servers`:
+
+```json
+{
+  "context_servers": {
+    "classmoji": { "url": "https://mcp.classmoji.io/mcp" }
+  }
+}
+```
+
+Zed prompts you to authenticate automatically the first time it connects.
+
+**Windsurf / Devin Desktop** — `~/.codeium/windsurf/mcp_config.json`. Note the field is **`serverUrl`**, not `url`:
+
+```json
+{
+  "mcpServers": {
+    "classmoji": { "serverUrl": "https://mcp.classmoji.io/mcp" }
+  }
+}
+```
+
+**MCP Inspector** (for testing) — run `npx @modelcontextprotocol/inspector`, set **Transport Type** to **Streamable HTTP**, enter the server URL, and click **Connect** to run the OAuth flow interactively.
+
+:::note
+For any other MCP client: point it at `https://mcp.classmoji.io/mcp`. A spec-compliant client discovers the sign-in flow on its own (RFC 9728 / OAuth 2.1 with PKCE), registers itself, and opens a browser for you to sign in to Classmoji and approve access — no manual app registration needed.
+:::
+
+## What you can do
+
+Once connected, the assistant has two kinds of capabilities, each limited to your role in each classroom:
+
+- **Read** — your classrooms, roster, teams, assignment containers and submissions, the grading queue, leaderboard, regrade requests, calendar, pages, modules, quizzes, and your token ledger.
+- **Act** — add and remove emoji grades, assign graders, resolve regrade requests, update assignments, create and publish modules, create and edit pages, manage calendar events, and grant tokens.
+
+Staff-only surfaces (rosters, grading, the leaderboard) require the corresponding teaching-team or owner role, exactly as in the web app; students connecting the same server get only their own view.
+
+## Managing access
+
+Every action the assistant takes is recorded in your classroom's audit log, just like an action in the web app. To revoke access, remove the connector (in Claude, **Settings → Connectors**; in Claude Code, `claude mcp logout classmoji` or **Clear authentication** in the `/mcp` menu) — the access is cut off immediately.
