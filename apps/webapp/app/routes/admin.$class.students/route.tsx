@@ -119,6 +119,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
           payload: {
             user: data.user,
             organization: classroom,
+            role: 'STUDENT',
           },
         });
 
