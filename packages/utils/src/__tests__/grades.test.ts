@@ -67,6 +67,13 @@ describe('calculateNumericGrade', () => {
   it('averages emoji grades', () => {
     expect(calculateNumericGrade(['heart', 'eyes'], EMOJI_MAP)).toBe(90);
   });
+
+  it('ignores emojis not in the scale instead of producing NaN', () => {
+    // '⭐' belongs to a different classroom's scale (regression: a foreign repo
+    // bled in and NaN-poisoned the whole grade). It must be dropped, not averaged.
+    expect(calculateNumericGrade(['⭐'], EMOJI_MAP)).toBe(0);
+    expect(calculateNumericGrade(['heart', '⭐'], EMOJI_MAP)).toBe(100);
+  });
 });
 
 describe('applyLatePenalty', () => {
@@ -186,6 +193,21 @@ describe('calculateStudentFinalGrade', () => {
     ];
     // base 80 + extra (100 * 5/100) = 80 + 5 = 85
     expect(calculateStudentFinalGrade(repos, EMOJI_MAP, NO_PENALTY, true)).toBe(85);
+  });
+
+  it('does not let an unrecognized emoji NaN-poison the whole final grade', () => {
+    // Regression: a repo whose grade uses an emoji from ANOTHER classroom's
+    // scale ('⭐') must not turn a finite grade into NaN (which serialized to
+    // `null` on leaderboards and rendered as a false `F` on the grades table).
+    const repos: GitRepo[] = [
+      repo([ra({ grades: [{ emoji: 'heart' }] })], mod({ weight: 50 })),
+      repo([ra({ id: 'foreign', grades: [{ emoji: '⭐' }] })], mod({ weight: 50 })),
+    ];
+    const grade = calculateStudentFinalGrade(repos, EMOJI_MAP, NO_PENALTY);
+    expect(Number.isFinite(grade)).toBe(true);
+    expect(Number.isNaN(grade)).toBe(false);
+    // heart=100 (weight 50) + foreign-repo-drops-to-0 (weight 50) = 50
+    expect(grade).toBe(50);
   });
 });
 
