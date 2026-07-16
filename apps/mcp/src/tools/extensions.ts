@@ -54,6 +54,7 @@ interface ExtensionPurchaseArgs {
 
 export const extensionPurchaseTool: ToolDefinition<ExtensionPurchaseArgs> = {
   name: 'extension_purchase',
+  annotations: { destructive: false },
   title: 'Purchase late-hour extension',
   description:
     'Spends YOUR tokens to buy late hours on one of YOUR OWN overdue assignments (students ' +

@@ -95,6 +95,7 @@ function resolveScope(
 
 export const calendarEventCreateTool: ToolDefinition<CalendarEventCreateArgs> = {
   name: 'calendar_event_create',
+  annotations: { destructive: false },
   title: 'Create a calendar event',
   description:
     'Creates a classroom calendar event (lecture, lab, office hours, or assessment). For a ' +
@@ -176,6 +177,7 @@ interface CalendarEventUpdateArgs {
 
 export const calendarEventUpdateTool: ToolDefinition<CalendarEventUpdateArgs> = {
   name: 'calendar_event_update',
+  annotations: { destructive: false },
   title: 'Update a calendar event',
   description:
     'Updates a calendar event. Assistants can only update events they created. For recurring ' +
@@ -267,6 +269,7 @@ interface CalendarEventDeleteArgs {
 
 export const calendarEventDeleteTool: ToolDefinition<CalendarEventDeleteArgs> = {
   name: 'calendar_event_delete',
+  annotations: { destructive: true },
   title: 'Delete a calendar event',
   description:
     'Deletes a calendar event. Assistants can only delete events they created. For recurring ' +

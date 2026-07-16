@@ -63,6 +63,7 @@ interface PageCreateArgs {
 
 export const pageCreateTool: ToolDefinition<PageCreateArgs> = {
   name: 'page_create',
+  annotations: { destructive: false, openWorld: true },
   title: 'Create a page',
   description:
     "Creates a new course page: a folder with an index.html in the classroom's shared content " +
@@ -136,6 +137,7 @@ interface PageUpdateArgs {
 
 export const pageUpdateTool: ToolDefinition<PageUpdateArgs> = {
   name: 'page_update',
+  annotations: { destructive: false, openWorld: true },
   title: 'Update a page',
   description:
     "Updates a course page's metadata: title, layout width, draft/published state (publishing " +
@@ -216,6 +218,7 @@ interface PageDeleteArgs {
 
 export const pageDeleteTool: ToolDefinition<PageDeleteArgs> = {
   name: 'page_delete',
+  annotations: { destructive: true, openWorld: true },
   title: 'Delete a page',
   description:
     "Permanently deletes a course page: removes its folder from the classroom's content repo " +

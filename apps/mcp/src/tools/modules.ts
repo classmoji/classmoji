@@ -54,6 +54,7 @@ interface ModuleCreateArgs {
 
 export const moduleCreateTool: ToolDefinition<ModuleCreateArgs> = {
   name: 'module_create',
+  annotations: { destructive: false },
   title: 'Create a module',
   description:
     'Creates a curriculum module — an ordered list of content (pages, repos/labs, quizzes, ' +
@@ -104,6 +105,7 @@ interface ModuleUpdateArgs {
 
 export const moduleUpdateTool: ToolDefinition<ModuleUpdateArgs> = {
   name: 'module_update',
+  annotations: { destructive: false },
   title: 'Update a module',
   description: "Updates a module's title and/or description (the slug never changes). Owner only.",
   scope: 'write',
@@ -148,6 +150,7 @@ interface ModulePublishArgs {
 
 export const modulePublishTool: ToolDefinition<ModulePublishArgs> = {
   name: 'module_publish',
+  annotations: { destructive: false },
   title: 'Publish or unpublish a module',
   description:
     'Sets whether a curriculum module is visible to students. Items whose underlying content ' +
@@ -194,6 +197,7 @@ interface ModuleItemAddArgs {
 
 export const moduleItemAddTool: ToolDefinition<ModuleItemAddArgs> = {
   name: 'module_item_add',
+  annotations: { destructive: false },
   title: 'Add an item to a module',
   description:
     'Appends a content item to a module: a page, a repo/lab (REPOSITORY links the assignment ' +

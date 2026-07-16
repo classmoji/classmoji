@@ -27,6 +27,7 @@ interface TokenGrantArgs {
 
 export const tokenGrantTool: ToolDefinition<TokenGrantArgs> = {
   name: 'token_grant',
+  annotations: { destructive: false },
   title: 'Grant tokens to a student',
   description:
     'Grants extension/reward tokens to one student in the classroom. Owner only. The student ' +

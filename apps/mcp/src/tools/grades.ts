@@ -59,6 +59,7 @@ async function assertEmojiInScale(classroomId: string, emoji: string): Promise<v
 
 export const gradeAddTool: ToolDefinition<GradeAddArgs> = {
   name: 'grade_add',
+  annotations: { destructive: false },
   title: 'Add a grade',
   description:
     'Adds an emoji grade to a submission (a GitRepoAssignment — one assignment on one ' +
@@ -121,6 +122,7 @@ interface GradeRemoveArgs {
 
 export const gradeRemoveTool: ToolDefinition<GradeRemoveArgs> = {
   name: 'grade_remove',
+  annotations: { destructive: true },
   title: 'Remove a grade',
   description:
     'Removes one emoji grade from a submission and reverses any token reward it minted. ' +
@@ -171,6 +173,7 @@ interface GradeRemoveAllArgs {
 
 export const gradeRemoveAllTool: ToolDefinition<GradeRemoveAllArgs> = {
   name: 'grade_remove_all',
+  annotations: { destructive: true },
   title: 'Remove all grades from a submission',
   description:
     'Removes every emoji grade from a submission and reverses their token rewards. Owner only.',
