@@ -24,6 +24,7 @@ interface EmojiMappingArgs {
 
 export const emojiMappingUpsertTool: ToolDefinition<EmojiMappingArgs> = {
   name: 'emoji_mapping_upsert',
+  annotations: { destructive: false, idempotent: true },
   title: 'Create or update an emoji grade mapping',
   description:
     "Creates or updates one emoji in the classroom's grading scale: its numeric grade value, " +
@@ -81,6 +82,7 @@ interface LetterGradeMappingArgs {
 
 export const letterGradeMappingUpsertTool: ToolDefinition<LetterGradeMappingArgs> = {
   name: 'letter_grade_mapping_upsert',
+  annotations: { destructive: false, idempotent: true },
   title: 'Create or update a letter grade mapping',
   description:
     'Creates or updates one letter-grade threshold (e.g. A = min 90) in the classroom. Owner only.',

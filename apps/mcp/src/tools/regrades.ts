@@ -88,6 +88,7 @@ interface RegradeCreateArgs {
 
 export const regradeCreateTool: ToolDefinition<RegradeCreateArgs> = {
   name: 'regrade_create',
+  annotations: { destructive: false },
   title: 'Request a regrade',
   description:
     'Submits a regrade (resubmit) request for one of YOUR OWN graded submissions. Students ' +
@@ -195,6 +196,7 @@ interface RegradeResolveArgs {
 
 export const regradeResolveTool: ToolDefinition<RegradeResolveArgs> = {
   name: 'regrade_resolve',
+  annotations: { destructive: false },
   title: 'Resolve a regrade request',
   description:
     'Approves or denies a pending regrade request and emails the student. After approving, add ' +

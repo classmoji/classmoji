@@ -10,15 +10,16 @@
 
 import { ClassmojiService } from '@classmoji/services';
 import type { ResourceDefinition } from '../mcp/registry.ts';
+import { buildSuggestions } from '../suggestions.ts';
 
 export const meResource: ResourceDefinition = {
   name: 'me',
   uriTemplate: 'classmoji://me',
   title: 'My identity & classrooms',
   description:
-    'The authenticated user (id, login, name), granted scopes, and every classroom membership ' +
-    "(one row per role) with status and archive flags. Classrooms are addressed as 'org/slug' " +
-    'in all other resource URIs.',
+    'The authenticated user (id, login, name), granted scopes, every classroom membership ' +
+    '(one row per role) with status and archive flags, and role-tailored example questions to ' +
+    "offer the user. Classrooms are addressed as 'org/slug' in all other resource URIs.",
   scope: 'read',
   roles: null,
   handler: async (_vars, { viewer }) => {
@@ -38,6 +39,8 @@ export const meResource: ResourceDefinition = {
         status: c.status,
         is_archived: c.is_archived,
       })),
+      // Role-tailored conversation starters (cosmetic; from the roles held).
+      suggestions: buildSuggestions(classrooms.map(c => c.membership.role)),
     };
   },
 };
