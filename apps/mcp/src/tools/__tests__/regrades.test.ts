@@ -39,7 +39,7 @@ vi.mock('@trigger.dev/sdk', () => ({
   runs: { retrieve: (...a: unknown[]) => mocks.retrieve(...a) },
 }));
 
-const { regradeCreateTool } = await import('../regrades.ts');
+const { regradeCreateTool, regradeResolveTool } = await import('../regrades.ts');
 
 const CTX: ToolContext = {
   viewer: { userId: 'student-1', clientId: 'c', scopes: new Set(['read', 'write']) },
@@ -116,5 +116,51 @@ describe('regrade_create idempotency (F1)', () => {
       })
     );
     expect(payload.regrade_request.id).toBe('rr-new');
+  });
+});
+
+// ─── U11: regrade_resolve idempotency (no duplicate resolution email) ────────
+
+describe('regrade_resolve idempotency (U11)', () => {
+  const RESOLVE_ARGS = {
+    classroom: 'org/winter-2025',
+    regrade_request_id: 'rr-1',
+    resolution: 'APPROVED' as const,
+  };
+
+  /** loadRegradeRequestInClassroom reads findMany()[0]; classroom_id must match. */
+  function requestWithStatus(status: string) {
+    return [
+      {
+        id: 'rr-1',
+        classroom_id: 'class-1',
+        status,
+        student: { email: 's@example.com' },
+        git_repo_assignment: { assignment: { title: 'Lab 1' } },
+      },
+    ];
+  }
+
+  it('returns the recorded resolution WITHOUT re-triggering when already terminal', async () => {
+    mocks.findMany.mockResolvedValue(requestWithStatus('APPROVED'));
+
+    const payload = parse(await regradeResolveTool.handler(RESOLVE_ARGS, CTX));
+    expect(payload.already_resolved).toBe(true);
+    expect(payload.regrade_request.status).toBe('APPROVED');
+    // The whole point of U11: no second task run, so no duplicate email.
+    expect(mocks.trigger).not.toHaveBeenCalled();
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
+  });
+
+  it('triggers the resolution task once for an IN_REVIEW request', async () => {
+    mocks.findMany.mockResolvedValue(requestWithStatus('IN_REVIEW'));
+    mocks.trigger.mockResolvedValue({ id: 'run-1' });
+    mocks.retrieve.mockResolvedValue({ status: 'COMPLETED', output: {} });
+
+    const payload = parse(await regradeResolveTool.handler(RESOLVE_ARGS, CTX));
+    expect(mocks.trigger).toHaveBeenCalledTimes(1);
+    expect(mocks.trigger).toHaveBeenCalledWith('update_regrade_request', expect.any(Object));
+    expect(payload.regrade_request.status).toBe('APPROVED');
+    expect(payload.already_resolved).toBeUndefined();
   });
 });

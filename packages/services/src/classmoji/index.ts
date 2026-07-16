@@ -2,6 +2,7 @@
 import * as gitOrganizationService from './gitOrganization.service.ts';
 import * as classroomService from './classroom.service.ts';
 import * as classroomMembershipService from './classroomMembership.service.ts';
+import * as rosterService from './roster.service.ts';
 import * as moduleService from './module.service.ts';
 import * as repositoryService from './repository.service.ts';
 import * as autogradingTestService from './autogradingTest.service.ts';
@@ -47,6 +48,7 @@ const ClassmojiService = {
   gitOrganization: gitOrganizationService,
   classroom: classroomService,
   classroomMembership: classroomMembershipService,
+  roster: rosterService,
   module: moduleService,
   repository: repositoryService,
   autogradingTest: autogradingTestService,

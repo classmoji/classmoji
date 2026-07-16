@@ -22,7 +22,20 @@ import type { Prisma } from '@prisma/client';
 import { z } from 'zod';
 import { ToolError } from '../mcp/errors.ts';
 import type { ToolDefinition } from '../mcp/registry.ts';
-import { holdsRole, loadAssignmentInClassroom, ok, OWNER_TEACHER, writeAudit } from './shared.ts';
+import {
+  holdsRole,
+  loadAssignmentInClassroom,
+  loadRepositoryInClassroom,
+  ok,
+  OWNER_ONLY,
+  OWNER_TEACHER,
+  writeAudit,
+} from './shared.ts';
+
+/** Prisma unique-violation (P2002) — Assignment is @@unique([repository_id, title]). */
+function isUniqueTitleViolation(error: unknown): boolean {
+  return error instanceof Error && 'code' in error && (error as { code?: string }).code === 'P2002';
+}
 
 interface AssignmentUpdateArgs {
   classroom: string;
@@ -106,6 +119,168 @@ export const assignmentUpdateTool: ToolDefinition<AssignmentUpdateArgs> = {
         weight: updated.weight,
         grades_released: updated.grades_released,
       },
+    });
+  },
+};
+
+interface AssignmentCreateArgs {
+  classroom: string;
+  repository_id: string;
+  title: string;
+  weight?: number;
+  description?: string;
+  student_deadline?: string;
+  grader_deadline?: string;
+  tokens_per_hour?: number;
+  release_at?: string;
+  is_published?: boolean;
+}
+
+export const assignmentCreateTool: ToolDefinition<AssignmentCreateArgs> = {
+  name: 'assignment_create',
+  annotations: { destructive: false },
+  title: 'Create an assignment',
+  description:
+    'Creates an assignment (a due-dated, gradeable slice of a repo/lab) under an existing ' +
+    'repository (assignment container). Owner only. Creating it does NOT provision anything on ' +
+    'GitHub — the assignment reaches students only when its repo is published (repo_publish) or ' +
+    'the next release runs. Created as a draft unless is_published is set.',
+  scope: 'write',
+  roles: OWNER_ONLY,
+  inputSchema: {
+    classroom: z.string().describe("Classroom reference as 'org/slug'"),
+    repository_id: z.string().uuid().describe('Parent repo (assignment container) id'),
+    title: z.string().min(1).max(200).describe('Assignment title (unique per repository)'),
+    weight: z
+      .number()
+      .int()
+      .positive()
+      .max(10000)
+      .optional()
+      .describe('Grading weight (default 100)'),
+    description: z.string().max(10000).optional(),
+    student_deadline: z
+      .string()
+      .datetime({ offset: true })
+      .optional()
+      .describe('Student due date (ISO 8601, e.g. 2026-07-20T23:59:00-04:00)'),
+    grader_deadline: z
+      .string()
+      .datetime({ offset: true })
+      .optional()
+      .describe('Grader due date (ISO 8601)'),
+    tokens_per_hour: z
+      .number()
+      .int()
+      .min(0)
+      .optional()
+      .describe('Extension token cost per late hour (default 0)'),
+    release_at: z
+      .string()
+      .datetime({ offset: true })
+      .optional()
+      .describe('Auto-release date (ISO 8601)'),
+    is_published: z.boolean().optional().describe('Publish immediately (default false = draft)'),
+  },
+  handler: async (args, ctx) => {
+    // S1: the assignment row does not exist yet, so re-verify ownership of the
+    // PARENT container. classroom_id on the new row derives from the verified
+    // parent's repository_id — never from request input.
+    const repository = await loadRepositoryInClassroom(args.repository_id, ctx);
+
+    const data: Prisma.AssignmentUncheckedCreateInput = {
+      repository_id: repository.id,
+      title: args.title,
+      ...(args.weight !== undefined ? { weight: args.weight } : {}),
+      ...(args.description !== undefined ? { description: args.description } : {}),
+      ...(args.student_deadline !== undefined
+        ? { student_deadline: new Date(args.student_deadline) }
+        : {}),
+      ...(args.grader_deadline !== undefined
+        ? { grader_deadline: new Date(args.grader_deadline) }
+        : {}),
+      ...(args.tokens_per_hour !== undefined ? { tokens_per_hour: args.tokens_per_hour } : {}),
+      ...(args.release_at !== undefined ? { release_at: new Date(args.release_at) } : {}),
+      ...(args.is_published !== undefined ? { is_published: args.is_published } : {}),
+    };
+
+    let created;
+    try {
+      created = await ClassmojiService.assignment.create(data);
+    } catch (error) {
+      if (isUniqueTitleViolation(error)) {
+        throw new ToolError(
+          'invalid_params',
+          'An assignment with this title already exists in this repository.'
+        );
+      }
+      throw error;
+    }
+
+    await writeAudit(ctx, {
+      resource_type: 'ASSIGNMENT',
+      resource_id: created.id,
+      action: 'CREATE',
+      data: { tool: 'assignment_create', repository_id: repository.id, title: args.title },
+    });
+
+    return ok({
+      success: true,
+      assignment: {
+        id: created.id,
+        title: created.title,
+        repository_id: created.repository_id,
+        weight: created.weight,
+        is_published: created.is_published,
+        student_deadline: created.student_deadline?.toISOString() ?? null,
+      },
+    });
+  },
+};
+
+interface AssignmentDeleteArgs {
+  classroom: string;
+  assignment_id: string;
+}
+
+export const assignmentDeleteTool: ToolDefinition<AssignmentDeleteArgs> = {
+  name: 'assignment_delete',
+  annotations: { destructive: true },
+  title: 'Delete an assignment',
+  description:
+    'Permanently deletes an assignment. Owner only. THIS CANNOT BE UNDONE and cascades: it ' +
+    'deletes every student/team submission for this assignment along with all their grades, ' +
+    'grader assignments, regrade requests, token transactions, and analytics, plus its ' +
+    'page/slide/calendar links. It does NOT remove the GitHub issues already created in student ' +
+    'repos (they are orphaned), and it does NOT reconcile student token balances.',
+  scope: 'write',
+  roles: OWNER_ONLY,
+  inputSchema: {
+    classroom: z.string().describe("Classroom reference as 'org/slug'"),
+    assignment_id: z.string().uuid().describe('Assignment id'),
+  },
+  handler: async (args, ctx) => {
+    const assignment = await loadAssignmentInClassroom(args.assignment_id, ctx);
+    // Blast-radius count for the audit trail (findById includes the submissions).
+    const submissionsDeleted = assignment.git_repo_assignments?.length ?? 0;
+
+    await ClassmojiService.assignment.deleteById(assignment.id);
+
+    await writeAudit(ctx, {
+      resource_type: 'ASSIGNMENT',
+      resource_id: assignment.id,
+      action: 'DELETE',
+      data: {
+        tool: 'assignment_delete',
+        title: assignment.title,
+        submissions_deleted: submissionsDeleted,
+      },
+    });
+
+    return ok({
+      success: true,
+      deleted_assignment_id: assignment.id,
+      submissions_deleted: submissionsDeleted,
     });
   },
 };
