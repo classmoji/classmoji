@@ -183,6 +183,27 @@ export async function loadRegradeRequestInClassroom(
   return record;
 }
 
+type RepositoryRecord = NonNullable<
+  Awaited<ReturnType<typeof ClassmojiService.repository.findById>>
+>;
+
+/**
+ * Load a Repository (an assignment container) and verify its classroom_id.
+ * Used as the parent-container S1 check by repo_publish/repo_unpublish and by
+ * assignment_create (whose target row does not exist yet, so ownership is
+ * re-verified against the parent container instead).
+ */
+export async function loadRepositoryInClassroom(
+  id: string,
+  ctx: ToolContext
+): Promise<RepositoryRecord> {
+  const record = await ClassmojiService.repository.findById(id);
+  if (!record || record.classroom_id !== requireClassroomCtx(ctx).classroomId) {
+    throw scopedNotFound('Repo');
+  }
+  return record;
+}
+
 // ─── Misc shared utilities ───────────────────────────────────────────────────
 
 /**

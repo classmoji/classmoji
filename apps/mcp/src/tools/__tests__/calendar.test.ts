@@ -17,6 +17,7 @@ import type { ToolContext } from '../../mcp/registry.ts';
 
 const mocks = vi.hoisted(() => ({
   getEventById: vi.fn(),
+  createEvent: vi.fn(),
   updateEvent: vi.fn(),
   updateEventWithScope: vi.fn(),
   auditCreate: vi.fn(),
@@ -26,6 +27,7 @@ vi.mock('@classmoji/services', () => ({
   ClassmojiService: {
     calendar: {
       getEventById: (...a: unknown[]) => mocks.getEventById(...a),
+      createEvent: (...a: unknown[]) => mocks.createEvent(...a),
       updateEvent: (...a: unknown[]) => mocks.updateEvent(...a),
       updateEventWithScope: (...a: unknown[]) => mocks.updateEventWithScope(...a),
     },
@@ -33,7 +35,7 @@ vi.mock('@classmoji/services', () => ({
   },
 }));
 
-const { calendarEventUpdateTool } = await import('../calendar.ts');
+const { calendarEventCreateTool, calendarEventUpdateTool } = await import('../calendar.ts');
 
 /** OWNER context (skips the assistant own-events sub-gate cleanly). */
 const CTX: ToolContext = {
@@ -67,6 +69,134 @@ beforeEach(() => {
   mocks.getEventById.mockResolvedValue(RECURRING_EVENT);
   mocks.updateEventWithScope.mockResolvedValue(RECURRING_EVENT);
   mocks.auditCreate.mockResolvedValue(undefined);
+});
+
+// ─── F5: end_time must be after start_time ──────────────────────────────────
+
+/** Non-recurring event with concrete Date bounds (for single-edge update). */
+const TIMED_EVENT = {
+  id: 'event-2',
+  classroom_id: 'class-1',
+  created_by: 'owner-1',
+  title: 'Office Hours',
+  is_recurring: false,
+  recurrence_rule: null,
+  start_time: new Date('2026-07-20T10:00:00-04:00'),
+  end_time: new Date('2026-07-20T11:00:00-04:00'),
+};
+
+const CREATE_BASE = {
+  classroom: 'org/winter-2025',
+  title: 'Lab',
+  event_type: 'LAB' as const,
+};
+
+async function expectInvalidParams(p: Promise<unknown>) {
+  await expect(p).rejects.toMatchObject({ kind: 'invalid_params' });
+}
+
+describe('calendar end_time > start_time (F5)', () => {
+  it('rejects create when end_time <= start_time (before createEvent)', async () => {
+    await expectInvalidParams(
+      calendarEventCreateTool.handler(
+        {
+          ...CREATE_BASE,
+          start_time: '2026-07-20T11:00:00-04:00',
+          end_time: '2026-07-20T10:00:00-04:00',
+        },
+        CTX
+      )
+    );
+    // Zero-length range also rejected (strict >).
+    await expectInvalidParams(
+      calendarEventCreateTool.handler(
+        {
+          ...CREATE_BASE,
+          start_time: '2026-07-20T10:00:00-04:00',
+          end_time: '2026-07-20T10:00:00-04:00',
+        },
+        CTX
+      )
+    );
+    expect(mocks.createEvent).not.toHaveBeenCalled();
+  });
+
+  it('allows a valid create', async () => {
+    mocks.createEvent.mockResolvedValue({
+      ...TIMED_EVENT,
+      event_type: 'LAB',
+    });
+    await calendarEventCreateTool.handler(
+      {
+        ...CREATE_BASE,
+        start_time: '2026-07-20T10:00:00-04:00',
+        end_time: '2026-07-20T11:00:00-04:00',
+      },
+      CTX
+    );
+    expect(mocks.createEvent).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects a single-edge update that inverts against the stored bound', async () => {
+    mocks.getEventById.mockResolvedValue(TIMED_EVENT);
+    // Move only start_time to AFTER the stored end (11:00) → invalid.
+    await expectInvalidParams(
+      calendarEventUpdateTool.handler(
+        {
+          classroom: 'org/winter-2025',
+          event_id: 'event-2',
+          start_time: '2026-07-20T12:00:00-04:00',
+        },
+        CTX
+      )
+    );
+    expect(mocks.updateEvent).not.toHaveBeenCalled();
+  });
+
+  it('allows a valid single-edge update (extend the end)', async () => {
+    mocks.getEventById.mockResolvedValue(TIMED_EVENT);
+    mocks.updateEvent.mockResolvedValue(TIMED_EVENT);
+    await calendarEventUpdateTool.handler(
+      { classroom: 'org/winter-2025', event_id: 'event-2', end_time: '2026-07-20T12:30:00-04:00' },
+      CTX
+    );
+    expect(mocks.updateEvent).toHaveBeenCalledTimes(1);
+  });
+
+  it('does NOT reject a recurring single-edge (this_only) override vs the template bound', async () => {
+    // RECURRING_EVENT's stored bounds are the SERIES TEMPLATE's absolute
+    // datetimes, not the edited occurrence's — a start-only override must not be
+    // validated against them (that was the false-rejection bug). getEventById
+    // defaults to RECURRING_EVENT.
+    await calendarEventUpdateTool.handler(
+      {
+        classroom: 'org/winter-2025',
+        event_id: 'event-1',
+        start_time: '2026-02-02T12:00:00-04:00',
+        edit_scope: 'this_only',
+        occurrence_date: '2026-02-02T10:00:00-04:00',
+      },
+      CTX
+    );
+    expect(mocks.updateEventWithScope).toHaveBeenCalledTimes(1);
+  });
+
+  it('still validates both-edges override on a recurring event', async () => {
+    await expectInvalidParams(
+      calendarEventUpdateTool.handler(
+        {
+          classroom: 'org/winter-2025',
+          event_id: 'event-1',
+          start_time: '2026-02-02T12:00:00-04:00',
+          end_time: '2026-02-02T11:00:00-04:00',
+          edit_scope: 'this_only',
+          occurrence_date: '2026-02-02T10:00:00-04:00',
+        },
+        CTX
+      )
+    );
+    expect(mocks.updateEventWithScope).not.toHaveBeenCalled();
+  });
 });
 
 describe('calendar_event_update recurrence preservation (U2)', () => {

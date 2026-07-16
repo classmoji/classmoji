@@ -8,6 +8,26 @@
 
 const stripTrailingSlash = (url: string): string => url.replace(/\/+$/, '');
 
+/**
+ * Validate an absolute http(s) URL, throwing at boot on a schemeless or
+ * malformed value. The resource identifier advertised in RFC 9728
+ * protected-resource metadata and WWW-Authenticate challenges MUST be an
+ * absolute origin; a schemeless value ('mcp.example.com', 'localhost:8100')
+ * silently produces broken metadata clients cannot resolve.
+ */
+const requireHttpUrl = (value: string, varName: string): string => {
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    throw new Error(`[mcp] ${varName} must be an absolute http(s) URL, got: ${value}`);
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    throw new Error(`[mcp] ${varName} must use http:// or https://, got: ${value}`);
+  }
+  return stripTrailingSlash(value);
+};
+
 export const MCP_PORT = Number(process.env.MCP_PORT) || 8100;
 
 /**
@@ -15,8 +35,9 @@ export const MCP_PORT = Number(process.env.MCP_PORT) || 8100;
  * RFC 9728 protected-resource metadata and referenced from WWW-Authenticate
  * challenges. Must be the externally reachable URL in production.
  */
-export const MCP_PUBLIC_URL = stripTrailingSlash(
-  process.env.MCP_PUBLIC_URL || `http://localhost:${MCP_PORT}`
+export const MCP_PUBLIC_URL = requireHttpUrl(
+  process.env.MCP_PUBLIC_URL || `http://localhost:${MCP_PORT}`,
+  'MCP_PUBLIC_URL'
 );
 
 /**

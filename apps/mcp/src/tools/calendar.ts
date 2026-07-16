@@ -93,6 +93,21 @@ function resolveScope(
   return null;
 }
 
+/**
+ * An event must end strictly after it starts (mirrors the web calendar form).
+ * A zero-length (end == start) or inverted range is rejected. The NaN guards
+ * are defensive — Zod already enforces valid ISO-with-offset strings.
+ */
+function assertEndAfterStart(start: Date, end: Date): void {
+  if (
+    Number.isNaN(start.getTime()) ||
+    Number.isNaN(end.getTime()) ||
+    end.getTime() <= start.getTime()
+  ) {
+    throw new ToolError('invalid_params', 'end_time must be after start_time');
+  }
+}
+
 export const calendarEventCreateTool: ToolDefinition<CalendarEventCreateArgs> = {
   name: 'calendar_event_create',
   annotations: { destructive: false },
@@ -123,6 +138,7 @@ export const calendarEventCreateTool: ToolDefinition<CalendarEventCreateArgs> = 
     if (args.is_recurring && !args.recurrence_rule) {
       throw new ToolError('invalid_params', 'recurrence_rule is required when is_recurring');
     }
+    assertEndAfterStart(new Date(args.start_time), new Date(args.end_time));
 
     const event = await ClassmojiService.calendar.createEvent(
       classroom.classroomId,
@@ -217,6 +233,28 @@ export const calendarEventUpdateTool: ToolDefinition<CalendarEventUpdateArgs> = 
     };
     if (Object.keys(updates).length === 0) {
       throw new ToolError('invalid_params', 'Provide at least one field to update');
+    }
+
+    // end_time must be after start_time. When BOTH edges are supplied we can
+    // compare them directly (recurrence-independent). When only one edge moves,
+    // we can only validate against the stored bound for a NON-recurring event —
+    // for a recurring occurrence override (this_only / this_and_future) the
+    // stored event.start_time/end_time are the SERIES TEMPLATE's absolute
+    // datetimes (dated at the series start), not this occurrence's, so comparing
+    // a single new edge against them is meaningless (it would reject valid
+    // edits). A start-only recurring override is always valid anyway (the
+    // service derives end = start + template duration); a both-edges override is
+    // still fully validated by the first branch.
+    if (args.start_time !== undefined && args.end_time !== undefined) {
+      assertEndAfterStart(new Date(args.start_time), new Date(args.end_time));
+    } else if (
+      !event.is_recurring &&
+      (args.start_time !== undefined || args.end_time !== undefined)
+    ) {
+      const effectiveStart =
+        args.start_time !== undefined ? new Date(args.start_time) : event.start_time;
+      const effectiveEnd = args.end_time !== undefined ? new Date(args.end_time) : event.end_time;
+      assertEndAfterStart(effectiveStart, effectiveEnd);
     }
 
     const scoped = resolveScope(event.is_recurring, args.edit_scope, args.occurrence_date);

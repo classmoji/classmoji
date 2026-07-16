@@ -191,6 +191,7 @@ export const gradeRemoveAllTool: ToolDefinition<GradeRemoveAllArgs> = {
     // orchestrated removal to reverse tokens. A bare
     // assignmentGrade.removeAllGrades would delete rows but strand tokens.
     const grades = await ClassmojiService.assignmentGrade.findByAssignmentId(gra.id);
+    let removedCount = 0;
     for (const grade of grades) {
       await HelperService.removeGradeFromGitRepoAssignment({
         classroom: { id: classroom.classroomId },
@@ -201,15 +202,18 @@ export const gradeRemoveAllTool: ToolDefinition<GradeRemoveAllArgs> = {
         },
         grade,
       });
+      // U9: audit each removal as it lands, not once at the end — a mid-loop
+      // failure must still leave every completed removal audited. Per-grade
+      // rows match grade_remove's audit shape (emoji + grade_id).
+      await writeAudit(ctx, {
+        resource_type: 'GIT_REPO_ASSIGNMENT',
+        resource_id: gra.id,
+        action: 'DELETE',
+        data: { tool: 'grade_remove_all', emoji: grade.emoji, grade_id: grade.id },
+      });
+      removedCount += 1;
     }
 
-    await writeAudit(ctx, {
-      resource_type: 'GIT_REPO_ASSIGNMENT',
-      resource_id: gra.id,
-      action: 'DELETE',
-      data: { tool: 'grade_remove_all', removed_count: grades.length },
-    });
-
-    return ok({ success: true, removed_count: grades.length });
+    return ok({ success: true, removed_count: removedCount });
   },
 };

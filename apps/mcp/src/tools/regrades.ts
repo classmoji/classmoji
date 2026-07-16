@@ -212,6 +212,20 @@ export const regradeResolveTool: ToolDefinition<RegradeResolveArgs> = {
   handler: async (args, ctx) => {
     const request = await loadRegradeRequestInClassroom(args.regrade_request_id, ctx);
 
+    // Idempotency (U11): waitForRunCompletion below is a 60s client-side
+    // timeout, not a cancel — the update_regrade_request run can flip the row
+    // and email the student AFTER the MCP request has timed out. A client retry
+    // would re-trigger the task and send a SECOND resolution email. Once the
+    // request leaves IN_REVIEW it is terminal, so return its recorded
+    // resolution without re-triggering. (Mirrors regrade_create's F1 guard.)
+    if (request.status !== 'IN_REVIEW') {
+      return ok({
+        success: true,
+        regrade_request: { id: request.id, status: request.status },
+        already_resolved: true,
+      });
+    }
+
     // Same task + payload as api.$operation updateRegradeRequest: the status
     // update and the resolution email use values re-derived from the DB
     // record, never the request body. onSuccess emails the student.
