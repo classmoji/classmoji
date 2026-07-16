@@ -12,6 +12,7 @@
 
 import { registerToolDefinition } from '../mcp/registry.ts';
 import { whoamiTool } from './whoami.ts';
+import { readTools } from './reads.ts';
 import { gradeAddTool, gradeRemoveTool, gradeRemoveAllTool } from './grades.ts';
 import { graderAssignTool, graderUnassignTool } from './graders.ts';
 import { emojiMappingUpsertTool, letterGradeMappingUpsertTool } from './mappings.ts';
@@ -36,6 +37,11 @@ import { repoPublishTool, repoUnpublishTool } from './repos.ts';
 export function registerAllTools(): void {
   // Identity / bootstrap
   registerToolDefinition(whoamiTool);
+
+  // Read surface mirrored as tools (tool-only clients like claude.ai cannot
+  // list/read MCP resources). Each mirror reuses its resource's handler + tier;
+  // list_submissions/list_teaching_team add filtering / staff-id resolution.
+  for (const tool of readTools) registerToolDefinition(tool);
 
   // Grading (teaching team incl. TEACHER; remove-all OWNER)
   registerToolDefinition(gradeAddTool);
