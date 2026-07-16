@@ -32,8 +32,12 @@ import {
   type SubmissionLike,
 } from './shape.ts';
 
-/** Compact queue row: identity narrowed, no token/transaction internals. */
-function queueRow(s: SubmissionLike, org: string | null) {
+/**
+ * Compact queue row: identity narrowed, no token/transaction internals.
+ * Exported so the `list_submissions` tool (tools/reads.ts) renders the SAME
+ * per-submission shape as the grading-queue resource — the two must never drift.
+ */
+export function queueRow(s: SubmissionLike, org: string | null) {
   return {
     id: s.id,
     status: s.status,
@@ -56,6 +60,71 @@ function queueRow(s: SubmissionLike, org: string | null) {
   };
 }
 
+export interface EmojiScaleRow {
+  emoji: string;
+  grade: number;
+  extra_tokens: number;
+  description: string;
+}
+
+/**
+ * Shared load for the grading-queue read surface: every submission
+ * (GitRepoAssignment) in the classroom plus the classroom emoji scale.
+ *
+ * Factored out of gradingQueueResource so the `list_submissions` tool builds on
+ * exactly the same query + emoji-scale shaping (the tool then filters the raw
+ * rows in-memory and maps them through `queueRow`). Returns RAW SubmissionLike
+ * rows so callers can filter before shaping.
+ */
+export async function loadGradingQueueData(
+  classroomId: string
+): Promise<{ emoji_scale: EmojiScaleRow[]; all: SubmissionLike[] }> {
+  const [all, emojiMappings] = await Promise.all([
+    ClassmojiService.gitRepoAssignment.findByClassroomId(classroomId) as unknown as Promise<
+      SubmissionLike[]
+    >,
+    // includeExtraTokens=true returns the full mapping rows (the default
+    // shape is a bare emoji→grade record).
+    ClassmojiService.emojiMapping.findByClassroomId(classroomId, true) as Promise<EmojiScaleRow[]>,
+  ]);
+  return {
+    emoji_scale: emojiMappings.map(m => ({
+      emoji: m.emoji,
+      grade: m.grade,
+      extra_tokens: m.extra_tokens,
+      description: m.description,
+    })),
+    all,
+  };
+}
+
+/**
+ * Shared leaderboard computation with the twin-classroom guard (S1).
+ *
+ * helper.calculateClassLeaderboard resolves by BARE slug (findBySlug), but
+ * slugs are only unique per git org. Guard: if the bare slug resolves to a
+ * different classroom than the org/slug the caller was authorized for, refuse
+ * rather than leak another classroom's leaderboard. Both the leaderboard
+ * resource and the `get_leaderboard` tool call this so the guard never drifts.
+ */
+export async function computeLeaderboard(
+  slug: string,
+  classroomId: string
+): Promise<{
+  count: number;
+  leaderboard: Awaited<ReturnType<typeof ClassmojiService.helper.calculateClassLeaderboard>>;
+}> {
+  const bySlug = await ClassmojiService.classroom.findBySlug(slug);
+  if (!bySlug || bySlug.id !== classroomId) {
+    throw new ToolError(
+      'internal',
+      `Classroom slug '${slug}' is ambiguous across git orgs — leaderboard unavailable for this classroom`
+    );
+  }
+  const leaderboard = await ClassmojiService.helper.calculateClassLeaderboard(slug);
+  return { count: leaderboard.length, leaderboard };
+}
+
 export const gradingQueueResource: ResourceDefinition = {
   name: 'grading-queue',
   uriTemplate: 'classmoji://{org}/{slug}/grading-queue',
@@ -69,29 +138,19 @@ export const gradingQueueResource: ResourceDefinition = {
   handler: async (_vars, ctx) => {
     const { classroomId } = classroomCtx(ctx);
     const org = orgLogin(ctx);
-    const [assignedToMe, all, emojiMappings] = await Promise.all([
+    const [assignedToMe, { emoji_scale, all }] = await Promise.all([
       // Rows are GitRepoAssignmentGrader records wrapping the submission.
       ClassmojiService.gitRepoAssignmentGrader.findAssignedByGrader(
         ctx.viewer.userId,
         classroomId
       ) as unknown as Promise<Array<{ git_repo_assignment: SubmissionLike }>>,
-      ClassmojiService.gitRepoAssignment.findByClassroomId(classroomId) as unknown as Promise<
-        SubmissionLike[]
-      >,
-      // includeExtraTokens=true returns the full mapping rows (the default
-      // shape is a bare emoji→grade record).
-      ClassmojiService.emojiMapping.findByClassroomId(classroomId, true) as Promise<
-        Array<{ emoji: string; grade: number; extra_tokens: number; description: string }>
-      >,
+      // Shared with the list_submissions tool (tools/reads.ts) — one query +
+      // emoji-scale shaping so the two surfaces cannot drift.
+      loadGradingQueueData(classroomId),
     ]);
 
     return {
-      emoji_scale: emojiMappings.map(m => ({
-        emoji: m.emoji,
-        grade: m.grade,
-        extra_tokens: m.extra_tokens,
-        description: m.description,
-      })),
+      emoji_scale,
       assigned_to_me: assignedToMe
         .map(g => g.git_repo_assignment)
         .filter(Boolean)
@@ -151,19 +210,9 @@ export const leaderboardResource: ResourceDefinition = {
   roles: OWNER_ONLY,
   handler: async (vars, ctx) => {
     const { classroomId } = classroomCtx(ctx);
-    // helper.calculateClassLeaderboard resolves by BARE slug (findBySlug), but
-    // slugs are only unique per git org. Guard: if the bare slug resolves to a
-    // different classroom than the org/slug the caller was authorized for,
-    // refuse rather than leak another classroom's leaderboard (S1).
-    const bySlug = await ClassmojiService.classroom.findBySlug(vars.slug);
-    if (!bySlug || bySlug.id !== classroomId) {
-      throw new ToolError(
-        'internal',
-        `Classroom slug '${vars.slug}' is ambiguous across git orgs — leaderboard unavailable for this classroom`
-      );
-    }
-    const leaderboard = await ClassmojiService.helper.calculateClassLeaderboard(vars.slug);
-    return { count: leaderboard.length, leaderboard };
+    // Shared with the get_leaderboard tool (tools/reads.ts): the twin-classroom
+    // guard + computation live in one place so they cannot drift.
+    return computeLeaderboard(vars.slug, classroomId);
   },
 };
 
