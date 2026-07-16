@@ -31,19 +31,18 @@ import Tasks from '@classmoji/tasks';
 import { z } from 'zod';
 import { ToolError } from '../mcp/errors.ts';
 import type { ToolDefinition, ToolContext } from '../mcp/registry.ts';
-import { ok, OWNER_ONLY, requireClassroomCtx, scopedNotFound, writeAudit } from './shared.ts';
+import {
+  loadRepositoryInClassroom,
+  ok,
+  OWNER_ONLY,
+  requireClassroomCtx,
+  scopedNotFound,
+  writeAudit,
+} from './shared.ts';
 
-type RepositoryRecord = NonNullable<
-  Awaited<ReturnType<typeof ClassmojiService.repository.findById>>
->;
-
-/** Load a Repository (an assignment container) and verify its classroom_id. */
-async function loadRepositoryInClassroom(id: string, ctx: ToolContext): Promise<RepositoryRecord> {
-  const record = await ClassmojiService.repository.findById(id);
-  if (!record || record.classroom_id !== requireClassroomCtx(ctx).classroomId) {
-    throw scopedNotFound('Repo');
-  }
-  return record;
+/** Prisma unique-violation (P2002) — Repository is @@unique([classroom_id, title]). */
+function isUniqueTitleViolation(error: unknown): boolean {
+  return error instanceof Error && 'code' in error && (error as { code?: string }).code === 'P2002';
 }
 
 /** The classroom slug drives the task payload + concurrency key (route parity). */
@@ -237,5 +236,164 @@ export const repoUnpublishTool: ToolDefinition<RepoUnpublishArgs> = {
     });
 
     return ok({ success: true, is_published: false, message: 'Repository unpublished' });
+  },
+};
+
+interface RepoCreateArgs {
+  classroom: string;
+  title: string;
+  template: string;
+  type?: 'INDIVIDUAL' | 'GROUP';
+  weight?: number;
+  description?: string;
+  is_extra_credit?: boolean;
+  drop_lowest_count?: number;
+  tag_id?: string;
+  team_formation_mode?: 'INSTRUCTOR' | 'SELF_FORMED';
+  team_formation_deadline?: string;
+  max_team_size?: number;
+  project_template_id?: string;
+  project_template_title?: string;
+}
+
+export const repoCreateTool: ToolDefinition<RepoCreateArgs> = {
+  name: 'repo_create',
+  // Commits a content-manifest refresh to the GitHub content repo (best-effort,
+  // failure-tolerant) → openWorld. No student repos are provisioned here (that
+  // is repo_publish), and nothing is removed → not destructive.
+  annotations: { destructive: false, openWorld: true },
+  title: 'Create an assignment container (repo)',
+  description:
+    'Creates an UNPUBLISHED assignment container (a "repo"/lab) in the classroom. Owner only. No ' +
+    'student git repos are created — the container starts empty and hidden; add assignments with ' +
+    'assignment_create, then provision student repos with repo_publish. For a GROUP repo with ' +
+    'instructor-assigned teams, pass tag_id (a team tag in this classroom). Refreshes the ' +
+    "classroom's content manifest on GitHub (best-effort).",
+  scope: 'write',
+  roles: OWNER_ONLY,
+  inputSchema: {
+    classroom: z.string().describe("Classroom reference as 'org/slug'"),
+    title: z.string().min(1).max(200).describe('Repo/lab title (unique per classroom)'),
+    template: z
+      .string()
+      .min(1)
+      .max(200)
+      .describe('GitHub template repo name students are provisioned from at publish'),
+    type: z
+      .enum(['INDIVIDUAL', 'GROUP'])
+      .optional()
+      .describe('Individual or group repo (default INDIVIDUAL)'),
+    weight: z.number().int().min(0).max(10000).optional().describe('Grading weight (default 100)'),
+    description: z.string().max(2000).optional(),
+    is_extra_credit: z.boolean().optional().describe('default false'),
+    drop_lowest_count: z
+      .number()
+      .int()
+      .min(0)
+      .optional()
+      .describe('Drop the N lowest assignments (default 0)'),
+    tag_id: z
+      .string()
+      .uuid()
+      .optional()
+      .describe('Team tag id (GROUP with instructor-assigned teams)'),
+    team_formation_mode: z
+      .enum(['INSTRUCTOR', 'SELF_FORMED'])
+      .optional()
+      .describe('GROUP only (default INSTRUCTOR)'),
+    team_formation_deadline: z
+      .string()
+      .datetime({ offset: true })
+      .optional()
+      .describe('GROUP only (ISO 8601)'),
+    max_team_size: z.number().int().positive().optional().describe('GROUP only'),
+    project_template_id: z.string().optional().describe('GitHub Projects V2 template node_id'),
+    project_template_title: z.string().optional().describe('Human-readable project template name'),
+  },
+  handler: async (args, ctx) => {
+    const classroom = requireClassroomCtx(ctx);
+    const type = args.type ?? 'INDIVIDUAL';
+    const teamMode = args.team_formation_mode ?? 'INSTRUCTOR';
+
+    // S1 for the one cross-record reference: a supplied tag must belong to THIS
+    // classroom (Tag has no findById — validate via the classroom-scoped list).
+    if (args.tag_id) {
+      const tags = await ClassmojiService.organizationTag.findByClassroomId(classroom.classroomId);
+      if (!tags.some(t => t.id === args.tag_id)) {
+        throw scopedNotFound('Tag');
+      }
+    }
+
+    // Mirror the web superRefine: instructor-assigned GROUP teams need a tag.
+    if (type === 'GROUP' && teamMode === 'INSTRUCTOR' && !args.tag_id) {
+      throw new ToolError(
+        'invalid_params',
+        'A GROUP repo with instructor-assigned teams requires tag_id'
+      );
+    }
+
+    let created;
+    try {
+      created = await ClassmojiService.repository.create({
+        // classroom_id is ALWAYS the authorized classroom, never request input.
+        classroom_id: classroom.classroomId,
+        title: args.title,
+        template: args.template,
+        type,
+        ...(args.weight !== undefined ? { weight: args.weight } : {}),
+        ...(args.description !== undefined ? { description: args.description } : {}),
+        ...(args.is_extra_credit !== undefined ? { is_extra_credit: args.is_extra_credit } : {}),
+        ...(args.drop_lowest_count !== undefined
+          ? { drop_lowest_count: args.drop_lowest_count }
+          : {}),
+        ...(args.tag_id !== undefined ? { tag_id: args.tag_id } : {}),
+        ...(type === 'GROUP'
+          ? {
+              team_formation_mode: teamMode,
+              ...(args.team_formation_deadline !== undefined
+                ? { team_formation_deadline: new Date(args.team_formation_deadline) }
+                : {}),
+              ...(args.max_team_size !== undefined ? { max_team_size: args.max_team_size } : {}),
+            }
+          : {}),
+        ...(args.project_template_id !== undefined
+          ? { project_template_id: args.project_template_id }
+          : {}),
+        ...(args.project_template_title !== undefined
+          ? { project_template_title: args.project_template_title }
+          : {}),
+      });
+    } catch (error) {
+      if (isUniqueTitleViolation(error)) {
+        throw new ToolError(
+          'invalid_params',
+          'A repo with this title already exists in this classroom.'
+        );
+      }
+      throw error;
+    }
+
+    // Mirror the web create flow: refresh the content manifest (best-effort —
+    // saveManifest swallows GitHub errors internally, so this never throws).
+    await ClassmojiService.contentManifest.saveManifest(classroom.classroomId);
+
+    await writeAudit(ctx, {
+      resource_type: 'REPOSITORIES',
+      resource_id: created.id,
+      action: 'CREATE',
+      data: { tool: 'repo_create', title: args.title, type },
+    });
+
+    return ok({
+      success: true,
+      repository: {
+        id: created.id,
+        title: created.title,
+        slug: created.slug,
+        type: created.type,
+        is_published: created.is_published,
+        weight: created.weight,
+      },
+    });
   },
 };

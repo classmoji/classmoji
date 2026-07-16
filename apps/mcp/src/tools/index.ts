@@ -16,7 +16,7 @@ import { readTools } from './reads.ts';
 import { gradeAddTool, gradeRemoveTool, gradeRemoveAllTool } from './grades.ts';
 import { graderAssignTool, graderUnassignTool } from './graders.ts';
 import { emojiMappingUpsertTool, letterGradeMappingUpsertTool } from './mappings.ts';
-import { assignmentUpdateTool } from './assignments.ts';
+import { assignmentCreateTool, assignmentUpdateTool, assignmentDeleteTool } from './assignments.ts';
 import { regradeCreateTool, regradeResolveTool } from './regrades.ts';
 import {
   moduleCreateTool,
@@ -32,7 +32,8 @@ import {
 import { pageCreateTool, pageUpdateTool, pageDeleteTool } from './pages.ts';
 import { tokenGrantTool } from './tokens.ts';
 import { extensionPurchaseTool } from './extensions.ts';
-import { repoPublishTool, repoUnpublishTool } from './repos.ts';
+import { repoCreateTool, repoPublishTool, repoUnpublishTool } from './repos.ts';
+import { rosterAddStudentTool, rosterRemoveStudentTool } from './roster.ts';
 
 export function registerAllTools(): void {
   // Identity / bootstrap
@@ -56,8 +57,10 @@ export function registerAllTools(): void {
   registerToolDefinition(emojiMappingUpsertTool);
   registerToolDefinition(letterGradeMappingUpsertTool);
 
-  // Assignments (OWNER+TEACHER with per-field tiering)
+  // Assignments (create/delete OWNER-only; update OWNER+TEACHER with per-field tiering)
+  registerToolDefinition(assignmentCreateTool);
   registerToolDefinition(assignmentUpdateTool);
+  registerToolDefinition(assignmentDeleteTool);
 
   // Regrades (student self-create; teaching-team resolve)
   registerToolDefinition(regradeCreateTool);
@@ -82,10 +85,15 @@ export function registerAllTools(): void {
   // Tokens (OWNER)
   registerToolDefinition(tokenGrantTool);
 
+  // Roster (OWNER — add sends real emails; remove is destructive, confirm-gated)
+  registerToolDefinition(rosterAddStudentTool);
+  registerToolDefinition(rosterRemoveStudentTool);
+
   // Extensions (STUDENT self)
   registerToolDefinition(extensionPurchaseTool);
 
-  // Repos: publish/unpublish + provisioning (OWNER — route-derived)
+  // Repos: create container + publish/unpublish + provisioning (OWNER)
+  registerToolDefinition(repoCreateTool);
   registerToolDefinition(repoPublishTool);
   registerToolDefinition(repoUnpublishTool);
 }
