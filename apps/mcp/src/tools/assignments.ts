@@ -37,6 +37,7 @@ const TEACHER_ALLOWED_FIELDS = new Set(['grades_released', 'student_deadline']);
 
 export const assignmentUpdateTool: ToolDefinition<AssignmentUpdateArgs> = {
   name: 'assignment_update',
+  annotations: { destructive: false },
   title: 'Update an assignment',
   description:
     'Updates an assignment (a due-dated, gradeable slice of a repo/lab): student deadline, ' +

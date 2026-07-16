@@ -74,6 +74,25 @@ export interface ToolDefinition<Args = Record<string, unknown>> {
   roles: readonly Role[] | null;
   /** Zod raw shape (v1.x SDK registerTool style). */
   inputSchema: ZodRawShape;
+  /**
+   * MCP behavioral hints surfaced to clients (tools/list `annotations`).
+   * `readOnlyHint` is derived from `scope` automatically — do NOT set it here.
+   * These fields describe the WRITE surface so a client can decide whether to
+   * run a call silently or pause for human confirmation:
+   *   - `destructive`: the call deletes/removes data or access (a client should
+   *     double-check before running). Deletes/removes → true; pure creates/
+   *     updates/upserts → false. Defaults to `true` when omitted on a write, so
+   *     an unclassified new tool errs toward "make the human confirm".
+   *   - `idempotent`: repeating the call with the same args has no additional
+   *     effect (e.g. upserts). Meaningful only for writes; defaults false.
+   *   - `openWorld`: the call ripples to an external system (GitHub) rather than
+   *     just our own database. Defaults false (closed classroom domain).
+   */
+  annotations?: {
+    destructive?: boolean;
+    idempotent?: boolean;
+    openWorld?: boolean;
+  };
   /** Optional per-tool override of the default rate limit (S6). */
   rateLimit?: RateLimitConfig;
   handler: (args: Args, ctx: ToolContext) => Promise<ToolResult>;
@@ -361,6 +380,33 @@ function makeListCallback(
 }
 
 /**
+ * Translate a tool's declared scope + `annotations` into the MCP
+ * `ToolAnnotations` hint block (readOnlyHint/destructiveHint/idempotentHint/
+ * openWorldHint). `readOnlyHint` comes straight from `scope`, so the read/write
+ * split we already enforce is the single source of truth for the hint too.
+ * destructiveHint/idempotentHint are only meaningful for writes (per the MCP
+ * spec) and are omitted for reads. destructiveHint defaults to `true` for a
+ * write that declares no annotation — the safety-biased default.
+ */
+export function toolAnnotations(def: ToolDefinition<never>): {
+  readOnlyHint: boolean;
+  destructiveHint?: boolean;
+  idempotentHint?: boolean;
+  openWorldHint: boolean;
+} {
+  const openWorldHint = def.annotations?.openWorld ?? false;
+  if (def.scope === 'read') {
+    return { readOnlyHint: true, openWorldHint };
+  }
+  return {
+    readOnlyHint: false,
+    destructiveHint: def.annotations?.destructive ?? true,
+    idempotentHint: def.annotations?.idempotent ?? false,
+    openWorldHint,
+  };
+}
+
+/**
  * Build a per-request McpServer bound to the authenticated viewer
  * (locked decision 3: stateless — new server + transport per request).
  * Tools/resources whose scope the token was not granted are not registered at
@@ -377,6 +423,7 @@ export function buildMcpServer(viewer: Viewer): McpServer {
         title: def.title,
         description: def.description,
         inputSchema: def.inputSchema,
+        annotations: { title: def.title, ...toolAnnotations(def) },
       },
       wrapHandler(def, viewer) as never
     );

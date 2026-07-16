@@ -34,8 +34,16 @@ vi.mock('@classmoji/services', () => ({
   },
 }));
 
-const { buildMcpServer, registerToolDefinition } = await import('../registry.ts');
+const { buildMcpServer, registerToolDefinition, toolAnnotations } = await import('../registry.ts');
 const { resetRateLimits } = await import('../rateLimit.ts');
+
+/** Minimal def stub — toolAnnotations only reads `.scope` and `.annotations`. */
+function annotationsOf(
+  scope: 'read' | 'write',
+  annotations?: { destructive?: boolean; idempotent?: boolean; openWorld?: boolean }
+) {
+  return toolAnnotations({ scope, annotations } as Parameters<typeof toolAnnotations>[0]);
+}
 
 // ─── Fake tools ──────────────────────────────────────────────────────────────
 
@@ -423,6 +431,64 @@ describe('mutation gate on write tools', () => {
     const result = await callTool(client, 't_write_classroom', { classroom: REF });
     expect(result.isError).toBeFalsy();
     expect(writeHandlerCalls).toBe(1);
+  });
+});
+
+// ─── Tool annotations (behavioral hints surfaced to clients) ────────────────
+
+describe('toolAnnotations mapping', () => {
+  it('marks reads read-only and omits the write-only hints', () => {
+    const a = annotationsOf('read');
+    expect(a.readOnlyHint).toBe(true);
+    expect(a.openWorldHint).toBe(false);
+    // destructive/idempotent are "meaningful only when readOnlyHint is false".
+    expect('destructiveHint' in a).toBe(false);
+    expect('idempotentHint' in a).toBe(false);
+  });
+
+  it('defaults an unannotated write to destructive (safety-biased)', () => {
+    const a = annotationsOf('write');
+    expect(a).toEqual({
+      readOnlyHint: false,
+      destructiveHint: true,
+      idempotentHint: false,
+      openWorldHint: false,
+    });
+  });
+
+  it('passes through a destructive, external-reaching write', () => {
+    expect(annotationsOf('write', { destructive: true, openWorld: true })).toEqual({
+      readOnlyHint: false,
+      destructiveHint: true,
+      idempotentHint: false,
+      openWorldHint: true,
+    });
+  });
+
+  it('passes through an additive idempotent write (upsert)', () => {
+    expect(annotationsOf('write', { destructive: false, idempotent: true })).toEqual({
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    });
+  });
+});
+
+describe('annotations reach the wire (tools/list)', () => {
+  it('advertises readOnlyHint on reads and destructiveHint on writes', async () => {
+    const client = await connectClient(makeViewer(['read', 'write']));
+    const tools = (await client.listTools()).tools;
+    const byName = new Map(tools.map(t => [t.name, t.annotations]));
+
+    // t_read_plain is a read tool → read-only, no destructive hint.
+    expect(byName.get('t_read_plain')).toMatchObject({ readOnlyHint: true });
+    // t_write_plain is a write tool with no declared annotations → default
+    // destructive:true (a client should confirm before running it).
+    expect(byName.get('t_write_plain')).toMatchObject({
+      readOnlyHint: false,
+      destructiveHint: true,
+    });
   });
 });
 

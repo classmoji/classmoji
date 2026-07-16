@@ -90,6 +90,7 @@ interface RepoPublishArgs {
 
 export const repoPublishTool: ToolDefinition<RepoPublishArgs> = {
   name: 'repo_publish',
+  annotations: { destructive: false, openWorld: true },
   title: 'Publish a repo',
   description:
     'Publishes a repo (assignment container) to students and provisions their git repositories ' +
@@ -210,6 +211,9 @@ interface RepoUnpublishArgs {
 
 export const repoUnpublishTool: ToolDefinition<RepoUnpublishArgs> = {
   name: 'repo_unpublish',
+  // Reversible visibility flip in our DB (setPublished(false)); no rows removed,
+  // no GitHub call — repo_publish flips it back. Not destructive, closed-world.
+  annotations: { destructive: false },
   title: 'Unpublish a repo',
   description:
     'Hides a repo (assignment container) from students. Owner only. Existing git repositories ' +

@@ -7,6 +7,7 @@
 
 import { ClassmojiService } from '@classmoji/services';
 import type { ToolDefinition } from '../mcp/registry.ts';
+import { buildSuggestions } from '../suggestions.ts';
 
 interface MembershipSummary {
   classroom: string;
@@ -20,9 +21,9 @@ export const whoamiTool: ToolDefinition<Record<string, never>> = {
   name: 'whoami',
   title: 'Who am I',
   description:
-    'Returns the authenticated user (id, login, name), the scopes granted to this token, and a ' +
-    "summary of classroom memberships. Classrooms are addressed as 'org/slug' — use those " +
-    'references with other tools.',
+    'Returns the authenticated user (id, login, name), the scopes granted to this token, a ' +
+    'summary of classroom memberships, and role-tailored example questions to offer the user. ' +
+    "Classrooms are addressed as 'org/slug' — use those references with other tools.",
   scope: 'read',
   roles: null,
   inputSchema: {},
@@ -45,6 +46,8 @@ export const whoamiTool: ToolDefinition<Record<string, never>> = {
       name: user?.name ?? null,
       scopes: [...viewer.scopes],
       memberships,
+      // Role-tailored conversation starters (cosmetic; from the roles held).
+      suggestions: buildSuggestions(classrooms.map(c => c.membership.role)),
     };
 
     return {

@@ -55,6 +55,7 @@ async function loadGitOrganization(classroomId: string) {
 
 export const graderAssignTool: ToolDefinition<GraderArgs> = {
   name: 'grader_assign',
+  annotations: { destructive: false, openWorld: true },
   title: 'Assign a grader',
   description:
     'Assigns a teaching-team member as grader on a submission. Mirrors the grader to the ' +
@@ -109,6 +110,7 @@ export const graderAssignTool: ToolDefinition<GraderArgs> = {
 
 export const graderUnassignTool: ToolDefinition<GraderArgs> = {
   name: 'grader_unassign',
+  annotations: { destructive: true, openWorld: true },
   title: 'Unassign a grader',
   description:
     'Removes a grader from a submission and from the GitHub issue assignees. Owner only.',
