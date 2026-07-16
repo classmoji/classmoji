@@ -76,6 +76,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
             user: data.user,
             gitOrganization: classroom.git_organization,
             classroom: classroom,
+            role: 'ASSISTANT',
           },
         });
 
