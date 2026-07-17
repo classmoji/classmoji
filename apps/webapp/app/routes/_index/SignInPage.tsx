@@ -1,11 +1,17 @@
+import { GithubFilled, GitlabFilled } from '@ant-design/icons';
 import { Emoji } from '~/components';
-import GitHubIcon from './github.svg';
 
 interface SignInPageProps {
   handleGitHubLogin: () => void;
+  handleGitLabLogin?: () => void;
+  gitlabEnabled?: boolean;
 }
 
-const SignInPage = ({ handleGitHubLogin }: SignInPageProps) => {
+const SignInPage = ({
+  handleGitHubLogin,
+  handleGitLabLogin,
+  gitlabEnabled = false,
+}: SignInPageProps) => {
   return (
     <div className="min-h-screen bg-[#fdfdfd] dark:bg-neutral-950 flex flex-col">
       {/* Main content */}
@@ -26,9 +32,20 @@ const SignInPage = ({ handleGitHubLogin }: SignInPageProps) => {
             onClick={handleGitHubLogin}
             className="w-full flex items-center justify-center gap-2 bg-primary hover:bg-primary/90 text-white font-medium rounded-lg px-4 py-2.5 transition-colors cursor-pointer"
           >
-            <img src={GitHubIcon} alt="GitHub" className="w-5 h-5" />
+            <GithubFilled style={{ fontSize: 20 }} />
             Continue with GitHub
           </button>
+
+          {/* GitLab OAuth button (only when configured) */}
+          {gitlabEnabled && handleGitLabLogin && (
+            <button
+              onClick={handleGitLabLogin}
+              className="mt-3 w-full flex items-center justify-center gap-2 bg-white dark:bg-neutral-900 text-gray-900 dark:text-white font-medium rounded-lg px-4 py-2.5 ring-1 ring-gray-300 dark:ring-neutral-700 hover:bg-gray-50 dark:hover:bg-neutral-800 transition-colors cursor-pointer"
+            >
+              <GitlabFilled style={{ fontSize: 20, color: '#FC6D26' }} />
+              Continue with GitLab
+            </button>
+          )}
         </div>
       </main>
 

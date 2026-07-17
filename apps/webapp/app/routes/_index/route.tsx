@@ -1,9 +1,10 @@
 import { redirect } from 'react-router';
 
 import { Alert } from 'antd';
-import { auth } from '@classmoji/auth/server';
+import { auth, isGitLabAuthConfigured } from '@classmoji/auth/server';
 import { authClient } from '@classmoji/auth/client';
 import SignInPage from './SignInPage';
+import { GithubFilled, GitlabFilled } from '@ant-design/icons';
 import type { Route } from './+types/route';
 
 export const loader = async ({ request }: Route.LoaderArgs) => {
@@ -18,16 +19,24 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
     isDev: process.env.NODE_ENV === 'development',
     multipleTokens: process.env.MULTIPLE_TOKENS === 'true',
     setupComplete: url.searchParams.get('setup') === 'complete',
+    gitlabEnabled: isGitLabAuthConfigured,
   };
 };
 
 const Index = ({ loaderData }: Route.ComponentProps) => {
-  const { isDev, setupComplete, multipleTokens } = loaderData;
+  const { isDev, setupComplete, multipleTokens, gitlabEnabled } = loaderData;
 
   const handleGitHubLogin = async () => {
     // Use BetterAuth client for OAuth flow
     await authClient.signIn.social({
       provider: 'github',
+      callbackURL: '/select-organization',
+    });
+  };
+
+  const handleGitLabLogin = async () => {
+    await authClient.signIn.social({
+      provider: 'gitlab',
       callbackURL: '/select-organization',
     });
   };
@@ -49,10 +58,21 @@ const Index = ({ loaderData }: Route.ComponentProps) => {
 
         <button
           onClick={handleGitHubLogin}
-          className="font-bold bg-black dark:bg-gray-200 text-white dark:text-black rounded-md px-6 py-3 min-w-[200px] text-center cursor-pointer"
+          className="font-bold bg-black hover:bg-neutral-800 text-white ring-1 ring-neutral-700 rounded-md px-6 py-3 min-w-[200px] flex items-center justify-center gap-2 cursor-pointer"
         >
-          GitHub OAuth
+          <GithubFilled style={{ fontSize: 20 }} />
+          Continue with GitHub
         </button>
+
+        {gitlabEnabled && (
+          <button
+            onClick={handleGitLabLogin}
+            className="font-bold bg-white dark:bg-neutral-900 text-gray-900 dark:text-white ring-1 ring-gray-300 dark:ring-neutral-700 hover:bg-gray-50 dark:hover:bg-neutral-800 rounded-md px-6 py-3 min-w-[200px] flex items-center justify-center gap-2 cursor-pointer"
+          >
+            <GitlabFilled style={{ fontSize: 20, color: '#FC6D26' }} />
+            Continue with GitLab
+          </button>
+        )}
 
         {multipleTokens && (
           <>
@@ -96,7 +116,11 @@ const Index = ({ loaderData }: Route.ComponentProps) => {
   return (
     <>
       {setupBanner}
-      <SignInPage handleGitHubLogin={handleGitHubLogin} />
+      <SignInPage
+        handleGitHubLogin={handleGitHubLogin}
+        handleGitLabLogin={handleGitLabLogin}
+        gitlabEnabled={gitlabEnabled}
+      />
     </>
   );
 };

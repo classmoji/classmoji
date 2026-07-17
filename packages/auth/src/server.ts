@@ -206,6 +206,162 @@ async function getValidGitHubToken(userId: string): Promise<GitHubTokenResult | 
   return ClassmojiService.githubUserToken.getGitHubTokenForUser(userId);
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// GitLab social login (optional).
+//
+// Mirrors the GitHub provider below, but for GitLab identities. Registered only
+// when GITLAB_CLIENT_ID + GITLAB_CLIENT_SECRET are set, so unconfigured setups
+// (local/OSS) don't surface a broken "Continue with GitLab" button.
+//
+// `issuer` defaults to https://gitlab.com; set GITLAB_ISSUER to point login at a
+// single self-hosted instance. We request ONLY the `api` scope (full read-write)
+// so the same login token can act as the API actor when a user creates a
+// classroom (groups/projects) on GitLab. `api` is a superset of `read_user`, so
+// we set `disableDefaultScope` to stop the provider prepending `read_user` —
+// otherwise GitLab rejects the request with `invalid_scope` unless the OAuth app
+// also has the `read_user` box ticked.
+// NOTE: this couples identity to full account access. When the dedicated
+// instructor org/group-connection grant lands, move `api` onto that grant
+// (stored on GitOrganization) and drop this back to `read_user` for login.
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const isGitLabAuthConfigured = Boolean(
+  process.env.GITLAB_CLIENT_ID && process.env.GITLAB_CLIENT_SECRET
+);
+
+// GitLab's /api/v4/user profile — the fields we read from it.
+interface GitLabProfile {
+  id: number | string;
+  username: string;
+  name?: string;
+  email?: string;
+  avatar_url?: string;
+}
+
+async function mapGitLabProfileToUser(profile: GitLabProfile) {
+  const gitlabId = String(profile.id);
+  const login = profile.username; // GitLab uses `username` (GitHub uses `login`)
+
+  // Ensure a GitLab user + account row exist BEFORE BetterAuth's findOAuthUser
+  // runs. findOAuthUser resolves by (provider_id, account_id) first and only
+  // falls back to matching a user by email — so provisioning the account here
+  // makes GitLab sign-in resolve to its OWN user and take the sign-in path,
+  // instead of matching a different provider's user that happens to share the
+  // same provider_email and throwing `account_not_linked`. GitHub and GitLab
+  // deliberately stay separate users (single-provider-per-user schema); a shared
+  // provider_email across two providers is expected and fine.
+  try {
+    // Match the GitLab identity, or a roster placeholder pre-provisioned by
+    // username. The username match is scoped to GitLab / un-provisioned users so
+    // it can never hijack a user that already belongs to another provider (e.g.
+    // a GitHub user who happens to share the username).
+    const existing = await getPrisma().user.findFirst({
+      where: {
+        OR: [
+          { provider: 'GITLAB', provider_id: gitlabId },
+          { login, provider: 'GITLAB' },
+          { login, provider: null },
+        ],
+      },
+      include: {
+        accounts: { where: { provider_id: 'gitlab' }, select: { id: true } },
+      },
+    });
+
+    if (existing) {
+      // Backfill anything missing on the matched user: provider linkage + account
+      // row for a roster placeholder, and the canonical `email` (see the note in
+      // the create branch) so the user clears the GitHub-centric onboarding gate.
+      // This also self-heals users half-created by an earlier sign-in attempt.
+      const needsAccount = existing.accounts.length === 0;
+      const needsEmail = !existing.email && !!profile.email;
+      const needsProviderEmail = !existing.provider_email && !!profile.email;
+
+      if (needsAccount || needsEmail || needsProviderEmail) {
+        await getPrisma().user.update({
+          where: { id: existing.id },
+          data: {
+            ...(needsAccount
+              ? { provider: 'GITLAB', provider_id: gitlabId, login: existing.login ?? login }
+              : {}),
+            ...(needsEmail ? { email: profile.email } : {}),
+            ...(needsProviderEmail ? { provider_email: profile.email } : {}),
+          },
+        });
+      }
+
+      if (needsAccount) {
+        // Tokens left null — BetterAuth fills them on this same sign-in.
+        await getPrisma().account.upsert({
+          where: {
+            provider_id_account_id: { provider_id: 'gitlab', account_id: gitlabId },
+          },
+          update: {},
+          create: {
+            user_id: existing.id,
+            provider_id: 'gitlab',
+            account_id: gitlabId,
+          },
+        });
+      }
+    } else {
+      // Brand-new GitLab identity → create the user (and its account) ourselves,
+      // so findOAuthUser resolves by account rather than colliding on a shared
+      // provider_email.
+      //
+      // We seed the canonical `email` from the GitLab profile too. The GitHub
+      // onboarding sends users with a null `email` to `/registration`, but that
+      // route requires a GitHub token — a GitLab user would bounce back and hit
+      // a redirect loop. Seeding `email` lets them clear that gate and land on
+      // `/select-organization`. (A real GitLab onboarding would make
+      // `/registration` provider-aware instead; this is the demo-path shortcut.)
+      const created = await getPrisma().user.create({
+        data: {
+          provider: 'GITLAB',
+          provider_id: gitlabId,
+          login,
+          email: profile.email ?? null,
+          provider_email: profile.email ?? null,
+          name: profile.name ?? login,
+          image: profile.avatar_url ?? null,
+        },
+      });
+
+      await getPrisma().account.create({
+        data: {
+          user_id: created.id,
+          provider_id: 'gitlab',
+          account_id: gitlabId,
+        },
+      });
+    }
+  } catch (error: unknown) {
+    console.error('[auth] mapGitLabProfileToUser provisioning failed', error);
+  }
+
+  return {
+    login, // GitLab username
+    provider: 'GITLAB',
+    provider_id: gitlabId, // GitLab user ID as string
+  };
+}
+
+const gitlabProvider = isGitLabAuthConfigured
+  ? {
+      clientId: process.env.GITLAB_CLIENT_ID as string,
+      clientSecret: process.env.GITLAB_CLIENT_SECRET as string,
+      // Undefined → BetterAuth defaults to https://gitlab.com. Set GITLAB_ISSUER
+      // to target a single self-hosted GitLab instance.
+      issuer: process.env.GITLAB_ISSUER || undefined,
+      // Full read-write API access so the login token can create groups/projects
+      // when a user provisions a classroom. `api` already covers `read_user`, so
+      // suppress the provider's default `read_user` scope (see note above).
+      scope: ['api'],
+      disableDefaultScope: true,
+      mapProfileToUser: mapGitLabProfileToUser,
+    }
+  : null;
+
 export const auth = betterAuth({
   basePath: '/api/auth',
   baseURL: process.env.WEBAPP_URL,
@@ -285,6 +441,8 @@ export const auth = betterAuth({
         };
       },
     },
+    // Registered only when GITLAB_CLIENT_ID + GITLAB_CLIENT_SECRET are set.
+    ...(gitlabProvider ? { gitlab: gitlabProvider } : {}),
   },
   session: {
     expiresIn: 60 * 60 * 24 * 7, // 7 days
