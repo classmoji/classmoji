@@ -3,19 +3,154 @@ import Layout from '../layouts/Layout.astro';
 import Header from '../components/Header.astro';
 import Footer from '../components/Footer.astro';
 
-// Add releases here, newest first.
-// Example entry:
-// { version: 'v1.2.0', date: 'March 24, 2026', title: 'What changed', description: 'Short summary.', tags: ['Feature'] }
-const entries = [];
+type Item = {
+  text: string;
+  link?: { label: string; href: string };
+};
+
+type Release = {
+  month: string;
+  title?: string;
+  items: Item[];
+};
+
+type Era = {
+  version: string;
+  title: string;
+  when?: string;
+  items: string[];
+};
+
+// Newest first.
+const entries: Release[] = [
+  {
+    month: 'July 2026',
+    items: [
+      {
+        text: 'Connect your classroom to Claude. Grades, regrades, modules, and tokens, all from the chat.',
+        link: { label: 'MCP server setup', href: '/docs/instructors/mcp-server' },
+      },
+      { text: 'Tighter permission checks across grading, leaderboards, and role changes.' },
+    ],
+  },
+  {
+    month: 'June 2026',
+    items: [
+      {
+        text: 'Modules group repos, pages, quizzes, and slides into an ordered path for students.',
+        link: { label: 'Build modules', href: '/docs/instructors/modules' },
+      },
+      {
+        text: 'Autograding runs your tests on Github Actions and shows results on the submission.',
+        link: { label: 'Set up autograding', href: '/docs/instructors/autograding' },
+      },
+      {
+        text: 'Import a Github Classroom course live. No ZIP upload.',
+        link: { label: 'Import from Github Classroom', href: '/docs/instructors/import-github-classroom' },
+      },
+      { text: 'Private org repos work as assignment templates.' },
+    ],
+  },
+  {
+    month: 'May 2026',
+    items: [
+      { text: 'Pin, reorder, and archive your classrooms. Active, Locked, and Unpublished modes control access.' },
+      { text: 'Creating a class no longer asks for a term or year.' },
+      { text: 'Teams, assistants, and tokens are now included on every tier.' },
+      {
+        text: 'What used to be called modules are now repositories, named for what they actually are.',
+        link: { label: 'Repositories and assignments', href: '/docs/instructors/modules-and-assignments' },
+      },
+      {
+        text: 'Only owners can delete repositories or view billing, calendar links are signed more strictly, and duplicate Stripe events can no longer double-charge.',
+      },
+    ],
+  },
+  {
+    month: 'April 2026',
+    title: 'The redesign',
+    items: [
+      { text: 'New sidebar, breadcrumbs, design system, and dark mode.' },
+      {
+        text: "Dashboards per role. Students see what's due, TAs get a queue and throughput, admins get assignment health and at-risk students.",
+      },
+      { text: 'Repo analytics: commit activity and contribution health per student, with a deep dive from the grading table.' },
+      { text: 'An in-app notification bell, with email preferences.' },
+    ],
+  },
+  {
+    month: 'March 2026',
+    items: [
+      { text: 'Owners can unpublish assignments.' },
+      { text: 'Late overrides are now respected in the student view.' },
+    ],
+  },
+  {
+    month: 'February 2026',
+    title: 'Classmoji is public',
+    items: [
+      { text: 'The first public release, rebuilt from the ground up on react-router-7.' },
+      { text: 'A setup wizard configures your Github App for you.' },
+      { text: 'Slides gained sections, and students got a way to navigate them.' },
+      {
+        text: 'Instructor and contributor docs.',
+        link: { label: 'Getting started', href: '/docs/introduction/getting-started' },
+      },
+    ],
+  },
+];
+
+// Oldest first: a story reads forward.
+const eras: Era[] = [
+  {
+    version: 'v0',
+    title: 'The scripts',
+    when: '2021',
+    items: [
+      'A command line tool for creating student repos',
+      'Assign students and graders to repos without leaving the terminal',
+      'Emoji grades, read straight from the feedback PR description. The name stuck.',
+    ],
+  },
+  {
+    version: 'v1',
+    title: 'The first web version',
+    when: '2023',
+    items: [
+      'The CLI grew a web interface',
+      'Github was the whole backend. No database, everything through the GraphQL API.',
+    ],
+  },
+  {
+    version: 'v2',
+    title: 'The rewrite',
+    when: '2024–2025',
+    items: [
+      'Rebuilt from scratch on react-router-7, this time with a real database',
+      'Quizzes with AI grading, slides, and pages',
+      'A setup wizard that configures your Github App',
+      'Made public in February 2026',
+    ],
+  },
+];
+
+const slugify = (value: string) => value.toLowerCase().replace(/\s+/g, '-');
+
+// Header is fixed, so anchors need to clear it. Keep in sync with `scroll-mt-28` below.
+const navItems = [
+  ...entries.map(entry => ({ id: slugify(entry.month), label: entry.month })),
+  { id: 'how-we-got-here', label: 'How we got here' },
+];
 ---
 
 <Layout title="Changelog - Classmoji" description="What's new in Classmoji: features, improvements, and fixes.">
   <Header />
 
   <section class="px-6 pt-32 pb-20">
-    <div class="max-w-3xl mx-auto">
+    <div class="max-w-5xl mx-auto lg:grid lg:grid-cols-[minmax(0,1fr)_11rem] lg:gap-16">
+      <div>
       <h1 class="text-4xl md:text-5xl font-bold text-gray-900 mb-3">Changelog</h1>
-      <p class="text-lg text-gray-600 mb-10">New features, improvements, and fixes.</p>
+      <p class="text-lg text-gray-600 mb-12">New features, improvements, and fixes.</p>
 
       {
         entries.length === 0 ? (
@@ -24,33 +159,143 @@ const entries = [];
             <p class="text-sm text-gray-500 mt-1">Check back soon for the latest updates.</p>
           </div>
         ) : (
-          <ul class="space-y-4">
+          <div class="space-y-12">
             {entries.map(entry => (
-              <li class="rounded-2xl ring-1 ring-gray-200 p-6">
-                <div class="flex items-center gap-3 mb-2">
-                  <span class="text-xs font-semibold uppercase tracking-wide text-primary">
-                    {entry.version}
-                  </span>
-                  <span class="text-sm text-gray-500">{entry.date}</span>
+              <article>
+                <div class="flex flex-wrap items-baseline gap-x-3 gap-y-1 mb-4">
+                  <h2 id={slugify(entry.month)} class="scroll-mt-28 text-xl font-semibold text-gray-900">
+                    {entry.month}
+                  </h2>
+                  {entry.title && <span class="text-sm text-gray-500">{entry.title}</span>}
                 </div>
-                <h2 class="text-lg font-semibold text-gray-900">{entry.title}</h2>
-                <p class="text-sm text-gray-600 mt-1">{entry.description}</p>
-                {entry.tags && (
-                  <div class="flex flex-wrap gap-2 mt-3">
-                    {entry.tags.map(tag => (
-                      <span class="text-xs font-medium text-gray-600 bg-gray-100 rounded-full px-2.5 py-0.5">
-                        {tag}
+                <ul class="space-y-3">
+                  {entry.items.map(item => (
+                    <li class="flex gap-3 text-base text-gray-700 leading-relaxed">
+                      <span class="text-gray-400 select-none shrink-0" aria-hidden="true">
+                        &bull;
                       </span>
-                    ))}
-                  </div>
-                )}
-              </li>
+                      <span>
+                        {item.text}
+                        {item.link && (
+                          <>
+                            {' '}
+                            <a
+                              href={item.link.href}
+                              class="font-medium text-primary underline underline-offset-2 hover:no-underline"
+                            >
+                              {item.link.label}
+                            </a>
+                          </>
+                        )}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              </article>
             ))}
-          </ul>
+          </div>
         )
       }
+
+      <div class="border-t border-gray-200 mt-16 pt-12">
+        <h2 id="how-we-got-here" class="scroll-mt-28 text-xl font-semibold text-gray-900 mb-2">
+          How we got here
+        </h2>
+        <p class="text-sm text-gray-500 mb-8">
+          Classmoji before it was Classmoji. Everything above is v3.
+        </p>
+
+        <div class="space-y-12">
+          {
+            eras.map(era => (
+              <div>
+                <div class="flex flex-wrap items-baseline gap-x-3 gap-y-1 mb-4">
+                  <span class="text-xs font-semibold uppercase tracking-wide text-primary">
+                    {era.version}
+                  </span>
+                  <h3 class="text-lg font-semibold text-gray-900">{era.title}</h3>
+                  {era.when && <span class="text-sm text-gray-500">{era.when}</span>}
+                </div>
+                <ul class="space-y-3">
+                  {era.items.map(item => (
+                    <li class="flex gap-3 text-base text-gray-700 leading-relaxed">
+                      <span class="text-gray-400 select-none shrink-0" aria-hidden="true">
+                        &bull;
+                      </span>
+                      <span>{item}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ))
+          }
+        </div>
+      </div>
+      </div>
+
+      <nav class="hidden lg:block lg:row-start-1 lg:col-start-2" aria-label="On this page" data-changelog-nav>
+        <div class="sticky top-28">
+          <p class="text-xs font-semibold uppercase tracking-wide text-gray-400 mb-3">On this page</p>
+          <ul class="border-l border-gray-200">
+            {
+              navItems.map(item => (
+                <li>
+                  <a
+                    href={`#${item.id}`}
+                    class="block -ml-px border-l-2 border-transparent pl-4 py-1.5 text-sm text-gray-500 hover:text-gray-900 transition-colors"
+                  >
+                    {item.label}
+                  </a>
+                </li>
+              ))
+            }
+          </ul>
+        </div>
+      </nav>
     </div>
   </section>
+
+  <script>
+    const nav = document.querySelector('[data-changelog-nav]');
+    if (nav) {
+      const links = [...nav.querySelectorAll<HTMLAnchorElement>('a[href^="#"]')];
+
+      const headings = links
+        .map(link => document.querySelector(link.hash))
+        .filter((el): el is Element => el !== null);
+
+      const setActive = (id: string) => {
+        for (const link of links) {
+          const on = link.hash === `#${id}`;
+          link.classList.toggle('border-primary', on);
+          link.classList.toggle('text-gray-900', on);
+          link.classList.toggle('font-medium', on);
+          link.classList.toggle('text-gray-500', !on);
+        }
+      };
+
+      // Highlight the topmost heading that has scrolled into the upper band of
+      // the viewport. Without the bottom margin, short trailing sections never win.
+      const observer = new IntersectionObserver(
+        () => {
+          const current = headings
+            .map(el => ({ el, top: el.getBoundingClientRect().top }))
+            .filter(({ top }) => top < 160)
+            .pop();
+          if (current) setActive(current.el.id);
+        },
+        { rootMargin: '-120px 0px -60% 0px', threshold: [0, 1] }
+      );
+
+      for (const heading of headings) observer.observe(heading);
+    }
+  </script>
+
+  <style>
+    html {
+      scroll-behavior: smooth;
+    }
+  </style>
 
   <Footer />
 </Layout>
