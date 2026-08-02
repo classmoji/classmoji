@@ -24,7 +24,7 @@ vi.mock('@classmoji/database', () => ({
 const putMock = vi.fn();
 const uploadBatchMock = vi.fn();
 
-vi.mock('@classmoji/content', () => ({
+vi.mock('../../content/ContentService.ts', () => ({
   ContentService: {
     put: (...args: unknown[]) => putMock(...args),
     uploadBatch: (...args: unknown[]) => uploadBatchMock(...args),

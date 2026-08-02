@@ -1,6 +1,6 @@
 import getPrisma from '@classmoji/database';
-import { titleToIdentifier } from '@classmoji/utils';
-import { ContentService } from '@classmoji/content';
+import { titleToIdentifier, classroomContentRepoName } from '@classmoji/utils';
+import { ContentService } from '../content/ContentService.ts';
 import { getGitProvider } from '../git/index.ts';
 import * as contentManifestService from './contentManifest.service.ts';
 import * as notificationService from './notification.service.ts';
@@ -110,7 +110,10 @@ async function resolveContentRepo(classroomId: string) {
   return {
     classroom,
     gitOrgLogin,
-    repoName: `content-${gitOrgLogin}-${classroom.content_namespace}`,
+    repoName: classroomContentRepoName({
+      login: gitOrgLogin,
+      namespace: classroom.content_namespace,
+    }),
   };
 }
 
@@ -519,7 +522,10 @@ export async function deletePage(pageId: string) {
 
   // Delete from GitHub if configured
   if (gitOrgLogin && page.content_path) {
-    const repoName = `content-${gitOrgLogin}-${page.classroom.content_namespace}`;
+    const repoName = classroomContentRepoName({
+      login: gitOrgLogin,
+      namespace: page.classroom.content_namespace,
+    });
 
     try {
       await ContentService.deleteFolder({
