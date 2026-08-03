@@ -1,5 +1,6 @@
 import { redirect } from 'react-router';
 import { ClassmojiService, getAuthSession } from '~/utils/db.server.ts';
+import { pageMutationBlocked } from '~/utils/auth.server.ts';
 import {
   loadPageContent,
   savePageContent,
@@ -101,14 +102,21 @@ export const loader = async ({
   // Staff asked for a preview but no branch exists → render main with a notice.
   const previewMissing = Boolean(canEdit && wantsPreview && !previewStatus?.exists);
 
-  // Load content from GitHub (page includes classroom.git_organization via includeClassroom)
+  // Load content from GitHub (page includes classroom.git_organization via
+  // includeClassroom). Staff loads bypass the 60s per-process cache: for
+  // canEdit users this read IS the edit surface (the editor mounts inline) and
+  // seeds the save conflict token, so a cached read on another Fly instance
+  // could silently revert an MCP write (4b parity with slides). It also keeps
+  // the post-accept redirect (`?notice=preview-accepted`, staff-only) from
+  // showing pre-accept cached content under the success toast.
   const {
     format,
     content,
     coverImage: jsonCoverImage,
+    sha: contentFileSha,
   } = await loadPageContent(
     pageForContent,
-    previewActive ? { ref: previewBranch, skipCache: true } : {}
+    previewActive ? { ref: previewBranch, skipCache: true } : { skipCache: canEdit }
   );
 
   let viewerContent: unknown;
@@ -174,6 +182,12 @@ export const loader = async ({
     userRole,
     canEdit,
     notice,
+    // Conflict token (F2, 4b parity with slides): content.json's blob sha,
+    // echoed back by the editor on every save so the action can 409 instead
+    // of clobbering a concurrent write. null = no content.json yet (fresh or
+    // legacy-HTML page) → the first save creates it without a precondition.
+    // Editor-only: null for non-editors and in read-only preview mode.
+    contentSha: canEdit && !previewActive && format === 'json' ? contentFileSha : null,
     // Preview state is staff-only; students/anonymous always get null.
     preview: canEdit
       ? {
@@ -221,10 +235,15 @@ export const action = async ({
     authData.userId
   );
 
-  const canEdit = membership && ['OWNER', 'TEACHER'].includes(membership.role);
-  if (!canEdit) {
+  if (!membership || !['OWNER', 'TEACHER'].includes(membership.role)) {
     return Response.json({ error: 'Unauthorized' }, { status: 403 });
   }
+
+  // SEC4: every intent this action handles mutates (GitHub content, preview
+  // branches, or page rows) — enforce the platform-wide classroom status gate
+  // (owners always may mutate; LOCKED/UNPUBLISHED are read-only for others).
+  const blocked = pageMutationBlocked(page.classroom, membership.role);
+  if (blocked) return blocked;
 
   // Support both JSON and multipart form data (for file uploads)
   const contentType = request.headers.get('content-type') || '';
@@ -241,12 +260,45 @@ export const action = async ({
   if (intent === 'save') {
     try {
       const blocks = JSON.parse(data.content as string);
-      await savePageContent(actionPage, blocks);
+
+      // F2 (4b parity with slides): optimistic-lock the write on the
+      // content.json sha the editor loaded (loader / previous save response).
+      const expectedSha =
+        typeof data.content_sha === 'string' && data.content_sha ? data.content_sha : null;
+
+      if (!expectedSha) {
+        // Token-less save. Legit only when content.json doesn't exist yet
+        // (fresh or legacy-HTML page — the loader handed out a null token).
+        // If the file EXISTS, this is a stale pre-token client bundle (or the
+        // file appeared since the editor loaded, e.g. an MCP apply): reject
+        // rather than silently clobber. Fresh existence check — the 60s cache
+        // must not vouch for absence.
+        const existing = await loadPageContent(actionPage, { skipCache: true });
+        if (existing.format === 'json') {
+          return Response.json(
+            { conflict: true, message: 'This page changed since you opened it.' },
+            { status: 409 }
+          );
+        }
+      }
+
+      const { sha } = await savePageContent(actionPage, blocks, {
+        ...(expectedSha ? { expectedSha } : {}),
+      });
       await ClassmojiService.page.quickUpdate(pageId, {
         updated_at: new Date(),
       });
-      return Response.json({ success: true });
+      // Return the new sha — the editor's conflict token for its next save.
+      return Response.json({ success: true, sha });
     } catch (error: unknown) {
+      if ((error as { status?: number } | null)?.status === 409) {
+        // Someone (another editor, an MCP apply) changed content.json since
+        // this editor loaded it. Nothing was written.
+        return Response.json(
+          { conflict: true, message: 'This page changed since you opened it.' },
+          { status: 409 }
+        );
+      }
       console.error('Failed to save page:', error);
       return Response.json(
         { error: error instanceof Error ? error.message : 'Unknown error' },
@@ -334,6 +386,14 @@ export const action = async ({
       });
       return Response.json({ success: true });
     } catch (error: unknown) {
+      if ((error as { status?: number } | null)?.status === 409) {
+        // F5: savePageCoverImage's CAS write lost to a concurrent content
+        // edit — nothing was written, and retrying re-reads fresh content.
+        return Response.json(
+          { error: 'This page changed while updating the cover image — please try again.' },
+          { status: 409 }
+        );
+      }
       return Response.json(
         { error: error instanceof Error ? error.message : 'Unknown error' },
         { status: 500 }
@@ -354,6 +414,14 @@ export const action = async ({
       });
       return Response.json({ success: true, url });
     } catch (error: unknown) {
+      if ((error as { status?: number } | null)?.status === 409) {
+        // F5: the asset uploaded fine, but the cover-image metadata write
+        // lost to a concurrent content edit. Retrying is safe and cheap.
+        return Response.json(
+          { error: 'This page changed while updating the cover image — please try again.' },
+          { status: 409 }
+        );
+      }
       console.error('Failed to upload header image:', error);
       return Response.json(
         { error: error instanceof Error ? error.message : 'Unknown error' },

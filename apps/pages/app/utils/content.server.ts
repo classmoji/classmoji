@@ -21,51 +21,69 @@ interface PageContentResult {
   format: 'json' | 'html' | 'none';
   content: unknown;
   coverImage: CoverImage | null;
+  /**
+   * Git blob sha of the file the content came from (content.json for 'json',
+   * index.html for 'html', null for 'none'). Only the 'json' sha may be used
+   * as an expectedSha for saves — saves write content.json, never index.html.
+   */
+  sha: string | null;
 }
 
 /**
  * Load page content from GitHub.
  * Tries JSON first (BlockNote format), falls back to HTML (legacy).
  * Preserves this app's historical { format, content, coverImage } shape
- * (the service returns the blocks under `blocks`, plus the file sha).
+ * (the service returns the blocks under `blocks`), plus the file sha for
+ * conflict tokens.
  *
  * @param options.ref - Git ref to read from (e.g. the page's preview branch).
- * @param options.skipCache - Bypass the 60s ContentService cache.
+ * @param options.skipCache - Bypass the 60s ContentService cache (sha-bearing
+ *   reads that seed an expectedSha MUST pass true).
  */
 export async function loadPageContent(
   page: PageForContent,
   options: { ref?: string; skipCache?: boolean } = {}
 ): Promise<PageContentResult> {
-  const { format, blocks, coverImage } = await ClassmojiService.pageContent.loadPageContent(
+  const { format, blocks, coverImage, sha } = await ClassmojiService.pageContent.loadPageContent(
     page,
     options
   );
-  return { format, content: blocks, coverImage };
+  return { format, content: blocks, coverImage, sha };
 }
 
 /**
  * Save BlockNote JSON content to GitHub (wrapper format { blocks, coverImage? }).
  * When coverImage is not provided, the service preserves the existing one.
  * Does NOT delete the legacy index.html — keeps for backward compatibility.
+ *
+ * @param options.expectedSha - Optimistic-lock sha of content.json; a
+ *   concurrent write throws an error with status 409 instead of clobbering.
+ * @returns The new content.json sha (the caller's next conflict token) and
+ *   commit sha.
  */
 export async function savePageContent(
   page: PageForContent,
   blocks: unknown,
-  coverImage: CoverImage | null | undefined = undefined
-): Promise<void> {
-  await ClassmojiService.pageContent.savePageContent(page, blocks, { coverImage });
+  options: { coverImage?: CoverImage | null; expectedSha?: string } = {}
+): Promise<{ sha: string; commit: string }> {
+  return ClassmojiService.pageContent.savePageContent(page, blocks, options);
 }
 
 /**
  * Save only the cover image metadata to content.json without requiring editor
  * blocks. Loads the current content, migrating legacy HTML to BlockNote JSON
  * so it isn't lost when content.json is first created.
+ *
+ * F5: this is a read-modify-write of the whole file — the read bypasses the
+ * 60s cache and the write is CAS'd on the read's sha, so a cover-image change
+ * can never revert content edits that landed in between (throws status 409
+ * instead; callers surface "page changed — try again").
  */
 export async function savePageCoverImage(
   page: PageForContent,
   coverImage: CoverImage | null
 ): Promise<void> {
-  const { format, content } = await loadPageContent(page);
+  const { format, content, sha } = await loadPageContent(page, { skipCache: true });
 
   let currentBlocks: unknown;
   if (format === 'json') {
@@ -79,7 +97,12 @@ export async function savePageCoverImage(
     currentBlocks = [{ type: 'paragraph', content: [] }];
   }
 
-  await savePageContent(page, currentBlocks, coverImage);
+  await savePageContent(page, currentBlocks, {
+    coverImage,
+    // Only content.json's own sha is a valid precondition — the 'html'
+    // fallback sha belongs to index.html, a different file than this write.
+    ...(format === 'json' && sha ? { expectedSha: sha } : {}),
+  });
 }
 
 /**
