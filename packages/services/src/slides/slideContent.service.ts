@@ -203,14 +203,12 @@ export interface SaveDeckResult {
  * Every check uses getMeta(skipCache: true) — caches are per-process and
  * cross-instance invalidation does not exist, so skipCache is REQUIRED.
  *
- * CAS note: uploadBatch has no per-file precondition, so the expected sha is
- * re-verified via getMeta(skipCache) immediately before the batch call. A
- * residual race window remains between that check and the batch's ref update:
- * a concurrent commit landing inside it (or during uploadBatch's internal
- * not-a-fast-forward retries) can be clobbered. Closing it fully requires a
- * per-attempt hook inside ContentService.uploadBatch's gitOperation retry loop
- * (compare the base tree's blob sha to expectedSha on every attempt) —
- * ContentService exposes no such hook today; tracked as a follow-up.
+ * CAS note: the pre-check above gives fast, readable 409s, but the real
+ * guarantee is uploadBatch's `verifyBaseTree` hook — the expected sha is
+ * re-verified against EVERY retry attempt's base commit inside the git
+ * operation, so a concurrent commit (including one landing during an internal
+ * not-a-fast-forward retry) always surfaces as a DeckConflictError instead of
+ * being clobbered. Batch writes are a true compare-and-swap.
  *
  * @throws {DeckConflictError} on any conflict row above (status 409).
  */
@@ -295,6 +293,32 @@ export async function saveDeck({
     files,
     branch: targetBranch,
     message,
+    // True CAS: re-verify the expected sha against EVERY retry attempt's base
+    // commit, so a ref race can never retry past (and clobber) a concurrent
+    // save. Mirrors the pre-check's 2×2 table rows for the sha we hold.
+    verifyBaseTree: expectedSha
+      ? async ({ getFileSha }) => {
+          if (shaSource === 'deck') {
+            const current = await getFileSha(deckPath);
+            if (current !== expectedSha) {
+              throw new DeckConflictError('Deck changed since it was read — re-read before saving');
+            }
+          } else {
+            const [currentDeck, currentHtml] = await Promise.all([
+              getFileSha(deckPath),
+              getFileSha(htmlPath),
+            ]);
+            if (currentDeck !== null) {
+              throw new DeckConflictError(
+                'deck.json was created since this deck was read — re-read before saving'
+              );
+            }
+            if (currentHtml !== expectedSha) {
+              throw new DeckConflictError('Slide HTML changed since it was read — re-read before saving');
+            }
+          }
+        }
+      : undefined,
   });
 
   const newDeckSha = result.files.find(f => f.path === deckPath)?.sha;

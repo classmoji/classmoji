@@ -959,6 +959,7 @@ export class ContentService {
     branch = 'main',
     message,
     onProgress,
+    verifyBaseTree,
   }: {
     gitOrganization?: GitOrganizationRecord;
     orgLogin?: string;
@@ -971,6 +972,17 @@ export class ContentService {
       total: number;
       filename: string | undefined;
     }) => void;
+    /**
+     * Optimistic-concurrency hook, run on EVERY retry attempt against the
+     * commit the new tree will be based on. `getFileSha(path)` returns the
+     * blob sha of `path` at that base commit (null if absent). Throw to abort
+     * the write — unlike put(), the Trees API has no per-file precondition and
+     * #withGitRetry would otherwise retry PAST a concurrent commit, so this is
+     * the only way to make batch writes a true compare-and-swap.
+     */
+    verifyBaseTree?: (ctx: {
+      getFileSha: (path: string) => Promise<string | null>;
+    }) => Promise<void>;
   }): Promise<{
     commit: string;
     filesUploaded: number;
@@ -1020,6 +1032,26 @@ export class ContentService {
         ref: `heads/${branch}`,
       });
       const currentCommitSha = refData.object.sha;
+
+      // Optimistic-concurrency check against THIS attempt's base commit —
+      // must re-run per retry or a retry would silently clobber the very
+      // concurrent commit that caused the ref race.
+      if (verifyBaseTree) {
+        await verifyBaseTree({
+          getFileSha: async (path: string) => {
+            try {
+              const { data } = await octokit.request(
+                'GET /repos/{owner}/{repo}/contents/{path}',
+                { owner: resolvedOrg.login, repo, path, ref: currentCommitSha }
+              );
+              return Array.isArray(data) ? null : (data.sha ?? null);
+            } catch (error) {
+              if ((error as { status?: number }).status === 404) return null;
+              throw error;
+            }
+          },
+        });
+      }
 
       // Step 3: Get the tree SHA from the current commit
       const { data: commitData } = await octokit.request(
