@@ -315,6 +315,19 @@ export const action = async ({
     try {
       const result = await ClassmojiService.pageContent.acceptPreview(actionPage);
       if (result.merged) {
+        // Settle guard: GitHub's Contents API lags a merge by ~1-2s, so an
+        // immediate redirect can render pre-accept content under an
+        // "accepted" toast (with a stale pending-preview banner to match).
+        // We know the merged sha — wait (bounded) until reads serve it.
+        if (result.sha) {
+          for (let attempt = 0; attempt < 5; attempt++) {
+            const fresh = await ClassmojiService.pageContent.loadPageContent(actionPage, {
+              skipCache: true,
+            });
+            if (fresh.sha === result.sha) break;
+            await new Promise(r => setTimeout(r, 700));
+          }
+        }
         return redirect(`/${page.classroom.slug}/${pageId}?notice=preview-accepted`);
       }
       // Merge conflict — nothing merged, branch kept. Surface the per-unit
