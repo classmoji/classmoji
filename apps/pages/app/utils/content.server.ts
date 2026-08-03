@@ -28,9 +28,18 @@ interface PageContentResult {
  * Tries JSON first (BlockNote format), falls back to HTML (legacy).
  * Preserves this app's historical { format, content, coverImage } shape
  * (the service returns the blocks under `blocks`, plus the file sha).
+ *
+ * @param options.ref - Git ref to read from (e.g. the page's preview branch).
+ * @param options.skipCache - Bypass the 60s ContentService cache.
  */
-export async function loadPageContent(page: PageForContent): Promise<PageContentResult> {
-  const { format, blocks, coverImage } = await ClassmojiService.pageContent.loadPageContent(page);
+export async function loadPageContent(
+  page: PageForContent,
+  options: { ref?: string; skipCache?: boolean } = {}
+): Promise<PageContentResult> {
+  const { format, blocks, coverImage } = await ClassmojiService.pageContent.loadPageContent(
+    page,
+    options
+  );
   return { format, content: blocks, coverImage };
 }
 

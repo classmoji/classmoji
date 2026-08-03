@@ -1,9 +1,15 @@
 import { useLoaderData, useFetcher, useOutletContext } from 'react-router';
 import { useState, useEffect, useRef, useCallback, lazy, Suspense } from 'react';
 import { IconPhoto } from '@tabler/icons-react';
+import { toast } from 'react-toastify';
 
 import Header from '~/components/layout/Header.tsx';
 import HeaderImage from '~/components/editor/HeaderImage.tsx';
+import {
+  PreviewBar,
+  PendingPreviewBanner,
+  NoPreviewNotice,
+} from '~/components/preview/PreviewControls.tsx';
 
 const PageEditor = lazy(() => import('~/components/editor/PageEditor.tsx'));
 const BlockNoteViewer = lazy(() => import('~/components/viewer/BlockNoteViewer.tsx'));
@@ -20,10 +26,21 @@ const widthClasses: Record<number, string> = {
 };
 
 const PageRoute = () => {
-  const { page, classroom, content, coverImage, canEdit } =
-    useLoaderData<typeof import('./route.server.ts').loader>();
+  const {
+    page,
+    classroom,
+    content,
+    coverImage,
+    canEdit: canEditRole,
+    preview,
+    notice,
+  } = useLoaderData<typeof import('./route.server.ts').loader>();
   const outletContext = useOutletContext<{ isEmbedded?: boolean }>();
   const isEmbedded = outletContext?.isEmbedded || false;
+  // Preview mode is strictly read-only — editing chrome is suppressed while
+  // rendering the pending preview branch (plan §3b).
+  const isPreview = Boolean(preview?.active);
+  const canEdit = canEditRole && !isPreview;
   const widthClass = widthClasses[page.width] || 'max-w-4xl';
   const editorRef = useRef<{ getContent: () => unknown } | null>(null);
   const fetcher = useFetcher();
@@ -85,6 +102,20 @@ const PageRoute = () => {
     setTitleValue(page.title || 'Untitled');
     setIsEditingTitle(false);
   }, [page.id, page.title]);
+
+  // Post-accept/discard success notice (round-tripped via redirect param)
+  useEffect(() => {
+    if (!notice) return;
+    if (notice === 'preview-accepted') {
+      toast.success('Preview accepted — changes are now live.');
+    } else if (notice === 'preview-discarded') {
+      toast.success('Preview discarded.');
+    }
+    // Strip the param so a refresh doesn't re-toast
+    const url = new URL(window.location.href);
+    url.searchParams.delete('notice');
+    window.history.replaceState({}, '', url);
+  }, [notice]);
 
   // Initialize lastSavedContent on mount
   useEffect(() => {
@@ -166,6 +197,11 @@ const PageRoute = () => {
           onSave={canEdit ? handleSave : undefined}
         />
       )}
+
+      {/* Preview-branch chrome (staff only — `preview` is null otherwise) */}
+      {preview?.active && <PreviewBar preview={preview} isEmbedded={isEmbedded} />}
+      {preview?.missing && <NoPreviewNotice />}
+      {preview && !preview.active && preview.exists && <PendingPreviewBanner preview={preview} />}
 
       {coverImage?.url && (
         <HeaderImage

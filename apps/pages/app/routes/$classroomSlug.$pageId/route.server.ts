@@ -1,3 +1,4 @@
+import { redirect } from 'react-router';
 import { ClassmojiService, getAuthSession } from '~/utils/db.server.ts';
 import {
   loadPageContent,
@@ -65,9 +66,50 @@ export const loader = async ({
     throw new Response('Page is not public', { status: 403 });
   }
 
-  // Load content from GitHub (page includes classroom.git_organization via includeClassroom)
   const pageForContent = page as unknown as PageForContent;
-  const { format, content, coverImage: jsonCoverImage } = await loadPageContent(pageForContent);
+
+  // ── Preview branches (plan §3b) ────────────────────────────────────────────
+  // `?preview=1` renders the singleton `preview/<content_path>` branch instead
+  // of main. Staff-gated: non-staff viewers never pay the GitHub status call
+  // and the param is silently ignored for them.
+  const url = new URL(request.url);
+  const wantsPreview = url.searchParams.get('preview') === '1';
+  // Post-accept/discard success notice, round-tripped via redirect (staff only).
+  const rawNotice = url.searchParams.get('notice');
+  const notice =
+    canEdit && (rawNotice === 'preview-accepted' || rawNotice === 'preview-discarded')
+      ? rawNotice
+      : null;
+
+  let previewStatus: {
+    exists: boolean;
+    commits_ahead?: number;
+    oldest_commit_at?: string;
+  } | null = null;
+  if (canEdit) {
+    try {
+      previewStatus = await ClassmojiService.pageContent.getPreviewStatus(pageForContent);
+    } catch (err) {
+      // A GitHub hiccup must not 500 the page — degrade to "no preview".
+      console.error('[pages] Failed to check preview status:', err);
+      previewStatus = { exists: false };
+    }
+  }
+
+  const previewBranch = ClassmojiService.pageContent.previewBranchName(page.content_path);
+  const previewActive = Boolean(canEdit && wantsPreview && previewStatus?.exists);
+  // Staff asked for a preview but no branch exists → render main with a notice.
+  const previewMissing = Boolean(canEdit && wantsPreview && !previewStatus?.exists);
+
+  // Load content from GitHub (page includes classroom.git_organization via includeClassroom)
+  const {
+    format,
+    content,
+    coverImage: jsonCoverImage,
+  } = await loadPageContent(
+    pageForContent,
+    previewActive ? { ref: previewBranch, skipCache: true } : {}
+  );
 
   let viewerContent: unknown;
 
@@ -97,6 +139,13 @@ export const loader = async ({
   const repoName =
     contentNamespace && gitOrg?.login ? `content-${gitOrg.login}-${contentNamespace}` : null;
 
+  // GitHub's free diff UI for the pending preview (branch segment URL-encoded —
+  // preview branch names contain slashes).
+  const diffUrl =
+    gitOrg?.login && repoName
+      ? `https://github.com/${gitOrg.login}/${repoName}/compare/main...${encodeURIComponent(previewBranch)}`
+      : null;
+
   return {
     page: {
       id: page.id,
@@ -124,6 +173,18 @@ export const loader = async ({
     coverImage,
     userRole,
     canEdit,
+    notice,
+    // Preview state is staff-only; students/anonymous always get null.
+    preview: canEdit
+      ? {
+          active: previewActive,
+          missing: previewMissing,
+          exists: Boolean(previewStatus?.exists),
+          commitsAhead: previewStatus?.commits_ahead ?? 0,
+          oldestCommitAt: previewStatus?.oldest_commit_at ?? null,
+          diffUrl,
+        }
+      : null,
   };
 };
 
@@ -187,6 +248,41 @@ export const action = async ({
       return Response.json({ success: true });
     } catch (error: unknown) {
       console.error('Failed to save page:', error);
+      return Response.json(
+        { error: error instanceof Error ? error.message : 'Unknown error' },
+        { status: 500 }
+      );
+    }
+  }
+
+  // ── Preview lifecycle (plan §3b) ───────────────────────────────────────────
+  // Staff-gated by the shared canEdit check above (same gate as every edit
+  // intent). Accept merges the preview branch into main; discard deletes it.
+
+  if (intent === 'preview-accept') {
+    try {
+      const result = await ClassmojiService.pageContent.acceptPreview(actionPage);
+      if (result.merged) {
+        return redirect(`/${page.classroom.slug}/${pageId}?notice=preview-accepted`);
+      }
+      // Merge conflict — nothing merged, branch kept. Surface the per-unit
+      // report so the UI can list the conflicted blocks.
+      return Response.json({ conflict: true, units: result.units }, { status: 409 });
+    } catch (error: unknown) {
+      console.error('Failed to accept preview:', error);
+      return Response.json(
+        { error: error instanceof Error ? error.message : 'Unknown error' },
+        { status: 500 }
+      );
+    }
+  }
+
+  if (intent === 'preview-discard') {
+    try {
+      await ClassmojiService.pageContent.discardPreview(actionPage);
+      return redirect(`/${page.classroom.slug}/${pageId}?notice=preview-discarded`);
+    } catch (error: unknown) {
+      console.error('Failed to discard preview:', error);
       return Response.json(
         { error: error instanceof Error ? error.message : 'Unknown error' },
         { status: 500 }

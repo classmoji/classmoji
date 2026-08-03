@@ -9,7 +9,11 @@
     "pages:build": "react-router build",
     "pages:start": "NODE_ENV=production node --experimental-strip-types server.ts",
     "lint": "eslint .",
-    "lint:fix": "eslint . --fix"
+    "lint:fix": "eslint . --fix",
+    "test": "playwright test",
+    "test:ui": "playwright test --ui",
+    "test:headed": "playwright test --headed",
+    "test:debug": "playwright test --debug"
   },
   "dependencies": {
     "@blocknote/code-block": "^0.46.2",
@@ -46,6 +50,7 @@
     "zustand": "^5.0.5"
   },
   "devDependencies": {
+    "@playwright/test": "^1.57.0",
     "@react-router/dev": "^7.9.2",
     "@react-router/fs-routes": "^7.9.2",
     "@tailwindcss/vite": "^4.1.18",
