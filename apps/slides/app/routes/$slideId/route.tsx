@@ -1,10 +1,21 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
-import { useLoaderData, useFetcher } from 'react-router';
+import { useLoaderData, useFetcher, data } from 'react-router';
 import { message, Tooltip, Popconfirm } from 'antd';
 import getPrisma from '@classmoji/database';
 import { ContentService } from '@classmoji/content';
 import { assertSlideAccess } from '@classmoji/auth/server';
 import { ClassmojiService } from '@classmoji/services';
+import {
+  DeckConflictError,
+  DeckParseError,
+  loadDeck,
+  parseSlidesFragment,
+  saveDeck,
+  slideService,
+  type DeckJson,
+  type DeckShaSource,
+  type DeckThemeUrls,
+} from '@classmoji/services/slides';
 import { SandpackRenderer } from '@classmoji/ui-components/sandpack';
 import { useUser } from '~/hooks';
 import { fetchContent } from '~/utils/contentProxy';
@@ -91,21 +102,52 @@ export const loader = async ({
   let usedApiFallback = false;
   let contentResult: { content: string | Buffer; source: string } | null = null;
 
+  // Conflict token for the editor (Phase 4b): the sha of the deck's SOURCE OF
+  // TRUTH — deck.json once it exists (materialized by the first dual-write
+  // save), else the legacy index.html. Content rendering stays index.html-first
+  // (the loader flip is Phase 4c); only the token is deck-aware.
+  let contentSha: string | null = null;
+  let shaSource: DeckShaSource = 'legacy_html';
+
   if (mode === 'edit') {
-    // API-first for edit mode - ensures fresh content after saves
+    // API-first for edit mode - ensures fresh content after saves.
+    // skipCache: this read seeds the conflict token — it must not serve the
+    // per-process 60s cache (cross-instance invalidation does not exist).
     try {
       const result = await ContentService.getContent({
         orgLogin: gitOrgLogin,
         repo,
         path: filePath,
+        skipCache: true,
       });
       if (result) {
         contentResult = { content: result.content, source: 'api' };
+        contentSha = result.sha;
       }
     } catch (e: unknown) {
       // Fall back to CDN if API fails
       const message = e instanceof Error ? e.message : String(e);
       console.log('[Loader] API fetch failed, falling back to CDN:', message);
+    }
+
+    // deck.json's sha supersedes the index.html sha as the conflict token —
+    // after the first dual-write save the deck is the source of truth, and a
+    // legacy_html token would 409 on every save (§3 crossover row).
+    try {
+      const deckMeta = await ContentService.getMeta({
+        orgLogin: gitOrgLogin,
+        repo,
+        path: `${slide.content_path}/deck.json`,
+        skipCache: true,
+      });
+      if (deckMeta) {
+        contentSha = deckMeta.sha;
+        shaSource = 'deck';
+      }
+    } catch (e: unknown) {
+      // Keep the legacy token; a stale token surfaces as a save-time 409, not data loss.
+      const message = e instanceof Error ? e.message : String(e);
+      console.warn('[Loader] deck.json meta check failed, keeping legacy token:', message);
     }
   }
 
@@ -188,6 +230,11 @@ export const loader = async ({
     autoEdit: mode === 'edit',
     // Indicate if we fell back to API (CDN wasn't available yet)
     usedApiFallback,
+    // Conflict token (edit mode only; null in view mode): sha of the deck's
+    // source of truth + which file it came from. The client echoes it back on
+    // every save so saveDeck can 409 instead of clobbering a concurrent write.
+    content_sha: contentSha,
+    sha_source: shaSource,
     // Return URL for back navigation (from webapp query param)
     returnUrl,
     // Authorization flags from assertSlideAccess
@@ -422,20 +469,46 @@ export const action = async ({
   // Used when entering edit mode to ensure we're editing the current version
   if (intent === 'fetch-latest') {
     try {
+      // skipCache: this read refreshes the editor's conflict token — it must
+      // not serve the per-process 60s cache.
       const result = await ContentService.getContent({
         gitOrganization,
         repo,
         path: filePath,
+        skipCache: true,
       });
 
       if (!result) {
         return { error: 'Content not found' };
       }
 
+      // Conflict token: deck.json's sha once it exists (source of truth after
+      // the first dual-write save), else the legacy index.html sha. Content
+      // itself stays index.html (the deck-first flip is Phase 4c).
+      let contentSha = result.sha;
+      let shaSource: DeckShaSource = 'legacy_html';
+      try {
+        const deckMeta = await ContentService.getMeta({
+          gitOrganization,
+          repo,
+          path: `${slide.content_path}/deck.json`,
+          skipCache: true,
+        });
+        if (deckMeta) {
+          contentSha = deckMeta.sha;
+          shaSource = 'deck';
+        }
+      } catch (metaError: unknown) {
+        // Keep the legacy token; a stale token surfaces as a save-time 409.
+        const message = metaError instanceof Error ? metaError.message : String(metaError);
+        console.warn('[fetch-latest] deck.json meta check failed, keeping legacy token:', message);
+      }
+
       return {
         intent: 'fetch-latest',
         content: result.content,
-        sha: result.sha,
+        content_sha: contentSha,
+        sha_source: shaSource,
       };
     } catch (error: unknown) {
       console.error('Failed to fetch latest content:', error);
@@ -819,59 +892,100 @@ export const action = async ({
     }
   }
 
-  // Save content to GitHub
+  // Save content to GitHub (Phase 4b: dual-write deck.json + regenerated
+  // index.html through saveDeck, with sha-based conflict detection)
   const htmlContent = formData.get('content') as string;
+  // Conflict token echoed back by the client (loader / fetch-latest / prior save).
+  const expectedSha = (formData.get('content_sha') as string | null) || undefined;
+  const shaSource: DeckShaSource = formData.get('sha_source') === 'deck' ? 'deck' : 'legacy_html';
 
   try {
-    // Check if content uses a shared theme (format: shared:theme-name)
-    const themeMatch = htmlContent.match(/data-theme="([^"]+)"/);
-    const theme = themeMatch ? themeMatch[1] : 'white';
-    const codeThemeMatch = htmlContent.match(/data-code-theme="([^"]+)"/);
-    const codeTheme = codeThemeMatch ? codeThemeMatch[1] : 'github';
+    // Parse the editor's posted `<div class="slides">` wrapper into
+    // theme/codeTheme + structured slides (mints/keeps data-cm-ids).
+    const { theme: postedTheme, codeTheme, slides, warnings } = parseSlidesFragment(htmlContent);
+    for (const warning of warnings) {
+      console.warn(`[save] ${warning}`);
+    }
 
-    // Look up shared theme URLs if needed
-    /** @type {{ theme: string, codeTheme: string, libCssUrl?: string, customThemeUrl?: string | null, bodyClasses?: string }} */
-    let themeOptions: {
-      theme: string;
-      codeTheme: string;
-      libCssUrl?: string;
-      customThemeUrl?: string | null;
-      bodyClasses?: string;
-    } = { theme, codeTheme };
+    // Load the current deck server-side to carry the fields the thin editor
+    // wrapper doesn't round-trip: config, customCss, extraCss, dark themes.
+    // (deck.json when present, else a one-time parse of legacy index.html.)
+    let currentDeck: DeckJson | null = null;
+    try {
+      const loaded = await loadDeck(slide, { skipCache: true });
+      currentDeck = loaded.deck;
+    } catch (loadError: unknown) {
+      const loadMessage = loadError instanceof Error ? loadError.message : String(loadError);
+      if (
+        loadError instanceof DeckParseError ||
+        loadMessage.startsWith('Slide content not found')
+      ) {
+        // Unparseable legacy deck (or nothing committed yet): proceed with no
+        // carried fields — exactly what the legacy template-regenerating save
+        // did on every write.
+        console.warn('[save] No current deck to merge from:', loadMessage);
+      } else {
+        // Transient API failure: fail the save rather than silently dropping
+        // the deck's customCss/config on a lossy merge.
+        throw loadError;
+      }
+    }
+
+    // Resolve shared-theme URLs (stays in the action — the engine never calls
+    // services; URLs are caller-resolved, plan §2).
+    let theme = postedTheme;
+    let themeUrls: DeckThemeUrls | undefined;
     if (theme.startsWith('shared:')) {
       const sharedThemeName = theme.replace('shared:', '');
       try {
-        const themeUrls = await getThemeUrls(gitOrgLogin, repo, sharedThemeName);
-        themeOptions = {
-          theme,
-          codeTheme,
-          libCssUrl: themeUrls.libCssUrl,
-          customThemeUrl: themeUrls.customThemeUrl,
-          bodyClasses: themeUrls.bodyClasses,
+        const urls = await getThemeUrls(gitOrgLogin, repo, sharedThemeName);
+        themeUrls = {
+          libCssUrl: urls.libCssUrl,
+          customThemeUrl: urls.customThemeUrl,
+          bodyClasses: urls.bodyClasses,
         };
       } catch (err: unknown) {
         console.error(`Failed to get shared theme URLs for ${sharedThemeName}:`, err);
         // Fall back to default theme if shared theme lookup fails
-        themeOptions = { theme: 'white', codeTheme };
+        theme = 'white';
       }
     }
 
-    // Wrap the slides content in a reveal.js HTML template
-    const fullHtml = generateSlideHtml(htmlContent, slide.title, themeOptions);
+    // Merge rules (plan §5.1, review-hardened): an explicit theme change
+    // clears the paired dark theme (same for codeTheme), and drops
+    // starter-recognized customCss (exact match) so switching a starter deck
+    // to a dark theme doesn't keep #333 headings. All other customCss, the
+    // Reveal config, and extraCss carry over verbatim.
+    const themeChanged = currentDeck != null && theme !== currentDeck.theme;
+    const codeThemeChanged = currentDeck != null && codeTheme !== currentDeck.codeTheme;
+    let customCss = currentDeck?.customCss;
+    if (themeChanged && customCss === slideService.STARTER_CUSTOM_CSS) {
+      customCss = undefined;
+    }
 
-    // Save to GitHub via ContentService
-    const result = await ContentService.put({
-      orgLogin: gitOrgLogin,
-      repo,
-      path: filePath,
-      content: fullHtml,
+    const deck: DeckJson = {
+      version: 1,
+      theme,
+      codeTheme,
+      ...(!themeChanged && currentDeck?.themeDark ? { themeDark: currentDeck.themeDark } : {}),
+      ...(!codeThemeChanged && currentDeck?.codeThemeDark
+        ? { codeThemeDark: currentDeck.codeThemeDark }
+        : {}),
+      ...(currentDeck?.config ? { config: currentDeck.config } : {}),
+      ...(customCss != null ? { customCss } : {}),
+      ...(currentDeck?.extraCss ? { extraCss: currentDeck.extraCss } : {}),
+      slides,
+    };
+
+    // Single choke point: conflict check (§3 2×2 table) → generateDeckHtml →
+    // one atomic commit (deck.json + index.html) → updated_at bump.
+    const result = await saveDeck({
+      slide,
+      deck,
+      expectedSha,
+      shaSource,
       message: `Update slides: ${slide.title}`,
-    });
-
-    // Update the slide's updated_at timestamp
-    await getPrisma().slide.update({
-      where: { id: slideId },
-      data: { updated_at: new Date() },
+      themeUrls,
     });
 
     // Check for orphaned images after save
@@ -881,168 +995,43 @@ export const action = async ({
         orgLogin: gitOrgLogin,
         repo,
         imagesFolder: `${slide.content_path}/images`,
-        htmlContent: fullHtml,
+        htmlContent: result.html,
       });
     } catch (err: unknown) {
       // Don't fail the save if orphan detection fails
       console.error('Failed to detect orphaned images:', err);
     }
 
-    // Return the full HTML so UI can update without waiting for CDN
+    // Return the full HTML so UI can update without waiting for CDN.
+    // sha is the DECK sha (+ sha_source 'deck') — deck.json now exists, so the
+    // client's conflict token must point at it for the next save.
     return {
       success: true,
       sha: result.sha,
-      savedContent: fullHtml,
+      sha_source: 'deck' as const,
+      savedContent: result.html,
       orphanedImages,
     };
   } catch (error: unknown) {
+    if (
+      error instanceof DeckConflictError ||
+      (error instanceof Error && error.name === 'DeckConflictError')
+    ) {
+      // Surfaced by the fetcher as data with a 409 status — the client shows
+      // the "deck changed, reload" prompt instead of a generic save error.
+      return data(
+        {
+          conflict: true,
+          message:
+            'This deck changed since you opened it — reload to get the latest version before saving.',
+        },
+        { status: 409 }
+      );
+    }
     console.error('Failed to save slide:', error);
     return { error: error instanceof Error ? error.message : String(error) };
   }
 };
-
-// Built-in Reveal.js themes
-const BUILTIN_THEMES = [
-  'black',
-  'white',
-  'league',
-  'beige',
-  'night',
-  'serif',
-  'simple',
-  'solarized',
-  'moon',
-  'dracula',
-  'sky',
-  'blood',
-];
-
-// Generate theme stylesheet URL for built-in themes
-/** @param {string} theme */
-function getBuiltinThemeUrl(theme: string) {
-  if (BUILTIN_THEMES.includes(theme)) {
-    return `https://cdn.jsdelivr.net/npm/reveal.js@5.1.0/dist/theme/${theme}.css`;
-  }
-  // Custom CSS themes are relative paths
-  if (theme.startsWith('custom:')) {
-    return null; // Custom themes loaded dynamically by RevealSlides
-  }
-  // Default fallback
-  return `https://cdn.jsdelivr.net/npm/reveal.js@5.1.0/dist/theme/white.css`;
-}
-
-/**
- * Generate a complete reveal.js HTML document
- * @param {string} slidesContent - The slides content with data attributes
- * @param {string} title - The slide title
- * @param {Object} [options] - Theme options
- * @param {string} [options.theme] - Theme name (e.g., 'white', 'shared:my-theme')
- * @param {string} [options.codeTheme] - Code syntax theme (e.g., 'github-dark')
- * @param {string} [options.libCssUrl] - Shared theme lib CSS URL
- * @param {string | null} [options.customThemeUrl] - Shared theme custom CSS URL
- * @param {string} [options.bodyClasses] - Body classes for shared theme
- */
-function generateSlideHtml(
-  slidesContent: string,
-  title: string,
-  options: {
-    theme?: string;
-    codeTheme?: string;
-    libCssUrl?: string | null;
-    customThemeUrl?: string | null;
-    bodyClasses?: string;
-  } = {}
-) {
-  const {
-    theme = 'white',
-    codeTheme = 'github',
-    libCssUrl = null,
-    customThemeUrl = null,
-    bodyClasses = '',
-  } = options;
-
-  // Determine if using shared theme
-  const isSharedTheme = theme.startsWith('shared:');
-  const sharedThemeName = isSharedTheme ? theme.replace('shared:', '') : null;
-
-  // Strip any wrapper div (e.g., <div class="slides"...> or <div class="reveal"...>)
-  let cleanContent = slidesContent;
-  cleanContent = cleanContent
-    .replace(/^<div class="slides"[^>]*>\n?/, '')
-    .replace(/\n?<\/div>$/, '');
-  cleanContent = cleanContent
-    .replace(/^<div class="reveal"[^>]*><div class="slides"[^>]*>\n?/, '')
-    .replace(/\n?<\/div><\/div>$/, '');
-
-  // Build theme CSS links
-  let themeCssLinks = '';
-  if (isSharedTheme && libCssUrl) {
-    // Shared theme from slides.com import
-    themeCssLinks = `
-  <!-- Shared theme lib CSS (fonts, base styles) -->
-  <link rel="stylesheet" href="${libCssUrl}">`;
-    if (customThemeUrl) {
-      themeCssLinks += `
-  <!-- Shared theme custom CSS -->
-  <link rel="stylesheet" href="${customThemeUrl}">`;
-    }
-    // Add override styles for sl-block visibility
-    themeCssLinks += `
-  <style>
-    /* Override slides.com animation system - make all elements visible */
-    .sl-block-content,
-    .sl-block-content[data-animation-type],
-    .sl-block-content[data-animation-type="fade-in"],
-    .sl-block-content[data-animation-type="fade-out"] {
-      opacity: 1 !important;
-      visibility: visible !important;
-      pointer-events: auto !important;
-    }
-  </style>`;
-  } else {
-    // Built-in reveal.js theme
-    const themeUrl = getBuiltinThemeUrl(theme);
-    if (themeUrl) {
-      themeCssLinks = `
-  <!-- Reveal.js theme -->
-  <link rel="stylesheet" href="${themeUrl}">`;
-    }
-  }
-
-  // Code syntax highlighting
-  const codeThemeCss = `
-  <!-- Code syntax highlighting -->
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/styles/${codeTheme}.min.css">`;
-
-  return `<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>${title}</title>
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/reveal.js@5.1.0/dist/reveal.css">${themeCssLinks}${codeThemeCss}
-</head>
-<body class="${bodyClasses}">
-  <div class="reveal"${isSharedTheme ? ` data-theme="shared:${sharedThemeName}"` : ` data-theme="${theme}"`} data-code-theme="${codeTheme}">
-    <div class="slides">
-${cleanContent}
-    </div>
-  </div>
-  <script src="https://cdn.jsdelivr.net/npm/reveal.js@5.1.0/dist/reveal.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/reveal.js@5.1.0/plugin/highlight/highlight.js"></script>
-  <script>
-    Reveal.initialize({
-      hash: true,
-      controls: true,
-      progress: true,
-      center: true,
-      transition: 'slide',
-      plugins: [RevealHighlight]
-    });
-  </script>
-</body>
-</html>`;
-}
 
 export default function SlideViewer() {
   const {
@@ -1061,6 +1050,8 @@ export default function SlideViewer() {
     canPresent,
     canViewSpeakerNotes,
     userRole: _userRole,
+    content_sha: loaderContentSha,
+    sha_source: loaderShaSource,
   } = useLoaderData<typeof loader>();
   const [snippets, setSnippets] = useState<Array<{ id: string; name: string; content: string }>>(
     initialSnippets || []
@@ -1077,6 +1068,15 @@ export default function SlideViewer() {
   const [isEditing, setIsEditing] = useState(false);
   const [hasChanges, setHasChanges] = useState(false);
   const [isLoadingLatest, setIsLoadingLatest] = useState(false);
+  // Conflict token (Phase 4b): sha of the deck's source of truth + which file
+  // it came from. Seeded by the loader, refreshed by fetch-latest and every
+  // successful save; echoed back with each save submit.
+  const [contentToken, setContentToken] = useState<{
+    content_sha: string | null;
+    sha_source: 'deck' | 'legacy_html';
+  }>({ content_sha: loaderContentSha, sha_source: loaderShaSource });
+  // Non-null when the last save 409'd (deck changed under this session).
+  const [saveConflict, setSaveConflict] = useState<string | null>(null);
   const [autoEditTriggered, setAutoEditTriggered] = useState(false);
   // Track editable content separately from CDN content
   const [editableContent, setEditableContent] = useState<string | null>(null);
@@ -1209,6 +1209,16 @@ export default function SlideViewer() {
     if (fetcher.data?.intent === 'fetch-latest' && fetcher.data?.content) {
       // Got fresh content from GitHub API - enter edit mode with it
       setEditableContent(fetcher.data.content);
+      // Refresh the conflict token (also the recovery path after a 409:
+      // fresh content + fresh token, unsaved changes discarded)
+      if (fetcher.data.content_sha) {
+        setContentToken({
+          content_sha: fetcher.data.content_sha,
+          sha_source: fetcher.data.sha_source === 'deck' ? 'deck' : 'legacy_html',
+        });
+      }
+      setSaveConflict(null);
+      setHasChanges(false);
       setIsEditing(true);
       setIsLoadingLatest(false);
     } else if (fetcher.data?.intent === 'delete-images') {
@@ -1291,10 +1301,25 @@ export default function SlideViewer() {
       } else if (fetcher.data.error) {
         message.error(`Failed to delete theme: ${fetcher.data.error}`);
       }
+    } else if (fetcher.data?.conflict) {
+      // Save 409'd: the deck changed since this session read it. Show the
+      // reload prompt instead of a generic save error.
+      setSaveConflict(
+        fetcher.data.message ||
+          'This deck changed since you opened it — reload to get the latest version before saving.'
+      );
     } else if (fetcher.data?.savedContent) {
       // After save, update our local content to match what was saved
       // This prevents stale content when CDN hasn't updated yet
       setEditableContent(fetcher.data.savedContent);
+      // The save materialized deck.json — future saves must key on ITS sha
+      if (fetcher.data.sha) {
+        setContentToken({
+          content_sha: fetcher.data.sha,
+          sha_source: fetcher.data.sha_source === 'deck' ? 'deck' : 'legacy_html',
+        });
+      }
+      setSaveConflict(null);
       // Check if there are orphaned images to clean up
       if (fetcher.data.orphanedImages?.length > 0) {
         setOrphanedImages(fetcher.data.orphanedImages);
@@ -1366,19 +1391,39 @@ export default function SlideViewer() {
     const content = revealRef.current?.getCurrentContent();
     if (!content) return;
 
-    fetcher.submit({ content }, { method: 'post' });
+    // Echo the conflict token so the server can 409 instead of clobbering
+    const payload: Record<string, string> = { content };
+    if (contentToken.content_sha) {
+      payload.content_sha = contentToken.content_sha;
+      payload.sha_source = contentToken.sha_source;
+    }
+    fetcher.submit(payload, { method: 'post' });
     setHasChanges(false);
     setIsEditing(false);
-  }, [fetcher]);
+  }, [fetcher, contentToken]);
 
   // Save content without exiting edit mode (used for auto-save after destructive operations)
   const handleSaveContent = useCallback(() => {
     const content = revealRef.current?.getCurrentContent();
     if (!content) return;
 
-    fetcher.submit({ content }, { method: 'post' });
+    // Same conflict-token treatment as handleSave
+    const payload: Record<string, string> = { content };
+    if (contentToken.content_sha) {
+      payload.content_sha = contentToken.content_sha;
+      payload.sha_source = contentToken.sha_source;
+    }
+    fetcher.submit(payload, { method: 'post' });
     setHasChanges(false);
     // Don't exit edit mode - user is still editing
+  }, [fetcher, contentToken]);
+
+  // Recover from a save conflict: re-fetch the latest content + token
+  // (the existing fetch-latest flow), discarding this session's unsaved changes
+  const handleReloadLatest = useCallback(() => {
+    setSaveConflict(null);
+    setIsLoadingLatest(true);
+    fetcher.submit({ intent: 'fetch-latest' }, { method: 'post' });
   }, [fetcher]);
 
   // Exit editing mode (discards unsaved changes)
@@ -1652,6 +1697,47 @@ export default function SlideViewer() {
             )}
           </div>
         </nav>
+
+        {/* Save-conflict banner (Phase 4b): the deck changed under this session */}
+        {saveConflict && (
+          <div className="fixed top-16 left-1/2 -translate-x-1/2 z-[1100] w-[calc(100%-2rem)] max-w-xl">
+            <div
+              role="alert"
+              className="flex items-start gap-3 rounded-lg border border-amber-300 dark:border-amber-600 bg-amber-50 dark:bg-amber-950 px-4 py-3 shadow-lg"
+            >
+              <div className="flex-1 text-sm text-amber-900 dark:text-amber-100">
+                <div className="font-semibold">Deck changed since you opened it</div>
+                <div className="mt-0.5">
+                  Someone else saved a newer version. Reload to get the latest — your unsaved
+                  changes here will be discarded.
+                </div>
+              </div>
+              <div className="flex items-center gap-2 shrink-0">
+                <button
+                  onClick={handleReloadLatest}
+                  disabled={isLoadingLatest || isFetchingLatest}
+                  className="px-3 py-1.5 text-sm font-medium rounded-md bg-amber-600 text-white hover:bg-amber-700 dark:bg-amber-500 dark:text-amber-950 dark:hover:bg-amber-400 disabled:opacity-50"
+                >
+                  {isLoadingLatest || isFetchingLatest ? 'Reloading...' : 'Reload latest'}
+                </button>
+                <button
+                  onClick={() => setSaveConflict(null)}
+                  aria-label="Dismiss"
+                  className="p-1 text-amber-700 hover:text-amber-900 dark:text-amber-300 dark:hover:text-amber-100"
+                >
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={2}
+                      d="M6 18L18 6M6 6l12 12"
+                    />
+                  </svg>
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Main content area with optional properties sidebar */}
         <div className={`reveal-container ${isEditing ? 'reveal-container-with-sidebar' : ''}`}>

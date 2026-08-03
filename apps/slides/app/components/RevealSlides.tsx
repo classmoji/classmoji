@@ -562,7 +562,8 @@ const RevealSlides = forwardRef(function RevealSlides(
     const sectionsHtml = rootSections.map((s: Element) => s.outerHTML).join('\n');
 
     // Return a thin wrapper with data attributes + slide sections
-    // generateSlideHtml() extracts themes via regex, then uses just the sections
+    // The save action parses this via parseSlidesFragment (themes from the
+    // wrapper's data attributes, sections into structured DeckSlides)
     const attrsStr = dataAttrs.length > 0 ? ' ' + dataAttrs.join(' ') : '';
     return `<div class="slides"${attrsStr}>\n${sectionsHtml}\n</div>`;
   }, []);
