@@ -163,9 +163,15 @@ const PageRoute = () => {
 
   // Surface cover-image failures (incl. the F5 409 "page changed — try
   // again") — the cover flow has no inline status indicator of its own.
+  // On success, refresh the conflict token: a cover write advances
+  // content.json's sha, so a save still carrying the pre-cover token would
+  // self-conflict against our own change.
   useEffect(() => {
-    if (coverFetcher.state === 'idle' && coverFetcher.data?.error) {
+    if (coverFetcher.state !== 'idle') return;
+    if (coverFetcher.data?.error) {
       toast.error(coverFetcher.data.error);
+    } else if (coverFetcher.data?.sha) {
+      setContentToken(coverFetcher.data.sha);
     }
   }, [coverFetcher.state, coverFetcher.data]);
 

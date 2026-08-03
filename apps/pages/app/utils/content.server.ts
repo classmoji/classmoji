@@ -82,7 +82,7 @@ export async function savePageContent(
 export async function savePageCoverImage(
   page: PageForContent,
   coverImage: CoverImage | null
-): Promise<void> {
+): Promise<{ sha: string }> {
   const { format, content, sha } = await loadPageContent(page, { skipCache: true });
 
   let currentBlocks: unknown;
@@ -97,12 +97,16 @@ export async function savePageCoverImage(
     currentBlocks = [{ type: 'paragraph', content: [] }];
   }
 
-  await savePageContent(page, currentBlocks, {
+  const result = await savePageContent(page, currentBlocks, {
     coverImage,
     // Only content.json's own sha is a valid precondition — the 'html'
     // fallback sha belongs to index.html, a different file than this write.
     ...(format === 'json' && sha ? { expectedSha: sha } : {}),
   });
+  // Returned so the editor can refresh its conflict token — a cover write
+  // advances content.json's sha, and a save carrying the pre-cover token
+  // would otherwise self-conflict.
+  return { sha: result.sha };
 }
 
 /**

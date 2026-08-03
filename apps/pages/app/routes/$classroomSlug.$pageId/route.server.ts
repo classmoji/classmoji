@@ -380,11 +380,11 @@ export const action = async ({
             position: typeof data.position === 'number' ? data.position : 50,
           }
         : null;
-      await savePageCoverImage(actionPage, coverImage);
+      const { sha } = await savePageCoverImage(actionPage, coverImage);
       await ClassmojiService.page.quickUpdate(pageId, {
         updated_at: new Date(),
       });
-      return Response.json({ success: true });
+      return Response.json({ success: true, sha });
     } catch (error: unknown) {
       if ((error as { status?: number } | null)?.status === 409) {
         // F5: savePageCoverImage's CAS write lost to a concurrent content
@@ -408,11 +408,11 @@ export const action = async ({
         return Response.json({ error: 'No file provided' }, { status: 400 });
       }
       const { url } = await uploadPageAsset(actionPage, file);
-      await savePageCoverImage(actionPage, { url, position: 50 });
+      const { sha } = await savePageCoverImage(actionPage, { url, position: 50 });
       await ClassmojiService.page.quickUpdate(pageId, {
         updated_at: new Date(),
       });
-      return Response.json({ success: true, url });
+      return Response.json({ success: true, url, sha });
     } catch (error: unknown) {
       if ((error as { status?: number } | null)?.status === 409) {
         // F5: the asset uploaded fine, but the cover-image metadata write
