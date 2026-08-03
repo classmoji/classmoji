@@ -86,20 +86,46 @@ describe('page.createPage', () => {
     saveManifestMock.mockResolvedValue(undefined);
   });
 
-  it('blank flow: single-file put of the template + DB row + manifest refresh', async () => {
+  it('blank flow: index.html + blank content.json in ONE uploadBatch + DB row + manifest refresh', async () => {
     const page = await createPage({
       classroomId: 'class-1',
       title: 'My New Page',
       createdBy: 'user-1',
     });
 
-    expect(uploadBatchMock).not.toHaveBeenCalled();
-    expect(putMock).toHaveBeenCalledTimes(1);
-    const putArg = putMock.mock.calls[0][0] as Record<string, unknown>;
-    expect(putArg.repo).toBe('content-test-org-cs101');
-    expect(putArg.path).toBe('pages/my-new-page/index.html');
-    expect(putArg.content).toBe('Add your content here...\n');
-    expect(putArg.message).toBe('Create page: My New Page');
+    // One atomic commit carrying BOTH files — index.html for URL/manifest
+    // stability, content.json so fresh pages are json-first from birth.
+    expect(putMock).not.toHaveBeenCalled();
+    expect(uploadBatchMock).toHaveBeenCalledTimes(1);
+    const batchArg = uploadBatchMock.mock.calls[0][0] as {
+      repo: string;
+      branch: string;
+      message: string;
+      files: Array<{ path: string; content: string; encoding: string }>;
+    };
+    expect(batchArg.repo).toBe('content-test-org-cs101');
+    expect(batchArg.branch).toBe('main');
+    expect(batchArg.message).toBe('Create page: My New Page');
+    expect(batchArg.files.map(f => f.path)).toEqual([
+      'pages/my-new-page/index.html',
+      'pages/my-new-page/content.json',
+    ]);
+    expect(batchArg.files[0].content).toBe('Add your content here...\n');
+
+    const contentJson = JSON.parse(batchArg.files[1].content) as {
+      blocks: Array<Record<string, unknown>>;
+    };
+    expect(contentJson).toEqual({
+      blocks: [
+        {
+          id: 'p1',
+          type: 'paragraph',
+          props: { textColor: 'default', backgroundColor: 'default', textAlignment: 'left' },
+          content: [],
+          children: [],
+        },
+      ],
+    });
 
     expect(pageCreateMock).toHaveBeenCalledTimes(1);
     const createArg = pageCreateMock.mock.calls[0][0] as { data: Record<string, unknown> };
@@ -109,6 +135,26 @@ describe('page.createPage', () => {
 
     expect(saveManifestMock).toHaveBeenCalledWith('class-1');
     expect(page.id).toBe('page-1');
+  });
+
+  it('html-without-assets flow: single-file put of the given html (unchanged)', async () => {
+    await createPage({
+      classroomId: 'class-1',
+      title: 'Md Import',
+      html: '<p>from markdown</p>',
+      createdBy: 'user-1',
+      commitMessage: 'Import page: Md Import',
+    });
+
+    // Import/markdown flows stay index.html-only — migration to content.json
+    // happens web-side, on first edit.
+    expect(uploadBatchMock).not.toHaveBeenCalled();
+    expect(putMock).toHaveBeenCalledTimes(1);
+    const putArg = putMock.mock.calls[0][0] as Record<string, unknown>;
+    expect(putArg.repo).toBe('content-test-org-cs101');
+    expect(putArg.path).toBe('pages/md-import/index.html');
+    expect(putArg.content).toBe('<p>from markdown</p>');
+    expect(putArg.message).toBe('Import page: Md Import');
   });
 
   it('import flow: batches assets + index.html in one commit with the import message', async () => {
@@ -221,10 +267,17 @@ describe('page.createPage', () => {
     expect(uploadBatchMock).not.toHaveBeenCalled();
   });
 
-  it('wraps upload failures with the route-identical message', async () => {
-    putMock.mockRejectedValue(new Error('boom'));
+  it('wraps upload failures with the route-identical messages (batch and put flows)', async () => {
+    // Blank flow now commits via uploadBatch → the batch-flow message.
+    uploadBatchMock.mockRejectedValue(new Error('boom'));
     await expect(
       createPage({ classroomId: 'class-1', title: 'X', createdBy: 'user-1' })
+    ).rejects.toThrow('Failed to upload files to GitHub: boom');
+
+    // html-without-assets flow still uses put → the single-file message.
+    putMock.mockRejectedValue(new Error('boom'));
+    await expect(
+      createPage({ classroomId: 'class-1', title: 'X', html: '<p>x</p>', createdBy: 'user-1' })
     ).rejects.toThrow('Failed to upload file to GitHub: boom');
   });
 

@@ -4,6 +4,7 @@ import { ContentService } from '../content/ContentService.ts';
 import { getGitProvider } from '../git/index.ts';
 import * as contentManifestService from './contentManifest.service.ts';
 import * as notificationService from './notification.service.ts';
+import { blankPageContentJson } from './pageContent.service.ts';
 import type { Prisma } from '@prisma/client';
 
 interface PageQueryOptions {
@@ -219,7 +220,6 @@ export async function createPage({
   }
 
   const htmlPath = `${contentPath}/index.html`;
-  const pageHtml = html ?? generatePageTemplate(title);
 
   if (files.length > 0) {
     // Import flow: assets + index.html in a single batch commit.
@@ -227,7 +227,10 @@ export async function createPage({
       await ContentService.uploadBatch({
         gitOrganization: ctx.classroom.git_organization!,
         repo: ctx.repoName,
-        files: [...files, { path: htmlPath, content: pageHtml, encoding: 'utf-8' }],
+        files: [
+          ...files,
+          { path: htmlPath, content: html ?? generatePageTemplate(title), encoding: 'utf-8' },
+        ],
         branch: 'main',
         message: commitMessage ?? `Import page: ${title}`,
       });
@@ -238,20 +241,46 @@ export async function createPage({
         { cause: uploadError }
       );
     }
-  } else {
-    // Blank flow: single-file commit.
+  } else if (html != null) {
+    // Import/markdown flow without extra assets: single-file commit.
     try {
       await ContentService.put({
         gitOrganization: ctx.classroom.git_organization!,
         repo: ctx.repoName,
         path: htmlPath,
-        content: pageHtml,
+        content: html,
         message: commitMessage ?? `Create page: ${title}`,
       });
     } catch (uploadError) {
       console.error('Failed to upload file to GitHub:', uploadError);
       throw new Error(
         `Failed to upload file to GitHub: ${uploadError instanceof Error ? uploadError.message : String(uploadError)}`,
+        { cause: uploadError }
+      );
+    }
+  } else {
+    // Blank flow: index.html (kept for URL/manifest stability) + a blank
+    // BlockNote content.json wrapper in ONE commit, so fresh pages are
+    // json-first for the granular content tools from birth.
+    try {
+      await ContentService.uploadBatch({
+        gitOrganization: ctx.classroom.git_organization!,
+        repo: ctx.repoName,
+        files: [
+          { path: htmlPath, content: generatePageTemplate(title), encoding: 'utf-8' },
+          {
+            path: `${contentPath}/content.json`,
+            content: blankPageContentJson(),
+            encoding: 'utf-8',
+          },
+        ],
+        branch: 'main',
+        message: commitMessage ?? `Create page: ${title}`,
+      });
+    } catch (uploadError) {
+      console.error('Failed to upload files to GitHub:', uploadError);
+      throw new Error(
+        `Failed to upload files to GitHub: ${uploadError instanceof Error ? uploadError.message : String(uploadError)}`,
         { cause: uploadError }
       );
     }

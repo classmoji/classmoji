@@ -17,6 +17,7 @@ import * as auditService from './audit.service.ts';
 import * as calendarService from './calendar.service.ts';
 import * as icsGeneratorService from './icsGenerator.service.ts';
 import * as pageService from './page.service.ts';
+import * as pageContentService from './pageContent.service.ts';
 import * as emojiMappingService from './emojiMapping.service.ts';
 import * as helperService from './helper.service.ts';
 import * as letterGradeMappingService from './letterGradeMapping.service.ts';
@@ -61,6 +62,7 @@ const ClassmojiService = {
   calendar: calendarService,
   icsGenerator: icsGeneratorService,
   page: pageService,
+  pageContent: pageContentService,
   emojiMapping: emojiMappingService,
   helper: helperService,
   letterGradeMapping: letterGradeMappingService,
@@ -111,6 +113,7 @@ export {
   calendarService,
   icsGeneratorService,
   pageService,
+  pageContentService,
   emojiMappingService,
   helperService,
   letterGradeMappingService,

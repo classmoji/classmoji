@@ -1,5 +1,16 @@
-import { ContentService } from '@classmoji/content';
+import { ClassmojiService } from './db.server.ts';
 import type { PageForContent } from '~/types/pages.ts';
+
+/**
+ * Thin wrappers around the shared page-content service
+ * (packages/services/src/classmoji/pageContent.service.ts).
+ *
+ * What stays app-local here:
+ * - the migrateHtmlToBlockNote fallback in savePageCoverImage (needs the
+ *   React editor schema, which must not leak into packages/services),
+ * - the Web API File → Buffer adapter for uploads,
+ * - extractBodyContent (used by the HTML→BlockNote migration).
+ */
 
 interface CoverImage {
   url: string;
@@ -13,141 +24,33 @@ interface PageContentResult {
 }
 
 /**
- * Get the content repo name for a page's classroom.
- */
-function getRepoName(page: PageForContent): string {
-  const gitOrg = page.classroom.git_organization!;
-  return `content-${gitOrg.login}-${page.classroom.content_namespace}`;
-}
-
-/**
  * Load page content from GitHub.
  * Tries JSON first (BlockNote format), falls back to HTML (legacy).
- *
- * @param {Object} page - Page with classroom.git_organization
- * @returns {{ format: 'json'|'html'|'none', content: Object|string|null, coverImage: { url: string, position: number }|null }}
+ * Preserves this app's historical { format, content, coverImage } shape
+ * (the service returns the blocks under `blocks`, plus the file sha).
  */
 export async function loadPageContent(page: PageForContent): Promise<PageContentResult> {
-  const gitOrg = page.classroom.git_organization!;
-  const repo = getRepoName(page);
-
-  // Try JSON first (BlockNote format)
-  try {
-    const jsonResult = await ContentService.getContent({
-      gitOrganization: gitOrg,
-      repo,
-      path: `${page.content_path}/content.json`,
-    });
-
-    if (jsonResult?.content) {
-      const parsed = JSON.parse(jsonResult.content);
-
-      // New format: { coverImage?, blocks } wrapper
-      if (parsed && !Array.isArray(parsed) && Array.isArray(parsed.blocks)) {
-        return {
-          format: 'json',
-          content: parsed.blocks,
-          coverImage: parsed.coverImage || null,
-        };
-      }
-
-      // Old format: bare blocks array
-      return {
-        format: 'json',
-        content: parsed,
-        coverImage: null,
-      };
-    }
-  } catch (err) {
-    console.error(
-      `[loadPageContent] JSON fetch failed for ${repo}/${page.content_path}/content.json:`,
-      err
-    );
-  }
-
-  // Fallback: HTML (legacy format)
-  try {
-    const htmlResult = await ContentService.getContent({
-      gitOrganization: gitOrg,
-      repo,
-      path: `${page.content_path}/index.html`,
-    });
-
-    if (htmlResult?.content) {
-      return {
-        format: 'html',
-        content: htmlResult.content,
-        coverImage: null,
-      };
-    }
-  } catch (err) {
-    console.error(
-      `[loadPageContent] HTML fetch failed for ${repo}/${page.content_path}/index.html:`,
-      err
-    );
-  }
-
-  return { format: 'none', content: null, coverImage: null };
+  const { format, blocks, coverImage } = await ClassmojiService.pageContent.loadPageContent(page);
+  return { format, content: blocks, coverImage };
 }
 
 /**
- * Save BlockNote JSON content to GitHub.
- * Uses the new wrapper format: { coverImage?, blocks }.
- * When coverImage is not provided, preserves the existing coverImage from the JSON file.
+ * Save BlockNote JSON content to GitHub (wrapper format { blocks, coverImage? }).
+ * When coverImage is not provided, the service preserves the existing one.
  * Does NOT delete the legacy index.html — keeps for backward compatibility.
- *
- * @param {Object} page - Page with classroom.git_organization
- * @param {Array} blocks - BlockNote document blocks array
- * @param {{ url: string, position: number }|null} [coverImage] - Cover image metadata; omit to preserve existing
  */
 export async function savePageContent(
   page: PageForContent,
   blocks: unknown,
   coverImage: CoverImage | null | undefined = undefined
 ): Promise<void> {
-  const gitOrg = page.classroom.git_organization!;
-  const repo = getRepoName(page);
-  const path = `${page.content_path}/content.json`;
-
-  // When coverImage isn't explicitly provided, read the existing JSON to preserve it
-  if (coverImage === undefined) {
-    try {
-      const existing = await ContentService.getContent({
-        gitOrganization: gitOrg,
-        repo,
-        path,
-      });
-      if (existing?.content) {
-        const parsed = JSON.parse(existing.content);
-        if (parsed && !Array.isArray(parsed) && parsed.coverImage) {
-          coverImage = parsed.coverImage;
-        }
-      }
-    } catch {
-      // No existing file — coverImage stays undefined (won't be in wrapper)
-    }
-  }
-
-  const wrapper: { blocks: unknown; coverImage?: CoverImage | null } = { blocks };
-  if (coverImage !== undefined) {
-    wrapper.coverImage = coverImage;
-  }
-
-  await ContentService.put({
-    gitOrganization: gitOrg,
-    repo,
-    path,
-    content: JSON.stringify(wrapper, null, 2),
-    message: `Update page: ${page.title}`,
-  });
+  await ClassmojiService.pageContent.savePageContent(page, blocks, { coverImage });
 }
 
 /**
- * Save only the cover image metadata to content.json without requiring editor blocks.
- * Loads the current JSON, updates the coverImage field, and saves back.
- *
- * @param {Object} page - Page with classroom.git_organization
- * @param {{ url: string, position: number }|null} coverImage - Cover image metadata, or null to remove
+ * Save only the cover image metadata to content.json without requiring editor
+ * blocks. Loads the current content, migrating legacy HTML to BlockNote JSON
+ * so it isn't lost when content.json is first created.
  */
 export async function savePageCoverImage(
   page: PageForContent,
@@ -172,33 +75,14 @@ export async function savePageCoverImage(
 
 /**
  * Upload a file to the page's assets folder on GitHub.
- *
- * Converts Web API File to Node.js Buffer for ContentService compatibility.
- *
- * @param {Object} page - Page with classroom.git_organization
- * @param {File} file - Web API File from formData
- * @returns {{ url: string, path: string }}
+ * Converts the Web API File to a Node.js Buffer for the service.
  */
 export async function uploadPageAsset(
   page: PageForContent,
   file: File
 ): Promise<{ url: string; path: string }> {
-  const gitOrg = page.classroom.git_organization!;
-  const repo = getRepoName(page);
-  const assetsFolder = `${page.content_path}/assets`;
-
   const buffer = Buffer.from(await file.arrayBuffer());
-  const result = await ContentService.upload({
-    gitOrganization: gitOrg,
-    repo,
-    folder: assetsFolder,
-    file: buffer,
-    filename: file.name,
-    branch: 'main',
-    message: `Upload asset for ${page.title || 'page'}`,
-  });
-
-  return { url: result.url, path: result.path };
+  return ClassmojiService.pageContent.uploadPageAsset(page, buffer, file.name);
 }
 
 /**
