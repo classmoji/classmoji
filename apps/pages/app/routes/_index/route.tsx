@@ -46,7 +46,7 @@ const Index = () => {
             {classrooms.map(
               (c: { slug: string; name: string; content_namespace: string; role: string }) => (
                 <a
-                  key={c.slug}
+                  key={`${c.slug}-${c.role}`}
                   href={`/${c.slug}`}
                   className="block p-4 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg hover:shadow-md transition-shadow"
                 >
