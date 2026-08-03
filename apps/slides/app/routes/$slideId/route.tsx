@@ -8,6 +8,7 @@ import { ClassmojiService } from '@classmoji/services';
 import {
   DeckConflictError,
   DeckParseError,
+  generateDeckHtml,
   loadDeck,
   parseSlidesFragment,
   saveDeck,
@@ -29,6 +30,35 @@ import PropertiesPanel from '~/components/properties/PropertiesPanel';
 import SlideOverview from '~/components/SlideOverview';
 import ImageResizeHandles from '~/components/ImageResizeHandles';
 import BlockHandles from '~/components/BlockHandles';
+
+/**
+ * Resolve shared-theme URLs for read-side deck rendering (Phase 4c). Same
+ * resolution the save path uses (getThemeUrls with identical args), so the
+ * generated document matches the saved index.html artifact byte-for-byte.
+ * Unlike the save path (which is about to persist and falls back to theme
+ * 'white'), a resolve failure on a READ must not mutate the deck — we just
+ * render without theme links (generateDeckHtml warns).
+ */
+async function resolveReadThemeUrls(
+  deck: DeckJson,
+  gitOrgLogin: string,
+  repo: string
+): Promise<DeckThemeUrls | undefined> {
+  if (!deck.theme.startsWith('shared:')) return undefined;
+  const sharedThemeName = deck.theme.replace('shared:', '');
+  try {
+    const urls = await getThemeUrls(gitOrgLogin, repo, sharedThemeName);
+    return {
+      libCssUrl: urls.libCssUrl,
+      customThemeUrl: urls.customThemeUrl,
+      bodyClasses: urls.bodyClasses,
+    };
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.warn(`Could not resolve shared theme URLs for "${sharedThemeName}":`, message);
+    return undefined;
+  }
+}
 
 // Loader to fetch slide metadata and content from database/GitHub
 export const loader = async ({
@@ -104,50 +134,92 @@ export const loader = async ({
 
   // Conflict token for the editor (Phase 4b): the sha of the deck's SOURCE OF
   // TRUTH — deck.json once it exists (materialized by the first dual-write
-  // save), else the legacy index.html. Content rendering stays index.html-first
-  // (the loader flip is Phase 4c); only the token is deck-aware.
+  // save), else the legacy index.html.
   let contentSha: string | null = null;
   let shaSource: DeckShaSource = 'legacy_html';
 
   if (mode === 'edit') {
-    // API-first for edit mode - ensures fresh content after saves.
-    // skipCache: this read seeds the conflict token — it must not serve the
-    // per-process 60s cache (cross-instance invalidation does not exist).
+    // Phase 4c: deck.json-first read for edit mode. skipCache is REQUIRED —
+    // this read both renders the editor and seeds the conflict token; the
+    // per-process 60s cache has no cross-instance invalidation, so a cached
+    // read on another Fly instance could silently revert an MCP write.
+    let deckLoadFailed = false;
     try {
-      const result = await ContentService.getContent({
-        orgLogin: gitOrgLogin,
-        repo,
-        path: filePath,
-        skipCache: true,
-      });
-      if (result) {
-        contentResult = { content: result.content, source: 'api' };
-        contentSha = result.sha;
+      const loaded = await loadDeck(slide, { skipCache: true });
+      if (loaded.sha_source === 'deck') {
+        // deck.json exists: render server-side with the SAME generator +
+        // theme-URL resolution the save path uses, so this document is
+        // identical to the index.html artifact the last save committed.
+        const themeUrls = await resolveReadThemeUrls(loaded.deck, gitOrgLogin, repo);
+        contentResult = {
+          content: generateDeckHtml(loaded.deck, {
+            title: slide.title,
+            themeUrls,
+            includeNotes: true,
+          }),
+          source: 'api',
+        };
+        contentSha = loaded.sha;
+        shaSource = 'deck';
+      } else {
+        // deck.json absent (legacy deck): do NOT serve generate(parse(html)) —
+        // a parse-lossy legacy deck must not silently canonicalize on READ; it
+        // only converts through a SAVE. Keep loadDeck's sha token (index.html)
+        // and serve the raw file below.
+        contentSha = loaded.sha;
+        shaSource = 'legacy_html';
       }
     } catch (e: unknown) {
-      // Fall back to CDN if API fails
+      // DeckParseError (malformed deck.json / unparseable legacy html) or a
+      // transient API failure — fall back to the raw index.html read below.
+      deckLoadFailed = true;
       const message = e instanceof Error ? e.message : String(e);
-      console.log('[Loader] API fetch failed, falling back to CDN:', message);
+      console.warn('[Loader] Deck-first read failed, serving raw index.html:', message);
     }
 
-    // deck.json's sha supersedes the index.html sha as the conflict token —
-    // after the first dual-write save the deck is the source of truth, and a
-    // legacy_html token would 409 on every save (§3 crossover row).
-    try {
-      const deckMeta = await ContentService.getMeta({
-        orgLogin: gitOrgLogin,
-        repo,
-        path: `${slide.content_path}/deck.json`,
-        skipCache: true,
-      });
-      if (deckMeta) {
-        contentSha = deckMeta.sha;
-        shaSource = 'deck';
+    if (!contentResult) {
+      // Raw index.html via API (legacy decks + deck-read failures) — the
+      // pre-4c edit path, unchanged. API-first ensures fresh content after saves.
+      try {
+        const result = await ContentService.getContent({
+          orgLogin: gitOrgLogin,
+          repo,
+          path: filePath,
+          skipCache: true,
+        });
+        if (result) {
+          contentResult = { content: result.content, source: 'api' };
+          if (!contentSha) contentSha = result.sha;
+        }
+      } catch (e: unknown) {
+        // Fall back to CDN if API fails
+        const message = e instanceof Error ? e.message : String(e);
+        console.log('[Loader] API fetch failed, falling back to CDN:', message);
       }
-    } catch (e: unknown) {
-      // Keep the legacy token; a stale token surfaces as a save-time 409, not data loss.
-      const message = e instanceof Error ? e.message : String(e);
-      console.warn('[Loader] deck.json meta check failed, keeping legacy token:', message);
+
+      // 4b token logic for the deck-read failure path: deck.json's sha
+      // supersedes the index.html sha as the conflict token — a malformed
+      // deck.json still yields a 'deck' token (overwriting it on the next
+      // save is the recovery path). loadDeck's success branches above have
+      // already resolved the deck-first token, so this only runs on failure.
+      if (deckLoadFailed) {
+        try {
+          const deckMeta = await ContentService.getMeta({
+            orgLogin: gitOrgLogin,
+            repo,
+            path: `${slide.content_path}/deck.json`,
+            skipCache: true,
+          });
+          if (deckMeta) {
+            contentSha = deckMeta.sha;
+            shaSource = 'deck';
+          }
+        } catch (e: unknown) {
+          // Keep the legacy token; a stale token surfaces as a save-time 409, not data loss.
+          const message = e instanceof Error ? e.message : String(e);
+          console.warn('[Loader] deck.json meta check failed, keeping legacy token:', message);
+        }
+      }
     }
   }
 
@@ -469,8 +541,43 @@ export const action = async ({
   // Used when entering edit mode to ensure we're editing the current version
   if (intent === 'fetch-latest') {
     try {
-      // skipCache: this read refreshes the editor's conflict token — it must
-      // not serve the per-process 60s cache.
+      // Phase 4c: deck.json-first, mirroring the edit-mode loader. skipCache:
+      // this read refreshes the editor's conflict token — it must not serve
+      // the per-process 60s cache.
+      let legacySha: string | null = null;
+      let deckLoadFailed = false;
+      try {
+        const loaded = await loadDeck(slide, { skipCache: true });
+        if (loaded.sha_source === 'deck') {
+          // Same generator + theme-URL resolution as the save path — the
+          // returned document is identical to the saved index.html artifact.
+          const themeUrls = await resolveReadThemeUrls(loaded.deck, gitOrgLogin, repo);
+          return {
+            intent: 'fetch-latest',
+            content: generateDeckHtml(loaded.deck, {
+              title: slide.title,
+              themeUrls,
+              includeNotes: true,
+            }),
+            content_sha: loaded.sha,
+            sha_source: 'deck' as const,
+          };
+        }
+        // Legacy deck: keep loadDeck's index.html sha as the token and serve
+        // the raw file below (never generate from a legacy parse on read).
+        legacySha = loaded.sha;
+      } catch (deckError: unknown) {
+        // Parse failures fall back to the raw file; transient API failures
+        // surface as errors (same as the pre-4c behavior).
+        if (!(deckError instanceof DeckParseError)) throw deckError;
+        deckLoadFailed = true;
+        console.warn(
+          '[fetch-latest] Deck parse failed, serving raw index.html:',
+          deckError.message
+        );
+      }
+
+      // Legacy path: raw index.html exactly as before.
       const result = await ContentService.getContent({
         gitOrganization,
         repo,
@@ -482,26 +589,31 @@ export const action = async ({
         return { error: 'Content not found' };
       }
 
-      // Conflict token: deck.json's sha once it exists (source of truth after
-      // the first dual-write save), else the legacy index.html sha. Content
-      // itself stays index.html (the deck-first flip is Phase 4c).
-      let contentSha = result.sha;
+      let contentSha = legacySha ?? result.sha;
       let shaSource: DeckShaSource = 'legacy_html';
-      try {
-        const deckMeta = await ContentService.getMeta({
-          gitOrganization,
-          repo,
-          path: `${slide.content_path}/deck.json`,
-          skipCache: true,
-        });
-        if (deckMeta) {
-          contentSha = deckMeta.sha;
-          shaSource = 'deck';
+      if (deckLoadFailed) {
+        // 4b token logic for the parse-failure path: a malformed deck.json
+        // still exists and its sha must be the conflict token (overwriting it
+        // on the next save is the recovery path).
+        try {
+          const deckMeta = await ContentService.getMeta({
+            gitOrganization,
+            repo,
+            path: `${slide.content_path}/deck.json`,
+            skipCache: true,
+          });
+          if (deckMeta) {
+            contentSha = deckMeta.sha;
+            shaSource = 'deck';
+          }
+        } catch (metaError: unknown) {
+          // Keep the legacy token; a stale token surfaces as a save-time 409.
+          const message = metaError instanceof Error ? metaError.message : String(metaError);
+          console.warn(
+            '[fetch-latest] deck.json meta check failed, keeping legacy token:',
+            message
+          );
         }
-      } catch (metaError: unknown) {
-        // Keep the legacy token; a stale token surfaces as a save-time 409.
-        const message = metaError instanceof Error ? metaError.message : String(metaError);
-        console.warn('[fetch-latest] deck.json meta check failed, keeping legacy token:', message);
       }
 
       return {

@@ -5,7 +5,8 @@ import getPrisma from '@classmoji/database';
 import { getAuthSession, assertSlideAccess } from '@classmoji/auth/server';
 import { ClassmojiService } from '@classmoji/services';
 import { ContentService } from '@classmoji/content';
-import { deleteSlide } from '~/utils/slideService.server';
+import { slideService } from '@classmoji/services/slides';
+import { deleteSlideVideos } from '~/utils/cloudinaryService.server';
 
 export const loader = async ({ request }: { request: Request }) => {
   // 1. Require authentication
@@ -106,9 +107,14 @@ export const action = async ({ request }: { request: Request }) => {
       return { error: message };
     }
 
-    // Delete the slide (no theme cleanup for simple deletion)
+    // Delete the slide (no theme cleanup for simple deletion). Cloudinary
+    // video cleanup stays app-local — supplied as the service's callback.
     try {
-      await deleteSlide({ slideId, deleteTheme: false });
+      await slideService.deleteSlide({
+        slideId,
+        deleteTheme: false,
+        onDeleteVideos: deleteSlideVideos,
+      });
       return { success: true, intent: 'delete', deletedSlideId: slideId };
     } catch (error: unknown) {
       console.error('Failed to delete slide:', error);

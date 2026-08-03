@@ -9,8 +9,9 @@
 import { useState } from 'react';
 import { useLoaderData, useNavigation, Form, redirect, useActionData } from 'react-router';
 import { assertSlideAccess } from '@classmoji/auth/server';
+import { slideService } from '@classmoji/services/slides';
 import { useUser } from '~/root';
-import { getSlideDeleteInfo, deleteSlide } from '~/utils/slideService.server';
+import { deleteSlideVideos } from '~/utils/cloudinaryService.server';
 
 export const loader = async ({
   params,
@@ -30,10 +31,10 @@ export const loader = async ({
     accessType: 'edit',
   });
 
-  // Get slide info for deletion confirmation
+  // Get slide info for deletion confirmation (deck.json-first theme detection)
   let slideInfo;
   try {
-    slideInfo = await getSlideDeleteInfo(slideId);
+    slideInfo = await slideService.getSlideDeleteInfo(slideId);
   } catch (error: unknown) {
     console.log(error);
     const message = error instanceof Error ? error.message : 'Slide not found';
@@ -103,9 +104,10 @@ export const action = async ({
     return { error: 'Slide does not belong to this classroom' };
   }
 
-  // Delete the slide
+  // Delete the slide. Cloudinary video cleanup stays app-local — supplied as
+  // the service's callback.
   try {
-    await deleteSlide({ slideId, deleteTheme });
+    await slideService.deleteSlide({ slideId, deleteTheme, onDeleteVideos: deleteSlideVideos });
 
     // Redirect back to webapp slides list
     const webappUrl = process.env.WEBAPP_URL || 'http://localhost:3000';
