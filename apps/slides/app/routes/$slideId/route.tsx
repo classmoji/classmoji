@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
-import { useLoaderData, useFetcher, data } from 'react-router';
+import { useLoaderData, useFetcher, data, redirect } from 'react-router';
 import { message, Tooltip, Popconfirm } from 'antd';
 import getPrisma from '@classmoji/database';
 import { ContentService } from '@classmoji/content';
@@ -8,9 +8,13 @@ import { ClassmojiService } from '@classmoji/services';
 import {
   DeckConflictError,
   DeckParseError,
+  acceptDeckPreview,
+  discardDeckPreview,
   generateDeckHtml,
+  getDeckPreviewStatus,
   loadDeck,
   parseSlidesFragment,
+  previewBranchName,
   saveDeck,
   slideService,
   type DeckJson,
@@ -30,6 +34,11 @@ import PropertiesPanel from '~/components/properties/PropertiesPanel';
 import SlideOverview from '~/components/SlideOverview';
 import ImageResizeHandles from '~/components/ImageResizeHandles';
 import BlockHandles from '~/components/BlockHandles';
+import {
+  PreviewBar,
+  PendingPreviewBanner,
+  NoPreviewNotice,
+} from '~/components/preview/PreviewControls';
 
 /**
  * Resolve shared-theme URLs for read-side deck rendering (Phase 4c). Same
@@ -124,6 +133,43 @@ export const loader = async ({
   // Build the content URL using content proxy (CDN-first + API fallback)
   // Used as client-side fallback if server-side fetch fails
   const contentUrl = `/content/${gitOrgLogin}/${repo}/${filePath}`;
+
+  // ── Preview branches (plan §3b) ────────────────────────────────────────────
+  // `?preview=1` renders the singleton `preview/<content_path>` branch instead
+  // of main. Staff-gated to the EDIT tier (same gate as fetch-latest): viewers
+  // without edit access never pay the GitHub status call and the param is
+  // silently ignored for them. Edit mode always works on main.
+  const wantsPreview = url.searchParams.get('preview') === '1' && mode !== 'edit';
+  // Post-accept/discard success notice, round-tripped via redirect (staff only).
+  const rawNotice = url.searchParams.get('notice');
+  const notice =
+    canEdit && (rawNotice === 'preview-accepted' || rawNotice === 'preview-discarded')
+      ? rawNotice
+      : null;
+
+  let previewStatus: {
+    exists: boolean;
+    commits_ahead?: number;
+    oldest_commit_at?: string;
+  } | null = null;
+  if (canEdit) {
+    try {
+      previewStatus = await getDeckPreviewStatus(slide);
+    } catch (e: unknown) {
+      // A GitHub hiccup must not 500 the deck — degrade to "no preview".
+      console.error('[slides] Failed to check preview status:', e);
+      previewStatus = { exists: false };
+    }
+  }
+
+  const previewBranch = previewBranchName(slide.content_path);
+  const previewActive = Boolean(canEdit && wantsPreview && previewStatus?.exists);
+  // Staff asked for a preview but no branch exists → render main with a notice.
+  const previewMissing = Boolean(canEdit && wantsPreview && !previewStatus?.exists);
+
+  // GitHub's free diff UI for the pending preview (branch segment URL-encoded —
+  // preview branch names contain slashes).
+  const diffUrl = `https://github.com/${gitOrgLogin}/${repo}/compare/main...${encodeURIComponent(previewBranch)}`;
 
   // Fetch content: API-first for edit mode (freshness), CDN-first for view mode (speed)
   // CDN has ~3 minute propagation delay after saves, so edit mode needs fresh API data
@@ -223,6 +269,31 @@ export const loader = async ({
     }
   }
 
+  // Preview mode: render the preview branch's deck server-side through the
+  // SAME generator + theme-URL resolution the save path uses — actual themes,
+  // Sandpack, layout. API-path only: the CDN serves main, so students can
+  // never reach a preview through it. Notes rules below are unchanged (the
+  // canViewSpeakerNotes strip applies to this content too).
+  if (previewActive && !contentResult) {
+    try {
+      const loaded = await loadDeck(slide, { ref: previewBranch, skipCache: true });
+      const themeUrls = await resolveReadThemeUrls(loaded.deck, gitOrgLogin, repo);
+      contentResult = {
+        content: generateDeckHtml(loaded.deck, {
+          title: slide.title,
+          themeUrls,
+          includeNotes: true,
+        }),
+        source: 'api',
+      };
+    } catch (e: unknown) {
+      // Unreadable preview (parse failure / API hiccup): fall through to the
+      // live deck below rather than 500ing the viewer.
+      const message = e instanceof Error ? e.message : String(e);
+      console.warn('[Loader] Preview-branch read failed, serving live deck:', message);
+    }
+  }
+
   // CDN-first for view mode, or as fallback if API failed
   if (!contentResult) {
     contentResult = await fetchContent({
@@ -315,6 +386,19 @@ export const loader = async ({
     canViewSpeakerNotes,
     // User's role in the classroom
     userRole: membership?.role || null,
+    // Post-accept/discard notice (staff only; null otherwise)
+    notice,
+    // Preview state is staff-only; students/anonymous always get null.
+    preview: canEdit
+      ? {
+          active: previewActive,
+          missing: previewMissing,
+          exists: Boolean(previewStatus?.exists),
+          commitsAhead: previewStatus?.commits_ahead ?? 0,
+          oldestCommitAt: previewStatus?.oldest_commit_at ?? null,
+          diffUrl,
+        }
+      : null,
   };
 };
 
@@ -1004,6 +1088,50 @@ export const action = async ({
     }
   }
 
+  // ── Preview lifecycle (plan §3b) ───────────────────────────────────────────
+  // Staff-gated by the shared assertSlideAccess edit check above (same gate as
+  // every edit intent). Accept merges the preview branch into main and
+  // regenerates the index.html artifact from the merged deck.json; discard
+  // deletes the branch without touching main.
+
+  if (intent === 'preview-accept') {
+    try {
+      const status = await getDeckPreviewStatus(slide);
+      if (!status.exists) {
+        return { error: 'No pending preview to accept' };
+      }
+      const result = await acceptDeckPreview(slide, {
+        resolveThemeUrls: deck => resolveReadThemeUrls(deck, gitOrgLogin, repo),
+      });
+      if (result.merged) {
+        return redirect(`/${slideId}?notice=preview-accepted`);
+      }
+      // Merge conflict — nothing merged, branch kept. Surface the per-unit
+      // report so the UI can list the conflicted slides.
+      return data(
+        {
+          conflict: true,
+          units: result.units,
+          orderConflict: result.order_conflict ?? null,
+        },
+        { status: 409 }
+      );
+    } catch (error: unknown) {
+      console.error('Failed to accept preview:', error);
+      return { error: error instanceof Error ? error.message : String(error) };
+    }
+  }
+
+  if (intent === 'preview-discard') {
+    try {
+      await discardDeckPreview(slide);
+      return redirect(`/${slideId}?notice=preview-discarded`);
+    } catch (error: unknown) {
+      console.error('Failed to discard preview:', error);
+      return { error: error instanceof Error ? error.message : String(error) };
+    }
+  }
+
   // Save content to GitHub (Phase 4b: dual-write deck.json + regenerated
   // index.html through saveDeck, with sha-based conflict detection)
   const htmlContent = formData.get('content') as string;
@@ -1164,7 +1292,13 @@ export default function SlideViewer() {
     userRole: _userRole,
     content_sha: loaderContentSha,
     sha_source: loaderShaSource,
+    preview,
+    notice,
   } = useLoaderData<typeof loader>();
+  // Preview mode is strictly read-only — editing chrome is suppressed while
+  // rendering the pending preview branch (plan §3b).
+  const previewActive = Boolean(preview?.active);
+  const effectiveCanEdit = canEdit && !previewActive;
   const [snippets, setSnippets] = useState<Array<{ id: string; name: string; content: string }>>(
     initialSnippets || []
   );
@@ -1299,16 +1433,30 @@ export default function SlideViewer() {
 
   // canEdit, canPresent, canViewSpeakerNotes now come from loader data (computed by assertSlideAccess)
 
+  // Post-accept/discard success notice (round-tripped via redirect param)
+  useEffect(() => {
+    if (!notice) return;
+    if (notice === 'preview-accepted') {
+      message.success('Preview accepted — changes are now live.');
+    } else if (notice === 'preview-discarded') {
+      message.success('Preview discarded.');
+    }
+    // Strip the param so a refresh doesn't re-toast
+    const url = new URL(window.location.href);
+    url.searchParams.delete('notice');
+    window.history.replaceState({}, '', url);
+  }, [notice]);
+
   // Auto-enter edit mode if ?mode=edit was in URL (for new slides where CDN hasn't caught up)
   // Only triggers once on mount, and only if user has permission to edit
   useEffect(() => {
-    if (autoEdit && canEdit && !autoEditTriggered && !isEditing) {
+    if (autoEdit && effectiveCanEdit && !autoEditTriggered && !isEditing) {
       setAutoEditTriggered(true);
       // Trigger the same flow as clicking "Edit" button - fetch latest from API
       setIsLoadingLatest(true);
       fetcher.submit({ intent: 'fetch-latest' }, { method: 'post' });
     }
-  }, [autoEdit, canEdit, autoEditTriggered, isEditing, fetcher]);
+  }, [autoEdit, effectiveCanEdit, autoEditTriggered, isEditing, fetcher]);
 
   const isSaving = fetcher.state === 'submitting' && !fetcher.formData?.get('intent');
   const isFetchingLatest =
@@ -1780,7 +1928,7 @@ export default function SlideViewer() {
                 </button>
               </Tooltip>
             )}
-            {canEdit && !isEditing && (
+            {effectiveCanEdit && !isEditing && (
               <button
                 onClick={handleStartEditing}
                 disabled={isLoadingLatest || isFetchingLatest}
@@ -1809,6 +1957,13 @@ export default function SlideViewer() {
             )}
           </div>
         </nav>
+
+        {/* Preview-branch chrome (staff only — `preview` is null otherwise) */}
+        {preview?.active && <PreviewBar preview={preview} />}
+        {preview?.missing && <NoPreviewNotice />}
+        {preview && !preview.active && preview.exists && !isEditing && (
+          <PendingPreviewBanner preview={preview} />
+        )}
 
         {/* Save-conflict banner (Phase 4b): the deck changed under this session */}
         {saveConflict && (
@@ -1865,7 +2020,7 @@ export default function SlideViewer() {
                 contentUrl={contentUrl}
                 initialContent={displayContent}
                 initialError={contentError}
-                canEdit={canEdit}
+                canEdit={effectiveCanEdit}
                 isEditing={isEditing}
                 onContentChange={handleContentChange}
                 customThemes={customThemes}
