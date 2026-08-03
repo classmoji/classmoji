@@ -16,7 +16,7 @@ import { ContentService } from '../content/ContentService.ts';
 import * as contentManifestService from '../classmoji/contentManifest.service.ts';
 import { ensureContentRepo } from '../classmoji/page.service.ts';
 import { mintSlideId, type IdGenerator } from './deckHtml.ts';
-import { saveDeck } from './slideContent.service.ts';
+import { previewBranchName, saveDeck } from './slideContent.service.ts';
 import type { DeckJson } from './deckTypes.ts';
 
 const THEMES_FOLDER = '.slidesthemes';
@@ -99,10 +99,49 @@ export interface SlideMetadataUpdate {
  * the content folder would break the CDN URL and any student links).
  */
 export async function updateSlide(slideId: string, data: SlideMetadataUpdate) {
-  return getPrisma().slide.update({
+  const slide = await getPrisma().slide.update({
     where: { id: slideId },
     data: { ...data, updated_at: new Date() },
   });
+
+  // Titles surface in the content manifest — refresh it after a title change
+  // (non-fatal on failure, mirroring createSlide/deleteSlide).
+  if (data.title !== undefined) {
+    try {
+      await contentManifestService.saveManifest(slide.classroom_id);
+    } catch (error: unknown) {
+      console.error('Failed to update manifest after slide title change:', error);
+    }
+  }
+
+  return slide;
+}
+
+/**
+ * Best-effort deletion of the singleton preview branch for a content path.
+ * 404/422 (branch absent) is the common case and silent; any other failure is
+ * loud but non-fatal — callers proceed either way.
+ */
+async function deletePreviewBranchBestEffort({
+  orgLogin,
+  repo,
+  contentPath,
+  context,
+}: {
+  orgLogin: string;
+  repo: string;
+  contentPath: string;
+  context: string;
+}): Promise<void> {
+  const branch = previewBranchName(contentPath);
+  try {
+    await ContentService.deleteBranch({ orgLogin, repo, branch });
+    console.warn(`[slide.service] Deleted preview branch ${branch} (${context})`);
+  } catch (error: unknown) {
+    const status = (error as { status?: number }).status;
+    if (status === 404 || status === 422) return; // already absent
+    console.error(`[slide.service] Failed to delete preview branch ${branch} (${context}):`, error);
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -223,6 +262,19 @@ export async function createSlide({
   }
 
   await ensureContentRepo(classroomId);
+
+  // Slug-reuse retarget guard: a preview branch left over from a previously
+  // deleted deck at the same content path would make this new deck appear to
+  // have pending (stale) edits — clear it before the first write.
+  await deletePreviewBranchBestEffort({
+    orgLogin: classroom.git_organization.login,
+    repo: classroomContentRepoName({
+      login: classroom.git_organization.login,
+      namespace: classroom.content_namespace,
+    }),
+    contentPath,
+    context: 'stale preview from a reused slug, cleared before create',
+  });
 
   const deck = starterDeck(title, idGen);
   const { sha, commit, html } = await saveDeck({
@@ -450,6 +502,15 @@ export async function deleteSlide({
     console.error('Failed to delete slide content from GitHub:', error);
     // Continue with database deletion even if GitHub fails.
   }
+
+  // Drop any pending preview branch alongside the folder — a stale
+  // preview/<content_path> ref would retarget a future deck reusing the slug.
+  await deletePreviewBranchBestEffort({
+    orgLogin: gitOrgLogin,
+    repo: repoName,
+    contentPath: slide.content_path,
+    context: 'slide deleted',
+  });
 
   // Cloudinary cleanup via the app-provided callback.
   if (onDeleteVideos) {

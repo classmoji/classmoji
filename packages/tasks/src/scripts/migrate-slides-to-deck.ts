@@ -14,6 +14,12 @@
  * DECK_PARSE_FAILED slides doubles as the plan's §9 parse census. Pass
  * --write to actually commit deck.json files.
  *
+ * Writes are strictly CREATE-ONLY: absence is re-verified immediately before
+ * each write and the commit goes through ContentService.put's `createOnly`
+ * mode (no sha sent — GitHub 422s if the file exists, surfaced as a 409).
+ * A deck.json that materializes concurrently (editor save, MCP deck_apply,
+ * a parallel migration run) always wins; the migration skips, never overwrites.
+ *
  * Usage:
  *   npx tsx packages/tasks/src/scripts/migrate-slides-to-deck.ts                          # dry run, all slides
  *   npx tsx packages/tasks/src/scripts/migrate-slides-to-deck.ts --write                  # apply
@@ -253,13 +259,42 @@ async function migrateSlidesToDeck(options: CliOptions): Promise<void> {
       const deckJson = JSON.stringify(deck, null, 2) + '\n';
 
       if (options.write) {
-        await ContentService.put({
+        // CREATE-ONLY write. The exists() probe above ran before the
+        // (potentially slow) html fetch + parse; re-verify absence right
+        // before writing, then commit with `createOnly` — put sends NO sha, so
+        // GitHub itself rejects an existence race with a 422 (mapped to a
+        // 409 by ContentService). Either path means a concurrent writer
+        // (editor save, deck_apply, another migration run) materialized
+        // deck.json first — their version wins and this slide is a skip,
+        // never an overwrite.
+        const materialized = await ContentService.exists({
           gitOrganization,
           repo,
           path: deckPath,
-          content: deckJson,
-          message: 'Migrate deck to deck.json',
         });
+        if (materialized) {
+          console.log(`⏭️  Skipping ${label} — deck.json materialized during migration`);
+          counts.alreadyMigrated++;
+          continue;
+        }
+        try {
+          await ContentService.put({
+            gitOrganization,
+            repo,
+            path: deckPath,
+            content: deckJson,
+            message: 'Migrate deck to deck.json',
+            createOnly: true,
+          });
+        } catch (writeError: unknown) {
+          const status = (writeError as { status?: number }).status;
+          if (status === 409) {
+            console.log(`⏭️  Skipping ${label} — deck.json created concurrently (race lost)`);
+            counts.alreadyMigrated++;
+            continue;
+          }
+          throw writeError;
+        }
         console.log(`✅ Migrated ${label} → ${repo}/${deckPath} (${deck.slides.length} slides)`);
       } else {
         console.log(

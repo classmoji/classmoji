@@ -365,7 +365,12 @@ export class ContentService {
         );
         return null;
       }
-      console.error(`[ContentService.getContent] error for ${repo}/${path}:`, error);
+      // Log status + message only — the full error object carries request
+      // headers (auth tokens) and payloads that must not land in logs.
+      const e = error as ErrorWithStatus;
+      console.error(
+        `[ContentService.getContent] error for ${repo}/${path}: status=${e.status ?? '?'} msg=${e.message ?? '?'}`
+      );
       throw error;
     }
   }
@@ -439,8 +444,14 @@ export class ContentService {
    * @param {string} [options.expectedSha] - Expected SHA for optimistic locking
    * @param {string} [options.branch] - Branch to commit to (default: repository default branch)
    * @param {string} [options.message] - Commit message
+   * @param {boolean} [options.createOnly] - Create-only write: no sha is ever
+   *   sent (never updates), and GitHub's 422 "file exists" rejection is mapped
+   *   to a 409 so callers can treat it as an existence race. Mutually
+   *   exclusive with expectedSha.
    * @returns {Promise<{ sha: string, commit: string }>}
-   * @throws {Error} 409 Conflict if expectedSha doesn't match
+   * @throws {Error} 409 Conflict if expectedSha doesn't match, if the file was
+   *   deleted since it was read (expectedSha given but file missing), or if a
+   *   createOnly write finds the file already exists
    */
   static async put({
     gitOrganization,
@@ -451,6 +462,7 @@ export class ContentService {
     expectedSha,
     branch,
     message,
+    createOnly = false,
   }: {
     gitOrganization?: GitOrganizationRecord;
     orgLogin?: string;
@@ -460,33 +472,63 @@ export class ContentService {
     expectedSha?: string;
     branch?: string;
     message?: string;
+    createOnly?: boolean;
   }): Promise<{ sha: string; commit: string }> {
     const resolvedOrg = await resolveGitOrganization(gitOrganization, orgLogin);
     const octokit = await getOctokit(resolvedOrg);
+
+    if (createOnly && expectedSha) {
+      throw new Error('createOnly and expectedSha are mutually exclusive');
+    }
 
     // Check current SHA if optimistic locking is requested
     // (branch writes check the sha on that branch; ref bypasses the cache)
     if (expectedSha) {
       const current = await this.getMeta({ gitOrganization: resolvedOrg, repo, path, ref: branch });
-      if (current && current.sha !== expectedSha) {
+      if (!current) {
+        // A sha was expected but the file is gone: deleted = changed. Silently
+        // recreating would resurrect content the deleter meant to remove.
+        const error = new Error('File was deleted since it was read') as Error & { status: number };
+        error.status = 409;
+        throw error;
+      }
+      if (current.sha !== expectedSha) {
         const error = new Error('File was modified by someone else') as Error & { status: number };
         error.status = 409;
         throw error;
       }
     }
 
-    // Get current SHA for update (required by GitHub API)
-    const existing = await this.getMeta({ gitOrganization: resolvedOrg, repo, path, ref: branch });
+    // Get current SHA for update (required by GitHub API). createOnly writes
+    // deliberately skip this and send no sha, so GitHub itself enforces
+    // non-existence (422 when the file materialized concurrently).
+    const existing = createOnly
+      ? null
+      : await this.getMeta({ gitOrganization: resolvedOrg, repo, path, ref: branch });
 
-    const { data } = await octokit.request('PUT /repos/{owner}/{repo}/contents/{path}', {
-      owner: resolvedOrg.login,
-      repo,
-      path,
-      message: message || `Update ${path}`,
-      content: Buffer.from(content).toString('base64'),
-      sha: existing?.sha, // Required for updates, undefined for creates
-      ...(branch ? { branch } : {}),
-    });
+    let data;
+    try {
+      ({ data } = await octokit.request('PUT /repos/{owner}/{repo}/contents/{path}', {
+        owner: resolvedOrg.login,
+        repo,
+        path,
+        message: message || `Update ${path}`,
+        content: Buffer.from(content).toString('base64'),
+        sha: existing?.sha, // Required for updates, undefined for creates
+        ...(branch ? { branch } : {}),
+      }));
+    } catch (error: unknown) {
+      // Sha-less create against an existing file → GitHub 422. For createOnly
+      // callers that's the existence race, surfaced with conflict semantics.
+      if (createOnly && hasStatus(error, 422)) {
+        const conflict = new Error(
+          `File already exists: ${path} (create-only write refused)`
+        ) as Error & { status: number };
+        conflict.status = 409;
+        throw conflict;
+      }
+      throw error;
+    }
 
     // Invalidate cache for this path (and parent folder).
     // Branch writes don't touch the default branch's content, so they must
@@ -960,6 +1002,7 @@ export class ContentService {
     message,
     onProgress,
     verifyBaseTree,
+    primeCache = false,
   }: {
     gitOrganization?: GitOrganizationRecord;
     orgLogin?: string;
@@ -972,6 +1015,13 @@ export class ContentService {
       total: number;
       filename: string | undefined;
     }) => void;
+    /**
+     * Opt-in read-after-write coherence: on success (default-branch writes
+     * only), store each utf-8 file's { content, sha } into the response cache
+     * getContent reads, so a same-process read immediately after the commit
+     * sees the new content despite GitHub's Contents-API replication lag.
+     */
+    primeCache?: boolean;
     /**
      * Optimistic-concurrency hook, run on EVERY retry attempt against the
      * commit the new tree will be based on. `getFileSha(path)` returns the
@@ -1040,10 +1090,12 @@ export class ContentService {
         await verifyBaseTree({
           getFileSha: async (path: string) => {
             try {
-              const { data } = await octokit.request(
-                'GET /repos/{owner}/{repo}/contents/{path}',
-                { owner: resolvedOrg.login, repo, path, ref: currentCommitSha }
-              );
+              const { data } = await octokit.request('GET /repos/{owner}/{repo}/contents/{path}', {
+                owner: resolvedOrg.login,
+                repo,
+                path,
+                ref: currentCommitSha,
+              });
               return Array.isArray(data) ? null : (data.sha ?? null);
             } catch (error) {
               if ((error as { status?: number }).status === 404) return null;
@@ -1106,6 +1158,22 @@ export class ContentService {
     // Invalidate cache for all uploaded files and their parent folders
     for (const file of files) {
       invalidateCache(resolvedOrg.login, repo, file.path);
+    }
+
+    // Prime the response cache with the just-written content (default branch
+    // only — the cache is keyed org:repo:path for the default branch). Runs
+    // AFTER invalidation so the fresh entries survive.
+    if (primeCache && branch === 'main') {
+      const shaByPath = new Map(result.files.map(f => [f.path, f.sha]));
+      for (const file of files) {
+        if ((file.encoding ?? 'utf-8') !== 'utf-8' || isImagePath(file.path)) continue;
+        const sha = shaByPath.get(file.path);
+        if (!sha) continue;
+        setCache(getCacheKey(resolvedOrg.login, repo, file.path) + ':content', {
+          content: file.content,
+          sha,
+        });
+      }
     }
 
     return result;

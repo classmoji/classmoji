@@ -298,6 +298,10 @@ export async function saveDeck({
     files,
     branch: targetBranch,
     message,
+    // Main writes prime the response cache so a same-process read right after
+    // the save (editor reload, MCP re-read) sees the new content despite
+    // GitHub's Contents-API replication lag.
+    primeCache: !isPreviewBranch,
     // True CAS: re-verify the expected sha against EVERY retry attempt's base
     // commit, so a ref race can never retry past (and clobber) a concurrent
     // save. Mirrors the pre-check's 2×2 table rows for the sha we hold.

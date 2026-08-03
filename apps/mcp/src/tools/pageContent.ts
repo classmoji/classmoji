@@ -35,16 +35,25 @@ import {
 
 // ─── Shared helpers ──────────────────────────────────────────────────────────
 
-const CONTENT_CONFLICT_MESSAGE =
-  'Content changed since you read it — call page_content_get again for a fresh sha';
-
 const LEGACY_GUIDANCE =
   'This page still stores legacy HTML (index.html), so granular block ops are unavailable. ' +
   'Either open the page once in the web editor to migrate it to BlockNote, or overwrite it ' +
   'with a single replace_all op carrying fresh BlockNote blocks.';
 
-function contentConflict(): ToolError {
-  return new ToolError('invalid_params', CONTENT_CONFLICT_MESSAGE, 'CONTENT_CONFLICT');
+/**
+ * CONTENT_CONFLICT naming the ref that was compared: when a preview exists,
+ * applies stack onto it and the sha must come from a preview read — a stale
+ * main sha is the most common mistake, so the message says which re-read fixes it.
+ */
+function contentConflict(at: 'main' | 'preview' = 'main'): ToolError {
+  return new ToolError(
+    'invalid_params',
+    at === 'preview'
+      ? 'Content changed since you read it — a preview exists and applies stack onto it, so ' +
+          "re-read with page_content_get at: 'preview' for a fresh sha"
+      : 'Content changed since you read it — call page_content_get again for a fresh sha',
+    'CONTENT_CONFLICT'
+  );
 }
 
 /** A BlockNote block as the tools see it (opaque beyond id/type/children). */
@@ -431,7 +440,8 @@ export const pageContentApplyTool: ToolDefinition<PageContentApplyArgs> = {
     'page_content_outline; a CONTENT_CONFLICT error means the content changed — re-read for a ' +
     "fresh sha. Published pages default to commit: 'preview' (a preview branch students never " +
     "see — review then page_preview_accept); drafts default to commit: 'direct'. Pass commit " +
-    'explicitly to override either way.',
+    'explicitly to override either way. When a preview already exists, applies STACK onto it ' +
+    "and expected_sha must come from a read at: 'preview' (main's sha will conflict).",
   scope: 'write',
   roles: OWNER_TEACHER,
   inputSchema: {
@@ -484,10 +494,14 @@ export const pageContentApplyTool: ToolDefinition<PageContentApplyArgs> = {
       throw new ToolError('invalid_params', LEGACY_GUIDANCE);
     }
 
+    // Which ref the sha was compared against — names the right re-read in
+    // CONTENT_CONFLICT messages (stacking reads target the preview branch).
+    const conflictAt: 'main' | 'preview' = loadRef ? 'preview' : 'main';
+
     // Optimistic lock (tool-level, works for BOTH sha sources): the sha the
     // caller read must still be the sha of the file we loaded.
     if (content.sha !== null && content.sha !== args.expected_sha) {
-      throw contentConflict();
+      throw contentConflict(conflictAt);
     }
 
     const priorBlocks =
@@ -498,11 +512,17 @@ export const pageContentApplyTool: ToolDefinition<PageContentApplyArgs> = {
         : [];
     const priorCount = countBlocks(priorBlocks);
 
+    // Client-supplied ids that collide with existing ids (or each other) are
+    // re-minted deterministically inside applyBlockOps — collected here so the
+    // result/audit report the re-mints.
+    const idRemints: Array<{ op_index: number; from: string; to: string }> = [];
+
     let newBlocks: unknown[];
     try {
       newBlocks = ClassmojiService.pageContent.applyBlockOps(
         priorBlocks,
-        args.ops as Parameters<typeof ClassmojiService.pageContent.applyBlockOps>[1]
+        args.ops as Parameters<typeof ClassmojiService.pageContent.applyBlockOps>[1],
+        { onIdRemint: remint => idRemints.push(remint) }
       );
     } catch (error) {
       if (error instanceof Error && error.name === 'BlockOpError') {
@@ -515,11 +535,19 @@ export const pageContentApplyTool: ToolDefinition<PageContentApplyArgs> = {
     // fill them deterministically so this apply PERSISTS stable ids.
     newBlocks = ClassmojiService.pageContent.ensureBlockIds(newBlocks as BlockNode[]);
 
+    let createdPreviewBranch = false;
     if (committedTo === 'preview') {
       // Create the branch from main's current HEAD when absent (no-op when
       // stacking on an existing preview).
-      await ClassmojiService.pageContent.ensurePreviewBranch(page);
+      const ensured = await ClassmojiService.pageContent.ensurePreviewBranch(page);
+      createdPreviewBranch = ensured.created;
     }
+
+    // On a create (no content file yet), there is no sha to lock on — passing
+    // one would 409 every first write (put treats expectedSha + missing file
+    // as deleted-since-read). GitHub's sha-less create still rejects an
+    // existence race with a 422, mapped to CONTENT_CONFLICT below.
+    const isCreate = content.sha === null;
 
     let saved: { sha: string; commit: string };
     try {
@@ -527,20 +555,45 @@ export const pageContentApplyTool: ToolDefinition<PageContentApplyArgs> = {
         // Also enforced GitHub-side at write time: catches a racing writer
         // between our read and this commit (and a content.json materialized
         // out-of-band under a legacy page).
-        expectedSha: args.expected_sha,
+        ...(isCreate ? {} : { expectedSha: args.expected_sha }),
         ...(committedTo === 'preview'
           ? { branch: ClassmojiService.pageContent.previewBranchName(page.content_path) }
           : {}),
         message: `page_content_apply: ${page.title}`,
       });
     } catch (error) {
-      if ((error as { status?: number }).status === 409) {
-        throw contentConflict();
+      const status = (error as { status?: number }).status;
+      // 409 = optimistic-lock loss; 422 on a create = a concurrent creator won
+      // the sha-less create race — both mean "re-read for a fresh sha".
+      if (status === 409 || (isCreate && status === 422)) {
+        // The branch was created by THIS apply and the save failed — delete
+        // the fresh (empty) branch so it doesn't strand the page in preview
+        // mode with no pending edits. Best-effort.
+        if (createdPreviewBranch) {
+          try {
+            await ClassmojiService.pageContent.discardPreview(page);
+          } catch (cleanupError: unknown) {
+            console.warn(
+              '[page_content_apply] Failed to clean up the freshly created preview branch:',
+              cleanupError instanceof Error ? cleanupError.message : String(cleanupError)
+            );
+          }
+        }
+        throw contentConflict(conflictAt);
       }
       throw error;
     }
 
     const applied = summarizeOps(args.ops);
+    for (const remint of idRemints) {
+      const entry = applied[remint.op_index];
+      if (entry) {
+        const reminted =
+          (entry.reminted_ids as Array<{ from: string; to: string }> | undefined) ?? [];
+        reminted.push({ from: remint.from, to: remint.to });
+        entry.reminted_ids = reminted;
+      }
+    }
     const hasDestructiveOps = args.ops.some(op => op.op === 'replace_all' || op.op === 'delete');
 
     await writeAudit(ctx, {
@@ -609,9 +662,23 @@ export const pagePreviewAcceptTool: ToolDefinition<PagePreviewArgs> = {
           tool: 'page_preview_accept',
           outcome: 'merged',
           new_sha: result.sha,
+          ...(result.preview_kept ? { preview_kept: true, reason: result.reason } : {}),
         } as Prisma.InputJsonValue,
       });
-      return ok({ success: true, merged: true, new_sha: result.sha });
+      return ok({
+        success: true,
+        merged: true,
+        new_sha: result.sha,
+        ...(result.preview_kept
+          ? {
+              preview_kept: true,
+              message:
+                'New changes arrived during accept — the preview branch was retained with the ' +
+                `newer edits (${result.reason ?? 'concurrent apply'}). Review and accept again, ` +
+                'or discard.',
+            }
+          : {}),
+      });
     }
 
     await writeAudit(ctx, {

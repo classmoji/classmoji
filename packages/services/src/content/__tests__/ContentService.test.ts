@@ -264,6 +264,175 @@ describe('put with branch', () => {
     const after = await ContentService.getContent({ gitOrganization, repo, path });
     expect(after?.content).toBe('main-v2');
   });
+
+  it('expectedSha + missing file → 409 (deleted since read), never a silent create', async () => {
+    const repo = 'repo-put-deleted';
+    const path = 'pages/gone/content.json';
+
+    requestMock.mockImplementation(async (route: string) => {
+      if (route === 'GET /repos/{owner}/{repo}/contents/{path}') {
+        const error = Object.assign(new Error('Not Found'), { status: 404 });
+        throw error;
+      }
+      throw new Error(`Unexpected route: ${route}`);
+    });
+
+    await expect(
+      ContentService.put({
+        gitOrganization,
+        repo,
+        path,
+        content: 'resurrected?',
+        expectedSha: 'sha-old',
+      })
+    ).rejects.toMatchObject({ status: 409, message: expect.stringContaining('deleted') });
+
+    // Nothing was written
+    expect(requestMock.mock.calls.some(([route]) => String(route).startsWith('PUT '))).toBe(false);
+  });
+});
+
+describe('put createOnly', () => {
+  it('sends NO sha (no prior meta read) and creates the file', async () => {
+    const repo = 'repo-createonly-ok';
+    const path = 'slides/x/deck.json';
+
+    requestMock.mockImplementation(async (route: string) => {
+      if (route === 'PUT /repos/{owner}/{repo}/contents/{path}') {
+        return { data: { content: { sha: 'sha-created' }, commit: { sha: 'commit-created' } } };
+      }
+      throw new Error(`Unexpected route: ${route}`);
+    });
+
+    const result = await ContentService.put({
+      gitOrganization,
+      repo,
+      path,
+      content: '{}',
+      createOnly: true,
+    });
+    expect(result).toEqual({ sha: 'sha-created', commit: 'commit-created' });
+
+    // No getMeta probe ran, and the PUT carried no sha
+    expect(contentsGetCalls().total).toBe(0);
+    const putCall = requestMock.mock.calls.find(([route]) => String(route).startsWith('PUT '));
+    expect((putCall?.[1] as RequestParams).sha).toBeUndefined();
+  });
+
+  it("maps GitHub's 422 (file exists) to a 409 existence conflict", async () => {
+    const repo = 'repo-createonly-race';
+    const path = 'slides/x/deck.json';
+
+    requestMock.mockImplementation(async (route: string) => {
+      if (route === 'PUT /repos/{owner}/{repo}/contents/{path}') {
+        throw Object.assign(new Error('Invalid request. "sha" wasn\'t supplied.'), {
+          status: 422,
+        });
+      }
+      throw new Error(`Unexpected route: ${route}`);
+    });
+
+    await expect(
+      ContentService.put({ gitOrganization, repo, path, content: '{}', createOnly: true })
+    ).rejects.toMatchObject({ status: 409, message: expect.stringContaining('already exists') });
+  });
+
+  it('refuses createOnly combined with expectedSha', async () => {
+    await expect(
+      ContentService.put({
+        gitOrganization,
+        repo: 'repo-createonly-bad',
+        path: 'x.json',
+        content: '{}',
+        createOnly: true,
+        expectedSha: 'sha-1',
+      })
+    ).rejects.toThrow('mutually exclusive');
+  });
+});
+
+describe('uploadBatch primeCache', () => {
+  function mockBatchRoutes() {
+    requestMock.mockImplementation(async (route: string, params: RequestParams) => {
+      switch (route) {
+        case 'POST /repos/{owner}/{repo}/git/blobs': {
+          const decoded = Buffer.from(String(params.content), 'base64').toString('utf-8');
+          return { data: { sha: `blob-${decoded}` } };
+        }
+        case 'GET /repos/{owner}/{repo}/git/ref/{ref}':
+          return { data: { object: { sha: 'head-commit' } } };
+        case 'GET /repos/{owner}/{repo}/git/commits/{commit_sha}':
+          return { data: { tree: { sha: 'base-tree' } } };
+        case 'POST /repos/{owner}/{repo}/git/trees':
+          return { data: { sha: 'new-tree' } };
+        case 'POST /repos/{owner}/{repo}/git/commits':
+          return { data: { sha: 'new-commit' } };
+        case 'PATCH /repos/{owner}/{repo}/git/refs/{ref}':
+          return { data: {} };
+        case 'GET /repos/{owner}/{repo}/contents/{path}':
+          // A post-write API read would serve STALE content (Contents-API lag)
+          return {
+            data: { content: Buffer.from('stale-from-api').toString('base64'), sha: 'sha-stale' },
+          };
+        default:
+          throw new Error(`Unexpected route: ${route}`);
+      }
+    });
+  }
+
+  it('primeCache:true makes a same-process read-after-write coherent (no API read)', async () => {
+    const repo = 'repo-primecache-on';
+    const path = 'slides/p/deck.json';
+    mockBatchRoutes();
+
+    await ContentService.uploadBatch({
+      gitOrganization,
+      repo,
+      files: [{ path, content: '{"fresh":true}' }],
+      message: 'save',
+      primeCache: true,
+    });
+
+    const read = await ContentService.getContent({ gitOrganization, repo, path });
+    expect(read).toEqual({ content: '{"fresh":true}', sha: 'blob-{"fresh":true}' });
+    expect(contentsGetCalls().total).toBe(0); // cache hit — API never touched
+  });
+
+  it('without primeCache the post-write read still goes to the API (unchanged)', async () => {
+    const repo = 'repo-primecache-off';
+    const path = 'slides/p/deck.json';
+    mockBatchRoutes();
+
+    await ContentService.uploadBatch({
+      gitOrganization,
+      repo,
+      files: [{ path, content: '{"fresh":true}' }],
+      message: 'save',
+    });
+
+    const read = await ContentService.getContent({ gitOrganization, repo, path });
+    expect(read?.content).toBe('stale-from-api');
+    expect(contentsGetCalls().total).toBe(1);
+  });
+
+  it('primeCache is scoped to main — branch batches prime nothing', async () => {
+    const repo = 'repo-primecache-branch';
+    const path = 'slides/p/deck.json';
+    mockBatchRoutes();
+
+    await ContentService.uploadBatch({
+      gitOrganization,
+      repo,
+      files: [{ path, content: '{"fresh":true}' }],
+      branch: 'preview/slides/p',
+      message: 'save',
+      primeCache: true,
+    });
+
+    const read = await ContentService.getContent({ gitOrganization, repo, path });
+    expect(read?.content).toBe('stale-from-api');
+    expect(contentsGetCalls().total).toBe(1);
+  });
 });
 
 describe('branch lifecycle wrappers', () => {

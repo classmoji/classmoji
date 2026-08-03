@@ -175,6 +175,40 @@ describe('ensureDeckPreviewBranch', () => {
     expect(result).toEqual({ branch: BRANCH, created: false });
     expect(createBranchMock).not.toHaveBeenCalled();
   });
+
+  it('treats a 422 "Reference already exists" creation race as created:false', async () => {
+    compareBranchesMock
+      .mockResolvedValueOnce(null) // branch probe → absent (stale)
+      .mockResolvedValueOnce({
+        ahead_by: 0,
+        behind_by: 0,
+        base_sha: 'main-head-sha',
+        head_sha: 'main-head-sha',
+        merge_base_sha: 'main-head-sha',
+        commits: [],
+      });
+    createBranchMock.mockRejectedValue(
+      Object.assign(new Error('Reference already exists'), { status: 422 })
+    );
+
+    const result = await ensureDeckPreviewBranch(slide);
+
+    expect(result).toEqual({ branch: BRANCH, created: false });
+  });
+
+  it('rethrows non-existence createBranch failures', async () => {
+    compareBranchesMock.mockResolvedValueOnce(null).mockResolvedValueOnce({
+      ahead_by: 0,
+      behind_by: 0,
+      base_sha: 'main-head-sha',
+      head_sha: 'main-head-sha',
+      merge_base_sha: 'main-head-sha',
+      commits: [],
+    });
+    createBranchMock.mockRejectedValue(Object.assign(new Error('boom'), { status: 500 }));
+
+    await expect(ensureDeckPreviewBranch(slide)).rejects.toThrow('boom');
+  });
 });
 
 // ─── acceptDeckPreview — clean merge ─────────────────────────────────────────
@@ -185,6 +219,15 @@ describe('acceptDeckPreview (clean merge)', () => {
   beforeEach(() => {
     mergeBranchMock.mockResolvedValue({ merged: true, sha: 'merge-commit' });
     getContentMock.mockResolvedValue({ content: deckJson(mergedDeck), sha: 'merged-deck-sha' });
+    // Post-merge concurrent-stacking guard: branch has nothing main lacks.
+    compareBranchesMock.mockResolvedValue({
+      ahead_by: 0,
+      behind_by: 0,
+      base_sha: 'main-sha',
+      head_sha: 'main-sha',
+      merge_base_sha: 'main-sha',
+      commits: [],
+    });
   });
 
   it('merges → regenerates index.html on main from the MERGED deck.json → deletes the branch', async () => {
@@ -194,9 +237,10 @@ describe('acceptDeckPreview (clean merge)', () => {
       expect.objectContaining({ base: 'main', head: BRANCH })
     );
 
-    // Merged deck read from main, cache bypassed (the sha doubles as the CAS pin).
+    // Merged deck read AT THE MERGE COMMIT — a deterministic ref immune to
+    // eventually-consistent branch reads (the sha doubles as the CAS pin).
     expect(getContentMock).toHaveBeenCalledWith(
-      expect.objectContaining({ path: DECK_PATH, skipCache: true })
+      expect.objectContaining({ path: DECK_PATH, ref: 'merge-commit' })
     );
 
     // Regeneration: ONE single-file batch on main carrying only the artifact.
@@ -240,9 +284,9 @@ describe('acceptDeckPreview (clean merge)', () => {
     expect(batchArgs.files[0].content).toContain('/content/x/lib.css');
   });
 
-  it('verifyBaseTree pins the merged deck sha — a moved deck.json skips regeneration instead of clobbering', async () => {
-    // The base tree seen at commit time carries a DIFFERENT deck.json sha
-    // (a concurrent saveDeck landed — and that save regenerated the artifact).
+  it('verifyBaseTree pins the merged deck sha — a persistently racing deck.json skips regeneration after ONE retry', async () => {
+    // The base tree seen at commit time carries a DIFFERENT deck.json sha on
+    // EVERY attempt (writes actively racing — each racer regenerates itself).
     uploadBatchMock.mockImplementation(
       async ({
         verifyBaseTree,
@@ -260,9 +304,92 @@ describe('acceptDeckPreview (clean merge)', () => {
 
     const result = await acceptDeckPreview(slide);
 
-    // Merge landed; regeneration safely skipped; branch STILL deleted.
+    // Merge landed; one retry against fresh main, then safely skipped; branch
+    // STILL deleted.
+    expect(uploadBatchMock).toHaveBeenCalledTimes(2);
     expect(result).toEqual({ merged: true, sha: 'merged-deck-sha', html_regenerated: false });
     expect(deleteBranchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('verifyBaseTree conflict retries ONCE against fresh main and regenerates from the fresh deck', async () => {
+    const freshDeck = deckWith([{ id: 'bbbb2222', html: '<h1>Fresh</h1>' }]);
+    // Merge-commit read → merged deck; fresh main read (no ref) → fresh deck.
+    getContentMock.mockImplementation(({ ref }: { ref?: string }) =>
+      Promise.resolve(
+        ref === 'merge-commit'
+          ? { content: deckJson(mergedDeck), sha: 'merged-deck-sha' }
+          : { content: deckJson(freshDeck), sha: 'fresh-sha' }
+      )
+    );
+    // First attempt: base tree moved past the merged sha → conflict.
+    // Second attempt (pinned to fresh-sha): base tree matches → commit.
+    uploadBatchMock.mockImplementation(
+      async ({
+        files,
+        verifyBaseTree,
+      }: {
+        files: Array<{ path: string; content: string }>;
+        verifyBaseTree?: (ctx: {
+          getFileSha: (path: string) => Promise<string | null>;
+        }) => Promise<void>;
+      }) => {
+        if (verifyBaseTree) {
+          await verifyBaseTree({ getFileSha: async () => 'fresh-sha' });
+        }
+        return {
+          commit: 'regen-commit',
+          filesUploaded: files.length,
+          files: files.map(f => ({ path: f.path, sha: 'new-html-sha' })),
+        };
+      }
+    );
+
+    const result = await acceptDeckPreview(slide);
+
+    expect(uploadBatchMock).toHaveBeenCalledTimes(2);
+    // The retry's artifact came from the FRESH deck, and the reported sha is
+    // the fresh deck's (the caller's next expected_sha).
+    const retryArgs = uploadBatchMock.mock.calls[1][0] as {
+      files: Array<{ content: string }>;
+    };
+    expect(retryArgs.files[0].content).toContain('<h1>Fresh</h1>');
+    expect(result).toEqual({ merged: true, sha: 'fresh-sha', html_regenerated: true });
+    expect(deleteBranchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps the branch when a concurrent stacking apply landed during accept (preview_kept)', async () => {
+    // Post-merge compare: the branch gained commits main lacks.
+    compareBranchesMock.mockResolvedValue({
+      ahead_by: 2,
+      behind_by: 0,
+      base_sha: 'main-sha',
+      head_sha: 'newer-head',
+      merge_base_sha: 'main-sha',
+      commits: [
+        { sha: 'n1', date: '2026-08-03T10:00:00Z' },
+        { sha: 'n2', date: '2026-08-03T10:01:00Z' },
+      ],
+    });
+
+    const result = await acceptDeckPreview(slide);
+
+    expect(result).toMatchObject({
+      merged: true,
+      sha: 'merged-deck-sha',
+      html_regenerated: true,
+      preview_kept: true,
+      reason: expect.stringContaining('retained'),
+    });
+    expect(deleteBranchMock).not.toHaveBeenCalled();
+  });
+
+  it('keeps the branch for safety when the post-merge compare fails', async () => {
+    compareBranchesMock.mockRejectedValue(new Error('GitHub down'));
+
+    const result = await acceptDeckPreview(slide);
+
+    expect(result).toMatchObject({ merged: true, preview_kept: true });
+    expect(deleteBranchMock).not.toHaveBeenCalled();
   });
 
   it('unreadable merged deck.json: merge stands, no regenerate, branch still deleted', async () => {

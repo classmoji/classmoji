@@ -493,6 +493,101 @@ describe('pageContent.applyBlockOps', () => {
     ]);
     expect(input).toEqual(snapshot);
   });
+
+  describe('id uniqueness (client-supplied blocks)', () => {
+    it('insert re-mints an id colliding with an existing block and reports it', () => {
+      const remints: Array<{ op_index: number; from: string; to: string }> = [];
+      const result = applyBlockOps(
+        doc(),
+        [{ op: 'insert', blocks: [{ id: 'a', type: 'paragraph' }], position: { at: 'end' } }],
+        { onIdRemint: remint => remints.push(remint) }
+      );
+
+      const newId = ids(result)[3];
+      expect(newId).not.toBe('a');
+      expect(newId).toMatch(/^b[0-9a-f]{10}$/);
+      expect(ids(result).slice(0, 3)).toEqual(['a', 'b', 'c']);
+      expect(remints).toEqual([{ op_index: 0, from: 'a', to: newId }]);
+      // No duplicate ids anywhere afterwards
+      expect(new Set(ids(result)).size).toBe(4);
+    });
+
+    it('re-mints deterministically — the same doc + ops always yield the same id', () => {
+      const run = () =>
+        applyBlockOps(doc(), [
+          { op: 'insert', blocks: [{ id: 'b1', type: 'paragraph' }], position: { at: 'end' } },
+        ]);
+      expect(ids(run())[3]).toBe(ids(run())[3]);
+    });
+
+    it('insert payload blocks colliding with EACH OTHER get distinct ids', () => {
+      const result = applyBlockOps(doc(), [
+        {
+          op: 'insert',
+          blocks: [
+            { id: 'x', type: 'paragraph', content: [{ type: 'text', text: 'one' }] },
+            { id: 'x', type: 'paragraph', content: [{ type: 'text', text: 'two' }] },
+          ],
+          position: { at: 'end' },
+        },
+      ]);
+      const [first, second] = ids(result).slice(3);
+      expect(first).toBe('x'); // first claimant keeps the id
+      expect(second).not.toBe('x');
+      expect(new Set(ids(result)).size).toBe(5);
+    });
+
+    it('replace_all deduplicates internal id collisions', () => {
+      const result = applyBlockOps(doc(), [
+        {
+          op: 'replace_all',
+          blocks: [
+            { id: 'dup', type: 'paragraph', content: [] },
+            { id: 'dup', type: 'heading', content: [] },
+          ],
+        },
+      ]);
+      expect(ids(result)[0]).toBe('dup');
+      expect(ids(result)[1]).not.toBe('dup');
+    });
+
+    it("update re-mints replacement children that collide with OTHER blocks' ids", () => {
+      const result = applyBlockOps(doc(), [
+        {
+          op: 'update',
+          id: 'c',
+          block: {
+            type: 'bulletListItem',
+            content: [],
+            children: [
+              { id: 'a', type: 'bulletListItem', content: [] }, // collides with block 'a'
+              { id: 'fresh', type: 'bulletListItem', content: [] },
+            ],
+          },
+        },
+      ]) as Array<{ id: string; children?: Array<{ id: string }> }>;
+
+      const childIds = result[2].children!.map(child => child.id);
+      expect(childIds[0]).not.toBe('a');
+      expect(childIds[1]).toBe('fresh');
+    });
+
+    it('update replacement children may REUSE ids from the replaced subtree', () => {
+      const result = applyBlockOps(doc(), [
+        {
+          op: 'update',
+          id: 'b',
+          block: {
+            type: 'bulletListItem',
+            content: [],
+            children: [{ id: 'b1', type: 'paragraph', content: [] }], // b1 was inside 'b'
+          },
+        },
+      ]) as Array<{ children?: Array<{ id: string }> }>;
+
+      expect(result[1].children![0].id).toBe('b1');
+    });
+  });
 });
 
 // ─── preview branches (plan §3b) ─────────────────────────────────────────────
@@ -603,16 +698,67 @@ describe('pageContent.ensurePreviewBranch', () => {
     await expect(ensurePreviewBranch(page)).rejects.toThrow(/main HEAD/);
     expect(createBranchMock).not.toHaveBeenCalled();
   });
+
+  it('treats a 422 "Reference already exists" creation race as created:false', async () => {
+    compareBranchesMock
+      .mockResolvedValueOnce(null) // branch probe → absent (stale)
+      .mockResolvedValueOnce({
+        ahead_by: 0,
+        behind_by: 0,
+        base_sha: 'main-head',
+        head_sha: 'main-head',
+        merge_base_sha: 'main-head',
+        commits: [],
+      });
+    createBranchMock.mockRejectedValue(
+      Object.assign(new Error('Reference already exists'), { status: 422 })
+    );
+
+    expect(await ensurePreviewBranch(page)).toEqual({ branch: PREVIEW_BRANCH, created: false });
+  });
+
+  it('rethrows non-existence createBranch failures', async () => {
+    compareBranchesMock.mockResolvedValueOnce(null).mockResolvedValueOnce({
+      ahead_by: 0,
+      behind_by: 0,
+      base_sha: 'main-head',
+      head_sha: 'main-head',
+      merge_base_sha: 'main-head',
+      commits: [],
+    });
+    createBranchMock.mockRejectedValue(Object.assign(new Error('boom'), { status: 500 }));
+
+    await expect(ensurePreviewBranch(page)).rejects.toThrow('boom');
+  });
 });
 
 describe('pageContent.acceptPreview', () => {
-  it('clean merge: merges main←preview, deletes the branch, returns the merge sha', async () => {
+  /** Post-merge stacking guard: branch has nothing main lacks. */
+  const branchFullyMerged = () =>
+    compareBranchesMock.mockResolvedValue({
+      ahead_by: 0,
+      behind_by: 0,
+      base_sha: 'main-head',
+      head_sha: 'main-head',
+      merge_base_sha: 'main-head',
+      commits: [],
+    });
+
+  it('clean merge: merges main←preview, deletes the branch, returns the content BLOB sha', async () => {
     mergeBranchMock.mockResolvedValue({ merged: true, sha: 'merge-sha' });
     deleteBranchMock.mockResolvedValue({ deleted: true });
+    getContentMock.mockResolvedValue({ content: '{"blocks":[]}', sha: 'merged-blob-sha' });
+    branchFullyMerged();
 
     const result = await acceptPreview(page);
 
-    expect(result).toEqual({ merged: true, sha: 'merge-sha' });
+    // D2: the reported sha is content.json's blob sha on main (the caller's
+    // next expected_sha), read AT THE MERGE COMMIT — a deterministic ref.
+    expect(result).toEqual({ merged: true, sha: 'merged-blob-sha' });
+    expect(callArg(getContentMock)).toMatchObject({
+      path: 'pages/syllabus/content.json',
+      ref: 'merge-sha',
+    });
     expect(callArg(mergeBranchMock)).toMatchObject({
       repo: 'content-test-org-cs101',
       base: 'main',
@@ -621,12 +767,51 @@ describe('pageContent.acceptPreview', () => {
     expect(callArg(deleteBranchMock)).toMatchObject({ branch: PREVIEW_BRANCH });
   });
 
-  it('already-merged (204): still deletes the branch, sha is null', async () => {
+  it('already-merged (204): still deletes the branch, sha from a fresh main read', async () => {
     mergeBranchMock.mockResolvedValue({ merged: true });
     deleteBranchMock.mockResolvedValue({ deleted: true });
+    getContentMock.mockResolvedValue(null); // no content.json on main
+    branchFullyMerged();
 
     expect(await acceptPreview(page)).toEqual({ merged: true, sha: null });
+    // No merge commit to pin on → fresh (skipCache) main read.
+    expect(callArg(getContentMock)).toMatchObject({ skipCache: true });
+    expect(callArg(getContentMock).ref).toBeUndefined();
     expect(deleteBranchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps the branch when a concurrent stacking apply landed during accept (preview_kept)', async () => {
+    mergeBranchMock.mockResolvedValue({ merged: true, sha: 'merge-sha' });
+    getContentMock.mockResolvedValue({ content: '{"blocks":[]}', sha: 'merged-blob-sha' });
+    compareBranchesMock.mockResolvedValue({
+      ahead_by: 1,
+      behind_by: 0,
+      base_sha: 'main-head',
+      head_sha: 'newer-head',
+      merge_base_sha: 'main-head',
+      commits: [{ sha: 'n1', date: '2026-08-03T10:00:00Z' }],
+    });
+
+    const result = await acceptPreview(page);
+
+    expect(result).toMatchObject({
+      merged: true,
+      sha: 'merged-blob-sha',
+      preview_kept: true,
+      reason: expect.stringContaining('retained'),
+    });
+    expect(deleteBranchMock).not.toHaveBeenCalled();
+  });
+
+  it('keeps the branch for safety when the post-merge compare fails', async () => {
+    mergeBranchMock.mockResolvedValue({ merged: true, sha: 'merge-sha' });
+    getContentMock.mockResolvedValue({ content: '{"blocks":[]}', sha: 'merged-blob-sha' });
+    compareBranchesMock.mockRejectedValue(new Error('GitHub down'));
+
+    const result = await acceptPreview(page);
+
+    expect(result).toMatchObject({ merged: true, preview_kept: true });
+    expect(deleteBranchMock).not.toHaveBeenCalled();
   });
 
   it('conflict: builds the 3-way per-unit report and does NOT delete the branch', async () => {

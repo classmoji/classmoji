@@ -514,6 +514,52 @@ describe('deck_apply routing + locking', () => {
     expect(mocks.auditCreate).not.toHaveBeenCalled();
   });
 
+  it('a 409 after THIS apply created the branch deletes the fresh (empty) preview', async () => {
+    // No preview existed; ensure creates one; then the save conflicts.
+    mocks.ensureDeckPreviewBranch.mockResolvedValue({ branch: PREVIEW_BRANCH, created: true });
+    mocks.saveDeck.mockRejectedValue(
+      Object.assign(new Error('Deck changed since it was read'), { status: 409 })
+    );
+
+    await expect(deckApplyTool.handler(APPLY_ARGS, CTX)).rejects.toMatchObject({
+      code: 'CONTENT_CONFLICT',
+    });
+    // The stranded empty branch is cleaned up (best-effort)…
+    expect(mocks.discardDeckPreview).toHaveBeenCalledTimes(1);
+  });
+
+  it('a 409 while STACKING keeps the pre-existing preview branch', async () => {
+    mocks.getDeckPreviewStatus.mockResolvedValue({ exists: true, commits_ahead: 1 });
+    mocks.ensureDeckPreviewBranch.mockResolvedValue({ branch: PREVIEW_BRANCH, created: false });
+    mocks.saveDeck.mockRejectedValue(Object.assign(new Error('conflict'), { status: 409 }));
+
+    await expect(deckApplyTool.handler(APPLY_ARGS, CTX)).rejects.toMatchObject({
+      code: 'CONTENT_CONFLICT',
+      // Stacking conflicts must name the preview re-read (F12).
+      message: expect.stringContaining("at: 'preview'"),
+    });
+    expect(mocks.discardDeckPreview).not.toHaveBeenCalled();
+  });
+
+  it('conflict messages name the compared ref: preview when stacking, plain re-read otherwise', async () => {
+    // Non-stacking (no preview existed): plain deck_get guidance.
+    await expect(
+      deckApplyTool.handler({ ...APPLY_ARGS, expected_sha: 'stale-sha' }, CTX)
+    ).rejects.toMatchObject({
+      code: 'CONTENT_CONFLICT',
+      message: expect.not.stringContaining("at: 'preview'"),
+    });
+
+    // Stacking (preview existed, loaded from it): preview re-read guidance.
+    mocks.getDeckPreviewStatus.mockResolvedValue({ exists: true, commits_ahead: 1 });
+    await expect(
+      deckApplyTool.handler({ ...APPLY_ARGS, expected_sha: 'stale-sha' }, CTX)
+    ).rejects.toMatchObject({
+      code: 'CONTENT_CONFLICT',
+      message: expect.stringContaining("at: 'preview'"),
+    });
+  });
+
   it('unparseable deck refuses granular ops with web-editor guidance', async () => {
     mocks.loadDeck.mockRejectedValue(new DeckParseError('no sections'));
 
@@ -682,6 +728,44 @@ describe('deck_apply op semantics', () => {
     expect(deck2.customCss).toBe('custom stuff'); // non-starter css preserved
   });
 
+  it('set_theme rejects traversal in shared:/custom: names (no /, no ..)', async () => {
+    for (const theme of [
+      'shared:../../x',
+      'shared:a/b',
+      'custom:../evil.css',
+      'custom:themes/evil.css',
+      'shared:',
+    ]) {
+      await expect(run([{ op: 'set_theme', theme }])).rejects.toMatchObject({
+        kind: 'invalid_params',
+        message: expect.stringContaining('Invalid theme name'),
+      });
+    }
+    expect(mocks.saveDeck).not.toHaveBeenCalled();
+
+    // Legitimate names still pass (custom names include '.css').
+    await run([{ op: 'set_theme', theme: 'custom:my-theme.css' }]);
+    expect(savedDeck().theme).toBe('custom:my-theme.css');
+  });
+
+  it('move rejects placing a stack container at a nested position', async () => {
+    await expect(
+      run([{ op: 'move', id: 'stack', position: { after: 'c1' } }])
+    ).rejects.toMatchObject({
+      kind: 'invalid_params',
+      message: expect.stringContaining('nested stacks are not supported'),
+    });
+    expect(mocks.saveDeck).not.toHaveBeenCalled();
+
+    // A LEAF can still move into a stack, and a container can move at top level.
+    await run([{ op: 'move', id: 'bbb', position: { after: 'c1' } }]);
+    expect(savedDeck().slides.map(s => s.id)).toEqual(['aaa', 'stack']);
+
+    mocks.saveDeck.mockClear();
+    await run([{ op: 'move', id: 'stack', position: { at: 'start' } }]);
+    expect(savedDeck().slides.map(s => s.id)).toEqual(['stack', 'aaa', 'bbb']);
+  });
+
   it('sequential visibility: a reorder after insert must cover the inserted slide', async () => {
     await expect(
       run([
@@ -779,6 +863,31 @@ describe('deck_preview_accept', () => {
       new_sha: 'merge-sha',
       html_regenerated: true,
     });
+  });
+
+  it('preview_kept (concurrent stacking apply during accept) surfaces in payload + audit', async () => {
+    mocks.getDeckPreviewStatus.mockResolvedValue({ exists: true, commits_ahead: 2 });
+    mocks.acceptDeckPreview.mockResolvedValue({
+      merged: true,
+      sha: 'merge-sha',
+      html_regenerated: true,
+      preview_kept: true,
+      reason: 'Preview branch gained 1 new commit(s) during accept — retained with the newer edits',
+    });
+
+    const payload = parse(
+      await deckPreviewAcceptTool.handler({ classroom: 'org/x', slide_id: SLIDE_ID }, CTX)
+    );
+
+    expect(payload).toMatchObject({
+      success: true,
+      merged: true,
+      preview_kept: true,
+      message: expect.stringContaining('preview branch was retained'),
+    });
+
+    const audit = mocks.auditCreate.mock.calls[0][0] as { data: Record<string, unknown> };
+    expect(audit.data).toMatchObject({ preview_kept: true, reason: expect.any(String) });
   });
 
   it('conflict: structured per-unit report as a NON-error payload, with guidance + audit', async () => {

@@ -62,15 +62,24 @@ import {
 
 // ─── Shared helpers ──────────────────────────────────────────────────────────
 
-const CONTENT_CONFLICT_MESSAGE =
-  'Deck changed since you read it — call deck_get again for a fresh sha';
-
 const LEGACY_GUIDANCE =
   "This deck's HTML could not be parsed into a structured deck, so granular slide ops are " +
   'unavailable. Open it once in the web slides editor and save to migrate it.';
 
-function contentConflict(): ToolError {
-  return new ToolError('invalid_params', CONTENT_CONFLICT_MESSAGE, 'CONTENT_CONFLICT');
+/**
+ * CONTENT_CONFLICT naming the ref that was compared: when a preview exists,
+ * applies stack onto it and the sha must come from a preview read — a stale
+ * main sha is the most common mistake, so the message says which re-read fixes it.
+ */
+function contentConflict(at: 'main' | 'preview' = 'main'): ToolError {
+  return new ToolError(
+    'invalid_params',
+    at === 'preview'
+      ? 'Deck changed since you read it — a preview exists and applies stack onto it, so ' +
+          "re-read with deck_get at: 'preview' for a fresh sha"
+      : 'Deck changed since you read it — call deck_get again for a fresh sha',
+    'CONTENT_CONFLICT'
+  );
 }
 
 /**
@@ -501,9 +510,23 @@ function insertSlidesAt(
   }
 }
 
+/** shared:/custom: theme names: single path segment, no separators, no '..'. */
+const THEME_NAME_RE = /^[\w.-]+$/;
+
 /** Validate a set_theme theme value: builtin, 'custom:<file>.css', or 'shared:<name>'. */
 function assertValidTheme(theme: string): void {
-  if (theme.startsWith('shared:') || theme.startsWith('custom:')) return;
+  if (theme.startsWith('shared:') || theme.startsWith('custom:')) {
+    // The suffix lands in repo paths (.slidesthemes/<name>/…) and generated
+    // link hrefs — refuse anything that could traverse ('/', '..').
+    const name = theme.slice(theme.indexOf(':') + 1);
+    if (!THEME_NAME_RE.test(name) || name.includes('..')) {
+      throw new DeckOpError(
+        `Invalid theme name '${theme}' — shared:/custom: names may only contain letters, ` +
+          "digits, '_', '-', and '.' (no path separators, no '..')"
+      );
+    }
+    return;
+  }
   if ((BUILTIN_THEMES as readonly string[]).includes(theme)) return;
   throw new DeckOpError(
     `Unknown theme '${theme}' — use a builtin (${BUILTIN_THEMES.join(', ')}), ` +
@@ -593,6 +616,19 @@ function applyDeckOps(
           throw new DeckOpError(`Cannot move slide '${op.id}' relative to itself`);
         }
         const source = mustFindSlide(deck.slides, op.id, 'move');
+        // Reveal supports one level of nesting: a stack container can never
+        // land inside another container. Checked BEFORE the splice so the
+        // rejection is targeted (not a generic unknown-id error).
+        if (source.slide.children?.length && 'after' in op.position) {
+          const target = mustFindSlide(deck.slides, op.position.after, 'move');
+          if (target.parent !== deck.slides) {
+            throw new DeckOpError(
+              `Cannot move slide '${op.id}' after '${op.position.after}' — '${op.id}' is a ` +
+                'vertical stack container and that position is inside another stack ' +
+                '(nested stacks are not supported)'
+            );
+          }
+        }
         const [moved] = source.parent.splice(source.index, 1);
         insertSlidesAt(deck, [moved], op.position, 'move');
         applied.push({ op: 'move', id: op.id });
@@ -682,8 +718,10 @@ export const deckApplyTool: ToolDefinition<DeckApplyArgs> = {
     'deck_outline; a CONTENT_CONFLICT error means the deck changed — re-read for a fresh sha. ' +
     "Published decks default to commit: 'preview' (a preview branch students never see — " +
     "review at the deck's ?preview=1 URL, then deck_preview_accept); drafts default to " +
-    "commit: 'direct'. Pass commit explicitly to override either way. Slide html/notes must " +
-    'not contain <section> tags (slide structure is managed via ops).',
+    "commit: 'direct'. Pass commit explicitly to override either way. When a preview already " +
+    "exists, applies STACK onto it and expected_sha must come from a read at: 'preview' " +
+    "(main's sha will conflict). Slide html/notes must not contain <section> tags (slide " +
+    'structure is managed via ops).',
   scope: 'write',
   roles: TEACHING_TEAM,
   inputSchema: {
@@ -737,12 +775,16 @@ export const deckApplyTool: ToolDefinition<DeckApplyArgs> = {
       throw new ToolError('invalid_params', LEGACY_GUIDANCE);
     }
 
+    // Which ref the sha was compared against — names the right re-read in
+    // CONTENT_CONFLICT messages (stacking reads target the preview branch).
+    const conflictAt: 'main' | 'preview' = loadRef ? 'preview' : 'main';
+
     // Optimistic lock (tool-level): the sha AND source the caller read must
     // still describe the file we loaded. saveDeck re-verifies both inside the
     // git operation (true CAS), so a racer between here and the commit still
     // surfaces as a 409, never a clobber.
     if (loaded.sha !== args.expected_sha || loaded.sha_source !== shaSource) {
-      throw contentConflict();
+      throw contentConflict(conflictAt);
     }
 
     const priorSlideCount = countSlides(loaded.deck.slides);
@@ -758,10 +800,12 @@ export const deckApplyTool: ToolDefinition<DeckApplyArgs> = {
       throw error;
     }
 
+    let createdPreviewBranch = false;
     if (committedTo === 'preview') {
       // Create the branch from main's current HEAD when absent (no-op when
       // stacking on an existing preview).
-      await ensureDeckPreviewBranch(slide);
+      const ensured = await ensureDeckPreviewBranch(slide);
+      createdPreviewBranch = ensured.created;
     }
 
     // Shared-theme URLs are caller-resolved (the engine never calls services
@@ -781,7 +825,20 @@ export const deckApplyTool: ToolDefinition<DeckApplyArgs> = {
       });
     } catch (error: unknown) {
       if ((error as { status?: number }).status === 409) {
-        throw contentConflict();
+        // The branch was created by THIS apply and the save failed — delete
+        // the fresh (empty) branch so it doesn't strand the deck in preview
+        // mode with no pending edits. Best-effort.
+        if (createdPreviewBranch) {
+          try {
+            await discardDeckPreview(slide);
+          } catch (cleanupError: unknown) {
+            console.warn(
+              '[deck_apply] Failed to clean up the freshly created preview branch:',
+              cleanupError instanceof Error ? cleanupError.message : String(cleanupError)
+            );
+          }
+        }
+        throw contentConflict(conflictAt);
       }
       throw error;
     }
@@ -861,6 +918,7 @@ export const deckPreviewAcceptTool: ToolDefinition<DeckPreviewArgs> = {
           outcome: 'merged',
           new_sha: result.sha,
           html_regenerated: result.html_regenerated,
+          ...(result.preview_kept ? { preview_kept: true, reason: result.reason } : {}),
         } as Prisma.InputJsonValue,
       });
       return ok({
@@ -868,6 +926,15 @@ export const deckPreviewAcceptTool: ToolDefinition<DeckPreviewArgs> = {
         merged: true,
         new_sha: result.sha,
         html_regenerated: result.html_regenerated,
+        ...(result.preview_kept
+          ? {
+              preview_kept: true,
+              message:
+                'New changes arrived during accept — the preview branch was retained with the ' +
+                `newer edits (${result.reason ?? 'concurrent apply'}). Review and accept again, ` +
+                'or discard.',
+            }
+          : {}),
       });
     }
 

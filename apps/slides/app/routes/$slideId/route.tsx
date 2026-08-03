@@ -140,6 +140,12 @@ export const loader = async ({
   // without edit access never pay the GitHub status call and the param is
   // silently ignored for them. Edit mode always works on main.
   const wantsPreview = url.searchParams.get('preview') === '1' && mode !== 'edit';
+  // DISTINCT param value: `?preview=true` is the landing page's thumbnail
+  // iframe render (and the speaker view's mini frames) — NOT the
+  // branch-preview gate above (`preview === '1'`). Thumbnails never show the
+  // preview banner, so skip the GitHub compare probe entirely: a staff
+  // landing page renders ~20 of these at once and must not fire ~20 compares.
+  const isThumbnail = url.searchParams.get('preview') === 'true';
   // Post-accept/discard success notice, round-tripped via redirect (staff only).
   const rawNotice = url.searchParams.get('notice');
   const notice =
@@ -152,7 +158,7 @@ export const loader = async ({
     commits_ahead?: number;
     oldest_commit_at?: string;
   } | null = null;
-  if (canEdit) {
+  if (canEdit && !isThumbnail) {
     try {
       previewStatus = await getDeckPreviewStatus(slide);
     } catch (e: unknown) {
@@ -1151,6 +1157,9 @@ export const action = async ({
     // wrapper doesn't round-trip: config, customCss, extraCss, dark themes.
     // (deck.json when present, else a one-time parse of legacy index.html.)
     let currentDeck: DeckJson | null = null;
+    // Whether ANY committed content exists (deck.json or index.html) — a
+    // DeckParseError still means a file is there, only 'not found' means none.
+    let contentExists = true;
     try {
       const loaded = await loadDeck(slide, { skipCache: true });
       currentDeck = loaded.deck;
@@ -1163,12 +1172,29 @@ export const action = async ({
         // Unparseable legacy deck (or nothing committed yet): proceed with no
         // carried fields — exactly what the legacy template-regenerating save
         // did on every write.
+        contentExists = !loadMessage.startsWith('Slide content not found');
         console.warn('[save] No current deck to merge from:', loadMessage);
       } else {
         // Transient API failure: fail the save rather than silently dropping
         // the deck's customCss/config on a lossy merge.
         throw loadError;
       }
+    }
+
+    // Token-less saves against an existing deck are refused: the editor
+    // always round-trips content_sha, so its absence means this client lost
+    // its conflict token — writing anyway would clobber the committed deck
+    // without any concurrency protection. First writes (nothing committed
+    // yet — create/import flows) legitimately carry no token.
+    if (!expectedSha && contentExists) {
+      return data(
+        {
+          error:
+            'This save is missing its conflict token (content_sha) but the deck already has ' +
+            'committed content — reload the editor and try again.',
+        },
+        { status: 400 }
+      );
     }
 
     // Resolve shared-theme URLs (stays in the action — the engine never calls

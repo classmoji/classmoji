@@ -516,6 +516,132 @@ describe('page_content_apply', () => {
     expect(mocks.auditCreate).not.toHaveBeenCalled();
   });
 
+  it('a 409 after THIS apply created the branch deletes the fresh (empty) preview', async () => {
+    mocks.ensurePreviewBranch.mockResolvedValue({ branch: PREVIEW_BRANCH, created: true });
+    mocks.savePageContent.mockRejectedValue(
+      Object.assign(new Error('File was modified by someone else'), { status: 409 })
+    );
+
+    await expect(pageContentApplyTool.handler(APPLY_ARGS, CTX)).rejects.toMatchObject({
+      code: 'CONTENT_CONFLICT',
+    });
+    expect(mocks.discardPreview).toHaveBeenCalledTimes(1);
+  });
+
+  it('a 409 while STACKING keeps the pre-existing preview branch and names the preview re-read', async () => {
+    mocks.getPreviewStatus.mockResolvedValue({ exists: true, commits_ahead: 1 });
+    mocks.ensurePreviewBranch.mockResolvedValue({ branch: PREVIEW_BRANCH, created: false });
+    mocks.savePageContent.mockRejectedValue(Object.assign(new Error('conflict'), { status: 409 }));
+
+    await expect(pageContentApplyTool.handler(APPLY_ARGS, CTX)).rejects.toMatchObject({
+      code: 'CONTENT_CONFLICT',
+      message: expect.stringContaining("at: 'preview'"),
+    });
+    expect(mocks.discardPreview).not.toHaveBeenCalled();
+  });
+
+  it('non-stacking conflict messages do NOT point at the preview', async () => {
+    await expect(
+      pageContentApplyTool.handler({ ...APPLY_ARGS, expected_sha: 'stale-sha' }, CTX)
+    ).rejects.toMatchObject({
+      code: 'CONTENT_CONFLICT',
+      message: expect.not.stringContaining("at: 'preview'"),
+    });
+  });
+
+  it('create path (no content file yet): saves WITHOUT an expectedSha lock', async () => {
+    mocks.loadPageContent.mockResolvedValue({
+      format: 'none',
+      blocks: null,
+      coverImage: null,
+      sha: null,
+    });
+
+    const payload = parse(
+      await pageContentApplyTool.handler(
+        {
+          ...APPLY_ARGS,
+          commit: 'direct' as const,
+          ops: [
+            {
+              op: 'replace_all' as const,
+              blocks: [{ type: 'paragraph', content: [{ type: 'text', text: 'First' }] }],
+            },
+          ],
+        },
+        CTX
+      )
+    );
+
+    expect(payload).toMatchObject({ success: true, block_count: 1 });
+    const saveOpts = mocks.savePageContent.mock.calls[0][2] as Record<string, unknown>;
+    // A sha-less create: put() would 409 any expectedSha against a missing
+    // file, so the lock is GitHub's own create semantics (422 on existence).
+    expect(saveOpts.expectedSha).toBeUndefined();
+  });
+
+  it('create race: a 422 from the sha-less create maps to CONTENT_CONFLICT', async () => {
+    mocks.loadPageContent.mockResolvedValue({
+      format: 'none',
+      blocks: null,
+      coverImage: null,
+      sha: null,
+    });
+    mocks.savePageContent.mockRejectedValue(
+      Object.assign(new Error('Invalid request. "sha" wasn\'t supplied.'), { status: 422 })
+    );
+
+    await expect(
+      pageContentApplyTool.handler(
+        {
+          ...APPLY_ARGS,
+          commit: 'direct' as const,
+          ops: [{ op: 'replace_all' as const, blocks: [] }],
+        },
+        CTX
+      )
+    ).rejects.toMatchObject({ kind: 'invalid_params', code: 'CONTENT_CONFLICT' });
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
+  });
+
+  it('a 422 when content DID exist is not swallowed as a conflict', async () => {
+    mocks.savePageContent.mockRejectedValue(
+      Object.assign(new Error('Validation Failed'), { status: 422 })
+    );
+
+    await expect(pageContentApplyTool.handler(APPLY_ARGS, CTX)).rejects.toMatchObject({
+      message: expect.stringContaining('Validation Failed'),
+    });
+  });
+
+  it('reports deterministic id re-mints for colliding client-supplied ids', async () => {
+    const payload = parse(
+      await pageContentApplyTool.handler(
+        {
+          ...APPLY_ARGS,
+          ops: [
+            {
+              op: 'insert' as const,
+              // 'h1' collides with the existing heading block's id.
+              blocks: [{ id: 'h1', type: 'paragraph', content: [] }],
+              position: { at: 'end' as const },
+            },
+          ],
+        },
+        CTX
+      )
+    );
+
+    expect(payload.applied[0]).toMatchObject({
+      op: 'insert',
+      reminted_ids: [{ from: 'h1', to: expect.stringMatching(/^b[0-9a-f]{10}$/) }],
+    });
+    // The saved doc has no duplicate ids.
+    const savedBlocks = mocks.savePageContent.mock.calls[0][1] as Array<{ id: string }>;
+    const ids = savedBlocks.map(b => b.id);
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+
   it('unknown block id in an op → invalid_params naming it, no write', async () => {
     await expect(
       pageContentApplyTool.handler(
@@ -672,6 +798,31 @@ describe('page_preview_accept', () => {
       outcome: 'merged',
       new_sha: 'merge-sha',
     });
+  });
+
+  it('preview_kept (concurrent stacking apply during accept) surfaces in payload + audit', async () => {
+    mocks.getPreviewStatus.mockResolvedValue({ exists: true, commits_ahead: 2 });
+    mocks.acceptPreview.mockResolvedValue({
+      merged: true,
+      sha: 'merged-blob-sha',
+      preview_kept: true,
+      reason: 'Preview branch gained 1 new commit(s) during accept — retained with the newer edits',
+    });
+
+    const payload = parse(
+      await pagePreviewAcceptTool.handler({ classroom: 'org/x', page_id: PAGE_ID }, CTX)
+    );
+
+    expect(payload).toMatchObject({
+      success: true,
+      merged: true,
+      new_sha: 'merged-blob-sha',
+      preview_kept: true,
+      message: expect.stringContaining('preview branch was retained'),
+    });
+
+    const audit = mocks.auditCreate.mock.calls[0][0] as { data: Record<string, unknown> };
+    expect(audit.data).toMatchObject({ preview_kept: true, reason: expect.any(String) });
   });
 
   it('conflict: structured per-unit report as a NON-error payload, with guidance + audit', async () => {

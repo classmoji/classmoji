@@ -53,6 +53,16 @@ describe('parseSlidesFragment', () => {
     expect(result.slides[0].attrs).toEqual({ style: 'margin: 0;' });
   });
 
+  it('strips event-handler attributes from sections (converging with the generator)', () => {
+    const result = parseSlidesFragment(
+      '<div class="slides"><section data-cm-id="evil0001" onclick="alert(1)" ' +
+        'ONMouseOver="alert(2)" style="color: red" data-ok="yes"><h2>A</h2></section></div>'
+    );
+    // style survives (cruft-strip normalizes it with a trailing ';')
+    expect(result.slides[0].attrs).toEqual({ style: 'color: red;', 'data-ok': 'yes' });
+    expect(result.warnings.filter(w => w.includes('Event-handler'))).toHaveLength(2);
+  });
+
   it('throws DeckParseError on a fragment with zero sections', () => {
     expect(() => parseSlidesFragment('<div class="slides"></div>')).toThrow(DeckParseError);
   });
@@ -285,6 +295,34 @@ describe('generateDeckHtml specifics', () => {
     expect(html).not.toContain('onmouseover');
     expect(html).not.toContain('1bad');
     expect(warnSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it('drops event-handler attribute names (onclick, ONLoad, …) with a warning, keeps style', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const html = generateDeckHtml(
+      baseDeck({
+        slides: [
+          {
+            id: 'aaa11111',
+            html: '<h1>Hi</h1>',
+            attrs: {
+              onclick: 'alert(1)',
+              ONLoad: 'alert(2)',
+              onerror: 'alert(3)',
+              style: 'color: red',
+              'data-ok': 'yes',
+            },
+          },
+        ],
+      }),
+      { title: 'T' }
+    );
+    expect(html).not.toContain('onclick');
+    expect(html).not.toContain('ONLoad');
+    expect(html).not.toContain('onerror');
+    expect(html).toContain('style="color: red"');
+    expect(html).toContain('data-ok="yes"');
+    expect(warnSpy).toHaveBeenCalledTimes(3);
   });
 
   it('escapes the document title', () => {

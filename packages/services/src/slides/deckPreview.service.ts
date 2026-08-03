@@ -107,7 +107,18 @@ export async function ensureDeckPreviewBranch(
     throw new Error(`Cannot resolve main HEAD for ${repo} — repository has no main branch?`);
   }
 
-  await ContentService.createBranch({ gitOrganization, repo, branch, fromSha: main.base_sha });
+  try {
+    await ContentService.createBranch({ gitOrganization, repo, branch, fromSha: main.base_sha });
+  } catch (error: unknown) {
+    // Creation race: a concurrent apply created the branch between our probe
+    // and this call. GitHub answers 422 "Reference already exists" — treat as
+    // exists (the stacking semantics the probe would have chosen).
+    const { status, message } = error as { status?: number; message?: string };
+    if (status === 422 && message?.includes('already exists')) {
+      return { branch, created: false };
+    }
+    throw error;
+  }
   return { branch, created: true };
 }
 
@@ -122,6 +133,10 @@ export type AcceptDeckPreviewResult =
       sha: string | null;
       /** false when regeneration was skipped (concurrent writer already regenerated, or merged deck unreadable). */
       html_regenerated: boolean;
+      /** true when a concurrent stacking apply landed after the merge snapshot — the branch was kept, not deleted. */
+      preview_kept?: boolean;
+      /** Why the preview branch was retained (present iff preview_kept). */
+      reason?: string;
     }
   | {
       merged: false;
@@ -150,7 +165,10 @@ function parseDeckForDiff(content: string | null | undefined): DeckJson {
 /**
  * Accept the deck's preview: merge the preview branch into main via the
  * GitHub merge API, regenerate the index.html artifact on main from the
- * MERGED deck.json, then delete the branch.
+ * MERGED deck.json, then delete the branch — unless a concurrent stacking
+ * apply landed on the branch after the merge snapshot, in which case the
+ * branch is KEPT (deleting it would discard the newer edits) and the result
+ * carries `preview_kept: true` with a reason.
  *
  * Regeneration mechanics (§3b): the merged deck.json is read from main with
  * skipCache, rendered via generateDeckHtml (theme URLs come from the caller's
@@ -226,57 +244,91 @@ export async function acceptDeckPreview(
   }
 
   // Clean merge: regenerate the artifact on main from the merged deck.json.
-  // skipCache is REQUIRED — this read both renders the artifact and pins the
-  // CAS sha; a stale cached read would regenerate from a pre-merge deck.
+  // The deck is read at the MERGE COMMIT sha when available — a deterministic
+  // ref immune to GitHub's eventually-consistent branch reads (a plain main
+  // read, even with skipCache, can serve a pre-merge deck right after the
+  // merge). 204 no-op merges have no merge commit; fall back to a fresh main
+  // read (skipCache REQUIRED — the read pins the CAS sha).
+  const readDeckFile = (ref?: string) =>
+    ContentService.getContent({
+      gitOrganization,
+      repo,
+      path: deckPath,
+      ...(ref ? { ref } : { skipCache: true }),
+    });
+
+  const parseDeck = (content: string): DeckJson | null => {
+    try {
+      const parsed = JSON.parse(content) as DeckJson;
+      if (parsed?.version === 1 && Array.isArray(parsed.slides)) return parsed;
+    } catch {
+      // Malformed — reported by the caller.
+    }
+    return null;
+  };
+
+  // Render + commit the artifact, CAS-pinned on the deck.json sha it was
+  // generated from: if a concurrent save moves deck.json, the write aborts
+  // (DeckConflictError) instead of publishing a stale artifact.
+  const regenerateFrom = async (deck: DeckJson, pinnedSha: string): Promise<void> => {
+    const themeUrls = await resolveThemeUrls?.(deck);
+    const html = generateDeckHtml(deck, {
+      title: slide.title,
+      themeUrls,
+      includeNotes: true,
+    });
+    await ContentService.uploadBatch({
+      gitOrganization,
+      repo,
+      files: [{ path: htmlPath, content: html, encoding: 'utf-8' as const }],
+      branch: 'main',
+      message: `Regenerate slides artifact: ${slide.title}`,
+      verifyBaseTree: async ({ getFileSha }) => {
+        const current = await getFileSha(deckPath);
+        if (current !== pinnedSha) {
+          throw new DeckConflictError(
+            'deck.json changed while regenerating the artifact — the artifact must be generated from the current deck'
+          );
+        }
+      },
+    });
+  };
+
   let mergedSha: string | null = null;
   let htmlRegenerated = false;
-  const mergedFile = await ContentService.getContent({
-    gitOrganization,
-    repo,
-    path: deckPath,
-    skipCache: true,
-  });
+  const mergedFile = await readDeckFile(result.sha);
   if (mergedFile) {
     mergedSha = mergedFile.sha;
-    let deck: DeckJson | null = null;
-    try {
-      const parsed = JSON.parse(mergedFile.content) as DeckJson;
-      if (parsed?.version === 1 && Array.isArray(parsed.slides)) deck = parsed;
-    } catch {
-      deck = null;
-    }
+    const deck = parseDeck(mergedFile.content);
     if (deck) {
       try {
-        const themeUrls = await resolveThemeUrls?.(deck);
-        const html = generateDeckHtml(deck, {
-          title: slide.title,
-          themeUrls,
-          includeNotes: true,
-        });
-        await ContentService.uploadBatch({
-          gitOrganization,
-          repo,
-          files: [{ path: htmlPath, content: html, encoding: 'utf-8' as const }],
-          branch: 'main',
-          message: `Regenerate slides artifact: ${slide.title}`,
-          // CAS: the artifact must be generated FROM the deck.json we read —
-          // if a concurrent save moved deck.json, that save regenerated the
-          // artifact itself, so this regeneration is safely skipped.
-          verifyBaseTree: async ({ getFileSha }) => {
-            const current = await getFileSha(deckPath);
-            if (current !== mergedSha) {
-              throw new DeckConflictError(
-                'deck.json changed while regenerating the artifact — skipping (the concurrent save regenerated it)'
-              );
-            }
-          },
-        });
+        await regenerateFrom(deck, mergedFile.sha);
         htmlRegenerated = true;
       } catch (error: unknown) {
-        if (error instanceof DeckConflictError) {
-          console.warn(`[deckPreview] ${error.message}`);
-        } else {
-          throw error;
+        if (!(error instanceof DeckConflictError)) throw error;
+        // A concurrent writer moved deck.json between the merge and this
+        // regenerate. Retry ONCE against fresh main (regenerating from the
+        // fresh deck is idempotent even if that writer already regenerated);
+        // a second conflict means writes are actively racing — skip, the last
+        // writer's own save regenerates.
+        console.warn(`[deckPreview] ${error.message} — retrying against fresh main`);
+        try {
+          const freshFile = await readDeckFile();
+          const freshDeck = freshFile ? parseDeck(freshFile.content) : null;
+          if (freshFile && freshDeck) {
+            await regenerateFrom(freshDeck, freshFile.sha);
+            mergedSha = freshFile.sha;
+            htmlRegenerated = true;
+          } else {
+            console.error(
+              `[deckPreview] Fresh deck.json at ${deckPath} is unreadable on retry — artifact NOT regenerated`
+            );
+          }
+        } catch (retryError: unknown) {
+          if (!(retryError instanceof DeckConflictError)) throw retryError;
+          console.warn(
+            `[deckPreview] ${retryError.message} — skipping regeneration (the concurrent save regenerated it)`
+          );
         }
       }
     } else {
@@ -290,9 +342,35 @@ export async function acceptDeckPreview(
     console.warn(`[deckPreview] No deck.json on main after merge for ${deckPath}`);
   }
 
-  // Cleanup is guaranteed on the accept path: the branch is deleted whether
-  // or not the artifact needed regenerating.
-  await ContentService.deleteBranch({ gitOrganization, repo, branch });
+  // Concurrent-stacking guard: a stacking apply may have committed to the
+  // preview branch AFTER the merge snapshot GitHub used. If the branch now has
+  // commits main lacks, deleting it would silently discard those edits — keep
+  // the branch and report it. (A compare failure also keeps the branch:
+  // stranding a preview is recoverable, deleting fresh commits is not.)
+  let previewKept = false;
+  let keptReason: string | undefined;
+  try {
+    const after = await ContentService.compareBranches({
+      gitOrganization,
+      repo,
+      base: 'main',
+      head: branch,
+    });
+    if (after && after.ahead_by > 0) {
+      previewKept = true;
+      keptReason = `Preview branch gained ${after.ahead_by} new commit(s) during accept — retained with the newer edits`;
+    } else if (after) {
+      await ContentService.deleteBranch({ gitOrganization, repo, branch });
+    }
+    // after === null → branch already gone (concurrent discard) — nothing to delete.
+  } catch (error: unknown) {
+    previewKept = true;
+    keptReason = 'Could not verify the preview branch was fully merged — retained for safety';
+    console.warn(
+      `[deckPreview] Post-merge branch check failed for ${repo}/${branch}:`,
+      error instanceof Error ? error.message : String(error)
+    );
+  }
 
   // The accept published changes to main — bump updated_at like saveDeck does.
   if (slide.id) {
@@ -306,7 +384,12 @@ export async function acceptDeckPreview(
     }
   }
 
-  return { merged: true, sha: mergedSha, html_regenerated: htmlRegenerated };
+  return {
+    merged: true,
+    sha: mergedSha,
+    html_regenerated: htmlRegenerated,
+    ...(previewKept ? { preview_kept: true, reason: keptReason } : {}),
+  };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

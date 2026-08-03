@@ -10,6 +10,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const classroomFindUniqueMock = vi.fn();
 const pageCreateMock = vi.fn();
 const pageFindFirstMock = vi.fn();
+const pageFindUniqueMock = vi.fn();
+const pageDeleteMock = vi.fn();
 
 vi.mock('@classmoji/database', () => ({
   default: () => ({
@@ -17,17 +19,23 @@ vi.mock('@classmoji/database', () => ({
     page: {
       create: (...args: unknown[]) => pageCreateMock(...args),
       findFirst: (...args: unknown[]) => pageFindFirstMock(...args),
+      findUnique: (...args: unknown[]) => pageFindUniqueMock(...args),
+      delete: (...args: unknown[]) => pageDeleteMock(...args),
     },
   }),
 }));
 
 const putMock = vi.fn();
 const uploadBatchMock = vi.fn();
+const deleteFolderMock = vi.fn();
+const deleteBranchMock = vi.fn();
 
 vi.mock('../../content/ContentService.ts', () => ({
   ContentService: {
     put: (...args: unknown[]) => putMock(...args),
     uploadBatch: (...args: unknown[]) => uploadBatchMock(...args),
+    deleteFolder: (...args: unknown[]) => deleteFolderMock(...args),
+    deleteBranch: (...args: unknown[]) => deleteBranchMock(...args),
   },
 }));
 
@@ -54,7 +62,9 @@ vi.mock('../notification.service.ts', () => ({
   createNotifications: vi.fn(),
 }));
 
-const { createPage, ensureContentRepo, pageContentPath } = await import('../page.service.ts');
+const { createPage, deletePage, ensureContentRepo, pageContentPath } = await import(
+  '../page.service.ts'
+);
 
 const gitOrganization = { id: 'org-1', login: 'test-org', provider: 'GITHUB' };
 const classroom = {
@@ -84,6 +94,10 @@ describe('page.createPage', () => {
       ...args.data,
     }));
     saveManifestMock.mockResolvedValue(undefined);
+    // Preview branches are absent by default (the common case).
+    deleteBranchMock.mockRejectedValue(
+      Object.assign(new Error('Reference does not exist'), { status: 422 })
+    );
   });
 
   it('blank flow: index.html + blank content.json in ONE uploadBatch + DB row + manifest refresh', async () => {
@@ -249,6 +263,37 @@ describe('page.createPage', () => {
     expect(saveManifestMock).not.toHaveBeenCalled();
   });
 
+  it('clears a stale preview branch for the content path BEFORE the first write (slug reuse)', async () => {
+    deleteBranchMock.mockResolvedValue({ deleted: true }); // stale branch existed
+
+    await createPage({ classroomId: 'class-1', title: 'My New Page', createdBy: 'user-1' });
+
+    expect(deleteBranchMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        orgLogin: 'test-org',
+        repo: 'content-test-org-cs101',
+        branch: 'preview/pages/my-new-page',
+      })
+    );
+    // Cleared BEFORE the page content lands
+    expect(deleteBranchMock.mock.invocationCallOrder[0]).toBeLessThan(
+      uploadBatchMock.mock.invocationCallOrder[0]
+    );
+  });
+
+  it('proceeds when the stale-preview delete fails unexpectedly (best-effort)', async () => {
+    deleteBranchMock.mockRejectedValue(Object.assign(new Error('boom'), { status: 500 }));
+
+    const page = await createPage({
+      classroomId: 'class-1',
+      title: 'My New Page',
+      createdBy: 'user-1',
+    });
+
+    expect(page.id).toBe('page-1');
+    expect(uploadBatchMock).toHaveBeenCalledTimes(1);
+  });
+
   it('refuses a same-title duplicate before GitHub too (was: clobber-then-P2002)', async () => {
     pageFindFirstMock.mockResolvedValue({
       id: 'page-existing',
@@ -296,6 +341,64 @@ describe('page.createPage', () => {
     );
     expect(((failure as Error).cause as { code?: string })?.code).toBe('P2002');
     expect(saveManifestMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('page.deletePage', () => {
+  const dbPage = {
+    id: 'page-1',
+    title: 'Doomed Page',
+    content_path: 'pages/doomed',
+    classroom_id: 'class-1',
+    classroom: { ...classroom },
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    pageFindUniqueMock.mockResolvedValue(dbPage);
+    pageDeleteMock.mockResolvedValue(dbPage);
+    deleteFolderMock.mockResolvedValue({ commit: 'del-1', filesDeleted: 2 });
+    deleteBranchMock.mockRejectedValue(
+      Object.assign(new Error('Reference does not exist'), { status: 422 })
+    );
+    saveManifestMock.mockResolvedValue(undefined);
+  });
+
+  it('deletes the folder AND the preview branch, then the DB row + manifest', async () => {
+    deleteBranchMock.mockResolvedValue({ deleted: true }); // a preview existed
+
+    const result = await deletePage('page-1');
+
+    expect(deleteFolderMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        orgLogin: 'test-org',
+        repo: 'content-test-org-cs101',
+        path: 'pages/doomed',
+      })
+    );
+    expect(deleteBranchMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        orgLogin: 'test-org',
+        repo: 'content-test-org-cs101',
+        branch: 'preview/pages/doomed',
+      })
+    );
+    expect(pageDeleteMock).toHaveBeenCalledWith({ where: { id: 'page-1' } });
+    expect(saveManifestMock).toHaveBeenCalledWith('class-1');
+    expect(result.success).toBe(true);
+  });
+
+  it('an absent preview branch (422) is silent and non-fatal', async () => {
+    const result = await deletePage('page-1');
+    expect(result.success).toBe(true);
+    expect(pageDeleteMock).toHaveBeenCalled();
+  });
+
+  it('an unexpected preview-branch delete failure is loud but non-fatal', async () => {
+    deleteBranchMock.mockRejectedValue(Object.assign(new Error('boom'), { status: 500 }));
+    const result = await deletePage('page-1');
+    expect(result.success).toBe(true);
+    expect(pageDeleteMock).toHaveBeenCalled();
   });
 });
 

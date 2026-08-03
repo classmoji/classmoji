@@ -56,6 +56,14 @@ const THEMES_FOLDER = '.slidesthemes';
 const ATTR_NAME_RE = /^[a-zA-Z][\w:-]*$/;
 
 /**
+ * Event-handler attribute names (onclick, onerror, ONLoad, …) are denied on
+ * sections in BOTH directions — dropped by the generator and stripped by the
+ * parsers — so the two surfaces converge and section attrs can never carry
+ * script handlers. `style` stays (legitimately used).
+ */
+const EVENT_ATTR_RE = /^on/i;
+
+/**
  * Runtime paint the Reveal viewer / editor leaves on sections. Stripped by
  * both parsers so `attrs` is deterministic between saves (plan §2).
  */
@@ -180,6 +188,12 @@ function renderSection(slide: DeckSlide, includeNotes: boolean): string {
       // Not a security boundary (staff HTML is trusted + already public) but a
       // hostile/odd attr name must not break document parseability.
       console.warn(`[deckHtml] Dropping invalid attribute name '${name}' on slide ${slide.id}`);
+      continue;
+    }
+    if (EVENT_ATTR_RE.test(name)) {
+      console.warn(
+        `[deckHtml] Dropping event-handler attribute '${name}' on slide ${slide.id} — section attrs must not carry script handlers`
+      );
       continue;
     }
     attrStr += ` ${name}="${escapeAttr(value)}"`;
@@ -430,6 +444,14 @@ function sectionToSlide(el: Element, ctx: ParseContext): DeckSlide {
 
   // Attribute snapshot AFTER cruft strip + aside removal.
   const attribs: Record<string, string> = { ...el.attribs };
+  // Event-handler attributes are stripped (the generator drops them too — the
+  // two surfaces must converge, plan §2 round-trip invariants).
+  for (const name of Object.keys(attribs)) {
+    if (EVENT_ATTR_RE.test(name)) {
+      delete attribs[name];
+      ctx.warnings.push(`Event-handler attribute '${name}' stripped from a section`);
+    }
+  }
   const id = resolveSectionId(attribs, ctx);
   const hidden = attribs['data-hidden'] === 'true';
   delete attribs['data-hidden'];

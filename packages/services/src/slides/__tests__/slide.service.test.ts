@@ -34,6 +34,7 @@ const getMetaMock = vi.fn();
 const getContentMock = vi.fn();
 const uploadBatchMock = vi.fn();
 const deleteFolderMock = vi.fn();
+const deleteBranchMock = vi.fn();
 
 vi.mock('../../content/ContentService.ts', () => ({
   ContentService: {
@@ -41,6 +42,7 @@ vi.mock('../../content/ContentService.ts', () => ({
     getContent: (...args: unknown[]) => getContentMock(...args),
     uploadBatch: (...args: unknown[]) => uploadBatchMock(...args),
     deleteFolder: (...args: unknown[]) => deleteFolderMock(...args),
+    deleteBranch: (...args: unknown[]) => deleteBranchMock(...args),
   },
 }));
 
@@ -63,6 +65,7 @@ const {
   deleteSlide,
   getSlideDeleteInfo,
   findById,
+  updateSlide,
   SLIDE_CONTENT_PATH_CONFLICT,
   STARTER_CUSTOM_CSS,
 } = await import('../slide.service.ts');
@@ -103,6 +106,10 @@ beforeEach(() => {
   );
   saveManifestMock.mockResolvedValue(undefined);
   slideUpdateMock.mockResolvedValue({});
+  // Preview branches are absent by default (the common case).
+  deleteBranchMock.mockRejectedValue(
+    Object.assign(new Error('Reference does not exist'), { status: 422 })
+  );
 });
 
 describe('slideSlug / slideContentPath', () => {
@@ -193,6 +200,43 @@ describe('createSlide', () => {
     expect(result.deck.slides).toHaveLength(4);
     // No slide row existed during saveDeck → no updated_at bump
     expect(slideUpdateMock).not.toHaveBeenCalled();
+  });
+
+  it('clears a stale preview branch for the content path BEFORE the first write (slug reuse)', async () => {
+    deleteBranchMock.mockResolvedValue({ deleted: true }); // stale branch existed
+
+    await createSlide({
+      classroomId: 'class-1',
+      title: 'Intro: Web!',
+      createdBy: 'user-1',
+      idGen: seededIdGen(),
+    });
+
+    expect(deleteBranchMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        orgLogin: 'test-org',
+        repo: 'content-test-org-26w',
+        branch: 'preview/slides/intro-web',
+      })
+    );
+    // Cleared BEFORE the starter deck lands
+    expect(deleteBranchMock.mock.invocationCallOrder[0]).toBeLessThan(
+      uploadBatchMock.mock.invocationCallOrder[0]
+    );
+  });
+
+  it('proceeds when the stale-preview delete fails unexpectedly (best-effort)', async () => {
+    deleteBranchMock.mockRejectedValue(Object.assign(new Error('boom'), { status: 500 }));
+
+    const result = await createSlide({
+      classroomId: 'class-1',
+      title: 'Intro: Web!',
+      createdBy: 'user-1',
+      idGen: seededIdGen(),
+    });
+
+    expect(result.slide.id).toBe('slide-new');
+    expect(uploadBatchMock).toHaveBeenCalledTimes(1);
   });
 
   it('refuses content-path collisions BEFORE any GitHub write', async () => {
@@ -358,6 +402,34 @@ describe('deleteSlide', () => {
     expect(result.success).toBe(true);
   });
 
+  it('deletes the preview branch alongside the content folder (404/422-tolerant)', async () => {
+    deleteBranchMock.mockResolvedValue({ deleted: true }); // a preview existed
+
+    await deleteSlide({ slideId: 'slide-1' });
+
+    expect(deleteBranchMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        orgLogin: 'test-org',
+        repo: 'content-test-org-26w',
+        branch: 'preview/slides/doomed',
+      })
+    );
+  });
+
+  it('an absent preview branch (422) is silent and non-fatal', async () => {
+    // default deleteBranchMock rejection: 422 Reference does not exist
+    const result = await deleteSlide({ slideId: 'slide-1' });
+    expect(result.success).toBe(true);
+    expect(slideDeleteMock).toHaveBeenCalled();
+  });
+
+  it('an unexpected preview-branch delete failure is loud but non-fatal', async () => {
+    deleteBranchMock.mockRejectedValue(Object.assign(new Error('boom'), { status: 500 }));
+    const result = await deleteSlide({ slideId: 'slide-1' });
+    expect(result.success).toBe(true);
+    expect(slideDeleteMock).toHaveBeenCalled();
+  });
+
   it('deletes the shared theme when requested and no other slide uses it', async () => {
     gitOrgFindFirstMock.mockResolvedValue(gitOrganization);
     // Theme read: this slide's deck.json says shared:foo
@@ -401,6 +473,33 @@ describe('deleteSlide', () => {
   it('throws when the slide does not exist', async () => {
     slideFindUniqueMock.mockResolvedValue(null);
     await expect(deleteSlide({ slideId: 'nope' })).rejects.toThrow('Slide not found');
+  });
+});
+
+describe('updateSlide', () => {
+  beforeEach(() => {
+    slideUpdateMock.mockResolvedValue({ id: 'slide-1', classroom_id: 'class-1', title: 'Renamed' });
+  });
+
+  it('refreshes the content manifest when the title changes (non-fatal)', async () => {
+    await updateSlide('slide-1', { title: 'Renamed' });
+
+    expect(slideUpdateMock).toHaveBeenCalledWith({
+      where: { id: 'slide-1' },
+      data: expect.objectContaining({ title: 'Renamed' }),
+    });
+    expect(saveManifestMock).toHaveBeenCalledWith('class-1');
+  });
+
+  it('does NOT touch the manifest for non-title metadata updates', async () => {
+    await updateSlide('slide-1', { is_draft: false });
+    expect(saveManifestMock).not.toHaveBeenCalled();
+  });
+
+  it('a manifest refresh failure does not fail the update', async () => {
+    saveManifestMock.mockRejectedValue(new Error('manifest down'));
+    const slide = await updateSlide('slide-1', { title: 'Renamed' });
+    expect(slide).toMatchObject({ id: 'slide-1' });
   });
 });
 

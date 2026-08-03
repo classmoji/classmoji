@@ -357,6 +357,71 @@ export type BlockOp =
   | { op: 'delete'; id: string }
   | { op: 'replace_all'; blocks: unknown[] };
 
+/** Collect every id in the tree (incl. nested children). */
+function collectBlockIds(blocks: BlockNode[], out = new Set<string>()): Set<string> {
+  for (const block of blocks) {
+    if (!block || typeof block !== 'object') continue;
+    if (typeof block.id === 'string' && block.id) out.add(block.id);
+    if (Array.isArray(block.children)) collectBlockIds(block.children, out);
+  }
+  return out;
+}
+
+/** A client-supplied block id that collided and was re-minted. */
+export interface BlockIdRemint {
+  /** Index of the op (within the ops array) whose payload carried the id. */
+  op_index: number;
+  from: string;
+  to: string;
+}
+
+/**
+ * Deterministically re-mint a colliding id: same derivation family as
+ * ensureBlockIds (`'b' + sha1(canonicalJson(block-sans-id) + ':' + seed)`),
+ * with a counter suffix in the (vanishingly unlikely) event of a hash clash.
+ */
+function remintBlockId(block: BlockNode, seed: string, used: Set<string>): string {
+  const { id: _id, ...rest } = block;
+  for (let n = 0; ; n++) {
+    const candidate =
+      'b' +
+      createHash('sha1')
+        .update(canonicalJson(rest) + ':' + seed + (n > 0 ? ':' + n : ''))
+        .digest('hex')
+        .slice(0, 10);
+    if (!used.has(candidate)) return candidate;
+  }
+}
+
+/**
+ * Enforce id uniqueness on client-supplied blocks (mutates in place, callers
+ * pass clones): any id already in `used` (existing doc ids, or an earlier
+ * block in the same payload) is re-minted deterministically. Ids the payload
+ * lacks are left absent — ensureBlockIds fills those downstream.
+ */
+function sanitizeIncomingIds(
+  blocks: BlockNode[],
+  used: Set<string>,
+  seedPrefix: string,
+  onRemint?: (from: string, to: string) => void
+): void {
+  blocks.forEach((block, index) => {
+    if (!block || typeof block !== 'object') return;
+    const seed = seedPrefix ? `${seedPrefix}.${index}` : String(index);
+    if (typeof block.id === 'string' && block.id) {
+      if (used.has(block.id)) {
+        const to = remintBlockId(block, seed, used);
+        onRemint?.(block.id, to);
+        block.id = to;
+      }
+      used.add(block.id);
+    }
+    if (Array.isArray(block.children) && block.children.length > 0) {
+      sanitizeIncomingIds(block.children, used, seed, onRemint);
+    }
+  });
+}
+
 /** Depth-first search for a block id anywhere in the tree (incl. children). */
 function findBlock(blocks: BlockNode[], id: string): { parent: BlockNode[]; index: number } | null {
   for (let i = 0; i < blocks.length; i++) {
@@ -416,23 +481,48 @@ function insertBlocksAt(
  * - `delete  { id }`                 — remove the block (and its children).
  * - `replace_all { blocks }`         — replace the entire document.
  *
+ * Client-supplied blocks (insert / replace_all payloads, and an update's
+ * children) whose ids collide with existing ids — or with each other — are
+ * re-minted deterministically (matching deck_apply's insert behavior); each
+ * re-mint is reported through `onIdRemint`.
+ *
  * Unknown ids throw a BlockOpError naming the id (code UNKNOWN_BLOCK_ID).
  */
-export function applyBlockOps(blocks: unknown[], ops: BlockOp[]): unknown[] {
+export function applyBlockOps(
+  blocks: unknown[],
+  ops: BlockOp[],
+  { onIdRemint }: { onIdRemint?: (remint: BlockIdRemint) => void } = {}
+): unknown[] {
   let doc = structuredClone(blocks) as BlockNode[];
 
-  for (const op of ops) {
+  for (const [opIndex, op] of ops.entries()) {
+    const remintReporter = (from: string, to: string) =>
+      onIdRemint?.({ op_index: opIndex, from, to });
+
     switch (op.op) {
       case 'update': {
         const target = mustFindBlock(doc, op.id, 'update');
         const replacement = structuredClone(op.block) as BlockNode;
         replacement.id = op.id; // id preserved regardless of the payload
+        if (Array.isArray(replacement.children) && replacement.children.length > 0) {
+          // Children ride along wholesale — their ids must not collide with
+          // ids elsewhere in the doc (the replaced subtree's own ids are fair
+          // game to reuse).
+          const used = collectBlockIds(doc);
+          for (const oldId of collectBlockIds([target.parent[target.index]])) {
+            used.delete(oldId);
+          }
+          used.add(op.id);
+          sanitizeIncomingIds(replacement.children, used, `op${opIndex}`, remintReporter);
+        }
         target.parent[target.index] = replacement;
         break;
       }
 
       case 'insert': {
-        insertBlocksAt(doc, structuredClone(op.blocks) as BlockNode[], op.position, 'insert');
+        const inserted = structuredClone(op.blocks) as BlockNode[];
+        sanitizeIncomingIds(inserted, collectBlockIds(doc), `op${opIndex}`, remintReporter);
+        insertBlocksAt(doc, inserted, op.position, 'insert');
         break;
       }
 
@@ -457,6 +547,8 @@ export function applyBlockOps(blocks: unknown[], ops: BlockOp[]): unknown[] {
 
       case 'replace_all': {
         doc = structuredClone(op.blocks) as BlockNode[];
+        // A fresh document may still carry internal duplicates.
+        sanitizeIncomingIds(doc, new Set<string>(), `op${opIndex}`, remintReporter);
         break;
       }
 
@@ -546,7 +638,18 @@ export async function ensurePreviewBranch(
     throw new Error(`Cannot resolve main HEAD for ${repo} — repository has no main branch?`);
   }
 
-  await ContentService.createBranch({ gitOrganization, repo, branch, fromSha: main.base_sha });
+  try {
+    await ContentService.createBranch({ gitOrganization, repo, branch, fromSha: main.base_sha });
+  } catch (error: unknown) {
+    // Creation race: a concurrent apply created the branch between our probe
+    // and this call. GitHub answers 422 "Reference already exists" — treat as
+    // exists (the stacking semantics the probe would have chosen).
+    const { status, message } = error as { status?: number; message?: string };
+    if (status === 422 && message?.includes('already exists')) {
+      return { branch, created: false };
+    }
+    throw error;
+  }
   return { branch, created: true };
 }
 
@@ -564,7 +667,15 @@ export interface PreviewConflictUnit {
 }
 
 export type AcceptPreviewResult =
-  | { merged: true; sha: string | null }
+  | {
+      merged: true;
+      /** content.json's blob sha on main post-merge (read at the merge commit) — the fresh expected_sha for future applies. */
+      sha: string | null;
+      /** true when a concurrent stacking apply landed after the merge snapshot — the branch was kept, not deleted. */
+      preview_kept?: boolean;
+      /** Why the preview branch was retained (present iff preview_kept). */
+      reason?: string;
+    }
   | {
       merged: false;
       conflict: true;
@@ -588,7 +699,10 @@ function extractBlocks(content: string | null | undefined): BlockNode[] {
 
 /**
  * Accept the page's preview: merge the preview branch into main via the
- * GitHub merge API, then delete the branch.
+ * GitHub merge API, then delete the branch — unless a concurrent stacking
+ * apply landed on the branch after the merge snapshot, in which case the
+ * branch is KEPT (deleting it would discard the newer edits) and the result
+ * carries `preview_kept: true` with a reason.
  *
  * On a git-level conflict, nothing is merged and nothing is deleted; instead
  * a structured per-unit report is built by 3-way-walking content.json's
@@ -608,8 +722,64 @@ export async function acceptPreview(page: PageWithContentRepo): Promise<AcceptPr
   });
 
   if (result.merged) {
-    await ContentService.deleteBranch({ gitOrganization, repo, branch });
-    return { merged: true, sha: result.sha ?? null };
+    const path = `${page.content_path}/content.json`;
+
+    // Report content.json's blob sha on main post-merge (aligning with the
+    // deck accept's semantics). Read at the MERGE COMMIT sha — a deterministic
+    // ref immune to GitHub's eventually-consistent branch reads. 204 no-op
+    // merges have no merge commit; fall back to a fresh main read.
+    let newSha: string | null = null;
+    try {
+      const mergedFile = await ContentService.getContent({
+        gitOrganization,
+        repo,
+        path,
+        ...(result.sha ? { ref: result.sha } : { skipCache: true }),
+      });
+      newSha = mergedFile?.sha ?? null;
+    } catch (error: unknown) {
+      // Advisory only — the merge itself stands.
+      console.warn(
+        `[pageContent.acceptPreview] Could not read merged content.json sha for ${repo}/${path}:`,
+        error instanceof Error ? error.message : String(error)
+      );
+    }
+
+    // Concurrent-stacking guard: a stacking apply may have committed to the
+    // preview branch AFTER the merge snapshot GitHub used. If the branch now
+    // has commits main lacks, deleting it would silently discard those edits —
+    // keep the branch and report it. (A compare failure also keeps the branch:
+    // stranding a preview is recoverable, deleting fresh commits is not.)
+    let previewKept = false;
+    let reason: string | undefined;
+    try {
+      const after = await ContentService.compareBranches({
+        gitOrganization,
+        repo,
+        base: 'main',
+        head: branch,
+      });
+      if (after && after.ahead_by > 0) {
+        previewKept = true;
+        reason = `Preview branch gained ${after.ahead_by} new commit(s) during accept — retained with the newer edits`;
+      } else if (after) {
+        await ContentService.deleteBranch({ gitOrganization, repo, branch });
+      }
+      // after === null → branch already gone (concurrent discard) — nothing to delete.
+    } catch (error: unknown) {
+      previewKept = true;
+      reason = 'Could not verify the preview branch was fully merged — retained for safety';
+      console.warn(
+        `[pageContent.acceptPreview] Post-merge branch check failed for ${repo}/${branch}:`,
+        error instanceof Error ? error.message : String(error)
+      );
+    }
+
+    return {
+      merged: true,
+      sha: newSha,
+      ...(previewKept ? { preview_kept: true, reason } : {}),
+    };
   }
 
   // Conflict: build the per-unit report. The branch is left alone so the
