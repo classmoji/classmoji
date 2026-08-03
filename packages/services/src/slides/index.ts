@@ -11,4 +11,5 @@
 export * from './deckTypes.ts';
 export * from './deckHtml.ts';
 export * from './slideContent.service.ts';
+export * from './deckPreview.service.ts';
 export * as slideService from './slide.service.ts';

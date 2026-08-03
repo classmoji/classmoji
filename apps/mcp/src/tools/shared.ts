@@ -21,6 +21,7 @@
  */
 
 import { ClassmojiService } from '@classmoji/services';
+import { slideService } from '@classmoji/services/slides';
 import type { AuditLogAction, Prisma } from '@prisma/client';
 import { ToolError } from '../mcp/errors.ts';
 import type { ToolContext, ToolResult } from '../mcp/registry.ts';
@@ -214,6 +215,80 @@ export async function loadPageWithRepoInClassroom(
     throw new ToolError('internal', 'Classroom git organization is not configured');
   }
   return record;
+}
+
+/**
+ * A Slide loaded WITH the classroom chain the content repo lives under.
+ * Structurally satisfies slideContent.service's SlideContentTarget, so the
+ * record can be handed straight to loadDeck/saveDeck and the deck preview
+ * helpers.
+ */
+export interface SlideWithRepoRecord {
+  id: string;
+  classroom_id: string;
+  title: string;
+  slug: string;
+  content_path: string;
+  is_draft: boolean;
+  is_public: boolean;
+  allow_team_edit: boolean;
+  show_speaker_notes: boolean;
+  created_by: string;
+  updated_at: Date | string;
+  classroom: {
+    id: string;
+    content_namespace: string | null;
+    git_organization: {
+      provider: string;
+      login: string;
+      [key: string]: unknown;
+    } | null;
+    [key: string]: unknown;
+  };
+  [key: string]: unknown;
+}
+
+/**
+ * Load a Slide WITH its classroom + git organization (the content-repo chain)
+ * and verify it belongs to the authorized classroom (S1 — by-id compare, same
+ * non-leaking rejection as every other loader). Deck tools need the git org
+ * to locate the per-classroom content repo, so a classroom without one is an
+ * internal misconfiguration, reported only AFTER the S1 check passes.
+ */
+export async function loadSlideInClassroom(
+  id: string,
+  ctx: ToolContext
+): Promise<SlideWithRepoRecord> {
+  const record = (await slideService.findById(id, {
+    includeClassroom: true,
+  })) as SlideWithRepoRecord | null;
+  if (!record || record.classroom_id !== requireClassroomCtx(ctx).classroomId) {
+    throw scopedNotFound('Slide');
+  }
+  if (!record.classroom?.git_organization?.login) {
+    throw new ToolError('internal', 'Classroom git organization is not configured');
+  }
+  return record;
+}
+
+/**
+ * The slide-write sub-gate, mirroring the web's assertSlideAccess edit tier
+ * (auth/server.ts): OWNER/TEACHER may edit any deck; an ASSISTANT only decks
+ * they created or decks with allow_team_edit. Checked with holdsRole so a
+ * multi-role OWNER/TEACHER whose registry gate happened to resolve as
+ * ASSISTANT is not wrongly denied.
+ */
+export async function assertSlideEditable(
+  slide: SlideWithRepoRecord,
+  ctx: ToolContext
+): Promise<void> {
+  if (await holdsRole(ctx, ['OWNER', 'TEACHER'])) return;
+  if (String(slide.created_by) === String(ctx.viewer.userId) || slide.allow_team_edit) return;
+  throw new ToolError(
+    'forbidden',
+    'Assistants can only edit slide decks they created or decks with allow_team_edit enabled',
+    'INSUFFICIENT_ROLE'
+  );
 }
 
 type RegradeRequestRecord = Awaited<

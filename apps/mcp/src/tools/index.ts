@@ -37,6 +37,14 @@ import {
   pagePreviewAcceptTool,
   pagePreviewDiscardTool,
 } from './pageContent.ts';
+import { listSlidesTool, slideCreateTool, slideUpdateTool, slideDeleteTool } from './slides.ts';
+import {
+  deckOutlineTool,
+  deckGetTool,
+  deckApplyTool,
+  deckPreviewAcceptTool,
+  deckPreviewDiscardTool,
+} from './deck.ts';
 import { tokenGrantTool } from './tokens.ts';
 import { extensionPurchaseTool } from './extensions.ts';
 import { repoCreateTool, repoPublishTool, repoUnpublishTool } from './repos.ts';
@@ -96,6 +104,21 @@ export function registerAllTools(): void {
   registerToolDefinition(pageContentApplyTool);
   registerToolDefinition(pagePreviewAcceptTool);
   registerToolDefinition(pagePreviewDiscardTool);
+
+  // Slides: list (all roles, students published-only) + metadata CRUD
+  // (TEACHING_TEAM with the web's creator/allow_team_edit sub-gate)
+  registerToolDefinition(listSlidesTool);
+  registerToolDefinition(slideCreateTool);
+  registerToolDefinition(slideUpdateTool);
+  registerToolDefinition(slideDeleteTool);
+
+  // Deck content: granular slide editing + preview-branch workflow
+  // (TEACHING_TEAM + sub-gate on writes)
+  registerToolDefinition(deckOutlineTool);
+  registerToolDefinition(deckGetTool);
+  registerToolDefinition(deckApplyTool);
+  registerToolDefinition(deckPreviewAcceptTool);
+  registerToolDefinition(deckPreviewDiscardTool);
 
   // Tokens (OWNER)
   registerToolDefinition(tokenGrantTool);

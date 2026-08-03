@@ -64,7 +64,12 @@ export function previewBranchName(contentPath: string): string {
   return `${PREVIEW_BRANCH_PREFIX}${contentPath}`;
 }
 
-function resolveRepoContext(slide: SlideContentTarget): {
+/**
+ * Resolve the content repo (org + repo name) a slide's files live in.
+ * Shared with deckPreview.service — the preview lifecycle operates on the
+ * same repo the save choke point writes to.
+ */
+export function resolveSlideRepoContext(slide: SlideContentTarget): {
   gitOrganization: GitOrgRecord;
   repo: string;
 } {
@@ -110,7 +115,7 @@ export async function loadDeck(
     parseOptions,
   }: { skipCache?: boolean; ref?: string; parseOptions?: ParseOptions } = {}
 ): Promise<LoadDeckResult> {
-  const { gitOrganization, repo } = resolveRepoContext(slide);
+  const { gitOrganization, repo } = resolveSlideRepoContext(slide);
   const deckPath = `${slide.content_path}/deck.json`;
   const htmlPath = `${slide.content_path}/index.html`;
 
@@ -221,7 +226,7 @@ export async function saveDeck({
   branch,
   themeUrls,
 }: SaveDeckArgs): Promise<SaveDeckResult> {
-  const { gitOrganization, repo } = resolveRepoContext(slide);
+  const { gitOrganization, repo } = resolveSlideRepoContext(slide);
   const deckPath = `${slide.content_path}/deck.json`;
   const htmlPath = `${slide.content_path}/index.html`;
 
@@ -314,7 +319,9 @@ export async function saveDeck({
               );
             }
             if (currentHtml !== expectedSha) {
-              throw new DeckConflictError('Slide HTML changed since it was read — re-read before saving');
+              throw new DeckConflictError(
+                'Slide HTML changed since it was read — re-read before saving'
+              );
             }
           }
         }

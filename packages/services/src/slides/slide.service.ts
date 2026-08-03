@@ -66,6 +66,45 @@ export async function findById(slideId: string, options: SlideQueryOptions = {})
   return slide;
 }
 
+/**
+ * List a classroom's slide decks, newest-updated first (mirrors the web list
+ * loaders: admin.$class.slides shows everything, the student/assistant route
+ * filters to published — pass includeDrafts accordingly).
+ */
+export async function findByClassroomId(
+  classroomId: string,
+  { includeDrafts = false }: { includeDrafts?: boolean } = {}
+) {
+  return getPrisma().slide.findMany({
+    where: {
+      classroom_id: classroomId,
+      ...(includeDrafts ? {} : { is_draft: false }),
+    },
+    orderBy: { updated_at: 'desc' },
+  });
+}
+
+/** Metadata fields the quick metadata update accepts (content is saveDeck's job). */
+export interface SlideMetadataUpdate {
+  title?: string;
+  is_draft?: boolean;
+  is_public?: boolean;
+  allow_team_edit?: boolean;
+  show_speaker_notes?: boolean;
+}
+
+/**
+ * Metadata-only update (page.service.quickUpdate's slide twin). Title changes
+ * do NOT touch slug/content_path — those are set once at creation (renaming
+ * the content folder would break the CDN URL and any student links).
+ */
+export async function updateSlide(slideId: string, data: SlideMetadataUpdate) {
+  return getPrisma().slide.update({
+    where: { id: slideId },
+    data: { ...data, updated_at: new Date() },
+  });
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Create
 // ─────────────────────────────────────────────────────────────────────────────
