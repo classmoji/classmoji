@@ -167,6 +167,55 @@ export async function loadPageInClassroom(id: string, ctx: ToolContext): Promise
   return record;
 }
 
+/**
+ * A Page loaded WITH the classroom chain the content repo lives under.
+ * Structurally satisfies pageContent.service's PageWithContentRepo, so the
+ * record can be handed straight to loadPageContent/savePageContent and the
+ * preview helpers.
+ */
+export interface PageWithRepoRecord {
+  id: string;
+  classroom_id: string;
+  title: string;
+  slug: string | null;
+  content_path: string;
+  is_draft: boolean;
+  classroom: {
+    id: string;
+    content_namespace: string;
+    git_organization: {
+      provider: string;
+      login: string;
+      [key: string]: unknown;
+    } | null;
+    [key: string]: unknown;
+  };
+  [key: string]: unknown;
+}
+
+/**
+ * Load a Page WITH its classroom + git organization (the content-repo chain)
+ * and verify it belongs to the authorized classroom (S1 — by-id compare, same
+ * non-leaking rejection as every other loader). Content tools need the git
+ * org to locate the per-classroom content repo, so a classroom without one is
+ * an internal misconfiguration, reported only AFTER the S1 check passes.
+ */
+export async function loadPageWithRepoInClassroom(
+  id: string,
+  ctx: ToolContext
+): Promise<PageWithRepoRecord> {
+  const record = (await ClassmojiService.page.findById(id, {
+    includeClassroom: true,
+  })) as PageWithRepoRecord | null;
+  if (!record || record.classroom_id !== requireClassroomCtx(ctx).classroomId) {
+    throw scopedNotFound('Page');
+  }
+  if (!record.classroom?.git_organization?.login) {
+    throw new ToolError('internal', 'Classroom git organization is not configured');
+  }
+  return record;
+}
+
 type RegradeRequestRecord = Awaited<
   ReturnType<typeof ClassmojiService.regradeRequest.findMany>
 >[number];

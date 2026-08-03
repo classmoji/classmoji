@@ -81,10 +81,12 @@ function contentRepoFor(page: PageWithContentRepo) {
  * @param page - Page with classroom.git_organization
  * @param options.skipCache - Bypass the 60s ContentService cache (sha-bearing
  *   reads that will be used as expectedSha MUST pass true).
+ * @param options.ref - Git ref (branch/sha) to read from — e.g. the page's
+ *   preview branch. Ref-bearing reads always bypass the cache.
  */
 export async function loadPageContent(
   page: PageWithContentRepo,
-  { skipCache = false }: { skipCache?: boolean } = {}
+  { skipCache = false, ref }: { skipCache?: boolean; ref?: string } = {}
 ): Promise<PageContentResult> {
   const { gitOrganization, repo } = contentRepoFor(page);
 
@@ -94,6 +96,7 @@ export async function loadPageContent(
       gitOrganization,
       repo,
       path: `${page.content_path}/content.json`,
+      ...(ref ? { ref } : {}),
       skipCache,
     });
 
@@ -131,6 +134,7 @@ export async function loadPageContent(
       gitOrganization,
       repo,
       path: `${page.content_path}/index.html`,
+      ...(ref ? { ref } : {}),
       skipCache,
     });
 
@@ -462,4 +466,293 @@ export function applyBlockOps(blocks: unknown[], ops: BlockOp[]): unknown[] {
   }
 
   return doc;
+}
+
+// ─── Preview branches (plan §3b) ─────────────────────────────────────────────
+//
+// One singleton preview branch per page, named `preview/<content_path>`.
+// Pages have no generated artifact, so preview branches carry content.json
+// only (savePageContent with a branch writes just that file). Accept merges
+// the branch into main via the GitHub merge API and deletes it; discard
+// deletes it without touching main.
+
+/** The singleton preview branch for a content path (e.g. `preview/pages/syllabus`). */
+export function previewBranchName(contentPath: string): string {
+  return `preview/${contentPath}`;
+}
+
+export interface PreviewStatus {
+  exists: boolean;
+  /** Commits the preview branch has that main lacks (present iff exists). */
+  commits_ahead?: number;
+  /** Committer date (ISO) of the oldest preview-only commit — the preview's age. */
+  oldest_commit_at?: string;
+}
+
+/**
+ * Report whether the page's preview branch exists and how far ahead of main
+ * it is. A 404 from the compare (branch absent) → `{ exists: false }`.
+ */
+export async function getPreviewStatus(page: PageWithContentRepo): Promise<PreviewStatus> {
+  const { gitOrganization, repo } = contentRepoFor(page);
+  const comparison = await ContentService.compareBranches({
+    gitOrganization,
+    repo,
+    base: 'main',
+    head: previewBranchName(page.content_path),
+  });
+  if (!comparison) {
+    return { exists: false };
+  }
+  const oldest = comparison.commits[0]?.date;
+  return {
+    exists: true,
+    commits_ahead: comparison.ahead_by,
+    ...(oldest ? { oldest_commit_at: oldest } : {}),
+  };
+}
+
+/**
+ * Ensure the page's preview branch exists, creating it from main's current
+ * HEAD when absent. Existing branches are left untouched (stacking — a
+ * multi-step agent session accumulates commits on one preview).
+ *
+ * Main's HEAD sha comes from comparing main against itself (the compare
+ * payload's base commit), avoiding a separate refs read.
+ */
+export async function ensurePreviewBranch(
+  page: PageWithContentRepo
+): Promise<{ branch: string; created: boolean }> {
+  const { gitOrganization, repo } = contentRepoFor(page);
+  const branch = previewBranchName(page.content_path);
+
+  const existing = await ContentService.compareBranches({
+    gitOrganization,
+    repo,
+    base: 'main',
+    head: branch,
+  });
+  if (existing) {
+    return { branch, created: false };
+  }
+
+  const main = await ContentService.compareBranches({
+    gitOrganization,
+    repo,
+    base: 'main',
+    head: 'main',
+  });
+  if (!main) {
+    throw new Error(`Cannot resolve main HEAD for ${repo} — repository has no main branch?`);
+  }
+
+  await ContentService.createBranch({ gitOrganization, repo, branch, fromSha: main.base_sha });
+  return { branch, created: true };
+}
+
+export interface PreviewConflictUnit {
+  /** Block id (or the sentinel `__order__` for a top-level ordering conflict). */
+  id: string;
+  /** Index in the preview's document (falls back to main's, then base's). */
+  index: number;
+  /** Main's version of the unit (absent = deleted on main). */
+  ours?: unknown;
+  /** The preview's version of the unit (absent = deleted on the preview). */
+  theirs?: unknown;
+  /** The merge-base version (absent = the unit was added after the fork). */
+  base?: unknown;
+}
+
+export type AcceptPreviewResult =
+  | { merged: true; sha: string | null }
+  | {
+      merged: false;
+      conflict: true;
+      units: PreviewConflictUnit[];
+      ours_sha: string | null;
+      theirs_sha: string | null;
+    };
+
+/** Parse a content.json body (wrapper or legacy bare array) into its blocks. */
+function extractBlocks(content: string | null | undefined): BlockNode[] {
+  if (!content) return [];
+  try {
+    const parsed = JSON.parse(content);
+    if (Array.isArray(parsed)) return parsed;
+    if (parsed && Array.isArray(parsed.blocks)) return parsed.blocks;
+  } catch {
+    // Malformed JSON — treat as empty for diff purposes
+  }
+  return [];
+}
+
+/**
+ * Accept the page's preview: merge the preview branch into main via the
+ * GitHub merge API, then delete the branch.
+ *
+ * On a git-level conflict, nothing is merged and nothing is deleted; instead
+ * a structured per-unit report is built by 3-way-walking content.json's
+ * top-level blocks (base = merge-base version, ours = main, theirs = preview)
+ * so the caller can resolve semantically and re-apply.
+ */
+export async function acceptPreview(page: PageWithContentRepo): Promise<AcceptPreviewResult> {
+  const { gitOrganization, repo } = contentRepoFor(page);
+  const branch = previewBranchName(page.content_path);
+
+  const result = await ContentService.mergeBranch({
+    gitOrganization,
+    repo,
+    base: 'main',
+    head: branch,
+    message: `Accept preview: ${page.title}`,
+  });
+
+  if (result.merged) {
+    await ContentService.deleteBranch({ gitOrganization, repo, branch });
+    return { merged: true, sha: result.sha ?? null };
+  }
+
+  // Conflict: build the per-unit report. The branch is left alone so the
+  // caller can inspect, re-apply on fresh main, or discard explicitly.
+  const comparison = await ContentService.compareBranches({
+    gitOrganization,
+    repo,
+    base: 'main',
+    head: branch,
+  });
+  const path = `${page.content_path}/content.json`;
+  const [ours, theirs, base] = await Promise.all([
+    ContentService.getContent({ gitOrganization, repo, path, skipCache: true }),
+    ContentService.getContent({ gitOrganization, repo, path, ref: branch }),
+    comparison?.merge_base_sha
+      ? ContentService.getContent({ gitOrganization, repo, path, ref: comparison.merge_base_sha })
+      : Promise.resolve(null),
+  ]);
+
+  const units = diffBlockUnits(
+    extractBlocks(base?.content),
+    extractBlocks(ours?.content),
+    extractBlocks(theirs?.content)
+  );
+
+  return {
+    merged: false,
+    conflict: true,
+    units,
+    ours_sha: ours?.sha ?? null,
+    theirs_sha: theirs?.sha ?? null,
+  };
+}
+
+/**
+ * Discard the page's preview branch (delete it; main is untouched).
+ * 404-tolerant: an already-gone branch reports `existed: false` instead of
+ * throwing (GitHub answers 422 "Reference does not exist" — some proxies 404).
+ */
+export async function discardPreview(
+  page: PageWithContentRepo
+): Promise<{ discarded: true; existed: boolean }> {
+  const { gitOrganization, repo } = contentRepoFor(page);
+  const branch = previewBranchName(page.content_path);
+
+  try {
+    await ContentService.deleteBranch({ gitOrganization, repo, branch });
+    return { discarded: true, existed: true };
+  } catch (error: unknown) {
+    const status = (error as { status?: number }).status;
+    if (status === 404 || status === 422) {
+      return { discarded: true, existed: false };
+    }
+    throw error;
+  }
+}
+
+// ─── 3-way block diff (conflict reporting) ───────────────────────────────────
+
+/** Sentinel unit id for a top-level ordering conflict. */
+export const ORDER_CONFLICT_ID = '__order__';
+
+const idsOf = (blocks: BlockNode[]): string[] =>
+  blocks.map(block => block?.id).filter((id): id is string => typeof id === 'string');
+
+const deepEqual = (a: unknown, b: unknown): boolean =>
+  a === b || canonicalJson(a) === canonicalJson(b);
+
+/**
+ * 3-way diff of a block document by top-level unit (block) id, for conflict
+ * reporting after a failed preview merge. Pure.
+ *
+ * A unit conflicts when BOTH sides changed it relative to base (edit/edit,
+ * edit/delete, or both-added-differently) and the two sides disagree. A
+ * one-sided change is not a conflict (git would have auto-merged it — the
+ * report only names what genuinely needs a human/agent decision).
+ *
+ * The top-level ordering is compared as id sequences the same way: reordered
+ * differently on both sides → one sentinel `__order__` unit whose ours/theirs/
+ * base carry the id arrays. Nested children ride inside their parent unit
+ * (deep-equal covers the whole subtree).
+ */
+export function diffBlockUnits(
+  base: BlockNode[],
+  ours: BlockNode[],
+  theirs: BlockNode[]
+): PreviewConflictUnit[] {
+  const byId = (blocks: BlockNode[]): Map<string, { block: BlockNode; index: number }> => {
+    const map = new Map<string, { block: BlockNode; index: number }>();
+    blocks.forEach((block, index) => {
+      if (block && typeof block.id === 'string' && !map.has(block.id)) {
+        map.set(block.id, { block, index });
+      }
+    });
+    return map;
+  };
+
+  const baseMap = byId(base);
+  const oursMap = byId(ours);
+  const theirsMap = byId(theirs);
+
+  const seen = new Set<string>();
+  const orderedIds = [...theirsMap.keys(), ...oursMap.keys(), ...baseMap.keys()].filter(id => {
+    if (seen.has(id)) return false;
+    seen.add(id);
+    return true;
+  });
+
+  const units: PreviewConflictUnit[] = [];
+  for (const id of orderedIds) {
+    const inBase = baseMap.get(id);
+    const inOurs = oursMap.get(id);
+    const inTheirs = theirsMap.get(id);
+
+    const oursChanged = !deepEqual(inBase?.block, inOurs?.block);
+    const theirsChanged = !deepEqual(inBase?.block, inTheirs?.block);
+    if (!oursChanged || !theirsChanged) continue; // one-sided → auto-mergeable
+    if (deepEqual(inOurs?.block, inTheirs?.block)) continue; // both sides agree
+
+    units.push({
+      id,
+      index: inTheirs?.index ?? inOurs?.index ?? inBase?.index ?? -1,
+      ...(inOurs ? { ours: inOurs.block } : {}),
+      ...(inTheirs ? { theirs: inTheirs.block } : {}),
+      ...(inBase ? { base: inBase.block } : {}),
+    });
+  }
+
+  // Ordering conflict: both sides changed the top-level sequence, differently.
+  const baseIds = idsOf(base);
+  const oursIds = idsOf(ours);
+  const theirsIds = idsOf(theirs);
+  const oursOrderChanged = !deepEqual(baseIds, oursIds);
+  const theirsOrderChanged = !deepEqual(baseIds, theirsIds);
+  if (oursOrderChanged && theirsOrderChanged && !deepEqual(oursIds, theirsIds)) {
+    units.push({
+      id: ORDER_CONFLICT_ID,
+      index: -1,
+      ours: oursIds,
+      theirs: theirsIds,
+      base: baseIds,
+    });
+  }
+
+  return units;
 }

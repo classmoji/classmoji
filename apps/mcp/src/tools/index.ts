@@ -30,6 +30,13 @@ import {
   calendarEventDeleteTool,
 } from './calendar.ts';
 import { pageCreateTool, pageUpdateTool, pageDeleteTool } from './pages.ts';
+import {
+  pageContentOutlineTool,
+  pageContentGetTool,
+  pageContentApplyTool,
+  pagePreviewAcceptTool,
+  pagePreviewDiscardTool,
+} from './pageContent.ts';
 import { tokenGrantTool } from './tokens.ts';
 import { extensionPurchaseTool } from './extensions.ts';
 import { repoCreateTool, repoPublishTool, repoUnpublishTool } from './repos.ts';
@@ -81,6 +88,14 @@ export function registerAllTools(): void {
   registerToolDefinition(pageCreateTool);
   registerToolDefinition(pageUpdateTool);
   registerToolDefinition(pageDeleteTool);
+
+  // Page content: granular BlockNote editing + preview-branch workflow
+  // (OWNER+TEACHER — parity with web page editing)
+  registerToolDefinition(pageContentOutlineTool);
+  registerToolDefinition(pageContentGetTool);
+  registerToolDefinition(pageContentApplyTool);
+  registerToolDefinition(pagePreviewAcceptTool);
+  registerToolDefinition(pagePreviewDiscardTool);
 
   // Tokens (OWNER)
   registerToolDefinition(tokenGrantTool);

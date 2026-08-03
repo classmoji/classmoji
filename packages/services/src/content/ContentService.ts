@@ -1412,4 +1412,87 @@ export class ContentService {
       throw error;
     }
   }
+
+  /**
+   * Compare two branches (or any two refs)
+   * Thin wrapper over GET /repos/{owner}/{repo}/compare/{base}...{head}
+   *
+   * Returns `null` when the comparison 404s (head — or base — branch does not
+   * exist), matching the getMeta/getContent idiom. Callers probing for a
+   * preview branch treat `null` as "branch absent".
+   *
+   * Comparing a branch against itself (base === head) is a cheap way to get
+   * that branch's HEAD commit sha (`base_sha`) without a separate refs call.
+   *
+   * @param {Object} options
+   * @param {Object} [options.gitOrganization] - GitOrganization record from database
+   * @param {string} [options.orgLogin] - Organization login (fallback, assumes GITHUB)
+   * @param {string} options.repo - Repository name
+   * @param {string} options.base - Base ref (e.g. 'main')
+   * @param {string} options.head - Head ref (e.g. 'preview/pages/syllabus')
+   * @returns {Promise<{ ahead_by, behind_by, base_sha, head_sha, merge_base_sha, commits } | null>}
+   *   - `ahead_by` / `behind_by` — commit counts head is ahead of / behind base
+   *   - `base_sha` / `head_sha` — HEAD commit shas of the two refs
+   *   - `merge_base_sha` — the merge-base commit sha (for 3-way content reads)
+   *   - `commits` — the commits head has that base lacks, oldest first,
+   *     as `{ sha, date }` (committer date, ISO string)
+   */
+  static async compareBranches({
+    gitOrganization,
+    orgLogin,
+    repo,
+    base,
+    head,
+  }: {
+    gitOrganization?: GitOrganizationRecord;
+    orgLogin?: string;
+    repo: string;
+    base: string;
+    head: string;
+  }): Promise<{
+    ahead_by: number;
+    behind_by: number;
+    base_sha: string;
+    head_sha: string;
+    merge_base_sha: string | null;
+    commits: Array<{ sha: string; date: string | null }>;
+  } | null> {
+    const resolvedOrg = await resolveGitOrganization(gitOrganization, orgLogin);
+    const octokit = await getOctokit(resolvedOrg);
+
+    try {
+      const { data } = await octokit.request('GET /repos/{owner}/{repo}/compare/{basehead}', {
+        owner: resolvedOrg.login,
+        repo,
+        basehead: `${base}...${head}`,
+      });
+
+      interface CompareCommit {
+        sha: string;
+        commit?: { committer?: { date?: string }; author?: { date?: string } };
+      }
+
+      return {
+        ahead_by: data.ahead_by,
+        behind_by: data.behind_by,
+        base_sha: data.base_commit.sha,
+        // The compare payload has no head_commit field: when head is ahead its
+        // HEAD is the last listed commit; otherwise (identical or strictly
+        // behind) head's HEAD IS the merge base.
+        head_sha: data.commits?.length
+          ? data.commits[data.commits.length - 1].sha
+          : (data.merge_base_commit?.sha ?? data.base_commit.sha),
+        merge_base_sha: data.merge_base_commit?.sha ?? null,
+        commits: ((data.commits ?? []) as CompareCommit[]).map(item => ({
+          sha: item.sha,
+          date: item.commit?.committer?.date ?? item.commit?.author?.date ?? null,
+        })),
+      };
+    } catch (error: unknown) {
+      if (hasStatus(error, 404)) {
+        return null;
+      }
+      throw error;
+    }
+  }
 }

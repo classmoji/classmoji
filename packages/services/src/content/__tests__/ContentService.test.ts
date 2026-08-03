@@ -367,3 +367,117 @@ describe('branch lifecycle wrappers', () => {
     ).rejects.toThrow('Base does not exist');
   });
 });
+
+describe('compareBranches', () => {
+  it('maps the compare payload to ahead/behind counts, shas, and dated commits', async () => {
+    requestMock.mockResolvedValue({
+      data: {
+        ahead_by: 2,
+        behind_by: 1,
+        base_commit: { sha: 'main-head' },
+        merge_base_commit: { sha: 'fork-point' },
+        commits: [
+          { sha: 'c1', commit: { committer: { date: '2026-08-01T10:00:00Z' } } },
+          { sha: 'c2', commit: { author: { date: '2026-08-01T11:00:00Z' } } }, // no committer → author
+        ],
+      },
+    });
+
+    const result = await ContentService.compareBranches({
+      gitOrganization,
+      repo: 'repo-compare',
+      base: 'main',
+      head: 'preview/pages/syllabus',
+    });
+
+    expect(requestMock).toHaveBeenCalledWith('GET /repos/{owner}/{repo}/compare/{basehead}', {
+      owner: 'test-org',
+      repo: 'repo-compare',
+      basehead: 'main...preview/pages/syllabus',
+    });
+    expect(result).toEqual({
+      ahead_by: 2,
+      behind_by: 1,
+      base_sha: 'main-head',
+      head_sha: 'c2', // head's HEAD = last listed commit when ahead
+      merge_base_sha: 'fork-point',
+      commits: [
+        { sha: 'c1', date: '2026-08-01T10:00:00Z' },
+        { sha: 'c2', date: '2026-08-01T11:00:00Z' },
+      ],
+    });
+  });
+
+  it('falls back to the merge base for head_sha when no commits are listed', async () => {
+    requestMock.mockResolvedValue({
+      data: {
+        ahead_by: 0,
+        behind_by: 3,
+        base_commit: { sha: 'main-head' },
+        merge_base_commit: { sha: 'stale-head' },
+        commits: [],
+      },
+    });
+
+    const result = await ContentService.compareBranches({
+      gitOrganization,
+      repo: 'repo-compare',
+      base: 'main',
+      head: 'stale-branch',
+    });
+
+    // A strictly-behind head's HEAD IS the merge base, not main's HEAD.
+    expect(result?.head_sha).toBe('stale-head');
+  });
+
+  it('resolves main HEAD via a self-compare (base_sha with zero commits)', async () => {
+    requestMock.mockResolvedValue({
+      data: {
+        ahead_by: 0,
+        behind_by: 0,
+        base_commit: { sha: 'main-head' },
+        merge_base_commit: { sha: 'main-head' },
+        commits: [],
+      },
+    });
+
+    const result = await ContentService.compareBranches({
+      gitOrganization,
+      repo: 'repo-compare',
+      base: 'main',
+      head: 'main',
+    });
+
+    expect(result?.base_sha).toBe('main-head');
+    expect(result?.head_sha).toBe('main-head');
+    expect(result?.ahead_by).toBe(0);
+  });
+
+  it('returns null on 404 (head branch does not exist)', async () => {
+    const missing = Object.assign(new Error('Not Found'), { status: 404 });
+    requestMock.mockRejectedValue(missing);
+
+    const result = await ContentService.compareBranches({
+      gitOrganization,
+      repo: 'repo-compare',
+      base: 'main',
+      head: 'preview/pages/ghost',
+    });
+
+    expect(result).toBeNull();
+  });
+
+  it('rethrows non-404 errors', async () => {
+    const boom = Object.assign(new Error('Server error'), { status: 500 });
+    requestMock.mockRejectedValue(boom);
+
+    await expect(
+      ContentService.compareBranches({
+        gitOrganization,
+        repo: 'repo-compare',
+        base: 'main',
+        head: 'preview/pages/syllabus',
+      })
+    ).rejects.toThrow('Server error');
+  });
+});

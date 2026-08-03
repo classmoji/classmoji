@@ -10,12 +10,20 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const getContentMock = vi.fn();
 const putMock = vi.fn();
 const uploadMock = vi.fn();
+const compareBranchesMock = vi.fn();
+const createBranchMock = vi.fn();
+const deleteBranchMock = vi.fn();
+const mergeBranchMock = vi.fn();
 
 vi.mock('../../content/ContentService.ts', () => ({
   ContentService: {
     getContent: (...args: unknown[]) => getContentMock(...args),
     put: (...args: unknown[]) => putMock(...args),
     upload: (...args: unknown[]) => uploadMock(...args),
+    compareBranches: (...args: unknown[]) => compareBranchesMock(...args),
+    createBranch: (...args: unknown[]) => createBranchMock(...args),
+    deleteBranch: (...args: unknown[]) => deleteBranchMock(...args),
+    mergeBranch: (...args: unknown[]) => mergeBranchMock(...args),
   },
 }));
 
@@ -28,6 +36,13 @@ const {
   blankPageBlocks,
   blankPageContentJson,
   BlockOpError,
+  previewBranchName,
+  getPreviewStatus,
+  ensurePreviewBranch,
+  acceptPreview,
+  discardPreview,
+  diffBlockUnits,
+  ORDER_CONFLICT_ID,
 } = await import('../pageContent.service.ts');
 
 const gitOrganization = { provider: 'GITHUB', login: 'test-org' };
@@ -121,6 +136,19 @@ describe('pageContent.loadPageContent', () => {
 
     expect(callArg(getContentMock, 0).skipCache).toBe(true);
     expect(callArg(getContentMock, 1).skipCache).toBe(true);
+  });
+
+  it('passes ref through to both reads (preview-branch loads), omitting it by default', async () => {
+    getContentMock.mockResolvedValue(null);
+
+    await loadPageContent(page, { skipCache: true, ref: 'preview/pages/syllabus' });
+
+    expect(callArg(getContentMock, 0).ref).toBe('preview/pages/syllabus');
+    expect(callArg(getContentMock, 1).ref).toBe('preview/pages/syllabus');
+
+    getContentMock.mockClear();
+    await loadPageContent(page);
+    expect('ref' in callArg(getContentMock, 0)).toBe(false);
   });
 
   it('throws when the classroom has no git organization', async () => {
@@ -464,5 +492,315 @@ describe('pageContent.applyBlockOps', () => {
       { op: 'replace_all', blocks: [] },
     ]);
     expect(input).toEqual(snapshot);
+  });
+});
+
+// ─── preview branches (plan §3b) ─────────────────────────────────────────────
+
+const PREVIEW_BRANCH = 'preview/pages/syllabus';
+
+describe('pageContent.previewBranchName', () => {
+  it('is the singleton preview/<content_path> branch', () => {
+    expect(previewBranchName('pages/syllabus')).toBe(PREVIEW_BRANCH);
+    expect(previewBranchName(page.content_path)).toBe(PREVIEW_BRANCH);
+  });
+});
+
+describe('pageContent.getPreviewStatus', () => {
+  it('reports exists:false when the compare 404s (branch absent)', async () => {
+    compareBranchesMock.mockResolvedValue(null);
+
+    const status = await getPreviewStatus(page);
+
+    expect(status).toEqual({ exists: false });
+    const arg = callArg(compareBranchesMock);
+    expect(arg.repo).toBe('content-test-org-cs101');
+    expect(arg.base).toBe('main');
+    expect(arg.head).toBe(PREVIEW_BRANCH);
+  });
+
+  it('reports commits_ahead and the OLDEST preview commit date when present', async () => {
+    compareBranchesMock.mockResolvedValue({
+      ahead_by: 3,
+      behind_by: 0,
+      base_sha: 'main-head',
+      head_sha: 'c3',
+      merge_base_sha: 'main-head',
+      commits: [
+        { sha: 'c1', date: '2026-08-01T10:00:00Z' },
+        { sha: 'c2', date: '2026-08-01T11:00:00Z' },
+        { sha: 'c3', date: '2026-08-01T12:00:00Z' },
+      ],
+    });
+
+    expect(await getPreviewStatus(page)).toEqual({
+      exists: true,
+      commits_ahead: 3,
+      oldest_commit_at: '2026-08-01T10:00:00Z',
+    });
+  });
+
+  it('handles an existing branch with no preview-only commits (just created)', async () => {
+    compareBranchesMock.mockResolvedValue({
+      ahead_by: 0,
+      behind_by: 0,
+      base_sha: 'main-head',
+      head_sha: 'main-head',
+      merge_base_sha: 'main-head',
+      commits: [],
+    });
+
+    expect(await getPreviewStatus(page)).toEqual({ exists: true, commits_ahead: 0 });
+  });
+});
+
+describe('pageContent.ensurePreviewBranch', () => {
+  it('creates the branch from main HEAD when absent', async () => {
+    compareBranchesMock
+      .mockResolvedValueOnce(null) // main...preview → 404 (absent)
+      .mockResolvedValueOnce({
+        // main...main → main's HEAD via base_sha
+        ahead_by: 0,
+        behind_by: 0,
+        base_sha: 'main-head',
+        head_sha: 'main-head',
+        merge_base_sha: 'main-head',
+        commits: [],
+      });
+    createBranchMock.mockResolvedValue({ ref: `refs/heads/${PREVIEW_BRANCH}`, sha: 'main-head' });
+
+    const result = await ensurePreviewBranch(page);
+
+    expect(result).toEqual({ branch: PREVIEW_BRANCH, created: true });
+    expect(callArg(compareBranchesMock, 1)).toMatchObject({ base: 'main', head: 'main' });
+    expect(callArg(createBranchMock)).toMatchObject({
+      repo: 'content-test-org-cs101',
+      branch: PREVIEW_BRANCH,
+      fromSha: 'main-head',
+    });
+  });
+
+  it('leaves an existing branch untouched (stacking)', async () => {
+    compareBranchesMock.mockResolvedValue({
+      ahead_by: 1,
+      behind_by: 0,
+      base_sha: 'main-head',
+      head_sha: 'c1',
+      merge_base_sha: 'main-head',
+      commits: [{ sha: 'c1', date: '2026-08-01T10:00:00Z' }],
+    });
+
+    const result = await ensurePreviewBranch(page);
+
+    expect(result).toEqual({ branch: PREVIEW_BRANCH, created: false });
+    expect(compareBranchesMock).toHaveBeenCalledTimes(1); // no main-HEAD lookup
+    expect(createBranchMock).not.toHaveBeenCalled();
+  });
+
+  it('throws when main itself cannot be resolved', async () => {
+    compareBranchesMock.mockResolvedValue(null);
+
+    await expect(ensurePreviewBranch(page)).rejects.toThrow(/main HEAD/);
+    expect(createBranchMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('pageContent.acceptPreview', () => {
+  it('clean merge: merges main←preview, deletes the branch, returns the merge sha', async () => {
+    mergeBranchMock.mockResolvedValue({ merged: true, sha: 'merge-sha' });
+    deleteBranchMock.mockResolvedValue({ deleted: true });
+
+    const result = await acceptPreview(page);
+
+    expect(result).toEqual({ merged: true, sha: 'merge-sha' });
+    expect(callArg(mergeBranchMock)).toMatchObject({
+      repo: 'content-test-org-cs101',
+      base: 'main',
+      head: PREVIEW_BRANCH,
+    });
+    expect(callArg(deleteBranchMock)).toMatchObject({ branch: PREVIEW_BRANCH });
+  });
+
+  it('already-merged (204): still deletes the branch, sha is null', async () => {
+    mergeBranchMock.mockResolvedValue({ merged: true });
+    deleteBranchMock.mockResolvedValue({ deleted: true });
+
+    expect(await acceptPreview(page)).toEqual({ merged: true, sha: null });
+    expect(deleteBranchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('conflict: builds the 3-way per-unit report and does NOT delete the branch', async () => {
+    const baseBlock = { id: 'x', type: 'paragraph', content: [{ type: 'text', text: 'base' }] };
+    const oursBlock = { id: 'x', type: 'paragraph', content: [{ type: 'text', text: 'main' }] };
+    const theirsBlock = {
+      id: 'x',
+      type: 'paragraph',
+      content: [{ type: 'text', text: 'preview' }],
+    };
+
+    mergeBranchMock.mockResolvedValue({ merged: false, conflict: true });
+    compareBranchesMock.mockResolvedValue({
+      ahead_by: 1,
+      behind_by: 1,
+      base_sha: 'main-head',
+      head_sha: 'preview-head',
+      merge_base_sha: 'fork-point',
+      commits: [{ sha: 'preview-head', date: '2026-08-01T10:00:00Z' }],
+    });
+    getContentMock.mockImplementation(async (arg: unknown) => {
+      const { ref } = arg as { ref?: string };
+      if (ref === PREVIEW_BRANCH) {
+        return { content: JSON.stringify({ blocks: [theirsBlock] }), sha: 'theirs-sha' };
+      }
+      if (ref === 'fork-point') {
+        return { content: JSON.stringify({ blocks: [baseBlock] }), sha: 'base-sha' };
+      }
+      return { content: JSON.stringify({ blocks: [oursBlock] }), sha: 'ours-sha' };
+    });
+
+    const result = await acceptPreview(page);
+
+    expect(result).toEqual({
+      merged: false,
+      conflict: true,
+      units: [{ id: 'x', index: 0, ours: oursBlock, theirs: theirsBlock, base: baseBlock }],
+      ours_sha: 'ours-sha',
+      theirs_sha: 'theirs-sha',
+    });
+    expect(deleteBranchMock).not.toHaveBeenCalled();
+
+    // The three content reads: ours = fresh main (skipCache, no ref),
+    // theirs = the preview branch, base = the merge-base commit.
+    const reads = getContentMock.mock.calls.map(call => call[0] as CallArg);
+    expect(reads).toHaveLength(3);
+    const oursRead = reads.find(read => read.ref === undefined);
+    expect(oursRead?.skipCache).toBe(true);
+    expect(reads.some(read => read.ref === PREVIEW_BRANCH)).toBe(true);
+    expect(reads.some(read => read.ref === 'fork-point')).toBe(true);
+  });
+});
+
+describe('pageContent.discardPreview', () => {
+  it('deletes the branch and reports it existed', async () => {
+    deleteBranchMock.mockResolvedValue({ deleted: true });
+
+    expect(await discardPreview(page)).toEqual({ discarded: true, existed: true });
+    expect(callArg(deleteBranchMock)).toMatchObject({
+      repo: 'content-test-org-cs101',
+      branch: PREVIEW_BRANCH,
+    });
+  });
+
+  it('is tolerant of an already-gone branch (422 "Reference does not exist" or 404)', async () => {
+    for (const status of [422, 404]) {
+      deleteBranchMock.mockRejectedValueOnce(
+        Object.assign(new Error('Reference does not exist'), { status })
+      );
+      expect(await discardPreview(page)).toEqual({ discarded: true, existed: false });
+    }
+  });
+
+  it('rethrows other failures', async () => {
+    deleteBranchMock.mockRejectedValue(Object.assign(new Error('boom'), { status: 500 }));
+
+    await expect(discardPreview(page)).rejects.toThrow('boom');
+  });
+});
+
+// ─── diffBlockUnits (3-way conflict report) ──────────────────────────────────
+
+describe('pageContent.diffBlockUnits', () => {
+  const block = (id: string, text: string, extra: Record<string, unknown> = {}) => ({
+    id,
+    type: 'paragraph',
+    content: [{ type: 'text', text }],
+    ...extra,
+  });
+
+  it('one-sided changes are NOT conflicts (git auto-merges them)', () => {
+    const base = [block('a', 'one'), block('b', 'two')];
+    const ours = [block('a', 'one EDITED ON MAIN'), block('b', 'two')];
+    const theirs = [block('a', 'one'), block('b', 'two EDITED ON PREVIEW')];
+
+    // Each block changed on exactly one side → nothing to report.
+    expect(diffBlockUnits(base, ours, theirs)).toEqual([]);
+  });
+
+  it('both-sides-changed-differently is a conflict carrying ours/theirs/base', () => {
+    const base = [block('a', 'original'), block('b', 'stable')];
+    const ours = [block('a', 'main version'), block('b', 'stable')];
+    const theirs = [block('a', 'preview version'), block('b', 'stable')];
+
+    expect(diffBlockUnits(base, ours, theirs)).toEqual([
+      {
+        id: 'a',
+        index: 0,
+        ours: block('a', 'main version'),
+        theirs: block('a', 'preview version'),
+        base: block('a', 'original'),
+      },
+    ]);
+  });
+
+  it('identical changes on both sides are not conflicts', () => {
+    const base = [block('a', 'original')];
+    const same = [block('a', 'both sides agree')];
+
+    expect(diffBlockUnits(base, same, structuredClone(same))).toEqual([]);
+  });
+
+  it('edit-vs-delete is a conflict (deleted side absent from the unit)', () => {
+    const base = [block('a', 'original'), block('b', 'keep')];
+    const ours = [block('b', 'keep')]; // deleted on main
+    const theirs = [block('a', 'edited on preview'), block('b', 'keep')];
+
+    expect(diffBlockUnits(base, ours, theirs)).toEqual([
+      {
+        id: 'a',
+        index: 0,
+        theirs: block('a', 'edited on preview'),
+        base: block('a', 'original'),
+      },
+    ]);
+  });
+
+  it('deep-equal covers nested children (a child edit conflicts the parent unit)', () => {
+    const withChild = (text: string) => block('p', 'parent', { children: [block('c', text)] });
+    const base = [withChild('child')];
+    const ours = [withChild('child main')];
+    const theirs = [withChild('child preview')];
+
+    const units = diffBlockUnits(base, ours, theirs);
+    expect(units).toHaveLength(1);
+    expect(units[0].id).toBe('p');
+  });
+
+  it('order conflict: both sides reordered differently → sentinel __order__ unit', () => {
+    const a = block('a', 'a');
+    const b = block('b', 'b');
+    const c = block('c', 'c');
+    const base = [a, b, c];
+    const ours = [b, a, c]; // main swapped a/b
+    const theirs = [a, c, b]; // preview swapped b/c
+
+    const units = diffBlockUnits(base, ours, theirs);
+    expect(units).toEqual([
+      {
+        id: ORDER_CONFLICT_ID,
+        index: -1,
+        ours: ['b', 'a', 'c'],
+        theirs: ['a', 'c', 'b'],
+        base: ['a', 'b', 'c'],
+      },
+    ]);
+  });
+
+  it('same reorder on both sides is not an order conflict', () => {
+    const a = block('a', 'a');
+    const b = block('b', 'b');
+    const base = [a, b];
+    const swapped = [b, a];
+
+    expect(diffBlockUnits(base, swapped, structuredClone(swapped))).toEqual([]);
   });
 });
