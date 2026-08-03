@@ -52,7 +52,9 @@ export default ({ command }) => {
     server: {
       port: process.env.PORT ? Number(process.env.PORT) : 3000,
       host: '0.0.0.0',
-      hmr: true,
+      // HMR websocket on app port + 1 — the vite default (24678) is shared by
+      // every vite app in the monorepo, so concurrent dev servers race for it.
+      hmr: { port: (process.env.PORT ? Number(process.env.PORT) : 3000) + 1 },
       allowedHosts: ['.ngrok-free.app', '.ngrok.io'],
       warmup: {
         //warm up all routes for dependency pre-bundling
