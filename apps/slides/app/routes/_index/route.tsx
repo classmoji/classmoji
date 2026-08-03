@@ -236,6 +236,31 @@ export const action = async ({ request }: { request: Request }) => {
         }
       }
 
+      // Apply the same content-path rewrite to the copied deck.json (the
+      // source of truth for deck-first slides). 404-tolerant: legacy decks
+      // have no deck.json yet — getContent returns null and we skip.
+      const deckPath = `${newContentPath}/deck.json`;
+      const deckFile = await ContentService.getContent({
+        gitOrganization,
+        repo,
+        path: deckPath,
+        skipCache: true,
+      });
+
+      if (deckFile?.content && slide.content_path !== newContentPath) {
+        const updatedDeck = deckFile.content.replaceAll(slide.content_path, newContentPath);
+
+        if (updatedDeck !== deckFile.content) {
+          await ContentService.put({
+            gitOrganization,
+            repo,
+            path: deckPath,
+            content: updatedDeck,
+            message: `Rewrite content paths for duplicated slides: ${slide.title}`,
+          });
+        }
+      }
+
       // Create new database record
       const newSlide = await getPrisma().slide.create({
         data: {
