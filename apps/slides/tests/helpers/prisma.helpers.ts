@@ -1,7 +1,11 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
-import getPrisma from '@classmoji/database';
+// Type-only import — erased at runtime. @classmoji/database constructs its
+// PrismaClient eagerly at module import, so the runtime import MUST happen
+// after DATABASE_URL is resolved (see getTestPrisma's dynamic import).
+// Mirrors apps/pages/tests/helpers/prisma.helpers.ts.
+import type getPrismaType from '@classmoji/database';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -11,7 +15,9 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
  * already present in the environment.
  */
 
-let cached: ReturnType<typeof getPrisma> | null = null;
+type TestPrisma = ReturnType<typeof getPrismaType>;
+
+let cached: TestPrisma | null = null;
 
 function databaseUrlFromDevContext(): string | null {
   try {
@@ -24,12 +30,13 @@ function databaseUrlFromDevContext(): string | null {
   }
 }
 
-export function getTestPrisma(): ReturnType<typeof getPrisma> {
+export async function getTestPrisma(): Promise<TestPrisma> {
   if (!process.env.DATABASE_URL) {
     const url = databaseUrlFromDevContext();
     if (url) process.env.DATABASE_URL = url;
   }
   if (!cached) {
+    const { default: getPrisma } = await import('@classmoji/database');
     cached = getPrisma();
   }
   return cached;
@@ -50,7 +57,7 @@ export interface SlideRow {
  * Fetch a slide row by id, or null if it doesn't exist.
  */
 export async function getSlideById(slideId: string): Promise<SlideRow | null> {
-  const prisma = getTestPrisma();
+  const prisma = await getTestPrisma();
   const slide = await prisma.slide.findUnique({
     where: { id: slideId },
     select: {
@@ -72,7 +79,7 @@ export async function getSlideById(slideId: string): Promise<SlideRow | null> {
  * tests fail loudly when the dev DB hasn't been seeded.
  */
 export async function getClassroomIdBySlug(slug: string): Promise<string> {
-  const prisma = getTestPrisma();
+  const prisma = await getTestPrisma();
   const classroom = await prisma.classroom.findFirst({
     where: { slug },
     select: { id: true },
@@ -89,7 +96,7 @@ export async function getClassroomIdBySlug(slug: string): Promise<string> {
  * it, so tests set it directly to exercise the share/follow path.
  */
 export async function ensureSlideShareCode(slideId: string): Promise<string> {
-  const prisma = getTestPrisma();
+  const prisma = await getTestPrisma();
   const existing = await getSlideById(slideId);
   if (existing?.multiplex_id) return existing.multiplex_id;
 

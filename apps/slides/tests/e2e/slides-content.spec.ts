@@ -17,6 +17,7 @@ import {
   editSlide,
   deleteSlide,
   waitForReveal,
+  reloadUntil,
   saveSlide,
   addSlideBelow,
 } from '../helpers';
@@ -322,8 +323,12 @@ test.describe('Slides Content & Styling', () => {
 
     await saveSlide(page);
 
-    await page.reload();
-    await waitForReveal(page);
+    // reloadUntil absorbs GitHub's short read-after-write window on the
+    // git-data save path (commit verified-correct; an immediate reload can
+    // serve the pre-save cached copy for a few seconds).
+    await reloadUntil(page, async () =>
+      ((await page.locator('.reveal .slides').textContent()) ?? '').includes(PERSIST_MARKER)
+    );
 
     await expect(page.locator('.reveal .slides')).toContainText(PERSIST_MARKER);
   });
