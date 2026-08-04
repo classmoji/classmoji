@@ -10,9 +10,16 @@ import {
   PendingPreviewBanner,
   NoPreviewNotice,
   ConflictPanel,
-  type ConflictUnit,
 } from '~/components/preview/PreviewControls.tsx';
 import { diffBlockOps, type BlockOp } from '~/components/editor/blockOpsDiff.ts';
+import {
+  opsPathEligible,
+  deriveSaveMergeReport,
+  deriveSaveConflict,
+  fetcherMatchesPage,
+  type SaveBaseline,
+  type SaveFetcherData,
+} from './saveState.ts';
 
 const PageEditor = lazy(() => import('~/components/editor/PageEditor.tsx'));
 const BlockNoteViewer = lazy(() => import('~/components/viewer/BlockNoteViewer.tsx'));
@@ -55,7 +62,15 @@ const PageRoute = () => {
   // Save state (explicit saves only)
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
   const [saveStatus, setSaveStatus] = useState('saved');
-  const lastSavedContent = useRef<string | null>(null);
+  // The diff-at-save baseline, bound to the sha it represents (P1): the
+  // NORMALIZED editor document at that sha. Captured from the editor after
+  // mount (P2 — same BlockNote normalization on both sides, so untouched
+  // stored blocks never emit phantom updates) and re-captured after a
+  // merged-adoption remount. `null` until the editor's onReady fires.
+  const savedBaselineRef = useRef<SaveBaseline | null>(null);
+  // The sha the NEXT editor onReady should pair its snapshot with (the loaded
+  // sha, or a merged save's new sha set just before the epoch remount).
+  const pendingBaselineShaRef = useRef<string | null>(contentSha);
 
   // Conflict token (F2, 4b parity with slides): content.json's sha, seeded
   // ONCE from the loader (deliberately not re-synced on revalidation — the
@@ -63,23 +78,24 @@ const PageRoute = () => {
   // the token mid-edit would let a stale save pass the server's sha check).
   // Refreshed only from a successful save's response; echoed on every save.
   const [contentToken, setContentToken] = useState<string | null>(contentSha);
+  // The page id the CURRENT save fetcher exchange was stamped for (P4). The
+  // fetcher survives same-route param navigation, so its data is read only
+  // while this still matches page.id — otherwise a pending conflict chooser
+  // ghosts onto the next page and Apply fires a wrong-page save chain. Set at
+  // every save submission; deliberately NOT cleared on navigation (a stale
+  // stamp keeps the gate closed on the new page until it saves).
+  const saveReportPageIdRef = useRef(page.id);
+  const fetcherData = fetcher.data as SaveFetcherData | undefined;
+  const fetcherMatches = fetcherMatchesPage(saveReportPageIdRef.current, page.id);
   // Phase 7.5: a stale save's 3-way merge hit true collisions — the per-unit
-  // report the save-variant conflict chooser renders (derived straight from
-  // the fetcher; a successful re-submit replaces it).
+  // report the save-variant conflict chooser renders (gated to this page, P4).
   const saveMergeReport = useMemo(
-    () =>
-      fetcher.data?.conflict && fetcher.data?.units
-        ? {
-            units: fetcher.data.units as ConflictUnit[],
-            autoMerged: (fetcher.data.autoMerged as number) ?? 0,
-            oursSha: (fetcher.data.oursSha as string | null) ?? null,
-          }
-        : null,
-    [fetcher.data]
+    () => deriveSaveMergeReport(fetcherData, fetcherMatches),
+    [fetcherData, fetcherMatches]
   );
   // True once a save 409'd with NO mergeable report (legacy/fallback path):
-  // the page changed underneath this editor session — reload banner.
-  const saveConflict = Boolean(fetcher.data?.conflict) && !saveMergeReport;
+  // the page changed underneath this editor session — reload banner (P4-gated).
+  const saveConflict = deriveSaveConflict(fetcherData, fetcherMatches, saveMergeReport);
   // The exact content string the last save posted — a chooser re-submit (or
   // auto re-run) carries the SAME document.
   const lastPostedContentRef = useRef<string | null>(null);
@@ -101,16 +117,20 @@ const PageRoute = () => {
   const [editorEpoch, setEditorEpoch] = useState(0);
   // Navigating to a different page keeps this component mounted (same route,
   // new params) — re-seed the per-page editing state (React's sanctioned
-  // render-time reset for prop-derived state).
+  // render-time reset for prop-derived state), including the pending
+  // save/conflict UI (P4) so nothing ghosts across pages.
   const lastPageIdRef = useRef(page.id);
   if (lastPageIdRef.current !== page.id) {
     lastPageIdRef.current = page.id;
     setEditorDoc(content);
     setEditorEpoch(0);
     setContentToken(contentSha);
-    lastSavedContent.current = null;
+    savedBaselineRef.current = null;
+    pendingBaselineShaRef.current = contentSha;
     lastPostedContentRef.current = null;
     lastPostedOpsRef.current = null;
+    setHasUnsavedChanges(false);
+    setSaveStatus('saved');
   }
 
   // Client-only flag — prevents BlockNote from rendering during SSR
@@ -130,30 +150,36 @@ const PageRoute = () => {
     const currentContent = editorRef.current.getContent();
     const currentContentStr = JSON.stringify(currentContent);
 
-    if (lastSavedContent.current === currentContentStr) return;
+    const baseline = savedBaselineRef.current;
+    if (baseline && baseline.content === currentContentStr) return;
 
     // Preserved for the save-merge chooser and the whole-doc fallback: a
     // conflict re-submit must carry the SAME document that produced the report.
     lastPostedContentRef.current = currentContentStr;
+    // Stamp this exchange with the current page (P4).
+    saveReportPageIdRef.current = page.id;
 
-    // Diff-at-save: with a conflict token (content.json exists — the base the
-    // server replays against) and a baseline (the document this editor
-    // mounted from), post only the changed blocks as ops. Any anomaly (no
-    // baseline, duplicate ids, cross-scope move, complex reorder) → null →
-    // the whole-document save below (the 7.5 path, unchanged).
+    // Diff-at-save: post only the CHANGED blocks as ops — but ONLY when the
+    // baseline we diff against is the document the conflict token names (P1
+    // pairing guard). The server replays the ops onto base_sha, so a desynced
+    // baseline (e.g. a cover write advanced the token past this document)
+    // would replay onto the wrong base and silently clobber concurrent edits —
+    // fall back to the whole-document save (always correct) instead. Any
+    // anomaly in the diff itself (duplicate ids, cross-scope move, complex
+    // reorder) also yields null → the whole-document save (the 7.5 path).
     let ops: BlockOp[] | null = null;
-    if (contentToken && lastSavedContent.current) {
+    if (opsPathEligible(baseline, contentToken)) {
       try {
-        ops = diffBlockOps(JSON.parse(lastSavedContent.current), currentContent);
+        ops = diffBlockOps(JSON.parse(baseline.content), currentContent);
       } catch {
         ops = null;
       }
     }
 
     if (ops && ops.length === 0) {
-      // Canonically identical (only serialization order differs) — nothing
-      // to commit.
-      lastSavedContent.current = currentContentStr;
+      // Canonically identical (only serialization order differs) — nothing to
+      // commit; re-pin the baseline to the exact current string.
+      savedBaselineRef.current = { sha: contentToken, content: currentContentStr };
       setHasUnsavedChanges(false);
       setSaveStatus('saved');
       return;
@@ -179,7 +205,7 @@ const PageRoute = () => {
       { intent: 'save', content: currentContentStr, content_sha: contentToken },
       { method: 'POST', encType: 'application/json' }
     );
-  }, [canEdit, fetcher, contentToken]);
+  }, [canEdit, fetcher, contentToken, page.id]);
 
   // Apply the save-merge chooser's decisions (Phase 7.5): re-submit the SAME
   // posted content with one {id, choose} per conflict and the report's
@@ -188,6 +214,8 @@ const PageRoute = () => {
   const handleApplySaveResolutions = useCallback(
     (resolutions: Array<{ id: string; choose: 'ours' | 'theirs' }>) => {
       if (!saveMergeReport) return;
+      // Stamp the resolution exchange with the current page (P4).
+      saveReportPageIdRef.current = page.id;
 
       // Ops-save conflict: the re-submit carries the SAME ops (the server
       // re-materializes theirs = base + ops and re-validates the set).
@@ -223,7 +251,7 @@ const PageRoute = () => {
         { method: 'POST', encType: 'application/json' }
       );
     },
-    [fetcher, contentToken, saveMergeReport]
+    [fetcher, contentToken, saveMergeReport, page.id]
   );
 
   // A `code`-bearing refusal: a chooser re-submit hit a stale ours_sha pin or
@@ -233,17 +261,21 @@ const PageRoute = () => {
   // (possibly merged) or produces a FRESH report. Bounded: a plain whole-doc
   // save never answers with `code`, so this runs at most once per attempt.
   useEffect(() => {
+    // Only recover the fetcher exchange that belongs to THIS page (P4) — a
+    // stale code-bearing refusal from another page must not fire a save here.
+    if (saveReportPageIdRef.current !== page.id) return;
     if (fetcher.state !== 'idle') return;
     if (!fetcher.data?.code || fetcher.data?.conflict) return;
     const content = lastPostedContentRef.current;
     if (!content) return;
     lastPostedOpsRef.current = null;
+    saveReportPageIdRef.current = page.id;
     setSaveStatus('saving');
     fetcher.submit(
       { intent: 'save', content, content_sha: contentToken },
       { method: 'POST', encType: 'application/json' }
     );
-  }, [fetcher.state, fetcher.data, fetcher, contentToken]);
+  }, [fetcher.state, fetcher.data, fetcher, contentToken, page.id]);
 
   // Track editor changes (mark unsaved, but don't auto-save)
   const handleEditorChange = useCallback(
@@ -251,7 +283,9 @@ const PageRoute = () => {
       if (!canEdit) return;
 
       const currentContentStr = JSON.stringify(document);
-      if (lastSavedContent.current === currentContentStr) return;
+      // Compared against the normalized baseline (P2) — an unchanged document
+      // stringifies identically on both sides, so it never marks unsaved.
+      if (savedBaselineRef.current?.content === currentContentStr) return;
 
       setHasUnsavedChanges(true);
       setSaveStatus('unsaved');
@@ -290,62 +324,75 @@ const PageRoute = () => {
     window.history.replaceState({}, '', url);
   }, [notice, noticeAutoMerged]);
 
-  // Initialize lastSavedContent on mount
-  useEffect(() => {
-    if (canEdit && content && lastSavedContent.current === null) {
-      lastSavedContent.current = JSON.stringify(content);
-    }
-  }, [canEdit, content]);
+  // Baseline capture is the editor's onReady (P2), not the raw loader JSON —
+  // see handleEditorReady below.
 
   // Track save completion
   useEffect(() => {
+    // Only settle the fetcher exchange that belongs to THIS page (P4).
+    if (saveReportPageIdRef.current !== page.id) return;
     if (fetcher.state === 'idle' && fetcher.data?.success) {
+      const newSha =
+        typeof fetcher.data.sha === 'string' && fetcher.data.sha ? fetcher.data.sha : null;
       if (Array.isArray(fetcher.data.merged_content)) {
         // Semantic save-merge (7.5): the committed document is the MERGE of
         // this editor's content and concurrent server-side changes — adopt it
         // (remount) so the editor matches the fresh token, and tell the user.
+        // The NORMALIZED baseline for the adopted doc is captured by the
+        // editor's onReady after the epoch remount, paired with the new sha.
+        pendingBaselineShaRef.current = newSha;
         setEditorDoc(fetcher.data.merged_content);
         setEditorEpoch(epoch => epoch + 1);
-        lastSavedContent.current = JSON.stringify(fetcher.data.merged_content);
         const n = fetcher.data.merged_with_concurrent;
         if (typeof n === 'number' && n > 0) {
           toast.success(`Saved — merged with ${n} concurrent change${n === 1 ? '' : 's'}.`);
         }
-      } else if (lastPostedContentRef.current) {
-        // No adoption needed: the committed document IS the posted one. The
-        // baseline must be exactly what was committed (the next diff-at-save
-        // is computed against it), so use the posted string — not a re-read
-        // of the live editor, which may already contain post-save typing.
-        lastSavedContent.current = lastPostedContentRef.current;
-      } else if (editorRef.current) {
-        const currentContent = editorRef.current.getContent();
-        lastSavedContent.current = JSON.stringify(currentContent);
+      } else {
+        // No adoption/remount: pin the baseline directly to the committed sha.
+        // The content is the exact string posted (the normalized editor doc at
+        // save time) — not a re-read of the live editor, which may already
+        // contain post-save typing.
+        const committed =
+          lastPostedContentRef.current ??
+          (editorRef.current ? JSON.stringify(editorRef.current.getContent()) : null);
+        if (committed !== null) {
+          savedBaselineRef.current = { sha: newSha, content: committed };
+        }
       }
       // Refresh the conflict token — content.json's new sha after our save.
-      if (typeof fetcher.data.sha === 'string' && fetcher.data.sha) {
-        setContentToken(fetcher.data.sha);
+      if (newSha) {
+        setContentToken(newSha);
       }
       setHasUnsavedChanges(false);
       setSaveStatus('saved');
     } else if (fetcher.state === 'idle' && (fetcher.data?.error || fetcher.data?.conflict)) {
+      // P9: a code-bearing refusal that is NOT a conflict (OPS_BASE_MISMATCH /
+      // OPS_MALFORMED) is being auto-recovered by the whole-document fallback
+      // effect above — keep showing 'saving' for the recovery round-trip, not
+      // 'error' (the two effects fire in the same commit).
+      if (fetcher.data?.code && !fetcher.data?.conflict) return;
       // Conflict (409) keeps hasUnsavedChanges true — the chooser/banner
       // offers a way out; the editor content is preserved until the user
       // decides.
       setSaveStatus('error');
     }
-  }, [fetcher.state, fetcher.data]);
+  }, [fetcher.state, fetcher.data, page.id]);
 
-  // Surface cover-image failures (incl. the F5 409 "page changed — try
-  // again") — the cover flow has no inline status indicator of its own.
-  // On success, refresh the conflict token: a cover write advances
-  // content.json's sha, so a save still carrying the pre-cover token would
-  // self-conflict against our own change.
+  // Surface cover-image failures (incl. the F5 409 "page changed — try again") —
+  // the cover flow has no inline status indicator of its own.
+  //
+  // NOTE (P1): we deliberately do NOT advance the conflict token to the cover
+  // write's sha. savePageCoverImage folds the cover into main's CURRENT blocks,
+  // which may include a concurrent editor's edits this session never saw;
+  // adopting its sha as our base would let the next save replay against a
+  // document this editor isn't derived from and silently clobber those edits.
+  // Leaving the token at the loaded sha makes the next save a 3-way merge
+  // (base = what this editor loaded), which folds the cover in AND preserves
+  // the concurrent edits — the cover is already committed to main regardless.
   useEffect(() => {
     if (coverFetcher.state !== 'idle') return;
     if (coverFetcher.data?.error) {
       toast.error(coverFetcher.data.error);
-    } else if (coverFetcher.data?.sha) {
-      setContentToken(coverFetcher.data.sha);
     }
   }, [coverFetcher.state, coverFetcher.data]);
 
@@ -403,6 +450,18 @@ const PageRoute = () => {
     window.location.reload();
   }, []);
 
+  // Baseline capture (P2): once the editor has mounted (or remounted after a
+  // merged adoption), snapshot its NORMALIZED document as the diff-at-save
+  // baseline, paired with the sha it represents. Same BlockNote normalization
+  // on both diff sides, so untouched stored blocks never emit phantom updates.
+  // Stable identity (reads refs only) so a remounted editor captures it once.
+  const handleEditorReady = useCallback((document: unknown) => {
+    savedBaselineRef.current = {
+      sha: pendingBaselineShaRef.current,
+      content: JSON.stringify(document),
+    };
+  }, []);
+
   return (
     <>
       {!isEmbedded && (
@@ -416,10 +475,14 @@ const PageRoute = () => {
         />
       )}
 
-      {/* Preview-branch chrome (staff only — `preview` is null otherwise) */}
-      {preview?.active && <PreviewBar preview={preview} isEmbedded={isEmbedded} />}
+      {/* Preview-branch chrome (staff only — `preview` is null otherwise).
+          Keyed on page.id so the preview fetcher's conflict state resets on
+          same-route navigation (P4) instead of ghosting onto the next page. */}
+      {preview?.active && <PreviewBar key={page.id} preview={preview} isEmbedded={isEmbedded} />}
       {preview?.missing && <NoPreviewNotice />}
-      {preview && !preview.active && preview.exists && <PendingPreviewBanner preview={preview} />}
+      {preview && !preview.active && preview.exists && (
+        <PendingPreviewBanner key={page.id} preview={preview} />
+      )}
 
       {/* Save-merge chooser (Phase 7.5): a stale save hit true collisions —
           pick a side per block, then the same content re-submits with the
@@ -578,6 +641,11 @@ const PageRoute = () => {
                 pageId={page.id}
                 darkMode={darkMode}
                 onChange={handleEditorChange}
+                onReady={handleEditorReady}
+                // P5: block editing while the save-merge chooser is open so no
+                // edits are silently discarded when the resolved merge remounts
+                // the editor. The chooser is the way forward (Apply / Reload).
+                editable={!saveMergeReport}
               />
             </Suspense>
           ) : (

@@ -572,9 +572,9 @@ export class ContentService {
         ? null
         : await this.getMeta({ gitOrganization: resolvedOrg, repo, path, ref: branch });
 
-    let data;
+    let response;
     try {
-      ({ data } = await octokit.request('PUT /repos/{owner}/{repo}/contents/{path}', {
+      response = await octokit.request('PUT /repos/{owner}/{repo}/contents/{path}', {
         owner: resolvedOrg.login,
         repo,
         path,
@@ -584,7 +584,7 @@ export class ContentService {
         // sha (required for updates), undefined for creates.
         sha: expectedSha ?? existing?.sha,
         ...(branch ? { branch } : {}),
-      }));
+      });
     } catch (error: unknown) {
       // Sha-less create against an existing file → GitHub 422. For createOnly
       // callers that's the existence race, surfaced with conflict semantics.
@@ -595,10 +595,15 @@ export class ContentService {
         conflict.status = 409;
         throw conflict;
       }
-      // GitHub rejected the expectedSha precondition (409 Conflict): the file
-      // moved between the pre-check and the PUT. Same conflict semantics and
-      // message as the pre-check, now race-free.
-      if (expectedSha && hasStatus(error, 409)) {
+      // GitHub rejected the expectedSha precondition: the file moved between
+      // the pre-check and the PUT. It answers 409 Conflict, and (observed in
+      // practice) 422 "sha … does not match" for the SAME mismatch — map both
+      // to the same conflict so the caller never gets a raw 422.
+      if (
+        expectedSha &&
+        (hasStatus(error, 409) ||
+          (hasStatus(error, 422) && /does not match|sha/i.test(getErrorMessage(error))))
+      ) {
         const conflict = new Error('File was modified by someone else') as Error & {
           status: number;
         };
@@ -607,6 +612,24 @@ export class ContentService {
       }
       throw error;
     }
+
+    // Concurrent-delete race (live-probed): with an expectedSha the pre-check
+    // saw the file present, but it was DELETED before this PUT landed. GitHub
+    // has no "update-only" mode — a sha-bearing PUT on a now-missing path
+    // CREATES the file (HTTP 201) instead of conflicting, silently resurrecting
+    // content the deleter removed. The create cannot be cheaply prevented (no
+    // compare-and-swap-on-delete API), so we surface the delete as the same
+    // conflict AFTER the unwanted create; the caller reloads and the stray file
+    // is reconciled (overwritten/removed) on the next write.
+    if (expectedSha && response.status === 201) {
+      const conflict = new Error('File was deleted since it was read') as Error & {
+        status: number;
+      };
+      conflict.status = 409;
+      throw conflict;
+    }
+
+    const { data } = response;
 
     // Invalidate cache for this path (and parent folder).
     // Branch writes don't touch the default branch's content, so they must

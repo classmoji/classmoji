@@ -28,6 +28,13 @@
  */
 
 // ── Op vocabulary (client-side twin of pageContent.service's BlockOp) ────────
+//
+// The AUTHORITATIVE op vocabulary is the zod `pageBlockOpSchema` in
+// packages/services pageContent.service.ts — the route and the MCP tool both
+// validate against it (plan §7 P8). This is a hand-kept structural SUBSET (the
+// diff never emits `replace_all`): server code can't be imported into the
+// browser bundle, so it can't import the schema's type here. Every op this
+// module emits must stay assignable to `pageBlockOpSchema`'s inferred type.
 
 export type BlockPosition = { after: string } | { at: 'start' | 'end' };
 

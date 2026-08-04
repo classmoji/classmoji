@@ -32,6 +32,12 @@ export interface MergeResolution {
  *   report is stale — re-run accept for a fresh one.
  * - `MAIN_CONTENT_MISSING` — main's content file was deleted, so there is no
  *   sha to CAS the merge commit on; discard the preview or re-apply it.
+ * - `MERGE_BASE_MISSING` — the 3-way merge base (the content file at the
+ *   preview's fork point) is missing (add/add: the file was created
+ *   independently on both sides) or unparseable, so there is no trustworthy
+ *   base to merge against — merging against an empty base silently resurrects
+ *   deletions and duplicates blocks. Discard the preview or re-apply it as a
+ *   fresh document.
  */
 export class PreviewResolutionError extends Error {
   code:
@@ -42,7 +48,8 @@ export class PreviewResolutionError extends Error {
     | 'DUPLICATE_RESOLUTIONS'
     | 'INVALID_RESOLUTIONS'
     | 'CONTENT_CONFLICT'
-    | 'MAIN_CONTENT_MISSING';
+    | 'MAIN_CONTENT_MISSING'
+    | 'MERGE_BASE_MISSING';
   ids: string[];
 
   constructor(message: string, code: PreviewResolutionError['code'], ids: string[] = []) {

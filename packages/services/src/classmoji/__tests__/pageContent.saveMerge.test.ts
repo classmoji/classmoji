@@ -358,3 +358,38 @@ describe('savePageContentWithMerge — CAS retry', () => {
     expect(putMock).toHaveBeenCalledTimes(2);
   });
 });
+
+describe('savePageContentWithMerge — commit message (plan "commit-message")', () => {
+  it('a resolution pass records a resolution summary in the commit', async () => {
+    // A discarded B commits an edit to block b; A resolves the collision to
+    // "theirs" (A's version) — the commit that records B's discarded edit must
+    // be distinguishable from a plain save.
+    primeSave({
+      base: [block('a', 'one'), block('b', 'original')],
+      ours: [block('a', 'one'), block('b', 'REWRITTEN BY B')],
+    });
+    const theirs = [block('a', 'one'), block('b', 'version from A')];
+
+    const result = await savePageContentWithMerge(page, theirs, {
+      baseSha: BASE_SHA,
+      resolutions: [{ id: 'b', choose: 'theirs' }],
+      expectedOursSha: 'ours-sha',
+    });
+
+    expect(result).toMatchObject({ merged: true });
+    expect(callArg(putMock)).toMatchObject({
+      message: 'Update page (merged; resolved 1 conflict): Syllabus',
+    });
+    // B's committed content is really gone…
+    expect(JSON.stringify(writtenWrapper().blocks)).toContain('version from A');
+    expect(JSON.stringify(writtenWrapper().blocks)).not.toContain('REWRITTEN BY B');
+  });
+
+  it('a clean stale-token merge with no concurrency keeps the PLAIN message', async () => {
+    primeSave({ base: [block('a', 'one')], ours: [block('a', 'one')] });
+
+    await savePageContentWithMerge(page, [block('a', 'one MINE')], { baseSha: BASE_SHA });
+
+    expect(callArg(putMock)).toMatchObject({ message: 'Update page: Syllabus' });
+  });
+});

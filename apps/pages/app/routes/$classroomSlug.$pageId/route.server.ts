@@ -289,21 +289,32 @@ export const action = async ({
 
     // Ops save: the client posts a block-op diff against the document at
     // base_sha instead of the whole document (untouched blocks never
-    // transmit). Presence of `ops` selects the path; shape errors are 400.
+    // transmit). Presence of `ops` selects the path. The op vocabulary is
+    // validated against the service's single-source zod schema (op cap 400) so
+    // a structurally malformed payload is a typed 400 the client recovers from
+    // by falling back to a full-document save — never a raw TypeError → 500
+    // (plan §7 P8).
     let saveOps: unknown[] | null = null;
     if (data.ops != null) {
+      let rawOps: unknown;
       try {
-        const parsed = typeof data.ops === 'string' ? JSON.parse(data.ops) : data.ops;
-        if (!Array.isArray(parsed)) {
-          throw new Error('ops must be an array');
-        }
-        saveOps = parsed;
+        rawOps = typeof data.ops === 'string' ? JSON.parse(data.ops) : data.ops;
       } catch {
+        rawOps = undefined; // invalid JSON → schema rejects → typed 400 below
+      }
+      const parsed = ClassmojiService.pageContent.pageBlockOpsPayloadSchema.safeParse(rawOps);
+      if (!parsed.success) {
+        // `code` makes the client auto-fall-back to ONE whole-document save
+        // (its code-keyed fallback effect), which needs no base to replay.
         return Response.json(
-          { error: 'Malformed ops payload — expected an array of block operations' },
+          {
+            error: 'Malformed ops payload — retrying as a full-document save',
+            code: 'OPS_MALFORMED',
+          },
           { status: 400 }
         );
       }
+      saveOps = parsed.data;
     }
 
     try {
@@ -357,7 +368,10 @@ export const action = async ({
           baseSha,
           ...(saveResolutions ? { resolutions: saveResolutions } : {}),
           ...(saveOursSha ? { expectedOursSha: saveOursSha } : {}),
-          message: `Update page: ${page.title}`,
+          // No message override: a genuine fold-in or a resolution pass is
+          // recorded distinctly by the service ("(merged)" / resolution
+          // summary); a clean ops save keeps the plain message (plan
+          // "commit-message" finding).
         });
         if (!mergeResult.merged) return mergeReport(mergeResult);
         sha = mergeResult.sha;
@@ -390,7 +404,9 @@ export const action = async ({
             baseSha: expectedSha as string,
             ...(saveResolutions ? { resolutions: saveResolutions } : {}),
             ...(saveOursSha ? { expectedOursSha: saveOursSha } : {}),
-            message: `Update page: ${page.title}`,
+            // No message override — the service records a merged/resolution
+            // commit distinctly; a clean save keeps the plain message (plan
+            // "commit-message" finding).
           });
 
         if (saveResolutions && expectedSha) {

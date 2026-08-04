@@ -30,6 +30,7 @@ vi.mock('../../content/ContentService.ts', () => ({
 
 const {
   savePageContentFromOps,
+  pageBlockOpsPayloadSchema,
   PageOpsBaseMismatchError,
   PageSaveConflictError,
   PreviewResolutionError,
@@ -326,5 +327,78 @@ describe('savePageContentFromOps — base fallbacks', () => {
     expect(failure).toMatchObject({ status: 409, code: 'CONTENT_CONFLICT' });
     expect(getContentMock).not.toHaveBeenCalled();
     expect(putMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('savePageContentFromOps — the base the ops replay against is honored (plan §P1)', () => {
+  it('a concurrent edit to the SAME block the ops touched → conflict report, nothing committed', async () => {
+    // base = the document the client diffed its ops against; main (ours) has a
+    // DIFFERENT edit to the same block. Replaying ops onto the base and
+    // 3-way-merging against fresh main must REPORT the collision, not silently
+    // auto-merge (the desync the P1 client pairing guard prevents by binding
+    // base_sha to the baseline it diffed).
+    primeSave({
+      base: [block('a', 'intro'), block('b', 'ORIGINAL')],
+      ours: [block('a', 'intro'), block('b', 'INSTRUCTOR B EDIT')],
+    });
+    const result = await savePageContentFromOps(page, {
+      baseSha: BASE_SHA,
+      ops: [{ op: 'update', id: 'b', block: block('b', 'INSTRUCTOR A EDIT') }],
+    });
+
+    expect(result).toMatchObject({ merged: false, conflict: true, ours_sha: 'ours-sha' });
+    expect((result as { units: Array<{ id: string }> }).units.some(u => u.id === 'b')).toBe(true);
+    expect(putMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('savePageContentFromOps — commit message (plan "commit-message")', () => {
+  it('a clean ops save (no concurrency, no resolutions) keeps the PLAIN message', async () => {
+    primeSave({ base: [block('a', 'one')], ours: [block('a', 'one')] });
+
+    await savePageContentFromOps(page, {
+      baseSha: BASE_SHA,
+      ops: [{ op: 'update', id: 'a', block: block('a', 'one MINE') }],
+    });
+
+    expect(callArg(putMock)).toMatchObject({ message: 'Update page: Syllabus' });
+  });
+
+  it('a concurrent fold-in records the (merged) marker', async () => {
+    primeSave({
+      base: [block('a', 'one'), block('b', 'two')],
+      ours: [block('a', 'one'), block('b', 'two CONCURRENT')],
+    });
+
+    await savePageContentFromOps(page, {
+      baseSha: BASE_SHA,
+      ops: [{ op: 'update', id: 'a', block: block('a', 'one MINE') }],
+    });
+
+    expect(callArg(putMock)).toMatchObject({ message: 'Update page (merged): Syllabus' });
+  });
+});
+
+describe('pageBlockOpsPayloadSchema — single-source op validation (plan §7 P8)', () => {
+  it.each([
+    ['position:null', [{ op: 'move', id: 'b1', position: null }]],
+    ['block string', [{ op: 'update', id: 'b1', block: 'x' }]],
+    ['insert blocks string', [{ op: 'insert', blocks: 'oops', position: { at: 'end' } }]],
+    ['null op entry', [null]],
+    ['unknown op', [{ op: 'frobnicate', id: 'b1' }]],
+    ['empty array', []],
+  ])('rejects %s', (_label, ops) => {
+    expect(pageBlockOpsPayloadSchema.safeParse(ops).success).toBe(false);
+  });
+
+  it('accepts a well-formed op array', () => {
+    const parsed = pageBlockOpsPayloadSchema.safeParse([
+      { op: 'update', id: 'b1', block: { id: 'b1', type: 'paragraph', content: [] } },
+      { op: 'delete', id: 'b2' },
+      { op: 'insert', blocks: [{ type: 'paragraph' }], position: { after: 'b1' } },
+      { op: 'move', id: 'b1', position: { at: 'start' } },
+      { op: 'replace_all', blocks: [{ type: 'paragraph' }] },
+    ]);
+    expect(parsed.success).toBe(true);
   });
 });

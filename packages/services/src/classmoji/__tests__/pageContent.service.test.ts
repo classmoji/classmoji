@@ -41,8 +41,6 @@ const {
   ensurePreviewBranch,
   acceptPreview,
   discardPreview,
-  diffBlockUnits,
-  ORDER_CONFLICT_ID,
 } = await import('../pageContent.service.ts');
 
 const gitOrganization = { provider: 'GITHUB', login: 'test-org' };
@@ -905,100 +903,8 @@ describe('pageContent.discardPreview', () => {
   });
 });
 
-// ─── diffBlockUnits (3-way conflict report) ──────────────────────────────────
-
-describe('pageContent.diffBlockUnits', () => {
-  const block = (id: string, text: string, extra: Record<string, unknown> = {}) => ({
-    id,
-    type: 'paragraph',
-    content: [{ type: 'text', text }],
-    ...extra,
-  });
-
-  it('one-sided changes are NOT conflicts (git auto-merges them)', () => {
-    const base = [block('a', 'one'), block('b', 'two')];
-    const ours = [block('a', 'one EDITED ON MAIN'), block('b', 'two')];
-    const theirs = [block('a', 'one'), block('b', 'two EDITED ON PREVIEW')];
-
-    // Each block changed on exactly one side → nothing to report.
-    expect(diffBlockUnits(base, ours, theirs)).toEqual([]);
-  });
-
-  it('both-sides-changed-differently is a conflict carrying ours/theirs/base', () => {
-    const base = [block('a', 'original'), block('b', 'stable')];
-    const ours = [block('a', 'main version'), block('b', 'stable')];
-    const theirs = [block('a', 'preview version'), block('b', 'stable')];
-
-    expect(diffBlockUnits(base, ours, theirs)).toEqual([
-      {
-        id: 'a',
-        index: 0,
-        ours: block('a', 'main version'),
-        theirs: block('a', 'preview version'),
-        base: block('a', 'original'),
-      },
-    ]);
-  });
-
-  it('identical changes on both sides are not conflicts', () => {
-    const base = [block('a', 'original')];
-    const same = [block('a', 'both sides agree')];
-
-    expect(diffBlockUnits(base, same, structuredClone(same))).toEqual([]);
-  });
-
-  it('edit-vs-delete is a conflict (deleted side absent from the unit)', () => {
-    const base = [block('a', 'original'), block('b', 'keep')];
-    const ours = [block('b', 'keep')]; // deleted on main
-    const theirs = [block('a', 'edited on preview'), block('b', 'keep')];
-
-    expect(diffBlockUnits(base, ours, theirs)).toEqual([
-      {
-        id: 'a',
-        index: 0,
-        theirs: block('a', 'edited on preview'),
-        base: block('a', 'original'),
-      },
-    ]);
-  });
-
-  it('deep-equal covers nested children (a child edit conflicts the parent unit)', () => {
-    const withChild = (text: string) => block('p', 'parent', { children: [block('c', text)] });
-    const base = [withChild('child')];
-    const ours = [withChild('child main')];
-    const theirs = [withChild('child preview')];
-
-    const units = diffBlockUnits(base, ours, theirs);
-    expect(units).toHaveLength(1);
-    expect(units[0].id).toBe('p');
-  });
-
-  it('order conflict: both sides reordered differently → sentinel __order__ unit', () => {
-    const a = block('a', 'a');
-    const b = block('b', 'b');
-    const c = block('c', 'c');
-    const base = [a, b, c];
-    const ours = [b, a, c]; // main swapped a/b
-    const theirs = [a, c, b]; // preview swapped b/c
-
-    const units = diffBlockUnits(base, ours, theirs);
-    expect(units).toEqual([
-      {
-        id: ORDER_CONFLICT_ID,
-        index: -1,
-        ours: ['b', 'a', 'c'],
-        theirs: ['a', 'c', 'b'],
-        base: ['a', 'b', 'c'],
-      },
-    ]);
-  });
-
-  it('same reorder on both sides is not an order conflict', () => {
-    const a = block('a', 'a');
-    const b = block('b', 'b');
-    const base = [a, b];
-    const swapped = [b, a];
-
-    expect(diffBlockUnits(base, swapped, structuredClone(swapped))).toEqual([]);
-  });
-});
+// NOTE (plan §7 P10): the `diffBlockUnits` unit tests were removed with the
+// dead function itself — it had zero production callers post-Phase-7 and its
+// raw-string comparison diverged from the shipping engine. The authoritative
+// 3-way conflict reporting is exercised through merge3Blocks (see
+// pageContent.merge.test.ts) and the accept/save merge suites.

@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { z } from 'zod';
 import { classroomContentRepoName } from '@classmoji/utils';
 import { ContentService } from '../content/ContentService.ts';
 import {
@@ -365,12 +366,59 @@ export class BlockOpError extends Error {
 
 export type BlockPosition = { after: string } | { at: 'start' | 'end' };
 
-export type BlockOp =
-  | { op: 'update'; id: string; block: unknown }
-  | { op: 'insert'; blocks: unknown[]; position: BlockPosition }
-  | { op: 'move'; id: string; position: BlockPosition }
-  | { op: 'delete'; id: string }
-  | { op: 'replace_all'; blocks: unknown[] };
+/**
+ * Single source of truth for the page block-op vocabulary (content-tools plan
+ * §7 P8) — the pages twin of slides' deckOpSchema. Consumed by:
+ *  - the pages editor save action (route.server.ts) via
+ *    `pageBlockOpsPayloadSchema` (op cap 400 — an editor session may touch many
+ *    blocks between saves), which 400s a malformed payload instead of letting a
+ *    raw TypeError escape as a 500, and
+ *  - the page_content_apply MCP tool (which keeps its own tighter `.max(25)`
+ *    total-op cap as an override).
+ * It also types `applyBlockOps`' input. The client diff (blockOpsDiff.ts)
+ * mirrors a SUBSET of this vocabulary (it never emits replace_all); it cannot
+ * import server code into the browser bundle, so its BlockOp type is a
+ * hand-kept structural twin that stays assignable to this one.
+ */
+const pageBlockBodySchema = z.record(z.unknown());
+const pageBlockPositionSchema = z.union([
+  z.object({ after: z.string().min(1) }).strict(),
+  z.object({ at: z.enum(['start', 'end']) }).strict(),
+]);
+
+export const pageBlockOpSchema = z.discriminatedUnion('op', [
+  z.object({
+    op: z.literal('update'),
+    id: z.string().min(1),
+    block: pageBlockBodySchema.describe('Full replacement block (its id is preserved)'),
+  }),
+  z.object({
+    op: z.literal('insert'),
+    blocks: z.array(pageBlockBodySchema).min(1).max(400),
+    position: pageBlockPositionSchema,
+  }),
+  z.object({
+    op: z.literal('move'),
+    id: z.string().min(1),
+    position: pageBlockPositionSchema,
+  }),
+  z.object({
+    op: z.literal('delete'),
+    id: z.string().min(1),
+  }),
+  z.object({
+    op: z.literal('replace_all'),
+    blocks: z.array(pageBlockBodySchema),
+  }),
+]);
+
+export type BlockOp = z.infer<typeof pageBlockOpSchema>;
+
+/**
+ * Payload schema for the editor's ops-shaped save (a JSON array of ops). The
+ * MCP tool applies a tighter `.max(25)` in its own inputSchema.
+ */
+export const pageBlockOpsPayloadSchema = z.array(pageBlockOpSchema).min(1).max(400);
 
 /** Collect every id in the tree (incl. nested children). */
 function collectBlockIds(blocks: BlockNode[], out = new Set<string>()): Set<string> {
@@ -981,12 +1029,43 @@ function mainContentMissing(): PreviewResolutionError {
   );
 }
 
+/**
+ * Typed refusal for a missing/unparseable merge base (plan §7 P3): without the
+ * content.json the preview forked from there is no trustworthy 3-way base, and
+ * merging against an EMPTY base silently resurrects deletions and duplicates
+ * blocks (the add/add case, where content.json was created independently on
+ * both sides). Refuse rather than commit a corrupt document — mirroring the
+ * save path's readSaveMergeBase refusal.
+ */
+function mergeBaseMissing(): PreviewResolutionError {
+  return new PreviewResolutionError(
+    'This preview has no common merge base with the live page (its content.json was created ' +
+      'or replaced independently on both sides) — discard the preview or re-apply it as a fresh ' +
+      'document',
+    'MERGE_BASE_MISSING'
+  );
+}
+
 /** The accept path taken when the git merge reports a conflict. */
 async function acceptSemanticFallback(page: PageWithContentRepo): Promise<AcceptPreviewResult> {
   const threeWay = await readPreviewThreeWay(page);
   const { theirs, base } = threeWay;
   let ours = threeWay.ours;
-  const baseBlocks = extractBlocks(base?.content);
+  // P7: a concurrent discard can delete the preview branch between the git
+  // merge conflict and this 3-way read — with no preview there is nothing to
+  // accept, and merging against the vanished theirs would auto-merge junk.
+  // Mirror the resolvePreviewConflicts NO_PREVIEW guard.
+  if (!threeWay.comparison) {
+    throw new PreviewResolutionError(
+      'No pending preview for this page — nothing to accept',
+      'NO_PREVIEW'
+    );
+  }
+  // P3: the 3-way needs a real merge base. A missing/unparseable base (the
+  // add/add degenerate) would degrade to [] and silently resurrect deletions
+  // or duplicate blocks — refuse instead.
+  const baseBlocks = base?.content ? parseBlocksStrict(base.content) : null;
+  if (!baseBlocks) throw mergeBaseMissing();
   const theirsBlocks = extractBlocks(theirs?.content);
 
   for (let attempt = 0; attempt < 2; attempt++) {
@@ -1077,7 +1156,10 @@ export async function resolvePreviewConflicts(
   }
   const { theirs, base } = threeWay;
   let ours = threeWay.ours;
-  const baseBlocks = extractBlocks(base?.content);
+  // P3: refuse a missing/unparseable merge base (add/add degenerate) rather
+  // than apply reviewed choices over an empty base that resurrects/duplicates.
+  const baseBlocks = base?.content ? parseBlocksStrict(base.content) : null;
+  if (!baseBlocks) throw mergeBaseMissing();
   const theirsBlocks = extractBlocks(theirs?.content);
 
   if (expectedTheirsSha && (theirs?.sha ?? null) !== expectedTheirsSha) {
@@ -1382,13 +1464,27 @@ async function runSaveMerge(
     // merge (theirs = base) counts exactly the blocks ours changed vs base.
     const concurrent = merge3Blocks(baseBlocks, oursBlocks, baseBlocks).autoMerged;
 
+    // Commit message: a resolution pass or a genuine concurrent fold-in is
+    // recorded distinctly so the git history isn't indistinguishable from a
+    // plain save (the routes no longer override with a plain message — plan
+    // "commit-message" finding). A clean save with no concurrency and no
+    // resolutions keeps the plain message (nothing was actually merged).
+    const resolvedCount = chosen ? Object.keys(chosen).length : 0;
+    const committedMessage =
+      message ??
+      (resolvedCount > 0
+        ? `Update page (merged; resolved ${resolvedCount} conflict${resolvedCount === 1 ? '' : 's'}): ${page.title}`
+        : concurrent > 0
+          ? `Update page (merged): ${page.title}`
+          : `Update page: ${page.title}`);
+
     try {
       const saved = await savePageContent(page, merge.merged, {
         // Preserve main's CURRENT cover explicitly (the editor save carries no
         // cover; passing it avoids savePageContent's extra preserve re-read).
         coverImage: extractCover(ours.content),
         expectedSha: ours.sha,
-        message: message ?? `Update page (merged): ${page.title}`,
+        message: committedMessage,
       });
       return {
         merged: true,
@@ -1537,87 +1633,12 @@ export const ORDER_CONFLICT_ID = '__order__';
 const idsOf = (blocks: BlockNode[]): string[] =>
   blocks.map(block => block?.id).filter((id): id is string => typeof id === 'string');
 
-const deepEqual = (a: unknown, b: unknown): boolean =>
-  a === b || canonicalJson(a) === canonicalJson(b);
-
-/**
- * 3-way diff of a block document by top-level unit (block) id, for conflict
- * reporting after a failed preview merge. Pure.
- *
- * A unit conflicts when BOTH sides changed it relative to base (edit/edit,
- * edit/delete, or both-added-differently) and the two sides disagree. A
- * one-sided change is not a conflict (git would have auto-merged it — the
- * report only names what genuinely needs a human/agent decision).
- *
- * The top-level ordering is compared as id sequences the same way: reordered
- * differently on both sides → one sentinel `__order__` unit whose ours/theirs/
- * base carry the id arrays. Nested children ride inside their parent unit
- * (deep-equal covers the whole subtree).
- */
-export function diffBlockUnits(
-  base: BlockNode[],
-  ours: BlockNode[],
-  theirs: BlockNode[]
-): PreviewConflictUnit[] {
-  const byId = (blocks: BlockNode[]): Map<string, { block: BlockNode; index: number }> => {
-    const map = new Map<string, { block: BlockNode; index: number }>();
-    blocks.forEach((block, index) => {
-      if (block && typeof block.id === 'string' && !map.has(block.id)) {
-        map.set(block.id, { block, index });
-      }
-    });
-    return map;
-  };
-
-  const baseMap = byId(base);
-  const oursMap = byId(ours);
-  const theirsMap = byId(theirs);
-
-  const seen = new Set<string>();
-  const orderedIds = [...theirsMap.keys(), ...oursMap.keys(), ...baseMap.keys()].filter(id => {
-    if (seen.has(id)) return false;
-    seen.add(id);
-    return true;
-  });
-
-  const units: PreviewConflictUnit[] = [];
-  for (const id of orderedIds) {
-    const inBase = baseMap.get(id);
-    const inOurs = oursMap.get(id);
-    const inTheirs = theirsMap.get(id);
-
-    const oursChanged = !deepEqual(inBase?.block, inOurs?.block);
-    const theirsChanged = !deepEqual(inBase?.block, inTheirs?.block);
-    if (!oursChanged || !theirsChanged) continue; // one-sided → auto-mergeable
-    if (deepEqual(inOurs?.block, inTheirs?.block)) continue; // both sides agree
-
-    units.push({
-      id,
-      index: inTheirs?.index ?? inOurs?.index ?? inBase?.index ?? -1,
-      ...(inOurs ? { ours: inOurs.block } : {}),
-      ...(inTheirs ? { theirs: inTheirs.block } : {}),
-      ...(inBase ? { base: inBase.block } : {}),
-    });
-  }
-
-  // Ordering conflict: both sides changed the top-level sequence, differently.
-  const baseIds = idsOf(base);
-  const oursIds = idsOf(ours);
-  const theirsIds = idsOf(theirs);
-  const oursOrderChanged = !deepEqual(baseIds, oursIds);
-  const theirsOrderChanged = !deepEqual(baseIds, theirsIds);
-  if (oursOrderChanged && theirsOrderChanged && !deepEqual(oursIds, theirsIds)) {
-    units.push({
-      id: ORDER_CONFLICT_ID,
-      index: -1,
-      ours: oursIds,
-      theirs: theirsIds,
-      base: baseIds,
-    });
-  }
-
-  return units;
-}
+// NOTE (plan §7 P10): the Level-1 `diffBlockUnits` walker was removed here — it
+// had zero production callers after Phase 7 (accept/save conflict reports come
+// straight from merge3Blocks' `conflicts`), and its raw-string unit comparison
+// diverged from the shipping engine's canonical, serialization-tolerant merge
+// (re-adopting it would regress the Phase 7.5 phantom-conflict fix). The
+// authoritative 3-way is `merge3Blocks` below.
 
 // ─── merge3Blocks — semantic 3-way merge (Phase 7) ───────────────────────────
 

@@ -384,6 +384,115 @@ describe('put with branch', () => {
   });
 });
 
+describe('put expectedSha: concurrent-delete race + 422 mismatch (plan §P6)', () => {
+  it('a sha-bearing PUT GitHub answers as a CREATE (201) → 409 deleted-since-read, not a silent resurrection', async () => {
+    const repo = 'repo-put-201';
+    const path = 'pages/racedelete/content.json';
+
+    requestMock.mockImplementation(async (route: string) => {
+      if (route === 'GET /repos/{owner}/{repo}/contents/{path}') {
+        // Pre-check still sees the file present with the expected sha…
+        return { data: { content: Buffer.from('x').toString('base64'), sha: 'sha-live', size: 1 } };
+      }
+      if (route === 'PUT /repos/{owner}/{repo}/contents/{path}') {
+        // …but it was DELETED before the PUT landed, so GitHub CREATED it (201).
+        return {
+          status: 201,
+          data: { content: { sha: 'sha-new' }, commit: { sha: 'commit-new' } },
+        };
+      }
+      throw new Error(`Unexpected route: ${route}`);
+    });
+
+    await expect(
+      ContentService.put({
+        gitOrganization,
+        repo,
+        path,
+        content: 'resurrected?',
+        expectedSha: 'sha-live',
+      })
+    ).rejects.toMatchObject({ status: 409, message: expect.stringContaining('deleted') });
+  });
+
+  it('a 200 update under expectedSha is NOT mistaken for a create', async () => {
+    const repo = 'repo-put-200';
+    const path = 'pages/ok/content.json';
+
+    requestMock.mockImplementation(async (route: string) => {
+      if (route === 'GET /repos/{owner}/{repo}/contents/{path}') {
+        return { data: { content: Buffer.from('x').toString('base64'), sha: 'sha-live', size: 1 } };
+      }
+      if (route === 'PUT /repos/{owner}/{repo}/contents/{path}') {
+        return {
+          status: 200,
+          data: { content: { sha: 'sha-new' }, commit: { sha: 'commit-new' } },
+        };
+      }
+      throw new Error(`Unexpected route: ${route}`);
+    });
+
+    const result = await ContentService.put({
+      gitOrganization,
+      repo,
+      path,
+      content: 'updated',
+      expectedSha: 'sha-live',
+    });
+    expect(result).toMatchObject({ sha: 'sha-new', commit: 'commit-new' });
+  });
+
+  it("GitHub's 422 sha-mismatch variant under expectedSha maps to the same 409 conflict", async () => {
+    const repo = 'repo-put-422';
+    const path = 'pages/mismatch/content.json';
+
+    requestMock.mockImplementation(async (route: string) => {
+      if (route === 'GET /repos/{owner}/{repo}/contents/{path}') {
+        return { data: { content: Buffer.from('x').toString('base64'), sha: 'sha-live', size: 1 } };
+      }
+      if (route === 'PUT /repos/{owner}/{repo}/contents/{path}') {
+        throw Object.assign(new Error('"sha" 111 does not match abc'), { status: 422 });
+      }
+      throw new Error(`Unexpected route: ${route}`);
+    });
+
+    await expect(
+      ContentService.put({
+        gitOrganization,
+        repo,
+        path,
+        content: 'updated',
+        expectedSha: 'sha-live',
+      })
+    ).rejects.toMatchObject({ status: 409, message: 'File was modified by someone else' });
+  });
+
+  it('an unrelated 422 (not a sha mismatch) under expectedSha still propagates raw', async () => {
+    const repo = 'repo-put-422-other';
+    const path = 'pages/other/content.json';
+
+    requestMock.mockImplementation(async (route: string) => {
+      if (route === 'GET /repos/{owner}/{repo}/contents/{path}') {
+        return { data: { content: Buffer.from('x').toString('base64'), sha: 'sha-live', size: 1 } };
+      }
+      if (route === 'PUT /repos/{owner}/{repo}/contents/{path}') {
+        throw Object.assign(new Error('content is too large'), { status: 422 });
+      }
+      throw new Error(`Unexpected route: ${route}`);
+    });
+
+    await expect(
+      ContentService.put({
+        gitOrganization,
+        repo,
+        path,
+        content: 'updated',
+        expectedSha: 'sha-live',
+      })
+    ).rejects.toMatchObject({ status: 422, message: expect.stringContaining('too large') });
+  });
+});
+
 describe('put createOnly', () => {
   it('sends NO sha (no prior meta read) and creates the file', async () => {
     const repo = 'repo-createonly-ok';

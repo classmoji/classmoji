@@ -498,3 +498,69 @@ describe('resolvePreviewConflicts', () => {
     expect(putMock).not.toHaveBeenCalled();
   });
 });
+
+describe('accept/resolve refuse a missing or unparseable merge base (plan §7 P3)', () => {
+  /** git conflict + a valid comparison, but the merge-base read yields `base`. */
+  function primeMissingBase(base: string | null) {
+    mergeBranchMock.mockResolvedValue({ merged: false, conflict: true });
+    compareBranchesMock.mockResolvedValue({
+      ahead_by: 1,
+      behind_by: 1,
+      base_sha: 'main-head',
+      head_sha: 'preview-head',
+      merge_base_sha: 'fork-point',
+      commits: [],
+    });
+    getContentMock.mockImplementation(async (arg: unknown) => {
+      const { ref } = arg as { ref?: string };
+      if (ref === PREVIEW_BRANCH) return { content: wrapper([block('a', 'preview')]), sha: 'theirs-sha' };
+      if (ref === 'fork-point') return base == null ? null : { content: base, sha: 'base-sha' };
+      return { content: wrapper([block('a', 'main')]), sha: 'ours-sha' };
+    });
+  }
+
+  it('acceptPreview: merge-base content.json 404 (add/add) → MERGE_BASE_MISSING, nothing committed, branch kept', async () => {
+    primeMissingBase(null);
+
+    const failure = await acceptPreview(page).catch((e: unknown) => e);
+
+    expect(failure).toBeInstanceOf(PreviewResolutionError);
+    expect(failure).toMatchObject({ code: 'MERGE_BASE_MISSING' });
+    expect(putMock).not.toHaveBeenCalled();
+    expect(deleteBranchMock).not.toHaveBeenCalled();
+  });
+
+  it('acceptPreview: unparseable merge-base → MERGE_BASE_MISSING', async () => {
+    primeMissingBase('{ not valid json !!!');
+
+    const failure = await acceptPreview(page).catch((e: unknown) => e);
+
+    expect(failure).toMatchObject({ code: 'MERGE_BASE_MISSING' });
+    expect(putMock).not.toHaveBeenCalled();
+  });
+
+  it('resolvePreviewConflicts: missing merge-base → MERGE_BASE_MISSING (reviewed choices never applied over an empty base)', async () => {
+    primeMissingBase(null);
+
+    const failure = await resolvePreviewConflicts(page, {
+      resolutions: [{ id: 'a', choose: 'theirs' }],
+    }).catch((e: unknown) => e);
+
+    expect(failure).toMatchObject({ code: 'MERGE_BASE_MISSING' });
+    expect(putMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('acceptPreview refuses a vanished preview mid-accept (plan §7 P7)', () => {
+  it('a concurrent discard (compareBranches null) → NO_PREVIEW, nothing auto-merged', async () => {
+    mergeBranchMock.mockResolvedValue({ merged: false, conflict: true });
+    compareBranchesMock.mockResolvedValue(null); // preview branch gone
+    getContentMock.mockResolvedValue(null);
+
+    const failure = await acceptPreview(page).catch((e: unknown) => e);
+
+    expect(failure).toBeInstanceOf(PreviewResolutionError);
+    expect(failure).toMatchObject({ code: 'NO_PREVIEW' });
+    expect(putMock).not.toHaveBeenCalled();
+  });
+});

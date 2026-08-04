@@ -374,38 +374,11 @@ export const pageContentGetTool: ToolDefinition<PageContentGetArgs> = {
 
 // ─── page_content_apply ──────────────────────────────────────────────────────
 
-const blockSchema = z.record(z.unknown());
-
-const positionSchema = z.union([
-  z.object({ after: z.string().min(1) }).strict(),
-  z.object({ at: z.enum(['start', 'end']) }).strict(),
-]);
-
-const opSchema = z.discriminatedUnion('op', [
-  z.object({
-    op: z.literal('update'),
-    id: z.string().min(1),
-    block: blockSchema.describe('Full replacement block (its id is preserved)'),
-  }),
-  z.object({
-    op: z.literal('insert'),
-    blocks: z.array(blockSchema).min(1).max(20),
-    position: positionSchema,
-  }),
-  z.object({
-    op: z.literal('move'),
-    id: z.string().min(1),
-    position: positionSchema,
-  }),
-  z.object({
-    op: z.literal('delete'),
-    id: z.string().min(1),
-  }),
-  z.object({
-    op: z.literal('replace_all'),
-    blocks: z.array(blockSchema),
-  }),
-]);
+// Op vocabulary is single-sourced in the service (pageBlockOpSchema) so the
+// MCP tool, the pages editor save action, and applyBlockOps validate against
+// ONE schema (plan §7 P8). This tool keeps its own tighter .max(25) total-op
+// cap below as the override.
+const opSchema = ClassmojiService.pageContent.pageBlockOpSchema;
 
 type PageContentOp = z.infer<typeof opSchema>;
 
