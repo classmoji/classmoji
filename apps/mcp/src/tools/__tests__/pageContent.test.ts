@@ -26,6 +26,7 @@ const mocks = vi.hoisted(() => ({
   getPreviewStatus: vi.fn(),
   ensurePreviewBranch: vi.fn(),
   acceptPreview: vi.fn(),
+  resolvePreviewConflicts: vi.fn(),
   discardPreview: vi.fn(),
   auditCreate: vi.fn(),
 }));
@@ -54,6 +55,7 @@ vi.mock('@classmoji/services', async () => {
         getPreviewStatus: (...a: unknown[]) => mocks.getPreviewStatus(...a),
         ensurePreviewBranch: (...a: unknown[]) => mocks.ensurePreviewBranch(...a),
         acceptPreview: (...a: unknown[]) => mocks.acceptPreview(...a),
+        resolvePreviewConflicts: (...a: unknown[]) => mocks.resolvePreviewConflicts(...a),
         discardPreview: (...a: unknown[]) => mocks.discardPreview(...a),
       },
       audit: { create: (...a: unknown[]) => mocks.auditCreate(...a) },
@@ -834,6 +836,7 @@ describe('page_preview_accept', () => {
       merged: false,
       conflict: true,
       units,
+      auto_merged: 5,
       ours_sha: 'ours-sha',
       theirs_sha: 'theirs-sha',
     });
@@ -848,20 +851,151 @@ describe('page_preview_accept', () => {
     expect(payload).toMatchObject({
       conflict: true,
       units,
+      auto_merged: 5,
       ours_sha: 'ours-sha',
       theirs_sha: 'theirs-sha',
     });
     expect(payload.message).toMatch(/page_content_get/);
     expect(payload.message).toMatch(/page_preview_discard/);
+    // The report teaches the resolutions path and names the counts.
+    expect(payload.message).toMatch(/resolutions/);
+    expect(payload.message).toContain('5 change(s) auto-merge cleanly');
+    expect(payload.message).toContain('1 conflict(s)');
 
     const audit = mocks.auditCreate.mock.calls[0][0] as { data: Record<string, unknown> };
     expect(audit.data).toMatchObject({
       tool: 'page_preview_accept',
       outcome: 'conflict',
       conflict_unit_ids: ['h1'],
+      auto_merged: 5,
       ours_sha: 'ours-sha',
       theirs_sha: 'theirs-sha',
     });
+  });
+
+  it('a semantic auto-merge surfaces semantic + auto_merged in payload and audit', async () => {
+    mocks.getPreviewStatus.mockResolvedValue({ exists: true, commits_ahead: 2 });
+    mocks.acceptPreview.mockResolvedValue({
+      merged: true,
+      semantic: true,
+      auto_merged: 7,
+      sha: 'merge-sha',
+    });
+
+    const payload = parse(
+      await pagePreviewAcceptTool.handler({ classroom: 'org/x', page_id: PAGE_ID }, CTX)
+    );
+
+    expect(payload).toEqual({
+      success: true,
+      merged: true,
+      semantic: true,
+      auto_merged: 7,
+      new_sha: 'merge-sha',
+    });
+    const audit = mocks.auditCreate.mock.calls[0][0] as { data: Record<string, unknown> };
+    expect(audit.data).toMatchObject({ outcome: 'merged', semantic: true, auto_merged: 7 });
+  });
+
+  it('a 409 during the semantic merge maps to CONTENT_CONFLICT', async () => {
+    mocks.getPreviewStatus.mockResolvedValue({ exists: true, commits_ahead: 1 });
+    mocks.acceptPreview.mockRejectedValue(
+      Object.assign(new Error('File was modified'), { status: 409 })
+    );
+
+    await expect(
+      pagePreviewAcceptTool.handler({ classroom: 'org/x', page_id: PAGE_ID }, CTX)
+    ).rejects.toMatchObject({
+      kind: 'invalid_params',
+      code: 'CONTENT_CONFLICT',
+      message: expect.stringContaining('page_preview_accept'),
+    });
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
+  });
+});
+
+// ─── page_preview_accept — resolutions ───────────────────────────────────────
+
+describe('page_preview_accept with resolutions', () => {
+  const RESOLUTIONS = [
+    { id: 'h1', choose: 'ours' as const },
+    { id: '__order__', choose: 'theirs' as const },
+  ];
+
+  beforeEach(() => {
+    mocks.getPreviewStatus.mockResolvedValue({ exists: true, commits_ahead: 2 });
+    mocks.resolvePreviewConflicts.mockResolvedValue({
+      merged: true,
+      semantic: true,
+      auto_merged: 4,
+      resolved: RESOLUTIONS,
+      sha: 'resolved-sha',
+    });
+  });
+
+  it('routes to resolvePreviewConflicts and audits the choices', async () => {
+    const payload = parse(
+      await pagePreviewAcceptTool.handler(
+        { classroom: 'org/x', page_id: PAGE_ID, resolutions: RESOLUTIONS },
+        CTX
+      )
+    );
+
+    expect(payload).toEqual({
+      success: true,
+      merged: true,
+      semantic: true,
+      resolved: RESOLUTIONS,
+      auto_merged: 4,
+      new_sha: 'resolved-sha',
+    });
+
+    expect(mocks.acceptPreview).not.toHaveBeenCalled();
+    expect(mocks.resolvePreviewConflicts).toHaveBeenCalledTimes(1);
+    expect(mocks.resolvePreviewConflicts.mock.calls[0][1]).toEqual({ resolutions: RESOLUTIONS });
+
+    const audit = mocks.auditCreate.mock.calls[0][0] as { data: Record<string, unknown> };
+    expect(audit.data).toMatchObject({
+      tool: 'page_preview_accept',
+      outcome: 'merged',
+      semantic: true,
+      resolutions: RESOLUTIONS,
+      auto_merged: 4,
+      new_sha: 'resolved-sha',
+    });
+  });
+
+  it('maps PreviewResolutionError to invalid_params naming the ids — no audit', async () => {
+    mocks.resolvePreviewConflicts.mockRejectedValue(
+      Object.assign(new Error('Every conflict needs a choice — missing: p2'), {
+        name: 'PreviewResolutionError',
+        code: 'UNRESOLVED_CONFLICTS',
+        ids: ['p2'],
+      })
+    );
+
+    await expect(
+      pagePreviewAcceptTool.handler(
+        { classroom: 'org/x', page_id: PAGE_ID, resolutions: RESOLUTIONS },
+        CTX
+      )
+    ).rejects.toMatchObject({
+      kind: 'invalid_params',
+      message: expect.stringContaining('p2'),
+    });
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
+  });
+
+  it('still requires a pending preview', async () => {
+    mocks.getPreviewStatus.mockResolvedValue({ exists: false });
+
+    await expect(
+      pagePreviewAcceptTool.handler(
+        { classroom: 'org/x', page_id: PAGE_ID, resolutions: RESOLUTIONS },
+        CTX
+      )
+    ).rejects.toMatchObject({ kind: 'invalid_params' });
+    expect(mocks.resolvePreviewConflicts).not.toHaveBeenCalled();
   });
 });
 

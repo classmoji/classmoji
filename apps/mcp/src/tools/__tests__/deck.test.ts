@@ -27,6 +27,7 @@ const mocks = vi.hoisted(() => ({
   getDeckPreviewStatus: vi.fn(),
   ensureDeckPreviewBranch: vi.fn(),
   acceptDeckPreview: vi.fn(),
+  resolveDeckPreviewConflicts: vi.fn(),
   discardDeckPreview: vi.fn(),
   resolveSharedThemeUrls: vi.fn(),
   auditCreate: vi.fn(),
@@ -47,6 +48,7 @@ vi.mock('@classmoji/services/slides', async () => {
     getDeckPreviewStatus: (...a: unknown[]) => mocks.getDeckPreviewStatus(...a),
     ensureDeckPreviewBranch: (...a: unknown[]) => mocks.ensureDeckPreviewBranch(...a),
     acceptDeckPreview: (...a: unknown[]) => mocks.acceptDeckPreview(...a),
+    resolveDeckPreviewConflicts: (...a: unknown[]) => mocks.resolveDeckPreviewConflicts(...a),
     discardDeckPreview: (...a: unknown[]) => mocks.discardDeckPreview(...a),
     resolveSharedThemeUrls: (...a: unknown[]) => mocks.resolveSharedThemeUrls(...a),
     slideService: {
@@ -975,6 +977,7 @@ describe('deck_preview_accept', () => {
       conflict: true,
       units,
       order_conflict: orderConflict,
+      auto_merged: 3,
       ours_sha: 'ours-sha',
       theirs_sha: 'theirs-sha',
     });
@@ -990,11 +993,16 @@ describe('deck_preview_accept', () => {
       conflict: true,
       units,
       order_conflict: orderConflict,
+      auto_merged: 3,
       ours_sha: 'ours-sha',
       theirs_sha: 'theirs-sha',
     });
     expect(payload.message).toMatch(/deck_get/);
     expect(payload.message).toMatch(/deck_preview_discard/);
+    // The report teaches the resolutions path and names the counts.
+    expect(payload.message).toMatch(/resolutions/);
+    expect(payload.message).toContain('3 change(s) auto-merge cleanly');
+    expect(payload.message).toContain('2 conflict(s)');
 
     const audit = mocks.auditCreate.mock.calls[0][0] as { data: Record<string, unknown> };
     expect(audit.data).toMatchObject({
@@ -1002,9 +1010,146 @@ describe('deck_preview_accept', () => {
       outcome: 'conflict',
       conflict_unit_ids: ['aaa'],
       order_conflict: true,
+      auto_merged: 3,
       ours_sha: 'ours-sha',
       theirs_sha: 'theirs-sha',
     });
+  });
+
+  it('a semantic auto-merge surfaces semantic + auto_merged in payload and audit', async () => {
+    mocks.getDeckPreviewStatus.mockResolvedValue({ exists: true, commits_ahead: 2 });
+    mocks.acceptDeckPreview.mockResolvedValue({
+      merged: true,
+      semantic: true,
+      auto_merged: 7,
+      sha: 'merge-sha',
+      html_regenerated: true,
+    });
+
+    const payload = parse(
+      await deckPreviewAcceptTool.handler({ classroom: 'org/x', slide_id: SLIDE_ID }, CTX)
+    );
+
+    expect(payload).toEqual({
+      success: true,
+      merged: true,
+      semantic: true,
+      auto_merged: 7,
+      new_sha: 'merge-sha',
+      html_regenerated: true,
+    });
+    const audit = mocks.auditCreate.mock.calls[0][0] as { data: Record<string, unknown> };
+    expect(audit.data).toMatchObject({ outcome: 'merged', semantic: true, auto_merged: 7 });
+  });
+
+  it('a 409 during the semantic merge maps to CONTENT_CONFLICT', async () => {
+    mocks.getDeckPreviewStatus.mockResolvedValue({ exists: true, commits_ahead: 1 });
+    mocks.acceptDeckPreview.mockRejectedValue(
+      Object.assign(new Error('Deck changed since it was read'), { status: 409 })
+    );
+
+    await expect(
+      deckPreviewAcceptTool.handler({ classroom: 'org/x', slide_id: SLIDE_ID }, CTX)
+    ).rejects.toMatchObject({
+      kind: 'invalid_params',
+      code: 'CONTENT_CONFLICT',
+      message: expect.stringContaining('deck_preview_accept'),
+    });
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
+  });
+});
+
+// ─── deck_preview_accept — resolutions ───────────────────────────────────────
+
+describe('deck_preview_accept with resolutions', () => {
+  const RESOLUTIONS = [
+    { id: 'aaa', choose: 'ours' as const },
+    { id: '__order__', choose: 'theirs' as const },
+  ];
+
+  beforeEach(() => {
+    mocks.getDeckPreviewStatus.mockResolvedValue({ exists: true, commits_ahead: 2 });
+    mocks.resolveDeckPreviewConflicts.mockResolvedValue({
+      merged: true,
+      semantic: true,
+      html_regenerated: true,
+      auto_merged: 4,
+      resolved: RESOLUTIONS,
+      sha: 'resolved-sha',
+    });
+  });
+
+  it('routes to resolveDeckPreviewConflicts (with the theme resolver) and audits the choices', async () => {
+    const payload = parse(
+      await deckPreviewAcceptTool.handler(
+        { classroom: 'org/x', slide_id: SLIDE_ID, resolutions: RESOLUTIONS },
+        CTX
+      )
+    );
+
+    expect(payload).toEqual({
+      success: true,
+      merged: true,
+      semantic: true,
+      resolved: RESOLUTIONS,
+      auto_merged: 4,
+      new_sha: 'resolved-sha',
+      html_regenerated: true,
+    });
+
+    expect(mocks.acceptDeckPreview).not.toHaveBeenCalled();
+    expect(mocks.resolveDeckPreviewConflicts).toHaveBeenCalledTimes(1);
+    const opts = mocks.resolveDeckPreviewConflicts.mock.calls[0][1] as {
+      resolutions: unknown;
+      resolveThemeUrls: (deck: DeckJson) => Promise<unknown>;
+    };
+    expect(opts.resolutions).toEqual(RESOLUTIONS);
+    expect(opts.resolveThemeUrls).toBeTypeOf('function');
+    await opts.resolveThemeUrls(DECK());
+    expect(mocks.resolveSharedThemeUrls).toHaveBeenCalledTimes(1);
+
+    const audit = mocks.auditCreate.mock.calls[0][0] as { data: Record<string, unknown> };
+    expect(audit.data).toMatchObject({
+      tool: 'deck_preview_accept',
+      outcome: 'merged',
+      semantic: true,
+      resolutions: RESOLUTIONS,
+      auto_merged: 4,
+      new_sha: 'resolved-sha',
+    });
+  });
+
+  it('maps PreviewResolutionError to invalid_params naming the ids — no audit', async () => {
+    mocks.resolveDeckPreviewConflicts.mockRejectedValue(
+      Object.assign(new Error('Every conflict needs a choice — missing: bbb'), {
+        name: 'PreviewResolutionError',
+        code: 'UNRESOLVED_CONFLICTS',
+        ids: ['bbb'],
+      })
+    );
+
+    await expect(
+      deckPreviewAcceptTool.handler(
+        { classroom: 'org/x', slide_id: SLIDE_ID, resolutions: RESOLUTIONS },
+        CTX
+      )
+    ).rejects.toMatchObject({
+      kind: 'invalid_params',
+      message: expect.stringContaining('bbb'),
+    });
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
+  });
+
+  it('still requires a pending preview', async () => {
+    mocks.getDeckPreviewStatus.mockResolvedValue({ exists: false });
+
+    await expect(
+      deckPreviewAcceptTool.handler(
+        { classroom: 'org/x', slide_id: SLIDE_ID, resolutions: RESOLUTIONS },
+        CTX
+      )
+    ).rejects.toMatchObject({ kind: 'invalid_params' });
+    expect(mocks.resolveDeckPreviewConflicts).not.toHaveBeenCalled();
   });
 });
 

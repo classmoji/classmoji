@@ -40,12 +40,14 @@ import {
   mintSlideId,
   normalizeSlideHtml,
   previewBranchName,
+  resolveDeckPreviewConflicts,
   resolveSharedThemeUrls,
   saveDeck,
   slideService,
   type DeckJson,
   type DeckShaSource,
   type DeckSlide,
+  type MergeResolution,
 } from '@classmoji/services/slides';
 import type { Prisma } from '@prisma/client';
 import { z } from 'zod';
@@ -80,6 +82,27 @@ function contentConflict(at: 'main' | 'preview' = 'main'): ToolError {
       : 'Deck changed since you read it — call deck_get again for a fresh sha',
     'CONTENT_CONFLICT'
   );
+}
+
+/**
+ * Map semantic-merge failures from accept/resolve to tool errors:
+ * PreviewResolutionError (bad/incomplete resolutions) → invalid_params naming
+ * the ids; a 409 (main moved while merging) → CONTENT_CONFLICT so the caller
+ * simply re-runs the accept. Anything else is returned unchanged for rethrow.
+ */
+function mapSemanticMergeError(error: unknown, tool: string): unknown {
+  const named = error as { name?: string; message?: string; status?: number };
+  if (named?.name === 'PreviewResolutionError') {
+    return new ToolError('invalid_params', named.message ?? 'Invalid resolutions');
+  }
+  if (named?.status === 409) {
+    return new ToolError(
+      'invalid_params',
+      `Main changed while merging — call ${tool} again`,
+      'CONTENT_CONFLICT'
+    );
+  }
+  return error;
 }
 
 /**
@@ -688,7 +711,14 @@ function applyDeckOps(
             return container;
           }
           // The schema refine guarantees html is present on non-containers.
-          return buildLeaf(spec as { html: string; notes?: string; hidden?: boolean; attrs?: Record<string, string> });
+          return buildLeaf(
+            spec as {
+              html: string;
+              notes?: string;
+              hidden?: boolean;
+              attrs?: Record<string, string>;
+            }
+          );
         });
         insertSlidesAt(deck, inserted, op.position, 'insert');
         const entry: Record<string, unknown> = {
@@ -971,21 +1001,47 @@ interface DeckPreviewArgs {
   slide_id: string;
 }
 
-export const deckPreviewAcceptTool: ToolDefinition<DeckPreviewArgs> = {
+interface DeckPreviewAcceptArgs extends DeckPreviewArgs {
+  resolutions?: MergeResolution[];
+}
+
+export const deckPreviewAcceptTool: ToolDefinition<DeckPreviewAcceptArgs> = {
   name: 'deck_preview_accept',
   annotations: { destructive: false, openWorld: true },
   title: 'Accept a deck preview',
   description:
-    "Publishes a deck's pending preview: merges the preview branch into main (git auto-merges " +
-    'non-overlapping edits), regenerates the index.html artifact from the merged deck.json, ' +
-    'and deletes the branch. On a genuine same-slide conflict nothing merges — you get a ' +
-    'per-slide report (ours = main, theirs = preview, base); re-read fresh main with deck_get, ' +
-    're-apply the resolved slides, then accept again or discard.',
+    "Publishes a deck's pending preview: merges the preview branch into main, regenerates the " +
+    'index.html artifact from the merged deck.json, and deletes the branch. Non-overlapping ' +
+    'edits merge automatically (git first, then a per-slide semantic 3-way merge — the result ' +
+    'reports semantic: true with the auto_merged count when that layer kicked in). Only genuine ' +
+    'same-unit collisions stop the accept: you get a report of just those units (ours = main, ' +
+    'theirs = preview, base) plus auto_merged. To finish, either call this tool again with ' +
+    'resolutions — one {id, choose: ours|theirs} per reported conflict id (ours = keep the live ' +
+    "main version, theirs = keep the preview's) — or re-read fresh main with deck_get, re-apply " +
+    'merged slides with deck_apply and accept again, or deck_preview_discard.',
   scope: 'write',
   roles: TEACHING_TEAM,
   inputSchema: {
     classroom: z.string().describe("Classroom reference as 'org/slug'"),
     slide_id: z.string().uuid().describe('Slide deck id'),
+    resolutions: z
+      .array(
+        z
+          .object({
+            id: z.string().min(1),
+            choose: z.enum(['ours', 'theirs']),
+          })
+          .strict()
+      )
+      .min(1)
+      .max(100)
+      .optional()
+      .describe(
+        "Per-conflict choices from a prior conflict report: ours = keep main's (live) version, " +
+          "theirs = keep the preview's. Must cover EVERY reported conflict id — slide ids plus " +
+          "the sentinels '__order__' (slide order), '__order__:<stackId>' (a stack's child " +
+          "order), and '__meta__' (theme/config). Omit to attempt a plain accept."
+      ),
   },
   handler: async (args, ctx) => {
     const slide = await loadSlideInClassroom(args.slide_id, ctx);
@@ -996,9 +1052,53 @@ export const deckPreviewAcceptTool: ToolDefinition<DeckPreviewArgs> = {
       throw new ToolError('invalid_params', 'No pending preview for this deck — nothing to accept');
     }
 
-    const result = await acceptDeckPreview(slide, {
-      resolveThemeUrls: deck => resolveSharedThemeUrls(slide, deck),
-    });
+    // ── Resolutions path: apply chooser decisions to the conflicted merge ──
+    if (args.resolutions?.length) {
+      let result;
+      try {
+        result = await resolveDeckPreviewConflicts(slide, {
+          resolutions: args.resolutions,
+          resolveThemeUrls: deck => resolveSharedThemeUrls(slide, deck),
+        });
+      } catch (error: unknown) {
+        throw mapSemanticMergeError(error, 'deck_preview_accept');
+      }
+
+      await writeAudit(ctx, {
+        resource_type: 'SLIDES',
+        resource_id: slide.id,
+        action: 'UPDATE',
+        data: {
+          tool: 'deck_preview_accept',
+          outcome: 'merged',
+          semantic: true,
+          resolutions: args.resolutions.map(({ id, choose }) => ({ id, choose })),
+          auto_merged: result.auto_merged,
+          new_sha: result.sha,
+          html_regenerated: result.html_regenerated,
+          ...(result.preview_kept ? { preview_kept: true, reason: result.reason } : {}),
+        } as unknown as Prisma.InputJsonValue,
+      });
+      return ok({
+        success: true,
+        merged: true,
+        semantic: true,
+        resolved: args.resolutions,
+        auto_merged: result.auto_merged,
+        new_sha: result.sha,
+        html_regenerated: result.html_regenerated,
+        ...(result.preview_kept ? { preview_kept: true, reason: result.reason } : {}),
+      });
+    }
+
+    let result;
+    try {
+      result = await acceptDeckPreview(slide, {
+        resolveThemeUrls: deck => resolveSharedThemeUrls(slide, deck),
+      });
+    } catch (error: unknown) {
+      throw mapSemanticMergeError(error, 'deck_preview_accept');
+    }
 
     if (result.merged) {
       await writeAudit(ctx, {
@@ -1010,6 +1110,7 @@ export const deckPreviewAcceptTool: ToolDefinition<DeckPreviewArgs> = {
           outcome: 'merged',
           new_sha: result.sha,
           html_regenerated: result.html_regenerated,
+          ...(result.semantic ? { semantic: true, auto_merged: result.auto_merged } : {}),
           ...(result.preview_kept ? { preview_kept: true, reason: result.reason } : {}),
         } as Prisma.InputJsonValue,
       });
@@ -1018,6 +1119,7 @@ export const deckPreviewAcceptTool: ToolDefinition<DeckPreviewArgs> = {
         merged: true,
         new_sha: result.sha,
         html_regenerated: result.html_regenerated,
+        ...(result.semantic ? { semantic: true, auto_merged: result.auto_merged } : {}),
         ...(result.preview_kept
           ? {
               preview_kept: true,
@@ -1039,21 +1141,27 @@ export const deckPreviewAcceptTool: ToolDefinition<DeckPreviewArgs> = {
         outcome: 'conflict',
         conflict_unit_ids: result.units.map(unit => unit.id),
         ...(result.order_conflict ? { order_conflict: true } : {}),
+        auto_merged: result.auto_merged,
         ours_sha: result.ours_sha,
         theirs_sha: result.theirs_sha,
       } as Prisma.InputJsonValue,
     });
 
+    const conflictCount = result.units.length + (result.order_conflict ? 1 : 0);
     return ok({
       conflict: true,
       units: result.units,
       ...(result.order_conflict ? { order_conflict: result.order_conflict } : {}),
+      auto_merged: result.auto_merged,
       ours_sha: result.ours_sha,
       theirs_sha: result.theirs_sha,
       message:
-        'The preview conflicts with newer changes on main. Re-read fresh main with deck_get, ' +
-        'merge each conflicted slide (ours = main, theirs = preview), re-apply with deck_apply, ' +
-        'then accept again — or deck_preview_discard to drop the preview.',
+        `${result.auto_merged} change(s) auto-merge cleanly; ${conflictCount} conflict(s) need ` +
+        'a decision. Resolve by calling deck_preview_accept again with resolutions ' +
+        "(one {id, choose: 'ours'|'theirs'} per conflict id — include '__order__' if " +
+        'order_conflict is present; ours = main, theirs = preview) — or re-read fresh main ' +
+        'with deck_get, re-apply merged slides with deck_apply and accept again, or ' +
+        'deck_preview_discard to drop the preview.',
     });
   },
 };

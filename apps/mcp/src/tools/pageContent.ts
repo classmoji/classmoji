@@ -628,20 +628,68 @@ interface PagePreviewArgs {
   page_id: string;
 }
 
-export const pagePreviewAcceptTool: ToolDefinition<PagePreviewArgs> = {
+interface PagePreviewAcceptArgs extends PagePreviewArgs {
+  resolutions?: Array<{ id: string; choose: 'ours' | 'theirs' }>;
+}
+
+/**
+ * Map semantic-merge failures from accept/resolve to tool errors:
+ * PreviewResolutionError (bad/incomplete resolutions) → invalid_params naming
+ * the ids; a 409 (main moved while merging) → CONTENT_CONFLICT so the caller
+ * simply re-runs the accept. Anything else is returned unchanged for rethrow.
+ */
+function mapSemanticMergeError(error: unknown, tool: string): unknown {
+  const named = error as { name?: string; message?: string; status?: number };
+  if (named?.name === 'PreviewResolutionError') {
+    return new ToolError('invalid_params', named.message ?? 'Invalid resolutions');
+  }
+  if (named?.status === 409) {
+    return new ToolError(
+      'invalid_params',
+      `Main changed while merging — call ${tool} again`,
+      'CONTENT_CONFLICT'
+    );
+  }
+  return error;
+}
+
+export const pagePreviewAcceptTool: ToolDefinition<PagePreviewAcceptArgs> = {
   name: 'page_preview_accept',
   annotations: { destructive: false, openWorld: true },
   title: 'Accept a page preview',
   description:
-    "Publishes a page's pending preview: merges the preview branch into main (git auto-merges " +
-    'non-overlapping edits) and deletes the branch. On a genuine same-block conflict nothing ' +
-    'merges — you get a per-block report (ours = main, theirs = preview, base); re-read fresh ' +
-    'main with page_content_get, re-apply the resolved blocks, then accept again or discard.',
+    "Publishes a page's pending preview: merges the preview branch into main and deletes the " +
+    'branch. Non-overlapping edits merge automatically (git first, then a per-block semantic ' +
+    '3-way merge — the result reports semantic: true with the auto_merged count when that ' +
+    'layer kicked in). Only genuine same-block collisions stop the accept: you get a report of ' +
+    'just those blocks (ours = main, theirs = preview, base) plus auto_merged. To finish, ' +
+    'either call this tool again with resolutions — one {id, choose: ours|theirs} per reported ' +
+    "conflict id (ours = keep the live main version, theirs = keep the preview's) — or re-read " +
+    'fresh main with page_content_get, re-apply merged blocks with page_content_apply and ' +
+    'accept again, or page_preview_discard.',
   scope: 'write',
   roles: OWNER_TEACHER,
   inputSchema: {
     classroom: z.string().describe("Classroom reference as 'org/slug'"),
     page_id: z.string().uuid().describe('Page id'),
+    resolutions: z
+      .array(
+        z
+          .object({
+            id: z.string().min(1),
+            choose: z.enum(['ours', 'theirs']),
+          })
+          .strict()
+      )
+      .min(1)
+      .max(100)
+      .optional()
+      .describe(
+        "Per-conflict choices from a prior conflict report: ours = keep main's (live) version, " +
+          "theirs = keep the preview's. Must cover EVERY reported conflict id — block ids plus " +
+          "the '__order__' sentinel when a block-order conflict was reported. Omit to attempt " +
+          'a plain accept.'
+      ),
   },
   handler: async (args, ctx) => {
     const page = await loadPageWithRepoInClassroom(args.page_id, ctx);
@@ -651,7 +699,48 @@ export const pagePreviewAcceptTool: ToolDefinition<PagePreviewArgs> = {
       throw new ToolError('invalid_params', 'No pending preview for this page — nothing to accept');
     }
 
-    const result = await ClassmojiService.pageContent.acceptPreview(page);
+    // ── Resolutions path: apply chooser decisions to the conflicted merge ──
+    if (args.resolutions?.length) {
+      let result;
+      try {
+        result = await ClassmojiService.pageContent.resolvePreviewConflicts(page, {
+          resolutions: args.resolutions,
+        });
+      } catch (error: unknown) {
+        throw mapSemanticMergeError(error, 'page_preview_accept');
+      }
+
+      await writeAudit(ctx, {
+        resource_type: 'PAGES',
+        resource_id: page.id,
+        action: 'UPDATE',
+        data: {
+          tool: 'page_preview_accept',
+          outcome: 'merged',
+          semantic: true,
+          resolutions: args.resolutions.map(({ id, choose }) => ({ id, choose })),
+          auto_merged: result.auto_merged,
+          new_sha: result.sha,
+          ...(result.preview_kept ? { preview_kept: true, reason: result.reason } : {}),
+        } as unknown as Prisma.InputJsonValue,
+      });
+      return ok({
+        success: true,
+        merged: true,
+        semantic: true,
+        resolved: args.resolutions,
+        auto_merged: result.auto_merged,
+        new_sha: result.sha,
+        ...(result.preview_kept ? { preview_kept: true, reason: result.reason } : {}),
+      });
+    }
+
+    let result;
+    try {
+      result = await ClassmojiService.pageContent.acceptPreview(page);
+    } catch (error: unknown) {
+      throw mapSemanticMergeError(error, 'page_preview_accept');
+    }
 
     if (result.merged) {
       await writeAudit(ctx, {
@@ -662,6 +751,7 @@ export const pagePreviewAcceptTool: ToolDefinition<PagePreviewArgs> = {
           tool: 'page_preview_accept',
           outcome: 'merged',
           new_sha: result.sha,
+          ...(result.semantic ? { semantic: true, auto_merged: result.auto_merged } : {}),
           ...(result.preview_kept ? { preview_kept: true, reason: result.reason } : {}),
         } as Prisma.InputJsonValue,
       });
@@ -669,6 +759,7 @@ export const pagePreviewAcceptTool: ToolDefinition<PagePreviewArgs> = {
         success: true,
         merged: true,
         new_sha: result.sha,
+        ...(result.semantic ? { semantic: true, auto_merged: result.auto_merged } : {}),
         ...(result.preview_kept
           ? {
               preview_kept: true,
@@ -689,6 +780,7 @@ export const pagePreviewAcceptTool: ToolDefinition<PagePreviewArgs> = {
         tool: 'page_preview_accept',
         outcome: 'conflict',
         conflict_unit_ids: result.units.map(unit => unit.id),
+        auto_merged: result.auto_merged,
         ours_sha: result.ours_sha,
         theirs_sha: result.theirs_sha,
       } as Prisma.InputJsonValue,
@@ -697,13 +789,16 @@ export const pagePreviewAcceptTool: ToolDefinition<PagePreviewArgs> = {
     return ok({
       conflict: true,
       units: result.units,
+      auto_merged: result.auto_merged,
       ours_sha: result.ours_sha,
       theirs_sha: result.theirs_sha,
       message:
-        'The preview conflicts with newer changes on main. Re-read fresh main with ' +
-        'page_content_get, merge each conflicted unit (ours = main, theirs = preview), ' +
-        're-apply with page_content_apply, then accept again — or page_preview_discard to drop ' +
-        'the preview.',
+        `${result.auto_merged} change(s) auto-merge cleanly; ${result.units.length} conflict(s) ` +
+        'need a decision. Resolve by calling page_preview_accept again with resolutions ' +
+        "(one {id, choose: 'ours'|'theirs'} per conflict id — '__order__' addresses a " +
+        'block-order conflict; ours = main, theirs = preview) — or re-read fresh main with ' +
+        'page_content_get, re-apply merged blocks with page_content_apply and accept again, ' +
+        'or page_preview_discard to drop the preview.',
     });
   },
 };

@@ -848,7 +848,17 @@ describe('pageContent.acceptPreview', () => {
     expect(result).toEqual({
       merged: false,
       conflict: true,
-      units: [{ id: 'x', index: 0, ours: oursBlock, theirs: theirsBlock, base: baseBlock }],
+      units: [
+        {
+          id: 'x',
+          index: 0,
+          reason: 'content',
+          ours: oursBlock,
+          theirs: theirsBlock,
+          base: baseBlock,
+        },
+      ],
+      auto_merged: 0,
       ours_sha: 'ours-sha',
       theirs_sha: 'theirs-sha',
     });

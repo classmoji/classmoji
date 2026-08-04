@@ -1,7 +1,16 @@
 import { createHash } from 'node:crypto';
 import { classroomContentRepoName } from '@classmoji/utils';
 import { ContentService } from '../content/ContentService.ts';
-import { mergeIdSequence3, type MergeChoice } from '../content/merge3.ts';
+import {
+  indexResolutions,
+  mergeIdSequence3,
+  PreviewResolutionError,
+  type MergeChoice,
+  type MergeResolution,
+} from '../content/merge3.ts';
+
+export { PreviewResolutionError } from '../content/merge3.ts';
+export type { MergeChoice, MergeResolution } from '../content/merge3.ts';
 
 /**
  * Page Content Service
@@ -672,6 +681,10 @@ export type AcceptPreviewResult =
       merged: true;
       /** content.json's blob sha on main post-merge (read at the merge commit) — the fresh expected_sha for future applies. */
       sha: string | null;
+      /** Present when the git merge conflicted but the semantic 3-way auto-merge committed the result. */
+      semantic?: true;
+      /** Changes auto-merged by the semantic layer (present iff semantic). */
+      auto_merged?: number;
       /** true when a concurrent stacking apply landed after the merge snapshot — the branch was kept, not deleted. */
       preview_kept?: boolean;
       /** Why the preview branch was retained (present iff preview_kept). */
@@ -680,10 +693,25 @@ export type AcceptPreviewResult =
   | {
       merged: false;
       conflict: true;
-      units: PreviewConflictUnit[];
+      /** ONLY the true collisions — everything else auto-merges on accept. */
+      units: BlockMergeConflict[];
+      /** Changes the semantic layer can merge without a decision. */
+      auto_merged: number;
       ours_sha: string | null;
       theirs_sha: string | null;
     };
+
+/** Result of resolvePreviewConflicts: the resolved merge committed to main. */
+export interface ResolvePreviewResult {
+  merged: true;
+  semantic: true;
+  sha: string | null;
+  auto_merged: number;
+  /** The applied choices, echoed for auditing. */
+  resolved: MergeResolution[];
+  preview_kept?: boolean;
+  reason?: string;
+}
 
 /** Parse a content.json body (wrapper or legacy bare array) into its blocks. */
 function extractBlocks(content: string | null | undefined): BlockNode[] {
@@ -783,15 +811,36 @@ export async function acceptPreview(page: PageWithContentRepo): Promise<AcceptPr
     };
   }
 
-  // Conflict: build the per-unit report. The branch is left alone so the
-  // caller can inspect, re-apply on fresh main, or discard explicitly.
+  // Git-level conflict: run the semantic 3-way merge (Phase 7). Zero true
+  // collisions → the auto-merged result is committed to main (CAS'd on main's
+  // pre-write sha) and the branch is deleted; genuine collisions → structured
+  // report with only the units that need a decision, branch kept.
+  return acceptSemanticFallback(page);
+}
+
+// ─── Semantic merge on accept (Phase 7) ──────────────────────────────────────
+
+type ContentRead = Awaited<ReturnType<typeof ContentService.getContent>>;
+
+interface PreviewThreeWay {
+  comparison: Awaited<ReturnType<typeof ContentService.compareBranches>>;
+  ours: ContentRead;
+  theirs: ContentRead;
+  base: ContentRead;
+}
+
+/** Read the 3-way (ours = fresh main, theirs = the preview branch, base = merge-base). */
+async function readPreviewThreeWay(page: PageWithContentRepo): Promise<PreviewThreeWay> {
+  const { gitOrganization, repo } = contentRepoFor(page);
+  const branch = previewBranchName(page.content_path);
+  const path = `${page.content_path}/content.json`;
+
   const comparison = await ContentService.compareBranches({
     gitOrganization,
     repo,
     base: 'main',
     head: branch,
   });
-  const path = `${page.content_path}/content.json`;
   const [ours, theirs, base] = await Promise.all([
     ContentService.getContent({ gitOrganization, repo, path, skipCache: true }),
     ContentService.getContent({ gitOrganization, repo, path, ref: branch }),
@@ -799,20 +848,250 @@ export async function acceptPreview(page: PageWithContentRepo): Promise<AcceptPr
       ? ContentService.getContent({ gitOrganization, repo, path, ref: comparison.merge_base_sha })
       : Promise.resolve(null),
   ]);
+  return { comparison, ours, theirs, base };
+}
 
-  const units = diffBlockUnits(
-    extractBlocks(base?.content),
-    extractBlocks(ours?.content),
-    extractBlocks(theirs?.content)
-  );
+/** Read a fresh copy of main's content.json (retry path after a CAS loss). */
+async function readFreshOurs(page: PageWithContentRepo) {
+  const { gitOrganization, repo } = contentRepoFor(page);
+  return ContentService.getContent({
+    gitOrganization,
+    repo,
+    path: `${page.content_path}/content.json`,
+    skipCache: true,
+  });
+}
 
-  return {
-    merged: false,
-    conflict: true,
-    units,
-    ours_sha: ours?.sha ?? null,
-    theirs_sha: theirs?.sha ?? null,
-  };
+/** Pull the coverImage out of a raw content.json body (wrapper format only). */
+function extractCover(content: string | null | undefined): PageCoverImage | null {
+  if (!content) return null;
+  try {
+    const parsed = JSON.parse(content);
+    if (parsed && !Array.isArray(parsed) && parsed.coverImage) {
+      return parsed.coverImage as PageCoverImage;
+    }
+  } catch {
+    // Malformed JSON — no cover.
+  }
+  return null;
+}
+
+/**
+ * 3-way cover merge: a preview-side change wins (the accept publishes the
+ * preview's intent), anything else keeps main's. MCP previews never touch the
+ * cover, so a genuine double-change is out of scope — main's survives.
+ */
+function mergeCover(
+  base: PageCoverImage | null,
+  ours: PageCoverImage | null,
+  theirs: PageCoverImage | null
+): PageCoverImage | null {
+  const oursChanged = canonicalJson(ours) !== canonicalJson(base);
+  const theirsChanged = canonicalJson(theirs) !== canonicalJson(base);
+  if (theirsChanged && !oursChanged) return theirs;
+  return ours;
+}
+
+/**
+ * Commit a semantically merged document to main (CAS'd on main's pre-write
+ * sha via savePageContent's expectedSha), then delete the preview branch —
+ * unless the branch's content moved past the `theirs` we merged (a concurrent
+ * stacking apply), in which case it is kept. Note: `compareBranches.ahead_by`
+ * cannot make that call here — the semantic commit is a NEW commit on main,
+ * so the branch's commits are never git-ancestors; the branch's content blob
+ * sha vs the merged theirs sha is the reliable signal.
+ */
+async function commitSemanticMergeToMain(
+  page: PageWithContentRepo,
+  mergedBlocks: unknown[],
+  {
+    oursSha,
+    theirsSha,
+    coverImage,
+  }: { oursSha?: string; theirsSha: string | null; coverImage: PageCoverImage | null }
+): Promise<{ sha: string; preview_kept?: boolean; reason?: string }> {
+  const { gitOrganization, repo } = contentRepoFor(page);
+  const branch = previewBranchName(page.content_path);
+  const path = `${page.content_path}/content.json`;
+
+  const saved = await savePageContent(page, mergedBlocks, {
+    coverImage,
+    ...(oursSha ? { expectedSha: oursSha } : {}),
+    message: `Accept preview (auto-merged): ${page.title}`,
+  });
+
+  let previewKept = false;
+  let reason: string | undefined;
+  try {
+    const branchMeta = await ContentService.getMeta({
+      gitOrganization,
+      repo,
+      path,
+      ref: branch,
+      skipCache: true,
+    });
+    if (branchMeta && theirsSha && branchMeta.sha !== theirsSha) {
+      previewKept = true;
+      reason = 'Preview branch gained new edits during accept — retained with the newer changes';
+    } else {
+      try {
+        await ContentService.deleteBranch({ gitOrganization, repo, branch });
+      } catch (error: unknown) {
+        const status = (error as { status?: number }).status;
+        if (status !== 404 && status !== 422) throw error; // already gone is fine
+      }
+    }
+  } catch (error: unknown) {
+    previewKept = true;
+    reason = 'Could not verify the preview branch was unchanged — retained for safety';
+    console.warn(
+      `[pageContent.acceptPreview] Post-merge branch check failed for ${repo}/${branch}:`,
+      error instanceof Error ? error.message : String(error)
+    );
+  }
+
+  return { sha: saved.sha, ...(previewKept ? { preview_kept: true, reason } : {}) };
+}
+
+/** The accept path taken when the git merge reports a conflict. */
+async function acceptSemanticFallback(page: PageWithContentRepo): Promise<AcceptPreviewResult> {
+  const threeWay = await readPreviewThreeWay(page);
+  const { theirs, base } = threeWay;
+  let ours = threeWay.ours;
+  const baseBlocks = extractBlocks(base?.content);
+  const theirsBlocks = extractBlocks(theirs?.content);
+
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const merge = merge3Blocks(baseBlocks, extractBlocks(ours?.content), theirsBlocks);
+    if (merge.conflicts.length > 0) {
+      // Only the true collisions are reported; the branch is left alone so
+      // the caller can resolve (resolvePreviewConflicts), re-apply, or discard.
+      return {
+        merged: false,
+        conflict: true,
+        units: merge.conflicts,
+        auto_merged: merge.autoMerged,
+        ours_sha: ours?.sha ?? null,
+        theirs_sha: theirs?.sha ?? null,
+      };
+    }
+
+    const coverImage = mergeCover(
+      extractCover(base?.content),
+      extractCover(ours?.content),
+      extractCover(theirs?.content)
+    );
+    try {
+      const committed = await commitSemanticMergeToMain(page, merge.merged, {
+        oursSha: ours?.sha,
+        theirsSha: theirs?.sha ?? null,
+        coverImage,
+      });
+      return { merged: true, semantic: true, auto_merged: merge.autoMerged, ...committed };
+    } catch (error: unknown) {
+      if ((error as { status?: number }).status !== 409 || attempt === 1) throw error;
+      // Main moved while we were auto-merging — one retry against fresh main.
+      ours = await readFreshOurs(page);
+    }
+  }
+  /* c8 ignore next */
+  throw new Error('unreachable');
+}
+
+/**
+ * Apply chooser decisions to a conflicted preview accept: re-runs the 3-way
+ * merge, requires the resolutions to exactly cover the current conflict set
+ * (`ours` = keep main's version, `theirs` = keep the preview's; the sentinel
+ * `__order__` addresses a top-level order conflict), commits the resolved
+ * merge to main exactly like a semantic accept, and deletes the branch.
+ *
+ * @throws {PreviewResolutionError} NO_PREVIEW / NOTHING_TO_RESOLVE /
+ *   UNRESOLVED_CONFLICTS / UNKNOWN_RESOLUTIONS / DUPLICATE_RESOLUTIONS.
+ */
+export async function resolvePreviewConflicts(
+  page: PageWithContentRepo,
+  { resolutions }: { resolutions: MergeResolution[] }
+): Promise<ResolvePreviewResult> {
+  if (!resolutions?.length) {
+    throw new PreviewResolutionError(
+      'No resolutions supplied — pass one {id, choose} per conflict',
+      'UNRESOLVED_CONFLICTS'
+    );
+  }
+  const chosen = indexResolutions(resolutions);
+
+  const threeWay = await readPreviewThreeWay(page);
+  if (!threeWay.comparison) {
+    throw new PreviewResolutionError(
+      'No pending preview for this page — nothing to resolve',
+      'NO_PREVIEW'
+    );
+  }
+  const { theirs, base } = threeWay;
+  let ours = threeWay.ours;
+  const baseBlocks = extractBlocks(base?.content);
+  const theirsBlocks = extractBlocks(theirs?.content);
+
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const oursBlocks = extractBlocks(ours?.content);
+    const current = merge3Blocks(baseBlocks, oursBlocks, theirsBlocks);
+    const conflictIds = new Set(current.conflicts.map(unit => unit.id));
+    if (conflictIds.size === 0) {
+      throw new PreviewResolutionError(
+        'Nothing to resolve — the preview now merges cleanly; accept it without resolutions',
+        'NOTHING_TO_RESOLVE'
+      );
+    }
+    const missing = [...conflictIds].filter(id => !(id in chosen));
+    if (missing.length > 0) {
+      throw new PreviewResolutionError(
+        `Every conflict needs a choice — missing: ${missing.join(', ')}`,
+        'UNRESOLVED_CONFLICTS',
+        missing
+      );
+    }
+    const unknown = Object.keys(chosen).filter(id => !conflictIds.has(id));
+    if (unknown.length > 0) {
+      throw new PreviewResolutionError(
+        `Not current conflict ids: ${unknown.join(', ')} — re-run accept for the current report`,
+        'UNKNOWN_RESOLUTIONS',
+        unknown
+      );
+    }
+
+    const resolved = merge3Blocks(baseBlocks, oursBlocks, theirsBlocks, { resolutions: chosen });
+    if (resolved.conflicts.length > 0) {
+      throw new Error(
+        `Resolution pass left conflicts standing (${resolved.conflicts.map(u => u.id).join(', ')}) — this is a bug`
+      );
+    }
+
+    const coverImage = mergeCover(
+      extractCover(base?.content),
+      extractCover(ours?.content),
+      extractCover(theirs?.content)
+    );
+    try {
+      const committed = await commitSemanticMergeToMain(page, resolved.merged, {
+        oursSha: ours?.sha,
+        theirsSha: theirs?.sha ?? null,
+        coverImage,
+      });
+      return {
+        merged: true,
+        semantic: true,
+        auto_merged: resolved.autoMerged,
+        resolved: resolutions,
+        ...committed,
+      };
+    } catch (error: unknown) {
+      if ((error as { status?: number }).status !== 409 || attempt === 1) throw error;
+      // Main moved under us — re-read, re-validate the conflict set, retry once.
+      ours = await readFreshOurs(page);
+    }
+  }
+  /* c8 ignore next */
+  throw new Error('unreachable');
 }
 
 /**
