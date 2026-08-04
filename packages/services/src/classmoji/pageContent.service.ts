@@ -1234,6 +1234,32 @@ export type SavePageMergeResult =
     };
 
 /**
+ * Read + parse the save-merge base: the document at the editor's conflict
+ * token, fetched content-addressed via ContentService.getBlobContent. A
+ * failed or unparseable read means no trustworthy 3-way exists — throw the
+ * fallback conflict rather than merging against a guessed base.
+ *
+ * @throws {PageSaveConflictError}
+ */
+async function readSaveMergeBase(page: PageWithContentRepo, baseSha: string): Promise<BlockNode[]> {
+  const { gitOrganization, repo } = contentRepoFor(page);
+  let baseFile: { content: string } | null = null;
+  try {
+    baseFile = await ContentService.getBlobContent({ gitOrganization, repo, sha: baseSha });
+  } catch (error: unknown) {
+    console.warn(
+      `[pageContent.saveMerge] Base blob read failed for ${repo}@${baseSha}:`,
+      error instanceof Error ? error.message : String(error)
+    );
+  }
+  const baseBlocks = baseFile ? parseBlocksStrict(baseFile.content) : null;
+  if (!baseBlocks) {
+    throw new PageSaveConflictError('This page changed since it was read — reload before saving');
+  }
+  return baseBlocks;
+}
+
+/**
  * Save an editor's posted blocks over a stale conflict token by 3-way
  * semantic merge (plan §3b Phase 7.5). The token IS the merge base: it is
  * content.json's blob sha at editor-load time, fetched content-addressed via
@@ -1254,25 +1280,29 @@ export async function savePageContentWithMerge(
   theirs: unknown[],
   { baseSha, resolutions, expectedOursSha, message }: SavePageMergeArgs
 ): Promise<SavePageMergeResult> {
+  const baseBlocks = await readSaveMergeBase(page, baseSha);
+  return runSaveMerge(page, theirs, baseBlocks, { resolutions, expectedOursSha, message });
+}
+
+/**
+ * The save-merge core shared by the whole-document entry
+ * (savePageContentWithMerge) and the ops entry (savePageContentFromOps):
+ * 3-way merge of base (the token's document) / ours (fresh main) / theirs
+ * (the posted or materialized document), the resolutions validation, the
+ * concurrent-change count, and the CAS'd commit with one retry.
+ */
+async function runSaveMerge(
+  page: PageWithContentRepo,
+  theirs: unknown[],
+  baseBlocks: BlockNode[],
+  {
+    resolutions,
+    expectedOursSha,
+    message,
+  }: Pick<SavePageMergeArgs, 'resolutions' | 'expectedOursSha' | 'message'>
+): Promise<SavePageMergeResult> {
   const { gitOrganization, repo } = contentRepoFor(page);
   const path = `${page.content_path}/content.json`;
-
-  // Base = the document at the editor's token. A failed or unparseable base
-  // read means no trustworthy 3-way exists — fall back rather than merging
-  // against a guessed base.
-  let baseFile: { content: string } | null = null;
-  try {
-    baseFile = await ContentService.getBlobContent({ gitOrganization, repo, sha: baseSha });
-  } catch (error: unknown) {
-    console.warn(
-      `[pageContent.saveMerge] Base blob read failed for ${repo}@${baseSha}:`,
-      error instanceof Error ? error.message : String(error)
-    );
-  }
-  const baseBlocks = baseFile ? parseBlocksStrict(baseFile.content) : null;
-  if (!baseBlocks) {
-    throw new PageSaveConflictError('This page changed since it was read — reload before saving');
-  }
 
   const chosen = resolutions ? indexResolutions(resolutions) : null;
 
@@ -1375,6 +1405,105 @@ export async function savePageContentWithMerge(
   }
   /* c8 ignore next */
   throw new Error('unreachable');
+}
+
+// ─── Ops saves (diff-at-save) ────────────────────────────────────────────────
+
+/**
+ * Typed refusal for an ops save whose operations don't apply to the document
+ * at base_sha (unknown block id or anchor, bad position, malformed op). The
+ * client's recovery is ONE whole-document save of its current editor content —
+ * that path needs no base to replay against. Carries `status: 409` so an
+ * unhandled propagation degrades to the reload-banner flow, never a 500.
+ */
+export class PageOpsBaseMismatchError extends Error {
+  status = 409 as const;
+  code = 'OPS_BASE_MISMATCH' as const;
+
+  constructor(message: string) {
+    super(message);
+    this.name = 'PageOpsBaseMismatchError';
+  }
+}
+
+export interface SavePageOpsArgs extends SavePageMergeArgs {
+  /**
+   * Block operations the client diffed against the document at baseSha.
+   * Ids and positions resolve against that BASE document.
+   */
+  ops: BlockOp[];
+}
+
+export type SavePageOpsResult =
+  | (Omit<Extract<SavePageMergeResult, { merged: true }>, 'document'> & {
+      /**
+       * The merged blocks as committed, when they differ from the
+       * ops-materialized document (concurrent main-side changes folded in, or
+       * server-side id re-mints) — the editor must adopt them. `null` = the
+       * committed document is exactly base+ops, i.e. the document the client
+       * already shows; no adoption/remount needed.
+       */
+      document: unknown[] | null;
+    })
+  | Extract<SavePageMergeResult, { merged: false }>;
+
+/**
+ * Save an editor's diff-at-save block operations: materialize
+ * `theirs = applyBlockOps(base, ops)` where base is the document at the
+ * editor's conflict token (same blob-addressed base as
+ * savePageContentWithMerge), then run the SAME 3-way merge/commit/report/
+ * resolutions machinery. Untouched blocks never transmit, and concurrent
+ * saves to different blocks auto-merge by construction. coverImage: ops
+ * never carry it — main's current cover is preserved exactly like the
+ * whole-document merge path.
+ *
+ * A conflict report's chooser re-submit carries the SAME ops plus
+ * resolutions and the report's `ours_sha` pin.
+ *
+ * @throws {PageOpsBaseMismatchError} the ops don't apply to the document at
+ *   baseSha — the client falls back to one whole-document save.
+ * @throws {PageSaveConflictError} unreadable base → the plain 409 reload flow.
+ * @throws {PreviewResolutionError} same resolution-validation errors as
+ *   savePageContentWithMerge.
+ */
+export async function savePageContentFromOps(
+  page: PageWithContentRepo,
+  { ops, baseSha, resolutions, expectedOursSha, message }: SavePageOpsArgs
+): Promise<SavePageOpsResult> {
+  const baseBlocks = await readSaveMergeBase(page, baseSha);
+
+  // Materialize theirs = base + ops. Any BlockOpError (unknown id/anchor —
+  // the client diffed against a different document than the token names — or
+  // a malformed op) is the typed mismatch, NOT a merge conflict.
+  let theirs: unknown[];
+  let reminted = 0;
+  try {
+    theirs = applyBlockOps(baseBlocks, ops, { onIdRemint: () => reminted++ });
+  } catch (error: unknown) {
+    if (error instanceof BlockOpError) {
+      throw new PageOpsBaseMismatchError(
+        `Ops do not apply to the document at base_sha — ${error.message}`
+      );
+    }
+    throw error;
+  }
+
+  const result = await runSaveMerge(page, theirs, baseBlocks, {
+    resolutions,
+    expectedOursSha,
+    message,
+  });
+  if (!result.merged) return result;
+
+  // Adoption signal: when the committed document is exactly the materialized
+  // base+ops, the client's editor already shows it — `document: null` skips
+  // the adopt/remount (a clean ops save must not cost cursor position).
+  // Compared against ensureBlockIds(theirs) because the merge engine fills
+  // missing ids on every side; any server-side id re-mint forces adoption
+  // (the client's copy carries the pre-remint ids).
+  const unchanged =
+    reminted === 0 && canonicalJson(result.document) === canonicalJson(ensureBlockIds(theirs));
+  return unchanged ? { ...result, document: null } : result;
 }
 
 /**

@@ -287,41 +287,33 @@ export const action = async ({
     const saveOursSha =
       typeof data.ours_sha === 'string' && data.ours_sha ? data.ours_sha : undefined;
 
-    try {
-      const blocks = JSON.parse(data.content as string);
+    // Ops save: the client posts a block-op diff against the document at
+    // base_sha instead of the whole document (untouched blocks never
+    // transmit). Presence of `ops` selects the path; shape errors are 400.
+    let saveOps: unknown[] | null = null;
+    if (data.ops != null) {
+      try {
+        const parsed = typeof data.ops === 'string' ? JSON.parse(data.ops) : data.ops;
+        if (!Array.isArray(parsed)) {
+          throw new Error('ops must be an array');
+        }
+        saveOps = parsed;
+      } catch {
+        return Response.json(
+          { error: 'Malformed ops payload — expected an array of block operations' },
+          { status: 400 }
+        );
+      }
+    }
 
+    try {
       // F2 (4b parity with slides): optimistic-lock the write on the
       // content.json sha the editor loaded (loader / previous save response).
       const expectedSha =
         typeof data.content_sha === 'string' && data.content_sha ? data.content_sha : null;
 
-      if (!expectedSha) {
-        // Token-less save. Legit only when content.json doesn't exist yet
-        // (fresh or legacy-HTML page — the loader handed out a null token).
-        // If the file EXISTS, this is a stale pre-token client bundle (or the
-        // file appeared since the editor loaded, e.g. an MCP apply): reject
-        // rather than silently clobber. Fresh existence check — the 60s cache
-        // must not vouch for absence.
-        const existing = await loadPageContent(actionPage, { skipCache: true });
-        if (existing.format === 'json') {
-          return Response.json(
-            { conflict: true, message: 'This page changed since you opened it.' },
-            { status: 409 }
-          );
-        }
-      }
-
-      // Semantic save-merge (Phase 7.5): the token IS the 3-way base — a
-      // stale save merges against fresh main instead of refusing outright.
-      const runMergeSave = () =>
-        ClassmojiService.pageContent.savePageContentWithMerge(actionPage, blocks, {
-          baseSha: expectedSha as string,
-          ...(saveResolutions ? { resolutions: saveResolutions } : {}),
-          ...(saveOursSha ? { expectedOursSha: saveOursSha } : {}),
-          message: `Update page: ${page.title}`,
-        });
       // Conflict report → 409 the chooser renders (the client re-submits the
-      // same content + resolutions + the report's ours_sha).
+      // same content/ops + resolutions + the report's ours_sha).
       const mergeReport = (report: { units: unknown; auto_merged: number; ours_sha: string }) =>
         Response.json(
           {
@@ -340,27 +332,89 @@ export const action = async ({
       // token over a stale document would clobber them on the NEXT save.
       let mergedDocument: unknown[] | null = null;
 
-      if (saveResolutions && expectedSha) {
-        // Resolution pass: the token is known-stale — go straight to the 3-way.
-        const mergeResult = await runMergeSave();
+      if (saveOps) {
+        // ── Ops save ──────────────────────────────────────────────────────
+        // base = the document at base_sha (the conflict token the diff was
+        // computed against); the service materializes theirs = base + ops and
+        // runs the SAME merge/report/resolutions machinery as the whole-doc
+        // path. `document` is null when the commit is exactly base + ops —
+        // no adoption/remount needed for a clean save.
+        const baseSha =
+          typeof data.base_sha === 'string' && data.base_sha ? data.base_sha : expectedSha;
+        if (!baseSha) {
+          // No base to replay against (fresh/legacy page has no token) — the
+          // OPS_BASE_MISMATCH code tells the client to fall back to one
+          // whole-document save.
+          return Response.json(
+            { error: 'An ops save requires base_sha', code: 'OPS_BASE_MISMATCH' },
+            { status: 409 }
+          );
+        }
+        const mergeResult = await ClassmojiService.pageContent.savePageContentFromOps(actionPage, {
+          ops: saveOps as Parameters<
+            typeof ClassmojiService.pageContent.savePageContentFromOps
+          >[1]['ops'],
+          baseSha,
+          ...(saveResolutions ? { resolutions: saveResolutions } : {}),
+          ...(saveOursSha ? { expectedOursSha: saveOursSha } : {}),
+          message: `Update page: ${page.title}`,
+        });
         if (!mergeResult.merged) return mergeReport(mergeResult);
         sha = mergeResult.sha;
         mergedWithConcurrent = mergeResult.concurrent;
         mergedDocument = mergeResult.document;
       } else {
-        try {
-          const saved = await savePageContent(actionPage, blocks, {
-            ...(expectedSha ? { expectedSha } : {}),
+        // ── Whole-document save (7.5 path, unchanged) ─────────────────────
+        const blocks = JSON.parse(data.content as string);
+
+        if (!expectedSha) {
+          // Token-less save. Legit only when content.json doesn't exist yet
+          // (fresh or legacy-HTML page — the loader handed out a null token).
+          // If the file EXISTS, this is a stale pre-token client bundle (or the
+          // file appeared since the editor loaded, e.g. an MCP apply): reject
+          // rather than silently clobber. Fresh existence check — the 60s cache
+          // must not vouch for absence.
+          const existing = await loadPageContent(actionPage, { skipCache: true });
+          if (existing.format === 'json') {
+            return Response.json(
+              { conflict: true, message: 'This page changed since you opened it.' },
+              { status: 409 }
+            );
+          }
+        }
+
+        // Semantic save-merge (Phase 7.5): the token IS the 3-way base — a
+        // stale save merges against fresh main instead of refusing outright.
+        const runMergeSave = () =>
+          ClassmojiService.pageContent.savePageContentWithMerge(actionPage, blocks, {
+            baseSha: expectedSha as string,
+            ...(saveResolutions ? { resolutions: saveResolutions } : {}),
+            ...(saveOursSha ? { expectedOursSha: saveOursSha } : {}),
+            message: `Update page: ${page.title}`,
           });
-          sha = saved.sha;
-        } catch (error: unknown) {
-          if ((error as { status?: number } | null)?.status !== 409 || !expectedSha) throw error;
-          // Stale token → the semantic 3-way merge instead of a blank refusal.
+
+        if (saveResolutions && expectedSha) {
+          // Resolution pass: the token is known-stale — go straight to the 3-way.
           const mergeResult = await runMergeSave();
           if (!mergeResult.merged) return mergeReport(mergeResult);
           sha = mergeResult.sha;
           mergedWithConcurrent = mergeResult.concurrent;
           mergedDocument = mergeResult.document;
+        } else {
+          try {
+            const saved = await savePageContent(actionPage, blocks, {
+              ...(expectedSha ? { expectedSha } : {}),
+            });
+            sha = saved.sha;
+          } catch (error: unknown) {
+            if ((error as { status?: number } | null)?.status !== 409 || !expectedSha) throw error;
+            // Stale token → the semantic 3-way merge instead of a blank refusal.
+            const mergeResult = await runMergeSave();
+            if (!mergeResult.merged) return mergeReport(mergeResult);
+            sha = mergeResult.sha;
+            mergedWithConcurrent = mergeResult.concurrent;
+            mergedDocument = mergeResult.document;
+          }
         }
       }
 
@@ -378,6 +432,14 @@ export const action = async ({
           : {}),
       });
     } catch (error: unknown) {
+      if (error instanceof ClassmojiService.pageContent.PageOpsBaseMismatchError) {
+        // The posted ops don't apply to the document at base_sha (the client
+        // diffed against something else, or sent a malformed op). The code
+        // tells the client to auto-fall-back to ONE whole-document save of
+        // its current content. Checked BEFORE the generic 409 handler — this
+        // error carries status 409 but must not render the reload banner.
+        return Response.json({ error: error.message, code: error.code }, { status: 409 });
+      }
       if (error instanceof ClassmojiService.pageContent.PreviewResolutionError) {
         // Stale resolution pin (main moved after the reviewed report) → 409;
         // bad/stale resolutions → 400 naming the ids. Either way the client

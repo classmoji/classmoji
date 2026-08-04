@@ -12,6 +12,7 @@ import {
   ConflictPanel,
   type ConflictUnit,
 } from '~/components/preview/PreviewControls.tsx';
+import { diffBlockOps, type BlockOp } from '~/components/editor/blockOpsDiff.ts';
 
 const PageEditor = lazy(() => import('~/components/editor/PageEditor.tsx'));
 const BlockNoteViewer = lazy(() => import('~/components/viewer/BlockNoteViewer.tsx'));
@@ -82,6 +83,10 @@ const PageRoute = () => {
   // The exact content string the last save posted — a chooser re-submit (or
   // auto re-run) carries the SAME document.
   const lastPostedContentRef = useRef<string | null>(null);
+  // The serialized ops of the last save when it went down the diff-at-save
+  // path (null = it was a whole-document save). A chooser re-submit carries
+  // the SAME ops; the whole-doc fallback clears it.
+  const lastPostedOpsRef = useRef<string | null>(null);
   // Set when the user chooses Reload from the conflict banner — the banner
   // already warned that unsaved changes are discarded, so skip the browser's
   // beforeunload double-prompt.
@@ -105,6 +110,7 @@ const PageRoute = () => {
     setContentToken(contentSha);
     lastSavedContent.current = null;
     lastPostedContentRef.current = null;
+    lastPostedOpsRef.current = null;
   }
 
   // Client-only flag — prevents BlockNote from rendering during SSR
@@ -126,10 +132,47 @@ const PageRoute = () => {
 
     if (lastSavedContent.current === currentContentStr) return;
 
-    // Preserved for the save-merge chooser: a conflict re-submit must carry
-    // the SAME document that produced the report.
+    // Preserved for the save-merge chooser and the whole-doc fallback: a
+    // conflict re-submit must carry the SAME document that produced the report.
     lastPostedContentRef.current = currentContentStr;
+
+    // Diff-at-save: with a conflict token (content.json exists — the base the
+    // server replays against) and a baseline (the document this editor
+    // mounted from), post only the changed blocks as ops. Any anomaly (no
+    // baseline, duplicate ids, cross-scope move, complex reorder) → null →
+    // the whole-document save below (the 7.5 path, unchanged).
+    let ops: BlockOp[] | null = null;
+    if (contentToken && lastSavedContent.current) {
+      try {
+        ops = diffBlockOps(JSON.parse(lastSavedContent.current), currentContent);
+      } catch {
+        ops = null;
+      }
+    }
+
+    if (ops && ops.length === 0) {
+      // Canonically identical (only serialization order differs) — nothing
+      // to commit.
+      lastSavedContent.current = currentContentStr;
+      setHasUnsavedChanges(false);
+      setSaveStatus('saved');
+      return;
+    }
+
     setSaveStatus('saving');
+    if (ops) {
+      const opsStr = JSON.stringify(ops);
+      lastPostedOpsRef.current = opsStr;
+      fetcher.submit(
+        // base_sha: the token names the exact document the ops were diffed
+        // against; content_sha rides along as the CAS token (same value).
+        { intent: 'save', ops: opsStr, base_sha: contentToken, content_sha: contentToken },
+        { method: 'POST', encType: 'application/json' }
+      );
+      return;
+    }
+
+    lastPostedOpsRef.current = null;
     fetcher.submit(
       // content_sha: the conflict token the action CAS-checks the write
       // against (null = content.json doesn't exist yet → creation).
@@ -144,9 +187,29 @@ const PageRoute = () => {
   // (the server re-validates the conflict set either way).
   const handleApplySaveResolutions = useCallback(
     (resolutions: Array<{ id: string; choose: 'ours' | 'theirs' }>) => {
+      if (!saveMergeReport) return;
+
+      // Ops-save conflict: the re-submit carries the SAME ops (the server
+      // re-materializes theirs = base + ops and re-validates the set).
+      if (lastPostedOpsRef.current) {
+        setSaveStatus('saving');
+        fetcher.submit(
+          {
+            intent: 'save',
+            ops: lastPostedOpsRef.current,
+            base_sha: contentToken,
+            content_sha: contentToken,
+            resolutions: JSON.stringify(resolutions),
+            ...(saveMergeReport.oursSha ? { ours_sha: saveMergeReport.oursSha } : {}),
+          },
+          { method: 'POST', encType: 'application/json' }
+        );
+        return;
+      }
+
       const current = editorRef.current?.getContent();
       const content = current ? JSON.stringify(current) : lastPostedContentRef.current;
-      if (!content || !saveMergeReport) return;
+      if (!content) return;
       lastPostedContentRef.current = content;
       setSaveStatus('saving');
       fetcher.submit(
@@ -163,15 +226,18 @@ const PageRoute = () => {
     [fetcher, contentToken, saveMergeReport]
   );
 
-  // A chooser re-submit was refused (stale ours_sha pin, or the conflict set
-  // changed): re-run the plain save with the SAME posted content — it either
-  // lands (possibly merged) or produces a FRESH report. Bounded: a plain save
-  // never answers with `code`, so this runs at most once per Apply click.
+  // A `code`-bearing refusal: a chooser re-submit hit a stale ours_sha pin or
+  // a changed conflict set, or an ops save's base didn't match
+  // (OPS_BASE_MISMATCH). Either way the recovery is the same: ONE plain
+  // whole-document re-run with the SAME posted content — it either lands
+  // (possibly merged) or produces a FRESH report. Bounded: a plain whole-doc
+  // save never answers with `code`, so this runs at most once per attempt.
   useEffect(() => {
     if (fetcher.state !== 'idle') return;
     if (!fetcher.data?.code || fetcher.data?.conflict) return;
     const content = lastPostedContentRef.current;
     if (!content) return;
+    lastPostedOpsRef.current = null;
     setSaveStatus('saving');
     fetcher.submit(
       { intent: 'save', content, content_sha: contentToken },
@@ -245,6 +311,12 @@ const PageRoute = () => {
         if (typeof n === 'number' && n > 0) {
           toast.success(`Saved — merged with ${n} concurrent change${n === 1 ? '' : 's'}.`);
         }
+      } else if (lastPostedContentRef.current) {
+        // No adoption needed: the committed document IS the posted one. The
+        // baseline must be exactly what was committed (the next diff-at-save
+        // is computed against it), so use the posted string — not a re-read
+        // of the live editor, which may already contain post-save typing.
+        lastSavedContent.current = lastPostedContentRef.current;
       } else if (editorRef.current) {
         const currentContent = editorRef.current.getContent();
         lastSavedContent.current = JSON.stringify(currentContent);
