@@ -965,7 +965,7 @@ describe('page_preview_accept with resolutions', () => {
     });
   });
 
-  it('maps PreviewResolutionError to invalid_params naming the ids — no audit', async () => {
+  it('maps PreviewResolutionError to invalid_params carrying its code AND ids — no audit', async () => {
     mocks.resolvePreviewConflicts.mockRejectedValue(
       Object.assign(new Error('Every conflict needs a choice — missing: p2'), {
         name: 'PreviewResolutionError',
@@ -981,8 +981,52 @@ describe('page_preview_accept with resolutions', () => {
       )
     ).rejects.toMatchObject({
       kind: 'invalid_params',
+      code: 'UNRESOLVED_CONFLICTS',
+      data: { ids: ['p2'] },
       message: expect.stringContaining('p2'),
     });
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
+  });
+
+  it('passes expected_ours_sha/expected_theirs_sha through to the resolve service (F3)', async () => {
+    await pagePreviewAcceptTool.handler(
+      {
+        classroom: 'org/x',
+        page_id: PAGE_ID,
+        resolutions: RESOLUTIONS,
+        expected_ours_sha: 'report-ours-sha',
+        expected_theirs_sha: 'report-theirs-sha',
+      },
+      CTX
+    );
+
+    expect(mocks.resolvePreviewConflicts.mock.calls[0][1]).toEqual({
+      resolutions: RESOLUTIONS,
+      expectedOursSha: 'report-ours-sha',
+      expectedTheirsSha: 'report-theirs-sha',
+    });
+  });
+
+  it('maps a stale sha pin (CONTENT_CONFLICT PreviewResolutionError) to the CONTENT_CONFLICT code', async () => {
+    mocks.resolvePreviewConflicts.mockRejectedValue(
+      Object.assign(new Error('The live page changed since the conflict report — re-run accept'), {
+        name: 'PreviewResolutionError',
+        code: 'CONTENT_CONFLICT',
+        ids: [],
+      })
+    );
+
+    await expect(
+      pagePreviewAcceptTool.handler(
+        {
+          classroom: 'org/x',
+          page_id: PAGE_ID,
+          resolutions: RESOLUTIONS,
+          expected_ours_sha: 'stale',
+        },
+        CTX
+      )
+    ).rejects.toMatchObject({ kind: 'invalid_params', code: 'CONTENT_CONFLICT' });
     expect(mocks.auditCreate).not.toHaveBeenCalled();
   });
 

@@ -155,6 +155,47 @@ describe('acceptPreview — semantic auto-merge on git conflict', () => {
     expect(writtenWrapper().coverImage).toEqual(cover);
   });
 
+  it('a cover-less page merges WITHOUT a coverImage key (no cosmetic null)', async () => {
+    primeThreeWay({
+      base: [block('a', 'one')],
+      ours: [block('a', 'one MAIN')],
+      theirs: [block('a', 'one'), block('b', 'added PREVIEW')],
+    });
+
+    await acceptPreview(page);
+
+    // Pre-Phase-7 saves never wrote the key for cover-less pages; the
+    // semantic accept must not introduce `"coverImage": null`.
+    expect('coverImage' in writtenWrapper()).toBe(false);
+  });
+
+  it("main's content.json deleted → typed MAIN_CONTENT_MISSING, never an unguarded write", async () => {
+    primeThreeWay({
+      base: [block('a', 'one')],
+      ours: [block('a', 'one')],
+      theirs: [block('a', 'one PREVIEW')],
+    });
+    // Main's file is gone: the fresh main read (no ref) returns null.
+    getContentMock.mockImplementation(async (arg: unknown) => {
+      const { ref } = arg as { ref?: string };
+      if (ref === PREVIEW_BRANCH) {
+        return { content: wrapper([block('a', 'one PREVIEW')]), sha: 'theirs-sha' };
+      }
+      if (ref === 'fork-point') return { content: wrapper([block('a', 'one')]), sha: 'base-sha' };
+      return null;
+    });
+
+    const failure = await acceptPreview(page).catch((e: unknown) => e);
+
+    expect(failure).toMatchObject({
+      name: 'PreviewResolutionError',
+      code: 'MAIN_CONTENT_MISSING',
+      message: expect.stringContaining('deleted'),
+    });
+    expect(putMock).not.toHaveBeenCalled();
+    expect(deleteBranchMock).not.toHaveBeenCalled();
+  });
+
   it('true collisions → report with ONLY the colliding units + auto_merged, branch kept, nothing written', async () => {
     primeThreeWay({
       base: [block('a', 'original'), block('b', 'two')],
@@ -372,5 +413,88 @@ describe('resolvePreviewConflicts', () => {
     }).catch((e: unknown) => e);
 
     expect(failure).toMatchObject({ name: 'PreviewResolutionError', code: 'NO_PREVIEW' });
+  });
+
+  it('malformed resolution elements → INVALID_RESOLUTIONS, nothing written (never defaults to theirs)', async () => {
+    conflicted();
+
+    const failure = await resolvePreviewConflicts(page, {
+      resolutions: [{ id: 'a', choose: 'banana' } as unknown as { id: string; choose: 'ours' }],
+    }).catch((e: unknown) => e);
+
+    expect(failure).toMatchObject({
+      name: 'PreviewResolutionError',
+      code: 'INVALID_RESOLUTIONS',
+    });
+    expect(putMock).not.toHaveBeenCalled();
+    expect(deleteBranchMock).not.toHaveBeenCalled();
+  });
+
+  // ── Sha pinning (F3): resolutions apply only to the reviewed report ──
+
+  it('expected_ours_sha mismatch → CONTENT_CONFLICT, nothing written', async () => {
+    conflicted(); // fresh main reads as ours-sha
+
+    const failure = await resolvePreviewConflicts(page, {
+      resolutions: [{ id: 'a', choose: 'ours' }],
+      expectedOursSha: 'sha-from-an-older-report',
+    }).catch((e: unknown) => e);
+
+    expect(failure).toMatchObject({
+      name: 'PreviewResolutionError',
+      code: 'CONTENT_CONFLICT',
+      message: expect.stringContaining('re-run accept'),
+    });
+    expect(putMock).not.toHaveBeenCalled();
+    expect(deleteBranchMock).not.toHaveBeenCalled();
+  });
+
+  it('expected_theirs_sha mismatch (preview stacked since the report) → CONTENT_CONFLICT', async () => {
+    conflicted(); // preview branch reads as theirs-sha
+
+    const failure = await resolvePreviewConflicts(page, {
+      resolutions: [{ id: 'a', choose: 'ours' }],
+      expectedTheirsSha: 'sha-from-an-older-report',
+    }).catch((e: unknown) => e);
+
+    expect(failure).toMatchObject({ name: 'PreviewResolutionError', code: 'CONTENT_CONFLICT' });
+    expect(putMock).not.toHaveBeenCalled();
+  });
+
+  it('matching sha pins resolve normally', async () => {
+    conflicted();
+
+    const result = await resolvePreviewConflicts(page, {
+      resolutions: [{ id: 'a', choose: 'ours' }],
+      expectedOursSha: 'ours-sha',
+      expectedTheirsSha: 'theirs-sha',
+    });
+
+    expect(result).toMatchObject({ merged: true, semantic: true });
+    expect(writtenWrapper().blocks[0]).toEqual(block('a', 'main'));
+  });
+
+  it("main's content.json deleted → MAIN_CONTENT_MISSING from the resolve flow too", async () => {
+    conflicted();
+    getContentMock.mockImplementation(async (arg: unknown) => {
+      const { ref } = arg as { ref?: string };
+      if (ref === PREVIEW_BRANCH) {
+        return { content: wrapper([block('a', 'preview')]), sha: 'theirs-sha' };
+      }
+      if (ref === 'fork-point') {
+        return { content: wrapper([block('a', 'original')]), sha: 'base-sha' };
+      }
+      return null; // main's file is gone
+    });
+
+    const failure = await resolvePreviewConflicts(page, {
+      resolutions: [{ id: 'a', choose: 'ours' }],
+    }).catch((e: unknown) => e);
+
+    expect(failure).toMatchObject({
+      name: 'PreviewResolutionError',
+      code: 'MAIN_CONTENT_MISSING',
+    });
+    expect(putMock).not.toHaveBeenCalled();
   });
 });

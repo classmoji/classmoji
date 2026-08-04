@@ -594,6 +594,158 @@ describe('merge3Units — resolutions', () => {
   });
 });
 
+// ─── Cross-scope moves (confined view) ───────────────────────────────────────
+//
+// Review-probe scenarios (Phase 7 fix batch F1): a preview that moves a
+// child OUT of its stack while main edits that child must NOT collapse into a
+// container conflict whose cards contradict what resolving produces. The
+// confined view merges the escaped child independently: the move and the
+// edit compose (auto-merge), and any remaining conflict on the container is
+// fields-only with truthful cards.
+
+describe('merge3Units — cross-scope moves (confined view)', () => {
+  const collectIds = (d: DeckJson): string[] => {
+    const out: string[] = [];
+    for (const s of d.slides) {
+      out.push(s.id);
+      for (const c of s.children ?? []) out.push(c.id);
+    }
+    return out;
+  };
+  const assertUniqueIds = (d: DeckJson) => {
+    const ids = collectIds(d);
+    expect(new Set(ids).size).toBe(ids.length);
+  };
+
+  it('preview moves the only child out of a stack + main edits it → clean auto-merge (probe dir 1)', () => {
+    const base = deck([stack('s', [slide('c')]), slide('a')]);
+    const ours = deck([stack('s', [slide('c', '<p>edited on main</p>')]), slide('a')]);
+    // theirs: c moved to the top level; s left as a childless husk.
+    const theirs = deck([{ id: 's' }, slide('a'), slide('c')]);
+
+    const result = merge3Units(base, ours, theirs);
+
+    expect(result.conflicts).toEqual([]);
+    expect(topIds(result.merged)).toEqual(['s', 'a', 'c']);
+    // The edit followed the moved slide; the husk stayed childless.
+    expect(byId(result.merged, 'c').html).toBe('<p>edited on main</p>');
+    expect(result.merged.slides[0].children).toBeUndefined();
+    assertUniqueIds(result.merged);
+  });
+
+  it('main moves the only child out + preview edits it → clean auto-merge (probe dir 2)', () => {
+    const base = deck([stack('s', [slide('c')]), slide('a')]);
+    const ours = deck([{ id: 's' }, slide('a'), slide('c')]);
+    const theirs = deck([stack('s', [slide('c', '<p>edited on preview</p>')]), slide('a')]);
+
+    const result = merge3Units(base, ours, theirs);
+
+    expect(result.conflicts).toEqual([]);
+    expect(topIds(result.merged)).toEqual(['s', 'a', 'c']);
+    expect(byId(result.merged, 'c').html).toBe('<p>edited on preview</p>');
+    expect(result.merged.slides[0].children).toBeUndefined();
+    assertUniqueIds(result.merged);
+  });
+
+  it('move-out + container-field collision → fields-only conflict whose resolutions DIFFER and match the cards', () => {
+    const base = deck([stack('s', [slide('c')], { attrs: { 'data-x': 'base' } }), slide('a')]);
+    const ours = deck([
+      stack('s', [slide('c', '<p>edited on main</p>')], { attrs: { 'data-x': 'main' } }),
+      slide('a'),
+    ]);
+    const theirs = deck([{ id: 's', attrs: { 'data-x': 'preview' } }, slide('a'), slide('c')]);
+
+    const report = merge3Units(base, ours, theirs);
+    expect(report.conflicts).toHaveLength(1);
+    const conflict = report.conflicts[0];
+    expect(conflict).toMatchObject({ id: 's', reason: 'content' });
+    // Cards are fields-only: the escaped child appears on NEITHER side.
+    expect((conflict.ours as DeckSlide).children).toBeUndefined();
+    expect((conflict.theirs as DeckSlide).children).toBeUndefined();
+
+    const keepOurs = merge3Units(base, ours, theirs, { resolutions: { s: 'ours' } });
+    const keepTheirs = merge3Units(base, ours, theirs, { resolutions: { s: 'theirs' } });
+    expect(keepOurs.conflicts).toEqual([]);
+    expect(keepTheirs.conflicts).toEqual([]);
+
+    // The choice is honored: the two documents DIFFER exactly where the
+    // cards differ (s's fields), and each matches its card.
+    expect(keepOurs.merged).not.toEqual(keepTheirs.merged);
+    expect(byId(keepOurs.merged, 's').attrs).toEqual({ 'data-x': 'main' });
+    expect(byId(keepOurs.merged, 's')).toEqual(conflict.ours);
+    expect(byId(keepTheirs.merged, 's').attrs).toEqual({ 'data-x': 'preview' });
+    expect(byId(keepTheirs.merged, 's')).toEqual(conflict.theirs);
+
+    // Either way the moved child lives once, at the root, carrying the edit.
+    for (const resolved of [keepOurs.merged, keepTheirs.merged]) {
+      expect(topIds(resolved)).toEqual(['s', 'a', 'c']);
+      expect(byId(resolved, 'c').html).toBe('<p>edited on main</p>');
+      assertUniqueIds(resolved);
+    }
+  });
+
+  it('delete-vs-edit on a stack with an escaped child: cards exclude it, resolutions differ', () => {
+    const base = deck([stack('s', [slide('c'), slide('d')]), slide('a')]);
+    const ours = deck([slide('a')]); // main deleted the whole stack
+    // theirs: d edited in place, c moved out (unedited).
+    const theirs = deck([stack('s', [slide('d', '<p>edited</p>')]), slide('a'), slide('c')]);
+
+    const report = merge3Units(base, ours, theirs);
+    expect(report.conflicts).toHaveLength(1);
+    const conflict = report.conflicts[0];
+    expect(conflict).toMatchObject({ id: 's', reason: 'delete_vs_edit', ours: null });
+    // The escaped child c is excluded from the theirs AND base cards — its
+    // fate (delete wins over the unedited move) is not the chooser's to make.
+    expect((conflict.theirs as DeckSlide).children?.map(child => child.id)).toEqual(['d']);
+    expect((conflict.base as DeckSlide).children?.map(child => child.id)).toEqual(['d']);
+
+    const keepTheirs = merge3Units(base, ours, theirs, { resolutions: { s: 'theirs' } });
+    expect(keepTheirs.conflicts).toEqual([]);
+    expect(topIds(keepTheirs.merged)).toEqual(['s', 'a']);
+    expect(byId(keepTheirs.merged, 's').children?.map(child => child.id)).toEqual(['d']);
+    expect(byId(keepTheirs.merged, 'd').html).toBe('<p>edited</p>');
+
+    const keepOurs = merge3Units(base, ours, theirs, { resolutions: { s: 'ours' } });
+    expect(keepOurs.conflicts).toEqual([]);
+    expect(topIds(keepOurs.merged)).toEqual(['a']);
+
+    expect(keepOurs.merged).not.toEqual(keepTheirs.merged);
+    assertUniqueIds(keepOurs.merged);
+    assertUniqueIds(keepTheirs.merged);
+  });
+
+  it('both-added stack where one side moved an EXISTING slide in: nothing lost, resolutions differ', () => {
+    const base = deck([slide('c'), slide('a')]);
+    // ours adds stack s and moves existing c into it.
+    const ours = deck([stack('s', [slide('c')]), slide('a')]);
+    // theirs adds stack s with a brand-new child x; c untouched at the root.
+    const theirs = deck([stack('s', [slide('x', '<p>new</p>')]), slide('c'), slide('a')]);
+
+    const report = merge3Units(base, ours, theirs);
+    expect(report.conflicts).toHaveLength(1);
+    expect(report.conflicts[0]).toMatchObject({ id: 's', reason: 'both_added' });
+    // c escaped (it exists at the root on base/theirs) → not in ours' card.
+    expect((report.conflicts[0].ours as DeckSlide).children).toBeUndefined();
+    expect((report.conflicts[0].theirs as DeckSlide).children?.map(child => child.id)).toEqual([
+      'x',
+    ]);
+
+    const keepOurs = merge3Units(base, ours, theirs, { resolutions: { s: 'ours' } });
+    const keepTheirs = merge3Units(base, ours, theirs, { resolutions: { s: 'theirs' } });
+    expect(keepOurs.conflicts).toEqual([]);
+    expect(keepTheirs.conflicts).toEqual([]);
+    expect(keepOurs.merged).not.toEqual(keepTheirs.merged);
+
+    // c survives exactly once in both outcomes (root fallback — a verbatim
+    // container cannot admit independent children).
+    for (const resolved of [keepOurs.merged, keepTheirs.merged]) {
+      expect(collectIds(resolved)).toContain('c');
+      assertUniqueIds(resolved);
+    }
+    expect(byId(keepTheirs.merged, 's').children?.map(child => child.id)).toEqual(['x']);
+  });
+});
+
 // ─── Hygiene ─────────────────────────────────────────────────────────────────
 
 describe('merge3Units — hygiene', () => {

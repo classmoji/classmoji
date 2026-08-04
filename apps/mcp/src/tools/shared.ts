@@ -328,6 +328,52 @@ export async function loadRepositoryInClassroom(
   return record;
 }
 
+// ─── Semantic-merge error mapping (deck + page preview accept tools) ────────
+
+/**
+ * Map semantic-merge failures from a preview accept/resolve to tool errors:
+ * - PreviewResolutionError with code CONTENT_CONFLICT (the report the choices
+ *   were pinned to went stale) → the same CONTENT_CONFLICT tool error a plain
+ *   mid-merge 409 produces, so clients branch on one code.
+ * - Any other PreviewResolutionError (bad/incomplete resolutions, main file
+ *   deleted) → invalid_params carrying the service's `code` and offending
+ *   `ids`, so MCP clients get exactly what the web actions return.
+ * - A bare 409 (main moved while merging) → CONTENT_CONFLICT.
+ * Anything else is returned unchanged for rethrow.
+ */
+export function mapSemanticMergeError(error: unknown, tool: string): unknown {
+  const named = error as {
+    name?: string;
+    message?: string;
+    status?: number;
+    code?: string;
+    ids?: string[];
+  };
+  if (named?.name === 'PreviewResolutionError') {
+    if (named.code === 'CONTENT_CONFLICT') {
+      return new ToolError(
+        'invalid_params',
+        named.message ?? `Content changed since the conflict report — call ${tool} again`,
+        'CONTENT_CONFLICT'
+      );
+    }
+    return new ToolError(
+      'invalid_params',
+      named.message ?? 'Invalid resolutions',
+      named.code,
+      named.ids?.length ? { ids: named.ids } : undefined
+    );
+  }
+  if (named?.status === 409) {
+    return new ToolError(
+      'invalid_params',
+      `Main changed while merging — call ${tool} again`,
+      'CONTENT_CONFLICT'
+    );
+  }
+  return error;
+}
+
 // ─── Misc shared utilities ───────────────────────────────────────────────────
 
 /**

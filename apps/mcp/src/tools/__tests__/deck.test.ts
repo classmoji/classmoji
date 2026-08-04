@@ -1119,7 +1119,7 @@ describe('deck_preview_accept with resolutions', () => {
     });
   });
 
-  it('maps PreviewResolutionError to invalid_params naming the ids — no audit', async () => {
+  it('maps PreviewResolutionError to invalid_params carrying its code AND ids — no audit', async () => {
     mocks.resolveDeckPreviewConflicts.mockRejectedValue(
       Object.assign(new Error('Every conflict needs a choice — missing: bbb'), {
         name: 'PreviewResolutionError',
@@ -1135,8 +1135,52 @@ describe('deck_preview_accept with resolutions', () => {
       )
     ).rejects.toMatchObject({
       kind: 'invalid_params',
+      code: 'UNRESOLVED_CONFLICTS',
+      data: { ids: ['bbb'] },
       message: expect.stringContaining('bbb'),
     });
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
+  });
+
+  it('passes expected_ours_sha/expected_theirs_sha through to the resolve service (F3)', async () => {
+    await deckPreviewAcceptTool.handler(
+      {
+        classroom: 'org/x',
+        slide_id: SLIDE_ID,
+        resolutions: RESOLUTIONS,
+        expected_ours_sha: 'report-ours-sha',
+        expected_theirs_sha: 'report-theirs-sha',
+      },
+      CTX
+    );
+
+    expect(mocks.resolveDeckPreviewConflicts.mock.calls[0][1]).toMatchObject({
+      resolutions: RESOLUTIONS,
+      expectedOursSha: 'report-ours-sha',
+      expectedTheirsSha: 'report-theirs-sha',
+    });
+  });
+
+  it('maps a stale sha pin (CONTENT_CONFLICT PreviewResolutionError) to the CONTENT_CONFLICT code', async () => {
+    mocks.resolveDeckPreviewConflicts.mockRejectedValue(
+      Object.assign(new Error('The live deck changed since the conflict report — re-run accept'), {
+        name: 'PreviewResolutionError',
+        code: 'CONTENT_CONFLICT',
+        ids: [],
+      })
+    );
+
+    await expect(
+      deckPreviewAcceptTool.handler(
+        {
+          classroom: 'org/x',
+          slide_id: SLIDE_ID,
+          resolutions: RESOLUTIONS,
+          expected_ours_sha: 'stale',
+        },
+        CTX
+      )
+    ).rejects.toMatchObject({ kind: 'invalid_params', code: 'CONTENT_CONFLICT' });
     expect(mocks.auditCreate).not.toHaveBeenCalled();
   });
 

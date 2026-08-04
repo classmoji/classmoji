@@ -61,6 +61,8 @@ interface PreviewActionData {
   units?: ConflictUnit[];
   orderConflict?: OrderConflict | null;
   autoMerged?: number;
+  oursSha?: string | null;
+  theirsSha?: string | null;
   error?: string;
   code?: string;
   ids?: string[];
@@ -77,10 +79,17 @@ function usePreviewActions() {
   };
 
   // Chooser submit: same intent, plus one {id, choose} per listed conflict.
+  // The report's shas ride along so the server can refuse (CONTENT_CONFLICT)
+  // if the deck moved after the reviewed report (F3 pinning).
   const applyResolutions = (resolutions: MergeResolution[]) => {
     setPending('accept');
     fetcher.submit(
-      { intent: 'preview-accept', resolutions: JSON.stringify(resolutions) },
+      {
+        intent: 'preview-accept',
+        resolutions: JSON.stringify(resolutions),
+        ...(fetcher.data?.oursSha ? { ours_sha: fetcher.data.oursSha } : {}),
+        ...(fetcher.data?.theirsSha ? { theirs_sha: fetcher.data.theirsSha } : {}),
+      },
       { method: 'POST' }
     );
   };
@@ -96,6 +105,7 @@ function usePreviewActions() {
   const conflictUnits = fetcher.data?.conflict ? (fetcher.data.units ?? []) : null;
   const orderConflict = fetcher.data?.conflict ? (fetcher.data.orderConflict ?? null) : null;
   const autoMerged = fetcher.data?.conflict ? (fetcher.data.autoMerged ?? 0) : 0;
+  const conflictOursSha = fetcher.data?.conflict ? (fetcher.data.oursSha ?? null) : null;
   const error = fetcher.data?.error ?? null;
 
   return {
@@ -107,6 +117,7 @@ function usePreviewActions() {
     conflictUnits,
     orderConflict,
     autoMerged,
+    conflictOursSha,
     error,
   };
 }
@@ -313,6 +324,7 @@ const ConflictPanel = ({
   units,
   orderConflict,
   autoMerged,
+  oursSha,
   busy,
   onApply,
   onDiscard,
@@ -320,6 +332,7 @@ const ConflictPanel = ({
   units: ConflictUnit[];
   orderConflict: OrderConflict | null;
   autoMerged: number;
+  oursSha: string | null;
   busy: boolean;
   onApply: (resolutions: MergeResolution[]) => void;
   onDiscard: () => void;
@@ -341,7 +354,10 @@ const ConflictPanel = ({
       ]
     : units;
   const ids = allUnits.map(unit => unit.id);
-  const signature = ids.join('|');
+  // Keyed on the report's ours_sha too: a re-accept after main moved can
+  // yield the SAME conflict ids over different content — stale choices must
+  // not survive into the new report (F3).
+  const signature = `${oursSha ?? ''}::${ids.join('|')}`;
   const [choices, setChoices] = useState<Record<string, MergeChoice>>({});
   // Drop stale choices when the conflict set changes (a re-accept can shrink it).
   useEffect(() => setChoices({}), [signature]);
@@ -420,6 +436,7 @@ export const PreviewBar = ({ preview }: { preview: PreviewInfo }) => {
     conflictUnits,
     orderConflict,
     autoMerged,
+    conflictOursSha,
     error,
   } = usePreviewActions();
   const age = preview.oldestCommitAt ? dayjs(preview.oldestCommitAt).fromNow() : null;
@@ -477,6 +494,7 @@ export const PreviewBar = ({ preview }: { preview: PreviewInfo }) => {
           units={conflictUnits}
           orderConflict={orderConflict}
           autoMerged={autoMerged}
+          oursSha={conflictOursSha}
           busy={busy}
           onApply={applyResolutions}
           onDiscard={discard}
@@ -499,6 +517,7 @@ export const PendingPreviewBanner = ({ preview }: { preview: PreviewInfo }) => {
     conflictUnits,
     orderConflict,
     autoMerged,
+    conflictOursSha,
     error,
   } = usePreviewActions();
   const age = preview.oldestCommitAt ? dayjs(preview.oldestCommitAt).fromNow() : null;
@@ -549,6 +568,7 @@ export const PendingPreviewBanner = ({ preview }: { preview: PreviewInfo }) => {
           units={conflictUnits}
           orderConflict={orderConflict}
           autoMerged={autoMerged}
+          oursSha={conflictOursSha}
           busy={busy}
           onApply={applyResolutions}
           onDiscard={discard}

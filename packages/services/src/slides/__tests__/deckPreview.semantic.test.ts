@@ -468,4 +468,131 @@ describe('resolveDeckPreviewConflicts', () => {
 
     expect(failure).toMatchObject({ name: 'PreviewResolutionError', code: 'NO_PREVIEW' });
   });
+
+  it('malformed resolution elements → INVALID_RESOLUTIONS, nothing written (never defaults to theirs)', async () => {
+    conflicted();
+
+    const failure = await resolveDeckPreviewConflicts(slide, {
+      resolutions: [{ id: 'aaa', choose: 'sideways' } as unknown as { id: string; choose: 'ours' }],
+    }).catch((e: unknown) => e);
+
+    expect(failure).toMatchObject({
+      name: 'PreviewResolutionError',
+      code: 'INVALID_RESOLUTIONS',
+    });
+    expect(uploadBatchMock).not.toHaveBeenCalled();
+    expect(deleteBranchMock).not.toHaveBeenCalled();
+  });
+
+  // ── Sha pinning (F3): resolutions apply only to the reviewed report ──
+
+  it('expected_ours_sha mismatch → CONTENT_CONFLICT, nothing written', async () => {
+    conflicted(); // fresh main reads as ours-sha
+
+    const failure = await resolveDeckPreviewConflicts(slide, {
+      resolutions: [{ id: 'aaa', choose: 'ours' }],
+      expectedOursSha: 'sha-from-an-older-report',
+    }).catch((e: unknown) => e);
+
+    expect(failure).toMatchObject({
+      name: 'PreviewResolutionError',
+      code: 'CONTENT_CONFLICT',
+      message: expect.stringContaining('re-run accept'),
+    });
+    expect(uploadBatchMock).not.toHaveBeenCalled();
+    expect(deleteBranchMock).not.toHaveBeenCalled();
+  });
+
+  it('expected_theirs_sha mismatch (preview stacked since the report) → CONTENT_CONFLICT', async () => {
+    conflicted(); // preview branch reads as theirs-sha
+
+    const failure = await resolveDeckPreviewConflicts(slide, {
+      resolutions: [{ id: 'aaa', choose: 'ours' }],
+      expectedTheirsSha: 'sha-from-an-older-report',
+    }).catch((e: unknown) => e);
+
+    expect(failure).toMatchObject({ name: 'PreviewResolutionError', code: 'CONTENT_CONFLICT' });
+    expect(uploadBatchMock).not.toHaveBeenCalled();
+  });
+
+  it('matching sha pins resolve normally', async () => {
+    conflicted();
+
+    const result = await resolveDeckPreviewConflicts(slide, {
+      resolutions: [{ id: 'aaa', choose: 'ours' }],
+      expectedOursSha: 'ours-sha',
+      expectedTheirsSha: 'theirs-sha',
+    });
+
+    expect(result).toMatchObject({ merged: true, semantic: true });
+    expect(batchCall().deck?.slides[0]).toEqual({ id: 'aaa', html: '<p>main</p>' });
+  });
+
+  it("main's deck.json deleted → MAIN_CONTENT_MISSING from the resolve flow", async () => {
+    conflicted();
+    getContentMock.mockImplementation(async (arg: unknown) => {
+      const { ref } = arg as { ref?: string };
+      if (ref === BRANCH) {
+        return {
+          content: deckJson(deckWith([{ id: 'aaa', html: '<p>preview</p>' }])),
+          sha: 'theirs-sha',
+        };
+      }
+      if (ref === 'fork-point') {
+        return {
+          content: deckJson(deckWith([{ id: 'aaa', html: '<p>original</p>' }])),
+          sha: 'base-sha',
+        };
+      }
+      return null; // main's file is gone
+    });
+
+    const failure = await resolveDeckPreviewConflicts(slide, {
+      resolutions: [{ id: 'aaa', choose: 'ours' }],
+    }).catch((e: unknown) => e);
+
+    expect(failure).toMatchObject({
+      name: 'PreviewResolutionError',
+      code: 'MAIN_CONTENT_MISSING',
+    });
+    expect(uploadBatchMock).not.toHaveBeenCalled();
+  });
+});
+
+// ─── Main-file-deleted degenerate on the accept path (F4) ────────────────────
+
+describe('acceptDeckPreview — main deck.json deleted', () => {
+  it('throws typed MAIN_CONTENT_MISSING instead of an empty-units conflict report', async () => {
+    primeThreeWay({
+      base: deckWith([{ id: 'aaa', html: '<p>one</p>' }]),
+      ours: deckWith([{ id: 'aaa', html: '<p>one</p>' }]),
+      theirs: deckWith([{ id: 'aaa', html: '<p>one PREVIEW</p>' }]),
+    });
+    getContentMock.mockImplementation(async (arg: unknown) => {
+      const { ref } = arg as { ref?: string };
+      if (ref === BRANCH) {
+        return {
+          content: deckJson(deckWith([{ id: 'aaa', html: '<p>one PREVIEW</p>' }])),
+          sha: 'theirs-sha',
+        };
+      }
+      if (ref === 'fork-point') {
+        return {
+          content: deckJson(deckWith([{ id: 'aaa', html: '<p>one</p>' }])),
+          sha: 'base-sha',
+        };
+      }
+      return null; // main's file is gone
+    });
+
+    const failure = await acceptDeckPreview(slide).catch((e: unknown) => e);
+
+    expect(failure).toBeInstanceOf(PreviewResolutionError);
+    expect(failure).toMatchObject({
+      code: 'MAIN_CONTENT_MISSING',
+      message: expect.stringContaining('deleted'),
+    });
+    expect(uploadBatchMock).not.toHaveBeenCalled();
+    expect(deleteBranchMock).not.toHaveBeenCalled();
+  });
 });

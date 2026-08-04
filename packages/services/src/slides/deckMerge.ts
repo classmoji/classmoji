@@ -24,6 +24,12 @@
  *   Delete-vs-edit tests for a container consider its whole subtree; a
  *   container conflict that carries subtrees (delete-vs-edit / structure
  *   change) absorbs its children — no nested conflicts.
+ * - the container view is CONFINED: a child that escaped to a different
+ *   parent on some side (a cross-scope move) merges independently and is
+ *   excluded from its old container's structure detection, comparisons, and
+ *   conflict cards. A move-out on one side + a content edit on the other
+ *   auto-merges (the edit follows the moved slide); a card can never show a
+ *   child whose fate the chooser does not control.
  * - deck-level meta (theme, codeTheme, dark pairs, config, customCss,
  *   extraCss) merges per-field; a field changed differently on both sides
  *   raises the single `__meta__` conflict carrying the double-changed fields.
@@ -39,7 +45,12 @@
  * backbone (the other side's additions are still woven in).
  */
 
-import { canonicalJson, mergeIdSequence3, type MergeChoice } from '../content/merge3.ts';
+import {
+  canonicalJson,
+  dedupeMergedTreeIds,
+  mergeIdSequence3,
+  type MergeChoice,
+} from '../content/merge3.ts';
 import type { DeckJson, DeckSlide } from './deckTypes.ts';
 
 export { PreviewResolutionError, indexResolutions } from '../content/merge3.ts';
@@ -177,10 +188,18 @@ function contentSig(slide: DeckSlide | undefined): string {
   });
 }
 
-/** The whole subtree — used for delete tests on containers and atomic units. */
-function subtreeSig(slide: DeckSlide | undefined): string {
+/**
+ * The unit's subtree restricted to its CONFINED children — used for delete
+ * tests on containers and for atomic (structure-change) units. Children that
+ * escaped to another parent on some side are excluded: they merge
+ * independently, so they must not drag their old container into a conflict
+ * (or pad out its cards) on their behalf.
+ */
+function subtreeSig(slide: DeckSlide | undefined, confined?: ReadonlySet<string>): string {
   if (!slide) return 'absent';
-  const children = (slide.children ?? []).map(child => `${child.id}:${contentSig(child)}`);
+  const children = (slide.children ?? [])
+    .filter(child => !confined || confined.has(child.id))
+    .map(child => `${child.id}:${contentSig(child)}`);
   return `${contentSig(slide)}|${children.join(',')}`;
 }
 
@@ -188,6 +207,22 @@ function subtreeSig(slide: DeckSlide | undefined): string {
 function sansChildren(slide: DeckSlide): DeckSlide {
   const copy = structuredClone(slide);
   delete copy.children;
+  return copy;
+}
+
+/**
+ * Verbatim card/subtree copy restricted to confined children. What a
+ * subtree-carrying conflict card shows must be EXACTLY what resolving to that
+ * side commits — escaped children have independent fates, so they are
+ * stripped from the card just as buildUnit strips them from the resolved
+ * subtree.
+ */
+function cloneConfined(slide: DeckSlide, confined: ReadonlySet<string>): DeckSlide {
+  const copy = structuredClone(slide);
+  if (copy.children) {
+    copy.children = copy.children.filter(child => confined.has(child.id));
+    if (copy.children.length === 0) delete copy.children;
+  }
   return copy;
 }
 
@@ -249,22 +284,28 @@ export function merge3Units(
   const fates = new Map<string, UnitFate>();
   /** Ids that ride verbatim inside a subtree-carrying unit — not independent units. */
   const consumed = new Set<string>();
+  /** Ids that were (initially) conflicts — resolved or not (dedupe preference). */
+  const conflictedIds = new Set<string>();
 
-  /** Child ids of `id` (across all sides) confined to `id` everywhere they exist. */
-  const confinedChildIds = (id: string): string[] => {
+  /** Every child id of `id` across all sides. */
+  const childIdsOf = (id: string): Set<string> => {
     const childIds = new Set<string>();
     for (const side of ['base', 'ours', 'theirs'] as const) {
       for (const cid of entryOf(side, id)?.slide.children?.map(c => c.id) ?? []) {
         childIds.add(cid);
       }
     }
-    return [...childIds].filter(cid =>
+    return childIds;
+  };
+
+  /** Child ids of `id` (across all sides) confined to `id` everywhere they exist. */
+  const confinedChildIds = (id: string): string[] =>
+    [...childIdsOf(id)].filter(cid =>
       (['base', 'ours', 'theirs'] as const).every(side => {
         const entry = entryOf(side, cid);
         return !entry || entry.parent === id;
       })
     );
-  };
 
   const makeConflict = (
     id: string,
@@ -272,13 +313,14 @@ export function merge3Units(
     oursSlide: DeckSlide | null,
     theirsSlide: DeckSlide | null,
     baseSlide: DeckSlide | undefined,
-    verbatimSubtree: boolean
+    verbatimSubtree: boolean,
+    confinedSet: ReadonlySet<string>
   ): UnitFate => {
     const strip = (slide: DeckSlide | null): DeckSlide | null =>
       slide == null
         ? null
         : verbatimSubtree
-          ? structuredClone(slide)
+          ? cloneConfined(slide, confinedSet)
           : isContainer(slide)
             ? sansChildren(slide)
             : structuredClone(slide);
@@ -290,11 +332,7 @@ export function merge3Units(
       theirs: strip(theirsSlide),
     };
     if (baseSlide) {
-      conflict.base = (
-        verbatimSubtree || !isContainer(baseSlide)
-          ? structuredClone(baseSlide)
-          : sansChildren(baseSlide)
-      ) as DeckSlide;
+      conflict.base = strip(baseSlide) as DeckSlide;
     }
     return {
       kind: 'conflict',
@@ -309,17 +347,26 @@ export function merge3Units(
     const o = entryOf('ours', id);
     const t = entryOf('theirs', id);
 
+    // Confined view (cross-scope moves): a child that escaped to a different
+    // parent on some side is merged independently — it is invisible to this
+    // unit's structure detection, its comparisons, and its conflict cards.
+    // Without this, a moved-out child both rides inside the container's
+    // conflict subtree AND gets its own fate, so resolving either side of the
+    // container yields the same (card-contradicting) document.
+    const confinedSet = new Set(confinedChildIds(id));
     const presentFlags = [b, o, t].filter((e): e is UnitEntry => e != null);
-    const containerFlags = presentFlags.map(e => isContainer(e.slide));
+    const containerFlags = presentFlags.map(e =>
+      (e.slide.children ?? []).some(child => confinedSet.has(child.id))
+    );
     const atomic = containerFlags.some(flag => flag !== containerFlags[0]);
     const anyContainer = containerFlags.some(Boolean);
 
-    // Content comparisons: atomic units compare (and ride) whole subtrees;
-    // delete tests for containers consider the whole subtree.
+    // Content comparisons: atomic units compare (and ride) their confined
+    // subtrees; delete tests for containers consider the confined subtree.
     const cSig = (e: UnitEntry | undefined) =>
-      atomic ? subtreeSig(e?.slide) : contentSig(e?.slide);
+      atomic ? subtreeSig(e?.slide, confinedSet) : contentSig(e?.slide);
     const dSig = (e: UnitEntry | undefined) =>
-      anyContainer || atomic ? subtreeSig(e?.slide) : contentSig(e?.slide);
+      anyContainer || atomic ? subtreeSig(e?.slide, confinedSet) : contentSig(e?.slide);
 
     const autoKeep = (source: Side): UnitFate => {
       autoMerged++;
@@ -343,7 +390,7 @@ export function merge3Units(
       } else if (cSig(o) === cSig(t)) {
         fate = autoKeep('ours'); // identical edits on both sides
       } else {
-        fate = makeConflict(id, 'content', o.slide, t.slide, b.slide, atomic);
+        fate = makeConflict(id, 'content', o.slide, t.slide, b.slide, atomic, confinedSet);
       }
     } else if (b && !o && !t) {
       fate = autoDrop(); // deleted on both sides
@@ -352,14 +399,30 @@ export function merge3Units(
       if (dSig(t) === dSig(b)) {
         fate = autoDrop(); // the delete wins over an unchanged (or merely moved) unit
       } else {
-        fate = makeConflict(id, 'delete_vs_edit', null, t.slide, b.slide, anyContainer || atomic);
+        fate = makeConflict(
+          id,
+          'delete_vs_edit',
+          null,
+          t.slide,
+          b.slide,
+          anyContainer || atomic,
+          confinedSet
+        );
       }
     } else if (b && o && !t) {
       // Deleted on theirs (the preview).
       if (dSig(o) === dSig(b)) {
         fate = autoDrop();
       } else {
-        fate = makeConflict(id, 'delete_vs_edit', o.slide, null, b.slide, anyContainer || atomic);
+        fate = makeConflict(
+          id,
+          'delete_vs_edit',
+          o.slide,
+          null,
+          b.slide,
+          anyContainer || atomic,
+          confinedSet
+        );
       }
     } else if (!b && o && !t) {
       fate = autoKeep('ours'); // added on main
@@ -367,16 +430,17 @@ export function merge3Units(
       fate = autoKeep('theirs'); // added on the preview
     } else {
       // Added on both sides with the same id.
-      if (subtreeSig(o!.slide) === subtreeSig(t!.slide)) {
+      if (subtreeSig(o!.slide, confinedSet) === subtreeSig(t!.slide, confinedSet)) {
         fate = autoKeep('ours');
       } else {
-        fate = makeConflict(id, 'both_added', o!.slide, t!.slide, undefined, true);
+        fate = makeConflict(id, 'both_added', o!.slide, t!.slide, undefined, true, confinedSet);
       }
     }
 
     // Apply a chooser resolution to a unit conflict. The verbatimSubtree flag
     // survives the resolution (drops included) so the consumed sweep below
     // still binds the unit's confined children to its fate.
+    if (fate.kind === 'conflict') conflictedIds.add(id);
     const choice = resolutions[id];
     if (fate.kind === 'conflict' && choice) {
       const chosen = choice === 'ours' ? fate.conflict!.ours : fate.conflict!.theirs;
@@ -425,6 +489,7 @@ export function merge3Units(
 
     if (bothMovedDifferently) {
       if (fate.countedAuto) autoMerged--; // its content change no longer counts as clean
+      conflictedIds.add(id);
       if (choice) {
         // Resolved placement conflict: the chosen side's unit verbatim —
         // content AND position.
@@ -434,7 +499,9 @@ export function merge3Units(
         const o = entryOf('ours', id)!;
         const t = entryOf('theirs', id)!;
         const b = entryOf('base', id);
-        fates.set(id, makeConflict(id, 'placement', o.slide, t.slide, b?.slide, false));
+        // Placement conflicts only happen to leaves (containers never nest),
+        // so the confined set is irrelevant to the fields-only cards.
+        fates.set(id, makeConflict(id, 'placement', o.slide, t.slide, b?.slide, false, new Set()));
         parents.set(id, pt!);
       }
       continue;
@@ -472,17 +539,19 @@ export function merge3Units(
   });
 
   const scopeOrders = new Map<string, string[]>();
+  const scopeSet = new Set(scopeContainers);
   const scopes: string[] = [ROOT, ...scopeContainers];
   for (const scope of scopes) {
     const seqOf = (side: Side): string[] =>
       scope === ROOT ? sides[side].rootOrder : (sides[side].childOrder.get(scope) ?? []);
     const members = new Set([...survivors].filter(id => id !== scope && parents.get(id) === scope));
-    // A member whose parent no longer survives falls back to the root scope
-    // (rare: its container was resolved away) — appended at the end.
+    // A member whose parent is not an actual scope falls back to the root
+    // scope, appended at the end (rare: its container was resolved away, or
+    // rides verbatim and cannot admit independent children).
     if (scope === ROOT) {
       for (const id of survivors) {
         const parent = parents.get(id);
-        if (parent !== ROOT && parent != null && !survivors.has(parent) && !members.has(id)) {
+        if (parent !== ROOT && parent != null && !scopeSet.has(parent) && !members.has(id)) {
           members.add(id);
         }
       }
@@ -547,6 +616,21 @@ export function merge3Units(
 
   const rootOrder = scopeOrders.get(ROOT) ?? [];
   const mergedSlides = rootOrder.map(buildUnit);
+
+  // Final safety assertion: no id may appear twice in the assembled document.
+  // Unreachable through the confined-view machinery above, but kept as a
+  // cheap last line of defense (a duplicate committed to main corrupts the
+  // deck for every future merge). Preference goes to the copy inside a
+  // conflict unit's subtree — that copy is what the chooser card showed.
+  const duplicateIds = dedupeMergedTreeIds(mergedSlides, conflictedIds, {
+    dropEmptyChildren: true,
+  });
+  if (duplicateIds.length > 0) {
+    console.warn(
+      `[deckMerge] merged deck carried duplicate slide id(s) ${duplicateIds.join(', ')} — ` +
+        'kept the conflict-resolution copy and dropped the stale one(s)'
+    );
+  }
 
   // ── Meta: per-field 3-way ──
   const merged: DeckJson = {

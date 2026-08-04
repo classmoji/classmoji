@@ -56,6 +56,7 @@ import type { ToolDefinition } from '../mcp/registry.ts';
 import {
   assertSlideEditable,
   loadSlideInClassroom,
+  mapSemanticMergeError,
   ok,
   TEACHING_TEAM,
   writeAudit,
@@ -82,27 +83,6 @@ function contentConflict(at: 'main' | 'preview' = 'main'): ToolError {
       : 'Deck changed since you read it — call deck_get again for a fresh sha',
     'CONTENT_CONFLICT'
   );
-}
-
-/**
- * Map semantic-merge failures from accept/resolve to tool errors:
- * PreviewResolutionError (bad/incomplete resolutions) → invalid_params naming
- * the ids; a 409 (main moved while merging) → CONTENT_CONFLICT so the caller
- * simply re-runs the accept. Anything else is returned unchanged for rethrow.
- */
-function mapSemanticMergeError(error: unknown, tool: string): unknown {
-  const named = error as { name?: string; message?: string; status?: number };
-  if (named?.name === 'PreviewResolutionError') {
-    return new ToolError('invalid_params', named.message ?? 'Invalid resolutions');
-  }
-  if (named?.status === 409) {
-    return new ToolError(
-      'invalid_params',
-      `Main changed while merging — call ${tool} again`,
-      'CONTENT_CONFLICT'
-    );
-  }
-  return error;
 }
 
 /**
@@ -1003,6 +983,8 @@ interface DeckPreviewArgs {
 
 interface DeckPreviewAcceptArgs extends DeckPreviewArgs {
   resolutions?: MergeResolution[];
+  expected_ours_sha?: string;
+  expected_theirs_sha?: string;
 }
 
 export const deckPreviewAcceptTool: ToolDefinition<DeckPreviewAcceptArgs> = {
@@ -1015,9 +997,14 @@ export const deckPreviewAcceptTool: ToolDefinition<DeckPreviewAcceptArgs> = {
     'edits merge automatically (git first, then a per-slide semantic 3-way merge — the result ' +
     'reports semantic: true with the auto_merged count when that layer kicked in). Only genuine ' +
     'same-unit collisions stop the accept: you get a report of just those units (ours = main, ' +
-    'theirs = preview, base) plus auto_merged. To finish, either call this tool again with ' +
+    'theirs = preview, base) plus auto_merged. A top-level slide-order conflict is reported ' +
+    "separately as order_conflict — resolve it via the '__order__' id (unlike " +
+    "page_preview_accept, which lists '__order__' inside units). To finish, either call this " +
+    'tool again with ' +
     'resolutions — one {id, choose: ours|theirs} per reported conflict id (ours = keep the live ' +
-    "main version, theirs = keep the preview's) — or re-read fresh main with deck_get, re-apply " +
+    "main version, theirs = keep the preview's), passing the report's ours_sha/theirs_sha as " +
+    'expected_ours_sha/expected_theirs_sha to pin your choices to the state you reviewed — or ' +
+    're-read fresh main with deck_get, re-apply ' +
     'merged slides with deck_apply and accept again, or deck_preview_discard.',
   scope: 'write',
   roles: TEACHING_TEAM,
@@ -1042,6 +1029,23 @@ export const deckPreviewAcceptTool: ToolDefinition<DeckPreviewAcceptArgs> = {
           "the sentinels '__order__' (slide order), '__order__:<stackId>' (a stack's child " +
           "order), and '__meta__' (theme/config). Omit to attempt a plain accept."
       ),
+    expected_ours_sha: z
+      .string()
+      .min(1)
+      .optional()
+      .describe(
+        "Pass the ours_sha from the conflict report your resolutions answer. If main's deck " +
+          'changed since that report, the accept fails with CONTENT_CONFLICT instead of ' +
+          'applying reviewed choices to unseen content. Only meaningful with resolutions.'
+      ),
+    expected_theirs_sha: z
+      .string()
+      .min(1)
+      .optional()
+      .describe(
+        'Pass the theirs_sha from the conflict report your resolutions answer (same staleness ' +
+          'pin for the preview side). Only meaningful with resolutions.'
+      ),
   },
   handler: async (args, ctx) => {
     const slide = await loadSlideInClassroom(args.slide_id, ctx);
@@ -1059,6 +1063,8 @@ export const deckPreviewAcceptTool: ToolDefinition<DeckPreviewAcceptArgs> = {
         result = await resolveDeckPreviewConflicts(slide, {
           resolutions: args.resolutions,
           resolveThemeUrls: deck => resolveSharedThemeUrls(slide, deck),
+          ...(args.expected_ours_sha ? { expectedOursSha: args.expected_ours_sha } : {}),
+          ...(args.expected_theirs_sha ? { expectedTheirsSha: args.expected_theirs_sha } : {}),
         });
       } catch (error: unknown) {
         throw mapSemanticMergeError(error, 'deck_preview_accept');
@@ -1159,7 +1165,8 @@ export const deckPreviewAcceptTool: ToolDefinition<DeckPreviewAcceptArgs> = {
         `${result.auto_merged} change(s) auto-merge cleanly; ${conflictCount} conflict(s) need ` +
         'a decision. Resolve by calling deck_preview_accept again with resolutions ' +
         "(one {id, choose: 'ours'|'theirs'} per conflict id — include '__order__' if " +
-        'order_conflict is present; ours = main, theirs = preview) — or re-read fresh main ' +
+        "order_conflict is present; ours = main, theirs = preview), passing this report's " +
+        'ours_sha/theirs_sha as expected_ours_sha/expected_theirs_sha — or re-read fresh main ' +
         'with deck_get, re-apply merged slides with deck_apply and accept again, or ' +
         'deck_preview_discard to drop the preview.',
     });

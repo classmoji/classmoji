@@ -484,6 +484,13 @@ async function commitSemanticDeckMerge(
     ...(themeUrls ? { themeUrls } : {}),
   });
 
+  // TOCTOU note: this guard is a compare-THEN-delete — a stacking apply can
+  // still land on the branch between the getMeta read and the deleteBranch
+  // call below, and would be discarded with the branch. Accepted: GitHub's
+  // refs DELETE has no precondition (no CAS delete), so the window cannot be
+  // closed API-side; the guard shrinks it from the whole merge duration to
+  // one request round-trip, and an apply racing an in-flight accept has no
+  // ordering guarantee either way.
   let previewKept = false;
   let reason: string | undefined;
   try {
@@ -517,6 +524,19 @@ async function commitSemanticDeckMerge(
   return { sha: saved.sha, ...(previewKept ? { preview_kept: true, reason } : {}) };
 }
 
+/**
+ * Typed refusal for the main-file-deleted degenerate: without main's
+ * deck.json there is no sha to CAS the commit on, so committing would be an
+ * unguarded write over whatever deleted it.
+ */
+function mainDeckMissing(): PreviewResolutionError {
+  return new PreviewResolutionError(
+    "Main's deck.json was deleted while this preview was pending — discard the preview " +
+      'or re-apply it as a fresh deck',
+    'MAIN_CONTENT_MISSING'
+  );
+}
+
 /** The accept path taken when the git merge reports a conflict. */
 async function acceptDeckSemanticFallback(
   slide: SlideContentTarget,
@@ -542,11 +562,13 @@ async function acceptDeckSemanticFallback(
   };
 
   for (let attempt = 0; attempt < 2; attempt++) {
-    const merge = merge3Units(baseDeck, parseDeckForDiff(ours?.content), theirsDeck);
-    // Without main's deck.json sha there is nothing to CAS the commit on —
-    // report instead of writing (degenerate: a git conflict implies both
-    // sides changed deck.json, so ours should always exist).
-    if (merge.conflicts.length > 0 || !ours?.sha) {
+    // Main's deck.json vanished (deleted while the preview was pending):
+    // never commit without a CAS precondition, and never return an empty
+    // conflict report the caller cannot act on — refuse with a typed error.
+    if (!ours?.sha) throw mainDeckMissing();
+
+    const merge = merge3Units(baseDeck, parseDeckForDiff(ours.content), theirsDeck);
+    if (merge.conflicts.length > 0) {
       return report(merge);
     }
     try {
@@ -587,15 +609,30 @@ async function acceptDeckSemanticFallback(
  * the resolved merge to main exactly like a semantic accept (saveDeck: CAS +
  * artifact regeneration), and deletes the branch.
  *
+ * @param options.expectedOursSha - pin the resolution to the conflict report
+ *   the choices were made against (the report's `ours_sha`). When provided
+ *   and main's deck.json no longer matches, the resolve fails with
+ *   CONTENT_CONFLICT instead of applying reviewed choices to unseen content.
+ * @param options.expectedTheirsSha - same pin for the preview side
+ *   (the report's `theirs_sha`).
+ *
  * @throws {PreviewResolutionError} NO_PREVIEW / NOTHING_TO_RESOLVE /
- *   UNRESOLVED_CONFLICTS / UNKNOWN_RESOLUTIONS / DUPLICATE_RESOLUTIONS.
+ *   UNRESOLVED_CONFLICTS / UNKNOWN_RESOLUTIONS / DUPLICATE_RESOLUTIONS /
+ *   INVALID_RESOLUTIONS / CONTENT_CONFLICT / MAIN_CONTENT_MISSING.
  */
 export async function resolveDeckPreviewConflicts(
   slide: SlideContentTarget,
   {
     resolutions,
     resolveThemeUrls,
-  }: { resolutions: MergeResolution[]; resolveThemeUrls?: ThemeUrlResolver }
+    expectedOursSha,
+    expectedTheirsSha,
+  }: {
+    resolutions: MergeResolution[];
+    resolveThemeUrls?: ThemeUrlResolver;
+    expectedOursSha?: string;
+    expectedTheirsSha?: string;
+  }
 ): Promise<ResolveDeckPreviewResult> {
   if (!resolutions?.length) {
     throw new PreviewResolutionError(
@@ -617,8 +654,27 @@ export async function resolveDeckPreviewConflicts(
   const baseDeck = parseDeckForDiff(base?.content);
   const theirsDeck = parseDeckForDiff(theirs?.content);
 
+  if (expectedTheirsSha && (theirs?.sha ?? null) !== expectedTheirsSha) {
+    throw new PreviewResolutionError(
+      'The preview changed since the conflict report these choices were made against — ' +
+        're-run accept for a fresh report',
+      'CONTENT_CONFLICT'
+    );
+  }
+
   for (let attempt = 0; attempt < 2; attempt++) {
-    const oursDeck = parseDeckForDiff(ours?.content);
+    // Re-checked every attempt: a CAS-loss retry re-reads main, and choices
+    // pinned to the reviewed report must not silently apply to newer content.
+    if (expectedOursSha && (ours?.sha ?? null) !== expectedOursSha) {
+      throw new PreviewResolutionError(
+        'The live deck changed since the conflict report these choices were made against — ' +
+          're-run accept for a fresh report',
+        'CONTENT_CONFLICT'
+      );
+    }
+    if (!ours?.sha) throw mainDeckMissing();
+
+    const oursDeck = parseDeckForDiff(ours.content);
     const current = merge3Units(baseDeck, oursDeck, theirsDeck);
     const conflictIds = new Set(current.conflicts.map(conflict => conflict.id));
     if (conflictIds.size === 0) {
@@ -641,12 +697,6 @@ export async function resolveDeckPreviewConflicts(
         `Not current conflict ids: ${unknown.join(', ')} — re-run accept for the current report`,
         'UNKNOWN_RESOLUTIONS',
         unknown
-      );
-    }
-    if (!ours?.sha) {
-      throw new PreviewResolutionError(
-        'Main has no deck.json to lock the commit on — re-run accept',
-        'NOTHING_TO_RESOLVE'
       );
     }
 

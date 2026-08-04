@@ -226,3 +226,130 @@ describe('merge3Blocks', () => {
     expect([base, ours, theirs]).toEqual(snapshots);
   });
 });
+
+// ─── Cross-scope moves + id uniqueness (Phase 7 fix batch F1) ───────────────
+//
+// Review-probe scenarios: a preview that moves a nested block OUT of its
+// parent to the top level while main edits that block in place used to leave
+// the edited copy nested inside the parent's conflict subtree AND a stale
+// top-level copy — resolving 'ours' committed a DUPLICATE block id to main.
+// The engine now merges the moved block as its own unit and strips the
+// nested copies; a final sweep asserts id uniqueness on every merged doc.
+
+describe('merge3Blocks — cross-scope moves', () => {
+  const deepIds = (blocks: unknown[]): string[] => {
+    const out: string[] = [];
+    const walk = (list: Array<{ id?: string; children?: unknown[] }>): void => {
+      for (const node of list) {
+        if (node?.id) out.push(node.id);
+        if (Array.isArray(node?.children)) {
+          walk(node.children as Array<{ id?: string; children?: unknown[] }>);
+        }
+      }
+    };
+    walk(blocks as Array<{ id?: string; children?: unknown[] }>);
+    return out;
+  };
+  const assertUniqueIds = (blocks: unknown[]) => {
+    const all = deepIds(blocks);
+    expect(new Set(all).size).toBe(all.length);
+  };
+  const textOf = (node: unknown): string =>
+    (node as { content: Array<{ text: string }> }).content[0].text;
+
+  it('preview moves a nested block to the top level + main edits it in place → clean auto-merge (probe dir 1)', () => {
+    const base = [block('p', 'parent', { children: [block('c', 'child')] }), block('q', 'q')];
+    const ours = [
+      block('p', 'parent', { children: [block('c', 'child EDITED')] }),
+      block('q', 'q'),
+    ];
+    const theirs = [block('p', 'parent', { children: [] }), block('q', 'q'), block('c', 'child')];
+
+    const result = merge3Blocks(base, ours, theirs);
+
+    expect(result.conflicts).toEqual([]);
+    expect(ids(result.merged)).toEqual(['p', 'q', 'c']);
+    // The edit followed the moved block; the parent kept no nested copy.
+    expect(textOf(result.merged[2])).toBe('child EDITED');
+    expect((result.merged[0] as { children: unknown[] }).children).toEqual([]);
+    assertUniqueIds(result.merged);
+  });
+
+  it('main moves a nested block out + preview edits it in place → clean auto-merge (probe dir 2)', () => {
+    const base = [block('p', 'parent', { children: [block('c', 'child')] }), block('q', 'q')];
+    const ours = [block('p', 'parent', { children: [] }), block('c', 'child'), block('q', 'q')];
+    const theirs = [
+      block('p', 'parent', { children: [block('c', 'child EDITED')] }),
+      block('q', 'q'),
+    ];
+
+    const result = merge3Blocks(base, ours, theirs);
+
+    expect(result.conflicts).toEqual([]);
+    expect(ids(result.merged)).toEqual(['p', 'c', 'q']);
+    expect(textOf(result.merged[1])).toBe('child EDITED');
+    expect((result.merged[0] as { children: unknown[] }).children).toEqual([]);
+    assertUniqueIds(result.merged);
+  });
+
+  it('move-out + parent-content collision → parent conflict whose cards exclude the moved block; resolutions differ and match the cards', () => {
+    const base = [block('p', 'parent', { children: [block('c', 'child')] })];
+    const ours = [block('p', 'parent MAIN', { children: [block('c', 'child EDITED')] })];
+    const theirs = [block('p', 'parent PREVIEW', { children: [] }), block('c', 'child')];
+
+    const report = merge3Blocks(base, ours, theirs);
+    expect(report.conflicts).toHaveLength(1);
+    const conflict = report.conflicts[0];
+    expect(conflict).toMatchObject({ id: 'p', reason: 'content' });
+    // Neither card carries the moved block — its fate is not this choice's.
+    expect(deepIds([conflict.ours])).toEqual(['p']);
+    expect(deepIds([conflict.theirs])).toEqual(['p']);
+
+    const keepOurs = merge3Blocks(base, ours, theirs, { resolutions: { p: 'ours' } });
+    const keepTheirs = merge3Blocks(base, ours, theirs, { resolutions: { p: 'theirs' } });
+    expect(keepOurs.conflicts).toEqual([]);
+    expect(keepTheirs.conflicts).toEqual([]);
+
+    // The choice is honored: different documents, each matching its card.
+    expect(keepOurs.merged).not.toEqual(keepTheirs.merged);
+    expect(textOf(keepOurs.merged[0])).toBe('parent MAIN');
+    expect(keepOurs.merged[0]).toEqual(conflict.ours);
+    expect(textOf(keepTheirs.merged[0])).toBe('parent PREVIEW');
+    expect(keepTheirs.merged[0]).toEqual(conflict.theirs);
+
+    // NO duplicate id in either outcome (the original probe committed one),
+    // and the moved block lives once at the top with main's edit.
+    for (const resolved of [keepOurs.merged, keepTheirs.merged]) {
+      assertUniqueIds(resolved);
+      expect(ids(resolved)).toEqual(['p', 'c']);
+      expect(textOf(resolved[1])).toBe('child EDITED');
+    }
+  });
+
+  it('id-uniqueness sweep: a deep cross-parent nested move cannot commit a duplicate id', () => {
+    // c nested under p everywhere except theirs, where it moved under q
+    // (nested → nested, never top-level: below the promotion machinery).
+    const base = [
+      block('p', 'p', { children: [block('c', 'child')] }),
+      block('q', 'q', { children: [] }),
+    ];
+    const ours = [
+      block('p', 'p', { children: [block('c', 'child EDITED')] }),
+      block('q', 'q', { children: [] }),
+    ];
+    const theirs = [
+      block('p', 'p', { children: [] }),
+      block('q', 'q', { children: [block('c', 'child')] }),
+    ];
+
+    // p and q both changed on both sides → conflicts on each.
+    const keepBoth = merge3Blocks(base, ours, theirs, {
+      resolutions: { p: 'ours', q: 'theirs' },
+    });
+    expect(keepBoth.conflicts).toEqual([]);
+    // Without the sweep this document would carry c twice (p's edited copy +
+    // q's stale copy). The sweep keeps ONE copy.
+    assertUniqueIds(keepBoth.merged);
+    expect(deepIds(keepBoth.merged).filter(id => id === 'c')).toHaveLength(1);
+  });
+});

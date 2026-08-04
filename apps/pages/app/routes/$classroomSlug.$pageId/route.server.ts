@@ -322,7 +322,10 @@ export const action = async ({
   if (intent === 'preview-accept') {
     // Chooser resolutions (Phase 7): when present, this accept is a conflict
     // resolution pass — one {id, choose: 'ours'|'theirs'} per currently
-    // conflicted unit; the resolved merge is committed to main.
+    // conflicted unit; the resolved merge is committed to main. Element-shape
+    // validation (non-empty string id, choose ∈ ours|theirs) lives in the
+    // service's indexResolutions, so malformed choices throw
+    // PreviewResolutionError (→ 400 below) instead of defaulting to a side.
     let resolutions: { id: string; choose: 'ours' | 'theirs' }[] | null = null;
     if (data.resolutions != null) {
       try {
@@ -339,10 +342,21 @@ export const action = async ({
         );
       }
     }
+    // Sha pins (F3): the chooser posts back the ours_sha it rendered its
+    // conflict report from, so the resolve fails cleanly (CONTENT_CONFLICT)
+    // if the live page moved after the report was reviewed.
+    const expectedOursSha =
+      typeof data.ours_sha === 'string' && data.ours_sha ? data.ours_sha : undefined;
+    const expectedTheirsSha =
+      typeof data.theirs_sha === 'string' && data.theirs_sha ? data.theirs_sha : undefined;
 
     try {
       const result = resolutions
-        ? await ClassmojiService.pageContent.resolvePreviewConflicts(actionPage, { resolutions })
+        ? await ClassmojiService.pageContent.resolvePreviewConflicts(actionPage, {
+            resolutions,
+            ...(expectedOursSha ? { expectedOursSha } : {}),
+            ...(expectedTheirsSha ? { expectedTheirsSha } : {}),
+          })
         : await ClassmojiService.pageContent.acceptPreview(actionPage);
       if (result.merged) {
         // Settle guard: GitHub's Contents API lags a merge by ~1-2s, so an
@@ -364,16 +378,30 @@ export const action = async ({
         return redirect(`/${page.classroom.slug}/${pageId}?notice=preview-accepted${autoParam}`);
       }
       // Merge conflict — nothing merged, branch kept. Surface the per-unit
-      // report (plus the auto-merged count) so the chooser can render it.
+      // report (plus the auto-merged count and the shas the report was built
+      // from — the chooser posts them back with its resolutions) so the
+      // chooser can render it.
       return Response.json(
-        { conflict: true, units: result.units, autoMerged: result.auto_merged },
+        {
+          conflict: true,
+          units: result.units,
+          autoMerged: result.auto_merged,
+          oursSha: result.ours_sha,
+          theirsSha: result.theirs_sha,
+        },
         { status: 409 }
       );
     } catch (error: unknown) {
-      // Bad/stale resolutions (missing ids, unknown ids, duplicates, no
-      // preview) — a clear 400 naming the offending ids; the client re-runs
-      // accept for a fresh report.
       if (error instanceof ClassmojiService.pageContent.PreviewResolutionError) {
+        // Stale report pin: the content moved since the reviewed conflict
+        // report — same 409 semantics as a mid-merge CAS loss (re-run accept).
+        if (error.code === 'CONTENT_CONFLICT') {
+          return Response.json({ error: error.message, code: error.code }, { status: 409 });
+        }
+        // Bad/stale resolutions (missing ids, unknown ids, duplicates,
+        // malformed elements, no preview, main content deleted) — a clear 400
+        // naming the offending ids; the client re-runs accept for a fresh
+        // report.
         return Response.json(
           { error: error.message, code: error.code, ids: error.ids },
           { status: 400 }

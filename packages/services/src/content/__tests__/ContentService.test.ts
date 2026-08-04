@@ -220,12 +220,14 @@ describe('put with branch', () => {
     });
     expect(result).toEqual({ sha: 'sha-new', commit: 'commit-new' });
 
-    // Both internal getMeta lookups must have read the BRANCH (ref set), not main
+    // ONE internal getMeta pre-check, reading the BRANCH (ref set), not main.
+    // No second read: the expectedSha write sends the caller's sha directly
+    // (true CAS — a second read would adopt a concurrent writer's sha).
     const afterPut = contentsGetCalls();
-    expect(afterPut.withRef).toBe(2);
+    expect(afterPut.withRef).toBe(1);
     expect(afterPut.withoutRef).toBe(1);
 
-    // The PUT itself must carry the branch
+    // The PUT itself must carry the branch and the CALLER'S expected sha
     const putCall = requestMock.mock.calls.find(
       ([route]) => route === 'PUT /repos/{owner}/{repo}/contents/{path}'
     );
@@ -263,6 +265,96 @@ describe('put with branch', () => {
     // Cache was invalidated by the default-branch write, so this refetches
     const after = await ContentService.getContent({ gitOrganization, repo, path });
     expect(after?.content).toBe('main-v2');
+  });
+
+  it('expectedSha put is a true CAS: uncached pre-check, PUT carries the CALLER sha, no second read', async () => {
+    const repo = 'repo-put-cas';
+    const path = 'pages/cas/content.json';
+
+    requestMock.mockImplementation(async (route: string) => {
+      if (route === 'GET /repos/{owner}/{repo}/contents/{path}') {
+        const body = 'main-v1';
+        return {
+          data: { content: Buffer.from(body).toString('base64'), sha: 'sha-live', size: 1 },
+        };
+      }
+      if (route === 'PUT /repos/{owner}/{repo}/contents/{path}') {
+        return { data: { content: { sha: 'sha-new' }, commit: { sha: 'commit-new' } } };
+      }
+      throw new Error(`Unexpected route: ${route}`);
+    });
+
+    // Seed the 60s cache — the pre-check must NOT be satisfied by it.
+    await ContentService.getContent({ gitOrganization, repo, path });
+    expect(contentsGetCalls().total).toBe(1);
+
+    await ContentService.put({
+      gitOrganization,
+      repo,
+      path,
+      content: 'updated',
+      expectedSha: 'sha-live',
+    });
+
+    // Exactly ONE more Contents GET: the uncached pre-check. No second
+    // "current sha" read — that read is what made the old flow check-then-act
+    // (it would adopt a concurrent writer's sha).
+    expect(contentsGetCalls().total).toBe(2);
+
+    // The PUT sends the CALLER'S expectedSha so GitHub enforces it atomically.
+    const putCall = requestMock.mock.calls.find(
+      ([route]) => route === 'PUT /repos/{owner}/{repo}/contents/{path}'
+    );
+    expect((putCall?.[1] as RequestParams).sha).toBe('sha-live');
+  });
+
+  it("a 409 from GitHub's sha precondition (lost race after the pre-check) maps to the same conflict", async () => {
+    const repo = 'repo-put-cas-race';
+    const path = 'pages/race/content.json';
+
+    requestMock.mockImplementation(async (route: string) => {
+      if (route === 'GET /repos/{owner}/{repo}/contents/{path}') {
+        // Pre-check still sees the expected sha…
+        return { data: { content: Buffer.from('x').toString('base64'), sha: 'sha-live', size: 1 } };
+      }
+      if (route === 'PUT /repos/{owner}/{repo}/contents/{path}') {
+        // …but a concurrent writer landed between the check and the PUT.
+        throw Object.assign(new Error('is at abc but expected sha-live'), { status: 409 });
+      }
+      throw new Error(`Unexpected route: ${route}`);
+    });
+
+    await expect(
+      ContentService.put({
+        gitOrganization,
+        repo,
+        path,
+        content: 'updated',
+        expectedSha: 'sha-live',
+      })
+    ).rejects.toMatchObject({ status: 409, message: 'File was modified by someone else' });
+  });
+
+  it('a put WITHOUT expectedSha keeps the auto-sha update path (fresh read, its sha on the PUT)', async () => {
+    const repo = 'repo-put-nosha';
+    const path = 'pages/nosha/content.json';
+
+    requestMock.mockImplementation(async (route: string) => {
+      if (route === 'GET /repos/{owner}/{repo}/contents/{path}') {
+        return { data: { content: Buffer.from('x').toString('base64'), sha: 'sha-auto', size: 1 } };
+      }
+      if (route === 'PUT /repos/{owner}/{repo}/contents/{path}') {
+        return { data: { content: { sha: 'sha-new' }, commit: { sha: 'commit-new' } } };
+      }
+      throw new Error(`Unexpected route: ${route}`);
+    });
+
+    await ContentService.put({ gitOrganization, repo, path, content: 'updated' });
+
+    const putCall = requestMock.mock.calls.find(
+      ([route]) => route === 'PUT /repos/{owner}/{repo}/contents/{path}'
+    );
+    expect((putCall?.[1] as RequestParams).sha).toBe('sha-auto');
   });
 
   it('expectedSha + missing file → 409 (deleted since read), never a silent create', async () => {

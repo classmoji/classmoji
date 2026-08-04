@@ -199,11 +199,14 @@ describe('pageContent.savePageContent', () => {
     expect(writtenWrapper()).toEqual({ blocks, coverImage: newCover });
   });
 
-  it('removes the coverImage on explicit null', async () => {
+  it('removes the coverImage on explicit null (key omitted, matching cover-less saves)', async () => {
     await savePageContent(page, blocks, { coverImage: null });
 
     expect(getContentMock).not.toHaveBeenCalled();
-    expect(writtenWrapper()).toEqual({ blocks, coverImage: null });
+    // Removal serializes as NO key — semantic accepts must not sprinkle
+    // `"coverImage": null` into documents that never had one.
+    expect(writtenWrapper()).toEqual({ blocks });
+    expect('coverImage' in writtenWrapper()).toBe(false);
   });
 
   it('forwards expectedSha to put and propagates its 409', async () => {
@@ -240,7 +243,7 @@ describe('pageContent.savePageContent', () => {
     const arg = callArg(putMock);
     expect(arg.message).toBe('Agent edit: fix typo');
     expect(arg.content).toBe(
-      JSON.stringify({ blocks, coverImage: null }, null, 2) // 2-space pretty wrapper
+      JSON.stringify({ blocks }, null, 2) // 2-space pretty wrapper, null cover omitted
     );
   });
 });

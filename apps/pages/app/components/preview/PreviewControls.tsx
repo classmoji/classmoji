@@ -44,6 +44,8 @@ interface PreviewActionData {
   conflict?: boolean;
   units?: ConflictUnit[];
   autoMerged?: number;
+  oursSha?: string | null;
+  theirsSha?: string | null;
   error?: string;
   code?: string;
   ids?: string[];
@@ -60,10 +62,17 @@ function usePreviewActions() {
   };
 
   // Chooser submit: same intent, plus one {id, choose} per listed conflict.
+  // The report's shas ride along so the server can refuse (CONTENT_CONFLICT)
+  // if the content moved after the reviewed report (F3 pinning).
   const applyResolutions = (resolutions: MergeResolution[]) => {
     setPending('accept');
     fetcher.submit(
-      { intent: 'preview-accept', resolutions: JSON.stringify(resolutions) },
+      {
+        intent: 'preview-accept',
+        resolutions: JSON.stringify(resolutions),
+        ...(fetcher.data?.oursSha ? { ours_sha: fetcher.data.oursSha } : {}),
+        ...(fetcher.data?.theirsSha ? { theirs_sha: fetcher.data.theirsSha } : {}),
+      },
       { method: 'POST', encType: 'application/json' }
     );
   };
@@ -78,9 +87,20 @@ function usePreviewActions() {
 
   const conflictUnits = fetcher.data?.conflict ? (fetcher.data.units ?? []) : null;
   const autoMerged = fetcher.data?.conflict ? (fetcher.data.autoMerged ?? 0) : 0;
+  const conflictOursSha = fetcher.data?.conflict ? (fetcher.data.oursSha ?? null) : null;
   const error = fetcher.data?.error ?? null;
 
-  return { busy, pending, accept, applyResolutions, discard, conflictUnits, autoMerged, error };
+  return {
+    busy,
+    pending,
+    accept,
+    applyResolutions,
+    discard,
+    conflictUnits,
+    autoMerged,
+    conflictOursSha,
+    error,
+  };
 }
 
 // ─── Conflict chooser (Phase 7) ──────────────────────────────────────────────
@@ -239,18 +259,23 @@ const ConflictCard = ({
 const ConflictPanel = ({
   units,
   autoMerged,
+  oursSha,
   busy,
   onApply,
   onDiscard,
 }: {
   units: ConflictUnit[];
   autoMerged: number;
+  oursSha: string | null;
   busy: boolean;
   onApply: (resolutions: MergeResolution[]) => void;
   onDiscard: () => void;
 }) => {
   const ids = conflictIds(units);
-  const signature = ids.join('|');
+  // Keyed on the report's ours_sha too: a re-accept after main moved can
+  // yield the SAME conflict ids over different content — stale choices must
+  // not survive into the new report (F3).
+  const signature = `${oursSha ?? ''}::${ids.join('|')}`;
   const [choices, setChoices] = useState<Record<string, MergeChoice>>({});
   // Drop stale choices when the conflict set changes (a re-accept can shrink it).
   useEffect(() => setChoices({}), [signature]);
@@ -326,8 +351,17 @@ export const PreviewBar = ({
   preview: PreviewInfo;
   isEmbedded?: boolean;
 }) => {
-  const { busy, pending, accept, applyResolutions, discard, conflictUnits, autoMerged, error } =
-    usePreviewActions();
+  const {
+    busy,
+    pending,
+    accept,
+    applyResolutions,
+    discard,
+    conflictUnits,
+    autoMerged,
+    conflictOursSha,
+    error,
+  } = usePreviewActions();
   const age = preview.oldestCommitAt ? dayjs(preview.oldestCommitAt).fromNow() : null;
 
   return (
@@ -382,6 +416,7 @@ export const PreviewBar = ({
         <ConflictPanel
           units={conflictUnits}
           autoMerged={autoMerged}
+          oursSha={conflictOursSha}
           busy={busy}
           onApply={applyResolutions}
           onDiscard={discard}
@@ -395,8 +430,17 @@ export const PreviewBar = ({
  * Slim staff-only banner on the normal (live) view when a preview branch exists.
  */
 export const PendingPreviewBanner = ({ preview }: { preview: PreviewInfo }) => {
-  const { busy, pending, accept, applyResolutions, discard, conflictUnits, autoMerged, error } =
-    usePreviewActions();
+  const {
+    busy,
+    pending,
+    accept,
+    applyResolutions,
+    discard,
+    conflictUnits,
+    autoMerged,
+    conflictOursSha,
+    error,
+  } = usePreviewActions();
   const age = preview.oldestCommitAt ? dayjs(preview.oldestCommitAt).fromNow() : null;
 
   return (
@@ -444,6 +488,7 @@ export const PendingPreviewBanner = ({ preview }: { preview: PreviewInfo }) => {
         <ConflictPanel
           units={conflictUnits}
           autoMerged={autoMerged}
+          oursSha={conflictOursSha}
           busy={busy}
           onApply={applyResolutions}
           onDiscard={discard}

@@ -27,6 +27,7 @@ import { ToolError } from '../mcp/errors.ts';
 import type { ToolDefinition } from '../mcp/registry.ts';
 import {
   loadPageWithRepoInClassroom,
+  mapSemanticMergeError,
   ok,
   OWNER_TEACHER,
   writeAudit,
@@ -630,27 +631,8 @@ interface PagePreviewArgs {
 
 interface PagePreviewAcceptArgs extends PagePreviewArgs {
   resolutions?: Array<{ id: string; choose: 'ours' | 'theirs' }>;
-}
-
-/**
- * Map semantic-merge failures from accept/resolve to tool errors:
- * PreviewResolutionError (bad/incomplete resolutions) → invalid_params naming
- * the ids; a 409 (main moved while merging) → CONTENT_CONFLICT so the caller
- * simply re-runs the accept. Anything else is returned unchanged for rethrow.
- */
-function mapSemanticMergeError(error: unknown, tool: string): unknown {
-  const named = error as { name?: string; message?: string; status?: number };
-  if (named?.name === 'PreviewResolutionError') {
-    return new ToolError('invalid_params', named.message ?? 'Invalid resolutions');
-  }
-  if (named?.status === 409) {
-    return new ToolError(
-      'invalid_params',
-      `Main changed while merging — call ${tool} again`,
-      'CONTENT_CONFLICT'
-    );
-  }
-  return error;
+  expected_ours_sha?: string;
+  expected_theirs_sha?: string;
 }
 
 export const pagePreviewAcceptTool: ToolDefinition<PagePreviewAcceptArgs> = {
@@ -662,9 +644,13 @@ export const pagePreviewAcceptTool: ToolDefinition<PagePreviewAcceptArgs> = {
     'branch. Non-overlapping edits merge automatically (git first, then a per-block semantic ' +
     '3-way merge — the result reports semantic: true with the auto_merged count when that ' +
     'layer kicked in). Only genuine same-block collisions stop the accept: you get a report of ' +
-    'just those blocks (ours = main, theirs = preview, base) plus auto_merged. To finish, ' +
+    'just those blocks (ours = main, theirs = preview, base) plus auto_merged. A block-order ' +
+    "conflict appears as a units entry with id '__order__' (unlike deck_preview_accept, which " +
+    'reports top-level order separately as order_conflict). To finish, ' +
     'either call this tool again with resolutions — one {id, choose: ours|theirs} per reported ' +
-    "conflict id (ours = keep the live main version, theirs = keep the preview's) — or re-read " +
+    "conflict id (ours = keep the live main version, theirs = keep the preview's), passing the " +
+    "report's ours_sha/theirs_sha as expected_ours_sha/expected_theirs_sha to pin your choices " +
+    'to the state you reviewed — or re-read ' +
     'fresh main with page_content_get, re-apply merged blocks with page_content_apply and ' +
     'accept again, or page_preview_discard.',
   scope: 'write',
@@ -690,6 +676,23 @@ export const pagePreviewAcceptTool: ToolDefinition<PagePreviewAcceptArgs> = {
           "the '__order__' sentinel when a block-order conflict was reported. Omit to attempt " +
           'a plain accept.'
       ),
+    expected_ours_sha: z
+      .string()
+      .min(1)
+      .optional()
+      .describe(
+        "Pass the ours_sha from the conflict report your resolutions answer. If main's " +
+          'content changed since that report, the accept fails with CONTENT_CONFLICT instead ' +
+          'of applying reviewed choices to unseen content. Only meaningful with resolutions.'
+      ),
+    expected_theirs_sha: z
+      .string()
+      .min(1)
+      .optional()
+      .describe(
+        'Pass the theirs_sha from the conflict report your resolutions answer (same staleness ' +
+          'pin for the preview side). Only meaningful with resolutions.'
+      ),
   },
   handler: async (args, ctx) => {
     const page = await loadPageWithRepoInClassroom(args.page_id, ctx);
@@ -705,6 +708,8 @@ export const pagePreviewAcceptTool: ToolDefinition<PagePreviewAcceptArgs> = {
       try {
         result = await ClassmojiService.pageContent.resolvePreviewConflicts(page, {
           resolutions: args.resolutions,
+          ...(args.expected_ours_sha ? { expectedOursSha: args.expected_ours_sha } : {}),
+          ...(args.expected_theirs_sha ? { expectedTheirsSha: args.expected_theirs_sha } : {}),
         });
       } catch (error: unknown) {
         throw mapSemanticMergeError(error, 'page_preview_accept');
@@ -796,7 +801,8 @@ export const pagePreviewAcceptTool: ToolDefinition<PagePreviewAcceptArgs> = {
         `${result.auto_merged} change(s) auto-merge cleanly; ${result.units.length} conflict(s) ` +
         'need a decision. Resolve by calling page_preview_accept again with resolutions ' +
         "(one {id, choose: 'ours'|'theirs'} per conflict id — '__order__' addresses a " +
-        'block-order conflict; ours = main, theirs = preview) — or re-read fresh main with ' +
+        "block-order conflict; ours = main, theirs = preview), passing this report's " +
+        'ours_sha/theirs_sha as expected_ours_sha/expected_theirs_sha — or re-read fresh main with ' +
         'page_content_get, re-apply merged blocks with page_content_apply and accept again, ' +
         'or page_preview_discard to drop the preview.',
     });

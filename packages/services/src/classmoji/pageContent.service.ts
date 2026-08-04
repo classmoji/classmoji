@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { classroomContentRepoName } from '@classmoji/utils';
 import { ContentService } from '../content/ContentService.ts';
 import {
+  dedupeMergedTreeIds,
   indexResolutions,
   mergeIdSequence3,
   PreviewResolutionError,
@@ -220,8 +221,12 @@ export async function savePageContent(
     }
   }
 
-  const wrapper: { blocks: unknown; coverImage?: PageCoverImage | null } = { blocks };
-  if (coverImage !== undefined) {
+  // The key is only written when a cover actually exists: `null` (remove) and
+  // absence both serialize as no key, matching what pre-merge saves produced —
+  // a semantic accept must not sprinkle `"coverImage": null` into documents
+  // that never had one. Reads treat a missing key and null identically.
+  const wrapper: { blocks: unknown; coverImage?: PageCoverImage } = { blocks };
+  if (coverImage != null) {
     wrapper.coverImage = coverImage;
   }
 
@@ -908,18 +913,28 @@ async function commitSemanticMergeToMain(
     oursSha,
     theirsSha,
     coverImage,
-  }: { oursSha?: string; theirsSha: string | null; coverImage: PageCoverImage | null }
+  }: { oursSha: string; theirsSha: string | null; coverImage: PageCoverImage | null }
 ): Promise<{ sha: string; preview_kept?: boolean; reason?: string }> {
   const { gitOrganization, repo } = contentRepoFor(page);
   const branch = previewBranchName(page.content_path);
   const path = `${page.content_path}/content.json`;
 
+  // oursSha is REQUIRED: the merge commit is always CAS'd on main's pre-write
+  // content.json sha. Callers guard the main-file-deleted degenerate
+  // (MAIN_CONTENT_MISSING) before reaching here — never an unguarded write.
   const saved = await savePageContent(page, mergedBlocks, {
     coverImage,
-    ...(oursSha ? { expectedSha: oursSha } : {}),
+    expectedSha: oursSha,
     message: `Accept preview (auto-merged): ${page.title}`,
   });
 
+  // TOCTOU note: this guard is a compare-THEN-delete — a stacking apply can
+  // still land on the branch between the getMeta read and the deleteBranch
+  // call below, and would be discarded with the branch. Accepted: GitHub's
+  // refs DELETE has no precondition (no CAS delete), so the window cannot be
+  // closed API-side; the guard shrinks it from the whole merge duration to
+  // one request round-trip, and an apply racing an in-flight accept has no
+  // ordering guarantee either way.
   let previewKept = false;
   let reason: string | undefined;
   try {
@@ -953,6 +968,19 @@ async function commitSemanticMergeToMain(
   return { sha: saved.sha, ...(previewKept ? { preview_kept: true, reason } : {}) };
 }
 
+/**
+ * Typed refusal for the main-file-deleted degenerate: without main's
+ * content.json there is no sha to CAS the merge commit on, so committing
+ * would be an unguarded write over whatever deleted it.
+ */
+function mainContentMissing(): PreviewResolutionError {
+  return new PreviewResolutionError(
+    "Main's content.json was deleted while this preview was pending — discard the preview " +
+      'or re-apply it as a fresh document',
+    'MAIN_CONTENT_MISSING'
+  );
+}
+
 /** The accept path taken when the git merge reports a conflict. */
 async function acceptSemanticFallback(page: PageWithContentRepo): Promise<AcceptPreviewResult> {
   const threeWay = await readPreviewThreeWay(page);
@@ -962,7 +990,11 @@ async function acceptSemanticFallback(page: PageWithContentRepo): Promise<Accept
   const theirsBlocks = extractBlocks(theirs?.content);
 
   for (let attempt = 0; attempt < 2; attempt++) {
-    const merge = merge3Blocks(baseBlocks, extractBlocks(ours?.content), theirsBlocks);
+    // Main's content.json vanished (deleted while the preview was pending):
+    // never commit without a CAS precondition — refuse with a typed error.
+    if (!ours?.sha) throw mainContentMissing();
+
+    const merge = merge3Blocks(baseBlocks, extractBlocks(ours.content), theirsBlocks);
     if (merge.conflicts.length > 0) {
       // Only the true collisions are reported; the branch is left alone so
       // the caller can resolve (resolvePreviewConflicts), re-apply, or discard.
@@ -971,19 +1003,19 @@ async function acceptSemanticFallback(page: PageWithContentRepo): Promise<Accept
         conflict: true,
         units: merge.conflicts,
         auto_merged: merge.autoMerged,
-        ours_sha: ours?.sha ?? null,
+        ours_sha: ours.sha,
         theirs_sha: theirs?.sha ?? null,
       };
     }
 
     const coverImage = mergeCover(
       extractCover(base?.content),
-      extractCover(ours?.content),
+      extractCover(ours.content),
       extractCover(theirs?.content)
     );
     try {
       const committed = await commitSemanticMergeToMain(page, merge.merged, {
-        oursSha: ours?.sha,
+        oursSha: ours.sha,
         theirsSha: theirs?.sha ?? null,
         coverImage,
       });
@@ -1005,12 +1037,28 @@ async function acceptSemanticFallback(page: PageWithContentRepo): Promise<Accept
  * `__order__` addresses a top-level order conflict), commits the resolved
  * merge to main exactly like a semantic accept, and deletes the branch.
  *
+ * @param options.expectedOursSha - pin the resolution to the conflict report
+ *   the choices were made against (the report's `ours_sha`). When provided
+ *   and main's content.json no longer matches, the resolve fails with
+ *   CONTENT_CONFLICT instead of applying reviewed choices to unseen content.
+ * @param options.expectedTheirsSha - same pin for the preview side
+ *   (the report's `theirs_sha`).
+ *
  * @throws {PreviewResolutionError} NO_PREVIEW / NOTHING_TO_RESOLVE /
- *   UNRESOLVED_CONFLICTS / UNKNOWN_RESOLUTIONS / DUPLICATE_RESOLUTIONS.
+ *   UNRESOLVED_CONFLICTS / UNKNOWN_RESOLUTIONS / DUPLICATE_RESOLUTIONS /
+ *   INVALID_RESOLUTIONS / CONTENT_CONFLICT / MAIN_CONTENT_MISSING.
  */
 export async function resolvePreviewConflicts(
   page: PageWithContentRepo,
-  { resolutions }: { resolutions: MergeResolution[] }
+  {
+    resolutions,
+    expectedOursSha,
+    expectedTheirsSha,
+  }: {
+    resolutions: MergeResolution[];
+    expectedOursSha?: string;
+    expectedTheirsSha?: string;
+  }
 ): Promise<ResolvePreviewResult> {
   if (!resolutions?.length) {
     throw new PreviewResolutionError(
@@ -1032,8 +1080,27 @@ export async function resolvePreviewConflicts(
   const baseBlocks = extractBlocks(base?.content);
   const theirsBlocks = extractBlocks(theirs?.content);
 
+  if (expectedTheirsSha && (theirs?.sha ?? null) !== expectedTheirsSha) {
+    throw new PreviewResolutionError(
+      'The preview changed since the conflict report these choices were made against — ' +
+        're-run accept for a fresh report',
+      'CONTENT_CONFLICT'
+    );
+  }
+
   for (let attempt = 0; attempt < 2; attempt++) {
-    const oursBlocks = extractBlocks(ours?.content);
+    // Re-checked every attempt: a CAS-loss retry re-reads main, and choices
+    // pinned to the reviewed report must not silently apply to newer content.
+    if (expectedOursSha && (ours?.sha ?? null) !== expectedOursSha) {
+      throw new PreviewResolutionError(
+        'The live page changed since the conflict report these choices were made against — ' +
+          're-run accept for a fresh report',
+        'CONTENT_CONFLICT'
+      );
+    }
+    if (!ours?.sha) throw mainContentMissing();
+
+    const oursBlocks = extractBlocks(ours.content);
     const current = merge3Blocks(baseBlocks, oursBlocks, theirsBlocks);
     const conflictIds = new Set(current.conflicts.map(unit => unit.id));
     if (conflictIds.size === 0) {
@@ -1068,12 +1135,12 @@ export async function resolvePreviewConflicts(
 
     const coverImage = mergeCover(
       extractCover(base?.content),
-      extractCover(ours?.content),
+      extractCover(ours.content),
       extractCover(theirs?.content)
     );
     try {
       const committed = await commitSemanticMergeToMain(page, resolved.merged, {
-        oursSha: ours?.sha,
+        oursSha: ours.sha,
         theirsSha: theirs?.sha ?? null,
         coverImage,
       });
@@ -1242,6 +1309,13 @@ export interface BlockMergeResult {
  * - deleted on one side + edited other → conflict (side absent = deleted)
  * - top-level order 3-way merged; both reordered differently → the
  *   `__order__` sentinel conflict
+ * - a CROSS-SCOPE MOVE (an id that is top-level on one side but nested inside
+ *   a block's subtree on another) merges as its own top-level unit: each
+ *   side's copy is harvested from wherever it lives and the nested copies are
+ *   stripped from their old parents, so a parent conflict card never carries
+ *   a block with an independent fate — and a resolution can never commit a
+ *   duplicated id. A move-out on one side + an edit-in-place on the other
+ *   auto-merges (the edit follows the moved block).
  *
  * Ids are the merge identity: blocks missing one get the deterministic
  * derived id first (identical unedited blocks derive identical ids across
@@ -1271,9 +1345,72 @@ export function merge3Blocks(
     });
     return map;
   };
+
+  // ── Cross-scope moves ──
+  // Ids that are top-level on one side and nested on another are promoted to
+  // top-level units everywhere they exist; the nested copies are stripped.
+  const nestedById = (blocks: BlockNode[]): Map<string, BlockNode> => {
+    const map = new Map<string, BlockNode>();
+    const walk = (list: BlockNode[]): void => {
+      for (const node of list) {
+        if (!node || typeof node !== 'object') continue;
+        if (typeof node.id === 'string' && node.id && !map.has(node.id)) {
+          map.set(node.id, node);
+        }
+        if (Array.isArray(node.children)) walk(node.children);
+      }
+    };
+    for (const top of blocks) {
+      if (top && Array.isArray(top.children)) walk(top.children);
+    }
+    return map;
+  };
+  const topLevelIds = new Set([...idsOf(b), ...idsOf(o), ...idsOf(t)]);
+  const nestedSides = [nestedById(b), nestedById(o), nestedById(t)];
+  const escapedIds = new Set(
+    [...topLevelIds].filter(id => nestedSides.some(nested => nested.has(id)))
+  );
+  if (escapedIds.size > 0) {
+    const stripNested = (blocks: BlockNode[]): void => {
+      const prune = (list: BlockNode[]): void => {
+        for (let i = list.length - 1; i >= 0; i--) {
+          const node = list[i];
+          if (!node || typeof node !== 'object') continue;
+          if (typeof node.id === 'string' && escapedIds.has(node.id)) {
+            list.splice(i, 1);
+            continue;
+          }
+          if (Array.isArray(node.children)) prune(node.children);
+        }
+      };
+      for (const top of blocks) {
+        if (top && Array.isArray(top.children)) prune(top.children);
+      }
+    };
+    stripNested(b);
+    stripNested(o);
+    stripNested(t);
+  }
+
   const bMap = byId(b);
   const oMap = byId(o);
   const tMap = byId(t);
+
+  if (escapedIds.size > 0) {
+    // Promote each escaped id to a synthetic top-level entry on the sides
+    // where it only existed nested (its harvested copy is that side's
+    // version). Display index comes from wherever it is genuinely top-level.
+    const maps = [bMap, oMap, tMap] as const;
+    for (const id of escapedIds) {
+      const displayIndex = tMap.get(id)?.index ?? oMap.get(id)?.index ?? bMap.get(id)?.index ?? -1;
+      maps.forEach((map, side) => {
+        const harvested = nestedSides[side].get(id);
+        if (!map.has(id) && harvested) {
+          map.set(id, { block: harvested, index: displayIndex });
+        }
+      });
+    }
+  }
 
   const seen = new Set<string>();
   const allIds = [...tMap.keys(), ...oMap.keys(), ...bMap.keys()].filter(id => {
@@ -1289,6 +1426,8 @@ export function merge3Blocks(
   let autoMerged = 0;
   /** Survivors: id → the block the merged doc carries (chosen or provisional). */
   const kept = new Map<string, BlockNode>();
+  /** Ids that were (initially) conflicts — resolved or not (dedupe preference). */
+  const conflictedIds = new Set<string>();
 
   for (const id of allIds) {
     const inB = bMap.get(id);
@@ -1358,6 +1497,7 @@ export function merge3Blocks(
       fate = { kind: 'conflict', entry: makeEntry('both_added'), provisional: inT!.block };
     }
 
+    if (fate.kind === 'conflict') conflictedIds.add(id);
     const choice = resolutions[id];
     if (fate.kind === 'conflict' && choice) {
       const chosenBlock = (choice === 'ours' ? fate.entry.ours : fate.entry.theirs) as
@@ -1403,5 +1543,20 @@ export function merge3Blocks(
   }
 
   const merged = order.map(id => structuredClone(kept.get(id)!));
+
+  // Final safety assertion: no id may appear twice anywhere in the assembled
+  // document (a duplicate committed to main corrupts the page for every
+  // future merge and confuses id-addressed applies). Unreachable through the
+  // cross-scope-move promotion above, but deeply-nested cross-parent moves
+  // could still smuggle two copies in. Preference goes to the copy inside a
+  // conflict unit's subtree — that copy is what the chooser card showed.
+  const duplicateIds = dedupeMergedTreeIds(merged, conflictedIds);
+  if (duplicateIds.length > 0) {
+    console.warn(
+      `[pageContent.merge3Blocks] merged document carried duplicate block id(s) ` +
+        `${duplicateIds.join(', ')} — kept the conflict-resolution copy and dropped the stale one(s)`
+    );
+  }
+
   return { merged, conflicts, autoMerged };
 }

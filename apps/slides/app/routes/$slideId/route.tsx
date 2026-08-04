@@ -1114,7 +1114,10 @@ export const action = async ({
   if (intent === 'preview-accept') {
     // Chooser resolutions (Phase 7): when present, this accept is a conflict
     // resolution pass — one {id, choose: 'ours'|'theirs'} per currently
-    // conflicted unit; the resolved merge is committed to main.
+    // conflicted unit; the resolved merge is committed to main. Element-shape
+    // validation (non-empty string id, choose ∈ ours|theirs) lives in the
+    // service's indexResolutions, so malformed choices throw
+    // PreviewResolutionError (→ 400 below) instead of defaulting to a side.
     let resolutions: MergeResolution[] | null = null;
     const rawResolutions = formData.get('resolutions');
     if (typeof rawResolutions === 'string' && rawResolutions) {
@@ -1131,6 +1134,14 @@ export const action = async ({
         );
       }
     }
+    // Sha pins (F3): the chooser posts back the shas it rendered its conflict
+    // report from, so the resolve fails cleanly (CONTENT_CONFLICT) if the
+    // deck moved after the report was reviewed.
+    const rawOursSha = formData.get('ours_sha');
+    const expectedOursSha = typeof rawOursSha === 'string' && rawOursSha ? rawOursSha : undefined;
+    const rawTheirsSha = formData.get('theirs_sha');
+    const expectedTheirsSha =
+      typeof rawTheirsSha === 'string' && rawTheirsSha ? rawTheirsSha : undefined;
 
     try {
       const status = await getDeckPreviewStatus(slide);
@@ -1139,7 +1150,12 @@ export const action = async ({
       }
       const resolveThemeUrls = (deck: DeckJson) => resolveReadThemeUrls(deck, gitOrgLogin, repo);
       const result = resolutions
-        ? await resolveDeckPreviewConflicts(slide, { resolutions, resolveThemeUrls })
+        ? await resolveDeckPreviewConflicts(slide, {
+            resolutions,
+            resolveThemeUrls,
+            ...(expectedOursSha ? { expectedOursSha } : {}),
+            ...(expectedTheirsSha ? { expectedTheirsSha } : {}),
+          })
         : await acceptDeckPreview(slide, { resolveThemeUrls });
       if (result.merged) {
         // Surface the semantic layer's auto-merged count in the success toast.
@@ -1148,21 +1164,31 @@ export const action = async ({
         return redirect(`/${slideId}?notice=preview-accepted${autoParam}`);
       }
       // Merge conflict — nothing merged, branch kept. Surface the per-unit
-      // report (plus the auto-merged count) so the chooser can render it.
+      // report (plus the auto-merged count and the shas the report was built
+      // from — the chooser posts them back with its resolutions) so the
+      // chooser can render it.
       return data(
         {
           conflict: true,
           units: result.units,
           orderConflict: result.order_conflict ?? null,
           autoMerged: result.auto_merged,
+          oursSha: result.ours_sha,
+          theirsSha: result.theirs_sha,
         },
         { status: 409 }
       );
     } catch (error: unknown) {
-      // Bad/stale resolutions (missing ids, unknown ids, duplicates, no
-      // preview) — a clear 400 naming the offending ids; the client re-runs
-      // accept for a fresh report.
       if (error instanceof PreviewResolutionError) {
+        // Stale report pin: the content moved since the reviewed conflict
+        // report — same 409 semantics as a mid-merge CAS loss (re-run accept).
+        if (error.code === 'CONTENT_CONFLICT') {
+          return data({ error: error.message, code: error.code }, { status: 409 });
+        }
+        // Bad/stale resolutions (missing ids, unknown ids, duplicates,
+        // malformed elements, no preview, main deck deleted) — a clear 400
+        // naming the offending ids; the client re-runs accept for a fresh
+        // report.
         return data({ error: error.message, code: error.code, ids: error.ids }, { status: 400 });
       }
       // Mid-merge CAS loss: main moved while committing the resolved merge

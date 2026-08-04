@@ -22,6 +22,16 @@ export interface MergeResolution {
  * Typed failure for resolvePreviewConflicts: the supplied resolutions do not
  * exactly cover the current conflict set (or there is nothing to resolve).
  * Carries the offending ids so tools can name them.
+ *
+ * Additional codes:
+ * - `INVALID_RESOLUTIONS` — a resolution element is malformed (id not a
+ *   non-empty string, or choose not 'ours'/'theirs'). Validated centrally in
+ *   indexResolutions so a malformed choice can never silently default.
+ * - `CONTENT_CONFLICT` — the caller pinned the resolution to a conflict
+ *   report (expected ours/theirs shas) and the content moved since; the
+ *   report is stale — re-run accept for a fresh one.
+ * - `MAIN_CONTENT_MISSING` — main's content file was deleted, so there is no
+ *   sha to CAS the merge commit on; discard the preview or re-apply it.
  */
 export class PreviewResolutionError extends Error {
   code:
@@ -29,7 +39,10 @@ export class PreviewResolutionError extends Error {
     | 'NOTHING_TO_RESOLVE'
     | 'UNRESOLVED_CONFLICTS'
     | 'UNKNOWN_RESOLUTIONS'
-    | 'DUPLICATE_RESOLUTIONS';
+    | 'DUPLICATE_RESOLUTIONS'
+    | 'INVALID_RESOLUTIONS'
+    | 'CONTENT_CONFLICT'
+    | 'MAIN_CONTENT_MISSING';
   ids: string[];
 
   constructor(message: string, code: PreviewResolutionError['code'], ids: string[] = []) {
@@ -41,13 +54,24 @@ export class PreviewResolutionError extends Error {
 }
 
 /**
- * Validate a resolutions array (non-empty, no duplicate ids) and index it by
- * conflict id. Throws PreviewResolutionError on duplicates.
+ * Validate a resolutions array (well-formed elements, no duplicate ids) and
+ * index it by conflict id. Every element must be `{id: non-empty string,
+ * choose: 'ours' | 'theirs'}` — anything else throws INVALID_RESOLUTIONS
+ * (never a silent default to one side). Duplicates throw
+ * DUPLICATE_RESOLUTIONS.
  */
 export function indexResolutions(resolutions: MergeResolution[]): Record<string, MergeChoice> {
   const map: Record<string, MergeChoice> = {};
   const dupes: string[] = [];
-  for (const { id, choose } of resolutions) {
+  for (const entry of resolutions) {
+    const { id, choose } = (entry ?? {}) as { id?: unknown; choose?: unknown };
+    if (typeof id !== 'string' || id.length === 0 || (choose !== 'ours' && choose !== 'theirs')) {
+      throw new PreviewResolutionError(
+        "Malformed resolution — every element must be {id: non-empty string, choose: 'ours'|'theirs'}",
+        'INVALID_RESOLUTIONS',
+        typeof id === 'string' && id ? [id] : []
+      );
+    }
     if (id in map) dupes.push(id);
     map[id] = choose;
   }
@@ -133,9 +157,10 @@ function weave(result: string[], sideSeq: string[], members: ReadonlySet<string>
  * backbone; both reordered identically → that order; both reordered
  * differently → conflict (unless `resolution` picks a backbone). The final
  * sequence contains exactly `members`, with each side's additions woven in at
- * their side-relative positions (backbone-side entries first at a shared
- * anchor, ours before theirs when both add at the same anchor of a base
- * backbone).
+ * their side-relative positions (runs of consecutive additions keep their
+ * side order; when both sides add at the same anchor of a base backbone,
+ * theirs' additions land first — ours is woven before theirs, so the later
+ * theirs weave inserts directly after the shared anchor, ahead of ours').
  *
  * @param members - the ids that must appear in the output (the surviving units
  *   assigned to this scope by the unit-level merge).
@@ -186,4 +211,85 @@ export function mergeIdSequence3(
         ? 'theirs'
         : 'base';
   return { conflict: false, order: build(backbone) };
+}
+
+// ─── Merged-document id uniqueness (final safety sweep) ──────────────────────
+
+interface DedupeTreeNode {
+  id?: unknown;
+  children?: unknown;
+  [key: string]: unknown;
+}
+
+/**
+ * Enforce id uniqueness on an assembled merged document — the final assertion
+ * both merge engines run before returning `merged`. Duplicate ids should be
+ * unreachable after the cross-scope-move handling, but deeply-nested
+ * cross-parent moves (an id nested under different parents on each side, both
+ * parents kept) can still smuggle two copies in.
+ *
+ * For each duplicated id, ONE copy is kept: the first copy that sits inside a
+ * conflict unit's subtree (`preferredRoots` — that copy is what the chooser
+ * card showed / the resolution produced), else the first in document order.
+ * Every other copy is removed, subtree included (it is by definition a stale
+ * duplicate). Mutates `nodes` in place; returns the duplicated ids for
+ * logging/telemetry.
+ *
+ * @param opts.dropEmptyChildren - delete a `children` key emptied by the
+ *   sweep (deck documents omit empty children; BlockNote keeps `[]`).
+ */
+export function dedupeMergedTreeIds(
+  nodes: unknown[],
+  preferredRoots: ReadonlySet<string> = new Set(),
+  opts: { dropEmptyChildren?: boolean } = {}
+): string[] {
+  const byId = new Map<string, Array<{ node: DedupeTreeNode; preferred: boolean }>>();
+
+  const scan = (list: DedupeTreeNode[], underPreferred: boolean): void => {
+    for (const node of list) {
+      if (!node || typeof node !== 'object') continue;
+      const id = typeof node.id === 'string' && node.id ? node.id : null;
+      const preferred = underPreferred || (id != null && preferredRoots.has(id));
+      if (id != null) {
+        const bucket = byId.get(id) ?? [];
+        bucket.push({ node, preferred });
+        byId.set(id, bucket);
+      }
+      if (Array.isArray(node.children)) {
+        scan(node.children as DedupeTreeNode[], preferred);
+      }
+    }
+  };
+  scan(nodes as DedupeTreeNode[], false);
+
+  const toDrop = new Set<DedupeTreeNode>();
+  const duplicated: string[] = [];
+  for (const [id, bucket] of byId) {
+    if (bucket.length < 2) continue;
+    duplicated.push(id);
+    const winner = bucket.find(occurrence => occurrence.preferred) ?? bucket[0];
+    for (const occurrence of bucket) {
+      if (occurrence !== winner) toDrop.add(occurrence.node);
+    }
+  }
+  if (toDrop.size === 0) return [];
+
+  const prune = (list: DedupeTreeNode[]): void => {
+    for (let i = list.length - 1; i >= 0; i--) {
+      const node = list[i];
+      if (node && typeof node === 'object' && toDrop.has(node)) {
+        list.splice(i, 1);
+        continue;
+      }
+      if (Array.isArray(node?.children)) {
+        prune(node.children as DedupeTreeNode[]);
+        if (opts.dropEmptyChildren && (node.children as unknown[]).length === 0) {
+          delete node.children;
+        }
+      }
+    }
+  };
+  prune(nodes as DedupeTreeNode[]);
+
+  return duplicated;
 }

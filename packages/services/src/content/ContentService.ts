@@ -441,7 +441,11 @@ export class ContentService {
    * @param {string} options.repo - Repository name
    * @param {string} options.path - File path
    * @param {string} options.content - File content
-   * @param {string} [options.expectedSha] - Expected SHA for optimistic locking
+   * @param {string} [options.expectedSha] - Expected SHA for optimistic
+   *   locking. Sent as the PUT's `sha` so GitHub enforces it ATOMICALLY
+   *   (compare-and-swap, not check-then-act); the uncached pre-check only
+   *   exists for a clear early 409 and the deleted-file case. Without it, the
+   *   write adopts whatever sha a fresh read returns (last-writer-wins).
    * @param {string} [options.branch] - Branch to commit to (default: repository default branch)
    * @param {string} [options.message] - Commit message
    * @param {boolean} [options.createOnly] - Create-only write: no sha is ever
@@ -481,10 +485,20 @@ export class ContentService {
       throw new Error('createOnly and expectedSha are mutually exclusive');
     }
 
-    // Check current SHA if optimistic locking is requested
-    // (branch writes check the sha on that branch; ref bypasses the cache)
+    // Pre-check when optimistic locking is requested (branch writes check the
+    // sha on that branch). skipCache is REQUIRED here: a cached read could
+    // vouch for a sha that main has already moved past, and the check exists
+    // to produce a clear, early 409 — GitHub enforces the real precondition
+    // below. The deleted-file case (404) can only be caught here: a sha-bearing
+    // PUT against a missing file is not a conflict to GitHub.
     if (expectedSha) {
-      const current = await this.getMeta({ gitOrganization: resolvedOrg, repo, path, ref: branch });
+      const current = await this.getMeta({
+        gitOrganization: resolvedOrg,
+        repo,
+        path,
+        ref: branch,
+        skipCache: true,
+      });
       if (!current) {
         // A sha was expected but the file is gone: deleted = changed. Silently
         // recreating would resurrect content the deleter meant to remove.
@@ -499,12 +513,16 @@ export class ContentService {
       }
     }
 
-    // Get current SHA for update (required by GitHub API). createOnly writes
-    // deliberately skip this and send no sha, so GitHub itself enforces
-    // non-existence (422 when the file materialized concurrently).
-    const existing = createOnly
-      ? null
-      : await this.getMeta({ gitOrganization: resolvedOrg, repo, path, ref: branch });
+    // Get current SHA for update (required by GitHub API) — only when the
+    // caller did NOT lock: expectedSha writes send the caller's sha directly
+    // so GitHub enforces it atomically (a second read here would adopt a
+    // concurrent write and defeat the lock — check-then-act, not CAS).
+    // createOnly writes send no sha, so GitHub itself enforces non-existence
+    // (422 when the file materialized concurrently).
+    const existing =
+      createOnly || expectedSha
+        ? null
+        : await this.getMeta({ gitOrganization: resolvedOrg, repo, path, ref: branch });
 
     let data;
     try {
@@ -514,7 +532,9 @@ export class ContentService {
         path,
         message: message || `Update ${path}`,
         content: Buffer.from(content).toString('base64'),
-        sha: existing?.sha, // Required for updates, undefined for creates
+        // expectedSha is the atomic precondition; otherwise the fresh read's
+        // sha (required for updates), undefined for creates.
+        sha: expectedSha ?? existing?.sha,
         ...(branch ? { branch } : {}),
       }));
     } catch (error: unknown) {
@@ -524,6 +544,16 @@ export class ContentService {
         const conflict = new Error(
           `File already exists: ${path} (create-only write refused)`
         ) as Error & { status: number };
+        conflict.status = 409;
+        throw conflict;
+      }
+      // GitHub rejected the expectedSha precondition (409 Conflict): the file
+      // moved between the pre-check and the PUT. Same conflict semantics and
+      // message as the pre-check, now race-free.
+      if (expectedSha && hasStatus(error, 409)) {
+        const conflict = new Error('File was modified by someone else') as Error & {
+          status: number;
+        };
         conflict.status = 409;
         throw conflict;
       }
