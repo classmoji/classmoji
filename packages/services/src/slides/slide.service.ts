@@ -206,6 +206,53 @@ export function starterDeck(title: string, idGen: IdGenerator = mintSlideId): De
 }
 
 /**
+ * Build the DeckJson an editor save writes: the posted wrapper's parsed
+ * fields (theme/codeTheme/slides) merged with the meta the thin editor
+ * wrapper doesn't round-trip, carried from the CURRENT deck (plan §5.1,
+ * review-hardened):
+ * - an explicit theme change clears the paired dark theme (same for
+ *   codeTheme) and drops starter-recognized customCss (exact match) so
+ *   switching a starter deck to a dark theme doesn't keep #333 headings;
+ * - all other customCss, the Reveal config, and extraCss carry over verbatim.
+ *
+ * Pure — theme resolution (shared: URL lookup, white fallback) happens in the
+ * caller BEFORE this runs; `theme` is the resolved value. Shared by the plain
+ * save path and the semantic save-merge path (Phase 7.5 theirs-construction).
+ */
+export function buildEditorDeck({
+  theme,
+  codeTheme,
+  slides,
+  currentDeck,
+}: {
+  theme: string;
+  codeTheme: string;
+  slides: DeckJson['slides'];
+  currentDeck: DeckJson | null;
+}): DeckJson {
+  const themeChanged = currentDeck != null && theme !== currentDeck.theme;
+  const codeThemeChanged = currentDeck != null && codeTheme !== currentDeck.codeTheme;
+  let customCss = currentDeck?.customCss;
+  if (themeChanged && customCss === STARTER_CUSTOM_CSS) {
+    customCss = undefined;
+  }
+
+  return {
+    version: 1,
+    theme,
+    codeTheme,
+    ...(!themeChanged && currentDeck?.themeDark ? { themeDark: currentDeck.themeDark } : {}),
+    ...(!codeThemeChanged && currentDeck?.codeThemeDark
+      ? { codeThemeDark: currentDeck.codeThemeDark }
+      : {}),
+    ...(currentDeck?.config ? { config: currentDeck.config } : {}),
+    ...(customCss != null ? { customCss } : {}),
+    ...(currentDeck?.extraCss ? { extraCss: currentDeck.extraCss } : {}),
+    slides,
+  };
+}
+
+/**
  * Orchestrated slide creation: content-path collision check → ensure the
  * shared content repo exists → starter deck via saveDeck (deck.json +
  * index.html in one commit) → DB row → manifest refresh.

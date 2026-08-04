@@ -68,6 +68,7 @@ const {
   updateSlide,
   SLIDE_CONTENT_PATH_CONFLICT,
   STARTER_CUSTOM_CSS,
+  buildEditorDeck,
 } = await import('../slide.service.ts');
 const { parseDeckHtml, generateDeckHtml } = await import('../deckHtml.ts');
 
@@ -552,5 +553,96 @@ describe('getSlideDeleteInfo', () => {
     getContentMock.mockResolvedValue(null);
     const info = await getSlideDeleteInfo('slide-1');
     expect(info.themeName).toBeNull();
+  });
+});
+
+describe('buildEditorDeck (editor save meta-merge, plan §5.1)', () => {
+  const slides = [{ id: 'aaa', html: '<h1>One</h1>' }];
+
+  it('carries config, customCss, extraCss, and dark themes from the current deck', () => {
+    const currentDeck = {
+      version: 1 as const,
+      theme: 'white',
+      codeTheme: 'github',
+      themeDark: 'black',
+      codeThemeDark: 'monokai',
+      config: { center: false },
+      customCss: '.reveal h1 { color: red; }',
+      extraCss: [{ href: 'https://cdn.example/extra.css', media: 'print' }],
+      slides: [],
+    };
+
+    const deck = buildEditorDeck({ theme: 'white', codeTheme: 'github', slides, currentDeck });
+
+    expect(deck).toEqual({
+      version: 1,
+      theme: 'white',
+      codeTheme: 'github',
+      themeDark: 'black',
+      codeThemeDark: 'monokai',
+      config: { center: false },
+      customCss: '.reveal h1 { color: red; }',
+      extraCss: [{ href: 'https://cdn.example/extra.css', media: 'print' }],
+      slides,
+    });
+  });
+
+  it('a theme change clears the paired dark theme; a codeTheme change clears codeThemeDark', () => {
+    const currentDeck = {
+      version: 1 as const,
+      theme: 'white',
+      codeTheme: 'github',
+      themeDark: 'black',
+      codeThemeDark: 'monokai',
+      slides: [],
+    };
+
+    const themeChanged = buildEditorDeck({
+      theme: 'night',
+      codeTheme: 'github',
+      slides,
+      currentDeck,
+    });
+    expect(themeChanged.themeDark).toBeUndefined();
+    expect(themeChanged.codeThemeDark).toBe('monokai');
+
+    const codeChanged = buildEditorDeck({
+      theme: 'white',
+      codeTheme: 'dracula',
+      slides,
+      currentDeck,
+    });
+    expect(codeChanged.themeDark).toBe('black');
+    expect(codeChanged.codeThemeDark).toBeUndefined();
+  });
+
+  it('a theme change drops starter-recognized customCss (exact match) but keeps custom edits', () => {
+    const starter = {
+      version: 1 as const,
+      theme: 'white',
+      codeTheme: 'monokai',
+      customCss: STARTER_CUSTOM_CSS,
+      slides: [],
+    };
+    expect(
+      buildEditorDeck({ theme: 'night', codeTheme: 'monokai', slides, currentDeck: starter })
+        .customCss
+    ).toBeUndefined();
+    // Same theme → the starter css stays.
+    expect(
+      buildEditorDeck({ theme: 'white', codeTheme: 'monokai', slides, currentDeck: starter })
+        .customCss
+    ).toBe(STARTER_CUSTOM_CSS);
+    // Hand-edited css survives a theme change.
+    const edited = { ...starter, customCss: '.reveal h1 { color: teal; }' };
+    expect(
+      buildEditorDeck({ theme: 'night', codeTheme: 'monokai', slides, currentDeck: edited })
+        .customCss
+    ).toBe('.reveal h1 { color: teal; }');
+  });
+
+  it('no current deck (legacy-unparseable or first write) → bare posted fields', () => {
+    const deck = buildEditorDeck({ theme: 'sky', codeTheme: 'github', slides, currentDeck: null });
+    expect(deck).toEqual({ version: 1, theme: 'sky', codeTheme: 'github', slides });
   });
 });

@@ -22,12 +22,11 @@ import getPrisma from '@classmoji/database';
 import { ContentService } from '../content/ContentService.ts';
 import { generateDeckHtml, type DeckThemeUrls } from './deckHtml.ts';
 import {
-  DECK_ORDER_CONFLICT_ID,
   indexResolutions,
   merge3Units,
   PreviewResolutionError,
+  splitDeckConflicts,
   type DeckMergeConflict,
-  type DeckOrderMergeConflict,
   type MergeResolution,
 } from './deckMerge.ts';
 import {
@@ -434,21 +433,6 @@ async function readDeckThreeWay(slide: SlideContentTarget): Promise<DeckThreeWay
       : Promise.resolve(null),
   ]);
   return { comparison, ours, theirs, base };
-}
-
-/** Split the engine's conflicts into the service report shape (root order separated). */
-function splitDeckConflicts(conflicts: DeckMergeConflict[]): {
-  units: DeckMergeConflict[];
-  orderConflict?: { base: string[]; ours: string[]; theirs: string[] };
-} {
-  const root = conflicts.find(
-    (conflict): conflict is DeckOrderMergeConflict => conflict.id === DECK_ORDER_CONFLICT_ID
-  );
-  const units = conflicts.filter(conflict => conflict.id !== DECK_ORDER_CONFLICT_ID);
-  return {
-    units,
-    ...(root ? { orderConflict: { base: root.base, ours: root.ours, theirs: root.theirs } } : {}),
-  };
 }
 
 /**

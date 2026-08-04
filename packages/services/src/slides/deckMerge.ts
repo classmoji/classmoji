@@ -123,6 +123,27 @@ export type DeckMergeConflict =
   | DeckOrderMergeConflict
   | DeckMetaMergeConflict;
 
+/**
+ * Split an engine conflict list into the service report shape: the top-level
+ * `__order__` sentinel is pulled out as `orderConflict`; everything else
+ * (unit conflicts, per-stack `__order__:<id>` sentinels, `__meta__`) stays in
+ * `units`. Shared by the accept flow (deckPreview.service) and the editor
+ * save-merge flow (deckSaveMerge.service).
+ */
+export function splitDeckConflicts(conflicts: DeckMergeConflict[]): {
+  units: DeckMergeConflict[];
+  orderConflict?: { base: string[]; ours: string[]; theirs: string[] };
+} {
+  const root = conflicts.find(
+    (conflict): conflict is DeckOrderMergeConflict => conflict.id === DECK_ORDER_CONFLICT_ID
+  );
+  const units = conflicts.filter(conflict => conflict.id !== DECK_ORDER_CONFLICT_ID);
+  return {
+    units,
+    ...(root ? { orderConflict: { base: root.base, ours: root.ours, theirs: root.theirs } } : {}),
+  };
+}
+
 export interface DeckMergeResult {
   /**
    * The merged deck. Fully authoritative when `conflicts` is empty; while

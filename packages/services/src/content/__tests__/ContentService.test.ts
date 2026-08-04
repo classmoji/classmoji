@@ -742,3 +742,73 @@ describe('compareBranches', () => {
     ).rejects.toThrow('Server error');
   });
 });
+
+describe('getBlobContent', () => {
+  it('fetches a blob by sha via the Git Blobs API and decodes utf-8', async () => {
+    requestMock.mockImplementation(async (route: string, params: RequestParams) => {
+      expect(route).toBe('GET /repos/{owner}/{repo}/git/blobs/{file_sha}');
+      expect(params).toMatchObject({
+        owner: 'test-org',
+        repo: 'repo-blob',
+        file_sha: 'abc123',
+      });
+      // GitHub returns base64 with embedded newlines
+      const base64 = Buffer.from('{"version":1,"slides":[]}', 'utf-8').toString('base64');
+      return { data: { content: `${base64.slice(0, 10)}\n${base64.slice(10)}`, sha: 'abc123' } };
+    });
+
+    const result = await ContentService.getBlobContent({
+      gitOrganization,
+      repo: 'repo-blob',
+      sha: 'abc123',
+    });
+
+    expect(result).toEqual({ content: '{"version":1,"slides":[]}', sha: 'abc123' });
+    expect(requestMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('never serves from or stores into the response cache (content-addressed, uncached)', async () => {
+    const base64 = Buffer.from('hello', 'utf-8').toString('base64');
+    requestMock.mockResolvedValue({ data: { content: base64, sha: 'blob-sha' } });
+
+    await ContentService.getBlobContent({ gitOrganization, repo: 'repo-blob-2', sha: 'blob-sha' });
+    await ContentService.getBlobContent({ gitOrganization, repo: 'repo-blob-2', sha: 'blob-sha' });
+
+    // Two reads → two API calls (no cache layer involved).
+    expect(requestMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('returns null on 404 (blob not in the repo)', async () => {
+    requestMock.mockRejectedValue(Object.assign(new Error('Not Found'), { status: 404 }));
+
+    const result = await ContentService.getBlobContent({
+      gitOrganization,
+      repo: 'repo-blob',
+      sha: 'ffffffffffffffffffffffffffffffffffffffff',
+    });
+
+    expect(result).toBeNull();
+  });
+
+  it("returns null on 422 (GitHub's malformed-sha answer)", async () => {
+    requestMock.mockRejectedValue(
+      Object.assign(new Error('The sha parameter must be exactly 40 characters'), { status: 422 })
+    );
+
+    const result = await ContentService.getBlobContent({
+      gitOrganization,
+      repo: 'repo-blob',
+      sha: 'not-a-sha',
+    });
+
+    expect(result).toBeNull();
+  });
+
+  it('rethrows non-404/422 errors', async () => {
+    requestMock.mockRejectedValue(Object.assign(new Error('Server error'), { status: 500 }));
+
+    await expect(
+      ContentService.getBlobContent({ gitOrganization, repo: 'repo-blob', sha: 'abc123' })
+    ).rejects.toThrow('Server error');
+  });
+});

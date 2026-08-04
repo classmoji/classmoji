@@ -1161,6 +1161,222 @@ export async function resolvePreviewConflicts(
   throw new Error('unreachable');
 }
 
+// ─── Semantic merge for EDITOR saves (plan §3b Phase 7.5) ────────────────────
+
+/**
+ * Fallback conflict for the save-merge path: carries `status: 409` so the
+ * existing route handling (the "page changed — reload" banner) applies
+ * unchanged. Thrown when no trustworthy 3-way exists (base blob unreadable,
+ * main's content.json gone) or when the CAS retry lost twice.
+ */
+export class PageSaveConflictError extends Error {
+  status = 409 as const;
+  code = 'CONTENT_CONFLICT' as const;
+
+  constructor(message: string) {
+    super(message);
+    this.name = 'PageSaveConflictError';
+  }
+}
+
+/** Strict content.json parse — wrapper or legacy bare array; anything else null. */
+function parseBlocksStrict(content: string): BlockNode[] | null {
+  try {
+    const parsed = JSON.parse(content);
+    if (Array.isArray(parsed)) return parsed;
+    if (parsed && Array.isArray(parsed.blocks)) return parsed.blocks;
+  } catch {
+    // Malformed — the caller falls back to the plain conflict flow.
+  }
+  return null;
+}
+
+export interface SavePageMergeArgs {
+  /** The editor's conflict token — content.json's blob sha when the editor read it (the 3-way base). */
+  baseSha: string;
+  /** Chooser decisions from a prior conflict report (save re-submit). */
+  resolutions?: MergeResolution[];
+  /**
+   * Pin to the conflict report the resolutions were reviewed against (its
+   * `ours_sha`). When main's content.json no longer matches, the save fails
+   * with CONTENT_CONFLICT instead of applying reviewed choices to unseen
+   * content.
+   */
+  expectedOursSha?: string;
+  message?: string;
+}
+
+export type SavePageMergeResult =
+  | {
+      merged: true;
+      /** content.json's new blob sha — the editor's fresh conflict token. */
+      sha: string;
+      commit: string;
+      /**
+       * The merged blocks as committed — the editor must adopt this document
+       * (its own local copy lacks the folded-in concurrent changes, and a
+       * fresh token over a stale document would clobber them on the NEXT save).
+       */
+      document: unknown[];
+      /** Block-level changes (both sides) that merged without a conflict. */
+      auto_merged: number;
+      /** Concurrent (main-side) block changes folded into this save — the toast count. */
+      concurrent: number;
+    }
+  | {
+      merged: false;
+      conflict: true;
+      /** ONLY the true collisions (incl. the `__order__` sentinel). */
+      units: BlockMergeConflict[];
+      auto_merged: number;
+      /** Main's content.json sha the report was built from — the resolution pin. */
+      ours_sha: string;
+    };
+
+/**
+ * Save an editor's posted blocks over a stale conflict token by 3-way
+ * semantic merge (plan §3b Phase 7.5). The token IS the merge base: it is
+ * content.json's blob sha at editor-load time, fetched content-addressed via
+ * ContentService.getBlobContent. ours = fresh main, theirs = the posted
+ * blocks. Zero collisions → the merged document is committed (CAS'd on
+ * main's pre-write sha, main's current coverImage preserved) and the save
+ * succeeds with the concurrent-change count; true collisions → a structured
+ * per-unit report for the editor's conflict chooser. The client re-submits
+ * the SAME posted blocks plus resolutions and the report's `ours_sha` pin.
+ *
+ * @throws {PageSaveConflictError} fallback to the plain 409 reload flow.
+ * @throws {PreviewResolutionError} CONTENT_CONFLICT (ours pin stale) /
+ *   NOTHING_TO_RESOLVE / UNRESOLVED_CONFLICTS / UNKNOWN_RESOLUTIONS /
+ *   DUPLICATE_RESOLUTIONS / INVALID_RESOLUTIONS.
+ */
+export async function savePageContentWithMerge(
+  page: PageWithContentRepo,
+  theirs: unknown[],
+  { baseSha, resolutions, expectedOursSha, message }: SavePageMergeArgs
+): Promise<SavePageMergeResult> {
+  const { gitOrganization, repo } = contentRepoFor(page);
+  const path = `${page.content_path}/content.json`;
+
+  // Base = the document at the editor's token. A failed or unparseable base
+  // read means no trustworthy 3-way exists — fall back rather than merging
+  // against a guessed base.
+  let baseFile: { content: string } | null = null;
+  try {
+    baseFile = await ContentService.getBlobContent({ gitOrganization, repo, sha: baseSha });
+  } catch (error: unknown) {
+    console.warn(
+      `[pageContent.saveMerge] Base blob read failed for ${repo}@${baseSha}:`,
+      error instanceof Error ? error.message : String(error)
+    );
+  }
+  const baseBlocks = baseFile ? parseBlocksStrict(baseFile.content) : null;
+  if (!baseBlocks) {
+    throw new PageSaveConflictError('This page changed since it was read — reload before saving');
+  }
+
+  const chosen = resolutions ? indexResolutions(resolutions) : null;
+
+  for (let attempt = 0; attempt < 2; attempt++) {
+    // Ours = fresh main. skipCache REQUIRED — this read pins the CAS sha.
+    const ours = await ContentService.getContent({ gitOrganization, repo, path, skipCache: true });
+
+    // Re-checked every attempt: a CAS-loss retry re-reads main, and choices
+    // reviewed against one report must not silently apply to newer content.
+    if (expectedOursSha && (ours?.sha ?? null) !== expectedOursSha) {
+      throw new PreviewResolutionError(
+        'The page changed since the conflict report these choices were made against — ' +
+          'save again for a fresh report',
+        'CONTENT_CONFLICT'
+      );
+    }
+
+    const oursBlocks = ours ? parseBlocksStrict(ours.content) : null;
+    if (!ours || !oursBlocks) {
+      // content.json deleted or unreadable on main: no CAS anchor, no 3-way.
+      throw new PageSaveConflictError(
+        'content.json no longer exists — reload the page before saving'
+      );
+    }
+
+    if (chosen) {
+      // The resolutions must exactly cover the CURRENT conflict set (same
+      // validation as resolvePreviewConflicts).
+      const current = merge3Blocks(baseBlocks, oursBlocks, theirs);
+      const conflictIds = new Set(current.conflicts.map(unit => unit.id));
+      if (conflictIds.size === 0) {
+        throw new PreviewResolutionError(
+          'Nothing to resolve — the save now merges cleanly; save again without resolutions',
+          'NOTHING_TO_RESOLVE'
+        );
+      }
+      const missing = [...conflictIds].filter(id => !(id in chosen));
+      if (missing.length > 0) {
+        throw new PreviewResolutionError(
+          `Every conflict needs a choice — missing: ${missing.join(', ')}`,
+          'UNRESOLVED_CONFLICTS',
+          missing
+        );
+      }
+      const unknown = Object.keys(chosen).filter(id => !conflictIds.has(id));
+      if (unknown.length > 0) {
+        throw new PreviewResolutionError(
+          `Not current conflict ids: ${unknown.join(', ')} — save again for the current report`,
+          'UNKNOWN_RESOLUTIONS',
+          unknown
+        );
+      }
+    }
+
+    const merge = merge3Blocks(
+      baseBlocks,
+      oursBlocks,
+      theirs,
+      chosen ? { resolutions: chosen } : {}
+    );
+    if (merge.conflicts.length > 0) {
+      if (chosen) {
+        throw new Error(
+          `Resolution pass left conflicts standing (${merge.conflicts.map(u => u.id).join(', ')}) — this is a bug`
+        );
+      }
+      return {
+        merged: false,
+        conflict: true,
+        units: merge.conflicts,
+        auto_merged: merge.autoMerged,
+        ours_sha: ours.sha,
+      };
+    }
+
+    // Concurrent (main-side) changes folded into this save: a theirs-less
+    // merge (theirs = base) counts exactly the blocks ours changed vs base.
+    const concurrent = merge3Blocks(baseBlocks, oursBlocks, baseBlocks).autoMerged;
+
+    try {
+      const saved = await savePageContent(page, merge.merged, {
+        // Preserve main's CURRENT cover explicitly (the editor save carries no
+        // cover; passing it avoids savePageContent's extra preserve re-read).
+        coverImage: extractCover(ours.content),
+        expectedSha: ours.sha,
+        message: message ?? `Update page (merged): ${page.title}`,
+      });
+      return {
+        merged: true,
+        sha: saved.sha,
+        commit: saved.commit,
+        document: merge.merged,
+        auto_merged: merge.autoMerged,
+        concurrent,
+      };
+    } catch (error: unknown) {
+      if ((error as { status?: number }).status !== 409 || attempt === 1) throw error;
+      // Main moved mid-commit — one retry re-runs the 3-way against fresh ours.
+    }
+  }
+  /* c8 ignore next */
+  throw new Error('unreachable');
+}
+
 /**
  * Discard the page's preview branch (delete it; main is untouched).
  * 404-tolerant: an already-gone branch reports `existed: false` instead of

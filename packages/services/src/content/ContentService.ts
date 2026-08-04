@@ -434,6 +434,54 @@ export class ContentService {
   }
 
   /**
+   * Fetch a blob's decoded utf-8 content by its blob sha (Git Blobs API).
+   * Blob shas are content-addressed — no ref is needed and the content can
+   * never change under the sha, so this is the canonical way to read "the
+   * file as it was when a conflict token was handed out" (content-tools plan
+   * §3b Phase 7.5: the editor's stale token IS the 3-way merge base).
+   *
+   * Never cached (immutable content, read once per stale save).
+   *
+   * @param {Object} options
+   * @param {Object} [options.gitOrganization] - GitOrganization record from database
+   * @param {string} [options.orgLogin] - Organization login (fallback, assumes GITHUB)
+   * @param {string} options.repo - Repository name
+   * @param {string} options.sha - The blob sha to fetch
+   * @returns {Promise<{ content: string, sha: string } | null>} - null when the
+   *   blob does not exist in the repo (404, or GitHub's 422 for a malformed sha)
+   */
+  static async getBlobContent({
+    gitOrganization,
+    orgLogin,
+    repo,
+    sha,
+  }: {
+    gitOrganization?: GitOrganizationRecord;
+    orgLogin?: string;
+    repo: string;
+    sha: string;
+  }): Promise<{ content: string; sha: string } | null> {
+    try {
+      const resolvedOrg = await resolveGitOrganization(gitOrganization, orgLogin);
+      const octokit = await getOctokit(resolvedOrg);
+      const { data } = await octokit.request('GET /repos/{owner}/{repo}/git/blobs/{file_sha}', {
+        owner: resolvedOrg.login,
+        repo,
+        file_sha: sha,
+      });
+      return {
+        content: Buffer.from(data.content, 'base64').toString('utf-8'),
+        sha,
+      };
+    } catch (error: unknown) {
+      if (hasStatus(error, 404) || hasStatus(error, 422)) {
+        return null;
+      }
+      throw error;
+    }
+  }
+
+  /**
    * Create or update a text file
    * @param {Object} options
    * @param {Object} [options.gitOrganization] - GitOrganization record from database
