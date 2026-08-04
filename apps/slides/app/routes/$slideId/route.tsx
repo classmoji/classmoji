@@ -1542,8 +1542,8 @@ export default function SlideViewer() {
     if (notice === 'preview-accepted') {
       message.success(
         noticeAutoMerged
-          ? `Preview accepted — ${noticeAutoMerged} change${noticeAutoMerged === 1 ? '' : 's'} merged automatically; changes are now live.`
-          : 'Preview accepted — changes are now live.'
+          ? `Preview merged —${noticeAutoMerged} change${noticeAutoMerged === 1 ? '' : 's'} merged automatically; changes are now live.`
+          : 'Preview merged —changes are now live.'
       );
     } else if (notice === 'preview-discarded') {
       message.success('Preview discarded.');

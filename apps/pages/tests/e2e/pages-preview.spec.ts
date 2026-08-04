@@ -82,7 +82,7 @@ test.describe('Pages preview mode', () => {
 
     if (barCount === 1) {
       // Preview bar carries the three actions
-      await expect(page.getByRole('button', { name: 'Accept' })).toBeVisible();
+      await expect(page.getByRole('button', { name: 'Merge' })).toBeVisible();
       await expect(page.getByRole('button', { name: 'Discard' })).toBeVisible();
       await expect(page.getByRole('link', { name: /Diff/ })).toBeVisible();
     }

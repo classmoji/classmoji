@@ -388,7 +388,7 @@ export const PreviewBar = ({
                 rel="noopener noreferrer"
                 className={`${actionButtonBase} inline-flex items-center gap-1 text-amber-900 dark:text-amber-200 ring-1 ring-amber-300 dark:ring-amber-700 hover:bg-amber-100 dark:hover:bg-amber-900/40`}
               >
-                Diff
+                GitHub diff
                 <IconExternalLink size={14} />
               </a>
             )}
@@ -406,7 +406,7 @@ export const PreviewBar = ({
               disabled={busy}
               className={`${actionButtonBase} bg-amber-600 text-white hover:bg-amber-700 dark:bg-amber-500 dark:text-amber-950 dark:hover:bg-amber-400`}
             >
-              {busy && pending === 'accept' ? 'Accepting…' : 'Accept'}
+              {busy && pending === 'accept' ? 'Merging…' : 'Merge'}
             </button>
           </div>
         </div>
@@ -471,7 +471,7 @@ export const PendingPreviewBanner = ({ preview }: { preview: PreviewInfo }) => {
             disabled={busy}
             className="font-medium underline decoration-amber-400 underline-offset-2 hover:text-amber-700 dark:hover:text-amber-300 disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            {busy && pending === 'accept' ? 'Accepting…' : 'Accept'}
+            {busy && pending === 'accept' ? 'Merging…' : 'Merge'}
           </button>
           <button
             type="button"
