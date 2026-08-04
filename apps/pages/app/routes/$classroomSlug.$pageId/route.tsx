@@ -1,9 +1,15 @@
 import { useLoaderData, useFetcher, useOutletContext } from 'react-router';
 import { useState, useEffect, useRef, useCallback, lazy, Suspense } from 'react';
 import { IconPhoto } from '@tabler/icons-react';
+import { toast } from 'react-toastify';
 
 import Header from '~/components/layout/Header.tsx';
 import HeaderImage from '~/components/editor/HeaderImage.tsx';
+import {
+  PreviewBar,
+  PendingPreviewBanner,
+  NoPreviewNotice,
+} from '~/components/preview/PreviewControls.tsx';
 
 const PageEditor = lazy(() => import('~/components/editor/PageEditor.tsx'));
 const BlockNoteViewer = lazy(() => import('~/components/viewer/BlockNoteViewer.tsx'));
@@ -20,19 +26,45 @@ const widthClasses: Record<number, string> = {
 };
 
 const PageRoute = () => {
-  const { page, classroom, content, coverImage, canEdit } =
-    useLoaderData<typeof import('./route.server.ts').loader>();
+  const {
+    page,
+    classroom,
+    content,
+    coverImage,
+    canEdit: canEditRole,
+    preview,
+    notice,
+    contentSha,
+  } = useLoaderData<typeof import('./route.server.ts').loader>();
   const outletContext = useOutletContext<{ isEmbedded?: boolean }>();
   const isEmbedded = outletContext?.isEmbedded || false;
+  // Preview mode is strictly read-only — editing chrome is suppressed while
+  // rendering the pending preview branch (plan §3b).
+  const isPreview = Boolean(preview?.active);
+  const canEdit = canEditRole && !isPreview;
   const widthClass = widthClasses[page.width] || 'max-w-4xl';
   const editorRef = useRef<{ getContent: () => unknown } | null>(null);
   const fetcher = useFetcher();
   const titleFetcher = useFetcher();
+  const coverFetcher = useFetcher();
 
   // Save state (explicit saves only)
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
   const [saveStatus, setSaveStatus] = useState('saved');
   const lastSavedContent = useRef<string | null>(null);
+
+  // Conflict token (F2, 4b parity with slides): content.json's sha, seeded
+  // ONCE from the loader (deliberately not re-synced on revalidation — the
+  // editor's content is still what the initial load produced, so refreshing
+  // the token mid-edit would let a stale save pass the server's sha check).
+  // Refreshed only from a successful save's response; echoed on every save.
+  const [contentToken, setContentToken] = useState<string | null>(contentSha);
+  // True once a save 409'd: the page changed underneath this editor session.
+  const saveConflict = Boolean(fetcher.data?.conflict);
+  // Set when the user chooses Reload from the conflict banner — the banner
+  // already warned that unsaved changes are discarded, so skip the browser's
+  // beforeunload double-prompt.
+  const skipUnloadWarningRef = useRef(false);
 
   // Client-only flag — prevents BlockNote from rendering during SSR
   const [isClient, setIsClient] = useState(false);
@@ -55,10 +87,12 @@ const PageRoute = () => {
 
     setSaveStatus('saving');
     fetcher.submit(
-      { intent: 'save', content: currentContentStr },
+      // content_sha: the conflict token the action CAS-checks the write
+      // against (null = content.json doesn't exist yet → creation).
+      { intent: 'save', content: currentContentStr, content_sha: contentToken },
       { method: 'POST', encType: 'application/json' }
     );
-  }, [canEdit, fetcher]);
+  }, [canEdit, fetcher, contentToken]);
 
   // Track editor changes (mark unsaved, but don't auto-save)
   const handleEditorChange = useCallback(
@@ -86,6 +120,20 @@ const PageRoute = () => {
     setIsEditingTitle(false);
   }, [page.id, page.title]);
 
+  // Post-accept/discard success notice (round-tripped via redirect param)
+  useEffect(() => {
+    if (!notice) return;
+    if (notice === 'preview-accepted') {
+      toast.success('Preview accepted — changes are now live.');
+    } else if (notice === 'preview-discarded') {
+      toast.success('Preview discarded.');
+    }
+    // Strip the param so a refresh doesn't re-toast
+    const url = new URL(window.location.href);
+    url.searchParams.delete('notice');
+    window.history.replaceState({}, '', url);
+  }, [notice]);
+
   // Initialize lastSavedContent on mount
   useEffect(() => {
     if (canEdit && content && lastSavedContent.current === null) {
@@ -100,12 +148,32 @@ const PageRoute = () => {
         const currentContent = editorRef.current.getContent();
         lastSavedContent.current = JSON.stringify(currentContent);
       }
+      // Refresh the conflict token — content.json's new sha after our save.
+      if (typeof fetcher.data.sha === 'string' && fetcher.data.sha) {
+        setContentToken(fetcher.data.sha);
+      }
       setHasUnsavedChanges(false);
       setSaveStatus('saved');
-    } else if (fetcher.state === 'idle' && fetcher.data?.error) {
+    } else if (fetcher.state === 'idle' && (fetcher.data?.error || fetcher.data?.conflict)) {
+      // Conflict (409) keeps hasUnsavedChanges true — the banner offers
+      // Reload; the editor content is preserved until the user decides.
       setSaveStatus('error');
     }
   }, [fetcher.state, fetcher.data]);
+
+  // Surface cover-image failures (incl. the F5 409 "page changed — try
+  // again") — the cover flow has no inline status indicator of its own.
+  // On success, refresh the conflict token: a cover write advances
+  // content.json's sha, so a save still carrying the pre-cover token would
+  // self-conflict against our own change.
+  useEffect(() => {
+    if (coverFetcher.state !== 'idle') return;
+    if (coverFetcher.data?.error) {
+      toast.error(coverFetcher.data.error);
+    } else if (coverFetcher.data?.sha) {
+      setContentToken(coverFetcher.data.sha);
+    }
+  }, [coverFetcher.state, coverFetcher.data]);
 
   // Cmd/Ctrl+S to save
   useEffect(() => {
@@ -127,7 +195,7 @@ const PageRoute = () => {
     if (!canEdit) return;
 
     const handleBeforeUnload = (e: BeforeUnloadEvent) => {
-      if (hasUnsavedChanges) {
+      if (hasUnsavedChanges && !skipUnloadWarningRef.current) {
         e.preventDefault();
         e.returnValue = '';
       }
@@ -154,6 +222,13 @@ const PageRoute = () => {
     setIsEditingTitle(false);
   };
 
+  // Reload from the save-conflict banner: discard this session's unsaved
+  // changes and pick up the latest content + a fresh conflict token.
+  const handleConflictReload = useCallback(() => {
+    skipUnloadWarningRef.current = true;
+    window.location.reload();
+  }, []);
+
   return (
     <>
       {!isEmbedded && (
@@ -165,6 +240,41 @@ const PageRoute = () => {
           canEdit={canEdit}
           onSave={canEdit ? handleSave : undefined}
         />
+      )}
+
+      {/* Preview-branch chrome (staff only — `preview` is null otherwise) */}
+      {preview?.active && <PreviewBar preview={preview} isEmbedded={isEmbedded} />}
+      {preview?.missing && <NoPreviewNotice />}
+      {preview && !preview.active && preview.exists && <PendingPreviewBanner preview={preview} />}
+
+      {/* Save-conflict notice (F2): the last save 409'd — content.json changed
+          under this editor session (another editor, an MCP apply). Amber, same
+          visual language as the preview chrome. */}
+      {canEdit && saveConflict && (
+        <div
+          data-testid="save-conflict-banner"
+          className={`sticky ${isEmbedded ? 'top-0' : 'top-12'} z-30`}
+        >
+          <div className="border-y border-amber-300 dark:border-amber-700/70 bg-amber-50/95 dark:bg-amber-950/90 backdrop-blur px-4 sm:px-6 lg:px-8 py-2">
+            <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
+              <div className="text-sm text-amber-900 dark:text-amber-100">
+                <span className="font-semibold">
+                  This page changed since you opened it — reload to get the latest before saving.
+                </span>{' '}
+                <span className="text-amber-700 dark:text-amber-300">
+                  Your unsaved changes here will be discarded.
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={handleConflictReload}
+                className="rounded px-3 py-1 text-sm font-medium transition-colors bg-amber-600 text-white hover:bg-amber-700 dark:bg-amber-500 dark:text-amber-950 dark:hover:bg-amber-400"
+              >
+                Reload
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {coverImage?.url && (
@@ -183,8 +293,8 @@ const PageRoute = () => {
           {/* "Add cover" button — always visible in edit mode when no image */}
           {!coverImage?.url && canEdit && (
             <div className="flex items-center gap-2 mb-2">
-              {fetcher.state !== 'idle' &&
-              fetcher.formData?.get('intent') === 'upload-header-image' ? (
+              {coverFetcher.state !== 'idle' &&
+              coverFetcher.formData?.get('intent') === 'upload-header-image' ? (
                 <div className="flex items-center gap-1.5 px-2 py-1 text-sm text-gray-500 dark:text-gray-400">
                   <div className="w-4 h-4 border-2 border-gray-400 border-t-transparent rounded-full animate-spin" />
                   Uploading...
@@ -202,7 +312,7 @@ const PageRoute = () => {
                       const formData = new FormData();
                       formData.append('intent', 'upload-header-image');
                       formData.append('file', file);
-                      fetcher.submit(formData, {
+                      coverFetcher.submit(formData, {
                         method: 'POST',
                         encType: 'multipart/form-data',
                       });

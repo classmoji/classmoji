@@ -9,7 +9,13 @@ import JSZip from 'jszip';
 import * as cheerio from 'cheerio';
 import getPrisma from '@classmoji/database';
 import { ContentService } from '@classmoji/content';
-import { GitHubProvider } from '@classmoji/services';
+import { GitHubProvider, ClassmojiService } from '@classmoji/services';
+import {
+  generateDeckHtml,
+  parseSlidesFragment,
+  type DeckExtraCss,
+  type DeckJson,
+} from '@classmoji/services/slides';
 import { getContentRepoName } from '@classmoji/utils';
 import { getThemeUrls, saveTheme, generateThemeSlug } from './themeService.server.ts';
 import {
@@ -18,107 +24,13 @@ import {
   deleteSlideVideos,
 } from './cloudinaryService.server.ts';
 
-// Built-in Reveal.js themes
-const BUILTIN_THEMES = [
-  'black',
-  'white',
-  'league',
-  'beige',
-  'night',
-  'serif',
-  'simple',
-  'solarized',
-  'moon',
-  'dracula',
-  'sky',
-  'blood',
-];
-
 /**
- * Generate theme stylesheet URL
- * @param {string} theme
+ * Seeded into deck.json's customCss at import time: overrides slides.com's
+ * animation system so all elements are fully visible. The canonical deck
+ * generator emits NO implicit styles (content-tools plan §2), so this rule
+ * must live in the deck's customCss to survive regeneration.
  */
-function getThemeUrl(theme: string): string {
-  if (BUILTIN_THEMES.includes(theme)) {
-    return `https://cdn.jsdelivr.net/npm/reveal.js@5.1.0/dist/theme/${theme}.css`;
-  }
-  return theme;
-}
-
-/**
- * Generate a complete reveal.js HTML document
- * @param {string} slidesContent - The <section> elements
- * @param {string} title - Slide title
- * @param {Object} options - Theme options
- */
-function generateSlideHtml(
-  slidesContent: string,
-  title: string,
-  options: {
-    libCssUrl?: string | null;
-    customThemeUrl?: string | null;
-    bodyClasses?: string;
-    sharedThemeName?: string | null;
-    lightTheme?: string;
-    darkTheme?: string;
-    codeThemeLight?: string;
-    codeThemeDark?: string;
-  } = {}
-) {
-  const {
-    // slides.com theme options (when importTheme is true)
-    libCssUrl = null,
-    customThemeUrl = null,
-    bodyClasses = '',
-    // Shared theme name (e.g., "cs52-slides-theme") - used to set data-theme attribute
-    sharedThemeName = null,
-    // fallback to reveal.js themes (when importTheme is false)
-    lightTheme = 'white',
-    darkTheme = 'black',
-    codeThemeLight = 'github',
-    codeThemeDark = 'github-dark',
-  } = options;
-
-  // If we have slides.com lib CSS, use that instead of reveal.js themes
-  const useSlidesCom = !!libCssUrl;
-
-  const lightThemeUrl = getThemeUrl(lightTheme);
-  const darkThemeUrl = getThemeUrl(darkTheme);
-
-  // CSS links for slides.com theme
-  const slidesComCss = useSlidesCom
-    ? `
-  <!-- slides.com full CSS (includes fonts, themes, sl-block styles) -->
-  <link rel="stylesheet" href="${libCssUrl}">
-  ${customThemeUrl ? `<!-- Custom theme CSS (user customizations from slides.com) -->\n  <link rel="stylesheet" href="${customThemeUrl}">` : ''}`
-    : '';
-
-  // CSS links for reveal.js themes (fallback when not using slides.com theme)
-  const revealThemeCss = !useSlidesCom
-    ? `
-  <!-- Light mode slide theme -->
-  <link rel="stylesheet" href="${lightThemeUrl}" media="(prefers-color-scheme: light)">
-  <!-- Dark mode slide theme -->
-  <link rel="stylesheet" href="${darkThemeUrl}" media="(prefers-color-scheme: dark)">
-  <!-- Fallback for browsers without prefers-color-scheme support -->
-  <link rel="stylesheet" href="${lightThemeUrl}" media="not all and (prefers-color-scheme)">
-  <!-- Light mode code syntax highlighting -->
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/styles/${codeThemeLight}.min.css" media="(prefers-color-scheme: light)">
-  <!-- Dark mode code syntax highlighting -->
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/styles/${codeThemeDark}.min.css" media="(prefers-color-scheme: dark)">
-  <!-- Fallback code theme for browsers without prefers-color-scheme support -->
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/styles/${codeThemeLight}.min.css" media="not all and (prefers-color-scheme)">`
-    : '';
-
-  return `<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>${title}</title>
-  <!-- Reveal.js core CSS -->
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/reveal.js@5.1.0/dist/reveal.css">${slidesComCss}${revealThemeCss}
-  <style>
+const SL_BLOCK_VISIBILITY_CSS = `
     /* Override slides.com animation system - make all elements fully visible */
     .sl-block-content,
     .sl-block-content[data-animation-type],
@@ -128,31 +40,7 @@ function generateSlideHtml(
       visibility: visible !important;
       pointer-events: auto !important;
     }
-  </style>
-</head>
-<body class="${bodyClasses}">
-  <div class="reveal"${useSlidesCom && sharedThemeName ? ` data-theme="shared:${sharedThemeName}"` : ''}${!useSlidesCom ? ` data-theme="${lightTheme}" data-code-theme="${codeThemeLight}"` : ''}>
-    <div class="slides">
-${slidesContent}
-    </div>
-  </div>
-  <script src="https://cdn.jsdelivr.net/npm/reveal.js@5.1.0/dist/reveal.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/reveal.js@5.1.0/plugin/highlight/highlight.js"></script>
-  <script>
-    Reveal.initialize({
-      hash: true,
-      controls: true,
-      progress: true,
-      center: false,
-      transition: 'slide',
-      width: 960,
-      height: 700,
-      plugins: [RevealHighlight]
-    });
-  </script>
-</body>
-</html>`;
-}
+  `;
 
 /**
  * Process a slides.com ZIP export and create a slide in the system
@@ -725,6 +613,21 @@ export async function processZipImport({
     });
   }
 
+  /** Delete the slide record + any uploaded Cloudinary videos after a failed import. */
+  const cleanupFailedImport = async () => {
+    await getPrisma().slide.delete({ where: { id: slide.id } });
+
+    if (cloudinaryUploads > 0) {
+      try {
+        await deleteSlideVideos(slide.id);
+        console.log(`Cleaned up ${cloudinaryUploads} Cloudinary videos after failed import`);
+      } catch (cleanupErr: unknown) {
+        const message = cleanupErr instanceof Error ? cleanupErr.message : String(cleanupErr);
+        console.error('Failed to clean up Cloudinary videos:', message);
+      }
+    }
+  };
+
   // 11. Upload Cloudinary videos (now that we have slideId)
   if (cloudinaryVideoQueue.length > 0) {
     console.log(`Uploading ${cloudinaryVideoQueue.length} videos to Cloudinary...`);
@@ -831,31 +734,80 @@ export async function processZipImport({
     });
   });
 
-  // 12. Generate full HTML and add to files
+  // 12. Build deck.json (source of truth) and generate index.html (build
+  // artifact) via the canonical deck engine — both land in the SAME commit.
   onProgress({ type: 'step', step: 'generating_html' });
-  // Get the modified slides content (just the section elements)
-  const slidesHtml = $slides.html();
+  try {
+    // Parse the transformed sections into DeckSlides (mints stable data-cm-ids,
+    // extracts <aside class="notes"> into per-slide notes fields).
+    const slidesHtml = $slides.html() || '';
+    const { slides: deckSlides, warnings: parseWarnings } = parseSlidesFragment(
+      `<div class="slides">\n${slidesHtml}\n</div>`
+    );
+    for (const warning of parseWarnings) {
+      console.warn(`[slides.com import] ${warning}`);
+    }
 
-  // Build theme options based on whether we're using slides.com theme or fallback
-  const themeOptions = libCssUrl
-    ? {
-        // slides.com full theme import (from saved theme or extracted)
-        libCssUrl,
-        customThemeUrl,
-        bodyClasses: finalBodyClasses,
-        sharedThemeName, // For data-theme attribute
+    // Theme fields mirror the legacy generator's three modes.
+    let theme = 'white';
+    let themeDark: string | undefined;
+    let codeThemeDark: string | undefined;
+    let extraCss: DeckExtraCss[] | undefined;
+    let deckThemeUrls:
+      | { libCssUrl?: string | null; customThemeUrl?: string | null; bodyClasses?: string }
+      | undefined;
+
+    if (libCssUrl && sharedThemeName) {
+      // slides.com theme saved to (or reused from) .slidesthemes/ — first-class
+      // shared theme; asset URLs re-resolved from the theme on every save.
+      theme = `shared:${sharedThemeName}`;
+      deckThemeUrls = { libCssUrl, customThemeUrl, bodyClasses: finalBodyClasses };
+    } else if (libCssUrl) {
+      // Theme lib extracted into the slide folder (importTheme without
+      // saveThemeAs): no shared: name exists, so the copied assets are
+      // referenced verbatim via extraCss.
+      extraCss = [{ href: libCssUrl }];
+      if (customThemeUrl) {
+        extraCss.push({ href: customThemeUrl });
       }
-    : {
-        // Fallback to reveal.js themes
-        lightTheme: 'white',
-      };
+      deckThemeUrls = { bodyClasses: finalBodyClasses };
+    } else {
+      // Fallback reveal.js themes — the light/dark media pair, first-class.
+      themeDark = 'black';
+      codeThemeDark = 'github-dark';
+    }
 
-  const fullHtml = generateSlideHtml(slidesHtml || '', slideTitle, themeOptions);
-  files.push({
-    path: `${contentPath}/index.html`,
-    content: fullHtml,
-    encoding: 'utf-8',
-  });
+    const deck: DeckJson = {
+      version: 1,
+      theme,
+      codeTheme: 'github',
+      ...(themeDark ? { themeDark } : {}),
+      ...(codeThemeDark ? { codeThemeDark } : {}),
+      // Importer canonical Reveal config (canonical defaults are not stored).
+      config: { width: 960, height: 700, center: false },
+      // The generator emits no implicit styles — seed the sl-block override.
+      customCss: SL_BLOCK_VISIBILITY_CSS,
+      ...(extraCss ? { extraCss } : {}),
+      slides: deckSlides,
+    };
+
+    files.push({
+      path: `${contentPath}/deck.json`,
+      content: JSON.stringify(deck, null, 2) + '\n',
+      encoding: 'utf-8',
+    });
+    files.push({
+      path: `${contentPath}/index.html`,
+      content: generateDeckHtml(deck, { title: slideTitle, themeUrls: deckThemeUrls }),
+      encoding: 'utf-8',
+    });
+  } catch (genError: unknown) {
+    // Same cleanup as a failed upload: the slide row exists but no content
+    // was committed.
+    await cleanupFailedImport();
+    const message = genError instanceof Error ? genError.message : String(genError);
+    throw new Error(`Failed to generate slide deck: ${message}`);
+  }
 
   // 13. Batch upload all files in single commit
   onProgress({ type: 'step', step: 'uploading_github', current: 0, total: files.length });
@@ -872,21 +824,19 @@ export async function processZipImport({
   } catch (uploadError: unknown) {
     console.log(uploadError);
     // If upload fails, clean up slide record and Cloudinary videos
-    await getPrisma().slide.delete({ where: { id: slide.id } });
-
-    // Also clean up any Cloudinary videos we uploaded
-    if (cloudinaryUploads > 0) {
-      try {
-        await deleteSlideVideos(slide.id);
-        console.log(`Cleaned up ${cloudinaryUploads} Cloudinary videos after failed import`);
-      } catch (cleanupErr: unknown) {
-        const message = cleanupErr instanceof Error ? cleanupErr.message : String(cleanupErr);
-        console.error('Failed to clean up Cloudinary videos:', message);
-      }
-    }
+    await cleanupFailedImport();
 
     const message = uploadError instanceof Error ? uploadError.message : String(uploadError);
     throw new Error(`Failed to upload files: ${message}`);
+  }
+
+  // 14. Refresh the classroom content manifest so the imported deck shows up
+  // (content-tools plan §5.4 — imports previously never refreshed the
+  // manifest). Non-fatal: the import itself succeeded.
+  try {
+    await ClassmojiService.contentManifest.saveManifest(classroom.id);
+  } catch (manifestError: unknown) {
+    console.error('Failed to update manifest after slide import:', manifestError);
   }
 
   // Count slides (top-level sections, not nested vertical stacks)

@@ -16,6 +16,7 @@
     "test:debug": "playwright test --debug"
   },
   "dependencies": {
+    "@classmoji/content": "*",
     "@classmoji/database": "*",
     "@classmoji/services": "*",
     "@classmoji/ui-components": "*",

@@ -17,6 +17,31 @@ export async function waitForPageLoad(page: Page): Promise<void> {
 }
 
 /**
+ * Reload the page until `predicate` reports the saved state is visible, or
+ * attempts run out (the last attempt's state is left for the caller's own
+ * assertions to fail loudly).
+ *
+ * Why: the dual-write save path commits deck.json + index.html via the git
+ * data API (uploadBatch). GitHub's Contents API GETs can serve a cached
+ * pre-save copy for a short window after a git-data commit (read-after-write
+ * consistency across API families), so an immediate reload can render
+ * pre-save content even though the commit landed. The save itself is
+ * verified-correct; this helper absorbs the bounded consistency window.
+ */
+export async function reloadUntil(
+  page: Page,
+  predicate: () => Promise<boolean>,
+  { attempts = 4, delayMs = 3000 }: { attempts?: number; delayMs?: number } = {}
+): Promise<void> {
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    await page.reload();
+    await waitForReveal(page);
+    if (await predicate()) return;
+    if (attempt < attempts) await page.waitForTimeout(delayMs);
+  }
+}
+
+/**
  * Wait for Reveal.js to be initialized on the page.
  * This is important for slide presentation pages.
  */
@@ -60,7 +85,16 @@ export async function waitForNavigation(page: Page, urlPattern: string | RegExp)
  * Looks for save indicators or network requests completing.
  */
 export async function waitForSave(page: Page): Promise<void> {
-  // Wait for any pending save indicators
+  // The save button (handleSave) saves AND exits edit mode, and edit mode only
+  // exits after the save fetcher's response arrives — so the button detaching
+  // is the deterministic "save completed" signal. The old implementation waited
+  // on networkidle, which is sticky per navigation and resolves immediately on
+  // an already-idle page: tests reloaded while the save POST was still in
+  // flight, so the loader read pre-save content and "persists after reload"
+  // assertions failed against the slower dual-write save path.
+  await expect(page.locator('button.save-button')).toHaveCount(0, { timeout: 30000 });
+
+  // Wait for any pending save indicators (belt and suspenders)
   const saveIndicator = page.locator('[data-testid="saving"], .saving');
   await expect(saveIndicator)
     .toHaveCount(0, { timeout: 10000 })
@@ -68,8 +102,8 @@ export async function waitForSave(page: Page): Promise<void> {
       // Save indicator might not exist
     });
 
-  // Wait for network to settle
-  await page.waitForLoadState('networkidle', { timeout: 10000 });
+  // Let the post-save state (savedContent swap, sha token update) settle
+  await page.waitForTimeout(500);
 }
 
 /**

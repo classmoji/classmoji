@@ -1,9 +1,10 @@
 import getPrisma from '@classmoji/database';
-import { titleToIdentifier } from '@classmoji/utils';
-import { ContentService } from '@classmoji/content';
+import { titleToIdentifier, classroomContentRepoName } from '@classmoji/utils';
+import { ContentService } from '../content/ContentService.ts';
 import { getGitProvider } from '../git/index.ts';
 import * as contentManifestService from './contentManifest.service.ts';
 import * as notificationService from './notification.service.ts';
+import { blankPageContentJson, previewBranchName } from './pageContent.service.ts';
 import type { Prisma } from '@prisma/client';
 
 interface PageQueryOptions {
@@ -110,11 +111,41 @@ async function resolveContentRepo(classroomId: string) {
   return {
     classroom,
     gitOrgLogin,
-    repoName: `content-${gitOrgLogin}-${classroom.content_namespace}`,
+    repoName: classroomContentRepoName({
+      login: gitOrgLogin,
+      namespace: classroom.content_namespace,
+    }),
   };
 }
 
 type ContentRepoContext = Awaited<ReturnType<typeof resolveContentRepo>>;
+
+/**
+ * Best-effort deletion of the singleton preview branch for a content path.
+ * 404/422 (branch absent) is the common case and silent; any other failure is
+ * loud but non-fatal — callers proceed either way.
+ */
+async function deletePreviewBranchBestEffort({
+  orgLogin,
+  repo,
+  contentPath,
+  context,
+}: {
+  orgLogin: string;
+  repo: string;
+  contentPath: string;
+  context: string;
+}): Promise<void> {
+  const branch = previewBranchName(contentPath);
+  try {
+    await ContentService.deleteBranch({ orgLogin, repo, branch });
+    console.warn(`[page.service] Deleted preview branch ${branch} (${context})`);
+  } catch (error: unknown) {
+    const status = (error as { status?: number }).status;
+    if (status === 404 || status === 422) return; // already absent
+    console.error(`[page.service] Failed to delete preview branch ${branch} (${context}):`, error);
+  }
+}
 
 async function ensureContentRepoExists({ classroom, gitOrgLogin, repoName }: ContentRepoContext) {
   const gitProvider = getGitProvider(classroom.git_organization!);
@@ -215,8 +246,17 @@ export async function createPage({
     await ensureContentRepoExists(ctx);
   }
 
+  // Slug-reuse retarget guard: a preview branch left over from a previously
+  // deleted page at the same content path would make this new page appear to
+  // have pending (stale) edits — clear it before the first write.
+  await deletePreviewBranchBestEffort({
+    orgLogin: ctx.gitOrgLogin,
+    repo: ctx.repoName,
+    contentPath,
+    context: 'stale preview from a reused slug, cleared before create',
+  });
+
   const htmlPath = `${contentPath}/index.html`;
-  const pageHtml = html ?? generatePageTemplate(title);
 
   if (files.length > 0) {
     // Import flow: assets + index.html in a single batch commit.
@@ -224,7 +264,10 @@ export async function createPage({
       await ContentService.uploadBatch({
         gitOrganization: ctx.classroom.git_organization!,
         repo: ctx.repoName,
-        files: [...files, { path: htmlPath, content: pageHtml, encoding: 'utf-8' }],
+        files: [
+          ...files,
+          { path: htmlPath, content: html ?? generatePageTemplate(title), encoding: 'utf-8' },
+        ],
         branch: 'main',
         message: commitMessage ?? `Import page: ${title}`,
       });
@@ -235,20 +278,46 @@ export async function createPage({
         { cause: uploadError }
       );
     }
-  } else {
-    // Blank flow: single-file commit.
+  } else if (html != null) {
+    // Import/markdown flow without extra assets: single-file commit.
     try {
       await ContentService.put({
         gitOrganization: ctx.classroom.git_organization!,
         repo: ctx.repoName,
         path: htmlPath,
-        content: pageHtml,
+        content: html,
         message: commitMessage ?? `Create page: ${title}`,
       });
     } catch (uploadError) {
       console.error('Failed to upload file to GitHub:', uploadError);
       throw new Error(
         `Failed to upload file to GitHub: ${uploadError instanceof Error ? uploadError.message : String(uploadError)}`,
+        { cause: uploadError }
+      );
+    }
+  } else {
+    // Blank flow: index.html (kept for URL/manifest stability) + a blank
+    // BlockNote content.json wrapper in ONE commit, so fresh pages are
+    // json-first for the granular content tools from birth.
+    try {
+      await ContentService.uploadBatch({
+        gitOrganization: ctx.classroom.git_organization!,
+        repo: ctx.repoName,
+        files: [
+          { path: htmlPath, content: generatePageTemplate(title), encoding: 'utf-8' },
+          {
+            path: `${contentPath}/content.json`,
+            content: blankPageContentJson(),
+            encoding: 'utf-8',
+          },
+        ],
+        branch: 'main',
+        message: commitMessage ?? `Create page: ${title}`,
+      });
+    } catch (uploadError) {
+      console.error('Failed to upload files to GitHub:', uploadError);
+      throw new Error(
+        `Failed to upload files to GitHub: ${uploadError instanceof Error ? uploadError.message : String(uploadError)}`,
         { cause: uploadError }
       );
     }
@@ -519,7 +588,10 @@ export async function deletePage(pageId: string) {
 
   // Delete from GitHub if configured
   if (gitOrgLogin && page.content_path) {
-    const repoName = `content-${gitOrgLogin}-${page.classroom.content_namespace}`;
+    const repoName = classroomContentRepoName({
+      login: gitOrgLogin,
+      namespace: page.classroom.content_namespace,
+    });
 
     try {
       await ContentService.deleteFolder({
@@ -532,6 +604,15 @@ export async function deletePage(pageId: string) {
       console.error('Failed to delete page content from GitHub:', error);
       // Continue with database deletion even if GitHub fails
     }
+
+    // Drop any pending preview branch alongside the folder — a stale
+    // preview/<content_path> ref would retarget a future page reusing the slug.
+    await deletePreviewBranchBestEffort({
+      orgLogin: gitOrgLogin,
+      repo: repoName,
+      contentPath: page.content_path,
+      context: 'page deleted',
+    });
   }
 
   // Delete from database

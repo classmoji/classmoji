@@ -68,6 +68,14 @@ export const create = async (data: AuditLogData) => {
 
   const deduplicationWindowMs = 5 * 1000; // 5-second deduplication window
 
+  // Distinct tools acting on the same resource within the window must never
+  // coalesce — when the payload names a tool, it joins the dedup key. Rows
+  // without a tool keep the original key (unchanged behavior).
+  const tool =
+    data.data && typeof data.data === 'object' && !Array.isArray(data.data)
+      ? (data.data as Record<string, unknown>).tool
+      : undefined;
+
   const recentLog = await getPrisma().auditLog.findFirst({
     where: {
       user_id,
@@ -76,6 +84,7 @@ export const create = async (data: AuditLogData) => {
       resource_type,
       resource_id: normalizedResourceId,
       action,
+      ...(typeof tool === 'string' ? { data: { path: ['tool'], equals: tool } } : {}),
       timestamp: {
         gte: new Date(Date.now() - deduplicationWindowMs),
       },

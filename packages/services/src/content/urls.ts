@@ -5,6 +5,8 @@
  * No authentication required - URLs are public but unlisted
  */
 
+import { classroomContentRepoName } from '@classmoji/utils';
+
 /**
  * Build a GitHub Pages URL for content
  * @param {Object} options
@@ -47,7 +49,7 @@ export function getSlideContentUrl({
   contentPath: string;
   filename?: string;
 }): string {
-  const repo = `content-${orgLogin}-${term}`;
+  const repo = classroomContentRepoName({ login: orgLogin, namespace: term });
   const path = filename ? `${contentPath}/${filename}` : contentPath;
   return getContentUrl({ org: orgLogin, repo, path });
 }

@@ -1,5 +1,5 @@
 import { ClassmojiService } from '~/utils/db.server.ts';
-import { assertPageAccess } from '~/utils/auth.server.ts';
+import { assertPageAccess, pageMutationBlocked } from '~/utils/auth.server.ts';
 import { uploadPageAsset } from '~/utils/content.server.ts';
 
 /**
@@ -33,7 +33,13 @@ export const action = async ({ request }: { request: Request }) => {
   }
 
   // Require edit permission (staff in the page's classroom)
-  await assertPageAccess({ request, page, accessType: 'edit' });
+  const { membership } = await assertPageAccess({ request, page, accessType: 'edit' });
+
+  // SEC4: uploads write to the content repo — enforce the platform-wide
+  // classroom status gate (LOCKED/UNPUBLISHED are read-only for non-owners).
+  // accessType 'edit' guarantees a membership (assertPageAccess threw otherwise).
+  const blocked = membership ? pageMutationBlocked(page.classroom, membership.role) : null;
+  if (blocked) return blocked;
 
   try {
     const { url, path } = await uploadPageAsset(page, file);

@@ -274,9 +274,15 @@ test.describe('Security Edge Cases', () => {
     try {
       await logout(page);
 
-      const response = await page.goto(`/${privateSlideId}`);
-
-      expect(response?.status()).toBe(403);
+      // The root loader (app/root.server.ts) redirects unauthenticated
+      // visitors of non-public slides to the webapp login (302 → WEBAPP_URL
+      // ?redirect=...) before the slide route's 403 can fire. Assert the
+      // security-relevant outcome: the anonymous visitor is bounced away and
+      // never sees the slide content.
+      await page.goto(`/${privateSlideId}`);
+      const landedUrl = new URL(page.url());
+      expect(landedUrl.pathname).not.toBe(`/${privateSlideId}`); // bounced off the slide route
+      await expect(page.locator('.reveal')).toHaveCount(0);
     } finally {
       await loginAs(page, 'owner');
       await deleteSlide(page, privateSlideId);

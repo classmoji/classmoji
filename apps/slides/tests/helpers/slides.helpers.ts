@@ -11,16 +11,16 @@ export type SlideVisibility = 'draft' | 'private' | 'public';
  * Create a new slide presentation.
  * Navigates to the create page, fills the form, and submits.
  *
+ * The create form is title-only since the born-dual-writers rewrite
+ * (content-tools plan §5.3): the content repo is derived from the classroom's
+ * content namespace (shown read-only) and repository linking happens later, so
+ * there is no repository <select> anymore.
+ *
  * @param page - Playwright page
  * @param title - Slide title
- * @param repositoryIndex - Index of the repository to select (0-based)
  * @returns The new slide's ID
  */
-export async function createSlide(
-  page: Page,
-  title: string,
-  repositoryIndex: number = 0
-): Promise<string> {
+export async function createSlide(page: Page, title: string): Promise<string> {
   const classroomSlug = getTestClassroomSlug();
 
   // Navigate to create page
@@ -29,10 +29,6 @@ export async function createSlide(
 
   // Fill title
   await page.fill('input[name="title"]', title);
-
-  // Select repository (first option after the placeholder)
-  const repositorySelect = page.locator('select[name="repository"]');
-  await repositorySelect.selectOption({ index: repositoryIndex + 1 }); // +1 to skip "Select a repository..." placeholder
 
   // Submit form
   await page.click('button[type="submit"]');
@@ -100,8 +96,9 @@ export async function followSlide(page: Page, slideId: string, shareCode?: strin
  * Clicks the save button in the navbar (green checkmark button).
  */
 export async function saveSlide(page: Page): Promise<void> {
-  // The save button is the green button (bg-green-600) with a checkmark icon
-  const saveButton = page.locator('button.bg-green-600');
+  // The save button carries the stable `save-button` class (checkmark icon);
+  // the old bg-green-600 utility class was dropped in the TS migration.
+  const saveButton = page.locator('button.save-button');
   await saveButton.click();
   await waitForSave(page);
 }

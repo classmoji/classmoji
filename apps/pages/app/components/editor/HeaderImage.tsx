@@ -1,5 +1,6 @@
-import React, { useState, useRef, useCallback } from 'react';
+import React, { useState, useRef, useCallback, useEffect } from 'react';
 import { useFetcher } from 'react-router';
+import { toast } from 'react-toastify';
 import useHeaderImageDrag from '~/hooks/useHeaderImageDrag.ts';
 
 /**
@@ -39,6 +40,15 @@ const HeaderImage = ({ imageUrl, position, editMode, pageId: _pageId }: HeaderIm
     enabled: isRepositioning,
     containerRef,
   });
+
+  // Surface mutation failures — notably the 409 "page changed — try again"
+  // from the cover-image CAS write (F5); this component has no other
+  // error indicator.
+  useEffect(() => {
+    if (fetcher.state === 'idle' && fetcher.data?.error) {
+      toast.error(fetcher.data.error);
+    }
+  }, [fetcher.state, fetcher.data]);
 
   const handleFileSelect = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => {

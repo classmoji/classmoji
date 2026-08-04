@@ -1,4 +1,6 @@
+import { redirect } from 'react-router';
 import { ClassmojiService, getAuthSession } from '~/utils/db.server.ts';
+import { pageMutationBlocked } from '~/utils/auth.server.ts';
 import {
   loadPageContent,
   savePageContent,
@@ -65,9 +67,57 @@ export const loader = async ({
     throw new Response('Page is not public', { status: 403 });
   }
 
-  // Load content from GitHub (page includes classroom.git_organization via includeClassroom)
   const pageForContent = page as unknown as PageForContent;
-  const { format, content, coverImage: jsonCoverImage } = await loadPageContent(pageForContent);
+
+  // ── Preview branches (plan §3b) ────────────────────────────────────────────
+  // `?preview=1` renders the singleton `preview/<content_path>` branch instead
+  // of main. Staff-gated: non-staff viewers never pay the GitHub status call
+  // and the param is silently ignored for them.
+  const url = new URL(request.url);
+  const wantsPreview = url.searchParams.get('preview') === '1';
+  // Post-accept/discard success notice, round-tripped via redirect (staff only).
+  const rawNotice = url.searchParams.get('notice');
+  const notice =
+    canEdit && (rawNotice === 'preview-accepted' || rawNotice === 'preview-discarded')
+      ? rawNotice
+      : null;
+
+  let previewStatus: {
+    exists: boolean;
+    commits_ahead?: number;
+    oldest_commit_at?: string;
+  } | null = null;
+  if (canEdit) {
+    try {
+      previewStatus = await ClassmojiService.pageContent.getPreviewStatus(pageForContent);
+    } catch (err) {
+      // A GitHub hiccup must not 500 the page — degrade to "no preview".
+      console.error('[pages] Failed to check preview status:', err);
+      previewStatus = { exists: false };
+    }
+  }
+
+  const previewBranch = ClassmojiService.pageContent.previewBranchName(page.content_path);
+  const previewActive = Boolean(canEdit && wantsPreview && previewStatus?.exists);
+  // Staff asked for a preview but no branch exists → render main with a notice.
+  const previewMissing = Boolean(canEdit && wantsPreview && !previewStatus?.exists);
+
+  // Load content from GitHub (page includes classroom.git_organization via
+  // includeClassroom). Staff loads bypass the 60s per-process cache: for
+  // canEdit users this read IS the edit surface (the editor mounts inline) and
+  // seeds the save conflict token, so a cached read on another Fly instance
+  // could silently revert an MCP write (4b parity with slides). It also keeps
+  // the post-accept redirect (`?notice=preview-accepted`, staff-only) from
+  // showing pre-accept cached content under the success toast.
+  const {
+    format,
+    content,
+    coverImage: jsonCoverImage,
+    sha: contentFileSha,
+  } = await loadPageContent(
+    pageForContent,
+    previewActive ? { ref: previewBranch, skipCache: true } : { skipCache: canEdit }
+  );
 
   let viewerContent: unknown;
 
@@ -97,6 +147,13 @@ export const loader = async ({
   const repoName =
     contentNamespace && gitOrg?.login ? `content-${gitOrg.login}-${contentNamespace}` : null;
 
+  // GitHub's free diff UI for the pending preview (branch segment URL-encoded —
+  // preview branch names contain slashes).
+  const diffUrl =
+    gitOrg?.login && repoName
+      ? `https://github.com/${gitOrg.login}/${repoName}/compare/main...${encodeURIComponent(previewBranch)}`
+      : null;
+
   return {
     page: {
       id: page.id,
@@ -124,6 +181,24 @@ export const loader = async ({
     coverImage,
     userRole,
     canEdit,
+    notice,
+    // Conflict token (F2, 4b parity with slides): content.json's blob sha,
+    // echoed back by the editor on every save so the action can 409 instead
+    // of clobbering a concurrent write. null = no content.json yet (fresh or
+    // legacy-HTML page) → the first save creates it without a precondition.
+    // Editor-only: null for non-editors and in read-only preview mode.
+    contentSha: canEdit && !previewActive && format === 'json' ? contentFileSha : null,
+    // Preview state is staff-only; students/anonymous always get null.
+    preview: canEdit
+      ? {
+          active: previewActive,
+          missing: previewMissing,
+          exists: Boolean(previewStatus?.exists),
+          commitsAhead: previewStatus?.commits_ahead ?? 0,
+          oldestCommitAt: previewStatus?.oldest_commit_at ?? null,
+          diffUrl,
+        }
+      : null,
   };
 };
 
@@ -160,10 +235,15 @@ export const action = async ({
     authData.userId
   );
 
-  const canEdit = membership && ['OWNER', 'TEACHER'].includes(membership.role);
-  if (!canEdit) {
+  if (!membership || !['OWNER', 'TEACHER'].includes(membership.role)) {
     return Response.json({ error: 'Unauthorized' }, { status: 403 });
   }
+
+  // SEC4: every intent this action handles mutates (GitHub content, preview
+  // branches, or page rows) — enforce the platform-wide classroom status gate
+  // (owners always may mutate; LOCKED/UNPUBLISHED are read-only for others).
+  const blocked = pageMutationBlocked(page.classroom, membership.role);
+  if (blocked) return blocked;
 
   // Support both JSON and multipart form data (for file uploads)
   const contentType = request.headers.get('content-type') || '';
@@ -180,13 +260,94 @@ export const action = async ({
   if (intent === 'save') {
     try {
       const blocks = JSON.parse(data.content as string);
-      await savePageContent(actionPage, blocks);
+
+      // F2 (4b parity with slides): optimistic-lock the write on the
+      // content.json sha the editor loaded (loader / previous save response).
+      const expectedSha =
+        typeof data.content_sha === 'string' && data.content_sha ? data.content_sha : null;
+
+      if (!expectedSha) {
+        // Token-less save. Legit only when content.json doesn't exist yet
+        // (fresh or legacy-HTML page — the loader handed out a null token).
+        // If the file EXISTS, this is a stale pre-token client bundle (or the
+        // file appeared since the editor loaded, e.g. an MCP apply): reject
+        // rather than silently clobber. Fresh existence check — the 60s cache
+        // must not vouch for absence.
+        const existing = await loadPageContent(actionPage, { skipCache: true });
+        if (existing.format === 'json') {
+          return Response.json(
+            { conflict: true, message: 'This page changed since you opened it.' },
+            { status: 409 }
+          );
+        }
+      }
+
+      const { sha } = await savePageContent(actionPage, blocks, {
+        ...(expectedSha ? { expectedSha } : {}),
+      });
       await ClassmojiService.page.quickUpdate(pageId, {
         updated_at: new Date(),
       });
-      return Response.json({ success: true });
+      // Return the new sha — the editor's conflict token for its next save.
+      return Response.json({ success: true, sha });
     } catch (error: unknown) {
+      if ((error as { status?: number } | null)?.status === 409) {
+        // Someone (another editor, an MCP apply) changed content.json since
+        // this editor loaded it. Nothing was written.
+        return Response.json(
+          { conflict: true, message: 'This page changed since you opened it.' },
+          { status: 409 }
+        );
+      }
       console.error('Failed to save page:', error);
+      return Response.json(
+        { error: error instanceof Error ? error.message : 'Unknown error' },
+        { status: 500 }
+      );
+    }
+  }
+
+  // ── Preview lifecycle (plan §3b) ───────────────────────────────────────────
+  // Staff-gated by the shared canEdit check above (same gate as every edit
+  // intent). Accept merges the preview branch into main; discard deletes it.
+
+  if (intent === 'preview-accept') {
+    try {
+      const result = await ClassmojiService.pageContent.acceptPreview(actionPage);
+      if (result.merged) {
+        // Settle guard: GitHub's Contents API lags a merge by ~1-2s, so an
+        // immediate redirect can render pre-accept content under an
+        // "accepted" toast (with a stale pending-preview banner to match).
+        // We know the merged sha — wait (bounded) until reads serve it.
+        if (result.sha) {
+          for (let attempt = 0; attempt < 5; attempt++) {
+            const fresh = await ClassmojiService.pageContent.loadPageContent(actionPage, {
+              skipCache: true,
+            });
+            if (fresh.sha === result.sha) break;
+            await new Promise(r => setTimeout(r, 700));
+          }
+        }
+        return redirect(`/${page.classroom.slug}/${pageId}?notice=preview-accepted`);
+      }
+      // Merge conflict — nothing merged, branch kept. Surface the per-unit
+      // report so the UI can list the conflicted blocks.
+      return Response.json({ conflict: true, units: result.units }, { status: 409 });
+    } catch (error: unknown) {
+      console.error('Failed to accept preview:', error);
+      return Response.json(
+        { error: error instanceof Error ? error.message : 'Unknown error' },
+        { status: 500 }
+      );
+    }
+  }
+
+  if (intent === 'preview-discard') {
+    try {
+      await ClassmojiService.pageContent.discardPreview(actionPage);
+      return redirect(`/${page.classroom.slug}/${pageId}?notice=preview-discarded`);
+    } catch (error: unknown) {
+      console.error('Failed to discard preview:', error);
       return Response.json(
         { error: error instanceof Error ? error.message : 'Unknown error' },
         { status: 500 }
@@ -232,12 +393,20 @@ export const action = async ({
             position: typeof data.position === 'number' ? data.position : 50,
           }
         : null;
-      await savePageCoverImage(actionPage, coverImage);
+      const { sha } = await savePageCoverImage(actionPage, coverImage);
       await ClassmojiService.page.quickUpdate(pageId, {
         updated_at: new Date(),
       });
-      return Response.json({ success: true });
+      return Response.json({ success: true, sha });
     } catch (error: unknown) {
+      if ((error as { status?: number } | null)?.status === 409) {
+        // F5: savePageCoverImage's CAS write lost to a concurrent content
+        // edit — nothing was written, and retrying re-reads fresh content.
+        return Response.json(
+          { error: 'This page changed while updating the cover image — please try again.' },
+          { status: 409 }
+        );
+      }
       return Response.json(
         { error: error instanceof Error ? error.message : 'Unknown error' },
         { status: 500 }
@@ -252,12 +421,20 @@ export const action = async ({
         return Response.json({ error: 'No file provided' }, { status: 400 });
       }
       const { url } = await uploadPageAsset(actionPage, file);
-      await savePageCoverImage(actionPage, { url, position: 50 });
+      const { sha } = await savePageCoverImage(actionPage, { url, position: 50 });
       await ClassmojiService.page.quickUpdate(pageId, {
         updated_at: new Date(),
       });
-      return Response.json({ success: true, url });
+      return Response.json({ success: true, url, sha });
     } catch (error: unknown) {
+      if ((error as { status?: number } | null)?.status === 409) {
+        // F5: the asset uploaded fine, but the cover-image metadata write
+        // lost to a concurrent content edit. Retrying is safe and cheap.
+        return Response.json(
+          { error: 'This page changed while updating the cover image — please try again.' },
+          { status: 409 }
+        );
+      }
       console.error('Failed to upload header image:', error);
       return Response.json(
         { error: error instanceof Error ? error.message : 'Unknown error' },

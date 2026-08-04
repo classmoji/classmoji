@@ -10,6 +10,14 @@ export interface SlideData {
 export interface StackData {
   id: string;
   slides: SlideData[];
+  /**
+   * The ORIGINAL wrapper <section> element for stacks parsed from the DOM.
+   * syncToDOM clones it so drags reassemble stacks with the wrapper's
+   * attributes intact (data-cm-id, data-background-*, data-transition, …).
+   * Absent for newly-formed stacks (drag one slide onto another) — those get
+   * a bare <section>; the server mints ids on save.
+   */
+  wrapperElement?: Element;
 }
 
 interface MoveDestination {
@@ -202,8 +210,20 @@ export function useSlideStructure(revealInstance: RevealApi | null, onContentCha
         clone.setAttribute('contenteditable', 'true');
         fragment.appendChild(clone);
       } else {
-        // Multiple slides - wrap in a section
-        const wrapper = document.createElement('section');
+        // Multiple slides - wrap in a section. Reuse the ORIGINAL wrapper
+        // element when this stack came from the DOM so its attributes
+        // (data-cm-id, data-background-*, data-transition, …) survive the
+        // drag. Deep-clone then drop the child sections: non-section children
+        // (e.g. a container-level <aside class="notes">) are preserved too.
+        // Newly-formed stacks have no original wrapper — bare <section>, the
+        // server mints its id on save.
+        let wrapper: HTMLElement;
+        if (stack.wrapperElement) {
+          wrapper = stack.wrapperElement.cloneNode(true) as HTMLElement;
+          wrapper.querySelectorAll(':scope > section').forEach(child => child.remove());
+        } else {
+          wrapper = document.createElement('section');
+        }
         stack.slides.forEach(slide => {
           const clone = slide.element.cloneNode(true) as HTMLElement;
           clone.setAttribute('contenteditable', 'true');
@@ -321,6 +341,9 @@ function parseSlideStructure(slidesContainer: HTMLElement): StackData[] {
       stacks.push({
         id: `stack-${hIndex}`,
         slides,
+        // Carry the original wrapper element so syncToDOM can rebuild the
+        // stack with its attributes intact (see StackData.wrapperElement).
+        wrapperElement: section,
       });
     } else {
       // Single slide (still treat as a stack with one slide)
