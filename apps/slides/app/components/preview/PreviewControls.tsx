@@ -1,8 +1,23 @@
-import { useState } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { Link, useFetcher } from 'react-router';
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
 import { IconExternalLink, IconGitBranch } from '@tabler/icons-react';
+import {
+  META_CONFLICT_ID,
+  ORDER_CONFLICT_ID,
+  allResolved,
+  buildResolutions,
+  buildSlideSrcdoc,
+  isChildOrderId,
+  metaFieldRows,
+  reasonLabel,
+  slideSideHtml,
+  type ConflictUnit,
+  type MergeChoice,
+  type MergeResolution,
+  type SlideSide,
+} from './conflictChooser.ts';
 
 dayjs.extend(relativeTime);
 
@@ -10,12 +25,14 @@ dayjs.extend(relativeTime);
  * Preview-branch UI for slide decks (plan §3b, mirroring apps/pages'
  * PreviewControls): the persistent bar shown while rendering the pending
  * `preview/<content_path>` branch, the slim staff-only banner shown on the
- * live deck when a preview exists, and the conflict panel rendered when an
- * accept hits a git merge conflict.
+ * live deck when a preview exists, and the side-by-side conflict chooser
+ * rendered when an accept hits a genuine merge conflict (Phase 7).
  *
  * All accept/discard submissions post the same form intents the route action
  * handles (`preview-accept` / `preview-discard`) — staff-gated server-side
- * (assertSlideAccess edit tier, same gate as every edit intent).
+ * (assertSlideAccess edit tier, same gate as every edit intent). The chooser
+ * re-posts `preview-accept` with a `resolutions` payload covering every
+ * listed conflict.
  *
  * The slides navbar is `fixed top-0` and the reveal container fills the
  * viewport below it (`fixed inset-0 pt-14`), so preview chrome overlays as
@@ -31,20 +48,22 @@ export interface PreviewInfo {
   diffUrl: string | null;
 }
 
-/** A conflicted deck unit (diffDeckUnits shape): index is '4' or '4.2'. */
-export interface ConflictUnit {
-  id: string;
-  index: string;
-  ours?: unknown;
-  theirs?: unknown;
-  base?: unknown;
+export type { ConflictUnit };
+
+export interface OrderConflict {
+  base: string[];
+  ours: string[];
+  theirs: string[];
 }
 
 interface PreviewActionData {
   conflict?: boolean;
   units?: ConflictUnit[];
-  orderConflict?: { base: string[]; ours: string[]; theirs: string[] } | null;
+  orderConflict?: OrderConflict | null;
+  autoMerged?: number;
   error?: string;
+  code?: string;
+  ids?: string[];
 }
 
 function usePreviewActions() {
@@ -57,6 +76,15 @@ function usePreviewActions() {
     fetcher.submit({ intent: 'preview-accept' }, { method: 'POST' });
   };
 
+  // Chooser submit: same intent, plus one {id, choose} per listed conflict.
+  const applyResolutions = (resolutions: MergeResolution[]) => {
+    setPending('accept');
+    fetcher.submit(
+      { intent: 'preview-accept', resolutions: JSON.stringify(resolutions) },
+      { method: 'POST' }
+    );
+  };
+
   const discard = () => {
     if (!window.confirm('Discard the pending preview? Its changes will be permanently deleted.')) {
       return;
@@ -67,43 +95,313 @@ function usePreviewActions() {
 
   const conflictUnits = fetcher.data?.conflict ? (fetcher.data.units ?? []) : null;
   const orderConflict = fetcher.data?.conflict ? (fetcher.data.orderConflict ?? null) : null;
+  const autoMerged = fetcher.data?.conflict ? (fetcher.data.autoMerged ?? 0) : 0;
   const error = fetcher.data?.error ?? null;
 
-  return { busy, pending, accept, discard, conflictUnits, orderConflict, error };
+  return {
+    busy,
+    pending,
+    accept,
+    applyResolutions,
+    discard,
+    conflictUnits,
+    orderConflict,
+    autoMerged,
+    error,
+  };
 }
 
-function unitLabel(unit: ConflictUnit): string {
-  return `slide ${unit.index || '?'} (${unit.id})`;
-}
+// ─── Conflict chooser (Phase 7) ──────────────────────────────────────────────
+
+const SIDE_TITLE: Record<MergeChoice, string> = {
+  ours: 'Live version (yours)',
+  theirs: "Preview version (agent's)",
+};
+const SIDE_ACTION: Record<MergeChoice, string> = {
+  ours: 'Keep live',
+  theirs: 'Take preview',
+};
+
+/** One selectable side of a conflict card (radio + bounded preview). */
+const ChoiceSide = ({
+  unitId,
+  side,
+  selected,
+  onChoose,
+  children,
+}: {
+  unitId: string;
+  side: MergeChoice;
+  selected: boolean;
+  onChoose: (side: MergeChoice) => void;
+  children: ReactNode;
+}) => (
+  <label
+    data-testid={`conflict-choose-${side}-${unitId}`}
+    className={`flex flex-col gap-1.5 rounded-lg border p-2 cursor-pointer transition-colors ${
+      selected
+        ? 'border-amber-500 dark:border-amber-400 ring-1 ring-amber-500 dark:ring-amber-400 bg-amber-50/60 dark:bg-amber-950/40'
+        : 'border-stone-200 dark:border-neutral-700 hover:border-amber-300 dark:hover:border-amber-700'
+    }`}
+  >
+    <span className="flex items-center gap-2 text-xs font-medium text-gray-700 dark:text-gray-200">
+      <input
+        type="radio"
+        name={`conflict-${unitId}`}
+        checked={selected}
+        onChange={() => onChoose(side)}
+        className="accent-amber-600"
+      />
+      {SIDE_TITLE[side]}
+      <span className="ml-auto text-[11px] font-normal text-gray-500 dark:text-gray-400">
+        {SIDE_ACTION[side]}
+      </span>
+    </span>
+    {children}
+  </label>
+);
+
+/** Placeholder for a side where the slide was deleted. */
+const Tombstone = ({ label }: { label: string }) => (
+  <div className="flex h-full min-h-24 items-center justify-center rounded border border-dashed border-gray-300 dark:border-neutral-600 bg-gray-50 dark:bg-neutral-800/60 px-3 py-4 text-xs italic text-gray-500 dark:text-gray-400">
+    {label}
+  </div>
+);
 
 /**
- * Conflict panel: lists the slides that genuinely need a decision. The
- * per-slide chooser is Phase 7 — for now we name the conflicted units readably.
+ * Bounded render of one slide side. The deck's html is already trusted by the
+ * real viewer; here it renders scaled-down inside a fully sandboxed iframe
+ * (empty sandbox allowlist = no scripts, no same-origin access).
+ */
+const SlideFrame = ({ side }: { side: SlideSide }) => {
+  const html = slideSideHtml(side);
+  return (
+    <div className="rounded border border-stone-200 dark:border-neutral-700 bg-white overflow-hidden">
+      <iframe
+        sandbox=""
+        srcDoc={buildSlideSrcdoc(html)}
+        title="Slide preview"
+        loading="lazy"
+        className="h-36 w-full pointer-events-none"
+      />
+      {side.notes ? (
+        <div className="border-t border-stone-200 dark:border-neutral-700 bg-stone-50 dark:bg-neutral-800 px-2 py-1 text-[11px] text-gray-500 dark:text-gray-400 truncate">
+          Notes: {side.notes}
+        </div>
+      ) : null}
+    </div>
+  );
+};
+
+/** Numbered id list for an ordering conflict side. */
+const OrderList = ({ ids }: { ids: string[] }) => (
+  <ol className="space-y-0.5 text-xs text-gray-700 dark:text-gray-300 max-h-36 overflow-y-auto">
+    {ids.map((id, position) => (
+      <li key={`${id}-${position}`} className="flex gap-1.5">
+        <span className="w-5 shrink-0 text-right tabular-nums text-gray-400 dark:text-gray-500">
+          {position + 1}.
+        </span>
+        <span className="truncate font-mono text-[11px]">{id}</span>
+      </li>
+    ))}
+  </ol>
+);
+
+/** Field diff list for one side of the `__meta__` deck-settings conflict. */
+const MetaFieldList = ({
+  rows,
+  side,
+}: {
+  rows: ReturnType<typeof metaFieldRows>;
+  side: MergeChoice;
+}) => (
+  <dl className="space-y-1 text-xs max-h-36 overflow-y-auto">
+    {rows.map(row => (
+      <div key={row.field} className="flex gap-2">
+        <dt className="w-24 shrink-0 font-mono text-[11px] text-gray-500 dark:text-gray-400">
+          {row.field}
+        </dt>
+        <dd className="break-all text-gray-800 dark:text-gray-200">
+          {side === 'ours' ? row.ours : row.theirs}
+        </dd>
+      </div>
+    ))}
+  </dl>
+);
+
+const cardShell =
+  'rounded-lg border border-rose-200 dark:border-rose-800/70 bg-white dark:bg-neutral-900 p-3';
+const cardBadge =
+  'rounded-full bg-rose-100 dark:bg-rose-900/60 px-2 py-0.5 text-[11px] text-rose-800 dark:text-rose-200';
+
+/** One conflict card: side-by-side live vs preview with a choice per side. */
+const ConflictCard = ({
+  unit,
+  choice,
+  onChoose,
+}: {
+  unit: ConflictUnit;
+  choice: MergeChoice | undefined;
+  onChoose: (id: string, choice: MergeChoice) => void;
+}) => {
+  const isOrder = unit.id === ORDER_CONFLICT_ID || isChildOrderId(unit.id);
+  const isMeta = unit.id === META_CONFLICT_ID;
+  const title =
+    unit.id === ORDER_CONFLICT_ID
+      ? 'Slide order'
+      : isChildOrderId(unit.id)
+        ? `Stack ${unit.index || '?'} order`
+        : isMeta
+          ? 'Deck settings'
+          : `Slide ${unit.index || '?'}`;
+  const metaRows = isMeta
+    ? metaFieldRows(
+        unit.ours as Record<string, unknown> | undefined,
+        unit.theirs as Record<string, unknown> | undefined
+      )
+    : [];
+
+  const renderSide = (side: MergeChoice) => {
+    const value = side === 'ours' ? unit.ours : unit.theirs;
+    if (isOrder) {
+      return <OrderList ids={Array.isArray(value) ? (value as string[]) : []} />;
+    }
+    if (isMeta) {
+      return <MetaFieldList rows={metaRows} side={side} />;
+    }
+    if (value === undefined || value === null) {
+      return (
+        <Tombstone
+          label={side === 'ours' ? 'Deleted in the live version' : 'Deleted in the preview'}
+        />
+      );
+    }
+    return <SlideFrame side={value as SlideSide} />;
+  };
+
+  return (
+    <div data-testid={`conflict-card-${unit.id}`} className={cardShell}>
+      <div className="flex items-center gap-2 text-xs">
+        <span className="font-semibold text-gray-700 dark:text-gray-200">{title}</span>
+        <span className={cardBadge}>{reasonLabel(unit.reason)}</span>
+      </div>
+      <div className="mt-2 grid grid-cols-1 sm:grid-cols-2 gap-2">
+        {(['ours', 'theirs'] as const).map(side => (
+          <ChoiceSide
+            key={side}
+            unitId={unit.id}
+            side={side}
+            selected={choice === side}
+            onChoose={chosen => onChoose(unit.id, chosen)}
+          >
+            {renderSide(side)}
+          </ChoiceSide>
+        ))}
+      </div>
+    </div>
+  );
+};
+
+/**
+ * Conflict chooser panel (Phase 7): a side-by-side card per conflicted slide
+ * (plus stack-order / slide-order / deck-settings cards), an Apply footer that
+ * submits a resolution for EVERY listed conflict, and a Discard escape.
+ * Auto-merged counts from the accept report are surfaced so staff know only
+ * the true collisions are listed.
  */
 const ConflictPanel = ({
   units,
   orderConflict,
+  autoMerged,
+  busy,
+  onApply,
+  onDiscard,
 }: {
   units: ConflictUnit[];
-  orderConflict: { base: string[]; ours: string[]; theirs: string[] } | null;
-}) => (
-  <div
-    data-testid="preview-conflict-panel"
-    className="border-b border-rose-300 dark:border-rose-800 bg-rose-50 dark:bg-rose-950/90 px-4 sm:px-6 lg:px-8 py-3"
-  >
-    <div className="text-sm font-medium text-rose-900 dark:text-rose-100">
-      Changes conflict with edits made on the live deck
+  orderConflict: OrderConflict | null;
+  autoMerged: number;
+  busy: boolean;
+  onApply: (resolutions: MergeResolution[]) => void;
+  onDiscard: () => void;
+}) => {
+  // The top-level order conflict arrives separately in the accept payload;
+  // fold it into the card list under its sentinel id so one chooser covers
+  // the full conflict set the resolve service validates against.
+  const allUnits: ConflictUnit[] = orderConflict
+    ? [
+        ...units,
+        {
+          id: ORDER_CONFLICT_ID,
+          index: '',
+          reason: 'order',
+          base: orderConflict.base,
+          ours: orderConflict.ours,
+          theirs: orderConflict.theirs,
+        },
+      ]
+    : units;
+  const ids = allUnits.map(unit => unit.id);
+  const signature = ids.join('|');
+  const [choices, setChoices] = useState<Record<string, MergeChoice>>({});
+  // Drop stale choices when the conflict set changes (a re-accept can shrink it).
+  useEffect(() => setChoices({}), [signature]);
+
+  const choose = (id: string, choice: MergeChoice) =>
+    setChoices(prev => ({ ...prev, [id]: choice }));
+  const ready = allResolved(ids, choices);
+
+  return (
+    <div
+      data-testid="preview-conflict-panel"
+      className="border-b border-rose-300 dark:border-rose-800 bg-rose-50 dark:bg-rose-950/95 px-4 sm:px-6 lg:px-8 py-3 max-h-[calc(100vh-8rem)] overflow-y-auto"
+    >
+      <div className="text-sm font-medium text-rose-900 dark:text-rose-100">
+        Changes conflict with edits made on the live deck
+      </div>
+      <div
+        data-testid="conflict-auto-merged"
+        className="mt-0.5 text-sm text-rose-800 dark:text-rose-200"
+      >
+        {autoMerged > 0
+          ? `${autoMerged} change${autoMerged === 1 ? '' : 's'} merged automatically; these need you:`
+          : 'Choose which version to keep for each conflict:'}
+      </div>
+
+      <div className="mt-3 space-y-3">
+        {allUnits.map(unit => (
+          <ConflictCard key={unit.id} unit={unit} choice={choices[unit.id]} onChoose={choose} />
+        ))}
+      </div>
+
+      <div className="mt-4 flex flex-wrap items-center gap-3">
+        <button
+          type="button"
+          data-testid="conflict-apply"
+          disabled={!ready || busy}
+          onClick={() => onApply(buildResolutions(ids, choices))}
+          className={`${actionButtonBase} bg-amber-600 text-white hover:bg-amber-700 dark:bg-amber-500 dark:text-amber-950 dark:hover:bg-amber-400`}
+        >
+          {busy ? 'Applying…' : 'Apply choices'}
+        </button>
+        <button
+          type="button"
+          data-testid="conflict-discard"
+          disabled={busy}
+          onClick={onDiscard}
+          className={`${actionButtonBase} text-rose-800 dark:text-rose-200 ring-1 ring-rose-300 dark:ring-rose-700 hover:bg-rose-100 dark:hover:bg-rose-900/40`}
+        >
+          Discard preview
+        </button>
+        <span className="text-xs text-rose-700 dark:text-rose-300">
+          {ready
+            ? 'Applies your choice for every conflict and publishes the merge.'
+            : 'Pick a version for every conflict to enable Apply.'}{' '}
+          Or re-apply from the current version (via your agent).
+        </span>
+      </div>
     </div>
-    <div className="mt-1 text-sm text-rose-800 dark:text-rose-200">
-      Conflicting slides:{' '}
-      {units.length > 0 ? units.map(unit => unitLabel(unit)).join(', ') : 'none reported'}
-      {orderConflict ? `${units.length > 0 ? '; ' : ''}slide ordering also conflicts` : ''}
-    </div>
-    <div className="mt-1 text-sm text-rose-700 dark:text-rose-300">
-      Re-apply from the current version (via your agent) or discard the preview.
-    </div>
-  </div>
-);
+  );
+};
 
 const actionButtonBase =
   'rounded px-3 py-1 text-sm font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed';
@@ -113,8 +411,17 @@ const actionButtonBase =
  * Amber identity in both light and dark modes; fixed under the slides navbar.
  */
 export const PreviewBar = ({ preview }: { preview: PreviewInfo }) => {
-  const { busy, pending, accept, discard, conflictUnits, orderConflict, error } =
-    usePreviewActions();
+  const {
+    busy,
+    pending,
+    accept,
+    applyResolutions,
+    discard,
+    conflictUnits,
+    orderConflict,
+    autoMerged,
+    error,
+  } = usePreviewActions();
   const age = preview.oldestCommitAt ? dayjs(preview.oldestCommitAt).fromNow() : null;
 
   return (
@@ -165,7 +472,16 @@ export const PreviewBar = ({ preview }: { preview: PreviewInfo }) => {
         </div>
         {error && <div className="mt-2 text-sm text-rose-700 dark:text-rose-300">{error}</div>}
       </div>
-      {conflictUnits && <ConflictPanel units={conflictUnits} orderConflict={orderConflict} />}
+      {conflictUnits && (
+        <ConflictPanel
+          units={conflictUnits}
+          orderConflict={orderConflict}
+          autoMerged={autoMerged}
+          busy={busy}
+          onApply={applyResolutions}
+          onDiscard={discard}
+        />
+      )}
     </div>
   );
 };
@@ -174,8 +490,17 @@ export const PreviewBar = ({ preview }: { preview: PreviewInfo }) => {
  * Slim staff-only banner on the normal (live) view when a preview branch exists.
  */
 export const PendingPreviewBanner = ({ preview }: { preview: PreviewInfo }) => {
-  const { busy, pending, accept, discard, conflictUnits, orderConflict, error } =
-    usePreviewActions();
+  const {
+    busy,
+    pending,
+    accept,
+    applyResolutions,
+    discard,
+    conflictUnits,
+    orderConflict,
+    autoMerged,
+    error,
+  } = usePreviewActions();
   const age = preview.oldestCommitAt ? dayjs(preview.oldestCommitAt).fromNow() : null;
 
   return (
@@ -219,7 +544,16 @@ export const PendingPreviewBanner = ({ preview }: { preview: PreviewInfo }) => {
         </div>
         {error && <div className="mt-1 text-sm text-rose-700 dark:text-rose-300">{error}</div>}
       </div>
-      {conflictUnits && <ConflictPanel units={conflictUnits} orderConflict={orderConflict} />}
+      {conflictUnits && (
+        <ConflictPanel
+          units={conflictUnits}
+          orderConflict={orderConflict}
+          autoMerged={autoMerged}
+          busy={busy}
+          onApply={applyResolutions}
+          onDiscard={discard}
+        />
+      )}
     </div>
   );
 };

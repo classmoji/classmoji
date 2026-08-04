@@ -34,6 +34,7 @@ const PageRoute = () => {
     canEdit: canEditRole,
     preview,
     notice,
+    noticeAutoMerged,
     contentSha,
   } = useLoaderData<typeof import('./route.server.ts').loader>();
   const outletContext = useOutletContext<{ isEmbedded?: boolean }>();
@@ -124,15 +125,20 @@ const PageRoute = () => {
   useEffect(() => {
     if (!notice) return;
     if (notice === 'preview-accepted') {
-      toast.success('Preview accepted — changes are now live.');
+      toast.success(
+        noticeAutoMerged
+          ? `Preview accepted — ${noticeAutoMerged} change${noticeAutoMerged === 1 ? '' : 's'} merged automatically; changes are now live.`
+          : 'Preview accepted — changes are now live.'
+      );
     } else if (notice === 'preview-discarded') {
       toast.success('Preview discarded.');
     }
-    // Strip the param so a refresh doesn't re-toast
+    // Strip the params so a refresh doesn't re-toast
     const url = new URL(window.location.href);
     url.searchParams.delete('notice');
+    url.searchParams.delete('auto_merged');
     window.history.replaceState({}, '', url);
-  }, [notice]);
+  }, [notice, noticeAutoMerged]);
 
   // Initialize lastSavedContent on mount
   useEffect(() => {

@@ -81,6 +81,13 @@ export const loader = async ({
     canEdit && (rawNotice === 'preview-accepted' || rawNotice === 'preview-discarded')
       ? rawNotice
       : null;
+  // Semantic-merge accepts also round-trip how many changes auto-merged
+  // (Phase 7) so the success toast can mention them.
+  const rawAutoMerged = url.searchParams.get('auto_merged');
+  const noticeAutoMerged =
+    notice === 'preview-accepted' && rawAutoMerged && /^\d+$/.test(rawAutoMerged)
+      ? Number(rawAutoMerged)
+      : null;
 
   let previewStatus: {
     exists: boolean;
@@ -182,6 +189,7 @@ export const loader = async ({
     userRole,
     canEdit,
     notice,
+    noticeAutoMerged,
     // Conflict token (F2, 4b parity with slides): content.json's blob sha,
     // echoed back by the editor on every save so the action can 409 instead
     // of clobbering a concurrent write. null = no content.json yet (fresh or
@@ -312,8 +320,30 @@ export const action = async ({
   // intent). Accept merges the preview branch into main; discard deletes it.
 
   if (intent === 'preview-accept') {
+    // Chooser resolutions (Phase 7): when present, this accept is a conflict
+    // resolution pass — one {id, choose: 'ours'|'theirs'} per currently
+    // conflicted unit; the resolved merge is committed to main.
+    let resolutions: { id: string; choose: 'ours' | 'theirs' }[] | null = null;
+    if (data.resolutions != null) {
+      try {
+        const parsed =
+          typeof data.resolutions === 'string' ? JSON.parse(data.resolutions) : data.resolutions;
+        if (!Array.isArray(parsed) || parsed.length === 0) {
+          throw new Error('resolutions must be a non-empty array');
+        }
+        resolutions = parsed;
+      } catch {
+        return Response.json(
+          { error: 'Malformed resolutions payload — expected [{id, choose}]' },
+          { status: 400 }
+        );
+      }
+    }
+
     try {
-      const result = await ClassmojiService.pageContent.acceptPreview(actionPage);
+      const result = resolutions
+        ? await ClassmojiService.pageContent.resolvePreviewConflicts(actionPage, { resolutions })
+        : await ClassmojiService.pageContent.acceptPreview(actionPage);
       if (result.merged) {
         // Settle guard: GitHub's Contents API lags a merge by ~1-2s, so an
         // immediate redirect can render pre-accept content under an
@@ -328,12 +358,35 @@ export const action = async ({
             await new Promise(r => setTimeout(r, 700));
           }
         }
-        return redirect(`/${page.classroom.slug}/${pageId}?notice=preview-accepted`);
+        // Surface the semantic layer's auto-merged count in the success toast.
+        const autoMerged = ('auto_merged' in result && result.auto_merged) || 0;
+        const autoParam = autoMerged > 0 ? `&auto_merged=${autoMerged}` : '';
+        return redirect(`/${page.classroom.slug}/${pageId}?notice=preview-accepted${autoParam}`);
       }
       // Merge conflict — nothing merged, branch kept. Surface the per-unit
-      // report so the UI can list the conflicted blocks.
-      return Response.json({ conflict: true, units: result.units }, { status: 409 });
+      // report (plus the auto-merged count) so the chooser can render it.
+      return Response.json(
+        { conflict: true, units: result.units, autoMerged: result.auto_merged },
+        { status: 409 }
+      );
     } catch (error: unknown) {
+      // Bad/stale resolutions (missing ids, unknown ids, duplicates, no
+      // preview) — a clear 400 naming the offending ids; the client re-runs
+      // accept for a fresh report.
+      if (error instanceof ClassmojiService.pageContent.PreviewResolutionError) {
+        return Response.json(
+          { error: error.message, code: error.code, ids: error.ids },
+          { status: 400 }
+        );
+      }
+      // Mid-merge CAS loss: main moved while committing the resolved merge
+      // (the service already retried once). Nothing was written.
+      if ((error as { status?: number } | null)?.status === 409) {
+        return Response.json(
+          { error: 'The live page changed while merging — try accepting again.' },
+          { status: 409 }
+        );
+      }
       console.error('Failed to accept preview:', error);
       return Response.json(
         { error: error instanceof Error ? error.message : 'Unknown error' },

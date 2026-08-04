@@ -8,6 +8,7 @@ import { ClassmojiService } from '@classmoji/services';
 import {
   DeckConflictError,
   DeckParseError,
+  PreviewResolutionError,
   acceptDeckPreview,
   discardDeckPreview,
   generateDeckHtml,
@@ -15,11 +16,13 @@ import {
   loadDeck,
   parseSlidesFragment,
   previewBranchName,
+  resolveDeckPreviewConflicts,
   saveDeck,
   slideService,
   type DeckJson,
   type DeckShaSource,
   type DeckThemeUrls,
+  type MergeResolution,
 } from '@classmoji/services/slides';
 import { SandpackRenderer } from '@classmoji/ui-components/sandpack';
 import { useUser } from '~/hooks';
@@ -151,6 +154,13 @@ export const loader = async ({
   const notice =
     canEdit && (rawNotice === 'preview-accepted' || rawNotice === 'preview-discarded')
       ? rawNotice
+      : null;
+  // Semantic-merge accepts also round-trip how many changes auto-merged
+  // (Phase 7) so the success toast can mention them.
+  const rawAutoMerged = url.searchParams.get('auto_merged');
+  const noticeAutoMerged =
+    notice === 'preview-accepted' && rawAutoMerged && /^\d+$/.test(rawAutoMerged)
+      ? Number(rawAutoMerged)
       : null;
 
   let previewStatus: {
@@ -394,6 +404,7 @@ export const loader = async ({
     userRole: membership?.role || null,
     // Post-accept/discard notice (staff only; null otherwise)
     notice,
+    noticeAutoMerged,
     // Preview state is staff-only; students/anonymous always get null.
     preview: canEdit
       ? {
@@ -1101,28 +1112,67 @@ export const action = async ({
   // deletes the branch without touching main.
 
   if (intent === 'preview-accept') {
+    // Chooser resolutions (Phase 7): when present, this accept is a conflict
+    // resolution pass — one {id, choose: 'ours'|'theirs'} per currently
+    // conflicted unit; the resolved merge is committed to main.
+    let resolutions: MergeResolution[] | null = null;
+    const rawResolutions = formData.get('resolutions');
+    if (typeof rawResolutions === 'string' && rawResolutions) {
+      try {
+        const parsed = JSON.parse(rawResolutions);
+        if (!Array.isArray(parsed) || parsed.length === 0) {
+          throw new Error('resolutions must be a non-empty array');
+        }
+        resolutions = parsed;
+      } catch {
+        return data(
+          { error: 'Malformed resolutions payload — expected [{id, choose}]' },
+          { status: 400 }
+        );
+      }
+    }
+
     try {
       const status = await getDeckPreviewStatus(slide);
       if (!status.exists) {
         return { error: 'No pending preview to accept' };
       }
-      const result = await acceptDeckPreview(slide, {
-        resolveThemeUrls: deck => resolveReadThemeUrls(deck, gitOrgLogin, repo),
-      });
+      const resolveThemeUrls = (deck: DeckJson) => resolveReadThemeUrls(deck, gitOrgLogin, repo);
+      const result = resolutions
+        ? await resolveDeckPreviewConflicts(slide, { resolutions, resolveThemeUrls })
+        : await acceptDeckPreview(slide, { resolveThemeUrls });
       if (result.merged) {
-        return redirect(`/${slideId}?notice=preview-accepted`);
+        // Surface the semantic layer's auto-merged count in the success toast.
+        const autoMerged = ('auto_merged' in result && result.auto_merged) || 0;
+        const autoParam = autoMerged > 0 ? `&auto_merged=${autoMerged}` : '';
+        return redirect(`/${slideId}?notice=preview-accepted${autoParam}`);
       }
       // Merge conflict — nothing merged, branch kept. Surface the per-unit
-      // report so the UI can list the conflicted slides.
+      // report (plus the auto-merged count) so the chooser can render it.
       return data(
         {
           conflict: true,
           units: result.units,
           orderConflict: result.order_conflict ?? null,
+          autoMerged: result.auto_merged,
         },
         { status: 409 }
       );
     } catch (error: unknown) {
+      // Bad/stale resolutions (missing ids, unknown ids, duplicates, no
+      // preview) — a clear 400 naming the offending ids; the client re-runs
+      // accept for a fresh report.
+      if (error instanceof PreviewResolutionError) {
+        return data({ error: error.message, code: error.code, ids: error.ids }, { status: 400 });
+      }
+      // Mid-merge CAS loss: main moved while committing the resolved merge
+      // (the service already retried once). Nothing was written.
+      if (error instanceof DeckConflictError) {
+        return data(
+          { error: 'The live deck changed while merging — try accepting again.' },
+          { status: 409 }
+        );
+      }
       console.error('Failed to accept preview:', error);
       return { error: error instanceof Error ? error.message : String(error) };
     }
@@ -1320,6 +1370,7 @@ export default function SlideViewer() {
     sha_source: loaderShaSource,
     preview,
     notice,
+    noticeAutoMerged,
   } = useLoaderData<typeof loader>();
   // Preview mode is strictly read-only — editing chrome is suppressed while
   // rendering the pending preview branch (plan §3b).
@@ -1463,15 +1514,20 @@ export default function SlideViewer() {
   useEffect(() => {
     if (!notice) return;
     if (notice === 'preview-accepted') {
-      message.success('Preview accepted — changes are now live.');
+      message.success(
+        noticeAutoMerged
+          ? `Preview accepted — ${noticeAutoMerged} change${noticeAutoMerged === 1 ? '' : 's'} merged automatically; changes are now live.`
+          : 'Preview accepted — changes are now live.'
+      );
     } else if (notice === 'preview-discarded') {
       message.success('Preview discarded.');
     }
-    // Strip the param so a refresh doesn't re-toast
+    // Strip the params so a refresh doesn't re-toast
     const url = new URL(window.location.href);
     url.searchParams.delete('notice');
+    url.searchParams.delete('auto_merged');
     window.history.replaceState({}, '', url);
-  }, [notice]);
+  }, [notice, noticeAutoMerged]);
 
   // Auto-enter edit mode if ?mode=edit was in URL (for new slides where CDN hasn't caught up)
   // Only triggers once on mount, and only if user has permission to edit
