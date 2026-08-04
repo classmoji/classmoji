@@ -193,6 +193,22 @@ function parseDeckForDiff(content: string | null | undefined): DeckJson {
 }
 
 /**
+ * STRICT parse for the merge BASE: null when the deck.json is missing or
+ * unparseable. Unlike parseDeckForDiff, the base is NEVER degraded to an empty
+ * deck — see baseDeckUnavailable for why.
+ */
+function parseBaseDeckStrict(content: string | null | undefined): DeckJson | null {
+  if (!content) return null;
+  try {
+    const parsed = JSON.parse(content) as DeckJson;
+    if (parsed?.version === 1 && Array.isArray(parsed.slides)) return parsed;
+  } catch {
+    // Malformed — reported as unavailable by the caller.
+  }
+  return null;
+}
+
+/**
  * Accept the deck's preview: merge the preview branch into main via the
  * GitHub merge API, regenerate the index.html artifact on main from the
  * MERGED deck.json, then delete the branch — unless a concurrent stacking
@@ -521,6 +537,25 @@ function mainDeckMissing(): PreviewResolutionError {
   );
 }
 
+/**
+ * Typed refusal for a missing/unparseable merge BASE. Preview branches always
+ * fork from main, so a git-conflicting accept has a real merge base with a
+ * real deck.json — if that read is empty or malformed, degrading it to an
+ * empty deck would treat every slide as "added on both sides": the preview's
+ * deletions get resurrected and legacy add/add decks (both sides materialized
+ * deck.json after the fork point) duplicate wholesale. There is no trustworthy
+ * 3-way, so refuse rather than commit — mirroring the 7.5 editor-save
+ * readBaseDeck refusal. Reuses MAIN_CONTENT_MISSING (the existing "content the
+ * merge needs is gone → re-apply or discard" code); no new code is invented.
+ */
+function baseDeckUnavailable(): PreviewResolutionError {
+  return new PreviewResolutionError(
+    'The merge base is unavailable (deck.json was missing or unreadable at the fork point) — ' +
+      're-apply your changes onto the current deck or discard the preview',
+    'MAIN_CONTENT_MISSING'
+  );
+}
+
 /** The accept path taken when the git merge reports a conflict. */
 async function acceptDeckSemanticFallback(
   slide: SlideContentTarget,
@@ -529,7 +564,10 @@ async function acceptDeckSemanticFallback(
   const threeWay = await readDeckThreeWay(slide);
   const { theirs, base } = threeWay;
   let ours = threeWay.ours;
-  const baseDeck = parseDeckForDiff(base?.content);
+  // A trustworthy 3-way needs a real merge base — never degrade a missing or
+  // unparseable base to an empty deck and commit (S3).
+  const baseDeck = parseBaseDeckStrict(base?.content);
+  if (!baseDeck) throw baseDeckUnavailable();
   const theirsDeck = parseDeckForDiff(theirs?.content);
 
   const report = (merge: ReturnType<typeof merge3Units>): AcceptDeckPreviewResult => {
@@ -635,7 +673,10 @@ export async function resolveDeckPreviewConflicts(
   }
   const { theirs, base } = threeWay;
   let ours = threeWay.ours;
-  const baseDeck = parseDeckForDiff(base?.content);
+  // Same base-availability guard as the accept path (S3): no trustworthy 3-way
+  // without a real merge base — refuse instead of resolving against an empty one.
+  const baseDeck = parseBaseDeckStrict(base?.content);
+  if (!baseDeck) throw baseDeckUnavailable();
   const theirsDeck = parseDeckForDiff(theirs?.content);
 
   if (expectedTheirsSha && (theirs?.sha ?? null) !== expectedTheirsSha) {

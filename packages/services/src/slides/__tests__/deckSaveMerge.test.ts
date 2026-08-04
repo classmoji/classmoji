@@ -145,6 +145,8 @@ describe('saveDeckWithMerge — clean 3-way', () => {
       html: expect.stringContaining('<h1>My edit</h1>'),
       auto_merged: 2,
       concurrent: 1, // bbb — the one change main made that this editor never saw
+      // committed deck ≠ theirs (bbb's concurrent edit folded in) → remount
+      adoption_required: true,
     });
 
     // ONE atomic batch on main: merged deck.json + regenerated index.html,

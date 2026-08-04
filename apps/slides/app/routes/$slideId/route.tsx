@@ -733,7 +733,12 @@ export const action = async ({
       };
     } catch (error: unknown) {
       console.error('Failed to fetch latest content:', error);
-      return { error: error instanceof Error ? error.message : String(error) };
+      // Tag the intent so the client can distinguish a fetch-latest failure
+      // from a save error and clear its loading state (S8).
+      return {
+        intent: 'fetch-latest' as const,
+        error: error instanceof Error ? error.message : String(error),
+      };
     }
   }
 
@@ -1302,7 +1307,9 @@ export const action = async ({
         baseSha,
         ...(saveResolutions ? { resolutions: saveResolutions } : {}),
         ...(saveOursSha ? { expectedOursSha: saveOursSha } : {}),
-        message: `Update slides: ${slide.title}`,
+        // No message override: the service marks the commit '(merged)' only
+        // when this save actually folds a concurrent change or applies a
+        // chooser resolution — a plain ops save stays 'Update slides: <title>'.
         // Theme URLs must be resolved from the MERGED deck (a concurrent
         // theme change on main may win the per-field meta merge).
         resolveThemeUrls: mergedDeck => resolveReadThemeUrls(mergedDeck, gitOrgLogin, repo),
@@ -1321,16 +1328,18 @@ export const action = async ({
         console.error('Failed to detect orphaned images:', err);
       }
 
-      // merged_with_concurrent only when concurrent main-side changes were
-      // folded in: savedContent then differs from the editor DOM beyond its
-      // own edits, so a live editor must remount from it. A concurrent-free
-      // ops save behaves exactly like a plain save (no remount).
+      // adoption_required gates the live-editor remount on a FULL comparison
+      // (committed deck vs base+ops — main-side reorders / cross-stack moves /
+      // deck-meta changes fold in with concurrent 0, AND server-minted insert
+      // ids the id-less DOM never carried), NOT the unit-content counter.
+      // merged_with_concurrent stays purely the toast count.
       return {
         success: true,
         sha: result.sha,
         sha_source: 'deck' as const,
         savedContent: result.html,
         orphanedImages,
+        adoption_required: result.adoption_required,
         ...(result.concurrent > 0 ? { merged_with_concurrent: result.concurrent } : {}),
       };
     } catch (error: unknown) {
@@ -1453,7 +1462,9 @@ export const action = async ({
         baseSha: expectedSha as string,
         ...(saveResolutions ? { resolutions: saveResolutions } : {}),
         ...(saveOursSha ? { expectedOursSha: saveOursSha } : {}),
-        message: `Update slides: ${slide.title}`,
+        // No message override on the merge path: the service marks the commit
+        // '(merged)' (with a resolution summary) so a semantic-merge / chooser
+        // commit is distinguishable from a plain save in the git record.
         // Theme URLs must be resolved from the MERGED deck (a concurrent
         // theme change on main may win the per-field meta merge).
         resolveThemeUrls: mergedDeck => resolveReadThemeUrls(mergedDeck, gitOrgLogin, repo),
@@ -1747,7 +1758,11 @@ export default function SlideViewer() {
   // Note: Modern browsers ignore custom messages and show their own generic dialog
   useEffect(() => {
     const handleBeforeUnload = (e: BeforeUnloadEvent) => {
-      if (isEditing && hasChanges) {
+      // Warn on live unsaved edits, OR when a save 409 parked the ONLY copy of
+      // the work in the chooser / conflict banner. handleSave optimistically
+      // clears isEditing/hasChanges before the response, so those two flags no
+      // longer cover the chooser-open state — the report/banner presence does.
+      if ((isEditing && hasChanges) || saveMergeReport || saveConflict) {
         e.preventDefault();
         // Modern browsers ignore this, but it's required for the dialog to show
         e.returnValue = '';
@@ -1756,7 +1771,7 @@ export default function SlideViewer() {
 
     window.addEventListener('beforeunload', handleBeforeUnload);
     return () => window.removeEventListener('beforeunload', handleBeforeUnload);
-  }, [isEditing, hasChanges]);
+  }, [isEditing, hasChanges, saveMergeReport, saveConflict]);
 
   // canEdit, canPresent, canViewSpeakerNotes now come from loader data (computed by assertSlideAccess)
 
@@ -1814,9 +1829,17 @@ export default function SlideViewer() {
       captureBaseline(fetcher.data.content, fetcher.data.content_sha, fetcher.data.sha_source);
       setSaveConflict(null);
       setSaveMergeReport(null);
+      lastPostedOpsRef.current = null;
       setHasChanges(false);
       setIsEditing(true);
       setIsLoadingLatest(false);
+    } else if (fetcher.data?.intent === 'fetch-latest' && fetcher.data?.error) {
+      // Fetch-latest failed (e.g. a transient GitHub error). Clear the loading
+      // flag so the Edit / Reload buttons re-enable, surface a retryable
+      // message, and KEEP any open chooser / conflict banner (they hold the
+      // only recovery path — do not strand the user, S8).
+      setIsLoadingLatest(false);
+      message.error(`Couldn't load the latest version: ${fetcher.data.error}. Please try again.`);
     } else if (fetcher.data?.intent === 'delete-images') {
       // Images were deleted
       setIsDeletingImages(false);
@@ -1948,11 +1971,21 @@ export default function SlideViewer() {
       lastPostedOpsRef.current = null;
       setSaveConflict(null);
       setSaveMergeReport(null);
-      // Semantic save-merge (7.5): savedContent is the MERGED document —
-      // remount a live editor so the DOM (the next save's source) matches the
-      // fresh token, and tell the user about the folded-in changes.
-      if (typeof fetcher.data.merged_with_concurrent === 'number') {
+      // Remount the live editor whenever the committed savedContent must
+      // REPLACE what the DOM holds — otherwise the next save diffs a stale DOM
+      // against the fresh baseline and reverts the folded-in change (or churns
+      // a server-minted insert id). The ops path signals this with
+      // adoption_required (a FULL compare: concurrent reorders/cross-stack
+      // moves/deck-meta folds AND minted insert ids the id-less DOM never had);
+      // the whole-doc merge path still signals it with merged_with_concurrent.
+      // The toast is purely the concurrent count.
+      if (
+        fetcher.data.adoption_required === true ||
+        typeof fetcher.data.merged_with_concurrent === 'number'
+      ) {
         setEditorEpoch(epoch => epoch + 1);
+      }
+      if (typeof fetcher.data.merged_with_concurrent === 'number') {
         const n = fetcher.data.merged_with_concurrent;
         if (n > 0) {
           message.success(`Saved — merged with ${n} concurrent change${n === 1 ? '' : 's'}`);
@@ -2094,9 +2127,11 @@ export default function SlideViewer() {
   // Recover from a save conflict: re-fetch the latest content + token
   // (the existing fetch-latest flow), discarding this session's unsaved changes
   const handleReloadLatest = useCallback(() => {
-    setSaveConflict(null);
-    setSaveMergeReport(null);
-    lastPostedOpsRef.current = null;
+    // Keep the chooser / conflict banner (and the posted ops) mounted until the
+    // reload actually SUCCEEDS — a failed fetch-latest must not clear the only
+    // recovery UI and leave the user stranded (S8). The fetch-latest success
+    // branch clears saveConflict/saveMergeReport/lastPostedOpsRef; a failure
+    // just re-enables the buttons.
     setIsLoadingLatest(true);
     fetcher.submit({ intent: 'fetch-latest' }, { method: 'post' });
   }, [fetcher]);
@@ -2424,6 +2459,23 @@ export default function SlideViewer() {
         {preview?.missing && <NoPreviewNotice />}
         {preview && !preview.active && preview.exists && !isEditing && (
           <PendingPreviewBanner preview={preview} />
+        )}
+
+        {/* Read-only scrim while the save-merge chooser is open (S5). An
+            auto-save (handleSaveContent) keeps edit mode, so without this the
+            user could keep typing into the live editor while resolving — and
+            Apply re-submits the ORIGINAL posted ops, then adoption remounts the
+            editor from the committed document, silently discarding those edits.
+            Preserving post-conflict edits across the innerHTML rebuild is not
+            reliably feasible, so we take the honest fix: BLOCK editing while the
+            chooser is open. The scrim sits below the chooser (z-1100) and above
+            the editor; the already-posted work is safe in the ops/content refs. */}
+        {saveMergeReport && !saveConflict && (
+          <div
+            className="fixed inset-0 z-[1050] bg-black/5 dark:bg-black/20 cursor-not-allowed"
+            aria-hidden="true"
+            data-testid="save-merge-editing-block"
+          />
         )}
 
         {/* Save-merge chooser (Phase 7.5): a stale save hit true collisions —

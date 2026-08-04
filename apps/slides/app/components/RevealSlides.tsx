@@ -541,6 +541,12 @@ const RevealSlides = forwardRef(function RevealSlides(
       el.classList.remove('present', 'past', 'future');
     });
 
+    // Reveal paints `visible` / `current-fragment` on fragments as the presenter
+    // steps through them — runtime paint that must never persist (keep `fragment`).
+    slidesClone.querySelectorAll('.fragment').forEach((el: Element) => {
+      el.classList.remove('visible', 'current-fragment');
+    });
+
     // Build data attributes for theme settings (single theme)
     const revealDiv = deckRef.current;
     const dataAttrs = [];

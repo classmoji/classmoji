@@ -530,6 +530,26 @@ describe('deck_apply routing + locking', () => {
     expect(mocks.discardDeckPreview).toHaveBeenCalledTimes(1);
   });
 
+  it('a 409 after THIS apply created the branch KEEPS it when a concurrent apply committed to it (S4)', async () => {
+    // Routing check sees no preview (loads from main); ensure creates the
+    // branch; a racer commits to it; our save 409s. The cleanup re-check finds
+    // the branch moved ahead of main → it must NOT be discarded (that would
+    // silently delete the racer's committed work).
+    mocks.getDeckPreviewStatus
+      .mockResolvedValueOnce({ exists: false }) // routing decision (load from main)
+      .mockResolvedValueOnce({ exists: true, commits_ahead: 1 }); // cleanup re-check
+    mocks.ensureDeckPreviewBranch.mockResolvedValue({ branch: PREVIEW_BRANCH, created: true });
+    mocks.saveDeck.mockRejectedValue(
+      Object.assign(new Error('Deck changed since it was read'), { status: 409 })
+    );
+
+    await expect(deckApplyTool.handler(APPLY_ARGS, CTX)).rejects.toMatchObject({
+      code: 'CONTENT_CONFLICT',
+    });
+    // The concurrent writer's commits survive — the branch is retained.
+    expect(mocks.discardDeckPreview).not.toHaveBeenCalled();
+  });
+
   it('a 409 while STACKING keeps the pre-existing preview branch', async () => {
     mocks.getDeckPreviewStatus.mockResolvedValue({ exists: true, commits_ahead: 1 });
     mocks.ensureDeckPreviewBranch.mockResolvedValue({ branch: PREVIEW_BRANCH, created: false });

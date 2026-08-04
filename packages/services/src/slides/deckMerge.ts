@@ -2,17 +2,17 @@
  * deckMerge.ts — semantic 3-way merge of deck slides (content-tools plan §3b,
  * Phase 7).
  *
- * Pure functions only: no service imports, no network, no database. Extends
- * the Level-1 3-way walk (deckHtml diffDeckUnits) into a true auto-merge:
- * non-conflicted units of a stale preview are rebased onto fresh main, so an
- * accept only ever stops on genuine same-unit collisions.
+ * Pure functions only: no service imports, no network, no database. This is
+ * the live 3-way auto-merge (merge3Units): non-conflicted units of a stale
+ * preview are rebased onto fresh main, so an accept only ever stops on genuine
+ * same-unit collisions.
  *
  * Merge semantics (a SLIDE is the unit — fields merge atomically per unit,
  * never html-vs-notes within one slide):
  * - "changed" means changed MODULO BROWSER SERIALIZATION for html/notes/attrs
- *   (deckHtml htmlEquivalentModuloBrowserSerialization): the editor's theirs
- *   side is a browser DOM read-back, and browsers rewrite styled markup the
- *   user never touched — those rewrites must not read as edits
+ *   (deckHtml browserCanonicalHtmlSig / browserCanonicalAttrValue): the
+ *   editor's theirs side is a browser DOM read-back, and browsers rewrite
+ *   styled markup the user never touched — those rewrites must not read as edits
  * - changed on one side only → take that side
  * - changed identically on both sides → take either
  * - changed differently on both sides → conflict

@@ -33,6 +33,7 @@
  */
 
 import { ContentService } from '../content/ContentService.ts';
+import { canonicalJson } from '../content/merge3.ts';
 import { SlideHtmlError, type DeckThemeUrls } from './deckHtml.ts';
 import {
   indexResolutions,
@@ -82,6 +83,16 @@ export type SaveDeckMergeResult =
       auto_merged: number;
       /** Concurrent (main-side) unit changes folded into this save — the toast count. */
       concurrent: number;
+      /**
+       * The client must remount its live editor from `html` (adopt the
+       * committed document). True whenever the committed deck differs from the
+       * client's intended document (base+ops) — concurrent reorders / cross-
+       * stack moves / deck-meta changes fold in with `concurrent === 0` — OR
+       * the server minted new insert ids the id-less DOM never carried. Gates
+       * the remount on a FULL comparison, not the unit counter (mirrors the
+       * pages twin's `document`-adoption rule).
+       */
+      adoption_required: boolean;
     }
   | {
       merged: false;
@@ -157,6 +168,20 @@ interface RunDeckMergeSaveArgs {
   resolveThemeUrls?: (deck: DeckJson) => Promise<DeckThemeUrls | undefined>;
   /** Attempt-0 read of main's deck.json (prefetched in parallel with the base). */
   firstOurs: OursRead;
+  /**
+   * The server minted new slide ids while materializing `theirs` (an insert
+   * op). Those ids never appear in the editor's id-less DOM, so the client
+   * MUST adopt the committed document even when the canonical compare matches
+   * (base == ours). Mirrors the pages twin forcing adoption on any re-mint.
+   */
+  forceAdoption?: boolean;
+}
+
+/** Compact human summary of applied chooser choices, appended to a merge commit. */
+function resolutionSummary(chosen: ReturnType<typeof indexResolutions>): string {
+  const count = Object.keys(chosen).length;
+  if (count === 0) return '';
+  return ` — resolved ${count} conflict${count === 1 ? '' : 's'}`;
 }
 
 /**
@@ -223,6 +248,7 @@ async function runDeckMergeSave({
   message,
   resolveThemeUrls,
   firstOurs,
+  forceAdoption,
 }: RunDeckMergeSaveArgs): Promise<SaveDeckMergeResult> {
   for (let attempt = 0; attempt < 2; attempt++) {
     // Ours = fresh main (attempt 0 uses the prefetched parallel read).
@@ -295,6 +321,28 @@ async function runDeckMergeSave({
     // merge (theirs = base) counts exactly the units ours changed vs base.
     const concurrent = merge3Units(baseDeck, oursDeck, baseDeck).autoMerged;
 
+    // Adoption signal (the client's remount gate): the committed document must
+    // replace whatever the editor DOM holds whenever it differs from the
+    // client's intended document (theirs = base+ops) — NOT merely when the
+    // `concurrent` unit-content counter is nonzero. A main-side reorder, a
+    // cross-stack move, or a deck-meta change folds in with concurrent 0, and
+    // server-minted insert ids (forceAdoption) never appear in the id-less DOM
+    // at all. A FULL canonical compare (order, children placement, meta, ids)
+    // catches every one; the counter stays only for the toast.
+    const adoptionRequired =
+      forceAdoption === true || canonicalJson(merge.merged) !== canonicalJson(theirs);
+
+    // Commit message: mark the git record when this save actually folded a
+    // concurrent change or applied a chooser resolution (the routes no longer
+    // override the default, so a plain save stays 'Update slides: <title>').
+    const commitMessage =
+      message ??
+      (chosen
+        ? `Update slides (merged): ${slide.title}${resolutionSummary(chosen)}`
+        : concurrent > 0
+          ? `Update slides (merged): ${slide.title}`
+          : `Update slides: ${slide.title}`);
+
     const themeUrls = await resolveThemeUrls?.(merge.merged);
     try {
       const saved = await saveDeck({
@@ -302,7 +350,7 @@ async function runDeckMergeSave({
         deck: merge.merged,
         expectedSha: ours.sha,
         shaSource: 'deck',
-        message: message ?? `Update slides (merged): ${slide.title}`,
+        message: commitMessage,
         ...(themeUrls ? { themeUrls } : {}),
       });
       return {
@@ -312,6 +360,7 @@ async function runDeckMergeSave({
         html: saved.html,
         auto_merged: merge.autoMerged,
         concurrent,
+        adoption_required: adoptionRequired,
       };
     } catch (error: unknown) {
       if (!(error instanceof DeckConflictError) || attempt === 1) throw error;
@@ -404,8 +453,20 @@ export async function saveDeckFromOps({
   // path, which owns the buildEditorDeck merge rules), so no starterCustomCss
   // option is passed here.
   let theirs: DeckJson;
+  // Any insert op mints fresh server-side ids the editor's DOM never carried
+  // (SlideToolbar.createNewSlide emits id-less <section>s); the client must
+  // then adopt the committed document or its next diff re-deletes+re-inserts
+  // the slide, churning the id and manufacturing bogus delete_vs_edit
+  // conflicts. Count the mints so runDeckMergeSave can force adoption.
+  let mintedIds = 0;
   try {
-    theirs = applyDeckOps(baseDeck, ops).deck;
+    const result = applyDeckOps(baseDeck, ops);
+    theirs = result.deck;
+    mintedIds = result.applied.reduce(
+      (n, entry) =>
+        entry.op === 'insert' ? n + ((entry.ids as string[] | undefined)?.length ?? 0) : n,
+      0
+    );
   } catch (error: unknown) {
     if (error instanceof DeckOpError || error instanceof SlideHtmlError) {
       throw new DeckOpsBaseMismatchError(`Ops do not apply to the base deck: ${error.message}`);
@@ -425,5 +486,6 @@ export async function saveDeckFromOps({
     message,
     resolveThemeUrls,
     firstOurs,
+    forceAdoption: mintedIds > 0,
   });
 }

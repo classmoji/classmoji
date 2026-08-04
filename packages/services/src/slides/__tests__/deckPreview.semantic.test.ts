@@ -596,3 +596,101 @@ describe('acceptDeckPreview — main deck.json deleted', () => {
     expect(deleteBranchMock).not.toHaveBeenCalled();
   });
 });
+
+// ─── Missing / unparseable merge base (S3): refuse, never merge against empty ─
+
+describe('accept/resolve — merge base unavailable', () => {
+  /** A conflicting 3-way whose fork-point deck.json read yields `base`. */
+  function primeBase(base: string | null, ours: DeckJson, theirs: DeckJson) {
+    mergeBranchMock.mockResolvedValue({ merged: false, conflict: true });
+    compareBranchesMock.mockResolvedValue({
+      ahead_by: 1,
+      behind_by: 1,
+      base_sha: 'main-head',
+      head_sha: 'preview-head',
+      merge_base_sha: 'fork-point',
+      commits: [],
+    });
+    getContentMock.mockImplementation(async (arg: unknown) => {
+      const { ref } = arg as { ref?: string };
+      if (ref === BRANCH) return { content: deckJson(theirs), sha: 'theirs-sha' };
+      if (ref === 'fork-point') return base == null ? null : { content: base, sha: 'base-sha' };
+      return { content: deckJson(ours), sha: 'ours-sha' };
+    });
+  }
+
+  it('accept: base deck.json 404 (legacy add/add) → MAIN_CONTENT_MISSING, nothing committed', async () => {
+    // Preview deleted bbb; without a real base an empty-base merge would
+    // RESURRECT it. Refuse instead.
+    primeBase(
+      null,
+      deckWith([
+        { id: 'aaa', html: '<h1>Keep</h1>' },
+        { id: 'bbb', html: '<p>gone on preview</p>' },
+      ]),
+      deckWith([{ id: 'aaa', html: '<h1>Keep</h1>' }])
+    );
+
+    const failure = await acceptDeckPreview(slide).catch((e: unknown) => e);
+
+    expect(failure).toBeInstanceOf(PreviewResolutionError);
+    expect(failure).toMatchObject({ code: 'MAIN_CONTENT_MISSING' });
+    expect(uploadBatchMock).not.toHaveBeenCalled();
+    expect(deleteBranchMock).not.toHaveBeenCalled();
+  });
+
+  it('accept: base deck.json unparseable → MAIN_CONTENT_MISSING, nothing committed', async () => {
+    primeBase(
+      '{ not valid json !!!',
+      deckWith([
+        { id: 'aaa', html: '<h1>Keep</h1>' },
+        { id: 'bbb', html: '<p>gone on preview</p>' },
+      ]),
+      deckWith([{ id: 'aaa', html: '<h1>Keep</h1>' }])
+    );
+
+    const failure = await acceptDeckPreview(slide).catch((e: unknown) => e);
+
+    expect(failure).toBeInstanceOf(PreviewResolutionError);
+    expect(failure).toMatchObject({ code: 'MAIN_CONTENT_MISSING' });
+    expect(uploadBatchMock).not.toHaveBeenCalled();
+    expect(deleteBranchMock).not.toHaveBeenCalled();
+  });
+
+  it('resolve: base deck.json 404 → MAIN_CONTENT_MISSING, nothing committed', async () => {
+    primeBase(
+      null,
+      deckWith([{ id: 'aaa', html: '<h2>Racer</h2>' }]),
+      deckWith([{ id: 'aaa', html: '<h1>Preview</h1>' }])
+    );
+
+    const failure = await resolveDeckPreviewConflicts(slide, {
+      resolutions: [{ id: 'aaa', choose: 'ours' }],
+    }).catch((e: unknown) => e);
+
+    expect(failure).toBeInstanceOf(PreviewResolutionError);
+    expect(failure).toMatchObject({ code: 'MAIN_CONTENT_MISSING' });
+    expect(uploadBatchMock).not.toHaveBeenCalled();
+    expect(deleteBranchMock).not.toHaveBeenCalled();
+  });
+
+  it('CONTROL: a present, parseable base still merges (deletion honored, no resurrection)', async () => {
+    primeBase(
+      deckJson(
+        deckWith([
+          { id: 'aaa', html: '<h1>Keep</h1>' },
+          { id: 'bbb', html: '<p>gone on preview</p>' },
+        ])
+      ),
+      deckWith([
+        { id: 'aaa', html: '<h1>Keep (main edited)</h1>' },
+        { id: 'bbb', html: '<p>gone on preview</p>' },
+      ]),
+      deckWith([{ id: 'aaa', html: '<h1>Keep</h1>' }])
+    );
+
+    const result = await acceptDeckPreview(slide);
+    expect(result).toMatchObject({ merged: true, semantic: true });
+    expect(batchCall().deck?.slides.map(s => s.id)).toEqual(['aaa']); // bbb stays deleted
+  });
+});

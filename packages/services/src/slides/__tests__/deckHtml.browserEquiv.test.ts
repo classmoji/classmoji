@@ -47,13 +47,34 @@ describe('htmlEquivalentModuloBrowserSerialization — genuine differences still
 });
 
 describe('htmlEquivalentModuloBrowserSerialization — style declaration semantics', () => {
-  it('declaration order is insignificant', () => {
+  it('declaration order is SIGNIFICANT — browsers never reorder on a round-trip', () => {
+    // Independent properties reordered: still a genuine difference, because a
+    // DOM read-back never produces this reordering on its own (fixtures show
+    // order is preserved), so any reorder is a real edit.
     expect(
       equivalent(
         '<div style="color: red; top: 1px">x</div>',
         '<div style="top: 1px; color: red">x</div>'
       )
-    ).toBe(true);
+    ).toBe(false);
+  });
+
+  it('shorthand/longhand reorder changes the render — reported as a difference', () => {
+    // `margin-top: 5px; margin: 10px` renders margin-top 10px (shorthand last
+    // wins); the reverse renders margin-top 5px. The old order-insensitive
+    // canonicalization equated them and silently reverted one side's edit.
+    expect(
+      equivalent(
+        '<h2 style="margin-top: 5px; margin: 10px;">t</h2>',
+        '<h2 style="margin: 10px; margin-top: 5px;">t</h2>'
+      )
+    ).toBe(false);
+  });
+
+  it('a same-property value change is still detected (control)', () => {
+    expect(
+      equivalent('<h2 style="margin-top: 5px;">t</h2>', '<h2 style="margin-top: 9px;">t</h2>')
+    ).toBe(false);
   });
 
   it('trailing semicolon and declaration spacing are insignificant', () => {
@@ -72,6 +93,23 @@ describe('htmlEquivalentModuloBrowserSerialization — style declaration semanti
     expect(
       equivalent('<div style="color: red; color: blue">x</div>', '<div style="color: red">x</div>')
     ).toBe(false);
+  });
+
+  it('hex is NOT rewritten to rgb inside a custom property value (browser stores it verbatim)', () => {
+    expect(
+      equivalent(
+        '<div style="--brand: #fff">x</div>',
+        '<div style="--brand: rgb(255, 255, 255)">x</div>'
+      )
+    ).toBe(false);
+    // ...but a real edit to the same custom property is still a difference.
+    expect(
+      equivalent('<div style="--brand: #fff">x</div>', '<div style="--brand: #eee">x</div>')
+    ).toBe(false);
+    // An untouched custom property (only spacing differs) still matches.
+    expect(
+      equivalent('<div style="--brand:#fff">x</div>', '<div style="--brand: #fff">x</div>')
+    ).toBe(true);
   });
 
   it('4/8-digit hex (alpha) forms stay strict — never conflated with rgb()', () => {
@@ -101,6 +139,19 @@ describe('htmlEquivalentModuloBrowserSerialization — style declaration semanti
         '<div style="background: url(&quot;data:image/png;base64,BBBB&quot;); color: rgb(255, 255, 255);">x</div>'
       )
     ).toBe(false);
+  });
+});
+
+describe('htmlEquivalentModuloBrowserSerialization — class attribute is verbatim', () => {
+  it('class whitespace is significant — browsers preserve it byte-for-byte', () => {
+    // Fixture `class-whitespace` proves a DOM round-trip keeps repeated and
+    // leading/trailing spaces, so collapsing them would mask a real edit.
+    expect(equivalent('<div class="a  b">x</div>', '<div class="a b">x</div>')).toBe(false);
+    expect(equivalent('<div class=" a b ">x</div>', '<div class="a b">x</div>')).toBe(false);
+  });
+
+  it('identical class strings still match (no false difference)', () => {
+    expect(equivalent('<div class="a  b">x</div>', '<div class="a  b">x</div>')).toBe(true);
   });
 });
 

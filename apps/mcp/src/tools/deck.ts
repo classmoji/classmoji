@@ -529,9 +529,25 @@ export const deckApplyTool: ToolDefinition<DeckApplyArgs> = {
         // The branch was created by THIS apply and the save failed — delete
         // the fresh (empty) branch so it doesn't strand the deck in preview
         // mode with no pending edits. Best-effort.
+        //
+        // BUT re-check first: a concurrent apply (the racer that got the 422
+        // "already exists" from ensureDeckPreviewBranch) may have committed to
+        // the branch between our creation and this failed save. Deleting it
+        // then would silently discard that writer's commits — so skip the
+        // discard when the branch moved past main (same ahead_by guard the
+        // Phase 7 accept paths use).
         if (createdPreviewBranch) {
           try {
-            await discardDeckPreview(slide);
+            const status = await getDeckPreviewStatus(slide);
+            if (status.exists && (status.commits_ahead ?? 0) > 0) {
+              console.warn(
+                `[deck_apply] Preview branch gained ${status.commits_ahead} concurrent ` +
+                  'commit(s) after creation — keeping it instead of discarding after the ' +
+                  'failed save.'
+              );
+            } else {
+              await discardDeckPreview(slide);
+            }
           } catch (cleanupError: unknown) {
             console.warn(
               '[deck_apply] Failed to clean up the freshly created preview branch:',

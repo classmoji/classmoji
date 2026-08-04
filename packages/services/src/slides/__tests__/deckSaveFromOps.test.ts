@@ -208,6 +208,126 @@ describe('saveDeckFromOps — clean commits', () => {
   });
 });
 
+describe('saveDeckFromOps — adoption signal (S1/S10) and merge commit messages', () => {
+  it('no concurrent change, no mint → adoption_required false (cursor preserved), plain commit message', async () => {
+    const base = deckWith([
+      { id: 'aaa', html: '<p>one</p>' },
+      { id: 'bbb', html: '<p>two</p>' },
+    ]);
+    primeSave({ base, ours: base });
+
+    const ops: DeckOp[] = [{ op: 'update', id: 'aaa', html: '<h1>Mine</h1>' }];
+    const result = await saveDeckFromOps({ slide, ops, baseSha: BASE_SHA });
+
+    expect(result).toMatchObject({ merged: true, concurrent: 0, adoption_required: false });
+    // A plain save (no fold, no resolution) is NOT marked '(merged)'.
+    expect(batchCall().args.message).toBe('Update slides: My Deck');
+  });
+
+  it('S1 reorder-only concurrent (counter 0) → adoption_required true, still remounts', async () => {
+    const base = deckWith([
+      { id: 'aaa', html: '<h1>Alpha</h1>' },
+      { id: 'bbb', html: '<h1>Beta</h1>' },
+      { id: 'ccc', html: '<h1>Gamma</h1>' },
+    ]);
+    // Main reordered [A,B,C] → [C,A,B] with NO content edit (pure reorder).
+    const ours = deckWith([base.slides[2], base.slides[0], base.slides[1]]);
+    primeSave({ base, ours });
+
+    const ops: DeckOp[] = [{ op: 'update', id: 'aaa', html: '<h1>Alpha EDITED</h1>' }];
+    const result = await saveDeckFromOps({ slide, ops, baseSha: BASE_SHA });
+
+    // The unit counter misses a pure reorder, but the committed order differs
+    // from base+ops so the client MUST remount (else the next save reverts it).
+    expect(result).toMatchObject({ merged: true, concurrent: 0, adoption_required: true });
+    expect(batchCall().deck?.slides.map(s => s.id)).toEqual(['ccc', 'aaa', 'bbb']);
+    // concurrent === 0 → the commit is still a plain save (no fold counted).
+    expect(batchCall().args.message).toBe('Update slides: My Deck');
+  });
+
+  it('S1 meta-only concurrent (theme changed on main) → adoption_required true', async () => {
+    const base = deckWith([{ id: 'aaa', html: '<p>one</p>' }]);
+    const ours: DeckJson = { ...deckWith([{ id: 'aaa', html: '<p>one</p>' }]), theme: 'moon' };
+    primeSave({ base, ours });
+
+    const ops: DeckOp[] = [{ op: 'update', id: 'aaa', html: '<h1>Mine</h1>' }];
+    const result = await saveDeckFromOps({ slide, ops, baseSha: BASE_SHA });
+
+    expect(result).toMatchObject({ merged: true, concurrent: 0, adoption_required: true });
+    // The concurrent theme change is folded into the committed deck.
+    expect(batchCall().deck?.theme).toBe('moon');
+  });
+
+  it('S10 an insert mints a server-side id → adoption_required true even with concurrent 0', async () => {
+    const base = deckWith([
+      { id: 'aaa', html: '<p>one</p>' },
+      { id: 'bbb', html: '<p>two</p>' },
+    ]);
+    primeSave({ base, ours: base });
+
+    // The id-less <section> the editor added diffs to a single insert; the
+    // server mints its id, which the live DOM never carries → force adoption
+    // so the next in-session save can't delete+re-insert (id churn).
+    const ops: DeckOp[] = [
+      { op: 'insert', slides: [{ html: '<p>new slide</p>' }], position: { after: 'bbb' } },
+    ];
+    const result = await saveDeckFromOps({ slide, ops, baseSha: BASE_SHA });
+
+    expect(result).toMatchObject({ merged: true, concurrent: 0, adoption_required: true });
+    expect(batchCall().deck?.slides.map(s => s.html)).toEqual([
+      '<p>one</p>',
+      '<p>two</p>',
+      '<p>new slide</p>',
+    ]);
+    // A mint alone is not a concurrent fold — the commit stays a plain save.
+    expect(batchCall().args.message).toBe('Update slides: My Deck');
+  });
+
+  it('a concurrent fold marks the commit (merged); a resolution appends the summary', async () => {
+    const base = deckWith([
+      { id: 'aaa', html: '<p>one</p>' },
+      { id: 'bbb', html: '<p>two</p>' },
+    ]);
+    // Disjoint concurrent edit on main → clean fold, concurrent 1.
+    const ours = deckWith([
+      { id: 'aaa', html: '<p>one</p>' },
+      { id: 'bbb', html: '<h2>Racer</h2>' },
+    ]);
+    primeSave({ base, ours });
+
+    const ops: DeckOp[] = [{ op: 'update', id: 'aaa', html: '<h1>Mine</h1>' }];
+    const merged = await saveDeckFromOps({ slide, ops, baseSha: BASE_SHA });
+    expect(merged).toMatchObject({ merged: true, concurrent: 1, adoption_required: true });
+    expect(batchCall().args.message).toBe('Update slides (merged): My Deck');
+
+    // Now a genuine same-slide collision resolved via the chooser.
+    vi.clearAllMocks();
+    getMetaMock.mockResolvedValue({ sha: 'ours-sha', size: 1 });
+    uploadBatchMock.mockImplementation(async ({ files }: { files: Array<{ path: string }> }) => ({
+      commit: 'ops-commit',
+      filesUploaded: files.length,
+      files: files.map(f => ({
+        path: f.path,
+        sha: f.path === DECK_PATH ? 'new-deck-sha' : 'new-html-sha',
+      })),
+    }));
+    const collidingOurs = deckWith([
+      { id: 'aaa', html: '<h2>Racer version</h2>' },
+      { id: 'bbb', html: '<p>two</p>' },
+    ]);
+    primeSave({ base, ours: collidingOurs });
+    const resolved = await saveDeckFromOps({
+      slide,
+      ops,
+      baseSha: BASE_SHA,
+      resolutions: [{ id: 'aaa', choose: 'theirs' }],
+      expectedOursSha: 'ours-sha',
+    });
+    expect(resolved).toMatchObject({ merged: true });
+    expect(batchCall().args.message).toBe('Update slides (merged): My Deck — resolved 1 conflict');
+  });
+});
+
 describe('saveDeckFromOps — conflicts and resolutions', () => {
   const base = deckWith([
     { id: 'aaa', html: '<p>one</p>' },

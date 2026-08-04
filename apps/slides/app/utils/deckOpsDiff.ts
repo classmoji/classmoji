@@ -149,6 +149,13 @@ function cleanupContainer(container: Element): void {
     el.classList.remove('present', 'past', 'future');
     if ((el.getAttribute('class') ?? '') === '') el.removeAttribute('class');
   });
+
+  // Reveal fragment runtime paint (`visible` / `current-fragment`) is added as
+  // the presenter steps through fragments — never authored, must never persist,
+  // or a merely-VIEWED slide reads as edited. `fragment` itself stays.
+  container.querySelectorAll('.fragment').forEach(el => {
+    el.classList.remove('visible', 'current-fragment');
+  });
 }
 
 /**

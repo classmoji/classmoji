@@ -6,10 +6,10 @@
  * index.html on main FROM the merged deck.json via a single-file uploadBatch
  * whose verifyBaseTree hook pins the merged deck sha (a concurrent save skips
  * regeneration instead of clobbering); a conflicted merge builds the per-unit
- * report (real diffDeckUnits), keeps the branch, and NEVER regenerates.
+ * report (real merge3Units), keeps the branch, and NEVER regenerates.
  *
  * ContentService and prisma are mocked; the deck engine (generateDeckHtml,
- * diffDeckUnits) is real.
+ * merge3Units) is real.
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
@@ -416,7 +416,7 @@ describe('acceptDeckPreview (clean merge)', () => {
 // ─── acceptDeckPreview — conflict ────────────────────────────────────────────
 
 describe('acceptDeckPreview (conflict)', () => {
-  it('builds the per-unit report (real diffDeckUnits), keeps the branch, never regenerates', async () => {
+  it('builds the per-unit report (real merge3Units), keeps the branch, never regenerates', async () => {
     mergeBranchMock.mockResolvedValue({ merged: false, conflict: true });
     compareBranchesMock.mockResolvedValue({
       ahead_by: 1,

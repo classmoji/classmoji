@@ -358,8 +358,21 @@ function hasNotesClass(el: Element): boolean {
   return cls.split(/\s+/).includes('notes');
 }
 
+/**
+ * Reveal paints `visible` / `current-fragment` on `.fragment` descendants at
+ * runtime (as the presenter steps through fragments). They are never authored
+ * and must never persist — otherwise a merely-VIEWED slide's read-back html
+ * differs from its stored form and phantom-conflicts / phantom-diffs. Mirrors
+ * the client strips (deckOpsDiff cleanupContainer, RevealSlides
+ * getCurrentContent). `fragment` itself is authored content and stays.
+ */
+function stripFragmentRuntimeClasses($root: Cheerio<AnyNode>): void {
+  $root.find('.fragment').removeClass('visible').removeClass('current-fragment');
+}
+
 /** Strip runtime paint from a section element (plan §2 cruft list). */
 function stripRuntimeCruft($el: Cheerio<Element>): void {
+  stripFragmentRuntimeClasses($el);
   const cls = $el.attr('class');
   if (cls != null) {
     const kept = cls.split(/\s+/).filter(c => c !== '' && !CRUFT_CLASSES.has(c));
@@ -736,6 +749,9 @@ export function normalizeSlideHtml(html: string): string {
     }
   });
 
+  // Reveal fragment runtime paint (visible / current-fragment) never persists.
+  stripFragmentRuntimeClasses($.root());
+
   return $.root().html() ?? '';
 }
 
@@ -868,39 +884,57 @@ function splitStyleDeclarations(style: string): string[] {
 
 /**
  * Canonical form of a style attr VALUE for equivalence: declarations parsed
- * (property lowercased, value via canonicalCssValue), duplicates last-wins
- * (browser behavior), compared order-insensitively (sorted), trailing `;`
- * irrelevant by construction.
+ * (property lowercased, value via canonicalCssValue), trailing `;` irrelevant
+ * by construction.
+ *
+ * Declaration ORDER is PRESERVED — a browser DOM round-trip never reorders a
+ * style attr's declarations (captured Chromium ground truth in the fixtures),
+ * so two read-backs of untouched markup keep the same order, while a genuine
+ * shorthand/longhand reorder (`margin-top: 5px; margin: 10px` vs the reverse)
+ * changes the rendered result and MUST read as a difference. Sorting the
+ * declarations (the old behavior) masked exactly those semantic edits.
+ *
+ * An EXACT same-property repeat still collapses last-wins (the browser's own
+ * behavior), keeping the property at its first-seen position. Custom
+ * properties (`--x`) are stored verbatim by the browser — their value skips
+ * canonicalCssValue (no hex→rgb, no decimal trimming) and their name keeps its
+ * case.
  */
 function canonicalStyleAttr(style: string): string {
-  const decls = new Map<string, string>();
+  const order: string[] = [];
+  const values = new Map<string, string>();
+  const set = (prop: string, value: string): void => {
+    if (!values.has(prop)) order.push(prop);
+    values.set(prop, value);
+  };
   for (const raw of splitStyleDeclarations(style)) {
     const idx = raw.indexOf(':');
     if (idx === -1) {
       const bare = raw.trim().toLowerCase();
-      if (bare) decls.set(bare, '');
+      if (bare) set(bare, '');
       continue;
     }
-    const prop = raw.slice(0, idx).trim().toLowerCase();
-    if (!prop) continue;
-    decls.set(prop, canonicalCssValue(raw.slice(idx + 1)));
+    const rawProp = raw.slice(0, idx).trim();
+    if (!rawProp) continue;
+    const isCustom = rawProp.startsWith('--');
+    const prop = isCustom ? rawProp : rawProp.toLowerCase();
+    const value = isCustom ? raw.slice(idx + 1).trim() : canonicalCssValue(raw.slice(idx + 1));
+    set(prop, value);
   }
-  return [...decls.entries()]
-    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
-    .map(([prop, val]) => `${prop}:${val}`)
-    .join(';');
+  return order.map(prop => `${prop}:${values.get(prop)}`).join(';');
 }
 
 /**
  * Canonical form of one attribute value for browser-serialization-tolerant
- * comparison: `style` via the CSSOM rules, `class` as its ordered token list
- * with whitespace collapsed (token ORDER still matters), everything else
- * verbatim (values are already entity-decoded by the parser; a valueless
- * attr and `=""` are both the empty string).
+ * comparison: `style` via the CSSOM rules, everything else (including `class`)
+ * verbatim. Browsers preserve the class attribute string byte-for-byte on a
+ * DOM round-trip (fixture-pinned: leading/trailing and repeated whitespace all
+ * survive), so collapsing it would mask a real edit — compare it verbatim.
+ * Values are already entity-decoded by the parser; a valueless attr and `=""`
+ * are both the empty string.
  */
 export function browserCanonicalAttrValue(name: string, value: string): string {
   if (name === 'style') return canonicalStyleAttr(value);
-  if (name === 'class') return value.trim().split(/\s+/).filter(Boolean).join(' ');
   return value;
 }
 
@@ -976,113 +1010,4 @@ export function htmlEquivalentModuloBrowserSerialization(
   if (a == null || b == null) return a == null && b == null;
   if (a === b) return true;
   return browserCanonicalHtmlSig(a) === browserCanonicalHtmlSig(b);
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// diffDeckUnits — 3-way unit walk (powers §3b's structured conflict return)
-// ─────────────────────────────────────────────────────────────────────────────
-
-export interface DeckUnitConflict {
-  id: string;
-  /** Dotted position, '4' or '4.2' (position in ours, falling back to theirs/base). */
-  index: string;
-  /** The merge-base version of the unit; absent when the unit was added on both sides. */
-  base?: DeckSlide;
-  /** null = deleted/absent on that side. */
-  ours: DeckSlide | null;
-  theirs: DeckSlide | null;
-}
-
-export interface DeckUnitDiff {
-  /** Units changed on BOTH sides with differing results (deep-equal comparison). */
-  units: DeckUnitConflict[];
-  /** Present when both sides reordered the root sequence differently. */
-  orderConflict?: { base: string[]; ours: string[]; theirs: string[] };
-}
-
-interface FlatUnit {
-  unit: DeckSlide;
-  index: string;
-}
-
-function flattenUnits(deck: DeckJson): Map<string, FlatUnit> {
-  const map = new Map<string, FlatUnit>();
-  deck.slides.forEach((slide, i) => {
-    map.set(slide.id, { unit: slide, index: String(i + 1) });
-    slide.children?.forEach((child, j) => {
-      map.set(child.id, { unit: child, index: `${i + 1}.${j + 1}` });
-    });
-  });
-  return map;
-}
-
-/**
- * Comparable signature of a unit. Containers compare their own fields plus the
- * ORDER of their children (child ids) — child content changes are the child
- * unit's own diff. Attrs compared with sorted keys.
- */
-function unitSignature(entry: FlatUnit | undefined): string {
-  if (!entry) return ' absent';
-  const { unit } = entry;
-  const unitAttrs = unit.attrs ?? {};
-  const attrs = Object.keys(unitAttrs)
-    .sort()
-    .map(key => [key, unitAttrs[key]]);
-  return JSON.stringify({
-    html: unit.html ?? null,
-    notes: unit.notes ?? null,
-    hidden: unit.hidden ?? false,
-    attrs,
-    children: unit.children ? unit.children.map(c => c.id) : null,
-  });
-}
-
-/**
- * Report units changed on BOTH sides (base = merge-base, ours = main,
- * theirs = preview). Reports conflicts only — no auto-merge (Phase 7).
- */
-export function diffDeckUnits(base: DeckJson, ours: DeckJson, theirs: DeckJson): DeckUnitDiff {
-  const baseUnits = flattenUnits(base);
-  const ourUnits = flattenUnits(ours);
-  const theirUnits = flattenUnits(theirs);
-
-  const allIds = new Set<string>([...baseUnits.keys(), ...ourUnits.keys(), ...theirUnits.keys()]);
-  const units: DeckUnitConflict[] = [];
-
-  for (const id of allIds) {
-    const b = baseUnits.get(id);
-    const o = ourUnits.get(id);
-    const t = theirUnits.get(id);
-    const bSig = unitSignature(b);
-    const oSig = unitSignature(o);
-    const tSig = unitSignature(t);
-
-    const changedOurs = oSig !== bSig;
-    const changedTheirs = tSig !== bSig;
-    if (changedOurs && changedTheirs && oSig !== tSig) {
-      const index = o?.index ?? t?.index ?? b?.index ?? '';
-      const conflict: DeckUnitConflict = {
-        id,
-        index,
-        ours: o?.unit ?? null,
-        theirs: t?.unit ?? null,
-      };
-      if (b) conflict.base = b.unit;
-      units.push(conflict);
-    }
-  }
-
-  // Root order sequence compared as id arrays.
-  const baseOrder = base.slides.map(s => s.id);
-  const ourOrder = ours.slides.map(s => s.id);
-  const theirOrder = theirs.slides.map(s => s.id);
-  const sameAsBaseOurs = JSON.stringify(ourOrder) === JSON.stringify(baseOrder);
-  const sameAsBaseTheirs = JSON.stringify(theirOrder) === JSON.stringify(baseOrder);
-  const oursVsTheirs = JSON.stringify(ourOrder) === JSON.stringify(theirOrder);
-
-  const result: DeckUnitDiff = { units };
-  if (!sameAsBaseOurs && !sameAsBaseTheirs && !oursVsTheirs) {
-    result.orderConflict = { base: baseOrder, ours: ourOrder, theirs: theirOrder };
-  }
-  return result;
 }
