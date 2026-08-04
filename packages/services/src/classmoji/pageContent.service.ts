@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { classroomContentRepoName } from '@classmoji/utils';
 import { ContentService } from '../content/ContentService.ts';
+import { mergeIdSequence3, type MergeChoice } from '../content/merge3.ts';
 
 /**
  * Page Content Service
@@ -925,4 +926,203 @@ export function diffBlockUnits(
   }
 
   return units;
+}
+
+// ─── merge3Blocks — semantic 3-way merge (Phase 7) ───────────────────────────
+
+/** A true collision the semantic merge cannot decide. Same shape as
+ * PreviewConflictUnit (absent ours/theirs = deleted on that side; the
+ * `__order__` sentinel carries id arrays) plus the machine-readable reason. */
+export interface BlockMergeConflict extends PreviewConflictUnit {
+  reason: 'content' | 'delete_vs_edit' | 'both_added' | 'order';
+}
+
+export interface BlockMergeResult {
+  /**
+   * The merged document. Fully authoritative when `conflicts` is empty; while
+   * conflicts are pending, conflicted units carry the theirs side (or ours
+   * when theirs deleted) provisionally.
+   */
+  merged: unknown[];
+  conflicts: BlockMergeConflict[];
+  /** Block-level changes (edits/adds/deletes) that merged without a conflict. */
+  autoMerged: number;
+}
+
+/**
+ * Semantic 3-way merge of a BlockNote document by TOP-LEVEL block id
+ * (base = merge-base, ours = main, theirs = preview). Pure. The unit is the
+ * top-level block — its `children` subtree rides with it and compares
+ * deep-equal (a slide-style per-child merge does not apply to pages).
+ *
+ * Rules (mirroring the deck engine):
+ * - changed on one side only → take that side; identical changes → take either
+ * - changed differently on both sides → conflict
+ * - added on a side → keep (position woven from that side's order)
+ * - deleted on one side + unchanged other → the delete wins
+ * - deleted on one side + edited other → conflict (side absent = deleted)
+ * - top-level order 3-way merged; both reordered differently → the
+ *   `__order__` sentinel conflict
+ *
+ * Ids are the merge identity: blocks missing one get the deterministic
+ * derived id first (identical unedited blocks derive identical ids across
+ * versions, so they still align).
+ *
+ * @param opts.resolutions - chooser decisions keyed by conflict id
+ *   (`ours` = main's version, `theirs` = the preview's); a resolved conflict
+ *   is applied and not reported.
+ */
+export function merge3Blocks(
+  base: unknown[],
+  ours: unknown[],
+  theirs: unknown[],
+  opts: { resolutions?: Record<string, MergeChoice> } = {}
+): BlockMergeResult {
+  const resolutions = opts.resolutions ?? {};
+  const b = ensureBlockIds((base ?? []) as BlockNode[]) as BlockNode[];
+  const o = ensureBlockIds((ours ?? []) as BlockNode[]) as BlockNode[];
+  const t = ensureBlockIds((theirs ?? []) as BlockNode[]) as BlockNode[];
+
+  const byId = (blocks: BlockNode[]): Map<string, { block: BlockNode; index: number }> => {
+    const map = new Map<string, { block: BlockNode; index: number }>();
+    blocks.forEach((block, index) => {
+      if (block && typeof block.id === 'string' && !map.has(block.id)) {
+        map.set(block.id, { block, index });
+      }
+    });
+    return map;
+  };
+  const bMap = byId(b);
+  const oMap = byId(o);
+  const tMap = byId(t);
+
+  const seen = new Set<string>();
+  const allIds = [...tMap.keys(), ...oMap.keys(), ...bMap.keys()].filter(id => {
+    if (seen.has(id)) return false;
+    seen.add(id);
+    return true;
+  });
+
+  const sig = (entry: { block: BlockNode } | undefined): string =>
+    entry ? canonicalJson(entry.block) : 'absent';
+
+  const conflicts: BlockMergeConflict[] = [];
+  let autoMerged = 0;
+  /** Survivors: id → the block the merged doc carries (chosen or provisional). */
+  const kept = new Map<string, BlockNode>();
+
+  for (const id of allIds) {
+    const inB = bMap.get(id);
+    const inO = oMap.get(id);
+    const inT = tMap.get(id);
+
+    const makeEntry = (reason: BlockMergeConflict['reason']): BlockMergeConflict => ({
+      id,
+      index: inT?.index ?? inO?.index ?? inB?.index ?? -1,
+      reason,
+      ...(inO ? { ours: structuredClone(inO.block) } : {}),
+      ...(inT ? { theirs: structuredClone(inT.block) } : {}),
+      ...(inB ? { base: structuredClone(inB.block) } : {}),
+    });
+
+    type Fate =
+      | { kind: 'drop' }
+      | { kind: 'keep'; block: BlockNode }
+      | { kind: 'conflict'; entry: BlockMergeConflict; provisional: BlockNode };
+    let fate: Fate;
+
+    if (inB && inO && inT) {
+      const oursChanged = sig(inO) !== sig(inB);
+      const theirsChanged = sig(inT) !== sig(inB);
+      if (!oursChanged && !theirsChanged) fate = { kind: 'keep', block: inB.block };
+      else if (oursChanged && !theirsChanged) {
+        fate = { kind: 'keep', block: inO.block };
+        autoMerged++;
+      } else if (!oursChanged && theirsChanged) {
+        fate = { kind: 'keep', block: inT.block };
+        autoMerged++;
+      } else if (sig(inO) === sig(inT)) {
+        fate = { kind: 'keep', block: inO.block }; // identical edits
+        autoMerged++;
+      } else {
+        fate = { kind: 'conflict', entry: makeEntry('content'), provisional: inT.block };
+      }
+    } else if (inB && !inO && !inT) {
+      fate = { kind: 'drop' }; // deleted on both sides
+      autoMerged++;
+    } else if (inB && !inO && inT) {
+      // Deleted on ours (main).
+      if (sig(inT) === sig(inB)) {
+        fate = { kind: 'drop' }; // the delete wins over an unchanged block
+        autoMerged++;
+      } else {
+        fate = { kind: 'conflict', entry: makeEntry('delete_vs_edit'), provisional: inT.block };
+      }
+    } else if (inB && inO && !inT) {
+      // Deleted on theirs (the preview).
+      if (sig(inO) === sig(inB)) {
+        fate = { kind: 'drop' };
+        autoMerged++;
+      } else {
+        fate = { kind: 'conflict', entry: makeEntry('delete_vs_edit'), provisional: inO.block };
+      }
+    } else if (!inB && inO && !inT) {
+      fate = { kind: 'keep', block: inO.block }; // added on main
+      autoMerged++;
+    } else if (!inB && !inO && inT) {
+      fate = { kind: 'keep', block: inT.block }; // added on the preview
+      autoMerged++;
+    } else if (sig(inO) === sig(inT)) {
+      fate = { kind: 'keep', block: inO!.block }; // added identically on both
+      autoMerged++;
+    } else {
+      fate = { kind: 'conflict', entry: makeEntry('both_added'), provisional: inT!.block };
+    }
+
+    const choice = resolutions[id];
+    if (fate.kind === 'conflict' && choice) {
+      const chosenBlock = (choice === 'ours' ? fate.entry.ours : fate.entry.theirs) as
+        | BlockNode
+        | undefined;
+      fate = chosenBlock == null ? { kind: 'drop' } : { kind: 'keep', block: chosenBlock };
+    }
+
+    if (fate.kind === 'keep') {
+      kept.set(id, fate.block);
+    } else if (fate.kind === 'conflict') {
+      kept.set(id, fate.provisional);
+      conflicts.push(fate.entry);
+    }
+  }
+
+  // Top-level order: 3-way sequence merge with the survivors as members.
+  const members = new Set(kept.keys());
+  const seq = mergeIdSequence3(
+    idsOf(b),
+    idsOf(o),
+    idsOf(t),
+    members,
+    resolutions[ORDER_CONFLICT_ID]
+  );
+  let order: string[];
+  if (seq.conflict) {
+    conflicts.push({
+      id: ORDER_CONFLICT_ID,
+      index: -1,
+      reason: 'order',
+      base: seq.base,
+      ours: seq.ours,
+      theirs: seq.theirs,
+    });
+    order = seq.provisional;
+  } else {
+    order = seq.order;
+  }
+  // Safety net: every survivor must land somewhere.
+  for (const id of members) {
+    if (!order.includes(id)) order.push(id);
+  }
+
+  const merged = order.map(id => structuredClone(kept.get(id)!));
+  return { merged, conflicts, autoMerged };
 }
