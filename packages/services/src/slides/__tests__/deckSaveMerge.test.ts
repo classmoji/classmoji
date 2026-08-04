@@ -439,15 +439,18 @@ describe('saveDeckWithMerge — resolutions', () => {
 describe('saveDeckWithMerge — fallbacks', () => {
   const theirs = deckWith([{ id: 'aaa', html: '<h1>Edited</h1>' }]);
 
-  it('base blob missing (getBlobContent null) → DeckConflictError, nothing read from main, nothing written', async () => {
+  it('base blob missing (getBlobContent null) → DeckConflictError, nothing written', async () => {
     getBlobContentMock.mockResolvedValue(null);
+    // The fresh-main read is prefetched in PARALLEL with the base blob (a
+    // latency win), so it may fire — but a missing base must abort before
+    // any merge or write.
+    getContentMock.mockResolvedValue(null);
 
     const failure = await saveDeckWithMerge({ slide, theirs, baseSha: BASE_SHA }).catch(
       (e: unknown) => e
     );
 
     expect(failure).toBeInstanceOf(DeckConflictError);
-    expect(getContentMock).not.toHaveBeenCalled();
     expect(uploadBatchMock).not.toHaveBeenCalled();
   });
 

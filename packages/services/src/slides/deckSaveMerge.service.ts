@@ -33,7 +33,7 @@
  */
 
 import { ContentService } from '../content/ContentService.ts';
-import type { DeckThemeUrls } from './deckHtml.ts';
+import { SlideHtmlError, type DeckThemeUrls } from './deckHtml.ts';
 import {
   indexResolutions,
   merge3Units,
@@ -42,6 +42,7 @@ import {
   type DeckMergeConflict,
   type MergeResolution,
 } from './deckMerge.ts';
+import { applyDeckOps, DeckOpError, type DeckOp } from './deckOps.ts';
 import {
   DeckConflictError,
   resolveSlideRepoContext,
@@ -108,6 +109,56 @@ function parseDeckStrict(content: string): DeckJson | null {
   return null;
 }
 
+type SlideRepoContext = ReturnType<typeof resolveSlideRepoContext>;
+type OursRead = Awaited<ReturnType<typeof ContentService.getContent>>;
+
+/**
+ * Base = the deck at the editor's token (content-addressed blob read). A
+ * failed or unparseable base read means no trustworthy 3-way exists — the
+ * caller falls back to the plain conflict flow rather than merging against a
+ * guessed base.
+ */
+async function readBaseDeck(ctx: SlideRepoContext, baseSha: string): Promise<DeckJson | null> {
+  let baseFile: { content: string } | null = null;
+  try {
+    baseFile = await ContentService.getBlobContent({
+      gitOrganization: ctx.gitOrganization,
+      repo: ctx.repo,
+      sha: baseSha,
+    });
+  } catch (error: unknown) {
+    console.warn(
+      `[deckSaveMerge] Base blob read failed for ${ctx.repo}@${baseSha}:`,
+      error instanceof Error ? error.message : String(error)
+    );
+  }
+  return baseFile ? parseDeckStrict(baseFile.content) : null;
+}
+
+/** Fresh-main deck.json read. skipCache REQUIRED — this read pins the CAS sha. */
+function readOursDeckFile(ctx: SlideRepoContext, deckPath: string): Promise<OursRead> {
+  return ContentService.getContent({
+    gitOrganization: ctx.gitOrganization,
+    repo: ctx.repo,
+    path: deckPath,
+    skipCache: true,
+  });
+}
+
+interface RunDeckMergeSaveArgs {
+  slide: SlideContentTarget;
+  deckPath: string;
+  ctx: SlideRepoContext;
+  baseDeck: DeckJson;
+  theirs: DeckJson;
+  chosen: ReturnType<typeof indexResolutions> | null;
+  expectedOursSha?: string;
+  message?: string;
+  resolveThemeUrls?: (deck: DeckJson) => Promise<DeckThemeUrls | undefined>;
+  /** Attempt-0 read of main's deck.json (prefetched in parallel with the base). */
+  firstOurs: OursRead;
+}
+
 /**
  * Save an editor's posted deck over a stale conflict token by 3-way semantic
  * merge (see the module doc for the full contract).
@@ -127,36 +178,55 @@ export async function saveDeckWithMerge({
   message,
   resolveThemeUrls,
 }: SaveDeckMergeArgs): Promise<SaveDeckMergeResult> {
-  const { gitOrganization, repo } = resolveSlideRepoContext(slide);
+  const ctx = resolveSlideRepoContext(slide);
   const deckPath = `${slide.content_path}/deck.json`;
 
-  // Base = the deck at the editor's token. A failed or unparseable base read
-  // means no trustworthy 3-way exists — fall back to the plain conflict flow
-  // rather than merging against a guessed base.
-  let baseFile: { content: string } | null = null;
-  try {
-    baseFile = await ContentService.getBlobContent({ gitOrganization, repo, sha: baseSha });
-  } catch (error: unknown) {
-    console.warn(
-      `[deckSaveMerge] Base blob read failed for ${repo}@${baseSha}:`,
-      error instanceof Error ? error.message : String(error)
-    );
-  }
-  const baseDeck = baseFile ? parseDeckStrict(baseFile.content) : null;
+  // The base blob and the first fresh-main read are independent GitHub
+  // round-trips — fetched in parallel (save-latency win).
+  const [baseDeck, firstOurs] = await Promise.all([
+    readBaseDeck(ctx, baseSha),
+    readOursDeckFile(ctx, deckPath),
+  ]);
   if (!baseDeck) {
     throw new DeckConflictError('Deck changed since it was read — re-read before saving');
   }
 
   const chosen = resolutions ? indexResolutions(resolutions) : null;
+  return runDeckMergeSave({
+    slide,
+    deckPath,
+    ctx,
+    baseDeck,
+    theirs,
+    chosen,
+    expectedOursSha,
+    message,
+    resolveThemeUrls,
+    firstOurs,
+  });
+}
 
+/**
+ * The shared merge→commit loop: 3-way merge against fresh main, resolution
+ * validation, conflict reporting, and the CAS'd saveDeck commit with ONE
+ * retry on a mid-commit race. `firstOurs` (prefetched by the entry points)
+ * serves attempt 0; a retry re-reads main.
+ */
+async function runDeckMergeSave({
+  slide,
+  deckPath,
+  ctx,
+  baseDeck,
+  theirs,
+  chosen,
+  expectedOursSha,
+  message,
+  resolveThemeUrls,
+  firstOurs,
+}: RunDeckMergeSaveArgs): Promise<SaveDeckMergeResult> {
   for (let attempt = 0; attempt < 2; attempt++) {
-    // Ours = fresh main. skipCache REQUIRED — this read pins the CAS sha.
-    const ours = await ContentService.getContent({
-      gitOrganization,
-      repo,
-      path: deckPath,
-      skipCache: true,
-    });
+    // Ours = fresh main (attempt 0 uses the prefetched parallel read).
+    const ours = attempt === 0 ? firstOurs : await readOursDeckFile(ctx, deckPath);
 
     // Re-checked every attempt: a CAS-loss retry re-reads main, and choices
     // reviewed against one report must not silently apply to newer content.
@@ -250,4 +320,110 @@ export async function saveDeckWithMerge({
   }
   /* c8 ignore next */
   throw new Error('unreachable');
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// saveDeckFromOps — the editor's ops-shaped save (diff-at-save client)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * 409 — the posted ops do not apply to the deck at the base token (an unknown
+ * slide id, an insert/move anchor that does not exist in the base — e.g. the
+ * anchor slide was never in that base — or an op the engine refuses). The
+ * client's contract: fall back to the whole-document 7.5 save ONCE; nothing
+ * was written.
+ */
+export class DeckOpsBaseMismatchError extends Error {
+  status = 409 as const;
+  code = 'OPS_BASE_MISMATCH' as const;
+
+  constructor(message: string) {
+    super(message);
+    this.name = 'DeckOpsBaseMismatchError';
+  }
+}
+
+export interface SaveDeckFromOpsArgs {
+  slide: SlideContentTarget;
+  /** Granular ops the editor derived by diffing its DOM against its base snapshot. */
+  ops: DeckOp[];
+  /** The editor's conflict token — deck.json's blob sha the ops were diffed against. */
+  baseSha: string;
+  /** Chooser decisions from a prior conflict report (save re-submit with the SAME ops). */
+  resolutions?: MergeResolution[];
+  /** Pin to the conflict report the resolutions were reviewed against (its `ours_sha`). */
+  expectedOursSha?: string;
+  message?: string;
+  /** Resolver for shared:/custom: theme URLs, called with the MERGED deck. */
+  resolveThemeUrls?: (deck: DeckJson) => Promise<DeckThemeUrls | undefined>;
+}
+
+/**
+ * Save an editor's OPS over its base token: `theirs = applyDeckOps(base, ops)`
+ * — op ids and anchors resolve against the BASE deck — then the exact same
+ * 3-way merge → clean commit / conflict report / resolutions flow as
+ * saveDeckWithMerge. Untouched slides never ride in the request, so they can
+ * never phantom-conflict: a concurrent save to OTHER slides auto-merges by
+ * construction, with no equality tolerance involved.
+ *
+ * Op html/notes route through the same normalizeSlideHtml canonicalization
+ * the MCP deck_apply path uses (inside applyDeckOps), so ops-built documents
+ * match editor whole-document saves byte-for-byte.
+ *
+ * @throws {DeckOpsBaseMismatchError} the ops don't apply to the base (unknown
+ *   id/anchor, engine-refused op) — the client falls back to the whole-doc save.
+ * @throws {DeckConflictError} fallback to the plain 409 reload flow (base
+ *   blob unreadable/unparseable, main's deck.json gone, CAS retry lost twice).
+ * @throws {PreviewResolutionError} same codes as saveDeckWithMerge.
+ */
+export async function saveDeckFromOps({
+  slide,
+  ops,
+  baseSha,
+  resolutions,
+  expectedOursSha,
+  message,
+  resolveThemeUrls,
+}: SaveDeckFromOpsArgs): Promise<SaveDeckMergeResult> {
+  const ctx = resolveSlideRepoContext(slide);
+  const deckPath = `${slide.content_path}/deck.json`;
+
+  // Same parallel reads as saveDeckWithMerge (base blob + first fresh main).
+  const [baseDeck, firstOurs] = await Promise.all([
+    readBaseDeck(ctx, baseSha),
+    readOursDeckFile(ctx, deckPath),
+  ]);
+  if (!baseDeck) {
+    throw new DeckConflictError('Deck changed since it was read — re-read before saving');
+  }
+
+  // Materialize theirs by replaying the ops on the base. Anything the engine
+  // cannot resolve against THIS base (unknown ids, missing anchors, refused
+  // ops) is a base mismatch — the client retries as a whole-document save.
+  // NOTE: editor diffs never emit set_theme (theme changes take the whole-doc
+  // path, which owns the buildEditorDeck merge rules), so no starterCustomCss
+  // option is passed here.
+  let theirs: DeckJson;
+  try {
+    theirs = applyDeckOps(baseDeck, ops).deck;
+  } catch (error: unknown) {
+    if (error instanceof DeckOpError || error instanceof SlideHtmlError) {
+      throw new DeckOpsBaseMismatchError(`Ops do not apply to the base deck: ${error.message}`);
+    }
+    throw error;
+  }
+
+  const chosen = resolutions ? indexResolutions(resolutions) : null;
+  return runDeckMergeSave({
+    slide,
+    deckPath,
+    ctx,
+    baseDeck,
+    theirs,
+    chosen,
+    expectedOursSha,
+    message,
+    resolveThemeUrls,
+    firstOurs,
+  });
 }

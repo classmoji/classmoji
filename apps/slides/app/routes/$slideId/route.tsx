@@ -7,9 +7,11 @@ import { assertSlideAccess } from '@classmoji/auth/server';
 import { ClassmojiService } from '@classmoji/services';
 import {
   DeckConflictError,
+  DeckOpsBaseMismatchError,
   DeckParseError,
   PreviewResolutionError,
   acceptDeckPreview,
+  deckOpsPayloadSchema,
   discardDeckPreview,
   generateDeckHtml,
   getDeckPreviewStatus,
@@ -18,6 +20,7 @@ import {
   previewBranchName,
   resolveDeckPreviewConflicts,
   saveDeck,
+  saveDeckFromOps,
   saveDeckWithMerge,
   slideService,
   type DeckJson,
@@ -28,6 +31,7 @@ import {
 import { SandpackRenderer } from '@classmoji/ui-components/sandpack';
 import { useUser } from '~/hooks';
 import { fetchContent } from '~/utils/contentProxy';
+import { diffDeckSnapshots, extractDeckSnapshot, type DeckSnapshot } from '~/utils/deckOpsDiff';
 import { getThemeUrls } from '~/utils/themeService.server';
 import RevealSlides, { type RevealSlidesHandle } from '~/components/RevealSlides';
 import SlideToolbar from '~/components/SlideToolbar';
@@ -1218,15 +1222,14 @@ export const action = async ({
     }
   }
 
-  // Save content to GitHub (Phase 4b: dual-write deck.json + regenerated
-  // index.html through saveDeck, with sha-based conflict detection)
-  const htmlContent = formData.get('content') as string;
+  // ── Save paths ─────────────────────────────────────────────────────────────
   // Conflict token echoed back by the client (loader / fetch-latest / prior save).
   const expectedSha = (formData.get('content_sha') as string | null) || undefined;
   const shaSource: DeckShaSource = formData.get('sha_source') === 'deck' ? 'deck' : 'legacy_html';
 
   // Phase 7.5: a save-conflict chooser re-submit carries the SAME posted
-  // content plus one {id, choose} per conflict and the report's ours_sha pin.
+  // payload (ops or content) plus one {id, choose} per conflict and the
+  // report's ours_sha pin.
   let saveResolutions: MergeResolution[] | null = null;
   const rawSaveResolutions = formData.get('resolutions');
   if (typeof rawSaveResolutions === 'string' && rawSaveResolutions) {
@@ -1246,6 +1249,120 @@ export const action = async ({
   const rawSaveOursSha = formData.get('ours_sha');
   const saveOursSha =
     typeof rawSaveOursSha === 'string' && rawSaveOursSha ? rawSaveOursSha : undefined;
+
+  // Conflict report → 409 the chooser renders (the client re-submits the
+  // same payload + resolutions + the report's ours_sha). Shared by both save
+  // shapes.
+  const mergeReport = (report: {
+    units: unknown;
+    order_conflict?: unknown;
+    auto_merged: number;
+    ours_sha: string;
+  }) =>
+    data(
+      {
+        conflict: true,
+        units: report.units,
+        orderConflict: report.order_conflict ?? null,
+        autoMerged: report.auto_merged,
+        oursSha: report.ours_sha,
+      },
+      { status: 409 }
+    );
+
+  // ── Ops-shaped save (diff-at-save editor) ──────────────────────────────────
+  // The client diffed its DOM against its base snapshot and posted granular
+  // ops + the base token instead of the whole document. The server replays
+  // them onto the base (theirs = applyDeckOps(base, ops)) and runs the SAME
+  // 3-way merge → commit / chooser / resolutions flow as the whole-doc path.
+  // Any OPS_BASE_MISMATCH answer makes the client fall back to a whole-doc
+  // save ONCE — that path is always available and always correct.
+  const rawOps = formData.get('ops');
+  if (typeof rawOps === 'string' && rawOps) {
+    const opsFallback = (message: string) =>
+      data({ error: message, code: 'OPS_BASE_MISMATCH' }, { status: 409 });
+
+    const rawBaseSha = formData.get('base_sha');
+    const baseSha = typeof rawBaseSha === 'string' && rawBaseSha ? rawBaseSha : undefined;
+    if (!baseSha || shaSource !== 'deck') {
+      return opsFallback('Ops saves need a deck-sourced base token — use a full-document save.');
+    }
+
+    let ops;
+    try {
+      ops = deckOpsPayloadSchema.parse(JSON.parse(rawOps));
+    } catch {
+      return opsFallback('Malformed ops payload — use a full-document save.');
+    }
+
+    try {
+      const result = await saveDeckFromOps({
+        slide,
+        ops,
+        baseSha,
+        ...(saveResolutions ? { resolutions: saveResolutions } : {}),
+        ...(saveOursSha ? { expectedOursSha: saveOursSha } : {}),
+        message: `Update slides: ${slide.title}`,
+        // Theme URLs must be resolved from the MERGED deck (a concurrent
+        // theme change on main may win the per-field meta merge).
+        resolveThemeUrls: mergedDeck => resolveReadThemeUrls(mergedDeck, gitOrgLogin, repo),
+      });
+      if (!result.merged) return mergeReport(result);
+
+      let orphanedImages: Array<{ path: string; name: string; url: string }> = [];
+      try {
+        orphanedImages = await ContentService.findOrphanedImages({
+          orgLogin: gitOrgLogin,
+          repo,
+          imagesFolder: `${slide.content_path}/images`,
+          htmlContent: result.html,
+        });
+      } catch (err: unknown) {
+        console.error('Failed to detect orphaned images:', err);
+      }
+
+      // merged_with_concurrent only when concurrent main-side changes were
+      // folded in: savedContent then differs from the editor DOM beyond its
+      // own edits, so a live editor must remount from it. A concurrent-free
+      // ops save behaves exactly like a plain save (no remount).
+      return {
+        success: true,
+        sha: result.sha,
+        sha_source: 'deck' as const,
+        savedContent: result.html,
+        orphanedImages,
+        ...(result.concurrent > 0 ? { merged_with_concurrent: result.concurrent } : {}),
+      };
+    } catch (error: unknown) {
+      if (error instanceof DeckOpsBaseMismatchError) {
+        return opsFallback(error.message);
+      }
+      if (error instanceof PreviewResolutionError) {
+        if (error.code === 'CONTENT_CONFLICT') {
+          return data({ error: error.message, code: error.code }, { status: 409 });
+        }
+        return data({ error: error.message, code: error.code, ids: error.ids }, { status: 400 });
+      }
+      if (
+        error instanceof DeckConflictError ||
+        (error instanceof Error && error.name === 'DeckConflictError')
+      ) {
+        return data(
+          {
+            conflict: true,
+            message:
+              'This deck changed since you opened it — reload to get the latest version before saving.',
+          },
+          { status: 409 }
+        );
+      }
+      console.error('Failed to save slide (ops):', error);
+      return { error: error instanceof Error ? error.message : String(error) };
+    }
+  }
+
+  // ── Whole-document save (Phase 4b dual-write; also the ops fallback) ──────
+  const htmlContent = formData.get('content') as string;
 
   try {
     // Parse the editor's posted `<div class="slides">` wrapper into
@@ -1341,25 +1458,6 @@ export const action = async ({
         // theme change on main may win the per-field meta merge).
         resolveThemeUrls: mergedDeck => resolveReadThemeUrls(mergedDeck, gitOrgLogin, repo),
       });
-    // Conflict report → 409 the chooser renders (the client re-submits the
-    // same content + resolutions + the report's ours_sha).
-    const mergeReport = (report: {
-      units: unknown;
-      order_conflict?: unknown;
-      auto_merged: number;
-      ours_sha: string;
-    }) =>
-      data(
-        {
-          conflict: true,
-          units: report.units,
-          orderConflict: report.order_conflict ?? null,
-          autoMerged: report.auto_merged,
-          oursSha: report.ours_sha,
-        },
-        { status: 409 }
-      );
-
     let saved: { sha: string; html: string };
     let mergedWithConcurrent = 0;
     // true when the merge path committed: savedContent is then the MERGED
@@ -1519,6 +1617,34 @@ export default function SlideViewer() {
   // re-submit (or auto re-run) can carry the SAME document even though the
   // editor DOM was torn down when edit mode exited.
   const lastPostedContentRef = useRef<string | null>(null);
+  // Diff-at-save baseline: the canonical section snapshot of the document the
+  // editor is editing, paired with the deck sha it was read at. Captured at
+  // edit entry (fetch-latest) and refreshed after every successful save
+  // (merged-save adoption included — the adopted merged doc becomes the new
+  // baseline). null → no ops path; saves post the whole document.
+  const baselineRef = useRef<{ snapshot: DeckSnapshot; baseSha: string } | null>(null);
+  // The ops JSON the last save posted (when it was an ops save) — a chooser
+  // re-submit must carry the SAME ops so the server re-derives the SAME
+  // conflict report the choices answer.
+  const lastPostedOpsRef = useRef<{ ops: string; baseSha: string } | null>(null);
+  /** Capture/refresh the diff baseline from a server-rendered document. */
+  const captureBaseline = useCallback((content: unknown, sha: unknown, source: unknown): void => {
+    if (
+      typeof content === 'string' &&
+      content &&
+      typeof sha === 'string' &&
+      sha &&
+      source === 'deck' &&
+      typeof DOMParser !== 'undefined'
+    ) {
+      const snapshot = extractDeckSnapshot(content, html =>
+        new DOMParser().parseFromString(html, 'text/html')
+      );
+      baselineRef.current = snapshot ? { snapshot, baseSha: sha } : null;
+    } else {
+      baselineRef.current = null;
+    }
+  }, []);
   // Bumped when a merged save lands while editing: the committed document is
   // the MERGE (not what the DOM holds), so a live editor must remount from
   // the merged savedContent — otherwise the next save, carrying the fresh
@@ -1683,6 +1809,9 @@ export default function SlideViewer() {
           sha_source: fetcher.data.sha_source === 'deck' ? 'deck' : 'legacy_html',
         });
       }
+      // Diff-at-save baseline: this document + sha is what save-time ops
+      // will be diffed against (deck-sourced tokens only).
+      captureBaseline(fetcher.data.content, fetcher.data.content_sha, fetcher.data.sha_source);
       setSaveConflict(null);
       setSaveMergeReport(null);
       setHasChanges(false);
@@ -1788,12 +1917,14 @@ export default function SlideViewer() {
       );
       setSaveMergeReport(null);
     } else if (fetcher.data?.code && lastPostedContentRef.current) {
-      // A chooser re-submit was refused (stale ours_sha pin, or the conflict
-      // set changed). Re-run the plain save with the SAME posted content —
-      // it either lands (possibly merged) or produces a FRESH report. Bounded:
-      // a plain save never answers with `code`, so this runs at most once per
-      // Apply click.
+      // A chooser re-submit was refused (stale ours_sha pin, conflict set
+      // changed) OR an ops save answered OPS_BASE_MISMATCH. Re-run the plain
+      // WHOLE-DOCUMENT save with the SAME posted content — it either lands
+      // (possibly merged) or produces a FRESH report. Bounded: a plain
+      // whole-doc save never answers with `code`, so this runs at most once
+      // per save/Apply click.
       setSaveMergeReport(null);
+      lastPostedOpsRef.current = null;
       const payload: Record<string, string> = { content: lastPostedContentRef.current };
       if (contentToken.content_sha) {
         payload.content_sha = contentToken.content_sha;
@@ -1811,6 +1942,10 @@ export default function SlideViewer() {
           sha_source: fetcher.data.sha_source === 'deck' ? 'deck' : 'legacy_html',
         });
       }
+      // The committed document becomes the next diff-at-save baseline
+      // (merged-save adoption included).
+      captureBaseline(fetcher.data.savedContent, fetcher.data.sha, fetcher.data.sha_source);
+      lastPostedOpsRef.current = null;
       setSaveConflict(null);
       setSaveMergeReport(null);
       // Semantic save-merge (7.5): savedContent is the MERGED document —
@@ -1889,67 +2024,120 @@ export default function SlideViewer() {
     fetcher.submit({ intent: 'fetch-latest' }, { method: 'post' });
   }, [fetcher]);
 
+  // Build the save request from the current editor content. Diff-at-save:
+  // when a baseline snapshot matches the conflict token, the DOM is diffed
+  // against it and the delta posts as granular OPS + the base token —
+  // untouched slides never ride in the request. Any anomaly (no baseline,
+  // theme change, structure the op vocabulary can't express, zero delta)
+  // falls back to the existing whole-document save unchanged. The posted
+  // content string is ALWAYS preserved for the chooser / the server's
+  // OPS_BASE_MISMATCH whole-doc fallback re-submit.
+  const buildSavePayload = useCallback(
+    (content: string): Record<string, string> => {
+      lastPostedContentRef.current = content;
+      lastPostedOpsRef.current = null;
+
+      const baseline = baselineRef.current;
+      if (
+        baseline &&
+        contentToken.sha_source === 'deck' &&
+        contentToken.content_sha === baseline.baseSha &&
+        typeof DOMParser !== 'undefined'
+      ) {
+        const currSnapshot = extractDeckSnapshot(content, html =>
+          new DOMParser().parseFromString(html, 'text/html')
+        );
+        const ops = currSnapshot ? diffDeckSnapshots(baseline.snapshot, currSnapshot) : null;
+        if (ops && ops.length > 0) {
+          const opsJson = JSON.stringify(ops);
+          lastPostedOpsRef.current = { ops: opsJson, baseSha: baseline.baseSha };
+          return {
+            ops: opsJson,
+            base_sha: baseline.baseSha,
+            content_sha: contentToken.content_sha,
+            sha_source: 'deck',
+          };
+        }
+      }
+
+      // Whole-document save (7.5 path — also covers ops-ineligible states).
+      const payload: Record<string, string> = { content };
+      if (contentToken.content_sha) {
+        payload.content_sha = contentToken.content_sha;
+        payload.sha_source = contentToken.sha_source;
+      }
+      return payload;
+    },
+    [contentToken]
+  );
+
   // Save the current slide content and exit edit mode
   const handleSave = useCallback(() => {
     const content = revealRef.current?.getCurrentContent();
     if (!content) return;
 
-    // Preserved for the save-merge chooser: a conflict re-submit must carry
-    // the SAME document even after the editor DOM is torn down below.
-    lastPostedContentRef.current = content;
-    // Echo the conflict token so the server can 409 instead of clobbering
-    const payload: Record<string, string> = { content };
-    if (contentToken.content_sha) {
-      payload.content_sha = contentToken.content_sha;
-      payload.sha_source = contentToken.sha_source;
-    }
-    fetcher.submit(payload, { method: 'post' });
+    fetcher.submit(buildSavePayload(content), { method: 'post' });
     setHasChanges(false);
     setIsEditing(false);
-  }, [fetcher, contentToken]);
+  }, [fetcher, buildSavePayload]);
 
   // Save content without exiting edit mode (used for auto-save after destructive operations)
   const handleSaveContent = useCallback(() => {
     const content = revealRef.current?.getCurrentContent();
     if (!content) return;
 
-    // Same conflict-token treatment as handleSave
-    lastPostedContentRef.current = content;
-    const payload: Record<string, string> = { content };
-    if (contentToken.content_sha) {
-      payload.content_sha = contentToken.content_sha;
-      payload.sha_source = contentToken.sha_source;
-    }
-    fetcher.submit(payload, { method: 'post' });
+    fetcher.submit(buildSavePayload(content), { method: 'post' });
     setHasChanges(false);
     // Don't exit edit mode - user is still editing
-  }, [fetcher, contentToken]);
+  }, [fetcher, buildSavePayload]);
 
   // Recover from a save conflict: re-fetch the latest content + token
   // (the existing fetch-latest flow), discarding this session's unsaved changes
   const handleReloadLatest = useCallback(() => {
     setSaveConflict(null);
     setSaveMergeReport(null);
+    lastPostedOpsRef.current = null;
     setIsLoadingLatest(true);
     fetcher.submit({ intent: 'fetch-latest' }, { method: 'post' });
   }, [fetcher]);
 
   // Apply the save-merge chooser's decisions (Phase 7.5): re-submit the SAME
-  // posted content with one {id, choose} per conflict and the report's
-  // ours_sha pin. If the user is still in edit mode (auto-save conflicts),
-  // the live DOM is fresher than the preserved post — use it; the server
-  // re-validates the conflict set either way.
+  // posted payload with one {id, choose} per conflict and the report's
+  // ours_sha pin. An ops save re-submits the SAME ops (the report was derived
+  // from them — recomputing could change the conflict set under the reviewed
+  // choices). Whole-doc saves keep the pre-ops behavior: if the user is still
+  // in edit mode (auto-save conflicts), the live DOM is fresher than the
+  // preserved post — use it; the server re-validates the conflict set either
+  // way.
   const handleApplySaveResolutions = useCallback(
     (resolutions: Array<{ id: string; choose: 'ours' | 'theirs' }>) => {
-      const content =
-        (isEditing ? revealRef.current?.getCurrentContent() : null) || lastPostedContentRef.current;
-      if (!content || !saveMergeReport) return;
-      lastPostedContentRef.current = content;
-      const payload: Record<string, string> = {
-        content,
+      if (!saveMergeReport) return;
+
+      const shared: Record<string, string> = {
         resolutions: JSON.stringify(resolutions),
         ...(saveMergeReport.oursSha ? { ours_sha: saveMergeReport.oursSha } : {}),
       };
+
+      const postedOps = lastPostedOpsRef.current;
+      if (postedOps) {
+        fetcher.submit(
+          {
+            ops: postedOps.ops,
+            base_sha: postedOps.baseSha,
+            content_sha: postedOps.baseSha,
+            sha_source: 'deck',
+            ...shared,
+          },
+          { method: 'post' }
+        );
+        return;
+      }
+
+      const content =
+        (isEditing ? revealRef.current?.getCurrentContent() : null) || lastPostedContentRef.current;
+      if (!content) return;
+      lastPostedContentRef.current = content;
+      const payload: Record<string, string> = { content, ...shared };
       if (contentToken.content_sha) {
         payload.content_sha = contentToken.content_sha;
         payload.sha_source = contentToken.sha_source;
