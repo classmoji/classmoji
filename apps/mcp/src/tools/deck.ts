@@ -418,7 +418,7 @@ const positionSchema = z.union([
   z.object({ at: z.enum(['start', 'end']) }).strict(),
 ]);
 
-const newSlideSchema = z
+const newChildSlideSchema = z
   .object({
     html: z.string().max(200_000),
     notes: z.string().max(50_000).optional(),
@@ -426,6 +426,29 @@ const newSlideSchema = z
     attrs: attrsSchema.optional(),
   })
   .strict();
+
+const newSlideSchema = z
+  .object({
+    html: z.string().max(200_000).optional(),
+    notes: z.string().max(50_000).optional(),
+    hidden: z.boolean().optional(),
+    attrs: attrsSchema.optional(),
+    children: z
+      .array(newChildSlideSchema)
+      .min(1)
+      .max(20)
+      .optional()
+      .describe(
+        'Create a vertical stack: the slide becomes a container holding these child slides ' +
+          '(one nesting level — children cannot have children). Omit html on the container.'
+      ),
+  })
+  .strict()
+  .refine(s => (s.children?.length ? s.html === undefined : typeof s.html === 'string'), {
+    message:
+      'A new slide needs either html (regular slide) or children (vertical stack container) — ' +
+      'stack containers carry no html of their own',
+  });
 
 const opSchema = z.discriminatedUnion('op', [
   z.object({
@@ -593,21 +616,88 @@ function applyDeckOps(
       }
 
       case 'insert': {
+        // Runtime mirrors of the schema rules (defense in depth — the test
+        // harness and any validation-bypassing client hit the handler direct).
+        for (const spec of op.slides) {
+          const hasChildren = Boolean(spec.children?.length);
+          if (hasChildren && spec.html !== undefined) {
+            throw new DeckOpError(
+              'A vertical stack container cannot carry html — put content on its children'
+            );
+          }
+          if (!hasChildren && typeof spec.html !== 'string') {
+            throw new DeckOpError(
+              'A new slide needs html (regular slide) or children (vertical stack container)'
+            );
+          }
+          if (
+            hasChildren &&
+            spec.children!.some(c => (c as { children?: unknown[] }).children?.length)
+          ) {
+            throw new DeckOpError(
+              'Nested stacks are not supported — child slides cannot have children'
+            );
+          }
+        }
+        // A stack container can never land inside another stack (Reveal
+        // supports one nesting level) — mirror the move-op guard BEFORE any
+        // building so the rejection is targeted.
+        if (op.slides.some(s => s.children?.length) && 'after' in op.position) {
+          const target = mustFindSlide(deck.slides, op.position.after, 'insert');
+          if (target.parent !== deck.slides) {
+            throw new DeckOpError(
+              `Cannot insert a vertical stack after '${op.position.after}' — that position is ` +
+                'inside another stack (nested stacks are not supported)'
+            );
+          }
+        }
         const used = collectIds(deck.slides);
-        const inserted: DeckSlide[] = op.slides.map(spec => {
+        const mint = (): string => {
           let id = mintSlideId();
           while (used.has(id)) id = mintSlideId(); // re-mint collisions
           used.add(id);
-          const next: DeckSlide = { id, html: normalizeSlideHtml(spec.html) };
+          return id;
+        };
+        const buildLeaf = (spec: {
+          html: string;
+          notes?: string;
+          hidden?: boolean;
+          attrs?: Record<string, string>;
+        }): DeckSlide => {
+          const leaf: DeckSlide = { id: mint(), html: normalizeSlideHtml(spec.html) };
           if (spec.notes != null && spec.notes !== '') {
-            next.notes = normalizeSlideHtml(spec.notes);
+            leaf.notes = normalizeSlideHtml(spec.notes);
           }
-          if (spec.hidden) next.hidden = true;
-          if (spec.attrs && Object.keys(spec.attrs).length > 0) next.attrs = { ...spec.attrs };
-          return next;
+          if (spec.hidden) leaf.hidden = true;
+          if (spec.attrs && Object.keys(spec.attrs).length > 0) leaf.attrs = { ...spec.attrs };
+          return leaf;
+        };
+        const childIdsByContainer: Record<string, string[]> = {};
+        const inserted: DeckSlide[] = op.slides.map(spec => {
+          if (spec.children?.length) {
+            const container: DeckSlide = { id: mint() };
+            container.children = spec.children.map(buildLeaf);
+            if (spec.notes != null && spec.notes !== '') {
+              container.notes = normalizeSlideHtml(spec.notes);
+            }
+            if (spec.hidden) container.hidden = true;
+            if (spec.attrs && Object.keys(spec.attrs).length > 0) {
+              container.attrs = { ...spec.attrs };
+            }
+            childIdsByContainer[container.id] = container.children.map(c => c.id);
+            return container;
+          }
+          // The schema refine guarantees html is present on non-containers.
+          return buildLeaf(spec as { html: string; notes?: string; hidden?: boolean; attrs?: Record<string, string> });
         });
         insertSlidesAt(deck, inserted, op.position, 'insert');
-        applied.push({ op: 'insert', count: inserted.length, ids: inserted.map(s => s.id) });
+        const entry: Record<string, unknown> = {
+          op: 'insert',
+          count: inserted.length,
+          ids: inserted.map(s => s.id),
+        };
+        if (Object.keys(childIdsByContainer).length > 0) entry.children = childIdsByContainer;
+        applied.push(entry);
         break;
       }
 
@@ -721,7 +811,9 @@ export const deckApplyTool: ToolDefinition<DeckApplyArgs> = {
     "commit: 'direct'. Pass commit explicitly to override either way. When a preview already " +
     "exists, applies STACK onto it and expected_sha must come from a read at: 'preview' " +
     "(main's sha will conflict). Slide html/notes must not contain <section> tags (slide " +
-    'structure is managed via ops).',
+    'structure is managed via ops). To create a vertical stack, insert a slide with ' +
+    "children (child slides, one nesting level) instead of html; the response's applied " +
+    'entry reports the minted container and child ids.',
   scope: 'write',
   roles: TEACHING_TEAM,
   inputSchema: {

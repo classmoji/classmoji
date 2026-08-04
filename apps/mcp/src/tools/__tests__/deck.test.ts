@@ -662,6 +662,80 @@ describe('deck_apply op semantics', () => {
     expect(stack.children?.[1].html).toBe('<p>mid</p>');
   });
 
+  it('insert creates a vertical stack from children (minted ids reported, no container html)', async () => {
+    const payload = parse(
+      await run([
+        {
+          op: 'insert',
+          slides: [
+            {
+              children: [
+                { html: '<h2>Child A</h2>', notes: 'child notes' },
+                { html: '<h2>Child B</h2>', hidden: true },
+              ],
+              attrs: { 'data-background-color': '#123' },
+            },
+          ],
+          position: { at: 'end' },
+        },
+      ])
+    );
+
+    const deck = savedDeck();
+    const container = deck.slides[deck.slides.length - 1];
+    expect(container.html).toBeUndefined();
+    expect(container.attrs).toEqual({ 'data-background-color': '#123' });
+    expect(container.children).toHaveLength(2);
+    expect(container.children?.[0].html).toBe('<h2>Child A</h2>');
+    expect(container.children?.[0].notes).toBe('child notes');
+    expect(container.children?.[1].hidden).toBe(true);
+    for (const s of [container, ...(container.children ?? [])]) {
+      expect(s.id).toMatch(/^[0-9a-f]{8}$/);
+    }
+    const entry = payload.applied[0] as { ids: string[]; children: Record<string, string[]> };
+    expect(entry.children[entry.ids[0]]).toHaveLength(2);
+  });
+
+  it('insert stack rejects html-on-container, empty spec, and nested-stack positions', async () => {
+    // html + children together → schema refine rejects.
+    await expect(
+      run([
+        {
+          op: 'insert',
+          slides: [{ html: '<p>no</p>', children: [{ html: '<p>c</p>' }] }],
+          position: { at: 'end' },
+        },
+      ])
+    ).rejects.toMatchObject({ kind: 'invalid_params' });
+
+    // Neither html nor children → schema refine rejects.
+    await expect(
+      run([{ op: 'insert', slides: [{ hidden: true }], position: { at: 'end' } }])
+    ).rejects.toMatchObject({ kind: 'invalid_params' });
+
+    // Inserting a stack at a position inside another stack → targeted DeckOpError.
+    await expect(
+      run([
+        {
+          op: 'insert',
+          slides: [{ children: [{ html: '<p>c</p>' }] }],
+          position: { after: 'c1' },
+        },
+      ])
+    ).rejects.toMatchObject({ kind: 'invalid_params' });
+
+    // Children cannot nest (strict child schema has no children field).
+    await expect(
+      run([
+        {
+          op: 'insert',
+          slides: [{ children: [{ html: '<p>c</p>', children: [{ html: '<p>g</p>' }] }] }],
+          position: { at: 'end' },
+        },
+      ])
+    ).rejects.toMatchObject({ kind: 'invalid_params' });
+  });
+
   it('move repositions slides ({ after } and { at })', async () => {
     await run([{ op: 'move', id: 'bbb', position: { at: 'start' } }]);
     expect(savedDeck().slides.map(s => s.id)).toEqual(['bbb', 'aaa', 'stack']);
