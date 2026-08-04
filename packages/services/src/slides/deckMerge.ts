@@ -9,6 +9,10 @@
  *
  * Merge semantics (a SLIDE is the unit — fields merge atomically per unit,
  * never html-vs-notes within one slide):
+ * - "changed" means changed MODULO BROWSER SERIALIZATION for html/notes/attrs
+ *   (deckHtml htmlEquivalentModuloBrowserSerialization): the editor's theirs
+ *   side is a browser DOM read-back, and browsers rewrite styled markup the
+ *   user never touched — those rewrites must not read as edits
  * - changed on one side only → take that side
  * - changed identically on both sides → take either
  * - changed differently on both sides → conflict
@@ -51,6 +55,7 @@ import {
   mergeIdSequence3,
   type MergeChoice,
 } from '../content/merge3.ts';
+import { browserCanonicalAttrValue, browserCanonicalHtmlSig } from './deckHtml.ts';
 import type { DeckJson, DeckSlide } from './deckTypes.ts';
 
 export { PreviewResolutionError, indexResolutions } from '../content/merge3.ts';
@@ -194,16 +199,30 @@ function indexDeck(deck: DeckJson): SideIndex {
 
 const isContainer = (slide: DeckSlide | undefined): boolean => (slide?.children?.length ?? 0) > 0;
 
-/** A unit's own fields — children are the child units' / child scope's business. */
+/**
+ * A unit's own fields — children are the child units' / child scope's business.
+ *
+ * html/notes/attrs enter the signature in browser-serialization-CANONICAL form
+ * (deckHtml browserCanonicalHtmlSig / browserCanonicalAttrValue): the editor's
+ * `theirs` side is a browser-serialized DOM read-back, and browsers rewrite
+ * markup the user never touched (CSSOM style re-serialization hex→rgb,
+ * numeric noise, valueless-attr `=""`, entity re-encoding — ground truth in
+ * __tests__/fixtures/browserSerialization.ts). Without canonicalization every
+ * styled slide reads as "edited in both versions" the moment two tabs race
+ * (phantom conflicts); with it, only genuine content differences count, in
+ * BOTH decisions that share this signature — unchanged detection (side vs
+ * base) and identical-edit detection (ours vs theirs). Signature comparison
+ * is transitive, so the three pairwise decisions can never disagree.
+ */
 function contentSig(slide: DeckSlide | undefined): string {
   if (!slide) return 'absent';
   const unitAttrs = slide.attrs ?? {};
   const attrs = Object.keys(unitAttrs)
     .sort()
-    .map(key => [key, unitAttrs[key]]);
+    .map(key => [key, browserCanonicalAttrValue(key, unitAttrs[key])]);
   return JSON.stringify({
-    html: slide.html ?? null,
-    notes: slide.notes ?? null,
+    html: slide.html != null ? browserCanonicalHtmlSig(slide.html) : null,
+    notes: slide.notes != null ? browserCanonicalHtmlSig(slide.notes) : null,
     hidden: slide.hidden ?? false,
     attrs,
   });

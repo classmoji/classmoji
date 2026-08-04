@@ -13,6 +13,12 @@
  *   theirs = the POSTED document (the editor wrapper parsed + carried meta,
  *            constructed by the caller via slide.service buildEditorDeck)
  *
+ * theirs is a BROWSER-serialized DOM read-back while base/ours come from
+ * stored generator output, so the engine's equality is tolerant of pure
+ * browser serialization (hex→rgb style rewrites, numeric noise, attr
+ * requoting — see deckMerge/deckHtml). Slides the editor never touched merge
+ * clean instead of raising phantom "edited in both versions" conflicts.
+ *
  * Zero true collisions → the merged deck is committed through saveDeck (ONE
  * atomic CAS'd commit: deck.json + regenerated index.html) and the save
  * SUCCEEDS, reporting how many concurrent (main-side) changes were folded in.

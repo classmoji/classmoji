@@ -19,7 +19,7 @@
 
 import * as cheerio from 'cheerio';
 import type { Cheerio, CheerioAPI } from 'cheerio';
-import type { Element } from 'domhandler';
+import type { AnyNode, Element } from 'domhandler';
 import { randomBytes } from 'node:crypto';
 import type { DeckConfig, DeckExtraCss, DeckJson, DeckSlide } from './deckTypes.ts';
 
@@ -737,6 +737,245 @@ export function normalizeSlideHtml(html: string): string {
   });
 
   return $.root().html() ?? '';
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Browser-serialization-tolerant HTML equivalence (Phase 7.5 editor saves)
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// The editor-save merge compares the POSTED document (browser-serialized DOM)
+// against decks parsed from stored generator output. Browsers rewrite markup
+// they never semantically changed — the exact rewrites are pinned as captured
+// Chromium ground truth in __tests__/fixtures/browserSerialization.ts:
+//   - CSSOM style serialization: hex → rgb(r, g, b), rgb respacing, numeric
+//     noise trimmed (`.5px` → `0.5px`, `600.50px` → `600.5px`), url()/font
+//     quoting, `; ` joining + trailing `;`
+//   - valueless attrs gain `=""`, attr re-quoting, entity re-encoding,
+//     self-closing slashes dropped
+// The equivalence below treats exactly those rewrites as equal and NOTHING
+// else: tag structure and text-node data compare verbatim (the fragment
+// parser decodes entities, so `&quot;` vs `"` is the same text, never a
+// loosening), pre/code subtrees get no attribute loosening at all, and
+// genuinely different values (colors, numbers, class token order, code
+// content) still differ.
+
+/** Protects quoted strings / url() args during unquoted-css normalization. */
+const CSS_STRING_RE = /"((?:[^"\\]|\\.)*)"|'((?:[^'\\]|\\.)*)'/g;
+/** 3/6-digit hex colors only — 4/8-digit (alpha) forms stay verbatim. */
+const CSS_HEX_COLOR_RE = /#([0-9a-f]{6}|[0-9a-f]{3})(?![0-9a-f])/gi;
+const CSS_DECIMAL_RE = /(\d+\.\d*|\.\d+)/g;
+
+function hexToRgbTriplet(hex: string): string {
+  const full =
+    hex.length === 3
+      ? hex
+          .split('')
+          .map(c => c + c)
+          .join('')
+      : hex;
+  const r = parseInt(full.slice(0, 2), 16);
+  const g = parseInt(full.slice(2, 4), 16);
+  const b = parseInt(full.slice(4, 6), 16);
+  return `rgb(${r}, ${g}, ${b})`;
+}
+
+/** `.5` → `0.5`, `600.50` → `600.5`, `-50.0` → `-50` (sign untouched). */
+function trimCssDecimal(digits: string): string {
+  let d = digits.startsWith('.') ? `0${digits}` : digits;
+  if (d.includes('.')) {
+    d = d.replace(/0+$/, '');
+    if (d.endsWith('.')) d = d.slice(0, -1);
+  }
+  return d;
+}
+
+/**
+ * Canonicalize one css declaration VALUE the way Chromium's CSSOM serializer
+ * would (fixture-pinned): quoted strings become double-quoted (content
+ * verbatim), unquoted url() args get quoted, whitespace/comma spacing
+ * collapses, 3/6-digit hex → rgb(r, g, b), decimal noise trimmed. Keyword
+ * case and everything inside quotes stay verbatim — deliberately strict.
+ */
+function canonicalCssValue(rawValue: string): string {
+  const protectedParts: string[] = [];
+  const protect = (part: string): string => {
+    protectedParts.push(part);
+    return `\u0000${protectedParts.length - 1}\u0000`;
+  };
+
+  // Quoted strings first: canonical double-quoted form, content verbatim.
+  let value = rawValue.replace(
+    CSS_STRING_RE,
+    (_m, dq: string | undefined, sq: string | undefined) => {
+      const content =
+        dq !== undefined ? dq : (sq as string).replace(/\\'/g, "'").replace(/"/g, '\\"');
+      return protect(`"${content}"`);
+    }
+  );
+  // Unquoted url() args (quoted ones are already placeholders): url(x) → url("x").
+  value = value.replace(
+    // eslint-disable-next-line no-control-regex -- \u0000 is the placeholder sentinel; parsed attr values can never contain NUL
+    /url\(\s*([^)\u0000]*?)\s*\)/gi,
+    (_m, arg: string) => `url(${protect(`"${arg}"`)})`
+  );
+
+  value = value
+    .trim()
+    .replace(/\s+/g, ' ')
+    .replace(/\s*,\s*/g, ', ')
+    .replace(/\(\s+/g, '(')
+    .replace(/\s+\)/g, ')')
+    .replace(CSS_HEX_COLOR_RE, (_m, hex: string) => hexToRgbTriplet(hex.toLowerCase()))
+    .replace(CSS_DECIMAL_RE, (_m, digits: string) => trimCssDecimal(digits));
+
+  // eslint-disable-next-line no-control-regex -- restoring the \u0000-delimited placeholders
+  return value.replace(/\u0000(\d+)\u0000/g, (_m, i: string) => protectedParts[Number(i)]);
+}
+
+/** Split a style attr on top-level `;` (quotes and parens respected). */
+function splitStyleDeclarations(style: string): string[] {
+  const parts: string[] = [];
+  let current = '';
+  let quote: '"' | "'" | null = null;
+  let depth = 0;
+  for (let i = 0; i < style.length; i++) {
+    const ch = style[i];
+    if (quote) {
+      current += ch;
+      if (ch === '\\' && i + 1 < style.length) {
+        current += style[++i];
+      } else if (ch === quote) {
+        quote = null;
+      }
+      continue;
+    }
+    if (ch === '"' || ch === "'") {
+      quote = ch;
+    } else if (ch === '(') {
+      depth++;
+    } else if (ch === ')') {
+      depth = Math.max(0, depth - 1);
+    } else if (ch === ';' && depth === 0) {
+      parts.push(current);
+      current = '';
+      continue;
+    }
+    current += ch;
+  }
+  if (current.trim() !== '') parts.push(current);
+  return parts;
+}
+
+/**
+ * Canonical form of a style attr VALUE for equivalence: declarations parsed
+ * (property lowercased, value via canonicalCssValue), duplicates last-wins
+ * (browser behavior), compared order-insensitively (sorted), trailing `;`
+ * irrelevant by construction.
+ */
+function canonicalStyleAttr(style: string): string {
+  const decls = new Map<string, string>();
+  for (const raw of splitStyleDeclarations(style)) {
+    const idx = raw.indexOf(':');
+    if (idx === -1) {
+      const bare = raw.trim().toLowerCase();
+      if (bare) decls.set(bare, '');
+      continue;
+    }
+    const prop = raw.slice(0, idx).trim().toLowerCase();
+    if (!prop) continue;
+    decls.set(prop, canonicalCssValue(raw.slice(idx + 1)));
+  }
+  return [...decls.entries()]
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+    .map(([prop, val]) => `${prop}:${val}`)
+    .join(';');
+}
+
+/**
+ * Canonical form of one attribute value for browser-serialization-tolerant
+ * comparison: `style` via the CSSOM rules, `class` as its ordered token list
+ * with whitespace collapsed (token ORDER still matters), everything else
+ * verbatim (values are already entity-decoded by the parser; a valueless
+ * attr and `=""` are both the empty string).
+ */
+export function browserCanonicalAttrValue(name: string, value: string): string {
+  if (name === 'style') return canonicalStyleAttr(value);
+  if (name === 'class') return value.trim().split(/\s+/).filter(Boolean).join(' ');
+  return value;
+}
+
+function browserCanonicalNodeSig(node: AnyNode, verbatimAttrs: boolean): string {
+  if (node.type === 'text') {
+    // Parser-decoded data verbatim: entity re-encodings compare equal, any
+    // actual character change (including whitespace) does not.
+    return `T${JSON.stringify(node.data)}`;
+  }
+  if (node.type === 'comment') {
+    return `C${JSON.stringify(node.data)}`;
+  }
+  if (node.type === 'tag' || node.type === 'script' || node.type === 'style') {
+    const el = node as Element;
+    const name = el.tagName.toLowerCase();
+    // No attribute loosening anywhere inside pre/code — code content (and any
+    // markup riding in it) must never be loosened.
+    const childVerbatim = verbatimAttrs || name === 'pre' || name === 'code';
+    const attrs = Object.entries(el.attribs ?? {})
+      .map(([attrName, attrValue]): [string, string] => {
+        const lower = attrName.toLowerCase();
+        const raw = attrValue ?? '';
+        return [lower, verbatimAttrs ? raw : browserCanonicalAttrValue(lower, raw)];
+      })
+      .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+    const children = (el.children as AnyNode[])
+      .map(child => browserCanonicalNodeSig(child, childVerbatim))
+      .join('');
+    return `<${name} ${JSON.stringify(attrs)}>${children}</${name}>`;
+  }
+  // Directives / CDATA / anything exotic: byte-strict.
+  return `O${JSON.stringify({ type: node.type, data: (node as { data?: string }).data ?? '' })}`;
+}
+
+const canonicalHtmlCache = new Map<string, string>();
+const CANONICAL_HTML_CACHE_MAX = 2000;
+
+/**
+ * Canonical signature of an html fragment under the browser-serialization
+ * equivalence. Two fragments are equivalent iff their signatures match —
+ * signature comparison is transitive, so merge decisions stay consistent
+ * across base/ours/theirs.
+ */
+export function browserCanonicalHtmlSig(html: string): string {
+  const cached = canonicalHtmlCache.get(html);
+  if (cached !== undefined) return cached;
+  let sig: string;
+  try {
+    const $ = cheerio.load(html, null, false);
+    sig = ($.root()[0].children as AnyNode[])
+      .map(child => browserCanonicalNodeSig(child, false))
+      .join('');
+  } catch {
+    // Unparseable → byte-strict (never loosen what we cannot model).
+    sig = `RAW${JSON.stringify(html)}`;
+  }
+  if (canonicalHtmlCache.size >= CANONICAL_HTML_CACHE_MAX) canonicalHtmlCache.clear();
+  canonicalHtmlCache.set(html, sig);
+  return sig;
+}
+
+/**
+ * True when two html/notes fragments differ only by browser serialization
+ * (DOM round-trip + CSSOM style re-serialization) — see the fixture file for
+ * the exact rewrites this absorbs. Conservative by design: any real content,
+ * structure, attribute, color, or numeric difference is NOT equivalent.
+ * null/undefined are equivalent only to each other (absent ≠ empty string).
+ */
+export function htmlEquivalentModuloBrowserSerialization(
+  a: string | null | undefined,
+  b: string | null | undefined
+): boolean {
+  if (a == null || b == null) return a == null && b == null;
+  if (a === b) return true;
+  return browserCanonicalHtmlSig(a) === browserCanonicalHtmlSig(b);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

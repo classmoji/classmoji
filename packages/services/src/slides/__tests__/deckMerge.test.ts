@@ -17,6 +17,7 @@ import {
   deckChildOrderConflictId,
   merge3Units,
 } from '../deckMerge.ts';
+import { browserFixture } from './fixtures/browserSerialization.ts';
 import type { DeckJson, DeckSlide } from '../deckTypes.ts';
 
 const slide = (id: string, html = `<p>${id}</p>`, extra: Partial<DeckSlide> = {}): DeckSlide => ({
@@ -743,6 +744,107 @@ describe('merge3Units — cross-scope moves (confined view)', () => {
       assertUniqueIds(resolved);
     }
     expect(byId(keepTheirs.merged, 's').children?.map(child => child.id)).toEqual(['x']);
+  });
+});
+
+// ─── Browser-serialization tolerance (Phase 7.5 phantom conflicts) ───────────
+//
+// theirs in an editor save is a browser DOM read-back; base/ours come from
+// stored generator output. The fixture strings below are CAPTURED Chromium
+// output (fixtures/browserSerialization.ts) — the exact forms the user's
+// two-tab repro produced.
+
+describe('merge3Units — browser-serialization tolerance', () => {
+  const hexFixture = browserFixture('hex-color-style');
+  /** A third, byte-distinct but semantically identical browser variant. */
+  const hexVariant =
+    '<h2 style="color:rgb(224,123,57)">Warm heading</h2><p style="color:rgb(171,71,188)">purple</p>';
+
+  it('theirs = the REAL browser form of an untouched styled slide + ours = real edit → auto-merges to ours, zero conflicts', () => {
+    const edited = '<h2 style="color:#e07b39">Warm heading EDITED</h2>';
+    const base = deck([slide('a', hexFixture.input), slide('b')]);
+    const ours = deck([slide('a', edited), slide('b')]);
+    const theirs = deck([slide('a', hexFixture.cssom), slide('b')]);
+
+    const result = merge3Units(base, ours, theirs);
+
+    expect(result.conflicts).toEqual([]);
+    expect(byId(result.merged, 'a').html).toBe(edited);
+    // Only ours' genuine edit counts — browser noise is not a change.
+    expect(result.autoMerged).toBe(1);
+  });
+
+  it('the inverse — theirs REALLY edited (a different color) against an ours edit → still a content conflict', () => {
+    const base = deck([slide('a', hexFixture.input)]);
+    const ours = deck([slide('a', '<h2 style="color:#e07b39">Warm heading EDITED</h2>')]);
+    // rgb(200, …) is NOT the browser serialization of #e07b39 (that is 224).
+    const theirs = deck([slide('a', '<h2 style="color: rgb(200, 123, 57);">Warm heading</h2>')]);
+
+    const result = merge3Units(base, ours, theirs);
+
+    expect(result.conflicts).toMatchObject([{ id: 'a', reason: 'content' }]);
+  });
+
+  it('identical edits where one side is browser-serialized → auto-merge keeps ours (the clean stored form)', () => {
+    const base = deck([slide('a', '<p>old</p>')]);
+    const ours = deck([slide('a', hexFixture.input)]);
+    const theirs = deck([slide('a', hexFixture.cssom)]);
+
+    const result = merge3Units(base, ours, theirs);
+
+    expect(result.conflicts).toEqual([]);
+    expect(byId(result.merged, 'a').html).toBe(hexFixture.input);
+    expect(result.autoMerged).toBe(1);
+  });
+
+  it('browser noise on BOTH sides of an untouched slide → the unit stays at base verbatim', () => {
+    const base = deck([slide('a', hexFixture.input), slide('b')]);
+    const ours = deck([slide('a', hexFixture.cssom), slide('b')]);
+    const theirs = deck([slide('a', hexVariant), slide('b')]);
+
+    const result = merge3Units(base, ours, theirs);
+
+    expect(result.conflicts).toEqual([]);
+    expect(byId(result.merged, 'a').html).toBe(hexFixture.input);
+    expect(result.autoMerged).toBe(0);
+  });
+
+  it('notes fields get the same tolerance', () => {
+    const base = deck([slide('a', '<p>a</p>', { notes: '<p style="color:#e07b39">note</p>' })]);
+    const ours = deck([
+      slide('a', '<p>a edited</p>', { notes: '<p style="color:#e07b39">note</p>' }),
+    ]);
+    const theirs = deck([
+      slide('a', '<p>a</p>', { notes: '<p style="color: rgb(224, 123, 57);">note</p>' }),
+    ]);
+
+    const result = merge3Units(base, ours, theirs);
+
+    expect(result.conflicts).toEqual([]);
+    expect(byId(result.merged, 'a').html).toBe('<p>a edited</p>');
+  });
+
+  it('section attrs (style) tolerate CSSOM re-serialization; genuine attr changes still conflict', () => {
+    // Captured: style="background-color:#123456" reads back as
+    // "background-color: rgb(18, 52, 86);" after any CSSOM style write.
+    const base = deck([slide('a', '<p>a</p>', { attrs: { style: 'background-color:#123456' } })]);
+    const ours = deck([
+      slide('a', '<p>a edited</p>', { attrs: { style: 'background-color:#123456' } }),
+    ]);
+    const theirs = deck([
+      slide('a', '<p>a</p>', { attrs: { style: 'background-color: rgb(18, 52, 86);' } }),
+    ]);
+
+    const tolerant = merge3Units(base, ours, theirs);
+    expect(tolerant.conflicts).toEqual([]);
+    expect(byId(tolerant.merged, 'a').html).toBe('<p>a edited</p>');
+
+    const genuine = merge3Units(
+      base,
+      ours,
+      deck([slide('a', '<p>a</p>', { attrs: { style: 'background-color: rgb(99, 52, 86);' } })])
+    );
+    expect(genuine.conflicts).toMatchObject([{ id: 'a', reason: 'content' }]);
   });
 });
 

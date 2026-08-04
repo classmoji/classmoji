@@ -39,6 +39,7 @@ vi.mock('../../content/ContentService.ts', () => ({
 const { saveDeckWithMerge } = await import('../deckSaveMerge.service.ts');
 const { DeckConflictError } = await import('../slideContent.service.ts');
 const { PreviewResolutionError } = await import('../deckMerge.ts');
+const { browserFixture } = await import('./fixtures/browserSerialization.ts');
 
 const gitOrganization = { provider: 'GITHUB', login: 'test-org' };
 const slide = {
@@ -181,6 +182,74 @@ describe('saveDeckWithMerge — clean 3-way', () => {
 
     expect(result).toMatchObject({ merged: true, concurrent: 0 });
     expect(batchCall().deck?.slides).toEqual([{ id: 'aaa', html: '<h1>Edited</h1>' }]);
+  });
+});
+
+describe('saveDeckWithMerge — browser-serialization tolerance (the two-tab phantom conflict)', () => {
+  // The user's repro: two tabs editing DIFFERENT slides raised an
+  // 'Edited in both versions' card on a styled slide NEITHER touched, because
+  // each tab's browser re-serialized its inline styles (captured Chromium
+  // ground truth in fixtures/browserSerialization.ts).
+  const hexFixture = browserFixture('hex-color-style');
+
+  it('two tabs, different slides: the untouched styled slide auto-merges, save succeeds with the right concurrent count', async () => {
+    const base = deckWith([
+      { id: 'aaa', html: hexFixture.input },
+      { id: 'bbb', html: '<p>two</p>' },
+      { id: 'ccc', html: '<p>three</p>' },
+    ]);
+    // Tab 1 saved first: edited bbb; its posted document carried aaa in ITS
+    // browser-serialized form, which is now on main.
+    primeSave({
+      base,
+      ours: deckWith([
+        { id: 'aaa', html: hexFixture.cssom },
+        { id: 'bbb', html: '<h2>Tab 1 edit</h2>' },
+        { id: 'ccc', html: '<p>three</p>' },
+      ]),
+    });
+    // Tab 2 (stale token) edited ccc; posts aaa in another equivalent browser
+    // form (byte-distinct from both base and main).
+    const theirs = deckWith([
+      {
+        id: 'aaa',
+        html: '<h2 style="color:rgb(224,123,57)">Warm heading</h2><p style="color:rgb(171,71,188)">purple</p>',
+      },
+      { id: 'bbb', html: '<p>two</p>' },
+      { id: 'ccc', html: '<p>Tab 2 edit</p>' },
+    ]);
+
+    const result = await saveDeckWithMerge({ slide, theirs, baseSha: BASE_SHA });
+
+    expect(result).toMatchObject({
+      merged: true,
+      auto_merged: 2, // bbb (main's edit) + ccc (this save's edit)
+      concurrent: 1, // ONLY bbb — aaa's browser noise is not a concurrent change
+    });
+    // The untouched styled slide keeps its clean BASE form; both real edits land.
+    expect(batchCall().deck?.slides).toEqual([
+      { id: 'aaa', html: hexFixture.input },
+      { id: 'bbb', html: '<h2>Tab 1 edit</h2>' },
+      { id: 'ccc', html: '<p>Tab 2 edit</p>' },
+    ]);
+  });
+
+  it('a GENUINE double edit of the styled slide still reports a conflict', async () => {
+    const base = deckWith([{ id: 'aaa', html: hexFixture.input }]);
+    primeSave({
+      base,
+      ours: deckWith([{ id: 'aaa', html: '<h2 style="color:#e07b39">Main rewrote this</h2>' }]),
+    });
+    const theirs = deckWith([
+      { id: 'aaa', html: '<h2 style="color: rgb(200, 123, 57);">Tab 2 rewrote this</h2>' },
+    ]);
+
+    const result = await saveDeckWithMerge({ slide, theirs, baseSha: BASE_SHA });
+
+    expect(result).toMatchObject({ merged: false, conflict: true });
+    if (result.merged) throw new Error('unreachable');
+    expect(result.units).toMatchObject([{ id: 'aaa', reason: 'content' }]);
+    expect(uploadBatchMock).not.toHaveBeenCalled();
   });
 });
 
