@@ -47,6 +47,7 @@ import {
   PendingPreviewBanner,
   NoPreviewNotice,
   ConflictPanel,
+  MergeProgress,
   type ConflictUnit,
   type OrderConflict,
 } from '~/components/preview/PreviewControls';
@@ -1607,6 +1608,19 @@ export default function SlideViewer() {
   const [isEditing, setIsEditing] = useState(false);
   const [hasChanges, setHasChanges] = useState(false);
   const [isLoadingLatest, setIsLoadingLatest] = useState(false);
+  // Save-in-flight hold (fixes the stale-view flash): a Save / auto-save keeps
+  // edit mode locked behind a read-only scrim + a 'Saving…' strip until the
+  // response confirms, instead of exiting to view optimistically — which
+  // flashed the PRE-save content for the 1-3s round-trip, then swapped in the
+  // committed content. `savingInFlight` drives that UI; `saveInFlightRef` gates
+  // the fetcher effect (a ref, so it stays out of the effect's dep array);
+  // `exitAfterSaveRef` records whether success drops to view mode (handleSave →
+  // true) or stays in edit (handleSaveContent → false). The exit intent
+  // persists through a conflict chooser so resolving a Save-initiated conflict
+  // still ends in view, an auto-save-initiated one still ends in edit.
+  const [savingInFlight, setSavingInFlight] = useState(false);
+  const saveInFlightRef = useRef(false);
+  const exitAfterSaveRef = useRef(false);
   // Conflict token (Phase 4b): sha of the deck's source of truth + which file
   // it came from. Seeded by the loader, refreshed by fetch-latest and every
   // successful save; echoed back with each save submit.
@@ -1759,9 +1773,11 @@ export default function SlideViewer() {
   useEffect(() => {
     const handleBeforeUnload = (e: BeforeUnloadEvent) => {
       // Warn on live unsaved edits, OR when a save 409 parked the ONLY copy of
-      // the work in the chooser / conflict banner. handleSave optimistically
-      // clears isEditing/hasChanges before the response, so those two flags no
-      // longer cover the chooser-open state — the report/banner presence does.
+      // the work in the chooser / conflict banner. handleSave now HOLDS edit
+      // mode until the response confirms (hasChanges stays true through an
+      // in-flight save — S6), so `isEditing && hasChanges` already covers the
+      // saving and chooser-open states; the report/banner guards remain as
+      // belt-and-suspenders in case hasChanges was cleared elsewhere.
       if ((isEditing && hasChanges) || saveMergeReport || saveConflict) {
         e.preventDefault();
         // Modern browsers ignore this, but it's required for the dialog to show
@@ -1931,6 +1947,12 @@ export default function SlideViewer() {
         oursSha: fetcher.data.oursSha ?? null,
       });
       setSaveConflict(null);
+      // Stay in the edit context (no view switch). The chooser owns the
+      // read-only scrim now, so drop the saving-hold scrim/strip. Keep
+      // exitAfterSaveRef intact — resolving the conflict honors the original
+      // Save-vs-auto-save exit intent.
+      saveInFlightRef.current = false;
+      setSavingInFlight(false);
     } else if (fetcher.data?.conflict) {
       // Save 409'd with no mergeable report (legacy token, unreadable base,
       // or a double CAS loss). Show the reload prompt.
@@ -1939,6 +1961,12 @@ export default function SlideViewer() {
           'This deck changed since you opened it — reload to get the latest version before saving.'
       );
       setSaveMergeReport(null);
+      // Stay in edit mode with the reload banner (no view switch); drop the
+      // saving-hold scrim/strip. The exit intent is moot — reloading discards
+      // this session's edits — so reset it.
+      saveInFlightRef.current = false;
+      exitAfterSaveRef.current = false;
+      setSavingInFlight(false);
     } else if (fetcher.data?.code && lastPostedContentRef.current) {
       // A chooser re-submit was refused (stale ours_sha pin, conflict set
       // changed) OR an ops save answered OPS_BASE_MISMATCH. Re-run the plain
@@ -1948,6 +1976,11 @@ export default function SlideViewer() {
       // per save/Apply click.
       setSaveMergeReport(null);
       lastPostedOpsRef.current = null;
+      // Keep the saving-hold armed across the auto-retry (an ops→whole-doc
+      // fallback stays armed; a refused-chooser re-submit re-arms it) so the
+      // scrim/strip stays continuous until this fresh save resolves.
+      saveInFlightRef.current = true;
+      setSavingInFlight(true);
       const payload: Record<string, string> = { content: lastPostedContentRef.current };
       if (contentToken.content_sha) {
         payload.content_sha = contentToken.content_sha;
@@ -1996,6 +2029,32 @@ export default function SlideViewer() {
         setOrphanedImages(fetcher.data.orphanedImages);
         setShowOrphanedModal(true);
       }
+      // The committed content is now applied (editableContent + adoption
+      // remount above). ONLY now clear the unsaved flags and, for a Save-&-exit
+      // (handleSave), drop to view mode — its first render shows the committed
+      // document (merged concurrent changes included), so there's no stale-view
+      // flash. Auto-saves (handleSaveContent) set exitAfterSave=false and stay
+      // in edit. Clearing the saving-hold last removes the scrim/strip in the
+      // same transition.
+      setHasChanges(false);
+      if (exitAfterSaveRef.current) {
+        setIsEditing(false);
+      }
+      exitAfterSaveRef.current = false;
+      saveInFlightRef.current = false;
+      setSavingInFlight(false);
+    } else if (saveInFlightRef.current && fetcher.data?.error) {
+      // Plain save failure (non-conflict): drop the saving-hold scrim/strip but
+      // STAY in edit mode so the user can retry from the intact editor. Keep
+      // hasChanges true (honest — S6: still unsaved) and surface a retryable
+      // toast. Gated on the ref so an unrelated error (e.g. a failed image
+      // upload, which never arms the hold) can't trip this branch.
+      saveInFlightRef.current = false;
+      exitAfterSaveRef.current = false;
+      setSavingInFlight(false);
+      message.error(
+        `Couldn't save: ${fetcher.data.error}. Your changes are still here — please try again.`
+      );
     }
   }, [fetcher.data]);
 
@@ -2104,24 +2163,33 @@ export default function SlideViewer() {
     [contentToken]
   );
 
-  // Save the current slide content and exit edit mode
+  // Save the current slide content and, once the committed content is ready,
+  // exit edit mode. We do NOT exit optimistically: doing so flashed the
+  // pre-save content in view mode for the save round-trip. Instead arm the
+  // saving-hold (read-only scrim + 'Saving…' strip), keep hasChanges honest
+  // (S6: beforeunload stays armed until the response), and let the fetcher
+  // effect apply the committed document THEN drop to view in one transition.
   const handleSave = useCallback(() => {
     const content = revealRef.current?.getCurrentContent();
     if (!content) return;
 
+    exitAfterSaveRef.current = true;
+    saveInFlightRef.current = true;
+    setSavingInFlight(true);
     fetcher.submit(buildSavePayload(content), { method: 'post' });
-    setHasChanges(false);
-    setIsEditing(false);
   }, [fetcher, buildSavePayload]);
 
-  // Save content without exiting edit mode (used for auto-save after destructive operations)
+  // Save content without exiting edit mode (used for auto-save after destructive
+  // operations — uploads / orphan cleanup). Same saving-hold, but success stays
+  // in edit (exitAfterSave=false).
   const handleSaveContent = useCallback(() => {
     const content = revealRef.current?.getCurrentContent();
     if (!content) return;
 
+    exitAfterSaveRef.current = false;
+    saveInFlightRef.current = true;
+    setSavingInFlight(true);
     fetcher.submit(buildSavePayload(content), { method: 'post' });
-    setHasChanges(false);
-    // Don't exit edit mode - user is still editing
   }, [fetcher, buildSavePayload]);
 
   // Recover from a save conflict: re-fetch the latest content + token
@@ -2342,7 +2410,7 @@ export default function SlideViewer() {
             {/* Status badges */}
             {isEditing && (
               <span className="px-2 py-0.5 text-xs bg-yellow-100 text-yellow-800 rounded-full">
-                {hasChanges ? 'Unsaved' : 'Editing'}
+                {savingInFlight ? 'Saving…' : hasChanges ? 'Unsaved' : 'Editing'}
               </span>
             )}
             {saveSuccess && !hasChanges && !isEditing && (
@@ -2459,6 +2527,28 @@ export default function SlideViewer() {
         {preview?.missing && <NoPreviewNotice />}
         {preview && !preview.active && preview.exists && !isEditing && (
           <PendingPreviewBanner preview={preview} />
+        )}
+
+        {/* Saving-hold (fixes the stale-view flash): while a Save / auto-save
+            commits, freeze the editor behind the SAME read-only scrim the
+            chooser uses (prevents mid-save edits racing the posted snapshot)
+            and show a 'Saving…' strip. Holding edit mode here — instead of
+            exiting to view optimistically — is what keeps the pre-save content
+            from flashing: the fetcher effect applies the committed document,
+            then drops to view in one transition. Hidden once the chooser /
+            reload banner takes over (they own the scrim then). Scrim below the
+            strip (z-1050 < z-1100), both above the navbar (z-50). */}
+        {savingInFlight && !saveMergeReport && !saveConflict && (
+          <>
+            <div
+              className="fixed inset-0 z-[1050] bg-black/5 dark:bg-black/20 cursor-progress"
+              aria-hidden="true"
+              data-testid="saving-editing-block"
+            />
+            <div className="fixed top-14 left-0 right-0 z-[1100] shadow-lg">
+              <MergeProgress label="Saving your changes…" />
+            </div>
+          </>
         )}
 
         {/* Read-only scrim while the save-merge chooser is open (S5). An
