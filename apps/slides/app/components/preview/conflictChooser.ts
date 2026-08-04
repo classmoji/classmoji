@@ -111,6 +111,18 @@ export function buildSlideSrcdoc(html: string): string {
   ].join('');
 }
 
+/**
+ * true when the two sides' speaker notes differ (an absent side counts as no
+ * notes). The card hides identical notes strips entirely — they carry no
+ * decision signal when only the slide html differed.
+ */
+export function sideNotesDiffer(
+  ours: SlideSide | null | undefined,
+  theirs: SlideSide | null | undefined
+): boolean {
+  return (ours?.notes ?? '') !== (theirs?.notes ?? '');
+}
+
 /** One row of the `__meta__` field diff table. */
 export interface MetaFieldRow {
   field: string;
@@ -137,6 +149,62 @@ export function metaFieldRows(
     ours: formatMetaValue((ours ?? {})[field]),
     theirs: formatMetaValue((theirs ?? {})[field]),
   }));
+}
+
+// ─── Chooser copy variants (preview accepts vs editor saves, Phase 7.5) ──────
+
+/**
+ * Which flow mounted the chooser. `preview` = a preview-branch accept
+ * (ours = the live deck, theirs = the agent's preview). `save` = an editor
+ * save whose conflict token was stale (ours = what's saved on the server,
+ * theirs = the editor's unsaved version) — same machinery, flipped framing.
+ */
+export type ChooserVariant = 'preview' | 'save';
+
+export interface ChooserCopy {
+  heading: string;
+  sideTitle: Record<MergeChoice, string>;
+  sideAction: Record<MergeChoice, string>;
+  tombstone: Record<MergeChoice, string>;
+  /** Label of the escape-hatch button (discard the preview / reload latest). */
+  secondaryAction: string;
+  /** Trailing footer sentence after the apply hint. */
+  footerNote: string;
+  /** Progress-strip copy while the apply submit is in flight. */
+  busyLabel: string;
+}
+
+const CHOOSER_COPY: Record<ChooserVariant, ChooserCopy> = {
+  preview: {
+    heading: 'Changes conflict with edits made on the live deck',
+    sideTitle: { ours: 'Live version (yours)', theirs: "Preview version (agent's)" },
+    sideAction: { ours: 'Keep live', theirs: 'Take preview' },
+    tombstone: { ours: 'Deleted in the live version', theirs: 'Deleted in the preview' },
+    secondaryAction: 'Discard preview',
+    footerNote: 'Or re-apply from the current version (via your agent).',
+    busyLabel: 'Publishing your choices — this can take a few seconds…',
+  },
+  save: {
+    heading: 'Your save collided with changes saved by someone else',
+    sideTitle: { ours: 'Saved on the server', theirs: 'Your unsaved version' },
+    sideAction: { ours: "Keep server's", theirs: 'Keep yours' },
+    tombstone: { ours: 'Deleted on the server', theirs: 'Deleted in your version' },
+    secondaryAction: 'Reload latest',
+    footerNote: 'Or reload the latest version and discard your unsaved changes.',
+    busyLabel: 'Saving the merged version — this can take a few seconds…',
+  },
+};
+
+/** The chooser's variant-dependent labels. */
+export function chooserCopy(variant: ChooserVariant): ChooserCopy {
+  return CHOOSER_COPY[variant];
+}
+
+/** The subtitle under the heading (mentions the auto-merged count when > 0). */
+export function chooserSubtitle(variant: ChooserVariant, autoMerged: number): string {
+  if (autoMerged <= 0) return 'Choose which version to keep for each conflict:';
+  const merged = `${autoMerged} change${autoMerged === 1 ? '' : 's'} merged automatically`;
+  return variant === 'save' ? `${merged}; choose per slide:` : `${merged}; these need you:`;
 }
 
 /** true when every listed conflict id has an ours/theirs choice. */

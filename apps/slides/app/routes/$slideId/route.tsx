@@ -18,6 +18,7 @@ import {
   previewBranchName,
   resolveDeckPreviewConflicts,
   saveDeck,
+  saveDeckWithMerge,
   slideService,
   type DeckJson,
   type DeckShaSource,
@@ -41,6 +42,9 @@ import {
   PreviewBar,
   PendingPreviewBanner,
   NoPreviewNotice,
+  ConflictPanel,
+  type ConflictUnit,
+  type OrderConflict,
 } from '~/components/preview/PreviewControls';
 
 /**
@@ -1221,6 +1225,28 @@ export const action = async ({
   const expectedSha = (formData.get('content_sha') as string | null) || undefined;
   const shaSource: DeckShaSource = formData.get('sha_source') === 'deck' ? 'deck' : 'legacy_html';
 
+  // Phase 7.5: a save-conflict chooser re-submit carries the SAME posted
+  // content plus one {id, choose} per conflict and the report's ours_sha pin.
+  let saveResolutions: MergeResolution[] | null = null;
+  const rawSaveResolutions = formData.get('resolutions');
+  if (typeof rawSaveResolutions === 'string' && rawSaveResolutions) {
+    try {
+      const parsed = JSON.parse(rawSaveResolutions);
+      if (!Array.isArray(parsed) || parsed.length === 0) {
+        throw new Error('resolutions must be a non-empty array');
+      }
+      saveResolutions = parsed;
+    } catch {
+      return data(
+        { error: 'Malformed resolutions payload — expected [{id, choose}]' },
+        { status: 400 }
+      );
+    }
+  }
+  const rawSaveOursSha = formData.get('ours_sha');
+  const saveOursSha =
+    typeof rawSaveOursSha === 'string' && rawSaveOursSha ? rawSaveOursSha : undefined;
+
   try {
     // Parse the editor's posted `<div class="slides">` wrapper into
     // theme/codeTheme + structured slides (mints/keeps data-cm-ids).
@@ -1293,42 +1319,82 @@ export const action = async ({
       }
     }
 
-    // Merge rules (plan §5.1, review-hardened): an explicit theme change
-    // clears the paired dark theme (same for codeTheme), and drops
-    // starter-recognized customCss (exact match) so switching a starter deck
-    // to a dark theme doesn't keep #333 headings. All other customCss, the
-    // Reveal config, and extraCss carry over verbatim.
-    const themeChanged = currentDeck != null && theme !== currentDeck.theme;
-    const codeThemeChanged = currentDeck != null && codeTheme !== currentDeck.codeTheme;
-    let customCss = currentDeck?.customCss;
-    if (themeChanged && customCss === slideService.STARTER_CUSTOM_CSS) {
-      customCss = undefined;
+    // Merge rules (plan §5.1, review-hardened) live in buildEditorDeck: an
+    // explicit theme change clears the paired dark theme (same for codeTheme)
+    // and drops starter-recognized customCss; everything else carries over.
+    const deck: DeckJson = slideService.buildEditorDeck({ theme, codeTheme, slides, currentDeck });
+
+    // Semantic save-merge eligibility (Phase 7.5): a stale token whose sha
+    // came from deck.json is a trustworthy 3-way base. Legacy-html tokens are
+    // NOT (deterministic legacy ids can't be trusted across states) — those
+    // fall back to the plain 409 reload flow, as do base-fetch failures.
+    const canMergeSave = Boolean(expectedSha) && shaSource === 'deck';
+    const runMergeSave = () =>
+      saveDeckWithMerge({
+        slide,
+        theirs: deck,
+        baseSha: expectedSha as string,
+        ...(saveResolutions ? { resolutions: saveResolutions } : {}),
+        ...(saveOursSha ? { expectedOursSha: saveOursSha } : {}),
+        message: `Update slides: ${slide.title}`,
+        // Theme URLs must be resolved from the MERGED deck (a concurrent
+        // theme change on main may win the per-field meta merge).
+        resolveThemeUrls: mergedDeck => resolveReadThemeUrls(mergedDeck, gitOrgLogin, repo),
+      });
+    // Conflict report → 409 the chooser renders (the client re-submits the
+    // same content + resolutions + the report's ours_sha).
+    const mergeReport = (report: {
+      units: unknown;
+      order_conflict?: unknown;
+      auto_merged: number;
+      ours_sha: string;
+    }) =>
+      data(
+        {
+          conflict: true,
+          units: report.units,
+          orderConflict: report.order_conflict ?? null,
+          autoMerged: report.auto_merged,
+          oursSha: report.ours_sha,
+        },
+        { status: 409 }
+      );
+
+    let saved: { sha: string; html: string };
+    let mergedWithConcurrent = 0;
+    // true when the merge path committed: savedContent is then the MERGED
+    // document (not the posted one) and the client must adopt it.
+    let mergedSave = false;
+
+    if (saveResolutions && canMergeSave) {
+      // Resolution pass: the token is known-stale — go straight to the 3-way.
+      const mergeResult = await runMergeSave();
+      if (!mergeResult.merged) return mergeReport(mergeResult);
+      saved = mergeResult;
+      mergedWithConcurrent = mergeResult.concurrent;
+      mergedSave = true;
+    } else {
+      try {
+        // Single choke point: conflict check (§3 2×2 table) → generateDeckHtml
+        // → one atomic commit (deck.json + index.html) → updated_at bump.
+        saved = await saveDeck({
+          slide,
+          deck,
+          expectedSha,
+          shaSource,
+          message: `Update slides: ${slide.title}`,
+          themeUrls,
+        });
+      } catch (error: unknown) {
+        if (!(error instanceof DeckConflictError) || !canMergeSave) throw error;
+        // Stale token → the semantic 3-way merge instead of a blank refusal.
+        const mergeResult = await runMergeSave();
+        if (!mergeResult.merged) return mergeReport(mergeResult);
+        saved = mergeResult;
+        mergedWithConcurrent = mergeResult.concurrent;
+        mergedSave = true;
+      }
     }
-
-    const deck: DeckJson = {
-      version: 1,
-      theme,
-      codeTheme,
-      ...(!themeChanged && currentDeck?.themeDark ? { themeDark: currentDeck.themeDark } : {}),
-      ...(!codeThemeChanged && currentDeck?.codeThemeDark
-        ? { codeThemeDark: currentDeck.codeThemeDark }
-        : {}),
-      ...(currentDeck?.config ? { config: currentDeck.config } : {}),
-      ...(customCss != null ? { customCss } : {}),
-      ...(currentDeck?.extraCss ? { extraCss: currentDeck.extraCss } : {}),
-      slides,
-    };
-
-    // Single choke point: conflict check (§3 2×2 table) → generateDeckHtml →
-    // one atomic commit (deck.json + index.html) → updated_at bump.
-    const result = await saveDeck({
-      slide,
-      deck,
-      expectedSha,
-      shaSource,
-      message: `Update slides: ${slide.title}`,
-      themeUrls,
-    });
 
     // Check for orphaned images after save
     let orphanedImages: Array<{ path: string; name: string; url: string }> = [];
@@ -1337,7 +1403,7 @@ export const action = async ({
         orgLogin: gitOrgLogin,
         repo,
         imagesFolder: `${slide.content_path}/images`,
-        htmlContent: result.html,
+        htmlContent: saved.html,
       });
     } catch (err: unknown) {
       // Don't fail the save if orphan detection fails
@@ -1347,20 +1413,35 @@ export const action = async ({
     // Return the full HTML so UI can update without waiting for CDN.
     // sha is the DECK sha (+ sha_source 'deck') — deck.json now exists, so the
     // client's conflict token must point at it for the next save.
+    // merged_with_concurrent (present iff the merge path committed) → the
+    // savedContent is the MERGED document: the client adopts it and toasts
+    // the concurrent count.
     return {
       success: true,
-      sha: result.sha,
+      sha: saved.sha,
       sha_source: 'deck' as const,
-      savedContent: result.html,
+      savedContent: saved.html,
       orphanedImages,
+      ...(mergedSave ? { merged_with_concurrent: mergedWithConcurrent } : {}),
     };
   } catch (error: unknown) {
+    if (error instanceof PreviewResolutionError) {
+      // Stale resolution pin (main moved after the reviewed report) → 409;
+      // bad/stale resolutions → 400 naming the ids. Either way the client
+      // re-runs the plain save for a fresh report.
+      if (error.code === 'CONTENT_CONFLICT') {
+        return data({ error: error.message, code: error.code }, { status: 409 });
+      }
+      return data({ error: error.message, code: error.code, ids: error.ids }, { status: 400 });
+    }
     if (
       error instanceof DeckConflictError ||
       (error instanceof Error && error.name === 'DeckConflictError')
     ) {
       // Surfaced by the fetcher as data with a 409 status — the client shows
       // the "deck changed, reload" prompt instead of a generic save error.
+      // Reached only when the semantic merge is unavailable (legacy token,
+      // unreadable base, main deck gone) or lost its CAS retry.
       return data(
         {
           conflict: true,
@@ -1426,6 +1507,23 @@ export default function SlideViewer() {
   }>({ content_sha: loaderContentSha, sha_source: loaderShaSource });
   // Non-null when the last save 409'd (deck changed under this session).
   const [saveConflict, setSaveConflict] = useState<string | null>(null);
+  // Phase 7.5: non-null when a stale save's 3-way merge hit true collisions —
+  // the per-unit report the save-variant conflict chooser renders.
+  const [saveMergeReport, setSaveMergeReport] = useState<{
+    units: ConflictUnit[];
+    orderConflict: OrderConflict | null;
+    autoMerged: number;
+    oursSha: string | null;
+  } | null>(null);
+  // The exact content string the last save posted — preserved so a chooser
+  // re-submit (or auto re-run) can carry the SAME document even though the
+  // editor DOM was torn down when edit mode exited.
+  const lastPostedContentRef = useRef<string | null>(null);
+  // Bumped when a merged save lands while editing: the committed document is
+  // the MERGE (not what the DOM holds), so a live editor must remount from
+  // the merged savedContent — otherwise the next save, carrying the fresh
+  // token over the stale DOM, would clobber the folded-in concurrent changes.
+  const [editorEpoch, setEditorEpoch] = useState(0);
   const [autoEditTriggered, setAutoEditTriggered] = useState(false);
   // Track editable content separately from CDN content
   const [editableContent, setEditableContent] = useState<string | null>(null);
@@ -1586,6 +1684,7 @@ export default function SlideViewer() {
         });
       }
       setSaveConflict(null);
+      setSaveMergeReport(null);
       setHasChanges(false);
       setIsEditing(true);
       setIsLoadingLatest(false);
@@ -1669,13 +1768,38 @@ export default function SlideViewer() {
       } else if (fetcher.data.error) {
         message.error(`Failed to delete theme: ${fetcher.data.error}`);
       }
+    } else if (fetcher.data?.conflict && fetcher.data?.units) {
+      // Save-merge collision report (Phase 7.5): true same-unit conflicts the
+      // semantic merge could not decide — mount the save-variant chooser.
+      // Everything else already auto-merged server-side (nothing committed).
+      setSaveMergeReport({
+        units: fetcher.data.units,
+        orderConflict: fetcher.data.orderConflict ?? null,
+        autoMerged: fetcher.data.autoMerged ?? 0,
+        oursSha: fetcher.data.oursSha ?? null,
+      });
+      setSaveConflict(null);
     } else if (fetcher.data?.conflict) {
-      // Save 409'd: the deck changed since this session read it. Show the
-      // reload prompt instead of a generic save error.
+      // Save 409'd with no mergeable report (legacy token, unreadable base,
+      // or a double CAS loss). Show the reload prompt.
       setSaveConflict(
         fetcher.data.message ||
           'This deck changed since you opened it — reload to get the latest version before saving.'
       );
+      setSaveMergeReport(null);
+    } else if (fetcher.data?.code && lastPostedContentRef.current) {
+      // A chooser re-submit was refused (stale ours_sha pin, or the conflict
+      // set changed). Re-run the plain save with the SAME posted content —
+      // it either lands (possibly merged) or produces a FRESH report. Bounded:
+      // a plain save never answers with `code`, so this runs at most once per
+      // Apply click.
+      setSaveMergeReport(null);
+      const payload: Record<string, string> = { content: lastPostedContentRef.current };
+      if (contentToken.content_sha) {
+        payload.content_sha = contentToken.content_sha;
+        payload.sha_source = contentToken.sha_source;
+      }
+      fetcher.submit(payload, { method: 'post' });
     } else if (fetcher.data?.savedContent) {
       // After save, update our local content to match what was saved
       // This prevents stale content when CDN hasn't updated yet
@@ -1688,6 +1812,17 @@ export default function SlideViewer() {
         });
       }
       setSaveConflict(null);
+      setSaveMergeReport(null);
+      // Semantic save-merge (7.5): savedContent is the MERGED document —
+      // remount a live editor so the DOM (the next save's source) matches the
+      // fresh token, and tell the user about the folded-in changes.
+      if (typeof fetcher.data.merged_with_concurrent === 'number') {
+        setEditorEpoch(epoch => epoch + 1);
+        const n = fetcher.data.merged_with_concurrent;
+        if (n > 0) {
+          message.success(`Saved — merged with ${n} concurrent change${n === 1 ? '' : 's'}`);
+        }
+      }
       // Check if there are orphaned images to clean up
       if (fetcher.data.orphanedImages?.length > 0) {
         setOrphanedImages(fetcher.data.orphanedImages);
@@ -1759,6 +1894,9 @@ export default function SlideViewer() {
     const content = revealRef.current?.getCurrentContent();
     if (!content) return;
 
+    // Preserved for the save-merge chooser: a conflict re-submit must carry
+    // the SAME document even after the editor DOM is torn down below.
+    lastPostedContentRef.current = content;
     // Echo the conflict token so the server can 409 instead of clobbering
     const payload: Record<string, string> = { content };
     if (contentToken.content_sha) {
@@ -1776,6 +1914,7 @@ export default function SlideViewer() {
     if (!content) return;
 
     // Same conflict-token treatment as handleSave
+    lastPostedContentRef.current = content;
     const payload: Record<string, string> = { content };
     if (contentToken.content_sha) {
       payload.content_sha = contentToken.content_sha;
@@ -1790,9 +1929,35 @@ export default function SlideViewer() {
   // (the existing fetch-latest flow), discarding this session's unsaved changes
   const handleReloadLatest = useCallback(() => {
     setSaveConflict(null);
+    setSaveMergeReport(null);
     setIsLoadingLatest(true);
     fetcher.submit({ intent: 'fetch-latest' }, { method: 'post' });
   }, [fetcher]);
+
+  // Apply the save-merge chooser's decisions (Phase 7.5): re-submit the SAME
+  // posted content with one {id, choose} per conflict and the report's
+  // ours_sha pin. If the user is still in edit mode (auto-save conflicts),
+  // the live DOM is fresher than the preserved post — use it; the server
+  // re-validates the conflict set either way.
+  const handleApplySaveResolutions = useCallback(
+    (resolutions: Array<{ id: string; choose: 'ours' | 'theirs' }>) => {
+      const content =
+        (isEditing ? revealRef.current?.getCurrentContent() : null) || lastPostedContentRef.current;
+      if (!content || !saveMergeReport) return;
+      lastPostedContentRef.current = content;
+      const payload: Record<string, string> = {
+        content,
+        resolutions: JSON.stringify(resolutions),
+        ...(saveMergeReport.oursSha ? { ours_sha: saveMergeReport.oursSha } : {}),
+      };
+      if (contentToken.content_sha) {
+        payload.content_sha = contentToken.content_sha;
+        payload.sha_source = contentToken.sha_source;
+      }
+      fetcher.submit(payload, { method: 'post' });
+    },
+    [fetcher, contentToken, isEditing, saveMergeReport]
+  );
 
   // Exit editing mode (discards unsaved changes)
   const handleDoneEditing = useCallback(() => {
@@ -2073,6 +2238,25 @@ export default function SlideViewer() {
           <PendingPreviewBanner preview={preview} />
         )}
 
+        {/* Save-merge chooser (Phase 7.5): a stale save hit true collisions —
+            pick a side per slide, then re-submit the same content with the
+            choices. The posted document is preserved in lastPostedContentRef
+            until the resolution completes. */}
+        {saveMergeReport && !saveConflict && (
+          <div className="fixed top-14 left-0 right-0 z-[1100] shadow-lg">
+            <ConflictPanel
+              variant="save"
+              units={saveMergeReport.units}
+              orderConflict={saveMergeReport.orderConflict}
+              autoMerged={saveMergeReport.autoMerged}
+              oursSha={saveMergeReport.oursSha}
+              busy={fetcher.state !== 'idle'}
+              onApply={handleApplySaveResolutions}
+              onDiscard={handleReloadLatest}
+            />
+          </div>
+        )}
+
         {/* Save-conflict banner (Phase 4b): the deck changed under this session */}
         {saveConflict && (
           <div className="fixed top-16 left-1/2 -translate-x-1/2 z-[1100] w-[calc(100%-2rem)] max-w-xl">
@@ -2124,7 +2308,7 @@ export default function SlideViewer() {
                   This ensures Reveal.js reinitializes with the correct content source */}
               <RevealSlides
                 ref={revealRef}
-                key={isEditing ? 'editing' : 'viewing'}
+                key={isEditing ? `editing-${editorEpoch}` : 'viewing'}
                 contentUrl={contentUrl}
                 initialContent={displayContent}
                 initialError={contentError}

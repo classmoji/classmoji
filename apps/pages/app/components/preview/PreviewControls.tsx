@@ -8,8 +8,12 @@ import {
   allResolved,
   blockSummary,
   buildResolutions,
+  chooserCopy,
+  chooserSubtitle,
   conflictIds,
   reasonLabel,
+  type ChooserCopy,
+  type ChooserVariant,
   type ConflictUnit,
   type MergeChoice,
   type MergeResolution,
@@ -53,7 +57,7 @@ interface PreviewActionData {
 
 function usePreviewActions() {
   const fetcher = useFetcher<PreviewActionData>();
-  const [pending, setPending] = useState<'accept' | 'discard' | null>(null);
+  const [pending, setPending] = useState<'accept' | 'resolve' | 'discard' | null>(null);
   const busy = fetcher.state !== 'idle';
 
   const accept = () => {
@@ -65,7 +69,7 @@ function usePreviewActions() {
   // The report's shas ride along so the server can refuse (CONTENT_CONFLICT)
   // if the content moved after the reviewed report (F3 pinning).
   const applyResolutions = (resolutions: MergeResolution[]) => {
-    setPending('accept');
+    setPending('resolve');
     fetcher.submit(
       {
         intent: 'preview-accept',
@@ -103,27 +107,39 @@ function usePreviewActions() {
   };
 }
 
-// ─── Conflict chooser (Phase 7) ──────────────────────────────────────────────
+// ─── Conflict chooser (Phase 7; save variant 7.5) ────────────────────────────
 
-const SIDE_TITLE: Record<MergeChoice, string> = {
-  ours: 'Live version (yours)',
-  theirs: "Preview version (agent's)",
-};
-const SIDE_ACTION: Record<MergeChoice, string> = {
-  ours: 'Keep live',
-  theirs: 'Take preview',
-};
+/**
+ * Prominent in-flight indicator for merge submissions: the accept/resolve
+ * round-trips take several seconds of GitHub calls, and a button-label change
+ * alone is easy to miss.
+ */
+export const MergeProgress = ({ label }: { label: string }) => (
+  <div
+    data-testid="merge-progress"
+    className="flex items-center gap-2.5 border-b border-amber-300 dark:border-amber-700/70 bg-amber-100/95 dark:bg-amber-900/90 px-4 sm:px-6 lg:px-8 py-2.5 text-sm font-medium text-amber-900 dark:text-amber-100"
+    role="status"
+  >
+    <span
+      className="h-4 w-4 shrink-0 animate-spin rounded-full border-2 border-amber-600 dark:border-amber-300 border-t-transparent"
+      aria-hidden
+    />
+    {label}
+  </div>
+);
 
 /** One selectable side of a conflict card (radio + bounded preview). */
 const ChoiceSide = ({
   unitId,
   side,
+  copy,
   selected,
   onChoose,
   children,
 }: {
   unitId: string;
   side: MergeChoice;
+  copy: ChooserCopy;
   selected: boolean;
   onChoose: (side: MergeChoice) => void;
   children: ReactNode;
@@ -144,9 +160,9 @@ const ChoiceSide = ({
         onChange={() => onChoose(side)}
         className="accent-amber-600"
       />
-      {SIDE_TITLE[side]}
+      {copy.sideTitle[side]}
       <span className="ml-auto text-[11px] font-normal text-gray-500 dark:text-gray-400">
-        {SIDE_ACTION[side]}
+        {copy.sideAction[side]}
       </span>
     </span>
     {children}
@@ -199,13 +215,15 @@ const cardShell =
 const cardBadge =
   'rounded-full bg-rose-100 dark:bg-rose-900/60 px-2 py-0.5 text-[11px] text-rose-800 dark:text-rose-200';
 
-/** One conflict card: side-by-side live vs preview with a choice per side. */
+/** One conflict card: side-by-side ours vs theirs with a choice per side. */
 const ConflictCard = ({
   unit,
+  copy,
   choice,
   onChoose,
 }: {
   unit: ConflictUnit;
+  copy: ChooserCopy;
   choice: MergeChoice | undefined;
   onChoose: (id: string, choice: MergeChoice) => void;
 }) => {
@@ -218,11 +236,7 @@ const ConflictCard = ({
       return <OrderList ids={Array.isArray(value) ? (value as string[]) : []} />;
     }
     if (value === undefined || value === null) {
-      return (
-        <Tombstone
-          label={side === 'ours' ? 'Deleted in the live version' : 'Deleted in the preview'}
-        />
-      );
+      return <Tombstone label={copy.tombstone[side]} />;
     }
     return <BlockPreview block={value} />;
   };
@@ -239,6 +253,7 @@ const ConflictCard = ({
             key={side}
             unitId={unit.id}
             side={side}
+            copy={copy}
             selected={choice === side}
             onChoose={chosen => onChoose(unit.id, chosen)}
           >
@@ -252,17 +267,24 @@ const ConflictCard = ({
 
 /**
  * Conflict chooser panel (Phase 7): a side-by-side card per conflicted block,
- * an Apply footer that submits a resolution for EVERY listed conflict, and a
- * Discard escape. Auto-merged counts from the accept report are surfaced so
- * staff know only the true collisions are listed.
+ * an Apply footer that submits a resolution for EVERY listed conflict, and an
+ * escape hatch. Auto-merged counts from the report are surfaced so staff know
+ * only the true collisions are listed.
+ *
+ * Two variants share the machinery (7.5): `preview` (accept flow — ours = the
+ * live page, theirs = the agent's preview; escape = discard the preview) and
+ * `save` (a stale editor save — ours = what's saved on the server, theirs =
+ * the editor's unsaved version; escape = reload latest). `onDiscard` is the
+ * variant's escape action.
  */
-const ConflictPanel = ({
+export const ConflictPanel = ({
   units,
   autoMerged,
   oursSha,
   busy,
   onApply,
   onDiscard,
+  variant = 'preview',
 }: {
   units: ConflictUnit[];
   autoMerged: number;
@@ -270,6 +292,7 @@ const ConflictPanel = ({
   busy: boolean;
   onApply: (resolutions: MergeResolution[]) => void;
   onDiscard: () => void;
+  variant?: ChooserVariant;
 }) => {
   const ids = conflictIds(units);
   // Keyed on the report's ours_sha too: a re-accept after main moved can
@@ -283,27 +306,35 @@ const ConflictPanel = ({
   const choose = (id: string, choice: MergeChoice) =>
     setChoices(prev => ({ ...prev, [id]: choice }));
   const ready = allResolved(ids, choices);
+  const copy = chooserCopy(variant);
 
   return (
     <div
       data-testid="preview-conflict-panel"
       className="border-b border-rose-300 dark:border-rose-800 bg-rose-50 dark:bg-rose-950/95 px-4 sm:px-6 lg:px-8 py-3 max-h-[70vh] overflow-y-auto"
     >
-      <div className="text-sm font-medium text-rose-900 dark:text-rose-100">
-        Changes conflict with edits made on the live page
-      </div>
+      {busy && (
+        <div className="-mx-4 sm:-mx-6 lg:-mx-8 -mt-3 mb-3">
+          <MergeProgress label={copy.busyLabel} />
+        </div>
+      )}
+      <div className="text-sm font-medium text-rose-900 dark:text-rose-100">{copy.heading}</div>
       <div
         data-testid="conflict-auto-merged"
         className="mt-0.5 text-sm text-rose-800 dark:text-rose-200"
       >
-        {autoMerged > 0
-          ? `${autoMerged} change${autoMerged === 1 ? '' : 's'} merged automatically; these need you:`
-          : 'Choose which version to keep for each conflict:'}
+        {chooserSubtitle(variant, autoMerged)}
       </div>
 
       <div className="mt-3 space-y-3">
         {units.map(unit => (
-          <ConflictCard key={unit.id} unit={unit} choice={choices[unit.id]} onChoose={choose} />
+          <ConflictCard
+            key={unit.id}
+            unit={unit}
+            copy={copy}
+            choice={choices[unit.id]}
+            onChoose={choose}
+          />
         ))}
       </div>
 
@@ -324,13 +355,13 @@ const ConflictPanel = ({
           onClick={onDiscard}
           className={`${actionButtonBase} text-rose-800 dark:text-rose-200 ring-1 ring-rose-300 dark:ring-rose-700 hover:bg-rose-100 dark:hover:bg-rose-900/40`}
         >
-          Discard preview
+          {copy.secondaryAction}
         </button>
         <span className="text-xs text-rose-700 dark:text-rose-300">
           {ready
             ? 'Applies your choice for every conflict and publishes the merge.'
             : 'Pick a version for every conflict to enable Apply.'}{' '}
-          Or re-apply from the current version (via your agent).
+          {copy.footerNote}
         </span>
       </div>
     </div>
@@ -412,6 +443,9 @@ export const PreviewBar = ({
         </div>
         {error && <div className="mt-2 text-sm text-rose-700 dark:text-rose-300">{error}</div>}
       </div>
+      {busy && pending === 'accept' && (
+        <MergeProgress label="Merging preview into the live page — this can take a few seconds…" />
+      )}
       {conflictUnits && (
         <ConflictPanel
           units={conflictUnits}
@@ -484,6 +518,9 @@ export const PendingPreviewBanner = ({ preview }: { preview: PreviewInfo }) => {
         </div>
         {error && <div className="mt-1 text-sm text-rose-700 dark:text-rose-300">{error}</div>}
       </div>
+      {busy && pending === 'accept' && (
+        <MergeProgress label="Merging preview into the live page — this can take a few seconds…" />
+      )}
       {conflictUnits && (
         <ConflictPanel
           units={conflictUnits}

@@ -266,6 +266,27 @@ export const action = async ({
   const { intent } = data;
 
   if (intent === 'save') {
+    // Phase 7.5: a save-conflict chooser re-submit carries the SAME posted
+    // content plus one {id, choose} per conflict and the report's ours_sha pin.
+    let saveResolutions: { id: string; choose: 'ours' | 'theirs' }[] | null = null;
+    if (data.resolutions != null) {
+      try {
+        const parsed =
+          typeof data.resolutions === 'string' ? JSON.parse(data.resolutions) : data.resolutions;
+        if (!Array.isArray(parsed) || parsed.length === 0) {
+          throw new Error('resolutions must be a non-empty array');
+        }
+        saveResolutions = parsed;
+      } catch {
+        return Response.json(
+          { error: 'Malformed resolutions payload — expected [{id, choose}]' },
+          { status: 400 }
+        );
+      }
+    }
+    const saveOursSha =
+      typeof data.ours_sha === 'string' && data.ours_sha ? data.ours_sha : undefined;
+
     try {
       const blocks = JSON.parse(data.content as string);
 
@@ -290,18 +311,88 @@ export const action = async ({
         }
       }
 
-      const { sha } = await savePageContent(actionPage, blocks, {
-        ...(expectedSha ? { expectedSha } : {}),
-      });
+      // Semantic save-merge (Phase 7.5): the token IS the 3-way base — a
+      // stale save merges against fresh main instead of refusing outright.
+      const runMergeSave = () =>
+        ClassmojiService.pageContent.savePageContentWithMerge(actionPage, blocks, {
+          baseSha: expectedSha as string,
+          ...(saveResolutions ? { resolutions: saveResolutions } : {}),
+          ...(saveOursSha ? { expectedOursSha: saveOursSha } : {}),
+          message: `Update page: ${page.title}`,
+        });
+      // Conflict report → 409 the chooser renders (the client re-submits the
+      // same content + resolutions + the report's ours_sha).
+      const mergeReport = (report: { units: unknown; auto_merged: number; ours_sha: string }) =>
+        Response.json(
+          {
+            conflict: true,
+            units: report.units,
+            autoMerged: report.auto_merged,
+            oursSha: report.ours_sha,
+          },
+          { status: 409 }
+        );
+
+      let sha: string;
+      let mergedWithConcurrent = 0;
+      // The merged blocks as committed. The editor must adopt this document —
+      // its local copy lacks the folded-in concurrent changes, and a fresh
+      // token over a stale document would clobber them on the NEXT save.
+      let mergedDocument: unknown[] | null = null;
+
+      if (saveResolutions && expectedSha) {
+        // Resolution pass: the token is known-stale — go straight to the 3-way.
+        const mergeResult = await runMergeSave();
+        if (!mergeResult.merged) return mergeReport(mergeResult);
+        sha = mergeResult.sha;
+        mergedWithConcurrent = mergeResult.concurrent;
+        mergedDocument = mergeResult.document;
+      } else {
+        try {
+          const saved = await savePageContent(actionPage, blocks, {
+            ...(expectedSha ? { expectedSha } : {}),
+          });
+          sha = saved.sha;
+        } catch (error: unknown) {
+          if ((error as { status?: number } | null)?.status !== 409 || !expectedSha) throw error;
+          // Stale token → the semantic 3-way merge instead of a blank refusal.
+          const mergeResult = await runMergeSave();
+          if (!mergeResult.merged) return mergeReport(mergeResult);
+          sha = mergeResult.sha;
+          mergedWithConcurrent = mergeResult.concurrent;
+          mergedDocument = mergeResult.document;
+        }
+      }
+
       await ClassmojiService.page.quickUpdate(pageId, {
         updated_at: new Date(),
       });
       // Return the new sha — the editor's conflict token for its next save.
-      return Response.json({ success: true, sha });
+      // A merged save also returns the committed document + the concurrent
+      // count (the editor adopts the document and toasts the count).
+      return Response.json({
+        success: true,
+        sha,
+        ...(mergedDocument
+          ? { merged_with_concurrent: mergedWithConcurrent, merged_content: mergedDocument }
+          : {}),
+      });
     } catch (error: unknown) {
+      if (error instanceof ClassmojiService.pageContent.PreviewResolutionError) {
+        // Stale resolution pin (main moved after the reviewed report) → 409;
+        // bad/stale resolutions → 400 naming the ids. Either way the client
+        // re-runs the plain save for a fresh report.
+        if (error.code === 'CONTENT_CONFLICT') {
+          return Response.json({ error: error.message, code: error.code }, { status: 409 });
+        }
+        return Response.json(
+          { error: error.message, code: error.code, ids: error.ids },
+          { status: 400 }
+        );
+      }
       if ((error as { status?: number } | null)?.status === 409) {
-        // Someone (another editor, an MCP apply) changed content.json since
-        // this editor loaded it. Nothing was written.
+        // No mergeable path (token-less over existing content, unreadable
+        // base, main's file gone, or a double CAS loss). Nothing was written.
         return Response.json(
           { conflict: true, message: 'This page changed since you opened it.' },
           { status: 409 }

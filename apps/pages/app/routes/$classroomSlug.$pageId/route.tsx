@@ -1,5 +1,5 @@
 import { useLoaderData, useFetcher, useOutletContext } from 'react-router';
-import { useState, useEffect, useRef, useCallback, lazy, Suspense } from 'react';
+import { useState, useEffect, useMemo, useRef, useCallback, lazy, Suspense } from 'react';
 import { IconPhoto } from '@tabler/icons-react';
 import { toast } from 'react-toastify';
 
@@ -9,6 +9,8 @@ import {
   PreviewBar,
   PendingPreviewBanner,
   NoPreviewNotice,
+  ConflictPanel,
+  type ConflictUnit,
 } from '~/components/preview/PreviewControls.tsx';
 
 const PageEditor = lazy(() => import('~/components/editor/PageEditor.tsx'));
@@ -60,12 +62,50 @@ const PageRoute = () => {
   // the token mid-edit would let a stale save pass the server's sha check).
   // Refreshed only from a successful save's response; echoed on every save.
   const [contentToken, setContentToken] = useState<string | null>(contentSha);
-  // True once a save 409'd: the page changed underneath this editor session.
-  const saveConflict = Boolean(fetcher.data?.conflict);
+  // Phase 7.5: a stale save's 3-way merge hit true collisions — the per-unit
+  // report the save-variant conflict chooser renders (derived straight from
+  // the fetcher; a successful re-submit replaces it).
+  const saveMergeReport = useMemo(
+    () =>
+      fetcher.data?.conflict && fetcher.data?.units
+        ? {
+            units: fetcher.data.units as ConflictUnit[],
+            autoMerged: (fetcher.data.autoMerged as number) ?? 0,
+            oursSha: (fetcher.data.oursSha as string | null) ?? null,
+          }
+        : null,
+    [fetcher.data]
+  );
+  // True once a save 409'd with NO mergeable report (legacy/fallback path):
+  // the page changed underneath this editor session — reload banner.
+  const saveConflict = Boolean(fetcher.data?.conflict) && !saveMergeReport;
+  // The exact content string the last save posted — a chooser re-submit (or
+  // auto re-run) carries the SAME document.
+  const lastPostedContentRef = useRef<string | null>(null);
   // Set when the user chooses Reload from the conflict banner — the banner
   // already warned that unsaved changes are discarded, so skip the browser's
   // beforeunload double-prompt.
   const skipUnloadWarningRef = useRef(false);
+
+  // The document the editor mounts from. Normally the loader's content; after
+  // a merged save (7.5) it becomes the server's MERGED document and the epoch
+  // bump remounts the editor — its local copy lacked the folded-in concurrent
+  // changes, and a fresh token over a stale document would clobber them on
+  // the next save.
+  const [editorDoc, setEditorDoc] = useState(content);
+  const [editorEpoch, setEditorEpoch] = useState(0);
+  // Navigating to a different page keeps this component mounted (same route,
+  // new params) — re-seed the per-page editing state (React's sanctioned
+  // render-time reset for prop-derived state).
+  const lastPageIdRef = useRef(page.id);
+  if (lastPageIdRef.current !== page.id) {
+    lastPageIdRef.current = page.id;
+    setEditorDoc(content);
+    setEditorEpoch(0);
+    setContentToken(contentSha);
+    lastSavedContent.current = null;
+    lastPostedContentRef.current = null;
+  }
 
   // Client-only flag — prevents BlockNote from rendering during SSR
   const [isClient, setIsClient] = useState(false);
@@ -86,6 +126,9 @@ const PageRoute = () => {
 
     if (lastSavedContent.current === currentContentStr) return;
 
+    // Preserved for the save-merge chooser: a conflict re-submit must carry
+    // the SAME document that produced the report.
+    lastPostedContentRef.current = currentContentStr;
     setSaveStatus('saving');
     fetcher.submit(
       // content_sha: the conflict token the action CAS-checks the write
@@ -94,6 +137,47 @@ const PageRoute = () => {
       { method: 'POST', encType: 'application/json' }
     );
   }, [canEdit, fetcher, contentToken]);
+
+  // Apply the save-merge chooser's decisions (Phase 7.5): re-submit the SAME
+  // posted content with one {id, choose} per conflict and the report's
+  // ours_sha pin. The editor is still mounted, so prefer its live document
+  // (the server re-validates the conflict set either way).
+  const handleApplySaveResolutions = useCallback(
+    (resolutions: Array<{ id: string; choose: 'ours' | 'theirs' }>) => {
+      const current = editorRef.current?.getContent();
+      const content = current ? JSON.stringify(current) : lastPostedContentRef.current;
+      if (!content || !saveMergeReport) return;
+      lastPostedContentRef.current = content;
+      setSaveStatus('saving');
+      fetcher.submit(
+        {
+          intent: 'save',
+          content,
+          content_sha: contentToken,
+          resolutions: JSON.stringify(resolutions),
+          ...(saveMergeReport.oursSha ? { ours_sha: saveMergeReport.oursSha } : {}),
+        },
+        { method: 'POST', encType: 'application/json' }
+      );
+    },
+    [fetcher, contentToken, saveMergeReport]
+  );
+
+  // A chooser re-submit was refused (stale ours_sha pin, or the conflict set
+  // changed): re-run the plain save with the SAME posted content — it either
+  // lands (possibly merged) or produces a FRESH report. Bounded: a plain save
+  // never answers with `code`, so this runs at most once per Apply click.
+  useEffect(() => {
+    if (fetcher.state !== 'idle') return;
+    if (!fetcher.data?.code || fetcher.data?.conflict) return;
+    const content = lastPostedContentRef.current;
+    if (!content) return;
+    setSaveStatus('saving');
+    fetcher.submit(
+      { intent: 'save', content, content_sha: contentToken },
+      { method: 'POST', encType: 'application/json' }
+    );
+  }, [fetcher.state, fetcher.data, fetcher, contentToken]);
 
   // Track editor changes (mark unsaved, but don't auto-save)
   const handleEditorChange = useCallback(
@@ -150,7 +234,18 @@ const PageRoute = () => {
   // Track save completion
   useEffect(() => {
     if (fetcher.state === 'idle' && fetcher.data?.success) {
-      if (editorRef.current) {
+      if (Array.isArray(fetcher.data.merged_content)) {
+        // Semantic save-merge (7.5): the committed document is the MERGE of
+        // this editor's content and concurrent server-side changes — adopt it
+        // (remount) so the editor matches the fresh token, and tell the user.
+        setEditorDoc(fetcher.data.merged_content);
+        setEditorEpoch(epoch => epoch + 1);
+        lastSavedContent.current = JSON.stringify(fetcher.data.merged_content);
+        const n = fetcher.data.merged_with_concurrent;
+        if (typeof n === 'number' && n > 0) {
+          toast.success(`Saved — merged with ${n} concurrent change${n === 1 ? '' : 's'}.`);
+        }
+      } else if (editorRef.current) {
         const currentContent = editorRef.current.getContent();
         lastSavedContent.current = JSON.stringify(currentContent);
       }
@@ -161,8 +256,9 @@ const PageRoute = () => {
       setHasUnsavedChanges(false);
       setSaveStatus('saved');
     } else if (fetcher.state === 'idle' && (fetcher.data?.error || fetcher.data?.conflict)) {
-      // Conflict (409) keeps hasUnsavedChanges true — the banner offers
-      // Reload; the editor content is preserved until the user decides.
+      // Conflict (409) keeps hasUnsavedChanges true — the chooser/banner
+      // offers a way out; the editor content is preserved until the user
+      // decides.
       setSaveStatus('error');
     }
   }, [fetcher.state, fetcher.data]);
@@ -252,6 +348,24 @@ const PageRoute = () => {
       {preview?.active && <PreviewBar preview={preview} isEmbedded={isEmbedded} />}
       {preview?.missing && <NoPreviewNotice />}
       {preview && !preview.active && preview.exists && <PendingPreviewBanner preview={preview} />}
+
+      {/* Save-merge chooser (Phase 7.5): a stale save hit true collisions —
+          pick a side per block, then the same content re-submits with the
+          choices. The editor (and lastPostedContentRef) preserve the document
+          until the resolution completes. */}
+      {canEdit && saveMergeReport && (
+        <div className={`sticky ${isEmbedded ? 'top-0' : 'top-12'} z-30 shadow-lg`}>
+          <ConflictPanel
+            variant="save"
+            units={saveMergeReport.units}
+            autoMerged={saveMergeReport.autoMerged}
+            oursSha={saveMergeReport.oursSha}
+            busy={fetcher.state !== 'idle'}
+            onApply={handleApplySaveResolutions}
+            onDiscard={handleConflictReload}
+          />
+        </div>
+      )}
 
       {/* Save-conflict notice (F2): the last save 409'd — content.json changed
           under this editor session (another editor, an MCP apply). Amber, same
@@ -386,9 +500,9 @@ const PageRoute = () => {
               }
             >
               <PageEditor
-                key={page.id}
+                key={`${page.id}:${editorEpoch}`}
                 ref={editorRef}
-                initialContent={content}
+                initialContent={editorDoc}
                 pageId={page.id}
                 darkMode={darkMode}
                 onChange={handleEditorChange}
