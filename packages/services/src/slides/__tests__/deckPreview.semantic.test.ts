@@ -619,7 +619,7 @@ describe('accept/resolve — merge base unavailable', () => {
     });
   }
 
-  it('accept: base deck.json 404 (legacy add/add) → MAIN_CONTENT_MISSING, nothing committed', async () => {
+  it('accept: base deck.json 404 (legacy add/add) → MERGE_BASE_MISSING, nothing committed', async () => {
     // Preview deleted bbb; without a real base an empty-base merge would
     // RESURRECT it. Refuse instead.
     primeBase(
@@ -634,12 +634,12 @@ describe('accept/resolve — merge base unavailable', () => {
     const failure = await acceptDeckPreview(slide).catch((e: unknown) => e);
 
     expect(failure).toBeInstanceOf(PreviewResolutionError);
-    expect(failure).toMatchObject({ code: 'MAIN_CONTENT_MISSING' });
+    expect(failure).toMatchObject({ code: 'MERGE_BASE_MISSING' });
     expect(uploadBatchMock).not.toHaveBeenCalled();
     expect(deleteBranchMock).not.toHaveBeenCalled();
   });
 
-  it('accept: base deck.json unparseable → MAIN_CONTENT_MISSING, nothing committed', async () => {
+  it('accept: base deck.json unparseable → MERGE_BASE_MISSING, nothing committed', async () => {
     primeBase(
       '{ not valid json !!!',
       deckWith([
@@ -652,12 +652,12 @@ describe('accept/resolve — merge base unavailable', () => {
     const failure = await acceptDeckPreview(slide).catch((e: unknown) => e);
 
     expect(failure).toBeInstanceOf(PreviewResolutionError);
-    expect(failure).toMatchObject({ code: 'MAIN_CONTENT_MISSING' });
+    expect(failure).toMatchObject({ code: 'MERGE_BASE_MISSING' });
     expect(uploadBatchMock).not.toHaveBeenCalled();
     expect(deleteBranchMock).not.toHaveBeenCalled();
   });
 
-  it('resolve: base deck.json 404 → MAIN_CONTENT_MISSING, nothing committed', async () => {
+  it('resolve: base deck.json 404 → MERGE_BASE_MISSING, nothing committed', async () => {
     primeBase(
       null,
       deckWith([{ id: 'aaa', html: '<h2>Racer</h2>' }]),
@@ -669,7 +669,7 @@ describe('accept/resolve — merge base unavailable', () => {
     }).catch((e: unknown) => e);
 
     expect(failure).toBeInstanceOf(PreviewResolutionError);
-    expect(failure).toMatchObject({ code: 'MAIN_CONTENT_MISSING' });
+    expect(failure).toMatchObject({ code: 'MERGE_BASE_MISSING' });
     expect(uploadBatchMock).not.toHaveBeenCalled();
     expect(deleteBranchMock).not.toHaveBeenCalled();
   });

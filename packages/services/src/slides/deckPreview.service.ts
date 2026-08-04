@@ -545,14 +545,15 @@ function mainDeckMissing(): PreviewResolutionError {
  * deletions get resurrected and legacy add/add decks (both sides materialized
  * deck.json after the fork point) duplicate wholesale. There is no trustworthy
  * 3-way, so refuse rather than commit — mirroring the 7.5 editor-save
- * readBaseDeck refusal. Reuses MAIN_CONTENT_MISSING (the existing "content the
- * merge needs is gone → re-apply or discard" code); no new code is invented.
+ * readBaseDeck refusal. Uses the shared MERGE_BASE_MISSING code (aligned with
+ * the pages twin, which raises the same code for the identical add/add
+ * merge-base degenerate).
  */
 function baseDeckUnavailable(): PreviewResolutionError {
   return new PreviewResolutionError(
     'The merge base is unavailable (deck.json was missing or unreadable at the fork point) — ' +
       're-apply your changes onto the current deck or discard the preview',
-    'MAIN_CONTENT_MISSING'
+    'MERGE_BASE_MISSING'
   );
 }
 
@@ -640,7 +641,8 @@ async function acceptDeckSemanticFallback(
  *
  * @throws {PreviewResolutionError} NO_PREVIEW / NOTHING_TO_RESOLVE /
  *   UNRESOLVED_CONFLICTS / UNKNOWN_RESOLUTIONS / DUPLICATE_RESOLUTIONS /
- *   INVALID_RESOLUTIONS / CONTENT_CONFLICT / MAIN_CONTENT_MISSING.
+ *   INVALID_RESOLUTIONS / CONTENT_CONFLICT / MAIN_CONTENT_MISSING /
+ *   MERGE_BASE_MISSING.
  */
 export async function resolveDeckPreviewConflicts(
   slide: SlideContentTarget,
