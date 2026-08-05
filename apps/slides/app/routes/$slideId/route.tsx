@@ -319,7 +319,30 @@ export const loader = async ({
     }
   }
 
-  // CDN-first for view mode, or as fallback if API failed
+  // Staff view mode: API-first. The CDN (GitHub Pages) lags saves by minutes —
+  // and rapid consecutive saves can ERROR its builds, extending the lag — so a
+  // hard reload right after saving showed stale content to the very person who
+  // saved. Staff read the committed truth from the API; students keep the
+  // cheap CDN path (eventual consistency is fine for them). Thumbnails
+  // (?preview=true) stay CDN — a staff landing page renders ~20 at once and
+  // must not fan out API reads (the D4 amplification).
+  if (!contentResult && canEdit && !isThumbnail) {
+    try {
+      const result = await ContentService.getContent({
+        orgLogin: gitOrgLogin,
+        repo,
+        path: filePath,
+      });
+      if (result) {
+        contentResult = { content: result.content, source: 'api' };
+      }
+    } catch (e: unknown) {
+      const message = e instanceof Error ? e.message : String(e);
+      console.warn('[Loader] Staff view API read failed, falling back to CDN:', message);
+    }
+  }
+
+  // CDN-first for student/anonymous view mode, or as fallback if API failed
   if (!contentResult) {
     contentResult = await fetchContent({
       org: gitOrgLogin,
