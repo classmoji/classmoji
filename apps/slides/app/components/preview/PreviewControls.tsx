@@ -13,6 +13,7 @@ import {
   chooserSubtitle,
   isChildOrderId,
   metaFieldRows,
+  orderDiffIds,
   reasonLabel,
   sideNotesDiffer,
   slideSideHtml,
@@ -22,6 +23,8 @@ import {
   type MergeChoice,
   type MergeResolution,
   type SlideSide,
+  type UnitPreview,
+  type UnitPreviews,
 } from './conflictChooser.ts';
 
 dayjs.extend(relativeTime);
@@ -65,6 +68,7 @@ interface PreviewActionData {
   conflict?: boolean;
   units?: ConflictUnit[];
   orderConflict?: OrderConflict | null;
+  unitPreviews?: UnitPreviews | null;
   autoMerged?: number;
   oursSha?: string | null;
   theirsSha?: string | null;
@@ -109,6 +113,7 @@ function usePreviewActions() {
 
   const conflictUnits = fetcher.data?.conflict ? (fetcher.data.units ?? []) : null;
   const orderConflict = fetcher.data?.conflict ? (fetcher.data.orderConflict ?? null) : null;
+  const unitPreviews = fetcher.data?.conflict ? (fetcher.data.unitPreviews ?? null) : null;
   const autoMerged = fetcher.data?.conflict ? (fetcher.data.autoMerged ?? 0) : 0;
   const conflictOursSha = fetcher.data?.conflict ? (fetcher.data.oursSha ?? null) : null;
   const error = fetcher.data?.error ?? null;
@@ -121,6 +126,7 @@ function usePreviewActions() {
     discard,
     conflictUnits,
     orderConflict,
+    unitPreviews,
     autoMerged,
     conflictOursSha,
     error,
@@ -189,6 +195,23 @@ export const MergeProgress = ({ label }: { label: string }) => (
   </div>
 );
 
+/**
+ * The accept round-trip's in-flight strip, pinned to the app's TOP chrome layer
+ * (`fixed top-14 z-[1100]`, matching the editor 'Saving…' strip) — the preview
+ * bar/banner it is triggered from sit at z-40, and an accept has no conflict
+ * panel yet to host the indicator, so nesting the strip there left it easy to
+ * miss / paint under the reveal viewport. As its own fixed overlay it is always
+ * visible from click→response, above every other slide-view fixed element.
+ */
+const SlideMergeProgressOverlay = ({ label }: { label: string }) => (
+  <div
+    data-testid="merge-progress-overlay"
+    className="fixed top-14 left-0 right-0 z-[1100] shadow-lg"
+  >
+    <MergeProgress label={label} />
+  </div>
+);
+
 /** Placeholder for a side where the slide was deleted. */
 const Tombstone = ({ label }: { label: string }) => (
   <div className="flex h-full min-h-24 items-center justify-center rounded border border-dashed border-gray-300 dark:border-neutral-600 bg-gray-50 dark:bg-neutral-800/60 px-3 py-4 text-xs italic text-gray-500 dark:text-gray-400">
@@ -228,7 +251,8 @@ const SlideFrame = ({ side, showNotes }: { side: SlideSide; showNotes: boolean }
   );
 };
 
-/** Numbered id list for an ordering conflict side. */
+/** Numbered id list for an ordering conflict side (fallback when previews are
+ * missing — e.g. the save-merge chooser, which carries no `unit_previews`). */
 const OrderList = ({ ids }: { ids: string[] }) => (
   <ol className="space-y-0.5 text-xs text-gray-700 dark:text-gray-300 max-h-36 overflow-y-auto">
     {ids.map((id, position) => (
@@ -241,6 +265,82 @@ const OrderList = ({ ids }: { ids: string[] }) => (
     ))}
   </ol>
 );
+
+/**
+ * One slide thumbnail in an order filmstrip: a bounded sandboxed SlideFrame
+ * (same srcdoc renderer as a conflict card, echoing the 2D SlideOverview visual
+ * language) with a position badge + title caption. `moved` slides (a different
+ * position in the two orderings) get an amber ring so the reordering reads at a
+ * glance. Missing preview (server capped >50KB) falls back to the title/id.
+ */
+const FilmstripSlide = ({
+  id,
+  preview,
+  position,
+  moved,
+}: {
+  id: string;
+  preview: UnitPreview | undefined;
+  position: number;
+  moved: boolean;
+}) => (
+  <div
+    data-testid={`filmstrip-slide-${id}`}
+    data-moved={moved ? 'true' : undefined}
+    className={`w-28 shrink-0 overflow-hidden rounded border bg-white dark:bg-neutral-900 ${
+      moved
+        ? 'border-amber-400 dark:border-amber-500 ring-1 ring-amber-400 dark:ring-amber-500'
+        : 'border-stone-200 dark:border-neutral-700'
+    }`}
+  >
+    <div className="relative">
+      {preview?.html ? (
+        <iframe
+          sandbox=""
+          srcDoc={buildSlideSrcdoc(preview.html)}
+          title={`Slide ${position}`}
+          loading="lazy"
+          className="h-20 w-full pointer-events-none bg-white"
+        />
+      ) : (
+        <div className="flex h-20 w-full items-center justify-center bg-stone-50 dark:bg-neutral-800 px-1 text-center text-[11px] italic text-gray-400 dark:text-gray-500">
+          {preview?.title || id}
+        </div>
+      )}
+      <span className="absolute bottom-0.5 left-0.5 rounded-sm bg-black/60 px-1 py-px text-[10px] font-medium tabular-nums text-white">
+        {position}
+      </span>
+    </div>
+    <div className="truncate border-t border-stone-200 dark:border-neutral-700 px-1.5 py-1 text-[11px] leading-tight text-gray-600 dark:text-gray-300">
+      {preview?.title || <span className="font-mono">{id}</span>}
+    </div>
+  </div>
+);
+
+/** A horizontally-scrollable ordering rendered as a row of slide thumbnails. */
+const Filmstrip = ({
+  ids,
+  previews,
+  moved,
+}: {
+  ids: string[];
+  previews: UnitPreviews;
+  moved: Set<string>;
+}) => (
+  <div className="flex gap-2 overflow-x-auto pb-1">
+    {ids.map((id, position) => (
+      <FilmstripSlide
+        key={`${id}-${position}`}
+        id={id}
+        preview={previews[id]}
+        position={position + 1}
+        moved={moved.has(id)}
+      />
+    ))}
+  </div>
+);
+
+const EMPTY_MOVED: Set<string> = new Set();
 
 /** Field diff list for one side of the `__meta__` deck-settings conflict. */
 const MetaFieldList = ({
@@ -275,11 +375,13 @@ const ConflictCard = ({
   copy,
   choice,
   onChoose,
+  unitPreviews,
 }: {
   unit: ConflictUnit;
   copy: ChooserCopy;
   choice: MergeChoice | undefined;
   onChoose: (id: string, choice: MergeChoice) => void;
+  unitPreviews?: UnitPreviews | null;
 }) => {
   const isOrder = unit.id === ORDER_CONFLICT_ID || isChildOrderId(unit.id);
   const isMeta = unit.id === META_CONFLICT_ID;
@@ -304,10 +406,22 @@ const ConflictCard = ({
     !isMeta &&
     sideNotesDiffer(unit.ours as SlideSide | null, unit.theirs as SlideSide | null);
 
+  // Order cards diff the two id arrays to highlight the moved slides, and use
+  // the report's `unit_previews` to draw each ordering as a filmstrip. Absent
+  // previews (e.g. a save-merge report) fall back to the numbered id list.
+  const oursIds = isOrder && Array.isArray(unit.ours) ? (unit.ours as string[]) : [];
+  const theirsIds = isOrder && Array.isArray(unit.theirs) ? (unit.theirs as string[]) : [];
+  const movedIds = isOrder ? orderDiffIds(oursIds, theirsIds) : EMPTY_MOVED;
+  const hasPreviews = Boolean(unitPreviews && Object.keys(unitPreviews).length > 0);
+
   const renderSide = (side: MergeChoice) => {
     const value = side === 'ours' ? unit.ours : unit.theirs;
     if (isOrder) {
-      return <OrderList ids={Array.isArray(value) ? (value as string[]) : []} />;
+      const ids = Array.isArray(value) ? (value as string[]) : [];
+      if (hasPreviews) {
+        return <Filmstrip ids={ids} previews={unitPreviews as UnitPreviews} moved={movedIds} />;
+      }
+      return <OrderList ids={ids} />;
     }
     if (isMeta) {
       return <MetaFieldList rows={metaRows} side={side} />;
@@ -324,7 +438,11 @@ const ConflictCard = ({
         <span className="font-semibold text-gray-700 dark:text-gray-200">{title}</span>
         <span className={cardBadge}>{reasonLabel(unit.reason)}</span>
       </div>
-      <div className="mt-2 grid grid-cols-1 sm:grid-cols-2 gap-2">
+      <div
+        className={`mt-2 grid gap-2 ${
+          isOrder && hasPreviews ? 'grid-cols-1' : 'grid-cols-1 sm:grid-cols-2'
+        }`}
+      >
         {(['ours', 'theirs'] as const).map(side => (
           <ChoiceSide
             key={side}
@@ -358,6 +476,7 @@ const ConflictCard = ({
 export const ConflictPanel = ({
   units,
   orderConflict,
+  unitPreviews,
   autoMerged,
   oursSha,
   busy,
@@ -367,6 +486,7 @@ export const ConflictPanel = ({
 }: {
   units: ConflictUnit[];
   orderConflict: OrderConflict | null;
+  unitPreviews?: UnitPreviews | null;
   autoMerged: number;
   oursSha: string | null;
   busy: boolean;
@@ -410,7 +530,7 @@ export const ConflictPanel = ({
       className="border-b border-rose-300 dark:border-rose-800 bg-rose-50 dark:bg-rose-950/95 px-4 sm:px-6 lg:px-8 py-3 max-h-[calc(100vh-8rem)] overflow-y-auto"
     >
       {busy && (
-        <div className="-mx-4 sm:-mx-6 lg:-mx-8 -mt-3 mb-3">
+        <div className="sticky top-0 z-10 -mx-4 sm:-mx-6 lg:-mx-8 -mt-3 mb-3 shadow-sm">
           <MergeProgress label={copy.busyLabel} />
         </div>
       )}
@@ -430,6 +550,7 @@ export const ConflictPanel = ({
             copy={copy}
             choice={choices[unit.id]}
             onChoose={choose}
+            unitPreviews={unitPreviews}
           />
         ))}
       </div>
@@ -480,6 +601,7 @@ export const PreviewBar = ({ preview }: { preview: PreviewInfo }) => {
     discard,
     conflictUnits,
     orderConflict,
+    unitPreviews,
     autoMerged,
     conflictOursSha,
     error,
@@ -487,68 +609,71 @@ export const PreviewBar = ({ preview }: { preview: PreviewInfo }) => {
   const age = preview.oldestCommitAt ? dayjs(preview.oldestCommitAt).fromNow() : null;
 
   return (
-    <div data-testid="preview-bar" className="fixed top-14 left-0 right-0 z-40">
-      <div className="border-y border-amber-300 dark:border-amber-700/70 bg-amber-50/95 dark:bg-amber-950/90 backdrop-blur px-4 sm:px-6 lg:px-8 py-2">
-        <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
-          <div className="flex items-center gap-2 text-sm text-amber-900 dark:text-amber-100">
-            <span className="relative flex h-2 w-2" aria-hidden>
-              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-amber-500 opacity-60" />
-              <span className="relative inline-flex h-2 w-2 rounded-full bg-amber-500" />
-            </span>
-            <span className="font-semibold">Previewing pending changes</span>
-            <span className="text-amber-700 dark:text-amber-300">
-              · {preview.commitsAhead} commit{preview.commitsAhead === 1 ? '' : 's'}
-              {age ? ` · ${age}` : ''}
-            </span>
-          </div>
+    <>
+      <div data-testid="preview-bar" className="fixed top-14 left-0 right-0 z-40">
+        <div className="border-y border-amber-300 dark:border-amber-700/70 bg-amber-50/95 dark:bg-amber-950/90 backdrop-blur px-4 sm:px-6 lg:px-8 py-2">
+          <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
+            <div className="flex items-center gap-2 text-sm text-amber-900 dark:text-amber-100">
+              <span className="relative flex h-2 w-2" aria-hidden>
+                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-amber-500 opacity-60" />
+                <span className="relative inline-flex h-2 w-2 rounded-full bg-amber-500" />
+              </span>
+              <span className="font-semibold">Previewing pending changes</span>
+              <span className="text-amber-700 dark:text-amber-300">
+                · {preview.commitsAhead} commit{preview.commitsAhead === 1 ? '' : 's'}
+                {age ? ` · ${age}` : ''}
+              </span>
+            </div>
 
-          <div className="flex items-center gap-2">
-            {preview.diffUrl && (
-              <a
-                href={preview.diffUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                className={`${actionButtonBase} inline-flex items-center gap-1 text-amber-900 dark:text-amber-200 ring-1 ring-amber-300 dark:ring-amber-700 hover:bg-amber-100 dark:hover:bg-amber-900/40`}
+            <div className="flex items-center gap-2">
+              {preview.diffUrl && (
+                <a
+                  href={preview.diffUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className={`${actionButtonBase} inline-flex items-center gap-1 text-amber-900 dark:text-amber-200 ring-1 ring-amber-300 dark:ring-amber-700 hover:bg-amber-100 dark:hover:bg-amber-900/40`}
+                >
+                  GitHub diff
+                  <IconExternalLink size={14} />
+                </a>
+              )}
+              <button
+                type="button"
+                onClick={discard}
+                disabled={busy}
+                className={`${actionButtonBase} text-amber-900 dark:text-amber-200 ring-1 ring-amber-300 dark:ring-amber-700 hover:bg-amber-100 dark:hover:bg-amber-900/40`}
               >
-                GitHub diff
-                <IconExternalLink size={14} />
-              </a>
-            )}
-            <button
-              type="button"
-              onClick={discard}
-              disabled={busy}
-              className={`${actionButtonBase} text-amber-900 dark:text-amber-200 ring-1 ring-amber-300 dark:ring-amber-700 hover:bg-amber-100 dark:hover:bg-amber-900/40`}
-            >
-              {busy && pending === 'discard' ? 'Discarding…' : 'Discard'}
-            </button>
-            <button
-              type="button"
-              onClick={accept}
-              disabled={busy}
-              className={`${actionButtonBase} bg-amber-600 text-white hover:bg-amber-700 dark:bg-amber-500 dark:text-amber-950 dark:hover:bg-amber-400`}
-            >
-              {busy && pending === 'accept' ? 'Merging…' : 'Merge'}
-            </button>
+                {busy && pending === 'discard' ? 'Discarding…' : 'Discard'}
+              </button>
+              <button
+                type="button"
+                onClick={accept}
+                disabled={busy}
+                className={`${actionButtonBase} bg-amber-600 text-white hover:bg-amber-700 dark:bg-amber-500 dark:text-amber-950 dark:hover:bg-amber-400`}
+              >
+                {busy && pending === 'accept' ? 'Merging…' : 'Merge'}
+              </button>
+            </div>
           </div>
+          {error && <div className="mt-2 text-sm text-rose-700 dark:text-rose-300">{error}</div>}
         </div>
-        {error && <div className="mt-2 text-sm text-rose-700 dark:text-rose-300">{error}</div>}
+        {conflictUnits && (
+          <ConflictPanel
+            units={conflictUnits}
+            orderConflict={orderConflict}
+            unitPreviews={unitPreviews}
+            autoMerged={autoMerged}
+            oursSha={conflictOursSha}
+            busy={busy}
+            onApply={applyResolutions}
+            onDiscard={discard}
+          />
+        )}
       </div>
       {busy && pending === 'accept' && (
-        <MergeProgress label="Merging preview into the live deck — this can take a few seconds…" />
+        <SlideMergeProgressOverlay label="Merging preview into the live deck — this can take a few seconds…" />
       )}
-      {conflictUnits && (
-        <ConflictPanel
-          units={conflictUnits}
-          orderConflict={orderConflict}
-          autoMerged={autoMerged}
-          oursSha={conflictOursSha}
-          busy={busy}
-          onApply={applyResolutions}
-          onDiscard={discard}
-        />
-      )}
-    </div>
+    </>
   );
 };
 
@@ -564,6 +689,7 @@ export const PendingPreviewBanner = ({ preview }: { preview: PreviewInfo }) => {
     discard,
     conflictUnits,
     orderConflict,
+    unitPreviews,
     autoMerged,
     conflictOursSha,
     error,
@@ -571,61 +697,64 @@ export const PendingPreviewBanner = ({ preview }: { preview: PreviewInfo }) => {
   const age = preview.oldestCommitAt ? dayjs(preview.oldestCommitAt).fromNow() : null;
 
   return (
-    <div data-testid="pending-preview-banner" className="fixed top-14 left-0 right-0 z-40">
-      <div className="border-b border-amber-200 dark:border-amber-800/70 bg-amber-50/90 dark:bg-amber-950/80 backdrop-blur px-4 sm:px-6 lg:px-8 py-1.5">
-        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-amber-900 dark:text-amber-100">
-          <span className="inline-flex items-center gap-1.5">
-            <IconGitBranch size={14} className="text-amber-600 dark:text-amber-400" aria-hidden />A
-            preview with pending changes exists
-            {age ? (
-              <span className="text-amber-700 dark:text-amber-300">
-                ({preview.commitsAhead} commit{preview.commitsAhead === 1 ? '' : 's'}, {age})
-              </span>
-            ) : null}
-          </span>
-          <span className="text-amber-400 dark:text-amber-600" aria-hidden>
-            ·
-          </span>
-          <Link
-            to="?preview=1"
-            className="font-medium underline decoration-amber-400 underline-offset-2 hover:text-amber-700 dark:hover:text-amber-300"
-          >
-            View preview
-          </Link>
-          <button
-            type="button"
-            onClick={accept}
-            disabled={busy}
-            className="font-medium underline decoration-amber-400 underline-offset-2 hover:text-amber-700 dark:hover:text-amber-300 disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            {busy && pending === 'accept' ? 'Merging…' : 'Merge'}
-          </button>
-          <button
-            type="button"
-            onClick={discard}
-            disabled={busy}
-            className="font-medium underline decoration-amber-400 underline-offset-2 hover:text-amber-700 dark:hover:text-amber-300 disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            {busy && pending === 'discard' ? 'Discarding…' : 'Discard'}
-          </button>
+    <>
+      <div data-testid="pending-preview-banner" className="fixed top-14 left-0 right-0 z-40">
+        <div className="border-b border-amber-200 dark:border-amber-800/70 bg-amber-50/90 dark:bg-amber-950/80 backdrop-blur px-4 sm:px-6 lg:px-8 py-1.5">
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-amber-900 dark:text-amber-100">
+            <span className="inline-flex items-center gap-1.5">
+              <IconGitBranch size={14} className="text-amber-600 dark:text-amber-400" aria-hidden />
+              A preview with pending changes exists
+              {age ? (
+                <span className="text-amber-700 dark:text-amber-300">
+                  ({preview.commitsAhead} commit{preview.commitsAhead === 1 ? '' : 's'}, {age})
+                </span>
+              ) : null}
+            </span>
+            <span className="text-amber-400 dark:text-amber-600" aria-hidden>
+              ·
+            </span>
+            <Link
+              to="?preview=1"
+              className="font-medium underline decoration-amber-400 underline-offset-2 hover:text-amber-700 dark:hover:text-amber-300"
+            >
+              View preview
+            </Link>
+            <button
+              type="button"
+              onClick={accept}
+              disabled={busy}
+              className="font-medium underline decoration-amber-400 underline-offset-2 hover:text-amber-700 dark:hover:text-amber-300 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {busy && pending === 'accept' ? 'Merging…' : 'Merge'}
+            </button>
+            <button
+              type="button"
+              onClick={discard}
+              disabled={busy}
+              className="font-medium underline decoration-amber-400 underline-offset-2 hover:text-amber-700 dark:hover:text-amber-300 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {busy && pending === 'discard' ? 'Discarding…' : 'Discard'}
+            </button>
+          </div>
+          {error && <div className="mt-1 text-sm text-rose-700 dark:text-rose-300">{error}</div>}
         </div>
-        {error && <div className="mt-1 text-sm text-rose-700 dark:text-rose-300">{error}</div>}
+        {conflictUnits && (
+          <ConflictPanel
+            units={conflictUnits}
+            orderConflict={orderConflict}
+            unitPreviews={unitPreviews}
+            autoMerged={autoMerged}
+            oursSha={conflictOursSha}
+            busy={busy}
+            onApply={applyResolutions}
+            onDiscard={discard}
+          />
+        )}
       </div>
       {busy && pending === 'accept' && (
-        <MergeProgress label="Merging preview into the live deck — this can take a few seconds…" />
+        <SlideMergeProgressOverlay label="Merging preview into the live deck — this can take a few seconds…" />
       )}
-      {conflictUnits && (
-        <ConflictPanel
-          units={conflictUnits}
-          orderConflict={orderConflict}
-          autoMerged={autoMerged}
-          oursSha={conflictOursSha}
-          busy={busy}
-          onApply={applyResolutions}
-          onDiscard={discard}
-        />
-      )}
-    </div>
+    </>
   );
 };
 

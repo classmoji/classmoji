@@ -554,6 +554,7 @@ export const action = async ({
         {
           conflict: true,
           units: result.units,
+          unitPreviews: result.unit_previews ?? null,
           autoMerged: result.auto_merged,
           oursSha: result.ours_sha,
           theirsSha: result.theirs_sha,

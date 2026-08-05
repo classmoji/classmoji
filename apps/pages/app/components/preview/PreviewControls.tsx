@@ -11,12 +11,14 @@ import {
   chooserCopy,
   chooserSubtitle,
   conflictIds,
+  orderDiffIds,
   reasonLabel,
   type ChooserCopy,
   type ChooserVariant,
   type ConflictUnit,
   type MergeChoice,
   type MergeResolution,
+  type UnitPreviews,
 } from './conflictChooser.ts';
 
 dayjs.extend(relativeTime);
@@ -47,6 +49,7 @@ export type { ConflictUnit };
 interface PreviewActionData {
   conflict?: boolean;
   units?: ConflictUnit[];
+  unitPreviews?: UnitPreviews | null;
   autoMerged?: number;
   oursSha?: string | null;
   theirsSha?: string | null;
@@ -90,6 +93,7 @@ function usePreviewActions() {
   };
 
   const conflictUnits = fetcher.data?.conflict ? (fetcher.data.units ?? []) : null;
+  const unitPreviews = fetcher.data?.conflict ? (fetcher.data.unitPreviews ?? null) : null;
   const autoMerged = fetcher.data?.conflict ? (fetcher.data.autoMerged ?? 0) : 0;
   const conflictOursSha = fetcher.data?.conflict ? (fetcher.data.oursSha ?? null) : null;
   const error = fetcher.data?.error ?? null;
@@ -101,6 +105,7 @@ function usePreviewActions() {
     applyResolutions,
     discard,
     conflictUnits,
+    unitPreviews,
     autoMerged,
     conflictOursSha,
     error,
@@ -196,19 +201,49 @@ const BlockPreview = ({ block }: { block: unknown }) => {
   );
 };
 
-/** Numbered id list for an ordering conflict side. */
-const OrderList = ({ ids }: { ids: string[] }) => (
+/**
+ * Numbered rows for an ordering conflict side. With the accept report's
+ * `unit_previews` each row shows the block's type/text summary (moved blocks —
+ * a different position in the two orderings — get an amber marker); without
+ * them (e.g. a save-merge report) it falls back to the raw block id.
+ */
+const OrderList = ({
+  ids,
+  previews,
+  moved,
+}: {
+  ids: string[];
+  previews?: UnitPreviews | null;
+  moved?: Set<string>;
+}) => (
   <ol className="space-y-0.5 text-xs text-gray-700 dark:text-gray-300 max-h-36 overflow-y-auto">
-    {ids.map((id, position) => (
-      <li key={`${id}-${position}`} className="flex gap-1.5">
-        <span className="w-5 shrink-0 text-right tabular-nums text-gray-400 dark:text-gray-500">
-          {position + 1}.
-        </span>
-        <span className="truncate font-mono text-[11px]">{id}</span>
-      </li>
-    ))}
+    {ids.map((id, position) => {
+      const summary = previews?.[id]?.summary;
+      const isMoved = moved?.has(id) ?? false;
+      return (
+        <li
+          key={`${id}-${position}`}
+          data-testid={`order-row-${id}`}
+          data-moved={isMoved ? 'true' : undefined}
+          className={`flex gap-1.5 rounded px-1 ${
+            isMoved ? 'bg-amber-100/70 dark:bg-amber-900/40' : ''
+          }`}
+        >
+          <span className="w-5 shrink-0 text-right tabular-nums text-gray-400 dark:text-gray-500">
+            {position + 1}.
+          </span>
+          {summary ? (
+            <span className="truncate">{summary}</span>
+          ) : (
+            <span className="truncate font-mono text-[11px]">{id}</span>
+          )}
+        </li>
+      );
+    })}
   </ol>
 );
+
+const EMPTY_MOVED: Set<string> = new Set();
 
 const cardShell =
   'rounded-lg border border-rose-200 dark:border-rose-800/70 bg-white dark:bg-neutral-900 p-3';
@@ -221,19 +256,31 @@ const ConflictCard = ({
   copy,
   choice,
   onChoose,
+  unitPreviews,
 }: {
   unit: ConflictUnit;
   copy: ChooserCopy;
   choice: MergeChoice | undefined;
   onChoose: (id: string, choice: MergeChoice) => void;
+  unitPreviews?: UnitPreviews | null;
 }) => {
   const isOrder = unit.id === ORDER_CONFLICT_ID;
   const title = isOrder ? 'Block order' : `Block ${unit.index + 1}`;
 
+  const oursIds = isOrder && Array.isArray(unit.ours) ? (unit.ours as string[]) : [];
+  const theirsIds = isOrder && Array.isArray(unit.theirs) ? (unit.theirs as string[]) : [];
+  const movedIds = isOrder ? orderDiffIds(oursIds, theirsIds) : EMPTY_MOVED;
+
   const renderSide = (side: MergeChoice) => {
     const value = side === 'ours' ? unit.ours : unit.theirs;
     if (isOrder) {
-      return <OrderList ids={Array.isArray(value) ? (value as string[]) : []} />;
+      return (
+        <OrderList
+          ids={Array.isArray(value) ? (value as string[]) : []}
+          previews={unitPreviews}
+          moved={movedIds}
+        />
+      );
     }
     if (value === undefined || value === null) {
       return <Tombstone label={copy.tombstone[side]} />;
@@ -279,6 +326,7 @@ const ConflictCard = ({
  */
 export const ConflictPanel = ({
   units,
+  unitPreviews,
   autoMerged,
   oursSha,
   busy,
@@ -287,6 +335,7 @@ export const ConflictPanel = ({
   variant = 'preview',
 }: {
   units: ConflictUnit[];
+  unitPreviews?: UnitPreviews | null;
   autoMerged: number;
   oursSha: string | null;
   busy: boolean;
@@ -314,7 +363,7 @@ export const ConflictPanel = ({
       className="border-b border-rose-300 dark:border-rose-800 bg-rose-50 dark:bg-rose-950/95 px-4 sm:px-6 lg:px-8 py-3 max-h-[70vh] overflow-y-auto"
     >
       {busy && (
-        <div className="-mx-4 sm:-mx-6 lg:-mx-8 -mt-3 mb-3">
+        <div className="sticky top-0 z-10 -mx-4 sm:-mx-6 lg:-mx-8 -mt-3 mb-3 shadow-sm">
           <MergeProgress label={copy.busyLabel} />
         </div>
       )}
@@ -334,6 +383,7 @@ export const ConflictPanel = ({
             copy={copy}
             choice={choices[unit.id]}
             onChoose={choose}
+            unitPreviews={unitPreviews}
           />
         ))}
       </div>
@@ -389,6 +439,7 @@ export const PreviewBar = ({
     applyResolutions,
     discard,
     conflictUnits,
+    unitPreviews,
     autoMerged,
     conflictOursSha,
     error,
@@ -449,6 +500,7 @@ export const PreviewBar = ({
       {conflictUnits && (
         <ConflictPanel
           units={conflictUnits}
+          unitPreviews={unitPreviews}
           autoMerged={autoMerged}
           oursSha={conflictOursSha}
           busy={busy}
@@ -471,6 +523,7 @@ export const PendingPreviewBanner = ({ preview }: { preview: PreviewInfo }) => {
     applyResolutions,
     discard,
     conflictUnits,
+    unitPreviews,
     autoMerged,
     conflictOursSha,
     error,
@@ -524,6 +577,7 @@ export const PendingPreviewBanner = ({ preview }: { preview: PreviewInfo }) => {
       {conflictUnits && (
         <ConflictPanel
           units={conflictUnits}
+          unitPreviews={unitPreviews}
           autoMerged={autoMerged}
           oursSha={conflictOursSha}
           busy={busy}

@@ -226,6 +226,66 @@ describe('acceptPreview — semantic auto-merge on git conflict', () => {
     expect(deleteBranchMock).not.toHaveBeenCalled();
   });
 
+  it('a both-sides block reorder reports __order__ with numbered unit_previews', async () => {
+    primeThreeWay({
+      base: [block('a', 'one'), block('b', 'two'), block('c', 'three')],
+      ours: [block('b', 'two'), block('a', 'one'), block('c', 'three')],
+      theirs: [block('a', 'one'), block('c', 'three'), block('b', 'two')],
+    });
+
+    const result = await acceptPreview(page);
+
+    if (result.merged) throw new Error('unreachable');
+    expect(result.units).toEqual([
+      {
+        id: ORDER_CONFLICT_ID,
+        index: -1,
+        reason: 'order',
+        base: ['a', 'b', 'c'],
+        ours: ['b', 'a', 'c'],
+        theirs: ['a', 'c', 'b'],
+      },
+    ]);
+    // Each referenced block summarized ONCE from the ours doc: position + text.
+    expect(result.unit_previews).toEqual({
+      a: { index: 1, summary: 'paragraph: one' },
+      b: { index: 0, summary: 'paragraph: two' },
+      c: { index: 2, summary: 'paragraph: three' },
+    });
+  });
+
+  it('a block-order preview summary truncates long text to ≤80 chars', async () => {
+    const long = 'w'.repeat(200);
+    primeThreeWay({
+      base: [block('a', long), block('b', 'two'), block('c', 'three')],
+      ours: [block('b', 'two'), block('a', long), block('c', 'three')],
+      theirs: [block('a', long), block('c', 'three'), block('b', 'two')],
+    });
+
+    const result = await acceptPreview(page);
+
+    if (result.merged) throw new Error('unreachable');
+    const summary = result.unit_previews?.a.summary ?? '';
+    // `type: ` prefix + ≤80 chars of text ending in an ellipsis.
+    expect(summary.startsWith('paragraph: ')).toBe(true);
+    expect(summary.endsWith('…')).toBe(true);
+    expect(summary.length).toBeLessThanOrEqual('paragraph: '.length + 80);
+  });
+
+  it('a pure content collision has no unit_previews (no order conflict)', async () => {
+    primeThreeWay({
+      base: [block('a', 'one')],
+      ours: [block('a', 'main')],
+      theirs: [block('a', 'preview')],
+    });
+
+    const result = await acceptPreview(page);
+
+    if (result.merged) throw new Error('unreachable');
+    expect(result.units).toHaveLength(1);
+    expect(result.unit_previews).toBeUndefined();
+  });
+
   it('a CAS loss on the semantic commit retries ONCE against fresh main', async () => {
     primeThreeWay({
       base: [block('a', 'one')],
@@ -513,7 +573,8 @@ describe('accept/resolve refuse a missing or unparseable merge base (plan §7 P3
     });
     getContentMock.mockImplementation(async (arg: unknown) => {
       const { ref } = arg as { ref?: string };
-      if (ref === PREVIEW_BRANCH) return { content: wrapper([block('a', 'preview')]), sha: 'theirs-sha' };
+      if (ref === PREVIEW_BRANCH)
+        return { content: wrapper([block('a', 'preview')]), sha: 'theirs-sha' };
       if (ref === 'fork-point') return base == null ? null : { content: base, sha: 'base-sha' };
       return { content: wrapper([block('a', 'main')]), sha: 'ours-sha' };
     });

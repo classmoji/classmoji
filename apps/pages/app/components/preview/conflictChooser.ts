@@ -33,6 +33,34 @@ export interface ConflictUnit {
   base?: unknown;
 }
 
+/**
+ * A block as the order-conflict list renders it — one entry per referenced id
+ * in the accept report's `unit_previews`. In a pure ordering conflict the
+ * content is identical on both sides, so each block is summarized ONCE here and
+ * shown in both orderings (text-only; no BlockNote editor is mounted).
+ */
+export interface UnitPreview {
+  index: number;
+  summary: string;
+}
+
+/** id → order-list preview. Absent/empty ⇒ the card falls back to raw ids. */
+export type UnitPreviews = Record<string, UnitPreview>;
+
+/**
+ * The ids whose position differs between the two orderings — the moved blocks
+ * the list highlights. An id present in only one ordering counts as moved.
+ * Symmetric: both sides agree on the same moved set.
+ */
+export function orderDiffIds(ours: string[], theirs: string[]): Set<string> {
+  const oursPos = new Map(ours.map((id, i) => [id, i] as const));
+  const theirsPos = new Map(theirs.map((id, i) => [id, i] as const));
+  const moved = new Set<string>();
+  for (const [id, i] of oursPos) if (theirsPos.get(id) !== i) moved.add(id);
+  for (const [id, i] of theirsPos) if (oursPos.get(id) !== i) moved.add(id);
+  return moved;
+}
+
 const REASON_LABELS: Record<string, string> = {
   content: 'Edited in both versions',
   delete_vs_edit: 'Deleted in one version, edited in the other',

@@ -14,6 +14,7 @@ import {
   chooserCopy,
   chooserSubtitle,
   conflictIds,
+  orderDiffIds,
   reasonLabel,
   type ConflictUnit,
 } from '../../app/components/preview/conflictChooser.ts';
@@ -77,6 +78,28 @@ test.describe('blockSummary', () => {
       text: '',
       childCount: 0,
     });
+  });
+});
+
+test.describe('orderDiffIds (moved-block highlight)', () => {
+  test('flags every block whose position differs between the two orderings', () => {
+    const moved = orderDiffIds(['b', 'a', 'c'], ['a', 'c', 'b']);
+    expect(moved).toEqual(new Set(['a', 'b', 'c']));
+  });
+
+  test('a block that keeps its position is NOT flagged', () => {
+    const moved = orderDiffIds(['a', 'b', 'c'], ['a', 'c', 'b']);
+    expect(moved.has('a')).toBe(false);
+    expect(moved.has('b')).toBe(true);
+    expect(moved.has('c')).toBe(true);
+  });
+
+  test('identical orderings flag nothing', () => {
+    expect(orderDiffIds(['a', 'b', 'c'], ['a', 'b', 'c'])).toEqual(new Set());
+  });
+
+  test('a block present in only one ordering counts as moved', () => {
+    expect(orderDiffIds(['a', 'b'], ['a', 'b', 'c'])).toEqual(new Set(['c']));
   });
 });
 

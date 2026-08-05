@@ -17,6 +17,7 @@ import {
   formatMetaValue,
   isChildOrderId,
   metaFieldRows,
+  orderDiffIds,
   reasonLabel,
   sideNotesDiffer,
   slideSideHtml,
@@ -185,6 +186,32 @@ test.describe('chooser variants (save vs preview, Phase 7.5)', () => {
     expect(chooserSubtitle('preview', 3)).toBe('3 changes merged automatically; these need you:');
     expect(chooserSubtitle('save', 1)).toBe('1 change merged automatically; choose per slide:');
     expect(chooserSubtitle('save', 2)).toBe('2 changes merged automatically; choose per slide:');
+  });
+});
+
+test.describe('orderDiffIds (filmstrip moved-slide highlight)', () => {
+  test('flags every slide whose position differs between the two orderings', () => {
+    // base order [a,b,c]; both sides reorder differently.
+    const moved = orderDiffIds(['b', 'a', 'c'], ['a', 'c', 'b']);
+    // a: pos 1 vs 0 → moved; b: pos 0 vs 2 → moved; c: pos 2 vs 1 → moved.
+    expect(moved).toEqual(new Set(['a', 'b', 'c']));
+  });
+
+  test('a slide that keeps its position is NOT flagged', () => {
+    // Only b and c swap; a stays at index 0.
+    const moved = orderDiffIds(['a', 'b', 'c'], ['a', 'c', 'b']);
+    expect(moved.has('a')).toBe(false);
+    expect(moved.has('b')).toBe(true);
+    expect(moved.has('c')).toBe(true);
+  });
+
+  test('identical orderings flag nothing', () => {
+    expect(orderDiffIds(['a', 'b', 'c'], ['a', 'b', 'c'])).toEqual(new Set());
+  });
+
+  test('a slide present in only one ordering counts as moved (add/remove)', () => {
+    const moved = orderDiffIds(['a', 'b'], ['a', 'b', 'c']);
+    expect(moved).toEqual(new Set(['c']));
   });
 });
 

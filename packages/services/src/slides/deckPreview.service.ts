@@ -36,7 +36,7 @@ import {
   saveDeck,
   type SlideContentTarget,
 } from './slideContent.service.ts';
-import type { DeckJson } from './deckTypes.ts';
+import type { DeckJson, DeckSlide } from './deckTypes.ts';
 
 const THEMES_FOLDER = '.slidesthemes';
 
@@ -159,11 +159,40 @@ export type AcceptDeckPreviewResult =
       units: DeckMergeConflict[];
       /** Present when both sides reordered the root slide sequence differently (conflict id `__order__`). */
       order_conflict?: { base: string[]; ours: string[]; theirs: string[] };
+      /**
+       * Lightweight render of every slide referenced by an order / child-order
+       * (and placement) conflict, keyed by slide id — lets the chooser draw the
+       * two orderings as visual filmstrips instead of raw id lists. In a pure
+       * ordering conflict a slide's CONTENT is identical on both sides, so it is
+       * rendered ONCE here and shown in both orderings. Absent when no ordering
+       * conflict is present. See DeckUnitPreview for the per-slide shape.
+       */
+      unit_previews?: Record<string, DeckUnitPreview>;
       /** Changes the semantic layer can merge without a decision. */
       auto_merged: number;
       ours_sha: string | null;
       theirs_sha: string | null;
     };
+
+/**
+ * A slide as the order-conflict filmstrip renders it (built from the ours deck,
+ * falling back to theirs for ids only present there).
+ */
+export interface DeckUnitPreview {
+  /** Dotted position in the source deck ('4' or '4.2'). */
+  index: string;
+  /** First heading / text, ≤60 chars (empty when the slide carries no text). */
+  title: string;
+  /**
+   * Renderable slide html (stack containers: children joined like the chooser's
+   * SlideFrame). OMITTED for slides whose html exceeds ~50KB — the card falls
+   * back to the index + title so the payload never balloons.
+   */
+  html?: string;
+}
+
+/** Slides whose rendered html exceeds this drop `html` (title-only fallback). */
+const UNIT_PREVIEW_HTML_CAP = 50 * 1024;
 
 /** Result of resolveDeckPreviewConflicts: the resolved merge committed to main. */
 export interface ResolveDeckPreviewResult {
@@ -557,6 +586,81 @@ function baseDeckUnavailable(): PreviewResolutionError {
   );
 }
 
+/** Renderable html for one slide side: its own html, or a stack's children
+ * joined with the same dashed separator the chooser's SlideFrame uses. */
+function deckPreviewHtml(slide: DeckSlide): string {
+  if (typeof slide.html === 'string' && slide.html.trim()) return slide.html;
+  if (Array.isArray(slide.children) && slide.children.length > 0) {
+    return slide.children
+      .map(child => (typeof child?.html === 'string' ? child.html : ''))
+      .filter(Boolean)
+      .join('\n<hr style="border:none;border-top:1px dashed #bbb;margin:12px 0">\n');
+  }
+  return '';
+}
+
+/** First heading (else first text), tags stripped, ≤60 chars. */
+function deckPreviewTitle(html: string): string {
+  if (!html) return '';
+  const heading = html.match(/<h[1-6][^>]*>([\s\S]*?)<\/h[1-6]>/i)?.[1] ?? html;
+  const text = heading
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return text.length > 60 ? `${text.slice(0, 59)}…` : text;
+}
+
+/** Index a deck's slides AND their stack children by id → { slide, dotted index }. */
+function indexDeckUnits(...decks: DeckJson[]): Map<string, { slide: DeckSlide; index: string }> {
+  const map = new Map<string, { slide: DeckSlide; index: string }>();
+  for (const deck of decks) {
+    deck.slides.forEach((slide, i) => {
+      if (slide?.id && !map.has(slide.id)) map.set(slide.id, { slide, index: String(i + 1) });
+      slide?.children?.forEach((child, j) => {
+        if (child?.id && !map.has(child.id))
+          map.set(child.id, { slide: child, index: `${i + 1}.${j + 1}` });
+      });
+    });
+  }
+  return map;
+}
+
+/**
+ * Build the `unit_previews` map for an order/child-order/placement conflict
+ * report: every slide id those conflicts reference, rendered ONCE from the ours
+ * deck (falling back to theirs for ids only present there). Returns undefined
+ * when no ordering/placement conflict is present so the field stays absent.
+ */
+function buildDeckUnitPreviews(
+  conflicts: DeckMergeConflict[],
+  oursDeck: DeckJson,
+  theirsDeck: DeckJson
+): Record<string, DeckUnitPreview> | undefined {
+  const ids = new Set<string>();
+  for (const conflict of conflicts) {
+    if (conflict.reason === 'order' || conflict.reason === 'child_order') {
+      for (const list of [conflict.ours, conflict.theirs, conflict.base]) {
+        if (Array.isArray(list)) for (const id of list) if (typeof id === 'string') ids.add(id);
+      }
+    } else if (conflict.reason === 'placement') {
+      ids.add(conflict.id);
+    }
+  }
+  if (ids.size === 0) return undefined;
+
+  const index = indexDeckUnits(oursDeck, theirsDeck);
+  const previews: Record<string, DeckUnitPreview> = {};
+  for (const id of ids) {
+    const entry = index.get(id);
+    if (!entry) continue;
+    const html = deckPreviewHtml(entry.slide);
+    const preview: DeckUnitPreview = { index: entry.index, title: deckPreviewTitle(html) };
+    if (html && html.length <= UNIT_PREVIEW_HTML_CAP) preview.html = html;
+    previews[id] = preview;
+  }
+  return Object.keys(previews).length > 0 ? previews : undefined;
+}
+
 /** The accept path taken when the git merge reports a conflict. */
 async function acceptDeckSemanticFallback(
   slide: SlideContentTarget,
@@ -573,11 +677,17 @@ async function acceptDeckSemanticFallback(
 
   const report = (merge: ReturnType<typeof merge3Units>): AcceptDeckPreviewResult => {
     const { units, orderConflict } = splitDeckConflicts(merge.conflicts);
+    const unitPreviews = buildDeckUnitPreviews(
+      merge.conflicts,
+      parseDeckForDiff(ours?.content),
+      theirsDeck
+    );
     return {
       merged: false,
       conflict: true,
       units,
       ...(orderConflict ? { order_conflict: orderConflict } : {}),
+      ...(unitPreviews ? { unit_previews: unitPreviews } : {}),
       auto_merged: merge.autoMerged,
       ours_sha: ours?.sha ?? null,
       theirs_sha: theirs?.sha ?? null,

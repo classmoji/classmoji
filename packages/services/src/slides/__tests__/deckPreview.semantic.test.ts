@@ -241,7 +241,7 @@ describe('acceptDeckPreview — semantic auto-merge on git conflict', () => {
   });
 
   it('a both-sides order collision surfaces as order_conflict (units empty)', async () => {
-    const a = { id: 'aaa', html: '<p>a</p>' };
+    const a = { id: 'aaa', html: '<h2>Alpha</h2>' };
     const b = { id: 'bbb', html: '<p>b</p>' };
     const c = { id: 'ccc', html: '<p>c</p>' };
     primeThreeWay({
@@ -259,6 +259,50 @@ describe('acceptDeckPreview — semantic auto-merge on git conflict', () => {
       ours: ['bbb', 'aaa', 'ccc'],
       theirs: ['aaa', 'ccc', 'bbb'],
     });
+    // Every id the ordering references carries a filmstrip preview built from
+    // the ours deck: dotted position IN OURS, title (first heading/text), html.
+    expect(result.unit_previews).toEqual({
+      aaa: { index: '2', title: 'Alpha', html: '<h2>Alpha</h2>' },
+      bbb: { index: '1', title: 'b', html: '<p>b</p>' },
+      ccc: { index: '3', title: 'c', html: '<p>c</p>' },
+    });
+  });
+
+  it('an order preview drops html for slides over ~50KB (title-only fallback)', async () => {
+    const bigHtml = `<h2>Huge slide</h2><p>${'x'.repeat(60 * 1024)}</p>`;
+    const a = { id: 'aaa', html: bigHtml };
+    const b = { id: 'bbb', html: '<p>b</p>' };
+    const c = { id: 'ccc', html: '<p>c</p>' };
+    // Both sides reorder the same three slides differently → an order conflict.
+    primeThreeWay({
+      base: deckWith([a, b, c]),
+      ours: deckWith([b, a, c]),
+      theirs: deckWith([a, c, b]),
+    });
+
+    const result = await acceptDeckPreview(slide);
+
+    if (result.merged) throw new Error('unreachable');
+    // Over-cap slide keeps index + title but omits html; small slides keep it.
+    // (index is the position IN OURS: ours = [bbb, aaa, ccc].)
+    expect(result.unit_previews?.aaa).toEqual({ index: '2', title: 'Huge slide' });
+    expect(result.unit_previews?.aaa.html).toBeUndefined();
+    expect(result.unit_previews?.bbb).toEqual({ index: '1', title: 'b', html: '<p>b</p>' });
+    expect(result.unit_previews?.ccc).toEqual({ index: '3', title: 'c', html: '<p>c</p>' });
+  });
+
+  it('a pure content collision has no unit_previews (no ordering conflict)', async () => {
+    primeThreeWay({
+      base: deckWith([{ id: 'aaa', html: '<p>original</p>' }]),
+      ours: deckWith([{ id: 'aaa', html: '<p>main</p>' }]),
+      theirs: deckWith([{ id: 'aaa', html: '<p>preview</p>' }]),
+    });
+
+    const result = await acceptDeckPreview(slide);
+
+    if (result.merged) throw new Error('unreachable');
+    expect(result.units).toHaveLength(1);
+    expect(result.unit_previews).toBeUndefined();
   });
 
   it('a CAS loss on the semantic commit retries ONCE against fresh main', async () => {

@@ -748,11 +748,30 @@ export type AcceptPreviewResult =
       conflict: true;
       /** ONLY the true collisions — everything else auto-merges on accept. */
       units: BlockMergeConflict[];
+      /**
+       * Text preview of every block referenced by the `__order__` sentinel,
+       * keyed by block id — lets the chooser list the two orderings as numbered
+       * title/summary rows instead of raw ids. In a pure ordering conflict a
+       * block's CONTENT is identical on both sides, so it is summarized ONCE
+       * here. Absent when there is no order conflict. See PageUnitPreview.
+       */
+      unit_previews?: Record<string, PageUnitPreview>;
       /** Changes the semantic layer can merge without a decision. */
       auto_merged: number;
       ours_sha: string | null;
       theirs_sha: string | null;
     };
+
+/** A block as the order-conflict chooser lists it (text-only; no editor mounted). */
+export interface PageUnitPreview {
+  /** Position in the source document. */
+  index: number;
+  /** Block type + a short slice of its text (≤80 chars). */
+  summary: string;
+}
+
+/** Slice of a block's text kept in an order-conflict summary. */
+const UNIT_PREVIEW_SUMMARY_CAP = 80;
 
 /** Result of resolvePreviewConflicts: the resolved merge committed to main. */
 export interface ResolvePreviewResult {
@@ -1046,6 +1065,77 @@ function mergeBaseMissing(): PreviewResolutionError {
   );
 }
 
+/** Flatten a block's inline content (styled text, links, table rows) to plain text. */
+function blockInlineText(content: unknown): string {
+  if (typeof content === 'string') return content;
+  if (Array.isArray(content)) {
+    return content
+      .map(node => {
+        const inline = node as { text?: unknown; content?: unknown };
+        if (typeof inline.text === 'string') return inline.text;
+        if (inline.content !== undefined) return blockInlineText(inline.content);
+        return '';
+      })
+      .join('');
+  }
+  const rows = (content as { rows?: { cells?: unknown[] }[] } | null | undefined)?.rows;
+  if (Array.isArray(rows)) {
+    return rows
+      .map(row => (Array.isArray(row?.cells) ? row.cells.map(blockInlineText).join(' · ') : ''))
+      .join('\n');
+  }
+  return '';
+}
+
+/** A one-line `type: text…` summary of a block for the order-conflict list. */
+function blockPreviewSummary(block: BlockNode): string {
+  const type = typeof block.type === 'string' ? block.type : 'block';
+  const text = blockInlineText(block.content).replace(/\s+/g, ' ').trim();
+  if (!text) return type;
+  const shown =
+    text.length > UNIT_PREVIEW_SUMMARY_CAP
+      ? `${text.slice(0, UNIT_PREVIEW_SUMMARY_CAP - 1)}…`
+      : text;
+  return `${type}: ${shown}`;
+}
+
+/**
+ * Build the `unit_previews` map for a block-order conflict: every block id the
+ * `__order__` sentinel references, summarized ONCE from the ours document
+ * (falling back to theirs for ids only present there). Undefined when there is
+ * no order conflict. Blocks are id-normalized to align with the merge engine's
+ * conflict ids (merge3Blocks fills derived ids internally).
+ */
+function buildPageUnitPreviews(
+  conflicts: BlockMergeConflict[],
+  oursBlocks: BlockNode[],
+  theirsBlocks: BlockNode[]
+): Record<string, PageUnitPreview> | undefined {
+  const ids = new Set<string>();
+  for (const conflict of conflicts) {
+    if (conflict.reason === 'order') {
+      for (const list of [conflict.ours, conflict.theirs, conflict.base]) {
+        if (Array.isArray(list)) for (const id of list) if (typeof id === 'string') ids.add(id);
+      }
+    }
+  }
+  if (ids.size === 0) return undefined;
+
+  const index = new Map<string, { block: BlockNode; index: number }>();
+  for (const blocks of [ensureBlockIds(oursBlocks), ensureBlockIds(theirsBlocks)]) {
+    (blocks as BlockNode[]).forEach((block, i) => {
+      if (block?.id && !index.has(block.id)) index.set(block.id, { block, index: i });
+    });
+  }
+  const previews: Record<string, PageUnitPreview> = {};
+  for (const id of ids) {
+    const entry = index.get(id);
+    if (!entry) continue;
+    previews[id] = { index: entry.index, summary: blockPreviewSummary(entry.block) };
+  }
+  return Object.keys(previews).length > 0 ? previews : undefined;
+}
+
 /** The accept path taken when the git merge reports a conflict. */
 async function acceptSemanticFallback(page: PageWithContentRepo): Promise<AcceptPreviewResult> {
   const threeWay = await readPreviewThreeWay(page);
@@ -1073,14 +1163,17 @@ async function acceptSemanticFallback(page: PageWithContentRepo): Promise<Accept
     // never commit without a CAS precondition — refuse with a typed error.
     if (!ours?.sha) throw mainContentMissing();
 
-    const merge = merge3Blocks(baseBlocks, extractBlocks(ours.content), theirsBlocks);
+    const oursBlocks = extractBlocks(ours.content);
+    const merge = merge3Blocks(baseBlocks, oursBlocks, theirsBlocks);
     if (merge.conflicts.length > 0) {
       // Only the true collisions are reported; the branch is left alone so
       // the caller can resolve (resolvePreviewConflicts), re-apply, or discard.
+      const unitPreviews = buildPageUnitPreviews(merge.conflicts, oursBlocks, theirsBlocks);
       return {
         merged: false,
         conflict: true,
         units: merge.conflicts,
+        ...(unitPreviews ? { unit_previews: unitPreviews } : {}),
         auto_merged: merge.autoMerged,
         ours_sha: ours.sha,
         theirs_sha: theirs?.sha ?? null,
