@@ -11,6 +11,7 @@ import {
   buildSlideSrcdoc,
   chooserCopy,
   chooserSubtitle,
+  filmstripEntries,
   isChildOrderId,
   metaFieldRows,
   orderDiffIds,
@@ -20,10 +21,10 @@ import {
   type ChooserCopy,
   type ChooserVariant,
   type ConflictUnit,
+  type FilmstripEntry,
   type MergeChoice,
   type MergeResolution,
   type SlideSide,
-  type UnitPreview,
   type UnitPreviews,
 } from './conflictChooser.ts';
 
@@ -266,79 +267,103 @@ const OrderList = ({ ids }: { ids: string[] }) => (
   </ol>
 );
 
+/** Filmstrip layout: a horizontal row (top-level slide order) or a vertical
+ * column (a stack's child order — mirroring how a vertical stack actually lays
+ * its children out top-to-bottom). */
+type FilmstripOrientation = 'horizontal' | 'vertical';
+
 /**
- * One slide thumbnail in an order filmstrip: a bounded sandboxed SlideFrame
+ * One slide thumbnail in an order filmstrip: a bounded sandboxed slide render
  * (same srcdoc renderer as a conflict card, echoing the 2D SlideOverview visual
- * language) with a position badge + title caption. `moved` slides (a different
- * position in the two orderings) get an amber ring so the reordering reads at a
- * glance. Missing preview (server capped >50KB) falls back to the title/id.
+ * language) with a position badge + title caption. `entry.moved` slides (a
+ * different position in the two orderings) get an amber ring so the reordering
+ * reads at a glance. Missing html (server capped >50KB, or no preview) falls
+ * back to the title/id. Vertical thumbnails span the column width so a stack's
+ * child sequence reads as an actual top-to-bottom stack.
  */
 const FilmstripSlide = ({
-  id,
-  preview,
-  position,
-  moved,
+  entry,
+  orientation,
 }: {
-  id: string;
-  preview: UnitPreview | undefined;
-  position: number;
-  moved: boolean;
-}) => (
-  <div
-    data-testid={`filmstrip-slide-${id}`}
-    data-moved={moved ? 'true' : undefined}
-    className={`w-28 shrink-0 overflow-hidden rounded border bg-white dark:bg-neutral-900 ${
-      moved
-        ? 'border-amber-400 dark:border-amber-500 ring-1 ring-amber-400 dark:ring-amber-500'
-        : 'border-stone-200 dark:border-neutral-700'
-    }`}
-  >
-    <div className="relative">
-      {preview?.html ? (
-        <iframe
-          sandbox=""
-          srcDoc={buildSlideSrcdoc(preview.html)}
-          title={`Slide ${position}`}
-          loading="lazy"
-          className="h-20 w-full pointer-events-none bg-white"
-        />
-      ) : (
-        <div className="flex h-20 w-full items-center justify-center bg-stone-50 dark:bg-neutral-800 px-1 text-center text-[11px] italic text-gray-400 dark:text-gray-500">
-          {preview?.title || id}
-        </div>
-      )}
-      <span className="absolute bottom-0.5 left-0.5 rounded-sm bg-black/60 px-1 py-px text-[10px] font-medium tabular-nums text-white">
-        {position}
-      </span>
+  entry: FilmstripEntry;
+  orientation: FilmstripOrientation;
+}) => {
+  const vertical = orientation === 'vertical';
+  return (
+    <div
+      data-testid={`filmstrip-slide-${entry.id}`}
+      data-moved={entry.moved ? 'true' : undefined}
+      className={`overflow-hidden rounded border bg-white dark:bg-neutral-900 ${
+        vertical ? 'w-full' : 'w-28 shrink-0'
+      } ${
+        entry.moved
+          ? 'border-amber-400 dark:border-amber-500 ring-1 ring-amber-400 dark:ring-amber-500'
+          : 'border-stone-200 dark:border-neutral-700'
+      }`}
+    >
+      <div className="relative">
+        {entry.html ? (
+          <iframe
+            sandbox=""
+            srcDoc={buildSlideSrcdoc(entry.html)}
+            title={`Slide ${entry.position}`}
+            loading="lazy"
+            className="h-20 w-full pointer-events-none bg-white"
+          />
+        ) : (
+          <div className="flex h-20 w-full items-center justify-center bg-stone-50 dark:bg-neutral-800 px-1 text-center text-[11px] italic text-gray-400 dark:text-gray-500">
+            {entry.title || entry.id}
+          </div>
+        )}
+        <span className="absolute bottom-0.5 left-0.5 rounded-sm bg-black/60 px-1 py-px text-[10px] font-medium tabular-nums text-white">
+          {entry.position}
+        </span>
+      </div>
+      <div className="truncate border-t border-stone-200 dark:border-neutral-700 px-1.5 py-1 text-[11px] leading-tight text-gray-600 dark:text-gray-300">
+        {entry.title || <span className="font-mono">{entry.id}</span>}
+      </div>
     </div>
-    <div className="truncate border-t border-stone-200 dark:border-neutral-700 px-1.5 py-1 text-[11px] leading-tight text-gray-600 dark:text-gray-300">
-      {preview?.title || <span className="font-mono">{id}</span>}
-    </div>
-  </div>
-);
+  );
+};
 
-/** A horizontally-scrollable ordering rendered as a row of slide thumbnails. */
+/**
+ * An ordering rendered as a strip of slide thumbnails. Horizontal (a scrollable
+ * row) for the top-level slide order; vertical (a scrollable, height-capped
+ * column) for a stack's child order, so a VERTICAL stack's child sequence is
+ * shown the way it actually lays out. Both directions resolve each thumbnail's
+ * html through the same `filmstripEntries` helper — the top-level and
+ * child-order cards can never diverge in how they read `unit_previews`.
+ */
 const Filmstrip = ({
   ids,
   previews,
   moved,
+  orientation,
 }: {
   ids: string[];
   previews: UnitPreviews;
   moved: Set<string>;
-}) => (
-  <div className="flex gap-2 overflow-x-auto pb-1">
-    {ids.map((id, position) => (
-      <FilmstripSlide
-        key={`${id}-${position}`}
-        id={id}
-        preview={previews[id]}
-        position={position + 1}
-        moved={moved.has(id)}
-      />
-    ))}
-  </div>
-);
+  orientation: FilmstripOrientation;
+}) => {
+  const entries = filmstripEntries(ids, previews, moved);
+  return (
+    <div
+      className={
+        orientation === 'vertical'
+          ? 'flex flex-col gap-1.5 max-h-72 overflow-y-auto pr-1'
+          : 'flex gap-2 overflow-x-auto pb-1'
+      }
+    >
+      {entries.map(entry => (
+        <FilmstripSlide
+          key={`${entry.id}-${entry.position}`}
+          entry={entry}
+          orientation={orientation}
+        />
+      ))}
+    </div>
+  );
+};
 
 const EMPTY_MOVED: Set<string> = new Set();
 
@@ -383,8 +408,12 @@ const ConflictCard = ({
   onChoose: (id: string, choice: MergeChoice) => void;
   unitPreviews?: UnitPreviews | null;
 }) => {
-  const isOrder = unit.id === ORDER_CONFLICT_ID || isChildOrderId(unit.id);
+  const isChildOrder = isChildOrderId(unit.id);
+  const isOrder = unit.id === ORDER_CONFLICT_ID || isChildOrder;
   const isMeta = unit.id === META_CONFLICT_ID;
+  // A stack's children lay out vertically, so its reorder reads as a column;
+  // the top-level slide order stays a horizontal row.
+  const orientation: FilmstripOrientation = isChildOrder ? 'vertical' : 'horizontal';
   const title =
     unit.id === ORDER_CONFLICT_ID
       ? 'Slide order'
@@ -419,7 +448,14 @@ const ConflictCard = ({
     if (isOrder) {
       const ids = Array.isArray(value) ? (value as string[]) : [];
       if (hasPreviews) {
-        return <Filmstrip ids={ids} previews={unitPreviews as UnitPreviews} moved={movedIds} />;
+        return (
+          <Filmstrip
+            ids={ids}
+            previews={unitPreviews as UnitPreviews}
+            moved={movedIds}
+            orientation={orientation}
+          />
+        );
       }
       return <OrderList ids={ids} />;
     }
@@ -440,7 +476,9 @@ const ConflictCard = ({
       </div>
       <div
         className={`mt-2 grid gap-2 ${
-          isOrder && hasPreviews ? 'grid-cols-1' : 'grid-cols-1 sm:grid-cols-2'
+          isOrder && hasPreviews && orientation === 'horizontal'
+            ? 'grid-cols-1'
+            : 'grid-cols-1 sm:grid-cols-2'
         }`}
       >
         {(['ours', 'theirs'] as const).map(side => (

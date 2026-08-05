@@ -88,6 +88,55 @@ export function orderDiffIds(ours: string[], theirs: string[]): Set<string> {
   return moved;
 }
 
+/**
+ * One resolved thumbnail in an order/child-order filmstrip. The SINGLE point
+ * where a referenced slide id is turned into renderable filmstrip data —
+ * consumed identically by BOTH the top-level order card (ids from the
+ * `orderConflict` payload) and the per-stack child-order card (ids from a
+ * `units[]` `__order__:<stackId>` sentinel), so the two card types can never
+ * drift in how they read `unit_previews[id].html`.
+ */
+export interface FilmstripEntry {
+  id: string;
+  /** 1-based position within THIS ordering. */
+  position: number;
+  /** true when the slide sits at a different position in the other ordering. */
+  moved: boolean;
+  /** Preview title (first heading/text); '' when the id has no preview. */
+  title: string;
+  /**
+   * Renderable slide html, resolved from `unit_previews[id].html`. Absent when
+   * the preview carried no html (server capped it at ~50KB) or the id has no
+   * preview at all — the thumbnail falls back to the title/id.
+   */
+  html?: string;
+}
+
+/**
+ * Resolve an ordering (a list of slide ids) into filmstrip thumbnails against
+ * the accept report's `unit_previews` map. This is the one shared resolver the
+ * top-level order card and the child-order card both call — each id's html and
+ * title come straight from `previews[id]`, keyed by the SAME id the ordering
+ * lists. An id missing from `previews` yields a title/html-less entry (the
+ * thumbnail shows the id).
+ */
+export function filmstripEntries(
+  ids: string[],
+  previews: UnitPreviews | null | undefined,
+  moved: Set<string>
+): FilmstripEntry[] {
+  return ids.map((id, i) => {
+    const preview = previews?.[id];
+    return {
+      id,
+      position: i + 1,
+      moved: moved.has(id),
+      title: preview?.title ?? '',
+      ...(preview?.html ? { html: preview.html } : {}),
+    };
+  });
+}
+
 const REASON_LABELS: Record<string, string> = {
   content: 'Edited in both versions',
   delete_vs_edit: 'Deleted in one version, edited in the other',
