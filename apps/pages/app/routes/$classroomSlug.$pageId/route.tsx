@@ -305,10 +305,35 @@ const PageRoute = () => {
     setIsEditingTitle(false);
   }, [page.id, page.title]);
 
-  // Post-accept/discard success notice (round-tripped via redirect param)
+  // Post-accept/discard success notice (round-tripped via redirect param).
+  // Keyed on notice+sha so each accept is handled exactly once — the stripped
+  // URL param leaves `notice` in the loader data until the next revalidation,
+  // and a second accept can arrive with the same notice string but a new sha.
+  const handledNoticeRef = useRef<string | null>(null);
   useEffect(() => {
-    if (!notice) return;
+    if (!notice) {
+      handledNoticeRef.current = null;
+      return;
+    }
+    const noticeKey = `${notice}:${contentSha ?? ''}`;
+    if (handledNoticeRef.current === noticeKey) return;
+    handledNoticeRef.current = noticeKey;
     if (notice === 'preview-accepted') {
+      // The post-accept redirect revalidated the loader, so `content` and
+      // `contentSha` are the freshly merged main document — but the mounted
+      // editor still shows its pre-merge copy. Adopt through the epoch-remount
+      // protocol (baseline recaptured by onReady, same as a merged save).
+      // Skipped when this session has unsaved edits: remounting would discard
+      // them, and the next save's 3-way merge reconciles them against the new
+      // main instead.
+      if (!hasUnsavedChanges) {
+        pendingBaselineShaRef.current = contentSha;
+        savedBaselineRef.current = null;
+        setEditorDoc(content);
+        setEditorEpoch(epoch => epoch + 1);
+        setContentToken(contentSha);
+        setSaveStatus('saved');
+      }
       toast.success(
         noticeAutoMerged
           ? `Preview merged —${noticeAutoMerged} change${noticeAutoMerged === 1 ? '' : 's'} merged automatically; changes are now live.`
@@ -322,7 +347,7 @@ const PageRoute = () => {
     url.searchParams.delete('notice');
     url.searchParams.delete('auto_merged');
     window.history.replaceState({}, '', url);
-  }, [notice, noticeAutoMerged]);
+  }, [notice, noticeAutoMerged, content, contentSha, hasUnsavedChanges]);
 
   // Baseline capture is the editor's onReady (P2), not the raw loader JSON —
   // see handleEditorReady below.
