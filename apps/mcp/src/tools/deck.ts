@@ -29,24 +29,33 @@
  */
 
 import {
-  BUILTIN_THEMES,
   DeckParseError,
-  SlideHtmlError,
   acceptDeckPreview,
   discardDeckPreview,
   ensureDeckPreviewBranch,
   getDeckPreviewStatus,
   loadDeck,
-  mintSlideId,
-  normalizeSlideHtml,
   previewBranchName,
+  resolveDeckPreviewConflicts,
   resolveSharedThemeUrls,
   saveDeck,
   slideService,
   type DeckJson,
   type DeckShaSource,
   type DeckSlide,
+  type MergeResolution,
 } from '@classmoji/services/slides';
+// The op engine is imported via its OWN subpath (not `…/slides`) so test
+// mocks of `@classmoji/services/slides` leave the real engine in place —
+// op semantics in the deck tool tests stay genuine.
+import {
+  DeckOpError,
+  SlideHtmlError,
+  applyDeckOps,
+  deckOpSchema,
+  findSlide,
+  type DeckOp,
+} from '@classmoji/services/slides/ops';
 import type { Prisma } from '@prisma/client';
 import { z } from 'zod';
 import { ToolError } from '../mcp/errors.ts';
@@ -54,6 +63,7 @@ import type { ToolDefinition } from '../mcp/registry.ts';
 import {
   assertSlideEditable,
   loadSlideInClassroom,
+  mapSemanticMergeError,
   ok,
   TEACHING_TEAM,
   writeAudit,
@@ -229,31 +239,6 @@ function countSlides(slides: DeckSlide[]): number {
   return count;
 }
 
-/** Find a slide by id (top level or one stack level down, per Reveal). */
-function findSlide(
-  slides: DeckSlide[],
-  id: string
-): { parent: DeckSlide[]; index: number; slide: DeckSlide } | null {
-  for (let i = 0; i < slides.length; i++) {
-    if (slides[i].id === id) return { parent: slides, index: i, slide: slides[i] };
-    const children = slides[i].children;
-    if (children) {
-      for (let j = 0; j < children.length; j++) {
-        if (children[j].id === id) return { parent: children, index: j, slide: children[j] };
-      }
-    }
-  }
-  return null;
-}
-
-function collectIds(slides: DeckSlide[], out = new Set<string>()): Set<string> {
-  for (const slide of slides) {
-    out.add(slide.id);
-    if (slide.children) collectIds(slide.children, out);
-  }
-  return out;
-}
-
 // ─── deck_outline ────────────────────────────────────────────────────────────
 
 interface DeckOutlineArgs {
@@ -411,384 +396,6 @@ export const deckGetTool: ToolDefinition<DeckGetArgs> = {
 
 // ─── deck_apply ──────────────────────────────────────────────────────────────
 
-const attrsSchema = z.record(z.string());
-
-const positionSchema = z.union([
-  z.object({ after: z.string().min(1) }).strict(),
-  z.object({ at: z.enum(['start', 'end']) }).strict(),
-]);
-
-const newChildSlideSchema = z
-  .object({
-    html: z.string().max(200_000),
-    notes: z.string().max(50_000).optional(),
-    hidden: z.boolean().optional(),
-    attrs: attrsSchema.optional(),
-  })
-  .strict();
-
-const newSlideSchema = z
-  .object({
-    html: z.string().max(200_000).optional(),
-    notes: z.string().max(50_000).optional(),
-    hidden: z.boolean().optional(),
-    attrs: attrsSchema.optional(),
-    children: z
-      .array(newChildSlideSchema)
-      .min(1)
-      .max(20)
-      .optional()
-      .describe(
-        'Create a vertical stack: the slide becomes a container holding these child slides ' +
-          '(one nesting level — children cannot have children). Omit html on the container.'
-      ),
-  })
-  .strict()
-  .refine(s => (s.children?.length ? s.html === undefined : typeof s.html === 'string'), {
-    message:
-      'A new slide needs either html (regular slide) or children (vertical stack container) — ' +
-      'stack containers carry no html of their own',
-  });
-
-const opSchema = z.discriminatedUnion('op', [
-  z.object({
-    op: z.literal('update'),
-    id: z.string().min(1),
-    html: z.string().max(200_000).optional(),
-    notes: z
-      .string()
-      .max(50_000)
-      .nullable()
-      .optional()
-      .describe('Speaker notes HTML; null or empty string removes the notes'),
-    hidden: z.boolean().optional(),
-    attrs: attrsSchema
-      .nullable()
-      .optional()
-      .describe('Full replacement attrs record (null or {} clears all extra attributes)'),
-  }),
-  z.object({
-    op: z.literal('insert'),
-    slides: z.array(newSlideSchema).min(1).max(20),
-    position: positionSchema,
-  }),
-  z.object({
-    op: z.literal('move'),
-    id: z.string().min(1),
-    position: positionSchema,
-  }),
-  z.object({
-    op: z.literal('delete'),
-    id: z.string().min(1),
-  }),
-  z.object({
-    op: z.literal('reorder'),
-    order: z
-      .array(z.string().min(1))
-      .min(1)
-      .describe('The complete new top-level slide order (a permutation of current top-level ids)'),
-  }),
-  z.object({
-    op: z.literal('set_theme'),
-    theme: z.string().max(120).optional(),
-    code_theme: z
-      .string()
-      .max(50)
-      .regex(/^[\w.-]+$/)
-      .optional(),
-  }),
-]);
-
-type DeckOp = z.infer<typeof opSchema>;
-
-/** Typed error for deck op failures (unknown ids, bad positions, bad values). */
-class DeckOpError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = 'DeckOpError';
-  }
-}
-
-function mustFindSlide(slides: DeckSlide[], id: string, opName: string) {
-  const found = findSlide(slides, id);
-  if (!found) {
-    throw new DeckOpError(`Unknown slide id '${id}' in ${opName} op`);
-  }
-  return found;
-}
-
-function insertSlidesAt(
-  deck: DeckJson,
-  newSlides: DeckSlide[],
-  position: { after: string } | { at: 'start' | 'end' },
-  opName: string
-): void {
-  if ('after' in position) {
-    const target = mustFindSlide(deck.slides, position.after, opName);
-    target.parent.splice(target.index + 1, 0, ...newSlides);
-  } else if (position.at === 'start') {
-    deck.slides.unshift(...newSlides);
-  } else {
-    deck.slides.push(...newSlides);
-  }
-}
-
-/** shared:/custom: theme names: single path segment, no separators, no '..'. */
-const THEME_NAME_RE = /^[\w.-]+$/;
-
-/** Validate a set_theme theme value: builtin, 'custom:<file>.css', or 'shared:<name>'. */
-function assertValidTheme(theme: string): void {
-  if (theme.startsWith('shared:') || theme.startsWith('custom:')) {
-    // The suffix lands in repo paths (.slidesthemes/<name>/…) and generated
-    // link hrefs — refuse anything that could traverse ('/', '..').
-    const name = theme.slice(theme.indexOf(':') + 1);
-    if (!THEME_NAME_RE.test(name) || name.includes('..')) {
-      throw new DeckOpError(
-        `Invalid theme name '${theme}' — shared:/custom: names may only contain letters, ` +
-          "digits, '_', '-', and '.' (no path separators, no '..')"
-      );
-    }
-    return;
-  }
-  if ((BUILTIN_THEMES as readonly string[]).includes(theme)) return;
-  throw new DeckOpError(
-    `Unknown theme '${theme}' — use a builtin (${BUILTIN_THEMES.join(', ')}), ` +
-      "'custom:<file>.css', or 'shared:<name>'"
-  );
-}
-
-/**
- * Apply a sequence of deck operations. Pure — returns a new deck, input
- * untouched. Ops are applied sequentially, so later ops see earlier ops'
- * effects. Ids are matched at the top level and one stack level down.
- * EVERY incoming html/notes fragment rounds through normalizeSlideHtml
- * (SlideHtmlError propagates — stray <section> tags are rejected).
- */
-function applyDeckOps(
-  currentDeck: DeckJson,
-  ops: DeckOp[]
-): { deck: DeckJson; applied: Array<Record<string, unknown>> } {
-  const deck = structuredClone(currentDeck) as DeckJson;
-  const applied: Array<Record<string, unknown>> = [];
-
-  for (const op of ops) {
-    switch (op.op) {
-      case 'update': {
-        if (
-          op.html === undefined &&
-          op.notes === undefined &&
-          op.hidden === undefined &&
-          op.attrs === undefined
-        ) {
-          throw new DeckOpError(
-            `update op for '${op.id}' must set at least one of html, notes, hidden, attrs`
-          );
-        }
-        const target = mustFindSlide(deck.slides, op.id, 'update');
-        if (op.html !== undefined && target.slide.children?.length) {
-          throw new DeckOpError(
-            `Slide '${op.id}' is a vertical stack container and has no html — target its children`
-          );
-        }
-        if (op.html !== undefined) {
-          target.slide.html = normalizeSlideHtml(op.html);
-        }
-        if (op.notes !== undefined) {
-          if (op.notes == null || op.notes === '') {
-            delete target.slide.notes;
-          } else {
-            target.slide.notes = normalizeSlideHtml(op.notes);
-          }
-        }
-        if (op.hidden !== undefined) {
-          if (op.hidden) target.slide.hidden = true;
-          else delete target.slide.hidden;
-        }
-        if (op.attrs !== undefined) {
-          if (op.attrs == null || Object.keys(op.attrs).length === 0) {
-            delete target.slide.attrs;
-          } else {
-            target.slide.attrs = { ...op.attrs };
-          }
-        }
-        applied.push({ op: 'update', id: op.id });
-        break;
-      }
-
-      case 'insert': {
-        // Runtime mirrors of the schema rules (defense in depth — the test
-        // harness and any validation-bypassing client hit the handler direct).
-        for (const spec of op.slides) {
-          const hasChildren = Boolean(spec.children?.length);
-          if (hasChildren && spec.html !== undefined) {
-            throw new DeckOpError(
-              'A vertical stack container cannot carry html — put content on its children'
-            );
-          }
-          if (!hasChildren && typeof spec.html !== 'string') {
-            throw new DeckOpError(
-              'A new slide needs html (regular slide) or children (vertical stack container)'
-            );
-          }
-          if (
-            hasChildren &&
-            spec.children!.some(c => (c as { children?: unknown[] }).children?.length)
-          ) {
-            throw new DeckOpError(
-              'Nested stacks are not supported — child slides cannot have children'
-            );
-          }
-        }
-        // A stack container can never land inside another stack (Reveal
-        // supports one nesting level) — mirror the move-op guard BEFORE any
-        // building so the rejection is targeted.
-        if (op.slides.some(s => s.children?.length) && 'after' in op.position) {
-          const target = mustFindSlide(deck.slides, op.position.after, 'insert');
-          if (target.parent !== deck.slides) {
-            throw new DeckOpError(
-              `Cannot insert a vertical stack after '${op.position.after}' — that position is ` +
-                'inside another stack (nested stacks are not supported)'
-            );
-          }
-        }
-        const used = collectIds(deck.slides);
-        const mint = (): string => {
-          let id = mintSlideId();
-          while (used.has(id)) id = mintSlideId(); // re-mint collisions
-          used.add(id);
-          return id;
-        };
-        const buildLeaf = (spec: {
-          html: string;
-          notes?: string;
-          hidden?: boolean;
-          attrs?: Record<string, string>;
-        }): DeckSlide => {
-          const leaf: DeckSlide = { id: mint(), html: normalizeSlideHtml(spec.html) };
-          if (spec.notes != null && spec.notes !== '') {
-            leaf.notes = normalizeSlideHtml(spec.notes);
-          }
-          if (spec.hidden) leaf.hidden = true;
-          if (spec.attrs && Object.keys(spec.attrs).length > 0) leaf.attrs = { ...spec.attrs };
-          return leaf;
-        };
-        const childIdsByContainer: Record<string, string[]> = {};
-        const inserted: DeckSlide[] = op.slides.map(spec => {
-          if (spec.children?.length) {
-            const container: DeckSlide = { id: mint() };
-            container.children = spec.children.map(buildLeaf);
-            if (spec.notes != null && spec.notes !== '') {
-              container.notes = normalizeSlideHtml(spec.notes);
-            }
-            if (spec.hidden) container.hidden = true;
-            if (spec.attrs && Object.keys(spec.attrs).length > 0) {
-              container.attrs = { ...spec.attrs };
-            }
-            childIdsByContainer[container.id] = container.children.map(c => c.id);
-            return container;
-          }
-          // The schema refine guarantees html is present on non-containers.
-          return buildLeaf(spec as { html: string; notes?: string; hidden?: boolean; attrs?: Record<string, string> });
-        });
-        insertSlidesAt(deck, inserted, op.position, 'insert');
-        const entry: Record<string, unknown> = {
-          op: 'insert',
-          count: inserted.length,
-          ids: inserted.map(s => s.id),
-        };
-        if (Object.keys(childIdsByContainer).length > 0) entry.children = childIdsByContainer;
-        applied.push(entry);
-        break;
-      }
-
-      case 'move': {
-        if ('after' in op.position && op.position.after === op.id) {
-          throw new DeckOpError(`Cannot move slide '${op.id}' relative to itself`);
-        }
-        const source = mustFindSlide(deck.slides, op.id, 'move');
-        // Reveal supports one level of nesting: a stack container can never
-        // land inside another container. Checked BEFORE the splice so the
-        // rejection is targeted (not a generic unknown-id error).
-        if (source.slide.children?.length && 'after' in op.position) {
-          const target = mustFindSlide(deck.slides, op.position.after, 'move');
-          if (target.parent !== deck.slides) {
-            throw new DeckOpError(
-              `Cannot move slide '${op.id}' after '${op.position.after}' — '${op.id}' is a ` +
-                'vertical stack container and that position is inside another stack ' +
-                '(nested stacks are not supported)'
-            );
-          }
-        }
-        const [moved] = source.parent.splice(source.index, 1);
-        insertSlidesAt(deck, [moved], op.position, 'move');
-        applied.push({ op: 'move', id: op.id });
-        break;
-      }
-
-      case 'delete': {
-        const target = mustFindSlide(deck.slides, op.id, 'delete');
-        if (target.parent === deck.slides && deck.slides.length === 1) {
-          throw new DeckOpError('A deck must keep at least one slide — cannot delete the last one');
-        }
-        target.parent.splice(target.index, 1);
-        applied.push({ op: 'delete', id: op.id });
-        break;
-      }
-
-      case 'reorder': {
-        const currentIds = deck.slides.map(s => s.id);
-        const sameLength = op.order.length === currentIds.length;
-        const currentSet = new Set(currentIds);
-        const isPermutation =
-          sameLength &&
-          new Set(op.order).size === op.order.length &&
-          op.order.every(id => currentSet.has(id));
-        if (!isPermutation) {
-          throw new DeckOpError(
-            'reorder order must be a permutation of the current top-level slide ids ' +
-              `(current: ${currentIds.join(', ')})`
-          );
-        }
-        const byId = new Map(deck.slides.map(s => [s.id, s]));
-        deck.slides = op.order.flatMap(id => {
-          const found = byId.get(id);
-          return found ? [found] : []; // unreachable — permutation verified above
-        });
-        applied.push({ op: 'reorder', count: op.order.length });
-        break;
-      }
-
-      case 'set_theme': {
-        if (op.theme === undefined && op.code_theme === undefined) {
-          throw new DeckOpError('set_theme op must set theme and/or code_theme');
-        }
-        if (op.theme !== undefined && op.theme !== deck.theme) {
-          assertValidTheme(op.theme);
-          deck.theme = op.theme;
-          // Mirror the editor's merge rules: an explicit theme change clears
-          // the paired dark theme and drops starter-recognized customCss.
-          delete deck.themeDark;
-          if (deck.customCss === slideService.STARTER_CUSTOM_CSS) {
-            delete deck.customCss;
-          }
-        }
-        if (op.code_theme !== undefined && op.code_theme !== deck.codeTheme) {
-          deck.codeTheme = op.code_theme;
-          delete deck.codeThemeDark;
-        }
-        applied.push({
-          op: 'set_theme',
-          ...(op.theme !== undefined ? { theme: op.theme } : {}),
-          ...(op.code_theme !== undefined ? { code_theme: op.code_theme } : {}),
-        });
-        break;
-      }
-    }
-  }
-
-  return { deck, applied };
-}
-
 interface DeckApplyArgs {
   classroom: string;
   slide_id: string;
@@ -828,7 +435,7 @@ export const deckApplyTool: ToolDefinition<DeckApplyArgs> = {
       .optional()
       .describe("Which file the sha came from, as reported by deck_get/outline (default 'deck')"),
     ops: z
-      .array(opSchema)
+      .array(deckOpSchema)
       .min(1)
       .max(25)
       .describe('Slide operations, applied sequentially (later ops see earlier effects)'),
@@ -884,7 +491,9 @@ export const deckApplyTool: ToolDefinition<DeckApplyArgs> = {
     let newDeck: DeckJson;
     let applied: Array<Record<string, unknown>>;
     try {
-      ({ deck: newDeck, applied } = applyDeckOps(loaded.deck, args.ops));
+      ({ deck: newDeck, applied } = applyDeckOps(loaded.deck, args.ops, {
+        starterCustomCss: slideService.STARTER_CUSTOM_CSS,
+      }));
     } catch (error: unknown) {
       if (error instanceof DeckOpError || error instanceof SlideHtmlError) {
         throw new ToolError('invalid_params', error.message);
@@ -920,9 +529,25 @@ export const deckApplyTool: ToolDefinition<DeckApplyArgs> = {
         // The branch was created by THIS apply and the save failed — delete
         // the fresh (empty) branch so it doesn't strand the deck in preview
         // mode with no pending edits. Best-effort.
+        //
+        // BUT re-check first: a concurrent apply (the racer that got the 422
+        // "already exists" from ensureDeckPreviewBranch) may have committed to
+        // the branch between our creation and this failed save. Deleting it
+        // then would silently discard that writer's commits — so skip the
+        // discard when the branch moved past main (same ahead_by guard the
+        // Phase 7 accept paths use).
         if (createdPreviewBranch) {
           try {
-            await discardDeckPreview(slide);
+            const status = await getDeckPreviewStatus(slide);
+            if (status.exists && (status.commits_ahead ?? 0) > 0) {
+              console.warn(
+                `[deck_apply] Preview branch gained ${status.commits_ahead} concurrent ` +
+                  'commit(s) after creation — keeping it instead of discarding after the ' +
+                  'failed save.'
+              );
+            } else {
+              await discardDeckPreview(slide);
+            }
           } catch (cleanupError: unknown) {
             console.warn(
               '[deck_apply] Failed to clean up the freshly created preview branch:',
@@ -971,21 +596,71 @@ interface DeckPreviewArgs {
   slide_id: string;
 }
 
-export const deckPreviewAcceptTool: ToolDefinition<DeckPreviewArgs> = {
+interface DeckPreviewAcceptArgs extends DeckPreviewArgs {
+  resolutions?: MergeResolution[];
+  expected_ours_sha?: string;
+  expected_theirs_sha?: string;
+}
+
+export const deckPreviewAcceptTool: ToolDefinition<DeckPreviewAcceptArgs> = {
   name: 'deck_preview_accept',
   annotations: { destructive: false, openWorld: true },
   title: 'Accept a deck preview',
   description:
-    "Publishes a deck's pending preview: merges the preview branch into main (git auto-merges " +
-    'non-overlapping edits), regenerates the index.html artifact from the merged deck.json, ' +
-    'and deletes the branch. On a genuine same-slide conflict nothing merges — you get a ' +
-    'per-slide report (ours = main, theirs = preview, base); re-read fresh main with deck_get, ' +
-    're-apply the resolved slides, then accept again or discard.',
+    "Publishes a deck's pending preview: merges the preview branch into main, regenerates the " +
+    'index.html artifact from the merged deck.json, and deletes the branch. Non-overlapping ' +
+    'edits merge automatically (git first, then a per-slide semantic 3-way merge — the result ' +
+    'reports semantic: true with the auto_merged count when that layer kicked in). Only genuine ' +
+    'same-unit collisions stop the accept: you get a report of just those units (ours = main, ' +
+    'theirs = preview, base) plus auto_merged. A top-level slide-order conflict is reported ' +
+    "separately as order_conflict — resolve it via the '__order__' id (unlike " +
+    "page_preview_accept, which lists '__order__' inside units). To finish, either call this " +
+    'tool again with ' +
+    'resolutions — one {id, choose: ours|theirs} per reported conflict id (ours = keep the live ' +
+    "main version, theirs = keep the preview's), passing the report's ours_sha/theirs_sha as " +
+    'expected_ours_sha/expected_theirs_sha to pin your choices to the state you reviewed — or ' +
+    're-read fresh main with deck_get, re-apply ' +
+    'merged slides with deck_apply and accept again, or deck_preview_discard.',
   scope: 'write',
   roles: TEACHING_TEAM,
   inputSchema: {
     classroom: z.string().describe("Classroom reference as 'org/slug'"),
     slide_id: z.string().uuid().describe('Slide deck id'),
+    resolutions: z
+      .array(
+        z
+          .object({
+            id: z.string().min(1),
+            choose: z.enum(['ours', 'theirs']),
+          })
+          .strict()
+      )
+      .min(1)
+      .max(100)
+      .optional()
+      .describe(
+        "Per-conflict choices from a prior conflict report: ours = keep main's (live) version, " +
+          "theirs = keep the preview's. Must cover EVERY reported conflict id — slide ids plus " +
+          "the sentinels '__order__' (slide order), '__order__:<stackId>' (a stack's child " +
+          "order), and '__meta__' (theme/config). Omit to attempt a plain accept."
+      ),
+    expected_ours_sha: z
+      .string()
+      .min(1)
+      .optional()
+      .describe(
+        "Pass the ours_sha from the conflict report your resolutions answer. If main's deck " +
+          'changed since that report, the accept fails with CONTENT_CONFLICT instead of ' +
+          'applying reviewed choices to unseen content. Only meaningful with resolutions.'
+      ),
+    expected_theirs_sha: z
+      .string()
+      .min(1)
+      .optional()
+      .describe(
+        'Pass the theirs_sha from the conflict report your resolutions answer (same staleness ' +
+          'pin for the preview side). Only meaningful with resolutions.'
+      ),
   },
   handler: async (args, ctx) => {
     const slide = await loadSlideInClassroom(args.slide_id, ctx);
@@ -996,9 +671,55 @@ export const deckPreviewAcceptTool: ToolDefinition<DeckPreviewArgs> = {
       throw new ToolError('invalid_params', 'No pending preview for this deck — nothing to accept');
     }
 
-    const result = await acceptDeckPreview(slide, {
-      resolveThemeUrls: deck => resolveSharedThemeUrls(slide, deck),
-    });
+    // ── Resolutions path: apply chooser decisions to the conflicted merge ──
+    if (args.resolutions?.length) {
+      let result;
+      try {
+        result = await resolveDeckPreviewConflicts(slide, {
+          resolutions: args.resolutions,
+          resolveThemeUrls: deck => resolveSharedThemeUrls(slide, deck),
+          ...(args.expected_ours_sha ? { expectedOursSha: args.expected_ours_sha } : {}),
+          ...(args.expected_theirs_sha ? { expectedTheirsSha: args.expected_theirs_sha } : {}),
+        });
+      } catch (error: unknown) {
+        throw mapSemanticMergeError(error, 'deck_preview_accept');
+      }
+
+      await writeAudit(ctx, {
+        resource_type: 'SLIDES',
+        resource_id: slide.id,
+        action: 'UPDATE',
+        data: {
+          tool: 'deck_preview_accept',
+          outcome: 'merged',
+          semantic: true,
+          resolutions: args.resolutions.map(({ id, choose }) => ({ id, choose })),
+          auto_merged: result.auto_merged,
+          new_sha: result.sha,
+          html_regenerated: result.html_regenerated,
+          ...(result.preview_kept ? { preview_kept: true, reason: result.reason } : {}),
+        } as unknown as Prisma.InputJsonValue,
+      });
+      return ok({
+        success: true,
+        merged: true,
+        semantic: true,
+        resolved: args.resolutions,
+        auto_merged: result.auto_merged,
+        new_sha: result.sha,
+        html_regenerated: result.html_regenerated,
+        ...(result.preview_kept ? { preview_kept: true, reason: result.reason } : {}),
+      });
+    }
+
+    let result;
+    try {
+      result = await acceptDeckPreview(slide, {
+        resolveThemeUrls: deck => resolveSharedThemeUrls(slide, deck),
+      });
+    } catch (error: unknown) {
+      throw mapSemanticMergeError(error, 'deck_preview_accept');
+    }
 
     if (result.merged) {
       await writeAudit(ctx, {
@@ -1010,6 +731,7 @@ export const deckPreviewAcceptTool: ToolDefinition<DeckPreviewArgs> = {
           outcome: 'merged',
           new_sha: result.sha,
           html_regenerated: result.html_regenerated,
+          ...(result.semantic ? { semantic: true, auto_merged: result.auto_merged } : {}),
           ...(result.preview_kept ? { preview_kept: true, reason: result.reason } : {}),
         } as Prisma.InputJsonValue,
       });
@@ -1018,6 +740,7 @@ export const deckPreviewAcceptTool: ToolDefinition<DeckPreviewArgs> = {
         merged: true,
         new_sha: result.sha,
         html_regenerated: result.html_regenerated,
+        ...(result.semantic ? { semantic: true, auto_merged: result.auto_merged } : {}),
         ...(result.preview_kept
           ? {
               preview_kept: true,
@@ -1039,21 +762,28 @@ export const deckPreviewAcceptTool: ToolDefinition<DeckPreviewArgs> = {
         outcome: 'conflict',
         conflict_unit_ids: result.units.map(unit => unit.id),
         ...(result.order_conflict ? { order_conflict: true } : {}),
+        auto_merged: result.auto_merged,
         ours_sha: result.ours_sha,
         theirs_sha: result.theirs_sha,
       } as Prisma.InputJsonValue,
     });
 
+    const conflictCount = result.units.length + (result.order_conflict ? 1 : 0);
     return ok({
       conflict: true,
       units: result.units,
       ...(result.order_conflict ? { order_conflict: result.order_conflict } : {}),
+      auto_merged: result.auto_merged,
       ours_sha: result.ours_sha,
       theirs_sha: result.theirs_sha,
       message:
-        'The preview conflicts with newer changes on main. Re-read fresh main with deck_get, ' +
-        'merge each conflicted slide (ours = main, theirs = preview), re-apply with deck_apply, ' +
-        'then accept again — or deck_preview_discard to drop the preview.',
+        `${result.auto_merged} change(s) auto-merge cleanly; ${conflictCount} conflict(s) need ` +
+        'a decision. Resolve by calling deck_preview_accept again with resolutions ' +
+        "(one {id, choose: 'ours'|'theirs'} per conflict id — include '__order__' if " +
+        "order_conflict is present; ours = main, theirs = preview), passing this report's " +
+        'ours_sha/theirs_sha as expected_ours_sha/expected_theirs_sha — or re-read fresh main ' +
+        'with deck_get, re-apply merged slides with deck_apply and accept again, or ' +
+        'deck_preview_discard to drop the preview.',
     });
   },
 };

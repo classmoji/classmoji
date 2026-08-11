@@ -9,28 +9,34 @@
  * Accept = GitHub merge (main ← preview) → on a clean merge, regenerate
  * index.html on main FROM THE MERGED deck.json (CAS'd on its sha via
  * uploadBatch verifyBaseTree) → delete the branch. On a git-level conflict,
- * nothing merges, the branch is kept, and a structured per-unit report is
- * built by 3-way-walking deck slides (diffDeckUnits: base = merge-base,
- * ours = main, theirs = preview) so the caller resolves semantically.
+ * the semantic 3-way merge takes over (merge3Units: base = merge-base,
+ * ours = main, theirs = preview): zero true collisions → the auto-merged deck
+ * is committed to main via saveDeck and the branch deleted; genuine
+ * collisions → structured per-unit report (branch kept) that the caller
+ * resolves via resolveDeckPreviewConflicts or by re-applying.
  *
  * Discard = delete the branch; main untouched.
  */
 
 import getPrisma from '@classmoji/database';
 import { ContentService } from '../content/ContentService.ts';
+import { generateDeckHtml, type DeckThemeUrls } from './deckHtml.ts';
 import {
-  generateDeckHtml,
-  diffDeckUnits,
-  type DeckThemeUrls,
-  type DeckUnitConflict,
-} from './deckHtml.ts';
+  indexResolutions,
+  merge3Units,
+  PreviewResolutionError,
+  splitDeckConflicts,
+  type DeckMergeConflict,
+  type MergeResolution,
+} from './deckMerge.ts';
 import {
   DeckConflictError,
   previewBranchName,
   resolveSlideRepoContext,
+  saveDeck,
   type SlideContentTarget,
 } from './slideContent.service.ts';
-import type { DeckJson } from './deckTypes.ts';
+import type { DeckJson, DeckSlide } from './deckTypes.ts';
 
 const THEMES_FOLDER = '.slidesthemes';
 
@@ -133,6 +139,10 @@ export type AcceptDeckPreviewResult =
       sha: string | null;
       /** false when regeneration was skipped (concurrent writer already regenerated, or merged deck unreadable). */
       html_regenerated: boolean;
+      /** Present when the git merge conflicted but the semantic 3-way auto-merge committed the result. */
+      semantic?: true;
+      /** Changes auto-merged by the semantic layer (present iff semantic). */
+      auto_merged?: number;
       /** true when a concurrent stacking apply landed after the merge snapshot — the branch was kept, not deleted. */
       preview_kept?: boolean;
       /** Why the preview branch was retained (present iff preview_kept). */
@@ -141,13 +151,62 @@ export type AcceptDeckPreviewResult =
   | {
       merged: false;
       conflict: true;
-      /** Slides changed on BOTH sides with differing results (deck-unit 3-way walk). */
-      units: DeckUnitConflict[];
-      /** Present when both sides reordered the root slide sequence differently. */
+      /**
+       * ONLY the true collisions (everything else auto-merges on accept):
+       * per-slide conflicts, per-stack child-order conflicts
+       * (`__order__:<stackId>`), and the `__meta__` sentinel.
+       */
+      units: DeckMergeConflict[];
+      /** Present when both sides reordered the root slide sequence differently (conflict id `__order__`). */
       order_conflict?: { base: string[]; ours: string[]; theirs: string[] };
+      /**
+       * Lightweight render of every slide referenced by an order / child-order
+       * (and placement) conflict, keyed by slide id — lets the chooser draw the
+       * two orderings as visual filmstrips instead of raw id lists. In a pure
+       * ordering conflict a slide's CONTENT is identical on both sides, so it is
+       * rendered ONCE here and shown in both orderings. Absent when no ordering
+       * conflict is present. See DeckUnitPreview for the per-slide shape.
+       */
+      unit_previews?: Record<string, DeckUnitPreview>;
+      /** Changes the semantic layer can merge without a decision. */
+      auto_merged: number;
       ours_sha: string | null;
       theirs_sha: string | null;
     };
+
+/**
+ * A slide as the order-conflict filmstrip renders it (built from the ours deck,
+ * falling back to theirs for ids only present there).
+ */
+export interface DeckUnitPreview {
+  /** Dotted position in the source deck ('4' or '4.2'). */
+  index: string;
+  /** First heading / text, ≤60 chars (empty when the slide carries no text). */
+  title: string;
+  /**
+   * Renderable slide html (stack containers: children joined like the chooser's
+   * SlideFrame). OMITTED for slides whose html exceeds ~50KB — the card falls
+   * back to the index + title so the payload never balloons.
+   */
+  html?: string;
+}
+
+/** Slides whose rendered html exceeds this drop `html` (title-only fallback). */
+const UNIT_PREVIEW_HTML_CAP = 50 * 1024;
+
+/** Result of resolveDeckPreviewConflicts: the resolved merge committed to main. */
+export interface ResolveDeckPreviewResult {
+  merged: true;
+  semantic: true;
+  /** The new deck.json blob sha on main — the fresh expected_sha. */
+  sha: string | null;
+  html_regenerated: true;
+  auto_merged: number;
+  /** The applied choices, echoed for auditing. */
+  resolved: MergeResolution[];
+  preview_kept?: boolean;
+  reason?: string;
+}
 
 /** Parse a deck.json body into a DeckJson; malformed/missing → empty deck (diff-only use). */
 function parseDeckForDiff(content: string | null | undefined): DeckJson {
@@ -160,6 +219,22 @@ function parseDeckForDiff(content: string | null | undefined): DeckJson {
     // Malformed JSON — treat as empty for diff purposes
   }
   return empty;
+}
+
+/**
+ * STRICT parse for the merge BASE: null when the deck.json is missing or
+ * unparseable. Unlike parseDeckForDiff, the base is NEVER degraded to an empty
+ * deck — see baseDeckUnavailable for why.
+ */
+function parseBaseDeckStrict(content: string | null | undefined): DeckJson | null {
+  if (!content) return null;
+  try {
+    const parsed = JSON.parse(content) as DeckJson;
+    if (parsed?.version === 1 && Array.isArray(parsed.slides)) return parsed;
+  } catch {
+    // Malformed — reported as unavailable by the caller.
+  }
+  return null;
 }
 
 /**
@@ -178,10 +253,11 @@ function parseDeckForDiff(content: string | null | undefined): DeckJson {
  * a conflict instead of clobbering, and since that concurrent save already
  * regenerated the artifact itself, the accept simply skips regeneration.
  *
- * On a git-level conflict, nothing is merged and nothing is deleted; instead
- * a structured per-unit report is built with diffDeckUnits (base = merge-base
- * deck, ours = main, theirs = preview) so the caller can resolve semantically
- * and re-apply.
+ * On a git-level conflict, the semantic 3-way merge (merge3Units) takes over:
+ * zero true collisions → the auto-merged deck is committed to main and the
+ * branch deleted (result carries `semantic: true`); genuine collisions →
+ * structured per-unit report (branch kept) with ONLY the units needing a
+ * decision plus the auto_merged count.
  */
 export async function acceptDeckPreview(
   slide: SlideContentTarget,
@@ -206,41 +282,12 @@ export async function acceptDeckPreview(
   });
 
   if (!result.merged) {
-    // Conflict: build the per-unit report. The branch is left alone so the
-    // caller can inspect, re-apply on fresh main, or discard explicitly.
-    const comparison = await ContentService.compareBranches({
-      gitOrganization,
-      repo,
-      base: 'main',
-      head: branch,
-    });
-    const [ours, theirs, base] = await Promise.all([
-      ContentService.getContent({ gitOrganization, repo, path: deckPath, skipCache: true }),
-      ContentService.getContent({ gitOrganization, repo, path: deckPath, ref: branch }),
-      comparison?.merge_base_sha
-        ? ContentService.getContent({
-            gitOrganization,
-            repo,
-            path: deckPath,
-            ref: comparison.merge_base_sha,
-          })
-        : Promise.resolve(null),
-    ]);
-
-    const diff = diffDeckUnits(
-      parseDeckForDiff(base?.content),
-      parseDeckForDiff(ours?.content),
-      parseDeckForDiff(theirs?.content)
-    );
-
-    return {
-      merged: false,
-      conflict: true,
-      units: diff.units,
-      ...(diff.orderConflict ? { order_conflict: diff.orderConflict } : {}),
-      ours_sha: ours?.sha ?? null,
-      theirs_sha: theirs?.sha ?? null,
-    };
+    // Git-level conflict: run the semantic 3-way merge (Phase 7). Zero true
+    // collisions → the auto-merged deck is committed to main (saveDeck: CAS'd
+    // on main's pre-write deck.json sha, artifact regenerated in the same
+    // atomic batch) and the branch is deleted; genuine collisions →
+    // structured report with only the units that need a decision, branch kept.
+    return acceptDeckSemanticFallback(slide, resolveThemeUrls);
   }
 
   // Clean merge: regenerate the artifact on main from the merged deck.json.
@@ -390,6 +437,441 @@ export async function acceptDeckPreview(
     html_regenerated: htmlRegenerated,
     ...(previewKept ? { preview_kept: true, reason: keptReason } : {}),
   };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Semantic merge on accept (Phase 7)
+// ─────────────────────────────────────────────────────────────────────────────
+
+type ThemeUrlResolver = (deck: DeckJson) => Promise<DeckThemeUrls | undefined>;
+type ContentRead = Awaited<ReturnType<typeof ContentService.getContent>>;
+
+interface DeckThreeWay {
+  comparison: Awaited<ReturnType<typeof ContentService.compareBranches>>;
+  ours: ContentRead;
+  theirs: ContentRead;
+  base: ContentRead;
+}
+
+/** Read the 3-way (ours = fresh main, theirs = the preview branch, base = merge-base). */
+async function readDeckThreeWay(slide: SlideContentTarget): Promise<DeckThreeWay> {
+  const { gitOrganization, repo } = resolveSlideRepoContext(slide);
+  const branch = previewBranchName(slide.content_path);
+  const deckPath = `${slide.content_path}/deck.json`;
+
+  const comparison = await ContentService.compareBranches({
+    gitOrganization,
+    repo,
+    base: 'main',
+    head: branch,
+  });
+  const [ours, theirs, base] = await Promise.all([
+    ContentService.getContent({ gitOrganization, repo, path: deckPath, skipCache: true }),
+    ContentService.getContent({ gitOrganization, repo, path: deckPath, ref: branch }),
+    comparison?.merge_base_sha
+      ? ContentService.getContent({
+          gitOrganization,
+          repo,
+          path: deckPath,
+          ref: comparison.merge_base_sha,
+        })
+      : Promise.resolve(null),
+  ]);
+  return { comparison, ours, theirs, base };
+}
+
+/**
+ * Commit a semantically merged deck to main via saveDeck (ONE atomic commit:
+ * deck.json + regenerated index.html, CAS'd on main's pre-write deck.json sha
+ * through both the pre-check and the verifyBaseTree hook), then delete the
+ * preview branch — unless the branch's deck.json moved past the `theirs` we
+ * merged (a concurrent stacking apply), in which case it is kept. Note:
+ * `compareBranches.ahead_by` cannot make that call here — the semantic commit
+ * is a NEW commit on main, so the branch's commits are never git-ancestors;
+ * the branch's blob sha vs the merged theirs sha is the reliable signal.
+ */
+async function commitSemanticDeckMerge(
+  slide: SlideContentTarget,
+  deck: DeckJson,
+  {
+    oursSha,
+    theirsSha,
+    resolveThemeUrls,
+  }: { oursSha: string; theirsSha: string | null; resolveThemeUrls?: ThemeUrlResolver }
+): Promise<{ sha: string; preview_kept?: boolean; reason?: string }> {
+  const { gitOrganization, repo } = resolveSlideRepoContext(slide);
+  const branch = previewBranchName(slide.content_path);
+  const deckPath = `${slide.content_path}/deck.json`;
+
+  const themeUrls = await resolveThemeUrls?.(deck);
+  const saved = await saveDeck({
+    slide,
+    deck,
+    expectedSha: oursSha,
+    shaSource: 'deck',
+    message: `Accept slides preview (auto-merged): ${slide.title}`,
+    ...(themeUrls ? { themeUrls } : {}),
+  });
+
+  // TOCTOU note: this guard is a compare-THEN-delete — a stacking apply can
+  // still land on the branch between the getMeta read and the deleteBranch
+  // call below, and would be discarded with the branch. Accepted: GitHub's
+  // refs DELETE has no precondition (no CAS delete), so the window cannot be
+  // closed API-side; the guard shrinks it from the whole merge duration to
+  // one request round-trip, and an apply racing an in-flight accept has no
+  // ordering guarantee either way.
+  let previewKept = false;
+  let reason: string | undefined;
+  try {
+    const branchMeta = await ContentService.getMeta({
+      gitOrganization,
+      repo,
+      path: deckPath,
+      ref: branch,
+      skipCache: true,
+    });
+    if (branchMeta && theirsSha && branchMeta.sha !== theirsSha) {
+      previewKept = true;
+      reason = 'Preview branch gained new edits during accept — retained with the newer changes';
+    } else {
+      try {
+        await ContentService.deleteBranch({ gitOrganization, repo, branch });
+      } catch (error: unknown) {
+        const status = (error as { status?: number }).status;
+        if (status !== 404 && status !== 422) throw error; // already gone is fine
+      }
+    }
+  } catch (error: unknown) {
+    previewKept = true;
+    reason = 'Could not verify the preview branch was unchanged — retained for safety';
+    console.warn(
+      `[deckPreview] Post-merge branch check failed for ${repo}/${branch}:`,
+      error instanceof Error ? error.message : String(error)
+    );
+  }
+
+  return { sha: saved.sha, ...(previewKept ? { preview_kept: true, reason } : {}) };
+}
+
+/**
+ * Typed refusal for the main-file-deleted degenerate: without main's
+ * deck.json there is no sha to CAS the commit on, so committing would be an
+ * unguarded write over whatever deleted it.
+ */
+function mainDeckMissing(): PreviewResolutionError {
+  return new PreviewResolutionError(
+    "Main's deck.json was deleted while this preview was pending — discard the preview " +
+      'or re-apply it as a fresh deck',
+    'MAIN_CONTENT_MISSING'
+  );
+}
+
+/**
+ * Typed refusal for a missing/unparseable merge BASE. Preview branches always
+ * fork from main, so a git-conflicting accept has a real merge base with a
+ * real deck.json — if that read is empty or malformed, degrading it to an
+ * empty deck would treat every slide as "added on both sides": the preview's
+ * deletions get resurrected and legacy add/add decks (both sides materialized
+ * deck.json after the fork point) duplicate wholesale. There is no trustworthy
+ * 3-way, so refuse rather than commit — mirroring the 7.5 editor-save
+ * readBaseDeck refusal. Uses the shared MERGE_BASE_MISSING code (aligned with
+ * the pages twin, which raises the same code for the identical add/add
+ * merge-base degenerate).
+ */
+function baseDeckUnavailable(): PreviewResolutionError {
+  return new PreviewResolutionError(
+    'The merge base is unavailable (deck.json was missing or unreadable at the fork point) — ' +
+      're-apply your changes onto the current deck or discard the preview',
+    'MERGE_BASE_MISSING'
+  );
+}
+
+/** Renderable html for one slide side: its own html, or a stack's children
+ * joined with the same dashed separator the chooser's SlideFrame uses. */
+function deckPreviewHtml(slide: DeckSlide): string {
+  if (typeof slide.html === 'string' && slide.html.trim()) return slide.html;
+  if (Array.isArray(slide.children) && slide.children.length > 0) {
+    return slide.children
+      .map(child => (typeof child?.html === 'string' ? child.html : ''))
+      .filter(Boolean)
+      .join('\n<hr style="border:none;border-top:1px dashed #bbb;margin:12px 0">\n');
+  }
+  return '';
+}
+
+/** First heading (else first text), tags stripped, ≤60 chars. */
+function deckPreviewTitle(html: string): string {
+  if (!html) return '';
+  const heading = html.match(/<h[1-6][^>]*>([\s\S]*?)<\/h[1-6]>/i)?.[1] ?? html;
+  const text = heading
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return text.length > 60 ? `${text.slice(0, 59)}…` : text;
+}
+
+/** Index a deck's slides AND their stack children by id → { slide, dotted index }. */
+function indexDeckUnits(...decks: DeckJson[]): Map<string, { slide: DeckSlide; index: string }> {
+  const map = new Map<string, { slide: DeckSlide; index: string }>();
+  for (const deck of decks) {
+    deck.slides.forEach((slide, i) => {
+      if (slide?.id && !map.has(slide.id)) map.set(slide.id, { slide, index: String(i + 1) });
+      slide?.children?.forEach((child, j) => {
+        if (child?.id && !map.has(child.id))
+          map.set(child.id, { slide: child, index: `${i + 1}.${j + 1}` });
+      });
+    });
+  }
+  return map;
+}
+
+/**
+ * Build the `unit_previews` map for an order/child-order/placement conflict
+ * report: every slide id those conflicts reference, rendered ONCE from the ours
+ * deck (falling back to theirs for ids only present there). Returns undefined
+ * when no ordering/placement conflict is present so the field stays absent.
+ */
+function buildDeckUnitPreviews(
+  conflicts: DeckMergeConflict[],
+  oursDeck: DeckJson,
+  theirsDeck: DeckJson
+): Record<string, DeckUnitPreview> | undefined {
+  const ids = new Set<string>();
+  for (const conflict of conflicts) {
+    if (conflict.reason === 'order' || conflict.reason === 'child_order') {
+      for (const list of [conflict.ours, conflict.theirs, conflict.base]) {
+        if (Array.isArray(list)) for (const id of list) if (typeof id === 'string') ids.add(id);
+      }
+    } else if (conflict.reason === 'placement') {
+      ids.add(conflict.id);
+    }
+  }
+  if (ids.size === 0) return undefined;
+
+  const index = indexDeckUnits(oursDeck, theirsDeck);
+  const previews: Record<string, DeckUnitPreview> = {};
+  for (const id of ids) {
+    const entry = index.get(id);
+    if (!entry) continue;
+    const html = deckPreviewHtml(entry.slide);
+    const preview: DeckUnitPreview = { index: entry.index, title: deckPreviewTitle(html) };
+    if (html && html.length <= UNIT_PREVIEW_HTML_CAP) preview.html = html;
+    previews[id] = preview;
+  }
+  return Object.keys(previews).length > 0 ? previews : undefined;
+}
+
+/** The accept path taken when the git merge reports a conflict. */
+async function acceptDeckSemanticFallback(
+  slide: SlideContentTarget,
+  resolveThemeUrls?: ThemeUrlResolver
+): Promise<AcceptDeckPreviewResult> {
+  const threeWay = await readDeckThreeWay(slide);
+  const { theirs, base } = threeWay;
+  let ours = threeWay.ours;
+  // A trustworthy 3-way needs a real merge base — never degrade a missing or
+  // unparseable base to an empty deck and commit (S3).
+  const baseDeck = parseBaseDeckStrict(base?.content);
+  if (!baseDeck) throw baseDeckUnavailable();
+  const theirsDeck = parseDeckForDiff(theirs?.content);
+
+  const report = (merge: ReturnType<typeof merge3Units>): AcceptDeckPreviewResult => {
+    const { units, orderConflict } = splitDeckConflicts(merge.conflicts);
+    const unitPreviews = buildDeckUnitPreviews(
+      merge.conflicts,
+      parseDeckForDiff(ours?.content),
+      theirsDeck
+    );
+    return {
+      merged: false,
+      conflict: true,
+      units,
+      ...(orderConflict ? { order_conflict: orderConflict } : {}),
+      ...(unitPreviews ? { unit_previews: unitPreviews } : {}),
+      auto_merged: merge.autoMerged,
+      ours_sha: ours?.sha ?? null,
+      theirs_sha: theirs?.sha ?? null,
+    };
+  };
+
+  for (let attempt = 0; attempt < 2; attempt++) {
+    // Main's deck.json vanished (deleted while the preview was pending):
+    // never commit without a CAS precondition, and never return an empty
+    // conflict report the caller cannot act on — refuse with a typed error.
+    if (!ours?.sha) throw mainDeckMissing();
+
+    const merge = merge3Units(baseDeck, parseDeckForDiff(ours.content), theirsDeck);
+    if (merge.conflicts.length > 0) {
+      return report(merge);
+    }
+    try {
+      const committed = await commitSemanticDeckMerge(slide, merge.merged, {
+        oursSha: ours.sha,
+        theirsSha: theirs?.sha ?? null,
+        resolveThemeUrls,
+      });
+      return {
+        merged: true,
+        semantic: true,
+        html_regenerated: true,
+        auto_merged: merge.autoMerged,
+        ...committed,
+      };
+    } catch (error: unknown) {
+      if (!(error instanceof DeckConflictError) || attempt === 1) throw error;
+      // Main moved while we were auto-merging — one retry against fresh main.
+      const { gitOrganization, repo } = resolveSlideRepoContext(slide);
+      ours = await ContentService.getContent({
+        gitOrganization,
+        repo,
+        path: `${slide.content_path}/deck.json`,
+        skipCache: true,
+      });
+    }
+  }
+  /* c8 ignore next */
+  throw new Error('unreachable');
+}
+
+/**
+ * Apply chooser decisions to a conflicted deck accept: re-runs the 3-way
+ * merge, requires the resolutions to exactly cover the current conflict set
+ * (`ours` = keep main's version, `theirs` = keep the preview's; sentinels:
+ * `__order__` for the top-level order, `__order__:<stackId>` for a stack's
+ * child order, `__meta__` for deck-level theme/config collisions), commits
+ * the resolved merge to main exactly like a semantic accept (saveDeck: CAS +
+ * artifact regeneration), and deletes the branch.
+ *
+ * @param options.expectedOursSha - pin the resolution to the conflict report
+ *   the choices were made against (the report's `ours_sha`). When provided
+ *   and main's deck.json no longer matches, the resolve fails with
+ *   CONTENT_CONFLICT instead of applying reviewed choices to unseen content.
+ * @param options.expectedTheirsSha - same pin for the preview side
+ *   (the report's `theirs_sha`).
+ *
+ * @throws {PreviewResolutionError} NO_PREVIEW / NOTHING_TO_RESOLVE /
+ *   UNRESOLVED_CONFLICTS / UNKNOWN_RESOLUTIONS / DUPLICATE_RESOLUTIONS /
+ *   INVALID_RESOLUTIONS / CONTENT_CONFLICT / MAIN_CONTENT_MISSING /
+ *   MERGE_BASE_MISSING.
+ */
+export async function resolveDeckPreviewConflicts(
+  slide: SlideContentTarget,
+  {
+    resolutions,
+    resolveThemeUrls,
+    expectedOursSha,
+    expectedTheirsSha,
+  }: {
+    resolutions: MergeResolution[];
+    resolveThemeUrls?: ThemeUrlResolver;
+    expectedOursSha?: string;
+    expectedTheirsSha?: string;
+  }
+): Promise<ResolveDeckPreviewResult> {
+  if (!resolutions?.length) {
+    throw new PreviewResolutionError(
+      'No resolutions supplied — pass one {id, choose} per conflict',
+      'UNRESOLVED_CONFLICTS'
+    );
+  }
+  const chosen = indexResolutions(resolutions);
+
+  const threeWay = await readDeckThreeWay(slide);
+  if (!threeWay.comparison) {
+    throw new PreviewResolutionError(
+      'No pending preview for this deck — nothing to resolve',
+      'NO_PREVIEW'
+    );
+  }
+  const { theirs, base } = threeWay;
+  let ours = threeWay.ours;
+  // Same base-availability guard as the accept path (S3): no trustworthy 3-way
+  // without a real merge base — refuse instead of resolving against an empty one.
+  const baseDeck = parseBaseDeckStrict(base?.content);
+  if (!baseDeck) throw baseDeckUnavailable();
+  const theirsDeck = parseDeckForDiff(theirs?.content);
+
+  if (expectedTheirsSha && (theirs?.sha ?? null) !== expectedTheirsSha) {
+    throw new PreviewResolutionError(
+      'The preview changed since the conflict report these choices were made against — ' +
+        're-run accept for a fresh report',
+      'CONTENT_CONFLICT'
+    );
+  }
+
+  for (let attempt = 0; attempt < 2; attempt++) {
+    // Re-checked every attempt: a CAS-loss retry re-reads main, and choices
+    // pinned to the reviewed report must not silently apply to newer content.
+    if (expectedOursSha && (ours?.sha ?? null) !== expectedOursSha) {
+      throw new PreviewResolutionError(
+        'The live deck changed since the conflict report these choices were made against — ' +
+          're-run accept for a fresh report',
+        'CONTENT_CONFLICT'
+      );
+    }
+    if (!ours?.sha) throw mainDeckMissing();
+
+    const oursDeck = parseDeckForDiff(ours.content);
+    const current = merge3Units(baseDeck, oursDeck, theirsDeck);
+    const conflictIds = new Set(current.conflicts.map(conflict => conflict.id));
+    if (conflictIds.size === 0) {
+      throw new PreviewResolutionError(
+        'Nothing to resolve — the preview now merges cleanly; accept it without resolutions',
+        'NOTHING_TO_RESOLVE'
+      );
+    }
+    const missing = [...conflictIds].filter(id => !(id in chosen));
+    if (missing.length > 0) {
+      throw new PreviewResolutionError(
+        `Every conflict needs a choice — missing: ${missing.join(', ')}`,
+        'UNRESOLVED_CONFLICTS',
+        missing
+      );
+    }
+    const unknown = Object.keys(chosen).filter(id => !conflictIds.has(id));
+    if (unknown.length > 0) {
+      throw new PreviewResolutionError(
+        `Not current conflict ids: ${unknown.join(', ')} — re-run accept for the current report`,
+        'UNKNOWN_RESOLUTIONS',
+        unknown
+      );
+    }
+
+    const resolved = merge3Units(baseDeck, oursDeck, theirsDeck, { resolutions: chosen });
+    if (resolved.conflicts.length > 0) {
+      throw new Error(
+        `Resolution pass left conflicts standing (${resolved.conflicts.map(c => c.id).join(', ')}) — this is a bug`
+      );
+    }
+
+    try {
+      const committed = await commitSemanticDeckMerge(slide, resolved.merged, {
+        oursSha: ours.sha,
+        theirsSha: theirs?.sha ?? null,
+        resolveThemeUrls,
+      });
+      return {
+        merged: true,
+        semantic: true,
+        html_regenerated: true,
+        auto_merged: resolved.autoMerged,
+        resolved: resolutions,
+        ...committed,
+      };
+    } catch (error: unknown) {
+      if (!(error instanceof DeckConflictError) || attempt === 1) throw error;
+      // Main moved under us — re-read, re-validate the conflict set, retry once.
+      const { gitOrganization, repo } = resolveSlideRepoContext(slide);
+      ours = await ContentService.getContent({
+        gitOrganization,
+        repo,
+        path: `${slide.content_path}/deck.json`,
+        skipCache: true,
+      });
+    }
+  }
+  /* c8 ignore next */
+  throw new Error('unreachable');
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

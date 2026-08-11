@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo, useImperativeHandle, forwardRef } from 'react';
+import React, { useCallback, useEffect, useMemo, useImperativeHandle, forwardRef } from 'react';
 import {
   useCreateBlockNote,
   SuggestionMenuController,
@@ -54,10 +54,18 @@ interface PageEditorProps {
   pageId: string;
   darkMode: boolean;
   onChange?: (document: unknown) => void;
+  /**
+   * Fired once after mount with the editor's NORMALIZED document
+   * (`editor.document`). The parent uses this as its diff-at-save baseline so
+   * both diff sides share BlockNote's normalization (no phantom updates).
+   */
+  onReady?: (document: unknown) => void;
+  /** When false, the editor is read-only (e.g. while a save-merge chooser is open). */
+  editable?: boolean;
 }
 
 const PageEditor = forwardRef(function PageEditor(
-  { initialContent, pageId, darkMode, onChange }: PageEditorProps,
+  { initialContent, pageId, darkMode, onChange, onReady, editable = true }: PageEditorProps,
   ref: React.Ref<{ getContent: () => unknown }>
 ) {
   // Upload handler: POSTs to the page's upload action
@@ -107,6 +115,15 @@ const PageEditor = forwardRef(function PageEditor(
     }),
     [editor]
   );
+
+  // Baseline capture (P2): hand the parent this editor's normalized document
+  // once, right after mount. Runs again for a remounted instance (the parent
+  // remounts via `key` on merged adoption), so the baseline tracks the
+  // adopted document. `editor` is stable; onReady reads refs only.
+  useEffect(() => {
+    onReady?.(editor.document);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- fire once per editor instance
+  }, [editor]);
 
   // Slash menu: default + multi-column + custom blocks
   const getAllSlashMenuItems = useMemo(() => {
@@ -261,6 +278,7 @@ const PageEditor = forwardRef(function PageEditor(
       `}</style>
       <BlockNoteView
         editor={editor}
+        editable={editable}
         theme={darkMode ? 'dark' : 'light'}
         slashMenu={false}
         formattingToolbar={false}

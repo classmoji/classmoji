@@ -22,12 +22,19 @@ export class ToolError extends Error {
   kind: ToolErrorKind;
   /** Optional machine-readable code (e.g. CLASSROOM_LOCKED) mirroring the webapp's typed 403s. */
   code?: string;
+  /**
+   * Optional structured payload merged into the serialized error JSON
+   * (e.g. `{ ids: [...] }` from a PreviewResolutionError), so MCP clients get
+   * the same machine-readable details the web actions return.
+   */
+  data?: Record<string, unknown>;
 
-  constructor(kind: ToolErrorKind, message: string, code?: string) {
+  constructor(kind: ToolErrorKind, message: string, code?: string, data?: Record<string, unknown>) {
     super(message);
     this.name = 'ToolError';
     this.kind = kind;
     this.code = code;
+    this.data = data;
   }
 }
 

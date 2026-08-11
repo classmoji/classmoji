@@ -220,12 +220,14 @@ describe('put with branch', () => {
     });
     expect(result).toEqual({ sha: 'sha-new', commit: 'commit-new' });
 
-    // Both internal getMeta lookups must have read the BRANCH (ref set), not main
+    // ONE internal getMeta pre-check, reading the BRANCH (ref set), not main.
+    // No second read: the expectedSha write sends the caller's sha directly
+    // (true CAS — a second read would adopt a concurrent writer's sha).
     const afterPut = contentsGetCalls();
-    expect(afterPut.withRef).toBe(2);
+    expect(afterPut.withRef).toBe(1);
     expect(afterPut.withoutRef).toBe(1);
 
-    // The PUT itself must carry the branch
+    // The PUT itself must carry the branch and the CALLER'S expected sha
     const putCall = requestMock.mock.calls.find(
       ([route]) => route === 'PUT /repos/{owner}/{repo}/contents/{path}'
     );
@@ -265,6 +267,96 @@ describe('put with branch', () => {
     expect(after?.content).toBe('main-v2');
   });
 
+  it('expectedSha put is a true CAS: uncached pre-check, PUT carries the CALLER sha, no second read', async () => {
+    const repo = 'repo-put-cas';
+    const path = 'pages/cas/content.json';
+
+    requestMock.mockImplementation(async (route: string) => {
+      if (route === 'GET /repos/{owner}/{repo}/contents/{path}') {
+        const body = 'main-v1';
+        return {
+          data: { content: Buffer.from(body).toString('base64'), sha: 'sha-live', size: 1 },
+        };
+      }
+      if (route === 'PUT /repos/{owner}/{repo}/contents/{path}') {
+        return { data: { content: { sha: 'sha-new' }, commit: { sha: 'commit-new' } } };
+      }
+      throw new Error(`Unexpected route: ${route}`);
+    });
+
+    // Seed the 60s cache — the pre-check must NOT be satisfied by it.
+    await ContentService.getContent({ gitOrganization, repo, path });
+    expect(contentsGetCalls().total).toBe(1);
+
+    await ContentService.put({
+      gitOrganization,
+      repo,
+      path,
+      content: 'updated',
+      expectedSha: 'sha-live',
+    });
+
+    // Exactly ONE more Contents GET: the uncached pre-check. No second
+    // "current sha" read — that read is what made the old flow check-then-act
+    // (it would adopt a concurrent writer's sha).
+    expect(contentsGetCalls().total).toBe(2);
+
+    // The PUT sends the CALLER'S expectedSha so GitHub enforces it atomically.
+    const putCall = requestMock.mock.calls.find(
+      ([route]) => route === 'PUT /repos/{owner}/{repo}/contents/{path}'
+    );
+    expect((putCall?.[1] as RequestParams).sha).toBe('sha-live');
+  });
+
+  it("a 409 from GitHub's sha precondition (lost race after the pre-check) maps to the same conflict", async () => {
+    const repo = 'repo-put-cas-race';
+    const path = 'pages/race/content.json';
+
+    requestMock.mockImplementation(async (route: string) => {
+      if (route === 'GET /repos/{owner}/{repo}/contents/{path}') {
+        // Pre-check still sees the expected sha…
+        return { data: { content: Buffer.from('x').toString('base64'), sha: 'sha-live', size: 1 } };
+      }
+      if (route === 'PUT /repos/{owner}/{repo}/contents/{path}') {
+        // …but a concurrent writer landed between the check and the PUT.
+        throw Object.assign(new Error('is at abc but expected sha-live'), { status: 409 });
+      }
+      throw new Error(`Unexpected route: ${route}`);
+    });
+
+    await expect(
+      ContentService.put({
+        gitOrganization,
+        repo,
+        path,
+        content: 'updated',
+        expectedSha: 'sha-live',
+      })
+    ).rejects.toMatchObject({ status: 409, message: 'File was modified by someone else' });
+  });
+
+  it('a put WITHOUT expectedSha keeps the auto-sha update path (fresh read, its sha on the PUT)', async () => {
+    const repo = 'repo-put-nosha';
+    const path = 'pages/nosha/content.json';
+
+    requestMock.mockImplementation(async (route: string) => {
+      if (route === 'GET /repos/{owner}/{repo}/contents/{path}') {
+        return { data: { content: Buffer.from('x').toString('base64'), sha: 'sha-auto', size: 1 } };
+      }
+      if (route === 'PUT /repos/{owner}/{repo}/contents/{path}') {
+        return { data: { content: { sha: 'sha-new' }, commit: { sha: 'commit-new' } } };
+      }
+      throw new Error(`Unexpected route: ${route}`);
+    });
+
+    await ContentService.put({ gitOrganization, repo, path, content: 'updated' });
+
+    const putCall = requestMock.mock.calls.find(
+      ([route]) => route === 'PUT /repos/{owner}/{repo}/contents/{path}'
+    );
+    expect((putCall?.[1] as RequestParams).sha).toBe('sha-auto');
+  });
+
   it('expectedSha + missing file → 409 (deleted since read), never a silent create', async () => {
     const repo = 'repo-put-deleted';
     const path = 'pages/gone/content.json';
@@ -289,6 +381,115 @@ describe('put with branch', () => {
 
     // Nothing was written
     expect(requestMock.mock.calls.some(([route]) => String(route).startsWith('PUT '))).toBe(false);
+  });
+});
+
+describe('put expectedSha: concurrent-delete race + 422 mismatch (plan §P6)', () => {
+  it('a sha-bearing PUT GitHub answers as a CREATE (201) → 409 deleted-since-read, not a silent resurrection', async () => {
+    const repo = 'repo-put-201';
+    const path = 'pages/racedelete/content.json';
+
+    requestMock.mockImplementation(async (route: string) => {
+      if (route === 'GET /repos/{owner}/{repo}/contents/{path}') {
+        // Pre-check still sees the file present with the expected sha…
+        return { data: { content: Buffer.from('x').toString('base64'), sha: 'sha-live', size: 1 } };
+      }
+      if (route === 'PUT /repos/{owner}/{repo}/contents/{path}') {
+        // …but it was DELETED before the PUT landed, so GitHub CREATED it (201).
+        return {
+          status: 201,
+          data: { content: { sha: 'sha-new' }, commit: { sha: 'commit-new' } },
+        };
+      }
+      throw new Error(`Unexpected route: ${route}`);
+    });
+
+    await expect(
+      ContentService.put({
+        gitOrganization,
+        repo,
+        path,
+        content: 'resurrected?',
+        expectedSha: 'sha-live',
+      })
+    ).rejects.toMatchObject({ status: 409, message: expect.stringContaining('deleted') });
+  });
+
+  it('a 200 update under expectedSha is NOT mistaken for a create', async () => {
+    const repo = 'repo-put-200';
+    const path = 'pages/ok/content.json';
+
+    requestMock.mockImplementation(async (route: string) => {
+      if (route === 'GET /repos/{owner}/{repo}/contents/{path}') {
+        return { data: { content: Buffer.from('x').toString('base64'), sha: 'sha-live', size: 1 } };
+      }
+      if (route === 'PUT /repos/{owner}/{repo}/contents/{path}') {
+        return {
+          status: 200,
+          data: { content: { sha: 'sha-new' }, commit: { sha: 'commit-new' } },
+        };
+      }
+      throw new Error(`Unexpected route: ${route}`);
+    });
+
+    const result = await ContentService.put({
+      gitOrganization,
+      repo,
+      path,
+      content: 'updated',
+      expectedSha: 'sha-live',
+    });
+    expect(result).toMatchObject({ sha: 'sha-new', commit: 'commit-new' });
+  });
+
+  it("GitHub's 422 sha-mismatch variant under expectedSha maps to the same 409 conflict", async () => {
+    const repo = 'repo-put-422';
+    const path = 'pages/mismatch/content.json';
+
+    requestMock.mockImplementation(async (route: string) => {
+      if (route === 'GET /repos/{owner}/{repo}/contents/{path}') {
+        return { data: { content: Buffer.from('x').toString('base64'), sha: 'sha-live', size: 1 } };
+      }
+      if (route === 'PUT /repos/{owner}/{repo}/contents/{path}') {
+        throw Object.assign(new Error('"sha" 111 does not match abc'), { status: 422 });
+      }
+      throw new Error(`Unexpected route: ${route}`);
+    });
+
+    await expect(
+      ContentService.put({
+        gitOrganization,
+        repo,
+        path,
+        content: 'updated',
+        expectedSha: 'sha-live',
+      })
+    ).rejects.toMatchObject({ status: 409, message: 'File was modified by someone else' });
+  });
+
+  it('an unrelated 422 (not a sha mismatch) under expectedSha still propagates raw', async () => {
+    const repo = 'repo-put-422-other';
+    const path = 'pages/other/content.json';
+
+    requestMock.mockImplementation(async (route: string) => {
+      if (route === 'GET /repos/{owner}/{repo}/contents/{path}') {
+        return { data: { content: Buffer.from('x').toString('base64'), sha: 'sha-live', size: 1 } };
+      }
+      if (route === 'PUT /repos/{owner}/{repo}/contents/{path}') {
+        throw Object.assign(new Error('content is too large'), { status: 422 });
+      }
+      throw new Error(`Unexpected route: ${route}`);
+    });
+
+    await expect(
+      ContentService.put({
+        gitOrganization,
+        repo,
+        path,
+        content: 'updated',
+        expectedSha: 'sha-live',
+      })
+    ).rejects.toMatchObject({ status: 422, message: expect.stringContaining('too large') });
   });
 });
 
@@ -647,6 +848,76 @@ describe('compareBranches', () => {
         base: 'main',
         head: 'preview/pages/syllabus',
       })
+    ).rejects.toThrow('Server error');
+  });
+});
+
+describe('getBlobContent', () => {
+  it('fetches a blob by sha via the Git Blobs API and decodes utf-8', async () => {
+    requestMock.mockImplementation(async (route: string, params: RequestParams) => {
+      expect(route).toBe('GET /repos/{owner}/{repo}/git/blobs/{file_sha}');
+      expect(params).toMatchObject({
+        owner: 'test-org',
+        repo: 'repo-blob',
+        file_sha: 'abc123',
+      });
+      // GitHub returns base64 with embedded newlines
+      const base64 = Buffer.from('{"version":1,"slides":[]}', 'utf-8').toString('base64');
+      return { data: { content: `${base64.slice(0, 10)}\n${base64.slice(10)}`, sha: 'abc123' } };
+    });
+
+    const result = await ContentService.getBlobContent({
+      gitOrganization,
+      repo: 'repo-blob',
+      sha: 'abc123',
+    });
+
+    expect(result).toEqual({ content: '{"version":1,"slides":[]}', sha: 'abc123' });
+    expect(requestMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('never serves from or stores into the response cache (content-addressed, uncached)', async () => {
+    const base64 = Buffer.from('hello', 'utf-8').toString('base64');
+    requestMock.mockResolvedValue({ data: { content: base64, sha: 'blob-sha' } });
+
+    await ContentService.getBlobContent({ gitOrganization, repo: 'repo-blob-2', sha: 'blob-sha' });
+    await ContentService.getBlobContent({ gitOrganization, repo: 'repo-blob-2', sha: 'blob-sha' });
+
+    // Two reads → two API calls (no cache layer involved).
+    expect(requestMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('returns null on 404 (blob not in the repo)', async () => {
+    requestMock.mockRejectedValue(Object.assign(new Error('Not Found'), { status: 404 }));
+
+    const result = await ContentService.getBlobContent({
+      gitOrganization,
+      repo: 'repo-blob',
+      sha: 'ffffffffffffffffffffffffffffffffffffffff',
+    });
+
+    expect(result).toBeNull();
+  });
+
+  it("returns null on 422 (GitHub's malformed-sha answer)", async () => {
+    requestMock.mockRejectedValue(
+      Object.assign(new Error('The sha parameter must be exactly 40 characters'), { status: 422 })
+    );
+
+    const result = await ContentService.getBlobContent({
+      gitOrganization,
+      repo: 'repo-blob',
+      sha: 'not-a-sha',
+    });
+
+    expect(result).toBeNull();
+  });
+
+  it('rethrows non-404/422 errors', async () => {
+    requestMock.mockRejectedValue(Object.assign(new Error('Server error'), { status: 500 }));
+
+    await expect(
+      ContentService.getBlobContent({ gitOrganization, repo: 'repo-blob', sha: 'abc123' })
     ).rejects.toThrow('Server error');
   });
 });

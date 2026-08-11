@@ -338,6 +338,19 @@ const RevealSlides = forwardRef(function RevealSlides(
     if (!isClient || !htmlContent || !deckRef.current) return;
 
     let mounted = true;
+    let resizeObserver: ResizeObserver | null = null;
+    let layoutRaf = 0;
+
+    // rAF-debounced re-layout: collapse a burst of geometry changes to a
+    // single deck.layout() per frame. Guarded by revealRef.current, which the
+    // cleanup nulls on destroy, so a queued frame after teardown is a no-op.
+    const scheduleLayout = () => {
+      if (layoutRaf) return;
+      layoutRaf = requestAnimationFrame(() => {
+        layoutRaf = 0;
+        revealRef.current?.layout();
+      });
+    };
 
     const initReveal = async () => {
       // Dynamically import Reveal.js and highlight plugin (client-side only)
@@ -391,6 +404,21 @@ const RevealSlides = forwardRef(function RevealSlides(
       }
 
       revealRef.current = deck;
+
+      // Reactive centering (the structural cure for intermittent off-center
+      // slides after save): observe the .reveal container and re-layout on any
+      // size change. Reveal's center:true positions each slide against the
+      // container height measured at layout() time; when geometry shifts AFTER
+      // that measurement — the saving scrim/strip unmounting, the edit↔view
+      // chrome swap reclaiming the sidebar, a window/panel resize, or future
+      // chrome — the old centering is stale and content renders pushed down.
+      // Re-laying out on the actual resize makes centering track real geometry
+      // instead of hoping React effects settle first. Debounced to one call
+      // per frame; disconnected on unmount.
+      if (typeof ResizeObserver !== 'undefined' && deckRef.current) {
+        resizeObserver = new ResizeObserver(() => scheduleLayout());
+        resizeObserver.observe(deckRef.current);
+      }
 
       // If editing, make slides contenteditable and attach input handlers
       if (isEditing) {
@@ -447,12 +475,37 @@ const RevealSlides = forwardRef(function RevealSlides(
 
         deckRef.current.addEventListener('keydown', handleKeyDown);
       }
+
+      // Settled recalc after content adoption: deck.initialize() ran its first
+      // centering layout while the container may still be mid-transition (the
+      // post-save batch that swaps in the committed content ALSO exits edit
+      // mode, so the scrim/strip unmount and the edit→view chrome swap happen
+      // in the same frame). Re-center once the DOM has settled — a double rAF
+      // (one frame to commit, one to measure) — and again after fonts load,
+      // since font metrics change text height and therefore the center math.
+      // `revealRef.current === deck` guards against this deck being destroyed
+      // or replaced by a remount between scheduling and firing.
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          if (revealRef.current === deck) deck.layout();
+        });
+      });
+      if (typeof document !== 'undefined' && document.fonts?.ready) {
+        document.fonts.ready.then(() => {
+          if (revealRef.current === deck) deck.layout();
+        });
+      }
     };
 
     initReveal();
 
     return () => {
       mounted = false;
+      if (layoutRaf) cancelAnimationFrame(layoutRaf);
+      if (resizeObserver) {
+        resizeObserver.disconnect();
+        resizeObserver = null;
+      }
       if (revealRef.current) {
         revealRef.current.destroy();
         revealRef.current = null;
@@ -539,6 +592,12 @@ const RevealSlides = forwardRef(function RevealSlides(
     // Remove any Reveal.js runtime classes/attributes that shouldn't be saved
     slidesClone.querySelectorAll('.present, .past, .future').forEach((el: Element) => {
       el.classList.remove('present', 'past', 'future');
+    });
+
+    // Reveal paints `visible` / `current-fragment` on fragments as the presenter
+    // steps through them — runtime paint that must never persist (keep `fragment`).
+    slidesClone.querySelectorAll('.fragment').forEach((el: Element) => {
+      el.classList.remove('visible', 'current-fragment');
     });
 
     // Build data attributes for theme settings (single theme)

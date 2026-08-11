@@ -1,8 +1,32 @@
-import { useState } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { Link, useFetcher } from 'react-router';
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
 import { IconExternalLink, IconGitBranch } from '@tabler/icons-react';
+import {
+  META_CONFLICT_ID,
+  ORDER_CONFLICT_ID,
+  allResolved,
+  buildResolutions,
+  buildSlideSrcdoc,
+  chooserCopy,
+  chooserSubtitle,
+  filmstripEntries,
+  isChildOrderId,
+  metaFieldRows,
+  orderDiffIds,
+  reasonLabel,
+  sideNotesDiffer,
+  slideSideHtml,
+  type ChooserCopy,
+  type ChooserVariant,
+  type ConflictUnit,
+  type FilmstripEntry,
+  type MergeChoice,
+  type MergeResolution,
+  type SlideSide,
+  type UnitPreviews,
+} from './conflictChooser.ts';
 
 dayjs.extend(relativeTime);
 
@@ -10,12 +34,14 @@ dayjs.extend(relativeTime);
  * Preview-branch UI for slide decks (plan §3b, mirroring apps/pages'
  * PreviewControls): the persistent bar shown while rendering the pending
  * `preview/<content_path>` branch, the slim staff-only banner shown on the
- * live deck when a preview exists, and the conflict panel rendered when an
- * accept hits a git merge conflict.
+ * live deck when a preview exists, and the side-by-side conflict chooser
+ * rendered when an accept hits a genuine merge conflict (Phase 7).
  *
  * All accept/discard submissions post the same form intents the route action
  * handles (`preview-accept` / `preview-discard`) — staff-gated server-side
- * (assertSlideAccess edit tier, same gate as every edit intent).
+ * (assertSlideAccess edit tier, same gate as every edit intent). The chooser
+ * re-posts `preview-accept` with a `resolutions` payload covering every
+ * listed conflict.
  *
  * The slides navbar is `fixed top-0` and the reveal container fills the
  * viewport below it (`fixed inset-0 pt-14`), so preview chrome overlays as
@@ -31,30 +57,51 @@ export interface PreviewInfo {
   diffUrl: string | null;
 }
 
-/** A conflicted deck unit (diffDeckUnits shape): index is '4' or '4.2'. */
-export interface ConflictUnit {
-  id: string;
-  index: string;
-  ours?: unknown;
-  theirs?: unknown;
-  base?: unknown;
+export type { ConflictUnit };
+
+export interface OrderConflict {
+  base: string[];
+  ours: string[];
+  theirs: string[];
 }
 
 interface PreviewActionData {
   conflict?: boolean;
   units?: ConflictUnit[];
-  orderConflict?: { base: string[]; ours: string[]; theirs: string[] } | null;
+  orderConflict?: OrderConflict | null;
+  unitPreviews?: UnitPreviews | null;
+  autoMerged?: number;
+  oursSha?: string | null;
+  theirsSha?: string | null;
   error?: string;
+  code?: string;
+  ids?: string[];
 }
 
 function usePreviewActions() {
   const fetcher = useFetcher<PreviewActionData>();
-  const [pending, setPending] = useState<'accept' | 'discard' | null>(null);
+  const [pending, setPending] = useState<'accept' | 'resolve' | 'discard' | null>(null);
   const busy = fetcher.state !== 'idle';
 
   const accept = () => {
     setPending('accept');
     fetcher.submit({ intent: 'preview-accept' }, { method: 'POST' });
+  };
+
+  // Chooser submit: same intent, plus one {id, choose} per listed conflict.
+  // The report's shas ride along so the server can refuse (CONTENT_CONFLICT)
+  // if the deck moved after the reviewed report (F3 pinning).
+  const applyResolutions = (resolutions: MergeResolution[]) => {
+    setPending('resolve');
+    fetcher.submit(
+      {
+        intent: 'preview-accept',
+        resolutions: JSON.stringify(resolutions),
+        ...(fetcher.data?.oursSha ? { ours_sha: fetcher.data.oursSha } : {}),
+        ...(fetcher.data?.theirsSha ? { theirs_sha: fetcher.data.theirsSha } : {}),
+      },
+      { method: 'POST' }
+    );
   };
 
   const discard = () => {
@@ -67,43 +114,514 @@ function usePreviewActions() {
 
   const conflictUnits = fetcher.data?.conflict ? (fetcher.data.units ?? []) : null;
   const orderConflict = fetcher.data?.conflict ? (fetcher.data.orderConflict ?? null) : null;
+  const unitPreviews = fetcher.data?.conflict ? (fetcher.data.unitPreviews ?? null) : null;
+  const autoMerged = fetcher.data?.conflict ? (fetcher.data.autoMerged ?? 0) : 0;
+  const conflictOursSha = fetcher.data?.conflict ? (fetcher.data.oursSha ?? null) : null;
   const error = fetcher.data?.error ?? null;
 
-  return { busy, pending, accept, discard, conflictUnits, orderConflict, error };
+  return {
+    busy,
+    pending,
+    accept,
+    applyResolutions,
+    discard,
+    conflictUnits,
+    orderConflict,
+    unitPreviews,
+    autoMerged,
+    conflictOursSha,
+    error,
+  };
 }
 
-function unitLabel(unit: ConflictUnit): string {
-  return `slide ${unit.index || '?'} (${unit.id})`;
-}
+// ─── Conflict chooser (Phase 7; save variant 7.5) ────────────────────────────
+
+/** One selectable side of a conflict card (radio + bounded preview). */
+const ChoiceSide = ({
+  unitId,
+  side,
+  copy,
+  selected,
+  onChoose,
+  children,
+}: {
+  unitId: string;
+  side: MergeChoice;
+  copy: ChooserCopy;
+  selected: boolean;
+  onChoose: (side: MergeChoice) => void;
+  children: ReactNode;
+}) => (
+  <label
+    data-testid={`conflict-choose-${side}-${unitId}`}
+    className={`flex flex-col gap-1.5 rounded-lg border p-2 cursor-pointer transition-colors ${
+      selected
+        ? 'border-amber-500 dark:border-amber-400 ring-1 ring-amber-500 dark:ring-amber-400 bg-amber-50/60 dark:bg-amber-950/40'
+        : 'border-stone-200 dark:border-neutral-700 hover:border-amber-300 dark:hover:border-amber-700'
+    }`}
+  >
+    <span className="flex items-center gap-2 text-xs font-medium text-gray-700 dark:text-gray-200">
+      <input
+        type="radio"
+        name={`conflict-${unitId}`}
+        checked={selected}
+        onChange={() => onChoose(side)}
+        className="accent-amber-600"
+      />
+      {copy.sideTitle[side]}
+      <span className="ml-auto text-[11px] font-normal text-gray-500 dark:text-gray-400">
+        {copy.sideAction[side]}
+      </span>
+    </span>
+    {children}
+  </label>
+);
 
 /**
- * Conflict panel: lists the slides that genuinely need a decision. The
- * per-slide chooser is Phase 7 — for now we name the conflicted units readably.
+ * Prominent in-flight indicator for merge submissions: the accept/resolve
+ * round-trips take several seconds of GitHub calls, and a button-label change
+ * alone is easy to miss.
  */
-const ConflictPanel = ({
-  units,
-  orderConflict,
-}: {
-  units: ConflictUnit[];
-  orderConflict: { base: string[]; ours: string[]; theirs: string[] } | null;
-}) => (
+export const MergeProgress = ({ label }: { label: string }) => (
   <div
-    data-testid="preview-conflict-panel"
-    className="border-b border-rose-300 dark:border-rose-800 bg-rose-50 dark:bg-rose-950/90 px-4 sm:px-6 lg:px-8 py-3"
+    data-testid="merge-progress"
+    className="flex items-center gap-2.5 border-b border-amber-300 dark:border-amber-700/70 bg-amber-100/95 dark:bg-amber-900/90 px-4 sm:px-6 lg:px-8 py-2.5 text-sm font-medium text-amber-900 dark:text-amber-100"
+    role="status"
   >
-    <div className="text-sm font-medium text-rose-900 dark:text-rose-100">
-      Changes conflict with edits made on the live deck
-    </div>
-    <div className="mt-1 text-sm text-rose-800 dark:text-rose-200">
-      Conflicting slides:{' '}
-      {units.length > 0 ? units.map(unit => unitLabel(unit)).join(', ') : 'none reported'}
-      {orderConflict ? `${units.length > 0 ? '; ' : ''}slide ordering also conflicts` : ''}
-    </div>
-    <div className="mt-1 text-sm text-rose-700 dark:text-rose-300">
-      Re-apply from the current version (via your agent) or discard the preview.
-    </div>
+    <span
+      className="h-4 w-4 shrink-0 animate-spin rounded-full border-2 border-amber-600 dark:border-amber-300 border-t-transparent"
+      aria-hidden
+    />
+    {label}
   </div>
 );
+
+/**
+ * The accept round-trip's in-flight strip, pinned to the app's TOP chrome layer
+ * (`fixed top-14 z-[1100]`, matching the editor 'Saving…' strip) — the preview
+ * bar/banner it is triggered from sit at z-40, and an accept has no conflict
+ * panel yet to host the indicator, so nesting the strip there left it easy to
+ * miss / paint under the reveal viewport. As its own fixed overlay it is always
+ * visible from click→response, above every other slide-view fixed element.
+ */
+const SlideMergeProgressOverlay = ({ label }: { label: string }) => (
+  <div
+    data-testid="merge-progress-overlay"
+    className="fixed top-14 left-0 right-0 z-[1100] shadow-lg"
+  >
+    <MergeProgress label={label} />
+  </div>
+);
+
+/** Placeholder for a side where the slide was deleted. */
+const Tombstone = ({ label }: { label: string }) => (
+  <div className="flex h-full min-h-24 items-center justify-center rounded border border-dashed border-gray-300 dark:border-neutral-600 bg-gray-50 dark:bg-neutral-800/60 px-3 py-4 text-xs italic text-gray-500 dark:text-gray-400">
+    {label}
+  </div>
+);
+
+/**
+ * Bounded render of one slide side. The deck's html is already trusted by the
+ * real viewer; here it renders scaled-down inside a fully sandboxed iframe
+ * (empty sandbox allowlist = no scripts, no same-origin access).
+ *
+ * The notes strip only renders when `showNotes` — identical notes on both
+ * sides carry no decision signal, so the card hides them (and emphasizes the
+ * strip when the sides genuinely differ).
+ */
+const SlideFrame = ({ side, showNotes }: { side: SlideSide; showNotes: boolean }) => {
+  const html = slideSideHtml(side);
+  return (
+    <div className="rounded border border-stone-200 dark:border-neutral-700 bg-white overflow-hidden">
+      <iframe
+        sandbox=""
+        srcDoc={buildSlideSrcdoc(html)}
+        title="Slide preview"
+        loading="lazy"
+        className="h-36 w-full pointer-events-none"
+      />
+      {showNotes ? (
+        <div className="border-t border-stone-200 dark:border-neutral-700 bg-stone-50 dark:bg-neutral-800 px-2 py-1 text-[11px] text-gray-500 dark:text-gray-400 truncate">
+          <span className="mr-1 rounded bg-amber-100 dark:bg-amber-900/60 px-1 py-px text-[10px] font-medium text-amber-800 dark:text-amber-200">
+            Notes differ
+          </span>
+          {side.notes || <span className="italic">no notes on this side</span>}
+        </div>
+      ) : null}
+    </div>
+  );
+};
+
+/** Numbered id list for an ordering conflict side (fallback when previews are
+ * missing — e.g. the save-merge chooser, which carries no `unit_previews`). */
+const OrderList = ({ ids }: { ids: string[] }) => (
+  <ol className="space-y-0.5 text-xs text-gray-700 dark:text-gray-300 max-h-36 overflow-y-auto">
+    {ids.map((id, position) => (
+      <li key={`${id}-${position}`} className="flex gap-1.5">
+        <span className="w-5 shrink-0 text-right tabular-nums text-gray-400 dark:text-gray-500">
+          {position + 1}.
+        </span>
+        <span className="truncate font-mono text-[11px]">{id}</span>
+      </li>
+    ))}
+  </ol>
+);
+
+/** Filmstrip layout: a horizontal row (top-level slide order) or a vertical
+ * column (a stack's child order — mirroring how a vertical stack actually lays
+ * its children out top-to-bottom). */
+type FilmstripOrientation = 'horizontal' | 'vertical';
+
+/**
+ * One slide thumbnail in an order filmstrip: a bounded sandboxed slide render
+ * (same srcdoc renderer as a conflict card, echoing the 2D SlideOverview visual
+ * language) with a position badge + title caption. `entry.moved` slides (a
+ * different position in the two orderings) get an amber ring so the reordering
+ * reads at a glance. Missing html (server capped >50KB, or no preview) falls
+ * back to the title/id. Vertical thumbnails span the column width so a stack's
+ * child sequence reads as an actual top-to-bottom stack.
+ */
+const FilmstripSlide = ({
+  entry,
+  orientation,
+}: {
+  entry: FilmstripEntry;
+  orientation: FilmstripOrientation;
+}) => {
+  const vertical = orientation === 'vertical';
+  return (
+    <div
+      data-testid={`filmstrip-slide-${entry.id}`}
+      data-moved={entry.moved ? 'true' : undefined}
+      className={`overflow-hidden rounded border bg-white dark:bg-neutral-900 ${
+        vertical ? 'w-full' : 'w-28 shrink-0'
+      } ${
+        entry.moved
+          ? 'border-amber-400 dark:border-amber-500 ring-1 ring-amber-400 dark:ring-amber-500'
+          : 'border-stone-200 dark:border-neutral-700'
+      }`}
+    >
+      <div className="relative">
+        {entry.html ? (
+          <iframe
+            sandbox=""
+            srcDoc={buildSlideSrcdoc(entry.html)}
+            title={`Slide ${entry.position}`}
+            loading="lazy"
+            className="h-20 w-full pointer-events-none bg-white"
+          />
+        ) : (
+          <div className="flex h-20 w-full items-center justify-center bg-stone-50 dark:bg-neutral-800 px-1 text-center text-[11px] italic text-gray-400 dark:text-gray-500">
+            {entry.title || entry.id}
+          </div>
+        )}
+        <span className="absolute bottom-0.5 left-0.5 rounded-sm bg-black/60 px-1 py-px text-[10px] font-medium tabular-nums text-white">
+          {entry.position}
+        </span>
+      </div>
+      <div className="truncate border-t border-stone-200 dark:border-neutral-700 px-1.5 py-1 text-[11px] leading-tight text-gray-600 dark:text-gray-300">
+        {entry.title || <span className="font-mono">{entry.id}</span>}
+      </div>
+    </div>
+  );
+};
+
+/**
+ * An ordering rendered as a strip of slide thumbnails. Horizontal (a scrollable
+ * row) for the top-level slide order; vertical (a scrollable, height-capped
+ * column) for a stack's child order, so a VERTICAL stack's child sequence is
+ * shown the way it actually lays out. Both directions resolve each thumbnail's
+ * html through the same `filmstripEntries` helper — the top-level and
+ * child-order cards can never diverge in how they read `unit_previews`.
+ */
+const Filmstrip = ({
+  ids,
+  previews,
+  moved,
+  orientation,
+}: {
+  ids: string[];
+  previews: UnitPreviews;
+  moved: Set<string>;
+  orientation: FilmstripOrientation;
+}) => {
+  const entries = filmstripEntries(ids, previews, moved);
+  return (
+    <div
+      className={
+        orientation === 'vertical'
+          ? 'flex flex-col gap-1.5 max-h-72 overflow-y-auto pr-1'
+          : 'flex gap-2 overflow-x-auto pb-1'
+      }
+    >
+      {entries.map(entry => (
+        <FilmstripSlide
+          key={`${entry.id}-${entry.position}`}
+          entry={entry}
+          orientation={orientation}
+        />
+      ))}
+    </div>
+  );
+};
+
+const EMPTY_MOVED: Set<string> = new Set();
+
+/** Field diff list for one side of the `__meta__` deck-settings conflict. */
+const MetaFieldList = ({
+  rows,
+  side,
+}: {
+  rows: ReturnType<typeof metaFieldRows>;
+  side: MergeChoice;
+}) => (
+  <dl className="space-y-1 text-xs max-h-36 overflow-y-auto">
+    {rows.map(row => (
+      <div key={row.field} className="flex gap-2">
+        <dt className="w-24 shrink-0 font-mono text-[11px] text-gray-500 dark:text-gray-400">
+          {row.field}
+        </dt>
+        <dd className="break-all text-gray-800 dark:text-gray-200">
+          {side === 'ours' ? row.ours : row.theirs}
+        </dd>
+      </div>
+    ))}
+  </dl>
+);
+
+const cardShell =
+  'rounded-lg border border-rose-200 dark:border-rose-800/70 bg-white dark:bg-neutral-900 p-3';
+const cardBadge =
+  'rounded-full bg-rose-100 dark:bg-rose-900/60 px-2 py-0.5 text-[11px] text-rose-800 dark:text-rose-200';
+
+/** One conflict card: side-by-side ours vs theirs with a choice per side. */
+const ConflictCard = ({
+  unit,
+  copy,
+  choice,
+  onChoose,
+  unitPreviews,
+}: {
+  unit: ConflictUnit;
+  copy: ChooserCopy;
+  choice: MergeChoice | undefined;
+  onChoose: (id: string, choice: MergeChoice) => void;
+  unitPreviews?: UnitPreviews | null;
+}) => {
+  const isChildOrder = isChildOrderId(unit.id);
+  const isOrder = unit.id === ORDER_CONFLICT_ID || isChildOrder;
+  const isMeta = unit.id === META_CONFLICT_ID;
+  // A stack's children lay out vertically, so its reorder reads as a column;
+  // the top-level slide order stays a horizontal row.
+  const orientation: FilmstripOrientation = isChildOrder ? 'vertical' : 'horizontal';
+  const title =
+    unit.id === ORDER_CONFLICT_ID
+      ? 'Slide order'
+      : isChildOrderId(unit.id)
+        ? `Stack ${unit.index || '?'} order`
+        : isMeta
+          ? 'Deck settings'
+          : `Slide ${unit.index || '?'}`;
+  const metaRows = isMeta
+    ? metaFieldRows(
+        unit.ours as Record<string, unknown> | undefined,
+        unit.theirs as Record<string, unknown> | undefined
+      )
+    : [];
+  // Identical notes on both sides are noise — only show the strip when the
+  // notes are part of what differs.
+  const notesDiffer =
+    !isOrder &&
+    !isMeta &&
+    sideNotesDiffer(unit.ours as SlideSide | null, unit.theirs as SlideSide | null);
+
+  // Order cards diff the two id arrays to highlight the moved slides, and use
+  // the report's `unit_previews` to draw each ordering as a filmstrip. Absent
+  // previews (e.g. a save-merge report) fall back to the numbered id list.
+  const oursIds = isOrder && Array.isArray(unit.ours) ? (unit.ours as string[]) : [];
+  const theirsIds = isOrder && Array.isArray(unit.theirs) ? (unit.theirs as string[]) : [];
+  const movedIds = isOrder ? orderDiffIds(oursIds, theirsIds) : EMPTY_MOVED;
+  const hasPreviews = Boolean(unitPreviews && Object.keys(unitPreviews).length > 0);
+
+  const renderSide = (side: MergeChoice) => {
+    const value = side === 'ours' ? unit.ours : unit.theirs;
+    if (isOrder) {
+      const ids = Array.isArray(value) ? (value as string[]) : [];
+      if (hasPreviews) {
+        return (
+          <Filmstrip
+            ids={ids}
+            previews={unitPreviews as UnitPreviews}
+            moved={movedIds}
+            orientation={orientation}
+          />
+        );
+      }
+      return <OrderList ids={ids} />;
+    }
+    if (isMeta) {
+      return <MetaFieldList rows={metaRows} side={side} />;
+    }
+    if (value === undefined || value === null) {
+      return <Tombstone label={copy.tombstone[side]} />;
+    }
+    return <SlideFrame side={value as SlideSide} showNotes={notesDiffer} />;
+  };
+
+  return (
+    <div data-testid={`conflict-card-${unit.id}`} className={cardShell}>
+      <div className="flex items-center gap-2 text-xs">
+        <span className="font-semibold text-gray-700 dark:text-gray-200">{title}</span>
+        <span className={cardBadge}>{reasonLabel(unit.reason)}</span>
+      </div>
+      <div
+        className={`mt-2 grid gap-2 ${
+          isOrder && hasPreviews && orientation === 'horizontal'
+            ? 'grid-cols-1'
+            : 'grid-cols-1 sm:grid-cols-2'
+        }`}
+      >
+        {(['ours', 'theirs'] as const).map(side => (
+          <ChoiceSide
+            key={side}
+            unitId={unit.id}
+            side={side}
+            copy={copy}
+            selected={choice === side}
+            onChoose={chosen => onChoose(unit.id, chosen)}
+          >
+            {renderSide(side)}
+          </ChoiceSide>
+        ))}
+      </div>
+    </div>
+  );
+};
+
+/**
+ * Conflict chooser panel (Phase 7): a side-by-side card per conflicted slide
+ * (plus stack-order / slide-order / deck-settings cards), an Apply footer that
+ * submits a resolution for EVERY listed conflict, and an escape hatch.
+ * Auto-merged counts from the report are surfaced so staff know only the true
+ * collisions are listed.
+ *
+ * Two variants share the machinery (7.5): `preview` (accept flow — ours = the
+ * live deck, theirs = the agent's preview; escape = discard the preview) and
+ * `save` (a stale editor save — ours = what's saved on the server, theirs =
+ * the editor's unsaved version; escape = reload latest). `onDiscard` is the
+ * variant's escape action.
+ */
+export const ConflictPanel = ({
+  units,
+  orderConflict,
+  unitPreviews,
+  autoMerged,
+  oursSha,
+  busy,
+  onApply,
+  onDiscard,
+  variant = 'preview',
+}: {
+  units: ConflictUnit[];
+  orderConflict: OrderConflict | null;
+  unitPreviews?: UnitPreviews | null;
+  autoMerged: number;
+  oursSha: string | null;
+  busy: boolean;
+  onApply: (resolutions: MergeResolution[]) => void;
+  onDiscard: () => void;
+  variant?: ChooserVariant;
+}) => {
+  // The top-level order conflict arrives separately in the accept payload;
+  // fold it into the card list under its sentinel id so one chooser covers
+  // the full conflict set the resolve service validates against.
+  const allUnits: ConflictUnit[] = orderConflict
+    ? [
+        ...units,
+        {
+          id: ORDER_CONFLICT_ID,
+          index: '',
+          reason: 'order',
+          base: orderConflict.base,
+          ours: orderConflict.ours,
+          theirs: orderConflict.theirs,
+        },
+      ]
+    : units;
+  const ids = allUnits.map(unit => unit.id);
+  // Keyed on the report's ours_sha too: a re-accept after main moved can
+  // yield the SAME conflict ids over different content — stale choices must
+  // not survive into the new report (F3).
+  const signature = `${oursSha ?? ''}::${ids.join('|')}`;
+  const [choices, setChoices] = useState<Record<string, MergeChoice>>({});
+  // Drop stale choices when the conflict set changes (a re-accept can shrink it).
+  useEffect(() => setChoices({}), [signature]);
+
+  const choose = (id: string, choice: MergeChoice) =>
+    setChoices(prev => ({ ...prev, [id]: choice }));
+  const ready = allResolved(ids, choices);
+  const copy = chooserCopy(variant);
+
+  return (
+    <div
+      data-testid="preview-conflict-panel"
+      className="border-b border-rose-300 dark:border-rose-800 bg-rose-50 dark:bg-rose-950/95 px-4 sm:px-6 lg:px-8 py-3 max-h-[calc(100vh-8rem)] overflow-y-auto"
+    >
+      {busy && (
+        <div className="sticky top-0 z-10 -mx-4 sm:-mx-6 lg:-mx-8 -mt-3 mb-3 shadow-sm">
+          <MergeProgress label={copy.busyLabel} />
+        </div>
+      )}
+      <div className="text-sm font-medium text-rose-900 dark:text-rose-100">{copy.heading}</div>
+      <div
+        data-testid="conflict-auto-merged"
+        className="mt-0.5 text-sm text-rose-800 dark:text-rose-200"
+      >
+        {chooserSubtitle(variant, autoMerged)}
+      </div>
+
+      <div className="mt-3 space-y-3">
+        {allUnits.map(unit => (
+          <ConflictCard
+            key={unit.id}
+            unit={unit}
+            copy={copy}
+            choice={choices[unit.id]}
+            onChoose={choose}
+            unitPreviews={unitPreviews}
+          />
+        ))}
+      </div>
+
+      <div className="mt-4 flex flex-wrap items-center gap-3">
+        <button
+          type="button"
+          data-testid="conflict-apply"
+          disabled={!ready || busy}
+          onClick={() => onApply(buildResolutions(ids, choices))}
+          className={`${actionButtonBase} bg-amber-600 text-white hover:bg-amber-700 dark:bg-amber-500 dark:text-amber-950 dark:hover:bg-amber-400`}
+        >
+          {busy ? 'Applying…' : 'Apply choices'}
+        </button>
+        <button
+          type="button"
+          data-testid="conflict-discard"
+          disabled={busy}
+          onClick={onDiscard}
+          className={`${actionButtonBase} text-rose-800 dark:text-rose-200 ring-1 ring-rose-300 dark:ring-rose-700 hover:bg-rose-100 dark:hover:bg-rose-900/40`}
+        >
+          {copy.secondaryAction}
+        </button>
+        <span className="text-xs text-rose-700 dark:text-rose-300">
+          {ready
+            ? 'Applies your choice for every conflict and publishes the merge.'
+            : 'Pick a version for every conflict to enable Apply.'}{' '}
+          {copy.footerNote}
+        </span>
+      </div>
+    </div>
+  );
+};
 
 const actionButtonBase =
   'rounded px-3 py-1 text-sm font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed';
@@ -113,60 +631,87 @@ const actionButtonBase =
  * Amber identity in both light and dark modes; fixed under the slides navbar.
  */
 export const PreviewBar = ({ preview }: { preview: PreviewInfo }) => {
-  const { busy, pending, accept, discard, conflictUnits, orderConflict, error } =
-    usePreviewActions();
+  const {
+    busy,
+    pending,
+    accept,
+    applyResolutions,
+    discard,
+    conflictUnits,
+    orderConflict,
+    unitPreviews,
+    autoMerged,
+    conflictOursSha,
+    error,
+  } = usePreviewActions();
   const age = preview.oldestCommitAt ? dayjs(preview.oldestCommitAt).fromNow() : null;
 
   return (
-    <div data-testid="preview-bar" className="fixed top-14 left-0 right-0 z-40">
-      <div className="border-y border-amber-300 dark:border-amber-700/70 bg-amber-50/95 dark:bg-amber-950/90 backdrop-blur px-4 sm:px-6 lg:px-8 py-2">
-        <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
-          <div className="flex items-center gap-2 text-sm text-amber-900 dark:text-amber-100">
-            <span className="relative flex h-2 w-2" aria-hidden>
-              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-amber-500 opacity-60" />
-              <span className="relative inline-flex h-2 w-2 rounded-full bg-amber-500" />
-            </span>
-            <span className="font-semibold">Previewing pending changes</span>
-            <span className="text-amber-700 dark:text-amber-300">
-              · {preview.commitsAhead} commit{preview.commitsAhead === 1 ? '' : 's'}
-              {age ? ` · ${age}` : ''}
-            </span>
-          </div>
+    <>
+      <div data-testid="preview-bar" className="fixed top-14 left-0 right-0 z-40">
+        <div className="border-y border-amber-300 dark:border-amber-700/70 bg-amber-50/95 dark:bg-amber-950/90 backdrop-blur px-4 sm:px-6 lg:px-8 py-2">
+          <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
+            <div className="flex items-center gap-2 text-sm text-amber-900 dark:text-amber-100">
+              <span className="relative flex h-2 w-2" aria-hidden>
+                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-amber-500 opacity-60" />
+                <span className="relative inline-flex h-2 w-2 rounded-full bg-amber-500" />
+              </span>
+              <span className="font-semibold">Previewing pending changes</span>
+              <span className="text-amber-700 dark:text-amber-300">
+                · {preview.commitsAhead} commit{preview.commitsAhead === 1 ? '' : 's'}
+                {age ? ` · ${age}` : ''}
+              </span>
+            </div>
 
-          <div className="flex items-center gap-2">
-            {preview.diffUrl && (
-              <a
-                href={preview.diffUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                className={`${actionButtonBase} inline-flex items-center gap-1 text-amber-900 dark:text-amber-200 ring-1 ring-amber-300 dark:ring-amber-700 hover:bg-amber-100 dark:hover:bg-amber-900/40`}
+            <div className="flex items-center gap-2">
+              {preview.diffUrl && (
+                <a
+                  href={preview.diffUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className={`${actionButtonBase} inline-flex items-center gap-1 text-amber-900 dark:text-amber-200 ring-1 ring-amber-300 dark:ring-amber-700 hover:bg-amber-100 dark:hover:bg-amber-900/40`}
+                >
+                  GitHub diff
+                  <IconExternalLink size={14} />
+                </a>
+              )}
+              <button
+                type="button"
+                onClick={discard}
+                disabled={busy}
+                className={`${actionButtonBase} text-amber-900 dark:text-amber-200 ring-1 ring-amber-300 dark:ring-amber-700 hover:bg-amber-100 dark:hover:bg-amber-900/40`}
               >
-                Diff
-                <IconExternalLink size={14} />
-              </a>
-            )}
-            <button
-              type="button"
-              onClick={discard}
-              disabled={busy}
-              className={`${actionButtonBase} text-amber-900 dark:text-amber-200 ring-1 ring-amber-300 dark:ring-amber-700 hover:bg-amber-100 dark:hover:bg-amber-900/40`}
-            >
-              {busy && pending === 'discard' ? 'Discarding…' : 'Discard'}
-            </button>
-            <button
-              type="button"
-              onClick={accept}
-              disabled={busy}
-              className={`${actionButtonBase} bg-amber-600 text-white hover:bg-amber-700 dark:bg-amber-500 dark:text-amber-950 dark:hover:bg-amber-400`}
-            >
-              {busy && pending === 'accept' ? 'Accepting…' : 'Accept'}
-            </button>
+                {busy && pending === 'discard' ? 'Discarding…' : 'Discard'}
+              </button>
+              <button
+                type="button"
+                onClick={accept}
+                disabled={busy}
+                className={`${actionButtonBase} bg-amber-600 text-white hover:bg-amber-700 dark:bg-amber-500 dark:text-amber-950 dark:hover:bg-amber-400`}
+              >
+                {busy && pending === 'accept' ? 'Merging…' : 'Merge'}
+              </button>
+            </div>
           </div>
+          {error && <div className="mt-2 text-sm text-rose-700 dark:text-rose-300">{error}</div>}
         </div>
-        {error && <div className="mt-2 text-sm text-rose-700 dark:text-rose-300">{error}</div>}
+        {conflictUnits && (
+          <ConflictPanel
+            units={conflictUnits}
+            orderConflict={orderConflict}
+            unitPreviews={unitPreviews}
+            autoMerged={autoMerged}
+            oursSha={conflictOursSha}
+            busy={busy}
+            onApply={applyResolutions}
+            onDiscard={discard}
+          />
+        )}
       </div>
-      {conflictUnits && <ConflictPanel units={conflictUnits} orderConflict={orderConflict} />}
-    </div>
+      {busy && pending === 'accept' && (
+        <SlideMergeProgressOverlay label="Merging preview into the live deck — this can take a few seconds…" />
+      )}
+    </>
   );
 };
 
@@ -174,53 +719,80 @@ export const PreviewBar = ({ preview }: { preview: PreviewInfo }) => {
  * Slim staff-only banner on the normal (live) view when a preview branch exists.
  */
 export const PendingPreviewBanner = ({ preview }: { preview: PreviewInfo }) => {
-  const { busy, pending, accept, discard, conflictUnits, orderConflict, error } =
-    usePreviewActions();
+  const {
+    busy,
+    pending,
+    accept,
+    applyResolutions,
+    discard,
+    conflictUnits,
+    orderConflict,
+    unitPreviews,
+    autoMerged,
+    conflictOursSha,
+    error,
+  } = usePreviewActions();
   const age = preview.oldestCommitAt ? dayjs(preview.oldestCommitAt).fromNow() : null;
 
   return (
-    <div data-testid="pending-preview-banner" className="fixed top-14 left-0 right-0 z-40">
-      <div className="border-b border-amber-200 dark:border-amber-800/70 bg-amber-50/90 dark:bg-amber-950/80 backdrop-blur px-4 sm:px-6 lg:px-8 py-1.5">
-        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-amber-900 dark:text-amber-100">
-          <span className="inline-flex items-center gap-1.5">
-            <IconGitBranch size={14} className="text-amber-600 dark:text-amber-400" aria-hidden />A
-            preview with pending changes exists
-            {age ? (
-              <span className="text-amber-700 dark:text-amber-300">
-                ({preview.commitsAhead} commit{preview.commitsAhead === 1 ? '' : 's'}, {age})
-              </span>
-            ) : null}
-          </span>
-          <span className="text-amber-400 dark:text-amber-600" aria-hidden>
-            ·
-          </span>
-          <Link
-            to="?preview=1"
-            className="font-medium underline decoration-amber-400 underline-offset-2 hover:text-amber-700 dark:hover:text-amber-300"
-          >
-            View preview
-          </Link>
-          <button
-            type="button"
-            onClick={accept}
-            disabled={busy}
-            className="font-medium underline decoration-amber-400 underline-offset-2 hover:text-amber-700 dark:hover:text-amber-300 disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            {busy && pending === 'accept' ? 'Accepting…' : 'Accept'}
-          </button>
-          <button
-            type="button"
-            onClick={discard}
-            disabled={busy}
-            className="font-medium underline decoration-amber-400 underline-offset-2 hover:text-amber-700 dark:hover:text-amber-300 disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            {busy && pending === 'discard' ? 'Discarding…' : 'Discard'}
-          </button>
+    <>
+      <div data-testid="pending-preview-banner" className="fixed top-14 left-0 right-0 z-40">
+        <div className="border-b border-amber-200 dark:border-amber-800/70 bg-amber-50/90 dark:bg-amber-950/80 backdrop-blur px-4 sm:px-6 lg:px-8 py-1.5">
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-amber-900 dark:text-amber-100">
+            <span className="inline-flex items-center gap-1.5">
+              <IconGitBranch size={14} className="text-amber-600 dark:text-amber-400" aria-hidden />
+              A preview with pending changes exists
+              {age ? (
+                <span className="text-amber-700 dark:text-amber-300">
+                  ({preview.commitsAhead} commit{preview.commitsAhead === 1 ? '' : 's'}, {age})
+                </span>
+              ) : null}
+            </span>
+            <span className="text-amber-400 dark:text-amber-600" aria-hidden>
+              ·
+            </span>
+            <Link
+              to="?preview=1"
+              className="font-medium underline decoration-amber-400 underline-offset-2 hover:text-amber-700 dark:hover:text-amber-300"
+            >
+              View preview
+            </Link>
+            <button
+              type="button"
+              onClick={accept}
+              disabled={busy}
+              className="font-medium underline decoration-amber-400 underline-offset-2 hover:text-amber-700 dark:hover:text-amber-300 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {busy && pending === 'accept' ? 'Merging…' : 'Merge'}
+            </button>
+            <button
+              type="button"
+              onClick={discard}
+              disabled={busy}
+              className="font-medium underline decoration-amber-400 underline-offset-2 hover:text-amber-700 dark:hover:text-amber-300 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {busy && pending === 'discard' ? 'Discarding…' : 'Discard'}
+            </button>
+          </div>
+          {error && <div className="mt-1 text-sm text-rose-700 dark:text-rose-300">{error}</div>}
         </div>
-        {error && <div className="mt-1 text-sm text-rose-700 dark:text-rose-300">{error}</div>}
+        {conflictUnits && (
+          <ConflictPanel
+            units={conflictUnits}
+            orderConflict={orderConflict}
+            unitPreviews={unitPreviews}
+            autoMerged={autoMerged}
+            oursSha={conflictOursSha}
+            busy={busy}
+            onApply={applyResolutions}
+            onDiscard={discard}
+          />
+        )}
       </div>
-      {conflictUnits && <ConflictPanel units={conflictUnits} orderConflict={orderConflict} />}
-    </div>
+      {busy && pending === 'accept' && (
+        <SlideMergeProgressOverlay label="Merging preview into the live deck — this can take a few seconds…" />
+      )}
+    </>
   );
 };
 

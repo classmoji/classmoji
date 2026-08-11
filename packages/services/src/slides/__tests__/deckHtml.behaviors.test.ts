@@ -1,6 +1,6 @@
 /**
- * Unit behaviors: parseSlidesFragment, normalizeSlideHtml, diffDeckUnits,
- * and generator specifics (config emission, invalid attr names, includeNotes).
+ * Unit behaviors: parseSlidesFragment, normalizeSlideHtml, and generator
+ * specifics (config emission, invalid attr names, includeNotes).
  */
 
 import { describe, it, expect, vi, afterEach } from 'vitest';
@@ -8,7 +8,6 @@ import {
   generateDeckHtml,
   parseSlidesFragment,
   normalizeSlideHtml,
-  diffDeckUnits,
   DeckParseError,
   SlideHtmlError,
   mintSlideId,
@@ -66,6 +65,19 @@ describe('parseSlidesFragment', () => {
   it('throws DeckParseError on a fragment with zero sections', () => {
     expect(() => parseSlidesFragment('<div class="slides"></div>')).toThrow(DeckParseError);
   });
+
+  it('strips fragment runtime paint from a merely-viewed slide (no phantom edit persists)', () => {
+    const result = parseSlidesFragment(
+      '<div class="slides" data-theme="white" data-code-theme="github">' +
+        '<section data-cm-id="frag8888"><h2>Intro</h2>' +
+        '<p class="fragment visible">one</p>' +
+        '<p class="fragment visible current-fragment">two</p></section>' +
+        '</div>'
+    );
+    expect(result.slides[0].html).toBe(
+      '<h2>Intro</h2><p class="fragment">one</p><p class="fragment">two</p>'
+    );
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -112,112 +124,28 @@ describe('normalizeSlideHtml', () => {
     const output = normalizeSlideHtml('<div><p>unclosed');
     expect(output).toBe('<div><p>unclosed</p></div>');
   });
+
+  it('strips Reveal fragment runtime paint (visible / current-fragment), keeping `fragment`', () => {
+    const output = normalizeSlideHtml(
+      '<p class="fragment visible">one</p><p class="fragment visible current-fragment">two</p>'
+    );
+    expect(output).toBe('<p class="fragment">one</p><p class="fragment">two</p>');
+  });
+
+  it('leaves a non-fragment `visible`/`current-fragment` class alone (only fragment paint is runtime)', () => {
+    const output = normalizeSlideHtml('<div class="visible">kept</div>');
+    expect(output).toBe('<div class="visible">kept</div>');
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// diffDeckUnits
+// Shared deck helpers (generator specifics below)
 // ─────────────────────────────────────────────────────────────────────────────
-
-function makeDeck(slides: DeckSlide[]): DeckJson {
-  return { version: 1, theme: 'white', codeTheme: 'github', slides };
-}
 
 const s = (id: string, html: string, extra: Partial<DeckSlide> = {}): DeckSlide => ({
   id,
   html,
   ...extra,
-});
-
-describe('diffDeckUnits', () => {
-  const base = makeDeck([s('aaa11111', '<h1>One</h1>'), s('bbb22222', '<h2>Two</h2>')]);
-
-  it('reports no conflicts when the sides change different units', () => {
-    const ours = makeDeck([s('aaa11111', '<h1>One edited</h1>'), s('bbb22222', '<h2>Two</h2>')]);
-    const theirs = makeDeck([s('aaa11111', '<h1>One</h1>'), s('bbb22222', '<h2>Two edited</h2>')]);
-    const result = diffDeckUnits(base, ours, theirs);
-    expect(result.units).toEqual([]);
-    expect(result.orderConflict).toBeUndefined();
-  });
-
-  it('reports a conflict when both sides change the same unit differently', () => {
-    const ours = makeDeck([s('aaa11111', '<h1>Ours</h1>'), s('bbb22222', '<h2>Two</h2>')]);
-    const theirs = makeDeck([s('aaa11111', '<h1>Theirs</h1>'), s('bbb22222', '<h2>Two</h2>')]);
-    const result = diffDeckUnits(base, ours, theirs);
-    expect(result.units).toHaveLength(1);
-    expect(result.units[0]).toMatchObject({
-      id: 'aaa11111',
-      index: '1',
-      ours: { html: '<h1>Ours</h1>' },
-      theirs: { html: '<h1>Theirs</h1>' },
-    });
-    expect(result.units[0].base).toEqual(s('aaa11111', '<h1>One</h1>'));
-  });
-
-  it('does not report a conflict when both sides made the identical change', () => {
-    const same = makeDeck([s('aaa11111', '<h1>Same</h1>'), s('bbb22222', '<h2>Two</h2>')]);
-    const result = diffDeckUnits(base, same, makeDeck([...same.slides]));
-    expect(result.units).toEqual([]);
-  });
-
-  it('reports delete-vs-edit as a conflict with null for the deleted side', () => {
-    const ours = makeDeck([s('bbb22222', '<h2>Two</h2>')]); // deleted aaa
-    const theirs = makeDeck([s('aaa11111', '<h1>Edited</h1>'), s('bbb22222', '<h2>Two</h2>')]);
-    const result = diffDeckUnits(base, ours, theirs);
-    expect(result.units).toHaveLength(1);
-    expect(result.units[0].id).toBe('aaa11111');
-    expect(result.units[0].ours).toBeNull();
-    expect(result.units[0].theirs).toEqual(s('aaa11111', '<h1>Edited</h1>'));
-    // Order changed on ours only (deletion) — no order conflict
-    expect(result.orderConflict).toBeUndefined();
-  });
-
-  it('reports an order conflict only when both sides reordered differently', () => {
-    const ours = makeDeck([base.slides[1], base.slides[0]]);
-    const theirs = makeDeck([base.slides[0], base.slides[1]]);
-    expect(diffDeckUnits(base, ours, theirs).orderConflict).toBeUndefined();
-
-    const theirs2 = makeDeck([s('ccc33333', '<h3>New</h3>'), base.slides[0], base.slides[1]]);
-    const conflict = diffDeckUnits(base, ours, theirs2).orderConflict;
-    expect(conflict).toEqual({
-      base: ['aaa11111', 'bbb22222'],
-      ours: ['bbb22222', 'aaa11111'],
-      theirs: ['ccc33333', 'aaa11111', 'bbb22222'],
-    });
-  });
-
-  it('walks container children as their own units with dotted indexes', () => {
-    const containerBase = makeDeck([
-      s('flat0001', '<h1>Flat</h1>'),
-      { id: 'stack001', children: [s('leaf0001', '<p>a</p>'), s('leaf0002', '<p>b</p>')] },
-    ]);
-    const ours = makeDeck([
-      s('flat0001', '<h1>Flat</h1>'),
-      { id: 'stack001', children: [s('leaf0001', '<p>ours</p>'), s('leaf0002', '<p>b</p>')] },
-    ]);
-    const theirs = makeDeck([
-      s('flat0001', '<h1>Flat</h1>'),
-      { id: 'stack001', children: [s('leaf0001', '<p>theirs</p>'), s('leaf0002', '<p>b</p>')] },
-    ]);
-    const result = diffDeckUnits(containerBase, ours, theirs);
-    expect(result.units).toHaveLength(1);
-    expect(result.units[0].id).toBe('leaf0001');
-    expect(result.units[0].index).toBe('2.1');
-  });
-
-  it('treats attrs key order as irrelevant (sorted comparison)', () => {
-    const withAttrs = (order: 'ab' | 'ba') =>
-      makeDeck([
-        {
-          id: 'aaa11111',
-          html: '<h1>One</h1>',
-          attrs:
-            order === 'ab' ? { 'data-a': '1', 'data-b': '2' } : { 'data-b': '2', 'data-a': '1' },
-        },
-        s('bbb22222', '<h2>Two</h2>'),
-      ]);
-    const result = diffDeckUnits(withAttrs('ab'), withAttrs('ba'), withAttrs('ab'));
-    expect(result.units).toEqual([]);
-  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────

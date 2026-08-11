@@ -82,7 +82,7 @@ test.describe('Pages preview mode', () => {
 
     if (barCount === 1) {
       // Preview bar carries the three actions
-      await expect(page.getByRole('button', { name: 'Accept' })).toBeVisible();
+      await expect(page.getByRole('button', { name: 'Merge' })).toBeVisible();
       await expect(page.getByRole('button', { name: 'Discard' })).toBeVisible();
       await expect(page.getByRole('link', { name: /Diff/ })).toBeVisible();
     }
@@ -123,5 +123,40 @@ test.describe('Pages preview mode', () => {
     // 2. loginAs(page, 'owner'); goto the page WITHOUT ?preview=1
     // 3. expect pending-preview-banner with "View preview", Accept, Discard
     // 4. Cleanup: delete the branch
+  });
+
+  // ── Phase 7: side-by-side conflict chooser ────────────────────────────────
+  // Needs the same content-repo fixture PLUS a seeded conflict: edit block B
+  // differently on main and on the preview branch so accept 409s with a
+  // per-unit report instead of merging.
+
+  test.skip('staff: conflicting accept shows the chooser; Apply is gated on choosing every card', async () => {
+    // 1. Seed a conflict (same block edited differently on main and preview)
+    // 2. loginAs(page, 'owner'); goto the page; click Accept (banner flow)
+    // 3. expect preview-conflict-panel with conflict-card-<blockId> showing
+    //    "Live version (yours)" and "Preview version (agent's)" side by side
+    // 4. expect conflict-apply disabled while any card lacks a choice
+    // 5. click conflict-choose-theirs-<blockId>; expect conflict-apply enabled
+  });
+
+  test.skip('staff: Apply choices commits the resolved merge and redirects with the accepted toast', async () => {
+    // 1. Seed a conflict; open the chooser via Accept (in ?preview=1 bar flow)
+    // 2. choose a side for every card; click conflict-apply
+    // 3. expect redirect to the live view + "Preview accepted" toast
+    //    (mentioning the auto-merged count when > 0)
+    // 4. expect the chosen side's content live on main; branch deleted
+  });
+
+  test.skip('staff: delete-vs-edit conflicts render a tombstone for the deleted side', async () => {
+    // 1. Seed: delete block B on the preview, edit the same block on main
+    // 2. Accept → chooser; expect the theirs side of conflict-card-<blockId>
+    //    to show the "Deleted in the preview" tombstone card
+  });
+
+  test.skip('staff: stale resolutions surface the 400 error and a re-accept refreshes the report', async () => {
+    // 1. Open the chooser, then change main again behind its back (new apply)
+    // 2. click conflict-apply → expect the error line (UNKNOWN_RESOLUTIONS /
+    //    "re-run accept") instead of a silent failure
+    // 3. click Accept again → expect a fresh conflict report
   });
 });

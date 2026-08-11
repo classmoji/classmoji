@@ -19,7 +19,7 @@
 
 import * as cheerio from 'cheerio';
 import type { Cheerio, CheerioAPI } from 'cheerio';
-import type { Element } from 'domhandler';
+import type { AnyNode, Element } from 'domhandler';
 import { randomBytes } from 'node:crypto';
 import type { DeckConfig, DeckExtraCss, DeckJson, DeckSlide } from './deckTypes.ts';
 
@@ -358,8 +358,21 @@ function hasNotesClass(el: Element): boolean {
   return cls.split(/\s+/).includes('notes');
 }
 
+/**
+ * Reveal paints `visible` / `current-fragment` on `.fragment` descendants at
+ * runtime (as the presenter steps through fragments). They are never authored
+ * and must never persist — otherwise a merely-VIEWED slide's read-back html
+ * differs from its stored form and phantom-conflicts / phantom-diffs. Mirrors
+ * the client strips (deckOpsDiff cleanupContainer, RevealSlides
+ * getCurrentContent). `fragment` itself is authored content and stays.
+ */
+function stripFragmentRuntimeClasses($root: Cheerio<AnyNode>): void {
+  $root.find('.fragment').removeClass('visible').removeClass('current-fragment');
+}
+
 /** Strip runtime paint from a section element (plan §2 cruft list). */
 function stripRuntimeCruft($el: Cheerio<Element>): void {
+  stripFragmentRuntimeClasses($el);
   const cls = $el.attr('class');
   if (cls != null) {
     const kept = cls.split(/\s+/).filter(c => c !== '' && !CRUFT_CLASSES.has(c));
@@ -736,114 +749,265 @@ export function normalizeSlideHtml(html: string): string {
     }
   });
 
+  // Reveal fragment runtime paint (visible / current-fragment) never persists.
+  stripFragmentRuntimeClasses($.root());
+
   return $.root().html() ?? '';
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// diffDeckUnits — 3-way unit walk (powers §3b's structured conflict return)
+// Browser-serialization-tolerant HTML equivalence (Phase 7.5 editor saves)
 // ─────────────────────────────────────────────────────────────────────────────
+//
+// The editor-save merge compares the POSTED document (browser-serialized DOM)
+// against decks parsed from stored generator output. Browsers rewrite markup
+// they never semantically changed — the exact rewrites are pinned as captured
+// Chromium ground truth in __tests__/fixtures/browserSerialization.ts:
+//   - CSSOM style serialization: hex → rgb(r, g, b), rgb respacing, numeric
+//     noise trimmed (`.5px` → `0.5px`, `600.50px` → `600.5px`), url()/font
+//     quoting, `; ` joining + trailing `;`
+//   - valueless attrs gain `=""`, attr re-quoting, entity re-encoding,
+//     self-closing slashes dropped
+// The equivalence below treats exactly those rewrites as equal and NOTHING
+// else: tag structure and text-node data compare verbatim (the fragment
+// parser decodes entities, so `&quot;` vs `"` is the same text, never a
+// loosening), pre/code subtrees get no attribute loosening at all, and
+// genuinely different values (colors, numbers, class token order, code
+// content) still differ.
 
-export interface DeckUnitConflict {
-  id: string;
-  /** Dotted position, '4' or '4.2' (position in ours, falling back to theirs/base). */
-  index: string;
-  /** The merge-base version of the unit; absent when the unit was added on both sides. */
-  base?: DeckSlide;
-  /** null = deleted/absent on that side. */
-  ours: DeckSlide | null;
-  theirs: DeckSlide | null;
+/** Protects quoted strings / url() args during unquoted-css normalization. */
+const CSS_STRING_RE = /"((?:[^"\\]|\\.)*)"|'((?:[^'\\]|\\.)*)'/g;
+/** 3/6-digit hex colors only — 4/8-digit (alpha) forms stay verbatim. */
+const CSS_HEX_COLOR_RE = /#([0-9a-f]{6}|[0-9a-f]{3})(?![0-9a-f])/gi;
+const CSS_DECIMAL_RE = /(\d+\.\d*|\.\d+)/g;
+
+function hexToRgbTriplet(hex: string): string {
+  const full =
+    hex.length === 3
+      ? hex
+          .split('')
+          .map(c => c + c)
+          .join('')
+      : hex;
+  const r = parseInt(full.slice(0, 2), 16);
+  const g = parseInt(full.slice(2, 4), 16);
+  const b = parseInt(full.slice(4, 6), 16);
+  return `rgb(${r}, ${g}, ${b})`;
 }
 
-export interface DeckUnitDiff {
-  /** Units changed on BOTH sides with differing results (deep-equal comparison). */
-  units: DeckUnitConflict[];
-  /** Present when both sides reordered the root sequence differently. */
-  orderConflict?: { base: string[]; ours: string[]; theirs: string[] };
-}
-
-interface FlatUnit {
-  unit: DeckSlide;
-  index: string;
-}
-
-function flattenUnits(deck: DeckJson): Map<string, FlatUnit> {
-  const map = new Map<string, FlatUnit>();
-  deck.slides.forEach((slide, i) => {
-    map.set(slide.id, { unit: slide, index: String(i + 1) });
-    slide.children?.forEach((child, j) => {
-      map.set(child.id, { unit: child, index: `${i + 1}.${j + 1}` });
-    });
-  });
-  return map;
-}
-
-/**
- * Comparable signature of a unit. Containers compare their own fields plus the
- * ORDER of their children (child ids) — child content changes are the child
- * unit's own diff. Attrs compared with sorted keys.
- */
-function unitSignature(entry: FlatUnit | undefined): string {
-  if (!entry) return ' absent';
-  const { unit } = entry;
-  const unitAttrs = unit.attrs ?? {};
-  const attrs = Object.keys(unitAttrs)
-    .sort()
-    .map(key => [key, unitAttrs[key]]);
-  return JSON.stringify({
-    html: unit.html ?? null,
-    notes: unit.notes ?? null,
-    hidden: unit.hidden ?? false,
-    attrs,
-    children: unit.children ? unit.children.map(c => c.id) : null,
-  });
+/** `.5` → `0.5`, `600.50` → `600.5`, `-50.0` → `-50` (sign untouched). */
+function trimCssDecimal(digits: string): string {
+  let d = digits.startsWith('.') ? `0${digits}` : digits;
+  if (d.includes('.')) {
+    d = d.replace(/0+$/, '');
+    if (d.endsWith('.')) d = d.slice(0, -1);
+  }
+  return d;
 }
 
 /**
- * Report units changed on BOTH sides (base = merge-base, ours = main,
- * theirs = preview). Reports conflicts only — no auto-merge (Phase 7).
+ * Canonicalize one css declaration VALUE the way Chromium's CSSOM serializer
+ * would (fixture-pinned): quoted strings become double-quoted (content
+ * verbatim), unquoted url() args get quoted, whitespace/comma spacing
+ * collapses, 3/6-digit hex → rgb(r, g, b), decimal noise trimmed. Keyword
+ * case and everything inside quotes stay verbatim — deliberately strict.
  */
-export function diffDeckUnits(base: DeckJson, ours: DeckJson, theirs: DeckJson): DeckUnitDiff {
-  const baseUnits = flattenUnits(base);
-  const ourUnits = flattenUnits(ours);
-  const theirUnits = flattenUnits(theirs);
+function canonicalCssValue(rawValue: string): string {
+  const protectedParts: string[] = [];
+  const protect = (part: string): string => {
+    protectedParts.push(part);
+    return `\u0000${protectedParts.length - 1}\u0000`;
+  };
 
-  const allIds = new Set<string>([...baseUnits.keys(), ...ourUnits.keys(), ...theirUnits.keys()]);
-  const units: DeckUnitConflict[] = [];
-
-  for (const id of allIds) {
-    const b = baseUnits.get(id);
-    const o = ourUnits.get(id);
-    const t = theirUnits.get(id);
-    const bSig = unitSignature(b);
-    const oSig = unitSignature(o);
-    const tSig = unitSignature(t);
-
-    const changedOurs = oSig !== bSig;
-    const changedTheirs = tSig !== bSig;
-    if (changedOurs && changedTheirs && oSig !== tSig) {
-      const index = o?.index ?? t?.index ?? b?.index ?? '';
-      const conflict: DeckUnitConflict = {
-        id,
-        index,
-        ours: o?.unit ?? null,
-        theirs: t?.unit ?? null,
-      };
-      if (b) conflict.base = b.unit;
-      units.push(conflict);
+  // Quoted strings first: canonical double-quoted form, content verbatim.
+  let value = rawValue.replace(
+    CSS_STRING_RE,
+    (_m, dq: string | undefined, sq: string | undefined) => {
+      const content =
+        dq !== undefined ? dq : (sq as string).replace(/\\'/g, "'").replace(/"/g, '\\"');
+      return protect(`"${content}"`);
     }
-  }
+  );
+  // Unquoted url() args (quoted ones are already placeholders): url(x) → url("x").
+  value = value.replace(
+    // eslint-disable-next-line no-control-regex -- \u0000 is the placeholder sentinel; parsed attr values can never contain NUL
+    /url\(\s*([^)\u0000]*?)\s*\)/gi,
+    (_m, arg: string) => `url(${protect(`"${arg}"`)})`
+  );
 
-  // Root order sequence compared as id arrays.
-  const baseOrder = base.slides.map(s => s.id);
-  const ourOrder = ours.slides.map(s => s.id);
-  const theirOrder = theirs.slides.map(s => s.id);
-  const sameAsBaseOurs = JSON.stringify(ourOrder) === JSON.stringify(baseOrder);
-  const sameAsBaseTheirs = JSON.stringify(theirOrder) === JSON.stringify(baseOrder);
-  const oursVsTheirs = JSON.stringify(ourOrder) === JSON.stringify(theirOrder);
+  value = value
+    .trim()
+    .replace(/\s+/g, ' ')
+    .replace(/\s*,\s*/g, ', ')
+    .replace(/\(\s+/g, '(')
+    .replace(/\s+\)/g, ')')
+    .replace(CSS_HEX_COLOR_RE, (_m, hex: string) => hexToRgbTriplet(hex.toLowerCase()))
+    .replace(CSS_DECIMAL_RE, (_m, digits: string) => trimCssDecimal(digits));
 
-  const result: DeckUnitDiff = { units };
-  if (!sameAsBaseOurs && !sameAsBaseTheirs && !oursVsTheirs) {
-    result.orderConflict = { base: baseOrder, ours: ourOrder, theirs: theirOrder };
+  // eslint-disable-next-line no-control-regex -- restoring the \u0000-delimited placeholders
+  return value.replace(/\u0000(\d+)\u0000/g, (_m, i: string) => protectedParts[Number(i)]);
+}
+
+/** Split a style attr on top-level `;` (quotes and parens respected). */
+function splitStyleDeclarations(style: string): string[] {
+  const parts: string[] = [];
+  let current = '';
+  let quote: '"' | "'" | null = null;
+  let depth = 0;
+  for (let i = 0; i < style.length; i++) {
+    const ch = style[i];
+    if (quote) {
+      current += ch;
+      if (ch === '\\' && i + 1 < style.length) {
+        current += style[++i];
+      } else if (ch === quote) {
+        quote = null;
+      }
+      continue;
+    }
+    if (ch === '"' || ch === "'") {
+      quote = ch;
+    } else if (ch === '(') {
+      depth++;
+    } else if (ch === ')') {
+      depth = Math.max(0, depth - 1);
+    } else if (ch === ';' && depth === 0) {
+      parts.push(current);
+      current = '';
+      continue;
+    }
+    current += ch;
   }
-  return result;
+  if (current.trim() !== '') parts.push(current);
+  return parts;
+}
+
+/**
+ * Canonical form of a style attr VALUE for equivalence: declarations parsed
+ * (property lowercased, value via canonicalCssValue), trailing `;` irrelevant
+ * by construction.
+ *
+ * Declaration ORDER is PRESERVED — a browser DOM round-trip never reorders a
+ * style attr's declarations (captured Chromium ground truth in the fixtures),
+ * so two read-backs of untouched markup keep the same order, while a genuine
+ * shorthand/longhand reorder (`margin-top: 5px; margin: 10px` vs the reverse)
+ * changes the rendered result and MUST read as a difference. Sorting the
+ * declarations (the old behavior) masked exactly those semantic edits.
+ *
+ * An EXACT same-property repeat still collapses last-wins (the browser's own
+ * behavior), keeping the property at its first-seen position. Custom
+ * properties (`--x`) are stored verbatim by the browser — their value skips
+ * canonicalCssValue (no hex→rgb, no decimal trimming) and their name keeps its
+ * case.
+ */
+function canonicalStyleAttr(style: string): string {
+  const order: string[] = [];
+  const values = new Map<string, string>();
+  const set = (prop: string, value: string): void => {
+    if (!values.has(prop)) order.push(prop);
+    values.set(prop, value);
+  };
+  for (const raw of splitStyleDeclarations(style)) {
+    const idx = raw.indexOf(':');
+    if (idx === -1) {
+      const bare = raw.trim().toLowerCase();
+      if (bare) set(bare, '');
+      continue;
+    }
+    const rawProp = raw.slice(0, idx).trim();
+    if (!rawProp) continue;
+    const isCustom = rawProp.startsWith('--');
+    const prop = isCustom ? rawProp : rawProp.toLowerCase();
+    const value = isCustom ? raw.slice(idx + 1).trim() : canonicalCssValue(raw.slice(idx + 1));
+    set(prop, value);
+  }
+  return order.map(prop => `${prop}:${values.get(prop)}`).join(';');
+}
+
+/**
+ * Canonical form of one attribute value for browser-serialization-tolerant
+ * comparison: `style` via the CSSOM rules, everything else (including `class`)
+ * verbatim. Browsers preserve the class attribute string byte-for-byte on a
+ * DOM round-trip (fixture-pinned: leading/trailing and repeated whitespace all
+ * survive), so collapsing it would mask a real edit — compare it verbatim.
+ * Values are already entity-decoded by the parser; a valueless attr and `=""`
+ * are both the empty string.
+ */
+export function browserCanonicalAttrValue(name: string, value: string): string {
+  if (name === 'style') return canonicalStyleAttr(value);
+  return value;
+}
+
+function browserCanonicalNodeSig(node: AnyNode, verbatimAttrs: boolean): string {
+  if (node.type === 'text') {
+    // Parser-decoded data verbatim: entity re-encodings compare equal, any
+    // actual character change (including whitespace) does not.
+    return `T${JSON.stringify(node.data)}`;
+  }
+  if (node.type === 'comment') {
+    return `C${JSON.stringify(node.data)}`;
+  }
+  if (node.type === 'tag' || node.type === 'script' || node.type === 'style') {
+    const el = node as Element;
+    const name = el.tagName.toLowerCase();
+    // No attribute loosening anywhere inside pre/code — code content (and any
+    // markup riding in it) must never be loosened.
+    const childVerbatim = verbatimAttrs || name === 'pre' || name === 'code';
+    const attrs = Object.entries(el.attribs ?? {})
+      .map(([attrName, attrValue]): [string, string] => {
+        const lower = attrName.toLowerCase();
+        const raw = attrValue ?? '';
+        return [lower, verbatimAttrs ? raw : browserCanonicalAttrValue(lower, raw)];
+      })
+      .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+    const children = (el.children as AnyNode[])
+      .map(child => browserCanonicalNodeSig(child, childVerbatim))
+      .join('');
+    return `<${name} ${JSON.stringify(attrs)}>${children}</${name}>`;
+  }
+  // Directives / CDATA / anything exotic: byte-strict.
+  return `O${JSON.stringify({ type: node.type, data: (node as { data?: string }).data ?? '' })}`;
+}
+
+const canonicalHtmlCache = new Map<string, string>();
+const CANONICAL_HTML_CACHE_MAX = 2000;
+
+/**
+ * Canonical signature of an html fragment under the browser-serialization
+ * equivalence. Two fragments are equivalent iff their signatures match —
+ * signature comparison is transitive, so merge decisions stay consistent
+ * across base/ours/theirs.
+ */
+export function browserCanonicalHtmlSig(html: string): string {
+  const cached = canonicalHtmlCache.get(html);
+  if (cached !== undefined) return cached;
+  let sig: string;
+  try {
+    const $ = cheerio.load(html, null, false);
+    sig = ($.root()[0].children as AnyNode[])
+      .map(child => browserCanonicalNodeSig(child, false))
+      .join('');
+  } catch {
+    // Unparseable → byte-strict (never loosen what we cannot model).
+    sig = `RAW${JSON.stringify(html)}`;
+  }
+  if (canonicalHtmlCache.size >= CANONICAL_HTML_CACHE_MAX) canonicalHtmlCache.clear();
+  canonicalHtmlCache.set(html, sig);
+  return sig;
+}
+
+/**
+ * True when two html/notes fragments differ only by browser serialization
+ * (DOM round-trip + CSSOM style re-serialization) — see the fixture file for
+ * the exact rewrites this absorbs. Conservative by design: any real content,
+ * structure, attribute, color, or numeric difference is NOT equivalent.
+ * null/undefined are equivalent only to each other (absent ≠ empty string).
+ */
+export function htmlEquivalentModuloBrowserSerialization(
+  a: string | null | undefined,
+  b: string | null | undefined
+): boolean {
+  if (a == null || b == null) return a == null && b == null;
+  if (a === b) return true;
+  return browserCanonicalHtmlSig(a) === browserCanonicalHtmlSig(b);
 }

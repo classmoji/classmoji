@@ -434,6 +434,54 @@ export class ContentService {
   }
 
   /**
+   * Fetch a blob's decoded utf-8 content by its blob sha (Git Blobs API).
+   * Blob shas are content-addressed — no ref is needed and the content can
+   * never change under the sha, so this is the canonical way to read "the
+   * file as it was when a conflict token was handed out" (content-tools plan
+   * §3b Phase 7.5: the editor's stale token IS the 3-way merge base).
+   *
+   * Never cached (immutable content, read once per stale save).
+   *
+   * @param {Object} options
+   * @param {Object} [options.gitOrganization] - GitOrganization record from database
+   * @param {string} [options.orgLogin] - Organization login (fallback, assumes GITHUB)
+   * @param {string} options.repo - Repository name
+   * @param {string} options.sha - The blob sha to fetch
+   * @returns {Promise<{ content: string, sha: string } | null>} - null when the
+   *   blob does not exist in the repo (404, or GitHub's 422 for a malformed sha)
+   */
+  static async getBlobContent({
+    gitOrganization,
+    orgLogin,
+    repo,
+    sha,
+  }: {
+    gitOrganization?: GitOrganizationRecord;
+    orgLogin?: string;
+    repo: string;
+    sha: string;
+  }): Promise<{ content: string; sha: string } | null> {
+    try {
+      const resolvedOrg = await resolveGitOrganization(gitOrganization, orgLogin);
+      const octokit = await getOctokit(resolvedOrg);
+      const { data } = await octokit.request('GET /repos/{owner}/{repo}/git/blobs/{file_sha}', {
+        owner: resolvedOrg.login,
+        repo,
+        file_sha: sha,
+      });
+      return {
+        content: Buffer.from(data.content, 'base64').toString('utf-8'),
+        sha,
+      };
+    } catch (error: unknown) {
+      if (hasStatus(error, 404) || hasStatus(error, 422)) {
+        return null;
+      }
+      throw error;
+    }
+  }
+
+  /**
    * Create or update a text file
    * @param {Object} options
    * @param {Object} [options.gitOrganization] - GitOrganization record from database
@@ -441,7 +489,11 @@ export class ContentService {
    * @param {string} options.repo - Repository name
    * @param {string} options.path - File path
    * @param {string} options.content - File content
-   * @param {string} [options.expectedSha] - Expected SHA for optimistic locking
+   * @param {string} [options.expectedSha] - Expected SHA for optimistic
+   *   locking. Sent as the PUT's `sha` so GitHub enforces it ATOMICALLY
+   *   (compare-and-swap, not check-then-act); the uncached pre-check only
+   *   exists for a clear early 409 and the deleted-file case. Without it, the
+   *   write adopts whatever sha a fresh read returns (last-writer-wins).
    * @param {string} [options.branch] - Branch to commit to (default: repository default branch)
    * @param {string} [options.message] - Commit message
    * @param {boolean} [options.createOnly] - Create-only write: no sha is ever
@@ -481,10 +533,20 @@ export class ContentService {
       throw new Error('createOnly and expectedSha are mutually exclusive');
     }
 
-    // Check current SHA if optimistic locking is requested
-    // (branch writes check the sha on that branch; ref bypasses the cache)
+    // Pre-check when optimistic locking is requested (branch writes check the
+    // sha on that branch). skipCache is REQUIRED here: a cached read could
+    // vouch for a sha that main has already moved past, and the check exists
+    // to produce a clear, early 409 — GitHub enforces the real precondition
+    // below. The deleted-file case (404) can only be caught here: a sha-bearing
+    // PUT against a missing file is not a conflict to GitHub.
     if (expectedSha) {
-      const current = await this.getMeta({ gitOrganization: resolvedOrg, repo, path, ref: branch });
+      const current = await this.getMeta({
+        gitOrganization: resolvedOrg,
+        repo,
+        path,
+        ref: branch,
+        skipCache: true,
+      });
       if (!current) {
         // A sha was expected but the file is gone: deleted = changed. Silently
         // recreating would resurrect content the deleter meant to remove.
@@ -499,24 +561,30 @@ export class ContentService {
       }
     }
 
-    // Get current SHA for update (required by GitHub API). createOnly writes
-    // deliberately skip this and send no sha, so GitHub itself enforces
-    // non-existence (422 when the file materialized concurrently).
-    const existing = createOnly
-      ? null
-      : await this.getMeta({ gitOrganization: resolvedOrg, repo, path, ref: branch });
+    // Get current SHA for update (required by GitHub API) — only when the
+    // caller did NOT lock: expectedSha writes send the caller's sha directly
+    // so GitHub enforces it atomically (a second read here would adopt a
+    // concurrent write and defeat the lock — check-then-act, not CAS).
+    // createOnly writes send no sha, so GitHub itself enforces non-existence
+    // (422 when the file materialized concurrently).
+    const existing =
+      createOnly || expectedSha
+        ? null
+        : await this.getMeta({ gitOrganization: resolvedOrg, repo, path, ref: branch });
 
-    let data;
+    let response;
     try {
-      ({ data } = await octokit.request('PUT /repos/{owner}/{repo}/contents/{path}', {
+      response = await octokit.request('PUT /repos/{owner}/{repo}/contents/{path}', {
         owner: resolvedOrg.login,
         repo,
         path,
         message: message || `Update ${path}`,
         content: Buffer.from(content).toString('base64'),
-        sha: existing?.sha, // Required for updates, undefined for creates
+        // expectedSha is the atomic precondition; otherwise the fresh read's
+        // sha (required for updates), undefined for creates.
+        sha: expectedSha ?? existing?.sha,
         ...(branch ? { branch } : {}),
-      }));
+      });
     } catch (error: unknown) {
       // Sha-less create against an existing file → GitHub 422. For createOnly
       // callers that's the existence race, surfaced with conflict semantics.
@@ -527,8 +595,41 @@ export class ContentService {
         conflict.status = 409;
         throw conflict;
       }
+      // GitHub rejected the expectedSha precondition: the file moved between
+      // the pre-check and the PUT. It answers 409 Conflict, and (observed in
+      // practice) 422 "sha … does not match" for the SAME mismatch — map both
+      // to the same conflict so the caller never gets a raw 422.
+      if (
+        expectedSha &&
+        (hasStatus(error, 409) ||
+          (hasStatus(error, 422) && /does not match|sha/i.test(getErrorMessage(error))))
+      ) {
+        const conflict = new Error('File was modified by someone else') as Error & {
+          status: number;
+        };
+        conflict.status = 409;
+        throw conflict;
+      }
       throw error;
     }
+
+    // Concurrent-delete race (live-probed): with an expectedSha the pre-check
+    // saw the file present, but it was DELETED before this PUT landed. GitHub
+    // has no "update-only" mode — a sha-bearing PUT on a now-missing path
+    // CREATES the file (HTTP 201) instead of conflicting, silently resurrecting
+    // content the deleter removed. The create cannot be cheaply prevented (no
+    // compare-and-swap-on-delete API), so we surface the delete as the same
+    // conflict AFTER the unwanted create; the caller reloads and the stray file
+    // is reconciled (overwritten/removed) on the next write.
+    if (expectedSha && response.status === 201) {
+      const conflict = new Error('File was deleted since it was read') as Error & {
+        status: number;
+      };
+      conflict.status = 409;
+      throw conflict;
+    }
+
+    const { data } = response;
 
     // Invalidate cache for this path (and parent folder).
     // Branch writes don't touch the default branch's content, so they must

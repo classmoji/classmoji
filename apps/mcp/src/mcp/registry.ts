@@ -199,6 +199,7 @@ function toErrorResult(error: unknown, toolName: string): ToolResult {
             error: error.kind,
             ...(error.code ? { code: error.code } : {}),
             message: error.message,
+            ...(error.data ?? {}),
           }),
         },
       ],
@@ -274,6 +275,7 @@ function toResourceError(error: unknown, resourceName: string): McpError {
     return new McpError(RESOURCE_ERROR_CODES[error.kind], error.message, {
       kind: error.kind,
       ...(error.code ? { code: error.code } : {}),
+      ...(error.data ?? {}),
     });
   }
   // Unknown failure: log server-side, return a generic message (no internals).
