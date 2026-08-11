@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Select, Switch, Avatar, Empty, Button, Tag } from 'antd';
+import { Select, Switch, Avatar, Empty, Button, Tag, Checkbox } from 'antd';
 import {
   EditOutlined,
   BookOutlined,
@@ -7,7 +7,7 @@ import {
   QuestionCircleOutlined,
 } from '@ant-design/icons';
 import ModuleSelectionDrawer from './ModuleSelectionDrawer';
-import type { ClassroomModule, OwnedClassroom } from './types';
+import type { ClassroomModule, ImportSelections, OwnedClassroom } from './types';
 
 interface ModuleConfig {
   includeQuizzes: boolean;
@@ -21,6 +21,17 @@ interface StepImportModulesProps {
   setSourceClassroomId: (id: string | null) => void;
   selectedModules: Map<string, ModuleConfig>;
   setSelectedModules: (repositories: Map<string, ModuleConfig>) => void;
+  importSelections: ImportSelections;
+  setImportSelections: (selections: ImportSelections) => void;
+}
+
+/** One "Also copy" toggle row: key, label, sublabel, and an item count that
+ * disables the row at zero (null count = settings groups, always available). */
+interface CopyGroupRow {
+  key: keyof ImportSelections;
+  label: string;
+  sublabel?: string;
+  count?: number | null;
 }
 
 const StepImportModules = ({
@@ -31,6 +42,8 @@ const StepImportModules = ({
   setSourceClassroomId,
   selectedModules,
   setSelectedModules,
+  importSelections,
+  setImportSelections,
 }: StepImportModulesProps) => {
   const [drawerOpen, setDrawerOpen] = useState(false);
 
@@ -200,6 +213,105 @@ const StepImportModules = ({
                       Deadlines will be removed. Repositories and quizzes will start unpublished.
                     </div>
                   )}
+                </div>
+              )}
+
+              {sourceClassroomId && (
+                <div className="p-4 border border-gray-200 dark:border-neutral-700 rounded-lg">
+                  <div className="font-medium mb-1">Also copy</div>
+                  <div className="text-sm text-gray-500 mb-3">
+                    Settings and content to bring over from{' '}
+                    {sourceClassroom?.name ?? 'the source classroom'}. Pages, slide decks, and
+                    modules arrive as drafts.
+                  </div>
+                  <div className="grid sm:grid-cols-2 gap-x-6 gap-y-2">
+                    {(
+                      [
+                        {
+                          key: 'grading',
+                          label: 'Grading & late penalty',
+                          sublabel: 'late penalty rate, grade visibility',
+                        },
+                        {
+                          key: 'gradeScales',
+                          label: 'Grade scales',
+                          count:
+                            (sourceClassroom?._count?.emoji_mappings ?? 0) +
+                            (sourceClassroom?._count?.letter_grade_mappings ?? 0),
+                          sublabel: 'emoji + letter-grade mappings',
+                        },
+                        {
+                          key: 'tokens',
+                          label: 'Tokens & extensions',
+                          sublabel: 'default token rate',
+                        },
+                        {
+                          key: 'features',
+                          label: 'Features & appearance',
+                          sublabel: 'feature toggles, navigation, theme',
+                        },
+                        {
+                          key: 'aiConfig',
+                          label: 'AI & quiz config',
+                          sublabel: 'models, temperature, syllabus bot',
+                        },
+                        {
+                          key: 'apiKeys',
+                          label: 'AI API keys',
+                          sublabel: 'secrets — copy only if you mean to',
+                        },
+                        {
+                          key: 'pages',
+                          label: 'Pages',
+                          count: sourceClassroom?._count?.pages ?? 0,
+                          sublabel: 'imported as drafts',
+                        },
+                        {
+                          key: 'slides',
+                          label: 'Slide decks',
+                          count: sourceClassroom?._count?.slides ?? 0,
+                          sublabel: 'imported as drafts',
+                        },
+                        {
+                          key: 'modules',
+                          label: 'Modules',
+                          count: sourceClassroom?._count?.modules ?? 0,
+                          sublabel: 'items link only to content you import',
+                        },
+                        {
+                          key: 'calendar',
+                          label: 'Calendar events',
+                          count: sourceClassroom?._count?.calendar_events ?? 0,
+                          sublabel: 'dates copied as-is — edit after import',
+                        },
+                      ] as CopyGroupRow[]
+                    ).map(row => {
+                      const disabled = row.count !== undefined && (row.count ?? 0) === 0;
+                      return (
+                        <Checkbox
+                          key={row.key}
+                          checked={!disabled && importSelections[row.key]}
+                          disabled={disabled}
+                          onChange={e =>
+                            setImportSelections({
+                              ...importSelections,
+                              [row.key]: e.target.checked,
+                            })
+                          }
+                        >
+                          <span className="text-sm">
+                            {row.label}
+                            {row.count !== undefined && (
+                              <span className="text-gray-400"> ({row.count})</span>
+                            )}
+                          </span>
+                          {row.sublabel && (
+                            <div className="text-xs text-gray-500">{row.sublabel}</div>
+                          )}
+                        </Checkbox>
+                      );
+                    })}
+                  </div>
                 </div>
               )}
 
