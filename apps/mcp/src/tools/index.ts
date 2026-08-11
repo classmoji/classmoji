@@ -30,6 +30,21 @@ import {
   calendarEventDeleteTool,
 } from './calendar.ts';
 import { pageCreateTool, pageUpdateTool, pageDeleteTool } from './pages.ts';
+import {
+  pageContentOutlineTool,
+  pageContentGetTool,
+  pageContentApplyTool,
+  pagePreviewAcceptTool,
+  pagePreviewDiscardTool,
+} from './pageContent.ts';
+import { listSlidesTool, slideCreateTool, slideUpdateTool, slideDeleteTool } from './slides.ts';
+import {
+  deckOutlineTool,
+  deckGetTool,
+  deckApplyTool,
+  deckPreviewAcceptTool,
+  deckPreviewDiscardTool,
+} from './deck.ts';
 import { tokenGrantTool } from './tokens.ts';
 import { extensionPurchaseTool } from './extensions.ts';
 import { repoCreateTool, repoPublishTool, repoUnpublishTool } from './repos.ts';
@@ -81,6 +96,29 @@ export function registerAllTools(): void {
   registerToolDefinition(pageCreateTool);
   registerToolDefinition(pageUpdateTool);
   registerToolDefinition(pageDeleteTool);
+
+  // Page content: granular BlockNote editing + preview-branch workflow
+  // (OWNER+TEACHER — parity with web page editing)
+  registerToolDefinition(pageContentOutlineTool);
+  registerToolDefinition(pageContentGetTool);
+  registerToolDefinition(pageContentApplyTool);
+  registerToolDefinition(pagePreviewAcceptTool);
+  registerToolDefinition(pagePreviewDiscardTool);
+
+  // Slides: list (all roles, students published-only) + metadata CRUD
+  // (TEACHING_TEAM with the web's creator/allow_team_edit sub-gate)
+  registerToolDefinition(listSlidesTool);
+  registerToolDefinition(slideCreateTool);
+  registerToolDefinition(slideUpdateTool);
+  registerToolDefinition(slideDeleteTool);
+
+  // Deck content: granular slide editing + preview-branch workflow
+  // (TEACHING_TEAM + sub-gate on writes)
+  registerToolDefinition(deckOutlineTool);
+  registerToolDefinition(deckGetTool);
+  registerToolDefinition(deckApplyTool);
+  registerToolDefinition(deckPreviewAcceptTool);
+  registerToolDefinition(deckPreviewDiscardTool);
 
   // Tokens (OWNER)
   registerToolDefinition(tokenGrantTool);

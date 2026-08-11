@@ -66,10 +66,11 @@ export const pageCreateTool: ToolDefinition<PageCreateArgs> = {
   annotations: { destructive: false, openWorld: true },
   title: 'Create a page',
   description:
-    "Creates a new course page: a folder with an index.html in the classroom's shared content " +
-    'repo on GitHub, the database record (created as a draft), and a content-manifest refresh. ' +
-    'Mirrors the web "Create Blank" flow; pass html to seed the initial content. Publish it ' +
-    'later with page_update (is_draft: false).',
+    "Creates a new course page in the classroom's shared content repo on GitHub (a blank " +
+    'block-based content.json plus index.html), the database record (created as a draft), and ' +
+    'a content-manifest refresh. Edit its content with page_content_apply (start from ' +
+    'page_content_outline); publish it with page_update (is_draft: false). The optional html ' +
+    'param seeds legacy index.html content instead — prefer the block tools.',
   scope: 'write',
   roles: OWNER_TEACHER,
   inputSchema: {
@@ -142,7 +143,7 @@ export const pageUpdateTool: ToolDefinition<PageUpdateArgs> = {
   description:
     "Updates a course page's metadata: title, layout width, draft/published state (publishing " +
     'notifies students), public visibility, and student-menu placement. Page CONTENT is edited ' +
-    'in the web editor, not here.',
+    'with page_content_apply, not here.',
   scope: 'write',
   roles: OWNER_TEACHER,
   inputSchema: {

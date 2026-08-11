@@ -8,11 +8,9 @@
 
 import { useLoaderData, useNavigation, Form, redirect, useActionData } from 'react-router';
 import getPrisma from '@classmoji/database';
-import { getGitProvider, ClassmojiService } from '@classmoji/services';
-import { ContentService } from '@classmoji/content';
 import { requireClassroomTeachingTeam } from '@classmoji/auth/server';
+import { slideService } from '@classmoji/services/slides';
 import { useUser } from '~/root';
-import { generateSlideTemplate } from '~/utils/slideHelpers.server';
 
 export const loader = async ({
   params,
@@ -102,71 +100,15 @@ export const action = async ({
     return { error: 'Classroom content namespace not configured' };
   }
 
-  // Generate slug from title
-  const slug = title
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-|-$/g, '');
-
-  // Content repo name: content-{gitOrgLogin}-{contentNamespace}
-  const repoName = `content-${gitOrgLogin}-${contentNamespace}`;
-
-  // Flat content path: slides/{slug}
-  const contentPath = `slides/${slug}`;
-
   try {
-    // Step 1: Check if content repo exists, create if not
-    const gitProvider = getGitProvider(classroom.git_organization!);
-    const repoExists = await gitProvider.repositoryExists(gitOrgLogin, repoName);
-    if (!repoExists) {
-      console.log(`Creating content repository: ${repoName}`);
-      await gitProvider.createPublicRepository(
-        gitOrgLogin,
-        repoName,
-        `Course content for ${classroom.name || gitOrgLogin} - ${contentNamespace}`
-      );
-
-      // Give GitHub a moment to initialize the repo
-      await new Promise(resolve => setTimeout(resolve, 2000));
-    }
-
-    // Always try to enable GitHub Pages (idempotent - skips if already enabled)
-    try {
-      console.log(`Ensuring GitHub Pages is enabled for: ${repoName}`);
-      await gitProvider.enableGitHubPages(gitOrgLogin, repoName);
-    } catch (pagesError: unknown) {
-      // Pages API requires special permission - log but continue
-      const message = pagesError instanceof Error ? pagesError.message : String(pagesError);
-      console.warn(`Could not auto-enable GitHub Pages: ${message}`);
-      console.warn('GitHub Pages may need to be enabled manually in repo settings');
-    }
-
-    // Step 2: Create the slide HTML file
-    const slideHtml = generateSlideTemplate(title);
-    const filePath = `${contentPath}/index.html`;
-
-    console.log(`Creating slide content at: ${filePath}`);
-    await ContentService.put({
-      gitOrganization: classroom.git_organization,
-      repo: repoName,
-      path: filePath,
-      content: slideHtml,
-      message: `Create slides: ${title}`,
+    // Orchestrated creation (content-tools plan §5.3): repo ensure → canonical
+    // starter deck via saveDeck (deck.json + index.html in one commit) → DB
+    // row → manifest refresh.
+    const { slide } = await slideService.createSlide({
+      classroomId: classroom.id,
+      title,
+      createdBy: userId,
     });
-
-    // Step 3: Create the database record
-    const slide = await getPrisma().slide.create({
-      data: {
-        title,
-        slug,
-        content_path: contentPath,
-        classroom_id: classroom.id,
-        created_by: userId,
-      },
-    });
-
-    // Update manifest after creating slide
-    await ClassmojiService.contentManifest.saveManifest(classroom.id);
 
     // Redirect to the new slide in edit mode
     return redirect(`/${slide.id}?mode=edit`);

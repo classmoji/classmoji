@@ -1,5 +1,6 @@
 import getPrisma from '@classmoji/database';
-import { ContentService } from '@classmoji/content';
+import { classroomContentRepoName } from '@classmoji/utils';
+import { ContentService } from '../content/ContentService.ts';
 
 interface ManifestAssignmentEntry {
   pages: string[];
@@ -91,7 +92,10 @@ export async function saveManifest(classroomId: string): Promise<void> {
     .map(s => s.slug ?? String(s.id));
 
   // Write to repo
-  const repoName = `content-${classroom.git_organization.login}-${classroom.content_namespace}`;
+  const repoName = classroomContentRepoName({
+    login: classroom.git_organization.login,
+    namespace: classroom.content_namespace,
+  });
 
   try {
     await ContentService.put({

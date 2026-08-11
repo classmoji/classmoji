@@ -19,10 +19,12 @@ import {
   editSlide,
   presentSlide,
   followSlide,
+  setSlideVisibility,
   deleteSlide,
   saveSlide,
   addSlideBelow,
   waitForReveal,
+  reloadUntil,
   getTestClassroomSlug,
 } from '../helpers';
 import {
@@ -64,7 +66,12 @@ test.describe('Slides deck lifecycle', () => {
     await editSlide(page, testSlideId);
     await waitForReveal(page);
 
-    const sectionsBefore = await page.locator('.reveal .slides > section').count();
+    // Count ALL sections (nested included): "↓ Add" adds a VERTICAL slide,
+    // which nests the current slide into a stack wrapper — the top-level
+    // count stays flat while the total grows. The deck engine now preserves
+    // stack wrappers through saves (content-tools plan §5.8), so counting
+    // only `> section` would miss the added slide.
+    const sectionsBefore = await page.locator('.reveal .slides section').count();
 
     await addSlideBelow(page);
 
@@ -76,10 +83,16 @@ test.describe('Slides deck lifecycle', () => {
     await expect(editable).toContainText(uniqueText);
 
     await saveSlide(page);
-    await page.reload();
-    await waitForReveal(page);
+    // reloadUntil absorbs GitHub's short read-after-write window on the
+    // git-data save path (the commit is verified-correct; an immediate reload
+    // can still serve the pre-save cached copy for a few seconds).
+    await reloadUntil(page, async () => {
+      const count = await page.locator('.reveal .slides section').count();
+      const text = (await page.locator('.reveal .slides').textContent()) ?? '';
+      return count >= sectionsBefore + 1 && text.includes(uniqueText);
+    });
 
-    const sectionsAfter = await page.locator('.reveal .slides > section').count();
+    const sectionsAfter = await page.locator('.reveal .slides section').count();
     expect(sectionsAfter).toBeGreaterThanOrEqual(sectionsBefore + 1);
     await expect(page.locator('.reveal .slides')).toContainText(uniqueText);
   });
@@ -93,7 +106,9 @@ test.describe('Slides deck lifecycle', () => {
 
     // Assert a stable signal that we are in present mode: the route is
     // /<slideId>/present (rather than relying on translatable helper copy).
-    await expect(page).toHaveURL(/\/present(\?|$)/);
+    // Reveal appends a `#/` slide hash once initialized, so allow it — the
+    // old (\?|$) pattern only matched in the pre-hash window (flaky).
+    await expect(page).toHaveURL(/\/present([?#]|$)/);
   });
 
   test('a shared deck can be opened via its public follow link', async ({ browser }) => {
@@ -101,6 +116,19 @@ test.describe('Slides deck lifecycle', () => {
     shareCode = await ensureSlideShareCode(testSlideId);
     const row = await getSlideById(testSlideId);
     expect(row?.multiplex_id).toBe(shareCode);
+
+    // The root loader only admits unauthenticated visitors to PUBLIC,
+    // non-draft decks (app/root.server.ts) — freshly-created decks are drafts,
+    // so publish it before the anonymous follow. (Requires an authed session
+    // for the dev-only test endpoint.)
+    const ownerContext = await browser.newContext();
+    const ownerPage = await ownerContext.newPage();
+    try {
+      await loginAs(ownerPage, 'owner');
+      await setSlideVisibility(ownerPage, testSlideId, 'public');
+    } finally {
+      await ownerContext.close();
+    }
 
     const context = await browser.newContext();
     const page = await context.newPage();

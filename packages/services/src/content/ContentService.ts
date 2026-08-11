@@ -6,7 +6,7 @@
  */
 
 import getPrisma from '@classmoji/database';
-import { getGitProvider } from '@classmoji/services';
+import { getGitProvider } from '../git/index.ts';
 import { validateFile, sanitizeFilename } from './utils/validateFile.ts';
 
 interface GitOrganizationRecord {
@@ -224,6 +224,7 @@ export class ContentService {
    * @param {string} [options.orgLogin] - Organization login (fallback, assumes GITHUB)
    * @param {string} options.repo - Repository name
    * @param {string} options.path - File path
+   * @param {string} [options.ref] - Git ref (branch/tag/sha) to read from; bypasses the cache
    * @param {boolean} [options.skipCache=false] - Skip cache (for write operations)
    * @returns {Promise<{ sha: string, size: number } | null>}
    */
@@ -232,20 +233,25 @@ export class ContentService {
     orgLogin,
     repo,
     path,
+    ref,
     skipCache = false,
   }: {
     gitOrganization?: GitOrganizationRecord;
     orgLogin?: string;
     repo: string;
     path: string;
+    ref?: string;
     skipCache?: boolean;
   }): Promise<{ sha: string; size: number } | null> {
     try {
       const resolvedOrg = await resolveGitOrganization(gitOrganization, orgLogin);
 
-      // Check cache first (unless explicitly skipped or is an image)
+      // Check cache first (unless explicitly skipped or is an image).
+      // Ref-bearing reads bypass the cache entirely: the cache is keyed
+      // org:repo:path (default branch only), so a branch read must never
+      // serve — or be stored into — the default branch's entries.
       const cacheKey = getCacheKey(resolvedOrg.login, repo, path);
-      if (!skipCache && !isImagePath(path)) {
+      if (!skipCache && !ref && !isImagePath(path)) {
         const cached = getCache<{ sha: string; size: number }>(cacheKey + ':meta');
         if (cached !== null) {
           return cached;
@@ -257,6 +263,7 @@ export class ContentService {
         owner: resolvedOrg.login,
         repo,
         path,
+        ...(ref ? { ref } : {}),
       });
 
       const result = {
@@ -264,8 +271,8 @@ export class ContentService {
         size: data.size,
       };
 
-      // Cache the result (unless it's an image)
-      if (!isImagePath(path)) {
+      // Cache the result (unless it's an image or a ref-bearing read)
+      if (!ref && !isImagePath(path)) {
         setCache(cacheKey + ':meta', result);
       }
 
@@ -286,6 +293,7 @@ export class ContentService {
    * @param {string} [options.orgLogin] - Organization login (fallback, assumes GITHUB)
    * @param {string} options.repo - Repository name
    * @param {string} options.path - File path
+   * @param {string} [options.ref] - Git ref (branch/tag/sha) to read from; bypasses the cache
    * @param {boolean} [options.raw=false] - If true, returns raw base64 string (for binary files)
    * @param {boolean} [options.skipCache=false] - Skip cache (for fetching latest content)
    * @returns {Promise<{ content: string, sha: string } | null>}
@@ -295,6 +303,7 @@ export class ContentService {
     orgLogin,
     repo,
     path,
+    ref,
     raw = false,
     skipCache = false,
   }: {
@@ -302,6 +311,7 @@ export class ContentService {
     orgLogin?: string;
     repo: string;
     path: string;
+    ref?: string;
     raw?: boolean;
     skipCache?: boolean;
   }): Promise<{ content: string; sha: string } | null> {
@@ -310,9 +320,11 @@ export class ContentService {
 
       // Check cache first (unless explicitly skipped or is an image)
       // Images are excluded because they're large and rarely refetched
+      // Ref-bearing reads bypass the cache entirely (cache is keyed
+      // org:repo:path for the default branch only)
       const cacheKey = getCacheKey(resolvedOrg.login, repo, path);
       const cacheKeyWithRaw = raw ? cacheKey + ':content:raw' : cacheKey + ':content';
-      if (!skipCache && !isImagePath(path)) {
+      if (!skipCache && !ref && !isImagePath(path)) {
         const cached = getCache<{ content: string; sha: string }>(cacheKeyWithRaw);
         if (cached !== null) {
           return cached;
@@ -324,6 +336,7 @@ export class ContentService {
         owner: resolvedOrg.login,
         repo,
         path,
+        ...(ref ? { ref } : {}),
       });
 
       // GitHub returns base64-encoded content for files
@@ -338,8 +351,8 @@ export class ContentService {
         sha: data.sha,
       };
 
-      // Cache the result (unless it's an image)
-      if (!isImagePath(path)) {
+      // Cache the result (unless it's an image or a ref-bearing read)
+      if (!ref && !isImagePath(path)) {
         setCache(cacheKeyWithRaw, result);
       }
 
@@ -352,7 +365,12 @@ export class ContentService {
         );
         return null;
       }
-      console.error(`[ContentService.getContent] error for ${repo}/${path}:`, error);
+      // Log status + message only — the full error object carries request
+      // headers (auth tokens) and payloads that must not land in logs.
+      const e = error as ErrorWithStatus;
+      console.error(
+        `[ContentService.getContent] error for ${repo}/${path}: status=${e.status ?? '?'} msg=${e.message ?? '?'}`
+      );
       throw error;
     }
   }
@@ -416,6 +434,54 @@ export class ContentService {
   }
 
   /**
+   * Fetch a blob's decoded utf-8 content by its blob sha (Git Blobs API).
+   * Blob shas are content-addressed — no ref is needed and the content can
+   * never change under the sha, so this is the canonical way to read "the
+   * file as it was when a conflict token was handed out" (content-tools plan
+   * §3b Phase 7.5: the editor's stale token IS the 3-way merge base).
+   *
+   * Never cached (immutable content, read once per stale save).
+   *
+   * @param {Object} options
+   * @param {Object} [options.gitOrganization] - GitOrganization record from database
+   * @param {string} [options.orgLogin] - Organization login (fallback, assumes GITHUB)
+   * @param {string} options.repo - Repository name
+   * @param {string} options.sha - The blob sha to fetch
+   * @returns {Promise<{ content: string, sha: string } | null>} - null when the
+   *   blob does not exist in the repo (404, or GitHub's 422 for a malformed sha)
+   */
+  static async getBlobContent({
+    gitOrganization,
+    orgLogin,
+    repo,
+    sha,
+  }: {
+    gitOrganization?: GitOrganizationRecord;
+    orgLogin?: string;
+    repo: string;
+    sha: string;
+  }): Promise<{ content: string; sha: string } | null> {
+    try {
+      const resolvedOrg = await resolveGitOrganization(gitOrganization, orgLogin);
+      const octokit = await getOctokit(resolvedOrg);
+      const { data } = await octokit.request('GET /repos/{owner}/{repo}/git/blobs/{file_sha}', {
+        owner: resolvedOrg.login,
+        repo,
+        file_sha: sha,
+      });
+      return {
+        content: Buffer.from(data.content, 'base64').toString('utf-8'),
+        sha,
+      };
+    } catch (error: unknown) {
+      if (hasStatus(error, 404) || hasStatus(error, 422)) {
+        return null;
+      }
+      throw error;
+    }
+  }
+
+  /**
    * Create or update a text file
    * @param {Object} options
    * @param {Object} [options.gitOrganization] - GitOrganization record from database
@@ -423,10 +489,21 @@ export class ContentService {
    * @param {string} options.repo - Repository name
    * @param {string} options.path - File path
    * @param {string} options.content - File content
-   * @param {string} [options.expectedSha] - Expected SHA for optimistic locking
+   * @param {string} [options.expectedSha] - Expected SHA for optimistic
+   *   locking. Sent as the PUT's `sha` so GitHub enforces it ATOMICALLY
+   *   (compare-and-swap, not check-then-act); the uncached pre-check only
+   *   exists for a clear early 409 and the deleted-file case. Without it, the
+   *   write adopts whatever sha a fresh read returns (last-writer-wins).
+   * @param {string} [options.branch] - Branch to commit to (default: repository default branch)
    * @param {string} [options.message] - Commit message
+   * @param {boolean} [options.createOnly] - Create-only write: no sha is ever
+   *   sent (never updates), and GitHub's 422 "file exists" rejection is mapped
+   *   to a 409 so callers can treat it as an existence race. Mutually
+   *   exclusive with expectedSha.
    * @returns {Promise<{ sha: string, commit: string }>}
-   * @throws {Error} 409 Conflict if expectedSha doesn't match
+   * @throws {Error} 409 Conflict if expectedSha doesn't match, if the file was
+   *   deleted since it was read (expectedSha given but file missing), or if a
+   *   createOnly write finds the file already exists
    */
   static async put({
     gitOrganization,
@@ -435,7 +512,9 @@ export class ContentService {
     path,
     content,
     expectedSha,
+    branch,
     message,
+    createOnly = false,
   }: {
     gitOrganization?: GitOrganizationRecord;
     orgLogin?: string;
@@ -443,35 +522,121 @@ export class ContentService {
     path: string;
     content: string;
     expectedSha?: string;
+    branch?: string;
     message?: string;
+    createOnly?: boolean;
   }): Promise<{ sha: string; commit: string }> {
     const resolvedOrg = await resolveGitOrganization(gitOrganization, orgLogin);
     const octokit = await getOctokit(resolvedOrg);
 
-    // Check current SHA if optimistic locking is requested
+    if (createOnly && expectedSha) {
+      throw new Error('createOnly and expectedSha are mutually exclusive');
+    }
+
+    // Pre-check when optimistic locking is requested (branch writes check the
+    // sha on that branch). skipCache is REQUIRED here: a cached read could
+    // vouch for a sha that main has already moved past, and the check exists
+    // to produce a clear, early 409 — GitHub enforces the real precondition
+    // below. The deleted-file case (404) can only be caught here: a sha-bearing
+    // PUT against a missing file is not a conflict to GitHub.
     if (expectedSha) {
-      const current = await this.getMeta({ gitOrganization: resolvedOrg, repo, path });
-      if (current && current.sha !== expectedSha) {
+      const current = await this.getMeta({
+        gitOrganization: resolvedOrg,
+        repo,
+        path,
+        ref: branch,
+        skipCache: true,
+      });
+      if (!current) {
+        // A sha was expected but the file is gone: deleted = changed. Silently
+        // recreating would resurrect content the deleter meant to remove.
+        const error = new Error('File was deleted since it was read') as Error & { status: number };
+        error.status = 409;
+        throw error;
+      }
+      if (current.sha !== expectedSha) {
         const error = new Error('File was modified by someone else') as Error & { status: number };
         error.status = 409;
         throw error;
       }
     }
 
-    // Get current SHA for update (required by GitHub API)
-    const existing = await this.getMeta({ gitOrganization: resolvedOrg, repo, path });
+    // Get current SHA for update (required by GitHub API) — only when the
+    // caller did NOT lock: expectedSha writes send the caller's sha directly
+    // so GitHub enforces it atomically (a second read here would adopt a
+    // concurrent write and defeat the lock — check-then-act, not CAS).
+    // createOnly writes send no sha, so GitHub itself enforces non-existence
+    // (422 when the file materialized concurrently).
+    const existing =
+      createOnly || expectedSha
+        ? null
+        : await this.getMeta({ gitOrganization: resolvedOrg, repo, path, ref: branch });
 
-    const { data } = await octokit.request('PUT /repos/{owner}/{repo}/contents/{path}', {
-      owner: resolvedOrg.login,
-      repo,
-      path,
-      message: message || `Update ${path}`,
-      content: Buffer.from(content).toString('base64'),
-      sha: existing?.sha, // Required for updates, undefined for creates
-    });
+    let response;
+    try {
+      response = await octokit.request('PUT /repos/{owner}/{repo}/contents/{path}', {
+        owner: resolvedOrg.login,
+        repo,
+        path,
+        message: message || `Update ${path}`,
+        content: Buffer.from(content).toString('base64'),
+        // expectedSha is the atomic precondition; otherwise the fresh read's
+        // sha (required for updates), undefined for creates.
+        sha: expectedSha ?? existing?.sha,
+        ...(branch ? { branch } : {}),
+      });
+    } catch (error: unknown) {
+      // Sha-less create against an existing file → GitHub 422. For createOnly
+      // callers that's the existence race, surfaced with conflict semantics.
+      if (createOnly && hasStatus(error, 422)) {
+        const conflict = new Error(
+          `File already exists: ${path} (create-only write refused)`
+        ) as Error & { status: number };
+        conflict.status = 409;
+        throw conflict;
+      }
+      // GitHub rejected the expectedSha precondition: the file moved between
+      // the pre-check and the PUT. It answers 409 Conflict, and (observed in
+      // practice) 422 "sha … does not match" for the SAME mismatch — map both
+      // to the same conflict so the caller never gets a raw 422.
+      if (
+        expectedSha &&
+        (hasStatus(error, 409) ||
+          (hasStatus(error, 422) && /does not match|sha/i.test(getErrorMessage(error))))
+      ) {
+        const conflict = new Error('File was modified by someone else') as Error & {
+          status: number;
+        };
+        conflict.status = 409;
+        throw conflict;
+      }
+      throw error;
+    }
 
-    // Invalidate cache for this path (and parent folder)
-    invalidateCache(resolvedOrg.login, repo, path);
+    // Concurrent-delete race (live-probed): with an expectedSha the pre-check
+    // saw the file present, but it was DELETED before this PUT landed. GitHub
+    // has no "update-only" mode — a sha-bearing PUT on a now-missing path
+    // CREATES the file (HTTP 201) instead of conflicting, silently resurrecting
+    // content the deleter removed. The create cannot be cheaply prevented (no
+    // compare-and-swap-on-delete API), so we surface the delete as the same
+    // conflict AFTER the unwanted create; the caller reloads and the stray file
+    // is reconciled (overwritten/removed) on the next write.
+    if (expectedSha && response.status === 201) {
+      const conflict = new Error('File was deleted since it was read') as Error & {
+        status: number;
+      };
+      conflict.status = 409;
+      throw conflict;
+    }
+
+    const { data } = response;
+
+    // Invalidate cache for this path (and parent folder).
+    // Branch writes don't touch the default branch's content, so they must
+    // not disturb its (org:repo:path-keyed) cache entries.
+    if (!branch) {
+      invalidateCache(resolvedOrg.login, repo, path);
+    }
 
     return {
       sha: data.content.sha,
@@ -742,6 +907,7 @@ export class ContentService {
    * @param {string} [options.orgLogin] - Organization login (fallback, assumes GITHUB)
    * @param {string} options.repo - Repository name
    * @param {string} options.path - Folder path
+   * @param {string} [options.ref] - Git ref (branch/tag/sha) to read from; bypasses the cache
    * @param {boolean} [options.skipCache=false] - Skip cache
    * @returns {Promise<Array<{ name: string, path: string, type: 'file' | 'dir', sha: string }>>}
    */
@@ -750,20 +916,23 @@ export class ContentService {
     orgLogin,
     repo,
     path,
+    ref,
     skipCache = false,
   }: {
     gitOrganization?: GitOrganizationRecord;
     orgLogin?: string;
     repo: string;
     path: string;
+    ref?: string;
     skipCache?: boolean;
   }): Promise<Array<{ name: string; path: string; type: 'file' | 'dir'; sha: string }>> {
     try {
       const resolvedOrg = await resolveGitOrganization(gitOrganization, orgLogin);
 
-      // Check cache first
+      // Check cache first (ref-bearing reads bypass the cache entirely —
+      // it is keyed org:repo:path for the default branch only)
       const cacheKey = getCacheKey(resolvedOrg.login, repo, path) + ':list';
-      if (!skipCache) {
+      if (!skipCache && !ref) {
         const cached =
           getCache<Array<{ name: string; path: string; type: 'file' | 'dir'; sha: string }>>(
             cacheKey
@@ -778,6 +947,7 @@ export class ContentService {
         owner: resolvedOrg.login,
         repo,
         path,
+        ...(ref ? { ref } : {}),
       });
 
       // GitHub returns array for directories, object for files
@@ -794,8 +964,10 @@ export class ContentService {
         sha: item.sha,
       }));
 
-      // Cache the result
-      setCache(cacheKey, result);
+      // Cache the result (not for ref-bearing reads)
+      if (!ref) {
+        setCache(cacheKey, result);
+      }
 
       return result;
     } catch (error: unknown) {
@@ -918,7 +1090,9 @@ export class ContentService {
    * @param {Array<{path: string, content: string, encoding?: 'utf-8' | 'base64'}>} options.files - Files to upload
    * @param {string} [options.branch] - Branch name (default: 'main')
    * @param {string} [options.message] - Commit message
-   * @returns {Promise<{ commit: string, filesUploaded: number }>}
+   * @returns {Promise<{ commit: string, filesUploaded: number, files: Array<{ path: string, sha: string }> }>}
+   *   `files` carries each file's blob sha (identical to the Contents-API file
+   *   sha), so callers can compare against future getMeta reads.
    */
   static async uploadBatch({
     gitOrganization,
@@ -928,6 +1102,8 @@ export class ContentService {
     branch = 'main',
     message,
     onProgress,
+    verifyBaseTree,
+    primeCache = false,
   }: {
     gitOrganization?: GitOrganizationRecord;
     orgLogin?: string;
@@ -940,7 +1116,29 @@ export class ContentService {
       total: number;
       filename: string | undefined;
     }) => void;
-  }): Promise<{ commit: string; filesUploaded: number }> {
+    /**
+     * Opt-in read-after-write coherence: on success (default-branch writes
+     * only), store each utf-8 file's { content, sha } into the response cache
+     * getContent reads, so a same-process read immediately after the commit
+     * sees the new content despite GitHub's Contents-API replication lag.
+     */
+    primeCache?: boolean;
+    /**
+     * Optimistic-concurrency hook, run on EVERY retry attempt against the
+     * commit the new tree will be based on. `getFileSha(path)` returns the
+     * blob sha of `path` at that base commit (null if absent). Throw to abort
+     * the write — unlike put(), the Trees API has no per-file precondition and
+     * #withGitRetry would otherwise retry PAST a concurrent commit, so this is
+     * the only way to make batch writes a true compare-and-swap.
+     */
+    verifyBaseTree?: (ctx: {
+      getFileSha: (path: string) => Promise<string | null>;
+    }) => Promise<void>;
+  }): Promise<{
+    commit: string;
+    filesUploaded: number;
+    files: Array<{ path: string; sha: string }>;
+  }> {
     if (!files || files.length === 0) {
       throw new Error('No files to upload');
     }
@@ -986,6 +1184,28 @@ export class ContentService {
       });
       const currentCommitSha = refData.object.sha;
 
+      // Optimistic-concurrency check against THIS attempt's base commit —
+      // must re-run per retry or a retry would silently clobber the very
+      // concurrent commit that caused the ref race.
+      if (verifyBaseTree) {
+        await verifyBaseTree({
+          getFileSha: async (path: string) => {
+            try {
+              const { data } = await octokit.request('GET /repos/{owner}/{repo}/contents/{path}', {
+                owner: resolvedOrg.login,
+                repo,
+                path,
+                ref: currentCommitSha,
+              });
+              return Array.isArray(data) ? null : (data.sha ?? null);
+            } catch (error) {
+              if ((error as { status?: number }).status === 404) return null;
+              throw error;
+            }
+          },
+        });
+      }
+
       // Step 3: Get the tree SHA from the current commit
       const { data: commitData } = await octokit.request(
         'GET /repos/{owner}/{repo}/git/commits/{commit_sha}',
@@ -1030,6 +1250,7 @@ export class ContentService {
       return {
         commit: newCommit.sha,
         filesUploaded: files.length,
+        files: blobResults.map(({ path, sha }) => ({ path, sha })),
       };
     };
 
@@ -1038,6 +1259,22 @@ export class ContentService {
     // Invalidate cache for all uploaded files and their parent folders
     for (const file of files) {
       invalidateCache(resolvedOrg.login, repo, file.path);
+    }
+
+    // Prime the response cache with the just-written content (default branch
+    // only — the cache is keyed org:repo:path for the default branch). Runs
+    // AFTER invalidation so the fresh entries survive.
+    if (primeCache && branch === 'main') {
+      const shaByPath = new Map(result.files.map(f => [f.path, f.sha]));
+      for (const file of files) {
+        if ((file.encoding ?? 'utf-8') !== 'utf-8' || isImagePath(file.path)) continue;
+        const sha = shaByPath.get(file.path);
+        if (!sha) continue;
+        setCache(getCacheKey(resolvedOrg.login, repo, file.path) + ':content', {
+          content: file.content,
+          sha,
+        });
+      }
     }
 
     return result;
@@ -1239,5 +1476,224 @@ export class ContentService {
     }
 
     return { copied };
+  }
+
+  /**
+   * Create a branch (Git ref) pointing at an existing commit
+   * Thin wrapper over POST /repos/{owner}/{repo}/git/refs
+   * @param {Object} options
+   * @param {Object} [options.gitOrganization] - GitOrganization record from database
+   * @param {string} [options.orgLogin] - Organization login (fallback, assumes GITHUB)
+   * @param {string} options.repo - Repository name
+   * @param {string} options.branch - Branch name to create (without refs/heads/ prefix)
+   * @param {string} options.fromSha - Commit sha the new branch points at
+   * @returns {Promise<{ ref: string, sha: string }>}
+   */
+  static async createBranch({
+    gitOrganization,
+    orgLogin,
+    repo,
+    branch,
+    fromSha,
+  }: {
+    gitOrganization?: GitOrganizationRecord;
+    orgLogin?: string;
+    repo: string;
+    branch: string;
+    fromSha: string;
+  }): Promise<{ ref: string; sha: string }> {
+    const resolvedOrg = await resolveGitOrganization(gitOrganization, orgLogin);
+    const octokit = await getOctokit(resolvedOrg);
+
+    const { data } = await octokit.request('POST /repos/{owner}/{repo}/git/refs', {
+      owner: resolvedOrg.login,
+      repo,
+      ref: `refs/heads/${branch}`,
+      sha: fromSha,
+    });
+
+    return {
+      ref: data.ref,
+      sha: data.object.sha,
+    };
+  }
+
+  /**
+   * Delete a branch (Git ref)
+   * Thin wrapper over DELETE /repos/{owner}/{repo}/git/refs/{ref}
+   * @param {Object} options
+   * @param {Object} [options.gitOrganization] - GitOrganization record from database
+   * @param {string} [options.orgLogin] - Organization login (fallback, assumes GITHUB)
+   * @param {string} options.repo - Repository name
+   * @param {string} options.branch - Branch name to delete (without refs/heads/ prefix)
+   * @returns {Promise<{ deleted: boolean }>}
+   */
+  static async deleteBranch({
+    gitOrganization,
+    orgLogin,
+    repo,
+    branch,
+  }: {
+    gitOrganization?: GitOrganizationRecord;
+    orgLogin?: string;
+    repo: string;
+    branch: string;
+  }): Promise<{ deleted: boolean }> {
+    const resolvedOrg = await resolveGitOrganization(gitOrganization, orgLogin);
+    const octokit = await getOctokit(resolvedOrg);
+
+    await octokit.request('DELETE /repos/{owner}/{repo}/git/refs/{ref}', {
+      owner: resolvedOrg.login,
+      repo,
+      ref: `heads/${branch}`,
+    });
+
+    return { deleted: true };
+  }
+
+  /**
+   * Merge one branch into another via the GitHub merge API
+   * Thin wrapper over POST /repos/{owner}/{repo}/merges
+   *
+   * Note: after a successful merge into the default branch, cached reads for
+   * the merged paths may be stale for up to the cache TTL — sha-bearing reads
+   * after a merge should pass skipCache.
+   *
+   * @param {Object} options
+   * @param {Object} [options.gitOrganization] - GitOrganization record from database
+   * @param {string} [options.orgLogin] - Organization login (fallback, assumes GITHUB)
+   * @param {string} options.repo - Repository name
+   * @param {string} options.base - Branch to merge into (e.g. 'main')
+   * @param {string} options.head - Branch to merge from
+   * @param {string} [options.message] - Commit message for the merge commit
+   * @returns {Promise<{ merged: boolean, sha?: string, conflict?: boolean }>}
+   *   - `{ merged: true, sha }` — merge commit created
+   *   - `{ merged: true }` — base already contains head (nothing to merge, HTTP 204)
+   *   - `{ merged: false, conflict: true }` — merge conflict (HTTP 409)
+   *   Other errors (missing base/head, permissions, …) are thrown.
+   */
+  static async mergeBranch({
+    gitOrganization,
+    orgLogin,
+    repo,
+    base,
+    head,
+    message,
+  }: {
+    gitOrganization?: GitOrganizationRecord;
+    orgLogin?: string;
+    repo: string;
+    base: string;
+    head: string;
+    message?: string;
+  }): Promise<{ merged: boolean; sha?: string; conflict?: boolean }> {
+    const resolvedOrg = await resolveGitOrganization(gitOrganization, orgLogin);
+    const octokit = await getOctokit(resolvedOrg);
+
+    try {
+      const response = await octokit.request('POST /repos/{owner}/{repo}/merges', {
+        owner: resolvedOrg.login,
+        repo,
+        base,
+        head,
+        ...(message ? { commit_message: message } : {}),
+      });
+
+      // 204: base already contains head — nothing to merge
+      if (response.status === 204 || !response.data) {
+        return { merged: true };
+      }
+
+      return { merged: true, sha: response.data.sha };
+    } catch (error: unknown) {
+      // 409: merge conflict — surfaced distinctly so callers can branch on it
+      if (hasStatus(error, 409)) {
+        return { merged: false, conflict: true };
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Compare two branches (or any two refs)
+   * Thin wrapper over GET /repos/{owner}/{repo}/compare/{base}...{head}
+   *
+   * Returns `null` when the comparison 404s (head — or base — branch does not
+   * exist), matching the getMeta/getContent idiom. Callers probing for a
+   * preview branch treat `null` as "branch absent".
+   *
+   * Comparing a branch against itself (base === head) is a cheap way to get
+   * that branch's HEAD commit sha (`base_sha`) without a separate refs call.
+   *
+   * @param {Object} options
+   * @param {Object} [options.gitOrganization] - GitOrganization record from database
+   * @param {string} [options.orgLogin] - Organization login (fallback, assumes GITHUB)
+   * @param {string} options.repo - Repository name
+   * @param {string} options.base - Base ref (e.g. 'main')
+   * @param {string} options.head - Head ref (e.g. 'preview/pages/syllabus')
+   * @returns {Promise<{ ahead_by, behind_by, base_sha, head_sha, merge_base_sha, commits } | null>}
+   *   - `ahead_by` / `behind_by` — commit counts head is ahead of / behind base
+   *   - `base_sha` / `head_sha` — HEAD commit shas of the two refs
+   *   - `merge_base_sha` — the merge-base commit sha (for 3-way content reads)
+   *   - `commits` — the commits head has that base lacks, oldest first,
+   *     as `{ sha, date }` (committer date, ISO string)
+   */
+  static async compareBranches({
+    gitOrganization,
+    orgLogin,
+    repo,
+    base,
+    head,
+  }: {
+    gitOrganization?: GitOrganizationRecord;
+    orgLogin?: string;
+    repo: string;
+    base: string;
+    head: string;
+  }): Promise<{
+    ahead_by: number;
+    behind_by: number;
+    base_sha: string;
+    head_sha: string;
+    merge_base_sha: string | null;
+    commits: Array<{ sha: string; date: string | null }>;
+  } | null> {
+    const resolvedOrg = await resolveGitOrganization(gitOrganization, orgLogin);
+    const octokit = await getOctokit(resolvedOrg);
+
+    try {
+      const { data } = await octokit.request('GET /repos/{owner}/{repo}/compare/{basehead}', {
+        owner: resolvedOrg.login,
+        repo,
+        basehead: `${base}...${head}`,
+      });
+
+      interface CompareCommit {
+        sha: string;
+        commit?: { committer?: { date?: string }; author?: { date?: string } };
+      }
+
+      return {
+        ahead_by: data.ahead_by,
+        behind_by: data.behind_by,
+        base_sha: data.base_commit.sha,
+        // The compare payload has no head_commit field: when head is ahead its
+        // HEAD is the last listed commit; otherwise (identical or strictly
+        // behind) head's HEAD IS the merge base.
+        head_sha: data.commits?.length
+          ? data.commits[data.commits.length - 1].sha
+          : (data.merge_base_commit?.sha ?? data.base_commit.sha),
+        merge_base_sha: data.merge_base_commit?.sha ?? null,
+        commits: ((data.commits ?? []) as CompareCommit[]).map(item => ({
+          sha: item.sha,
+          date: item.commit?.committer?.date ?? item.commit?.author?.date ?? null,
+        })),
+      };
+    } catch (error: unknown) {
+      if (hasStatus(error, 404)) {
+        return null;
+      }
+      throw error;
+    }
   }
 }

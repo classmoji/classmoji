@@ -2,13 +2,14 @@
   "name": "@classmoji/content",
   "version": "1.0.0",
   "type": "module",
-  "description": "GitHub content service for reading via GitHub Pages and writing via GitHub API",
+  "description": "Thin re-export shim over @classmoji/services content module (ContentService moved there)",
   "main": "src/index.ts",
   "exports": {
     ".": "./src/index.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
+    "test": "vitest run",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix"
   },
@@ -16,7 +17,7 @@
     "@classmoji/services": "*"
   },
   "devDependencies": {
-    "@octokit/rest": "^20.1.2",
-    "eslint": "^9.39.4"
+    "eslint": "^9.39.4",
+    "vitest": "^4.1.4"
   }
 }

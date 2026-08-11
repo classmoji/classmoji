@@ -10,6 +10,18 @@ export {
   getQuestionResults,
 } from './classmoji/quizAttempt.service.ts';
 
+// Content management for GitHub-backed storage (moved from @classmoji/content;
+// that package is now a thin re-export shim over these)
+export { ContentService } from './content/ContentService.ts';
+export { getContentUrl, getSlideContentUrl, getRawContentUrl } from './content/urls.ts';
+export {
+  validateFile,
+  sanitizeFilename,
+  MAX_FILE_SIZE,
+  ALLOWED_EXTENSIONS,
+} from './content/utils/validateFile.ts';
+export { getMimeType, isBinaryFile, isImageFile } from './content/utils/contentType.ts';
+
 // Git provider abstraction layer
 export {
   GitProvider,

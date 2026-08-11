@@ -18,6 +18,7 @@ import {
   editSlide,
   deleteSlide,
   waitForReveal,
+  reloadUntil,
   saveSlide,
 } from '../helpers';
 
@@ -242,6 +243,13 @@ test.describe('Slides Theme Switching', () => {
     await editSlide(page, testSlideId);
 
     await expect(page.locator('.properties-sidebar')).toBeVisible({ timeout: 10000 });
+
+    // reloadUntil absorbs GitHub's short read-after-write window on the
+    // git-data save path (commit verified-correct; an immediate re-read can
+    // serve the pre-save cached copy for a few seconds).
+    await reloadUntil(page, async () =>
+      ((await page.locator('.reveal').getAttribute('data-theme')) ?? '') === 'beige'
+    );
 
     await expect(page.locator('.reveal')).toHaveAttribute('data-theme', 'beige');
 

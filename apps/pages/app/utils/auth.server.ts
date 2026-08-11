@@ -1,5 +1,33 @@
+import { assertClassroomMutationAllowed, type ClassroomStatusInput } from '@classmoji/auth/server';
 import { prisma, getAuthSession } from '~/utils/db.server.ts';
 import type { PageForContent } from '~/types/pages.ts';
+
+/**
+ * Classroom-status mutation gate (SEC4) — the platform-wide rule from
+ * `@classmoji/auth`: owners may always mutate; non-owners only while the
+ * classroom is ACTIVE (LOCKED and UNPUBLISHED are read-only).
+ *
+ * Returns the platform's typed 403 Response (JSON body
+ * `{ error: 'CLASSROOM_LOCKED' | 'CLASSROOM_UNPUBLISHED', message }`) for the
+ * action to RETURN as data, or null when mutation is allowed. Returning (not
+ * throwing) matters here: a thrown Response from a fetcher-submitted action
+ * escalates to the route ErrorBoundary and unmounts the editor.
+ */
+export function pageMutationBlocked(
+  classroom: { status: ClassroomStatusInput['status'] },
+  role: string
+): Response | null {
+  try {
+    assertClassroomMutationAllowed({
+      status: classroom.status,
+      role: role as ClassroomStatusInput['role'],
+    });
+    return null;
+  } catch (thrown) {
+    if (thrown instanceof Response) return thrown;
+    throw thrown;
+  }
+}
 
 interface AssertPageAccessOptions {
   request: Request;
