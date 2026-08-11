@@ -309,6 +309,10 @@ export interface GitHubCleanupSummary {
  * (already gone), any other failure (incl. permission 403s) is recorded and
  * the rest proceed. The classroom rows are never touched here.
  *
+ * The content repo is held back (and recorded as a failure) when another
+ * classroom in the same org shares this classroom's content namespace — they
+ * resolve to the SAME repo, so deleting it would take out live content.
+ *
  * @param {string} classroomId - Classroom whose artifacts to delete
  * @param {string} userToken - The requesting user's GitHub token (required)
  */
@@ -348,7 +352,7 @@ export const deleteGitHubArtifacts = async (
     };
   }
 
-  const plan = classroomGitHubArtifactPlan({
+  let plan = classroomGitHubArtifactPlan({
     orgLogin: classroom.git_organization.login,
     slug: classroom.slug,
     contentNamespace: classroom.content_namespace,
@@ -364,6 +368,32 @@ export const deleteGitHubArtifacts = async (
     skipped: 0,
     failures: [],
   };
+
+  // The content repo name is derived from [org login, content namespace], so a
+  // sibling classroom sharing that pair OWNS THE SAME REPO — deleting it would
+  // destroy live content of a classroom nobody asked to remove. A DB unique
+  // constraint on [git_org_id, content_namespace] now prevents new collisions;
+  // this guard covers rows that predate it. Teams and assignment repos are
+  // per-classroom and never shared, so only the content repo is held back.
+  if (classroom.content_namespace) {
+    const sharer = await getPrisma().classroom.findFirst({
+      where: {
+        git_org_id: classroom.git_org_id,
+        content_namespace: classroom.content_namespace,
+        id: { not: classroom.id },
+      },
+      select: { slug: true },
+    });
+    if (sharer) {
+      const contentRepo = plan.find(a => a.label === 'content repo');
+      plan = plan.filter(a => a.label !== 'content repo');
+      if (contentRepo) {
+        summary.failures.push(
+          `content repo ${contentRepo.name}: shared with classroom '${sharer.slug}' — not deleted`
+        );
+      }
+    }
+  }
 
   for (const artifact of plan) {
     try {

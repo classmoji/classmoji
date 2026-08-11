@@ -379,6 +379,10 @@ model Classroom {
   notifications         Notification[]
 
   @@unique([git_org_id, slug])
+  // The content repo name is content-{orgLogin}-{content_namespace}: two
+  // classrooms in one org sharing a namespace would share (and could adopt,
+  // overwrite, or delete) each other's content repo. Uniqueness is per-org.
+  @@unique([git_org_id, content_namespace])
   @@index([git_org_id])
   @@map("classrooms")
 }

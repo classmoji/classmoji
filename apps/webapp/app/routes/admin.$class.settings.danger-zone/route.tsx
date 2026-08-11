@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Button, Checkbox, Modal } from 'antd';
 
 import { namedAction } from 'remix-utils/named-action';
@@ -18,8 +18,15 @@ const DangerZone = () => {
   const navigate = useNavigate();
   const [deleteGitHub, setDeleteGitHub] = useState(false);
   const [removing, setRemoving] = useState(false);
+  // Round-trip latch. The global fetcher is SHARED and self-resets to null data
+  // right after it toasts a result, so "idle with no data" is ambiguous on its
+  // own: it is the aborted case only once this submission has been seen in
+  // flight, and only before its result was handled ('settled' — otherwise the
+  // post-success reset would re-enter the effect and reopen the button).
+  const phaseRef = useRef<'idle' | 'inflight' | 'settled'>('idle');
 
   const onRemoveClassroom = () => {
+    phaseRef.current = 'idle';
     setRemoving(true);
     notify(
       ActionTypes.REMOVE_CLASSROOM,
@@ -40,12 +47,23 @@ const DangerZone = () => {
   const fetcherData = fetcher?.data as { success?: string; error?: string } | undefined;
   useEffect(() => {
     if (!removing) return;
-    if (fetcher?.state !== 'idle') return;
+    if (phaseRef.current === 'settled') return;
+    if (fetcher?.state !== 'idle') {
+      phaseRef.current = 'inflight';
+      return;
+    }
+    if (phaseRef.current !== 'inflight') return;
+    phaseRef.current = 'settled';
     if (fetcherData?.success) {
       navigate('/select-organization');
     } else if (fetcherData?.error) {
       setRemoving(false);
       close();
+    } else {
+      // Settled with neither outcome: the action never returned (aborted or
+      // timed out). Un-stick the button but KEEP the modal open — the delete's
+      // fate is unknown, so the user must decide whether to retry.
+      setRemoving(false);
     }
   }, [removing, fetcher?.state, fetcherData, navigate, close]);
 
@@ -126,29 +144,56 @@ const removeClassroomHandler = async (
 ) => {
   // GitHub cleanup MUST precede the DB delete: the cascade destroys the rows
   // that name the artifacts (content repo, team slugs, git repo names).
-  // Best-effort — failures are reported, never block the classroom removal.
+  // A FAILED cleanup therefore ABORTS the delete — deleting anyway would strand
+  // the surviving GitHub artifacts with nothing left in Classmoji naming them,
+  // leaving manual cleanup as the only recourse. The user can fix permissions
+  // and retry, or opt out of the GitHub cleanup entirely.
   let cleanupNote = '';
   if (deleteGitHub) {
+    const retryHint =
+      'Fix the GitHub permissions and try again, or uncheck the GitHub option to remove the classroom only.';
+    let summary;
     try {
-      const summary = await ClassmojiService.classroom.deleteGitHubArtifacts(
+      summary = await ClassmojiService.classroom.deleteGitHubArtifacts(
         classroom.id,
         userToken ?? ''
       );
-      const bits: string[] = [];
-      if (summary.deleted_repos > 0)
-        bits.push(`${summary.deleted_repos} repo${summary.deleted_repos === 1 ? '' : 's'}`);
-      if (summary.deleted_teams > 0)
-        bits.push(`${summary.deleted_teams} team${summary.deleted_teams === 1 ? '' : 's'}`);
-      if (bits.length > 0) cleanupNote = ` GitHub: deleted ${bits.join(', ')}.`;
-      if (summary.failures.length > 0) {
-        console.error('GitHub cleanup failures on classroom delete:', summary.failures);
-        cleanupNote += ` ${summary.failures.length} GitHub item${
-          summary.failures.length === 1 ? '' : 's'
-        } could not be deleted (see server logs).`;
-      }
     } catch (error: unknown) {
       console.error('GitHub cleanup failed on classroom delete:', error);
-      cleanupNote = ' GitHub cleanup failed — artifacts left in place (see server logs).';
+      return {
+        action: ActionTypes.REMOVE_CLASSROOM,
+        error: `Classroom NOT deleted: GitHub cleanup failed (see server logs). ${retryHint}`,
+      };
+    }
+
+    const bits: string[] = [];
+    if (summary.deleted_repos > 0)
+      bits.push(`${summary.deleted_repos} repo${summary.deleted_repos === 1 ? '' : 's'}`);
+    if (summary.deleted_teams > 0)
+      bits.push(`${summary.deleted_teams} team${summary.deleted_teams === 1 ? '' : 's'}`);
+    const deletedNote = bits.length > 0 ? ` GitHub: deleted ${bits.join(', ')}.` : '';
+
+    if (summary.failures.length > 0) {
+      console.error('GitHub cleanup failures on classroom delete:', summary.failures);
+      const failedNote = `${summary.failures.length} GitHub item${
+        summary.failures.length === 1 ? '' : 's'
+      } could not be deleted (see server logs).`;
+      const progressNote =
+        bits.length > 0
+          ? ` Deleted before the failure: ${bits.join(', ')}.`
+          : ' Nothing was deleted on GitHub.';
+      return {
+        action: ActionTypes.REMOVE_CLASSROOM,
+        error: `Classroom NOT deleted: ${failedNote}${progressNote} ${retryHint}`,
+      };
+    }
+
+    // `skipped` is already-gone / not-visible — never a reason to abort.
+    cleanupNote = deletedNote;
+    if (summary.skipped > 0) {
+      cleanupNote += ` ${summary.skipped} item${
+        summary.skipped === 1 ? ' was' : 's were'
+      } already gone or not visible to your GitHub account.`;
     }
   }
 

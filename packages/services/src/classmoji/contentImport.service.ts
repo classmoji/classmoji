@@ -115,6 +115,67 @@ export function formatWarning(scope: string, detail: string): string {
   return `${scope}: ${trimmed}`;
 }
 
+/** File extensions whose contents get source→target URL rewriting. */
+const TEXT_EXTENSIONS = /\.(json|html?|md|css|js|txt|svg)$/i;
+
+/** true when the path names a text file safe to URL-rewrite (never binaries). */
+export function isTextContentPath(path: string): boolean {
+  return TEXT_EXTENSIONS.test(path);
+}
+
+export interface UrlRewriteContext {
+  sourceLogin: string;
+  sourceRepo: string;
+  /** This item's folder in the source repo (e.g. `pages/lab-1`). */
+  sourcePath: string;
+  targetLogin: string;
+  targetRepo: string;
+  /** This item's folder in the target repo (may carry a dedupe suffix). */
+  targetPath: string;
+}
+
+/**
+ * Rewrite absolute source-repo URLs inside copied text content so imported
+ * pages/decks reference THEIR OWN copied assets instead of the source repo —
+ * without this, deleting the source classroom (with GitHub cleanup) 404s every
+ * image in the imported content. Handles both URL shapes the app emits:
+ * raw.githubusercontent.com and the {login}.github.io Pages CDN.
+ *
+ * Order matters: the item-specific folder rewrite runs first (it may carry a
+ * dedupe suffix), then the repo-general rewrite catches cross-item references
+ * (which keep their original folder path — correct whenever that item was
+ * imported un-renamed; a renamed cross-referenced item is a documented
+ * residual).
+ */
+export function rewriteContentUrls(text: string, ctx: UrlRewriteContext): string {
+  const rawSource = `https://raw.githubusercontent.com/${ctx.sourceLogin}/${ctx.sourceRepo}/main`;
+  const rawTarget = `https://raw.githubusercontent.com/${ctx.targetLogin}/${ctx.targetRepo}/main`;
+  const pagesSource = `https://${ctx.sourceLogin}.github.io/${ctx.sourceRepo}`;
+  const pagesTarget = `https://${ctx.targetLogin}.github.io/${ctx.targetRepo}`;
+  return text
+    .replaceAll(`${rawSource}/${ctx.sourcePath}/`, `${rawTarget}/${ctx.targetPath}/`)
+    .replaceAll(`${rawSource}/`, `${rawTarget}/`)
+    .replaceAll(`${pagesSource}/${ctx.sourcePath}/`, `${pagesTarget}/${ctx.targetPath}/`)
+    .replaceAll(`${pagesSource}/`, `${pagesTarget}/`);
+}
+
+/**
+ * Apply `rewriteContentUrls` to the text files in a staged item's writes
+ * (base64-decoded, rewritten, re-encoded); binaries pass through untouched.
+ */
+export function rewriteStagedFiles(
+  files: BatchFile[],
+  ctx: UrlRewriteContext
+): BatchFile[] {
+  return files.map(file => {
+    if (!isTextContentPath(file.path)) return file;
+    const decoded = Buffer.from(file.content, 'base64').toString('utf8');
+    const rewritten = rewriteContentUrls(decoded, ctx);
+    if (rewritten === decoded) return file;
+    return { ...file, content: Buffer.from(rewritten, 'utf8').toString('base64') };
+  });
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Impl helpers (touch DB/GitHub — not unit-tested)
 // ─────────────────────────────────────────────────────────────────────────────
@@ -432,6 +493,16 @@ async function importPages({
       warn('pages', `skipped "${page.title}" — no files at ${page.content_path}`);
       continue;
     }
+    // Repoint absolute source-repo asset URLs at the copied files — otherwise
+    // deleting the source classroom (with GitHub cleanup) 404s every image.
+    files = rewriteStagedFiles(files, {
+      sourceLogin: source.login,
+      sourceRepo: source.repo,
+      sourcePath: page.content_path,
+      targetLogin: target.login,
+      targetRepo: target.repo,
+      targetPath: targetContentPath,
+    });
     staged.push({ source: page, files, targetTitle, targetSlug, targetContentPath });
   }
 
@@ -467,7 +538,17 @@ async function importPages({
           width: item.source.width,
           show_in_student_menu: item.source.show_in_student_menu,
           menu_order: item.source.menu_order,
-          header_image_url: item.source.header_image_url,
+          // Same source→target URL repoint as the file contents get.
+          header_image_url: item.source.header_image_url
+            ? rewriteContentUrls(item.source.header_image_url, {
+                sourceLogin: source.login,
+                sourceRepo: source.repo,
+                sourcePath: item.source.content_path,
+                targetLogin: target.login,
+                targetRepo: target.repo,
+                targetPath: item.targetContentPath,
+              })
+            : item.source.header_image_url,
           header_image_position: item.source.header_image_position,
         } satisfies Prisma.PageUncheckedCreateInput,
       });
@@ -540,6 +621,16 @@ async function importSlides({
       warn('slides', `skipped "${slide.title}" — no files at ${slide.content_path}`);
       continue;
     }
+    // Repoint absolute source-repo asset URLs at the copied files (deck.json +
+    // index.html are rewritten in lockstep, keeping the pair consistent).
+    files = rewriteStagedFiles(files, {
+      sourceLogin: source.login,
+      sourceRepo: source.repo,
+      sourcePath: slide.content_path,
+      targetLogin: target.login,
+      targetRepo: target.repo,
+      targetPath: targetContentPath,
+    });
     staged.push({
       source: slide,
       files,
