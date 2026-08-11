@@ -1,4 +1,6 @@
 import getPrisma from '@classmoji/database';
+import { classroomContentRepoName } from '@classmoji/utils';
+import { getGitProvider } from '../git/index.ts';
 import type { Prisma, Role } from '@prisma/client';
 
 /**
@@ -226,6 +228,134 @@ export const deleteById = async (id: string) => {
   return getPrisma().classroom.delete({
     where: { id },
   });
+};
+
+/** One GitHub artifact the optional delete-cleanup will remove. */
+export interface GitHubArtifact {
+  kind: 'repo' | 'team';
+  org: string;
+  /** Repo name or team slug. */
+  name: string;
+  /** Human label for summaries ('content repo', 'classroom team', …). */
+  label: string;
+}
+
+/**
+ * Pure helper: enumerate the GitHub artifacts a classroom owns, from DB-known
+ * facts ONLY — the content repo (derived from org login + content namespace),
+ * the two conventional classroom teams ({slug}-students / {slug}-assistants),
+ * any provider-backed project-team slugs, and the classroom's git repos by
+ * exact recorded name. Nothing is pattern-matched or discovered live: if the
+ * DB doesn't name it, it is not in the plan.
+ */
+export function classroomGitHubArtifactPlan({
+  orgLogin,
+  slug,
+  contentNamespace,
+  gitRepoNames,
+  teamSlugs,
+}: {
+  orgLogin: string;
+  slug: string;
+  contentNamespace: string | null;
+  gitRepoNames: string[];
+  teamSlugs: string[];
+}): GitHubArtifact[] {
+  const plan: GitHubArtifact[] = [];
+  if (contentNamespace) {
+    plan.push({
+      kind: 'repo',
+      org: orgLogin,
+      name: classroomContentRepoName({ login: orgLogin, namespace: contentNamespace }),
+      label: 'content repo',
+    });
+  }
+  for (const name of [...new Set(gitRepoNames)]) {
+    plan.push({ kind: 'repo', org: orgLogin, name, label: 'assignment repo' });
+  }
+  for (const suffix of ['students', 'assistants']) {
+    plan.push({ kind: 'team', org: orgLogin, name: `${slug}-${suffix}`, label: 'classroom team' });
+  }
+  for (const teamSlug of [...new Set(teamSlugs)]) {
+    plan.push({ kind: 'team', org: orgLogin, name: teamSlug, label: 'project team' });
+  }
+  return plan;
+}
+
+/** Result of the optional GitHub cleanup that precedes a classroom delete. */
+export interface GitHubCleanupSummary {
+  deleted_repos: number;
+  deleted_teams: number;
+  /** Artifacts that no longer existed on GitHub (already gone — not an error). */
+  skipped: number;
+  /** 'label name: reason' entries for artifacts that could not be deleted. */
+  failures: string[];
+}
+
+/**
+ * Best-effort deletion of a classroom's GitHub artifacts (content repo,
+ * classroom + project teams, student assignment repos), for the danger-zone
+ * "also delete from GitHub" option. MUST run BEFORE the DB delete — the
+ * cascade destroys the rows that name these artifacts.
+ *
+ * Every deletion is independent and best-effort: a 404 counts as skipped
+ * (already gone), any other failure is recorded and the rest proceed. The
+ * classroom rows are never touched here.
+ */
+export const deleteGitHubArtifacts = async (
+  classroomId: string
+): Promise<GitHubCleanupSummary> => {
+  const classroom = await getPrisma().classroom.findUnique({
+    where: { id: classroomId },
+    include: {
+      git_organization: true,
+      git_repos: { select: { name: true } },
+      teams: {
+        where: { provider: 'GITHUB', provider_id: { not: null } },
+        select: { slug: true },
+      },
+    },
+  });
+  if (!classroom?.git_organization?.login) {
+    return { deleted_repos: 0, deleted_teams: 0, skipped: 0, failures: ['no git organization'] };
+  }
+
+  const plan = classroomGitHubArtifactPlan({
+    orgLogin: classroom.git_organization.login,
+    slug: classroom.slug,
+    contentNamespace: classroom.content_namespace,
+    gitRepoNames: classroom.git_repos.map(r => r.name),
+    teamSlugs: classroom.teams.map(t => t.slug),
+  });
+
+  const provider = getGitProvider(classroom.git_organization);
+  const summary: GitHubCleanupSummary = {
+    deleted_repos: 0,
+    deleted_teams: 0,
+    skipped: 0,
+    failures: [],
+  };
+
+  for (const artifact of plan) {
+    try {
+      if (artifact.kind === 'repo') {
+        await provider.deleteRepository(artifact.org, artifact.name);
+        summary.deleted_repos += 1;
+      } else {
+        await provider.deleteTeam(artifact.org, artifact.name);
+        summary.deleted_teams += 1;
+      }
+    } catch (error: unknown) {
+      if ((error as { status?: number })?.status === 404) {
+        summary.skipped += 1;
+        continue;
+      }
+      const message = error instanceof Error ? error.message : String(error);
+      summary.failures.push(`${artifact.label} ${artifact.name}: ${message}`);
+    }
+  }
+
+  return summary;
 };
 
 /**

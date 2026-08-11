@@ -1,4 +1,5 @@
-import { Button, Modal } from 'antd';
+import { useEffect, useState } from 'react';
+import { Button, Checkbox, Modal } from 'antd';
 
 import { namedAction } from 'remix-utils/named-action';
 import { useNavigate, useParams } from 'react-router';
@@ -14,19 +15,38 @@ const DangerZone = () => {
   const { show, close, visible } = useDisclosure();
   const { class: classSlug } = useParams();
   const navigate = useNavigate();
+  const [deleteGitHub, setDeleteGitHub] = useState(false);
+  const [removing, setRemoving] = useState(false);
 
   const onRemoveClassroom = () => {
-    notify(ActionTypes.REMOVE_CLASSROOM, 'Removing classroom...');
+    setRemoving(true);
+    notify(
+      ActionTypes.REMOVE_CLASSROOM,
+      deleteGitHub ? 'Removing classroom and GitHub artifacts...' : 'Removing classroom...'
+    );
     fetcher!.submit(
-      {},
+      { delete_github: deleteGitHub ? 'true' : 'false' },
       {
         method: 'delete',
         action: `?/removeClassroom`,
       }
     );
-
-    navigate('/select-organization');
   };
+
+  // Navigate only after the server confirms — a fire-and-forget navigate hid
+  // failures entirely (the classroom would silently still exist). The success
+  // toast (incl. the GitHub cleanup summary) comes from the global fetcher.
+  const fetcherData = fetcher?.data as { success?: string; error?: string } | undefined;
+  useEffect(() => {
+    if (!removing) return;
+    if (fetcher?.state !== 'idle') return;
+    if (fetcherData?.success) {
+      navigate('/select-organization');
+    } else if (fetcherData?.error) {
+      setRemoving(false);
+      close();
+    }
+  }, [removing, fetcher?.state, fetcherData, navigate, close]);
 
   return (
     <>
@@ -36,12 +56,27 @@ const DangerZone = () => {
         onOk={onRemoveClassroom}
         onCancel={() => close()}
         okText="Remove"
-        okButtonProps={{ danger: true }}
+        okButtonProps={{ danger: true, loading: removing }}
+        cancelButtonProps={{ disabled: removing }}
       >
         <p>
-          The following data will be removed: repositories, student enrollments, grades, quizzes, and
-          classroom settings.
+          Everything stored in Classmoji for this classroom will be permanently removed:
+          repositories, assignments, quizzes, pages, slide decks, modules, student enrollments,
+          grades, and settings. There is no undo.
         </p>
+        <div className="pt-3">
+          <Checkbox
+            checked={deleteGitHub}
+            disabled={removing}
+            onChange={e => setDeleteGitHub(e.target.checked)}
+          >
+            Also delete this classroom&rsquo;s GitHub artifacts
+            <div className="text-xs text-gray-500">
+              The content repository, the classroom teams, and all student assignment repositories
+              in the GitHub organization. Leave unchecked to keep everything on GitHub.
+            </div>
+          </Checkbox>
+        </div>
         <p className="pt-3">Are you sure you want to proceed?</p>
       </Modal>
       <div>
@@ -67,20 +102,49 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
   });
   assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
 
+  // namedAction consumes the request body for the action name lookup only when
+  // using search-param naming (?/removeClassroom) — the form data stays readable.
+  const formData = await request.clone().formData();
+  const deleteGitHub = formData.get('delete_github') === 'true';
+
   return namedAction(request, {
     async removeClassroom() {
-      return removeClassroomHandler(classroom);
+      return removeClassroomHandler(classroom, deleteGitHub);
     },
   });
 };
 
-const removeClassroomHandler = async (classroom: { id: string }) => {
-  // Only delete the classroom data - don't remove the GitHub installation
-  // since multiple classrooms can share the same git organization
+const removeClassroomHandler = async (classroom: { id: string }, deleteGitHub: boolean) => {
+  // GitHub cleanup MUST precede the DB delete: the cascade destroys the rows
+  // that name the artifacts (content repo, team slugs, git repo names).
+  // Best-effort — failures are reported, never block the classroom removal.
+  let cleanupNote = '';
+  if (deleteGitHub) {
+    try {
+      const summary = await ClassmojiService.classroom.deleteGitHubArtifacts(classroom.id);
+      const bits: string[] = [];
+      if (summary.deleted_repos > 0)
+        bits.push(`${summary.deleted_repos} repo${summary.deleted_repos === 1 ? '' : 's'}`);
+      if (summary.deleted_teams > 0)
+        bits.push(`${summary.deleted_teams} team${summary.deleted_teams === 1 ? '' : 's'}`);
+      if (bits.length > 0) cleanupNote = ` GitHub: deleted ${bits.join(', ')}.`;
+      if (summary.failures.length > 0) {
+        console.error('GitHub cleanup failures on classroom delete:', summary.failures);
+        cleanupNote += ` ${summary.failures.length} GitHub item${
+          summary.failures.length === 1 ? '' : 's'
+        } could not be deleted (see server logs).`;
+      }
+    } catch (error: unknown) {
+      console.error('GitHub cleanup failed on classroom delete:', error);
+      cleanupNote = ' GitHub cleanup failed — artifacts left in place (see server logs).';
+    }
+  }
+
+  // The GitHub installation is never touched — multiple classrooms share it.
   await ClassmojiService.classroom.deleteById(classroom.id);
   return {
     action: ActionTypes.REMOVE_CLASSROOM,
-    success: 'Classroom removed successfully!',
+    success: `Classroom removed successfully!${cleanupNote}`,
   };
 };
 
