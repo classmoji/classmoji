@@ -17,6 +17,9 @@ interface StepBasicInfoProps {
   githubAppName?: string | null;
   availability?: AvailabilityResponse;
   availabilityLoading?: boolean;
+  selectedOrgLogin: string;
+  namespaceSuggestion: string;
+  effectiveNamespace: string;
 }
 
 const StepBasicInfo = ({
@@ -25,6 +28,9 @@ const StepBasicInfo = ({
   githubAppName,
   availability,
   availabilityLoading,
+  selectedOrgLogin,
+  namespaceSuggestion,
+  effectiveNamespace,
 }: StepBasicInfoProps) => {
   const {
     control,
@@ -38,6 +44,7 @@ const StepBasicInfo = ({
   const effectiveSlug = slugOverride && slugOverride.length > 0 ? slugOverride : slugPreview;
 
   const [editingSlug, setEditingSlug] = useState(false);
+  const [editingNamespace, setEditingNamespace] = useState(false);
 
   const showResult = !!effectiveSlug && !availabilityLoading && !!availability;
   const slugTaken = showResult && availability!.slug_available === false;
@@ -138,6 +145,11 @@ const StepBasicInfo = ({
                   if (!editingSlug) {
                     setValue('slug', '', { shouldDirty: false });
                   }
+                  // Same for the content-namespace override: re-derive from the
+                  // fresh slug unless the user is editing it right now.
+                  if (!editingNamespace) {
+                    setValue('content_namespace', '', { shouldDirty: false });
+                  }
                 }}
               />
             )}
@@ -223,6 +235,62 @@ const StepBasicInfo = ({
                   )}
                 </span>
               )}
+            </div>
+          </div>
+        )}
+
+        {/* Content repo name: content-{orgLogin}-{namespace}, namespace editable.
+            Shown once an org is selected and a slug exists to derive from. */}
+        {(slugPreview || slugOverride) && selectedOrgLogin && (
+          <div>
+            <div className="flex items-center gap-2 text-sm text-gray-600 dark:text-gray-300 flex-wrap">
+              <span>Content repo:</span>
+              {editingNamespace ? (
+                <Controller
+                  name="content_namespace"
+                  control={control}
+                  render={({ field }) => (
+                    <Input
+                      {...field}
+                      size="small"
+                      style={{ width: 340 }}
+                      addonBefore={`content-${selectedOrgLogin}-`}
+                      value={(field.value as string) || namespaceSuggestion}
+                      onChange={e => field.onChange(slugify(e.target.value))}
+                      onBlur={() => {
+                        field.onBlur();
+                        // An override equal to the suggestion is not an override.
+                        if ((field.value as string) === namespaceSuggestion) {
+                          setValue('content_namespace', '', { shouldDirty: false });
+                        }
+                        setEditingNamespace(false);
+                      }}
+                      autoFocus
+                    />
+                  )}
+                />
+              ) : (
+                <>
+                  <code className="bg-stone-100 dark:bg-neutral-800 text-gray-700 dark:text-gray-300 px-2 py-1 rounded">
+                    content-{selectedOrgLogin}-
+                    <span className="font-semibold text-gray-900 dark:text-gray-100">
+                      {effectiveNamespace}
+                    </span>
+                  </code>
+                  <button
+                    type="button"
+                    onClick={() => setEditingNamespace(true)}
+                    className="text-xs text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"
+                    aria-label="Edit content namespace"
+                  >
+                    <EditOutlined /> edit
+                  </button>
+                </>
+              )}
+            </div>
+            <div className="mt-1 text-xs text-gray-400 dark:text-gray-500">
+              The GitHub repository that will store this classroom&rsquo;s pages &amp; slides
+              content.
             </div>
           </div>
         )}
