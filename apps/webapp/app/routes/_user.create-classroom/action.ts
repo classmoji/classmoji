@@ -8,6 +8,7 @@ import {
 } from '@classmoji/services';
 import { ActionTypes } from '~/constants';
 import getPrisma from '@classmoji/database';
+import { maxContentNamespaceLength, suggestContentNamespace } from '@classmoji/utils';
 import { slugify } from './utils';
 
 export const action = checkAuth(async ({ request }: { request: Request }) => {
@@ -22,7 +23,13 @@ export const action = checkAuth(async ({ request }: { request: Request }) => {
     return { error: 'Unauthorized' };
   }
 
-  const { git_org_id, name, slug: slugInput, importConfig } = await request.json();
+  const {
+    git_org_id,
+    name,
+    slug: slugInput,
+    content_namespace: namespaceInput,
+    importConfig,
+  } = await request.json();
 
   if (!name) {
     return { error: 'Classroom name is required' };
@@ -68,6 +75,21 @@ export const action = checkAuth(async ({ request }: { request: Request }) => {
   // Slug: prefer client-provided (user override / suggestion) when present, else derive from name.
   const slug = slugInput && typeof slugInput === 'string' ? slugify(slugInput) : slugify(name);
 
+  // Content namespace (names the classroom's content repo,
+  // `content-{orgLogin}-{namespace}`): client-provided override when present,
+  // else the org-prefix-stripped slug — never the raw slug, which doubles the
+  // org name in the repo whenever the slug starts with the course/org name.
+  const contentNamespace =
+    namespaceInput && typeof namespaceInput === 'string' && slugify(namespaceInput).length > 0
+      ? slugify(namespaceInput)
+      : suggestContentNamespace({ orgLogin: gitOrg.login, slug });
+
+  if (contentNamespace.length > maxContentNamespaceLength(gitOrg.login)) {
+    return {
+      error: `Content namespace is too long — keep it under ${maxContentNamespaceLength(gitOrg.login)} characters so the content repo name fits GitHub's limit`,
+    };
+  }
+
   // Create Classroom, Settings, and Membership in transaction
   const classroom = await getPrisma().$transaction(async tx => {
     const classroom = await tx.classroom.create({
@@ -75,7 +97,7 @@ export const action = checkAuth(async ({ request }: { request: Request }) => {
         git_org_id,
         slug,
         name,
-        content_namespace: slug,
+        content_namespace: contentNamespace,
       },
     });
 

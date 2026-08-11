@@ -16,6 +16,7 @@ interface StepReviewProps {
   formValues: CreateClassroomFormValues;
   gitOrgs: GitOrganizationOption[];
   slugPreview: string;
+  contentRepoName?: string | null;
   importEnabled: boolean;
   sourceClassroom?: OwnedClassroom;
   selectedModules: Map<string, ModuleConfig>;
@@ -25,6 +26,7 @@ const StepReview = ({
   formValues,
   gitOrgs,
   slugPreview,
+  contentRepoName,
   importEnabled,
   sourceClassroom,
   selectedModules,
@@ -77,6 +79,14 @@ const StepReview = ({
               {slugPreview}
             </code>
           </div>
+          {contentRepoName && (
+            <div className="flex justify-between">
+              <span className="text-gray-500">Content repo</span>
+              <code className="bg-stone-100 dark:bg-neutral-800 text-gray-700 dark:text-gray-300 px-2 py-0.5 rounded text-sm">
+                {contentRepoName}
+              </code>
+            </div>
+          )}
         </div>
       </Card>
 

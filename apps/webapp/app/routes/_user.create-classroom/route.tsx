@@ -8,6 +8,7 @@ import { useGlobalFetcher, useGitHubAppInstallPopup } from '~/hooks';
 import { ClassmojiService, GitHubProvider } from '@classmoji/services';
 import { ActionTypes } from '~/constants';
 import getPrisma from '@classmoji/database';
+import { classroomContentRepoName, suggestContentNamespace } from '@classmoji/utils';
 
 import StepBasicInfo from './StepBasicInfo';
 import StepImportModules from './StepImportModules';
@@ -273,6 +274,7 @@ const CreateClassroom = ({ loaderData }: Route.ComponentProps) => {
       git_org_id: '',
       name: '',
       slug: '',
+      content_namespace: '',
     },
   });
 
@@ -301,6 +303,18 @@ const CreateClassroom = ({ loaderData }: Route.ComponentProps) => {
   const slugPreview = formValues.name ? slugify(formValues.name) : '';
   const slugOverride = (formValues as { slug?: string }).slug;
   const effectiveSlug = slugOverride && slugOverride.length > 0 ? slugOverride : slugPreview;
+
+  // Content namespace: manual override when set, else the org-prefix-stripped
+  // slug (mirrors the server's fallback so the preview always shows what an
+  // untouched submit would create).
+  const selectedOrgLogin = gitOrgs.find(o => o.id === formValues.git_org_id)?.login ?? '';
+  const namespaceSuggestion =
+    effectiveSlug && selectedOrgLogin
+      ? suggestContentNamespace({ orgLogin: selectedOrgLogin, slug: effectiveSlug })
+      : effectiveSlug;
+  const namespaceOverride = (formValues as { content_namespace?: string }).content_namespace;
+  const effectiveNamespace =
+    namespaceOverride && namespaceOverride.length > 0 ? namespaceOverride : namespaceSuggestion;
 
   // Debounced availability check (shared with StepBasicInfo via props)
   const availabilityFetcher = useFetcher<{
@@ -362,7 +376,7 @@ const CreateClassroom = ({ loaderData }: Route.ComponentProps) => {
     notify(ActionTypes.CREATE_CLASSROOM, 'Creating classroom...');
 
     fetcher!.submit(
-      { ...values, slug: effectiveSlug, importConfig },
+      { ...values, slug: effectiveSlug, content_namespace: effectiveNamespace, importConfig },
       {
         method: 'post',
         action: '/create-classroom',
@@ -420,6 +434,9 @@ const CreateClassroom = ({ loaderData }: Route.ComponentProps) => {
                 githubAppName={githubAppName}
                 availability={availabilityFetcher.data}
                 availabilityLoading={availabilityFetcher.state !== 'idle'}
+                selectedOrgLogin={selectedOrgLogin}
+                namespaceSuggestion={namespaceSuggestion}
+                effectiveNamespace={effectiveNamespace}
               />
             )}
 
@@ -439,7 +456,15 @@ const CreateClassroom = ({ loaderData }: Route.ComponentProps) => {
               <StepReview
                 formValues={formValues}
                 gitOrgs={gitOrgs}
-                slugPreview={slugPreview}
+                slugPreview={effectiveSlug}
+                contentRepoName={
+                  selectedOrgLogin
+                    ? classroomContentRepoName({
+                        login: selectedOrgLogin,
+                        namespace: effectiveNamespace,
+                      })
+                    : null
+                }
                 importEnabled={importEnabled}
                 sourceClassroom={sourceClassroom}
                 selectedModules={selectedModules}
