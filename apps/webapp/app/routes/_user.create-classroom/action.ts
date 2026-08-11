@@ -90,32 +90,84 @@ export const action = checkAuth(async ({ request }: { request: Request }) => {
     };
   }
 
-  // Create Classroom, Settings, and Membership in transaction
-  const classroom = await getPrisma().$transaction(async tx => {
-    const classroom = await tx.classroom.create({
-      data: {
-        git_org_id,
-        slug,
-        name,
-        content_namespace: contentNamespace,
-      },
-    });
-
-    await tx.classroomSettings.create({
-      data: { classroom_id: classroom.id },
-    });
-
-    await tx.classroomMembership.create({
-      data: {
-        classroom_id: classroom.id,
-        user_id: user.id,
-        role: 'OWNER',
-        has_accepted_invite: true,
-      },
-    });
-
-    return classroom;
+  // The namespace names the content repo (content-{org}-{namespace}); a
+  // collision would make two classrooms share one repo. The DB unique
+  // constraint backstops the race; this check gives a friendly error.
+  const namespaceTaken = await getPrisma().classroom.findFirst({
+    where: { git_org_id, content_namespace: contentNamespace },
+    select: { slug: true },
   });
+  if (namespaceTaken) {
+    return {
+      error: `Content namespace '${contentNamespace}' is already used by classroom '${namespaceTaken.slug}' in this organization — pick a different one`,
+    };
+  }
+
+  // ALL validation that can refuse creation must run BEFORE the transaction —
+  // returning an error after it leaves an orphaned classroom that also blocks
+  // a same-slug retry. Source-ownership for imports is part of that gate.
+  const sourceClassroomId: string | undefined = importConfig?.sourceClassroomId;
+  const configSelections = importConfig?.config ?? {};
+  const contentSelections = importConfig?.content ?? {};
+  const anyConfigSelected = Object.values(configSelections).some(Boolean);
+  const anyContentSelected = Object.values(contentSelections).some(Boolean);
+  const requestedRepos: Array<{ id: string; includeQuizzes?: boolean }> =
+    importConfig?.repositories ?? [];
+  const importRequested =
+    !!sourceClassroomId && (requestedRepos.length > 0 || anyConfigSelected || anyContentSelected);
+
+  if (importRequested) {
+    // The picker only OFFERS owned classrooms, but every id here arrives from
+    // the request body — re-verify ownership server-side before copying
+    // anything (settings can carry API keys; content must not be exfiltrated
+    // from classrooms the requester doesn't own).
+    const sourceMembership = await getPrisma().classroomMembership.findFirst({
+      where: { classroom_id: sourceClassroomId, user_id: user.id, role: 'OWNER' },
+    });
+    if (!sourceMembership) {
+      return { error: 'You must own the source classroom to import from it' };
+    }
+  }
+
+  // Create Classroom, Settings, and Membership in transaction
+  let classroom;
+  try {
+    classroom = await getPrisma().$transaction(async tx => {
+      const created = await tx.classroom.create({
+        data: {
+          git_org_id,
+          slug,
+          name,
+          content_namespace: contentNamespace,
+        },
+      });
+
+      await tx.classroomSettings.create({
+        data: { classroom_id: created.id },
+      });
+
+      await tx.classroomMembership.create({
+        data: {
+          classroom_id: created.id,
+          user_id: user.id,
+          role: 'OWNER',
+          has_accepted_invite: true,
+        },
+      });
+
+      return created;
+    });
+  } catch (error: unknown) {
+    // Unique-constraint race (slug or content namespace claimed between the
+    // pre-checks and the insert) — refuse cleanly instead of a 500.
+    if ((error as { code?: string })?.code === 'P2002') {
+      return {
+        error:
+          'That classroom slug or content namespace was just taken in this organization — adjust and try again',
+      };
+    }
+    throw error;
+  }
 
   // Import from a source classroom if configured. Phases (each best-effort,
   // logged, never fails classroom creation): 1 settings/scales/calendar,
@@ -138,26 +190,7 @@ export const action = checkAuth(async ({ request }: { request: Request }) => {
   let modulesSummary: { modules: number; items: number; skipped_items: number } | null = null;
   const importWarnings: string[] = [];
 
-  const sourceClassroomId: string | undefined = importConfig?.sourceClassroomId;
-  const configSelections = importConfig?.config ?? {};
-  const contentSelections = importConfig?.content ?? {};
-  const anyConfigSelected = Object.values(configSelections).some(Boolean);
-  const anyContentSelected = Object.values(contentSelections).some(Boolean);
-  const requestedRepos: Array<{ id: string; includeQuizzes?: boolean }> =
-    importConfig?.repositories ?? [];
-
-  if (sourceClassroomId && (requestedRepos.length > 0 || anyConfigSelected || anyContentSelected)) {
-    // The picker only OFFERS owned classrooms, but every id here arrives from
-    // the request body — re-verify ownership server-side before copying
-    // anything (settings can carry API keys; content must not be exfiltrated
-    // from classrooms the requester doesn't own).
-    const sourceMembership = await getPrisma().classroomMembership.findFirst({
-      where: { classroom_id: sourceClassroomId, user_id: user.id, role: 'OWNER' },
-    });
-    if (!sourceMembership) {
-      return { error: 'You must own the source classroom to import from it' };
-    }
-
+  if (importRequested && sourceClassroomId) {
     if (anyConfigSelected) {
       try {
         configSummary = await ClassmojiService.classroomConfigImport.importClassroomConfig(
