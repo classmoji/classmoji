@@ -1,6 +1,6 @@
 import getPrisma from '@classmoji/database';
 import { classroomContentRepoName } from '@classmoji/utils';
-import { getGitProvider } from '../git/index.ts';
+import { GitHubProvider } from '../git/index.ts';
 import type { Prisma, Role } from '@prisma/client';
 
 /**
@@ -298,13 +298,33 @@ export interface GitHubCleanupSummary {
  * "also delete from GitHub" option. MUST run BEFORE the DB delete — the
  * cascade destroys the rows that name these artifacts.
  *
+ * Deletions run with the REQUESTING USER's token, never the app installation
+ * token — deliberately. Classmoji user tokens are GitHub App user-to-server
+ * tokens, so GitHub enforces the intersection of the app's permissions AND the
+ * human's own: anything the requesting owner couldn't delete on GitHub
+ * themselves fails with a 403 here, regardless of what the app installation
+ * could do. There is no app-token fallback.
+ *
  * Every deletion is independent and best-effort: a 404 counts as skipped
- * (already gone), any other failure is recorded and the rest proceed. The
- * classroom rows are never touched here.
+ * (already gone), any other failure (incl. permission 403s) is recorded and
+ * the rest proceed. The classroom rows are never touched here.
+ *
+ * @param {string} classroomId - Classroom whose artifacts to delete
+ * @param {string} userToken - The requesting user's GitHub token (required)
  */
 export const deleteGitHubArtifacts = async (
-  classroomId: string
+  classroomId: string,
+  userToken: string
 ): Promise<GitHubCleanupSummary> => {
+  if (!userToken) {
+    return {
+      deleted_repos: 0,
+      deleted_teams: 0,
+      skipped: 0,
+      failures: ['no GitHub user token — nothing deleted'],
+    };
+  }
+
   const classroom = await getPrisma().classroom.findUnique({
     where: { id: classroomId },
     include: {
@@ -319,6 +339,14 @@ export const deleteGitHubArtifacts = async (
   if (!classroom?.git_organization?.login) {
     return { deleted_repos: 0, deleted_teams: 0, skipped: 0, failures: ['no git organization'] };
   }
+  if (classroom.git_organization.provider !== 'GITHUB') {
+    return {
+      deleted_repos: 0,
+      deleted_teams: 0,
+      skipped: 0,
+      failures: ['provider not supported for cleanup — artifacts left in place'],
+    };
+  }
 
   const plan = classroomGitHubArtifactPlan({
     orgLogin: classroom.git_organization.login,
@@ -328,7 +356,8 @@ export const deleteGitHubArtifacts = async (
     teamSlugs: classroom.teams.map(t => t.slug),
   });
 
-  const provider = getGitProvider(classroom.git_organization);
+  // User-to-server octokit: GitHub checks the HUMAN's authority per call.
+  const octokit = GitHubProvider.getUserOctokit(userToken);
   const summary: GitHubCleanupSummary = {
     deleted_repos: 0,
     deleted_teams: 0,
@@ -339,10 +368,16 @@ export const deleteGitHubArtifacts = async (
   for (const artifact of plan) {
     try {
       if (artifact.kind === 'repo') {
-        await provider.deleteRepository(artifact.org, artifact.name);
+        await octokit.request('DELETE /repos/{owner}/{repo}', {
+          owner: artifact.org,
+          repo: artifact.name,
+        });
         summary.deleted_repos += 1;
       } else {
-        await provider.deleteTeam(artifact.org, artifact.name);
+        await octokit.request('DELETE /orgs/{org}/teams/{team_slug}', {
+          org: artifact.org,
+          team_slug: artifact.name,
+        });
         summary.deleted_teams += 1;
       }
     } catch (error: unknown) {
