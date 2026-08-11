@@ -6,6 +6,7 @@ import { useNavigate, useParams } from 'react-router';
 
 import { useGlobalFetcher, useDisclosure } from '~/hooks';
 import { ClassmojiService } from '@classmoji/services';
+import { getAuthSession } from '@classmoji/auth/server';
 import { ActionTypes } from '~/constants';
 import { requireClassroomAdmin, assertClassroomMutationAllowed } from '~/utils/routeAuth.server';
 import type { Route } from './+types/route';
@@ -107,21 +108,32 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
   const formData = await request.clone().formData();
   const deleteGitHub = formData.get('delete_github') === 'true';
 
+  // The REQUESTER's GitHub token drives the cleanup (user-to-server: GitHub
+  // enforces the human's own permissions per call). Never the app token.
+  const authData = deleteGitHub ? await getAuthSession(request) : null;
+
   return namedAction(request, {
     async removeClassroom() {
-      return removeClassroomHandler(classroom, deleteGitHub);
+      return removeClassroomHandler(classroom, deleteGitHub, authData?.token ?? null);
     },
   });
 };
 
-const removeClassroomHandler = async (classroom: { id: string }, deleteGitHub: boolean) => {
+const removeClassroomHandler = async (
+  classroom: { id: string },
+  deleteGitHub: boolean,
+  userToken: string | null
+) => {
   // GitHub cleanup MUST precede the DB delete: the cascade destroys the rows
   // that name the artifacts (content repo, team slugs, git repo names).
   // Best-effort — failures are reported, never block the classroom removal.
   let cleanupNote = '';
   if (deleteGitHub) {
     try {
-      const summary = await ClassmojiService.classroom.deleteGitHubArtifacts(classroom.id);
+      const summary = await ClassmojiService.classroom.deleteGitHubArtifacts(
+        classroom.id,
+        userToken ?? ''
+      );
       const bits: string[] = [];
       if (summary.deleted_repos > 0)
         bits.push(`${summary.deleted_repos} repo${summary.deleted_repos === 1 ? '' : 's'}`);
