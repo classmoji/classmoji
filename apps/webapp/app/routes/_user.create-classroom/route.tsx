@@ -8,11 +8,13 @@ import { useGlobalFetcher, useGitHubAppInstallPopup } from '~/hooks';
 import { ClassmojiService, GitHubProvider } from '@classmoji/services';
 import { ActionTypes } from '~/constants';
 import getPrisma from '@classmoji/database';
+import { classroomContentRepoName, suggestContentNamespace } from '@classmoji/utils';
 
 import StepBasicInfo from './StepBasicInfo';
 import StepImportModules from './StepImportModules';
 import StepReview from './StepReview';
 import { slugify, STEPS } from './utils';
+import type { ImportSelections } from './types';
 import type { Route } from './+types/route';
 
 export const loader = async ({ request }: Route.LoaderArgs) => {
@@ -177,6 +179,17 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
             login: true,
           },
         },
+        // Counts drive the "Also copy" checkboxes on the import step.
+        _count: {
+          select: {
+            pages: true,
+            slides: true,
+            modules: true,
+            calendar_events: true,
+            emoji_mappings: true,
+            letter_grade_mappings: true,
+          },
+        },
         repositories: {
           select: {
             id: true,
@@ -273,6 +286,7 @@ const CreateClassroom = ({ loaderData }: Route.ComponentProps) => {
       git_org_id: '',
       name: '',
       slug: '',
+      content_namespace: '',
     },
   });
 
@@ -288,6 +302,21 @@ const CreateClassroom = ({ loaderData }: Route.ComponentProps) => {
   const [selectedModules, setSelectedModules] = useState(
     new Map<string, { includeQuizzes: boolean }>()
   );
+  // Settings/content copy groups. Config + drafts-only content default ON
+  // (the point of importing is reuse); the two exceptions are secrets
+  // (API keys) and calendar events (dates copy as-is), which are opt-in.
+  const [importSelections, setImportSelections] = useState<ImportSelections>({
+    grading: true,
+    gradeScales: true,
+    tokens: true,
+    features: true,
+    aiConfig: true,
+    apiKeys: false,
+    calendar: false,
+    pages: true,
+    slides: true,
+    modules: true,
+  });
 
   // Navigate to new classroom on success
   useEffect(() => {
@@ -301,6 +330,18 @@ const CreateClassroom = ({ loaderData }: Route.ComponentProps) => {
   const slugPreview = formValues.name ? slugify(formValues.name) : '';
   const slugOverride = (formValues as { slug?: string }).slug;
   const effectiveSlug = slugOverride && slugOverride.length > 0 ? slugOverride : slugPreview;
+
+  // Content namespace: manual override when set, else the org-prefix-stripped
+  // slug (mirrors the server's fallback so the preview always shows what an
+  // untouched submit would create).
+  const selectedOrgLogin = gitOrgs.find(o => o.id === formValues.git_org_id)?.login ?? '';
+  const namespaceSuggestion =
+    effectiveSlug && selectedOrgLogin
+      ? suggestContentNamespace({ orgLogin: selectedOrgLogin, slug: effectiveSlug })
+      : effectiveSlug;
+  const namespaceOverride = (formValues as { content_namespace?: string }).content_namespace;
+  const effectiveNamespace =
+    namespaceOverride && namespaceOverride.length > 0 ? namespaceOverride : namespaceSuggestion;
 
   // Debounced availability check (shared with StepBasicInfo via props)
   const availabilityFetcher = useFetcher<{
@@ -349,20 +390,25 @@ const CreateClassroom = ({ loaderData }: Route.ComponentProps) => {
 
     // Build import config if applicable
     let importConfig = null;
-    if (importEnabled && sourceClassroomId && selectedModules.size > 0) {
+    const anySelection =
+      selectedModules.size > 0 || Object.values(importSelections).some(Boolean);
+    if (importEnabled && sourceClassroomId && anySelection) {
+      const { pages, slides, modules, ...config } = importSelections;
       importConfig = {
         sourceClassroomId,
-        repositories: Array.from(selectedModules.entries()).map(([id, config]) => ({
+        repositories: Array.from(selectedModules.entries()).map(([id, cfg]) => ({
           id,
-          includeQuizzes: config.includeQuizzes || false,
+          includeQuizzes: cfg.includeQuizzes || false,
         })),
+        config,
+        content: { pages, slides, modules },
       };
     }
 
     notify(ActionTypes.CREATE_CLASSROOM, 'Creating classroom...');
 
     fetcher!.submit(
-      { ...values, slug: effectiveSlug, importConfig },
+      { ...values, slug: effectiveSlug, content_namespace: effectiveNamespace, importConfig },
       {
         method: 'post',
         action: '/create-classroom',
@@ -420,6 +466,9 @@ const CreateClassroom = ({ loaderData }: Route.ComponentProps) => {
                 githubAppName={githubAppName}
                 availability={availabilityFetcher.data}
                 availabilityLoading={availabilityFetcher.state !== 'idle'}
+                selectedOrgLogin={selectedOrgLogin}
+                namespaceSuggestion={namespaceSuggestion}
+                effectiveNamespace={effectiveNamespace}
               />
             )}
 
@@ -432,6 +481,8 @@ const CreateClassroom = ({ loaderData }: Route.ComponentProps) => {
                 setSourceClassroomId={setSourceClassroomId}
                 selectedModules={selectedModules}
                 setSelectedModules={setSelectedModules}
+                importSelections={importSelections}
+                setImportSelections={setImportSelections}
               />
             )}
 
@@ -439,10 +490,19 @@ const CreateClassroom = ({ loaderData }: Route.ComponentProps) => {
               <StepReview
                 formValues={formValues}
                 gitOrgs={gitOrgs}
-                slugPreview={slugPreview}
+                slugPreview={effectiveSlug}
+                contentRepoName={
+                  selectedOrgLogin
+                    ? classroomContentRepoName({
+                        login: selectedOrgLogin,
+                        namespace: effectiveNamespace,
+                      })
+                    : null
+                }
                 importEnabled={importEnabled}
                 sourceClassroom={sourceClassroom}
                 selectedModules={selectedModules}
+                importSelections={importSelections}
               />
             )}
 
