@@ -216,10 +216,19 @@ export const cloneModule = async (
     repository: typeof newModule;
     assignments: Awaited<ReturnType<typeof cloneAssignment>>[];
     quizzes: Awaited<ReturnType<typeof cloneQuiz>>[];
+    idMaps: {
+      repositories: Record<string, string>;
+      quizzes: Record<string, string>;
+    };
   } = {
     repository: newModule,
     assignments: [],
     quizzes: [],
+    idMaps: {
+      // Source repository id → newly cloned repository id.
+      repositories: { [sourceRepositoryId]: newModule.id },
+      quizzes: {},
+    },
   };
 
   // Clone assignments
@@ -246,6 +255,7 @@ export const cloneModule = async (
         tx
       );
       results.quizzes.push(clonedQuiz);
+      results.idMaps.quizzes[quiz.id] = clonedQuiz.id;
     }
   }
 
@@ -275,11 +285,19 @@ export const cloneModulesWithRelations = async (
       assignments: Awaited<ReturnType<typeof cloneAssignment>>[];
       quizzes: Awaited<ReturnType<typeof cloneQuiz>>[];
       tags: Prisma.TagUncheckedCreateInput[];
+      idMaps: {
+        repositories: Record<string, string>;
+        quizzes: Record<string, string>;
+      };
     } = {
       repositories: [],
       assignments: [],
       quizzes: [],
       tags: [],
+      idMaps: {
+        repositories: {},
+        quizzes: {},
+      },
     };
 
     for (const config of moduleConfigs) {
@@ -297,6 +315,8 @@ export const cloneModulesWithRelations = async (
       results.repositories.push(cloneResult.repository);
       results.assignments.push(...cloneResult.assignments);
       results.quizzes.push(...cloneResult.quizzes);
+      Object.assign(results.idMaps.repositories, cloneResult.idMaps.repositories);
+      Object.assign(results.idMaps.quizzes, cloneResult.idMaps.quizzes);
     }
 
     return results;

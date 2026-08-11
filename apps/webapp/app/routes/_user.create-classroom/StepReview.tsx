@@ -8,6 +8,7 @@ import {
 import type {
   CreateClassroomFormValues,
   GitOrganizationOption,
+  ImportSelections,
   ModuleConfig,
   OwnedClassroom,
 } from './types';
@@ -20,7 +21,31 @@ interface StepReviewProps {
   importEnabled: boolean;
   sourceClassroom?: OwnedClassroom;
   selectedModules: Map<string, ModuleConfig>;
+  importSelections?: ImportSelections;
 }
+
+/** Human labels for the enabled "Also copy" groups, with counts where known. */
+const copySummaryParts = (
+  selections: ImportSelections,
+  counts?: OwnedClassroom['_count']
+): string[] => {
+  const parts: string[] = [];
+  if (selections.grading) parts.push('grading & late penalty');
+  const scaleCount = (counts?.emoji_mappings ?? 0) + (counts?.letter_grade_mappings ?? 0);
+  if (selections.gradeScales && scaleCount > 0) parts.push(`grade scales (${scaleCount})`);
+  if (selections.tokens) parts.push('tokens');
+  if (selections.features) parts.push('features & appearance');
+  if (selections.aiConfig) parts.push('AI config');
+  if (selections.apiKeys) parts.push('API keys');
+  if (selections.pages && (counts?.pages ?? 0) > 0) parts.push(`pages (${counts?.pages})`);
+  if (selections.slides && (counts?.slides ?? 0) > 0)
+    parts.push(`slide decks (${counts?.slides})`);
+  if (selections.modules && (counts?.modules ?? 0) > 0)
+    parts.push(`modules (${counts?.modules})`);
+  if (selections.calendar && (counts?.calendar_events ?? 0) > 0)
+    parts.push(`calendar events (${counts?.calendar_events})`);
+  return parts;
+};
 
 const StepReview = ({
   formValues,
@@ -30,6 +55,7 @@ const StepReview = ({
   importEnabled,
   sourceClassroom,
   selectedModules,
+  importSelections,
 }: StepReviewProps) => {
   const { git_org_id, name } = formValues;
   const selectedOrg = gitOrgs.find(o => o.id === git_org_id);
@@ -89,6 +115,32 @@ const StepReview = ({
           )}
         </div>
       </Card>
+
+      {importEnabled && sourceClassroom && importSelections && (
+        <Card
+          title={
+            <div className="flex items-center gap-2">
+              <CheckCircleOutlined className="text-blue-500" />
+              <span>Settings &amp; Content Copy</span>
+            </div>
+          }
+          size="small"
+        >
+          {(() => {
+            const parts = copySummaryParts(importSelections, sourceClassroom._count);
+            return parts.length > 0 ? (
+              <div className="text-sm text-gray-700 dark:text-gray-300">
+                Copying from {sourceClassroom.name}: {parts.join(', ')}.
+                <div className="mt-1 text-xs text-gray-500">
+                  Pages, slide decks, and modules arrive as drafts.
+                </div>
+              </div>
+            ) : (
+              <div className="text-gray-500">No settings or content selected.</div>
+            );
+          })()}
+        </Card>
+      )}
 
       {importEnabled && selectedModules.size > 0 ? (
         <Card
