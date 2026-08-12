@@ -282,6 +282,87 @@ export function classroomGitHubArtifactPlan({
   return plan;
 }
 
+/** A classroom's GitHub cleanup plan, loaded from the DB. */
+export interface ClassroomGitHubPlan {
+  /** Exactly the artifacts that would be deleted, in deletion order. */
+  artifacts: GitHubArtifact[];
+  /** Content repo held back because a sibling classroom resolves to the same repo. */
+  withheld: { name: string; sharedWithSlug: string } | null;
+  /** Reason no plan exists at all; reported verbatim as the executor's only failure. */
+  unavailable: string | null;
+}
+
+/**
+ * Load a classroom's GitHub cleanup plan from the DB. Single source of truth
+ * for BOTH the danger-zone preview and the executor below, so what the user is
+ * shown before confirming is exactly what gets deleted. DB reads only — never
+ * calls GitHub, so it is safe in a loader.
+ *
+ * The content repo is held back (`withheld`, and excluded from `artifacts`)
+ * when another classroom in the same org shares this classroom's content
+ * namespace — they resolve to the SAME repo, so deleting it would take out live
+ * content. A DB unique constraint on [git_org_id, content_namespace] now
+ * prevents new collisions; this guard covers rows that predate it. Teams and
+ * assignment repos are per-classroom and never shared.
+ *
+ * @param {string} classroomId - Classroom whose artifacts to enumerate
+ */
+export const getClassroomGitHubArtifactPlan = async (
+  classroomId: string
+): Promise<ClassroomGitHubPlan> => {
+  const classroom = await getPrisma().classroom.findUnique({
+    where: { id: classroomId },
+    include: {
+      git_organization: true,
+      git_repos: { select: { name: true } },
+      teams: {
+        where: { provider: 'GITHUB', provider_id: { not: null } },
+        select: { slug: true },
+      },
+    },
+  });
+  if (!classroom?.git_organization?.login) {
+    return { artifacts: [], withheld: null, unavailable: 'no git organization' };
+  }
+  if (classroom.git_organization.provider !== 'GITHUB') {
+    return {
+      artifacts: [],
+      withheld: null,
+      unavailable: 'provider not supported for cleanup — artifacts left in place',
+    };
+  }
+
+  const artifacts = classroomGitHubArtifactPlan({
+    orgLogin: classroom.git_organization.login,
+    slug: classroom.slug,
+    contentNamespace: classroom.content_namespace,
+    gitRepoNames: classroom.git_repos.map(r => r.name),
+    teamSlugs: classroom.teams.map(t => t.slug),
+  });
+
+  if (!classroom.content_namespace) {
+    return { artifacts, withheld: null, unavailable: null };
+  }
+  const sharer = await getPrisma().classroom.findFirst({
+    where: {
+      git_org_id: classroom.git_org_id,
+      content_namespace: classroom.content_namespace,
+      id: { not: classroom.id },
+    },
+    select: { slug: true },
+  });
+  if (!sharer) {
+    return { artifacts, withheld: null, unavailable: null };
+  }
+
+  const contentRepo = artifacts.find(a => a.label === 'content repo');
+  return {
+    artifacts: artifacts.filter(a => a.label !== 'content repo'),
+    withheld: contentRepo ? { name: contentRepo.name, sharedWithSlug: sharer.slug } : null,
+    unavailable: null,
+  };
+};
+
 /** Result of the optional GitHub cleanup that precedes a classroom delete. */
 export interface GitHubCleanupSummary {
   deleted_repos: number;
@@ -309,9 +390,9 @@ export interface GitHubCleanupSummary {
  * (already gone), any other failure (incl. permission 403s) is recorded and
  * the rest proceed. The classroom rows are never touched here.
  *
- * The content repo is held back (and recorded as a failure) when another
- * classroom in the same org shares this classroom's content namespace — they
- * resolve to the SAME repo, so deleting it would take out live content.
+ * What gets deleted comes from getClassroomGitHubArtifactPlan — the same plan
+ * the danger-zone modal previews. A withheld (shared-namespace) content repo is
+ * recorded as a failure: the cleanup did not fully complete.
  *
  * @param {string} classroomId - Classroom whose artifacts to delete
  * @param {string} userToken - The requesting user's GitHub token (required)
@@ -329,36 +410,10 @@ export const deleteGitHubArtifacts = async (
     };
   }
 
-  const classroom = await getPrisma().classroom.findUnique({
-    where: { id: classroomId },
-    include: {
-      git_organization: true,
-      git_repos: { select: { name: true } },
-      teams: {
-        where: { provider: 'GITHUB', provider_id: { not: null } },
-        select: { slug: true },
-      },
-    },
-  });
-  if (!classroom?.git_organization?.login) {
-    return { deleted_repos: 0, deleted_teams: 0, skipped: 0, failures: ['no git organization'] };
+  const { artifacts, withheld, unavailable } = await getClassroomGitHubArtifactPlan(classroomId);
+  if (unavailable) {
+    return { deleted_repos: 0, deleted_teams: 0, skipped: 0, failures: [unavailable] };
   }
-  if (classroom.git_organization.provider !== 'GITHUB') {
-    return {
-      deleted_repos: 0,
-      deleted_teams: 0,
-      skipped: 0,
-      failures: ['provider not supported for cleanup — artifacts left in place'],
-    };
-  }
-
-  let plan = classroomGitHubArtifactPlan({
-    orgLogin: classroom.git_organization.login,
-    slug: classroom.slug,
-    contentNamespace: classroom.content_namespace,
-    gitRepoNames: classroom.git_repos.map(r => r.name),
-    teamSlugs: classroom.teams.map(t => t.slug),
-  });
 
   // User-to-server octokit: GitHub checks the HUMAN's authority per call.
   const octokit = GitHubProvider.getUserOctokit(userToken);
@@ -369,33 +424,14 @@ export const deleteGitHubArtifacts = async (
     failures: [],
   };
 
-  // The content repo name is derived from [org login, content namespace], so a
-  // sibling classroom sharing that pair OWNS THE SAME REPO — deleting it would
-  // destroy live content of a classroom nobody asked to remove. A DB unique
-  // constraint on [git_org_id, content_namespace] now prevents new collisions;
-  // this guard covers rows that predate it. Teams and assignment repos are
-  // per-classroom and never shared, so only the content repo is held back.
-  if (classroom.content_namespace) {
-    const sharer = await getPrisma().classroom.findFirst({
-      where: {
-        git_org_id: classroom.git_org_id,
-        content_namespace: classroom.content_namespace,
-        id: { not: classroom.id },
-      },
-      select: { slug: true },
-    });
-    if (sharer) {
-      const contentRepo = plan.find(a => a.label === 'content repo');
-      plan = plan.filter(a => a.label !== 'content repo');
-      if (contentRepo) {
-        summary.failures.push(
-          `content repo ${contentRepo.name}: shared with classroom '${sharer.slug}' — not deleted`
-        );
-      }
-    }
+  // Recorded before the loop so it leads the failure list.
+  if (withheld) {
+    summary.failures.push(
+      `content repo ${withheld.name}: shared with classroom '${withheld.sharedWithSlug}' — not deleted`
+    );
   }
 
-  for (const artifact of plan) {
+  for (const artifact of artifacts) {
     try {
       if (artifact.kind === 'repo') {
         await octokit.request('DELETE /repos/{owner}/{repo}', {
