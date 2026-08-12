@@ -188,6 +188,12 @@ export const action = checkAuth(async ({ request }: { request: Request }) => {
     warnings: string[];
   } | null = null;
   let modulesSummary: { modules: number; items: number; skipped_items: number } | null = null;
+  let templateSummary: {
+    duplicated: number;
+    relinked: number;
+    template_map: Record<string, string>;
+    warnings: string[];
+  } | null = null;
   const importWarnings: string[] = [];
 
   if (importRequested && sourceClassroomId) {
@@ -230,6 +236,23 @@ export const action = checkAuth(async ({ request }: { request: Request }) => {
           console.error('Error importing repositories:', error);
           importWarnings.push('repository copy failed');
         }
+      }
+    }
+
+    // Template duplication runs on the rows phase 2 just minted, so the copies
+    // exist before anything provisions student repos from them. Best-effort:
+    // a template that can't be duplicated keeps pointing at the original.
+    if (contentSelections.duplicateTemplates && (importResult?.repositories?.length ?? 0) > 0) {
+      try {
+        templateSummary = await ClassmojiService.templateImport.duplicateImportedTemplates(
+          sourceClassroomId,
+          classroom.id,
+          importResult!.repositories.map(repo => repo.id)
+        );
+        importWarnings.push(...(templateSummary?.warnings ?? []));
+      } catch (error: unknown) {
+        console.error('Error duplicating template repositories:', error);
+        importWarnings.push('template duplication failed');
       }
     }
 
@@ -313,6 +336,11 @@ export const action = checkAuth(async ({ request }: { request: Request }) => {
     }
     if (modulesSummary && modulesSummary.modules > 0) {
       parts.push(plural(modulesSummary.modules, 'module'));
+    }
+    if (templateSummary && templateSummary.duplicated > 0) {
+      parts.push(
+        `${templateSummary.duplicated} duplicated template${templateSummary.duplicated === 1 ? '' : 's'}`
+      );
     }
     if (parts.length > 0) {
       successMessage = `Classroom created with ${parts.join(', ')} imported!`;

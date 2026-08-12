@@ -316,6 +316,7 @@ const CreateClassroom = ({ loaderData }: Route.ComponentProps) => {
     pages: true,
     slides: true,
     modules: true,
+    duplicateTemplates: true,
   });
 
   // Navigate to new classroom on success
@@ -393,7 +394,7 @@ const CreateClassroom = ({ loaderData }: Route.ComponentProps) => {
     const anySelection =
       selectedModules.size > 0 || Object.values(importSelections).some(Boolean);
     if (importEnabled && sourceClassroomId && anySelection) {
-      const { pages, slides, modules, ...config } = importSelections;
+      const { pages, slides, modules, duplicateTemplates, ...config } = importSelections;
       importConfig = {
         sourceClassroomId,
         repositories: Array.from(selectedModules.entries()).map(([id, cfg]) => ({
@@ -401,7 +402,7 @@ const CreateClassroom = ({ loaderData }: Route.ComponentProps) => {
           includeQuizzes: cfg.includeQuizzes || false,
         })),
         config,
-        content: { pages, slides, modules },
+        content: { pages, slides, modules, duplicateTemplates },
       };
     }
 
