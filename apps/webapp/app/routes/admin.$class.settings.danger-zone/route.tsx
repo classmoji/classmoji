@@ -3,6 +3,7 @@ import { Button, Checkbox, Modal } from 'antd';
 
 import { namedAction } from 'remix-utils/named-action';
 import { useNavigate, useParams } from 'react-router';
+import type { ShouldRevalidateFunctionArgs } from 'react-router';
 
 import { useGlobalFetcher, useDisclosure } from '~/hooks';
 import { ClassmojiService } from '@classmoji/services';
@@ -11,7 +12,40 @@ import { ActionTypes } from '~/constants';
 import { requireClassroomAdmin, assertClassroomMutationAllowed } from '~/utils/routeAuth.server';
 import type { Route } from './+types/route';
 
-const DangerZone = () => {
+// DB-only read: the exact cleanup plan the action would execute, so the modal
+// can show it before the user confirms. No GitHub calls — same plan, one source.
+export const loader = async ({ request, params }: Route.LoaderArgs) => {
+  const { classroom } = await requireClassroomAdmin(request, params.class!, {
+    resourceType: 'SETTINGS',
+    action: 'view_delete_plan',
+  });
+
+  const { artifacts, withheld } = await ClassmojiService.classroom.getClassroomGitHubArtifactPlan(
+    classroom.id
+  );
+  return { artifacts, withheld };
+};
+
+// The delete submission revalidates this loader by default. On SUCCESS the
+// classroom is gone, so the loader's own auth gate would throw 404 into the
+// error boundary before the confirm-then-navigate effect can run — skip it.
+// On failure the modal stays open for a retry, so the plan is refreshed.
+export const shouldRevalidate = ({ actionResult }: ShouldRevalidateFunctionArgs) =>
+  Boolean(actionResult?.error);
+
+const DangerZone = ({ loaderData }: Route.ComponentProps) => {
+  const { artifacts, withheld } = loaderData;
+  const repos = artifacts.filter(a => a.kind === 'repo');
+  const teams = artifacts.filter(a => a.kind === 'team');
+  // Content repo first, then assignment repos, then every team.
+  const artifactGroups = [
+    { heading: 'Content repository', items: artifacts.filter(a => a.label === 'content repo') },
+    {
+      heading: 'Assignment repositories',
+      items: artifacts.filter(a => a.label === 'assignment repo'),
+    },
+    { heading: 'Teams', items: teams },
+  ].filter(group => group.items.length > 0);
   const { fetcher, notify } = useGlobalFetcher();
   const { show, close, visible } = useDisclosure();
   const { class: classSlug } = useParams();
@@ -90,11 +124,51 @@ const DangerZone = () => {
             onChange={e => setDeleteGitHub(e.target.checked)}
           >
             Also delete this classroom&rsquo;s GitHub artifacts
-            <div className="text-xs text-gray-500">
+            <div className="text-xs text-gray-500 dark:text-gray-400">
               The content repository, the classroom teams, and all student assignment repositories
               in the GitHub organization. Leave unchecked to keep everything on GitHub.
             </div>
           </Checkbox>
+          {deleteGitHub && (
+            <div className="mt-2 rounded-md border border-gray-200 bg-gray-50 p-3 text-xs dark:border-neutral-700 dark:bg-neutral-800">
+              {artifacts.length === 0 ? (
+                <p className="text-gray-600 dark:text-gray-300">
+                  Nothing to delete on GitHub for this classroom.
+                </p>
+              ) : (
+                <>
+                  <p className="font-medium text-gray-700 dark:text-gray-200">
+                    Will delete {repos.length} repositor{repos.length === 1 ? 'y' : 'ies'} and{' '}
+                    {teams.length} team{teams.length === 1 ? '' : 's'}:
+                  </p>
+                  {/* Student assignment repos can run to hundreds — keep the list scrollable. */}
+                  <div className="mt-2 max-h-40 overflow-y-auto pr-1">
+                    {artifactGroups.map(group => (
+                      <div key={group.heading} className="mb-2 last:mb-0">
+                        <div className="uppercase tracking-wide text-gray-400 dark:text-gray-500">
+                          {group.heading}
+                        </div>
+                        <ul className="font-mono text-gray-700 dark:text-gray-200">
+                          {group.items.map(artifact => (
+                            <li key={`${artifact.kind}:${artifact.name}`} className="truncate">
+                              {artifact.name}
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    ))}
+                  </div>
+                </>
+              )}
+              {withheld && (
+                <p className="mt-2 text-amber-600 dark:text-amber-400">
+                  Content repo <span className="font-mono">{withheld.name}</span> is shared with
+                  classroom <span className="font-mono">{withheld.sharedWithSlug}</span>, so GitHub
+                  cleanup is blocked — uncheck this option to remove the classroom only.
+                </p>
+              )}
+            </div>
+          )}
         </div>
         <p className="pt-3">Are you sure you want to proceed?</p>
       </Modal>
