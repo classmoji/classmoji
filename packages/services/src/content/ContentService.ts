@@ -1104,6 +1104,7 @@ export class ContentService {
     onProgress,
     verifyBaseTree,
     primeCache = false,
+    allowRootCommit = false,
   }: {
     gitOrganization?: GitOrganizationRecord;
     orgLogin?: string;
@@ -1134,6 +1135,17 @@ export class ContentService {
     verifyBaseTree?: (ctx: {
       getFileSha: (path: string) => Promise<string | null>;
     }) => Promise<void>;
+    /**
+     * Allow writing into a repository that has NO commits yet. Until an initial
+     * commit exists GitHub answers 409 "Git Repository is empty" to the whole
+     * Git Data API — `POST /git/blobs` included — so a root commit cannot be
+     * assembled at all. The only endpoint that works on an empty repo is the
+     * Contents API, so this seeds `files[0]` through it (creating `branch`,
+     * which becomes the repo's default) and then runs the normal batch path.
+     * Off by default — every existing caller writes to a branch that exists,
+     * where a missing ref is a real error worth surfacing.
+     */
+    allowRootCommit?: boolean;
   }): Promise<{
     commit: string;
     filesUploaded: number;
@@ -1145,6 +1157,43 @@ export class ContentService {
 
     const resolvedOrg = await resolveGitOrganization(gitOrganization, orgLogin);
     const octokit = await getOctokit(resolvedOrg);
+
+    // Step 0 (opt-in): give an EMPTY repository its initial commit, because
+    // every Git Data API call below — starting with blob creation — answers
+    // 409 "Git Repository is empty" until one exists. Passing `branch`
+    // explicitly makes the seed create that branch, so the result does not
+    // depend on the org's default-branch-name setting.
+    if (allowRootCommit) {
+      let repositoryIsEmpty = false;
+      try {
+        await octokit.request('GET /repos/{owner}/{repo}/git/ref/{ref}', {
+          owner: resolvedOrg.login,
+          repo,
+          ref: `heads/${branch}`,
+        });
+      } catch (error: unknown) {
+        // 409 is specifically "no commits yet". A 404 here means the REPO has
+        // commits but this branch is missing — a real error, left to surface.
+        if (!hasStatus(error, 409)) throw error;
+        repositoryIsEmpty = true;
+      }
+      if (repositoryIsEmpty) {
+        const seed = files[0]!;
+        await octokit.request('PUT /repos/{owner}/{repo}/contents/{path}', {
+          owner: resolvedOrg.login,
+          repo,
+          path: seed.path,
+          message: message || `Upload ${files.length} files`,
+          content:
+            (seed.encoding ?? 'utf-8') === 'base64'
+              ? seed.content
+              : Buffer.from(seed.content).toString('base64'),
+          branch,
+        });
+        // The seed file is re-written identically by the batch below, so the
+        // final tree is exactly `files` either way.
+      }
+    }
 
     // Step 1: Create blobs for all files in parallel (done once, content-addressed and idempotent)
     // Track progress as each blob completes

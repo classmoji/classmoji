@@ -84,6 +84,12 @@ const StepImportModules = ({
     setSelectedModules(new Map());
   };
 
+  // Distinct non-empty template refs across the WHOLE source classroom — the
+  // duplication ceiling, independent of which repositories are selected.
+  const distinctTemplates = new Set(
+    repositories.map(m => (m.template ?? '').trim()).filter(Boolean)
+  ).size;
+
   // Calculate totals for summary
   let totalAssignments = 0;
   let totalQuizzes = 0;
@@ -277,6 +283,12 @@ const StepImportModules = ({
                           label: 'Modules',
                           count: sourceClassroom?._count?.modules ?? 0,
                           sublabel: 'items link only to content you import',
+                        },
+                        {
+                          key: 'duplicateTemplates',
+                          label: 'Duplicate template repos',
+                          count: distinctTemplates,
+                          sublabel: 'private copies in this org — keeps terms independent',
                         },
                         {
                           key: 'calendar',
