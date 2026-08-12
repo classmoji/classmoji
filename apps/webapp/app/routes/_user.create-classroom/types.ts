@@ -58,6 +58,8 @@ export interface ImportSelections {
   pages: boolean;
   slides: boolean;
   modules: boolean;
+  /** Copy each imported repo's template into this org as a private repo. */
+  duplicateTemplates: boolean;
 }
 
 export interface ModuleConfig {

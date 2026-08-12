@@ -24,10 +24,15 @@ interface StepReviewProps {
   importSelections?: ImportSelections;
 }
 
+/** Distinct non-empty template refs across a classroom's repositories. */
+const distinctTemplateCount = (classroom?: OwnedClassroom): number =>
+  new Set((classroom?.repositories ?? []).map(m => (m.template ?? '').trim()).filter(Boolean)).size;
+
 /** Human labels for the enabled "Also copy" groups, with counts where known. */
 const copySummaryParts = (
   selections: ImportSelections,
-  counts?: OwnedClassroom['_count']
+  counts?: OwnedClassroom['_count'],
+  templateCount = 0
 ): string[] => {
   const parts: string[] = [];
   if (selections.grading) parts.push('grading & late penalty');
@@ -42,6 +47,8 @@ const copySummaryParts = (
     parts.push(`slide decks (${counts?.slides})`);
   if (selections.modules && (counts?.modules ?? 0) > 0)
     parts.push(`modules (${counts?.modules})`);
+  if (selections.duplicateTemplates && templateCount > 0)
+    parts.push(`private template copies (${templateCount})`);
   if (selections.calendar && (counts?.calendar_events ?? 0) > 0)
     parts.push(`calendar events (${counts?.calendar_events})`);
   return parts;
@@ -127,7 +134,11 @@ const StepReview = ({
           size="small"
         >
           {(() => {
-            const parts = copySummaryParts(importSelections, sourceClassroom._count);
+            const parts = copySummaryParts(
+              importSelections,
+              sourceClassroom._count,
+              distinctTemplateCount(sourceClassroom)
+            );
             return parts.length > 0 ? (
               <div className="text-sm text-gray-700 dark:text-gray-300">
                 Copying from {sourceClassroom.name}: {parts.join(', ')}.
