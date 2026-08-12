@@ -1,6 +1,7 @@
-import { redirect, useNavigate } from 'react-router';
+import { redirect, useNavigate, useSearchParams } from 'react-router';
 import { useEffect, useMemo, useState } from 'react';
 import { Modal, Button as AntdButton } from 'antd';
+import { useCallout } from '@classmoji/ui-components';
 
 import { useUser, useDisclosure, useGlobalFetcher } from '~/hooks';
 import { getAuthSession, clearRevokedToken } from '@classmoji/auth/server';
@@ -230,11 +231,35 @@ const SelectOrganization = ({ loaderData }: Route.ComponentProps) => {
   const { fetcher, notify } = useGlobalFetcher();
   const { show, close, visible } = useDisclosure();
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const callout = useCallout();
   const [pendingClassroom, setPendingClassroom] = useState<MembershipOrganization | null>(null);
 
   useEffect(() => {
     setClassroom(null);
   }, [setClassroom]);
+
+  // Classroom delete confirmation. The danger-zone action REDIRECTS here on success
+  // rather than returning data, because the shared global fetcher consumes and nulls
+  // an action payload before the submitting route can read it. The outcome therefore
+  // travels in the URL, and this is the only place it gets toasted.
+  useEffect(() => {
+    const removed = searchParams.get('removed');
+    if (!removed) return;
+    const cleanup = searchParams.get('cleanup');
+    callout.show({
+      variant: 'success',
+      title: `Classroom ${removed} removed.${cleanup ? ` ${cleanup}` : ''}`,
+      autoDismissMs: 5000,
+    });
+    // Drop only our own params so a refresh cannot re-toast.
+    const next = new URLSearchParams(searchParams);
+    next.delete('removed');
+    next.delete('cleanup');
+    setSearchParams(next, { replace: true });
+    // `callout` is stable per CalloutProvider (memoized handle), so it is not a dep.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams, setSearchParams]);
 
   const memberList = memberships as SelectOrganizationMembership[];
   const classes = useMemo(() => buildLandingClasses(memberList), [memberList]);
