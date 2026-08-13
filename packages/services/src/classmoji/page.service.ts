@@ -1,5 +1,5 @@
 import getPrisma from '@classmoji/database';
-import { titleToIdentifier, classroomContentRepoName } from '@classmoji/utils';
+import { titleToIdentifier } from '@classmoji/utils';
 import { ContentService } from '../content/ContentService.ts';
 import { getGitProvider } from '../git/index.ts';
 import * as contentManifestService from './contentManifest.service.ts';
@@ -91,7 +91,7 @@ export interface PageFileUpload {
 /** Error `code` set when a new page's derived content path is already taken. */
 export const PAGE_CONTENT_PATH_CONFLICT = 'PAGE_CONTENT_PATH_CONFLICT';
 
-/** Load the classroom and derive its content-repo coordinates, or throw. */
+/** Load the classroom and its content-repo coordinates, or throw. */
 async function resolveContentRepo(classroomId: string) {
   const classroom = await getPrisma().classroom.findUnique({
     where: { id: classroomId },
@@ -104,17 +104,14 @@ async function resolveContentRepo(classroomId: string) {
   if (!gitOrgLogin) {
     throw new Error('Git organization not configured');
   }
-  if (!classroom.content_namespace) {
-    throw new Error('Classroom content namespace not configured');
+  if (!classroom.content_repo) {
+    throw new Error('Classroom content repo not configured');
   }
-  // Content repo name: content-{gitOrgLogin}-{contentNamespace}
+  // Stored, user-editable repo name — never re-derived from org + namespace.
   return {
     classroom,
     gitOrgLogin,
-    repoName: classroomContentRepoName({
-      login: gitOrgLogin,
-      namespace: classroom.content_namespace,
-    }),
+    repoName: classroom.content_repo,
   };
 }
 
@@ -155,7 +152,7 @@ async function ensureContentRepoExists({ classroom, gitOrgLogin, repoName }: Con
       await gitProvider.createPublicRepository(
         gitOrgLogin,
         repoName,
-        `Course content for ${classroom.name || gitOrgLogin} - ${classroom.content_namespace}`
+        `Course content for ${classroom.name || gitOrgLogin}`
       );
 
       // Give GitHub a moment to initialize the repo
@@ -588,10 +585,7 @@ export async function deletePage(pageId: string) {
 
   // Delete from GitHub if configured
   if (gitOrgLogin && page.content_path) {
-    const repoName = classroomContentRepoName({
-      login: gitOrgLogin,
-      namespace: page.classroom.content_namespace,
-    });
+    const repoName = page.classroom.content_repo;
 
     try {
       await ContentService.deleteFolder({

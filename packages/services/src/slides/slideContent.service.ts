@@ -8,7 +8,6 @@
  */
 
 import getPrisma from '@classmoji/database';
-import { classroomContentRepoName } from '@classmoji/utils';
 import { ContentService } from '../content/ContentService.ts';
 import {
   DeckParseError,
@@ -39,7 +38,8 @@ export interface SlideContentTarget {
   title: string;
   content_path: string;
   classroom?: {
-    content_namespace: string | null;
+    /** Stored content repo name — never re-derived from org + namespace. */
+    content_repo: string | null;
     git_organization: GitOrgRecord | null;
   } | null;
 }
@@ -77,14 +77,11 @@ export function resolveSlideRepoContext(slide: SlideContentTarget): {
   if (!gitOrganization?.login) {
     throw new Error('Git organization not configured');
   }
-  const namespace = slide.classroom?.content_namespace;
-  if (!namespace) {
-    throw new Error('Classroom content namespace not configured');
+  const repo = slide.classroom?.content_repo;
+  if (!repo) {
+    throw new Error('Classroom content repo not configured');
   }
-  return {
-    gitOrganization,
-    repo: classroomContentRepoName({ login: gitOrganization.login, namespace }),
-  };
+  return { gitOrganization, repo };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

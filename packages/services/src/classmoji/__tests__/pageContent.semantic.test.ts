@@ -38,7 +38,7 @@ const gitOrganization = { provider: 'GITHUB', login: 'test-org' };
 const page = {
   title: 'Syllabus',
   content_path: 'pages/syllabus',
-  classroom: { content_namespace: 'cs101', git_organization: gitOrganization },
+  classroom: { content_repo: 'content-test-org-cs101', git_organization: gitOrganization },
 };
 const PREVIEW_BRANCH = 'preview/pages/syllabus';
 

@@ -10,7 +10,8 @@ interface PageWithClassroom {
   content_path: string;
   width: number;
   classroom: {
-    content_namespace: string;
+    // Stored, user-editable content repo name. Never re-derive it.
+    content_repo: string;
     git_organization: {
       login: string;
       provider: string;
@@ -90,7 +91,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
 
       const pageData = page as unknown as PageWithClassroom;
       const gitOrg = pageData.classroom.git_organization;
-      const repo = `content-${gitOrg.login}-${pageData.classroom.content_namespace}`;
+      const repo = pageData.classroom.content_repo;
       const assetsFolder = `${page.content_path}/assets`;
 
       console.error('[upload-image action] Uploading to repo:', repo, 'folder:', assetsFolder);
@@ -162,7 +163,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
 
       const pageData = page as unknown as PageWithClassroom;
       const gitOrg = pageData.classroom.git_organization;
-      const repo = `content-${gitOrg.login}-${pageData.classroom.content_namespace}`;
+      const repo = pageData.classroom.content_repo;
       const assetsFolder = `${page.content_path}/assets`;
 
       const buffer = Buffer.from(await file.arrayBuffer());
@@ -331,7 +332,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
 
       const pageData = page as unknown as PageWithClassroom;
       const gitOrg = pageData.classroom.git_organization;
-      const repo = `content-${gitOrg.login}-${pageData.classroom.content_namespace}`;
+      const repo = pageData.classroom.content_repo;
 
       // Upload header image to content repo (in page folder, not assets)
       const buffer = Buffer.from(await file.arrayBuffer());

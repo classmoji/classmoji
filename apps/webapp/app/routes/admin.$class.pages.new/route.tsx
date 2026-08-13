@@ -24,11 +24,8 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
     attemptedAction: 'create_page',
   });
 
-  const contentNamespace = classroom.content_namespace;
-
   // Include slug for navigation and gitOrgLogin for API calls
   return {
-    contentNamespace,
     classroom: {
       ...classroom,
       slug: classroom.slug, // For navigation URLs
@@ -57,16 +54,14 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
     return { error: 'Git organization not configured' };
   }
 
-  const contentNamespace = classroom.content_namespace;
-  if (!contentNamespace) {
-    return { error: 'Classroom content namespace not configured' };
+  // Stored, user-editable content repo name. Never re-derive it.
+  const repoName = classroom.content_repo;
+  if (!repoName) {
+    return { error: 'Classroom content repo not configured' };
   }
 
   // Single page import/create
   const title = formData.get('title') as string;
-
-  // Content repo name: content-{gitOrgLogin}-{contentNamespace}
-  const repoName = `content-${gitOrgLogin}-${contentNamespace}`;
 
   // Flat content path: pages/{slug}
   const contentPath = ClassmojiService.page.pageContentPath(title);
@@ -188,7 +183,7 @@ interface BatchPage {
 }
 
 export default function NewPage({ loaderData }: Route.ComponentProps) {
-  const { contentNamespace, classroom } = loaderData;
+  const { classroom } = loaderData;
   const fetcher = useFetcher();
   const navigate = useNavigate();
   const { opened, close } = useRouteDrawer({});
@@ -242,7 +237,6 @@ export default function NewPage({ loaderData }: Route.ComponentProps) {
       const initFormData = new FormData();
       initFormData.append('intent', 'batch-init');
       initFormData.append('classSlug', classroom.slug);
-      initFormData.append('contentNamespace', String(contentNamespace ?? ''));
 
       const initResponse = await fetch('/api/pages/batch', {
         method: 'POST',
@@ -265,7 +259,6 @@ export default function NewPage({ loaderData }: Route.ComponentProps) {
         const formData = new FormData();
         formData.append('intent', 'batch-import-single');
         formData.append('classSlug', classroom.slug);
-        formData.append('contentNamespace', String(contentNamespace ?? ''));
         formData.append('title', page.title);
         if (page.repository) formData.append('repository', page.repository);
         if (page.assignmentId) formData.append('assignmentId', page.assignmentId);
@@ -325,7 +318,6 @@ export default function NewPage({ loaderData }: Route.ComponentProps) {
 
   const handleSubmit = (values: Record<string, string>) => {
     const formData = new FormData();
-    formData.append('contentNamespace', String(contentNamespace ?? ''));
 
     if (activeTab === 'batch') {
       // Handle batch import with progress
@@ -369,9 +361,7 @@ export default function NewPage({ loaderData }: Route.ComponentProps) {
     {
       key: 'batch',
       label: 'Batch Import',
-      children: (
-        <BatchImportTab contentNamespace={contentNamespace ?? ''} onPagesChange={setBatchPages} />
-      ),
+      children: <BatchImportTab onPagesChange={setBatchPages} />,
     },
   ];
 

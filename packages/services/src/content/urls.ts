@@ -5,7 +5,6 @@
  * No authentication required - URLs are public but unlisted
  */
 
-import { classroomContentRepoName } from '@classmoji/utils';
 
 /**
  * Build a GitHub Pages URL for content
@@ -29,30 +28,6 @@ export function getContentUrl({
   return `https://${org}.github.io/${repo}/${cleanPath}`;
 }
 
-/**
- * Build a GitHub Pages URL for slide content
- * @param {Object} options
- * @param {string} options.orgLogin - Organization login
- * @param {string} options.term - Term identifier (e.g., "26w")
- * @param {string} options.contentPath - Path within content repo
- * @param {string} [options.filename] - Specific file (default: index.html)
- * @returns {string} GitHub Pages URL for the slide
- */
-export function getSlideContentUrl({
-  orgLogin,
-  term,
-  contentPath,
-  filename = 'index.html',
-}: {
-  orgLogin: string;
-  term: string;
-  contentPath: string;
-  filename?: string;
-}): string {
-  const repo = classroomContentRepoName({ login: orgLogin, namespace: term });
-  const path = filename ? `${contentPath}/${filename}` : contentPath;
-  return getContentUrl({ org: orgLogin, repo, path });
-}
 
 /**
  * Build a GitHub raw content URL (alternative to Pages)

@@ -35,7 +35,7 @@ const slide = {
   id: 'slide-1',
   title: 'My Deck',
   content_path: 'slides/my-deck',
-  classroom: { content_namespace: '26w', git_organization: gitOrganization },
+  classroom: { content_repo: 'content-test-org-26w', git_organization: gitOrganization },
 };
 
 const deck: DeckJson = {
@@ -257,18 +257,18 @@ describe('saveDeck — misc', () => {
     ).rejects.toThrow('Git organization not configured');
   });
 
-  it('throws when the classroom content namespace is missing', async () => {
+  it('throws when the classroom content repo is missing', async () => {
     await expect(
       saveDeck({
         slide: {
           title: 'X',
           content_path: 'slides/x',
-          classroom: { content_namespace: null, git_organization: gitOrganization },
+          classroom: { content_repo: null, git_organization: gitOrganization },
         },
         deck,
         message: 'm',
       })
-    ).rejects.toThrow('content namespace');
+    ).rejects.toThrow('Classroom content repo not configured');
   });
 });
 

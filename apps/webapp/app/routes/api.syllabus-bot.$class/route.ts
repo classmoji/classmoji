@@ -62,13 +62,11 @@ export async function loader({ params, request }: Route.LoaderArgs) {
   const settings = await ClassmojiService.classroom.getClassroomSettingsForServer(classroom.id);
   const isInstructor = ['OWNER', 'TEACHER'].includes(membership!.role);
 
-  // Check if we have a content repo (either explicitly set or can be derived)
+  // content_repo is the stored, user-editable repo name; the org-level helper is
+  // only a fallback for legacy classrooms that predate it.
   const gitOrgLogin = classroom.git_organization?.login;
-  const contentRepoName = classroom.content_namespace
-    ? `content-${gitOrgLogin}-${classroom.content_namespace}`
-    : gitOrgLogin
-      ? getContentRepoName({ login: gitOrgLogin })
-      : '';
+  const contentRepoName =
+    classroom.content_repo || (gitOrgLogin ? getContentRepoName({ login: gitOrgLogin }) : '');
 
   return jsonResponse({
     enabled: settings?.syllabus_bot_enabled ?? false,
@@ -150,16 +148,14 @@ async function handleInitConversation(request: Request, classSlug: string, formD
     },
   };
 
-  // If content repo is configured, add clone info
-  // Use settings override or generate from classroom/git_org
+  // If content repo is configured, add clone info.
+  // Precedence: legacy settings override, then the classroom's stored
+  // content_repo, then the org-level fallback for legacy classrooms.
   const gitOrgLoginForClone = classroom.git_organization?.login;
   const contentRepoNameForClone =
     settings?.content_repo_name ||
-    (classroom.content_namespace
-      ? `content-${gitOrgLoginForClone}-${classroom.content_namespace}`
-      : gitOrgLoginForClone
-        ? getContentRepoName({ login: gitOrgLoginForClone })
-        : '');
+    classroom.content_repo ||
+    (gitOrgLoginForClone ? getContentRepoName({ login: gitOrgLoginForClone }) : '');
   if (contentRepoNameForClone && classroom.git_organization?.github_installation_id) {
     try {
       const accessToken = await getInstallationToken(classroom.git_organization);

@@ -41,7 +41,9 @@ export interface PageForContent {
     id: string;
     slug: string;
     name: string;
-    content_namespace: string;
+    // Repo holding this classroom's content: stored and user-editable, never
+    // re-derived. Required by the page content service (PageWithContentRepo).
+    content_repo: string;
     avatar_url?: string | null;
     git_organization?: {
       login: string;

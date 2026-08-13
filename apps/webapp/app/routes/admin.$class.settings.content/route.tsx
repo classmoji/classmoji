@@ -35,11 +35,10 @@ const SettingsContent = ({ loaderData }: Route.ComponentProps) => {
 
   const { fetcher } = useGlobalFetcher();
 
-  // Generate repo name and URL for display
+  // content_repo is the stored, user-editable repo name; the org-level helper is
+  // only a fallback for legacy classrooms that predate it.
   const gitOrgLogin = organization.git_organization?.login || classSlug || '';
-  const repoName = organization.content_namespace
-    ? `content-${gitOrgLogin}-${organization.content_namespace}`
-    : getContentRepoName({ login: gitOrgLogin });
+  const repoName = organization.content_repo || getContentRepoName({ login: gitOrgLogin });
   const repoUrl = `https://github.com/${gitOrgLogin}/${repoName}`;
 
   // Handler for customizable repo name (currently disabled in UI)
@@ -119,10 +118,16 @@ const SettingsContent = ({ loaderData }: Route.ComponentProps) => {
             />
           </Form.Item>
           <Form.Item label="Show Pages">
-            <Switch checked={settings.show_pages ?? true} onChange={handleNavToggle('show_pages')} />
+            <Switch
+              checked={settings.show_pages ?? true}
+              onChange={handleNavToggle('show_pages')}
+            />
           </Form.Item>
           <Form.Item label="Show Repositories">
-            <Switch checked={settings.show_repos ?? true} onChange={handleNavToggle('show_repos')} />
+            <Switch
+              checked={settings.show_repos ?? true}
+              onChange={handleNavToggle('show_repos')}
+            />
           </Form.Item>
         </Form>
       </SettingSection>
@@ -194,9 +199,7 @@ const SettingsContent = ({ loaderData }: Route.ComponentProps) => {
             <div className="mt-4 p-4 bg-nav-hover rounded-lg border border-gray-200 dark:border-neutral-700">
               <div className="flex items-center gap-2 mb-3">
                 <IconInfoCircle size={16} className="text-ink-3" />
-                <span className="font-medium text-ink-0">
-                  About the Syllabus Bot
-                </span>
+                <span className="font-medium text-ink-0">About the Syllabus Bot</span>
               </div>
               <div className="space-y-2 text-sm text-gray-600 dark:text-gray-300">
                 <p>

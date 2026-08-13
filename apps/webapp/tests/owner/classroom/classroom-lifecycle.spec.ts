@@ -68,6 +68,7 @@ async function createDisposableClassroom(): Promise<{ id: string; slug: string }
       slug,
       name: 'E2E Disposable Classroom',
       content_namespace: slug,
+      content_repo: `content-${slug}`,
       git_org_id: gitOrgId,
       status: 'ACTIVE',
       settings: { create: {} },

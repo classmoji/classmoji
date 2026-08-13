@@ -1,13 +1,18 @@
 import { describe, it, expect } from 'vitest';
 import {
   classroomContentRepoName,
+  defaultContentRepoName,
   maxContentNamespaceLength,
+  sanitizeRepoName,
   suggestContentNamespace,
   GITHUB_REPO_NAME_MAX,
 } from '../repoNames.ts';
 import { getContentRepoName } from '../content.ts';
 
-describe('classroomContentRepoName', () => {
+// LEGACY pattern. classroomContentRepoName no longer names any live repo —
+// Classroom.content_repo is stored and user-editable. These cases pin the
+// string the migration backfilled existing rows with.
+describe('classroomContentRepoName (legacy backfill pattern)', () => {
   it('builds the per-classroom content repo name', () => {
     expect(classroomContentRepoName({ login: 'dali', namespace: '26w' })).toBe('content-dali-26w');
   });
@@ -60,6 +65,65 @@ describe('suggestContentNamespace', () => {
     expect(suggestContentNamespace({ orgLogin: 'dartmouth-cs5', slug: 'dartmouth-cs52-26f' })).toBe(
       'dartmouth-cs52-26f'
     );
+  });
+});
+
+describe('sanitizeRepoName', () => {
+  it('leaves an already-valid name untouched', () => {
+    expect(sanitizeRepoName('content-cs52-26f')).toBe('content-cs52-26f');
+  });
+
+  it('keeps the full GitHub-legal character set (dots and underscores included)', () => {
+    expect(sanitizeRepoName('my.course_notes-26f')).toBe('my.course_notes-26f');
+  });
+
+  it('lowercases', () => {
+    expect(sanitizeRepoName('CS52-Fall')).toBe('cs52-fall');
+  });
+
+  it('collapses each run of illegal characters to a single dash', () => {
+    expect(sanitizeRepoName('cs52   fall  2026')).toBe('cs52-fall-2026');
+    expect(sanitizeRepoName('cs52/@#$fall')).toBe('cs52-fall');
+  });
+
+  it('trims leading and trailing dashes and dots', () => {
+    expect(sanitizeRepoName('--cs52--')).toBe('cs52');
+    expect(sanitizeRepoName('..cs52..')).toBe('cs52');
+    expect(sanitizeRepoName('  cs52  ')).toBe('cs52');
+  });
+
+  it('truncates to GitHub’s cap and never leaves a trailing dash behind', () => {
+    expect(sanitizeRepoName('x'.repeat(150))).toHaveLength(GITHUB_REPO_NAME_MAX);
+    // Truncation lands mid-separator: the cut must not leave an edge dash.
+    const cut = sanitizeRepoName(`${'x'.repeat(GITHUB_REPO_NAME_MAX - 1)} tail`);
+    expect(cut).toHaveLength(GITHUB_REPO_NAME_MAX - 1);
+    expect(cut.endsWith('-')).toBe(false);
+  });
+
+  it('returns empty when nothing usable survives — callers MUST fall back', () => {
+    expect(sanitizeRepoName('///')).toBe('');
+    expect(sanitizeRepoName('   ')).toBe('');
+    expect(sanitizeRepoName('')).toBe('');
+  });
+
+  it('is idempotent', () => {
+    const once = sanitizeRepoName('CS 52 // Fall!! 2026--');
+    expect(sanitizeRepoName(once)).toBe(once);
+  });
+});
+
+describe('defaultContentRepoName', () => {
+  it('prefixes the namespace WITHOUT repeating the org login', () => {
+    expect(defaultContentRepoName('26f')).toBe('content-26f');
+    expect(defaultContentRepoName('dartmouth-cs52-26f')).toBe('content-dartmouth-cs52-26f');
+  });
+
+  it('sanitizes the namespace it is given', () => {
+    expect(defaultContentRepoName('Fall 2026')).toBe('content-fall-2026');
+  });
+
+  it('stays within the GitHub repo-name cap', () => {
+    expect(defaultContentRepoName('x'.repeat(200)).length).toBe(GITHUB_REPO_NAME_MAX);
   });
 });
 

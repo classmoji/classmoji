@@ -60,8 +60,10 @@ export const loader = async ({ request }: { request: Request }) => {
   // Get repositories for dropdown
   const repositories = await ClassmojiService.repository.findByClassroomSlug(classroomSlug);
 
-  const repoName = classroom.content_namespace
-    ? `content-${gitOrgLogin}-${classroom.content_namespace}`
+  // Content repo is STORED and user-editable — never re-derived. Legacy
+  // classrooms without one fall back to the ORG-level content repo.
+  const repoName = classroom.content_repo
+    ? classroom.content_repo
     : getContentRepoName({ login: gitOrgLogin });
   const savedThemes = await listSavedThemes(gitOrgLogin, repoName);
 

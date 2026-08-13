@@ -183,7 +183,8 @@ export interface PageWithRepoRecord {
   is_draft: boolean;
   classroom: {
     id: string;
-    content_namespace: string;
+    /** Stored content repo name — never re-derived from org + namespace. */
+    content_repo: string;
     git_organization: {
       provider: string;
       login: string;
@@ -237,7 +238,8 @@ export interface SlideWithRepoRecord {
   updated_at: Date | string;
   classroom: {
     id: string;
-    content_namespace: string | null;
+    /** Stored content repo name — never re-derived from org + namespace. */
+    content_repo: string | null;
     git_organization: {
       provider: string;
       login: string;
