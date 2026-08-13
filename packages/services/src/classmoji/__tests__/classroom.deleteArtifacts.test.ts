@@ -4,19 +4,19 @@ import { classroomGitHubArtifactPlan } from '../classroom.service.ts';
 const base = {
   orgLogin: 'dartmouth-cs52',
   slug: 'dartmouth-cs52-26f',
-  contentNamespace: 'dartmouth-cs52-26f',
+  contentRepo: 'cs52-content',
   gitRepoNames: [] as string[],
   teamSlugs: [] as string[],
 };
 
 describe('classroomGitHubArtifactPlan', () => {
-  it('names the content repo from org login + namespace and the two conventional teams', () => {
+  it('names the content repo from the STORED name (never re-derived) and the two conventional teams', () => {
     const plan = classroomGitHubArtifactPlan(base);
     expect(plan).toEqual([
       {
         kind: 'repo',
         org: 'dartmouth-cs52',
-        name: 'content-dartmouth-cs52-dartmouth-cs52-26f',
+        name: 'cs52-content',
         label: 'content repo',
       },
       { kind: 'team', org: 'dartmouth-cs52', name: 'dartmouth-cs52-26f-students', label: 'classroom team' },
@@ -24,8 +24,15 @@ describe('classroomGitHubArtifactPlan', () => {
     ]);
   });
 
-  it('omits the content repo when the namespace is null', () => {
-    const plan = classroomGitHubArtifactPlan({ ...base, contentNamespace: null });
+  it('uses the stored name verbatim even when it looks nothing like the legacy pattern', () => {
+    const plan = classroomGitHubArtifactPlan({ ...base, contentRepo: 'My.Course_Notes-26F' });
+    expect(plan.filter(a => a.label === 'content repo').map(a => a.name)).toEqual([
+      'My.Course_Notes-26F',
+    ]);
+  });
+
+  it('omits the content repo when the stored name is null', () => {
+    const plan = classroomGitHubArtifactPlan({ ...base, contentRepo: null });
     expect(plan.filter(a => a.label === 'content repo')).toHaveLength(0);
     expect(plan.filter(a => a.kind === 'team')).toHaveLength(2);
   });
@@ -43,7 +50,7 @@ describe('classroomGitHubArtifactPlan', () => {
     expect(plan.filter(a => a.label === 'project team').map(a => a.name)).toEqual(['team-rocket']);
   });
 
-  it('never invents artifacts: empty inputs yield only the derived content repo + conventional teams', () => {
+  it('never invents artifacts: empty inputs yield only the stored content repo + conventional teams', () => {
     const plan = classroomGitHubArtifactPlan(base);
     expect(plan).toHaveLength(3);
   });

@@ -81,7 +81,7 @@ const gitOrganization = {
 const classroom = {
   id: 'class-1',
   name: 'Test Class',
-  content_namespace: '26w',
+  content_repo: 'content-test-org-26w',
   git_organization: gitOrganization,
 };
 
@@ -269,10 +269,10 @@ describe('createSlide', () => {
       createSlide({ classroomId: 'class-1', title: 'T', createdBy: 'u' })
     ).rejects.toThrow('Git organization not configured');
 
-    classroomFindUniqueMock.mockResolvedValue({ ...classroom, content_namespace: null });
+    classroomFindUniqueMock.mockResolvedValue({ ...classroom, content_repo: null });
     await expect(
       createSlide({ classroomId: 'class-1', title: 'T', createdBy: 'u' })
-    ).rejects.toThrow('content namespace');
+    ).rejects.toThrow('Classroom content repo not configured');
   });
 });
 
@@ -347,14 +347,14 @@ describe('theme detection (deck.json first, index.html regex fallback)', () => {
   });
 
   it('countSlidesUsingTheme reads deck.json.theme first with html fallback', async () => {
-    const result = await countSlidesUsingTheme('test-org', '26w', 'foo');
+    const result = await countSlidesUsingTheme('test-org', 'content-test-org-26w', 'foo');
     expect(result.count).toBe(2);
     expect(result.slides.map(s => s.id)).toEqual(['slide-a', 'slide-c']);
   });
 
   it('returns zero when the git organization has no installation', async () => {
     gitOrgFindFirstMock.mockResolvedValue(null);
-    const result = await countSlidesUsingTheme('test-org', '26w', 'foo');
+    const result = await countSlidesUsingTheme('test-org', 'content-test-org-26w', 'foo');
     expect(result).toEqual({ count: 0, slides: [] });
     expect(slideFindManyMock).not.toHaveBeenCalled();
   });

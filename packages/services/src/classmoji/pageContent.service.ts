@@ -1,6 +1,5 @@
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
-import { classroomContentRepoName } from '@classmoji/utils';
 import { ContentService } from '../content/ContentService.ts';
 import {
   dedupeMergedTreeIds,
@@ -40,7 +39,8 @@ export interface PageWithContentRepo {
   title: string;
   content_path: string;
   classroom: {
-    content_namespace: string;
+    /** Stored content repo name — never re-derived from org + namespace. */
+    content_repo: string;
     git_organization?: {
       provider: string;
       login: string;
@@ -74,13 +74,10 @@ function contentRepoFor(page: PageWithContentRepo) {
   if (!gitOrganization?.login) {
     throw new Error('Git organization not configured');
   }
-  return {
-    gitOrganization,
-    repo: classroomContentRepoName({
-      login: gitOrganization.login,
-      namespace: page.classroom.content_namespace,
-    }),
-  };
+  if (!page.classroom.content_repo) {
+    throw new Error('Classroom content repo not configured');
+  }
+  return { gitOrganization, repo: page.classroom.content_repo };
 }
 
 // ─── Load / save ─────────────────────────────────────────────────────────────

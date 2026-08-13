@@ -150,9 +150,9 @@ export const loader = async ({
     login?: string;
     avatar_url?: string;
   } | null;
-  const contentNamespace = page.classroom.content_namespace;
-  const repoName =
-    contentNamespace && gitOrg?.login ? `content-${gitOrg.login}-${contentNamespace}` : null;
+  // Content repo is STORED and user-editable — never re-derived from the namespace.
+  const contentRepo = page.classroom.content_repo;
+  const repoName = contentRepo && gitOrg?.login ? contentRepo : null;
 
   // GitHub's free diff UI for the pending preview (branch segment URL-encoded —
   // preview branch names contain slashes).

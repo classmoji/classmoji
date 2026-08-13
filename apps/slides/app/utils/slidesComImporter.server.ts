@@ -141,8 +141,10 @@ export async function processZipImport({
   // 5. Flat content path: slides/{slug}-{timestamp}
   const timestamp = Date.now();
   const contentPath = `slides/${slug}-${timestamp}`;
-  const repoName = classroom.content_namespace
-    ? `content-${classroom.git_organization.login}-${classroom.content_namespace}`
+  // Content repo is STORED and user-editable — never re-derived. Legacy
+  // classrooms without one fall back to the ORG-level content repo.
+  const repoName = classroom.content_repo
+    ? classroom.content_repo
     : getContentRepoName({ login: classroom.git_organization.login });
 
   // 6. Ensure content repo exists (org is git org login for GitHub API)

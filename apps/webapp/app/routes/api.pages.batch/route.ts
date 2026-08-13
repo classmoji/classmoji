@@ -26,9 +26,10 @@ export const action = async ({ request }: Route.ActionArgs) => {
     return Response.json({ error: 'Git organization not configured' });
   }
 
-  const contentNamespace = classroom.content_namespace;
-  if (!contentNamespace) {
-    return Response.json({ error: 'Classroom content namespace not configured' });
+  // Stored, user-editable content repo name. Never re-derive it.
+  const contentRepo = classroom.content_repo;
+  if (!contentRepo) {
+    return Response.json({ error: 'Classroom content repo not configured' });
   }
 
   // Initialize batch import - creates repo if needed
@@ -45,7 +46,6 @@ export const action = async ({ request }: Route.ActionArgs) => {
   if (intent === 'batch-import-single') {
     const title = formData.get('title') as string;
     const moduleId = (formData.get('assignmentId') as string) || null; // Optional - for linking
-    const repoName = `content-${gitOrgLogin}-${contentNamespace}`;
 
     try {
       // Flat content path: pages/{slug}
@@ -62,7 +62,7 @@ export const action = async ({ request }: Route.ActionArgs) => {
       const { html, imageMap, unmatchedImages } = await processMarkdownImport(
         markdownText,
         imageFiles,
-        { org: gitOrgLogin, repo: repoName, contentPath, assetsFolder }
+        { org: gitOrgLogin, repo: contentRepo, contentPath, assetsFolder }
       );
 
       // Prepare files to upload

@@ -43,14 +43,15 @@ export const loader = async ({
     throw new Response('Git organization not configured for this classroom', { status: 400 });
   }
 
-  const contentNamespace = classroom.content_namespace;
-  if (!contentNamespace) {
-    throw new Response('Classroom content namespace not configured', { status: 400 });
+  // Slides land in the classroom's STORED content repo (user-editable, never
+  // re-derived); creation is impossible without it.
+  if (!classroom.content_repo) {
+    throw new Response('Classroom content repo not configured', { status: 400 });
   }
 
   return {
     classroomSlug,
-    contentNamespace,
+    contentNamespace: classroom.content_namespace,
     gitOrgLogin,
     classroom,
     webappUrl: process.env.WEBAPP_URL || 'http://localhost:3000',
@@ -95,9 +96,10 @@ export const action = async ({
     return { error: 'Git organization not configured for this classroom' };
   }
 
-  const contentNamespace = classroom.content_namespace;
-  if (!contentNamespace) {
-    return { error: 'Classroom content namespace not configured' };
+  // Slides land in the classroom's STORED content repo (user-editable, never
+  // re-derived); creation is impossible without it.
+  if (!classroom.content_repo) {
+    return { error: 'Classroom content repo not configured' };
   }
 
   try {

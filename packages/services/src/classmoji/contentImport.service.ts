@@ -20,7 +20,7 @@
  */
 
 import getPrisma from '@classmoji/database';
-import { classroomContentRepoName, titleToIdentifier } from '@classmoji/utils';
+import { titleToIdentifier } from '@classmoji/utils';
 import { ContentService } from '../content/ContentService.ts';
 import { getGitProvider } from '../git/index.ts';
 import * as contentManifestService from './contentManifest.service.ts';
@@ -207,8 +207,8 @@ function errText(error: unknown): string {
 
 /**
  * Load a classroom's content-repo coordinates. Returns null when the classroom
- * (or its git org / content namespace) is not configured — the caller turns
- * that into a zeros+warning result for the SOURCE side, or a throw for TARGET.
+ * (or its git org / content repo) is not configured — the caller turns that
+ * into a zeros+warning result for the SOURCE side, or a throw for TARGET.
  */
 async function loadRepoContext(classroomId: string): Promise<RepoContext | null> {
   const classroom = await getPrisma().classroom.findUnique({
@@ -216,17 +216,14 @@ async function loadRepoContext(classroomId: string): Promise<RepoContext | null>
     include: { git_organization: true },
   });
   const gitOrganization = classroom?.git_organization as GitOrgRecord | null | undefined;
-  if (!classroom || !gitOrganization?.login || !classroom.content_namespace) {
+  if (!classroom || !gitOrganization?.login || !classroom.content_repo) {
     return null;
   }
   return {
     classroomId,
     gitOrganization,
     login: gitOrganization.login,
-    repo: classroomContentRepoName({
-      login: gitOrganization.login,
-      namespace: classroom.content_namespace,
-    }),
+    repo: classroom.content_repo,
     slug: classroom.slug,
   };
 }

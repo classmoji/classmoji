@@ -13,7 +13,7 @@ export {
 // Content management for GitHub-backed storage (moved from @classmoji/content;
 // that package is now a thin re-export shim over these)
 export { ContentService } from './content/ContentService.ts';
-export { getContentUrl, getSlideContentUrl, getRawContentUrl } from './content/urls.ts';
+export { getContentUrl, getRawContentUrl } from './content/urls.ts';
 export {
   validateFile,
   sanitizeFilename,

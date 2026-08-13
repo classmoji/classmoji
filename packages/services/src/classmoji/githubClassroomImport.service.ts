@@ -23,7 +23,7 @@
  */
 
 import getPrisma from '@classmoji/database';
-import { titleToIdentifier } from '@classmoji/utils';
+import { defaultContentRepoName, titleToIdentifier } from '@classmoji/utils';
 
 // ---------------------------------------------------------------------------
 // Input shape (structural subset of the webapp parser's ParsedClassroom).
@@ -252,6 +252,7 @@ export async function importGithubClassroom(
           slug,
           name: gh.name,
           content_namespace: slug,
+          content_repo: defaultContentRepoName(slug),
           settings: { create: { show_grades_to_students: true, quizzes_enabled: true } },
         },
         update: { name: gh.name },

@@ -17,7 +17,6 @@ describe('@classmoji/content shim', () => {
 
     // URL builders
     expect(typeof shim.getContentUrl).toBe('function');
-    expect(typeof shim.getSlideContentUrl).toBe('function');
     expect(typeof shim.getRawContentUrl).toBe('function');
 
     // Validation utilities
@@ -35,7 +34,6 @@ describe('@classmoji/content shim', () => {
   it('re-exports the exact bindings from @classmoji/services', () => {
     expect(shim.ContentService).toBe(services.ContentService);
     expect(shim.getContentUrl).toBe(services.getContentUrl);
-    expect(shim.getSlideContentUrl).toBe(services.getSlideContentUrl);
     expect(shim.getRawContentUrl).toBe(services.getRawContentUrl);
     expect(shim.validateFile).toBe(services.validateFile);
     expect(shim.sanitizeFilename).toBe(services.sanitizeFilename);
@@ -50,9 +48,6 @@ describe('@classmoji/content shim', () => {
     expect(
       shim.getContentUrl({ org: 'dali', repo: 'content-dali-26w', path: '/pages/x.html' })
     ).toBe('https://dali.github.io/content-dali-26w/pages/x.html');
-    expect(
-      shim.getSlideContentUrl({ orgLogin: 'dali', term: '26w', contentPath: 'slides/intro' })
-    ).toBe('https://dali.github.io/content-dali-26w/slides/intro/index.html');
     expect(shim.getMimeType('photo.PNG')).toBe('image/png');
     expect(shim.isImageFile('photo.png')).toBe(true);
     expect(shim.isBinaryFile('doc.pdf')).toBe(true);

@@ -33,7 +33,6 @@
  */
 
 import getPrisma from '@classmoji/database';
-import { classroomContentRepoName } from '@classmoji/utils';
 import { ContentService } from '@classmoji/services';
 import { DeckParseError, parseDeckHtml } from '@classmoji/services/slides';
 
@@ -194,16 +193,13 @@ async function migrateSlidesToDeck(options: CliOptions): Promise<void> {
 
     try {
       const gitOrganization = classroom?.git_organization;
-      const namespace = classroom?.content_namespace;
-      if (!classroom || !gitOrganization?.login || !namespace) {
-        console.log(
-          `⚠️  Skipping ${label} — classroom missing git organization or content namespace`
-        );
+      const repo = classroom?.content_repo;
+      if (!classroom || !gitOrganization?.login || !repo) {
+        console.log(`⚠️  Skipping ${label} — classroom missing git organization or content repo`);
         counts.noRepo++;
         continue;
       }
 
-      const repo = classroomContentRepoName({ login: gitOrganization.login, namespace });
       const deckPath = `${slide.content_path}/deck.json`;
       const htmlPath = `${slide.content_path}/index.html`;
 

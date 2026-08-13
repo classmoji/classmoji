@@ -186,7 +186,6 @@ describe.skipIf(!RUN)('ContentService live-GitHub integration', () => {
 
   beforeAll(async () => {
     ({ ContentService } = await import('../ContentService.ts'));
-    const { classroomContentRepoName } = await import('@classmoji/utils');
     const getPrisma = (await import('@classmoji/database')).default;
     const db = getPrisma();
     prisma = db as unknown as { $disconnect: () => Promise<void> };
@@ -213,10 +212,8 @@ describe.skipIf(!RUN)('ContentService live-GitHub integration', () => {
       );
     }
     gitOrganization = classroom.git_organization;
-    repo = classroomContentRepoName({
-      login: gitOrganization.login,
-      namespace: classroom.content_namespace,
-    });
+    // Stored on the classroom row and user-editable — never re-derived.
+    repo = classroom.content_repo;
 
     // Verify the content repo actually exists before writing anything.
     const probe = await ContentService.compareBranches({

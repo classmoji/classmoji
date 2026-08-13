@@ -58,7 +58,6 @@ describe.skipIf(!RUN)('saveDeck live-GitHub integration', () => {
   let prisma: { $disconnect: () => Promise<void> } | null = null;
 
   let gitOrganization: GitOrgRecord;
-  let contentNamespace: string;
   let repo: string;
 
   type DeckJson = import('../deckTypes.ts').DeckJson;
@@ -101,7 +100,7 @@ describe.skipIf(!RUN)('saveDeck live-GitHub integration', () => {
       title,
       content_path: contentPath,
       classroom: {
-        content_namespace: contentNamespace,
+        content_repo: repo,
         git_organization: gitOrganization,
       },
     };
@@ -132,7 +131,6 @@ describe.skipIf(!RUN)('saveDeck live-GitHub integration', () => {
     slideContent = await import('../slideContent.service.ts');
     deckHtml = await import('../deckHtml.ts');
     ({ getGitProvider } = await import('../../git/index.ts'));
-    const { classroomContentRepoName } = await import('@classmoji/utils');
     const getPrisma = (await import('@classmoji/database')).default;
     const db = getPrisma();
     prisma = db as unknown as { $disconnect: () => Promise<void> };
@@ -157,11 +155,8 @@ describe.skipIf(!RUN)('saveDeck live-GitHub integration', () => {
       );
     }
     gitOrganization = classroom.git_organization;
-    contentNamespace = classroom.content_namespace;
-    repo = classroomContentRepoName({
-      login: gitOrganization.login,
-      namespace: contentNamespace,
-    });
+    // Stored on the classroom row and user-editable — never re-derived.
+    repo = classroom.content_repo;
 
     const probe = await ContentService.compareBranches({
       gitOrganization,

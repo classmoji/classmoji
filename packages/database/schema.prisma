@@ -347,7 +347,15 @@ model Classroom {
   slug              String // URL slug: "cs101-fall-2025"
   git_org_id        String
   name              String
+  // Internal identifier only. Historically the content repo name was derived
+  // as content-{orgLogin}-{content_namespace}; it no longer names any repo.
   content_namespace String
+  // The GitHub repo (in git_organization) holding this classroom's pages &
+  // slides content. STORED and fully user-editable — never re-derived. Set at
+  // creation for every classroom; defaults to `content-{content_namespace}`.
+  // NOT the same as ClassroomSettings.content_repo_name, which is a legacy
+  // ORG-level content repo override (`content-{login}`) for a DIFFERENT repo.
+  content_repo      String
   status            ClassroomStatus @default(ACTIVE)
   is_archived       Boolean         @default(false)
   // True for the auto-provisioned per-user "Example Course" sandbox used by the
@@ -379,10 +387,13 @@ model Classroom {
   notifications         Notification[]
 
   @@unique([git_org_id, slug])
-  // The content repo name is content-{orgLogin}-{content_namespace}: two
-  // classrooms in one org sharing a namespace would share (and could adopt,
-  // overwrite, or delete) each other's content repo. Uniqueness is per-org.
+  // content_namespace no longer names the content repo, but stays unique
+  // per-org: it is the internal identifier legacy rows were named from.
   @@unique([git_org_id, content_namespace])
+  // Two classrooms in one org sharing a content repo would share (and could
+  // adopt, overwrite, or delete) each other's content. Uniqueness is per-org;
+  // repo names are org-scoped on GitHub too.
+  @@unique([git_org_id, content_repo])
   @@index([git_org_id])
   @@map("classrooms")
 }

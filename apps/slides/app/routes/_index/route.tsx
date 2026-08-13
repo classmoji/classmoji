@@ -204,7 +204,8 @@ export const action = async ({ request }: { request: Request }) => {
         return { error: 'Git organization not configured for this classroom' };
       }
 
-      const repo = `content-${gitOrganization.login}-${slide.classroom?.content_namespace}`;
+      // Content repo is STORED and user-editable — never re-derived from the namespace.
+      const repo = slide.classroom.content_repo;
       const newSlug = `${slide.slug}-copy-${Date.now()}`;
       const newContentPath = `slides/${newSlug}`;
 

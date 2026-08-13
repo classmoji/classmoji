@@ -45,8 +45,8 @@ export const loader = async ({
     throw new Response('Git organization not configured', { status: 400 });
   }
 
-  // Get content repo name and file path
-  const repo = `content-${gitOrgLogin}-${slide.classroom.content_namespace}`;
+  // Content repo is STORED and user-editable — never re-derived from the namespace.
+  const repo = slide.classroom.content_repo;
   const filePath = `${slide.content_path}/index.html`;
 
   // Build the content URL using content proxy (CDN-first + API fallback)

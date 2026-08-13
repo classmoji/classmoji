@@ -5,7 +5,9 @@
  * Serves CSS, fonts, and other assets with correct MIME types.
  *
  * URL pattern: /content/:org/:repo/*path
- * Example: /content/myorg/content-myorg-25w/.slidesthemes/theme/lib/offline-v2.css
+ * The :repo segment is the classroom's stored content repo — user-editable, so
+ * it follows no derivable pattern.
+ * Example: /content/myorg/cs101-content/.slidesthemes/theme/lib/offline-v2.css
  *
  * SECURITY: This route validates access via one of:
  * 1. Authenticated user with classroom membership
@@ -32,7 +34,7 @@ import getPrisma from '@classmoji/database';
 
 interface ContentRouteMembership {
   classroom?: {
-    content_namespace?: string | null;
+    content_repo?: string | null;
     git_organization?: {
       login: string;
       settings?: Record<string, string> | null;
@@ -105,16 +107,17 @@ export const loader = async ({
   if (authData) {
     const memberships = await getCachedMemberships(authData.userId);
 
-    // STRICT validation: repo must EXACTLY match the content repo for a user's classroom
-    // Content repo pattern: content-{org}-{term} (e.g., content-csc-25w)
-    // Or explicitly set in organization.settings as any.content_repo_name
+    // STRICT validation: repo must EXACTLY match the content repo for a user's classroom.
+    // The classroom's content repo is STORED and user-editable — never re-derived.
+    // Legacy classrooms without one fall back to the ORG-level content repo
+    // (organization.settings.content_repo_name).
     hasAccess = memberships.some((m: ContentRouteMembership) => {
       const gitOrg = m.classroom?.git_organization;
       if (!gitOrg || gitOrg.login !== org) return false;
 
       // Get the expected content repo name for this classroom
-      const expectedRepo = m.classroom?.content_namespace
-        ? `content-${gitOrg.login}-${m.classroom.content_namespace}`
+      const expectedRepo = m.classroom?.content_repo
+        ? m.classroom.content_repo
         : getContentRepoName({
             login: gitOrg.login,
             settings: gitOrg.settings as { content_repo_name?: string } | undefined,
@@ -139,9 +142,10 @@ export const loader = async ({
     if (slide && slide.is_public && !slide.is_draft) {
       const gitOrg = slide.classroom?.git_organization;
       if (gitOrg && gitOrg.login === org) {
-        // Validate the requested repo matches the slide's content repo
-        const expectedRepo = slide.classroom.content_namespace
-          ? `content-${gitOrg.login}-${slide.classroom.content_namespace}`
+        // Validate the requested repo matches the slide's content repo (stored,
+        // user-editable — never re-derived)
+        const expectedRepo = slide.classroom.content_repo
+          ? slide.classroom.content_repo
           : getContentRepoName({ login: gitOrg.login });
 
         if (repo === expectedRepo) {

@@ -11,7 +11,6 @@
  */
 
 import getPrisma from '@classmoji/database';
-import { classroomContentRepoName } from '@classmoji/utils';
 import { ContentService } from '../content/ContentService.ts';
 import * as contentManifestService from '../classmoji/contentManifest.service.ts';
 import { ensureContentRepo } from '../classmoji/page.service.ts';
@@ -279,8 +278,8 @@ export async function createSlide({
   if (!classroom.git_organization?.login) {
     throw new Error('Git organization not configured');
   }
-  if (!classroom.content_namespace) {
-    throw new Error('Classroom content namespace not configured');
+  if (!classroom.content_repo) {
+    throw new Error('Classroom content repo not configured');
   }
 
   const slug = slideSlug(title);
@@ -315,10 +314,7 @@ export async function createSlide({
   // have pending (stale) edits — clear it before the first write.
   await deletePreviewBranchBestEffort({
     orgLogin: classroom.git_organization.login,
-    repo: classroomContentRepoName({
-      login: classroom.git_organization.login,
-      namespace: classroom.content_namespace,
-    }),
+    repo: classroom.content_repo,
     contentPath,
     context: 'stale preview from a reused slug, cleared before create',
   });
@@ -404,10 +400,15 @@ async function readSharedThemeName({
 /**
  * Count how many slides are using a specific shared theme.
  * Ported from apps/slides slideService.server.ts with deck.json-first reads.
+ *
+ * A shared theme lives in the content REPO, so the slides that could be using
+ * it are exactly the slides of the classroom(s) pointing at that repo — keyed
+ * on the stored `content_repo`. The org is part of the DB filter (repo names
+ * are only unique within an org), not a post-filter in JS.
  */
 export async function countSlidesUsingTheme(
   gitOrgLogin: string,
-  contentNamespace: string,
+  contentRepo: string,
   themeName: string
 ): Promise<{ count: number; slides: Array<{ id: string; title: string }> }> {
   const gitOrg = await getPrisma().gitOrganization.findFirst({
@@ -417,26 +418,26 @@ export async function countSlidesUsingTheme(
     return { count: 0, slides: [] };
   }
 
-  const slides = await getPrisma().slide.findMany({
-    where: { classroom: { content_namespace: contentNamespace } },
+  const orgSlides = await getPrisma().slide.findMany({
+    where: {
+      classroom: {
+        content_repo: contentRepo,
+        git_organization: { provider: 'GITHUB', login: gitOrgLogin },
+      },
+    },
     include: {
       classroom: {
         include: { git_organization: true },
       },
     },
   });
-  const orgSlides = slides.filter(
-    (s: { classroom?: { git_organization?: { login?: string } | null } | null }) =>
-      s.classroom?.git_organization?.login === gitOrgLogin
-  );
 
-  const repoName = classroomContentRepoName({ login: gitOrgLogin, namespace: contentNamespace });
   const slidesUsingTheme: Array<{ id: string; title: string }> = [];
 
   for (const slide of orgSlides) {
     const slideTheme = await readSharedThemeName({
       orgLogin: gitOrgLogin,
-      repo: repoName,
+      repo: contentRepo,
       contentPath: slide.content_path,
     });
     if (slideTheme === themeName) {
@@ -452,7 +453,7 @@ export async function countSlidesUsingTheme(
  */
 export async function deleteSharedTheme(
   gitOrgLogin: string,
-  contentNamespace: string,
+  contentRepo: string,
   themeName: string
 ): Promise<void> {
   const gitOrg = await getPrisma().gitOrganization.findFirst({
@@ -462,10 +463,9 @@ export async function deleteSharedTheme(
     throw new Error('Git organization not found');
   }
 
-  const repoName = classroomContentRepoName({ login: gitOrgLogin, namespace: contentNamespace });
   await ContentService.deleteFolder({
     orgLogin: gitOrgLogin,
-    repo: repoName,
+    repo: contentRepo,
     path: `${THEMES_FOLDER}/${themeName}`,
     message: `Delete shared theme: ${themeName}`,
   });
@@ -523,10 +523,7 @@ export async function deleteSlide({
     throw new Error('GitHub installation not configured');
   }
 
-  const repoName = classroomContentRepoName({
-    login: gitOrgLogin,
-    namespace: slide.classroom.content_namespace,
-  });
+  const repoName = slide.classroom.content_repo;
 
   // Check if this slide uses a shared theme (deck.json-first).
   const themeName = await readSharedThemeName({
@@ -570,16 +567,12 @@ export async function deleteSlide({
 
   // Handle shared theme deletion if requested.
   if (themeName && deleteTheme) {
-    const themeUsage = await countSlidesUsingTheme(
-      gitOrgLogin,
-      slide.classroom.content_namespace,
-      themeName
-    );
+    const themeUsage = await countSlidesUsingTheme(gitOrgLogin, repoName, themeName);
     otherSlidesUsingTheme = themeUsage.slides.filter(s => s.id !== slideId).length;
 
     if (otherSlidesUsingTheme === 0) {
       try {
-        await deleteSharedTheme(gitOrgLogin, slide.classroom.content_namespace, themeName);
+        await deleteSharedTheme(gitOrgLogin, repoName, themeName);
         themeDeleted = true;
       } catch (error: unknown) {
         console.error('Failed to delete shared theme:', error);
@@ -621,10 +614,7 @@ export async function getSlideDeleteInfo(slideId: string) {
     return { slide, themeName: null };
   }
 
-  const repoName = classroomContentRepoName({
-    login: gitOrgLogin,
-    namespace: slide.classroom.content_namespace,
-  });
+  const repoName = slide.classroom.content_repo;
 
   const themeName = await readSharedThemeName({
     orgLogin: gitOrgLogin,
@@ -635,11 +625,7 @@ export async function getSlideDeleteInfo(slideId: string) {
     return { slide, themeName: null };
   }
 
-  const themeUsage = await countSlidesUsingTheme(
-    gitOrgLogin,
-    slide.classroom.content_namespace,
-    themeName
-  );
+  const themeUsage = await countSlidesUsingTheme(gitOrgLogin, repoName, themeName);
   const otherSlides = themeUsage.slides.filter(s => s.id !== slideId);
 
   return {

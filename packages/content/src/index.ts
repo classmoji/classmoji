@@ -12,7 +12,6 @@ export {
   ContentService,
   // URL builders for reading content from GitHub Pages
   getContentUrl,
-  getSlideContentUrl,
   getRawContentUrl,
   // Validation utilities
   validateFile,
