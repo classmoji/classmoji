@@ -69,9 +69,40 @@ describe('roster.addStudents', () => {
       { school_email: 'new@x.edu', classroom_id: 'class-1', student_name: 'New' },
     ]);
 
+    // Subjects now live on the Resend templates, so the payload carries a
+    // template id plus variables rather than a rendered subject and body.
     expect(result.emails).toHaveLength(2);
-    expect(result.emails[0].payload.subject).toContain('added to CS1');
-    expect(result.emails[1].payload.subject).toContain('invited to join CS1');
+    expect(result.emails[0].payload.template.id).toBe('roster-added');
+    expect(result.emails[0].payload.template.variables.CLASSROOM_NAME).toBe('CS1');
+    expect(result.emails[1].payload.template.id).toBe('roster-invited');
+    expect(result.emails[1].payload.template.variables.CLASSROOM_NAME).toBe('CS1');
+  });
+
+  it('escapes user-authored names before they become template variables', async () => {
+    // Resend injects variables raw, so an unescaped teacher-typed name would
+    // put live markup in the invitee's inbox.
+    userFindMany.mockResolvedValue([]);
+
+    const result = await roster.addStudents({
+      classroomId: 'class-1',
+      students: [{ email: 'new@x.edu', name: '<b>Mallory</b>' }],
+    });
+
+    expect(result.emails[0].payload.template.variables.STUDENT_NAME).toBe(
+      '&lt;b&gt;Mallory&lt;/b&gt;'
+    );
+  });
+
+  it('falls back to a greeting when the teacher omits the student name', async () => {
+    // Previously rendered "Hi undefined!".
+    userFindMany.mockResolvedValue([]);
+
+    const result = await roster.addStudents({
+      classroomId: 'class-1',
+      students: [{ email: 'noname@x.edu' }],
+    });
+
+    expect(result.emails[0].payload.template.variables.STUDENT_NAME).toBe('there');
   });
 
   it('matches existing users case-insensitively', async () => {

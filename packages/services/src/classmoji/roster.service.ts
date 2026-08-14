@@ -1,4 +1,5 @@
 import getPrisma from '@classmoji/database';
+import { appUrl, escapeVars } from '../emails/escape.ts';
 import * as classroomService from './classroom.service.ts';
 import * as classroomMembershipService from './classroomMembership.service.ts';
 import * as classroomInviteService from './classroomInvite.service.ts';
@@ -9,7 +10,13 @@ export interface RosterStudentInput {
 }
 
 export interface RosterEmail {
-  payload: { to: string; subject: string; html: string };
+  payload: {
+    to: string;
+    template: {
+      id: 'roster-added' | 'roster-invited';
+      variables: Record<string, string | number>;
+    };
+  };
 }
 
 export interface AddStudentsResult {
@@ -80,10 +87,16 @@ export const addStudents = async ({
       emailsOut.push({
         payload: {
           to: student.email,
-          subject: `[Classmoji] You've been added to ${classroom.name}`,
-          html: `<p>Hi ${student.userName || student.name}!</p>
-          <p>You have been added to <b>${classroom.name}</b> on Classmoji.</p>
-          <p>Click the following link to access your classroom: <a href="${process.env.WEBAPP_URL}">${process.env.WEBAPP_URL}</a></p>`,
+          template: {
+            id: 'roster-added',
+            // Names and classroom titles are user-authored, and Resend injects
+            // variables raw, so escape before they reach the template.
+            variables: escapeVars({
+              STUDENT_NAME: student.userName || student.name || 'there',
+              CLASSROOM_NAME: classroom.name,
+              APP_URL: appUrl(),
+            }),
+          },
         },
       });
     }
@@ -102,10 +115,16 @@ export const addStudents = async ({
       emailsOut.push({
         payload: {
           to: student.email,
-          subject: `[Classmoji] You're invited to join ${classroom.name}`,
-          html: `<p>Hi ${student.name}!</p>
-          <p>You have been invited to join <b>${classroom.name}</b> on Classmoji.</p>
-          <p>Click the following link to login: <a href="${process.env.WEBAPP_URL}">${process.env.WEBAPP_URL}</a></p>`,
+          template: {
+            id: 'roster-invited',
+            // `student.name` is optional and teacher-typed: it previously
+            // rendered "Hi undefined!" when omitted, and was never escaped.
+            variables: escapeVars({
+              STUDENT_NAME: student.name || 'there',
+              CLASSROOM_NAME: classroom.name,
+              APP_URL: appUrl(),
+            }),
+          },
         },
       });
     }
