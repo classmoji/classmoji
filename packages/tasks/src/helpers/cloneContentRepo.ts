@@ -31,7 +31,7 @@ import { logger } from '@trigger.dev/sdk';
 import path from 'path';
 import fs from 'fs';
 
-import { ClassmojiService } from '@classmoji/services';
+import { ClassmojiService, redactAccessTokens } from '@classmoji/services';
 
 /** Top-level folders the content repo organizes managed content under. */
 const PAGES_DIR = 'pages';
@@ -77,6 +77,29 @@ export interface CloneContentRepoResult {
 
 const cloneUrl = ({ orgLogin, repo, token }: ContentRepoCoordinates): string =>
   `https://x-access-token:${token}@github.com/${orgLogin}/${repo}.git`;
+
+/**
+ * Rethrow a git failure with the repo named and the installation token stripped.
+ *
+ * Both halves matter. Git echoes the remote URL verbatim on failure ("fatal:
+ * repository 'https://x-access-token:<token>@github.com/...' not found"), and
+ * that text is rethrown → recorded in `ImportJob.error` → rendered in the
+ * progress banner, which would persist a live installation token in the
+ * database. And a raw git error names no org, so an unreachable source org
+ * reads as an unexplained clone failure.
+ *
+ * No token is minted in this file — the caller passes them in
+ * (classroomImport's `contentRepoCoordinates`, which names the org on a mint
+ * failure of its own).
+ */
+function gitFailure(
+  action: string,
+  { orgLogin, repo }: ContentRepoCoordinates,
+  error: unknown
+): Error {
+  const detail = error instanceof Error ? error.message : String(error);
+  return new Error(`${action} ${orgLogin}/${repo} failed: ${redactAccessTokens(detail)}`);
+}
 
 /** Every file under `dir`, recursively, as absolute paths. Skips `.git`. */
 function listFilesRecursive(dir: string): string[] {
@@ -182,7 +205,11 @@ export const cloneContentRepo = async (
     // --depth 1: only the current tree is wanted, and the history is dropped
     // below anyway. On a content repo with years of commits this is the
     // difference between seconds and minutes.
-    await simpleGit().clone(cloneUrl(source), localPath, ['--depth', '1']);
+    try {
+      await simpleGit().clone(cloneUrl(source), localPath, ['--depth', '1']);
+    } catch (error: unknown) {
+      throw gitFailure('cloning', source, error);
+    }
 
     const repoGit = simpleGit(localPath);
     let sourceHasCommits = true;
@@ -231,9 +258,15 @@ export const cloneContentRepo = async (
     await freshGit.checkoutLocalBranch('main');
     await freshGit.add('.');
     await freshGit.commit(commitMessage);
-    await freshGit.addRemote('origin', cloneUrl(target));
-    // Overwrites ONLY the auto-init scaffold ensureContentRepo just created.
-    await freshGit.push('origin', 'main', ['--force']);
+    // Only these two carry the credentialed remote URL — the local operations
+    // above cannot leak a token, so they are left to throw as they are.
+    try {
+      await freshGit.addRemote('origin', cloneUrl(target));
+      // Overwrites ONLY the auto-init scaffold ensureContentRepo just created.
+      await freshGit.push('origin', 'main', ['--force']);
+    } catch (error: unknown) {
+      throw gitFailure('pushing to', target, error);
+    }
 
     logger.info('content import: pushed content repo copy', {
       from: `${source.orgLogin}/${source.repo}`,
