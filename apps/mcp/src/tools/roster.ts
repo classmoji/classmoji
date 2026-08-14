@@ -84,7 +84,7 @@ export const rosterAddStudentTool: ToolDefinition<RosterAddStudentArgs> = {
     });
 
     if (result.emails.length > 0) {
-      await Tasks.sendEmailTask.batchTrigger(result.emails);
+      await Tasks.sendBatchEmailTask.trigger({ emails: result.emails.map(e => e.payload) });
     }
 
     return ok({

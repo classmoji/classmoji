@@ -13,6 +13,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   send: vi.fn(),
+  batchSend: vi.fn(),
 }));
 
 // `task()` normally returns a wrapped trigger handle; return the config itself
@@ -25,10 +26,11 @@ vi.mock('@trigger.dev/sdk', () => ({
 vi.mock('resend', () => ({
   Resend: class {
     emails = { send: (...a: unknown[]) => mocks.send(...a) };
+    batch = { send: (...a: unknown[]) => mocks.batchSend(...a) };
   },
 }));
 
-const { sendEmailTask } = await import('../email.ts');
+const { sendEmailTask, sendBatchEmailTask } = await import('../email.ts');
 
 const CTX = { ctx: { run: { id: 'run_abc123' } } };
 const PAYLOAD = { to: 'student@school.edu', subject: 'Hi', html: '<p>Hi</p>' };
@@ -158,5 +160,83 @@ describe('sendEmailTask', () => {
     // 429s during a roster import. The per-task override is the guard.
     const { retry } = sendEmailTask as unknown as { retry: { maxAttempts: number } };
     expect(retry.maxAttempts).toBeGreaterThan(1);
+  });
+});
+
+describe('sendBatchEmailTask', () => {
+  const runBatch = (input: unknown) =>
+    (sendBatchEmailTask as unknown as { run: (i: unknown, c: unknown) => Promise<unknown> }).run(
+      input,
+      CTX
+    );
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    process.env.RESEND_API_KEY = 're_test_key';
+    delete process.env.EMAIL_FROM;
+    delete process.env.EMAIL_REPLY_TO;
+  });
+
+  it('collapses many recipients into a single request', async () => {
+    mocks.batchSend.mockResolvedValue({ data: [{ id: 'a' }, { id: 'b' }], error: null });
+
+    await runBatch({
+      emails: [
+        { to: 'a@x.edu', template: { id: 'roster-added' } },
+        { to: 'b@x.edu', template: { id: 'roster-added' } },
+      ],
+    });
+
+    expect(mocks.batchSend).toHaveBeenCalledTimes(1);
+    expect(mocks.batchSend.mock.calls[0][0]).toHaveLength(2);
+    // Single-send endpoint must not be touched — that was the whole point.
+    expect(mocks.send).not.toHaveBeenCalled();
+  });
+
+  it('chunks at 100, since Resend rejects larger batches', async () => {
+    mocks.batchSend.mockResolvedValue({ data: [], error: null });
+
+    const emails = Array.from({ length: 250 }, (_, i) => ({
+      to: `s${i}@x.edu`,
+      template: { id: 'notification' },
+    }));
+    await runBatch({ emails });
+
+    expect(mocks.batchSend).toHaveBeenCalledTimes(3);
+    expect(mocks.batchSend.mock.calls[0][0]).toHaveLength(100);
+    expect(mocks.batchSend.mock.calls[2][0]).toHaveLength(50);
+  });
+
+  it('gives each chunk its own idempotency key', async () => {
+    // One key across chunks would 409, since the payloads differ.
+    mocks.batchSend.mockResolvedValue({ data: [], error: null });
+
+    await runBatch({
+      emails: Array.from({ length: 150 }, (_, i) => ({ to: `s${i}@x.edu`, html: 'h', subject: 's' })),
+    });
+
+    const keys = mocks.batchSend.mock.calls.map(c => c[1].idempotencyKey);
+    expect(new Set(keys).size).toBe(2);
+  });
+
+  it('throws when a batch errors rather than reporting success', async () => {
+    mocks.batchSend.mockResolvedValue({ data: null, error: { message: 'rate_limit_exceeded' } });
+
+    await expect(
+      runBatch({ emails: [{ to: 'a@x.edu', template: { id: 'roster-added' } }] })
+    ).rejects.toThrow('rate_limit_exceeded');
+  });
+
+  it('is a no-op on an empty list', async () => {
+    await expect(runBatch({ emails: [] })).resolves.toEqual([]);
+    expect(mocks.batchSend).not.toHaveBeenCalled();
+  });
+
+  it('unwraps the wrapped payload form', async () => {
+    mocks.batchSend.mockResolvedValue({ data: [], error: null });
+
+    await runBatch({ payload: { emails: [{ to: 'a@x.edu', html: 'h', subject: 's' }] } });
+
+    expect(mocks.batchSend).toHaveBeenCalledTimes(1);
   });
 });

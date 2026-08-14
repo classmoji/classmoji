@@ -26,7 +26,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
   });
 
   if (result.emails.length > 0) {
-    await Tasks.sendEmailTask.batchTrigger(result.emails);
+    await Tasks.sendBatchEmailTask.trigger({ emails: result.emails.map(e => e.payload) });
   }
 
   return {
