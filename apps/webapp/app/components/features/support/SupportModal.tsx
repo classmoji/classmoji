@@ -2,7 +2,9 @@ import { Modal } from 'antd';
 import { IconExternalLink, IconMail } from '@tabler/icons-react';
 
 const DISCUSSIONS_URL = 'https://github.com/classmoji/classmoji/discussions';
-const ISSUES_URL = 'https://github.com/classmoji/classmoji/issues/new';
+// Opens the guided bug form (.github/ISSUE_TEMPLATE/bug_report.yml) rather than
+// a blank issue, so reports arrive with repro steps and the `bug` label.
+const ISSUES_URL = 'https://github.com/classmoji/classmoji/issues/new?template=bug_report.yml';
 export const SUPPORT_EMAIL = 'hello@classmoji.io';
 
 interface SupportModalProps {
@@ -47,7 +49,7 @@ const SupportModal = ({ open, onClose }: SupportModalProps) => {
   return (
     <Modal open={open} onCancel={onClose} footer={null} width={520}>
       <div className="pr-6">
-        <h2 className="text-lg font-semibold text-ink-0 mb-1">Support</h2>
+        <h2 className="text-lg font-semibold text-ink-0 mb-1">Help &amp; Feedback</h2>
         <p className="text-sm text-ink-3 mb-5">
           Questions, bugs, or anything else. Pick whichever is easiest.
         </p>

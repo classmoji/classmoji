@@ -1,5 +1,5 @@
 import { task } from '@trigger.dev/sdk';
-import { ClassmojiService } from '@classmoji/services';
+import { appUrl, ClassmojiService, escapeVars } from '@classmoji/services';
 import { sendEmailTask } from './email.ts';
 import { emojiShortcodes } from '@classmoji/utils';
 
@@ -84,18 +84,20 @@ export const requestRegradeTask = task({
         gitRepoAssignment.graders.map(({ grader }) => ({
           payload: {
             to: grader.email,
-            subject: '[Classmoji] Action required: Regrade requested',
-            html: `<p>${student.name} (@${student.login}) has requested a regrade for
-                        <a href="${issueUrl}" style="text-decoration: underline;">${
-                          gitRepoAssignment.assignment.title
-                        }</a>
-                     .</p>
-                     <p>Previous grade: ${previous_grade
-                       .map(grade => emojiMap[grade] || grade)
-                       .join(' ')}</p>
-                     <p>Student comment: ${student_comment || 'None'}</p>
-                     <p>Please review the request and update the grade accordingly.</p>
-                     `,
+            template: {
+              id: 'regrade-requested',
+              // `student_comment` is free-form student input rendered into a
+              // TA's inbox, and Resend injects variables raw — escaping here is
+              // the only thing standing between the two.
+              variables: escapeVars({
+                STUDENT_NAME: student.name,
+                STUDENT_LOGIN: student.login,
+                ASSIGNMENT_TITLE: gitRepoAssignment.assignment.title,
+                ISSUE_URL: issueUrl,
+                PREVIOUS_GRADE: previous_grade.map(grade => emojiMap[grade] || grade).join(' '),
+                STUDENT_COMMENT: student_comment || 'None',
+              }),
+            },
           },
         }))
       );
@@ -114,10 +116,13 @@ export const updateRegradeRequestTask = task({
     const { request } = payload;
     sendEmailTask.trigger({
       to: request.student.email,
-      subject: '[Classmoji] Regrade request resolved',
-      html: `<p>Your regrade request for <u>${request.git_repo_assignment.assignment.title}</u> has been resolved.</p>
-             <p>Check your dashboard for the updated grade.</p>
-      `,
+      template: {
+        id: 'regrade-resolved',
+        variables: escapeVars({
+          ASSIGNMENT_TITLE: request.git_repo_assignment.assignment.title,
+          APP_URL: appUrl(),
+        }),
+      },
     });
   },
 });

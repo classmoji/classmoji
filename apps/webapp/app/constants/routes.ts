@@ -212,7 +212,7 @@ export const routes = {
   },
   support: {
     link: '/support',
-    label: 'Support',
+    label: 'Help & Feedback',
     icon: IconLifebuoy,
     roles: ['OWNER', 'TEACHER', 'ASSISTANT', 'STUDENT'],
     category: 'settings',

@@ -144,9 +144,19 @@ export const templates = [
       { key: 'SUBJECT', type: 'string' },
       { key: 'PREHEADER', type: 'string', fallbackValue: 'You have a new Classmoji notification.' },
       { key: 'MESSAGE_HTML', type: 'string' },
+      { key: 'MESSAGE_TEXT', type: 'string' },
       { key: 'ACTION_URL', type: 'string' },
       { key: 'PREFS_URL', type: 'string' },
     ],
+    // Explicit text/plain. Resend derives text from the HTML *before* variable
+    // substitution, so an auto-derived body would ship raw <p> markup from
+    // MESSAGE_HTML into the plain part.
+    text: `{{{MESSAGE_TEXT}}}
+
+Open Classmoji: {{{ACTION_URL}}}
+
+Manage email preferences: {{{PREFS_URL}}}
+Need help, email us at hello@classmoji.io`,
     html: shell({
       title: 'Classmoji',
       preheader: '{{{PREHEADER}}}',

@@ -157,7 +157,7 @@ const enqueueEmails = async ({
       const enabled = pref ? pref[prefField] : DEFAULT_PREFS[prefField];
       if (!enabled) continue;
 
-      const { subject, html } = renderEmail({
+      const { template } = renderEmail({
         type,
         title,
         classroomName: classroom?.name ?? null,
@@ -168,7 +168,7 @@ const enqueueEmails = async ({
       });
 
       try {
-        await tasks.trigger('send_email', { to: user.email, subject, html });
+        await tasks.trigger('send_email', { to: user.email, template });
       } catch (error) {
         console.error('[notifications] email enqueue failed', { userId: user.id, type, error });
       }
