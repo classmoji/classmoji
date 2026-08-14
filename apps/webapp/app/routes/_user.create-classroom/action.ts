@@ -3,6 +3,7 @@ import { checkAuth } from '~/utils/helpers';
 import {
   ClassmojiService,
   GitHubProvider,
+  describeTokenMintError,
   getGitProvider,
   ensureClassroomTeam,
 } from '@classmoji/services';
@@ -30,6 +31,52 @@ import { slugify } from './utils';
 /** Background work needs Trigger.dev; without it the async phases can't run. */
 const isTriggerConfigured = () =>
   Boolean(process.env.TRIGGER_SECRET_KEY || process.env.TRIGGER_ACCESS_TOKEN);
+
+/**
+ * Cap on the import pre-flight's token mint.
+ *
+ * The check runs inside the create request, so it must never be the thing that
+ * makes "create classroom" hang. `GitHubProvider.getAccessToken` accepts no
+ * AbortSignal, so a race is the only timeout available — and a mint that has
+ * not answered in this long is treated as a refusal, because an import that
+ * cannot get a source token now will not finish the copy either.
+ */
+const PREFLIGHT_TOKEN_TIMEOUT_MS = 5000;
+
+/**
+ * Can this environment mint an installation token for `org`?
+ *
+ * Staging runs against production-cloned GitOrganization rows whose
+ * installation ids belong to the PRODUCTION GitHub App, so the mint 404s there
+ * for orgs that look perfectly valid in the database. Answering this before the
+ * import starts is what turns a mid-run failure into a skipped-content warning.
+ */
+async function canMintOrgToken(org: Parameters<typeof getGitProvider>[0]): Promise<boolean> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    // Inside the try: getGitProvider throws SYNCHRONOUSLY when the row carries
+    // no installation id (or names a provider with no token support at all).
+    const mint = getGitProvider(org).getAccessToken();
+    // If the timeout wins the race, this rejection still arrives later — with
+    // no handler it would surface as an unhandled rejection.
+    mint.catch(() => {});
+    await Promise.race([
+      mint,
+      new Promise((_resolve, reject) => {
+        timer = setTimeout(
+          () => reject(new Error(`timed out after ${PREFLIGHT_TOKEN_TIMEOUT_MS}ms`)),
+          PREFLIGHT_TOKEN_TIMEOUT_MS
+        );
+      }),
+    ]);
+    return true;
+  } catch (error: unknown) {
+    console.warn(`Import pre-flight: ${describeTokenMintError(org.login, error)}`);
+    return false;
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 /**
  * Pick a free internal content namespace for a new classroom in this org.
@@ -170,13 +217,24 @@ export const action = checkAuth(async ({ request }: { request: Request }) => {
   // a same-slug retry. Source-ownership for imports is part of that gate.
   const sourceClassroomId: string | undefined = importConfig?.sourceClassroomId;
   const configSelections = importConfig?.config ?? {};
-  const contentSelections = importConfig?.content ?? {};
+  // A COPY of the request's content toggles: the GitHub pre-flight below drops
+  // the ones this environment cannot honor, and everything downstream (the
+  // `wants*` flags, the phase totals, whether a job is created at all, and the
+  // selections persisted on the job for a later retry) reads them from here.
+  const contentSelections: Record<string, boolean> = { ...(importConfig?.content ?? {}) };
   const anyConfigSelected = Object.values(configSelections).some(Boolean);
   const anyContentSelected = Object.values(contentSelections).some(Boolean);
   const requestedRepos: Array<{ id: string; includeQuizzes?: boolean }> =
     importConfig?.repositories ?? [];
   const importRequested =
     !!sourceClassroomId && (requestedRepos.length > 0 || anyConfigSelected || anyContentSelected);
+
+  /** Per-item notes; surfaced on the response and seeded onto the job row. */
+  const importWarnings: string[] = [];
+  /** Source org this environment can't read, when the pre-flight below says so. */
+  let unreachableSourceOrg: string | null = null;
+  /** The one sentence that explains the skipped content to the user. */
+  let githubUnavailableNote: string | null = null;
 
   if (importRequested) {
     // The picker only OFFERS owned classrooms, but every id here arrives from
@@ -188,6 +246,55 @@ export const action = checkAuth(async ({ request }: { request: Request }) => {
     });
     if (!sourceMembership) {
       return { error: 'You must own the source classroom to import from it' };
+    }
+
+    // ── GitHub pre-flight ────────────────────────────────────────────────────
+    // Template duplication and the page/deck copy all READ the source org, so
+    // each needs an installation token for it. When that token cannot be minted
+    // the import used to die mid-run with a bare "Failed to retrieve GitHub
+    // installation token (404)" in the banner — a half-built classroom and an
+    // error naming neither the org nor the cause. Finding out here turns it into
+    // a warning on an otherwise successful create.
+    //
+    // Deliberately NOT run for creates without an import, or for imports whose
+    // selections are all pure DB (settings, repos, quizzes, modules): those
+    // never touch the source org, and this would be a GitHub round-trip charged
+    // to every one of them.
+    const githubBoundSelected = !!(
+      contentSelections.duplicateTemplates ||
+      contentSelections.pages ||
+      contentSelections.slides
+    );
+    if (githubBoundSelected) {
+      const sourceClassroom = await getPrisma().classroom.findUnique({
+        where: { id: sourceClassroomId },
+        include: { git_organization: true },
+      });
+      const sourceOrg = sourceClassroom?.git_organization;
+      // A source with no org configured needs no pre-flight: the content phase
+      // already handles that case gracefully (zeros plus a warning).
+      if (sourceOrg?.login && !(await canMintOrgToken(sourceOrg))) {
+        unreachableSourceOrg = sourceOrg.login;
+        // Named while the flags are still set — the message lists only what the
+        // user actually asked for.
+        const dropped = [
+          contentSelections.pages ? 'pages' : null,
+          contentSelections.slides ? 'slide decks' : null,
+          contentSelections.duplicateTemplates ? 'template copies' : null,
+        ].filter(Boolean);
+
+        // Drop ONLY the source-org-bound selections. The classroom is still
+        // created and the pure-DB phases (settings, scales, calendar,
+        // repositories, quizzes, and the modules that reference them) still run.
+        contentSelections.pages = false;
+        contentSelections.slides = false;
+        contentSelections.duplicateTemplates = false;
+
+        githubUnavailableNote =
+          `GitHub org '${sourceOrg.login}' isn't accessible from this environment — ` +
+          `${dropped.join(', ')} ${dropped.length === 1 ? 'was' : 'were'} skipped.`;
+        importWarnings.push(githubUnavailableNote);
+      }
     }
   }
 
@@ -249,7 +356,6 @@ export const action = checkAuth(async ({ request }: { request: Request }) => {
     letter_grade_mappings: number;
     calendar_events: number;
   } | null = null;
-  const importWarnings: string[] = [];
   /** Source repositories that survived the ownership filter (drives templates). */
   let repoConfigs: Array<{ id: string; includeQuizzes?: boolean }> = [];
 
@@ -473,6 +579,11 @@ export const action = checkAuth(async ({ request }: { request: Request }) => {
     syncParts.length > 0
       ? `Classroom created with ${syncParts.join(', ')} imported!`
       : 'Classroom created successfully!';
+  // Stated outright, not folded into the generic "N items skipped" count: the
+  // user selected content that will not be there, and has to know why.
+  if (githubUnavailableNote) {
+    successMessage += ` ${githubUnavailableNote}`;
+  }
   if (importJobId) {
     successMessage += ' Import continuing in the background.';
   }
@@ -486,5 +597,7 @@ export const action = checkAuth(async ({ request }: { request: Request }) => {
     classroomSlug: classroom.slug,
     import_job_id: importJobId,
     import_warnings: importWarnings,
+    /** Source org login when its GitHub App installation was unreachable, else null. */
+    import_github_unavailable: unreachableSourceOrg,
   };
 });
