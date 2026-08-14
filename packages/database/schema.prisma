@@ -385,6 +385,7 @@ model Classroom {
   classroom_invites     ClassroomInvite[]
   resource_views        ResourceView[]
   notifications         Notification[]
+  import_job            ImportJob?
 
   @@unique([git_org_id, slug])
   // content_namespace no longer names the content repo, but stays unique
@@ -452,6 +453,66 @@ model ClassroomMembership {
   @@index([classroom_id, user_id])
   @@index([user_id])
   @@map("classroom_memberships")
+}
+
+enum ImportJobStatus {
+  PENDING
+  RUNNING
+  COMPLETED
+  FAILED
+}
+
+// Tracks the BACKGROUND copy of a source classroom into a newly created one.
+// Classroom creation returns as soon as this row exists and the
+// `classroom-import` Trigger.dev task is triggered; the task then owns every
+// phase (config → repositories → templates → content → modules), and the admin
+// dashboard polls this row to draw a progress bar. Before this existed the copy
+// ran inside the create action and could pin a request for 10+ minutes.
+//
+// One import per classroom (`classroom_id` is unique): the per-item creates are
+// NOT idempotent, so a second run would duplicate pages, decks and repos. That
+// same non-idempotency is why the task sets `retry: { maxAttempts: 1 }`.
+model ImportJob {
+  id                  String          @id @default(uuid())
+  classroom_id        String          @unique
+  source_classroom_id String
+  // The user whose ownership of the source classroom was verified. The task
+  // re-verifies it before copying anything (defense in depth), and imported
+  // content is attributed to them.
+  requested_by        String
+  status              ImportJobStatus @default(PENDING)
+  // Coarse phase name: config | repositories | templates | content | modules.
+  // Null before the task starts and after it finishes.
+  phase               String?
+  // What the user asked to import — settings groups, per-repository ids and
+  // their includeQuizzes flags, and the content/module toggles. The task reads
+  // its whole input from this row, which is what keeps the trigger payload a
+  // bare { importJobId } and the run replayable.
+  selections          Json            @default("{}")
+  // Per-phase progress; see @classmoji/services `importProgress.ts` for the
+  // shape and the pure builders/reducer that produce it:
+  // { phases: { config: { status, summary?, note? },
+  //             repositories | templates | pages | slides:
+  //               { status, done, total, note? },
+  //             modules: { status, summary?, note? } },
+  //   parts?: string[] }
+  // status is pending | running | done | skipped | failed. `note` carries
+  // transient state such as a GitHub rate-limit backoff, so a wait is visible
+  // rather than looking like a hang. `parts` holds the final success-message
+  // fragments, written once at COMPLETED.
+  progress            Json            @default("{}")
+  // Best-effort per-item failures, same strings the synchronous import
+  // collected. A warning never fails the job.
+  warnings            Json            @default("[]")
+  // Set only when status is FAILED — the whole import died, not one item.
+  error               String?
+  created_at          DateTime        @default(now())
+  updated_at          DateTime        @default(now()) @updatedAt
+
+  classroom Classroom @relation(fields: [classroom_id], references: [id], onDelete: Cascade)
+
+  @@index([status])
+  @@map("import_jobs")
 }
 
 // ============================================================================

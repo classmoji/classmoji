@@ -39,12 +39,17 @@ const DangerZone = ({ loaderData }: Route.ComponentProps) => {
   const { artifacts, withheld } = loaderData;
   const repos = artifacts.filter(a => a.kind === 'repo');
   const teams = artifacts.filter(a => a.kind === 'team');
-  // Content repo first, then assignment repos, then every team.
+  // Content repo first, then assignment repos, then the template duplicates this
+  // classroom's own import created, then every team.
   const artifactGroups = [
     { heading: 'Content repository', items: artifacts.filter(a => a.label === 'content repo') },
     {
       heading: 'Assignment repositories',
       items: artifacts.filter(a => a.label === 'assignment repo'),
+    },
+    {
+      heading: 'Imported template repositories',
+      items: artifacts.filter(a => a.label === 'template repo'),
     },
     { heading: 'Teams', items: teams },
   ].filter(group => group.items.length > 0);
@@ -138,8 +143,9 @@ const DangerZone = ({ loaderData }: Route.ComponentProps) => {
           >
             Also delete this classroom&rsquo;s GitHub artifacts
             <div className="text-xs text-gray-500 dark:text-gray-400">
-              The content repository, the classroom teams, and all student assignment repositories
-              in the GitHub organization. Leave unchecked to keep everything on GitHub.
+              The content repository, the classroom teams, all student assignment repositories, and
+              any template repositories this classroom&rsquo;s import created. Leave unchecked to
+              keep everything on GitHub.
             </div>
           </Checkbox>
           {deleteGitHub && (
