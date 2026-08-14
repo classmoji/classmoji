@@ -74,6 +74,8 @@ export interface TemplateImportOptions {
     total: number;
     /** Transient status (e.g. a rate-limit wait). `null` clears it. */
     note?: string | null;
+    /** 'warn' only for actual limit waits; routine activity omits it. */
+    note_level?: 'info' | 'warn';
   }) => void | Promise<void>;
   /**
    * Templates a PREVIOUS run of this same import already duplicated: source ref
@@ -348,7 +350,7 @@ async function createRepositoryWithBackoff({
   provider: ReturnType<typeof getGitProvider>;
   orgLogin: string;
   name: string;
-  onWait: (note: string | null) => void;
+  onWait: (note: string | null, level?: 'info' | 'warn') => void;
 }): Promise<void> {
   for (let attempt = 0; ; attempt++) {
     try {
@@ -357,7 +359,7 @@ async function createRepositoryWithBackoff({
     } catch (error: unknown) {
       const limit = parseSecondaryRateLimit(error);
       if (!limit || attempt >= MAX_SECONDARY_LIMIT_RETRIES) throw error;
-      onWait(`waiting out GitHub rate limit (~${Math.round(limit.retryAfterMs / 1000)}s)`);
+      onWait(`waiting out GitHub rate limit (~${Math.round(limit.retryAfterMs / 1000)}s)`, 'warn');
       await sleep(limit.retryAfterMs);
       onWait(null);
     }
@@ -556,8 +558,8 @@ export const duplicateImportedTemplates = async (
    * Count/note emit for this phase. An omitted `note` LEAVES the current one
    * alone (the progress reducer's convention); `null` clears it.
    */
-  const emit = (note?: string | null) =>
-    emitProgress(opts.onProgress, { done: consumed, total, note });
+  const emit = (note?: string | null, noteLevel?: 'info' | 'warn') =>
+    emitProgress(opts.onProgress, { done: consumed, total, note, note_level: noteLevel });
   emit();
 
   if (groups.length === 0) return summary;

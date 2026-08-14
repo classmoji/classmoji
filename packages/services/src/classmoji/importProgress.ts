@@ -79,6 +79,8 @@ export interface SummaryPhaseProgress {
   status: ImportPhaseStatus;
   summary?: string;
   note?: string;
+  /** 'warn' = an actual limit/backoff wait (amber in the banner); absent = routine activity (neutral). */
+  note_level?: 'info' | 'warn';
 }
 
 /** A phase with fine-grained per-item counts. */
@@ -87,6 +89,8 @@ export interface CountedPhaseProgress {
   done: number;
   total: number;
   note?: string;
+  /** See SummaryPhaseProgress.note_level. */
+  note_level?: 'info' | 'warn';
 }
 
 /**
@@ -228,19 +232,29 @@ export interface ImportPhaseUpdate {
   total?: number;
   summary?: string;
   note?: string | null;
+  /** Rides with `note`; cleared whenever the note clears. */
+  note_level?: 'info' | 'warn';
 }
 
 const isCountedKey = (key: ImportPhaseKey): key is (typeof COUNTED_PHASE_KEYS)[number] =>
   (COUNTED_PHASE_KEYS as readonly string[]).includes(key);
 
-/** Apply `note` (undefined = leave, null = clear) to a phase patch. */
-function applyNote<T extends { note?: string }>(next: T, note: string | null | undefined): T {
+/** Apply `note` (undefined = leave, null = clear) to a phase patch. The level
+ * always follows the note: cleared with it, replaced with it, never orphaned. */
+function applyNote<T extends { note?: string; note_level?: 'info' | 'warn' }>(
+  next: T,
+  note: string | null | undefined,
+  level?: 'info' | 'warn'
+): T {
   if (note === undefined) return next;
   if (note === null) {
     delete next.note;
+    delete next.note_level;
     return next;
   }
   next.note = note;
+  if (level) next.note_level = level;
+  else delete next.note_level;
   return next;
 }
 
@@ -266,13 +280,13 @@ export function applyPhaseUpdate(
     if (update.done !== undefined) next.done = Math.max(0, Math.trunc(update.done));
     // Clamp AFTER both, so a patch that raises total and done together works.
     if (next.total > 0) next.done = Math.min(next.done, next.total);
-    phases[phase] = applyNote(next, update.note);
+    phases[phase] = applyNote(next, update.note, update.note_level);
   } else {
     const current = progress.phases[phase];
     const next: SummaryPhaseProgress = { ...current };
     if (update.status !== undefined) next.status = update.status;
     if (update.summary !== undefined) next.summary = update.summary;
-    phases[phase] = applyNote(next, update.note);
+    phases[phase] = applyNote(next, update.note, update.note_level);
   }
 
   return { ...progress, phases };
