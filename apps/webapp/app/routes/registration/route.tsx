@@ -442,10 +442,11 @@ export const action = async ({ request }: Route.ActionArgs) => {
         expires_at: new Date(Date.now() + 10 * 60 * 1000),
       },
     });
+    // Subject and markup live in the Resend template `verify-email`; source of
+    // truth for the HTML is packages/services/src/emails/templates/verify-email.html
     await Tasks.sendEmailTask.trigger({
       to: formData.email,
-      subject: '[Classmoji] Verify your school email',
-      html: `<p>Your verification code is: <strong style="font-size:24px;letter-spacing:4px">${code}</strong></p><p>It expires in 10 minutes.</p>`,
+      template: { id: 'verify-email', variables: { CODE: code } },
     });
     return { codeSent: true };
   }

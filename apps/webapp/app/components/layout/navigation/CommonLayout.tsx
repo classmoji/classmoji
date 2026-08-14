@@ -12,6 +12,7 @@ import useStore from '~/store';
 import tokenImage from '~/assets/images/token.png';
 import githubLogo from '~/assets/images/github_logo.svg';
 import ProfileDropdown from '../../features/profile/ProfileDropdown';
+import SupportModal from '../../features/support/SupportModal';
 import { LockedBanner } from '~/components/features/classroom/LockedBanner';
 import type { AppUser, MembershipWithOrganization } from '~/types';
 
@@ -27,6 +28,7 @@ const OWNER_CORE_LINKS = new Set([
   '/assistants',
   '/grades',
   '/settings/general',
+  '/support',
 ]);
 
 interface MenuPage {
@@ -87,6 +89,7 @@ const CommonLayout = ({
     defaultValue: false,
   });
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [supportOpen, setSupportOpen] = useState(false);
   const { classroom } = useStore();
   const params = useParams();
 
@@ -182,6 +185,34 @@ const CommonLayout = ({
     // Lean owner nav: until "Show all features" is on, the OWNER sees only the
     // core set. Other roles keep their full nav.
     if (leanNav && !OWNER_CORE_LINKS.has(item.link)) return null;
+
+    // Support has no page of its own — it opens a modal with the ways to reach
+    // us (community, bug report, email), so it renders as a button, not a Link.
+    if (item.link === '/support') {
+      return (
+        <RequireRole roles={item.roles} key={key}>
+          <button
+            type="button"
+            onClick={() => setSupportOpen(true)}
+            className={`group flex items-center gap-2.5 rounded-md transition-colors duration-150 w-[calc(100%-12px)] ${
+              collapsed ? 'justify-center p-2 mx-1.5' : 'px-2 py-1.5 mx-1.5 text-left'
+            } hover:bg-nav-hover`}
+            style={{ color: 'var(--ink-1)' }}
+          >
+            {collapsed ? (
+              <Tooltip title={item.label} placement="right">
+                <item.icon size={20} strokeWidth={1.75} />
+              </Tooltip>
+            ) : (
+              <>
+                <item.icon size={20} strokeWidth={1.75} className="shrink-0" />
+                <span className="flex-1">{item.label}</span>
+              </>
+            )}
+          </button>
+        </RequireRole>
+      );
+    }
 
     if (item.isProTier && !isProTier && isDemoClassroom === false) return null;
     if (item.link === '/quizzes' && !isProTier && isDemoClassroom === false) return null;
@@ -651,6 +682,8 @@ const CommonLayout = ({
           </div>
         </div>
       </div>
+
+      <SupportModal open={supportOpen} onClose={() => setSupportOpen(false)} />
 
       {/* Mobile Overlay */}
       {mobileOpen && (

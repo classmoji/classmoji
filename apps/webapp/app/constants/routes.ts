@@ -22,6 +22,7 @@ import {
   IconClipboardList,
   IconHeartRateMonitor,
   IconStack2,
+  IconLifebuoy,
 } from '@tabler/icons-react';
 
 /**
@@ -46,7 +47,7 @@ export const routeCategories = {
   },
   settings: {
     label: 'Settings',
-    items: ['settings', 'memberSettings'],
+    items: ['settings', 'memberSettings', 'support'],
   },
 };
 
@@ -207,6 +208,13 @@ export const routes = {
     label: 'Settings',
     icon: IconSettings,
     roles: ['STUDENT', 'ASSISTANT'],
+    category: 'settings',
+  },
+  support: {
+    link: '/support',
+    label: 'Support',
+    icon: IconLifebuoy,
+    roles: ['OWNER', 'TEACHER', 'ASSISTANT', 'STUDENT'],
     category: 'settings',
   },
 };
