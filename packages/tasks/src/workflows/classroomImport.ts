@@ -393,6 +393,9 @@ export const importContentTask = task({
   id: 'import-content',
   retry: { maxAttempts: 1 },
   maxDuration: 3600,
+  // Content repos carry full course assets (CS52 26W is 813MB); git's pack
+  // compression during the whole-repo push OOMs the default small-2x (1GB).
+  machine: 'large-1x',
   run: async ({ importJobId }: { importJobId: string }) => {
     const prisma = getPrisma();
     const job = await loadJob(prisma, importJobId);
