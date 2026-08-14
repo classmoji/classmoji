@@ -1,5 +1,5 @@
 import { task } from '@trigger.dev/sdk';
-import { ClassmojiService } from '@classmoji/services';
+import { appUrl, ClassmojiService, escapeVars } from '@classmoji/services';
 import { sendEmailTask } from './email.ts';
 
 /**
@@ -64,14 +64,21 @@ export const updateExtensionTask = task({
 
     if (!student?.email) return;
 
-    const html = `<p>Hi @${student.login}.</p>
-      <p>Your extension request for "${gitRepoAssignment?.assignment?.title || 'assignment'}" has been <span style="font-weight:bold">${status.toLowerCase()}</span>.</p>
-    `;
+    // `status` is an allowlisted enum upstream (IN_REVIEW | APPROVED | DENIED),
+    // but it leaked into the copy as snake_case — "has been in_review".
+    const statusLabel = status.toLowerCase().replace(/_/g, ' ');
 
     await sendEmailTask.triggerAndWait({
       to: student.email,
-      subject: `[Classmoji] Extension Request Status`,
-      html: html,
+      template: {
+        id: 'extension-status',
+        variables: escapeVars({
+          STUDENT_LOGIN: student.login,
+          ASSIGNMENT_TITLE: gitRepoAssignment?.assignment?.title || 'your assignment',
+          STATUS_LABEL: statusLabel,
+          APP_URL: appUrl(),
+        }),
+      },
     });
   },
 });

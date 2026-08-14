@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<!--
+  Source of truth for the Resend template with alias `verify-email`.
+
+  Resend hosts the version that actually sends; this file exists so the markup
+  gets code review and version history. After editing, push it to Resend and
+  publish — a draft cannot send.
+
+  Variables use TRIPLE mustache. Double braces render literally.
+    {{{CODE}}} — the 6-digit verification code (required, no fallback)
+
+  Email-client constraints this file deliberately follows:
+    - table-based layout; Outlook ignores max-width + margin:0 auto on a div
+    - all styles inline; <style> blocks get stripped
+    - longhand padding only; Outlook mis-parses the shorthand
+    - bgcolor attribute alongside background-color, again for Outlook
+-->
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="x-apple-disable-message-reformatting" />
+    <meta name="color-scheme" content="light" />
+    <title>Verify your email</title>
+  </head>
+  <body style="margin-top:0; margin-right:0; margin-bottom:0; margin-left:0; padding-top:0; padding-right:0; padding-bottom:0; padding-left:0; background-color:#ffffff;">
+    <!-- Preheader: shown in the inbox list preview, hidden in the body. -->
+    <div style="display:none; font-size:1px; line-height:1px; color:#ffffff; max-height:0; max-width:0; opacity:0; overflow:hidden;">
+      Your verification code is {{{CODE}}} and expires in 10 minutes.
+    </div>
+
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="#ffffff" style="background-color:#ffffff;">
+      <tr>
+        <td align="center" style="padding-top:40px; padding-right:20px; padding-bottom:40px; padding-left:20px;">
+          <table role="presentation" width="520" cellpadding="0" cellspacing="0" border="0" style="width:100%; max-width:520px;">
+            <tr>
+              <td style="padding-bottom:12px; font-family:'Mona Sans',-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif; font-size:20px; line-height:28px; font-weight:600; color:#14151a;">
+                Verify your email
+              </td>
+            </tr>
+
+            <tr>
+              <td style="padding-bottom:24px; font-family:'Mona Sans',-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif; font-size:15px; line-height:24px; color:#2b2d35;">
+                Enter this code to finish setting up your Classmoji account.
+              </td>
+            </tr>
+
+            <!-- Code -->
+            <tr>
+              <td style="padding-bottom:24px;">
+                <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+                  <tr>
+                    <td align="center" bgcolor="#f6f8fa" style="background-color:#f6f8fa; border:1px solid #e7e5e4; border-radius:8px; padding-top:20px; padding-right:16px; padding-bottom:20px; padding-left:16px; font-family:'Mona Sans',-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif; font-size:30px; line-height:38px; font-weight:700; letter-spacing:8px; text-indent:8px; color:#14151a;">
+                      {{{CODE}}}
+                    </td>
+                  </tr>
+                </table>
+              </td>
+            </tr>
+
+            <tr>
+              <td style="padding-bottom:28px; font-family:'Mona Sans',-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif; font-size:14px; line-height:22px; color:#5b5f69;">
+                This code expires in 10 minutes. If you did not request it, you can safely ignore this email.
+              </td>
+            </tr>
+
+            <!-- Footer -->
+            <tr>
+              <td style="border-top:1px solid #e7e5e4; padding-top:20px; font-family:'Mona Sans',-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif; font-size:12px; line-height:20px; color:#5b5f69;">
+                Need help, email us at <a href="mailto:hello@classmoji.io" style="color:#1f883d; text-decoration:underline;">hello@classmoji.io</a>
+                <br />
+                <span style="font-size:12px; line-height:20px; color:#8a8d97;">Made with ❤️ with support from <a href="https://dali.dartmouth.edu/" style="color:#1f883d; text-decoration:underline;">DALI</a> and the <a href="https://web.cs.dartmouth.edu/" style="color:#1f883d; text-decoration:underline;">CS Department</a> at Dartmouth College.</span>
+              </td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+    </table>
+  </body>
+</html>

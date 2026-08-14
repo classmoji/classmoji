@@ -87,6 +87,10 @@ export type {
 export { aggregateForTeam } from './classmoji/repoAnalytics.service.ts';
 export type { TeamAggregate, TeamRepoSnapshot } from './classmoji/repoAnalytics.service.ts';
 
+// Email helpers. Resend injects template variables raw, so every
+// user-controlled value must be escaped before it becomes one.
+export { appUrl, escapeHtml, escapeVars } from './emails/escape.ts';
+
 // Repo analytics flag heuristics (pure, client-safe)
 export {
   lateCommitRatio,

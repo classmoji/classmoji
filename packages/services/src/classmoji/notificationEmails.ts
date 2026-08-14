@@ -1,6 +1,5 @@
 import type { NotificationType } from '@prisma/client';
-
-const WEBAPP_URL = process.env.WEBAPP_URL ?? 'https://classmoji.com';
+import { appUrl, escapeHtml } from '../emails/escape.ts';
 
 interface EmailContext {
   type: NotificationType;
@@ -12,18 +11,26 @@ interface EmailContext {
   metadata?: Record<string, unknown>;
 }
 
+/** Variables for the Resend template with alias `notification`. */
+export interface NotificationEmail {
+  template: {
+    id: 'notification';
+    variables: {
+      SUBJECT: string;
+      PREHEADER: string;
+      MESSAGE_HTML: string;
+      MESSAGE_TEXT: string;
+      ACTION_URL: string;
+      PREFS_URL: string;
+    };
+  };
+}
+
 const SUBJECT_PREFIX = '[Classmoji]';
 
 const subjectFor = (ctx: EmailContext): string => {
   const scope = ctx.classroomName ? ` ${ctx.classroomName}` : '';
   switch (ctx.type) {
-    case 'QUIZ_PUBLISHED':
-    case 'PAGE_PUBLISHED':
-    case 'REPOSITORY_PUBLISHED':
-      return `${SUBJECT_PREFIX}${scope} - ${ctx.title}`;
-    case 'PAGE_UNPUBLISHED':
-    case 'REPOSITORY_UNPUBLISHED':
-      return `${SUBJECT_PREFIX}${scope} - ${ctx.title}`;
     case 'ASSIGNMENT_DUE_DATE_CHANGED':
       return `${SUBJECT_PREFIX}${scope} - Due date changed`;
     case 'ASSIGNMENT_GRADED':
@@ -32,6 +39,11 @@ const subjectFor = (ctx: EmailContext): string => {
       return `${SUBJECT_PREFIX}${scope} - New grading assignment`;
     case 'TA_REGRADE_ASSIGNED':
       return `${SUBJECT_PREFIX}${scope} - New regrade request`;
+    default:
+      // QUIZ_PUBLISHED, PAGE_(UN)PUBLISHED, REPOSITORY_(UN)PUBLISHED — the verb
+      // is carried in `title` by the caller. A default also means a new enum
+      // member can no longer produce the literal subject "undefined".
+      return `${SUBJECT_PREFIX}${scope} - ${ctx.title}`;
   }
 };
 
@@ -49,54 +61,78 @@ const formatDate = (value: unknown): string | null => {
   });
 };
 
-const bodyFor = (ctx: EmailContext): string => {
+/**
+ * The message as one plain sentence, with nothing escaped. Used for the
+ * text/plain alternative, where entities would render literally as "&lt;".
+ */
+const sentenceFor = (ctx: EmailContext): string => {
   const cls = ctx.classroomName ?? 'your classroom';
+  switch (ctx.type) {
+    case 'ASSIGNMENT_DUE_DATE_CHANGED':
+      return `The due date for ${ctx.title} in ${cls} has changed.`;
+    case 'ASSIGNMENT_GRADED':
+      return `Your submission for ${ctx.title} in ${cls} has been graded.`;
+    case 'TA_GRADING_ASSIGNED':
+      return `You have been assigned to grade ${ctx.title} in ${cls}.`;
+    case 'TA_REGRADE_ASSIGNED':
+      return `A regrade request for ${ctx.title} in ${cls} has been assigned to you.`;
+    default:
+      return `${ctx.title} in ${cls}.`;
+  }
+};
+
+/**
+ * The message body, pre-rendered into a single already-escaped HTML fragment.
+ * Resend templates have no conditionals, so all nine notification types resolve
+ * here rather than branching in the template.
+ */
+const bodyFor = (ctx: EmailContext): string => {
+  const cls = escapeHtml(ctx.classroomName ?? 'your classroom');
+  const title = escapeHtml(ctx.title);
+
   switch (ctx.type) {
     case 'ASSIGNMENT_DUE_DATE_CHANGED': {
       const oldDate = formatDate(ctx.metadata?.previous_deadline);
       const newDate = formatDate(ctx.metadata?.new_deadline);
-      return `<p>The due date for <strong>${escapeHtml(ctx.title)}</strong> in <strong>${escapeHtml(cls)}</strong> has changed.</p>${
+      return `<p style="margin-top:0;">The due date for <strong>${title}</strong> in <strong>${cls}</strong> has changed.</p>${
         oldDate ? `<p>Previous: ${escapeHtml(oldDate)}</p>` : ''
-      }${newDate ? `<p>New: <strong>${escapeHtml(newDate)}</strong></p>` : ''}`;
+      }${newDate ? `<p style="margin-bottom:0;">New: <strong>${escapeHtml(newDate)}</strong></p>` : ''}`;
     }
     case 'ASSIGNMENT_GRADED':
-      return `<p>Your submission for <strong>${escapeHtml(ctx.title)}</strong> in <strong>${escapeHtml(cls)}</strong> has been graded.</p>`;
+      return `<p style="margin-top:0; margin-bottom:0;">Your submission for <strong>${title}</strong> in <strong>${cls}</strong> has been graded.</p>`;
     case 'TA_GRADING_ASSIGNED':
-      return `<p>You've been assigned to grade <strong>${escapeHtml(ctx.title)}</strong> in <strong>${escapeHtml(cls)}</strong>.</p>`;
+      return `<p style="margin-top:0; margin-bottom:0;">You've been assigned to grade <strong>${title}</strong> in <strong>${cls}</strong>.</p>`;
     case 'TA_REGRADE_ASSIGNED':
-      return `<p>A regrade request for <strong>${escapeHtml(ctx.title)}</strong> in <strong>${escapeHtml(cls)}</strong> has been assigned to you.</p>`;
+      return `<p style="margin-top:0; margin-bottom:0;">A regrade request for <strong>${title}</strong> in <strong>${cls}</strong> has been assigned to you.</p>`;
     default:
-      return `<p><strong>${escapeHtml(ctx.title)}</strong> in <strong>${escapeHtml(cls)}</strong>.</p>`;
+      return `<p style="margin-top:0; margin-bottom:0;"><strong>${title}</strong> in <strong>${cls}</strong>.</p>`;
   }
 };
 
-const shell = (recipientName: string | null, body: string): string => {
-  const greeting = recipientName ? `<p>Hi ${escapeHtml(recipientName)},</p>` : '';
-  return `<div style="font-family:system-ui,-apple-system,sans-serif;color:#111;max-width:560px;margin:0 auto;padding:24px">
-    <div style="font-weight:600;font-size:18px;margin-bottom:16px">Classmoji</div>
-    ${greeting}
-    ${body}
-    <p style="margin-top:24px;font-size:13px;color:#666">
-      <a href="${WEBAPP_URL}/select-organization" style="color:#5b6cff">Open Classmoji</a>
-      &nbsp;|&nbsp;
-      <a href="${WEBAPP_URL}/settings/notifications" style="color:#666">Manage email preferences</a>
-    </p>
-  </div>`;
+export const renderEmail = (ctx: EmailContext): NotificationEmail => {
+  const greetingHtml = ctx.recipientName
+    ? `<p style="margin-top:0;">Hi ${escapeHtml(ctx.recipientName)},</p>`
+    : '';
+  const greetingText = ctx.recipientName ? `Hi ${ctx.recipientName},\n\n` : '';
+  const sentence = sentenceFor(ctx);
+
+  return {
+    template: {
+      id: 'notification',
+      variables: {
+        // Subject is a mail header, not HTML — escaping it would surface
+        // literal "&amp;" in the inbox.
+        SUBJECT: subjectFor(ctx),
+        // Lands in a hidden <div>, so it is escaped.
+        PREHEADER: escapeHtml(sentence),
+        MESSAGE_HTML: `${greetingHtml}${bodyFor(ctx)}`,
+        // The template supplies its own text/plain body from this. Without it
+        // Resend derives text from the HTML before substitution and leaks raw
+        // <p> tags into the plain part.
+        MESSAGE_TEXT: `${greetingText}${sentence}`,
+        ACTION_URL: `${appUrl()}/select-organization`,
+        PREFS_URL: `${appUrl()}/settings/notifications`,
+      },
+    },
+  };
 };
-
-const escapeHtml = (s: string): string =>
-  s.replace(/[&<>"']/g, c => {
-    const replacements: Record<string, string> = {
-      '&': '&amp;',
-      '<': '&lt;',
-      '>': '&gt;',
-      '"': '&quot;',
-      "'": '&#39;',
-    };
-    return replacements[c] ?? c;
-  });
-
-export const renderEmail = (ctx: EmailContext): { subject: string; html: string } => ({
-  subject: subjectFor(ctx),
-  html: shell(ctx.recipientName, bodyFor(ctx)),
-});
