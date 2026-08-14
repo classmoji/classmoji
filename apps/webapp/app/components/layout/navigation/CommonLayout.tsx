@@ -14,6 +14,9 @@ import githubLogo from '~/assets/images/github_logo.svg';
 import ProfileDropdown from '../../features/profile/ProfileDropdown';
 import SupportModal from '../../features/support/SupportModal';
 import { LockedBanner } from '~/components/features/classroom/LockedBanner';
+import ImportProgressBanner, {
+  type ImportProgressBannerProps,
+} from '../../features/import/ImportProgressBanner';
 import type { AppUser, MembershipWithOrganization } from '~/types';
 
 // Lean owner navigation. New/imported instructors land in a small core that
@@ -70,6 +73,13 @@ interface CommonLayoutProps {
    * navigation/revalidation rather than depending on the root-loader→store sync.
    */
   navVisibility?: NavVisibility;
+  /**
+   * A background classroom import worth showing progress for, from the layout
+   * loader. Only the ADMIN layout passes this: the progress endpoint the banner
+   * polls is admin-gated, so rendering it for an assistant would just 403 every
+   * two seconds.
+   */
+  importBanner?: ImportProgressBannerProps | null;
 }
 
 const CommonLayout = ({
@@ -79,6 +89,7 @@ const CommonLayout = ({
   groupViewersByRole = false,
   pagesUrl: _pagesUrl = 'http://localhost:7100',
   navVisibility,
+  importBanner = null,
 }: CommonLayoutProps) => {
   const [collapsed, setCollapsed] = useLocalStorageState('classmoji-collapsed', {
     defaultValue: false,
@@ -670,6 +681,15 @@ const CommonLayout = ({
             }
           >
             {classroom?.status === 'LOCKED' && role !== 'OWNER' && <LockedBanner />}
+            {/* Pinned above the page content on every teaching route, because
+                the import outlives the page the user started it from. */}
+            {importBanner && (
+              <ImportProgressBanner
+                key={importBanner.job.id}
+                job={importBanner.job}
+                sourceName={importBanner.sourceName}
+              />
+            )}
             {/* Recently-viewed: route-specific, so it lives with the content
                 (not the left nav). Rendered in-flow at the top-right above the
                 page so it never overlaps a page's header action buttons. */}

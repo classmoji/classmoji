@@ -241,12 +241,131 @@ export interface GitHubArtifact {
 }
 
 /**
+ * Pure helper: the duplicate-template repo names an import actually CREATED for
+ * this classroom, read out of its `ImportJob.progress`.
+ *
+ * PROVENANCE, never inference. A template repo is only ever deletable because
+ * THIS classroom's import made it — never because it merely looks unused or
+ * carries a familiar name. Reference-counting was considered and rejected: in a
+ * small org the only classroom referencing a hand-authored original would make
+ * that original look exclusive, and cleanup would destroy the instructor's real
+ * template. Naming heuristics are equally unsafe — a same-org duplicate is
+ * effectively always term-suffixed (the original name is taken), while a
+ * CROSS-ORG duplicate usually keeps the bare original name, so the two are
+ * indistinguishable by name alone.
+ *
+ * Reads `id_maps.templates` (canonical: source ref → created name) and the
+ * `template_map` alias, tolerating anything in the Json column — a row written
+ * by an older shape must degrade to "no template artifacts", never throw.
+ * A classroom with no ImportJob (every pre-feature classroom) yields none.
+ */
+export function importedTemplateRepoNames(progress: unknown): string[] {
+  if (!progress || typeof progress !== 'object') return [];
+  const record = progress as Record<string, unknown>;
+  const idMaps = record.id_maps;
+  const sources = [
+    idMaps && typeof idMaps === 'object'
+      ? (idMaps as Record<string, unknown>).templates
+      : undefined,
+    record.template_map,
+  ];
+
+  const names: string[] = [];
+  const seen = new Set<string>();
+  for (const source of sources) {
+    if (!source || typeof source !== 'object') continue;
+    for (const value of Object.values(source as Record<string, unknown>)) {
+      if (typeof value !== 'string') continue;
+      const name = value.trim();
+      if (!name) continue;
+      const key = name.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      names.push(name);
+    }
+  }
+  return names;
+}
+
+/**
+ * Pure helper: the repo NAMES a set of stored `Repository.template` refs point
+ * at WITHIN `orgLogin`, de-duplicated case-insensitively (GitHub repo names and
+ * logins are case-insensitive; the first spelling seen wins).
+ *
+ * Two accepted ref shapes, matching what the app writes: the canonical
+ * owner-qualified `owner/name` (the repo-form autocomplete stores GitHub's
+ * `full_name`), and a bare `name` (accepted by `repo_create` over MCP), which
+ * resolves against the classroom's OWN org exactly as templateImport resolves
+ * it. A ref owned by any other account is somebody else's repo and is dropped.
+ *
+ * Used to work out which OTHER classrooms still point at a duplicate this
+ * classroom created — not to discover deletable repos on its own.
+ */
+export function ownedTemplateRepoNames(
+  templateRefs: ReadonlyArray<string | null | undefined>,
+  orgLogin: string
+): string[] {
+  const wantedOwner = orgLogin.toLowerCase();
+  const names: string[] = [];
+  const seen = new Set<string>();
+  for (const ref of templateRefs) {
+    const segments = (ref ?? '')
+      .split('/')
+      .map(segment => segment.trim())
+      .filter(Boolean);
+    let name: string | null = null;
+    if (segments.length === 1) {
+      name = segments[0]!;
+    } else if (segments.length === 2 && segments[0]!.toLowerCase() === wantedOwner) {
+      name = segments[1]!;
+    }
+    if (!name) continue;
+    const key = name.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    names.push(name);
+  }
+  return names;
+}
+
+/**
+ * Pure helper: of the duplicate templates this classroom's import created, the
+ * ones no OTHER classroom in the org still points at.
+ *
+ * The safety guard on top of provenance: an instructor can relink a later
+ * term's assignment to a duplicate this classroom made, and deleting it would
+ * break that live classroom. Comparison is by resolved repo NAME within the
+ * org, so `org/lab1-26w` and a bare `lab1-26w` both count as a reference.
+ */
+export function exclusiveImportedTemplateNames({
+  createdNames,
+  otherClassroomTemplateRefs,
+  orgLogin,
+}: {
+  createdNames: string[];
+  otherClassroomTemplateRefs: ReadonlyArray<string | null | undefined>;
+  orgLogin: string;
+}): string[] {
+  const stillReferenced = new Set(
+    ownedTemplateRepoNames(otherClassroomTemplateRefs, orgLogin).map(name => name.toLowerCase())
+  );
+  return createdNames.filter(name => !stillReferenced.has(name.toLowerCase()));
+}
+
+/**
  * Pure helper: enumerate the GitHub artifacts a classroom owns, from DB-known
  * facts ONLY — the content repo (the classroom's STORED content_repo name),
  * the two conventional classroom teams ({slug}-students / {slug}-assistants),
- * any provider-backed project-team slugs, and the classroom's git repos by
- * exact recorded name. Nothing is pattern-matched or discovered live: if the
- * DB doesn't name it, it is not in the plan.
+ * any provider-backed project-team slugs, the classroom's git repos by exact
+ * recorded name, and the duplicate TEMPLATE repos its own import created (the
+ * caller supplies only those no other classroom in the org still references).
+ * Nothing is pattern-matched or discovered live: if the DB doesn't name it, it
+ * is not in the plan.
+ *
+ * Template repos are listed LAST among repos, and any name already claimed by
+ * the content repo or an assignment repo is dropped rather than listed twice —
+ * one repo must appear once, or the modal double-counts and the executor issues
+ * a pointless second DELETE.
  */
 export function classroomGitHubArtifactPlan({
   orgLogin,
@@ -254,24 +373,33 @@ export function classroomGitHubArtifactPlan({
   contentRepo,
   gitRepoNames,
   teamSlugs,
+  templateRepoNames = [],
 }: {
   orgLogin: string;
   slug: string;
   contentRepo: string | null;
   gitRepoNames: string[];
   teamSlugs: string[];
+  /** Import-created duplicate templates nothing else references (see exclusiveImportedTemplateNames). */
+  templateRepoNames?: string[];
 }): GitHubArtifact[] {
   const plan: GitHubArtifact[] = [];
+  const claimed = new Set<string>();
+  const pushRepo = (name: string, label: string) => {
+    const key = name.toLowerCase();
+    if (claimed.has(key)) return;
+    claimed.add(key);
+    plan.push({ kind: 'repo', org: orgLogin, name, label });
+  };
+
   if (contentRepo) {
-    plan.push({
-      kind: 'repo',
-      org: orgLogin,
-      name: contentRepo,
-      label: 'content repo',
-    });
+    pushRepo(contentRepo, 'content repo');
   }
-  for (const name of [...new Set(gitRepoNames)]) {
-    plan.push({ kind: 'repo', org: orgLogin, name, label: 'assignment repo' });
+  for (const name of gitRepoNames) {
+    pushRepo(name, 'assignment repo');
+  }
+  for (const name of templateRepoNames) {
+    pushRepo(name, 'template repo');
   }
   for (const suffix of ['students', 'assistants']) {
     plan.push({ kind: 'team', org: orgLogin, name: `${slug}-${suffix}`, label: 'classroom team' });
@@ -315,6 +443,10 @@ export const getClassroomGitHubArtifactPlan = async (
     include: {
       git_organization: true,
       git_repos: { select: { name: true } },
+      // Provenance for the template-repo artifacts: the duplicates THIS
+      // classroom's import created. The row survives until the delete cascade,
+      // and this plan always runs before it.
+      import_job: { select: { progress: true } },
       teams: {
         where: { provider: 'GITHUB', provider_id: { not: null } },
         select: { slug: true },
@@ -332,12 +464,34 @@ export const getClassroomGitHubArtifactPlan = async (
     };
   }
 
+  // Template duplicates this classroom's import created, minus any a DIFFERENT
+  // classroom in the org has since been relinked to. The `otherRefs` query is
+  // skipped entirely when the import created no templates — the common case.
+  const orgLogin = classroom.git_organization.login;
+  const createdTemplateNames = importedTemplateRepoNames(classroom.import_job?.progress);
+  const templateRepoNames = createdTemplateNames.length
+    ? exclusiveImportedTemplateNames({
+        createdNames: createdTemplateNames,
+        otherClassroomTemplateRefs: (
+          await getPrisma().repository.findMany({
+            where: {
+              classroom_id: { not: classroom.id },
+              classroom: { git_org_id: classroom.git_org_id },
+            },
+            select: { template: true },
+          })
+        ).map(row => row.template),
+        orgLogin,
+      })
+    : [];
+
   const artifacts = classroomGitHubArtifactPlan({
-    orgLogin: classroom.git_organization.login,
+    orgLogin,
     slug: classroom.slug,
     contentRepo: classroom.content_repo,
     gitRepoNames: classroom.git_repos.map(r => r.name),
     teamSlugs: classroom.teams.map(t => t.slug),
+    templateRepoNames,
   });
 
   if (!classroom.content_repo) {
