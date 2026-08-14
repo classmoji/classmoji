@@ -31,7 +31,7 @@
 
 import { task, logger } from '@trigger.dev/sdk';
 import getPrisma from '@classmoji/database';
-import { ClassmojiService, getGitProvider } from '@classmoji/services';
+import { ClassmojiService, describeTokenMintError, getGitProvider } from '@classmoji/services';
 /*
  * The zero-import progress module, via its package subpath export. The eslint
  * resolver here does not follow "exports" subpaths (the same reason
@@ -267,8 +267,20 @@ async function contentRepoCoordinates(
   });
   const org = classroom?.git_organization;
   if (!classroom || !org?.login || !classroom.content_repo) return null;
-  const token = await getGitProvider(org).getAccessToken();
-  return { orgLogin: org.login, repo: classroom.content_repo, token };
+
+  // Name the org on a mint failure. The provider's own error is a bare "Failed
+  // to retrieve GitHub installation token (404)", which as a phase error in the
+  // banner tells the user nothing — least of all that the real cause is an
+  // installation id belonging to a different environment's GitHub App. Both the
+  // source and target org come through here, so the org login is what
+  // identifies which side is unreachable. getGitProvider is inside the try: it
+  // throws synchronously when the row has no installation id.
+  try {
+    const token = await getGitProvider(org).getAccessToken();
+    return { orgLogin: org.login, repo: classroom.content_repo, token };
+  } catch (error: unknown) {
+    throw new Error(describeTokenMintError(org.login, error));
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

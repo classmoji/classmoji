@@ -31,6 +31,8 @@ export {
   getGitHubProvider,
   getTeamNameForClassroom,
   ensureClassroomTeam,
+  describeTokenMintError,
+  redactAccessTokens,
   Octokit,
 } from './git/index.ts';
 
