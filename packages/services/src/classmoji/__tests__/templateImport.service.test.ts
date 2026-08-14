@@ -1,6 +1,7 @@
 /**
  * templateImport.service pure helpers: parseTemplateRef, formatTemplateRef,
- * templateRefKey, groupTemplateRefs, templateNameCandidates, formatWarning.
+ * templateRefKey, groupTemplateRefs, templateNameCandidates, formatWarning,
+ * parseSecondaryRateLimit.
  * No DB/GitHub — the orchestrator's IO paths are out of scope here (repo
  * pure-only test convention). The runtime-heavy imports the service pulls in at
  * module load are stubbed so importing it is cheap.
@@ -19,6 +20,7 @@ const {
   groupTemplateRefs,
   templateNameCandidates,
   formatWarning,
+  parseSecondaryRateLimit,
 } = await import('../templateImport.service.ts');
 
 describe('parseTemplateRef', () => {
@@ -170,5 +172,117 @@ describe('formatWarning', () => {
 
   it('leaves detail at the limit untouched', () => {
     expect(formatWarning('scope', 'x'.repeat(200))).toBe(`scope: ${'x'.repeat(200)}`);
+  });
+});
+
+/**
+ * parseSecondaryRateLimit encodes the fix for a real production stall: creating
+ * ~14 template duplicates back-to-back tripped GitHub's secondary content-
+ * creation limit, and the next create sat in octokit's backoff for 30+ minutes.
+ * The clock is injected so reset-header arithmetic is deterministic.
+ */
+describe('parseSecondaryRateLimit', () => {
+  const err = (status: number, message: string, headers?: Record<string, unknown>): unknown => ({
+    status,
+    message,
+    response: headers ? { headers } : undefined,
+  });
+
+  it('detects a named secondary-limit trip with no headers and uses the 60s default', () => {
+    expect(parseSecondaryRateLimit(err(403, 'You have exceeded a secondary rate limit'))).toEqual({
+      retryAfterMs: 60_000,
+    });
+  });
+
+  it('detects the abuse-detection wording GitHub also uses', () => {
+    expect(parseSecondaryRateLimit(err(403, 'triggered an abuse detection mechanism'))).toEqual({
+      retryAfterMs: 60_000,
+    });
+  });
+
+  it('honors retry-after on a 429', () => {
+    expect(parseSecondaryRateLimit(err(429, 'Too Many Requests', { 'retry-after': '30' }))).toEqual(
+      { retryAfterMs: 30_000 }
+    );
+  });
+
+  it('treats a retry-after header alone as a trip even without the named message', () => {
+    // GitHub does not always name the limit; an explicit retry-after is an
+    // unambiguous "wait this long" and is enough on its own.
+    expect(parseSecondaryRateLimit(err(403, 'Forbidden', { 'retry-after': '12' }))).toEqual({
+      retryAfterMs: 12_000,
+    });
+  });
+
+  it('does NOT treat x-ratelimit-reset alone as a trip', () => {
+    // The anti-false-positive case: x-ratelimit-reset rides on nearly every
+    // GitHub response, an ordinary permissions 403 included. If it could
+    // DETECT, every 403 would be retried as though it were a rate limit.
+    expect(
+      parseSecondaryRateLimit(
+        err(403, 'Resource not accessible by integration', { 'x-ratelimit-reset': '2000' })
+      )
+    ).toBeNull();
+  });
+
+  it('sizes the wait from x-ratelimit-reset once the message names the limit', () => {
+    const nowMs = 1_900_000;
+    expect(
+      parseSecondaryRateLimit(
+        err(403, 'secondary rate limit', { 'x-ratelimit-reset': '2000' }),
+        nowMs
+      )
+    ).toEqual({ retryAfterMs: 100_000 });
+  });
+
+  it('prefers retry-after over x-ratelimit-reset when both are present', () => {
+    expect(
+      parseSecondaryRateLimit(
+        err(403, 'secondary rate limit', { 'retry-after': '5', 'x-ratelimit-reset': '999999' }),
+        0
+      )
+    ).toEqual({ retryAfterMs: 5_000 });
+  });
+
+  it('floors an already-past reset at 1s rather than retrying instantly', () => {
+    expect(
+      parseSecondaryRateLimit(
+        err(403, 'secondary rate limit', { 'x-ratelimit-reset': '1000' }),
+        5_000_000
+      )
+    ).toEqual({ retryAfterMs: 1000 });
+  });
+
+  it('caps an absurd retry-after so one bad header cannot park the job', () => {
+    expect(
+      parseSecondaryRateLimit(err(403, 'secondary rate limit', { 'retry-after': '9999' }))
+    ).toEqual({ retryAfterMs: 120_000 });
+  });
+
+  it('reads headers case-insensitively', () => {
+    expect(parseSecondaryRateLimit(err(429, 'slow down', { 'Retry-After': '7' }))).toEqual({
+      retryAfterMs: 7_000,
+    });
+  });
+
+  it('ignores a non-numeric retry-after and falls back to the default', () => {
+    expect(
+      parseSecondaryRateLimit(err(403, 'secondary rate limit', { 'retry-after': 'soon' }))
+    ).toEqual({ retryAfterMs: 60_000 });
+  });
+
+  it('returns null for statuses that are not 403/429', () => {
+    expect(parseSecondaryRateLimit(err(500, 'secondary rate limit'))).toBeNull();
+    expect(parseSecondaryRateLimit(err(404, 'Not Found'))).toBeNull();
+  });
+
+  it('returns null for an ordinary 403 with no limit signal at all', () => {
+    expect(parseSecondaryRateLimit(err(403, 'Must have admin rights to Repository'))).toBeNull();
+  });
+
+  it('returns null for non-object errors', () => {
+    expect(parseSecondaryRateLimit(null)).toBeNull();
+    expect(parseSecondaryRateLimit(undefined)).toBeNull();
+    expect(parseSecondaryRateLimit('secondary rate limit')).toBeNull();
   });
 });

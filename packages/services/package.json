@@ -12,6 +12,7 @@
   "exports": {
     ".": "./src/index.ts",
     "./flags": "./src/classmoji/repoAnalytics.flags.ts",
+    "./import-progress": "./src/classmoji/importProgress.ts",
     "./slides": "./src/slides/index.ts",
     "./slides/ops": "./src/slides/deckOps.ts"
   },

@@ -38,7 +38,21 @@ const WARNING_DETAIL_MAX = 200;
 export interface ContentImportOptions {
   pages?: boolean;
   slides?: boolean;
+  /**
+   * Optional per-item progress. Invoked as each page/deck folder finishes
+   * READING (the slow, network-bound part) and once more after the DB rows
+   * land. Never awaited for correctness: the caller fires-and-forgets, so a
+   * progress failure can never fail an import.
+   */
+  onProgress?: (update: {
+    kind: 'pages' | 'slides';
+    done: number;
+    total: number;
+  }) => void | Promise<void>;
 }
+
+/** Named once so both per-type passes can take the same callback. */
+type ContentProgressFn = NonNullable<ContentImportOptions['onProgress']>;
 
 export interface ContentImportSummary {
   pages: number;
@@ -163,10 +177,7 @@ export function rewriteContentUrls(text: string, ctx: UrlRewriteContext): string
  * Apply `rewriteContentUrls` to the text files in a staged item's writes
  * (base64-decoded, rewritten, re-encoded); binaries pass through untouched.
  */
-export function rewriteStagedFiles(
-  files: BatchFile[],
-  ctx: UrlRewriteContext
-): BatchFile[] {
+export function rewriteStagedFiles(files: BatchFile[], ctx: UrlRewriteContext): BatchFile[] {
   return files.map(file => {
     if (!isTextContentPath(file.path)) return file;
     const decoded = Buffer.from(file.content, 'base64').toString('utf8');
@@ -203,6 +214,23 @@ type WarnFn = (scope: string, detail: string) => void;
 
 function errText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * Fire-and-forget progress. Progress reporting must never fail (or slow) an
+ * import, so the result is deliberately not awaited and every error is
+ * swallowed — including a synchronous throw from a bad callback.
+ */
+function emitProgress<T>(
+  onProgress: ((update: T) => void | Promise<void>) | undefined,
+  update: T
+): void {
+  if (!onProgress) return;
+  try {
+    void Promise.resolve(onProgress(update)).catch(() => {});
+  } catch {
+    // ignore
+  }
 }
 
 /**
@@ -386,6 +414,7 @@ export const importClassroomContent = async (
         commitMessage,
         warn,
         idMap: summary.page_id_map,
+        onProgress: opts.onProgress,
       });
       summary.pages = created;
       if (created > 0) createdAny = true;
@@ -404,6 +433,7 @@ export const importClassroomContent = async (
         commitMessage,
         warn,
         idMap: summary.slide_id_map,
+        onProgress: opts.onProgress,
       });
       summary.slides = created;
       if (created > 0) createdAny = true;
@@ -437,6 +467,7 @@ async function importPages({
   commitMessage,
   warn,
   idMap,
+  onProgress,
 }: {
   source: RepoContext;
   target: RepoContext;
@@ -444,11 +475,16 @@ async function importPages({
   commitMessage: string;
   warn: WarnFn;
   idMap: Record<string, string>;
+  onProgress?: ContentProgressFn;
 }): Promise<number> {
   const sourcePages = await getPrisma().page.findMany({
     where: { classroom_id: source.classroomId },
     orderBy: { created_at: 'asc' },
   });
+  // The real total lands before the empty-set return, so the bar sizes itself
+  // the moment the phase starts even when there is nothing to copy.
+  const total = sourcePages.length;
+  emitProgress(onProgress, { kind: 'pages', done: 0, total });
   if (sourcePages.length === 0) return 0;
 
   // Seed collision sets from existing TARGET rows.
@@ -460,47 +496,55 @@ async function importPages({
   const takenSlugs = new Set(targetPages.map(p => p.content_path.replace(/^pages\//, '')));
 
   const staged: StagedItem<SourcePage>[] = [];
+  let consumed = 0;
 
   for (const page of sourcePages) {
-    const base = routeSlug(page.title);
-    if (!base) {
-      warn('pages', `skipped "${page.title}" — title has no slug-able characters`);
-      continue;
-    }
-    const targetSlug = dedupe(base, takenSlugs, slugSuffix);
-    takenSlugs.add(targetSlug);
-    const targetTitle = dedupe(page.title, takenTitles, titleSuffix);
-    takenTitles.add(targetTitle);
-    const targetContentPath = `pages/${targetSlug}`;
-
-    let files: BatchFile[];
+    // `finally` owns the count, not the end of the body: every skip below is a
+    // `continue`, and `done` tracks source pages CONSUMED, not pages staged.
     try {
-      files = await collectFolderFiles({
-        source,
+      const base = routeSlug(page.title);
+      if (!base) {
+        warn('pages', `skipped "${page.title}" — title has no slug-able characters`);
+        continue;
+      }
+      const targetSlug = dedupe(base, takenSlugs, slugSuffix);
+      takenSlugs.add(targetSlug);
+      const targetTitle = dedupe(page.title, takenTitles, titleSuffix);
+      takenTitles.add(targetTitle);
+      const targetContentPath = `pages/${targetSlug}`;
+
+      let files: BatchFile[];
+      try {
+        files = await collectFolderFiles({
+          source,
+          sourcePath: page.content_path,
+          targetPath: targetContentPath,
+          scope: 'pages',
+          warn,
+        });
+      } catch (error: unknown) {
+        warn('pages', `skipped "${page.title}" — read failed: ${errText(error)}`);
+        continue;
+      }
+      if (files.length === 0) {
+        warn('pages', `skipped "${page.title}" — no files at ${page.content_path}`);
+        continue;
+      }
+      // Repoint absolute source-repo asset URLs at the copied files — otherwise
+      // deleting the source classroom (with GitHub cleanup) 404s every image.
+      files = rewriteStagedFiles(files, {
+        sourceLogin: source.login,
+        sourceRepo: source.repo,
         sourcePath: page.content_path,
+        targetLogin: target.login,
+        targetRepo: target.repo,
         targetPath: targetContentPath,
-        scope: 'pages',
-        warn,
       });
-    } catch (error: unknown) {
-      warn('pages', `skipped "${page.title}" — read failed: ${errText(error)}`);
-      continue;
+      staged.push({ source: page, files, targetTitle, targetSlug, targetContentPath });
+    } finally {
+      consumed++;
+      emitProgress(onProgress, { kind: 'pages', done: consumed, total });
     }
-    if (files.length === 0) {
-      warn('pages', `skipped "${page.title}" — no files at ${page.content_path}`);
-      continue;
-    }
-    // Repoint absolute source-repo asset URLs at the copied files — otherwise
-    // deleting the source classroom (with GitHub cleanup) 404s every image.
-    files = rewriteStagedFiles(files, {
-      sourceLogin: source.login,
-      sourceRepo: source.repo,
-      sourcePath: page.content_path,
-      targetLogin: target.login,
-      targetRepo: target.repo,
-      targetPath: targetContentPath,
-    });
-    staged.push({ source: page, files, targetTitle, targetSlug, targetContentPath });
   }
 
   if (staged.length === 0) return 0;
@@ -555,6 +599,9 @@ async function importPages({
       warn('pages', `DB row failed for "${item.targetTitle}": ${errText(error)}`);
     }
   }
+  // The phase is finished once the rows land — say so explicitly rather than
+  // leaving the bar on whatever the last staging tick reported.
+  emitProgress(onProgress, { kind: 'pages', done: total, total });
   return created;
 }
 
@@ -567,6 +614,7 @@ async function importSlides({
   commitMessage,
   warn,
   idMap,
+  onProgress,
 }: {
   source: RepoContext;
   target: RepoContext;
@@ -574,11 +622,15 @@ async function importSlides({
   commitMessage: string;
   warn: WarnFn;
   idMap: Record<string, string>;
+  onProgress?: ContentProgressFn;
 }): Promise<number> {
   const sourceSlides = await getPrisma().slide.findMany({
     where: { classroom_id: source.classroomId },
     orderBy: { created_at: 'asc' },
   });
+  // Same as pages: the real total before the empty-set return.
+  const total = sourceSlides.length;
+  emitProgress(onProgress, { kind: 'slides', done: 0, total });
   if (sourceSlides.length === 0) return 0;
 
   // Slides carry a [classroom_id, slug] unique constraint — slug drives both the
@@ -590,51 +642,59 @@ async function importSlides({
   const takenSlugs = new Set(targetSlides.map(s => s.slug));
 
   const staged: StagedItem<SourceSlide>[] = [];
+  let consumed = 0;
 
   for (const slide of sourceSlides) {
-    const base = routeSlug(slide.title);
-    if (!base) {
-      warn('slides', `skipped "${slide.title}" — title has no slug-able characters`);
-      continue;
-    }
-    const targetSlug = dedupe(base, takenSlugs, slugSuffix);
-    takenSlugs.add(targetSlug);
-    const targetContentPath = `slides/${targetSlug}`;
-
-    let files: BatchFile[];
+    // `finally` owns the count, not the end of the body: every skip below is a
+    // `continue`, and `done` tracks source decks CONSUMED, not decks staged.
     try {
-      files = await collectFolderFiles({
-        source,
+      const base = routeSlug(slide.title);
+      if (!base) {
+        warn('slides', `skipped "${slide.title}" — title has no slug-able characters`);
+        continue;
+      }
+      const targetSlug = dedupe(base, takenSlugs, slugSuffix);
+      takenSlugs.add(targetSlug);
+      const targetContentPath = `slides/${targetSlug}`;
+
+      let files: BatchFile[];
+      try {
+        files = await collectFolderFiles({
+          source,
+          sourcePath: slide.content_path,
+          targetPath: targetContentPath,
+          scope: 'slides',
+          warn,
+        });
+      } catch (error: unknown) {
+        warn('slides', `skipped "${slide.title}" — read failed: ${errText(error)}`);
+        continue;
+      }
+      if (files.length === 0) {
+        warn('slides', `skipped "${slide.title}" — no files at ${slide.content_path}`);
+        continue;
+      }
+      // Repoint absolute source-repo asset URLs at the copied files (deck.json +
+      // index.html are rewritten in lockstep, keeping the pair consistent).
+      files = rewriteStagedFiles(files, {
+        sourceLogin: source.login,
+        sourceRepo: source.repo,
         sourcePath: slide.content_path,
+        targetLogin: target.login,
+        targetRepo: target.repo,
         targetPath: targetContentPath,
-        scope: 'slides',
-        warn,
       });
-    } catch (error: unknown) {
-      warn('slides', `skipped "${slide.title}" — read failed: ${errText(error)}`);
-      continue;
+      staged.push({
+        source: slide,
+        files,
+        targetTitle: slide.title,
+        targetSlug,
+        targetContentPath,
+      });
+    } finally {
+      consumed++;
+      emitProgress(onProgress, { kind: 'slides', done: consumed, total });
     }
-    if (files.length === 0) {
-      warn('slides', `skipped "${slide.title}" — no files at ${slide.content_path}`);
-      continue;
-    }
-    // Repoint absolute source-repo asset URLs at the copied files (deck.json +
-    // index.html are rewritten in lockstep, keeping the pair consistent).
-    files = rewriteStagedFiles(files, {
-      sourceLogin: source.login,
-      sourceRepo: source.repo,
-      sourcePath: slide.content_path,
-      targetLogin: target.login,
-      targetRepo: target.repo,
-      targetPath: targetContentPath,
-    });
-    staged.push({
-      source: slide,
-      files,
-      targetTitle: slide.title,
-      targetSlug,
-      targetContentPath,
-    });
   }
 
   if (staged.length === 0) return 0;
@@ -676,5 +736,7 @@ async function importSlides({
       warn('slides', `DB row failed for "${item.targetTitle}": ${errText(error)}`);
     }
   }
+  // The phase is finished once the rows land — same closing tick as pages.
+  emitProgress(onProgress, { kind: 'slides', done: total, total });
   return created;
 }

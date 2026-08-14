@@ -10,6 +10,23 @@ type SourceAssignmentWithLegacyFields = Prisma.AssignmentGetPayload<Record<strin
 };
 
 /**
+ * Fire-and-forget progress. Progress reporting must never fail (or slow) an
+ * import, so the result is deliberately not awaited and every error is
+ * swallowed — including a synchronous throw from a bad callback.
+ */
+function emitProgress<T>(
+  onProgress: ((update: T) => void | Promise<void>) | undefined,
+  update: T
+): void {
+  if (!onProgress) return;
+  try {
+    void Promise.resolve(onProgress(update)).catch(() => {});
+  } catch {
+    // ignore
+  }
+}
+
+/**
  * Clone or find an existing tag in the target classroom
  * @param {string} sourceTagId - Source tag ID
  * @param {string} targetClassroomId - Target classroom ID
@@ -270,14 +287,18 @@ export const cloneModule = async (
  * @param {boolean} [moduleConfigs[].includeQuizzes=false] - Include quizzes
  * @param {Object} [options] - Global options
  * @param {boolean} [options.stripDeadlines=true] - Remove deadline fields
+ * @param {Function} [options.onProgress] - Per-repository progress callback
  * @returns {Promise<Object>} - Summary of cloned items
  */
 export const cloneModulesWithRelations = async (
   targetClassroomId: string,
   moduleConfigs: Array<{ id: string; includeQuizzes?: boolean }>,
-  options: { stripDeadlines?: boolean } = {}
+  options: {
+    stripDeadlines?: boolean;
+    onProgress?: (update: { done: number; total: number }) => void | Promise<void>;
+  } = {}
 ) => {
-  const { stripDeadlines = true } = options;
+  const { stripDeadlines = true, onProgress } = options;
 
   return getPrisma().$transaction(async tx => {
     const results: {
@@ -300,7 +321,16 @@ export const cloneModulesWithRelations = async (
       },
     };
 
-    for (const config of moduleConfigs) {
+    // CONSTRAINT: this loop runs INSIDE an interactive transaction. The callback
+    // must never touch `tx` and is never awaited — awaiting a DB write here
+    // would stretch the transaction window and risk a transaction timeout, so
+    // progress is fire-and-forget (see emitProgress). Progress reported for
+    // repositories that later ROLL BACK is acceptable: the caller marks the
+    // whole phase failed on error, which supersedes any count it had shown.
+    const total = moduleConfigs.length;
+    emitProgress(onProgress, { done: 0, total });
+
+    for (const [index, config] of moduleConfigs.entries()) {
       const cloneResult = await cloneModule(
         config.id,
         targetClassroomId,
@@ -317,6 +347,7 @@ export const cloneModulesWithRelations = async (
       results.quizzes.push(...cloneResult.quizzes);
       Object.assign(results.idMaps.repositories, cloneResult.idMaps.repositories);
       Object.assign(results.idMaps.quizzes, cloneResult.idMaps.quizzes);
+      emitProgress(onProgress, { done: index + 1, total });
     }
 
     return results;

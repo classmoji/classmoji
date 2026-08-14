@@ -37,6 +37,27 @@ const MAX_REPO_NAME_LENGTH = 100;
 /** Candidate names tried before giving up on a free name in the target org. */
 const MAX_NAME_CANDIDATES = 10;
 
+/**
+ * Minimum spacing between repository CREATE calls.
+ *
+ * GitHub enforces a secondary rate limit on content-creation requests
+ * (repo/issue/comment creates) that is far tighter than the 5000/hr primary
+ * limit and is not advertised in the rate-limit headers. Creating ~14 template
+ * duplicates back-to-back tripped it in production and wedged the next create
+ * in octokit's retry/backoff for over half an hour. In a background job with a
+ * progress bar, spacing the creates out is free; tripping the limit is not.
+ */
+const REPO_CREATE_SPACING_MS = 15_000;
+
+/** Retries for a create that trips the secondary limit before the item is given up on. */
+const MAX_SECONDARY_LIMIT_RETRIES = 3;
+
+/** Upper bound on an honored Retry-After, so one bad header cannot stall the job. */
+const MAX_RETRY_AFTER_MS = 120_000;
+
+/** Wait for a named secondary-limit trip that carries no header — GitHub's own advice. */
+const SECONDARY_LIMIT_DEFAULT_WAIT_MS = 60_000;
+
 export interface TemplateDuplicationSummary {
   /** distinct templates duplicated */
   duplicated: number;
@@ -45,6 +66,15 @@ export interface TemplateDuplicationSummary {
   /** source template ref (`owner/name`) → new repo name in the target org */
   template_map: Record<string, string>;
   warnings: string[];
+}
+
+export interface TemplateImportOptions {
+  onProgress?: (update: {
+    done: number;
+    total: number;
+    /** Transient status (e.g. a rate-limit wait). `null` clears it. */
+    note?: string | null;
+  }) => void | Promise<void>;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -158,6 +188,68 @@ export function formatWarning(scope: string, detail: string): string {
   return `${scope}: ${trimmed}`;
 }
 
+/** Case-insensitive header read — octokit lowercases, other error shapes may not. */
+function readHeader(headers: Record<string, unknown>, name: string): unknown {
+  if (name in headers) return headers[name];
+  for (const [key, value] of Object.entries(headers)) {
+    if (key.toLowerCase() === name) return value;
+  }
+  return undefined;
+}
+
+/** A numeric header value (octokit hands them back as strings), or null. */
+function headerNumber(value: unknown): number | null {
+  if (typeof value === 'number') return Number.isFinite(value) ? value : null;
+  if (typeof value !== 'string' || value.trim() === '') return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+/**
+ * Detect GitHub's secondary rate limit and the wait it asks for. Matches the
+ * documented shapes: a 403/429 whose message names the secondary limit or the
+ * abuse-detection mechanism, and/or a `retry-after` (seconds) or
+ * `x-ratelimit-reset` (epoch seconds) header. Returns null when the error is
+ * something else, so ordinary failures keep their existing per-item handling.
+ */
+export function parseSecondaryRateLimit(
+  error: unknown,
+  nowMs: number = Date.now()
+): { retryAfterMs: number } | null {
+  if (!error || typeof error !== 'object') return null;
+  const { status, message, response } = error as {
+    status?: unknown;
+    message?: unknown;
+    response?: { headers?: Record<string, unknown> | null } | null;
+  };
+  if (status !== 403 && status !== 429) return null;
+
+  const headers = response?.headers ?? {};
+  const retryAfterSeconds = headerNumber(readHeader(headers, 'retry-after'));
+  const text = typeof message === 'string' ? message.toLowerCase() : '';
+  const named = text.includes('secondary rate limit') || text.includes('abuse detection');
+
+  // `x-ratelimit-reset` rides on nearly every GitHub response, an ordinary
+  // permissions 403 included — it may SIZE the wait but must never be what
+  // detects one, or every 403 would be retried as if it were a rate limit.
+  if (!named && retryAfterSeconds === null) return null;
+
+  let waitMs: number | null = null;
+  if (retryAfterSeconds !== null) {
+    waitMs = retryAfterSeconds * 1000;
+  } else {
+    const resetSeconds = headerNumber(readHeader(headers, 'x-ratelimit-reset'));
+    if (resetSeconds !== null) waitMs = resetSeconds * 1000 - nowMs;
+  }
+  // The common shape is a named trip with no header at all: GitHub just says to
+  // wait a while, so fall back to the interval its own docs suggest.
+  if (waitMs === null) waitMs = SECONDARY_LIMIT_DEFAULT_WAIT_MS;
+
+  // Clamped both ways: a stale reset (already past) must still cost a real
+  // pause, and one absurd header must not park the job for an hour.
+  return { retryAfterMs: Math.min(Math.max(Math.round(waitMs), 1000), MAX_RETRY_AFTER_MS) };
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Impl helpers (touch DB/GitHub — not unit-tested)
 // ─────────────────────────────────────────────────────────────────────────────
@@ -179,6 +271,62 @@ type BatchFile = { path: string; content: string; encoding: 'base64' };
 
 function errText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/** The only timers in this file: create pacing and secondary-limit backoff. */
+const sleep = (ms: number): Promise<void> => new Promise(resolve => setTimeout(resolve, ms));
+
+/**
+ * Fire-and-forget progress. Progress reporting must never fail (or slow) an
+ * import, so the result is deliberately not awaited and every error is
+ * swallowed — including a synchronous throw from a bad callback.
+ */
+function emitProgress<T>(
+  onProgress: ((update: T) => void | Promise<void>) | undefined,
+  update: T
+): void {
+  if (!onProgress) return;
+  try {
+    void Promise.resolve(onProgress(update)).catch(() => {});
+  } catch {
+    // ignore
+  }
+}
+
+/**
+ * Create the duplicate repo, riding out GitHub's secondary rate limit instead
+ * of letting octokit's internal backoff swallow the run: a detected trip is
+ * reported as a NOTE on the still-running phase — a visible wait rather than a
+ * hang — then slept off and retried, up to MAX_SECONDARY_LIMIT_RETRIES times.
+ *
+ * Only the create is wrapped. The file reads and the uploadBatch keep their
+ * existing single-attempt handling, and once the retries are spent the ORIGINAL
+ * error is rethrown untouched so the per-template catch warns and skips exactly
+ * as it always has.
+ */
+async function createRepositoryWithBackoff({
+  provider,
+  orgLogin,
+  name,
+  onWait,
+}: {
+  provider: ReturnType<typeof getGitProvider>;
+  orgLogin: string;
+  name: string;
+  onWait: (note: string | null) => void;
+}): Promise<void> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      await provider.createRepository(orgLogin, name, true);
+      return;
+    } catch (error: unknown) {
+      const limit = parseSecondaryRateLimit(error);
+      if (!limit || attempt >= MAX_SECONDARY_LIMIT_RETRIES) throw error;
+      onWait(`waiting out GitHub rate limit (~${Math.round(limit.retryAfterMs / 1000)}s)`);
+      await sleep(limit.retryAfterMs);
+      onWait(null);
+    }
+  }
 }
 
 /**
@@ -292,7 +440,7 @@ export const duplicateImportedTemplates = async (
   sourceClassroomId: string,
   targetClassroomId: string,
   importedRepositoryIds: string[],
-  _opts: Record<string, never> = {}
+  opts: TemplateImportOptions = {}
 ): Promise<TemplateDuplicationSummary> => {
   const warnings: string[] = [];
   const warn: WarnFn = (scope, detail) => {
@@ -344,114 +492,153 @@ export const duplicateImportedTemplates = async (
   if (scopedIds.length === 0) return summary;
 
   const groups = groupTemplateRefs(importedRows, sourceOrg?.login ?? targetOrg.login);
+
+  // The real total lands before the empty-set return, so the bar sizes itself
+  // the moment the phase starts even when there is nothing to duplicate.
+  const total = groups.length;
+  let consumed = 0;
+  /**
+   * Count/note emit for this phase. An omitted `note` LEAVES the current one
+   * alone (the progress reducer's convention); `null` clears it.
+   */
+  const emit = (note?: string | null) =>
+    emitProgress(opts.onProgress, { done: consumed, total, note });
+  emit();
+
   if (groups.length === 0) return summary;
 
   const targetProvider = getGitProvider(targetOrg);
   const targetNamespace = targetClassroom.content_namespace ?? '';
 
+  // Pacing is per RUN, not per template: the first create pays nothing, every
+  // later one waits out REPO_CREATE_SPACING_MS first.
+  let attemptedAnyCreate = false;
+
   for (const group of groups) {
-    const sourceRef = formatTemplateRef(group.ref);
-    const scope = `template ${sourceRef}`;
-
-    // Readable only through an installation this flow holds: the target org's,
-    // or the source classroom's. Anything else (a third org, a personal
-    // account) stays linked to the original.
-    const ownerLower = group.ref.owner.toLowerCase();
-    let readerOrg: GitOrgRecord | null = null;
-    if (ownerLower === targetOrg.login.toLowerCase()) {
-      readerOrg = targetOrg;
-    } else if (sourceOrg?.login && ownerLower === sourceOrg.login.toLowerCase()) {
-      readerOrg = sourceOrg.provider === 'GITHUB' ? sourceOrg : null;
-    }
-    if (!readerOrg) {
-      warn(scope, `not readable from ${targetOrg.login} — keeping the original link`);
-      continue;
-    }
-
+    // `finally` owns the count, not the end of the body: every skip below is a
+    // `continue`, and `done` tracks source templates CONSUMED, not duplicated.
     try {
-      // Distinguish a DELETED template from an empty one — a dangling ref is
-      // the exact failure this feature exists to stop repeating, so say so.
-      const readerProvider = readerOrg === targetOrg ? targetProvider : getGitProvider(readerOrg);
-      if (!(await readerProvider.repositoryExists(group.ref.owner, group.ref.name))) {
-        warn(scope, 'skipped — template repository no longer exists');
+      const sourceRef = formatTemplateRef(group.ref);
+      const scope = `template ${sourceRef}`;
+
+      // Readable only through an installation this flow holds: the target org's,
+      // or the source classroom's. Anything else (a third org, a personal
+      // account) stays linked to the original.
+      const ownerLower = group.ref.owner.toLowerCase();
+      let readerOrg: GitOrgRecord | null = null;
+      if (ownerLower === targetOrg.login.toLowerCase()) {
+        readerOrg = targetOrg;
+      } else if (sourceOrg?.login && ownerLower === sourceOrg.login.toLowerCase()) {
+        readerOrg = sourceOrg.provider === 'GITHUB' ? sourceOrg : null;
+      }
+      if (!readerOrg) {
+        warn(scope, `not readable from ${targetOrg.login} — keeping the original link`);
         continue;
       }
 
-      const { paths, exceededCap } = await listRepoFilePaths(
-        readerOrg,
-        group.ref.name,
-        MAX_TEMPLATE_FILES
-      );
-      if (exceededCap) {
-        warn(scope, `skipped — more than ${MAX_TEMPLATE_FILES} files`);
-        continue;
-      }
-      if (paths.length === 0) {
-        warn(scope, 'skipped — no readable files on the default branch');
-        continue;
-      }
-
-      const files = await readRepoFiles({
-        gitOrganization: readerOrg,
-        repo: group.ref.name,
-        paths,
-        scope,
-        warn,
-      });
-      if (files.length === 0) {
-        warn(scope, 'skipped — every file was unreadable or oversized');
-        continue;
-      }
-
-      const newName = await resolveFreeRepoName(
-        targetProvider,
-        targetOrg.login,
-        templateNameCandidates(group.ref.name, targetNamespace)
-      );
-      if (!newName) {
-        warn(scope, `skipped — no free repository name in ${targetOrg.login}`);
-        continue;
-      }
-
-      await targetProvider.createRepository(targetOrg.login, newName, true);
       try {
-        // The new repo has no commits: allowRootCommit seeds the initial commit
-        // (Contents API — the Git Data API 409s on an empty repo) and creates
-        // `main`, which becomes the default branch.
-        await ContentService.uploadBatch({
-          gitOrganization: targetOrg,
-          repo: newName,
-          files,
-          branch: 'main',
-          message: `Duplicated from ${sourceRef} for ${targetClassroom.slug}`,
-          allowRootCommit: true,
-        });
-      } catch (uploadError: unknown) {
-        // Drop the repo we just made rather than leave an empty shell behind —
-        // it has no commits, and the rows still point at the original template.
-        try {
-          await targetProvider.deleteRepository(targetOrg.login, newName);
-        } catch (cleanupError: unknown) {
-          warn(scope, `left an empty ${newName} behind: ${errText(cleanupError)}`);
+        // Distinguish a DELETED template from an empty one — a dangling ref is
+        // the exact failure this feature exists to stop repeating, so say so.
+        const readerProvider = readerOrg === targetOrg ? targetProvider : getGitProvider(readerOrg);
+        if (!(await readerProvider.repositoryExists(group.ref.owner, group.ref.name))) {
+          warn(scope, 'skipped — template repository no longer exists');
+          continue;
         }
-        throw uploadError;
-      }
 
-      const newRef = `${targetOrg.login}/${newName}`;
-      let relinked = 0;
-      for (const rawRef of group.rawRefs) {
-        const { count } = await getPrisma().repository.updateMany({
-          where: { id: { in: scopedIds }, template: rawRef },
-          data: { template: newRef },
+        const { paths, exceededCap } = await listRepoFilePaths(
+          readerOrg,
+          group.ref.name,
+          MAX_TEMPLATE_FILES
+        );
+        if (exceededCap) {
+          warn(scope, `skipped — more than ${MAX_TEMPLATE_FILES} files`);
+          continue;
+        }
+        if (paths.length === 0) {
+          warn(scope, 'skipped — no readable files on the default branch');
+          continue;
+        }
+
+        const files = await readRepoFiles({
+          gitOrganization: readerOrg,
+          repo: group.ref.name,
+          paths,
+          scope,
+          warn,
         });
-        relinked += count;
-      }
+        if (files.length === 0) {
+          warn(scope, 'skipped — every file was unreadable or oversized');
+          continue;
+        }
 
-      summary.duplicated++;
-      summary.relinked += relinked;
-      summary.template_map[sourceRef] = newName;
-    } catch (error: unknown) {
-      warn(scope, `duplication failed: ${errText(error)}`);
+        const newName = await resolveFreeRepoName(
+          targetProvider,
+          targetOrg.login,
+          templateNameCandidates(group.ref.name, targetNamespace)
+        );
+        if (!newName) {
+          warn(scope, `skipped — no free repository name in ${targetOrg.login}`);
+          continue;
+        }
+
+        // Pace BEFORE the retry loop, so a create that just slept off a
+        // rate-limit backoff is not made to wait all over again.
+        if (attemptedAnyCreate) {
+          emit('pacing repository creation to stay under GitHub limits');
+          await sleep(REPO_CREATE_SPACING_MS);
+          emit(null);
+        }
+        // Marked on ATTEMPT, not on success: a failed create still spends
+        // GitHub's content-creation budget, so the next one still gets paced.
+        attemptedAnyCreate = true;
+        await createRepositoryWithBackoff({
+          provider: targetProvider,
+          orgLogin: targetOrg.login,
+          name: newName,
+          onWait: emit,
+        });
+        try {
+          // The new repo has no commits: allowRootCommit seeds the initial commit
+          // (Contents API — the Git Data API 409s on an empty repo) and creates
+          // `main`, which becomes the default branch.
+          await ContentService.uploadBatch({
+            gitOrganization: targetOrg,
+            repo: newName,
+            files,
+            branch: 'main',
+            message: `Duplicated from ${sourceRef} for ${targetClassroom.slug}`,
+            allowRootCommit: true,
+          });
+        } catch (uploadError: unknown) {
+          // Drop the repo we just made rather than leave an empty shell behind —
+          // it has no commits, and the rows still point at the original template.
+          try {
+            await targetProvider.deleteRepository(targetOrg.login, newName);
+          } catch (cleanupError: unknown) {
+            warn(scope, `left an empty ${newName} behind: ${errText(cleanupError)}`);
+          }
+          throw uploadError;
+        }
+
+        const newRef = `${targetOrg.login}/${newName}`;
+        let relinked = 0;
+        for (const rawRef of group.rawRefs) {
+          const { count } = await getPrisma().repository.updateMany({
+            where: { id: { in: scopedIds }, template: rawRef },
+            data: { template: newRef },
+          });
+          relinked += count;
+        }
+
+        summary.duplicated++;
+        summary.relinked += relinked;
+        summary.template_map[sourceRef] = newName;
+      } catch (error: unknown) {
+        warn(scope, `duplication failed: ${errText(error)}`);
+      }
+    } finally {
+      consumed++;
+      emit();
     }
   }
 
