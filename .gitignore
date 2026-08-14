@@ -25,3 +25,6 @@ apps/pages/build
 
 # Local GitHub Classroom export dumps (contain real student logins; used only as local import fixtures)
 /classrooms/
+
+# Local Codex CLI config (holds MCP server credentials)
+.codex/

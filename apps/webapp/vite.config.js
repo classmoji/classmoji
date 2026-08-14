@@ -43,7 +43,6 @@ export default ({ command }) => {
         'stripe',
         'nanoid',
         'dotenv',
-        'nodemailer',
         'graphql',
         'jsonwebtoken',
       ],
@@ -66,7 +65,7 @@ export default ({ command }) => {
       sourcemap: process.env.NODE_ENV === 'production' ? false : true,
       chunkSizeWarningLimit: 1000, // Increase limit to 1MB to suppress chunk size warnings
       rollupOptions: {
-        external: ['graphql', 'nodemailer'], // Mark graphql as external
+        external: ['graphql'], // Mark graphql as external
         onwarn(warning, warn) {
           // Suppress sourcemap warnings from node_modules (antd, etc.)
           if (warning.code === 'SOURCEMAP_ERROR') return;
