@@ -227,9 +227,14 @@ class ProgressWriter {
 function phaseProgress(
   writer: ProgressWriter,
   phase: ImportPhaseUpdate['phase']
-): (update: { done: number; total: number; note?: string | null }) => void {
-  return ({ done, total, note }) => {
-    writer.patch({ phase, status: 'running', done, total, note });
+): (update: {
+  done: number;
+  total: number;
+  note?: string | null;
+  note_level?: 'info' | 'warn';
+}) => void {
+  return ({ done, total, note, note_level }) => {
+    writer.patch({ phase, status: 'running', done, total, note, note_level });
   };
 }
 
