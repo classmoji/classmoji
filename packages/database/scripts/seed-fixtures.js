@@ -137,6 +137,7 @@ export async function seedForeignClassroom(prisma, { org }) {
       slug: 'classmoji-other-class',
       name: 'Other Class',
       content_namespace: 'classmoji-other-class',
+      content_repo: 'content-classmoji-other-class',
     },
   });
 

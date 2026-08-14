@@ -3,6 +3,7 @@ import { useFormContext, Controller } from 'react-hook-form';
 import { Input, Select, Avatar, Button, Divider, Spin } from 'antd';
 import { PlusOutlined, LoadingOutlined, EditOutlined } from '@ant-design/icons';
 import { useGitHubAppInstallPopup } from '~/hooks';
+import { sanitizeRepoName } from '@classmoji/utils';
 import type { GitOrganizationOption } from './types';
 import { slugify } from './utils';
 
@@ -18,8 +19,8 @@ interface StepBasicInfoProps {
   availability?: AvailabilityResponse;
   availabilityLoading?: boolean;
   selectedOrgLogin: string;
-  namespaceSuggestion: string;
-  effectiveNamespace: string;
+  contentRepoSuggestion: string;
+  effectiveContentRepo: string;
 }
 
 const StepBasicInfo = ({
@@ -29,8 +30,8 @@ const StepBasicInfo = ({
   availability,
   availabilityLoading,
   selectedOrgLogin,
-  namespaceSuggestion,
-  effectiveNamespace,
+  contentRepoSuggestion,
+  effectiveContentRepo,
 }: StepBasicInfoProps) => {
   const {
     control,
@@ -44,7 +45,7 @@ const StepBasicInfo = ({
   const effectiveSlug = slugOverride && slugOverride.length > 0 ? slugOverride : slugPreview;
 
   const [editingSlug, setEditingSlug] = useState(false);
-  const [editingNamespace, setEditingNamespace] = useState(false);
+  const [editingContentRepo, setEditingContentRepo] = useState(false);
 
   const showResult = !!effectiveSlug && !availabilityLoading && !!availability;
   const slugTaken = showResult && availability!.slug_available === false;
@@ -145,10 +146,10 @@ const StepBasicInfo = ({
                   if (!editingSlug) {
                     setValue('slug', '', { shouldDirty: false });
                   }
-                  // Same for the content-namespace override: re-derive from the
+                  // Same for the content-repo override: re-derive from the
                   // fresh slug unless the user is editing it right now.
-                  if (!editingNamespace) {
-                    setValue('content_namespace', '', { shouldDirty: false });
+                  if (!editingContentRepo) {
+                    setValue('content_repo', '', { shouldDirty: false });
                   }
                 }}
               />
@@ -239,31 +240,41 @@ const StepBasicInfo = ({
           </div>
         )}
 
-        {/* Content repo name: content-{orgLogin}-{namespace}, namespace editable.
-            Shown once an org is selected and a slug exists to derive from. */}
+        {/* Content repo: the FULL repo name, fully editable (no fixed prefix).
+            Defaults to `content-{namespace}` and keeps re-deriving until the
+            user overrides it. Shown once an org is selected and a slug exists
+            to derive from. */}
         {(slugPreview || slugOverride) && selectedOrgLogin && (
           <div>
             <div className="flex items-center gap-2 text-sm text-gray-600 dark:text-gray-300 flex-wrap">
               <span>Content repo:</span>
-              {editingNamespace ? (
+              {editingContentRepo ? (
                 <Controller
-                  name="content_namespace"
+                  name="content_repo"
                   control={control}
                   render={({ field }) => (
                     <Input
                       {...field}
                       size="small"
                       style={{ width: 340 }}
-                      addonBefore={`content-${selectedOrgLogin}-`}
-                      value={(field.value as string) || namespaceSuggestion}
-                      onChange={e => field.onChange(slugify(e.target.value))}
+                      value={(field.value as string) || contentRepoSuggestion}
+                      // Per-keystroke: only lowercase + drop disallowed chars.
+                      // The FULL sanitize (edge-dash/dot trim) must wait for
+                      // blur — running it per keystroke eats every hyphen the
+                      // moment it is typed, because it is trailing right then.
+                      onChange={e =>
+                        field.onChange(e.target.value.toLowerCase().replace(/[^a-z0-9._-]+/g, '-'))
+                      }
                       onBlur={() => {
                         field.onBlur();
+                        const finalValue = sanitizeRepoName((field.value as string) ?? '');
                         // An override equal to the suggestion is not an override.
-                        if ((field.value as string) === namespaceSuggestion) {
-                          setValue('content_namespace', '', { shouldDirty: false });
-                        }
-                        setEditingNamespace(false);
+                        setValue(
+                          'content_repo',
+                          finalValue === contentRepoSuggestion ? '' : finalValue,
+                          { shouldDirty: false }
+                        );
+                        setEditingContentRepo(false);
                       }}
                       autoFocus
                     />
@@ -271,17 +282,17 @@ const StepBasicInfo = ({
                 />
               ) : (
                 <>
-                  <code className="bg-stone-100 dark:bg-neutral-800 text-gray-700 dark:text-gray-300 px-2 py-1 rounded">
-                    content-{selectedOrgLogin}-
+                  <code className="bg-stone-100 dark:bg-neutral-800 px-2 py-1 rounded">
+                    <span className="text-gray-500 dark:text-gray-400">{selectedOrgLogin}/</span>
                     <span className="font-semibold text-gray-900 dark:text-gray-100">
-                      {effectiveNamespace}
+                      {effectiveContentRepo}
                     </span>
                   </code>
                   <button
                     type="button"
-                    onClick={() => setEditingNamespace(true)}
+                    onClick={() => setEditingContentRepo(true)}
                     className="text-xs text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"
-                    aria-label="Edit content namespace"
+                    aria-label="Edit content repo name"
                   >
                     <EditOutlined /> edit
                   </button>
@@ -290,7 +301,7 @@ const StepBasicInfo = ({
             </div>
             <div className="mt-1 text-xs text-gray-400 dark:text-gray-500">
               The GitHub repository that will store this classroom&rsquo;s pages &amp; slides
-              content.
+              content. It must not already exist.
             </div>
           </div>
         )}

@@ -117,14 +117,15 @@ async function migratePagesToBlockNote(): Promise<void> {
           ? { ...gitOrg, login: OVERRIDE_GIT_ORG_LOGIN }
           : gitOrg;
 
-        const contentNamespace = page.classroom.content_namespace as string;
-        const repo = `content-${effectiveGitOrg.login}-${contentNamespace}`;
+        // Stored repo name — user-editable, so it is never re-derived. The git
+        // org override still redirects which ORG is read; it cannot rename the
+        // repo.
+        const repo = page.classroom.content_repo as string;
 
         console.log(`\n🔍 Processing: ${page.slug}`);
         console.log(
           `   Git Org: ${gitOrg.login} ${OVERRIDE_GIT_ORG_LOGIN ? `→ ${effectiveGitOrg.login} (overridden)` : ''}`
         );
-        console.log(`   Content namespace: ${contentNamespace}`);
         console.log(`   Repo: ${repo}`);
         console.log(`   Path: ${page.content_path}`);
 

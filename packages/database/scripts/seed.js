@@ -37,6 +37,7 @@ async function main() {
         slug: 'classmoji-dev-winter-2025',
         name: 'Dev Classroom',
         content_namespace: 'classmoji-dev-winter-2025',
+        content_repo: 'content-classmoji-dev-winter-2025',
       },
     });
   }

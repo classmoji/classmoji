@@ -48,9 +48,9 @@ export const loader = async ({
 
   // Build the GitHub paths that will be deleted
   const gitOrgLogin = slideInfo.slide.classroom?.git_organization?.login;
-  const contentNamespace = slideInfo.slide.classroom?.content_namespace;
-  const repoName =
-    gitOrgLogin && contentNamespace ? `content-${gitOrgLogin}-${contentNamespace}` : null;
+  // Content repo is STORED and user-editable — never re-derived from the namespace.
+  const contentRepo = slideInfo.slide.classroom?.content_repo;
+  const repoName = gitOrgLogin && contentRepo ? contentRepo : null;
   const contentPath = slideInfo.slide.content_path;
 
   return {

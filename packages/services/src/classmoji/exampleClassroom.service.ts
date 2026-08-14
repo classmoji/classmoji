@@ -23,6 +23,7 @@
  */
 
 import getPrisma from '@classmoji/database';
+import { defaultContentRepoName } from '@classmoji/utils';
 
 const EXAMPLE_ORG = {
   provider: 'GITHUB' as const,
@@ -91,6 +92,7 @@ export async function provisionExampleClassroom(params: {
           slug,
           name: 'Example Course',
           content_namespace: slug,
+          content_repo: defaultContentRepoName(slug),
           is_example: true,
           settings: { create: { show_grades_to_students: true, quizzes_enabled: true } },
         },

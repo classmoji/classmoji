@@ -95,7 +95,7 @@ const PAGE = {
   is_draft: false,
   classroom: {
     id: 'class-1',
-    content_namespace: 'cs101',
+    content_repo: 'content-test-org-cs101',
     git_organization: { provider: 'GITHUB', login: 'test-org' },
   },
 };

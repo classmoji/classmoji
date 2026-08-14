@@ -1,5 +1,4 @@
 import getPrisma from '@classmoji/database';
-import { classroomContentRepoName } from '@classmoji/utils';
 import { GitHubProvider } from '../git/index.ts';
 import type { Prisma, Role } from '@prisma/client';
 
@@ -132,7 +131,8 @@ export const findAll = async (query: Prisma.ClassroomWhereInput = {}) => {
  * @param {string} data.git_org_id - UUID of the GitOrganization
  * @param {string} data.slug - URL-friendly slug
  * @param {string} data.name - Display name
- * @param {string} data.content_namespace - Identifier embedded in content repo name
+ * @param {string} data.content_namespace - Internal identifier (names no repo)
+ * @param {string} data.content_repo - GitHub repo holding this classroom's content
  * @param {string} [data.emoji] - Emoji (default: "dart")
  * @returns {Promise<Object>}
  */
@@ -242,7 +242,7 @@ export interface GitHubArtifact {
 
 /**
  * Pure helper: enumerate the GitHub artifacts a classroom owns, from DB-known
- * facts ONLY — the content repo (derived from org login + content namespace),
+ * facts ONLY — the content repo (the classroom's STORED content_repo name),
  * the two conventional classroom teams ({slug}-students / {slug}-assistants),
  * any provider-backed project-team slugs, and the classroom's git repos by
  * exact recorded name. Nothing is pattern-matched or discovered live: if the
@@ -251,22 +251,22 @@ export interface GitHubArtifact {
 export function classroomGitHubArtifactPlan({
   orgLogin,
   slug,
-  contentNamespace,
+  contentRepo,
   gitRepoNames,
   teamSlugs,
 }: {
   orgLogin: string;
   slug: string;
-  contentNamespace: string | null;
+  contentRepo: string | null;
   gitRepoNames: string[];
   teamSlugs: string[];
 }): GitHubArtifact[] {
   const plan: GitHubArtifact[] = [];
-  if (contentNamespace) {
+  if (contentRepo) {
     plan.push({
       kind: 'repo',
       org: orgLogin,
-      name: classroomContentRepoName({ login: orgLogin, namespace: contentNamespace }),
+      name: contentRepo,
       label: 'content repo',
     });
   }
@@ -299,11 +299,11 @@ export interface ClassroomGitHubPlan {
  * calls GitHub, so it is safe in a loader.
  *
  * The content repo is held back (`withheld`, and excluded from `artifacts`)
- * when another classroom in the same org shares this classroom's content
- * namespace — they resolve to the SAME repo, so deleting it would take out live
- * content. A DB unique constraint on [git_org_id, content_namespace] now
- * prevents new collisions; this guard covers rows that predate it. Teams and
- * assignment repos are per-classroom and never shared.
+ * when another classroom in the same org names the SAME content repo — deleting
+ * it would take out live content. A DB unique constraint on
+ * [git_org_id, content_repo] now prevents new collisions; this guard covers
+ * rows that predate it. Teams and assignment repos are per-classroom and never
+ * shared.
  *
  * @param {string} classroomId - Classroom whose artifacts to enumerate
  */
@@ -335,18 +335,18 @@ export const getClassroomGitHubArtifactPlan = async (
   const artifacts = classroomGitHubArtifactPlan({
     orgLogin: classroom.git_organization.login,
     slug: classroom.slug,
-    contentNamespace: classroom.content_namespace,
+    contentRepo: classroom.content_repo,
     gitRepoNames: classroom.git_repos.map(r => r.name),
     teamSlugs: classroom.teams.map(t => t.slug),
   });
 
-  if (!classroom.content_namespace) {
+  if (!classroom.content_repo) {
     return { artifacts, withheld: null, unavailable: null };
   }
   const sharer = await getPrisma().classroom.findFirst({
     where: {
       git_org_id: classroom.git_org_id,
-      content_namespace: classroom.content_namespace,
+      content_repo: classroom.content_repo,
       id: { not: classroom.id },
     },
     select: { slug: true },

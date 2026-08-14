@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Button, Checkbox, Modal } from 'antd';
 
 import { namedAction } from 'remix-utils/named-action';
-import { useNavigate, useParams } from 'react-router';
+import { redirect, useParams } from 'react-router';
 import type { ShouldRevalidateFunctionArgs } from 'react-router';
 
 import { useGlobalFetcher, useDisclosure } from '~/hooks';
@@ -26,10 +26,12 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
   return { artifacts, withheld };
 };
 
-// The delete submission revalidates this loader by default. On SUCCESS the
-// classroom is gone, so the loader's own auth gate would throw 404 into the
-// error boundary before the confirm-then-navigate effect can run — skip it.
-// On failure the modal stays open for a retry, so the plan is refreshed.
+// Any mutation revalidates this loader by default, and the plan is a pure DB read
+// that only matters while the modal is open. So: revalidate on a FAILED delete (the
+// modal stays open for a retry and the plan may have changed), and skip otherwise —
+// including the global fetcher's reset POST and every unrelated mutation elsewhere in
+// the app, none of which can affect this plan. A SUCCESSFUL delete redirects, which
+// unmounts this route, so its loader never runs against the deleted classroom.
 export const shouldRevalidate = ({ actionResult }: ShouldRevalidateFunctionArgs) =>
   Boolean(actionResult?.error);
 
@@ -49,14 +51,13 @@ const DangerZone = ({ loaderData }: Route.ComponentProps) => {
   const { fetcher, notify } = useGlobalFetcher();
   const { show, close, visible } = useDisclosure();
   const { class: classSlug } = useParams();
-  const navigate = useNavigate();
   const [deleteGitHub, setDeleteGitHub] = useState(false);
   const [removing, setRemoving] = useState(false);
   // Round-trip latch. The global fetcher is SHARED and self-resets to null data
   // right after it toasts a result, so "idle with no data" is ambiguous on its
-  // own: it is the aborted case only once this submission has been seen in
-  // flight, and only before its result was handled ('settled' — otherwise the
-  // post-success reset would re-enter the effect and reopen the button).
+  // own: it is the failure case only once this submission has been seen in
+  // flight, and only once ('settled' — the reset round-trip would otherwise
+  // re-enter the effect).
   const phaseRef = useRef<'idle' | 'inflight' | 'settled'>('idle');
 
   const onRemoveClassroom = () => {
@@ -75,10 +76,23 @@ const DangerZone = ({ loaderData }: Route.ComponentProps) => {
     );
   };
 
-  // Navigate only after the server confirms — a fire-and-forget navigate hid
-  // failures entirely (the classroom would silently still exist). The success
-  // toast (incl. the GitHub cleanup summary) comes from the global fetcher.
-  const fetcherData = fetcher?.data as { success?: string; error?: string } | undefined;
+  // SUCCESS no longer settles here. The action returns a redirect, which react-router
+  // follows as a real navigation — immune to the shared fetcher's data lifecycle.
+  // This effect now only covers the failure cases.
+  //
+  // Why success could never be read here: react-router puts the fetcher into
+  // `loading` state ALREADY CARRYING the action result (getLoadingFetcher(submission,
+  // actionResult.data)) before it goes idle. The global fetcher is shared, and its
+  // provider matches on `data.success` at that `loading` commit, toasts, and
+  // immediately self-resets (POST /reset-fetcher, which returns null). The payload
+  // was therefore always gone by the time this effect saw `idle` — indistinguishable
+  // from an abort, so the delete succeeded while the UI just sat there.
+  //
+  // The redirect cannot trip the abort branch below: react-router folds the fetcher's
+  // return to idle into the SAME completeNavigation state update that swaps the
+  // route (markFetchRedirectsDone), so this component unmounts in that commit and
+  // never observes idle-with-no-data. No extra navigation guard is needed.
+  const fetcherData = fetcher?.data as { error?: string } | undefined;
   useEffect(() => {
     if (!removing) return;
     if (phaseRef.current === 'settled') return;
@@ -88,18 +102,17 @@ const DangerZone = ({ loaderData }: Route.ComponentProps) => {
     }
     if (phaseRef.current !== 'inflight') return;
     phaseRef.current = 'settled';
-    if (fetcherData?.success) {
-      navigate('/select-organization');
-    } else if (fetcherData?.error) {
+    if (fetcherData?.error) {
       setRemoving(false);
       close();
     } else {
-      // Settled with neither outcome: the action never returned (aborted or
-      // timed out). Un-stick the button but KEEP the modal open — the delete's
-      // fate is unknown, so the user must decide whether to retry.
+      // Settled with no error payload: either the action never returned (aborted or
+      // timed out), or the error was consumed and reset by the global fetcher first
+      // — it toasts the message either way. Un-stick the button but KEEP the modal
+      // open: the delete's fate is unknown, so the user must decide whether to retry.
       setRemoving(false);
     }
-  }, [removing, fetcher?.state, fetcherData, navigate, close]);
+  }, [removing, fetcher?.state, fetcherData, close]);
 
   return (
     <>
@@ -206,13 +219,14 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
 
   return namedAction(request, {
     async removeClassroom() {
-      return removeClassroomHandler(classroom, deleteGitHub, authData?.token ?? null);
+      return removeClassroomHandler(classroom, classSlug, deleteGitHub, authData?.token ?? null);
     },
   });
 };
 
 const removeClassroomHandler = async (
   classroom: { id: string },
+  classSlug: string,
   deleteGitHub: boolean,
   userToken: string | null
 ) => {
@@ -273,10 +287,16 @@ const removeClassroomHandler = async (
 
   // The GitHub installation is never touched — multiple classrooms share it.
   await ClassmojiService.classroom.deleteById(classroom.id);
-  return {
-    action: ActionTypes.REMOVE_CLASSROOM,
-    success: `Classroom removed successfully!${cleanupNote}`,
-  };
+
+  // Success REDIRECTS instead of returning a payload. Returned data was unreadable
+  // by the caller: the shared global fetcher consumes `data` the moment the fetcher
+  // enters `loading` and self-resets to null, so the deleting route only ever saw an
+  // empty `idle`. A redirect is a real navigation and carries the confirmation in the
+  // URL — /select-organization toasts it on arrival. See the effect comment above.
+  const search = new URLSearchParams({ removed: classSlug });
+  const trimmedNote = cleanupNote.trim();
+  if (trimmedNote) search.set('cleanup', trimmedNote);
+  return redirect(`/select-organization?${search.toString()}`);
 };
 
 export default DangerZone;

@@ -8,8 +8,38 @@ import {
 } from '@classmoji/services';
 import { ActionTypes } from '~/constants';
 import getPrisma from '@classmoji/database';
-import { maxContentNamespaceLength, suggestContentNamespace } from '@classmoji/utils';
+import {
+  defaultContentRepoName,
+  sanitizeRepoName,
+  suggestContentNamespace,
+} from '@classmoji/utils';
 import { slugify } from './utils';
+
+/**
+ * Pick a free internal content namespace for a new classroom in this org.
+ *
+ * content_namespace no longer names anything on GitHub (content_repo does), but
+ * it keeps a [git_org_id, content_namespace] unique constraint and is no longer
+ * user-editable — so a collision has to be resolved silently here instead of
+ * being handed back as an error the user has no field to fix. Candidates, in
+ * order: the org-prefix-stripped slug, the raw slug (unique per org), then
+ * numeric suffixes.
+ */
+async function pickContentNamespace(gitOrgId: string, orgLogin: string, slug: string) {
+  const suggested = suggestContentNamespace({ orgLogin, slug });
+  const candidates = [suggested, slug, ...Array.from({ length: 20 }, (_, i) => `${slug}-${i + 2}`)];
+
+  const taken = new Set(
+    (
+      await getPrisma().classroom.findMany({
+        where: { git_org_id: gitOrgId, content_namespace: { in: candidates } },
+        select: { content_namespace: true },
+      })
+    ).map(c => c.content_namespace)
+  );
+
+  return candidates.find(c => !taken.has(c)) ?? `${slug}-${Date.now()}`;
+}
 
 export const action = checkAuth(async ({ request }: { request: Request }) => {
   const authData = await getAuthSession(request);
@@ -27,7 +57,7 @@ export const action = checkAuth(async ({ request }: { request: Request }) => {
     git_org_id,
     name,
     slug: slugInput,
-    content_namespace: namespaceInput,
+    content_repo: contentRepoInput,
     importConfig,
   } = await request.json();
 
@@ -75,32 +105,48 @@ export const action = checkAuth(async ({ request }: { request: Request }) => {
   // Slug: prefer client-provided (user override / suggestion) when present, else derive from name.
   const slug = slugInput && typeof slugInput === 'string' ? slugify(slugInput) : slugify(name);
 
-  // Content namespace (names the classroom's content repo,
-  // `content-{orgLogin}-{namespace}`): client-provided override when present,
-  // else the org-prefix-stripped slug — never the raw slug, which doubles the
-  // org name in the repo whenever the slug starts with the course/org name.
-  const contentNamespace =
-    namespaceInput && typeof namespaceInput === 'string' && slugify(namespaceInput).length > 0
-      ? slugify(namespaceInput)
-      : suggestContentNamespace({ orgLogin: gitOrg.login, slug });
+  // Internal identifier only — names no repo, and no longer user-editable.
+  const contentNamespace = await pickContentNamespace(git_org_id, gitOrg.login, slug);
 
-  if (contentNamespace.length > maxContentNamespaceLength(gitOrg.login)) {
+  // Content repo: the user's name when supplied, else `content-{namespace}`.
+  // Sanitized to what GitHub accepts so the stored name and the real repo can
+  // never diverge; an input that sanitizes away entirely falls back to the
+  // default rather than storing an empty name.
+  const contentRepo =
+    (typeof contentRepoInput === 'string' ? sanitizeRepoName(contentRepoInput) : '') ||
+    defaultContentRepoName(contentNamespace);
+
+  // Two classrooms in one org sharing a content repo would share (and could
+  // overwrite or delete) each other's content. The DB unique constraint
+  // backstops the race; this check gives a friendly error.
+  const repoTaken = await getPrisma().classroom.findFirst({
+    where: { git_org_id, content_repo: contentRepo },
+    select: { slug: true },
+  });
+  if (repoTaken) {
     return {
-      error: `Content namespace is too long — keep it under ${maxContentNamespaceLength(gitOrg.login)} characters so the content repo name fits GitHub's limit`,
+      error: `Content repo '${contentRepo}' is already used by classroom '${repoTaken.slug}' in this organization — pick a different name`,
     };
   }
 
-  // The namespace names the content repo (content-{org}-{namespace}); a
-  // collision would make two classrooms share one repo. The DB unique
-  // constraint backstops the race; this check gives a friendly error.
-  const namespaceTaken = await getPrisma().classroom.findFirst({
-    where: { git_org_id, content_namespace: contentNamespace },
-    select: { slug: true },
-  });
-  if (namespaceTaken) {
+  // The content repo must be created FRESH. ensureContentRepo adopts a repo
+  // that already exists rather than failing, so an existing name here would
+  // silently make a student/template repo into this classroom's content repo
+  // (and a later classroom delete would offer to delete it). Refuse up front.
+  // Availability is best-effort: a failed check (network, rate limit) must not
+  // block creation — the DB constraint and ensure behavior are unchanged.
+  try {
+    await octokit.rest.repos.get({ owner: gitOrg.login, repo: contentRepo });
     return {
-      error: `Content namespace '${contentNamespace}' is already used by classroom '${namespaceTaken.slug}' in this organization — pick a different one`,
+      error: `Repository '${contentRepo}' already exists in ${gitOrg.login} — content repos must be created fresh; pick another name`,
     };
+  } catch (error: unknown) {
+    if ((error as { status?: number })?.status !== 404) {
+      console.warn(
+        `Could not verify content repo availability for ${gitOrg.login}/${contentRepo}:`,
+        error instanceof Error ? error.message : error
+      );
+    }
   }
 
   // ALL validation that can refuse creation must run BEFORE the transaction —
@@ -139,6 +185,7 @@ export const action = checkAuth(async ({ request }: { request: Request }) => {
           slug,
           name,
           content_namespace: contentNamespace,
+          content_repo: contentRepo,
         },
       });
 
@@ -158,12 +205,13 @@ export const action = checkAuth(async ({ request }: { request: Request }) => {
       return created;
     });
   } catch (error: unknown) {
-    // Unique-constraint race (slug or content namespace claimed between the
-    // pre-checks and the insert) — refuse cleanly instead of a 500.
+    // Unique-constraint race (slug, content repo, or the internal namespace
+    // claimed between the pre-checks and the insert) — refuse cleanly
+    // instead of a 500.
     if ((error as { code?: string })?.code === 'P2002') {
       return {
         error:
-          'That classroom slug or content namespace was just taken in this organization — adjust and try again',
+          'That classroom slug or content repo was just taken in this organization — adjust and try again',
       };
     }
     throw error;

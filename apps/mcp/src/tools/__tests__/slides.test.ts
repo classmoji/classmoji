@@ -78,7 +78,7 @@ const SLIDE = {
   updated_at: new Date('2026-08-01T00:00:00Z'),
   classroom: {
     id: 'class-1',
-    content_namespace: 'cs101',
+    content_repo: 'content-test-org-cs101',
     git_organization: { provider: 'GITHUB', login: 'test-org' },
   },
 };

@@ -70,6 +70,6 @@ export interface CreateClassroomFormValues {
   git_org_id: string;
   name: string;
   slug: string;
-  /** Manual content-namespace override; '' = derive from org login + slug. */
-  content_namespace: string;
+  /** Manual content-repo override; '' = default to `content-{namespace}`. */
+  content_repo: string;
 }

@@ -18,14 +18,10 @@ interface ImportedPage {
 }
 
 interface BatchImportTabProps {
-  contentNamespace: string;
   onPagesChange: (pages: ImportedPage[]) => void;
 }
 
-export default function BatchImportTab({
-  contentNamespace,
-  onPagesChange,
-}: BatchImportTabProps) {
+export default function BatchImportTab({ onPagesChange }: BatchImportTabProps) {
   const [pages, setPages] = useState<ImportedPage[]>([]);
   const [isExtracting, setIsExtracting] = useState(false);
   const [extractError, setExtractError] = useState<string | null>(null);
@@ -194,7 +190,6 @@ export default function BatchImportTab({
 
       {/* Hidden inputs for form data */}
       <input type="hidden" name="intent" value="batch-import" />
-      <input type="hidden" name="contentNamespace" value={contentNamespace} />
     </div>
   );
 }

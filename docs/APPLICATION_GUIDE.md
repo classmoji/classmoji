@@ -982,8 +982,11 @@ AuditLog
 - `processExtension`: Deduct tokens and extend deadline
 
 **Email Workflows**
-- `sendGradeNotification`: Notify students of new grades
-- `sendExtensionApproved`: Confirm extension request
+- `send_email`: The single transactional-email task. Takes `{ to, subject, html }`
+  and sends through Resend. Callers compose the HTML themselves (see
+  `notificationEmails.ts` and `roster.service.ts`) and enqueue this task; services
+  never send directly. Requires `RESEND_API_KEY`, with `EMAIL_FROM` and
+  `EMAIL_REPLY_TO` as optional overrides.
 
 **Task Features**
 - Real-time progress tracking in UI

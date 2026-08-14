@@ -52,7 +52,7 @@ const slide = {
   id: 'slide-1',
   title: 'My Deck',
   content_path: 'slides/my-deck',
-  classroom: { content_namespace: '26w', git_organization: gitOrganization },
+  classroom: { content_repo: 'content-test-org-26w', git_organization: gitOrganization },
 };
 
 const BRANCH = 'preview/slides/my-deck';

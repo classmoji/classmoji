@@ -70,7 +70,7 @@ const gitOrganization = { id: 'org-1', login: 'test-org', provider: 'GITHUB' };
 const classroom = {
   id: 'class-1',
   name: 'Test Class',
-  content_namespace: 'cs101',
+  content_repo: 'content-test-org-cs101',
   git_organization: gitOrganization,
 };
 
@@ -216,7 +216,7 @@ describe('page.createPage', () => {
     expect(createPublicRepositoryMock).toHaveBeenCalledWith(
       'test-org',
       'content-test-org-cs101',
-      'Course content for Test Class - cs101'
+      'Course content for Test Class'
     );
     expect(enableGitHubPagesMock).toHaveBeenCalledWith('test-org', 'content-test-org-cs101');
   });
@@ -227,10 +227,10 @@ describe('page.createPage', () => {
       createPage({ classroomId: 'class-1', title: 'X', createdBy: 'user-1' })
     ).rejects.toThrow('Git organization not configured');
 
-    classroomFindUniqueMock.mockResolvedValue({ ...classroom, content_namespace: null });
+    classroomFindUniqueMock.mockResolvedValue({ ...classroom, content_repo: null });
     await expect(
       createPage({ classroomId: 'class-1', title: 'X', createdBy: 'user-1' })
-    ).rejects.toThrow('Classroom content namespace not configured');
+    ).rejects.toThrow('Classroom content repo not configured');
   });
 
   it('refuses a content-path collision BEFORE any GitHub write (U3)', async () => {

@@ -48,7 +48,7 @@ const page = {
   title: 'Syllabus',
   content_path: 'pages/syllabus',
   classroom: {
-    content_namespace: 'cs101',
+    content_repo: 'content-test-org-cs101',
     git_organization: gitOrganization,
   },
 };
