@@ -6,6 +6,7 @@
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
+    "test": "vitest run",
     "trigger:dev": "npx trigger.dev@4.4.0 dev",
     "trigger:login": "npx trigger.dev@4.4.0 login",
     "trigger:deploy": "npx trigger.dev@4.4.0 deploy --push",
@@ -26,12 +27,13 @@
     "@trigger.dev/sdk": "4.4.0",
     "jsonwebtoken": "^9.0.2",
     "node-fetch": "^3.3.2",
+    "resend": "^6.20.0",
     "simple-git": "^3.36.0"
   },
   "trigger.dev": {
     "endpointId": "classflow-ahnN"
   },
   "devDependencies": {
-    "@types/nodemailer": "^7.0.11"
+    "vitest": "^4.1.4"
   }
 }
