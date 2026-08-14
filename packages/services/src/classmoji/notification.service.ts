@@ -151,6 +151,12 @@ const enqueueEmails = async ({
         })
       : null;
 
+    // Collect first, then enqueue once. A classroom-wide notification used to
+    // fire one trigger (and one Resend request) per recipient, which burns the
+    // team-wide 10 req/s budget; the batch task collapses it into one request
+    // per 100 recipients.
+    const emails = [];
+
     for (const user of recipients) {
       if (!user.email) continue;
       const pref = user.notification_preference;
@@ -167,11 +173,16 @@ const enqueueEmails = async ({
         metadata: asRecord(metadata),
       });
 
-      try {
-        await tasks.trigger('send_email', { to: user.email, template });
-      } catch (error) {
-        console.error('[notifications] email enqueue failed', { userId: user.id, type, error });
-      }
+      emails.push({ to: user.email, template });
+    }
+
+    if (emails.length === 0) return;
+
+    try {
+      await tasks.trigger('send_batch_email', { emails });
+    } catch (error) {
+      // Notifications must never break the primary action.
+      console.error('[notifications] email enqueue failed', { type, count: emails.length, error });
     }
   } catch (error) {
     console.error('[notifications] enqueueEmails failed', { type, error });

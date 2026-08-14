@@ -34,7 +34,7 @@ vi.mock('@classmoji/services', () => ({
 }));
 
 vi.mock('@classmoji/tasks', () => ({
-  default: { sendEmailTask: { batchTrigger: (...a: unknown[]) => mocks.batchTrigger(...a) } },
+  default: { sendBatchEmailTask: { trigger: (...a: unknown[]) => mocks.batchTrigger(...a) } },
 }));
 
 vi.mock('@trigger.dev/sdk', () => ({
@@ -75,7 +75,7 @@ describe('roster_add_student', () => {
     mocks.addStudents.mockResolvedValue({
       addedExistingUsers: 1,
       invitedNewUsers: 1,
-      emails: [{ payload: { to: 'a@x.edu', subject: 's', html: 'h' } }],
+      emails: [{ payload: { to: 'a@x.edu', template: { id: 'roster-added', variables: {} } } }],
     });
 
     const payload = parse(await rosterAddStudentTool.handler(ARGS, CTX));
@@ -86,7 +86,11 @@ describe('roster_add_student', () => {
       classroomId: 'class-1',
       students: ARGS.students,
     });
+    // One batched request for the whole roster, not one per recipient.
     expect(mocks.batchTrigger).toHaveBeenCalledTimes(1);
+    expect(mocks.batchTrigger).toHaveBeenCalledWith({
+      emails: [{ to: 'a@x.edu', template: { id: 'roster-added', variables: {} } }],
+    });
     expect((mocks.auditCreate.mock.calls[0][0] as { action: string }).action).toBe('CREATE');
   });
 
@@ -100,7 +104,7 @@ describe('roster_add_student', () => {
     mocks.addStudents.mockResolvedValue({
       addedExistingUsers: 1,
       invitedNewUsers: 0,
-      emails: [{ payload: { to: 'a@x.edu', subject: 's', html: 'h' } }],
+      emails: [{ payload: { to: 'a@x.edu', template: { id: 'roster-added', variables: {} } } }],
     });
     mocks.batchTrigger.mockRejectedValue(new Error('trigger down'));
 
