@@ -12,6 +12,9 @@ import {
   applyPhaseUpdate,
   applyPhaseUpdates,
   withSummaryParts,
+  withIdMaps,
+  importedSourceIds,
+  buildSummaryParts,
   overallPercent,
   IMPORT_PHASE_ORDER,
   IMPORT_PHASE_LABELS,
@@ -342,5 +345,129 @@ describe('overallPercent', () => {
       { phase: 'pages', status: 'running', done: 1, total: 3 },
     ]);
     expect(Number.isInteger(overallPercent(progress))).toBe(true);
+  });
+});
+
+describe('withIdMaps', () => {
+  const base = buildInitialProgress({ pages: true, slides: true });
+
+  it('attaches maps to a progress object that had none', () => {
+    const next = withIdMaps(base, { pages: { 'src-1': 'new-1' } });
+    expect(next.id_maps).toEqual({ pages: { 'src-1': 'new-1' } });
+  });
+
+  it('MERGES rather than replaces — one phase must not erase another phase hand-off', () => {
+    const withRepos = withIdMaps(base, { repositories: { 'r-1': 'R1' }, quizzes: { 'q-1': 'Q1' } });
+    const withPages = withIdMaps(withRepos, { pages: { 'p-1': 'P1' } });
+    expect(withPages.id_maps).toEqual({
+      repositories: { 'r-1': 'R1' },
+      quizzes: { 'q-1': 'Q1' },
+      pages: { 'p-1': 'P1' },
+    });
+  });
+
+  it('merges INTO an existing kind, later entries winning per key', () => {
+    const first = withIdMaps(base, { pages: { 'p-1': 'P1', 'p-2': 'P2' } });
+    const second = withIdMaps(first, { pages: { 'p-2': 'P2-again', 'p-3': 'P3' } });
+    expect(second.id_maps?.pages).toEqual({ 'p-1': 'P1', 'p-2': 'P2-again', 'p-3': 'P3' });
+  });
+
+  it('is pure: neither the progress nor the incoming maps are mutated', () => {
+    const incoming = { pages: { 'p-1': 'P1' } };
+    const first = withIdMaps(base, incoming);
+    withIdMaps(first, { pages: { 'p-2': 'P2' } });
+    expect(base.id_maps).toBeUndefined();
+    expect(first.id_maps?.pages).toEqual({ 'p-1': 'P1' });
+    expect(incoming).toEqual({ pages: { 'p-1': 'P1' } });
+  });
+
+  it('leaves the phases untouched', () => {
+    expect(withIdMaps(base, { slides: { 's-1': 'S1' } }).phases).toEqual(base.phases);
+  });
+});
+
+describe('importedSourceIds', () => {
+  it('returns the SOURCE ids already imported for a kind — the resume skip-set', () => {
+    const progress = withIdMaps(buildInitialProgress({ pages: true }), {
+      pages: { 'src-a': 'new-a', 'src-b': 'new-b' },
+    });
+    const skip = importedSourceIds(progress, 'pages');
+    expect(skip.has('src-a')).toBe(true);
+    expect(skip.has('src-b')).toBe(true);
+    expect(skip.has('new-a')).toBe(false);
+    expect(skip.size).toBe(2);
+  });
+
+  it('is empty for a kind never written, and for a job with no maps at all', () => {
+    const progress = withIdMaps(buildInitialProgress({ pages: true }), { pages: { a: 'A' } });
+    expect(importedSourceIds(progress, 'slides').size).toBe(0);
+    expect(importedSourceIds(buildInitialProgress({}), 'pages').size).toBe(0);
+  });
+});
+
+describe('buildSummaryParts', () => {
+  it('emits the fragments in the order the synchronous action used', () => {
+    expect(
+      buildSummaryParts({
+        repositories: 2,
+        assignments: 3,
+        quizzes: 1,
+        settings: true,
+        grade_mappings: 4,
+        calendar_events: 5,
+        pages: 24,
+        slides: 19,
+        modules: 6,
+        duplicated_templates: 2,
+      })
+    ).toEqual([
+      '2 repositories',
+      '3 assignments',
+      '1 quiz',
+      'settings',
+      '4 grade mappings',
+      '5 calendar events',
+      '24 pages',
+      '19 slide decks',
+      '6 modules',
+      '2 duplicated templates',
+    ]);
+  });
+
+  it('singularizes each count, including the irregular plurals', () => {
+    expect(
+      buildSummaryParts({
+        repositories: 1,
+        assignments: 1,
+        quizzes: 1,
+        grade_mappings: 1,
+        calendar_events: 1,
+        pages: 1,
+        slides: 1,
+        modules: 1,
+        duplicated_templates: 1,
+      })
+    ).toEqual([
+      '1 repository',
+      '1 assignment',
+      '1 quiz',
+      '1 grade mapping',
+      '1 calendar event',
+      '1 page',
+      '1 slide deck',
+      '1 module',
+      '1 duplicated template',
+    ]);
+  });
+
+  it('omits zero and absent counts — a run must never claim "0 quizzes"', () => {
+    expect(buildSummaryParts({ pages: 3, slides: 0, quizzes: 0, settings: false })).toEqual([
+      '3 pages',
+    ]);
+    expect(buildSummaryParts({})).toEqual([]);
+  });
+
+  it('reports settings as a bare word, with no count', () => {
+    expect(buildSummaryParts({ settings: true })).toEqual(['settings']);
   });
 });

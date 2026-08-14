@@ -89,6 +89,28 @@ export interface CountedPhaseProgress {
   note?: string;
 }
 
+/**
+ * Source id → new id, per entity kind, accumulated ACROSS phases.
+ *
+ * Two jobs, both load-bearing:
+ *  - HAND-OFF: the modules phase remaps module items onto ids minted by earlier
+ *    phases (repositories/quizzes in the synchronous action, pages/slides in the
+ *    content task). Carrying them on the row is what lets those phases run in
+ *    separate task runs with no shared memory.
+ *  - RESUME: a retried run skips source items already present here, so a phase
+ *    that died halfway does not duplicate what it already created.
+ *
+ * `templates` is keyed by source template ref (`owner/name`) rather than an id,
+ * matching `TemplateDuplicationSummary.template_map`.
+ */
+export interface ImportIdMaps {
+  repositories?: Record<string, string>;
+  quizzes?: Record<string, string>;
+  pages?: Record<string, string>;
+  slides?: Record<string, string>;
+  templates?: Record<string, string>;
+}
+
 export interface ImportProgress {
   phases: {
     config: SummaryPhaseProgress;
@@ -104,6 +126,37 @@ export interface ImportProgress {
    * one place — the same parts the old synchronous action returned inline.
    */
   parts?: string[];
+  /** See ImportIdMaps — cross-phase hand-off plus resume skip-sets. */
+  id_maps?: ImportIdMaps;
+  /**
+   * What each finished phase actually imported, accumulated as the run goes.
+   * The action seeds the phases it ran synchronously; the task adds its own.
+   * `buildSummaryParts` turns this into the final success line — which is why
+   * it has to survive on the row rather than living in one phase's memory.
+   */
+  counts?: ImportSummaryCounts;
+}
+
+/**
+ * A verbatim snapshot of the `importConfig` the create-classroom request
+ * carried, stored on `ImportJob.selections`.
+ *
+ * The task reads its WHOLE input from this row, which is what keeps the trigger
+ * payload a bare `{ importJobId }` and the run replayable. `config` and
+ * `repositories` describe phases the action already ran synchronously — they
+ * are kept for the record (and for a future resume of those phases), not re-run.
+ */
+export interface ImportJobSelections {
+  /** ClassroomSettings groups, as the create-classroom form posts them. */
+  config?: Record<string, boolean>;
+  /** Source repository ids the user picked, with their per-repo quiz flag. */
+  repositories?: Array<{ id: string; includeQuizzes?: boolean }>;
+  content?: {
+    pages?: boolean;
+    slides?: boolean;
+    modules?: boolean;
+    duplicateTemplates?: boolean;
+  };
 }
 
 /** Which phases the user actually asked for. Unselected phases start `skipped`. */
@@ -236,6 +289,102 @@ export function applyPhaseUpdates(
 /** Attach the final success-message parts (returns a new object). */
 export function withSummaryParts(progress: ImportProgress, parts: string[]): ImportProgress {
   return { ...progress, parts };
+}
+
+/** Every kind an ImportIdMaps can carry, so merges iterate one list. */
+const ID_MAP_KINDS: readonly (keyof ImportIdMaps)[] = [
+  'repositories',
+  'quizzes',
+  'pages',
+  'slides',
+  'templates',
+];
+
+/**
+ * Merge id-map entries into `progress.id_maps` (returns a new object; neither
+ * input is mutated).
+ *
+ * Merge, never replace: a phase only ever knows about the ids IT minted, and
+ * blowing away another phase's entries would break both the modules hand-off
+ * and the resume skip-sets. Later entries win per key, which makes a re-run of
+ * the same item idempotent rather than duplicative.
+ */
+export function withIdMaps(progress: ImportProgress, maps: ImportIdMaps): ImportProgress {
+  const merged: ImportIdMaps = { ...progress.id_maps };
+  for (const kind of ID_MAP_KINDS) {
+    const incoming = maps[kind];
+    if (!incoming) continue;
+    merged[kind] = { ...merged[kind], ...incoming };
+  }
+  return { ...progress, id_maps: merged };
+}
+
+/** The ids of one kind already imported — the resume skip-set for that phase. */
+export function importedSourceIds(
+  progress: ImportProgress,
+  kind: keyof ImportIdMaps
+): ReadonlySet<string> {
+  return new Set(Object.keys(progress.id_maps?.[kind] ?? {}));
+}
+
+/**
+ * Merge counted results into `progress.counts` (returns a new object).
+ *
+ * Patch, not replace: each phase only reports what IT imported, and the final
+ * success line is the union. A repeated key overwrites rather than adds, so a
+ * resumed phase that re-reports its own total stays accurate instead of
+ * doubling.
+ */
+export function withCounts(progress: ImportProgress, patch: ImportSummaryCounts): ImportProgress {
+  return { ...progress, counts: { ...progress.counts, ...patch } };
+}
+
+/** Everything the final success line can mention. Every field optional/zeroed. */
+export interface ImportSummaryCounts {
+  repositories?: number;
+  assignments?: number;
+  quizzes?: number;
+  /** true when any ClassroomSettings field was actually copied. */
+  settings?: boolean;
+  /** emoji + letter-grade mappings, already summed. */
+  grade_mappings?: number;
+  calendar_events?: number;
+  pages?: number;
+  slides?: number;
+  modules?: number;
+  duplicated_templates?: number;
+}
+
+/** `1 page` / `3 pages` — irregular plurals passed explicitly. */
+function plural(n: number, singular: string, pluralForm = `${singular}s`): string {
+  return `${n} ${n === 1 ? singular : pluralForm}`;
+}
+
+/**
+ * The final success-message fragments, in the order the synchronous action used
+ * to emit them ("Classroom created with <parts joined by ', '> imported!").
+ *
+ * Pure and unit-tested here rather than in the banner, because the phases that
+ * produce these counts now finish in a background task long after the action
+ * returned — the wording has to be built somewhere both sides agree on.
+ * A zero/absent count contributes NOTHING: a run that imported no quizzes must
+ * not claim "0 quizzes".
+ */
+export function buildSummaryParts(counts: ImportSummaryCounts): string[] {
+  const parts: string[] = [];
+  if (counts.repositories) parts.push(plural(counts.repositories, 'repository', 'repositories'));
+  if (counts.assignments) parts.push(plural(counts.assignments, 'assignment'));
+  if (counts.quizzes) parts.push(plural(counts.quizzes, 'quiz', 'quizzes'));
+  if (counts.settings) parts.push('settings');
+  if (counts.grade_mappings) parts.push(plural(counts.grade_mappings, 'grade mapping'));
+  if (counts.calendar_events) parts.push(plural(counts.calendar_events, 'calendar event'));
+  if (counts.pages) parts.push(plural(counts.pages, 'page'));
+  if (counts.slides) parts.push(plural(counts.slides, 'slide deck'));
+  if (counts.modules) parts.push(plural(counts.modules, 'module'));
+  if (counts.duplicated_templates) {
+    parts.push(plural(counts.duplicated_templates, 'duplicated template'));
+  }
+  return parts;
 }
 
 /**

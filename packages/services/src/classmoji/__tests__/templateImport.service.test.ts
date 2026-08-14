@@ -18,6 +18,7 @@ const {
   formatTemplateRef,
   templateRefKey,
   groupTemplateRefs,
+  lookupKnownTemplate,
   templateNameCandidates,
   formatWarning,
   parseSecondaryRateLimit,
@@ -284,5 +285,38 @@ describe('parseSecondaryRateLimit', () => {
     expect(parseSecondaryRateLimit(null)).toBeNull();
     expect(parseSecondaryRateLimit(undefined)).toBeNull();
     expect(parseSecondaryRateLimit('secondary rate limit')).toBeNull();
+  });
+});
+
+describe('lookupKnownTemplate', () => {
+  const ref = { owner: 'src-org', name: 'lab1-template' };
+
+  it('returns the duplicate a previous run already made', () => {
+    expect(
+      lookupKnownTemplate({ 'src-org/lab1-template': 'lab1-template-26w' }, ref, 'tgt-org')
+    ).toBe('lab1-template-26w');
+  });
+
+  it('matches case-insensitively — a missed match would duplicate the template twice', () => {
+    expect(lookupKnownTemplate({ 'SRC-ORG/Lab1-Template': 'lab1-26w' }, ref, 'tgt-org')).toBe(
+      'lab1-26w'
+    );
+  });
+
+  it('resolves a bare key against the fallback owner', () => {
+    expect(lookupKnownTemplate({ 'lab1-template': 'lab1-26w' }, ref, 'src-org')).toBe('lab1-26w');
+    // Same bare key, but the fallback now names a different org — not a match.
+    expect(lookupKnownTemplate({ 'lab1-template': 'lab1-26w' }, ref, 'tgt-org')).toBeNull();
+  });
+
+  it('returns null for an unknown template, an absent map, or an empty name', () => {
+    expect(lookupKnownTemplate({ 'src-org/other': 'other-26w' }, ref, 'tgt-org')).toBeNull();
+    expect(lookupKnownTemplate(undefined, ref, 'tgt-org')).toBeNull();
+    expect(lookupKnownTemplate({}, ref, 'tgt-org')).toBeNull();
+    expect(lookupKnownTemplate({ 'src-org/lab1-template': '' }, ref, 'tgt-org')).toBeNull();
+  });
+
+  it('ignores unusable keys instead of throwing', () => {
+    expect(lookupKnownTemplate({ '': 'x', 'a/b/c': 'y' }, ref, 'tgt-org')).toBeNull();
   });
 });

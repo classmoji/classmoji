@@ -75,6 +75,18 @@ export interface TemplateImportOptions {
     /** Transient status (e.g. a rate-limit wait). `null` clears it. */
     note?: string | null;
   }) => void | Promise<void>;
+  /**
+   * Templates a PREVIOUS run of this same import already duplicated: source ref
+   * (`owner/name`) → the duplicate's name in the target org.
+   *
+   * Resume support. Duplicating a repo is not idempotent — a second run would
+   * mint `lab1-template-2` beside the perfectly good `lab1-template` the first
+   * run made, and burn a paced 15s create doing it. A ref listed here is
+   * RELINKED ONLY: the rows are repointed if they aren't already (a run that
+   * died between the create and the relink left them stale), and no GitHub call
+   * is made at all.
+   */
+  knownTemplateMap?: Readonly<Record<string, string>>;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -151,6 +163,29 @@ export function groupTemplateRefs(
     groups.set(key, { ref, rawRefs: [raw] });
   }
   return [...groups.values()];
+}
+
+/**
+ * The already-made duplicate's name for `ref`, or null when this template has
+ * not been duplicated yet.
+ *
+ * Matched on `templateRefKey`, not on raw string equality: the map is written
+ * from `formatTemplateRef` output, but the rows it will be compared against can
+ * spell the same template with different casing (GitHub is case-insensitive),
+ * and a missed match would duplicate the template a second time.
+ */
+export function lookupKnownTemplate(
+  knownTemplateMap: Readonly<Record<string, string>> | undefined,
+  ref: TemplateRef,
+  fallbackOwner: string
+): string | null {
+  if (!knownTemplateMap) return null;
+  const wanted = templateRefKey(ref);
+  for (const [knownRef, newName] of Object.entries(knownTemplateMap)) {
+    const parsed = parseTemplateRef(knownRef, fallbackOwner);
+    if (parsed && templateRefKey(parsed) === wanted) return newName || null;
+  }
+  return null;
 }
 
 /**
@@ -493,6 +528,26 @@ export const duplicateImportedTemplates = async (
 
   const groups = groupTemplateRefs(importedRows, sourceOrg?.login ?? targetOrg.login);
 
+  /**
+   * Repoint every imported row that spells this template one of `rawRefs` at the
+   * duplicate `newName`, returning how many rows actually changed. Scoped to
+   * `scopedIds` (target-classroom rows only) — that scope is what keeps SOURCE
+   * rows untouched. A row already pointing at the new ref reports 0, which is
+   * what makes a resumed relink a no-op rather than a double count.
+   */
+  const relinkRows = async (rawRefs: string[], newName: string): Promise<number> => {
+    const newRef = `${targetOrg.login}/${newName}`;
+    let relinked = 0;
+    for (const rawRef of rawRefs) {
+      const { count } = await getPrisma().repository.updateMany({
+        where: { id: { in: scopedIds }, template: rawRef },
+        data: { template: newRef },
+      });
+      relinked += count;
+    }
+    return relinked;
+  };
+
   // The real total lands before the empty-set return, so the bar sizes itself
   // the moment the phase starts even when there is nothing to duplicate.
   const total = groups.length;
@@ -520,6 +575,23 @@ export const duplicateImportedTemplates = async (
     try {
       const sourceRef = formatTemplateRef(group.ref);
       const scope = `template ${sourceRef}`;
+
+      // Resume: a previous attempt of THIS import already duplicated this
+      // template. Repoint anything still stale (a run can die between the create
+      // and the relink) and move on — no GitHub call, no second copy, and none
+      // of the 15s create pacing. Counted as consumed by the `finally`, and
+      // reported in `template_map` so the caller's total stays right, but NOT
+      // as `duplicated`: this run did not duplicate it.
+      const knownName = lookupKnownTemplate(opts.knownTemplateMap, group.ref, targetOrg.login);
+      if (knownName) {
+        try {
+          summary.relinked += await relinkRows(group.rawRefs, knownName);
+          summary.template_map[sourceRef] = knownName;
+        } catch (error: unknown) {
+          warn(scope, `relink of the existing duplicate failed: ${errText(error)}`);
+        }
+        continue;
+      }
 
       // Readable only through an installation this flow holds: the target org's,
       // or the source classroom's. Anything else (a third org, a personal
@@ -620,18 +692,8 @@ export const duplicateImportedTemplates = async (
           throw uploadError;
         }
 
-        const newRef = `${targetOrg.login}/${newName}`;
-        let relinked = 0;
-        for (const rawRef of group.rawRefs) {
-          const { count } = await getPrisma().repository.updateMany({
-            where: { id: { in: scopedIds }, template: rawRef },
-            data: { template: newRef },
-          });
-          relinked += count;
-        }
-
         summary.duplicated++;
-        summary.relinked += relinked;
+        summary.relinked += await relinkRows(group.rawRefs, newName);
         summary.template_map[sourceRef] = newName;
       } catch (error: unknown) {
         warn(scope, `duplication failed: ${errText(error)}`);

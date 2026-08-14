@@ -10,6 +10,7 @@ import * as contributionTasks from './workflows/contribution.ts';
 import * as repoAnalyticsTasks from './workflows/repoAnalytics.ts';
 import * as notificationTasks from './workflows/notifications.ts';
 import * as importGithubClassroomTasks from './workflows/importGithubClassroom.ts';
+import * as classroomImportTasks from './workflows/classroomImport.ts';
 
 // comment to trigger a build
 
@@ -26,6 +27,7 @@ const Tasks = {
   ...repoAnalyticsTasks,
   ...notificationTasks,
   ...importGithubClassroomTasks,
+  ...classroomImportTasks,
 };
 
 export default Tasks;

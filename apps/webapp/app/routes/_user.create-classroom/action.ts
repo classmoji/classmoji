@@ -6,6 +6,18 @@ import {
   getGitProvider,
   ensureClassroomTeam,
 } from '@classmoji/services';
+import {
+  applyPhaseUpdates,
+  buildInitialProgress,
+  buildSummaryParts,
+  withCounts,
+  withIdMaps,
+  type ImportPhaseCounts,
+  type ImportPhaseSelections,
+  type ImportProgress,
+  type ImportSummaryCounts,
+} from '@classmoji/services/import-progress';
+import Tasks from '@classmoji/tasks';
 import { ActionTypes } from '~/constants';
 import getPrisma from '@classmoji/database';
 import {
@@ -14,6 +26,10 @@ import {
   suggestContentNamespace,
 } from '@classmoji/utils';
 import { slugify } from './utils';
+
+/** Background work needs Trigger.dev; without it the async phases can't run. */
+const isTriggerConfigured = () =>
+  Boolean(process.env.TRIGGER_SECRET_KEY || process.env.TRIGGER_ACCESS_TOKEN);
 
 /**
  * Pick a free internal content namespace for a new classroom in this org.
@@ -217,10 +233,15 @@ export const action = checkAuth(async ({ request }: { request: Request }) => {
     throw error;
   }
 
-  // Import from a source classroom if configured. Phases (each best-effort,
-  // logged, never fails classroom creation): 1 settings/scales/calendar,
-  // 2 repositories(+assignments/quizzes), 3 pages/slides content,
-  // 4 module containers last (they remap onto the ids minted in 2 and 3).
+  // Import from a source classroom if configured.
+  //
+  // SPLIT BY COST, not by phase order. Everything that is pure DB and finishes
+  // in seconds runs here, inside the request: the settings/scales/calendar copy
+  // and the repository(+assignment/quiz) clone. Everything that talks to GitHub
+  // — template duplication, the content-repo copy, and the modules phase that
+  // depends on the ids those mint — is handed to the `classroom-import`
+  // Trigger.dev task, and this action returns as soon as the job row exists.
+  // Before that split a real course pinned this request for 40+ minutes.
   let importResult = null;
   let configSummary: {
     settings_fields: string[];
@@ -228,21 +249,9 @@ export const action = checkAuth(async ({ request }: { request: Request }) => {
     letter_grade_mappings: number;
     calendar_events: number;
   } | null = null;
-  let contentSummary: {
-    pages: number;
-    slides: number;
-    page_id_map: Record<string, string>;
-    slide_id_map: Record<string, string>;
-    warnings: string[];
-  } | null = null;
-  let modulesSummary: { modules: number; items: number; skipped_items: number } | null = null;
-  let templateSummary: {
-    duplicated: number;
-    relinked: number;
-    template_map: Record<string, string>;
-    warnings: string[];
-  } | null = null;
   const importWarnings: string[] = [];
+  /** Source repositories that survived the ownership filter (drives templates). */
+  let repoConfigs: Array<{ id: string; includeQuizzes?: boolean }> = [];
 
   if (importRequested && sourceClassroomId) {
     if (anyConfigSelected) {
@@ -269,7 +278,7 @@ export const action = checkAuth(async ({ request }: { request: Request }) => {
           })
         ).map(r => r.id)
       );
-      const repoConfigs = requestedRepos.filter(r => sourceRepoIds.has(r.id));
+      repoConfigs = requestedRepos.filter(r => sourceRepoIds.has(r.id));
       if (repoConfigs.length !== requestedRepos.length) {
         importWarnings.push('repositories outside the source classroom were skipped');
       }
@@ -284,56 +293,6 @@ export const action = checkAuth(async ({ request }: { request: Request }) => {
           console.error('Error importing repositories:', error);
           importWarnings.push('repository copy failed');
         }
-      }
-    }
-
-    // Template duplication runs on the rows phase 2 just minted, so the copies
-    // exist before anything provisions student repos from them. Best-effort:
-    // a template that can't be duplicated keeps pointing at the original.
-    if (contentSelections.duplicateTemplates && (importResult?.repositories?.length ?? 0) > 0) {
-      try {
-        templateSummary = await ClassmojiService.templateImport.duplicateImportedTemplates(
-          sourceClassroomId,
-          classroom.id,
-          importResult!.repositories.map(repo => repo.id)
-        );
-        importWarnings.push(...(templateSummary?.warnings ?? []));
-      } catch (error: unknown) {
-        console.error('Error duplicating template repositories:', error);
-        importWarnings.push('template duplication failed');
-      }
-    }
-
-    if (contentSelections.pages || contentSelections.slides) {
-      try {
-        contentSummary = await ClassmojiService.contentImport.importClassroomContent(
-          sourceClassroomId,
-          classroom.id,
-          user.id,
-          { pages: !!contentSelections.pages, slides: !!contentSelections.slides }
-        );
-        importWarnings.push(...(contentSummary?.warnings ?? []));
-      } catch (error: unknown) {
-        console.error('Error importing pages/slides content:', error);
-        importWarnings.push('page/slide content copy failed');
-      }
-    }
-
-    if (contentSelections.modules) {
-      try {
-        modulesSummary = await ClassmojiService.classroomConfigImport.importModules(
-          sourceClassroomId,
-          classroom.id,
-          {
-            repositories: importResult?.idMaps?.repositories ?? {},
-            quizzes: importResult?.idMaps?.quizzes ?? {},
-            pages: contentSummary?.page_id_map ?? {},
-            slides: contentSummary?.slide_id_map ?? {},
-          }
-        );
-      } catch (error: unknown) {
-        console.error('Error importing modules:', error);
-        importWarnings.push('module copy failed');
       }
     }
   }
@@ -357,51 +316,175 @@ export const action = checkAuth(async ({ request }: { request: Request }) => {
     );
   }
 
-  // Build success message
-  let successMessage = 'Classroom created successfully!';
-  {
-    const plural = (n: number, singular: string, pluralForm = `${singular}s`) =>
-      `${n} ${n === 1 ? singular : pluralForm}`;
-    const parts: string[] = [];
-    if (importResult) {
-      if (importResult.repositories.length > 0)
-        parts.push(plural(importResult.repositories.length, 'repository', 'repositories'));
-      if (importResult.assignments.length > 0)
-        parts.push(plural(importResult.assignments.length, 'assignment'));
-      if (importResult.quizzes.length > 0)
-        parts.push(plural(importResult.quizzes.length, 'quiz', 'quizzes'));
+  // ── Hand the GitHub-bound phases to the background task ────────────────────
+  // Templates only matter if repositories were actually cloned — there is
+  // nothing to duplicate or relink otherwise.
+  const wantsTemplates =
+    !!contentSelections.duplicateTemplates && (importResult?.repositories.length ?? 0) > 0;
+  const wantsPages = !!contentSelections.pages;
+  const wantsSlides = !!contentSelections.slides;
+  const wantsModules = !!contentSelections.modules;
+  const hasBackgroundWork =
+    importRequested &&
+    !!sourceClassroomId &&
+    (wantsTemplates || wantsPages || wantsSlides || wantsModules);
+
+  /** What THIS request imported — seeded onto the job so the final line is whole. */
+  const syncCounts: ImportSummaryCounts = {
+    repositories: importResult?.repositories.length ?? 0,
+    assignments: importResult?.assignments.length ?? 0,
+    quizzes: importResult?.quizzes.length ?? 0,
+    settings: (configSummary?.settings_fields.length ?? 0) > 0,
+    grade_mappings:
+      (configSummary?.emoji_mappings ?? 0) + (configSummary?.letter_grade_mappings ?? 0),
+    calendar_events: configSummary?.calendar_events ?? 0,
+  };
+
+  let importJobId: string | null = null;
+  if (hasBackgroundWork) {
+    // Cheap totals so the bars are sized before the task even starts — an
+    // unsized bar is the thing that makes a slow import look broken. The task
+    // re-reports the real total when each phase begins.
+    const [sourcePages, sourceSlides, templateRows] = await Promise.all([
+      wantsPages
+        ? getPrisma().page.count({ where: { classroom_id: sourceClassroomId } })
+        : Promise.resolve(0),
+      wantsSlides
+        ? getPrisma().slide.count({ where: { classroom_id: sourceClassroomId } })
+        : Promise.resolve(0),
+      wantsTemplates
+        ? getPrisma().repository.findMany({
+            where: { id: { in: repoConfigs.map(r => r.id) } },
+            select: { template: true },
+          })
+        : Promise.resolve([] as Array<{ template: string | null }>),
+    ]);
+
+    const phaseSelections: ImportPhaseSelections = {
+      config: anyConfigSelected,
+      repositories: repoConfigs.length > 0,
+      templates: wantsTemplates,
+      pages: wantsPages,
+      slides: wantsSlides,
+      modules: wantsModules,
+    };
+    const phaseCounts: ImportPhaseCounts = {
+      repositories: importResult?.repositories.length ?? 0,
+      // Distinct templates, not rows: several assignments commonly share one.
+      templates: ClassmojiService.templateImport.groupTemplateRefs(templateRows, gitOrg.login)
+        .length,
+      pages: sourcePages,
+      slides: sourceSlides,
+    };
+
+    let progress: ImportProgress = buildInitialProgress(phaseSelections, phaseCounts);
+    // The two phases this request already finished are recorded as done up
+    // front, so the banner opens showing real completed work rather than an
+    // empty bar that has to catch up.
+    progress = applyPhaseUpdates(progress, [
+      ...(anyConfigSelected
+        ? [
+            {
+              phase: 'config' as const,
+              status: 'done' as const,
+              summary:
+                buildSummaryParts({
+                  settings: syncCounts.settings,
+                  grade_mappings: syncCounts.grade_mappings,
+                  calendar_events: syncCounts.calendar_events,
+                }).join(', ') || 'nothing to copy',
+            },
+          ]
+        : []),
+      ...(repoConfigs.length > 0
+        ? [
+            {
+              phase: 'repositories' as const,
+              status: 'done' as const,
+              done: importResult?.repositories.length ?? 0,
+              total: importResult?.repositories.length ?? 0,
+            },
+          ]
+        : []),
+    ]);
+    // The ids the modules phase will remap onto. They exist only in this
+    // request's memory, so the row is the only way they reach the task.
+    progress = withIdMaps(progress, {
+      repositories: importResult?.idMaps.repositories ?? {},
+      quizzes: importResult?.idMaps.quizzes ?? {},
+    });
+    progress = withCounts(progress, syncCounts);
+
+    try {
+      const job = await getPrisma().importJob.create({
+        data: {
+          classroom_id: classroom.id,
+          source_classroom_id: sourceClassroomId,
+          requested_by: user.id,
+          status: 'PENDING',
+          selections: {
+            config: configSelections,
+            repositories: repoConfigs,
+            content: contentSelections,
+          },
+          progress: progress as unknown as object,
+          warnings: importWarnings as unknown as object,
+        },
+      });
+      importJobId = job.id;
+
+      if (!isTriggerConfigured()) {
+        // No worker to pick this up. Fail the job immediately rather than leave
+        // a PENDING row the banner would poll forever.
+        await getPrisma().importJob.update({
+          where: { id: job.id },
+          data: {
+            status: 'FAILED',
+            error: 'The background job service (Trigger.dev) is not configured here.',
+          },
+        });
+        importWarnings.push('background import service unavailable — import not started');
+      } else {
+        await Tasks.classroomImportTask.trigger({ importJobId: job.id });
+      }
+    } catch (error: unknown) {
+      // The classroom itself is fine and everything synchronous already landed,
+      // so this is a warning on a successful create — never an error response.
+      console.error('Error starting the background import:', error);
+      if (importJobId) {
+        await getPrisma()
+          .importJob.update({
+            where: { id: importJobId },
+            data: {
+              status: 'FAILED',
+              error: error instanceof Error ? error.message : String(error),
+            },
+          })
+          .catch(() => {});
+      }
+      importWarnings.push('could not start the background import');
     }
-    if (configSummary) {
-      if (configSummary.settings_fields.length > 0) parts.push('settings');
-      const scales = configSummary.emoji_mappings + configSummary.letter_grade_mappings;
-      if (scales > 0) parts.push(plural(scales, 'grade mapping'));
-      if (configSummary.calendar_events > 0)
-        parts.push(plural(configSummary.calendar_events, 'calendar event'));
-    }
-    if (contentSummary) {
-      if (contentSummary.pages > 0) parts.push(plural(contentSummary.pages, 'page'));
-      if (contentSummary.slides > 0) parts.push(plural(contentSummary.slides, 'slide deck'));
-    }
-    if (modulesSummary && modulesSummary.modules > 0) {
-      parts.push(plural(modulesSummary.modules, 'module'));
-    }
-    if (templateSummary && templateSummary.duplicated > 0) {
-      parts.push(
-        `${templateSummary.duplicated} duplicated template${templateSummary.duplicated === 1 ? '' : 's'}`
-      );
-    }
-    if (parts.length > 0) {
-      successMessage = `Classroom created with ${parts.join(', ')} imported!`;
-    }
-    if (importWarnings.length > 0) {
-      successMessage += ` (${importWarnings.length} item${importWarnings.length === 1 ? '' : 's'} skipped — see server logs)`;
-    }
+  }
+
+  // Build success message — only what this request actually imported. The
+  // background phases report themselves through the progress banner.
+  const syncParts = buildSummaryParts(syncCounts);
+  let successMessage =
+    syncParts.length > 0
+      ? `Classroom created with ${syncParts.join(', ')} imported!`
+      : 'Classroom created successfully!';
+  if (importJobId) {
+    successMessage += ' Import continuing in the background.';
+  }
+  if (importWarnings.length > 0) {
+    successMessage += ` (${importWarnings.length} item${importWarnings.length === 1 ? '' : 's'} skipped — see server logs)`;
   }
 
   return {
     success: successMessage,
     action: ActionTypes.CREATE_CLASSROOM,
     classroomSlug: classroom.slug,
+    import_job_id: importJobId,
     import_warnings: importWarnings,
   };
 });
