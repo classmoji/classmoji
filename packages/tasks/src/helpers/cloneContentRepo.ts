@@ -247,7 +247,9 @@ export const cloneContentRepo = async (
       return { pushed: false, rewritten: 0, files: 0 };
     }
 
-    onStep?.(`pushing ${files} files to ${target.orgLogin}/${target.repo}`);
+    onStep?.(
+      `pushing to ${target.orgLogin}/${target.repo} — one commit (${files} files), a single git push`
+    );
     const freshGit = simpleGit(localPath);
     await freshGit.init();
     await freshGit.addConfig('user.name', 'Classmoji Bot');
