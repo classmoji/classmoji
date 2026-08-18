@@ -43,10 +43,13 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
   return namedAction(request, {
     async createAssistant() {
       try {
-        const classroom = (await ClassmojiService.classroom.findBySlug(
-          classSlug
-        )) as AssistantClassroom | null;
-        await addAssistantHandler({ assistant: data, classroom: classroom! });
+        // The classroom `requireClassroomAdmin` authorized above, not a fresh
+        // lookup on the same slug — re-resolving decides a second time which
+        // classroom this membership lands in.
+        await addAssistantHandler({
+          assistant: data,
+          classroom: classroom as unknown as AssistantClassroom,
+        });
 
         return {
           success: 'Assistant created',
@@ -62,7 +65,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
     },
 
     async updateAssistant() {
-      await updateAssistantHandler(classSlug, data.login, data.isGrader);
+      await updateAssistantHandler(classroom.id, data.login, data.isGrader);
       return {
         success: 'Assistant updated',
         action: ActionTypes.SAVE_USER,
@@ -97,15 +100,15 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
   });
 };
 
+/** `classroomId` is the caller's already-authorized classroom, not a re-resolve. */
 export const updateAssistantHandler = async (
-  classSlug: string,
+  classroomId: string,
   assistantLogin: string,
   isGrader: boolean
 ) => {
-  const classroom = await ClassmojiService.classroom.findBySlug(classSlug);
   const assistant = await ClassmojiService.user.findByLogin(assistantLogin);
 
-  return ClassmojiService.classroomMembership.update(classroom!.id, assistant!.id, {
+  return ClassmojiService.classroomMembership.update(classroomId, assistant!.id, {
     is_grader: isGrader,
   });
 };

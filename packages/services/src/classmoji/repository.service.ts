@@ -105,7 +105,7 @@ export const findBySlugAndTitle = async (
   title: string,
   options: RepositoryQueryOptions = {}
 ) => {
-  const classroom = await getPrisma().classroom.findFirst({
+  const classroom = await getPrisma().classroom.findUnique({
     where: { slug: classroomSlug },
     select: { id: true },
   });
@@ -149,7 +149,7 @@ export const findByClassroomSlugAndModuleSlug = async (
   repositorySlug: string,
   options: RepositoryQueryOptions = {}
 ) => {
-  const classroom = await getPrisma().classroom.findFirst({
+  const classroom = await getPrisma().classroom.findUnique({
     where: { slug: classroomSlug },
     select: { id: true },
   });
@@ -306,7 +306,7 @@ export const createFromForm = async (values: RepositoryFormValues) => {
     branch,
   } = values;
 
-  const classroom = await getPrisma().classroom.findFirst({
+  const classroom = await getPrisma().classroom.findUnique({
     where: { slug: classroomSlug },
   });
 
@@ -438,31 +438,52 @@ export const updateWithAssignments = async (values: RepositoryUpdateValues) => {
 };
 
 /**
- * Delete a Repository
+ * Delete a Repository.
+ *
+ * `classroomId` is REQUIRED and is part of the write itself rather than a check
+ * performed beforehand: `delete({ where: { id } })` would destroy any repository
+ * whose id a caller can name, in any classroom. `deleteMany` accepts the
+ * non-unique compound, and a count other than 1 means the id did not belong to
+ * the authorized classroom — which throws rather than passing as a silent no-op.
+ *
  * @param {string} id - UUID of the Repository
+ * @param {string} classroomId - UUID of the authorized Classroom
  * @returns {Promise<Object>}
  */
-export const deleteById = async (id: string) => {
-  return getPrisma().repository.delete({
-    where: { id },
+export const deleteById = async (id: string, classroomId: string) => {
+  const { count } = await getPrisma().repository.deleteMany({
+    where: { id, classroom_id: classroomId },
   });
+  if (count !== 1) throw new Error('Repository not found in classroom');
+  return { id };
 };
 
 /**
- * Publish or unpublish a Repository
+ * Publish or unpublish a Repository.
+ *
+ * `classroomId` is REQUIRED and scopes the write — see `deleteById` above.
+ *
  * @param {string} id - UUID of the Repository
  * @param {boolean} isPublished - Whether to publish
+ * @param {string} classroomId - UUID of the authorized Classroom
  * @returns {Promise<Object>}
  */
-export const setPublished = async (id: string, isPublished: boolean) => {
-  const previous = await getPrisma().repository.findUnique({
-    where: { id },
+export const setPublished = async (id: string, isPublished: boolean, classroomId: string) => {
+  const previous = await getPrisma().repository.findFirst({
+    where: { id, classroom_id: classroomId },
     select: { is_published: true },
   });
 
-  const mod = await getPrisma().repository.update({
-    where: { id },
+  const { count } = await getPrisma().repository.updateMany({
+    where: { id, classroom_id: classroomId },
     data: { is_published: isPublished },
+  });
+  if (count !== 1) throw new Error('Repository not found in classroom');
+
+  // `updateMany` returns a count, not the row, and the notification below needs
+  // the record. The scoped write above has already proven it exists.
+  const mod = await getPrisma().repository.findUniqueOrThrow({
+    where: { id },
   });
 
   if (previous && previous.is_published !== isPublished) {

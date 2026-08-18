@@ -45,7 +45,16 @@ interface AccessOptions {
 
 interface AssertClassroomAccessOptions {
   request: Request;
-  classroomSlug: string;
+  /** Slug of the classroom being accessed. Omit when `classroomId` is given. */
+  classroomSlug?: string;
+  /**
+   * Id of the classroom being acted on. Endpoints keyed on a record id (rather
+   * than on a slug in the URL) MUST authorize with this: resolving the record
+   * by id and then authorizing against that record's slug re-resolves through a
+   * second lookup, so nothing proves the authorized classroom is the row being
+   * mutated. Passing the id binds the two together.
+   */
+  classroomId?: string;
   allowedRoles?: Role[];
   resourceType?: string;
   attemptedAction?: string;
@@ -537,9 +546,14 @@ export async function requireAuth(request: Request): Promise<AuthSessionResult> 
  * Assert that the user has access to a classroom with the specified role(s).
  * Supports ownership-based access patterns and audit logging for denied access.
  *
+ * Pass EITHER `classroomSlug` (routes whose URL carries the slug) OR
+ * `classroomId` (endpoints keyed on a record id — the id binds the authorization
+ * to the exact row being acted on), never both.
+ *
  * @param {Object} options
  * @param {Request} options.request - The request object
  * @param {string} options.classroomSlug - Classroom slug
+ * @param {string} options.classroomId - Classroom id (alternative to classroomSlug)
  * @param {string[]} options.allowedRoles - Roles with blanket access (e.g., ['OWNER', 'TEACHER'])
  * @param {string} options.resourceType - Type for audit logging
  * @param {string} options.attemptedAction - Action for audit logging
@@ -552,6 +566,7 @@ export async function requireAuth(request: Request): Promise<AuthSessionResult> 
 export const assertClassroomAccess = async ({
   request,
   classroomSlug,
+  classroomId,
   allowedRoles = [],
   resourceType = 'CLASSROOM_ACCESS',
   attemptedAction = 'access',
@@ -561,6 +576,22 @@ export const assertClassroomAccess = async ({
   requireOwnership = false,
 }: AssertClassroomAccessOptions): Promise<ClassroomAccessResult> => {
   // SECURITY: Validate parameter combinations to prevent misconfigurations
+  if (!classroomSlug && !classroomId) {
+    throw new Error(
+      '[assertClassroomAccess] Configuration error: one of classroomSlug or classroomId is required. ' +
+        `Context: resourceType="${resourceType}", attemptedAction="${attemptedAction}"`
+    );
+  }
+
+  if (classroomSlug && classroomId) {
+    throw new Error(
+      '[assertClassroomAccess] Configuration error: pass either classroomSlug or classroomId, not both. ' +
+        'Accepting both would silently ignore one of them and hide a mismatch between the classroom ' +
+        'that was authorized and the record being acted on. ' +
+        `Context: resourceType="${resourceType}", attemptedAction="${attemptedAction}"`
+    );
+  }
+
   if (requireOwnership && !resourceOwnerId) {
     throw new Error(
       '[assertClassroomAccess] Configuration error: requireOwnership is true but resourceOwnerId is not provided. ' +
@@ -586,7 +617,12 @@ export const assertClassroomAccess = async ({
     });
   }
 
-  const classroom = await ClassmojiService.classroom.findBySlug(classroomSlug);
+  // Resolving by id is what makes the authorization bind to the record the
+  // caller is acting on. The 404 body is identical either way, so an id probe
+  // leaks no more than a slug probe.
+  const classroom = classroomId
+    ? await ClassmojiService.classroom.findById(classroomId)
+    : await ClassmojiService.classroom.findBySlug(classroomSlug!);
 
   if (!classroom) {
     throw new Response('Classroom not found', {

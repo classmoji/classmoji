@@ -14,6 +14,10 @@
  *    unique across every user's sandbox.
  *
  * Idempotent: if the user's example classroom already exists, it returns early.
+ * Keyed on the owner's membership in an is_example classroom under the mock
+ * org, NOT on the `example-{login}` slug — that slug can take a collision
+ * suffix, after which a slug lookup would miss forever and re-provision the
+ * sandbox on every call.
  * Shared demo personas (TA + 3 students) are upserted once and reused across all
  * sandboxes; their memberships, repos, and grades are created per classroom.
  *
@@ -24,6 +28,7 @@
 
 import getPrisma from '@classmoji/database';
 import { defaultContentRepoName } from '@classmoji/utils';
+import { createWithUniqueClassroomSlug } from './classroomSlug.ts';
 
 const EXAMPLE_ORG = {
   provider: 'GITHUB' as const,
@@ -72,9 +77,19 @@ export async function provisionExampleClassroom(params: {
 
   const slug = `example-${ownerLogin}`.toLowerCase();
 
-  // Idempotent: if this user's example classroom already exists, do nothing.
-  const existing = await prisma.classroom.findUnique({
-    where: { git_org_id_slug: { git_org_id: org.id, slug } },
+  // Idempotent, keyed on IDENTITY rather than on the slug.
+  //
+  // `example-{login}` is globally unique only because GitHub logins are — one
+  // real classroom slugged `example-tim` and this user's sandbox has to take a
+  // suffix. A slug lookup would then miss forever and re-provision on every
+  // call. The owner's membership in an is_example classroom under the shared
+  // mock org is the thing that is actually stable.
+  const existing = await prisma.classroom.findFirst({
+    where: {
+      git_org_id: org.id,
+      is_example: true,
+      memberships: { some: { user_id: ownerUserId, role: 'OWNER' } },
+    },
     select: { id: true, slug: true },
   });
   if (existing) return existing;
@@ -84,11 +99,39 @@ export async function provisionExampleClassroom(params: {
   // strand a user in (and the idempotency check above stays accurate, so the next
   // signup retries from a clean slate). Timeout is raised for the ~30 sequential
   // writes; all of them go through `tx`, never `prisma`.
+  //
+  // The slug guard wraps the transaction from OUTSIDE: a P2002 raised inside an
+  // interactive transaction aborts the whole thing (Postgres 25P02), so a retry
+  // attempted from within would fail every remaining candidate.
+  const { result } = await createWithUniqueClassroomSlug(
+    { slug, orgLogin: EXAMPLE_ORG.login },
+    classroomSlug =>
+      buildExampleSandbox({ ownerUserId, ownerLogin, gitOrgId: org.id, slug: classroomSlug })
+  );
+  return result;
+}
+
+/**
+ * Build one example sandbox on one candidate slug.
+ *
+ * Split out from `provisionExampleClassroom` so the slug retry can wrap the
+ * whole `$transaction` call — a retry attempted from inside an aborted
+ * transaction fails every remaining candidate.
+ */
+function buildExampleSandbox(args: {
+  ownerUserId: string;
+  ownerLogin: string;
+  gitOrgId: string;
+  slug: string;
+}): Promise<{ id: string; slug: string }> {
+  const { ownerUserId, ownerLogin, gitOrgId, slug } = args;
+  const prisma = getPrisma();
+
   return prisma.$transaction(
     async tx => {
       const classroom = await tx.classroom.create({
         data: {
-          git_org_id: org.id,
+          git_org_id: gitOrgId,
           slug,
           name: 'Example Course',
           content_namespace: slug,

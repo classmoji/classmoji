@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Input, Tag } from 'antd';
-import type { ListedClassroom } from './utils';
+import { slugify, type ListedClassroom } from './utils';
 
 interface Props {
   classrooms: ListedClassroom[]; // only the selected ones
@@ -12,12 +12,18 @@ interface SlugStatus {
   checking: boolean;
   available: boolean;
   suggestion?: string;
+  /** The check itself failed — say nothing rather than guess either way. */
+  unknown?: boolean;
 }
 
 /**
- * Step 3 — review each selected classroom, edit its slug, and confirm. Slug
- * availability is checked per classroom against the (possibly not-yet-created)
- * GitHub org via the availability endpoint's `org_provider_id` path.
+ * Step 3 — review each selected classroom, edit its slug, and confirm.
+ *
+ * Slug availability is GLOBAL (the slug is the sole key in every app URL), so
+ * the check can fail against a classroom in an organization the teacher has
+ * never seen. The org is still passed along — as `org_provider_id` plus the
+ * login, since the org row usually doesn't exist until import time — so the
+ * suggestion comes back org-qualified rather than as a bare `slug-2`.
  */
 export default function StepReview({ classrooms, slugByClassroom, onSlugChange }: Props) {
   const [status, setStatus] = useState<Map<number, SlugStatus>>(new Map());
@@ -36,9 +42,11 @@ export default function StepReview({ classrooms, slugByClassroom, onSlugChange }
           try {
             const params = new URLSearchParams({
               org_provider_id: String(c.organization.id),
+              org_login: c.organization.login,
               slug,
             });
             const res = await fetch(`/api/classrooms/availability?${params.toString()}`);
+            if (!res.ok) throw new Error(String(res.status));
             const data = (await res.json()) as {
               slug_available: boolean;
               slug_suggestion?: string;
@@ -49,8 +57,10 @@ export default function StepReview({ classrooms, slugByClassroom, onSlugChange }
               suggestion: data.slug_suggestion,
             });
           } catch {
-            // Network hiccup — don't block import; treat as available.
-            next.set(c.githubId, { checking: false, available: true });
+            // The check failed (network, 500). Don't block the import — the
+            // importer's own slug guard will suffix a real collision — but
+            // don't claim the slug is free either.
+            next.set(c.githubId, { checking: false, available: false, unknown: true });
           }
         })
       );
@@ -72,7 +82,7 @@ export default function StepReview({ classrooms, slugByClassroom, onSlugChange }
         {classrooms.map(c => {
           const slug = slugByClassroom.get(c.githubId) ?? '';
           const st = status.get(c.githubId);
-          const taken = st && !st.checking && !st.available;
+          const taken = st && !st.checking && !st.available && !st.unknown;
           return (
             <div
               key={c.githubId}
@@ -90,6 +100,11 @@ export default function StepReview({ classrooms, slugByClassroom, onSlugChange }
                   status={taken ? 'error' : undefined}
                   style={{ maxWidth: 320 }}
                   onChange={e => onSlugChange(c.githubId, e.target.value)}
+                  // Normalized on blur rather than per keystroke: the server
+                  // slugifies whatever arrives, so the field has to show the
+                  // slug that will actually be stored — but trimming edge
+                  // dashes mid-word would fight the typist.
+                  onBlur={e => onSlugChange(c.githubId, slugify(e.target.value))}
                 />
                 {taken && st?.suggestion && (
                   <Tag
@@ -103,7 +118,14 @@ export default function StepReview({ classrooms, slugByClassroom, onSlugChange }
               </div>
               {taken && (
                 <div className="text-xs text-red-500 mt-1">
-                  A classroom with this slug already exists in {c.organization?.login}.
+                  A classroom with this slug already exists. Slugs are shared across all
+                  organizations, so pick another.
+                </div>
+              )}
+              {st?.unknown && !st.checking && (
+                <div className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                  Couldn&apos;t check this slug. The import will pick a variation if it turns out to
+                  be taken.
                 </div>
               )}
             </div>

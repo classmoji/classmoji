@@ -42,7 +42,7 @@ export const loader = async ({ request }: { request: Request }) => {
   });
 
   // Get classroom with git_organization
-  const classroom = await getPrisma().classroom.findFirst({
+  const classroom = await getPrisma().classroom.findUnique({
     where: { slug: classroomSlug },
     include: { git_organization: true },
   });

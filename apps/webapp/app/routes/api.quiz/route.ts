@@ -90,13 +90,9 @@ export async function action({ request }: Route.ActionArgs) {
             return { response: jsonResponse(404, 'Quiz not found') };
           }
 
-          const classroomSlug =
-            quiz.classroom?.slug ||
-            (await ClassmojiService.classroom.findById(quiz.classroom_id))!.slug;
-
           return {
             context: {
-              classroomSlug,
+              classroomId: quiz.classroom_id,
               quiz,
               metadata: { quiz_id: data.quizId },
             },
@@ -113,14 +109,9 @@ export async function action({ request }: Route.ActionArgs) {
             return { response: jsonResponse(404, 'Attempt not found') };
           }
 
-          const classroomSlug =
-            attemptData.attempt.quiz.classroom?.slug ||
-            (await ClassmojiService.classroom.findById(attemptData.attempt.quiz.classroom_id))!
-              .slug;
-
           return {
             context: {
-              classroomSlug,
+              classroomId: attemptData.attempt.quiz.classroom_id,
               attemptData,
               metadata: {
                 attempt_id: data.attemptId,
@@ -140,13 +131,9 @@ export async function action({ request }: Route.ActionArgs) {
             return { response: jsonResponse(404, 'Attempt not found') };
           }
 
-          const classroomSlug =
-            attempt.quiz.classroom?.slug ||
-            (await ClassmojiService.classroom.findById(attempt.quiz.classroom_id))!.slug;
-
           return {
             context: {
-              classroomSlug,
+              classroomId: attempt.quiz.classroom_id,
               attempt,
               metadata: {
                 attempt_id: data.attemptId,
@@ -166,13 +153,9 @@ export async function action({ request }: Route.ActionArgs) {
             return { response: jsonResponse(404, 'Quiz not found') };
           }
 
-          const classroomSlug =
-            quiz.classroom?.slug ||
-            (await ClassmojiService.classroom.findById(quiz.classroom_id))!.slug;
-
           return {
             context: {
-              classroomSlug,
+              classroomId: quiz.classroom_id,
               quiz,
               metadata: { quiz_id: data.quizId },
             },
@@ -195,13 +178,9 @@ export async function action({ request }: Route.ActionArgs) {
             };
           }
 
-          const classroomSlug =
-            attempt.quiz.classroom?.slug ||
-            (await ClassmojiService.classroom.findById(attempt.quiz.classroom_id))!.slug;
-
           return {
             context: {
-              classroomSlug,
+              classroomId: attempt.quiz.classroom_id,
               attempt,
               metadata: {
                 attempt_id: data.attemptId,
@@ -226,13 +205,9 @@ export async function action({ request }: Route.ActionArgs) {
             };
           }
 
-          const classroomSlug =
-            attempt.quiz.classroom?.slug ||
-            (await ClassmojiService.classroom.findById(attempt.quiz.classroom_id))!.slug;
-
           return {
             context: {
-              classroomSlug,
+              classroomId: attempt.quiz.classroom_id,
               attempt,
               metadata: {
                 attempt_id: data.attemptId,
@@ -257,13 +232,9 @@ export async function action({ request }: Route.ActionArgs) {
             };
           }
 
-          const classroomSlug =
-            attempt.quiz.classroom?.slug ||
-            (await ClassmojiService.classroom.findById(attempt.quiz.classroom_id))!.slug;
-
           return {
             context: {
-              classroomSlug,
+              classroomId: attempt.quiz.classroom_id,
               attempt,
               metadata: {
                 attempt_id: data.attemptId,
@@ -283,16 +254,21 @@ export async function action({ request }: Route.ActionArgs) {
       return contextResponse;
     }
 
+    // Every branch above addresses its record by a body-supplied id, so the
+    // classroom id carried out of that record is what authorizes the call. The
+    // previous shape read a slug off the record and let the auth layer resolve it
+    // again, which left nothing tying the authorized classroom to the quiz or
+    // attempt mutated below. `access.classroom` is that same row.
     const access = await assertClassroomAccess({
       request,
-      classroomSlug: context.classroomSlug,
+      classroomId: context.classroomId,
       allowedRoles,
       resourceType: 'QUIZ_API_ACTION',
       attemptedAction: data._action,
       metadata: context.metadata,
     });
     assertClassroomMutationAllowed({ status: access.classroom.status, role: access.membership!.role });
-    await assertProTier(context.classroomSlug);
+    await assertProTier(access.classroom.slug);
 
     // Check AI agent availability AFTER auth (preserves audit logging)
     if (!isAIAgentConfigured()) {

@@ -270,7 +270,7 @@ const SelectOrganization = ({ loaderData }: Route.ComponentProps) => {
     if (!organization || !user.login) return;
     notify(ActionTypes.SEND_INVITATION, 'Sending you Github invite...');
     fetcher?.submit(
-      { student_login: user.login, organization_login: organization.login },
+      { classroom_id: organization.id },
       {
         method: 'post',
         encType: 'application/json',
@@ -359,69 +359,85 @@ const SelectOrganization = ({ loaderData }: Route.ComponentProps) => {
   );
 };
 
-export const action = checkAuth(async ({ request }: { request: Request }) => {
-  const { student_login, organization_login } = (await request.json()) as {
-    student_login: string;
-    organization_login: string;
-  };
+export const action = checkAuth(
+  async ({ request, user }: { request: Request; user: { userId: string } }) => {
+    const { classroom_id } = (await request.json()) as { classroom_id?: string };
 
-  const classroom = await getPrisma().classroom.findFirst({
-    where: { slug: organization_login },
-    include: { git_organization: true },
-  });
-
-  if (!classroom) {
-    return { error: 'Classroom not found' };
-  }
-
-  const gitProvider = getGitProvider(
-    classroom.git_organization as {
-      provider: string;
-      github_installation_id?: string;
-      access_token?: string;
-      base_url?: string;
-      login?: string;
+    if (typeof classroom_id !== 'string' || !classroom_id) {
+      return { error: 'Classroom not found' };
     }
-  );
-  const team = await ensureClassroomTeam(
-    gitProvider,
-    classroom.git_organization.login,
-    classroom,
-    'STUDENT'
-  );
-  // If the student is ALREADY a member of the GitHub org (common when migrating
-  // from GitHub Classroom), GitHub rejects a fresh org invitation with a 422,
-  // which used to error the whole join. In that case skip the invite and add them
-  // straight to the class team — they're already in the org.
-  const alreadyMember = await gitProvider.isUserMemberOfOrganization(
-    classroom.git_organization.login,
-    student_login
-  );
 
-  if (alreadyMember) {
-    await gitProvider.addTeamMember(classroom.git_organization.login, team.slug, student_login);
-    // No `member_added` webhook fires for users already in the org, so activate the
-    // membership here (flip has_accepted_invite + provision repos) — otherwise they
-    // stay stuck pending and never receive their assignment repos.
-    await tasks.trigger('activate_membership', {
-      login: student_login,
-      gitOrganizationId: classroom.git_organization.id,
+    const membership = await getPrisma().classroomMembership.findFirst({
+      where: { classroom_id, user_id: user.userId },
+      include: {
+        user: true,
+        classroom: { include: { git_organization: true } },
+      },
     });
+
+    if (!membership) {
+      return { error: 'Classroom not found' };
+    }
+
+    const student_login = membership.user.login;
+
+    if (!student_login) {
+      return { error: 'Your account has no linked GitHub login.' };
+    }
+
+    const classroom = membership.classroom;
+
+    const gitProvider = getGitProvider(
+      classroom.git_organization as {
+        provider: string;
+        github_installation_id?: string;
+        access_token?: string;
+        base_url?: string;
+        login?: string;
+      }
+    );
+    const team = await ensureClassroomTeam(
+      gitProvider,
+      classroom.git_organization.login,
+      classroom,
+      'STUDENT'
+    );
+    // If the student is ALREADY a member of the GitHub org (common when migrating
+    // from GitHub Classroom), GitHub rejects a fresh org invitation with a 422,
+    // which used to error the whole join. In that case skip the invite and add them
+    // straight to the class team — they're already in the org.
+    const alreadyMember = await gitProvider.isUserMemberOfOrganization(
+      classroom.git_organization.login,
+      student_login
+    );
+
+    if (alreadyMember) {
+      await gitProvider.addTeamMember(classroom.git_organization.login, team.slug, student_login);
+      // No `member_added` webhook fires for users already in the org, so activate the
+      // membership here (flip has_accepted_invite + provision repos) — otherwise they
+      // stay stuck pending and never receive their assignment repos.
+      await tasks.trigger('activate_membership', {
+        login: student_login,
+        gitOrganizationId: classroom.git_organization.id,
+      });
+      return {
+        success: 'Already in the organization — added you to the class.',
+        action: ActionTypes.SEND_INVITATION,
+      };
+    }
+
+    const githubUser = await gitProvider.getUserByLogin(student_login);
+    await gitProvider.inviteToOrganization(
+      classroom.git_organization.login,
+      String(githubUser.id),
+      [team.id]
+    );
+
     return {
-      success: 'Already in the organization — added you to the class.',
+      success: 'Successfully sent invite.',
       action: ActionTypes.SEND_INVITATION,
     };
   }
-
-  const githubUser = await gitProvider.getUserByLogin(student_login);
-  await gitProvider.inviteToOrganization(classroom.git_organization.login, String(githubUser.id), [
-    team.id,
-  ]);
-
-  return {
-    success: 'Successfully sent invite.',
-    action: ActionTypes.SEND_INVITATION,
-  };
-});
+);
 
 export default SelectOrganization;

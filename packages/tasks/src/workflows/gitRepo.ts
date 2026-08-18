@@ -219,7 +219,7 @@ export const createRepositoriesTask = task({
 
     await createRepositoryTask.batchTriggerAndWait(reposData);
 
-    await ClassmojiService.repository.setPublished(repository.id, true);
+    await ClassmojiService.repository.setPublished(repository.id, true, classroom.id);
   },
 });
 

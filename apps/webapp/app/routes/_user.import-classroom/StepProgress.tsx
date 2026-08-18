@@ -36,7 +36,8 @@ interface Props {
   accessToken: string;
   sessionId: string;
   expected: number;
-  singleSlug: string | null;
+  /** One classroom imported → land on it; several → back to the org picker. */
+  single: boolean;
 }
 
 /**
@@ -45,15 +46,15 @@ interface Props {
  * everything finishes, offers a button to the new classroom (single import) or
  * back to the org picker (multiple).
  */
-export default function StepProgress({ accessToken, sessionId, expected, singleSlug }: Props) {
+export default function StepProgress({ accessToken, sessionId, expected, single }: Props) {
   return (
     <TriggerAuthContext.Provider value={{ accessToken }}>
-      <ProgressInner sessionId={sessionId} expected={expected} singleSlug={singleSlug} />
+      <ProgressInner sessionId={sessionId} expected={expected} single={single} />
     </TriggerAuthContext.Provider>
   );
 }
 
-function ProgressInner({ sessionId, expected, singleSlug }: Omit<Props, 'accessToken'>) {
+function ProgressInner({ sessionId, expected, single }: Omit<Props, 'accessToken'>) {
   const navigate = useNavigate();
   const { runs, error } = useRealtimeRunsWithTag(`session_${sessionId}`);
 
@@ -67,10 +68,15 @@ function ProgressInner({ sessionId, expected, singleSlug }: Omit<Props, 'accessT
   const allDone = terminal.length >= expected && importRuns.length >= expected;
   const percent = Math.min(100, Math.floor((terminal.length / Math.max(1, expected)) * 100));
 
+  // Only the finished run knows the destination: the importer normalizes the
+  // requested slug and suffixes it on a global collision, so the slug the
+  // wizard submitted is not necessarily the one that got stored. With no run
+  // output there is no slug to trust, and the org picker is the safe landing.
+  const destinationSlug = single ? (succeeded[0]?.output?.classroomSlug ?? null) : null;
+
   const goToDestination = () => {
-    if (singleSlug && succeeded.length > 0) {
-      const slug = succeeded[0].output?.classroomSlug ?? singleSlug;
-      navigate(`/admin/${slug}/dashboard`);
+    if (destinationSlug) {
+      navigate(`/admin/${destinationSlug}/dashboard`);
     } else {
       navigate('/select-organization');
     }
@@ -156,7 +162,7 @@ function ProgressInner({ sessionId, expected, singleSlug }: Omit<Props, 'accessT
       {allDone && (
         <div className="mt-6 flex justify-end">
           <Button type="primary" onClick={goToDestination}>
-            {singleSlug && succeeded.length > 0 ? 'Go to classroom' : 'Done'}
+            {destinationSlug ? 'Go to classroom' : 'Done'}
           </Button>
         </div>
       )}

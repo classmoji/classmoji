@@ -80,7 +80,7 @@ export async function getSlideById(slideId: string): Promise<SlideRow | null> {
  */
 export async function getClassroomIdBySlug(slug: string): Promise<string> {
   const prisma = await getTestPrisma();
-  const classroom = await prisma.classroom.findFirst({
+  const classroom = await prisma.classroom.findUnique({
     where: { slug },
     select: { id: true },
   });

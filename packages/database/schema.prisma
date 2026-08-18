@@ -343,26 +343,37 @@ model GitOrganization {
 }
 
 model Classroom {
-  id                String          @id @default(uuid())
-  slug              String // URL slug: "cs101-fall-2025"
-  git_org_id        String
-  name              String
+  id                  String          @id @default(uuid())
+  // GLOBALLY unique. The slug is the sole key in every app URL — /admin/:class,
+  // /student/:class, the ICS calendar feed, and the autograde callback — and
+  // none of them carry an org segment, so a slug reused across orgs resolves to
+  // the wrong classroom. e.g. "cs101-fall-2025".
+  slug                String          @unique
+  git_org_id          String
+  name                String
   // Internal identifier only. Historically the content repo name was derived
   // as content-{orgLogin}-{content_namespace}; it no longer names any repo.
-  content_namespace String
+  content_namespace   String
   // The GitHub repo (in git_organization) holding this classroom's pages &
   // slides content. STORED and fully user-editable — never re-derived. Set at
   // creation for every classroom; defaults to `content-{content_namespace}`.
   // NOT the same as ClassroomSettings.content_repo_name, which is a legacy
   // ORG-level content repo override (`content-{login}`) for a DIFFERENT repo.
-  content_repo      String
-  status            ClassroomStatus @default(ACTIVE)
-  is_archived       Boolean         @default(false)
+  content_repo        String
+  // GitHub Classroom course id, set on import; null for classrooms created
+  // directly in Classmoji. Unique because one GitHub Classroom course maps to at
+  // most one Classmoji classroom, which makes it the stable idempotency key for
+  // re-imports — the slug can be suffixed on collision, so it can't be.
+  // (Postgres allows many NULLs under a unique index, which is the semantics we
+  // want: existing imported rows stay null and never collide.)
+  github_classroom_id Int?            @unique
+  status              ClassroomStatus @default(ACTIVE)
+  is_archived         Boolean         @default(false)
   // True for the auto-provisioned per-user "Example Course" sandbox used by the
   // in-classroom onboarding tour. Backed by a mock GitOrganization (no live GitHub).
-  is_example        Boolean         @default(false)
-  created_at        DateTime        @default(now())
-  updated_at        DateTime        @default(now()) @updatedAt
+  is_example          Boolean         @default(false)
+  created_at          DateTime        @default(now())
+  updated_at          DateTime        @default(now()) @updatedAt
 
   git_organization      GitOrganization       @relation(fields: [git_org_id], references: [id], onDelete: Cascade)
   settings              ClassroomSettings?
@@ -387,6 +398,9 @@ model Classroom {
   notifications         Notification[]
   import_job            ImportJob?
 
+  // Logically redundant now that slug is globally unique, but retained: it is
+  // the compound key live upserts select on (githubClassroomImport, example
+  // classroom provisioning, seed fixtures).
   @@unique([git_org_id, slug])
   // content_namespace no longer names the content repo, but stays unique
   // per-org: it is the internal identifier legacy rows were named from.

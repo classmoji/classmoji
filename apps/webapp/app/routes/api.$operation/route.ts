@@ -110,15 +110,13 @@ export const action = checkAuth(async ({ request }: { request: Request }) => {
         return data({ error: 'Regrade request not found' }, { status: 404 });
       }
 
-      const classroom = await ClassmojiService.classroom.findById(regradeRequest.classroom_id);
-
-      if (!classroom) {
-        return data({ error: 'Classroom not found' }, { status: 404 });
-      }
-
+      // Authorize on the record's classroom_id. Loading the classroom and then
+      // authorizing against its slug would re-resolve through a second lookup,
+      // leaving nothing that ties the authorized classroom to the regrade
+      // request being updated below.
       await assertClassroomAccess({
         request,
-        classroomSlug: classroom.slug,
+        classroomId: regradeRequest.classroom_id,
         allowedRoles: ['OWNER', 'TEACHER', 'ASSISTANT'],
         resourceType: 'REGRADE_REQUEST',
         attemptedAction: 'update_regrade_request',
@@ -178,13 +176,11 @@ export const action = checkAuth(async ({ request }: { request: Request }) => {
         return data({ error: 'Transaction not found' }, { status: 404 });
       }
 
-      const classroom = await ClassmojiService.classroom.findById(storedTransaction.classroom_id);
-
-      if (!classroom) {
-        return data({ error: 'Classroom not found' }, { status: 404 });
-      }
-
-      // Check authorization: OWNER can cancel any, STUDENT can cancel their own
+      // Check authorization: OWNER can cancel any, STUDENT can cancel their own.
+      // Bound to the transaction's own classroom_id — a slug read back off the
+      // classroom record would be re-resolved by the auth layer, so the refund
+      // below could be issued against a row in a classroom the caller was never
+      // authorized for.
       const {
         userId: _userId,
         membership: _membership,
@@ -192,7 +188,7 @@ export const action = checkAuth(async ({ request }: { request: Request }) => {
         accessGrantedVia: _accessGrantedVia,
       } = await assertClassroomAccess({
         request,
-        classroomSlug: classroom.slug,
+        classroomId: storedTransaction.classroom_id,
         allowedRoles: ['OWNER'], // OWNER can cancel any transaction
         resourceType: 'TOKEN_TRANSACTION',
         attemptedAction: 'cancel_transaction',
@@ -220,20 +216,19 @@ export const action = checkAuth(async ({ request }: { request: Request }) => {
 
     async deleteRepositories() {
       const { deleteFromGithub, repositories, classSlug } = body;
-      const classroom = await ClassmojiService.classroom.findBySlug(classSlug);
 
-      if (!classroom) {
-        return data({ error: 'Classroom not found' }, { status: 404 });
-      }
-
-      const { classroom: accessClassroom, membership } = await assertClassroomAccess({
+      // No pre-auth lookup: the previous shape resolved the slug, then handed
+      // the SAME slug to the auth helper to resolve a second time, and used the
+      // first result for the git org and repo scoping. One resolution, and
+      // everything below reads off the classroom the auth helper authorized.
+      const { classroom, membership } = await assertClassroomAccess({
         request,
-        classroomSlug: classroom.slug,
+        classroomSlug: classSlug,
         allowedRoles: ['OWNER'],
         resourceType: 'REPOSITORY',
         attemptedAction: 'delete_repositories',
       });
-      assertClassroomMutationAllowed({ status: accessClassroom.status, role: membership!.role });
+      assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
 
       const sessionId = nanoid();
       const payloads = await Promise.all(

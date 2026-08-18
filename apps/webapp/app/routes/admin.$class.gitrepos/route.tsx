@@ -546,11 +546,21 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
       const data = await request.json();
       const repo = await ClassmojiService.gitRepo.findByName(classSlug, data.name);
 
+      // `data.name` is client-supplied, and the payload below deletes the repo on
+      // GitHub and then drops the GitRepo row by bare id. Refuse unless the
+      // resolved repo belongs to the classroom the caller was authorized for.
+      if (!repo || repo.classroom_id !== classroom.id) {
+        return {
+          action: ActionTypes.DELETE_REPO,
+          error: 'Repository not found',
+        };
+      }
+
       const payload = {
         name: data.name,
         gitOrganization: classroom.git_organization,
         deleteFromGithub: true,
-        id: repo?.id,
+        id: repo.id,
       };
 
       try {

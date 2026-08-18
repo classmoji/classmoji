@@ -20,7 +20,7 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
 
   const repositoryAssignmentId = params.id!;
 
-  // Resolve the owning classroom so we can run auth against its slug.
+  // Load the assignment so its OWN classroom id can authorize the refresh.
   const repoAssignment =
     await ClassmojiService.gitRepoAssignment.findById(repositoryAssignmentId);
 
@@ -31,20 +31,13 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
     });
   }
 
-  const classroom = await ClassmojiService.classroom.findById(
-    repoAssignment.git_repo.classroom_id
-  );
-
-  if (!classroom) {
-    return new Response('Classroom not found', {
-      status: 404,
-      headers: { 'Content-Type': 'text/plain' },
-    });
-  }
-
+  // Authorize on the id, not on a slug read back off a classroom record:
+  // resolving the classroom and then handing its slug to the auth layer sent it
+  // through a second lookup, so nothing tied the authorized classroom to the
+  // assignment refreshed below.
   const { classroom: accessClassroom, membership } = await assertClassroomAccess({
     request,
-    classroomSlug: classroom.slug,
+    classroomId: repoAssignment.git_repo.classroom_id,
     allowedRoles: ['OWNER', 'TEACHER', 'ASSISTANT'],
     resourceType: 'REPOSITORY_ASSIGNMENT',
     attemptedAction: 'refresh_repo_analytics',

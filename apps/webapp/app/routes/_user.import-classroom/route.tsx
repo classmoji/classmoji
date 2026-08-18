@@ -25,7 +25,8 @@ interface TriggerSession {
   accessToken: string;
   id: string;
   expected: number;
-  singleSlug: string | null;
+  /** One classroom imported → land on it; several → back to the org picker. */
+  single: boolean;
 }
 
 interface ImportActionData {
@@ -121,7 +122,7 @@ const ImportClassroom = ({ loaderData }: Route.ComponentProps) => {
             accessToken={session.accessToken}
             sessionId={session.id}
             expected={session.expected}
-            singleSlug={session.singleSlug}
+            single={session.single}
           />
         )}
 

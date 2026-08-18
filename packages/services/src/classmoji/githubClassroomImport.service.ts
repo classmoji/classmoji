@@ -19,11 +19,15 @@
  * on their imported repo — for viewing only, never feeding live grading.
  *
  * Every write is an upsert on a natural key, so re-importing the same bundle is
- * idempotent (updates in place, never duplicates).
+ * idempotent (updates in place, never duplicates). The classroom itself is the
+ * one exception to "upsert": it is matched on TWO keys, because a slug can be
+ * suffixed on a global collision and so can no longer carry idempotency alone.
+ * See `resolveImportedClassroom`.
  */
 
 import getPrisma from '@classmoji/database';
 import { defaultContentRepoName, titleToIdentifier } from '@classmoji/utils';
+import { createWithUniqueClassroomSlug, slugify } from './classroomSlug.ts';
 
 // ---------------------------------------------------------------------------
 // Input shape (structural subset of the webapp parser's ParsedClassroom).
@@ -191,13 +195,24 @@ export const deriveTeamSlug = (
 // Import a single classroom.
 // ---------------------------------------------------------------------------
 
+/** The transaction client handed to an interactive `prisma.$transaction`. */
+type ImportTx = Parameters<Parameters<ReturnType<typeof getPrisma>['$transaction']>[0]>[0];
+
 export async function importGithubClassroom(
   ownerUserId: string,
   input: ImportClassroomInput
 ): Promise<ImportSummary> {
   const prisma = getPrisma();
-  const { classroom: gh, slug } = input;
-  const warnings: string[] = [];
+  const { classroom: gh } = input;
+
+  // Normalize the slug HERE rather than only in the HTTP action: the wizard's
+  // slug field is free text that reaches the job verbatim, and a Trigger.dev
+  // REPLAY re-enters at this function with the original payload. An input that
+  // sanitizes away entirely falls back to the classroom name.
+  const requestedSlug = slugify(input.slug) || slugify(gh.name);
+  if (!requestedSlug) {
+    throw new Error(`Classroom "${gh.name}" has no usable slug and can't be imported.`);
+  }
 
   // Org upsert lives OUTSIDE the transaction. github_installation_id is left
   // untouched: NULL on first import (GitHub-free), preserved if the teacher
@@ -215,7 +230,8 @@ export async function importGithubClassroom(
   });
 
   // Index imported scores by (github_username, assignment) so each student's repo
-  // can pick up its own grade for its own assignment.
+  // can pick up its own grade for its own assignment. Read-only for the rest of
+  // the import, so it is built once and survives a retried attempt untouched.
   const gradeByUserAssignment = new Map<string, ImportGradeRow>();
   const gradedLogins = new Set<string>();
   for (const row of gh.grades ?? []) {
@@ -224,12 +240,144 @@ export async function importGithubClassroom(
     gradeByUserAssignment.set(`${login}::${row.assignmentTitle}`, row);
   }
 
+  // The retry wraps the WHOLE transaction. A P2002 raised inside an interactive
+  // transaction aborts it (Postgres 25P02 — see `resolveImportedUser` below),
+  // so a slug retry attempted from within would fail every remaining candidate
+  // with "current transaction is aborted". Each attempt therefore builds its own
+  // summary and warning list, so a replay counts the roster once, not twice.
+  const { result: summary } = await createWithUniqueClassroomSlug(
+    { slug: requestedSlug, orgLogin: gh.organization.login },
+    candidateSlug =>
+      importClassroomAttempt({
+        ownerUserId,
+        gh,
+        gitOrgId: org.id,
+        appInstalled: Boolean(org.github_installation_id),
+        requestedSlug,
+        candidateSlug,
+        gradeByUserAssignment,
+        gradedLogins,
+      })
+  );
+
+  return summary;
+}
+
+/**
+ * Find (or create) the Classmoji classroom this GitHub Classroom course maps to.
+ *
+ * TWO keys, in order, because the slug alone can no longer carry idempotency —
+ * a global collision suffixes it, and a suffixed slug never matches the default
+ * one a re-import asks for:
+ *
+ *  1. `github_classroom_id` — the GitHub Classroom course id, the stable key.
+ *     Its slug is deliberately NOT touched: it may carry a collision suffix and
+ *     it is a live URL.
+ *  2. `(git_org_id, slug)` — LEGACY rows imported before that column existed.
+ *     Matched on the REQUESTED slug, never the retry candidate: a candidate such
+ *     as `cs101-2` can belong to an unrelated classroom in this org, and
+ *     updating that would pour this roster into someone else's course. The
+ *     course id is stamped on as a side effect, so the row self-heals and the
+ *     next re-import matches on step 1 instead.
+ *  3. Otherwise create, on the candidate slug the retry wrapper supplied.
+ *
+ * Steps 1 and 2 are attempt-invariant, which is what makes a retried attempt
+ * take the same branch as the first one.
+ */
+async function resolveImportedClassroom(
+  tx: ImportTx,
+  args: {
+    gitOrgId: string;
+    githubClassroomId: number | null;
+    requestedSlug: string;
+    candidateSlug: string;
+    name: string;
+  }
+) {
+  const { gitOrgId, githubClassroomId, requestedSlug, candidateSlug, name } = args;
+
+  if (githubClassroomId != null) {
+    const byCourse = await tx.classroom.findUnique({
+      where: { github_classroom_id: githubClassroomId },
+      select: { id: true },
+    });
+    if (byCourse) {
+      return tx.classroom.update({
+        where: { id: byCourse.id },
+        data: { name },
+        include: { settings: true },
+      });
+    }
+  }
+
+  const legacy = await tx.classroom.findUnique({
+    where: { git_org_id_slug: { git_org_id: gitOrgId, slug: requestedSlug } },
+    select: { id: true },
+  });
+  if (legacy) {
+    return tx.classroom.update({
+      where: { id: legacy.id },
+      data: {
+        name,
+        ...(githubClassroomId != null ? { github_classroom_id: githubClassroomId } : {}),
+      },
+      include: { settings: true },
+    });
+  }
+
+  return tx.classroom.create({
+    data: {
+      git_org_id: gitOrgId,
+      slug: candidateSlug,
+      name,
+      content_namespace: candidateSlug,
+      content_repo: defaultContentRepoName(candidateSlug),
+      github_classroom_id: githubClassroomId,
+      settings: { create: { show_grades_to_students: true, quizzes_enabled: true } },
+    },
+    include: { settings: true },
+  });
+}
+
+/**
+ * One import attempt against one candidate slug.
+ *
+ * Everything mutable lives here rather than in the caller, so the slug retry can
+ * replay it from a clean slate: the transaction rolls back completely, and the
+ * counters and warnings roll back with it.
+ */
+async function importClassroomAttempt(args: {
+  ownerUserId: string;
+  gh: ImportClassroom;
+  gitOrgId: string;
+  appInstalled: boolean;
+  requestedSlug: string;
+  candidateSlug: string;
+  gradeByUserAssignment: Map<string, ImportGradeRow>;
+  gradedLogins: Set<string>;
+}): Promise<ImportSummary> {
+  const prisma = getPrisma();
+  const {
+    ownerUserId,
+    gh,
+    gitOrgId,
+    appInstalled,
+    requestedSlug,
+    candidateSlug,
+    gradeByUserAssignment,
+    gradedLogins,
+  } = args;
+  const warnings: string[] = [];
+
+  // The GitHub Classroom course id, when the source actually carried one.
+  const githubClassroomId = Number.isInteger(gh.githubId) && gh.githubId > 0 ? gh.githubId : null;
+
   const summary: ImportSummary = {
     classroomId: '',
-    classroomSlug: slug,
+    classroomSlug: candidateSlug,
     classroomName: gh.name,
     organizationLogin: gh.organization.login,
-    appInstalled: Boolean(org.github_installation_id),
+    appInstalled,
     repositoriesImported: 0,
     assignmentsImported: 0,
     studentsEnrolled: 0,
@@ -245,20 +393,18 @@ export async function importGithubClassroom(
   // Timeout is raised because large rosters mean many sequential upserts.
   await prisma.$transaction(
     async tx => {
-      const classroom = await tx.classroom.upsert({
-        where: { git_org_id_slug: { git_org_id: org.id, slug } },
-        create: {
-          git_org_id: org.id,
-          slug,
-          name: gh.name,
-          content_namespace: slug,
-          content_repo: defaultContentRepoName(slug),
-          settings: { create: { show_grades_to_students: true, quizzes_enabled: true } },
-        },
-        update: { name: gh.name },
-        include: { settings: true },
+      const classroom = await resolveImportedClassroom(tx, {
+        gitOrgId,
+        githubClassroomId,
+        requestedSlug,
+        candidateSlug,
+        name: gh.name,
       });
       summary.classroomId = classroom.id;
+      // The PERSISTED slug, not the candidate: a re-import updates a row in
+      // place, and that row may already carry a collision suffix. This is what
+      // the wizard's "Go to classroom" link is built from.
+      summary.classroomSlug = classroom.slug;
 
       // A re-import onto an existing classroom may predate settings; ensure they exist.
       if (!classroom.settings) {
@@ -518,11 +664,7 @@ export async function importGithubClassroom(
  * The one mutable unique field, `login`, is only changed when the target is free.
  * Never writes `email` (unique and absent from the export).
  */
-async function resolveImportedUser(
-  tx: Parameters<Parameters<ReturnType<typeof getPrisma>['$transaction']>[0]>[0],
-  s: ImportStudent,
-  warnings: string[]
-) {
+async function resolveImportedUser(tx: ImportTx, s: ImportStudent, warnings: string[]) {
   // 1) Canonical match: the GitHub user id.
   const byProvider = await tx.user.findUnique({
     where: { provider_provider_id: { provider: 'GITHUB', provider_id: s.providerId } },

@@ -66,6 +66,18 @@ export {
 // Example-classroom provisioning (server-only; touches Prisma)
 export { provisionExampleClassroom } from './classmoji/exampleClassroom.service.ts';
 
+// Classroom slug rules: normalization, deterministic collision candidates, and
+// the constraint-and-retry wrapper every slug-creating path goes through
+// (pure — no Prisma; the caller supplies the write).
+export {
+  slugify,
+  classroomSlugCandidates,
+  createWithUniqueClassroomSlug,
+  isClassroomSlugConflict,
+  ClassroomSlugUnavailableError,
+  MAX_CLASSROOM_SLUG_SUFFIX,
+} from './classmoji/classroomSlug.ts';
+
 // Models list (moved from @classmoji/llm)
 export { getAllModels, getAnthropicModels } from './classmoji/modelsList.ts';
 

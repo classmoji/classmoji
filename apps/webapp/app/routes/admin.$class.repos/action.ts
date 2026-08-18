@@ -20,7 +20,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
 
   return namedAction(request, {
     async delete() {
-      await ClassmojiService.repository.deleteById(assignmentId);
+      await ClassmojiService.repository.deleteById(assignmentId, classroom.id);
 
       return {
         success: 'Repository deleted',
@@ -29,16 +29,16 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
     },
 
     async publish() {
-      return publishAssignment(classSlug, assignmentId, userId);
+      return publishAssignment(classSlug, classroom.id, assignmentId, userId);
     },
 
     async unpublish() {
-      await ClassmojiService.repository.setPublished(assignmentId, false);
+      await ClassmojiService.repository.setPublished(assignmentId, false, classroom.id);
       return { success: 'Repository unpublished' };
     },
 
     async sync() {
-      const res = await syncAssignment(classSlug, assignmentId, userId);
+      const res = await syncAssignment(classSlug, classroom.id, assignmentId, userId);
       const {
         triggerSession: { numReposToCreate, numIssuesToCreate },
       } = res;
