@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-const classroomFindFirst = vi.fn();
+const classroomFindUnique = vi.fn();
 const moduleFindMany = vi.fn();
 const itemFindFirst = vi.fn();
 const itemFindMany = vi.fn();
@@ -10,7 +10,7 @@ const transaction = vi.fn();
 
 vi.mock('@classmoji/database', () => ({
   default: () => ({
-    classroom: { findFirst: classroomFindFirst },
+    classroom: { findUnique: classroomFindUnique },
     module: { findMany: moduleFindMany },
     moduleItem: {
       findFirst: itemFindFirst,
@@ -128,7 +128,7 @@ describe('reorderItems', () => {
 
 describe('listForClassroom', () => {
   beforeEach(() => {
-    classroomFindFirst.mockResolvedValue({ id: 'c1' });
+    classroomFindUnique.mockResolvedValue({ id: 'c1' });
   });
 
   it('filters out unpublished items for students', async () => {
@@ -166,7 +166,7 @@ describe('listForClassroom', () => {
   });
 
   it('returns [] when the classroom does not exist', async () => {
-    classroomFindFirst.mockResolvedValue(null);
+    classroomFindUnique.mockResolvedValue(null);
     expect(await listForClassroom('missing')).toEqual([]);
   });
 });

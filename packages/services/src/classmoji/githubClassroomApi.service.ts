@@ -19,6 +19,7 @@
 
 import getPrisma from '@classmoji/database';
 import { GitHubProvider } from '../git/index.ts';
+import { slugify } from './classroomSlug.ts';
 import type {
   ImportClassroom,
   ImportClassroomInput,
@@ -93,17 +94,9 @@ export interface ListedClassroom {
   archived: boolean;
   /** null only if the classroom has no organization (can't be imported). */
   organization: { id: number; login: string } | null;
-  /** True if a Classmoji classroom already exists for this one (org + default slug). */
+  /** True if a Classmoji classroom already exists for this GitHub Classroom course. */
   alreadyImported: boolean;
 }
-
-/** Slugify a classroom name. MUST match the webapp's `slugify` (and create-classroom),
- * because that's the slug the importer keys on. */
-const slugifyName = (str: string): string =>
-  str
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '');
 
 /**
  * List the classrooms the authenticated user administers, enriched with their
@@ -149,19 +142,44 @@ export async function listAdminClassrooms(token: string): Promise<ListedClassroo
 }
 
 /**
- * Mark which listed classrooms already exist in Classmoji. A classroom is
- * "already imported" when a Classroom row exists under the matching
- * GitOrganization with the default slug (slugify of the name) — the same natural
- * key the importer upserts on. Imports under a custom slug aren't detected (rare);
- * re-importing with the default slug would update in place anyway.
+ * Mark which listed classrooms already exist in Classmoji.
+ *
+ * Primary key: `Classroom.github_classroom_id`, the GitHub Classroom course id
+ * — the same key the importer keys idempotency on, so it holds however the
+ * classroom's slug was named.
+ *
+ * Fallback: the org + default-slug match, for LEGACY rows imported before that
+ * column existed (the importer stamps the course id onto those on the next
+ * re-import, after which they match on the primary key). The fallback is a
+ * guess, and it goes wrong in both directions once slugs can be suffixed: a
+ * course imported under a suffixed or custom slug looks fresh, and a slug that
+ * happens to match an unrelated classroom looks imported. Only the course-id
+ * match is authoritative.
  */
 async function annotateAlreadyImported(classrooms: ListedClassroom[]): Promise<void> {
   const orgProviderIds = [
     ...new Set(classrooms.flatMap(c => (c.organization ? [String(c.organization.id)] : []))),
   ];
-  if (orgProviderIds.length === 0) return;
+  const courseIds = classrooms.map(c => c.githubId).filter(id => Number.isInteger(id) && id > 0);
 
   const prisma = getPrisma();
+  const importedCourseIds = new Set(
+    courseIds.length === 0
+      ? []
+      : (
+          await prisma.classroom.findMany({
+            where: { github_classroom_id: { in: courseIds } },
+            select: { github_classroom_id: true },
+          })
+        ).flatMap(c => (c.github_classroom_id == null ? [] : [c.github_classroom_id]))
+  );
+
+  for (const c of classrooms) {
+    if (importedCourseIds.has(c.githubId)) c.alreadyImported = true;
+  }
+
+  if (orgProviderIds.length === 0) return;
+
   const orgs = await prisma.gitOrganization.findMany({
     where: { provider: 'GITHUB', provider_id: { in: orgProviderIds } },
     select: { id: true, provider_id: true },
@@ -170,15 +188,15 @@ async function annotateAlreadyImported(classrooms: ListedClassroom[]): Promise<v
 
   const gitOrgIdByProvider = new Map(orgs.map(o => [o.provider_id, o.id]));
   const existing = await prisma.classroom.findMany({
-    where: { git_org_id: { in: orgs.map(o => o.id) } },
+    where: { git_org_id: { in: orgs.map(o => o.id) }, github_classroom_id: null },
     select: { git_org_id: true, slug: true },
   });
   const existingKey = new Set(existing.map(c => `${c.git_org_id}::${c.slug}`));
 
   for (const c of classrooms) {
-    if (!c.organization) continue;
+    if (c.alreadyImported || !c.organization) continue;
     const gitOrgId = gitOrgIdByProvider.get(String(c.organization.id));
-    if (gitOrgId && existingKey.has(`${gitOrgId}::${slugifyName(c.name)}`)) {
+    if (gitOrgId && existingKey.has(`${gitOrgId}::${slugify(c.name)}`)) {
       c.alreadyImported = true;
     }
   }

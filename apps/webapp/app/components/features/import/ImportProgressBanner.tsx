@@ -186,7 +186,13 @@ const ImportProgressBanner = ({ job: initialJob, sourceName }: ImportProgressBan
   // The first phase still reporting a transient note (a GitHub rate-limit wait,
   // repo pacing). Surfacing it is the whole reason `note` exists: without it a
   // 60s backoff is indistinguishable from a dead job.
-  const waitingNote = IMPORT_PHASE_ORDER.map(key => progress.phases?.[key]?.note).find(Boolean);
+  const notedPhase = IMPORT_PHASE_ORDER.map(key => progress.phases?.[key])
+    .filter(Boolean)
+    .find(phase => phase?.note);
+  const waitingNote = notedPhase?.note;
+  // Amber is reserved for genuine limit waits; routine activity (cloning,
+  // pushing) reads as neutral status, not a warning.
+  const noteIsWarn = notedPhase?.note_level === 'warn';
 
   const failed = job.status === 'FAILED';
   const completed = job.status === 'COMPLETED';
@@ -247,7 +253,13 @@ const ImportProgressBanner = ({ job: initialJob, sourceName }: ImportProgressBan
       )}
 
       {waitingNote && !failed && !completed && (
-        <p className="mt-2 rounded-md bg-amber-100 px-2 py-1 text-xs text-amber-800 dark:bg-amber-950 dark:text-amber-300">
+        <p
+          className={`mt-2 rounded-md px-2 py-1 text-xs ${
+            noteIsWarn
+              ? 'bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300'
+              : 'bg-blue-100/70 text-blue-800 dark:bg-blue-950/60 dark:text-blue-200'
+          }`}
+        >
           {waitingNote}
         </p>
       )}

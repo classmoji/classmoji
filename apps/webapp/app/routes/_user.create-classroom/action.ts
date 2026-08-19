@@ -2,7 +2,9 @@ import { getAuthSession } from '@classmoji/auth/server';
 import { checkAuth } from '~/utils/helpers';
 import {
   ClassmojiService,
+  ClassroomSlugUnavailableError,
   GitHubProvider,
+  createWithUniqueClassroomSlug,
   describeTokenMintError,
   getGitProvider,
   ensureClassroomTeam,
@@ -166,9 +168,28 @@ export const action = checkAuth(async ({ request }: { request: Request }) => {
   }
 
   // Slug: prefer client-provided (user override / suggestion) when present, else derive from name.
+  // The slug is globally unique, so this is only the FIRST candidate — the
+  // create below retries down `slug`, `slug-{org}`, `slug-N` and the row's own
+  // slug is what gets returned.
   const slug = slugInput && typeof slugInput === 'string' ? slugify(slugInput) : slugify(name);
 
+  // An empty slug is not a URL. Refuse here rather than store one and let the
+  // global unique index reject the next classroom that also slugifies to ''.
+  if (!slug) {
+    return {
+      error: 'That name has no letters or numbers to build a URL from — add some, or set a slug',
+    };
+  }
+
   // Internal identifier only — names no repo, and no longer user-editable.
+  //
+  // Deliberately pinned to the ORIGINAL slug and NOT re-derived if the slug
+  // retry suffixes it. Both this and `content_repo` below are unique PER ORG,
+  // while the slug suffix answers a GLOBAL collision — so the values picked
+  // here stay free whatever the slug ends up as. More importantly, `contentRepo`
+  // is validated against GitHub further down ("content repos must be created
+  // fresh") and may be a name the user typed; re-deriving it inside the retry
+  // would create a classroom pointing at a repo name that gate never saw.
   const contentNamespace = await pickContentNamespace(git_org_id, gitOrg.login, slug);
 
   // Content repo: the user's name when supplied, else `content-{namespace}`.
@@ -298,43 +319,58 @@ export const action = checkAuth(async ({ request }: { request: Request }) => {
     }
   }
 
-  // Create Classroom, Settings, and Membership in transaction
+  // Create Classroom, Settings, and Membership in transaction.
+  //
+  // The slug guard wraps the WHOLE `$transaction` call: a P2002 inside an
+  // interactive transaction aborts it (Postgres 25P02), so retrying from within
+  // would fail every remaining candidate. `classroom.slug` below is therefore
+  // the slug that actually won, which is what the response redirects on.
   let classroom;
   try {
-    classroom = await getPrisma().$transaction(async tx => {
-      const created = await tx.classroom.create({
-        data: {
-          git_org_id,
-          slug,
-          name,
-          content_namespace: contentNamespace,
-          content_repo: contentRepo,
-        },
-      });
+    const created = await createWithUniqueClassroomSlug(
+      { slug, orgLogin: gitOrg.login },
+      classroomSlug =>
+        getPrisma().$transaction(async tx => {
+          const row = await tx.classroom.create({
+            data: {
+              git_org_id,
+              slug: classroomSlug,
+              name,
+              content_namespace: contentNamespace,
+              content_repo: contentRepo,
+            },
+          });
 
-      await tx.classroomSettings.create({
-        data: { classroom_id: created.id },
-      });
+          await tx.classroomSettings.create({
+            data: { classroom_id: row.id },
+          });
 
-      await tx.classroomMembership.create({
-        data: {
-          classroom_id: created.id,
-          user_id: user.id,
-          role: 'OWNER',
-          has_accepted_invite: true,
-        },
-      });
+          await tx.classroomMembership.create({
+            data: {
+              classroom_id: row.id,
+              user_id: user.id,
+              role: 'OWNER',
+              has_accepted_invite: true,
+            },
+          });
 
-      return created;
-    });
+          return row;
+        })
+    );
+    classroom = created.result;
   } catch (error: unknown) {
-    // Unique-constraint race (slug, content repo, or the internal namespace
-    // claimed between the pre-checks and the insert) — refuse cleanly
-    // instead of a 500.
+    if (error instanceof ClassroomSlugUnavailableError) {
+      return {
+        error: `'${slug}' and every variation of it are already taken — pick a different slug`,
+      };
+    }
+    // Unique-constraint race on something the guard does NOT retry: the content
+    // repo or the internal namespace, claimed between the pre-checks and the
+    // insert. A slug collision is no longer one of these, and the collision can
+    // be with a classroom in any organization — the slug is globally unique.
     if ((error as { code?: string })?.code === 'P2002') {
       return {
-        error:
-          'That classroom slug or content repo was just taken in this organization — adjust and try again',
+        error: 'That content repo name was just taken in this organization — adjust and try again',
       };
     }
     throw error;

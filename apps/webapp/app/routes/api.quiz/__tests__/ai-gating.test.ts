@@ -72,7 +72,7 @@ describe('api.quiz AI gating', () => {
     // Pass the authorization + pro-tier gates so we reach the config check.
     assertClassroomAccessMock.mockResolvedValue({
       userId: 'student-1',
-      classroom: { status: 'ACTIVE' },
+      classroom: { id: 'c-1', slug: 'test-class', status: 'ACTIVE' },
       membership: { role: 'STUDENT' },
     });
     assertClassroomMutationAllowedMock.mockReturnValue(undefined);

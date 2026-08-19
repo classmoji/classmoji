@@ -81,6 +81,22 @@ const SettingsGeneral = ({ loaderData }: Route.ComponentProps) => {
   );
 };
 
+/**
+ * The only Classroom columns `saveProfile` may write.
+ *
+ * The request body reaches `classroom.update` as a whole object, so without
+ * this every column on the model is settable by anyone who can POST here —
+ * including `slug`, which is the sole key in every app URL and two HMAC
+ * credentials and is set once at creation (schema comment on `Classroom.slug`),
+ * and `git_org_id`, which would move the classroom to another organization.
+ */
+const PROFILE_FIELDS = ['name'] as const;
+
+const pickProfileFields = (data: Record<string, unknown>) =>
+  Object.fromEntries(
+    PROFILE_FIELDS.filter(field => data[field] !== undefined).map(field => [field, data[field]])
+  );
+
 export const action = async ({ params, request }: Route.ActionArgs) => {
   const classSlug = params.class!;
 
@@ -98,7 +114,11 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
 
   return namedAction(request, {
     async saveProfile() {
-      await ClassmojiService.classroom.update(classroom.id, data);
+      const fields = pickProfileFields(data);
+      if (Object.keys(fields).length === 0) {
+        return { error: 'Nothing to update' };
+      }
+      await ClassmojiService.classroom.update(classroom.id, fields);
       return {
         success: 'Classroom profile updated',
         action: ActionTypes.SAVE_PROFILE,
