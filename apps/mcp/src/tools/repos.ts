@@ -19,10 +19,9 @@
  * a live progress bar — that is a web-UI session concern and is not exposed
  * here (counts are returned instead).
  *
- * S1: the web helper flips by repository id WITHOUT re-verifying the
- * repository's classroom (the URL-derived slug only scopes the git-repo
- * lookups); MCP does NOT mirror that hole — the Repository is loaded and its
- * classroom_id compared to the authorized classroom before anything runs.
+ * S1: the Repository is loaded and its classroom_id compared to the authorized
+ * classroom before anything runs, and the authorized classroom id is passed
+ * into repository.setPublished so the write itself is scoped.
  */
 
 import { randomUUID } from 'node:crypto';
@@ -122,7 +121,7 @@ export const repoPublishTool: ToolDefinition<RepoPublishArgs> = {
       repository.id
     );
     if (existingRepos.length > 0) {
-      await ClassmojiService.repository.setPublished(repository.id, true);
+      await ClassmojiService.repository.setPublished(repository.id, true, classroom.classroomId);
       await audit({ is_published: true, provisioning_triggered: false, republished: true });
       return ok({
         success: true,
@@ -146,7 +145,7 @@ export const repoPublishTool: ToolDefinition<RepoPublishArgs> = {
 
       // Publish = "make available to students" — flip visibility immediately;
       // per-student GitHub repos provision in the background (route parity).
-      await ClassmojiService.repository.setPublished(repository.id, true);
+      await ClassmojiService.repository.setPublished(repository.id, true, classroom.classroomId);
       await audit({
         is_published: true,
         provisioning_triggered: true,
@@ -164,7 +163,7 @@ export const repoPublishTool: ToolDefinition<RepoPublishArgs> = {
     if (repository.team_formation_mode === 'SELF_FORMED') {
       // For self-formed teams, just mark the repository as published — teams
       // and repos are created when students form their teams.
-      await ClassmojiService.repository.setPublished(repository.id, true);
+      await ClassmojiService.repository.setPublished(repository.id, true, classroom.classroomId);
       await audit({ is_published: true, provisioning_triggered: false });
       return ok({
         success: true,
@@ -187,7 +186,7 @@ export const repoPublishTool: ToolDefinition<RepoPublishArgs> = {
       sessionId
     );
 
-    await ClassmojiService.repository.setPublished(repository.id, true);
+    await ClassmojiService.repository.setPublished(repository.id, true, classroom.classroomId);
     await audit({
       is_published: true,
       provisioning_triggered: true,
@@ -224,9 +223,10 @@ export const repoUnpublishTool: ToolDefinition<RepoUnpublishArgs> = {
     repository_id: z.string().uuid().describe('Repository (assignment container) id'),
   },
   handler: async (args, ctx) => {
+    const classroom = requireClassroomCtx(ctx);
     const repository = await loadRepositoryInClassroom(args.repository_id, ctx);
 
-    await ClassmojiService.repository.setPublished(repository.id, false);
+    await ClassmojiService.repository.setPublished(repository.id, false, classroom.classroomId);
 
     await writeAudit(ctx, {
       resource_type: 'REPOSITORIES',

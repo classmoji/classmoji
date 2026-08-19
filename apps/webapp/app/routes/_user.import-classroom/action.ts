@@ -72,9 +72,11 @@ export const action = checkAuth(async ({ request, user }) => {
       accessToken,
       id: sessionId,
       expected: selections.length,
-      // For a single import we know the destination slug up front (the importer
-      // uses it verbatim); multi-import lands back on the org picker.
-      singleSlug: selections.length === 1 ? selections[0].slug : null,
+      // A single import lands on the new classroom, multiple land back on the
+      // org picker. Only WHICH destination is known here, never the slug: the
+      // importer normalizes the requested slug and suffixes it on a global
+      // collision, so the destination comes off the finished run.
+      single: selections.length === 1,
     },
   };
 });

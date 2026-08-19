@@ -77,7 +77,7 @@ const isItemTargetInClassroom = (item: ModuleItemWithTargets, classroomId: strin
 };
 
 const findClassroomIdBySlug = async (classroomSlug: string) => {
-  const classroom = await getPrisma().classroom.findFirst({
+  const classroom = await getPrisma().classroom.findUnique({
     where: { slug: classroomSlug },
     select: { id: true },
   });

@@ -28,7 +28,7 @@ export const loader = async ({
   });
 
   // Get classroom with git_organization
-  const classroom = await getPrisma().classroom.findFirst({
+  const classroom = await getPrisma().classroom.findUnique({
     where: { slug: classroomSlug },
     include: { git_organization: true },
   });
@@ -82,7 +82,7 @@ export const action = async ({
   });
 
   // Get classroom with git_organization for GitHub API calls
-  const classroom = await getPrisma().classroom.findFirst({
+  const classroom = await getPrisma().classroom.findUnique({
     where: { slug: classroomSlug },
     include: { git_organization: true },
   });

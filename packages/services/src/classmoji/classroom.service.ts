@@ -45,12 +45,17 @@ export const findById = async (id: string) => {
 };
 
 /**
- * Find a Classroom by its unique slug
+ * Find a Classroom by its slug.
+ *
+ * Classroom.slug is GLOBALLY unique (not just per git organization): it is the
+ * sole key in every app URL — /admin/:class, /student/:class, the ICS calendar
+ * feed, the autograde callback — and none of those carry an org segment, so a
+ * slug shared across orgs would resolve to the wrong classroom.
  * @param {string} slug - URL-friendly slug (e.g., "cs101-fall-2025")
  * @returns {Promise<Object|null>}
  */
 export const findBySlug = async (slug: string) => {
-  return getPrisma().classroom.findFirst({
+  return getPrisma().classroom.findUnique({
     where: { slug },
     include: {
       git_organization: true,
@@ -187,30 +192,6 @@ export const createWithSettings = async (
 export const update = async (id: string, updates: Prisma.ClassroomUpdateInput) => {
   return getPrisma().classroom.update({
     where: { id },
-    data: updates,
-    include: {
-      git_organization: true,
-      settings: true,
-    },
-  });
-};
-
-/**
- * Update a Classroom by slug
- * @param {string} slug - Classroom slug
- * @param {Object} updates - Fields to update
- * @returns {Promise<Object>}
- */
-export const updateBySlug = async (slug: string, updates: Prisma.ClassroomUpdateInput) => {
-  const classroom = await getPrisma().classroom.findFirst({
-    where: { slug },
-    select: { id: true },
-  });
-  if (!classroom) {
-    throw new Error(`Classroom with slug "${slug}" not found`);
-  }
-  return getPrisma().classroom.update({
-    where: { id: classroom.id },
     data: updates,
     include: {
       git_organization: true,
@@ -611,24 +592,6 @@ export const deleteGitHubArtifacts = async (
   }
 
   return summary;
-};
-
-/**
- * Delete a Classroom by slug
- * @param {string} slug - Classroom slug
- * @returns {Promise<Object>}
- */
-export const deleteBySlug = async (slug: string) => {
-  const classroom = await getPrisma().classroom.findFirst({
-    where: { slug },
-    select: { id: true },
-  });
-  if (!classroom) {
-    throw new Error(`Classroom with slug "${slug}" not found`);
-  }
-  return getPrisma().classroom.delete({
-    where: { id: classroom.id },
-  });
 };
 
 /**

@@ -5,7 +5,7 @@ import {
   type ImportProgress,
 } from '@classmoji/services/import-progress';
 import Tasks from '@classmoji/tasks';
-import { requireClassroomAdmin } from '~/utils/routeAuth.server';
+import { assertClassroomAccess } from '~/utils/routeAuth.server';
 import type { Route } from './+types/route';
 
 /** Lifecycle of an `ImportJob` row (mirrors the `ImportJobStatus` enum). */
@@ -64,18 +64,21 @@ const toView = (job: {
 export const loader = async ({ params, request }: Route.LoaderArgs) => {
   const jobId = params.jobId!;
 
-  const job = await getPrisma().importJob.findUnique({
-    where: { id: jobId },
-    include: { classroom: { select: { slug: true } } },
-  });
+  const job = await getPrisma().importJob.findUnique({ where: { id: jobId } });
 
   if (!job) {
     throw new Response('Not found', { status: 404 });
   }
 
-  await requireClassroomAdmin(request, job.classroom.slug, {
+  // The row's own `classroom_id` is the authorization key. Going through
+  // `job.classroom.slug` had the auth layer resolve a classroom by slug a second
+  // time, and nothing then proved that classroom is the one owning this job.
+  await assertClassroomAccess({
+    request,
+    classroomId: job.classroom_id,
+    allowedRoles: ['OWNER'],
     resourceType: 'IMPORT_JOB',
-    action: 'view_import_job',
+    attemptedAction: 'view_import_job',
   });
 
   return Response.json(toView(job));
@@ -102,18 +105,19 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
     throw new Response('Method not allowed', { status: 405 });
   }
 
-  const job = await getPrisma().importJob.findUnique({
-    where: { id: jobId },
-    include: { classroom: { select: { slug: true } } },
-  });
+  const job = await getPrisma().importJob.findUnique({ where: { id: jobId } });
 
   if (!job) {
     throw new Response('Not found', { status: 404 });
   }
 
-  await requireClassroomAdmin(request, job.classroom.slug, {
+  // Authorize on the row's `classroom_id` — see the loader.
+  await assertClassroomAccess({
+    request,
+    classroomId: job.classroom_id,
+    allowedRoles: ['OWNER'],
     resourceType: 'IMPORT_JOB',
-    action: 'retry_import_job',
+    attemptedAction: 'retry_import_job',
   });
 
   if (job.status !== 'FAILED') {
@@ -133,17 +137,30 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
     }))
   );
 
+  // Claim the row with `status: 'FAILED'` in the WHERE, not just the read above:
+  // the import pipeline is not idempotent, and two POSTs arriving together would
+  // both see FAILED and both trigger it. Exactly one `updateMany` can move the
+  // row off FAILED, and only that one goes on to trigger.
+  //
   // PENDING before the trigger: if the trigger throws, the row is left claiming
   // a run that never started, which the caller sees and can retry again.
-  const updated = await getPrisma().importJob.update({
-    where: { id: job.id },
+  const { count } = await getPrisma().importJob.updateMany({
+    where: { id: job.id, status: 'FAILED' },
     data: {
       status: 'PENDING',
       error: null,
       progress: reset as unknown as object,
     },
-    include: { classroom: { select: { slug: true } } },
   });
+
+  if (count !== 1) {
+    return Response.json(
+      { error: 'This import was already retried — poll for its current status.' },
+      { status: 409 }
+    );
+  }
+
+  const updated = await getPrisma().importJob.findUniqueOrThrow({ where: { id: job.id } });
 
   try {
     await Tasks.classroomImportTask.trigger({ importJobId: job.id });

@@ -1,5 +1,9 @@
-import { describe, it, expect } from 'vitest';
-import { buildImportedMetadata, deriveTeamSlug } from '../githubClassroomImport.service.ts';
+import { describe, it, expect, vi } from 'vitest';
+import {
+  buildImportedMetadata,
+  deriveTeamSlug,
+  resolveImportedClassroom,
+} from '../githubClassroomImport.service.ts';
 import type { ImportAcceptance } from '../githubClassroomImport.service.ts';
 
 const baseAcc = (over: Partial<ImportAcceptance> = {}): ImportAcceptance => ({
@@ -138,5 +142,103 @@ describe('deriveTeamSlug', () => {
 
   it('returns null when there is no repo name and no members', () => {
     expect(deriveTeamSlug('', '', [])).toBeNull();
+  });
+});
+
+describe('resolveImportedClassroom', () => {
+  type Tx = Parameters<typeof resolveImportedClassroom>[0];
+
+  const makeTx = (rows: { byCourse?: unknown; legacy?: unknown }) => {
+    const findUnique = vi.fn(async () => rows.byCourse ?? null);
+    const findFirst = vi.fn(async () => rows.legacy ?? null);
+    const update = vi.fn(async (args: { where: { id: string } }) => ({ id: args.where.id }));
+    const create = vi.fn(async () => ({ id: 'created' }));
+    const tx = { classroom: { findUnique, findFirst, update, create } } as unknown as Tx;
+    return { tx, findUnique, findFirst, update, create };
+  };
+
+  const args = {
+    gitOrgId: 'org-1',
+    githubClassroomId: 222,
+    requestedSlug: 'cs-52',
+    candidateSlug: 'cs-52',
+    name: 'CS 52 Full Stack',
+  };
+
+  it('matches on the course id first and never touches the slug', async () => {
+    const { tx, findUnique, findFirst, update, create } = makeTx({ byCourse: { id: 'existing' } });
+
+    await resolveImportedClassroom(tx, args);
+
+    expect(findUnique).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { github_classroom_id: 222 } })
+    );
+    expect(findFirst).not.toHaveBeenCalled();
+    expect(create).not.toHaveBeenCalled();
+    expect(update).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ where: { id: 'existing' }, data: { name: args.name } })
+    );
+  });
+
+  it('restricts the legacy probe to rows with no github_classroom_id', async () => {
+    const { tx, findFirst } = makeTx({});
+
+    await resolveImportedClassroom(tx, args);
+
+    // The predicate is the fix: without `github_classroom_id: null`, a second
+    // course whose name slugifies to an already-imported slug would match that
+    // classroom's row and overwrite its name and course id.
+    expect(findFirst).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        where: { git_org_id: 'org-1', slug: 'cs-52', github_classroom_id: null },
+      })
+    );
+  });
+
+  it('creates on the candidate slug when no legacy row matches', async () => {
+    const { tx, update, create } = makeTx({});
+
+    await resolveImportedClassroom(tx, { ...args, candidateSlug: 'cs-52-2' });
+
+    expect(update).not.toHaveBeenCalled();
+    expect(create).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          git_org_id: 'org-1',
+          slug: 'cs-52-2',
+          github_classroom_id: 222,
+        }),
+      })
+    );
+  });
+
+  it('self-heals a legacy row by stamping the course id onto it', async () => {
+    const { tx, update, create } = makeTx({ legacy: { id: 'legacy-row' } });
+
+    await resolveImportedClassroom(tx, args);
+
+    expect(create).not.toHaveBeenCalled();
+    expect(update).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        where: { id: 'legacy-row' },
+        data: { name: args.name, github_classroom_id: 222 },
+      })
+    );
+  });
+
+  it('skips the course-id lookup, but still filters the legacy probe, without a course id', async () => {
+    const { tx, findUnique, findFirst, update } = makeTx({ legacy: { id: 'legacy-row' } });
+
+    await resolveImportedClassroom(tx, { ...args, githubClassroomId: null });
+
+    expect(findUnique).not.toHaveBeenCalled();
+    expect(findFirst).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        where: { git_org_id: 'org-1', slug: 'cs-52', github_classroom_id: null },
+      })
+    );
+    expect(update).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ where: { id: 'legacy-row' }, data: { name: args.name } })
+    );
   });
 });

@@ -11,22 +11,29 @@ type Classroom = NonNullable<Awaited<ReturnType<typeof ClassmojiService.classroo
 type Repository = NonNullable<Awaited<ReturnType<typeof ClassmojiService.repository.findById>>>;
 type GitRepo = Awaited<ReturnType<typeof ClassmojiService.gitRepo.findByRepository>>[number];
 
+/**
+ * `classroomId` is the classroom the CALLER was authorized for. The classroom is
+ * resolved from it rather than from the slug, and the repository — addressed by
+ * a body-supplied id — is checked against it before anything is published.
+ */
 export const publishAssignment = async (
   classroomSlug: string,
+  classroomId: string,
   repositoryId: string,
   _userId: string | null = null
 ) => {
   try {
     const sessionId = nanoid();
-    const classroom = await ClassmojiService.classroom.findBySlug(classroomSlug);
+    const classroom = await ClassmojiService.classroom.findById(classroomId);
     const repository = await ClassmojiService.repository.findById(repositoryId);
 
     invariant(repository != null, 'Repository not found');
+    invariant(repository.classroom_id === classroomId, 'Repository not found in classroom');
 
     // If repos already exist (re-publish after unpublish), just flip the flag
     const existingRepos = await ClassmojiService.gitRepo.findByRepository(classroomSlug, repositoryId);
     if (existingRepos.length > 0) {
-      await ClassmojiService.repository.setPublished(repositoryId, true);
+      await ClassmojiService.repository.setPublished(repositoryId, true, classroomId);
       return { success: 'Repository re-published. Use Sync to update repositories.' };
     }
 
@@ -69,11 +76,11 @@ export const publishAssignment = async (
       // that job is slow or partially fails, the repository is still visible
       // (instructors can re-run Sync to fill in missing repos). Mirrors the
       // SELF_FORMED branch below, which already publishes up front.
-      await ClassmojiService.repository.setPublished(repositoryId, true);
+      await ClassmojiService.repository.setPublished(repositoryId, true, classroomId);
     } else if (repository.team_formation_mode === 'SELF_FORMED') {
       // For self-formed teams, just mark repository as published
       // Teams and repos will be created when students form their teams
-      await ClassmojiService.repository.setPublished(repositoryId, true);
+      await ClassmojiService.repository.setPublished(repositoryId, true, classroomId);
 
       return {
         success: 'Repository published! Students can now form teams.',
@@ -107,7 +114,7 @@ export const publishAssignment = async (
       // Publish = "make available to students" — flip visibility immediately
       // (see the INDIVIDUAL branch above). Team repos provision in the
       // background; the repository stays visible regardless.
-      await ClassmojiService.repository.setPublished(repositoryId, true);
+      await ClassmojiService.repository.setPublished(repositoryId, true, classroomId);
     }
 
     const accessToken = await auth.createPublicToken({
@@ -132,14 +139,19 @@ export const publishAssignment = async (
   }
 };
 
+/** `classroomId` scopes the body-supplied repository — see `publishAssignment`. */
 export const syncAssignment = async (
   classroomSlug: string,
+  classroomId: string,
   repositoryId: string,
   _userId: string | null = null
 ) => {
-  const classroom = await ClassmojiService.classroom.findBySlug(classroomSlug);
+  const classroom = await ClassmojiService.classroom.findById(classroomId);
   const repository = await ClassmojiService.repository.findById(repositoryId);
   const sessionId = nanoid();
+
+  invariant(repository != null, 'Repository not found');
+  invariant(repository.classroom_id === classroomId, 'Repository not found in classroom');
 
   const accessToken = await auth.createPublicToken({
     scopes: {

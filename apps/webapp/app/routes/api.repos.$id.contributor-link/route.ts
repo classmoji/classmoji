@@ -25,10 +25,10 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
 
   const repositoryId = params.id!;
 
-  // Resolve the owning classroom so we can run auth against its slug.
+  // Load the repo so its OWN classroom id can authorize the link.
   const repo = await getPrisma().gitRepo.findUnique({
     where: { id: repositoryId },
-    select: { id: true, classroom: { select: { id: true, slug: true } } },
+    select: { id: true, classroom_id: true },
   });
 
   if (!repo) {
@@ -38,9 +38,12 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
     });
   }
 
+  // Authorize on the id, not on the repo's classroom slug: a slug sends the auth
+  // layer through a second lookup, leaving nothing that ties the authorized
+  // classroom to the repo whose contributor mapping is written below.
   const { classroom, membership } = await assertClassroomAccess({
     request,
-    classroomSlug: repo.classroom.slug,
+    classroomId: repo.classroom_id,
     allowedRoles: ['OWNER', 'TEACHER', 'ASSISTANT'],
     resourceType: 'REPOSITORY',
     attemptedAction: 'link_contributor',

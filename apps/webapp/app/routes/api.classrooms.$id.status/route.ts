@@ -6,7 +6,6 @@
  * Only OWNER. Returns `{ status }`.
  */
 
-import { ClassmojiService } from '@classmoji/services';
 import getPrisma from '@classmoji/database';
 import { assertClassroomAccess } from '~/utils/routeAuth.server';
 import type { Route } from './+types/route';
@@ -29,14 +28,15 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
     return new Response('Invalid status', { status: 400 });
   }
 
-  const classroom = await ClassmojiService.classroom.findById(classroomId);
-  if (!classroom) {
-    return new Response('Classroom not found', { status: 404 });
-  }
-
+  // Authorize on the id, not on a slug read back off the record: resolving the
+  // classroom and then authorizing against its slug sends the auth layer through
+  // a second lookup, and nothing ties the classroom it lands on to the row
+  // updated below. `classroomId` makes them the same row by construction. It
+  // also 404s an unknown id only after the session check, so ids stay
+  // unenumerable to anonymous callers.
   await assertClassroomAccess({
     request,
-    classroomSlug: classroom.slug,
+    classroomId,
     allowedRoles: ['OWNER'],
     resourceType: 'CLASSROOM',
     attemptedAction: 'change_classroom_status',

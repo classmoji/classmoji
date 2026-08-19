@@ -19,7 +19,7 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
     include: {
       assignment: true,
       git_repo: {
-        select: { id: true, classroom_id: true, classroom: { select: { slug: true } } },
+        select: { id: true, classroom_id: true },
       },
       analytics_snapshot: true,
     },
@@ -32,9 +32,12 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
     });
   }
 
+  // Authorize on the repo's own classroom id. Authorizing against its slug had
+  // the auth layer resolve a classroom a second time, so the roster and snapshot
+  // returned below were never proven to belong to the classroom that was checked.
   await assertClassroomAccess({
     request,
-    classroomSlug: repoAssignment.git_repo.classroom.slug,
+    classroomId: repoAssignment.git_repo.classroom_id,
     allowedRoles: ['OWNER', 'TEACHER', 'ASSISTANT'],
     resourceType: 'REPOSITORY_ASSIGNMENT',
     attemptedAction: 'view_submission_analytics',
