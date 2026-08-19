@@ -273,18 +273,31 @@ export async function importGithubClassroom(
  *  1. `github_classroom_id` — the GitHub Classroom course id, the stable key.
  *     Its slug is deliberately NOT touched: it may carry a collision suffix and
  *     it is a live URL.
- *  2. `(git_org_id, slug)` — LEGACY rows imported before that column existed.
+ *  2. `(git_org_id, slug)` on a row that carries NO `github_classroom_id` —
+ *     LEGACY rows imported before that column existed. The null predicate is
+ *     load-bearing, not decoration: two courses in one org whose names slugify
+ *     identically ("CS 52: Full-Stack" and "CS 52 Full Stack" both give `cs-52`)
+ *     are both auto-selected by the wizard, and without it the second import
+ *     would match the first one's row by slug and overwrite its name and course
+ *     id — one classroom holding both rosters, the first course id lost. It is
+ *     also the same predicate `annotateAlreadyImported` uses for its fallback,
+ *     so the two agree on what "legacy" means.
  *     Matched on the REQUESTED slug, never the retry candidate: a candidate such
  *     as `cs101-2` can belong to an unrelated classroom in this org, and
  *     updating that would pour this roster into someone else's course. The
  *     course id is stamped on as a side effect, so the row self-heals and the
  *     next re-import matches on step 1 instead.
- *  3. Otherwise create, on the candidate slug the retry wrapper supplied.
+ *  3. Otherwise create, on the candidate slug the retry wrapper supplied. An
+ *     already-imported row holding the requested slug falls through to here,
+ *     where the globally unique slug raises P2002 and the retry wrapper moves
+ *     on to the next candidate — a correctly suffixed second classroom.
  *
  * Steps 1 and 2 are attempt-invariant, which is what makes a retried attempt
  * take the same branch as the first one.
+ *
+ * Exported for tests only; the importer is its sole caller.
  */
-async function resolveImportedClassroom(
+export async function resolveImportedClassroom(
   tx: ImportTx,
   args: {
     gitOrgId: string;
@@ -310,8 +323,12 @@ async function resolveImportedClassroom(
     }
   }
 
-  const legacy = await tx.classroom.findUnique({
-    where: { git_org_id_slug: { git_org_id: gitOrgId, slug: requestedSlug } },
+  // `findFirst`, not `findUnique`: the compound unique cannot carry the
+  // `github_classroom_id` predicate. It is still a single-row lookup — the
+  // `@@unique([git_org_id, slug])` index caps the match at one — so no ordering
+  // is needed to make the result deterministic.
+  const legacy = await tx.classroom.findFirst({
+    where: { git_org_id: gitOrgId, slug: requestedSlug, github_classroom_id: null },
     select: { id: true },
   });
   if (legacy) {

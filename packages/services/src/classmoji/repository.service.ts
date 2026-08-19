@@ -343,15 +343,46 @@ export const createFromForm = async (values: RepositoryFormValues) => {
 };
 
 /**
- * Update a Repository
+ * Reject ids that cannot safely stand in a scoped `where` clause.
+ *
+ * The scoped writes below pair the repository id with `classroom_id` so the
+ * write itself can only touch the authorized classroom, but that pairing only
+ * holds while both values are real strings. Prisma drops an `undefined` value
+ * from a `where` instead of rejecting it, and these id fields also accept a
+ * `StringFilter` object — so `undefined` or `{ not: '' }` would leave a
+ * `deleteMany`/`updateMany` matching EVERY row in the classroom. Ids reach these
+ * functions from untyped request bodies, so the check has to be a runtime one.
+ */
+const assertScopedIds = (id: unknown, classroomId: unknown): void => {
+  if (typeof id !== 'string' || !id) throw new Error('Invalid repository id');
+  if (typeof classroomId !== 'string' || !classroomId) throw new Error('Invalid classroom id');
+};
+
+/**
+ * Update a Repository.
+ *
+ * `classroomId` is REQUIRED and scopes the write — see `deleteById` below.
+ *
  * @param {string} id - UUID of the Repository
  * @param {Object} updates - Fields to update
+ * @param {string} classroomId - UUID of the authorized Classroom
  * @returns {Promise<Object>}
  */
-export const update = async (id: string, updates: Prisma.RepositoryUncheckedUpdateInput) => {
-  return getPrisma().repository.update({
-    where: { id },
+export const update = async (
+  id: string,
+  updates: Prisma.RepositoryUpdateManyMutationInput,
+  classroomId: string
+) => {
+  assertScopedIds(id, classroomId);
+
+  const { count } = await getPrisma().repository.updateMany({
+    where: { id, classroom_id: classroomId },
     data: updates,
+  });
+  if (count !== 1) throw new Error('Repository not found in classroom');
+
+  return getPrisma().repository.findFirst({
+    where: { id, classroom_id: classroomId },
     include: {
       assignments: true,
       tag: true,
@@ -443,14 +474,21 @@ export const updateWithAssignments = async (values: RepositoryUpdateValues) => {
  * `classroomId` is REQUIRED and is part of the write itself rather than a check
  * performed beforehand: `delete({ where: { id } })` would destroy any repository
  * whose id a caller can name, in any classroom. `deleteMany` accepts the
- * non-unique compound, and a count other than 1 means the id did not belong to
- * the authorized classroom — which throws rather than passing as a silent no-op.
+ * non-unique compound.
+ *
+ * `assertScopedIds` runs FIRST because the compound only narrows the write while
+ * both halves are real strings — see its docblock. Past that guard `id` is the
+ * primary key, so the compound matches at most one row: a count other than 1
+ * means zero rows matched, the id did not belong to the authorized classroom,
+ * and nothing was written — which throws rather than passing as a silent no-op.
  *
  * @param {string} id - UUID of the Repository
  * @param {string} classroomId - UUID of the authorized Classroom
  * @returns {Promise<Object>}
  */
 export const deleteById = async (id: string, classroomId: string) => {
+  assertScopedIds(id, classroomId);
+
   const { count } = await getPrisma().repository.deleteMany({
     where: { id, classroom_id: classroomId },
   });
@@ -469,6 +507,11 @@ export const deleteById = async (id: string, classroomId: string) => {
  * @returns {Promise<Object>}
  */
 export const setPublished = async (id: string, isPublished: boolean, classroomId: string) => {
+  // Before the read as well as the write: an unusable id would make the lookup
+  // below return an arbitrary repository in the classroom, and the notification
+  // would then be decided by one row while another was flipped.
+  assertScopedIds(id, classroomId);
+
   const previous = await getPrisma().repository.findFirst({
     where: { id, classroom_id: classroomId },
     select: { is_published: true },

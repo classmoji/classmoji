@@ -50,6 +50,17 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
     async addLink() {
       const { resourceId, resourceType, targetType, targetId } = await request.json();
 
+      // Same untyped-body hazard as removeLink: an `undefined` id is dropped from
+      // the `where` rather than rejected, so the scope checks below would match an
+      // arbitrary row in the classroom, pass, and then create a link pointing at
+      // nothing.
+      if (typeof resourceId !== 'string' || !resourceId) {
+        throw new Response('Invalid resource id', { status: 400 });
+      }
+      if (typeof targetId !== 'string' || !targetId) {
+        throw new Response('Invalid target id', { status: 400 });
+      }
+
       await assertTargetInClassroom(targetType, targetId);
 
       if (resourceType === 'page') {
@@ -93,8 +104,20 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
     async removeLink() {
       const { linkId, resourceType } = await request.json();
 
-      // deleteMany takes the compound that `delete` cannot; a count other than 1
-      // means the link was not this classroom's, which fails rather than no-ops.
+      // `linkId` is untyped request-body data, and the compound below only
+      // narrows the delete while it is a real string: Prisma drops an
+      // `undefined` value from a `where` rather than rejecting it, and the id
+      // field also accepts a filter object, so `undefined` or `{ not: '' }`
+      // would leave `deleteMany` matching every link in the classroom.
+      if (typeof linkId !== 'string' || !linkId) {
+        throw new Response('Invalid link id', { status: 400 });
+      }
+
+      // deleteMany takes the compound that `delete` cannot. Past the guard `id`
+      // is the primary key, so the compound matches at most one row: a count
+      // other than 1 means zero rows matched, the link was not this classroom's,
+      // and nothing was deleted — so the throw below cannot leave the manifest
+      // describing links that are gone.
       const { count } =
         resourceType === 'page'
           ? await prisma.pageLink.deleteMany({
