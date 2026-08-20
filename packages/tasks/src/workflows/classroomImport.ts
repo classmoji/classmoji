@@ -53,7 +53,7 @@ import {
   type ImportSummaryCounts,
 } from '@classmoji/services/import-progress'; // eslint-disable-line import/no-unresolved
 import { titleToIdentifier } from '@classmoji/utils';
-import { cloneContentRepo } from '../helpers/cloneContentRepo.ts';
+import { cloneContentRepo, type CloneSkipReason } from '../helpers/cloneContentRepo.ts';
 
 /**
  * Minimum spacing between `progress` writes.
@@ -449,11 +449,10 @@ export const importContentTask = task({
     await writer.flush();
 
     if (!clone.pushed) {
-      // Nothing reached the target repo (an empty source, or everything pruned
-      // away). Creating rows now would point every page and deck at a path that
-      // does not exist — a classroom full of broken content, which is worse
-      // than an empty one. Say so and stop.
-      writer.addWarnings(['content: no files were copied — no pages or decks were created']);
+      // Nothing reached the target repo. Creating rows now would point every
+      // page and deck at a path that does not exist — a classroom full of
+      // broken content, which is worse than an empty one. Say why and stop.
+      writer.addWarnings([describeEmptyCopy(source, clone.skipped)]);
       writer.patch(...activePhases.map(phase => ({ phase, status: 'done' as const, note: null })));
       await writer.flush();
       return { pages: 0, slides: 0, pushed: false, files: clone.files };
@@ -487,6 +486,29 @@ export const importContentTask = task({
 
 function errText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * The banner line for a content copy that moved nothing.
+ *
+ * Worth distinguishing, because only one of these is ever the user's to act on.
+ * A missing source repo usually means the source classroom simply never had
+ * content — a classroom gets no content repo until its first page or deck — but
+ * GitHub returns the same 404 for a repo the installation cannot see, and does
+ * not let us tell which. So the text names both rather than asserting either.
+ */
+function describeEmptyCopy(
+  source: { orgLogin: string; repo: string },
+  skipped?: CloneSkipReason
+): string {
+  const repo = `${source.orgLogin}/${source.repo}`;
+  const reason =
+    skipped === 'missing'
+      ? `the source content repository ${repo} was not found — it was most likely never created, or the Classmoji GitHub App cannot see it`
+      : skipped === 'pruned'
+        ? 'the source had no content of the types you selected'
+        : `the source content repository ${repo} is empty`;
+  return `content: nothing was copied — ${reason}. No pages or decks were created.`;
 }
 
 /**
