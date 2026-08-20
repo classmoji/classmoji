@@ -53,7 +53,7 @@ import {
   type ImportSummaryCounts,
 } from '@classmoji/services/import-progress'; // eslint-disable-line import/no-unresolved
 import { titleToIdentifier } from '@classmoji/utils';
-import { cloneContentRepo } from '../helpers/cloneContentRepo.ts';
+import { cloneContentRepo, type CloneSkipReason } from '../helpers/cloneContentRepo.ts';
 
 /**
  * Minimum spacing between `progress` writes.
@@ -448,12 +448,40 @@ export const importContentTask = task({
     writer.patch(...activePhases.map(phase => ({ phase, note: null })));
     await writer.flush();
 
+    if (clone.skipped === 'missing') {
+      // GitHub answers 404 both for a repo that never existed and for one this
+      // installation cannot see — but here the DB breaks the tie. Every page
+      // and slide row is created only after `ensureContentRepo` (page.service
+      // `createPage`, slide.service `create`), so a single source row proves
+      // the repo was created at some point. Rows present + a 404 therefore
+      // means deleted, renamed, or out of the installation's reach: a real
+      // failure, and one the user can act on.
+      //
+      // It has to THROW rather than warn. Warning marks the phases `done`,
+      // which finalizes the job COMPLETED — and a completed job cannot be
+      // retried (the retry endpoint refuses anything but FAILED) while a
+      // `done` phase is skipped on resume. That would strand an instructor
+      // with an empty term-rollover classroom and no way back. Failing keeps
+      // the job retryable, so granting access and retrying recovers content.
+      const [sourcePages, sourceSlides] = await Promise.all([
+        wantPages ? prisma.page.count({ where: { classroom_id: job.source_classroom_id } }) : 0,
+        wantSlides ? prisma.slide.count({ where: { classroom_id: job.source_classroom_id } }) : 0,
+      ]);
+      if (sourcePages + sourceSlides > 0) {
+        throw new Error(
+          `source content repository ${source.orgLogin}/${source.repo} could not be cloned, but ` +
+            `the source classroom has ${sourcePages + sourceSlides} item(s) of content to copy. ` +
+            `The repository may have been deleted or renamed, or the Classmoji GitHub App may no ` +
+            `longer have access to it. Nothing was changed — fix the access and retry.`
+        );
+      }
+    }
+
     if (!clone.pushed) {
-      // Nothing reached the target repo (an empty source, or everything pruned
-      // away). Creating rows now would point every page and deck at a path that
-      // does not exist — a classroom full of broken content, which is worse
-      // than an empty one. Say so and stop.
-      writer.addWarnings(['content: no files were copied — no pages or decks were created']);
+      // Nothing reached the target repo. Creating rows now would point every
+      // page and deck at a path that does not exist — a classroom full of
+      // broken content, which is worse than an empty one. Say why and stop.
+      writer.addWarnings([describeEmptyCopy(source, clone.skipped)]);
       writer.patch(...activePhases.map(phase => ({ phase, status: 'done' as const, note: null })));
       await writer.flush();
       return { pages: 0, slides: 0, pushed: false, files: clone.files };
@@ -487,6 +515,27 @@ export const importContentTask = task({
 
 function errText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * The banner line for a content copy that moved nothing.
+ *
+ * Worth distinguishing, because only one of these is the user's to act on. The
+ * 'missing' wording can state plainly that the source never had content: the
+ * caller has already proven it, by failing instead of warning whenever the
+ * source classroom still owns page or slide rows.
+ */
+function describeEmptyCopy(
+  source: { orgLogin: string; repo: string },
+  skipped: CloneSkipReason
+): string {
+  const repo = `${source.orgLogin}/${source.repo}`;
+  const reason = {
+    missing: `the source classroom never published any content (it has no ${repo} repository)`,
+    empty: `the source content repository ${repo} is empty`,
+    pruned: 'the source had no content of the types you selected',
+  }[skipped];
+  return `content: nothing was copied — ${reason}. No pages or decks were created.`;
 }
 
 /**
