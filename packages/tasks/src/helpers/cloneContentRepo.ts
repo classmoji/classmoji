@@ -66,14 +66,37 @@ export interface CloneContentRepoPayload {
   onStep?: (note: string) => void;
 }
 
-export interface CloneContentRepoResult {
-  /** false when the source repo had no commits — nothing to copy, not an error. */
-  pushed: boolean;
-  /** Files whose absolute source-repo URLs were repointed at the target repo. */
-  rewritten: number;
-  /** Files in the pushed tree (excluding .git). */
-  files: number;
-}
+/** Why nothing reached the target. Set whenever `pushed` is false. */
+export type CloneSkipReason =
+  /** The source repo does not exist, or this installation cannot see it. */
+  | 'missing'
+  /** The source repo exists but has no commits. */
+  | 'empty'
+  /** Everything the source had was pruned away by the pages/slides selection. */
+  | 'pruned';
+
+/**
+ * A discriminated union rather than an optional field: "nothing was copied"
+ * always carries its reason, and tsc — not a comment — is what guarantees it.
+ * The caller turns the reason into user-facing text, so a return path that
+ * forgot to set one would silently describe the wrong situation.
+ */
+export type CloneContentRepoResult =
+  | {
+      pushed: true;
+      /** Files whose absolute source-repo URLs were repointed at the target repo. */
+      rewritten: number;
+      /** Files in the pushed tree (excluding .git). */
+      files: number;
+      skipped?: never;
+    }
+  | {
+      /** Nothing reached the target. Not an error — see `skipped`. */
+      pushed: false;
+      rewritten: number;
+      files: number;
+      skipped: CloneSkipReason;
+    };
 
 const cloneUrl = ({ orgLogin, repo, token }: ContentRepoCoordinates): string =>
   `https://x-access-token:${token}@github.com/${orgLogin}/${repo}.git`;
@@ -99,6 +122,26 @@ function gitFailure(
 ): Error {
   const detail = error instanceof Error ? error.message : String(error);
   return new Error(`${action} ${orgLogin}/${repo} failed: ${redactAccessTokens(detail)}`);
+}
+
+/**
+ * Does this clone failure mean "there is no such repo"?
+ *
+ * Git says it two ways for the same condition — `remote: Repository not found.`
+ * from the server, then `fatal: repository '<url>' not found` from the client —
+ * and both land in one message, so either alternative matching is enough.
+ *
+ * Deliberately narrow: anything broader (a bare /not found/) would swallow
+ * unrelated git failures and silently import a classroom with no content. Auth
+ * and network failures must still throw.
+ *
+ * Note that GitHub answers 404 both for a repo that does not exist AND for one
+ * the installation cannot see, and does not distinguish them on purpose. The
+ * caller's warning has to name both possibilities, because we cannot tell.
+ */
+function isRepoNotFound(error: unknown): boolean {
+  const detail = error instanceof Error ? error.message : String(error);
+  return /remote: Repository not found|repository '[^']*' not found/i.test(detail);
 }
 
 /** Every file under `dir`, recursively, as absolute paths. Skips `.git`. */
@@ -208,6 +251,20 @@ export const cloneContentRepo = async (
     try {
       await simpleGit().clone(cloneUrl(source), localPath, ['--depth', '1']);
     } catch (error: unknown) {
+      // A source classroom that never had a page or deck still carries a
+      // content repo NAME: `Classroom.content_repo` is NOT NULL and every
+      // creation path fills it with a derived default, while the repo itself is
+      // only created on the first content write. "Named but absent" is
+      // therefore the ordinary shape of a source with no content — the same
+      // situation as the no-commits case below, and it has to behave the same
+      // way. Throwing here failed the whole content phase and left the user
+      // with an unretryable import (Trigger run 06g1u10i, 2026-08-20).
+      if (isRepoNotFound(error)) {
+        logger.warn('content import: source content repo not found — nothing to copy', {
+          repo: `${source.orgLogin}/${source.repo}`,
+        });
+        return { pushed: false, rewritten: 0, files: 0, skipped: 'missing' };
+      }
       throw gitFailure('cloning', source, error);
     }
 
@@ -222,7 +279,7 @@ export const cloneContentRepo = async (
       logger.warn('content import: source content repo has no commits — nothing to copy', {
         repo: `${source.orgLogin}/${source.repo}`,
       });
-      return { pushed: false, rewritten: 0, files: 0 };
+      return { pushed: false, rewritten: 0, files: 0, skipped: 'empty' };
     }
 
     // Discard the source's history: the target gets one fresh commit.
@@ -244,7 +301,7 @@ export const cloneContentRepo = async (
         keepPages,
         keepSlides,
       });
-      return { pushed: false, rewritten: 0, files: 0 };
+      return { pushed: false, rewritten: 0, files: 0, skipped: 'pruned' };
     }
 
     onStep?.(

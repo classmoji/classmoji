@@ -153,13 +153,17 @@ const ImportProgressBanner = ({ job: initialJob, sourceName }: ImportProgressBan
 
   // A finished import tidies itself away, but stays reopenable for a while —
   // the summary line is the only place the final counts are shown.
+  //
+  // A completed-with-warnings import does NOT tidy itself away. Something the
+  // user asked for was not imported, and collapsing that after 8 seconds is how
+  // an empty classroom goes unnoticed until the term starts. They dismiss it.
   useEffect(() => {
-    if (job.status !== 'COMPLETED') return;
+    if (job.status !== 'COMPLETED' || job.warnings?.length > 0) return;
     autoHideRef.current = setTimeout(() => setCollapsed(true), COMPLETED_AUTOHIDE_MS);
     return () => {
       if (autoHideRef.current) clearTimeout(autoHideRef.current);
     };
-  }, [job.status]);
+  }, [job.status, job.warnings?.length]);
 
   if (dismissed) return null;
 
@@ -293,9 +297,28 @@ const ImportProgressBanner = ({ job: initialJob, sourceName }: ImportProgressBan
       )}
 
       {job.warnings?.length > 0 && (
-        <p className="mt-2 text-xs text-gray-500 dark:text-gray-400">
-          {job.warnings.length} item{job.warnings.length === 1 ? '' : 's'} skipped.
-        </p>
+        <div className="mt-2">
+          <p className="text-xs text-gray-500 dark:text-gray-400">
+            {job.warnings.length} item{job.warnings.length === 1 ? '' : 's'} skipped.
+          </p>
+          {/*
+            The count alone is not actionable: a whole content phase can copy
+            nothing and report "1 item skipped", which reads as a rounding error
+            rather than an empty classroom. Show the text, as the sibling
+            _user.import-classroom/StepProgress does. Capped at 6 — per-item
+            warnings on a large course can run to dozens.
+          */}
+          <ul className="ml-5 mt-1 list-disc text-xs text-amber-600 dark:text-amber-400">
+            {job.warnings.slice(0, 6).map((warning, i) => (
+              <li key={i}>{warning}</li>
+            ))}
+          </ul>
+          {job.warnings.length > 6 && (
+            <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+              …and {job.warnings.length - 6} more.
+            </p>
+          )}
+        </div>
       )}
     </div>
   );

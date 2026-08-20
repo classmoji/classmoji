@@ -5,7 +5,7 @@ import { PlusOutlined, LoadingOutlined, EditOutlined } from '@ant-design/icons';
 import { useGitHubAppInstallPopup } from '~/hooks';
 import { sanitizeRepoName } from '@classmoji/utils';
 import type { GitOrganizationOption } from './types';
-import { slugify } from './utils';
+import { slugify, slugifyInput } from './utils';
 
 interface AvailabilityResponse {
   slug_available: boolean;
@@ -173,8 +173,9 @@ const StepBasicInfo = ({
                       {...field}
                       size="small"
                       style={{ width: 240 }}
-                      onChange={e => field.onChange(slugify(e.target.value))}
+                      onChange={e => field.onChange(slugifyInput(e.target.value))}
                       onBlur={() => {
+                        field.onChange(slugify(field.value ?? ''));
                         field.onBlur();
                         setEditingSlug(false);
                       }}
