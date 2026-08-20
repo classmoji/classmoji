@@ -75,16 +75,28 @@ export type CloneSkipReason =
   /** Everything the source had was pruned away by the pages/slides selection. */
   | 'pruned';
 
-export interface CloneContentRepoResult {
-  /** false when there was nothing to copy — see `skipped`. Not an error. */
-  pushed: boolean;
-  /** Files whose absolute source-repo URLs were repointed at the target repo. */
-  rewritten: number;
-  /** Files in the pushed tree (excluding .git). */
-  files: number;
-  /** Present only when `pushed` is false: which of the empty cases it was. */
-  skipped?: CloneSkipReason;
-}
+/**
+ * A discriminated union rather than an optional field: "nothing was copied"
+ * always carries its reason, and tsc — not a comment — is what guarantees it.
+ * The caller turns the reason into user-facing text, so a return path that
+ * forgot to set one would silently describe the wrong situation.
+ */
+export type CloneContentRepoResult =
+  | {
+      pushed: true;
+      /** Files whose absolute source-repo URLs were repointed at the target repo. */
+      rewritten: number;
+      /** Files in the pushed tree (excluding .git). */
+      files: number;
+      skipped?: never;
+    }
+  | {
+      /** Nothing reached the target. Not an error — see `skipped`. */
+      pushed: false;
+      rewritten: number;
+      files: number;
+      skipped: CloneSkipReason;
+    };
 
 const cloneUrl = ({ orgLogin, repo, token }: ContentRepoCoordinates): string =>
   `https://x-access-token:${token}@github.com/${orgLogin}/${repo}.git`;

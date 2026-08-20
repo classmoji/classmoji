@@ -18,13 +18,18 @@
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import fs from 'fs';
 
 const mocks = vi.hoisted(() => ({
   clone: vi.fn(),
+  raw: vi.fn(),
 }));
 
 vi.mock('simple-git', () => ({
-  simpleGit: () => ({ clone: (...a: unknown[]) => mocks.clone(...a) }),
+  simpleGit: () => ({
+    clone: (...a: unknown[]) => mocks.clone(...a),
+    raw: (...a: unknown[]) => mocks.raw(...a),
+  }),
 }));
 
 vi.mock('@trigger.dev/sdk', () => ({
@@ -75,6 +80,28 @@ describe('cloneContentRepo — source repo that is not there', () => {
     });
   });
 
+  /**
+   * Pins WHAT is cloned, not just how failure is classified. Without this the
+   * suite stays green if the SOURCE url is swapped for the target's — and that
+   * mutation is quietly catastrophic rather than loud: the target was just
+   * auto-init'd with a README, so cloning it succeeds, pushes the README back,
+   * and returns pushed:true. Every page and slide row is then created against
+   * content paths that do not exist, and the instructor is told it worked.
+   * Also pins --depth 1: a full-history clone of an 800MB content repo is the
+   * difference between a minute and a timeout.
+   */
+  it('clones the SOURCE repo, shallow', async () => {
+    mocks.clone.mockRejectedValue(new Error(SERVER_LINE));
+
+    await clone();
+
+    expect(mocks.clone).toHaveBeenCalledWith(
+      `https://x-access-token:${SOURCE.token}@github.com/${SOURCE.orgLogin}/${SOURCE.repo}.git`,
+      expect.any(String),
+      ['--depth', '1']
+    );
+  });
+
   it.each([
     ['the server line alone', SERVER_LINE],
     ['the client line alone', CLIENT_LINE],
@@ -103,5 +130,57 @@ describe('cloneContentRepo — source repo that is not there', () => {
 
     await expect(clone()).rejects.toThrow(/x-access-token:\*\*\*@/);
     await expect(clone()).rejects.not.toThrow(/ghs_src/);
+  });
+});
+
+/**
+ * The other two ways a copy ends up empty. Each reason reaches the caller and
+ * becomes a different sentence in the instructor's banner, so a return path
+ * that dropped or mislabeled its reason would state something confidently
+ * false — 'pruned' silently reported as 'empty' tells the user to go look at
+ * the source classroom when the cause was their own pages/slides selection.
+ *
+ * These drive the real filesystem branch, so `clone` creates its directory the
+ * way a real clone does; the helper's `finally` removes it.
+ */
+describe('cloneContentRepo — the other empty outcomes', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.clone.mockImplementation(async (_url: string, dir: string) => {
+      fs.mkdirSync(dir, { recursive: true });
+    });
+  });
+
+  it('reports a source repo with no commits as empty', async () => {
+    // `rev-parse --verify HEAD` is what fails on a repo with no commits.
+    mocks.raw.mockRejectedValue(new Error("fatal: Needed a single revision'"));
+
+    await expect(clone()).resolves.toEqual({
+      pushed: false,
+      rewritten: 0,
+      files: 0,
+      skipped: 'empty',
+    });
+  });
+
+  it('reports an all-pruned tree as pruned, not empty', async () => {
+    mocks.raw.mockResolvedValue('abc123'); // HEAD exists — the repo has commits.
+
+    // The cloned tree holds nothing the selection keeps, so pruning empties it.
+    await expect(clone()).resolves.toEqual({
+      pushed: false,
+      rewritten: 0,
+      files: 0,
+      skipped: 'pruned',
+    });
+  });
+
+  it('leaves no working directory behind', async () => {
+    mocks.raw.mockResolvedValue('abc123');
+
+    await clone();
+
+    const dir = mocks.clone.mock.calls[0][1] as string;
+    expect(fs.existsSync(dir)).toBe(false);
   });
 });

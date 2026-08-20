@@ -448,6 +448,35 @@ export const importContentTask = task({
     writer.patch(...activePhases.map(phase => ({ phase, note: null })));
     await writer.flush();
 
+    if (clone.skipped === 'missing') {
+      // GitHub answers 404 both for a repo that never existed and for one this
+      // installation cannot see — but here the DB breaks the tie. Every page
+      // and slide row is created only after `ensureContentRepo` (page.service
+      // `createPage`, slide.service `create`), so a single source row proves
+      // the repo was created at some point. Rows present + a 404 therefore
+      // means deleted, renamed, or out of the installation's reach: a real
+      // failure, and one the user can act on.
+      //
+      // It has to THROW rather than warn. Warning marks the phases `done`,
+      // which finalizes the job COMPLETED — and a completed job cannot be
+      // retried (the retry endpoint refuses anything but FAILED) while a
+      // `done` phase is skipped on resume. That would strand an instructor
+      // with an empty term-rollover classroom and no way back. Failing keeps
+      // the job retryable, so granting access and retrying recovers content.
+      const [sourcePages, sourceSlides] = await Promise.all([
+        wantPages ? prisma.page.count({ where: { classroom_id: job.source_classroom_id } }) : 0,
+        wantSlides ? prisma.slide.count({ where: { classroom_id: job.source_classroom_id } }) : 0,
+      ]);
+      if (sourcePages + sourceSlides > 0) {
+        throw new Error(
+          `source content repository ${source.orgLogin}/${source.repo} could not be cloned, but ` +
+            `the source classroom has ${sourcePages + sourceSlides} item(s) of content to copy. ` +
+            `The repository may have been deleted or renamed, or the Classmoji GitHub App may no ` +
+            `longer have access to it. Nothing was changed — fix the access and retry.`
+        );
+      }
+    }
+
     if (!clone.pushed) {
       // Nothing reached the target repo. Creating rows now would point every
       // page and deck at a path that does not exist — a classroom full of
@@ -491,23 +520,21 @@ function errText(error: unknown): string {
 /**
  * The banner line for a content copy that moved nothing.
  *
- * Worth distinguishing, because only one of these is ever the user's to act on.
- * A missing source repo usually means the source classroom simply never had
- * content — a classroom gets no content repo until its first page or deck — but
- * GitHub returns the same 404 for a repo the installation cannot see, and does
- * not let us tell which. So the text names both rather than asserting either.
+ * Worth distinguishing, because only one of these is the user's to act on. The
+ * 'missing' wording can state plainly that the source never had content: the
+ * caller has already proven it, by failing instead of warning whenever the
+ * source classroom still owns page or slide rows.
  */
 function describeEmptyCopy(
   source: { orgLogin: string; repo: string },
-  skipped?: CloneSkipReason
+  skipped: CloneSkipReason
 ): string {
   const repo = `${source.orgLogin}/${source.repo}`;
-  const reason =
-    skipped === 'missing'
-      ? `the source content repository ${repo} was not found — it was most likely never created, or the Classmoji GitHub App cannot see it`
-      : skipped === 'pruned'
-        ? 'the source had no content of the types you selected'
-        : `the source content repository ${repo} is empty`;
+  const reason = {
+    missing: `the source classroom never published any content (it has no ${repo} repository)`,
+    empty: `the source content repository ${repo} is empty`,
+    pruned: 'the source had no content of the types you selected',
+  }[skipped];
   return `content: nothing was copied — ${reason}. No pages or decks were created.`;
 }
 
