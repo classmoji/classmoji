@@ -7,6 +7,7 @@ import {
   IconClipboardList,
 } from '@tabler/icons-react';
 import type { CalendarEventWithLinks } from './types';
+import { PageLink, usePagePeek } from '~/components/features/pages';
 
 interface RepositoryAssignmentLinkInfo {
   provider_issue_number?: number | null;
@@ -51,6 +52,8 @@ const EventLinks = ({
   repoAssignmentsByAssignmentId = {},
 }: EventLinksProps) => {
   const resolvedClassSlug = classSlug ?? '';
+  // Null on admin (no drawer mounted there) — the page links stay new-tab links.
+  const peek = usePagePeek();
   const hasMeetingLink = event.meeting_link;
   const hasPages = (event.pages?.length ?? 0) > 0;
   const hasSlides = (event.slides?.length ?? 0) > 0;
@@ -78,20 +81,21 @@ const EventLinks = ({
         </a>
       )}
 
-      {/* Pages - opens in new tab (external pages app) */}
+      {/* Pages — peek in place inside the student/assistant shell, new tab on
+          admin (no drawer there). The ↗ affordance follows the behaviour. */}
       {hasPages &&
         (event.pages ?? []).map(({ page }) => (
-          <a
+          <PageLink
             key={page.id}
+            pageId={page.id}
+            title={page.title}
             href={`${pagesUrl}/${resolvedClassSlug}/${page.id}`}
-            target="_blank"
-            rel="noopener noreferrer"
             className="flex items-center gap-2 text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300 text-sm"
           >
             <IconFileText size={18} className="text-ink-3" />
             <span className="underline">{page.title}</span>
-            <IconExternalLink size={14} className="text-ink-3" />
-          </a>
+            {peek ? null : <IconExternalLink size={14} className="text-ink-3" />}
+          </PageLink>
         ))}
 
       {/* Slides - opens in new tab */}

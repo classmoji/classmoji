@@ -1,6 +1,13 @@
-import { useLoaderData, redirect, Outlet, useParams } from 'react-router';
+import { useLoaderData, redirect, Outlet, useLocation, useNavigate, useParams } from 'react-router';
 import { useEffect, useState } from 'react';
 import useLocalStorageState from 'use-local-storage-state';
+
+import {
+  PAGE_ESC_MESSAGE,
+  buildNavMessage,
+  resolveEmbedParentOrigin,
+  resolveNavGridHref,
+} from './embedBridge.ts';
 
 import { ClassmojiService, getAuthSession } from '~/utils/db.server.ts';
 
@@ -92,6 +99,14 @@ export const loader = async ({
   return {
     view,
     isEmbedded,
+    // The single origin this document may talk to when embedded (null = stay
+    // silent). Resolved from server config, with the URL's parentOrigin claim
+    // used only as a cross-check — see embedBridge.ts.
+    embedParentOrigin: resolveEmbedParentOrigin({
+      isEmbedded,
+      parentOriginParam: url.searchParams.get('parentOrigin'),
+      webappUrl: process.env.WEBAPP_URL,
+    }),
     classroom: {
       id: classroom.id,
       name: classroom.name,
@@ -275,8 +290,11 @@ export const action = async ({
 };
 
 const ClassroomLayout = () => {
-  const { isEmbedded, classroom, pages, membership } = useLoaderData<typeof loader>();
+  const { isEmbedded, embedParentOrigin, classroom, pages, membership } =
+    useLoaderData<typeof loader>();
   const params = useParams();
+  const navigate = useNavigate();
+  const location = useLocation();
   const [collapsed, setCollapsed] = useLocalStorageState('classmoji-pages-sidebar-collapsed', {
     defaultValue: false,
   });
@@ -297,6 +315,68 @@ const ClassroomLayout = () => {
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [setCollapsed]);
+
+  /* ---- Embed bridge (see ./embedBridge.ts) ------------------------------ */
+
+  // Keep embed mode sticky for the whole framed session.
+  //
+  // `isEmbedded` is derived per-request from `?embed=true`, and in-page links
+  // (the pageLink block navigates with a bare `/{slug}/{pageId}`) drop it — so
+  // one click inside the reader would pop the editor's full sidebar into the
+  // panel. Being in a frame is the durable fact, so that is what this reads;
+  // the query param is restored to match. Guarded on already-embedded, so it
+  // runs at most once per navigation and cannot loop.
+  useEffect(() => {
+    if (typeof window === 'undefined' || window.self === window.top) return;
+    const url = new URL(window.location.href);
+    if (url.searchParams.get('embed') === 'true') return;
+    url.searchParams.set('embed', 'true');
+    navigate(`${url.pathname}${url.search}`, { replace: true });
+  }, [location.key, navigate]);
+
+  // Tell the host which page is on screen — on mount and after every in-frame
+  // navigation — so its header title and ↗ target track the reader.
+  useEffect(() => {
+    if (!embedParentOrigin || typeof window === 'undefined') return;
+    if (window.parent === window) return;
+    const page = pages.find(p => p.id === currentPageId);
+    if (!page) return;
+    window.parent.postMessage(
+      buildNavMessage({ classroomSlug: classroom.slug, page }),
+      embedParentOrigin
+    );
+  }, [embedParentOrigin, currentPageId, pages, classroom.slug]);
+
+  // Escape belongs to the host's drawer, but focus is in this document, so the
+  // keydown never reaches it. Forward the intent rather than acting on it.
+  useEffect(() => {
+    if (!embedParentOrigin || typeof window === 'undefined') return;
+    if (window.parent === window) return;
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      window.parent.postMessage({ type: PAGE_ESC_MESSAGE }, embedParentOrigin);
+    };
+    window.addEventListener('keydown', handleEscape);
+    return () => window.removeEventListener('keydown', handleEscape);
+  }, [embedParentOrigin]);
+
+  // Resolve the authored page-directory hub. NavGridStatic deliberately emits
+  // `href="#"` + data-page-id and leaves the real URL to its consumer; without
+  // this the hub is dead inside the reader, and the hub IS the navigation.
+  useEffect(() => {
+    if (!isEmbedded || typeof document === 'undefined') return;
+    const handleClick = (event: MouseEvent) => {
+      if (event.defaultPrevented || event.button !== 0) return;
+      if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+      const anchor = (event.target as Element | null)?.closest?.('a[data-page-id]');
+      const href = resolveNavGridHref(anchor as Element | null, classroom.slug);
+      if (!href) return;
+      event.preventDefault();
+      navigate(href);
+    };
+    document.addEventListener('click', handleClick);
+    return () => document.removeEventListener('click', handleClick);
+  }, [isEmbedded, classroom.slug, navigate]);
 
   // If embedded, render without sidebar
   if (isEmbedded) {

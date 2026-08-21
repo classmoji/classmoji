@@ -1,4 +1,5 @@
 import { IconFileText, IconPresentation } from '@tabler/icons-react';
+import { PageLink } from '~/components/features/pages';
 
 interface LinkedPage {
   page: { id: string; title: string };
@@ -34,16 +35,16 @@ const ResourceLinks = ({
     <div className="flex flex-wrap gap-4 mt-2">
       {hasPages &&
         pages!.map(({ page }: { page: { id: string; title: string } }) => (
-          <a
+          <PageLink
             key={page.id}
+            pageId={page.id}
+            title={page.title}
             href={`${pagesUrl}/${classSlug}/${page.id}`}
-            target="_blank"
-            rel="noopener noreferrer"
             className="flex items-center gap-1 text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300 text-sm underline"
           >
             <IconFileText size={16} className="text-ink-3" />
             {page.title}
-          </a>
+          </PageLink>
         ))}
       {hasSlides &&
         slides!.map(({ slide }: { slide: { id: string; title: string } }) => (

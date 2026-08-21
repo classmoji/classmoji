@@ -8,6 +8,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const classroomSiteFindUnique = vi.fn();
 const classroomSiteUpsert = vi.fn();
 const classroomSiteUpdate = vi.fn();
+const classroomSiteDelete = vi.fn();
 const classroomFindUnique = vi.fn();
 const pageFindFirst = vi.fn();
 const moduleFindMany = vi.fn();
@@ -18,6 +19,7 @@ vi.mock('@classmoji/database', () => ({
       findUnique: classroomSiteFindUnique,
       upsert: classroomSiteUpsert,
       update: classroomSiteUpdate,
+      delete: classroomSiteDelete,
     },
     classroom: { findUnique: classroomFindUnique },
     page: { findFirst: pageFindFirst },
@@ -28,6 +30,7 @@ vi.mock('@classmoji/database', () => ({
 const {
   SITE_ERROR,
   checkSubdomainAvailability,
+  deleteSiteForClassroom,
   getHomePageForViewer,
   getPageBySlugForSite,
   getSiteBySubdomain,
@@ -590,5 +593,28 @@ describe('site.listPublicModulesForViewer', () => {
   it('drops modules left with no visible items rather than rendering empty shells', async () => {
     moduleFindMany.mockResolvedValue([{ id: 'mod-4', title: 'Secret Week', items: [] }]);
     await expect(listPublicModulesForViewer('class-1', null)).resolves.toEqual([]);
+  });
+});
+
+describe('site.deleteSiteForClassroom', () => {
+  it('deletes the row and reports the subdomain it freed', async () => {
+    classroomSiteFindUnique.mockResolvedValue({ id: 'site-1', subdomain: 'cs52' });
+    classroomSiteDelete.mockResolvedValue({ id: 'site-1' });
+
+    await expect(deleteSiteForClassroom('class-1')).resolves.toEqual({
+      id: 'site-1',
+      subdomain: 'cs52',
+    });
+    expect(classroomSiteDelete).toHaveBeenCalledWith({ where: { classroom_id: 'class-1' } });
+  });
+
+  it('refuses a classroom with no site instead of letting prisma throw P2025', async () => {
+    classroomSiteFindUnique.mockResolvedValue(null);
+
+    await expect(deleteSiteForClassroom('class-1')).rejects.toMatchObject({
+      code: SITE_ERROR.SITE_NOT_FOUND,
+    });
+    // The whole reason for the pre-check: a double-submit must not reach the DB.
+    expect(classroomSiteDelete).not.toHaveBeenCalled();
   });
 });

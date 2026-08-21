@@ -31,7 +31,9 @@ import {
 export const routeCategories = {
   content: {
     label: 'Content',
-    items: ['modules', 'repositories', 'assignments', 'slides', 'pages', 'quizzes'],
+    // Pages is LAST on purpose: it is the class's reading surface (its front
+    // page, docked), not a task list, so it sits after the coursework entries.
+    items: ['modules', 'repositories', 'assignments', 'slides', 'quizzes', 'pages'],
   },
   assessment: {
     label: 'Assessment',
@@ -105,7 +107,12 @@ export const routes = {
     link: '/pages',
     label: 'Pages',
     icon: IconBook,
-    roles: ['OWNER', 'TEACHER'],
+    // One entry for everyone, but it lands somewhere different per role: staff
+    // get the page CMS list, students/assistants get the class front page
+    // docked (the Option C reader). The sidebar no longer hangs one entry per
+    // page — CommonLayout hides this whole entry from non-owners when the
+    // class has no readable pages, the same way Modules hides.
+    roles: ['OWNER', 'TEACHER', 'ASSISTANT', 'STUDENT'],
     category: 'content',
   },
   resources: {

@@ -13,6 +13,7 @@ const ALL_TABS: TabDef[] = [
   { key: 'grades', label: 'Grades' },
   { key: 'quizzes', label: 'Quizzes' },
   { key: 'content', label: 'Content' },
+  { key: 'website', label: 'Website' },
   { key: 'team', label: 'Team' },
   { key: 'extension', label: 'Extension' },
   { key: 'danger-zone', label: 'Danger Zone', danger: true },
@@ -27,9 +28,7 @@ const OrgSettings = () => {
 
   return (
     <div className="min-h-full flex flex-col">
-      <h1 className="mt-2 mb-4 text-lg font-semibold text-ink-1">
-        Settings
-      </h1>
+      <h1 className="mt-2 mb-4 text-lg font-semibold text-ink-1">Settings</h1>
 
       <div className="flex-1 flex flex-col">
         <div className="flex -mb-px relative overflow-x-auto">

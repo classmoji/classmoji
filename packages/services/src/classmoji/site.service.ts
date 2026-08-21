@@ -339,6 +339,32 @@ export async function upsertSiteSettings(classroomId: string, input: SiteSetting
   });
 }
 
+/**
+ * Delete a classroom's site row, releasing its subdomain for another class.
+ *
+ * Only the ClassroomSite row goes: pages, modules and their `is_public` flags
+ * are the classroom's own content and survive. Re-claiming the same subdomain
+ * later rebuilds the site from scratch (disabled, no home page) — which is the
+ * point, since "remove" is how an instructor gives a name back.
+ *
+ * Absence is an ERROR, not a no-op. `prisma.delete` on a missing row throws an
+ * opaque P2025; checking first turns a double-submit into a message the caller
+ * can render, and matches upsertSiteSettings' SITE_NOT_FOUND contract.
+ */
+export async function deleteSiteForClassroom(classroomId: string) {
+  const prisma = getPrisma();
+  const existing = await prisma.classroomSite.findUnique({
+    where: { classroom_id: classroomId },
+    select: { id: true, subdomain: true },
+  });
+  if (!existing) {
+    throw new SiteError(SITE_ERROR.SITE_NOT_FOUND, 'This classroom has no site to remove.');
+  }
+
+  await prisma.classroomSite.delete({ where: { classroom_id: classroomId } });
+  return existing;
+}
+
 /** The two page flags every site visibility decision reads. */
 type PageVisibility = { is_draft: boolean; is_public: boolean };
 
