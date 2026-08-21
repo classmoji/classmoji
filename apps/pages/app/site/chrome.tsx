@@ -52,7 +52,7 @@ export function IdentityBar({
         <nav aria-label="Breadcrumb" className="flex min-w-0 items-center gap-2 text-sm">
           <Link
             to="/"
-            className="shrink-0 font-semibold text-gray-900 no-underline hover:text-gray-600 dark:text-gray-100 dark:hover:text-gray-300"
+            className="min-w-0 truncate font-semibold text-gray-900 no-underline hover:text-gray-600 dark:text-gray-100 dark:hover:text-gray-300"
           >
             {courseName}
           </Link>

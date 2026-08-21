@@ -128,23 +128,52 @@ interface PagePickerProps {
   anchorRef: React.RefObject<HTMLDivElement | null>;
 }
 
+type PickerPos = {
+  left: number;
+  width: number;
+  maxHeight: number;
+  top?: number;
+  bottom?: number;
+};
+
+/**
+ * Fixed-position coords for the portaled dropdown, anchored under the action
+ * row — or above it when the viewport below is too tight (no flip meant the
+ * list ran off-screen with no way to scroll to it, since fixed elements don't
+ * join the page's scroll flow). maxHeight clamps to the space actually there.
+ */
+function computePickerPos(el: HTMLElement | null): PickerPos | null {
+  if (!el || typeof window === 'undefined') return null;
+  const r = el.getBoundingClientRect();
+  const spaceBelow = window.innerHeight - r.bottom - 16;
+  const spaceAbove = r.top - 16;
+  const flipUp = spaceBelow < 200 && spaceAbove > spaceBelow;
+  return {
+    left: r.left,
+    width: r.width,
+    maxHeight: Math.min(400, Math.max(spaceBelow, spaceAbove, 160)),
+    ...(flipUp ? { bottom: window.innerHeight - r.top + 8 } : { top: r.bottom + 8 }),
+  };
+}
+
 function PagePicker({ pages, isLoading, onSelect, onClose, anchorRef }: PagePickerProps) {
   const [query, setQuery] = useState('');
-  const [pos, setPos] = useState<{ top: number; left: number; width: number } | null>(null);
+  // Lazy-init so the FIRST render is already positioned: a null first pass
+  // renders `visibility: hidden`, and focusing the search input from an effect
+  // in that same flush is a silent no-op (browsers refuse focus inside hidden
+  // subtrees; verified — and a useLayoutEffect does NOT fix it, since pending
+  // passive effects still run before its re-render). The anchor row is always
+  // mounted before the picker opens, so this is non-null in practice.
+  const [pos, setPos] = useState<PickerPos | null>(() => computePickerPos(anchorRef.current));
   const containerRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
   // The dropdown is portaled to <body> so it escapes BlockNote's per-block
   // stacking contexts — an absolutely-positioned dropdown inside the block is
-  // painted over by whatever block follows, regardless of its z-index. Position
-  // it under the anchor with fixed coords and keep it attached on scroll/resize.
+  // painted over by whatever block follows, regardless of its z-index. Keep it
+  // attached to the anchor on scroll/resize.
   useEffect(() => {
-    const update = () => {
-      const el = anchorRef.current;
-      if (!el) return;
-      const r = el.getBoundingClientRect();
-      setPos({ top: r.bottom + 8, left: r.left, width: r.width });
-    };
+    const update = () => setPos(computePickerPos(anchorRef.current));
     update();
     window.addEventListener('scroll', update, true);
     window.addEventListener('resize', update);
@@ -154,9 +183,11 @@ function PagePicker({ pages, isLoading, onSelect, onClose, anchorRef }: PagePick
     };
   }, [anchorRef]);
 
+  // Gated on being positioned (visible) — focus inside a hidden subtree no-ops.
+  const positioned = pos !== null;
   useEffect(() => {
-    inputRef.current?.focus();
-  }, []);
+    if (positioned) inputRef.current?.focus();
+  }, [positioned]);
 
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
@@ -186,7 +217,13 @@ function PagePicker({ pages, isLoading, onSelect, onClose, anchorRef }: PagePick
       ref={containerRef}
       style={
         pos
-          ? { position: 'fixed', top: pos.top, left: pos.left, minWidth: pos.width }
+          ? {
+              position: 'fixed',
+              left: pos.left,
+              minWidth: pos.width,
+              maxHeight: pos.maxHeight,
+              ...(pos.top !== undefined ? { top: pos.top } : { bottom: pos.bottom }),
+            }
           : { position: 'fixed', top: 0, left: 0, visibility: 'hidden' }
       }
     >

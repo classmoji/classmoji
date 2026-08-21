@@ -135,6 +135,14 @@ body {
  * the missing scheme attribute. Light mode carries no .dark, so it is untouched.
  * The --mantine-* repoints additionally fix any surface driven by those vars
  * (e.g. BlockNote's sticky table header). */
+html.dark {
+  /* Dark UA chrome (scrollbars, form controls) for the whole document — the
+     .bn-container-scoped color-scheme doesn't reach body-portaled UI (the
+     navGrid page picker) or the viewport scrollbar. Mirrors the site twin in
+     site/styles.ts; (0,1,1) beats Mantine's unlayered :root (0,1,0). */
+  color-scheme: dark;
+}
+
 html.dark body {
   background-color: #191919;
   color: var(--mantine-color-dark-0);
