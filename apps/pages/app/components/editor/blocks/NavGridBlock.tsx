@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { createReactBlockSpec, type ReactCustomBlockRenderProps } from '@blocknote/react';
 import {
   IconArrowUp,
@@ -123,12 +124,35 @@ interface PagePickerProps {
   isLoading: boolean;
   onSelect: (page: DirectoryPage) => void;
   onClose: () => void;
+  /** The button row the dropdown hangs beneath; anchors the portal's position. */
+  anchorRef: React.RefObject<HTMLDivElement | null>;
 }
 
-function PagePicker({ pages, isLoading, onSelect, onClose }: PagePickerProps) {
+function PagePicker({ pages, isLoading, onSelect, onClose, anchorRef }: PagePickerProps) {
   const [query, setQuery] = useState('');
+  const [pos, setPos] = useState<{ top: number; left: number; width: number } | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+
+  // The dropdown is portaled to <body> so it escapes BlockNote's per-block
+  // stacking contexts — an absolutely-positioned dropdown inside the block is
+  // painted over by whatever block follows, regardless of its z-index. Position
+  // it under the anchor with fixed coords and keep it attached on scroll/resize.
+  useEffect(() => {
+    const update = () => {
+      const el = anchorRef.current;
+      if (!el) return;
+      const r = el.getBoundingClientRect();
+      setPos({ top: r.bottom + 8, left: r.left, width: r.width });
+    };
+    update();
+    window.addEventListener('scroll', update, true);
+    window.addEventListener('resize', update);
+    return () => {
+      window.removeEventListener('scroll', update, true);
+      window.removeEventListener('resize', update);
+    };
+  }, [anchorRef]);
 
   useEffect(() => {
     inputRef.current?.focus();
@@ -136,20 +160,36 @@ function PagePicker({ pages, isLoading, onSelect, onClose }: PagePickerProps) {
 
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
-      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
+      const target = e.target as Node;
+      // Neither the portaled dropdown nor the anchor buttons (which manage their
+      // own open/close) count as "outside".
+      if (
+        containerRef.current &&
+        !containerRef.current.contains(target) &&
+        anchorRef.current &&
+        !anchorRef.current.contains(target)
+      ) {
         onClose();
       }
     };
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, [onClose]);
+  }, [onClose, anchorRef]);
 
   const filtered = pages.filter(page =>
     (page.title || 'Untitled').toLowerCase().includes(query.toLowerCase())
   );
 
-  return (
-    <div className="page-link-dropdown nav-grid-picker" ref={containerRef}>
+  const dropdown = (
+    <div
+      className="page-link-dropdown nav-grid-picker nav-grid-picker-portal"
+      ref={containerRef}
+      style={
+        pos
+          ? { position: 'fixed', top: pos.top, left: pos.left, minWidth: pos.width }
+          : { position: 'fixed', top: 0, left: 0, visibility: 'hidden' }
+      }
+    >
       <div className="page-link-dropdown-header">Select a page</div>
       <div className="nav-grid-picker-search">
         <IconFileText size={16} className="page-link-icon" />
@@ -194,6 +234,8 @@ function PagePicker({ pages, isLoading, onSelect, onClose }: PagePickerProps) {
       </div>
     </div>
   );
+
+  return typeof document === 'undefined' ? dropdown : createPortal(dropdown, document.body);
 }
 
 /* ------------------------------------------------------------------ *
@@ -451,6 +493,8 @@ const navGridImplementation = {
     const [currentPageId, setCurrentPageId] = useState('');
 
     const [pickerTarget, setPickerTarget] = useState<{ index: number | null } | null>(null);
+    // Anchor for the portaled page picker — the action-button row it drops under.
+    const actionsRef = useRef<HTMLDivElement>(null);
     const [externalForm, setExternalForm] = useState<ExternalFormValue | null>(null);
     const [formError, setFormError] = useState('');
     const [labelEditIndex, setLabelEditIndex] = useState<number | null>(null);
@@ -698,7 +742,7 @@ const navGridImplementation = {
           />
         ) : null}
 
-        <div className="nav-grid-actions">
+        <div className="nav-grid-actions" ref={actionsRef}>
           <button
             type="button"
             className="nav-grid-btn"
@@ -729,6 +773,7 @@ const navGridImplementation = {
               isLoading={pagesLoading}
               onSelect={handleSelectPage}
               onClose={() => setPickerTarget(null)}
+              anchorRef={actionsRef}
             />
           ) : null}
         </div>

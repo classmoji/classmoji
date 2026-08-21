@@ -176,10 +176,17 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
       console.log(`[test-login] Redirecting directly to ${redirectPath}`);
     }
 
-    // Set Better Auth session cookie and redirect
+    // Set Better Auth session cookie and redirect. Honor COOKIE_DOMAIN so the
+    // cookie can span subdomains locally (e.g. `.lvh.me` covers app.lvh.me AND
+    // {sub}.lvh.me) — mirrors what crossSubDomainCookies does for the real
+    // OAuth path, which this route bypasses.
+    const cookieDomain = process.env.COOKIE_DOMAIN;
+    const sessionCookie =
+      `classmoji.session_token=${sessionToken}; Path=/; HttpOnly; SameSite=Lax` +
+      (cookieDomain ? `; Domain=${cookieDomain}` : '');
     return redirect(redirectPath, {
       headers: {
-        'Set-Cookie': `classmoji.session_token=${sessionToken}; Path=/; HttpOnly; SameSite=Lax`,
+        'Set-Cookie': sessionCookie,
       },
     });
   } catch (error: unknown) {

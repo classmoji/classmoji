@@ -1,10 +1,16 @@
-import { Outlet, data, isRouteErrorResponse, useLoaderData, useRouteError } from 'react-router';
+import {
+  Outlet,
+  data,
+  isRouteErrorResponse,
+  useLoaderData,
+  useMatches,
+  useRouteError,
+} from 'react-router';
 import type { HeadersFunction, LoaderFunctionArgs, MetaFunction } from 'react-router';
 
 import { IdentityBar, SiteFooter, SiteNotice } from './chrome.tsx';
 import { routeSiteHeaders, siteHeaders } from './headers.server.ts';
-import { isMember, publicPathOf, resolveSiteContext, rolePrefix } from './tenant.server.ts';
-import { webappUrl } from './env.server.ts';
+import { isMember, publicPathOf, resolveSiteContext } from './tenant.server.ts';
 import { signInPathFor } from './returnTo.ts';
 import { SITE_STYLES } from './styles.ts';
 
@@ -27,16 +33,15 @@ export const loader = async (args: LoaderFunctionArgs) => {
   // rewrote to — that prefix must never appear in a link or a redirect.
   const publicPath = publicPathOf(url.pathname, params.subdomain!) + url.search;
 
-  const prefix = rolePrefix(viewer.role);
-
   return data(
     {
       courseName: site.classroom.name,
       memberName: isMember(viewer) ? viewer.name || viewer.login : null,
-      appHref:
-        prefix && isMember(viewer)
-          ? `${webappUrl()}/${prefix}/${site.classroom.slug}/dashboard`
-          : null,
+      // Always offer a way into the app. Points at the role-agnostic `/app`
+      // bridge (not a role-specific dashboard URL) so this link is identical
+      // for every viewer and stays safe to embed in the anonymous, cacheable
+      // HTML — the bridge resolves the real destination per request.
+      appHref: '/app',
       signInHref: viewer.userId ? null : signInPathFor(publicPath),
     },
     {
@@ -58,6 +63,17 @@ export const meta: MetaFunction<typeof loader> = ({ data }) => {
 const SiteLayout = () => {
   const data = useLoaderData<typeof loader>();
 
+  // The current page's title lives in the leaf route's loader data, not here.
+  // page.tsx marks itself with `handle.siteBreadcrumb`; read it (SSR-only, no
+  // hydration) so the identity bar can show `{course} › {page}`. Null on the
+  // home page and on non-page routes, which collapses the crumb to the name.
+  const matches = useMatches();
+  const pageMatch = matches.find(
+    m => (m.handle as { siteBreadcrumb?: boolean } | undefined)?.siteBreadcrumb
+  );
+  const pageData = pageMatch?.data as { title?: string; isHomePage?: boolean } | undefined;
+  const currentPageTitle = pageData && !pageData.isHomePage ? (pageData.title ?? null) : null;
+
   return (
     <div className="flex min-h-screen flex-col">
       {/* Inlined rather than imported — see styles.ts for why a route-module
@@ -68,6 +84,7 @@ const SiteLayout = () => {
         memberName={data.memberName}
         appHref={data.appHref}
         signInHref={data.signInHref}
+        currentPageTitle={currentPageTitle}
       />
       <main className="flex-1">
         <Outlet />

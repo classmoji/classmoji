@@ -13,10 +13,17 @@ export type IdentityBarProps = {
   courseName: string;
   /** Signed-in member's display name, or null for anonymous visitors. */
   memberName?: string | null;
-  /** Deep link into the app for members ("Open in Classmoji"). */
+  /** Link into the app ("Go to Classmoji") — the role-agnostic `/app` bridge. */
   appHref?: string | null;
   /** Sign-in interstitial path (anonymous visitors only). */
   signInHref?: string | null;
+  /**
+   * Current sub-page title, or null on the home page. When set, the course name
+   * becomes the first crumb of an inline `{course} › {page}` breadcrumb — kept
+   * in the fixed-height bar (rather than a row above the cover) so the banner
+   * never shifts between the home page and a sub-page.
+   */
+  currentPageTitle?: string | null;
 };
 
 /** Two initials for the avatar chip — never more, never an empty circle. */
@@ -32,16 +39,34 @@ function initialsOf(name: string): string {
  * state on the right. Deliberately not a nav — navigation on a class site is
  * authored content (the page directory block), not chrome.
  */
-export function IdentityBar({ courseName, memberName, appHref, signInHref }: IdentityBarProps) {
+export function IdentityBar({
+  courseName,
+  memberName,
+  appHref,
+  signInHref,
+  currentPageTitle,
+}: IdentityBarProps) {
   return (
     <header className="border-b border-stone-200 dark:border-neutral-800 bg-white/90 dark:bg-[#191919]/90">
       <div className="mx-auto flex max-w-5xl items-center justify-between gap-4 px-4 py-3 sm:px-6">
-        <Link
-          to="/"
-          className="truncate text-sm font-semibold text-gray-900 no-underline hover:text-gray-600 dark:text-gray-100 dark:hover:text-gray-300"
-        >
-          {courseName}
-        </Link>
+        <nav aria-label="Breadcrumb" className="flex min-w-0 items-center gap-2 text-sm">
+          <Link
+            to="/"
+            className="shrink-0 font-semibold text-gray-900 no-underline hover:text-gray-600 dark:text-gray-100 dark:hover:text-gray-300"
+          >
+            {courseName}
+          </Link>
+          {currentPageTitle ? (
+            <>
+              <span aria-hidden="true" className="shrink-0 text-gray-400 dark:text-gray-600">
+                ›
+              </span>
+              <span aria-current="page" className="truncate text-gray-600 dark:text-gray-400">
+                {currentPageTitle}
+              </span>
+            </>
+          ) : null}
+        </nav>
 
         <div className="flex shrink-0 items-center gap-3">
           {memberName ? (
@@ -61,7 +86,7 @@ export function IdentityBar({ courseName, memberName, appHref, signInHref }: Ide
               href={appHref}
               className="rounded-full border border-stone-300 px-3 py-1 text-sm text-gray-700 no-underline hover:bg-stone-50 dark:border-neutral-700 dark:text-gray-200 dark:hover:bg-neutral-800"
             >
-              Open in Classmoji
+              Go to Classmoji
             </a>
           ) : null}
 

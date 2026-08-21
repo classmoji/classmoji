@@ -65,6 +65,11 @@ export const loader = async (args: LoaderFunctionArgs) => {
     {
       courseName: site.classroom.name,
       title: rendered.title,
+      // The home page is also servable at its own slug (sitePagePath links to
+      // the slug, not `/`), so a route-based "this is a sub-page" test is not
+      // enough — an authored link to the home page would render "Home › Home".
+      // Gate the breadcrumb on identity with the nominated front page instead.
+      isHomePage: page.id === site.home_page_id,
       html: rendered.html,
       coverImage: rendered.coverImage,
       description: describeFromHtml(rendered.html),
@@ -86,6 +91,14 @@ export const loader = async (args: LoaderFunctionArgs) => {
 };
 
 export const headers: HeadersFunction = args => routeSiteHeaders(args);
+
+/**
+ * Marks this route as the breadcrumb source: the layout reads the leaf match's
+ * loader data (`title` + `isHomePage`) via `useMatches` and renders the inline
+ * `{course} › {page}` crumb in the identity bar. Only page.tsx carries it, so
+ * home/schedule/sign-in show the course name alone.
+ */
+export const handle = { siteBreadcrumb: true };
 
 export const meta: MetaFunction<typeof loader> = ({ data: loaderData }) => {
   if (!loaderData) return [{ title: 'Page' }];

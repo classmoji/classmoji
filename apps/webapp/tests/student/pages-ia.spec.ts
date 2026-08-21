@@ -316,10 +316,12 @@ test.describe('postMessage nav-sync', () => {
       [TEST_CLASSROOM, other!.id]
     );
 
-    // Proof the ping arrived: the header is a "back to the front page" button
-    // now, carrying the new page's title.
-    const home = page.getByRole('button', { name: other!.title, exact: true });
+    // Proof the ping arrived: the docked header is now a "Home › {title}"
+    // breadcrumb — a "Home" button plus the new page's title as the current,
+    // terminal crumb.
+    const home = panel.getByRole('button', { name: 'Home', exact: true });
     await expect(home).toBeVisible({ timeout: 20000 });
+    await expect(panel.getByText(other!.title, { exact: true })).toBeVisible();
     expect(other!.title).not.toBe(titleBefore);
 
     // ...and the ↗ retargeted to the page the reader is actually on.
@@ -331,11 +333,14 @@ test.describe('postMessage nav-sync', () => {
       }
     }
 
-    // The header doubles as home (S5b): clicking it returns to the front page.
+    // The "Home" crumb navigates the iframe back to the front page. Once there
+    // the breadcrumb disappears — you are home — and the header is the plain
+    // front-page title again (a level-2 heading, no "Home" button).
     await home.click();
     await expect(panel.getByRole('heading', { level: 2 })).toHaveText(titleBefore, {
       timeout: 20000,
     });
+    await expect(panel.getByRole('button', { name: 'Home' })).toHaveCount(0);
   });
 
   /**

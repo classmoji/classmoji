@@ -145,14 +145,30 @@ const PageViewPanel = ({
           containers; the docked one simply has no ✕. */}
       <div className="flex items-center gap-2 border-b border-stone-200 px-4 py-2.5 dark:border-neutral-800">
         {canGoHome ? (
-          <button
-            type="button"
-            onClick={goHome}
-            title={`Back to ${homeTitle || 'the front page'}`}
-            className="truncate text-left text-sm font-semibold text-gray-700 hover:text-gray-900 dark:text-gray-200 dark:hover:text-white"
-          >
-            {title}
-          </button>
+          // Docked, off the front page: a flat two-level "Home › {current}"
+          // crumb. "Home" navigates the iframe back to the front page (goHome);
+          // the current title is the terminal, non-interactive crumb. The peek
+          // drawer never reaches here — it passes no homeRef, so canGoHome is
+          // false and it keeps the plain title below.
+          <nav aria-label="Breadcrumb" className="flex min-w-0 items-center gap-1.5 text-sm">
+            <button
+              type="button"
+              onClick={goHome}
+              title={`Back to ${homeTitle || 'the front page'}`}
+              className="flex-none font-semibold text-gray-500 hover:text-gray-900 dark:text-gray-400 dark:hover:text-white"
+            >
+              Home
+            </button>
+            <span aria-hidden="true" className="flex-none text-gray-400 dark:text-gray-600">
+              ›
+            </span>
+            <span
+              aria-current="page"
+              className="truncate font-semibold text-gray-700 dark:text-gray-200"
+            >
+              {title}
+            </span>
+          </nav>
         ) : (
           <h2 className="truncate text-sm font-semibold text-gray-700 dark:text-gray-200">
             {title}
