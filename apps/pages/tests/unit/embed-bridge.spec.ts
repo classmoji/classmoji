@@ -14,6 +14,7 @@
 import { expect, test } from '@playwright/test';
 import {
   PAGE_NAV_MESSAGE,
+  buildEmbeddedPageHref,
   buildNavMessage,
   resolveEmbedParentOrigin,
   resolveNavGridHref,
@@ -39,9 +40,7 @@ test.describe('resolveEmbedParentOrigin', () => {
         webappUrl: 'not a url',
       })
     ).toBeNull();
-    expect(
-      resolveEmbedParentOrigin({ isEmbedded: true, parentOriginParam: WEBAPP })
-    ).toBeNull();
+    expect(resolveEmbedParentOrigin({ isEmbedded: true, parentOriginParam: WEBAPP })).toBeNull();
   });
 
   test('uses the configured webapp origin when the URL makes no claim', () => {
@@ -143,15 +142,58 @@ test.describe('buildNavMessage', () => {
   });
 });
 
+test.describe('buildEmbeddedPageHref', () => {
+  test('forwards only embed, parentOrigin and theme from the current search', () => {
+    expect(
+      buildEmbeddedPageHref(
+        'cs52',
+        'p1',
+        'embed=true&parentOrigin=http%3A%2F%2Flocalhost%3A3040&theme=dark'
+      )
+    ).toBe('/cs52/p1?embed=true&parentOrigin=http%3A%2F%2Flocalhost%3A3040&theme=dark');
+  });
+
+  test('drops per-page staff state — preview/notice/auto_merged must not ride along', () => {
+    expect(
+      buildEmbeddedPageHref('cs52', 'p1', 'embed=true&preview=abc&notice=saved&auto_merged=1')
+    ).toBe('/cs52/p1?embed=true');
+  });
+
+  test('a bare (canonical-editor) search yields a bare href — never chrome-less embed', () => {
+    // `embed` is forwarded, not forced: a click in the canonical pages app has
+    // no `embed` in its URL and must keep its full chrome.
+    expect(buildEmbeddedPageHref('cs52', 'p1', '')).toBe('/cs52/p1');
+    expect(buildEmbeddedPageHref('cs52', 'p1', 'preview=abc')).toBe('/cs52/p1');
+  });
+
+  test('only the two real theme values forward; anything else falls through to OS', () => {
+    expect(buildEmbeddedPageHref('cs52', 'p1', 'embed=true&theme=light')).toBe(
+      '/cs52/p1?embed=true&theme=light'
+    );
+    expect(buildEmbeddedPageHref('cs52', 'p1', 'embed=true&theme=purple')).toBe(
+      '/cs52/p1?embed=true'
+    );
+    expect(buildEmbeddedPageHref('cs52', 'p1', 'embed=true&theme=')).toBe('/cs52/p1?embed=true');
+  });
+
+  test('encodes both segments', () => {
+    expect(buildEmbeddedPageHref('x y', 'a/b', 'embed=true')).toBe('/x%20y/a%2Fb?embed=true');
+  });
+});
+
 test.describe('resolveNavGridHref', () => {
   const anchor = (attrs: Record<string, string>) => ({
     getAttribute: (name: string) => attrs[name] ?? null,
   });
 
   test('resolves a page entry to an embedded page URL', () => {
-    expect(resolveNavGridHref(anchor({ 'data-kind': 'page', 'data-page-id': 'p1' }), 'cs52')).toBe(
-      '/cs52/p1?embed=true'
-    );
+    expect(
+      resolveNavGridHref(
+        anchor({ 'data-kind': 'page', 'data-page-id': 'p1' }),
+        'cs52',
+        'embed=true'
+      )
+    ).toBe('/cs52/p1?embed=true');
   });
 
   test('leaves external entries and ordinary links alone', () => {
@@ -162,7 +204,11 @@ test.describe('resolveNavGridHref', () => {
 
   test('encodes both segments', () => {
     expect(
-      resolveNavGridHref(anchor({ 'data-kind': 'page', 'data-page-id': 'a/b' }), 'x y')
+      resolveNavGridHref(
+        anchor({ 'data-kind': 'page', 'data-page-id': 'a/b' }),
+        'x y',
+        'embed=true'
+      )
     ).toBe('/x%20y/a%2Fb?embed=true');
   });
 });

@@ -88,21 +88,30 @@ export function resolveOpenTarget({
  * `parentOrigin` is passed so the embedded app can CHECK that its embedder is
  * the origin its own server config says the webapp lives at. It is a claim to
  * be verified, never the authority — see resolveEmbedParentOrigin in apps/pages.
+ *
+ * `theme` is the webapp's RESOLVED appearance ('light'/'dark', never 'system').
+ * The embedded reader otherwise themes itself from prefers-color-scheme alone,
+ * which disagrees with the app whenever the user's chosen theme differs from
+ * their OS. Passing it (embed only) lets the reader match the surrounding app.
+ * Public class-site pages carry no theme and stay OS-driven.
  */
 export function buildEmbedUrl({
   pagesUrl,
   classSlug,
   pageRef,
   parentOrigin,
+  theme,
 }: {
   pagesUrl: string;
   classSlug: string;
   pageRef: string;
   parentOrigin?: string | null;
+  theme?: 'light' | 'dark' | null;
 }): string {
   const base = String(pagesUrl ?? '').replace(/\/+$/, '');
   const params = new URLSearchParams({ embed: 'true' });
   if (parentOrigin) params.set('parentOrigin', parentOrigin);
+  if (theme) params.set('theme', theme);
   return `${base}/${encodeURIComponent(classSlug)}/${encodeURIComponent(pageRef)}?${params}`;
 }
 

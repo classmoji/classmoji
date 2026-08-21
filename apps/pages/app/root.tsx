@@ -157,10 +157,57 @@ export const loader = async ({ request }: { request: Request }) => {
   return { user, isSite: false };
 };
 
-/** Flash-free dark mode: set the `dark` class before first paint. */
+/**
+ * Flash-free dark mode: set the `dark` class before first paint.
+ *
+ * CSP COUPLING — DO NOT EDIT THIS STRING. `SiteDocument` inlines it on every
+ * class-site page, and its exact bytes are sha256-hashed in the site CSP
+ * (`app/site/headers.server.ts`, `DARK_MODE_SCRIPT_HASH`). Change one character
+ * and the browser blocks the site's only script. `tests/unit/site-headers.spec`
+ * re-derives the hash from this literal and fails on drift. The embed/canonical
+ * `App` document uses `APP_DARK_MODE_SCRIPT` below instead — which is NOT under
+ * the CSP — so its theme-param behavior lives there, leaving this untouched.
+ */
 const DARK_MODE_SCRIPT = `
               (function() {
                 try {
+                  var isDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+                  if (isDark) {
+                    document.documentElement.classList.add('dark');
+                  }
+                  window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', function(e) {
+                    if (e.matches) {
+                      document.documentElement.classList.add('dark');
+                    } else {
+                      document.documentElement.classList.remove('dark');
+                    }
+                  });
+                } catch (error) { console.log(error); }
+              })();
+            `;
+
+/**
+ * Flash-free dark mode for the hydrating `App` document (canonical + embed).
+ *
+ * When the webapp frames a page it passes its RESOLVED appearance as `?theme=`.
+ * If it is exactly 'dark' or 'light' we honour it and DO NOT attach the
+ * prefers-color-scheme listener, so the embedded reader matches the app even
+ * when the app theme differs from the OS. With no such param (the canonical
+ * pages host, opened directly) this is byte-for-byte the OS-driven behavior of
+ * `DARK_MODE_SCRIPT`. Class sites never carry the param and keep `DARK_MODE_SCRIPT`.
+ */
+const APP_DARK_MODE_SCRIPT = `
+              (function() {
+                try {
+                  var forced = new URLSearchParams(window.location.search).get('theme');
+                  if (forced === 'dark' || forced === 'light') {
+                    if (forced === 'dark') {
+                      document.documentElement.classList.add('dark');
+                    } else {
+                      document.documentElement.classList.remove('dark');
+                    }
+                    return;
+                  }
                   var isDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
                   if (isDark) {
                     document.documentElement.classList.add('dark');
@@ -202,8 +249,9 @@ const App = () => {
           href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:ital,wght@0,100..800;1,100..800&display=swap"
           rel="stylesheet"
         />
-        {/* Flash-free dark mode: add 'dark' class before first paint based on system preference */}
-        <script dangerouslySetInnerHTML={{ __html: DARK_MODE_SCRIPT }} />
+        {/* Flash-free dark mode: honour an explicit `?theme=` (the webapp's
+            resolved appearance when embedded), else follow system preference. */}
+        <script dangerouslySetInnerHTML={{ __html: APP_DARK_MODE_SCRIPT }} />
         {/* React Refresh preamble for dev mode — required for dynamic imports of JSX files.
             Must be a synchronous (non-module) script so it runs before any ESM modules load. */}
         {import.meta.env.DEV && (

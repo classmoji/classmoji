@@ -135,9 +135,9 @@ test.describe('Sidebar compression', () => {
 
     // Every nav item carries its route key in data-tour-nav, so DOM order is
     // read straight off the attributes instead of guessing at group wrappers.
-    const order = await nav.locator('[data-tour-nav]').evaluateAll(nodes =>
-      nodes.map(n => n.getAttribute('data-tour-nav'))
-    );
+    const order = await nav
+      .locator('[data-tour-nav]')
+      .evaluateAll(nodes => nodes.map(n => n.getAttribute('data-tour-nav')));
     const contentLinks = ['/modules', '/repos', '/assignments', '/slides', '/quizzes', '/pages'];
     const present = order.filter(link => contentLinks.includes(link!));
     expect(present[present.length - 1]).toBe('/pages');
@@ -238,7 +238,10 @@ test.describe('Peek drawer', () => {
 
     await openPeek(page);
     // The scrim is the first button in the portal — clicking outside the panel.
-    await page.locator('[data-cm-page-peek] > button').first().click({ position: { x: 8, y: 8 } });
+    await page
+      .locator('[data-cm-page-peek] > button')
+      .first()
+      .click({ position: { x: 8, y: 8 } });
     await expect(page.locator('[data-cm-page-peek]')).toHaveCount(0);
   });
 
@@ -386,8 +389,14 @@ test.describe('postMessage nav-sync', () => {
 });
 
 /**
- * Light and dark captures of both containers. These are the design-review
- * artifacts, so they are asserted only for "the surface rendered".
+ * The embedded reader must theme itself to the APP, not the OS.
+ *
+ * Each test sets the app theme (cm-tweaks) and emulates the OPPOSITE OS scheme,
+ * so prefers-color-scheme alone would give the wrong answer. The webapp passes
+ * its resolved theme as `?theme=` on the iframe src; the reader's inline script
+ * honours it and skips the media listener. Asserting the iframe document's
+ * `documentElement.dark` class equals the app theme proves the param wins — and
+ * a screenshot is still attached as the design-review artifact.
  */
 test.describe('Appearance', () => {
   const setTheme = async (page: Page, theme: 'light' | 'dark') => {
@@ -396,30 +405,47 @@ test.describe('Appearance', () => {
     }, theme);
   };
 
+  // The embedded reader is a cross-origin iframe; contentFrame() reaches into it
+  // at the CDP level (same pattern as the nav-sync test above).
+  const iframeIsDark = async (page: Page, selector: string): Promise<boolean> => {
+    const handle = await page.locator(selector).elementHandle();
+    const frame = await handle!.contentFrame();
+    await frame!.waitForLoadState('domcontentloaded');
+    return frame!.evaluate(() => document.documentElement.classList.contains('dark'));
+  };
+
   for (const theme of ['light', 'dark'] as const) {
-    test(`docked Pages view — ${theme}`, async ({ page }, testInfo) => {
+    const oppositeOs = theme === 'light' ? 'dark' : 'light';
+    const wantDark = theme === 'dark';
+
+    test(`docked Pages view themes to the app, not the OS — ${theme}`, async ({
+      page,
+    }, testInfo) => {
+      await page.emulateMedia({ colorScheme: oppositeOs });
       await setTheme(page, theme);
       await page.goto(`/student/${TEST_CLASSROOM}/pages`);
-      await expect(page.locator('[data-cm-page-panel="docked"] iframe')).toBeVisible({
-        timeout: 20000,
-      });
-      await page.waitForTimeout(1500);
-      await page.screenshot({
-        path: testInfo.outputPath(`docked-${theme}.png`),
-        fullPage: false,
-      });
+      const frameSel = '[data-cm-page-panel="docked"] iframe';
+      await expect(page.locator(frameSel)).toBeVisible({ timeout: 20000 });
+
+      await expect.poll(() => iframeIsDark(page, frameSel), { timeout: 20000 }).toBe(wantDark);
+
+      await page.screenshot({ path: testInfo.outputPath(`docked-${theme}.png`), fullPage: false });
       testInfo.attach(`docked-${theme}`, { path: testInfo.outputPath(`docked-${theme}.png`) });
     });
 
-    test(`peek drawer — ${theme}`, async ({ page }, testInfo) => {
+    test(`peek drawer themes to the app, not the OS — ${theme}`, async ({ page }, testInfo) => {
       test.skip(!linkedPageId, 'No repository page link could be created');
+      await page.emulateMedia({ colorScheme: oppositeOs });
       await setTheme(page, theme);
       await page.goto(`/student/${TEST_CLASSROOM}/repos`);
       const trigger = page.locator(`[data-cm-page-link="${linkedPageId}"]`).first();
       await expect(trigger).toBeVisible({ timeout: 20000 });
       await trigger.click();
-      await expect(page.locator('[data-cm-page-peek] iframe')).toBeVisible();
-      await page.waitForTimeout(1500);
+      const frameSel = '[data-cm-page-peek] iframe';
+      await expect(page.locator(frameSel)).toBeVisible();
+
+      await expect.poll(() => iframeIsDark(page, frameSel), { timeout: 20000 }).toBe(wantDark);
+
       await page.screenshot({ path: testInfo.outputPath(`peek-${theme}.png`), fullPage: false });
       testInfo.attach(`peek-${theme}`, { path: testInfo.outputPath(`peek-${theme}.png`) });
     });

@@ -95,6 +95,43 @@ export function buildNavMessage({
 }
 
 /**
+ * Build an in-frame href to another page that PRESERVES the embed context.
+ *
+ * In-frame navigation (a pageLink block click, a NavGrid page anchor) must keep
+ * the reader inside the chrome-less embed. The failure this exists to prevent:
+ * a bare `/{slug}/{pageId}` commits the pages app's full `PagesLayout` inside
+ * the 720px drawer, popping the editor sidebar, before the sticky-embed effect
+ * can repair the URL.
+ *
+ * It forwards ONLY `embed`, `parentOrigin` and `theme` from the current search
+ * — never the whole query string. `preview`/`notice`/`auto_merged` are per-page
+ * staff state (the editor's unsaved-preview flow) that must not ride to another
+ * page. And `embed` is FORWARDED, not forced: `PageLinkBlock` also renders in
+ * the canonical pages app (staff editing at the pages host directly), where the
+ * search carries no `embed` and the click must keep the full chrome. Forcing it
+ * would dump a canonical editor into chrome-less embed mode.
+ */
+export function buildEmbeddedPageHref(
+  classroomSlug: string,
+  pageId: string,
+  currentSearch: string
+): string {
+  const incoming = new URLSearchParams(currentSearch);
+  const params = new URLSearchParams();
+  if (incoming.get('embed') === 'true') params.set('embed', 'true');
+  const parentOrigin = incoming.get('parentOrigin');
+  if (parentOrigin) params.set('parentOrigin', parentOrigin);
+  // Only the two real values forward; anything else (an unknown preset, an
+  // empty string) falls through to the iframe's prefers-color-scheme default.
+  const theme = incoming.get('theme');
+  if (theme === 'light' || theme === 'dark') params.set('theme', theme);
+
+  const path = `/${encodeURIComponent(classroomSlug)}/${encodeURIComponent(pageId)}`;
+  const qs = params.toString();
+  return qs ? `${path}?${qs}` : path;
+}
+
+/**
  * Resolve a NavGrid page anchor to the URL this embedded document should go to.
  *
  * NavGridStatic emits `href="#"` + `data-page-id` and leaves resolution to its
@@ -103,16 +140,21 @@ export function buildNavMessage({
  * without this the authored hub — the thing the docked Pages view exists to
  * show — would be a grid of dead links.
  *
+ * Shares `buildEmbeddedPageHref` with the pageLink block so the two in-frame
+ * navigation paths cannot drift on which params survive. The caller passes the
+ * live `window.location.search`; the pure default keeps this testable.
+ *
  * Returns null when the element is not a page anchor, so ordinary links and
  * external entries are left completely alone.
  */
 export function resolveNavGridHref(
   anchor: { getAttribute: (name: string) => string | null } | null,
-  classroomSlug: string
+  classroomSlug: string,
+  currentSearch = ''
 ): string | null {
   if (!anchor) return null;
   if (anchor.getAttribute('data-kind') !== 'page') return null;
   const pageId = anchor.getAttribute('data-page-id');
   if (!pageId) return null;
-  return `/${encodeURIComponent(classroomSlug)}/${encodeURIComponent(pageId)}?embed=true`;
+  return buildEmbeddedPageHref(classroomSlug, pageId, currentSearch);
 }

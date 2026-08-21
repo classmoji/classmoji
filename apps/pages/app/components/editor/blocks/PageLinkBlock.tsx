@@ -3,6 +3,8 @@ import { createReactBlockSpec, type ReactCustomBlockRenderProps } from '@blockno
 import { IconFileText } from '@tabler/icons-react';
 import { useNavigate } from 'react-router';
 
+import { buildEmbeddedPageHref } from '~/routes/$classroomSlug/embedBridge.ts';
+
 /**
  * PageLink - Custom BlockNote block for linking to other pages in the classroom
  *
@@ -267,7 +269,10 @@ export const PageLink = createReactBlockSpec(
         e.preventDefault();
         if (typeof window !== 'undefined') {
           const classroomSlug = window.location.pathname.split('/')[1];
-          navigate(`/${classroomSlug}/${pageId}`);
+          // Preserve the embed context (embed/parentOrigin/theme) when the block
+          // is clicked inside the webapp's reader, and stay bare in the canonical
+          // editor — buildEmbeddedPageHref forwards, never forces, `embed`.
+          navigate(buildEmbeddedPageHref(classroomSlug, pageId, window.location.search));
         }
       };
 

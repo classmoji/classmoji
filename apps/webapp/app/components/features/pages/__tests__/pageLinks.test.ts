@@ -119,6 +119,26 @@ describe('buildEmbedUrl', () => {
       buildEmbedUrl({ pagesUrl: 'http://localhost:7140/', classSlug: 'cs52', pageRef: 'p1' })
     ).toBe('http://localhost:7140/cs52/p1?embed=true');
   });
+
+  it('carries the resolved theme so the reader matches the app, not the OS', () => {
+    expect(
+      buildEmbedUrl({
+        pagesUrl: PAGES_URL,
+        classSlug: 'cs52',
+        pageRef: 'p1',
+        parentOrigin: 'http://localhost:3040',
+        theme: 'dark',
+      })
+    ).toBe(
+      'http://localhost:7140/cs52/p1?embed=true&parentOrigin=http%3A%2F%2Flocalhost%3A3040&theme=dark'
+    );
+  });
+
+  it('omits the theme param when none is given — the reader falls back to OS', () => {
+    expect(
+      buildEmbedUrl({ pagesUrl: PAGES_URL, classSlug: 'cs52', pageRef: 'p1', theme: null })
+    ).toBe('http://localhost:7140/cs52/p1?embed=true');
+  });
 });
 
 describe('readPagesMessage', () => {

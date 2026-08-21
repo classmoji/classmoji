@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { IconExternalLink, IconX } from '@tabler/icons-react';
 import { Tooltip } from 'antd';
+import { useDarkMode } from '~/hooks';
 import { buildEmbedUrl, originOf, readPagesMessage, type PageNavMessage } from './pageLinks';
 
 /**
@@ -65,6 +66,12 @@ const PageViewPanel = ({
   const [parentOrigin, setParentOrigin] = useState<string | null>(null);
   useEffect(() => setParentOrigin(window.location.origin), []);
 
+  // The app's RESOLVED appearance, handed to the iframe so it matches the app
+  // rather than the OS. `isDarkMode` has already collapsed 'system' to a
+  // boolean, so this is only ever 'light' or 'dark'.
+  const { isDarkMode } = useDarkMode();
+  const theme = isDarkMode ? 'dark' : 'light';
+
   // The page the panel has been EXPLICITLY pointed at. Distinct from wherever
   // the embedded app has since navigated itself: re-deriving src from the
   // latter on every nav ping would fight the reader's own history.
@@ -88,7 +95,7 @@ const PageViewPanel = ({
   // rendering a src-without-parentOrigin first would cost a wasted page load
   // and a flash, and the bridge would be dead for that first document.
   const src = parentOrigin
-    ? buildEmbedUrl({ pagesUrl, classSlug, pageRef: targetRef, parentOrigin })
+    ? buildEmbedUrl({ pagesUrl, classSlug, pageRef: targetRef, parentOrigin, theme })
     : null;
 
   const pagesOrigin = originOf(pagesUrl);
@@ -201,7 +208,10 @@ const PageViewPanel = ({
         )}
         {src ? (
           <iframe
-            key={`${targetRef}:${reloadNonce}`}
+            // Theme is in the key so a live light/dark toggle re-mounts the
+            // cross-origin iframe (its only channel for a theme change is the
+            // src), repainting the reader to match.
+            key={`${targetRef}:${theme}:${reloadNonce}`}
             ref={frameRef}
             src={src}
             title={title || 'Page'}

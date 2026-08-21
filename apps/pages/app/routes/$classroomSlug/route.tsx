@@ -1,5 +1,5 @@
 import { useLoaderData, redirect, Outlet, useLocation, useNavigate, useParams } from 'react-router';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import useLocalStorageState from 'use-local-storage-state';
 
 import {
@@ -300,6 +300,20 @@ const ClassroomLayout = () => {
   });
   const [mobileOpen, setMobileOpen] = useState(false);
 
+  // Being inside a frame is the durable fact of an embedded session; `isEmbedded`
+  // is only per-request (`?embed=true`) and a bare in-frame link drops it. Treat
+  // any framed document as embedded so a param-less landing never commits the
+  // full PagesLayout chrome into the drawer. Lazy initializer (not inline) so the
+  // server render — where `window` is undefined — resolves to false consistently.
+  const [framed] = useState(() => typeof window !== 'undefined' && window.self !== window.top);
+
+  // The parent origin, held sticky across a bare pass. A bare (no-`embed`)
+  // navigation makes the loader resolve `embedParentOrigin` to null; without a
+  // sticky copy the nav/Esc bridges would fall silent mid-session. Written on
+  // every render that carries a real origin, read from `.current` at post time.
+  const parentOriginRef = useRef(embedParentOrigin);
+  if (embedParentOrigin) parentOriginRef.current = embedParentOrigin;
+
   const canEdit = !!(membership && ['OWNER', 'TEACHER'].includes(membership.role));
   const currentPageId = params.pageId;
 
@@ -318,68 +332,87 @@ const ClassroomLayout = () => {
 
   /* ---- Embed bridge (see ./embedBridge.ts) ------------------------------ */
 
-  // Keep embed mode sticky for the whole framed session.
+  // Keep the URL honest for reload/share after a bare in-frame landing.
   //
-  // `isEmbedded` is derived per-request from `?embed=true`, and in-page links
-  // (the pageLink block navigates with a bare `/{slug}/{pageId}`) drop it — so
-  // one click inside the reader would pop the editor's full sidebar into the
-  // panel. Being in a frame is the durable fact, so that is what this reads;
-  // the query param is restored to match. Guarded on already-embedded, so it
-  // runs at most once per navigation and cannot loop.
+  // The render guard below already keeps a framed document chrome-less whatever
+  // the URL says, so this no longer needs to force a loader pass — it just
+  // rewrites the address bar to carry `embed=true` (a `replaceState`, not a
+  // `navigate`, so there is no second loader run and no doubled GitHub read).
+  // `theme`/`parentOrigin` ride along untouched via `new URL(href)`. Guarded on
+  // already-embedded, so it runs at most once per navigation and cannot loop.
   useEffect(() => {
     if (typeof window === 'undefined' || window.self === window.top) return;
     const url = new URL(window.location.href);
     if (url.searchParams.get('embed') === 'true') return;
     url.searchParams.set('embed', 'true');
-    navigate(`${url.pathname}${url.search}`, { replace: true });
-  }, [location.key, navigate]);
+    window.history.replaceState(null, '', `${url.pathname}${url.search}`);
+  }, [location.key]);
 
   // Tell the host which page is on screen — on mount and after every in-frame
-  // navigation — so its header title and ↗ target track the reader.
+  // navigation — so its header title and ↗ target track the reader. Reads the
+  // sticky origin from the ref so a bare pass (loader origin momentarily null)
+  // cannot silence the bridge mid-session.
   useEffect(() => {
-    if (!embedParentOrigin || typeof window === 'undefined') return;
+    const parentOrigin = parentOriginRef.current;
+    if (!parentOrigin || typeof window === 'undefined') return;
     if (window.parent === window) return;
     const page = pages.find(p => p.id === currentPageId);
     if (!page) return;
     window.parent.postMessage(
       buildNavMessage({ classroomSlug: classroom.slug, page }),
-      embedParentOrigin
+      parentOrigin
     );
-  }, [embedParentOrigin, currentPageId, pages, classroom.slug]);
+  }, [currentPageId, pages, classroom.slug]);
 
   // Escape belongs to the host's drawer, but focus is in this document, so the
-  // keydown never reaches it. Forward the intent rather than acting on it.
+  // keydown never reaches it. Forward the intent rather than acting on it —
+  // UNLESS something in this document already handled the Escape. In the peek
+  // drawer a staff user's page is still editable, and BlockNote calls
+  // preventDefault on every Escape it consumes (closing a menu, blurring). Left
+  // unchecked, that Escape would close the whole drawer and discard typed edits.
   useEffect(() => {
-    if (!embedParentOrigin || typeof window === 'undefined') return;
+    if (typeof window === 'undefined') return;
     if (window.parent === window) return;
     const handleEscape = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') return;
-      window.parent.postMessage({ type: PAGE_ESC_MESSAGE }, embedParentOrigin);
+      if (event.defaultPrevented) return;
+      const parentOrigin = parentOriginRef.current;
+      if (!parentOrigin) return;
+      window.parent.postMessage({ type: PAGE_ESC_MESSAGE }, parentOrigin);
     };
     window.addEventListener('keydown', handleEscape);
     return () => window.removeEventListener('keydown', handleEscape);
-  }, [embedParentOrigin]);
+  }, []);
 
   // Resolve the authored page-directory hub. NavGridStatic deliberately emits
   // `href="#"` + data-page-id and leaves the real URL to its consumer; without
   // this the hub is dead inside the reader, and the hub IS the navigation.
+  // Gated on `isEmbedded || framed` to match the render guard — a framed-but-
+  // bare pass still renders the chrome-less hub, so its links must resolve too.
+  // Passing the live search shares embed/parentOrigin/theme forwarding with the
+  // pageLink block (see buildEmbeddedPageHref).
   useEffect(() => {
-    if (!isEmbedded || typeof document === 'undefined') return;
+    if ((!isEmbedded && !framed) || typeof document === 'undefined') return;
     const handleClick = (event: MouseEvent) => {
       if (event.defaultPrevented || event.button !== 0) return;
       if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
       const anchor = (event.target as Element | null)?.closest?.('a[data-page-id]');
-      const href = resolveNavGridHref(anchor as Element | null, classroom.slug);
+      const href = resolveNavGridHref(
+        anchor as Element | null,
+        classroom.slug,
+        window.location.search
+      );
       if (!href) return;
       event.preventDefault();
       navigate(href);
     };
     document.addEventListener('click', handleClick);
     return () => document.removeEventListener('click', handleClick);
-  }, [isEmbedded, classroom.slug, navigate]);
+  }, [isEmbedded, framed, classroom.slug, navigate]);
 
-  // If embedded, render without sidebar
-  if (isEmbedded) {
+  // If embedded (or merely framed — a bare in-frame landing), render without
+  // sidebar so the editor chrome never pops into the host's drawer.
+  if (isEmbedded || framed) {
     return (
       <div className="h-full w-full">
         <Outlet context={{ classroom, userRole: membership?.role, canEdit, pages, isEmbedded }} />

@@ -633,7 +633,9 @@ const CommonLayout = ({
         >
           <div
             className={
-              pathname.includes('/pages/') && !pathname.endsWith('/pages/new')
+              pathname.startsWith('/admin') &&
+              pathname.includes('/pages/') &&
+              !pathname.endsWith('/pages/new')
                 ? 'min-h-full'
                 : 'px-4 pt-14 pb-4 sm:px-6 lg:px-8 lg:pt-6 lg:pb-6 min-h-full'
             }
