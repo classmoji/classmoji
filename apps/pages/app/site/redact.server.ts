@@ -36,10 +36,33 @@ type LooseBlock = {
 /** What a redacted-away block becomes: an empty paragraph, which renders as nothing. */
 const emptyParagraph = (): LooseBlock => ({ type: 'paragraph', content: [] });
 
+/**
+ * BlockNote's file-family blocks, which this app does NOT override in the
+ * viewer schema.
+ *
+ * Their populated state is fine on a static site (an `<img>`, a download link).
+ * Their EMPTY state is not: `FileBlockWrapper` branches on `props.url === ''`
+ * and renders the editor's "Add image" / "Add file" button — a clickable
+ * affordance, on a page with no JavaScript, offering a visitor an upload the
+ * site cannot and must not perform. An unset block is easy to leave behind (add
+ * an image, never pick one, publish), so this is the common case, not an
+ * exotic one.
+ *
+ * Redacting rather than adding two more schema overrides keeps the fix in the
+ * layer that already owns "this block must not reach the serializer".
+ */
+const FILE_BLOCK_TYPES = new Set(['image', 'file']);
+
 function redactBlock(block: LooseBlock, resolveLink: PageLinkResolver): LooseBlock {
   const children = Array.isArray(block.children)
     ? (block.children as LooseBlock[]).map(child => redactBlock(child, resolveLink))
     : block.children;
+
+  if (typeof block.type === 'string' && FILE_BLOCK_TYPES.has(block.type)) {
+    // Exactly the condition BlockNote's own wrapper branches on.
+    if (String(block.props?.url ?? '') === '') return emptyParagraph();
+    return children === block.children ? block : { ...block, children };
+  }
 
   if (block.type === 'pageLink') {
     const pageId = String(block.props?.pageId ?? '');

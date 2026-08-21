@@ -15,7 +15,10 @@
  *    BOTH `req.url` and `req.originalUrl`, and the sanitizer must strip
  *    `X-Forwarded-Host` before anything downstream reads it.
  *  - The rewrite is a raw string-prefix operation. Never round-trip through
- *    `new URL()`: percent-encoding must survive byte-for-byte.
+ *    `new URL()`: percent-encoding must survive byte-for-byte. Classification
+ *    is the opposite — it runs on the `new URL()`-normalized path, because that
+ *    is what the adapter routes on. Raw for the rewrite, normalized for the
+ *    decision; mixing the two up is how `/x/../_site/cs52` got in.
  *  - This file is loaded by `server.ts` under `node --experimental-strip-types`
  *    in BOTH dev and prod, so: type-only imports, no enums/namespaces, and no
  *    runtime dependencies.
@@ -40,7 +43,7 @@ export type SiteRequestResolution =
   | { action: 'pass' }
   | {
       action: 'not-found';
-      reason: 'unknown-host' | 'invalid-host' | 'internal-path' | 'data-request';
+      reason: 'unknown-host' | 'invalid-host' | 'internal-path' | 'data-request' | 'dot-segment';
     }
   | { action: 'rewrite'; url: string; subdomain: string };
 
@@ -154,20 +157,93 @@ export function computeSiteUrl(rawUrl: string, subdomain: string): string {
   return `${rewrittenPath}${query}`;
 }
 
-/** Path prefixes that bypass host handling entirely (health checks, ACME). */
-function isAlwaysAllowed(path: string): boolean {
-  return path === '/health' || path === '/.well-known' || path.startsWith('/.well-known/');
+/** ACME / RFC 8615 well-known paths. Allowed on non-site hosts only. */
+function isWellKnownPath(path: string): boolean {
+  return path === '/.well-known' || path.startsWith('/.well-known/');
 }
 
 function isInternalPath(path: string): boolean {
   return path === SITE_ROUTE_PREFIX || path.startsWith(`${SITE_ROUTE_PREFIX}/`);
 }
 
+/** Strip the query string off a raw request target. */
+function pathOf(rawUrl: string): string {
+  const queryAt = rawUrl.indexOf('?');
+  return queryAt === -1 ? rawUrl : rawUrl.slice(0, queryAt);
+}
+
+/**
+ * The path React Router will actually route on.
+ *
+ * `@react-router/express` rebuilds the request URL with `new URL(...)`, and the
+ * WHATWG parser removes `.` / `..` segments — AFTER this middleware has made
+ * its decision. So classification must run on the NORMALIZED path, or
+ * `/x/../_site/cs52` sails past the `/_site` guard and lands in the internal
+ * namespace anyway. (The rewrite itself still uses the raw string: see
+ * `computeSiteUrl` — percent-encoding must survive byte-for-byte.)
+ */
+function decisionPathOf(rawUrl: string): string {
+  try {
+    return new URL(rawUrl, 'http://x').pathname;
+  } catch {
+    return pathOf(rawUrl);
+  }
+}
+
+/**
+ * Does this path contain a `.` or `..` segment, encoded or not?
+ *
+ * Normalizing and classifying would be enough for the routes we know about, but
+ * a request that needs normalizing is a request trying to be two paths at once
+ * — so it is refused outright rather than silently rewritten into whatever it
+ * collapses to. That also keeps the always-allowed prefixes honest:
+ * `/health/../_site/cs52` must not borrow `/health`'s bypass.
+ *
+ * Three details, each of which is a bypass on its own if you skip it:
+ *
+ *  - **`%2e`.** One level of decoding is exactly right. `new URL` does not
+ *    decode `%25`, so `%252e` stays the literal text `%252e` downstream — a
+ *    legitimate (if odd) slug, not a traversal.
+ *  - **Backslash.** For special schemes the URL parser treats `\` as a path
+ *    separator, so `/..\..\api/pages/x` collapses to `/api/pages/x` while a
+ *    `split('/')` sees one harmless-looking segment. Verified against
+ *    `new URL`.
+ *  - **Tab, LF, CR.** The parser STRIPS these before parsing anything, so
+ *    `/.<TAB>./x` is `/../x` to it. Node's HTTP parser rejects them in a
+ *    request target today, which makes this insurance rather than a live hole
+ *    — but it is one line of insurance against a lenient front end.
+ *
+ * Percent-encoded forms of the separators (`%5c`, `%09`) are NOT decoded by the
+ * parser either, so they stay literal and are deliberately left alone here.
+ */
+export function hasDotSegment(path: string): boolean {
+  for (const segment of path.replace(/[\t\n\r]/g, '').split(/[/\\]/)) {
+    const decoded = segment.replace(/%2e/gi, '.');
+    if (decoded === '.' || decoded === '..') return true;
+  }
+  return false;
+}
+
+/**
+ * The container/probe health path, matched on the RAW target.
+ *
+ * Deliberately not the normalized one: `/../../health` normalizes to `/health`,
+ * and answering that 200 would hand a traversal attempt a success signal and
+ * bypass the dot-segment refusal below.
+ */
+export function isHealthRequest(rawUrl: string): boolean {
+  return pathOf(rawUrl) === '/health';
+}
+
 /**
  * The whole rewriter decision, as a pure function of (url, host, config).
  *
  * When `siteBaseDomain` is null the feature is inert and every request passes
- * through untouched — that is the prod-safety default.
+ * through untouched — that is the prod-safety default, and it stays FIRST so
+ * an off switch is genuinely off.
+ *
+ * `/health` is not handled here at all: the middleware answers it before it
+ * ever reaches classification (see `rewriteSiteRequests`).
  */
 export function resolveSiteRequest(
   rawUrl: string,
@@ -176,20 +252,31 @@ export function resolveSiteRequest(
 ): SiteRequestResolution {
   if (!config.siteBaseDomain) return { action: 'pass' };
 
-  const queryAt = rawUrl.indexOf('?');
-  const path = queryAt === -1 ? rawUrl : rawUrl.slice(0, queryAt);
+  const rawPath = pathOf(rawUrl);
 
-  if (isAlwaysAllowed(path)) return { action: 'pass' };
+  // Above every allowance, for every host class: a dot segment means the path
+  // this middleware sees and the path React Router sees are different strings.
+  if (hasDotSegment(rawPath)) return { action: 'not-found', reason: 'dot-segment' };
+
+  // Classify on what the adapter will route on, never on the raw bytes.
+  const path = decisionPathOf(rawUrl);
 
   const classification = classifyHost(hostHeader, config);
 
   switch (classification.kind) {
     case 'canonical':
+      // ACME and friends belong to the canonical deployment.
+      if (isWellKnownPath(path)) return { action: 'pass' };
       // The internal namespace is reachable only via an internal rewrite.
       if (isInternalPath(path)) return { action: 'not-found', reason: 'internal-path' };
       return { action: 'pass' };
 
     case 'site':
+      // NOTE: no `.well-known` allowance on a site host. It falls through to
+      // the rewrite and 404s inside the _site tree, rather than serving the
+      // editor app (hydration payload, none of the site's security headers)
+      // off a tenant domain.
+      //
       // Script-less site pages never issue React Router single-fetch requests;
       // refusing them removes a loader-serialization surface.
       if (path.endsWith('.data')) return { action: 'not-found', reason: 'data-request' };
@@ -203,6 +290,9 @@ export function resolveSiteRequest(
       return { action: 'not-found', reason: 'invalid-host' };
 
     default:
+      // A domain pointed at us but not yet configured still needs to be able to
+      // answer an ACME challenge; everything else on it is a 404.
+      if (isWellKnownPath(path)) return { action: 'pass' };
       // Never redirect an arbitrary Host — that is an open-redirect gadget.
       return { action: 'not-found', reason: 'unknown-host' };
   }
@@ -248,6 +338,13 @@ function sendNotFound(res: Response): void {
   res.send('Not found\n');
 }
 
+function sendHealthy(res: Response): void {
+  res.status(200);
+  res.setHeader('Cache-Control', 'no-store');
+  res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+  res.send('ok\n');
+}
+
 export type SiteHostMiddleware = {
   /**
    * Mount FIRST, before vite/static/anything else: `X-Forwarded-Host` is
@@ -279,6 +376,15 @@ export function createSiteHostMiddleware(env: SiteHostEnv = process.env): SiteHo
   };
 
   const rewriteSiteRequests: RequestHandler = (req: Request, res: Response, next: NextFunction) => {
+    // Answered HERE, before any host classification: the probe has to work on
+    // whatever Host the platform sends, and letting it into the app would serve
+    // the editor document — hydration payload, no site headers, a session and
+    // membership lookup per probe — off every tenant domain.
+    if (isHealthRequest(req.url || '/')) {
+      sendHealthy(res);
+      return;
+    }
+
     // Classify from the RAW Host header, never `req.hostname` (which consults
     // the forwarded headers once `trust proxy` is on).
     const resolution = resolveSiteRequest(req.url || '/', req.headers.host, config);

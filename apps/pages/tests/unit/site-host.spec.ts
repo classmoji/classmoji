@@ -18,6 +18,8 @@ import {
   classifyHost,
   computeSiteUrl,
   createSiteHostMiddleware,
+  hasDotSegment,
+  isHealthRequest,
   parseHostHeader,
   resolveSiteHostConfig,
   resolveSiteRequest,
@@ -254,12 +256,237 @@ test.describe('resolveSiteRequest — site hosts', () => {
     });
   });
 
-  test('health and .well-known bypass host handling', () => {
-    expect(resolveSiteRequest('/health', 'cs52.lvh.me', devConfig)).toEqual({ action: 'pass' });
+  /**
+   * `/health` no longer bypasses classification in the resolver — the
+   * middleware answers it first (see the express-wrapper describe below), so
+   * from the resolver's point of view a tenant host asking for `/health` is
+   * just another site path. `.well-known` is allowed on non-site hosts ONLY:
+   * on a tenant host it must not serve the editor app.
+   */
+  test('.well-known does NOT escape the rewrite on a site host', () => {
+    expect(resolveSiteRequest('/.well-known/zzz', 'cs52.lvh.me', devConfig)).toEqual({
+      action: 'rewrite',
+      url: '/_site/cs52/.well-known/zzz',
+      subdomain: 'cs52',
+    });
     expect(
       resolveSiteRequest('/.well-known/acme-challenge/token', 'cs52.lvh.me', devConfig)
+    ).toMatchObject({ action: 'rewrite' });
+  });
+
+  test('.well-known still passes on the canonical host and on unknown hosts', () => {
+    expect(resolveSiteRequest('/.well-known/zzz', 'localhost:7140', devConfig)).toEqual({
+      action: 'pass',
+    });
+    expect(
+      resolveSiteRequest('/.well-known/acme-challenge/token', 'totally-unknown.example', devConfig)
     ).toEqual({ action: 'pass' });
+    // …but an invalid Host header still gets nothing.
+    expect(resolveSiteRequest('/.well-known/zzz', 'a,b', devConfig)).toEqual({
+      action: 'not-found',
+      reason: 'invalid-host',
+    });
+  });
+
+  test('the resolver no longer special-cases /health', () => {
+    expect(resolveSiteRequest('/health', 'cs52.lvh.me', devConfig)).toMatchObject({
+      action: 'rewrite',
+      url: '/_site/cs52/health',
+    });
     expect(resolveSiteRequest('/health', 'totally-unknown.example', devConfig)).toEqual({
+      action: 'not-found',
+      reason: 'unknown-host',
+    });
+  });
+});
+
+// ─── dot-segment traversal ───────────────────────────────────────────────────
+
+/**
+ * `@react-router/express` rebuilds the request URL with `new URL(originalUrl)`,
+ * and the WHATWG parser removes `.` / `..` segments — AFTER this middleware has
+ * classified and rewritten. So `/../../api/pages/x` on a TENANT host normalizes
+ * straight back into the canonical route tree with none of the site's headers,
+ * and `/x/../_site/cs52` on the CANONICAL host walks into the internal
+ * namespace past the `/_site` guard. Both were reproduced over raw sockets.
+ */
+test.describe('dot-segment traversal', () => {
+  test('hasDotSegment flags plain and single-encoded dot segments', () => {
+    for (const path of [
+      '/../../health',
+      '/..',
+      '/./x',
+      '/a/../b',
+      '/%2e%2e/x',
+      '/%2E%2E/x',
+      '/%2e/x',
+      '/x/%2E/y',
+    ]) {
+      expect(hasDotSegment(path), `${path} should be flagged`).toBe(true);
+    }
+  });
+
+  /**
+   * The WHATWG URL parser treats `\` as a path separator for http(s) and
+   * STRIPS tab/LF/CR before parsing at all — so `/..\..\api/pages/x` and
+   * `/.<TAB>./x` both collapse exactly like `/../../…` does. A dot-segment
+   * check that only split on `/` saw one innocent-looking segment and waved
+   * them through, which put the tenant→canonical escape right back.
+   */
+  const BACKSLASH = String.fromCharCode(92);
+
+  test('hasDotSegment flags the separators the URL parser also honours', () => {
+    for (const path of [
+      `/..${BACKSLASH}..${BACKSLASH}api/pages/x`,
+      `/x/..${BACKSLASH}_site/cs52`,
+      `/%2e%2e${BACKSLASH}%2e%2e/api/x`,
+      '/.\t./x',
+      '/.\n./x',
+      '/.\r./x',
+    ]) {
+      expect(hasDotSegment(path), `${JSON.stringify(path)} should be flagged`).toBe(true);
+      // …and every one of them really does collapse, which is why it matters.
+      expect(new URL(path, 'http://x').pathname).not.toBe(path);
+    }
+  });
+
+  test('a backslash traversal cannot escape a tenant host into the canonical tree', () => {
+    const url = `/..${BACKSLASH}..${BACKSLASH}api/pages/x`;
+    // Without the refusal this rewrites to `/_site/cs52/..\..\api/pages/x`,
+    // which the adapter re-parses as `/api/pages/x` — the editor's API, served
+    // off a class-site domain.
+    expect(new URL(`/_site/cs52${url}`, 'http://x').pathname).toBe('/api/pages/x');
+    expect(resolveSiteRequest(url, 'cs52.lvh.me', devConfig)).toEqual({
+      action: 'not-found',
+      reason: 'dot-segment',
+    });
+  });
+
+  test('hasDotSegment leaves legitimate slugs alone', () => {
+    for (const path of [
+      '/',
+      '/syllabus',
+      '/%252e',
+      '/foo.bar',
+      '/...',
+      '/..a',
+      '/a..',
+      '/.well-known/acme-challenge/token',
+      '/caf%C3%A9',
+      '/page%2Fname',
+      '/.hidden',
+      // The parser does not decode these, so they stay literal text.
+      '/%5c../x',
+      '/.%09./x',
+    ]) {
+      expect(hasDotSegment(path), `${path} should NOT be flagged`).toBe(false);
+      // The negatives are only safe because they do not collapse either.
+      expect(new URL(path, 'http://x').pathname, `${path} unexpectedly collapsed`).toBe(path);
+    }
+  });
+
+  const traversals = [
+    '/../../health',
+    '/../../',
+    '/../../api/pages/x',
+    '/../dali/page',
+    '/%2e%2e/%2e%2e/health',
+    '/%2E%2E/x',
+    '/a/../_site/cs52/x',
+  ];
+
+  for (const url of traversals) {
+    test(`site host refuses ${url}`, () => {
+      expect(resolveSiteRequest(url, 'cs52.lvh.me:7140', devConfig)).toEqual({
+        action: 'not-found',
+        reason: 'dot-segment',
+      });
+    });
+
+    test(`canonical host refuses ${url}`, () => {
+      expect(resolveSiteRequest(url, 'localhost:7140', devConfig)).toEqual({
+        action: 'not-found',
+        reason: 'dot-segment',
+      });
+    });
+  }
+
+  test('the canonical host cannot walk into /_site through a dot segment', () => {
+    for (const url of [
+      '/./_site/cs52',
+      '/x/../_site/cs52/secret',
+      '/%2e/_site/cs52',
+      '/./_site/cs52/syllabus.data',
+    ]) {
+      expect(resolveSiteRequest(url, 'localhost:7140', devConfig), url).toMatchObject({
+        action: 'not-found',
+      });
+    }
+  });
+
+  test('a site host cannot smuggle a .data request through a dot segment', () => {
+    expect(resolveSiteRequest('/./syllabus.data', 'cs52.lvh.me', devConfig)).toEqual({
+      action: 'not-found',
+      reason: 'dot-segment',
+    });
+    expect(resolveSiteRequest('/x/../syllabus.data', 'cs52.lvh.me', devConfig)).toEqual({
+      action: 'not-found',
+      reason: 'dot-segment',
+    });
+  });
+
+  test('a dot segment cannot borrow the /health or /.well-known bypass', () => {
+    expect(resolveSiteRequest('/health/../_site/cs52', 'localhost:7140', devConfig)).toEqual({
+      action: 'not-found',
+      reason: 'dot-segment',
+    });
+    expect(resolveSiteRequest('/.well-known/../_site/cs52', 'localhost:7140', devConfig)).toEqual({
+      action: 'not-found',
+      reason: 'dot-segment',
+    });
+  });
+
+  test('query strings do not hide a traversal, and are not searched for one', () => {
+    expect(resolveSiteRequest('/../x?a=1', 'cs52.lvh.me', devConfig)).toEqual({
+      action: 'not-found',
+      reason: 'dot-segment',
+    });
+    // A `..` inside the QUERY is just data.
+    expect(resolveSiteRequest('/syllabus?next=/../x', 'cs52.lvh.me', devConfig)).toMatchObject({
+      action: 'rewrite',
+      url: '/_site/cs52/syllabus?next=/../x',
+    });
+  });
+
+  test('legitimate slugs that merely look like traversal still resolve, byte-for-byte', () => {
+    expect(resolveSiteRequest('/%252e', 'cs52.lvh.me', devConfig)).toMatchObject({
+      action: 'rewrite',
+      url: '/_site/cs52/%252e',
+    });
+    expect(resolveSiteRequest('/foo.bar', 'cs52.lvh.me', devConfig)).toMatchObject({
+      action: 'rewrite',
+      url: '/_site/cs52/foo.bar',
+    });
+    expect(resolveSiteRequest('/...', 'cs52.lvh.me', devConfig)).toMatchObject({
+      action: 'rewrite',
+      url: '/_site/cs52/...',
+    });
+    expect(resolveSiteRequest('/syllabus', 'cs52.lvh.me', devConfig)).toMatchObject({
+      action: 'rewrite',
+      url: '/_site/cs52/syllabus',
+    });
+    expect(resolveSiteRequest('/caf%C3%A9?q=a%20b', 'cs52.lvh.me', devConfig)).toMatchObject({
+      action: 'rewrite',
+      url: '/_site/cs52/caf%C3%A9?q=a%20b',
+    });
+    // And the canonical host keeps serving its own traffic.
+    expect(resolveSiteRequest('/cs52/page-id?edit=1', 'localhost:7140', devConfig)).toEqual({
+      action: 'pass',
+    });
+  });
+
+  test('inert config stays inert — traversal included', () => {
+    expect(resolveSiteRequest('/../../health', 'cs52.lvh.me', inertConfig)).toEqual({
       action: 'pass',
     });
   });
@@ -500,6 +727,92 @@ test.describe('createSiteHostMiddleware', () => {
 
     expect(nexted).toBe(false);
     expect(res.statusCode).toBe(404);
+  });
+
+  /**
+   * `/health` is answered by the middleware itself, before classification.
+   * Routing it into the app would serve the editor document — with its
+   * hydration payload and root.tsx's session/user/membership lookup — off every
+   * tenant domain, which is what the old `isAlwaysAllowed` bypass did.
+   */
+  test('isHealthRequest matches the exact raw path only', () => {
+    expect(isHealthRequest('/health')).toBe(true);
+    expect(isHealthRequest('/health?verbose=1')).toBe(true);
+    expect(isHealthRequest('/healthz')).toBe(false);
+    expect(isHealthRequest('/health/x')).toBe(false);
+    // Matched RAW, so the normalized form never gets a 200 (see below).
+    expect(isHealthRequest('/../../health')).toBe(false);
+  });
+
+  test('/health answers 200 text/plain on ANY host, without reaching the app', () => {
+    const { rewriteSiteRequests } = createSiteHostMiddleware({
+      SITE_BASE_DOMAIN: 'lvh.me',
+      PAGES_URL: 'http://localhost:7140',
+    });
+
+    for (const host of ['localhost:7140', 'cs52.lvh.me', 'evil.example.com', 'a,b']) {
+      const res = fakeRes();
+      let nexted = false;
+      rewriteSiteRequests(
+        fakeReq('/health', { host }),
+        res as unknown as Response,
+        (() => {
+          nexted = true;
+        }) as NextFunction
+      );
+
+      expect(nexted, `host ${host} leaked /health into the app`).toBe(false);
+      expect(res.statusCode, `host ${host}`).toBe(200);
+      expect(res.headers['content-type']).toBe('text/plain; charset=utf-8');
+      expect(res.headers['cache-control']).toBe('no-store');
+      expect(res.body).toBe('ok\n');
+    }
+  });
+
+  test('a traversal that normalizes to /health gets a 404, not a 200', () => {
+    const { rewriteSiteRequests } = createSiteHostMiddleware({
+      SITE_BASE_DOMAIN: 'lvh.me',
+      PAGES_URL: 'http://localhost:7140',
+    });
+    const req = fakeReq('/../../health', { host: 'cs52.lvh.me' });
+    const res = fakeRes();
+    let nexted = false;
+
+    rewriteSiteRequests(
+      req,
+      res as unknown as Response,
+      (() => {
+        nexted = true;
+      }) as NextFunction
+    );
+
+    expect(nexted).toBe(false);
+    expect(res.statusCode).toBe(404);
+    expect(req.url).toBe('/../../health');
+  });
+
+  test('a tenant-host traversal never reaches the canonical route tree', () => {
+    const { rewriteSiteRequests } = createSiteHostMiddleware({
+      SITE_BASE_DOMAIN: 'lvh.me',
+      PAGES_URL: 'http://localhost:7140',
+    });
+    const req = fakeReq('/../../api/pages/cs52', { host: 'cs52.lvh.me' });
+    const res = fakeRes();
+    let nexted = false;
+
+    rewriteSiteRequests(
+      req,
+      res as unknown as Response,
+      (() => {
+        nexted = true;
+      }) as NextFunction
+    );
+
+    expect(nexted).toBe(false);
+    expect(res.statusCode).toBe(404);
+    // Untouched: nothing downstream gets a chance to normalize it.
+    expect(req.url).toBe('/../../api/pages/cs52');
+    expect(req.originalUrl).toBe('/../../api/pages/cs52');
   });
 
   test('with SITE_BASE_DOMAIN unset the rewriter is a no-op', () => {

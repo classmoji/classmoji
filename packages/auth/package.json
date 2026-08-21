@@ -10,6 +10,7 @@
     "./server": "./src/server.ts",
     "./client": "./src/client.ts",
     "./predicates": "./src/predicates.ts",
+    "./secret": "./src/secret.ts",
     "./site-return": "./src/siteReturnToken.ts"
   },
   "dependencies": {

@@ -14,12 +14,14 @@ import { test, expect } from '@playwright/test';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as crypto from 'crypto';
+import { execFileSync } from 'child_process';
 import { fileURLToPath } from 'url';
 
 import {
   DARK_MODE_SCRIPT_HASH,
   hasSessionCookie,
   routeSiteHeaders,
+  sessionCookieRegexFor,
   siteHeaders,
 } from '~/site/headers.server.ts';
 
@@ -66,6 +68,82 @@ test.describe('cache policy', () => {
 
   test('no cookie header at all is anonymous', () => {
     expect(hasSessionCookie(anonymous())).toBe(false);
+  });
+});
+
+/**
+ * The session cookie name is CONFIGURABLE (`COOKIE_PREFIX`), and staging runs
+ * `classmoji-staging` so its sessions do not shadow production's on a shared
+ * parent domain. A matcher hardcoded to `classmoji.` therefore sees a real
+ * staging session as ANONYMOUS — and a signed-in member's members-only page
+ * goes out `public, max-age=60`, into a shared cache, to be handed to the next
+ * visitor. Nothing looks broken while it happens.
+ */
+test.describe('the session-cookie matcher tracks COOKIE_PREFIX', () => {
+  const staging = sessionCookieRegexFor('classmoji-staging');
+
+  test('a staging-prefixed session cookie matches', () => {
+    expect(staging.test('classmoji-staging.session_token=abc')).toBe(true);
+    expect(staging.test('theme=dark; classmoji-staging.session_token=abc')).toBe(true);
+  });
+
+  test('the __Secure- variant matches under a custom prefix too', () => {
+    expect(staging.test('__Secure-classmoji-staging.session_token=abc')).toBe(true);
+  });
+
+  test('the production cookie name does NOT match under the staging prefix', () => {
+    expect(staging.test('classmoji.session_token=abc')).toBe(false);
+    // The `-` and `.` in the prefix are escaped, not treated as regex syntax.
+    expect(staging.test('classmojiXstaging.session_token=abc')).toBe(false);
+    expect(staging.test('classmoji-stagingXsession_token=abc')).toBe(false);
+  });
+
+  test('a lookalike cookie name still cannot smuggle a session', () => {
+    expect(staging.test('not-classmoji-staging.session_token=abc')).toBe(false);
+    expect(staging.test('xclassmoji-staging.session_token=abc')).toBe(false);
+  });
+
+  /**
+   * End-to-end, in a process that actually boots with the staging prefix —
+   * `COOKIE_PREFIX` is resolved at import time, so this is the only way to
+   * exercise the real module constant rather than the exported builder.
+   *
+   * It also pins a second property on purpose: `headers.server.ts` must stay
+   * importable by bare node, i.e. it must NOT grow an import of
+   * `@classmoji/auth/server` (betterAuth + Prisma + the service layer) just to
+   * read one string.
+   */
+  test('a staging deployment serves a signed-in member private, no-store', () => {
+    const script = [
+      "const m = await import('./app/site/headers.server.ts');",
+      "const request = new Request('http://cs52.lvh.me/syllabus', {",
+      "  headers: { cookie: 'classmoji-staging.session_token=abc' },",
+      '});',
+      'const headers = m.siteHeaders({ request, cacheable: true });',
+      'console.log(JSON.stringify({',
+      "  cacheControl: headers.get('Cache-Control'),",
+      '  staging: m.hasSessionCookie(request),',
+      "  production: m.hasSessionCookie(new Request('http://cs52.lvh.me/syllabus', {",
+      "    headers: { cookie: 'classmoji.session_token=abc' },",
+      '  })),',
+      '}));',
+    ].join('\n');
+
+    const stdout = execFileSync(
+      process.execPath,
+      ['--experimental-strip-types', '--input-type=module', '-e', script],
+      {
+        cwd: path.join(__dirname, '../..'),
+        env: { ...process.env, COOKIE_PREFIX: 'classmoji-staging' },
+        encoding: 'utf-8',
+      }
+    );
+
+    expect(JSON.parse(stdout.trim().split('\n').pop()!)).toEqual({
+      cacheControl: 'private, no-store',
+      staging: true,
+      production: false,
+    });
   });
 });
 

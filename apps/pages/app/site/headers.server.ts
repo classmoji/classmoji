@@ -1,3 +1,5 @@
+import { COOKIE_PREFIX } from '@classmoji/auth/secret';
+
 import { frameAncestorOrigins } from './env.server.ts';
 
 /**
@@ -33,8 +35,30 @@ import { frameAncestorOrigins } from './env.server.ts';
  */
 export const DARK_MODE_SCRIPT_HASH = "'sha256-zE9lMCBH7j47LO0x2JTz3HAviU8juJhY/nTgMO3guIQ='";
 
-/** Session cookie name(s) better-auth sets (`cookiePrefix: 'classmoji'`). */
-const SESSION_COOKIE = /(?:^|;\s*)(?:__Secure-)?classmoji\.session_token=/;
+/**
+ * Match the session cookie better-auth sets for a given `cookiePrefix`.
+ *
+ * Built from the prefix rather than hardcoded, because it is configurable:
+ * staging runs `COOKIE_PREFIX=classmoji-staging` so its sessions do not shadow
+ * production's on a shared parent domain. A hardcoded `classmoji.` here would
+ * mean a real staging session looks ANONYMOUS to `siteHeaders`, and a
+ * signed-in member's members-only page would go out `public, max-age=60` — a
+ * cache poisoning of personalized content, invisible until someone else is
+ * served it.
+ *
+ * Escaping matches `packages/auth/src/server.ts` exactly: both `.` and `-` are
+ * regex-active and both occur in real prefixes.
+ *
+ * Exported so drift is testable — `COOKIE_PREFIX` resolves at import time, so
+ * a test cannot get at other prefixes any other way.
+ */
+export function sessionCookieRegexFor(prefix: string): RegExp {
+  const escaped = prefix.replace(/[.*+?^${}()|[\]\\-]/g, '\\$&');
+  return new RegExp(`(?:^|;\\s*)(?:__Secure-)?${escaped}\\.session_token=`);
+}
+
+/** Session cookie name(s) better-auth sets, for THIS deployment's prefix. */
+const SESSION_COOKIE = sessionCookieRegexFor(COOKIE_PREFIX);
 
 /** Does this request carry a Classmoji session? */
 export function hasSessionCookie(request: Request): boolean {

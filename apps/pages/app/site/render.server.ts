@@ -1,7 +1,15 @@
 import { ServerBlockNoteEditor } from '@blocknote/server-util';
+// @ts-expect-error -- jsdom ships no type declarations and `@types/jsdom` is
+// not a dependency of this workspace. The cast below pins the shape this
+// module actually uses, so everything downstream of it is fully typed.
+import { JSDOM as UntypedJSDOM } from 'jsdom';
 
 import { redactDocumentForViewer } from './redact.server.ts';
 import { createViewerSchema, type PageLinkResolver } from './viewerSchema.server.ts';
+
+/** The only part of jsdom's surface this module touches. */
+type DomFactory = new (html?: string) => { window: { document: Document } };
+const JSDOM = UntypedJSDOM as DomFactory;
 
 /**
  * Server-side rendering of a page's BlockNote document to static HTML.
@@ -225,12 +233,46 @@ export function slugifyHeading(text: string): string {
 }
 
 /**
+ * One reused JSDOM window, built on first use.
+ *
+ * Reused so `addHeadingAnchors` stays SYNCHRONOUS and cheap (constructing a
+ * JSDOM is the expensive part; a fresh `<div>` off an existing window is not).
+ * A brand-new host element per call is what keeps two documents from seeing
+ * each other's nodes — the window itself holds no state we write to. This
+ * window is entirely separate from the pair `ServerBlockNoteEditor` swaps into
+ * `globalThis`, and is never installed as a global, so it cannot participate in
+ * the interleaving hazard `withServerBlockNoteLock` exists to prevent.
+ */
+let anchorWindow: { document: Document } | null = null;
+
+function anchorHost(): HTMLElement {
+  if (!anchorWindow) anchorWindow = new JSDOM('').window;
+  return anchorWindow.document.createElement('div');
+}
+
+/**
  * Give every h1-h3 an `id` so `#fragment` links work.
  *
- * A regex post-pass rather than a schema override: BlockNote's heading render
- * is fine as-is, and re-implementing it to add one attribute would mean owning
- * its inline-content plumbing forever. Duplicate slugs get a numeric suffix so
- * two "Grading" headings do not collide.
+ * A post-pass rather than a schema override: BlockNote's heading render is fine
+ * as-is, and re-implementing it to add one attribute would mean owning its
+ * inline-content plumbing forever. Duplicate slugs get a numeric suffix so two
+ * "Grading" headings do not collide.
+ *
+ * ## Why this parses instead of running a regex
+ *
+ * This used to be `html.replace(/<h([1-3])([^>]*)>...)` splicing `id="slug"`
+ * back into the match. BlockNote's serializer writes EVERY block prop onto the
+ * block wrapper as a `data-*` attribute, and block props are author-controlled
+ * — a terminal block whose `code` is `<h1 a>b</h1>` puts that text inside
+ * `data-code="..."`, where the regex happily matched it and spliced in two
+ * unescaped quote characters. Those quotes close the attribute, and everything
+ * after them becomes live markup: stored XSS, authored through a perfectly
+ * ordinary block field.
+ *
+ * Parsing, mutating and re-serializing cannot have that bug in principle. The
+ * HTML serializer escapes attribute values on the way out, so nothing written
+ * through `setAttribute` can break out of the attribute it lands in, whatever
+ * the slug contains.
  */
 export function addHeadingAnchors(html: string): {
   html: string;
@@ -239,26 +281,26 @@ export function addHeadingAnchors(html: string): {
   const headings: Array<{ id: string; level: number; text: string }> = [];
   const used = new Map<string, number>();
 
-  const out = html.replace(
-    /<h([1-3])([^>]*)>([\s\S]*?)<\/h\1>/g,
-    (match, levelStr: string, attrs: string, inner: string) => {
-      // Never overwrite an id BlockNote (or an author) already set.
-      if (/\sid\s*=/.test(attrs)) return match;
+  const host = anchorHost();
+  host.innerHTML = html;
 
-      const text = inner.replace(/<[^>]*>/g, '').trim();
-      if (!text) return match;
+  for (const heading of host.querySelectorAll('h1, h2, h3')) {
+    // Never overwrite an id BlockNote (or an author) already set.
+    if (heading.hasAttribute('id')) continue;
 
-      const base = slugifyHeading(text);
-      const seen = used.get(base) ?? 0;
-      used.set(base, seen + 1);
-      const id = seen === 0 ? base : `${base}-${seen + 1}`;
+    const text = (heading.textContent ?? '').trim();
+    if (!text) continue;
 
-      headings.push({ id, level: Number(levelStr), text });
-      return `<h${levelStr}${attrs} id="${id}">${inner}</h${levelStr}>`;
-    }
-  );
+    const base = slugifyHeading(text);
+    const seen = used.get(base) ?? 0;
+    used.set(base, seen + 1);
+    const id = seen === 0 ? base : `${base}-${seen + 1}`;
 
-  return { html: out, headings };
+    heading.setAttribute('id', id);
+    headings.push({ id, level: Number(heading.tagName[1]), text });
+  }
+
+  return { html: host.innerHTML, headings };
 }
 
 /* ------------------------------------------------------------------ *

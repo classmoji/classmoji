@@ -17,6 +17,9 @@
  */
 
 import { test, expect } from '@playwright/test';
+// @ts-expect-error -- jsdom ships no type declarations and `@types/jsdom` is
+// not a dependency; the cast below pins the shape this file uses.
+import { JSDOM as UntypedJSDOM } from 'jsdom';
 
 import {
   addHeadingAnchors,
@@ -28,6 +31,11 @@ import { redactDocumentForViewer } from '~/site/redact.server.ts';
 import { allBlockTypes, OVERRIDDEN_BLOCK_TYPES } from '~/site/viewerSchema.server.ts';
 import { migrateHtmlToBlockNote } from '~/utils/migration.server.ts';
 import { schema } from '~/components/editor/blocks/index.tsx';
+
+const JSDOM = UntypedJSDOM as new (html?: string) => { window: { document: Document } };
+
+/** Parse rendered HTML so assertions can ask about ELEMENTS, not substrings. */
+const parse = (html: string): Document => new JSDOM(`<body>${html}</body>`).window.document;
 
 /** A resolver where `visible` is readable and everything else is not. */
 const resolveLink = (pageId: string) =>
@@ -162,6 +170,77 @@ test.describe('editor affordances are stripped', () => {
     const inputs = html.match(/<input[^>]*>/g) ?? [];
     for (const input of inputs) {
       expect(input, `unexpected interactive input: ${input}`).toContain('disabled');
+    }
+  });
+
+  /**
+   * BlockNote class names that only exist in EDITOR states.
+   *
+   * `<input>`/`<select>`/`<textarea>` was too narrow a scan: BlockNote's file
+   * wrapper builds its "Add image" control out of plain `<div>`s, so the tag
+   * check saw nothing while a clickable upload affordance shipped to the
+   * public site.
+   */
+  const EDITOR_ONLY_CLASSES = ['bn-add-file-button', 'bn-file-loading-preview'];
+
+  /**
+   * The blocks whose EMPTY state is an editor control.
+   *
+   * `image` and `file` are not overridden in the viewer schema (their populated
+   * renders are correct for a static page), and BlockNote's `FileBlockWrapper`
+   * branches on `props.url === ''` to render "Add image" / "Add file". Leaving
+   * an image block unset is a completely ordinary authoring mistake, so this is
+   * the common case rather than an exotic one. Kept OUT of `SAMPLES` on
+   * purpose: that map is the block-coverage contract and must keep describing
+   * one populated sample per type.
+   */
+  const EMPTY_FILE_SAMPLES: Record<string, unknown> = {
+    image: { type: 'image', props: { url: '' } },
+    file: { type: 'file', props: { url: '' } },
+  };
+
+  for (const [type, block] of Object.entries(EMPTY_FILE_SAMPLES)) {
+    test(`an unset ${type} block ships no add-file affordance`, async () => {
+      const { html } = await renderSitePage({ blocks: [block], resolveLink });
+      for (const className of EDITOR_ONLY_CLASSES) {
+        expect(html, `${type} shipped ${className}`).not.toContain(className);
+      }
+      expect(html).not.toContain('Add image');
+      expect(html).not.toContain('Add file');
+      // It renders as nothing at all, like every other redacted block.
+      expect(html).toContain('data-content-type="paragraph"');
+    });
+  }
+
+  test('unset file blocks stay inert inside a full document render', async () => {
+    const blocks = [
+      ...Object.values(SAMPLES).filter(Boolean),
+      ...Object.values(EMPTY_FILE_SAMPLES),
+    ];
+    const { html } = await renderSitePage({ blocks, resolveLink });
+    for (const className of EDITOR_ONLY_CLASSES) {
+      expect(html, `combined render shipped ${className}`).not.toContain(className);
+    }
+    // The POPULATED samples still render — this is not a blanket ban on files.
+    expect(html).toContain('https://example.test/a.png');
+    expect(html).toContain('https://example.test/a.pdf');
+  });
+
+  test('unset file blocks nested inside a column are redacted too', async () => {
+    const { html } = await renderSitePage({
+      blocks: [
+        {
+          type: 'columnList',
+          children: [
+            { type: 'column', props: { width: 1 }, children: [EMPTY_FILE_SAMPLES.image] },
+            { type: 'column', props: { width: 1 }, children: [EMPTY_FILE_SAMPLES.file] },
+          ],
+        },
+      ],
+      resolveLink,
+    });
+    for (const className of EDITOR_ONLY_CLASSES) {
+      expect(html, `nested render shipped ${className}`).not.toContain(className);
     }
   });
 });
@@ -301,6 +380,83 @@ test.describe('heading anchors', () => {
   test('slugify degrades to a stable fallback', () => {
     expect(slugifyHeading('!!!')).toBe('section');
     expect(slugifyHeading('  Hello   World  ')).toBe('hello-world');
+  });
+
+  /**
+   * The anchor pass used to be a regex that spliced `id="slug"` back into
+   * whatever it matched. BlockNote writes every block prop onto the block
+   * wrapper as a `data-*` attribute, and block props are AUTHOR-CONTROLLED —
+   * so a terminal block whose `code` reads `<h1 a>b</h1>` matched the regex
+   * *inside `data-code="…"`* and got two unescaped quote characters spliced
+   * into the attribute value. The first quote closes the attribute and
+   * everything after it becomes live markup: a stored XSS reachable from an
+   * ordinary block field, on a public multi-tenant host.
+   *
+   * The fix parses, mutates and re-serializes, so an id can no longer be
+   * written anywhere except as a real attribute.
+   *
+   * NOTE what is deliberately NOT asserted: the payload text still appears in
+   * the output, because the HTML serialization spec escapes only `&`, `"` and
+   * nbsp inside an attribute value — `<` is legal there. That is correct and
+   * inert. The invariant is that it stays DATA: no `<img>` element exists in
+   * the parsed document, and no element ever got `id="b"`.
+   */
+  const XSS_PROP = '<h1 a>b</h1><img src=x onerror=alert(1)>';
+
+  test('an author-controlled block prop cannot become markup via the anchor pass', async () => {
+    const { html } = await renderSitePage({
+      blocks: [{ type: 'terminal', props: { code: XSS_PROP, title: 'Terminal' } }],
+      resolveLink,
+    });
+
+    const doc = parse(html);
+    expect(doc.querySelector('img'), 'the payload broke out of the attribute').toBeNull();
+    expect(doc.querySelector('#b'), 'an id was spliced into an attribute value').toBeNull();
+    expect(html).not.toContain('id="b"');
+
+    // The attribute survives intact, as one attribute holding the whole value.
+    expect(doc.querySelector('[data-code]')?.getAttribute('data-code')).toBe(XSS_PROP);
+    // And the code is still displayed to the reader, escaped.
+    expect(html).toContain('&lt;h1 a&gt;b&lt;/h1&gt;');
+  });
+
+  test('the same payload in a navGrid entry title is inert too', async () => {
+    const { html } = await renderSitePage({
+      blocks: [
+        {
+          type: 'navGrid',
+          props: {
+            entries: JSON.stringify([{ kind: 'external', url: 'https://a.test', label: XSS_PROP }]),
+            columns: 1,
+          },
+        },
+      ],
+      resolveLink,
+    });
+
+    const doc = parse(html);
+    expect(doc.querySelector('img')).toBeNull();
+    expect(doc.querySelector('#b')).toBeNull();
+    expect(html).not.toContain('id="b"');
+  });
+
+  test('headings inside real content still get ids after the parse rewrite', () => {
+    const { html, headings } = addHeadingAnchors(
+      '<div data-code="<h1 a>b</h1>"><h2>Real Heading</h2></div>'
+    );
+    const doc = parse(html);
+    expect(doc.querySelector('h2')?.getAttribute('id')).toBe('real-heading');
+    // Only the REAL heading is reported; the one inside the attribute is data.
+    expect(headings).toEqual([{ id: 'real-heading', level: 2, text: 'Real Heading' }]);
+  });
+
+  test('a slug can never break out of the attribute it is written to', () => {
+    // slugifyHeading cannot emit a quote, but the serializer is the actual
+    // guarantee: whatever lands in setAttribute comes back escaped.
+    const { html } = addHeadingAnchors('<h2>a" onmouseover="alert(1)</h2>');
+    const doc = parse(html);
+    expect(doc.querySelectorAll('h2')).toHaveLength(1);
+    expect(doc.querySelector('h2')?.hasAttribute('onmouseover')).toBe(false);
   });
 });
 
