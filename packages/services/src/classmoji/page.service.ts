@@ -1,5 +1,5 @@
 import getPrisma from '@classmoji/database';
-import { titleToIdentifier } from '@classmoji/utils';
+import { titleToIdentifier, RESERVED_PAGE_SLUGS } from '@classmoji/utils';
 import { ContentService } from '../content/ContentService.ts';
 import { getGitProvider } from '../git/index.ts';
 import * as contentManifestService from './contentManifest.service.ts';
@@ -18,41 +18,168 @@ interface PageQueryOptions {
  * Manages page CRUD operations
  */
 
+// ─── Page slug allocation ───────────────────────────────────────────────────
+// `slug` is the page's address on the classroom's public course site
+// (`{subdomain}.classmoji.io/{slug}`) and is unique per classroom. It is set
+// once at create and never updated — renaming a page must not break a URL that
+// is already in circulation.
+
 /**
- * Create a new page
+ * Highest numeric fallback: `{base}-2` … `{base}-50`. Mirrored by `max_suffix`
+ * in the 20260821003300_page_slug_backfill_and_unique migration so a row
+ * renamed there and a page created here are named by the same rule. The
+ * migration additionally falls back to an id suffix; this does not, on purpose
+ * — a release command must never fail, but a human creating their 50th "Lab 1"
+ * is better served by an error than by `lab-1-a3f9c210`.
+ */
+export const PAGE_SLUG_MAX_SUFFIX = 50;
+
+/** Error `code` set when every slug candidate for a new page is taken. */
+export const PAGE_SLUG_UNAVAILABLE = 'PAGE_SLUG_UNAVAILABLE';
+
+/**
+ * The unique index a colliding page SLUG violates, and the field set Prisma
+ * reports for it.
+ *
+ * `pages` carries TWO composite uniques — [classroom_id, title] and
+ * [classroom_id, slug] — so a bare `code === 'P2002'` test is wrong: it would
+ * turn "a page with this title already exists", which the user must see and
+ * fix, into a silent walk down slug candidates that all fail on the title and
+ * end in a bogus PAGE_SLUG_UNAVAILABLE. Matching is EXACT on the field set.
+ *
+ * Prisma does not pin the shape of `meta.target`: depending on driver and
+ * version it is an array of field names, the raw constraint name, or that name
+ * inside a one-element array. All three are handled — the same reasoning, and
+ * the same shape, as `isClassroomSlugConflict` in classroomSlug.ts.
+ */
+const PAGE_SLUG_INDEX_NAME = 'pages_classroom_id_slug_key';
+const PAGE_SLUG_FIELD_SET = 'classroom_id,slug';
+
+const targetTokens = (target: unknown): string[] => {
+  const raw = Array.isArray(target) ? target : typeof target === 'string' ? target.split(',') : [];
+  return raw.map(t => String(t).trim().toLowerCase()).filter(Boolean);
+};
+
+/** Is this error a unique violation on the page (classroom_id, slug) index? */
+export function isPageSlugConflict(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false;
+  if ((error as { code?: unknown }).code !== 'P2002') return false;
+
+  const tokens = targetTokens((error as { meta?: { target?: unknown } }).meta?.target);
+  if (tokens.length === 0) return false;
+  if (tokens.length === 1 && tokens[0] === PAGE_SLUG_INDEX_NAME) return true;
+  return [...tokens].sort().join(',') === PAGE_SLUG_FIELD_SET;
+}
+
+/**
+ * The slugs to try, in order, for a page with this title: the derived slug,
+ * then `{base}-2` … `{base}-N`.
+ *
+ * Returns `[]` when the title has no slug-usable characters — the page then
+ * gets slug NULL, never '' (an empty string is an ordinary value under the
+ * unique index and a second one would collide; NULL is exempt). That the old
+ * code wrote '' here is exactly what the backfill migration had to clean up.
+ *
+ * A base that lands on a RESERVED_PAGE_SLUGS entry is skipped rather than
+ * offered: `{subdomain}/app` and `{subdomain}/schedule` belong to the platform,
+ * so a page titled "Schedule" starts at `schedule-2`.
+ */
+export function pageSlugCandidates(title: string): string[] {
+  const base = titleToIdentifier(title);
+  if (!base) return [];
+
+  const candidates = RESERVED_PAGE_SLUGS.has(base) ? [] : [base];
+  for (let n = 2; n <= PAGE_SLUG_MAX_SUFFIX; n++) candidates.push(`${base}-${n}`);
+  return candidates;
+}
+
+const CREATE_INCLUDE = {
+  classroom: {
+    include: {
+      git_organization: true,
+    },
+  },
+  creator: true,
+  links: {
+    include: {
+      repository: true,
+      assignment: true,
+    },
+  },
+} satisfies Prisma.PageInclude;
+
+/**
+ * Run `write` with the first page slug this classroom does not already hold.
+ *
+ * Insert-and-catch, never scan-then-insert: a uniqueness check followed by an
+ * insert is two statements with a gap between them, and two admins creating
+ * "Lab 1" at once both read "free" before either writes. The index is the only
+ * authority; a P2002 on it is the signal to try the next candidate.
+ *
+ * `write` receives `null` when the title has no slug-usable characters and MUST
+ * store it as such — never ''. It performs the whole write, and must NOT run
+ * inside an interactive `prisma.$transaction`: a P2002 raised in one aborts the
+ * whole transaction (Postgres 25P02), so every remaining candidate would fail
+ * with "current transaction is aborted". Same constraint, same reasoning as
+ * `createWithUniqueClassroomSlug` in classroomSlug.ts.
+ *
+ * Callback-shaped rather than a create() wrapper so the import paths — which
+ * write columns create() does not carry (width, menu_order, header_image_*) and
+ * sometimes hold their own PrismaClient — get the identical allocation rule
+ * instead of a second, drifting copy.
+ *
+ * @throws an Error with `code = PAGE_SLUG_UNAVAILABLE` when every candidate is taken.
+ */
+export async function createWithUniquePageSlug<T>(
+  title: string,
+  write: (slug: string | null) => Promise<T>
+): Promise<T> {
+  const candidates = pageSlugCandidates(title);
+
+  // Title with no usable characters (an emoji, punctuation). NULL, not '': the
+  // page simply has no site URL and stays reachable by id.
+  if (candidates.length === 0) return write(null);
+
+  for (const candidate of candidates) {
+    try {
+      return await write(candidate);
+    } catch (error: unknown) {
+      // A duplicate TITLE (the other composite unique on this table) is the
+      // caller's problem and propagates untouched.
+      if (!isPageSlugConflict(error)) throw error;
+    }
+  }
+
+  throw Object.assign(
+    new Error(
+      `No free page slug for "${title}" — all ${candidates.length} candidates are taken. Choose a different title.`
+    ),
+    { code: PAGE_SLUG_UNAVAILABLE }
+  );
+}
+
+/**
+ * Create a new page, taking the first free slug.
  */
 export async function create(values: Prisma.PageUncheckedCreateInput) {
   // Explicitly exclude id - Prisma will auto-generate with uuid()
-  const { id: _id, ...safeValues } = values;
+  // `slug` is likewise never taken from the caller: it is derived here so every
+  // creation path (web, import, MCP) produces the same address for a title.
+  const { id: _id, slug: _slug, ...safeValues } = values;
 
-  const page = await getPrisma().page.create({
-    data: {
-      classroom_id: safeValues.classroom_id,
-      title: safeValues.title,
-      slug: titleToIdentifier(safeValues.title),
-      content_path: safeValues.content_path,
-      created_by: safeValues.created_by,
-      is_draft: safeValues.is_draft ?? true,
-      is_public: safeValues.is_public ?? false,
-      show_in_student_menu: safeValues.show_in_student_menu ?? false,
-    },
-    include: {
-      classroom: {
-        include: {
-          git_organization: true,
-        },
-      },
-      creator: true,
-      links: {
-        include: {
-          repository: true,
-          assignment: true,
-        },
-      },
-    },
-  });
+  const data = {
+    classroom_id: safeValues.classroom_id,
+    title: safeValues.title,
+    content_path: safeValues.content_path,
+    created_by: safeValues.created_by,
+    is_draft: safeValues.is_draft ?? true,
+    is_public: safeValues.is_public ?? false,
+    show_in_student_menu: safeValues.show_in_student_menu ?? false,
+  };
 
-  return page;
+  return createWithUniquePageSlug(safeValues.title, slug =>
+    getPrisma().page.create({ data: { ...data, slug }, include: CREATE_INCLUDE })
+  );
 }
 
 // ─── Create-page choreography (extract-first, plan §5.2 gap 2) ──────────────

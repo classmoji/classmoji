@@ -62,9 +62,17 @@ vi.mock('../notification.service.ts', () => ({
   createNotifications: vi.fn(),
 }));
 
-const { createPage, deletePage, ensureContentRepo, pageContentPath } = await import(
-  '../page.service.ts'
-);
+const {
+  create,
+  createPage,
+  deletePage,
+  ensureContentRepo,
+  isPageSlugConflict,
+  pageContentPath,
+  pageSlugCandidates,
+  PAGE_SLUG_MAX_SUFFIX,
+  PAGE_SLUG_UNAVAILABLE,
+} = await import('../page.service.ts');
 
 const gitOrganization = { id: 'org-1', login: 'test-org', provider: 'GITHUB' };
 const classroom = {
@@ -422,5 +430,131 @@ describe('page.ensureContentRepo', () => {
     await expect(ensureContentRepo('class-1')).rejects.toThrow(
       'Failed to create GitHub repository. Please check your GitHub organization permissions'
     );
+  });
+});
+
+// ─── Page slug allocation ───────────────────────────────────────────────────
+// `slug` is unique per classroom (pages_classroom_id_slug_key) and is the
+// page's address on the public course site, so create() has to allocate one
+// against a live index rather than compute one and hope.
+
+/** A Prisma unique violation as the driver reports it, for a given index. */
+const p2002 = (target: unknown) =>
+  Object.assign(new Error('Unique constraint'), {
+    code: 'P2002',
+    meta: { target },
+  });
+
+describe('page.pageSlugCandidates', () => {
+  it('offers the derived slug first, then numeric suffixes', () => {
+    const candidates = pageSlugCandidates('Lab 1: Pointers');
+    expect(candidates[0]).toBe('lab-1-pointers');
+    expect(candidates[1]).toBe('lab-1-pointers-2');
+    expect(candidates).toHaveLength(PAGE_SLUG_MAX_SUFFIX);
+  });
+
+  it('skips a base that is a reserved site path', () => {
+    // `{subdomain}/schedule` is the platform's, so a page titled "Schedule"
+    // never gets the bare slug — not even when it is free.
+    expect(pageSlugCandidates('Schedule')[0]).toBe('schedule-2');
+    expect(pageSlugCandidates('App')[0]).toBe('app-2');
+    expect(pageSlugCandidates('Schedule')).not.toContain('schedule');
+  });
+
+  it('returns nothing for a title with no slug-usable characters', () => {
+    expect(pageSlugCandidates('!!!')).toEqual([]);
+    expect(pageSlugCandidates('')).toEqual([]);
+  });
+});
+
+describe('page.isPageSlugConflict', () => {
+  it('recognises the slug index in all three shapes Prisma reports', () => {
+    expect(isPageSlugConflict(p2002(['classroom_id', 'slug']))).toBe(true);
+    expect(isPageSlugConflict(p2002('pages_classroom_id_slug_key'))).toBe(true);
+    expect(isPageSlugConflict(p2002(['pages_classroom_id_slug_key']))).toBe(true);
+  });
+
+  it('does NOT match the title index on the same table', () => {
+    // The trap: `pages` has two composite uniques. A bare P2002 test would turn
+    // "that title is taken" into a futile walk down slug candidates.
+    expect(isPageSlugConflict(p2002(['classroom_id', 'title']))).toBe(false);
+    expect(isPageSlugConflict(p2002('pages_classroom_id_title_key'))).toBe(false);
+  });
+
+  it('ignores non-P2002 errors and unrecognised targets', () => {
+    expect(isPageSlugConflict(new Error('boom'))).toBe(false);
+    expect(isPageSlugConflict(p2002(undefined))).toBe(false);
+    expect(isPageSlugConflict(null)).toBe(false);
+  });
+});
+
+describe('page.create slug allocation', () => {
+  const values = {
+    classroom_id: 'class-1',
+    title: 'Lab 1',
+    content_path: 'pages/lab-1',
+    created_by: 'user-1',
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  const slugOf = (call: number) =>
+    (pageCreateMock.mock.calls[call][0] as { data: { slug: string | null } }).data.slug;
+
+  it('takes the derived slug when it is free', async () => {
+    pageCreateMock.mockResolvedValue({ id: 'page-1' });
+    await create(values as never);
+    expect(pageCreateMock).toHaveBeenCalledTimes(1);
+    expect(slugOf(0)).toBe('lab-1');
+  });
+
+  it('retries -2 then -3 when the index rejects the earlier candidates', async () => {
+    // Insert-and-catch, not scan-then-insert: only the index knows, and it only
+    // knows at write time.
+    pageCreateMock
+      .mockRejectedValueOnce(p2002(['classroom_id', 'slug']))
+      .mockRejectedValueOnce(p2002(['classroom_id', 'slug']))
+      .mockResolvedValueOnce({ id: 'page-1' });
+
+    await create(values as never);
+
+    expect(pageCreateMock).toHaveBeenCalledTimes(3);
+    expect([slugOf(0), slugOf(1), slugOf(2)]).toEqual(['lab-1', 'lab-1-2', 'lab-1-3']);
+  });
+
+  it('propagates a duplicate TITLE without retrying', async () => {
+    pageCreateMock.mockRejectedValue(p2002(['classroom_id', 'title']));
+    await expect(create(values as never)).rejects.toMatchObject({ code: 'P2002' });
+    expect(pageCreateMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('writes NULL, never an empty string, for a title with no usable characters', async () => {
+    // '' is an ordinary value under the unique index — a second one collides.
+    // Writing '' here is what the backfill migration had to clean up.
+    pageCreateMock.mockResolvedValue({ id: 'page-1' });
+    await create({ ...values, title: '🎉' } as never);
+    expect(slugOf(0)).toBeNull();
+  });
+
+  it('starts a reserved-word title at -2', async () => {
+    pageCreateMock.mockResolvedValue({ id: 'page-1' });
+    await create({ ...values, title: 'Schedule' } as never);
+    expect(slugOf(0)).toBe('schedule-2');
+  });
+
+  it('gives up with PAGE_SLUG_UNAVAILABLE once every candidate is taken', async () => {
+    pageCreateMock.mockRejectedValue(p2002(['classroom_id', 'slug']));
+    await expect(create(values as never)).rejects.toMatchObject({
+      code: PAGE_SLUG_UNAVAILABLE,
+    });
+    expect(pageCreateMock).toHaveBeenCalledTimes(PAGE_SLUG_MAX_SUFFIX);
+  });
+
+  it('never lets a caller supply the slug', async () => {
+    pageCreateMock.mockResolvedValue({ id: 'page-1' });
+    await create({ ...values, slug: 'hand-picked' } as never);
+    expect(slugOf(0)).toBe('lab-1');
   });
 });

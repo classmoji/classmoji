@@ -74,9 +74,10 @@ function getCache<T>(key: string): T | null {
  * Store response in cache
  * @param {string} key - Cache key
  * @param {any} data - Data to cache
+ * @param {number} [ttlMs] - Lifetime override; defaults to CACHE_TTL
  */
-function setCache<T>(key: string, data: T): void {
-  responseCache.set(key, { data, expiresAt: Date.now() + CACHE_TTL });
+function setCache<T>(key: string, data: T, ttlMs: number = CACHE_TTL): void {
+  responseCache.set(key, { data, expiresAt: Date.now() + ttlMs });
 }
 
 /**
@@ -296,6 +297,12 @@ export class ContentService {
    * @param {string} [options.ref] - Git ref (branch/tag/sha) to read from; bypasses the cache
    * @param {boolean} [options.raw=false] - If true, returns raw base64 string (for binary files)
    * @param {boolean} [options.skipCache=false] - Skip cache (for fetching latest content)
+   * @param {number} [options.cacheTtl] - Lifetime for THIS entry, in ms; defaults to CACHE_TTL (60s).
+   *   Only affects how long a value written by this call stays fresh — a longer
+   *   TTL never extends an entry another caller already wrote, and a write
+   *   through put()/uploadBatch() invalidates the key regardless. Public course
+   *   sites pass 5 minutes: they are anonymous, cacheable, and read the same
+   *   handful of paths on every request, where the editor wants the 60s default.
    * @returns {Promise<{ content: string, sha: string } | null>}
    */
   static async getContent({
@@ -306,6 +313,7 @@ export class ContentService {
     ref,
     raw = false,
     skipCache = false,
+    cacheTtl,
   }: {
     gitOrganization?: GitOrganizationRecord;
     orgLogin?: string;
@@ -314,6 +322,7 @@ export class ContentService {
     ref?: string;
     raw?: boolean;
     skipCache?: boolean;
+    cacheTtl?: number;
   }): Promise<{ content: string; sha: string } | null> {
     try {
       const resolvedOrg = await resolveGitOrganization(gitOrganization, orgLogin);
@@ -353,7 +362,7 @@ export class ContentService {
 
       // Cache the result (unless it's an image or a ref-bearing read)
       if (!ref && !isImagePath(path)) {
-        setCache(cacheKeyWithRaw, result);
+        setCache(cacheKeyWithRaw, result, cacheTtl);
       }
 
       return result;

@@ -397,6 +397,7 @@ model Classroom {
   resource_views        ResourceView[]
   notifications         Notification[]
   import_job            ImportJob?
+  site                  ClassroomSite?
 
   // Logically redundant now that slug is globally unique, but retained: it is
   // the compound key live upserts select on (githubClassroomImport, example
@@ -442,6 +443,38 @@ model ClassroomSettings {
   classroom Classroom @relation(fields: [classroom_id], references: [id], onDelete: Cascade)
 
   @@map("classroom_settings")
+}
+
+// The public course website for a classroom, served at {subdomain}.classmoji.io.
+// At most one per classroom (classroom_id is unique), and the subdomain is the
+// sole key the request host resolves on, so it is globally unique.
+//
+// There is deliberately NO nav column: site navigation is authored content (a
+// "Page directory" block on a page), not configuration.
+model ClassroomSite {
+  id           String @id @default(uuid())
+  classroom_id String @unique
+  // A single lowercase DNS label — validated by SUBDOMAIN_REGEX in
+  // packages/utils/src/subdomains.ts and by a CHECK constraint in the
+  // add_classroom_sites migration (the two must stay byte-identical). Labels in
+  // RESERVED_SUBDOMAINS are refused in the service layer, not by the DB: the
+  // list is product policy and changes without a migration.
+  subdomain    String @unique
+  // A site can only be enabled once home_page_id is set — enforced in
+  // site.service (HOME_PAGE_REQUIRED), not by the DB, because it is a
+  // cross-column rule the FK cannot express.
+  is_enabled   Boolean @default(false)
+  // SetNull, not Cascade: deleting the home page must take the site offline for
+  // repair, never delete the site row (and with it the claimed subdomain).
+  home_page_id String?
+  show_schedule Boolean @default(true)
+  created_at    DateTime @default(now())
+  updated_at    DateTime @default(now()) @updatedAt
+
+  classroom Classroom @relation(fields: [classroom_id], references: [id], onDelete: Cascade)
+  home_page Page?     @relation("SiteHomePage", fields: [home_page_id], references: [id], onDelete: SetNull)
+
+  @@map("classroom_sites")
 }
 
 model ClassroomMembership {
@@ -579,6 +612,10 @@ model Module {
   description  String?
   position     Int      @default(0)
   is_published Boolean  @default(false)
+  // Public course site only. Orthogonal to is_published, which governs the
+  // in-app student view: the site shows a module only when BOTH are true, so
+  // opting a classroom into a website never publishes anything by itself.
+  is_public    Boolean  @default(false)
   created_at   DateTime @default(now())
   updated_at   DateTime @default(now()) @updatedAt
 
@@ -1138,8 +1175,20 @@ model Page {
   links              PageLink[]
   calendarEventLinks CalendarEventPageLink[]
   module_items       ModuleItem[]
+  // A list only because ClassroomSite.home_page_id carries no @unique, which is
+  // what Prisma requires for a one-to-one back-relation. In practice at most one
+  // row can point here: classroom_id is unique on ClassroomSite and the home
+  // page must belong to that classroom.
+  site_home_for      ClassroomSite[]         @relation("SiteHomePage")
 
   @@unique([classroom_id, title])
+  // The page's address on the public course site ({subdomain}/{slug}) and the
+  // idempotency key for content tooling. Postgres's default NULLS DISTINCT is
+  // load-bearing: legacy rows whose title reduces to nothing keep slug = NULL
+  // and many of them coexist. An empty-string slug is NOT legal — see the
+  // page_slug_backfill_and_unique migration, which converts every '' to a real
+  // slug or NULL, and page.service's create(), which never writes ''.
+  @@unique([classroom_id, slug])
   @@index([classroom_id])
   @@map("pages")
 }
