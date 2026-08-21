@@ -48,6 +48,9 @@ export default () => {
       // HMR websocket on app port + 1 — the vite default (24678) is shared by
       // every vite app in the monorepo, so concurrent dev servers race for it.
       hmr: { port: (process.env.PORT ? Number(process.env.PORT) : 7100) + 1 },
+      // Class sites are served on {subdomain}.lvh.me in dev — vite's host check
+      // rejects them otherwise.
+      allowedHosts: ['.lvh.me', '.localhost'],
     },
     build: {
       sourcemap: process.env.NODE_ENV === 'production' ? 'hidden' : true,

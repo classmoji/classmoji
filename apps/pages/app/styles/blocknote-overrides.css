@@ -846,3 +846,521 @@
   color: #6b7280;
 }
 
+/* ==========================================================================
+   navGrid — "Page directory" block
+   Authored navigation hub (class sites). Two surfaces:
+   - .bn-nav-grid   static markup (SSR viewer, HTML export, read-only editor)
+   - .nav-grid-*    editor-only chrome (rows, pickers, toolbar)
+   ========================================================================== */
+
+.bn-block-content[data-content-type="navGrid"] {
+  width: 100%;
+}
+
+.bn-block-content[data-content-type="navGrid"] > div {
+  width: 100%;
+}
+
+.nav-grid-block {
+  width: 100%;
+  margin: 4px 0;
+}
+
+/* A `content: 'none'` block that happens to be the document's FIRST node takes
+   ProseMirror's initial NodeSelection, and BlockNote paints a selection
+   outline on the node view's child. In a read-only view (the page viewer)
+   there is no selection to show — and a directory hub is exactly the block
+   authors put first. Scoped to non-editable editors so the real editor keeps
+   its selection affordance. */
+.bn-editor[contenteditable='false'] .nav-grid-block {
+  outline: none !important;
+  box-shadow: none !important;
+  background-color: transparent !important;
+}
+
+/* ---- Static grid (also what the viewer/site sees) ----
+   The root carries BOTH `bn-nav-grid` and `nav-grid`: BlockNote's
+   toExternalHTML exporter strips `bn-*` classes from a block's root element,
+   so `nav-grid` is the class that survives an HTML export. */
+.bn-nav-grid,
+.nav-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px 14px;
+  width: 100%;
+}
+
+.bn-nav-grid[data-columns="1"],
+.nav-grid[data-columns="1"] {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+/* Descendant form (2 classes) + `!important` on colour so these win over the
+   global link styling (`.page-viewer a`, and `.bn-editor a` above, which is
+   itself `!important`) — directory tiles are tiles, not blue underlined links. */
+.bn-nav-grid .bn-nav-grid-item,
+.nav-grid .bn-nav-grid-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 9px 12px;
+  border-radius: 8px;
+  border: 1px solid rgba(0, 0, 0, 0.09);
+  background: #ffffff;
+  color: #1f2937 !important;
+  font-size: 14px;
+  font-weight: 600;
+  text-decoration: none;
+  transition:
+    background-color 0.15s ease,
+    border-color 0.15s ease;
+}
+
+.bn-nav-grid .bn-nav-grid-item:hover,
+.nav-grid .bn-nav-grid-item:hover {
+  background: #f7f6f5;
+  border-color: rgba(0, 0, 0, 0.16);
+  color: #1f2937 !important;
+  text-decoration: none;
+}
+
+.dark .bn-nav-grid .bn-nav-grid-item,
+.dark .nav-grid .bn-nav-grid-item {
+  border-color: rgba(255, 255, 255, 0.1);
+  background: #2d2d2d;
+  color: #e5e7eb !important;
+}
+
+.dark .bn-nav-grid .bn-nav-grid-item:hover,
+.dark .nav-grid .bn-nav-grid-item:hover {
+  background: #363636;
+  border-color: rgba(255, 255, 255, 0.18);
+  color: #e5e7eb !important;
+}
+
+.bn-nav-grid-emoji {
+  font-size: 15px;
+  line-height: 1;
+  flex: none;
+}
+
+.bn-nav-grid-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bn-nav-grid-ext {
+  margin-left: auto;
+  flex: none;
+  font-size: 11px;
+  font-weight: 700;
+  color: #9ca3af;
+}
+
+.dark .bn-nav-grid-ext {
+  color: #6b7280;
+}
+
+/* ---- Editor chrome ---- */
+.nav-grid-block-editing {
+  border: 1px dashed rgba(0, 0, 0, 0.12);
+  border-radius: 12px;
+  padding: 10px 12px 12px;
+  background: rgba(0, 0, 0, 0.015);
+  color: #1f2937;
+}
+
+.dark .nav-grid-block-editing {
+  border-color: rgba(255, 255, 255, 0.14);
+  background: rgba(255, 255, 255, 0.03);
+  color: #e5e7eb;
+}
+
+.nav-grid-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.nav-grid-toolbar-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: #9ca3af;
+}
+
+.dark .nav-grid-toolbar-title {
+  color: #6b7280;
+}
+
+.nav-grid-cols {
+  display: inline-flex;
+  gap: 2px;
+  padding: 2px;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.05);
+}
+
+.dark .nav-grid-cols {
+  background: rgba(255, 255, 255, 0.07);
+}
+
+.nav-grid-col-btn {
+  min-width: 26px;
+  padding: 3px 8px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: #6b7280;
+  font-size: 12px;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.nav-grid-col-btn.is-active {
+  background: #ffffff;
+  color: #1f2937;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
+}
+
+.dark .nav-grid-col-btn {
+  color: #9ca3af;
+}
+
+.dark .nav-grid-col-btn.is-active {
+  background: #4b4b4b;
+  color: #f3f4f6;
+}
+
+.nav-grid-rows {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px 14px;
+}
+
+/* `color` is set explicitly (not inherited): the label button/input inherit
+   from the row, and during a light/dark switch the editor's inherited color
+   can lag behind the `.dark` class, leaving dark text on a dark tile. */
+.nav-grid-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 6px 8px;
+  border-radius: 8px;
+  border: 1px solid rgba(0, 0, 0, 0.09);
+  background: #ffffff;
+  color: #1f2937;
+}
+
+.dark .nav-grid-row {
+  border-color: rgba(255, 255, 255, 0.1);
+  background: #2d2d2d;
+  color: #e5e7eb;
+}
+
+.nav-grid-row-missing {
+  opacity: 0.65;
+  border-style: dashed;
+}
+
+.nav-grid-emoji-input {
+  width: 26px;
+  flex: none;
+  padding: 2px !important;
+  margin: 0 !important;
+  border: none !important;
+  background: transparent !important;
+  outline: none !important;
+  text-align: center;
+  font-size: 15px;
+  line-height: 1;
+  color: inherit;
+  border-radius: 4px;
+}
+
+.nav-grid-emoji-input:hover,
+.nav-grid-emoji-input:focus {
+  background: rgba(0, 0, 0, 0.05) !important;
+}
+
+.dark .nav-grid-emoji-input:hover,
+.dark .nav-grid-emoji-input:focus {
+  background: rgba(255, 255, 255, 0.08) !important;
+}
+
+.nav-grid-emoji-input::placeholder {
+  color: #d1d5db;
+  font-size: 12px;
+}
+
+.nav-grid-label-btn {
+  flex: 1;
+  min-width: 0;
+  padding: 2px 4px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  font-family: inherit;
+  text-align: left;
+  cursor: text;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.nav-grid-label-btn:hover {
+  background: rgba(0, 0, 0, 0.05);
+}
+
+.dark .nav-grid-label-btn:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.nav-grid-label-input {
+  flex: 1;
+  min-width: 0;
+  padding: 2px 4px !important;
+  margin: 0 !important;
+  border: none !important;
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.05) !important;
+  outline: none !important;
+  color: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  font-family: inherit;
+}
+
+.dark .nav-grid-label-input {
+  background: rgba(255, 255, 255, 0.1) !important;
+}
+
+.nav-grid-badge {
+  flex: none;
+  font-size: 8.5px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 2px 6px;
+  border-radius: 999px;
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  background: rgba(0, 0, 0, 0.04);
+  color: #6b7280;
+  white-space: nowrap;
+}
+
+.dark .nav-grid-badge {
+  border-color: rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.08);
+  color: #d1d5db;
+}
+
+.nav-grid-badge-draft {
+  color: #b45309;
+  background: rgba(245, 158, 11, 0.12);
+  border-color: rgba(245, 158, 11, 0.25);
+}
+
+.dark .nav-grid-badge-draft {
+  color: #fbbf24;
+}
+
+.nav-grid-badge-missing {
+  color: #b91c1c;
+  background: rgba(239, 68, 68, 0.1);
+  border-color: rgba(239, 68, 68, 0.25);
+}
+
+.dark .nav-grid-badge-missing {
+  color: #fca5a5;
+}
+
+.nav-grid-row-actions {
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  flex: none;
+}
+
+.nav-grid-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: #9ca3af;
+  cursor: pointer;
+}
+
+.nav-grid-icon-btn:hover:not(:disabled) {
+  background: rgba(0, 0, 0, 0.06);
+  color: #4b5563;
+}
+
+.dark .nav-grid-icon-btn:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.1);
+  color: #e5e7eb;
+}
+
+.nav-grid-icon-btn:disabled {
+  opacity: 0.3;
+  cursor: default;
+}
+
+.nav-grid-icon-btn-danger:hover:not(:disabled) {
+  color: #dc2626;
+  background: rgba(220, 38, 38, 0.1);
+}
+
+.nav-grid-empty-state {
+  padding: 18px;
+  border: 1px dashed rgba(0, 0, 0, 0.12);
+  border-radius: 8px;
+  text-align: center;
+  font-size: 13px;
+  color: #9ca3af;
+}
+
+.dark .nav-grid-empty-state {
+  border-color: rgba(255, 255, 255, 0.14);
+  color: #6b7280;
+}
+
+.nav-grid-actions {
+  position: relative;
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.nav-grid-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 10px;
+  border-radius: 6px;
+  border: 1px solid rgba(0, 0, 0, 0.1);
+  background: #ffffff;
+  color: #4b5563;
+  font-size: 12.5px;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.nav-grid-btn:hover {
+  background: #f3f4f6;
+}
+
+.dark .nav-grid-btn {
+  border-color: rgba(255, 255, 255, 0.12);
+  background: #333333;
+  color: #d1d5db;
+}
+
+.dark .nav-grid-btn:hover {
+  background: #3f3f3f;
+}
+
+.nav-grid-btn-primary {
+  border-color: transparent;
+  background: #111827;
+  color: #ffffff;
+}
+
+.nav-grid-btn-primary:hover {
+  background: #1f2937;
+}
+
+.dark .nav-grid-btn-primary {
+  background: #e5e7eb;
+  color: #111827;
+}
+
+.dark .nav-grid-btn-primary:hover {
+  background: #f9fafb;
+}
+
+/* ---- External-link form ---- */
+.nav-grid-form {
+  margin-top: 10px;
+  padding: 8px;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.04);
+}
+
+.dark .nav-grid-form {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.nav-grid-form-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.nav-grid-form-input {
+  flex: 2;
+  min-width: 140px;
+  padding: 5px 8px !important;
+  margin: 0 !important;
+  border: 1px solid rgba(0, 0, 0, 0.1) !important;
+  border-radius: 6px;
+  background: #ffffff !important;
+  outline: none !important;
+  color: inherit;
+  font-size: 13px;
+  font-family: inherit;
+}
+
+.nav-grid-form-input-label {
+  flex: 1;
+  min-width: 100px;
+}
+
+.dark .nav-grid-form-input {
+  border-color: rgba(255, 255, 255, 0.14) !important;
+  background: #2d2d2d !important;
+}
+
+.nav-grid-form-error {
+  margin-top: 6px;
+  font-size: 12px;
+  color: #dc2626;
+}
+
+.dark .nav-grid-form-error {
+  color: #fca5a5;
+}
+
+/* ---- Page picker (reuses the .page-link-dropdown shell) ---- */
+.nav-grid-picker {
+  top: 100%;
+  left: 0;
+}
+
+.nav-grid-picker-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px 8px;
+}
+

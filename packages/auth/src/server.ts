@@ -5,18 +5,42 @@ import getPrisma from '@classmoji/database';
 import type { Role, ClassroomStatus } from '@prisma/client';
 import { ClassmojiService } from '@classmoji/services';
 
-// Use explicit secret for consistent session signing
-// Export so test-login can use the same signing mechanism
-const DEV_SECRET = 'dev-secret-change-in-production-32chars!';
+// The signing secret and the cookie prefix live in ./secret.ts so that modules
+// which only need to sign something (./siteReturnToken.ts) can share them
+// without importing betterAuth and Prisma. Re-exported here because
+// `import { AUTH_SECRET } from '@classmoji/auth/server'` is the established
+// entry point.
+import { AUTH_SECRET, COOKIE_PREFIX } from './secret.ts';
 
-if (process.env.NODE_ENV === 'production' && !process.env.BETTER_AUTH_SECRET) {
-  throw new Error(
-    '[SECURITY] BETTER_AUTH_SECRET environment variable is required in production. ' +
-      'This secret is used to sign session tokens. Running without it would allow session forgery.'
-  );
-}
+export { AUTH_SECRET, COOKIE_PREFIX };
 
-export const AUTH_SECRET = process.env.BETTER_AUTH_SECRET || DEV_SECRET;
+// Signed sign-in-return tokens for public course sites. Re-exported from the
+// server entry for callers already importing from here; site code that must not
+// pull in betterAuth/Prisma should import '@classmoji/auth/site-return'.
+export {
+  signSiteReturnToken,
+  verifySiteReturnToken,
+  isSafeRelativePath,
+  SITE_RETURN_TOKEN_TTL_MS,
+  SITE_RETURN_MAX_PATH_LENGTH,
+  type SiteReturnPayload,
+} from './siteReturnToken.ts';
+
+/** `classmoji.session_token`, or whatever COOKIE_PREFIX makes it. */
+const SESSION_COOKIE_NAME = `${COOKIE_PREFIX}.session_token`;
+
+/**
+ * Matches the session cookie by its CONFIGURED name.
+ *
+ * Built from COOKIE_PREFIX rather than hardcoded: staging runs
+ * COOKIE_PREFIX=classmoji-staging so its sessions do not shadow production's on
+ * the shared parent domain, and a literal `classmoji.` here would quietly stop
+ * matching there. The prefix is escaped because `.` and `-` are regex-active and
+ * the value comes from the environment.
+ */
+const SESSION_COOKIE_REGEX = new RegExp(
+  `(?:^|;\\s*)${SESSION_COOKIE_NAME.replace(/[.*+?^${}()|[\]\\-]/g, '\\$&')}=([^;]+)`
+);
 
 // ─── Interfaces ──────────────────────────────────────────────────────────────
 
@@ -317,11 +341,24 @@ export const auth = betterAuth({
     database: {
       generateId: 'uuid',
     },
-    cookiePrefix: 'classmoji',
-    crossSubDomainCookies: {
-      enabled: process.env.NODE_ENV === 'production',
-      domain: '.classmoji.io',
-    },
+    cookiePrefix: COOKIE_PREFIX,
+    // Env-driven, with today's behaviour as the unset default.
+    //
+    //   COOKIE_DOMAIN set   → cross-subdomain cookies ON for that domain, in
+    //                         every environment. Staging sets
+    //                         `.staging.classmoji.io`; local development can
+    //                         opt in with `.lvh.me` (browse the app at
+    //                         app.lvh.me:PORT, not localhost).
+    //   COOKIE_DOMAIN unset → exactly what shipped before: on in production for
+    //                         `.classmoji.io`, off everywhere else.
+    //
+    // Course sites live at {subdomain}.{SITE_BASE_DOMAIN}, so a session cookie
+    // scoped to the parent domain is what lets a signed-in visitor be
+    // recognized there. It is NOT what authorizes them — see
+    // ./siteReturnToken.ts for why tenant hosts are never auth trust origins.
+    crossSubDomainCookies: process.env.COOKIE_DOMAIN
+      ? { enabled: true, domain: process.env.COOKIE_DOMAIN }
+      : { enabled: process.env.NODE_ENV === 'production', domain: '.classmoji.io' },
   },
   // Map to your existing schema conventions
   user: {
@@ -436,7 +473,7 @@ export const auth = betterAuth({
  */
 export async function getAuthSession(request: Request): Promise<AuthSessionResult | null> {
   const cookieHeader = request.headers.get('cookie') || '';
-  const sessionTokenMatch = cookieHeader.match(/classmoji\.session_token=([^;]+)/);
+  const sessionTokenMatch = cookieHeader.match(SESSION_COOKIE_REGEX);
   const tokenFromCookie = sessionTokenMatch?.[1];
 
   // Try BetterAuth's getSession first (validates session cookie, not OAuth token)

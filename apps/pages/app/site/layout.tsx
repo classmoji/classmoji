@@ -1,0 +1,137 @@
+import { Outlet, data, isRouteErrorResponse, useLoaderData, useRouteError } from 'react-router';
+import type { HeadersFunction, LoaderFunctionArgs, MetaFunction } from 'react-router';
+
+import { IdentityBar, SiteFooter, SiteNotice } from './chrome.tsx';
+import { routeSiteHeaders, siteHeaders } from './headers.server.ts';
+import { isMember, publicPathOf, resolveSiteContext, rolePrefix } from './tenant.server.ts';
+import { webappUrl } from './env.server.ts';
+import { signInPathFor } from './returnTo.ts';
+import { SITE_STYLES } from './styles.ts';
+
+/**
+ * The class-site shell: identity bar, content, footer — and the single place
+ * the tenant is resolved for a request.
+ *
+ * Everything under `/_site/:subdomain` nests here. The loader's only job is to
+ * force `resolveSiteContext` to run (memoized on the Request, so the child
+ * loader running in parallel shares this exact lookup) and to hand the chrome
+ * the two or three strings it needs.
+ */
+
+export const loader = async (args: LoaderFunctionArgs) => {
+  const { request, params } = args;
+  const { site, viewer } = await resolveSiteContext(args);
+
+  const url = new URL(request.url);
+  // The visitor-facing path, not the internal `/_site/...` one the middleware
+  // rewrote to — that prefix must never appear in a link or a redirect.
+  const publicPath = publicPathOf(url.pathname, params.subdomain!) + url.search;
+
+  const prefix = rolePrefix(viewer.role);
+
+  return data(
+    {
+      courseName: site.classroom.name,
+      memberName: isMember(viewer) ? viewer.name || viewer.login : null,
+      appHref:
+        prefix && isMember(viewer)
+          ? `${webappUrl()}/${prefix}/${site.classroom.slug}/dashboard`
+          : null,
+      signInHref: viewer.userId ? null : signInPathFor(publicPath),
+    },
+    {
+      // The shell itself is never the cache decision — the leaf route's
+      // headers export wins. This set exists so a leaf that somehow returns
+      // nothing still carries the security baseline.
+      headers: siteHeaders({ request, cacheable: false, noindex: false }),
+    }
+  );
+};
+
+export const headers: HeadersFunction = args => routeSiteHeaders(args);
+
+export const meta: MetaFunction<typeof loader> = ({ data }) => {
+  const courseName = data?.courseName;
+  return courseName ? [{ title: courseName }] : [{ title: 'Class site' }];
+};
+
+const SiteLayout = () => {
+  const data = useLoaderData<typeof loader>();
+
+  return (
+    <div className="flex min-h-screen flex-col">
+      {/* Inlined rather than imported — see styles.ts for why a route-module
+          stylesheet does not reach these pages. */}
+      <style dangerouslySetInnerHTML={{ __html: SITE_STYLES }} />
+      <IdentityBar
+        courseName={data.courseName}
+        memberName={data.memberName}
+        appHref={data.appHref}
+        signInHref={data.signInHref}
+      />
+      <main className="flex-1">
+        <Outlet />
+      </main>
+      <SiteFooter />
+    </div>
+  );
+};
+
+/**
+ * Branded, script-less error states.
+ *
+ * A missing subdomain and a switched-off site render the same 404 shape on
+ * purpose: telling a stranger "this subdomain exists but is disabled" is an
+ * enumeration oracle over every course we host.
+ */
+export function ErrorBoundary() {
+  const error = useRouteError();
+
+  if (isRouteErrorResponse(error)) {
+    if (error.status === 404) {
+      const unavailable = error.data === 'unavailable';
+      return (
+        <SiteNotice
+          title={unavailable ? 'This site is unavailable' : "There's no site here"}
+          message={
+            unavailable
+              ? 'The instructor has turned this course website off, or the course is no longer running.'
+              : 'That address does not point at a Classmoji course website.'
+          }
+          action={{ href: 'https://classmoji.io', label: 'Go to Classmoji', external: true }}
+        />
+      );
+    }
+
+    if (error.status === 403) {
+      return (
+        <SiteNotice
+          title="You do not have access to this page"
+          message={
+            typeof error.data === 'string' && error.data
+              ? error.data
+              : 'This page is limited to members of this class.'
+          }
+        />
+      );
+    }
+
+    if (error.status === 503) {
+      return (
+        <SiteNotice
+          title="This page is temporarily unavailable"
+          message="The course content could not be loaded right now. Please try again in a few minutes."
+        />
+      );
+    }
+  }
+
+  return (
+    <SiteNotice
+      title="Something went wrong"
+      message="This page could not be rendered. Please try again in a few minutes."
+    />
+  );
+}
+
+export default SiteLayout;
