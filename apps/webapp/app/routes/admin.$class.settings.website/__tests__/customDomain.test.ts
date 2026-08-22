@@ -8,6 +8,8 @@ import {
   customDomainErrorHint,
   customDomainRowState,
   dnsRows,
+  manualCnameTarget,
+  manualDomainSetup,
   type CertSnapshot,
 } from '../customDomain.ts';
 
@@ -150,11 +152,18 @@ describe('certChip', () => {
   });
 
   it('says manual setup when certificate automation is off', () => {
-    // isFlyCertsConfigured() false: the feature degrades to "ask an admin",
-    // and it must not look like the instructor did something wrong.
+    // isFlyCertsConfigured() false: the feature degrades to a DNS record the
+    // instructor adds themselves, and it must not look like they did something
+    // wrong.
     const chip = certChip(cert({ status: 'active' }), { flyConfigured: false });
     expect(chip.tone).toBe('manual');
     expect(chip.label).toBe('Manual setup');
+  });
+
+  it('carries NO hint in manual mode — the setup block is the instruction', () => {
+    // The bug this pins: the hint and the NOT_CONFIGURED notice printed the
+    // same sentence one above the other, and neither told anyone what to do.
+    expect(certChip(null, { flyConfigured: false }).hint).toBe('');
   });
 
   it('reports an unreadable certificate as unknown, not as a failure', () => {
@@ -268,6 +277,84 @@ describe('dnsRows', () => {
   });
 });
 
+describe('manualCnameTarget', () => {
+  it('derives the pages app’s own Fly hostname', () => {
+    expect(manualCnameTarget('classmoji-pages')).toBe('classmoji-pages.fly.dev');
+    expect(manualCnameTarget('classmoji-pages-staging')).toBe('classmoji-pages-staging.fly.dev');
+  });
+
+  it('normalizes surrounding space and case', () => {
+    expect(manualCnameTarget('  Classmoji-Pages  ')).toBe('classmoji-pages.fly.dev');
+  });
+
+  it('has no target without an app name', () => {
+    // No default, ever: staging and production share a fly.toml, and guessing
+    // here would print production's hostname on a staging screen.
+    expect(manualCnameTarget(null)).toBeNull();
+    expect(manualCnameTarget(undefined)).toBeNull();
+    expect(manualCnameTarget('')).toBeNull();
+    expect(manualCnameTarget('   ')).toBeNull();
+  });
+});
+
+describe('manualDomainSetup', () => {
+  const setup = manualDomainSetup({ domain: 'cs52.me', pagesApp: 'classmoji-pages' });
+
+  it('gives the instructor a record they can actually add', () => {
+    // The whole point. Who issues the certificate is our problem; the CNAME is
+    // the instructor's, and it is the same record either way.
+    expect(setup.state).toBe('dns');
+    if (setup.state !== 'dns') return;
+    expect(setup.heading).toBe('Point cs52.me at Classmoji');
+    expect(setup.rows).toEqual([
+      { type: 'CNAME', name: 'cs52.me', value: 'classmoji-pages.fly.dev', purpose: 'route' },
+    ]);
+  });
+
+  it('warns about the two ways this silently fails', () => {
+    if (setup.state !== 'dns') throw new Error('expected DNS guidance');
+    expect(setup.notes.some(note => /ALIAS|flattening/i.test(note))).toBe(true);
+    expect(setup.notes.some(note => /DNS only|grey cloud/i.test(note))).toBe(true);
+  });
+
+  it('promises issuance without mentioning who does it', () => {
+    if (setup.state !== 'dns') throw new Error('expected DNS guidance');
+    expect(setup.footer).toBe(
+      'Your certificate will be issued automatically once your domain points at Classmoji.'
+    );
+    expect(setup.footer).not.toMatch(/administrator/i);
+  });
+
+  it('normalizes the claimed domain the same way the record does', () => {
+    const upper = manualDomainSetup({ domain: '  CS52.ME ', pagesApp: 'classmoji-pages' });
+    if (upper.state !== 'dns') throw new Error('expected DNS guidance');
+    expect(upper.rows[0].name).toBe('cs52.me');
+    expect(upper.heading).toBe('Point cs52.me at Classmoji');
+  });
+
+  it('falls back to one honest line when the app name is unset too', () => {
+    // Nothing true left to say — but never the old jargon, and never a
+    // hostname we made up.
+    for (const pagesApp of [null, undefined, '', '   ']) {
+      const fallback = manualDomainSetup({ domain: 'cs52.me', pagesApp });
+      expect(fallback).toEqual({
+        state: 'unavailable',
+        message:
+          'Your Classmoji administrator needs to finish configuring custom domains — contact support.',
+      });
+    }
+  });
+
+  it('has nothing to point anywhere without a claimed domain', () => {
+    expect(manualDomainSetup({ domain: null, pagesApp: 'classmoji-pages' }).state).toBe(
+      'unavailable'
+    );
+    expect(manualDomainSetup({ domain: '  ', pagesApp: 'classmoji-pages' }).state).toBe(
+      'unavailable'
+    );
+  });
+});
+
 describe('customDomainErrorHint', () => {
   it('gives the next step for each rejection the service raises', () => {
     expect(customDomainErrorHint('PRO_REQUIRED')).toMatch(/Pro/);
@@ -296,13 +383,7 @@ describe('certErrorNotice', () => {
     // setCustomDomain already committed the row. Telling the instructor the
     // save failed would be false, and would invite a re-claim that clears the
     // verification stamp for no reason.
-    for (const code of [
-      'NOT_CONFIGURED',
-      'UNAUTHORIZED',
-      'RATE_LIMITED',
-      'UPSTREAM',
-      'NOT_FOUND',
-    ]) {
+    for (const code of ['UNAUTHORIZED', 'RATE_LIMITED', 'UPSTREAM', 'NOT_FOUND']) {
       expect(certErrorNotice(code)).toMatch(/^Domain claimed/);
     }
   });
@@ -313,9 +394,11 @@ describe('certErrorNotice', () => {
     expect(certErrorNotice('UPSTREAM')).toMatch(/Check status/);
   });
 
-  it('does not offer a retry for an unconfigured environment', () => {
-    // Nothing the instructor presses can conjure credentials this process lacks.
-    expect(certErrorNotice('NOT_CONFIGURED')).not.toMatch(/Check status/);
+  it('says nothing at all for an unconfigured environment', () => {
+    // Nothing the instructor presses can conjure credentials this process
+    // lacks, and `manualDomainSetup` is already on screen telling them what
+    // they CAN do. A notice here only repeated it, one line higher.
+    expect(certErrorNotice('NOT_CONFIGURED')).toBeNull();
   });
 
   it('still explains an unfamiliar code', () => {

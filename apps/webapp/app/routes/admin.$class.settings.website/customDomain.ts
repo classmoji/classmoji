@@ -157,7 +157,11 @@ export function certChip(
     return {
       tone: 'manual',
       label: 'Manual setup',
-      hint: 'Certificate automation is not configured on this environment — an administrator has to issue the certificate.',
+      // Deliberately empty. `manualDomainSetup` below is the single instruction
+      // in this mode, and a hint here printed the same sentence a second time
+      // directly above it — twice as much text, no extra information, and none
+      // of it anything the instructor could act on.
+      hint: '',
     };
   }
   if (!cert) {
@@ -298,6 +302,76 @@ export function dnsRows(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// What to put in the zone file when nothing is automated
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * The hostname a manual setup points at — the pages app's own Fly address.
+ *
+ * `FLY_PAGES_APP` is an app NAME (`classmoji-pages`), and every Fly app answers
+ * on `{app}.fly.dev`, so this is the one piece of routing we can state without
+ * asking Fly anything. Null when the name is unset, which is the only reason
+ * the fallback below exists.
+ */
+export function manualCnameTarget(pagesApp: string | null | undefined): string | null {
+  const app = (pagesApp ?? '').trim().toLowerCase();
+  return app ? `${app}.fly.dev` : null;
+}
+
+/**
+ * What the Custom domain row shows when certificate automation is off.
+ *
+ * `dns` when we know where to send them, `unavailable` when we do not.
+ */
+export type ManualDomainSetup =
+  | { state: 'unavailable'; message: string }
+  | { state: 'dns'; heading: string; rows: DnsRow[]; notes: string[]; footer: string };
+
+/**
+ * The instructor's next step with no Fly credential in this process.
+ *
+ * Who issues the certificate is OUR problem, and this instructions block says
+ * nothing about it: the DNS record is the same record either way, it is the
+ * only part of the setup the instructor can do, and it is the part that must
+ * happen first. The previous copy — "an administrator has to issue the
+ * certificate", printed twice — was a description of our internal state
+ * dressed up as an instruction, and left a paying customer with nothing to do.
+ *
+ * A CNAME, never an A record: the addresses behind a Fly app are per app and
+ * change, and there is no credential here to go and read them. The apex caveat
+ * rides along as a note rather than as detection — a label count calls
+ * `cs52.co.uk` a subdomain, and we have no public-suffix list in this bundle.
+ */
+export function manualDomainSetup(input: {
+  domain: string | null | undefined;
+  pagesApp: string | null | undefined;
+}): ManualDomainSetup {
+  const domain = (input.domain ?? '').trim().toLowerCase();
+  const target = manualCnameTarget(input.pagesApp);
+
+  // Nothing true left to say. One honest line beats inventing a hostname or
+  // repeating jargon at someone who cannot act on either.
+  if (!domain || !target) {
+    return {
+      state: 'unavailable',
+      message:
+        'Your Classmoji administrator needs to finish configuring custom domains — contact support.',
+    };
+  }
+
+  return {
+    state: 'dns',
+    heading: `Point ${domain} at Classmoji`,
+    rows: [{ type: 'CNAME', name: domain, value: target, purpose: 'route' }],
+    notes: [
+      'If this is a root domain (no www in front), some DNS hosts will not accept a CNAME there — use their ALIAS, ANAME or CNAME flattening record with the same value instead. Cloudflare does this for you automatically.',
+      'On Cloudflare, set the record to DNS only (the grey cloud). Leaving it proxied on the orange cloud stops the certificate from being issued.',
+    ],
+    footer: 'Your certificate will be issued automatically once your domain points at Classmoji.',
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // What went wrong
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -333,11 +407,16 @@ export function customDomainErrorHint(code: string | null | undefined): string |
  * returned — so this is never phrased as a failure of the save. It is a
  * retryable second step, and every code below resolves to the same action:
  * press Check status, which re-requests issuance.
+ *
+ * NOT_CONFIGURED is the exception and returns nothing: it can only arrive in a
+ * process where `flyConfigured` is false, which is exactly when the row already
+ * renders `manualDomainSetup` — an actionable block that owns that message.
+ * Saying it here too is how the row came to print the same sentence twice.
  */
 export function certErrorNotice(code: string | null | undefined): string | null {
   switch (code) {
     case 'NOT_CONFIGURED':
-      return 'Domain claimed. Certificate automation is not configured on this environment, so an administrator has to issue the certificate.';
+      return null;
     case 'UNAUTHORIZED':
       return 'Domain claimed, but the certificate request was rejected. An administrator needs to check the Fly credential; press Check status to retry.';
     case 'RATE_LIMITED':

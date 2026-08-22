@@ -26,6 +26,7 @@ import {
   customDomainErrorHint,
   customDomainRowState,
   dnsRows,
+  manualDomainSetup,
   type CertSnapshot,
 } from './customDomain.ts';
 import type { SubdomainAvailabilityResponse } from '../api.site.availability/availability.ts';
@@ -85,6 +86,13 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
 
   const flyConfigured = isFlyCertsConfigured();
 
+  // The Fly app that serves class sites. Rendered only when automation is off,
+  // as the CNAME target of the manual DNS instructions — the app's own public
+  // `{app}.fly.dev` name, which is the same hostname Fly would have handed back
+  // in `dns_requirements`, so nothing crosses to the browser that a `dig` at a
+  // working class site would not already show.
+  const pagesApp = (process.env.FLY_PAGES_APP ?? '').trim() || null;
+
   // A plain GET, deliberately: `{ check: true }` makes Fly re-resolve DNS and
   // belongs behind the explicit Check status button, not on every page load.
   // Failing soft to null — a Fly outage must not 500 the whole Website tab,
@@ -119,6 +127,7 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
     siteOrigin,
     isPro,
     flyConfigured,
+    pagesApp,
     cert,
     suggestedSubdomain: site ? '' : suggestSubdomainFromSlug(classroom.slug),
   };
@@ -417,6 +426,7 @@ const SettingsWebsite = ({ loaderData }: Route.ComponentProps) => {
     suggestedSubdomain,
     isPro,
     flyConfigured,
+    pagesApp,
     cert,
   } = loaderData;
   const { class: classSlug } = useParams();
@@ -541,6 +551,10 @@ const SettingsWebsite = ({ loaderData }: Route.ComponentProps) => {
   const records = claimedDomain ? dnsRows(liveCert?.dnsRequirements, claimedDomain) : [];
   const routeRecords = records.filter(record => record.purpose === 'route');
   const proofRecords = records.filter(record => record.purpose === 'proof');
+  // With no Fly credential there is no `dns_requirements` to render — and there
+  // never will be, so waiting for one leaves the instructor with a claimed
+  // domain and no instructions. The CNAME below is derivable without Fly.
+  const manual = flyConfigured ? null : manualDomainSetup({ domain: claimedDomain, pagesApp });
   // A completed check SUPERSEDES the claim's verdict, including when it clears.
   // The save's `certError` lives on its fetcher until the next save, so reading
   // it first would leave "the certificate could not be requested" on screen
@@ -903,7 +917,10 @@ const SettingsWebsite = ({ loaderData }: Route.ComponentProps) => {
 
               {claimedDomain && !editingDomain && (
                 <>
-                  <div className="pt-2 text-sm text-ink-3">{chip.hint}</div>
+                  {/* Manual setup carries no hint — the block below is its
+                      whole instruction, and printing a chip hint too is how
+                      this row ended up saying the same thing twice. */}
+                  {chip.hint && <div className="pt-2 text-sm text-ink-3">{chip.hint}</div>}
 
                   {domainState === 'verified' ? (
                     <div className="pt-2 text-sm text-green-700 dark:text-green-400">
@@ -927,7 +944,57 @@ const SettingsWebsite = ({ loaderData }: Route.ComponentProps) => {
                     </ul>
                   )}
 
-                  {records.length > 0 && (
+                  {/* Manual mode replaces the Fly-derived table outright, so
+                      the automated path below is untouched by it. */}
+                  {manual && (
+                    <div className="mt-4 rounded-lg border border-line p-4">
+                      {manual.state === 'unavailable' ? (
+                        <p className="text-sm text-ink-3">{manual.message}</p>
+                      ) : (
+                        <>
+                          <p className="text-sm font-medium text-ink-1">{manual.heading}</p>
+                          <p className="pt-1 pb-3 text-sm text-ink-3">
+                            Add this record wherever your domain&apos;s DNS is hosted — your
+                            registrar, or Cloudflare if you moved it there.
+                          </p>
+                          <div className="overflow-x-auto">
+                            <table className="w-full min-w-[32rem] text-left text-sm">
+                              <thead>
+                                <tr className="text-ink-3">
+                                  <th className="pb-2 pr-4 font-medium">Type</th>
+                                  <th className="pb-2 pr-4 font-medium">Name</th>
+                                  <th className="pb-2 font-medium">Value</th>
+                                </tr>
+                              </thead>
+                              <tbody className="divide-y divide-line">
+                                {manual.rows.map(record => (
+                                  <tr key={`${record.type}-${record.name}-${record.value}`}>
+                                    <td className="py-2 pr-4 font-mono text-ink-2">
+                                      {record.type}
+                                    </td>
+                                    <td className="py-2 pr-4 font-mono break-all text-ink-2">
+                                      {record.name}
+                                    </td>
+                                    <td className="py-2 font-mono break-all text-ink-0">
+                                      {record.value}
+                                    </td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                          <ul className="mt-3 list-disc space-y-1 pl-5 text-sm text-ink-3">
+                            {manual.notes.map(note => (
+                              <li key={note}>{note}</li>
+                            ))}
+                          </ul>
+                          <p className="pt-3 text-sm text-ink-3">{manual.footer}</p>
+                        </>
+                      )}
+                    </div>
+                  )}
+
+                  {!manual && records.length > 0 && (
                     <div className="mt-4 rounded-lg border border-line p-4">
                       <p className="pb-3 text-sm text-ink-3">
                         Add these at your DNS provider. Values come from Fly, which issues the
