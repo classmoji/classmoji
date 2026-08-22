@@ -3,7 +3,7 @@ import type { HeadersFunction, LoaderFunctionArgs, MetaFunction } from 'react-ro
 
 import { routeSiteHeaders, siteHeaders } from './headers.server.ts';
 import { isMember, resolveSiteContext, rolePrefix, sitePagePath } from './tenant.server.ts';
-import { siteOrigin, slidesUrl, webappUrl } from './env.server.ts';
+import { slidesUrl, webappUrl } from './env.server.ts';
 import { ClassmojiService } from '~/utils/db.server.ts';
 
 /**
@@ -23,7 +23,7 @@ type ScheduleLink = { label: string; href: string; kind: string; external: boole
 
 export const loader = async (args: LoaderFunctionArgs) => {
   const { request } = args;
-  const { site, viewer } = await resolveSiteContext(args);
+  const { site, viewer, seoOrigin } = await resolveSiteContext(args);
 
   if (!site.show_schedule) {
     throw new Response('missing', {
@@ -85,13 +85,13 @@ export const loader = async (args: LoaderFunctionArgs) => {
       .filter((item): item is ScheduleLink => item !== null),
   }));
 
-  const origin = siteOrigin(site.subdomain);
-
   return data(
     {
       courseName: site.classroom.name,
       sections,
-      canonical: origin ? `${origin}/schedule` : null,
+      // `seoOrigin`, not the subdomain: when a verified custom domain is live,
+      // both hostnames name it, so the signal consolidates on one address.
+      canonical: seoOrigin ? `${seoOrigin}/schedule` : null,
     },
     {
       // A member's schedule contains members-only titles; only the anonymous

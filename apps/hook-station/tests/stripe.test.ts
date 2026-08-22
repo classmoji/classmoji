@@ -1,7 +1,29 @@
+/**
+ * Stripe webhook route tests.
+ *
+ * These handlers are the only writers of the billing state that gates PRO
+ * features, so most of what is pinned here is a refusal: an unrecognized price
+ * grants nothing, a cancel REQUEST does not end the paid term early, and a
+ * finished subscription leaves a FREE row behind rather than a lapsed PRO one.
+ *
+ * Every subscription payload therefore carries `items.data[].price.id`, because
+ * a payload without the Pro price is now a no-op by design.
+ */
+
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import Fastify, { type FastifyInstance } from 'fastify';
 import fastifyRawBody from 'fastify-raw-body';
 import dayjs from 'dayjs';
+
+const PRO_PRICE_ID = 'price_pro_test';
+
+/** A subscription payload carrying the configured Pro price. */
+const proSub = (overrides: Record<string, unknown> = {}) => ({
+  id: 'sub_new',
+  customer: 'cus_1',
+  items: { data: [{ price: { id: PRO_PRICE_ID } }] },
+  ...overrides,
+});
 
 const constructWebhookEvent = vi.fn();
 const userFindBy = vi.fn();
@@ -61,8 +83,10 @@ const post = async (
 
 describe('stripe webhook route', () => {
   let errorSpy: ReturnType<typeof vi.spyOn>;
+  let warnSpy: ReturnType<typeof vi.spyOn>;
 
   beforeEach(() => {
+    process.env.STRIPE_PRO_PRICE_ID = PRO_PRICE_ID;
     [
       constructWebhookEvent,
       userFindBy,
@@ -79,9 +103,11 @@ describe('stripe webhook route', () => {
     // afterEach — a leaked console.error spy would otherwise accumulate across
     // every suite in the process and swallow real diagnostics.
     errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
   });
 
   afterEach(() => {
+    delete process.env.STRIPE_PRO_PRICE_ID;
     vi.restoreAllMocks();
   });
 
@@ -135,7 +161,7 @@ describe('stripe webhook route', () => {
   it('subscription.created: cancels prior subscription and creates a new PRO one', async () => {
     constructWebhookEvent.mockReturnValue({
       type: 'customer.subscription.created',
-      data: { object: { id: 'sub_new', customer: 'cus_1' } },
+      data: { object: proSub() },
     });
     userFindBy.mockResolvedValue({ id: 'user-1' });
     subGetCurrent.mockResolvedValue({ id: 'sub-old' });
@@ -153,6 +179,9 @@ describe('stripe webhook route', () => {
         user_id: 'user-1',
         tier: 'PRO',
         stripe_subscription_id: 'sub_new',
+        // A live subscription has no end date. `isSubscriptionActive` reads a
+        // null `ends_at` as open-ended, which is the whole point.
+        ends_at: null,
       })
     );
   });
@@ -160,7 +189,7 @@ describe('stripe webhook route', () => {
   it('subscription.created: skips when no user matches the customer', async () => {
     constructWebhookEvent.mockReturnValue({
       type: 'customer.subscription.created',
-      data: { object: { id: 'sub_new', customer: 'cus_unknown' } },
+      data: { object: proSub({ customer: 'cus_unknown' }) },
     });
     userFindBy.mockResolvedValue(null);
 
@@ -171,125 +200,175 @@ describe('stripe webhook route', () => {
     expect(subCreate).not.toHaveBeenCalled();
   });
 
-  it('subscription.updated: ignores brand-new subscriptions under the 30s cutoff', async () => {
-    // Pin created_at relative to a captured "now" so the 30s cutoff is exercised
-    // deterministically. fastify-raw-body and app.inject rely on real timers, so
-    // we offset created_at rather than faking the system clock. We use a 5s
-    // margin (25s) rather than 29s: under CI load, request handling can take
-    // >1s, which would push a 29s offset across the exact 30s boundary and flake.
-    const now = Date.now();
-    constructWebhookEvent.mockReturnValue({
-      type: 'customer.subscription.updated',
-      data: { object: { id: 'sub_x', customer: 'cus_1', canceled_at: dayjs().unix() } },
-    });
-    userFindBy.mockResolvedValue({ id: 'user-1' });
-    // 25s old: comfortably under the 30s cutoff, so the route must skip.
-    subGetCurrent.mockResolvedValue({
-      id: 'sub-cur',
-      created_at: new Date(now - 25_000),
+  describe('price assertion', () => {
+    // Checkout is a customer-facing flow; without this assertion a subscription
+    // to ANY price mints a PRO row. An unrecognized price writes nothing.
+    it('grants nothing when the subscription carries a different price', async () => {
+      constructWebhookEvent.mockReturnValue({
+        type: 'customer.subscription.created',
+        data: { object: proSub({ items: { data: [{ price: { id: 'price_something_else' } }] } }) },
+      });
+      userFindBy.mockResolvedValue({ id: 'user-1' });
+
+      const app = await buildApp();
+      const res = await post(app, {}, { 'stripe-signature': 'sig' });
+
+      expect(res.statusCode).toBe(200);
+      expect(subCreate).not.toHaveBeenCalled();
+      expect(subUpdate).not.toHaveBeenCalled();
+      expect(warnSpy).toHaveBeenCalled();
     });
 
-    const app = await buildApp();
-    const res = await post(app, {}, { 'stripe-signature': 'sig' });
+    it('FAILS CLOSED when STRIPE_PRO_PRICE_ID is unset', async () => {
+      // A deployment that forgot the variable must stop granting PRO, not grant
+      // it to every price — the failure mode of an assertion decides whether it
+      // is one.
+      delete process.env.STRIPE_PRO_PRICE_ID;
+      constructWebhookEvent.mockReturnValue({
+        type: 'customer.subscription.created',
+        data: { object: proSub() },
+      });
+      userFindBy.mockResolvedValue({ id: 'user-1' });
 
-    expect(res.statusCode).toBe(200);
-    expect(subUpdate).not.toHaveBeenCalled();
-    expect(subCreate).not.toHaveBeenCalled();
+      const app = await buildApp();
+      const res = await post(app, {}, { 'stripe-signature': 'sig' });
+
+      expect(res.statusCode).toBe(200);
+      expect(subCreate).not.toHaveBeenCalled();
+      expect(warnSpy).toHaveBeenCalled();
+    });
   });
 
-  it('subscription.updated: processes subscriptions past the 30s cutoff', async () => {
-    const now = Date.now();
-    constructWebhookEvent.mockReturnValue({
-      type: 'customer.subscription.updated',
-      data: {
-        object: {
-          id: 'sub_x',
-          customer: 'cus_1',
-          canceled_at: dayjs().unix(),
-          cancellation_details: { reason: 'cancellation_requested' },
+  describe('subscription.updated: end dates come from Stripe', () => {
+    it('persists current_period_end under cancel_at_period_end, NOT now', async () => {
+      // The standard billing-portal cancel. Stripe sets `canceled_at` to the
+      // moment of the CLICK and keeps the subscription usable until the period
+      // ends; writing `new Date()` here ended the paid term weeks early.
+      const periodEnd = dayjs().add(21, 'day');
+      constructWebhookEvent.mockReturnValue({
+        type: 'customer.subscription.updated',
+        data: {
+          object: proSub({
+            id: 'sub_x',
+            canceled_at: dayjs().unix(),
+            cancel_at_period_end: true,
+            current_period_end: periodEnd.unix(),
+            cancellation_details: { reason: 'cancellation_requested' },
+          }),
         },
-      },
+      });
+      subFindBy.mockResolvedValue({ id: 'sub-cur', user_id: 'user-1' });
+
+      const app = await buildApp();
+      const res = await post(app, {}, { 'stripe-signature': 'sig' });
+      expect(res.statusCode).toBe(200);
+
+      expect(subFindBy).toHaveBeenCalledWith({ where: { stripe_subscription_id: 'sub_x' } });
+      const [, patch] = subUpdate.mock.calls[0] as [string, { ends_at: Date }];
+      // Stripe timestamps are whole seconds — compare on that grid, not on ms.
+      expect(patch.ends_at.getTime()).toBe(periodEnd.unix() * 1000);
+      // Still PRO until the term runs out — `deleted` is what demotes.
+      expect(subCreate).not.toHaveBeenCalled();
     });
-    userFindBy.mockResolvedValue({ id: 'user-1' });
-    // 35s old: comfortably over the cutoff (5s margin), so the route processes it.
-    subGetCurrent.mockResolvedValue({
-      id: 'sub-cur',
-      created_at: new Date(now - 35_000),
-    });
 
-    const app = await buildApp();
-    const res = await post(app, {}, { 'stripe-signature': 'sig' });
-
-    expect(res.statusCode).toBe(200);
-    expect(subUpdate).toHaveBeenCalledTimes(1);
-    expect(subCreate).toHaveBeenCalledWith(
-      expect.objectContaining({ user_id: 'user-1', tier: 'FREE' })
-    );
-  });
-
-  it('subscription.updated: cancels and creates FREE tier when older than 30s', async () => {
-    constructWebhookEvent.mockReturnValue({
-      type: 'customer.subscription.updated',
-      data: {
-        object: {
-          id: 'sub_x',
-          customer: 'cus_1',
-          canceled_at: dayjs().unix(),
-          cancellation_details: { reason: 'cancellation_requested' },
+    it('prefers an explicit cancel_at over the period end', async () => {
+      const cancelAt = dayjs().add(3, 'day');
+      constructWebhookEvent.mockReturnValue({
+        type: 'customer.subscription.updated',
+        data: {
+          object: proSub({
+            id: 'sub_x',
+            canceled_at: dayjs().unix(),
+            cancel_at: cancelAt.unix(),
+            cancel_at_period_end: true,
+            current_period_end: dayjs().add(21, 'day').unix(),
+          }),
         },
-      },
-    });
-    userFindBy.mockResolvedValue({ id: 'user-1' });
-    subGetCurrent.mockResolvedValue({
-      id: 'sub-cur',
-      created_at: dayjs().subtract(2, 'minute').toDate(),
+      });
+      subFindBy.mockResolvedValue({ id: 'sub-cur', user_id: 'user-1' });
+
+      const app = await buildApp();
+      await post(app, {}, { 'stripe-signature': 'sig' });
+
+      const [, patch] = subUpdate.mock.calls[0] as [string, { ends_at: Date }];
+      expect(patch.ends_at.getTime()).toBe(cancelAt.unix() * 1000);
     });
 
-    const app = await buildApp();
-    const res = await post(app, {}, { 'stripe-signature': 'sig' });
-    expect(res.statusCode).toBe(200);
+    it('CLEARS the end date when a cancellation is undone', async () => {
+      // Stripe drops cancel_at/cancel_at_period_end when a customer changes
+      // their mind. The old handler early-returned unless `canceled_at` was
+      // set, so an un-cancelled account stayed scheduled for expiry forever.
+      constructWebhookEvent.mockReturnValue({
+        type: 'customer.subscription.updated',
+        data: {
+          object: proSub({
+            id: 'sub_x',
+            canceled_at: null,
+            cancel_at: null,
+            cancel_at_period_end: false,
+            current_period_end: dayjs().add(21, 'day').unix(),
+          }),
+        },
+      });
+      subFindBy.mockResolvedValue({ id: 'sub-cur', user_id: 'user-1' });
 
-    expect(subUpdate).toHaveBeenCalledWith(
-      'sub-cur',
-      expect.objectContaining({
-        cancellation_reason: 'cancellation_requested',
-        ends_at: expect.any(Date),
-        cancelled_at: expect.any(Date),
-      })
-    );
-    expect(subCreate).toHaveBeenCalledWith(
-      expect.objectContaining({ user_id: 'user-1', tier: 'FREE' })
-    );
+      const app = await buildApp();
+      await post(app, {}, { 'stripe-signature': 'sig' });
+
+      expect(subUpdate).toHaveBeenCalledWith('sub-cur', {
+        ends_at: null,
+        cancelled_at: null,
+        cancellation_reason: null,
+      });
+    });
+
+    it('skips when no local row matches the stripe subscription id', async () => {
+      constructWebhookEvent.mockReturnValue({
+        type: 'customer.subscription.updated',
+        data: { object: proSub({ id: 'sub_unknown' }) },
+      });
+      subFindBy.mockResolvedValue(null);
+
+      const app = await buildApp();
+      const res = await post(app, {}, { 'stripe-signature': 'sig' });
+      expect(res.statusCode).toBe(200);
+
+      expect(subUpdate).not.toHaveBeenCalled();
+      expect(subCreate).not.toHaveBeenCalled();
+    });
   });
 
-  it('subscription.updated: skips when subscription not actually canceled', async () => {
-    constructWebhookEvent.mockReturnValue({
-      type: 'customer.subscription.updated',
-      data: { object: { id: 'sub_x', customer: 'cus_1', canceled_at: null } },
-    });
-    userFindBy.mockResolvedValue({ id: 'user-1' });
-
-    const app = await buildApp();
-    const res = await post(app, {}, { 'stripe-signature': 'sig' });
-    expect(res.statusCode).toBe(200);
-
-    expect(subUpdate).not.toHaveBeenCalled();
-    expect(subCreate).not.toHaveBeenCalled();
-  });
-
-  it('subscription.deleted: closes matching subscription by stripe id', async () => {
+  it('subscription.deleted: closes the PRO row AND creates the FREE successor', async () => {
+    // The successor is what actually demotes the account: `getCurrent` returns
+    // the newest row, so without it the newest row stays {tier:'PRO'} forever.
+    const endedAt = dayjs().subtract(1, 'hour');
     constructWebhookEvent.mockReturnValue({
       type: 'customer.subscription.deleted',
-      data: { object: { id: 'sub_z', customer: 'cus_1' } },
+      data: { object: proSub({ id: 'sub_z', ended_at: endedAt.unix() }) },
     });
     userFindBy.mockResolvedValue(null);
-    subFindBy.mockResolvedValue({ id: 'sub-internal' });
+    subFindBy.mockResolvedValue({ id: 'sub-internal', user_id: 'user-1' });
 
     const app = await buildApp();
     const res = await post(app, {}, { 'stripe-signature': 'sig' });
 
     expect(res.statusCode).toBe(200);
     expect(subFindBy).toHaveBeenCalledWith({ where: { stripe_subscription_id: 'sub_z' } });
+    const [, patch] = subUpdate.mock.calls[0] as [string, { ends_at: Date }];
+    expect(patch.ends_at.getTime()).toBe(endedAt.unix() * 1000);
+    expect(subCreate).toHaveBeenCalledWith({ user_id: 'user-1', tier: 'FREE' });
+  });
+
+  it('subscription.deleted: falls back to now when Stripe reports no ended_at', async () => {
+    constructWebhookEvent.mockReturnValue({
+      type: 'customer.subscription.deleted',
+      data: { object: proSub({ id: 'sub_z' }) },
+    });
+    subFindBy.mockResolvedValue({ id: 'sub-internal', user_id: 'user-1' });
+
+    const app = await buildApp();
+    await post(app, {}, { 'stripe-signature': 'sig' });
+
     expect(subUpdate).toHaveBeenCalledWith(
       'sub-internal',
       expect.objectContaining({ ends_at: expect.any(Date) })
@@ -299,7 +378,7 @@ describe('stripe webhook route', () => {
   it('subscription.deleted: silent when no matching internal subscription', async () => {
     constructWebhookEvent.mockReturnValue({
       type: 'customer.subscription.deleted',
-      data: { object: { id: 'sub_z', customer: 'cus_1' } },
+      data: { object: proSub({ id: 'sub_z' }) },
     });
     subFindBy.mockResolvedValue(null);
 
@@ -308,6 +387,7 @@ describe('stripe webhook route', () => {
 
     expect(res.statusCode).toBe(200);
     expect(subUpdate).not.toHaveBeenCalled();
+    expect(subCreate).not.toHaveBeenCalled();
   });
 
   describe('handler exception containment', () => {
@@ -318,7 +398,7 @@ describe('stripe webhook route', () => {
       constructWebhookEvent.mockReturnValue({
         id: 'evt_err_created',
         type: 'customer.subscription.created',
-        data: { object: { id: 'sub_new', customer: 'cus_1' } },
+        data: { object: proSub() },
       });
       userFindBy.mockResolvedValue({ id: 'user-1' });
       subGetCurrent.mockResolvedValue(null);
@@ -338,21 +418,19 @@ describe('stripe webhook route', () => {
     });
 
     it('updated: swallows a service error, logs it, and returns 200', async () => {
-      const now = Date.now();
       constructWebhookEvent.mockReturnValue({
         id: 'evt_err_updated',
         type: 'customer.subscription.updated',
         data: {
-          object: {
+          object: proSub({
             id: 'sub_x',
-            customer: 'cus_1',
             canceled_at: dayjs().unix(),
             cancellation_details: { reason: 'cancellation_requested' },
-          },
+          }),
         },
       });
       userFindBy.mockResolvedValue({ id: 'user-1' });
-      subGetCurrent.mockResolvedValue({ id: 'sub-cur', created_at: new Date(now - 35_000) });
+      subFindBy.mockResolvedValue({ id: 'sub-cur', user_id: 'user-1' });
       subUpdate.mockRejectedValue(new Error('db down'));
 
       const app = await buildApp();
@@ -369,7 +447,7 @@ describe('stripe webhook route', () => {
       constructWebhookEvent.mockReturnValue({
         id: 'evt_err_deleted',
         type: 'customer.subscription.deleted',
-        data: { object: { id: 'sub_z', customer: 'cus_1' } },
+        data: { object: proSub({ id: 'sub_z' }) },
       });
       subFindBy.mockRejectedValue(new Error('db down'));
 
@@ -393,7 +471,7 @@ describe('stripe webhook route', () => {
       constructWebhookEvent.mockReturnValue({
         id: 'evt_dup_1',
         type: 'customer.subscription.created',
-        data: { object: { id: 'sub_new', customer: 'cus_1' } },
+        data: { object: proSub() },
       });
       userFindBy.mockResolvedValue({ id: 'user-1' });
       subGetCurrent.mockResolvedValue(null);

@@ -1,6 +1,7 @@
 import ClassmojiService from './classmoji/index.ts';
 import HelperService from './helper/index.ts';
 import StripeService from './stripe/index.ts';
+import FlyCertService from './fly/index.ts';
 import * as MarkdownImporter from './content/markdownImporter.ts';
 
 export {
@@ -48,7 +49,19 @@ export {
   notificationService,
 } from './classmoji/index.ts';
 
-export { ClassmojiService, HelperService, StripeService, MarkdownImporter };
+export { ClassmojiService, HelperService, StripeService, FlyCertService, MarkdownImporter };
+
+// Fly certificate automation for class-site custom domains. Every method throws
+// a typed FlyCertError when the credentials are absent, so importing this in a
+// deployment that has none is safe.
+export {
+  isFlyCertsConfigured,
+  FlyCertError,
+  FLY_CERT_ERROR,
+  type FlyCertErrorCode,
+  type FlyCertificate,
+  type FlyDnsRequirements,
+} from './fly/index.ts';
 
 // Autograding: workflow (classroom.yml) generator (pure, client-safe)
 export { generateClassroomWorkflow } from './autograding/generateClassroomWorkflow.ts';

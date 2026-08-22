@@ -3,7 +3,8 @@ import { createRequestHandler } from '@react-router/express';
 import compression from 'compression';
 import morgan from 'morgan';
 
-import { createSiteHostMiddleware } from './server/siteHost.ts';
+import { buildSiteLoadContext, createSiteHostMiddleware } from './server/siteHost.ts';
+import { createCustomDomainSnapshot } from './server/customDomains.ts';
 
 const app = express();
 
@@ -11,8 +12,18 @@ const app = express();
 // Class-site host handling
 // Built once at boot so a malformed SITE_BASE_DOMAIN fails startup, not
 // requests. Unset SITE_BASE_DOMAIN ⇒ the rewriter is a no-op.
+//
+// The custom-domain snapshot is built alongside it and injected as a plain
+// closure: siteHost.ts must keep its "no runtime dependencies" property, and
+// this is the one place that knows both halves. It starts empty and fills in
+// from the database within a second of boot — see server/customDomains.ts for
+// why a whole-table snapshot rather than a per-request lookup.
 // ─────────────────────────────────────────────────────────────────────────────
-const { sanitizeForwardedHost, rewriteSiteRequests } = createSiteHostMiddleware(process.env);
+const customDomains = createCustomDomainSnapshot();
+
+const { sanitizeForwardedHost, rewriteSiteRequests } = createSiteHostMiddleware(process.env, {
+  resolveCustomHost: customDomains.resolve,
+});
 
 // Strip the spoofable X-Forwarded-Host before ANY other middleware can read it
 // (@react-router/express honours it when building the request URL).
@@ -82,9 +93,14 @@ if (isDev) {
   // React Router handler.
   app.use(rewriteSiteRequests);
 
-  // React Router request handler
+  // React Router request handler.
+  //
+  // `getLoadContext` is what carries the custom-domain marker into the loaders.
+  // The dev path builds its own handler in server/app.ts and needs the SAME
+  // wiring — a marker plumbed into only one of the two entry points is a marker
+  // that silently does nothing in the other environment.
   const build = await import('./build/server/index.js');
-  app.use(createRequestHandler({ build }));
+  app.use(createRequestHandler({ build, getLoadContext: req => buildSiteLoadContext(req) }));
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
