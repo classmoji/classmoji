@@ -6,8 +6,10 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // registries are the things under test, and a stub would test the stub.
 
 const classroomSiteFindUnique = vi.fn();
+const classroomSiteFindMany = vi.fn();
 const classroomSiteUpsert = vi.fn();
 const classroomSiteUpdate = vi.fn();
+const classroomSiteUpdateMany = vi.fn();
 const classroomSiteDelete = vi.fn();
 const classroomFindUnique = vi.fn();
 const pageFindFirst = vi.fn();
@@ -17,8 +19,10 @@ vi.mock('@classmoji/database', () => ({
   default: () => ({
     classroomSite: {
       findUnique: classroomSiteFindUnique,
+      findMany: classroomSiteFindMany,
       upsert: classroomSiteUpsert,
       update: classroomSiteUpdate,
+      updateMany: classroomSiteUpdateMany,
       delete: classroomSiteDelete,
     },
     classroom: { findUnique: classroomFindUnique },
@@ -27,15 +31,37 @@ vi.mock('@classmoji/database', () => ({
   }),
 }));
 
+// How a classroom's tier is resolved is its own unit
+// (subscription.service.test.ts). Stubbed here so the custom-domain tests
+// exercise the GATE rather than re-testing the tier rule behind it.
+const getProStateForClassroomId = vi.fn();
+vi.mock('../subscription.service.ts', () => ({
+  getProStateForClassroomId: (...a: unknown[]) => getProStateForClassroomId(...a),
+}));
+
+// Certificate teardown is best-effort by design; these tests pin WHEN it is
+// asked for, not what Fly does with it.
+const removeCert = vi.fn();
+const isFlyCertsConfigured = vi.fn();
+vi.mock('../../fly/index.ts', () => ({
+  removeCert: (...a: unknown[]) => removeCert(...a),
+  isFlyCertsConfigured: () => isFlyCertsConfigured(),
+}));
+
 const {
   SITE_ERROR,
   checkSubdomainAvailability,
+  clearCustomDomain,
   deleteSiteForClassroom,
   getHomePageForViewer,
   getPageBySlugForSite,
+  getSiteByCustomDomain,
   getSiteBySubdomain,
   isPageVisibleOnSite,
+  listCustomDomainRoutes,
   listPublicModulesForViewer,
+  markCustomDomainVerified,
+  setCustomDomain,
   upsertSiteSettings,
   validateAndClaimSubdomain,
 } = await import('../site.service.ts');
@@ -61,6 +87,16 @@ const siteRow = (overrides: Record<string, unknown> = {}) => ({
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // Default posture for the custom-domain block: PRO classroom, Fly configured.
+  // Every test that cares about the other side says so explicitly.
+  getProStateForClassroomId.mockResolvedValue({
+    tier: 'PRO',
+    isActive: true,
+    isPro: true,
+    subscription: { id: 'sub-1' },
+  });
+  isFlyCertsConfigured.mockReturnValue(true);
+  removeCert.mockResolvedValue(true);
 });
 
 describe('site.checkSubdomainAvailability', () => {
@@ -616,5 +652,380 @@ describe('site.deleteSiteForClassroom', () => {
     });
     // The whole reason for the pre-check: a double-submit must not reach the DB.
     expect(classroomSiteDelete).not.toHaveBeenCalled();
+  });
+});
+
+// ─── custom domains (PRO) ────────────────────────────────────────────────────
+
+describe('site.setCustomDomain', () => {
+  it('refuses a classroom with no site row instead of letting prisma throw P2025', async () => {
+    // A classroom with no site has no subdomain to fall back to, and
+    // `prisma.update` on a missing row throws an error no caller can render.
+    classroomSiteFindUnique.mockResolvedValue(null);
+
+    await expect(setCustomDomain('class-1', 'cs52.me')).rejects.toMatchObject({
+      code: SITE_ERROR.SITE_NOT_FOUND,
+    });
+    expect(classroomSiteUpdate).not.toHaveBeenCalled();
+  });
+
+  it('enforces PRO at the SERVICE layer, before any validation or write', async () => {
+    // The route checks too, but this is the gate that holds: MCP tools, a
+    // future API and any script reach this function without passing a loader.
+    classroomSiteFindUnique.mockResolvedValue({ id: 'site-1', custom_domain: null });
+    getProStateForClassroomId.mockResolvedValue({
+      tier: 'FREE',
+      isActive: false,
+      isPro: false,
+      subscription: null,
+    });
+
+    await expect(setCustomDomain('class-1', 'cs52.me')).rejects.toMatchObject({
+      code: SITE_ERROR.PRO_REQUIRED,
+    });
+    expect(classroomSiteUpdate).not.toHaveBeenCalled();
+  });
+
+  it('refuses a LAPSED pro subscription exactly as it refuses FREE', async () => {
+    classroomSiteFindUnique.mockResolvedValue({ id: 'site-1', custom_domain: null });
+    getProStateForClassroomId.mockResolvedValue({
+      tier: 'PRO',
+      isActive: false,
+      isPro: false,
+      subscription: { id: 'sub-lapsed' },
+    });
+
+    await expect(setCustomDomain('class-1', 'cs52.me')).rejects.toMatchObject({
+      code: SITE_ERROR.PRO_REQUIRED,
+    });
+  });
+
+  it('normalizes case, whitespace and a trailing dot before storing', async () => {
+    // The stored value is compared against a normalized Host header on every
+    // request, so anything else here is a row that can never match.
+    classroomSiteFindUnique.mockResolvedValue({ id: 'site-1', custom_domain: null });
+    classroomSiteUpdate.mockResolvedValue({ id: 'site-1' });
+
+    await setCustomDomain('class-1', '  CS52.ME.  ');
+
+    expect(classroomSiteUpdate).toHaveBeenCalledWith({
+      where: { classroom_id: 'class-1' },
+      data: { custom_domain: 'cs52.me', custom_domain_verified_at: null },
+    });
+  });
+
+  it.each([
+    ['cs52', 'a single label is not a domain'],
+    ['https://cs52.me', 'a scheme is not part of a hostname'],
+    ['cs52.me/path', 'nor is a path'],
+    ['cs52.me:443', 'nor a port'],
+    ['-bad.me', 'a leading hyphen is not a legal DNS label'],
+    ['bad-.me', 'nor a trailing one'],
+    ['under_score.me', 'underscores are not legal in a hostname'],
+    ['has space.me', 'spaces are not legal'],
+    ['café.fr', 'unicode must be punycoded by the caller'],
+    ['', 'empty is not a domain'],
+  ])('rejects %j — %s', async domain => {
+    classroomSiteFindUnique.mockResolvedValue({ id: 'site-1', custom_domain: null });
+
+    await expect(setCustomDomain('class-1', domain)).rejects.toMatchObject({
+      code: SITE_ERROR.DOMAIN_INVALID,
+    });
+    expect(classroomSiteUpdate).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['classmoji.io'],
+    ['cs52.classmoji.io'],
+    ['pages.classmoji.io'],
+    ['staging.classmoji.io'],
+    ['lvh.me'],
+    ['cs52.lvh.me'],
+    ['fly.dev'],
+    ['classmoji-pages.fly.dev'],
+  ])('refuses the platform hostname %j', async domain => {
+    // Not a validation slip — claiming one of these is a hijack of a hostname
+    // our own wildcard certificate already answers for.
+    classroomSiteFindUnique.mockResolvedValue({ id: 'site-1', custom_domain: null });
+
+    await expect(setCustomDomain('class-1', domain)).rejects.toMatchObject({
+      code: SITE_ERROR.DOMAIN_RESERVED,
+    });
+    expect(classroomSiteUpdate).not.toHaveBeenCalled();
+  });
+
+  it('accepts an apex domain and a deep subdomain of one', async () => {
+    classroomSiteFindUnique.mockResolvedValue({ id: 'site-1', custom_domain: null });
+    classroomSiteUpdate.mockResolvedValue({ id: 'site-1' });
+
+    await expect(setCustomDomain('class-1', 'cs52.me')).resolves.toBeTruthy();
+    await expect(setCustomDomain('class-1', 'www.cs.dartmouth.edu')).resolves.toBeTruthy();
+  });
+
+  it('turns the unique violation into DOMAIN_TAKEN', async () => {
+    classroomSiteFindUnique.mockResolvedValue({ id: 'site-1', custom_domain: null });
+    classroomSiteUpdate.mockRejectedValue({
+      code: 'P2002',
+      meta: { target: ['custom_domain'] },
+    });
+
+    await expect(setCustomDomain('class-1', 'cs52.me')).rejects.toMatchObject({
+      code: SITE_ERROR.DOMAIN_TAKEN,
+    });
+  });
+
+  it('re-throws a P2002 on some OTHER constraint as itself', async () => {
+    // Matched by target so a constraint added later surfaces as what it is,
+    // rather than as a misleading "that domain is taken".
+    classroomSiteFindUnique.mockResolvedValue({ id: 'site-1', custom_domain: null });
+    classroomSiteUpdate.mockRejectedValue({ code: 'P2002', meta: { target: ['subdomain'] } });
+
+    await expect(setCustomDomain('class-1', 'cs52.me')).rejects.toMatchObject({ code: 'P2002' });
+  });
+
+  it('clears the verification stamp on a RE-CLAIM of the same hostname', async () => {
+    // Re-claiming is the one moment we can honestly say "prove it again".
+    classroomSiteFindUnique.mockResolvedValue({ id: 'site-1', custom_domain: 'cs52.me' });
+    classroomSiteUpdate.mockResolvedValue({ id: 'site-1' });
+
+    await setCustomDomain('class-1', 'cs52.me');
+
+    expect(classroomSiteUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: { custom_domain: 'cs52.me', custom_domain_verified_at: null },
+      })
+    );
+    // Same hostname: nothing to release.
+    expect(removeCert).not.toHaveBeenCalled();
+  });
+
+  it('releases the OLD certificate when the domain is re-pointed', async () => {
+    // An inherited certificate is a live TLS endpoint for a hostname this
+    // classroom no longer claims.
+    classroomSiteFindUnique.mockResolvedValue({ id: 'site-1', custom_domain: 'old.example' });
+    classroomSiteUpdate.mockResolvedValue({ id: 'site-1' });
+
+    await setCustomDomain('class-1', 'cs52.me');
+
+    expect(removeCert).toHaveBeenCalledWith('old.example');
+  });
+
+  it('survives a Fly failure while releasing the old certificate', async () => {
+    // The claim already succeeded; a leaked certificate is the reconcile task's
+    // problem, not a user-visible failure of an operation that worked.
+    classroomSiteFindUnique.mockResolvedValue({ id: 'site-1', custom_domain: 'old.example' });
+    classroomSiteUpdate.mockResolvedValue({ id: 'site-1' });
+    removeCert.mockRejectedValue(new Error('fly down'));
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    await expect(setCustomDomain('class-1', 'cs52.me')).resolves.toBeTruthy();
+    expect(errorSpy).toHaveBeenCalled();
+    errorSpy.mockRestore();
+  });
+});
+
+describe('site.clearCustomDomain', () => {
+  it('clears both columns and releases the certificate', async () => {
+    classroomSiteFindUnique.mockResolvedValue({ id: 'site-1', custom_domain: 'cs52.me' });
+    classroomSiteUpdate.mockResolvedValue({ id: 'site-1' });
+
+    await expect(clearCustomDomain('class-1')).resolves.toEqual({ released: 'cs52.me' });
+    expect(classroomSiteUpdate).toHaveBeenCalledWith({
+      where: { classroom_id: 'class-1' },
+      data: { custom_domain: null, custom_domain_verified_at: null },
+    });
+    expect(removeCert).toHaveBeenCalledWith('cs52.me');
+  });
+
+  it('is a no-op when there is no domain to clear', async () => {
+    // A double-submitted Remove button is not an error state.
+    classroomSiteFindUnique.mockResolvedValue({ id: 'site-1', custom_domain: null });
+
+    await expect(clearCustomDomain('class-1')).resolves.toEqual({ released: null });
+    expect(classroomSiteUpdate).not.toHaveBeenCalled();
+    expect(removeCert).not.toHaveBeenCalled();
+  });
+
+  it('refuses a classroom with no site row', async () => {
+    classroomSiteFindUnique.mockResolvedValue(null);
+    await expect(clearCustomDomain('class-1')).rejects.toMatchObject({
+      code: SITE_ERROR.SITE_NOT_FOUND,
+    });
+  });
+
+  it('skips the Fly call entirely when certificate automation is off', async () => {
+    classroomSiteFindUnique.mockResolvedValue({ id: 'site-1', custom_domain: 'cs52.me' });
+    classroomSiteUpdate.mockResolvedValue({ id: 'site-1' });
+    isFlyCertsConfigured.mockReturnValue(false);
+
+    await expect(clearCustomDomain('class-1')).resolves.toEqual({ released: 'cs52.me' });
+    expect(removeCert).not.toHaveBeenCalled();
+  });
+});
+
+describe('site.getSiteByCustomDomain', () => {
+  const customSiteRow = (overrides: Record<string, unknown> = {}) => ({
+    id: 'site-1',
+    classroom_id: 'class-1',
+    subdomain: 'cs52',
+    custom_domain: 'cs52.me',
+    custom_domain_verified_at: null,
+    is_enabled: true,
+    classroom: { id: 'class-1', is_archived: false, status: 'ACTIVE' },
+    ...overrides,
+  });
+
+  it('refuses a malformed host WITHOUT touching the database', async () => {
+    // The Host header is unauthenticated and attacker-controlled; an indexed
+    // lookup per garbage value is a free amplification primitive.
+    for (const host of ['', 'localhost', 'not a host', '..', 'a', '-x.me']) {
+      await expect(getSiteByCustomDomain(host)).resolves.toEqual({ state: 'not_found' });
+    }
+    expect(classroomSiteFindUnique).not.toHaveBeenCalled();
+  });
+
+  it('refuses a platform hostname without touching the database', async () => {
+    await expect(getSiteByCustomDomain('cs52.classmoji.io')).resolves.toEqual({
+      state: 'not_found',
+    });
+    expect(classroomSiteFindUnique).not.toHaveBeenCalled();
+  });
+
+  it('normalizes the host before the lookup', async () => {
+    classroomSiteFindUnique.mockResolvedValue(null);
+    await getSiteByCustomDomain('CS52.ME.');
+    expect(classroomSiteFindUnique).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { custom_domain: 'cs52.me' } })
+    );
+  });
+
+  it('reports not_found for a hostname nobody claims', async () => {
+    classroomSiteFindUnique.mockResolvedValue(null);
+    await expect(getSiteByCustomDomain('cs52.me')).resolves.toEqual({ state: 'not_found' });
+  });
+
+  it('reports LAPSED before any site-state check', async () => {
+    // Billing first, deliberately: a lapsed classroom gets ONE consistent
+    // answer on its custom domain whatever else is true of the site, and the
+    // subdomain stays the single place a visitor learns the rest.
+    classroomSiteFindUnique.mockResolvedValue(customSiteRow({ is_enabled: false }));
+    getProStateForClassroomId.mockResolvedValue({
+      tier: 'PRO',
+      isActive: false,
+      isPro: false,
+      subscription: { id: 'sub-lapsed' },
+    });
+
+    const lookup = await getSiteByCustomDomain('cs52.me');
+    expect(lookup.state).toBe('lapsed');
+  });
+
+  it('reports disabled for a switched-off site', async () => {
+    classroomSiteFindUnique.mockResolvedValue(customSiteRow({ is_enabled: false }));
+    const lookup = await getSiteByCustomDomain('cs52.me');
+    expect(lookup.state).toBe('disabled');
+  });
+
+  it('reports unavailable for an archived or unpublished classroom', async () => {
+    classroomSiteFindUnique.mockResolvedValue(
+      customSiteRow({ classroom: { id: 'class-1', is_archived: true, status: 'ACTIVE' } })
+    );
+    expect((await getSiteByCustomDomain('cs52.me')).state).toBe('unavailable');
+
+    classroomSiteFindUnique.mockResolvedValue(
+      customSiteRow({ classroom: { id: 'class-1', is_archived: false, status: 'UNPUBLISHED' } })
+    );
+    expect((await getSiteByCustomDomain('cs52.me')).state).toBe('unavailable');
+  });
+
+  it('serves an active PRO site and reports its verification stamp', async () => {
+    const verifiedAt = new Date('2026-08-01T00:00:00Z');
+    classroomSiteFindUnique.mockResolvedValue(
+      customSiteRow({ custom_domain_verified_at: verifiedAt })
+    );
+
+    const lookup = await getSiteByCustomDomain('cs52.me');
+    expect(lookup).toMatchObject({ state: 'active', verifiedAt });
+  });
+});
+
+describe('site.markCustomDomainVerified', () => {
+  it('writes only when the stamp is still null AND the domain still matches', async () => {
+    // Runs on a hot path, so it must be one write per CLAIM, not per request —
+    // and if the domain changed between the read and this write, zero rows
+    // match and the new claim keeps its unproven status.
+    classroomSiteUpdateMany.mockResolvedValue({ count: 1 });
+
+    await markCustomDomainVerified('site-1', 'cs52.me');
+
+    expect(classroomSiteUpdateMany).toHaveBeenCalledWith({
+      where: { id: 'site-1', custom_domain: 'cs52.me', custom_domain_verified_at: null },
+      data: { custom_domain_verified_at: expect.any(Date) },
+    });
+  });
+});
+
+describe('site.listCustomDomainRoutes', () => {
+  const routeRow = (overrides: Record<string, unknown> = {}) => ({
+    subdomain: 'cs52',
+    custom_domain: 'cs52.me',
+    is_enabled: true,
+    classroom: {
+      is_archived: false,
+      status: 'ACTIVE',
+      memberships: [{ user: { subscriptions: [{ tier: 'PRO', ends_at: null }] } }],
+    },
+    ...overrides,
+  });
+
+  it('maps a live claim to an active route', async () => {
+    classroomSiteFindMany.mockResolvedValue([routeRow()]);
+    await expect(listCustomDomainRoutes()).resolves.toEqual([
+      { domain: 'cs52.me', subdomain: 'cs52', active: true },
+    ]);
+  });
+
+  it('still LISTS a lapsed or disabled claim, marked inactive', async () => {
+    // Routing has to reach the loader for these — a lapsed domain needs a 302
+    // and a disabled one a branded 404. Dropping them here would flatten both
+    // into an edge 404. The reconcile task needs them listed too, or it would
+    // delete their certificates the moment a subscription lapsed.
+    classroomSiteFindMany.mockResolvedValue([
+      routeRow({
+        classroom: {
+          is_archived: false,
+          status: 'ACTIVE',
+          memberships: [
+            { user: { subscriptions: [{ tier: 'PRO', ends_at: new Date(Date.now() - 1000) }] } },
+          ],
+        },
+      }),
+    ]);
+    await expect(listCustomDomainRoutes()).resolves.toEqual([
+      { domain: 'cs52.me', subdomain: 'cs52', active: false },
+    ]);
+
+    classroomSiteFindMany.mockResolvedValue([routeRow({ is_enabled: false })]);
+    await expect(listCustomDomainRoutes()).resolves.toEqual([
+      { domain: 'cs52.me', subdomain: 'cs52', active: false },
+    ]);
+  });
+
+  it('counts ANY accepted owner with an active PRO, matching the tier rule', async () => {
+    classroomSiteFindMany.mockResolvedValue([
+      routeRow({
+        classroom: {
+          is_archived: false,
+          status: 'ACTIVE',
+          memberships: [
+            { user: { subscriptions: [{ tier: 'FREE', ends_at: null }] } },
+            { user: { subscriptions: [{ tier: 'PRO', ends_at: null }] } },
+          ],
+        },
+      }),
+    ]);
+    await expect(listCustomDomainRoutes()).resolves.toEqual([
+      { domain: 'cs52.me', subdomain: 'cs52', active: true },
+    ]);
   });
 });

@@ -193,23 +193,25 @@ interface QuizRow {
   attemptCount?: number;
 }
 
-/** Mirror of the webapp's assertProTier (apps/webapp/app/utils/helpers.ts). */
-async function assertProTier(classroomSlug: string, classroomId: string): Promise<void> {
-  // subscription.getByClassroom resolves by BARE slug (unique per git org
-  // only). Guard as the leaderboard/modules resources do: if the bare slug
-  // resolves to a different classroom than the one the caller was authorized
-  // for, refuse rather than gate quiz access on a twin classroom's Pro
-  // subscription (S1 — Pro-gating bypass).
-  const bySlug = await ClassmojiService.classroom.findBySlug(classroomSlug);
-  if (!bySlug || bySlug.id !== classroomId) {
-    throw new ToolError(
-      'internal',
-      `Classroom slug '${classroomSlug}' is ambiguous across git orgs — quizzes unavailable for this classroom`
-    );
-  }
-  const subscription = await ClassmojiService.subscription.getByClassroom(classroomSlug);
-  const isActive = subscription.ends_at ? new Date(subscription.ends_at) > new Date() : true;
-  if (subscription.tier !== 'PRO' || !isActive) {
+/**
+ * The MCP face of the webapp's assertProTier (apps/webapp/app/utils/helpers.ts)
+ * — same decision, different error type.
+ *
+ * Resolves by classroom ID, which is what the authorization context already
+ * carries. The previous version took the slug, looked the classroom up again
+ * and refused when the two disagreed, on the premise that a bare slug was
+ * unique only per git org — that premise has been false since the global unique
+ * index landed (schema.prisma: `slug String @unique`), so the guard could never
+ * fire and the round trip bought nothing. Passing the ID straight through is
+ * both simpler and strictly safer: there is no second lookup to disagree with.
+ *
+ * The `ends_at` test is NOT reimplemented here. It lives once, in
+ * `subscription.getProStateForClassroomId`, precisely so this file and the
+ * webapp cannot drift into gating on different definitions of "active".
+ */
+async function assertProTier(classroomId: string): Promise<void> {
+  const proState = await ClassmojiService.subscription.getProStateForClassroomId(classroomId);
+  if (!proState.isPro) {
     throw new ToolError('forbidden', 'This feature requires a Pro subscription');
   }
 }
@@ -228,7 +230,7 @@ export const quizzesResource: ResourceDefinition = {
     const { classroomId, role, membership } = classroomCtx(ctx);
 
     // Gate order mirrors the routes: access (done) → Pro tier → quizzes_enabled.
-    await assertProTier(vars.slug, classroomId);
+    await assertProTier(classroomId);
     if (sanitizedSettings(ctx).quizzes_enabled === false) {
       throw new ToolError('forbidden', 'Quizzes are currently disabled for this classroom');
     }

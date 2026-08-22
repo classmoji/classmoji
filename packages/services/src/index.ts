@@ -1,6 +1,7 @@
 import ClassmojiService from './classmoji/index.ts';
 import HelperService from './helper/index.ts';
 import StripeService from './stripe/index.ts';
+import FlyCertService from './fly/index.ts';
 import * as MarkdownImporter from './content/markdownImporter.ts';
 
 export {
@@ -48,7 +49,26 @@ export {
   notificationService,
 } from './classmoji/index.ts';
 
-export { ClassmojiService, HelperService, StripeService, MarkdownImporter };
+export { ClassmojiService, HelperService, StripeService, FlyCertService, MarkdownImporter };
+
+// Fly certificate automation for class-site custom domains. Every method throws
+// a typed FlyCertError when the credentials are absent, so importing this in a
+// deployment that has none is safe.
+export {
+  isFlyCertsConfigured,
+  FlyCertError,
+  FLY_CERT_ERROR,
+  type FlyCertErrorCode,
+  type FlyCertificate,
+  type FlyDnsRequirements,
+} from './fly/index.ts';
+
+// Re-exported from `@classmoji/utils` for `@classmoji/tasks`, which depends on
+// this package but not on utils. The nightly reconcile sweep needs the same "is
+// this hostname one of ours?" test the claim path uses, and a second copy of the
+// platform-domain list is exactly the drift that would put our own wildcard back
+// into a delete list.
+export { isPlatformDomain, PLATFORM_DOMAINS } from '@classmoji/utils';
 
 // Autograding: workflow (classroom.yml) generator (pure, client-safe)
 export { generateClassroomWorkflow } from './autograding/generateClassroomWorkflow.ts';

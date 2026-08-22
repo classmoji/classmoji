@@ -1,7 +1,9 @@
+import { redirect } from 'react-router';
 import type { Role } from '@prisma/client';
 
 import { prisma, ClassmojiService, getAuthSession } from '~/utils/db.server.ts';
 import { siteHeaders } from './headers.server.ts';
+import { customDomainOrigin, siteOrigin } from './env.server.ts';
 
 /**
  * Site types are derived from the service's own return type rather than
@@ -54,6 +56,35 @@ export type SiteContext = {
   subdomain: string;
   site: SiteWithClassroom;
   viewer: SiteViewer;
+  /**
+   * The instructor-owned hostname this request arrived on, or null for the
+   * canonical `{subdomain}.{SITE_BASE_DOMAIN}` host.
+   *
+   * Comes from the trusted load context (stamped by the host middleware),
+   * NEVER from a header — see CUSTOM_DOMAIN_REQUEST_KEY in server/siteHost.ts.
+   */
+  customDomain: string | null;
+  /**
+   * Prefix for links that must leave this host: `''` on the canonical
+   * subdomain, an absolute origin on a custom domain.
+   *
+   * A custom domain has no session and cannot get one — cookies do not cross
+   * registrable domains — so Sign in, the `/app` bridge and every members-only
+   * destination have to be absolute URLs back to the cookie world. Concatenate
+   * it with an ordinary path (`` `${memberLinkOrigin}/sign-in` ``) and the
+   * subdomain case stays exactly the relative URL it is today.
+   */
+  memberLinkOrigin: string;
+  /**
+   * The origin `rel=canonical` and `og:url` must name.
+   *
+   * The point of a custom domain is that it becomes the address of the course,
+   * so SEO signal has to consolidate on ONE hostname — and both hostnames have
+   * to agree on which. When a claim is verified and the classroom is on PRO,
+   * that is the custom domain, and the canonical subdomain says so too.
+   * Otherwise both name the subdomain.
+   */
+  seoOrigin: string | null;
 };
 
 /** One row of the classroom's page index — everything a link or a gate needs. */
@@ -179,7 +210,181 @@ function siteNotFound(request: Request, kind: 'missing' | 'unavailable'): Respon
   });
 }
 
-async function loadSiteContext(request: Request, rawSubdomain: string): Promise<SiteContext> {
+/**
+ * The visitor-facing path of the current request, prefix already removed.
+ * Query string included — a redirect that drops `?page=2` is a broken link.
+ */
+function publicRequestPath(request: Request, subdomain: string): string {
+  const url = new URL(request.url);
+  return publicPathOf(url.pathname, subdomain) + url.search;
+}
+
+/** Everything the canonical-hostname decision depends on. */
+export type SeoOriginInput = {
+  /** Origin of the canonical `{subdomain}.{SITE_BASE_DOMAIN}` host. */
+  subdomainOrigin: string | null;
+  /** The stored claim — never the inbound Host header. */
+  customDomain: string | null;
+  /** Has this claim served over its own hostname? */
+  verified: boolean;
+  /** Is the classroom's subscription active right now? */
+  proActive: boolean;
+  /** Is THIS request being served on the custom domain? */
+  servingOnCustomDomain: boolean;
+};
+
+/**
+ * Which hostname should `rel=canonical` and `og:url` name?
+ *
+ * Pulled out as a pure function because it is one decision that has to come out
+ * the same in two places. If the custom host said "I am canonical" while the
+ * subdomain also said "I am canonical", the two hostnames would be competing
+ * copies of the same course — the duplicate-content split the flip exists to
+ * prevent. Worse in the lapsed case: the custom host is 302ing visitors to the
+ * subdomain, so a subdomain canonical pointing back at it would name a URL that
+ * redirects away.
+ *
+ * Serving ON the custom domain is itself the verification — the request only
+ * exists because a certificate for that hostname completed a handshake — so
+ * that case does not wait for the stamp it is in the middle of writing.
+ */
+export function seoOriginFor(input: SeoOriginInput): string | null {
+  const { subdomainOrigin, customDomain, verified, proActive, servingOnCustomDomain } = input;
+
+  if (!customDomain || !proActive) return subdomainOrigin;
+  if (servingOnCustomDomain || verified) return customDomainOrigin(customDomain);
+  return subdomainOrigin;
+}
+
+/**
+ * The response a custom domain gives once its subscription has lapsed.
+ *
+ * **302, never 301.** A lapse is a reversible billing state: the instructor can
+ * re-subscribe this afternoon. Browsers and search engines cache a permanent
+ * redirect indefinitely, so a 301 would make "upgrade restores it instantly"
+ * false for everyone who already followed one — and `Cache-Control: no-store`
+ * does not help, because it governs HTTP caches, not the permanence a 301
+ * asserts. 301 is reserved for a genuine `clearCustomDomain`, where the
+ * hostname really has been given up.
+ *
+ * `noindex` on top: while lapsed, this URL is not the course's address and
+ * should not be collecting search results of its own.
+ */
+export function lapsedCustomDomainRedirect(
+  request: Request,
+  canonicalOrigin: string | null,
+  publicPath: string
+): Response {
+  return redirect(`${canonicalOrigin ?? ''}${publicPath}`, {
+    status: 302,
+    headers: siteHeaders({ request, cacheable: false, noindex: true }),
+  });
+}
+
+/**
+ * Resolve a request that arrived on an instructor-owned hostname.
+ *
+ * The routing snapshot in the express layer already decided WHICH tenant this
+ * hostname belongs to; everything here re-derives that from the database,
+ * because the snapshot is allowed to be up to a refresh interval stale and a
+ * re-pointed domain must never serve its previous owner's content.
+ *
+ * Two guards carry that weight:
+ *
+ *  - the claim is re-read by hostname, so a domain cleared or moved since the
+ *    snapshot was taken resolves to nothing (or to somebody else), and
+ *  - the subdomain it resolves to is compared against the one the middleware
+ *    rewrote to. A mismatch means the map and the database disagree, which on
+ *    this path can only mean the domain moved — and serving the rewritten
+ *    tenant anyway would be a cross-tenant content leak with a cache TTL for a
+ *    lifetime. It is a 404, not a redirect: the correct destination belongs to
+ *    someone who did not ask us to advertise it.
+ *
+ * A custom domain NEVER reads the session. Cookies do not cross registrable
+ * domains, so there is nothing to read — but "nothing to read" and "we do not
+ * look" are different guarantees, and only the second one survives someone
+ * later setting a wildcard cookie domain. Every visitor here is anonymous, and
+ * members-only content is reached by an absolute link back to the subdomain.
+ */
+async function loadCustomDomainContext(
+  request: Request,
+  rawSubdomain: string,
+  customDomain: string
+): Promise<SiteContext> {
+  const lookup = await ClassmojiService.site.getSiteByCustomDomain(customDomain);
+
+  if (lookup.state === 'not_found') throw siteNotFound(request, 'missing');
+  if (lookup.site.subdomain !== rawSubdomain) throw siteNotFound(request, 'missing');
+
+  const canonicalOrigin = siteOrigin(lookup.site.subdomain);
+  // Unreachable in practice — the middleware only resolves a custom host when
+  // SITE_BASE_DOMAIN is set, which is the one thing siteOrigin needs. Guarded
+  // anyway because the failure mode is not a broken link: every absolute URL on
+  // this path (the lapse redirect, Sign in, the /app bridge) would collapse to a
+  // relative one, pointing the custom domain at ITSELF. That is an infinite
+  // redirect, and it is worth one branch to make it impossible.
+  if (!canonicalOrigin) throw siteNotFound(request, 'unavailable');
+
+  if (lookup.state === 'lapsed') {
+    // The subscription that bought this hostname is no longer active. The site
+    // itself is untouched and still live at its subdomain, so send visitors
+    // there. See lapsedCustomDomainRedirect for why 302 and not 301.
+    throw lapsedCustomDomainRedirect(
+      request,
+      canonicalOrigin,
+      publicRequestPath(request, rawSubdomain)
+    );
+  }
+
+  // Same as the subdomain path: `disabled` and `unavailable` are deliberately
+  // indistinguishable from outside.
+  if (lookup.state !== 'active') throw siteNotFound(request, 'unavailable');
+
+  // The full site payload for rendering. A second read rather than widening the
+  // hot-path select: this one is the same query every subdomain request makes,
+  // and having one assembly path for site content is worth a round trip on a
+  // route that serves tens of hostnames.
+  const full = await ClassmojiService.site.getSiteBySubdomain(lookup.site.subdomain);
+  if (full.state !== 'active') throw siteNotFound(request, 'unavailable');
+
+  // Lazily record that this claim has served over its own hostname. Reaching
+  // this line means a browser completed a TLS handshake against a certificate
+  // Fly issued for this name, which is the only ownership proof in the system —
+  // and it arrives whether or not an admin has the settings tab open. Written
+  // once per claim (the service no-ops when the stamp is already set) and never
+  // awaited: a verification stamp must not be able to delay, or fail, a page.
+  if (!lookup.verifiedAt) {
+    void ClassmojiService.site
+      .markCustomDomainVerified(lookup.site.id, customDomain)
+      .catch(() => {});
+  }
+
+  return {
+    subdomain: full.site.subdomain,
+    site: full.site,
+    viewer: ANONYMOUS,
+    customDomain,
+    memberLinkOrigin: canonicalOrigin,
+    seoOrigin: seoOriginFor({
+      subdomainOrigin: canonicalOrigin,
+      customDomain,
+      // Serving this request IS the verification — see markCustomDomainVerified
+      // — so the flip happens on the first hit rather than one page view later.
+      verified: true,
+      // `active` is only reachable past the `lapsed` branch above.
+      proActive: true,
+      servingOnCustomDomain: true,
+    }),
+  };
+}
+
+async function loadSiteContext(
+  request: Request,
+  rawSubdomain: string,
+  customDomain: string | null
+): Promise<SiteContext> {
+  if (customDomain) return loadCustomDomainContext(request, rawSubdomain, customDomain);
+
   const lookup = await ClassmojiService.site.getSiteBySubdomain(rawSubdomain);
 
   if (lookup.state === 'not_found') throw siteNotFound(request, 'missing');
@@ -192,20 +397,71 @@ async function loadSiteContext(request: Request, rawSubdomain: string): Promise<
   const site = lookup.site;
   const viewer = await resolveViewer(request, site.classroom_id);
 
-  return { subdomain: site.subdomain, site, viewer };
+  return {
+    subdomain: site.subdomain,
+    site,
+    viewer,
+    customDomain: null,
+    // Already on the host that owns the session; links stay relative.
+    memberLinkOrigin: '',
+    seoOrigin: await canonicalOriginForSite(site),
+  };
+}
+
+/**
+ * Which hostname should a request served on the SUBDOMAIN call canonical?
+ *
+ * The custom domain, once it is verified and the classroom is actually on PRO —
+ * otherwise the two hostnames would disagree about which of them is canonical,
+ * which is the duplicate-content split the flip exists to prevent. The lapsed
+ * case matters most: the custom host is 302ing visitors here, so pointing
+ * `rel=canonical` back at it would name a URL that redirects away.
+ *
+ * The subscription lookup runs ONLY for the handful of sites that have a domain
+ * to flip to — the overwhelmingly common request reads `custom_domain === null`
+ * and does no extra work at all.
+ */
+async function canonicalOriginForSite(site: SiteWithClassroom): Promise<string | null> {
+  const subdomainOrigin = siteOrigin(site.subdomain);
+  if (!site.custom_domain || !site.custom_domain_verified_at) return subdomainOrigin;
+
+  const proState = await ClassmojiService.subscription.getProStateForClassroomId(site.classroom_id);
+  return seoOriginFor({
+    subdomainOrigin,
+    customDomain: site.custom_domain,
+    verified: true,
+    proActive: proState.isPro,
+    servingOnCustomDomain: false,
+  });
+}
+
+/**
+ * The custom hostname this request arrived on, per the load context.
+ *
+ * The context is built by `buildSiteLoadContext` from a property the host
+ * middleware stamped on the Express request — it is not derived from anything
+ * the client sent, which is the entire reason it is trustworthy enough to flip
+ * a canonical URL on a cacheable response.
+ */
+function customDomainOf(args: SiteLoaderArgs): string | null {
+  const context = args.context as { customDomain?: unknown } | undefined;
+  const value = context?.customDomain;
+  return typeof value === 'string' && value.length > 0 ? value : null;
 }
 
 /**
  * Resolve (and memoize for this request) the site + viewer.
  *
- * Throws a branded 404 Response when the hostname resolves to nothing.
+ * Throws a branded 404 Response when the hostname resolves to nothing, and a
+ * 302 to the canonical subdomain when a custom domain's subscription has
+ * lapsed.
  */
 export function resolveSiteContext(args: SiteLoaderArgs): Promise<SiteContext> {
   const key = memoKey(args);
   const cached = contextCache.get(key);
   if (cached) return cached;
 
-  const pending = loadSiteContext(args.request, args.params.subdomain ?? '');
+  const pending = loadSiteContext(args.request, args.params.subdomain ?? '', customDomainOf(args));
   contextCache.set(key, pending);
   // A rejected promise stays cached on purpose: every loader on this request
   // should fail identically, and re-running the lookup would only re-throw.

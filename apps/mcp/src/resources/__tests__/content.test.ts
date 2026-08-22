@@ -1,14 +1,18 @@
 /**
- * Unit tests for the quizzes resource Pro-tier twin guard (finding A3) and
- * the calendar resource's allowlist shaping (finding U5).
+ * Unit tests for the quizzes resource Pro gate (finding A3) and the calendar
+ * resource's allowlist shaping (finding U5).
  *
- * A3: assertProTier resolves the subscription by BARE slug
- * (subscription.getByClassroom), and slugs are unique only per git org. Without
- * a guard, a caller authorized for a FREE twin classroom could pass the Pro
- * gate on the OTHER same-slug classroom's PRO subscription. The guard mirrors
- * the leaderboard/modules resources: it re-resolves the slug via
- * classroom.findBySlug and refuses unless the resolved id equals the
- * authorized ctx.classroom.classroomId.
+ * A3 (SUPERSEDED — kept as the history of why this looks the way it does):
+ * assertProTier used to resolve the subscription by BARE slug, guarded by a
+ * re-resolution that refused when the slug landed on a different classroom than
+ * the caller was authorized for. The premise was that slugs were unique only
+ * per git org; they have been GLOBALLY unique since the
+ * 20260818103726_classroom_slug_global_unique migration, so the guard could
+ * never fire. The gate now takes the AUTHORIZED `classroomId` straight from the
+ * tool context and asks `subscription.getProStateForClassroomId`, which is also
+ * the single owner of the `ends_at` activity test. The tests below pin what
+ * actually matters now: the gate keys on the authorized id and never on the
+ * URI's slug, and a lapsed PRO row does not open it.
  *
  * U5: calendar.getClassroomCalendar rows spread `...event`, carrying the raw
  * pageLinks/slideLinks include (UNFILTERED — draft page/slide titles) plus
@@ -24,7 +28,7 @@ import { ToolError } from '../../mcp/errors.ts';
 import type { ToolContext } from '../../mcp/registry.ts';
 
 const findBySlug = vi.fn();
-const getByClassroom = vi.fn();
+const getProStateForClassroomId = vi.fn();
 const findByClassroom = vi.fn();
 const getQuizzesForStudent = vi.fn();
 const getClassroomCalendar = vi.fn();
@@ -32,7 +36,9 @@ const getClassroomCalendar = vi.fn();
 vi.mock('@classmoji/services', () => ({
   ClassmojiService: {
     classroom: { findBySlug: (...a: unknown[]) => findBySlug(...a) },
-    subscription: { getByClassroom: (...a: unknown[]) => getByClassroom(...a) },
+    subscription: {
+      getProStateForClassroomId: (...a: unknown[]) => getProStateForClassroomId(...a),
+    },
     quiz: {
       findByClassroom: (...a: unknown[]) => findByClassroom(...a),
       getQuizzesForStudent: (...a: unknown[]) => getQuizzesForStudent(...a),
@@ -75,33 +81,23 @@ function studentCtx(): ToolContext {
 
 beforeEach(() => {
   findBySlug.mockReset();
-  getByClassroom.mockReset();
+  getProStateForClassroomId.mockReset();
   findByClassroom.mockReset();
   getQuizzesForStudent.mockReset();
   getClassroomCalendar.mockReset();
 });
 
-describe('quizzes resource Pro-tier twin guard (A3)', () => {
-  it('REFUSES when the bare slug resolves to a different classroom than authorized', async () => {
-    // The slug's findFirst resolves to the OTHER same-slug classroom...
-    findBySlug.mockResolvedValue({ id: 'other-class' });
-    // ...whose subscription is PRO — this must NOT be reachable as a bypass.
-    getByClassroom.mockResolvedValue({ tier: 'PRO', id: 'sub-pro' });
-
-    const err = await quizzesResource
-      .handler(VARS, ownerCtx(), new URL('classmoji://x'))
-      .catch(e => e);
-    expect(err).toBeInstanceOf(ToolError);
-    expect((err as ToolError).kind).toBe('internal');
-    // Guard runs BEFORE the tier lookup and before any quiz data is fetched.
-    expect(getByClassroom).not.toHaveBeenCalled();
-    expect(findByClassroom).not.toHaveBeenCalled();
-  });
-
-  it('keys the Pro gate on the resolved classroom id, then serves quizzes', async () => {
-    // Slug resolves back to the authorized classroom id → guard passes.
-    findBySlug.mockResolvedValue({ id: 'class-1' });
-    getByClassroom.mockResolvedValue({ tier: 'PRO', id: 'sub-pro' });
+describe('quizzes resource Pro gate (A3)', () => {
+  it('gates on the AUTHORIZED classroom id, never on the URI slug', async () => {
+    // The URI names `winter-2025`; the authorized context names `class-1`. The
+    // gate must ask about class-1 and must not re-resolve the slug at all —
+    // that round trip was the twin guard, and it is gone.
+    getProStateForClassroomId.mockResolvedValue({
+      tier: 'PRO',
+      isActive: true,
+      isPro: true,
+      subscription: { id: 'sub-pro' },
+    });
     findByClassroom.mockResolvedValue([
       { id: 'q1', name: 'Quiz 1', status: 'PUBLISHED', weight: 1, question_count: 3 },
     ]);
@@ -112,9 +108,47 @@ describe('quizzes resource Pro-tier twin guard (A3)', () => {
       new URL('classmoji://x')
     )) as { quizzes: Array<{ id: string }> };
 
-    expect(findBySlug).toHaveBeenCalledWith('winter-2025');
+    expect(getProStateForClassroomId).toHaveBeenCalledWith('class-1');
+    expect(findBySlug).not.toHaveBeenCalled();
     expect(findByClassroom).toHaveBeenCalledWith('class-1', expect.anything());
     expect(result.quizzes.map(q => q.id)).toEqual(['q1']);
+  });
+
+  it('REFUSES a lapsed PRO row before touching any quiz data', async () => {
+    // {tier:'PRO', ends_at: past} is a real shape: the Stripe handlers stamp
+    // `ends_at` rather than rewriting `tier`. A tier-only check serves it
+    // forever; `isPro` folds the activity test in.
+    getProStateForClassroomId.mockResolvedValue({
+      tier: 'PRO',
+      isActive: false,
+      isPro: false,
+      subscription: { id: 'sub-lapsed' },
+    });
+
+    const err = await quizzesResource
+      .handler(VARS, ownerCtx({ quizzes_enabled: true }), new URL('classmoji://x'))
+      .catch(e => e);
+
+    expect(err).toBeInstanceOf(ToolError);
+    expect((err as ToolError).kind).toBe('forbidden');
+    expect(findByClassroom).not.toHaveBeenCalled();
+  });
+
+  it('REFUSES a FREE classroom', async () => {
+    getProStateForClassroomId.mockResolvedValue({
+      tier: 'FREE',
+      isActive: false,
+      isPro: false,
+      subscription: null,
+    });
+
+    const err = await quizzesResource
+      .handler(VARS, ownerCtx({ quizzes_enabled: true }), new URL('classmoji://x'))
+      .catch(e => e);
+
+    expect(err).toBeInstanceOf(ToolError);
+    expect((err as ToolError).kind).toBe('forbidden');
+    expect(findByClassroom).not.toHaveBeenCalled();
   });
 });
 

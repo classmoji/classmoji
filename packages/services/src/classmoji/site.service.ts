@@ -1,6 +1,15 @@
 import getPrisma from '@classmoji/database';
-import { normalizeSubdomain, isValidSubdomain, RESERVED_SUBDOMAINS } from '@classmoji/utils';
+import {
+  normalizeSubdomain,
+  isValidSubdomain,
+  RESERVED_SUBDOMAINS,
+  normalizeCustomDomain,
+  isValidCustomDomain,
+  isPlatformDomain,
+} from '@classmoji/utils';
 import { isItemPublished, isItemPubliclyVisible } from './module.service.ts';
+import { getProStateForClassroomId } from './subscription.service.ts';
+import { removeCert, isFlyCertsConfigured } from '../fly/index.ts';
 import type { Prisma, Role } from '@prisma/client';
 
 /**
@@ -32,6 +41,14 @@ export const SITE_ERROR = {
   HOME_PAGE_REQUIRED: 'HOME_PAGE_REQUIRED',
   /** Home page is a draft, or belongs to another classroom. */
   HOME_PAGE_INVALID: 'HOME_PAGE_INVALID',
+  /** Not a bare domain of two or more valid DNS labels. */
+  DOMAIN_INVALID: 'DOMAIN_INVALID',
+  /** A hostname Classmoji itself answers for (classmoji.io / lvh.me / fly.dev). */
+  DOMAIN_RESERVED: 'DOMAIN_RESERVED',
+  /** Another classroom already claims it. */
+  DOMAIN_TAKEN: 'DOMAIN_TAKEN',
+  /** Custom domains are a PRO feature and this classroom is not on PRO. */
+  PRO_REQUIRED: 'PRO_REQUIRED',
 } as const;
 
 export type SiteErrorCode = (typeof SITE_ERROR)[keyof typeof SITE_ERROR];
@@ -355,14 +372,376 @@ export async function deleteSiteForClassroom(classroomId: string) {
   const prisma = getPrisma();
   const existing = await prisma.classroomSite.findUnique({
     where: { classroom_id: classroomId },
-    select: { id: true, subdomain: true },
+    select: { id: true, subdomain: true, custom_domain: true },
   });
   if (!existing) {
     throw new SiteError(SITE_ERROR.SITE_NOT_FOUND, 'This classroom has no site to remove.');
   }
 
   await prisma.classroomSite.delete({ where: { classroom_id: classroomId } });
+  // The row is gone, so this is the LAST moment the hostname is knowable from
+  // our side. Best-effort, after the delete: a Fly outage must not block an
+  // instructor from removing their site, and the reconcile task
+  // (packages/tasks/src/workflows/customDomains.ts) sweeps up whatever this
+  // misses — including the classroom-delete cascade, which drops this row
+  // inside the database with no application code on the path at all.
+  await releaseCert(existing.custom_domain);
   return existing;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Custom domains (PRO)
+//
+// A PRO classroom may point a hostname it owns at its site. The hostname lives
+// on the SAME ClassroomSite row as the subdomain and serves the same content;
+// nothing about visibility, publishing or membership changes. What does change
+// is the trust model, and it is worth stating once here because three functions
+// below only make sense in its light:
+//
+//   * The subdomain is ours and always resolves. A custom domain is the
+//     instructor's, can be re-pointed or abandoned at any moment, and is only
+//     ever reachable because a certificate we asked Fly to issue exists.
+//   * Serving therefore gates on the DATABASE claim, never on "a certificate
+//     exists for this hostname" — a stale certificate plus a dangling DNS
+//     record is precisely how the next person to claim the name would take over
+//     someone else's site.
+//   * `custom_domain_verified_at` is per CLAIM and is cleared whenever the
+//     domain changes. It records that THIS claim served over its own hostname,
+//     which a completed TLS handshake proves; it gates the canonical/og:url
+//     flip, and nothing else.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Best-effort certificate teardown for a hostname we are giving up.
+ *
+ * Never throws. Every caller has already committed the database change that
+ * makes the hostname ours-no-longer, so a Fly failure here is a leaked
+ * certificate — annoying, swept up by the reconcile task — while a THROW here
+ * would be a user-visible failure of an operation that already succeeded.
+ */
+async function releaseCert(domain: string | null | undefined): Promise<void> {
+  if (!domain) return;
+  if (!isFlyCertsConfigured()) return;
+
+  try {
+    await removeCert(domain);
+  } catch (error: unknown) {
+    console.error(`[site.service] could not remove the Fly certificate for ${domain}`, error);
+  }
+}
+
+/** Does this P2002 name the classroom_sites.custom_domain unique index? */
+const isCustomDomainConflict = (error: unknown): boolean => {
+  if (!error || typeof error !== 'object') return false;
+  if ((error as { code?: unknown }).code !== 'P2002') return false;
+  const target = (error as { meta?: { target?: unknown } }).meta?.target;
+  const tokens = (
+    Array.isArray(target) ? target : typeof target === 'string' ? target.split(',') : []
+  ).map(t => String(t).trim().toLowerCase());
+  return tokens.includes('custom_domain') || tokens.includes('classroom_sites_custom_domain_key');
+};
+
+/**
+ * Claim (or re-point) a classroom's custom domain.
+ *
+ * Four gates, in this order and for these reasons:
+ *
+ *  1. **The site row must already exist.** A classroom with no site has no
+ *     subdomain to fall back to, and `prisma.update` on a missing row throws an
+ *     opaque P2025 that no caller can render. SITE_NOT_FOUND matches what
+ *     upsertSiteSettings and deleteSiteForClassroom already promise.
+ *  2. **PRO, checked HERE.** The route will check too, but this is the gate
+ *     that actually holds: MCP tools, a future API and any script reach this
+ *     function without passing a loader. It asks
+ *     `getProStateForClassroomId`, so a lapsed `{tier:'PRO', ends_at: past}`
+ *     row is refused exactly as a FREE one is.
+ *  3. **Shape, then platform domains.** Two different messages because they are
+ *     two different mistakes: a typo, versus trying to claim a hostname we
+ *     already answer for.
+ *  4. **Uniqueness, at the index.** The pre-check is advisory and stale the
+ *     moment it returns; the P2002 is the authority. Matched by target so an
+ *     unrelated constraint added later surfaces as itself rather than as a
+ *     misleading "that domain is taken".
+ *
+ * Re-pointing a domain CLEARS `custom_domain_verified_at` and releases the old
+ * hostname's certificate. Both halves matter: an inherited verification stamp
+ * would present an unproven hostname as verified, and an inherited certificate
+ * is a live TLS endpoint for a domain this classroom no longer claims.
+ *
+ * Issuance is deliberately NOT done here. The caller claims, then calls
+ * `FlyCertService.addCert(domain)` — so a Fly outage leaves a claimed domain
+ * awaiting a certificate (retryable from the admin UI) rather than rolling back
+ * a claim the instructor just made.
+ */
+export async function setCustomDomain(classroomId: string, domain: string) {
+  const prisma = getPrisma();
+
+  const existing = await prisma.classroomSite.findUnique({
+    where: { classroom_id: classroomId },
+    select: { id: true, custom_domain: true },
+  });
+  if (!existing) {
+    throw new SiteError(
+      SITE_ERROR.SITE_NOT_FOUND,
+      'This classroom has no site yet — claim a subdomain first.'
+    );
+  }
+
+  const proState = await getProStateForClassroomId(classroomId);
+  if (!proState.isPro) {
+    throw new SiteError(
+      SITE_ERROR.PRO_REQUIRED,
+      'Custom domains require an active Pro subscription.'
+    );
+  }
+
+  const normalized = normalizeCustomDomain(domain);
+  if (!isValidCustomDomain(normalized)) {
+    throw new SiteError(
+      SITE_ERROR.DOMAIN_INVALID,
+      `'${normalized}' is not a valid domain. Use a bare hostname like 'cs52.me' — no https://, no path, no port.`
+    );
+  }
+  if (isPlatformDomain(normalized)) {
+    throw new SiteError(
+      SITE_ERROR.DOMAIN_RESERVED,
+      `'${normalized}' belongs to Classmoji — your site already answers at its Classmoji address. Connect a domain you own.`
+    );
+  }
+
+  // Re-claiming the same hostname is a no-op on the certificate but must still
+  // clear the stamp: the admin is asking for re-verification, and a re-claim is
+  // the one moment we can honestly say "prove it again".
+  const previous = existing.custom_domain;
+
+  let updated;
+  try {
+    updated = await prisma.classroomSite.update({
+      where: { classroom_id: classroomId },
+      data: { custom_domain: normalized, custom_domain_verified_at: null },
+    });
+  } catch (error: unknown) {
+    if (isCustomDomainConflict(error)) {
+      throw new SiteError(
+        SITE_ERROR.DOMAIN_TAKEN,
+        `'${normalized}' is already connected to another Classmoji site.`
+      );
+    }
+    throw error;
+  }
+
+  if (previous && previous !== normalized) await releaseCert(previous);
+
+  return updated;
+}
+
+/**
+ * Drop a classroom's custom domain, releasing its certificate.
+ *
+ * Absence is a no-op rather than an error: "this site should not have a custom
+ * domain" is already true, and a double-submitted Remove button is not
+ * something to show an error for. Returns the hostname that was released (or
+ * null), which is what the caller needs to tell the instructor their DNS record
+ * can now come down.
+ */
+export async function clearCustomDomain(classroomId: string) {
+  const prisma = getPrisma();
+
+  const existing = await prisma.classroomSite.findUnique({
+    where: { classroom_id: classroomId },
+    select: { id: true, custom_domain: true },
+  });
+  if (!existing) {
+    throw new SiteError(SITE_ERROR.SITE_NOT_FOUND, 'This classroom has no site.');
+  }
+  if (!existing.custom_domain) return { released: null as string | null };
+
+  await prisma.classroomSite.update({
+    where: { classroom_id: classroomId },
+    data: { custom_domain: null, custom_domain_verified_at: null },
+  });
+
+  await releaseCert(existing.custom_domain);
+  return { released: existing.custom_domain };
+}
+
+/**
+ * The fields a custom-domain request needs, and nothing else.
+ *
+ * Narrower than SITE_INCLUDE on purpose: this lookup runs on the anonymous hot
+ * path and its only job is to answer "which tenant, and may it serve here?".
+ * The full site + classroom record is loaded afterwards by the ordinary
+ * subdomain path, which is the one place site content is assembled.
+ */
+const CUSTOM_DOMAIN_SELECT = {
+  id: true,
+  classroom_id: true,
+  subdomain: true,
+  custom_domain: true,
+  custom_domain_verified_at: true,
+  is_enabled: true,
+  classroom: { select: { id: true, is_archived: true, status: true } },
+} satisfies Prisma.ClassroomSiteSelect;
+
+export type CustomDomainSite = Prisma.ClassroomSiteGetPayload<{
+  select: typeof CUSTOM_DOMAIN_SELECT;
+}>;
+
+/**
+ * Why a custom hostname did not serve — a discriminated state, because the
+ * caller renders four genuinely different responses and only one is a 404.
+ *
+ * `lapsed` is the interesting one: the classroom's PRO subscription is no
+ * longer active, so the custom domain stops being an address we will serve on,
+ * but the site itself is untouched and still live at its subdomain. That is a
+ * REVERSIBLE billing state, which is why the caller answers it with a 302 (plus
+ * `no-store`) and never a 301 — a permanent redirect is remembered by browsers
+ * and search engines long after the instructor re-subscribes.
+ */
+export type CustomDomainLookup =
+  | { state: 'not_found' }
+  | { state: 'lapsed'; site: CustomDomainSite }
+  | { state: 'disabled'; site: CustomDomainSite }
+  | { state: 'unavailable'; site: CustomDomainSite }
+  | { state: 'active'; site: CustomDomainSite; verifiedAt: Date | null };
+
+/**
+ * Resolve a request hostname to the site that claims it.
+ *
+ * Precedence is not_found → lapsed → disabled → unavailable → active. Billing
+ * is tested BEFORE site state deliberately: a lapsed classroom gets one
+ * consistent answer on its custom domain — "this lives at the canonical
+ * subdomain" — whatever else is true of the site, and the subdomain then
+ * remains the single place a visitor learns whether it is switched off or
+ * archived. Splitting that decision across two hostnames is how you end up
+ * telling someone "unavailable" on one and redirecting them on the other.
+ *
+ * This is called PER REQUEST, not read from the routing snapshot. The snapshot
+ * is a hint that gets a hostname onto the right tenant subtree; this is the
+ * check that makes it true. Without it, a domain re-pointed from one classroom
+ * to another would keep serving the old classroom's content for as long as any
+ * machine held the previous map — a cross-tenant content leak with a cache TTL
+ * for a lifetime.
+ */
+export async function getSiteByCustomDomain(host: string): Promise<CustomDomainLookup> {
+  const normalized = normalizeCustomDomain(host);
+  // Shape-check before touching the database: `host` is an unauthenticated,
+  // attacker-controlled header, and an indexed lookup per garbage Host is a
+  // free amplification primitive.
+  if (!isValidCustomDomain(normalized) || isPlatformDomain(normalized)) {
+    return { state: 'not_found' };
+  }
+
+  const site = await getPrisma().classroomSite.findUnique({
+    where: { custom_domain: normalized },
+    select: CUSTOM_DOMAIN_SELECT,
+  });
+  if (!site) return { state: 'not_found' };
+
+  const proState = await getProStateForClassroomId(site.classroom_id);
+  if (!proState.isPro) return { state: 'lapsed', site };
+
+  if (!site.is_enabled) return { state: 'disabled', site };
+  if (site.classroom.is_archived || site.classroom.status === 'UNPUBLISHED') {
+    return { state: 'unavailable', site };
+  }
+
+  return { state: 'active', site, verifiedAt: site.custom_domain_verified_at };
+}
+
+/**
+ * Record that a claim has served over its own hostname.
+ *
+ * Called from the serving path on a successful custom-domain render, and
+ * written ONLY when the stamp is currently null — so it is one UPDATE per
+ * claim, not one per request. The `custom_domain` in the WHERE clause is what
+ * makes it safe to fire from a hot path: if the domain changed between the read
+ * and this write, zero rows match and the new claim keeps its unproven status.
+ *
+ * Why a completed request is proof at all: reaching this code means a browser
+ * completed a TLS handshake for this hostname against a certificate Fly issued
+ * to us, which required DNS the instructor controls to point here. Polling Fly
+ * from an admin tab, the alternative, only advances while someone has the tab
+ * open — a domain configured next week would stay unverified forever.
+ */
+export async function markCustomDomainVerified(siteId: string, domain: string): Promise<void> {
+  await getPrisma().classroomSite.updateMany({
+    where: { id: siteId, custom_domain: domain, custom_domain_verified_at: null },
+    data: { custom_domain_verified_at: new Date() },
+  });
+}
+
+/** One row of the custom-domain routing map. */
+export type CustomDomainRoute = {
+  domain: string;
+  subdomain: string;
+  /** Servable right now: enabled, classroom live, PRO active. */
+  active: boolean;
+};
+
+/**
+ * Every custom domain and the tenant it points at.
+ *
+ * Feeds two consumers with different needs, which is why `active` is carried
+ * rather than filtered on:
+ *
+ *  - the pages routing snapshot, which must route a LAPSED or disabled domain
+ *    too (its request needs to reach a loader that can answer 302 or 404 —
+ *    dropping it here would 404 at the edge and lose that distinction), and
+ *  - the reconcile task, which diffs this against Fly's certificate list.
+ *
+ * One query, tens of rows. `custom_domain: { not: null }` rides the unique
+ * index, and the owner subscriptions come along in the same round trip rather
+ * than as one `getProStateForClassroomId` per row.
+ */
+export async function listCustomDomainRoutes(): Promise<CustomDomainRoute[]> {
+  const sites = await getPrisma().classroomSite.findMany({
+    where: { custom_domain: { not: null } },
+    select: {
+      subdomain: true,
+      custom_domain: true,
+      is_enabled: true,
+      classroom: {
+        select: {
+          is_archived: true,
+          status: true,
+          memberships: {
+            where: { role: 'OWNER', has_accepted_invite: true },
+            select: {
+              user: {
+                select: { subscriptions: { orderBy: { created_at: 'desc' }, take: 1 } },
+              },
+            },
+          },
+        },
+      },
+    },
+  });
+
+  const now = Date.now();
+  return sites.flatMap(site => {
+    if (!site.custom_domain) return [];
+
+    // Same rule as getProStateForClassroomId — any accepted owner with a live
+    // PRO row wins — evaluated inline so this stays one query for the whole map.
+    const proActive = site.classroom.memberships.some(membership => {
+      const subscription = membership.user.subscriptions[0];
+      if (!subscription || subscription.tier !== 'PRO') return false;
+      return subscription.ends_at === null || new Date(subscription.ends_at).getTime() > now;
+    });
+
+    return [
+      {
+        domain: site.custom_domain,
+        subdomain: site.subdomain,
+        active:
+          proActive &&
+          site.is_enabled &&
+          !site.classroom.is_archived &&
+          site.classroom.status !== 'UNPUBLISHED',
+      },
+    ];
+  });
 }
 
 /** The two page flags every site visibility decision reads. */

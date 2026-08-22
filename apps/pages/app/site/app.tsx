@@ -20,8 +20,16 @@ import { webappUrl } from './env.server.ts';
  */
 export const loader = async (args: LoaderFunctionArgs) => {
   const { request } = args;
-  const { site, viewer } = await resolveSiteContext(args);
+  const { site, viewer, customDomain, memberLinkOrigin } = await resolveSiteContext(args);
   const headers = siteHeaders({ request, cacheable: false, noindex: true });
+
+  // On a custom domain there is no session to resolve a role from, so this
+  // bridge cannot do its job here — hand the request to the canonical
+  // subdomain's copy, which can. Bouncing everyone to the app's front door
+  // instead would drop a signed-in member back at a generic landing page.
+  if (customDomain) {
+    throw redirect(`${memberLinkOrigin}/app`, { headers });
+  }
 
   const prefix = rolePrefix(viewer.role);
   if (!prefix) {

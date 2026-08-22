@@ -15,6 +15,7 @@
 import { test, expect } from '@playwright/test';
 import type { NextFunction, Request, Response } from 'express';
 import {
+  buildSiteLoadContext,
   classifyHost,
   computeSiteUrl,
   createSiteHostMiddleware,
@@ -833,5 +834,203 @@ test.describe('createSiteHostMiddleware', () => {
     expect(nexted).toBe(true);
     expect(req.url).toBe('/cs52/page-id');
     expect(req.originalUrl).toBe('/cs52/page-id');
+  });
+});
+
+// ─── custom domains ──────────────────────────────────────────────────────────
+
+/**
+ * A resolved custom domain must get the `site` branch VERBATIM.
+ *
+ * The tempting shortcut — handle custom domains in the `unknown` branch, where
+ * they already land — silently inherits that branch's `.well-known` pass and
+ * drops the `site` branch's `.data` refusal. Together those mean the editor app
+ * (hydration payload, none of the site's security headers) served off a
+ * tenant's own domain. Both properties are pinned below.
+ *
+ * The `.well-known` allowance is not needed for certificates: Fly answers ACME
+ * challenges at its proxy (TLS-ALPN, or DNS-01) for issuance and for the 90-day
+ * renewal, so no challenge request ever reaches this app. An UNCLAIMED hostname
+ * keeps the pass, which is what a domain pointed here before it is connected
+ * needs.
+ */
+const customConfig: SiteHostConfig = {
+  siteBaseDomain: 'lvh.me',
+  canonicalHosts: ['localhost'],
+  resolveCustomHost: (host: string) => (host === 'cs52.me' ? 'cs52' : null),
+};
+
+test.describe('classifyHost — custom domains', () => {
+  test('a claimed hostname classifies as its tenant site and names itself', () => {
+    expect(classifyHost('cs52.me', customConfig)).toEqual({
+      kind: 'site',
+      subdomain: 'cs52',
+      customDomain: 'cs52.me',
+    });
+  });
+
+  test('port, trailing dot and case all normalize before the lookup', () => {
+    for (const host of ['CS52.ME', 'cs52.me:7140', 'cs52.me.', 'CS52.ME.:7140']) {
+      expect(classifyHost(host, customConfig), host).toMatchObject({
+        kind: 'site',
+        subdomain: 'cs52',
+        customDomain: 'cs52.me',
+      });
+    }
+  });
+
+  test('an unclaimed hostname stays unknown', () => {
+    expect(classifyHost('unclaimed.example', customConfig)).toEqual({ kind: 'unknown' });
+  });
+
+  test('the base-domain and canonical rules still win over the resolver', () => {
+    // A resolver that claimed `localhost` or `cs61.lvh.me` must not be able to
+    // take over the editor host or a real tenant subdomain.
+    const greedy: SiteHostConfig = {
+      ...customConfig,
+      resolveCustomHost: () => 'attacker',
+    };
+    expect(classifyHost('localhost', greedy)).toEqual({ kind: 'canonical' });
+    expect(classifyHost('cs61.lvh.me', greedy)).toEqual({ kind: 'site', subdomain: 'cs61' });
+  });
+
+  test('shapes that are not bare domains never reach the resolver', () => {
+    // The Host header is attacker-controlled; a single label or an IP literal
+    // is not a domain anyone could have claimed, so it must not cost a lookup.
+    let lookups = 0;
+    const counting: SiteHostConfig = {
+      ...customConfig,
+      resolveCustomHost: () => {
+        lookups += 1;
+        return null;
+      },
+    };
+
+    for (const host of ['localhost', 'single', '127.0.0.1', 'under_score.me', 'a,b']) {
+      classifyHost(host, counting);
+    }
+    expect(lookups).toBe(0);
+  });
+
+  test('a resolver answer that is not a plain DNS label is refused', () => {
+    // The map is loaded from a database column. A value like `../api` would be
+    // spliced straight into a rewritten URL path by computeSiteUrl.
+    for (const answer of ['../api', 'a/b', 'has space', '', 'UPPER', '-lead']) {
+      const poisoned: SiteHostConfig = { ...customConfig, resolveCustomHost: () => answer };
+      expect(classifyHost('cs52.me', poisoned), answer).toEqual({ kind: 'unknown' });
+    }
+  });
+});
+
+test.describe('resolveSiteRequest — custom domains', () => {
+  test('rewrites onto the tenant subtree and marks the origin', () => {
+    expect(resolveSiteRequest('/syllabus?week=1', 'cs52.me', customConfig)).toEqual({
+      action: 'rewrite',
+      url: '/_site/cs52/syllabus?week=1',
+      subdomain: 'cs52',
+      customDomain: 'cs52.me',
+    });
+  });
+
+  test('refuses .data exactly as a subdomain host does', () => {
+    expect(resolveSiteRequest('/about.data', 'cs52.me', customConfig)).toEqual({
+      action: 'not-found',
+      reason: 'data-request',
+    });
+  });
+
+  test('does NOT grant .well-known a pass on a resolved custom domain', () => {
+    // Fly answers ACME at its proxy, so nothing here needs it — and passing
+    // would serve the editor app off the tenant's own hostname.
+    expect(resolveSiteRequest('/.well-known/acme-challenge/tok', 'cs52.me', customConfig)).toEqual({
+      action: 'rewrite',
+      url: '/_site/cs52/.well-known/acme-challenge/tok',
+      subdomain: 'cs52',
+      customDomain: 'cs52.me',
+    });
+  });
+
+  test('an UNCLAIMED hostname keeps the .well-known pass', () => {
+    // The pre-connection state: DNS points here, the claim does not exist yet.
+    expect(
+      resolveSiteRequest('/.well-known/acme-challenge/tok', 'notyet.example', customConfig)
+    ).toEqual({ action: 'pass' });
+    expect(resolveSiteRequest('/', 'notyet.example', customConfig)).toEqual({
+      action: 'not-found',
+      reason: 'unknown-host',
+    });
+  });
+
+  test('dot-segment refusal still runs first, before any host resolution', () => {
+    expect(resolveSiteRequest('/../../api/pages/x', 'cs52.me', customConfig)).toEqual({
+      action: 'not-found',
+      reason: 'dot-segment',
+    });
+  });
+
+  test('percent-encoding survives the rewrite byte-for-byte', () => {
+    expect(resolveSiteRequest('/page%2Fname?q=a%20b', 'cs52.me', customConfig)).toMatchObject({
+      action: 'rewrite',
+      url: '/_site/cs52/page%2Fname?q=a%20b',
+    });
+  });
+
+  test('an inert config ignores custom domains entirely', () => {
+    expect(
+      resolveSiteRequest('/', 'cs52.me', { ...inertConfig, resolveCustomHost: () => 'cs52' })
+    ).toEqual({ action: 'pass' });
+  });
+});
+
+test.describe('custom-origin marker', () => {
+  test('the middleware stamps the hostname, and the load context reads it back', () => {
+    const { rewriteSiteRequests } = createSiteHostMiddleware(
+      { SITE_BASE_DOMAIN: 'lvh.me', PAGES_URL: 'http://localhost:7140' },
+      { resolveCustomHost: host => (host === 'cs52.me' ? 'cs52' : null) }
+    );
+
+    const req = fakeReq('/syllabus', { host: 'cs52.me' });
+    rewriteSiteRequests(req, fakeRes() as unknown as Response, (() => {}) as NextFunction);
+
+    expect(req.url).toBe('/_site/cs52/syllabus');
+    expect(buildSiteLoadContext(req)).toEqual({ customDomain: 'cs52.me' });
+  });
+
+  test('a subdomain request is explicitly NOT marked', () => {
+    const { rewriteSiteRequests } = createSiteHostMiddleware(
+      { SITE_BASE_DOMAIN: 'lvh.me', PAGES_URL: 'http://localhost:7140' },
+      { resolveCustomHost: host => (host === 'cs52.me' ? 'cs52' : null) }
+    );
+
+    const req = fakeReq('/syllabus', { host: 'cs52.lvh.me' });
+    rewriteSiteRequests(req, fakeRes() as unknown as Response, (() => {}) as NextFunction);
+
+    expect(buildSiteLoadContext(req)).toEqual({ customDomain: null });
+  });
+
+  test('an inbound header can NEVER become the marker', () => {
+    // Forging this flips rel=canonical/og:url on a response that is
+    // shared-cacheable for 60 seconds. The marker is a property the middleware
+    // writes, not anything the client can send.
+    const { rewriteSiteRequests } = createSiteHostMiddleware({
+      SITE_BASE_DOMAIN: 'lvh.me',
+      PAGES_URL: 'http://localhost:7140',
+    });
+
+    const req = fakeReq('/syllabus', {
+      host: 'cs52.lvh.me',
+      'x-custom-domain': 'evil.test',
+      __classmojiCustomDomain: 'evil.test',
+      'x-forwarded-host': 'evil.test',
+    });
+    rewriteSiteRequests(req, fakeRes() as unknown as Response, (() => {}) as NextFunction);
+
+    expect(buildSiteLoadContext(req)).toEqual({ customDomain: null });
+  });
+
+  test('a request the middleware never saw reads as not-custom', () => {
+    expect(buildSiteLoadContext(fakeReq('/', {}))).toEqual({ customDomain: null });
+    expect(buildSiteLoadContext(undefined)).toEqual({ customDomain: null });
+    expect(buildSiteLoadContext({ __classmojiCustomDomain: 42 })).toEqual({ customDomain: null });
   });
 });

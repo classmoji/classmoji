@@ -42,18 +42,41 @@ export function siteOrigin(subdomain: string): string | null {
   const base = siteBaseDomain();
   if (!base) return null;
 
-  let scheme = 'https';
-  let port = '';
+  const { scheme, port } = schemeAndPort();
+  return `${scheme}://${subdomain}.${base}${port}`;
+}
+
+/**
+ * The public origin of an instructor-owned hostname.
+ *
+ * Separate from `siteOrigin` rather than an optional argument, because the two
+ * take different inputs and one of them is dangerous to get wrong: this takes
+ * the STORED `custom_domain`, never the inbound `Host` header. Building a
+ * canonical URL or a redirect target out of the request's own Host is how a
+ * `<link rel="canonical">` ends up naming whatever an attacker typed — on a
+ * response that is shared-cacheable for sixty seconds.
+ *
+ * Scheme and port still come from PAGES_URL so a dev environment yields
+ * something reachable, exactly as `siteOrigin` does.
+ */
+export function customDomainOrigin(domain: string): string {
+  const { scheme, port } = schemeAndPort();
+  return `${scheme}://${domain}${port}`;
+}
+
+/** Scheme and port for every site URL we mint, read off PAGES_URL. */
+function schemeAndPort(): { scheme: string; port: string } {
   try {
     const parsed = new URL(pagesUrl());
-    scheme = parsed.protocol.replace(':', '');
-    port = parsed.port ? `:${parsed.port}` : '';
+    return {
+      scheme: parsed.protocol.replace(':', ''),
+      port: parsed.port ? `:${parsed.port}` : '',
+    };
   } catch {
     // Keep the https/no-port default — a malformed PAGES_URL must not 500 a
     // page over a <link rel="canonical">.
+    return { scheme: 'https', port: '' };
   }
-
-  return `${scheme}://${subdomain}.${base}${port}`;
 }
 
 /**

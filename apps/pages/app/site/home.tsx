@@ -1,4 +1,4 @@
-import { Link, data, useLoaderData } from 'react-router';
+import { data, useLoaderData } from 'react-router';
 import type { HeadersFunction, LoaderFunctionArgs, MetaFunction } from 'react-router';
 
 import { CoverImage, EditPagePill } from './chrome.tsx';
@@ -11,7 +11,7 @@ import {
   resolveSiteContext,
 } from './tenant.server.ts';
 import { describeFromHtml, renderPageForViewer, type SitePageRow } from './pageRender.server.ts';
-import { pagesUrl, siteOrigin } from './env.server.ts';
+import { pagesUrl } from './env.server.ts';
 import { ClassmojiService } from '~/utils/db.server.ts';
 
 /**
@@ -37,15 +37,19 @@ import { ClassmojiService } from '~/utils/db.server.ts';
 export const loader = async (args: LoaderFunctionArgs) => {
   const { request } = args;
   const context = await resolveSiteContext(args);
-  const { site, viewer } = context;
+  const { site, viewer, memberLinkOrigin, seoOrigin } = context;
 
   const home = (await ClassmojiService.site.getHomePageForViewer(
     site,
     viewer.role
   )) as SitePageRow | null;
 
-  const origin = siteOrigin(site.subdomain);
-  const canonical = origin ? `${origin}/` : null;
+  // `seoOrigin`, not the subdomain: a verified custom domain is the address
+  // both hostnames advertise. See canonicalOriginForSite.
+  const canonical = seoOrigin ? `${seoOrigin}/` : null;
+  // Absolute on a custom domain (no session can exist there), relative on the
+  // canonical subdomain.
+  const signInHref = `${memberLinkOrigin}/sign-in`;
 
   if (!home) {
     const pages = await loadSitePageIndex(args, site.classroom_id);
@@ -56,6 +60,7 @@ export const loader = async (args: LoaderFunctionArgs) => {
         kind: 'landing' as const,
         courseName: site.classroom.name,
         canonical,
+        signInHref,
         isAnonymous: !viewer.userId,
         html: null,
         title: null,
@@ -80,6 +85,7 @@ export const loader = async (args: LoaderFunctionArgs) => {
       kind: 'page' as const,
       courseName: site.classroom.name,
       canonical,
+      signInHref,
       isAnonymous: !viewer.userId,
       html: rendered.html,
       title: rendered.title,
@@ -123,7 +129,7 @@ export const meta: MetaFunction<typeof loader> = ({ data: loaderData }) => {
 };
 
 const SiteHome = () => {
-  const { kind, courseName, title, html, coverImage, editHref, isAnonymous } =
+  const { kind, courseName, title, html, coverImage, editHref, isAnonymous, signInHref } =
     useLoaderData<typeof loader>();
 
   if (kind === 'landing') {
@@ -136,12 +142,15 @@ const SiteHome = () => {
             : 'This course website does not have a front page yet.'}
         </p>
         {isAnonymous ? (
-          <Link
-            to="/sign-in"
+          // A plain anchor, not <Link>: on a custom domain this href is an
+          // absolute URL to another origin, which client-side routing cannot
+          // navigate to anyway — and these pages ship no client bundle.
+          <a
+            href={signInHref}
             className="mt-6 rounded-full bg-gray-900 px-4 py-2 text-sm text-white no-underline hover:bg-gray-700 dark:bg-gray-100 dark:text-gray-900 dark:hover:bg-white"
           >
             Sign in
-          </Link>
+          </a>
         ) : null}
       </div>
     );

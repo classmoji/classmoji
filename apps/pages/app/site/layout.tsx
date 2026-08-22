@@ -26,7 +26,7 @@ import { SITE_STYLES } from './styles.ts';
 
 export const loader = async (args: LoaderFunctionArgs) => {
   const { request, params } = args;
-  const { site, viewer } = await resolveSiteContext(args);
+  const { site, viewer, memberLinkOrigin } = await resolveSiteContext(args);
 
   const url = new URL(request.url);
   // The visitor-facing path, not the internal `/_site/...` one the middleware
@@ -41,8 +41,14 @@ export const loader = async (args: LoaderFunctionArgs) => {
       // bridge (not a role-specific dashboard URL) so this link is identical
       // for every viewer and stays safe to embed in the anonymous, cacheable
       // HTML — the bridge resolves the real destination per request.
-      appHref: '/app',
-      signInHref: viewer.userId ? null : signInPathFor(publicPath),
+      //
+      // `memberLinkOrigin` is empty on the canonical subdomain, so these stay
+      // the relative URLs they have always been. On a custom domain it is the
+      // subdomain's absolute origin, because that is where the session lives:
+      // a relative `/sign-in` on cs52.me would start an OAuth round trip whose
+      // cookie the custom domain can never see.
+      appHref: `${memberLinkOrigin}/app`,
+      signInHref: viewer.userId ? null : `${memberLinkOrigin}${signInPathFor(publicPath)}`,
     },
     {
       // The shell itself is never the cache decision — the leaf route's
