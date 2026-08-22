@@ -32,6 +32,9 @@ RUN apk add --no-cache openssl libc6-compat
 
 COPY --from=build /app/apps/pages/build ./apps/pages/build
 COPY --from=build /app/apps/pages/server.ts ./apps/pages/server.ts
+# server.ts imports from server/ (the site-host middleware) — skipping this
+# directory crash-loops the app at boot with ERR_MODULE_NOT_FOUND.
+COPY --from=build /app/apps/pages/server ./apps/pages/server
 COPY --from=build /app/apps/pages/package.json ./apps/pages/package.json
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/package.json ./

@@ -19,6 +19,17 @@ primary_region = 'iad'
   auto_start_machines = true
   min_machines_running = 1
 
+  # Without a check, a boot crash still reads as a green deploy (learned the
+  # hard way: the image once shipped without server/ and crash-looped while
+  # the deploy job passed). /health is answered before host classification,
+  # so it works on any Host header.
+  [[http_service.checks]]
+    interval = '15s'
+    timeout = '5s'
+    grace_period = '30s'
+    method = 'GET'
+    path = '/health'
+
 [[vm]]
   memory = '1gb'
   cpus = 1
