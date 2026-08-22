@@ -27,7 +27,7 @@ fi
 source "$SCRIPT_DIR/devport-env.sh"
 
 # Step 3: Export all devport vars so they're available to subprocesses
-export DATABASE_URL WEBAPP_URL QUIZ_AGENT_URL AI_AGENT_URL SLIDES_URL PAGES_URL MCP_PUBLIC_URL
+export DATABASE_URL WEBAPP_URL QUIZ_AGENT_URL AI_AGENT_URL SLIDES_URL PAGES_URL MCP_PUBLIC_URL SITE_BASE_DOMAIN
 export WEBAPP_PORT HOOK_PORT QUIZ_AGENT_PORT SLIDES_PORT PAGES_PORT MCP_PORT
 export DEVPORT_ID DEVPORT_NAME
 
@@ -84,7 +84,7 @@ DEVPORT_NAME=${DEVPORT_NAME:-main}
 DEVPORT_ID=${DEVPORT_ID:-0}
 
 ## Services Running:
-- Webapp:     http://localhost:$WEBAPP_PORT
+- Webapp:     $WEBAPP_URL
 - Slides:     http://localhost:$SLIDES_PORT
 - Pages:      http://localhost:$PAGES_PORT
 - Hook:       http://localhost:$HOOK_PORT

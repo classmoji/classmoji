@@ -10,6 +10,7 @@ import {
   IconPresentation,
   IconRobot,
 } from '@tabler/icons-react';
+import { PageLink } from '~/components/features/pages';
 
 /**
  * Generic, read-only module tree renderer shared by the student and assistant
@@ -29,6 +30,13 @@ export interface ModuleTreeNode {
   autogradingNode?: React.ReactNode;
   href?: string;
   resourceIcon?: 'page' | 'slide' | 'quiz';
+  /**
+   * Set on page leaves only. Inside the student/assistant shell it makes the
+   * row open the peek drawer instead of a new tab, so a lab guide can be read
+   * without leaving the tree it was linked from. `href` stays as the fallback
+   * for shells with no drawer (admin) — see PageLink.
+   */
+  pageId?: string;
   children?: ModuleTreeNode[];
 }
 
@@ -71,6 +79,7 @@ export const buildResourceLeaves = (
       level,
       resourceIcon: 'page',
       name: page.title,
+      pageId: page.id,
       href: `${ctx.pagesUrl}/${ctx.classSlug}/${page.id}`,
     })
   );
@@ -191,7 +200,18 @@ const ReadOnlyModulesTree = ({
               <span className="shrink-0 w-4" />
             )}
             <NodeIcon node={record} isExpanded={isExpanded} />
-            {record.href ? (
+            {record.pageId && record.href ? (
+              // Pages peek in place; slides and quizzes keep opening their own
+              // app in a new tab, which is the only sensible thing for them.
+              <PageLink
+                pageId={record.pageId}
+                title={typeof record.name === 'string' ? record.name : ''}
+                href={record.href}
+                className="text-sky-600 hover:text-sky-700 dark:text-sky-400"
+              >
+                {record.name}
+              </PageLink>
+            ) : record.href ? (
               <a
                 href={record.href}
                 target="_blank"

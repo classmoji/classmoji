@@ -54,15 +54,12 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
 
   // Handle case where class param might not be present yet (e.g., at /admin)
   if (!classSlug) {
-    return { menuPages: [], recentViewers: [], navVisibility: DEFAULT_NAV_VISIBILITY };
+    return { recentViewers: [], navVisibility: DEFAULT_NAV_VISIBILITY };
   }
 
   try {
     // SECURITY: Verify user has OWNER role in this classroom before recording/fetching views
     const { userId, classroom } = await requireClassroomAdmin(request, classSlug);
-
-    // Fetch pages that should appear in menu (same as student view)
-    const menuPages = await ClassmojiService.page.findForStudentMenu(classroom.id);
 
     const importBanner = await loadImportBanner(classroom.id);
 
@@ -70,7 +67,7 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
     const recentViewersEnabled = classroom.settings?.recent_viewers_enabled ?? true;
 
     if (!recentViewersEnabled) {
-      return { menuPages, recentViewers: [], importBanner };
+      return { recentViewers: [], importBanner };
     }
 
     // Normalize the current path
@@ -96,7 +93,6 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
     });
 
     return {
-      menuPages,
       recentViewers,
       isAdmin: true,
       importBanner,
@@ -106,7 +102,6 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
   } catch {
     // If classroom access fails, return empty data
     return {
-      menuPages: [],
       recentViewers: [],
       pagesUrl: process.env.PAGES_URL || 'http://localhost:7100',
       navVisibility: DEFAULT_NAV_VISIBILITY,
@@ -115,12 +110,11 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
 };
 
 const Admin = ({ loaderData }: Route.ComponentProps) => {
-  const { menuPages, recentViewers, isAdmin, pagesUrl, navVisibility } = loaderData;
+  const { recentViewers, isAdmin, pagesUrl, navVisibility } = loaderData;
   const importBanner = 'importBanner' in loaderData ? loaderData.importBanner : null;
 
   return (
     <CommonLayout
-      menuPages={menuPages}
       recentViewers={recentViewers}
       groupViewersByRole={isAdmin}
       pagesUrl={pagesUrl}

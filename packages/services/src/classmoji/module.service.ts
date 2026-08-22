@@ -42,11 +42,26 @@ const DETAIL_INCLUDE = {
 type ModuleItemWithTargets = Prisma.ModuleItemGetPayload<{ include: typeof ITEM_INCLUDE }>;
 
 /**
+ * The minimum an item must carry for a visibility decision. Stated structurally
+ * rather than as `ModuleItemWithTargets` so callers that select only the flags —
+ * the public course site, which must not pull a repository's assignments and
+ * attached resources into an anonymous request — can use the same predicates.
+ * A fully-included ModuleItem satisfies it.
+ */
+export type ModuleItemVisibility = {
+  item_type: ModuleItemType;
+  page?: { is_draft: boolean; is_public: boolean } | null;
+  slide?: { is_draft: boolean; is_public: boolean } | null;
+  repository?: { is_published: boolean } | null;
+  quiz?: { status: string } | null;
+};
+
+/**
  * Whether a module item should be visible to students, based on the publish
  * state of its underlying target (the single source of truth for item
  * visibility, mirrored by the plan's visibility rules).
  */
-export const isItemPublished = (item: ModuleItemWithTargets): boolean => {
+export const isItemPublished = (item: ModuleItemVisibility): boolean => {
   switch (item.item_type) {
     case 'PAGE':
       return !!item.page && !item.page.is_draft;
@@ -56,6 +71,34 @@ export const isItemPublished = (item: ModuleItemWithTargets): boolean => {
       return !!item.repository && item.repository.is_published;
     case 'QUIZ':
       return !!item.quiz && item.quiz.status !== 'DRAFT';
+    default:
+      return false;
+  }
+};
+
+/**
+ * Whether a module item may be shown to an ANONYMOUS visitor of the classroom's
+ * public course site. Strictly narrower than isItemPublished:
+ *
+ *   - PAGE and SLIDE additionally require `is_public`. Published-to-students is
+ *     not published-to-the-web; the author opts in per resource.
+ *   - REPOSITORY and QUIZ are never shown, published or not — and are dropped
+ *     entirely rather than rendered locked, because the title alone leaks the
+ *     assignment ("Final Project: Raytracer", "Quiz 3: Pointers") before the
+ *     course wants it public.
+ *
+ * Members (any role) go through isItemPublished instead: a signed-in student
+ * still must not see an unpublished repo just because its module is public.
+ */
+export const isItemPubliclyVisible = (item: ModuleItemVisibility): boolean => {
+  switch (item.item_type) {
+    case 'PAGE':
+      return !!item.page && !item.page.is_draft && item.page.is_public;
+    case 'SLIDE':
+      return !!item.slide && !item.slide.is_draft && item.slide.is_public;
+    case 'REPOSITORY':
+    case 'QUIZ':
+      return false;
     default:
       return false;
   }
@@ -299,6 +342,21 @@ export const setPublished = async (id: string, isPublished: boolean, classroomId
   return getPrisma().module.update({
     where: { id },
     data: { is_published: isPublished },
+  });
+};
+
+/**
+ * Toggle a module's visibility on the classroom's public course site.
+ *
+ * Independent of setPublished on purpose: the site shows a module only when
+ * BOTH flags are true, so this can be turned on ahead of time without leaking
+ * anything, and turning a site on never publishes coursework by itself.
+ */
+export const setPublic = async (id: string, isPublic: boolean, classroomId?: string) => {
+  if (classroomId) await assertModuleInClassroom(id, classroomId);
+  return getPrisma().module.update({
+    where: { id },
+    data: { is_public: isPublic },
   });
 };
 
