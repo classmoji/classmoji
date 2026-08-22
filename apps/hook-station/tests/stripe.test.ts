@@ -8,6 +8,12 @@
  *
  * Every subscription payload therefore carries `items.data[].price.id`, because
  * a payload without the Pro price is now a no-op by design.
+ *
+ * The other axis these tests pin is DELIVERY, and the distinction is the whole
+ * point: a refusal is an answer (200, recorded, never retried), while a failure
+ * is not (5xx, NOT recorded, so Stripe redelivers and the handler runs again).
+ * Recording an event the handler did not complete is unrecoverable — the
+ * redelivery short-circuits as a duplicate and a paid grant is lost in silence.
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
@@ -217,14 +223,21 @@ describe('stripe webhook route', () => {
       expect(subCreate).not.toHaveBeenCalled();
       expect(subUpdate).not.toHaveBeenCalled();
       expect(warnSpy).toHaveBeenCalled();
+      // A refusal is an ANSWER, not a failure: recorded, 200'd, never retried.
+      // Redelivering it would produce the same answer forever.
+      expect(processedCreate).toHaveBeenCalled();
     });
 
-    it('FAILS CLOSED when STRIPE_PRO_PRICE_ID is unset', async () => {
+    it('FAILS CLOSED and asks for a REDELIVERY when STRIPE_PRO_PRICE_ID is unset', async () => {
       // A deployment that forgot the variable must stop granting PRO, not grant
       // it to every price — the failure mode of an assertion decides whether it
-      // is one.
+      // is one. But the delivery is not the customer's fault and nothing about
+      // it is wrong: hook-station is a separate Fly app with its own secrets, so
+      // a 5xx here means the grant lands by itself once the secret is set,
+      // instead of being lost the moment the event is marked processed.
       delete process.env.STRIPE_PRO_PRICE_ID;
       constructWebhookEvent.mockReturnValue({
+        id: 'evt_no_price_env',
         type: 'customer.subscription.created',
         data: { object: proSub() },
       });
@@ -233,9 +246,9 @@ describe('stripe webhook route', () => {
       const app = await buildApp();
       const res = await post(app, {}, { 'stripe-signature': 'sig' });
 
-      expect(res.statusCode).toBe(200);
+      expect(res.statusCode).toBe(500);
       expect(subCreate).not.toHaveBeenCalled();
-      expect(warnSpy).toHaveBeenCalled();
+      expect(processedCreate).not.toHaveBeenCalled();
     });
   });
 
@@ -390,11 +403,13 @@ describe('stripe webhook route', () => {
     expect(subCreate).not.toHaveBeenCalled();
   });
 
-  describe('handler exception containment', () => {
-    // Each handler wraps its service calls in try/catch + console.error. A
-    // service failure must NOT 500 the webhook (Stripe would retry-storm) and
-    // must still record the event for idempotency so the retry is a no-op.
-    it('created: swallows a service error, logs it, returns 200, and records the event', async () => {
+  describe('handler failures ask Stripe to redeliver', () => {
+    // A failed handler must NOT be recorded as processed. It used to be, and the
+    // consequence was silent and permanent: the redelivery short-circuits as a
+    // duplicate without running anything, so a transient database blip during a
+    // PRO grant left a charged customer on the free tier with a 200 in Stripe's
+    // dashboard and nothing to retry.
+    it('created: 5xx and NO processed row when the grant write fails', async () => {
       constructWebhookEvent.mockReturnValue({
         id: 'evt_err_created',
         type: 'customer.subscription.created',
@@ -407,17 +422,11 @@ describe('stripe webhook route', () => {
       const app = await buildApp();
       const res = await post(app, {}, { 'stripe-signature': 'sig' });
 
-      expect(res.statusCode).toBe(200);
-      expect(errorSpy).toHaveBeenCalledWith(
-        'Error in customer.subscription.created',
-        expect.any(Error)
-      );
-      expect(processedCreate).toHaveBeenCalledWith(
-        expect.objectContaining({ data: expect.objectContaining({ event_id: 'evt_err_created' }) })
-      );
+      expect(res.statusCode).toBe(500);
+      expect(processedCreate).not.toHaveBeenCalled();
     });
 
-    it('updated: swallows a service error, logs it, and returns 200', async () => {
+    it('updated: 5xx and NO processed row when the write fails', async () => {
       constructWebhookEvent.mockReturnValue({
         id: 'evt_err_updated',
         type: 'customer.subscription.updated',
@@ -436,14 +445,11 @@ describe('stripe webhook route', () => {
       const app = await buildApp();
       const res = await post(app, {}, { 'stripe-signature': 'sig' });
 
-      expect(res.statusCode).toBe(200);
-      expect(errorSpy).toHaveBeenCalledWith(
-        'Error in customer.subscription.updated',
-        expect.any(Error)
-      );
+      expect(res.statusCode).toBe(500);
+      expect(processedCreate).not.toHaveBeenCalled();
     });
 
-    it('deleted: swallows a service error, logs it, and returns 200', async () => {
+    it('deleted: 5xx and NO processed row when the read fails', async () => {
       constructWebhookEvent.mockReturnValue({
         id: 'evt_err_deleted',
         type: 'customer.subscription.deleted',
@@ -454,11 +460,61 @@ describe('stripe webhook route', () => {
       const app = await buildApp();
       const res = await post(app, {}, { 'stripe-signature': 'sig' });
 
-      expect(res.statusCode).toBe(200);
-      expect(errorSpy).toHaveBeenCalledWith(
-        'Error in customer.subscription.deleted',
-        expect.any(Error)
+      expect(res.statusCode).toBe(500);
+      expect(processedCreate).not.toHaveBeenCalled();
+    });
+
+    it('a redelivery after a failure RUNS the handler again', async () => {
+      // The property the processed row must not defeat. Recording a failed
+      // delivery is what turns a retryable blip into a permanent loss.
+      constructWebhookEvent.mockReturnValue({
+        id: 'evt_retry_me',
+        type: 'customer.subscription.created',
+        data: { object: proSub() },
+      });
+      userFindBy.mockResolvedValue({ id: 'user-1' });
+      subGetCurrent.mockResolvedValue(null);
+
+      const processed = new Set<string>();
+      processedFindUnique.mockImplementation(async ({ where }: { where: { event_id: string } }) =>
+        processed.has(where.event_id) ? { event_id: where.event_id } : null
       );
+      processedCreate.mockImplementation(async ({ data }: { data: { event_id: string } }) => {
+        processed.add(data.event_id);
+        return data;
+      });
+      subCreate.mockRejectedValueOnce(new Error('deadlock detected')).mockResolvedValue({});
+
+      const app = await buildApp();
+
+      const first = await post(app, {}, { 'stripe-signature': 'sig' });
+      expect(first.statusCode).toBe(500);
+
+      const second = await post(app, {}, { 'stripe-signature': 'sig' });
+      expect(second.statusCode).toBe(200);
+      expect(subCreate).toHaveBeenCalledTimes(2);
+      expect(JSON.parse(second.body)).not.toHaveProperty('duplicate');
+    });
+
+    it('created: a redelivery never mints a SECOND PRO row for the same stripe id', async () => {
+      // Retries are only safe because `created` is idempotent. A retry after a
+      // partial success (row written, processed-write failed) would otherwise
+      // expire the fresh row and mint a duplicate.
+      constructWebhookEvent.mockReturnValue({
+        id: 'evt_partial',
+        type: 'customer.subscription.created',
+        data: { object: proSub() },
+      });
+      userFindBy.mockResolvedValue({ id: 'user-1' });
+      subFindBy.mockResolvedValue({ id: 'sub-existing', stripe_subscription_id: 'sub_new' });
+
+      const app = await buildApp();
+      const res = await post(app, {}, { 'stripe-signature': 'sig' });
+
+      expect(res.statusCode).toBe(200);
+      expect(subCreate).not.toHaveBeenCalled();
+      expect(subUpdate).not.toHaveBeenCalled();
+      expect(processedCreate).toHaveBeenCalled();
     });
   });
 

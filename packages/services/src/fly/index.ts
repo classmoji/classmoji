@@ -26,6 +26,15 @@
  *    missing one both succeed. Both are called from paths that can be retried
  *    (a double-submitted form, a reconcile sweep), and Fly's own guidance is
  *    that recreating certificates burns issuance rate limit.
+ *  - **It will not delete our own certificates.** `removeCert` refuses platform
+ *    hostnames outright. The certificates on this app are not only the tenants':
+ *    the wildcard that terminates TLS for every `{subdomain}.classmoji.io` class
+ *    site lives here too, and no caller can ever legitimately ask for it to go —
+ *    a custom domain under a platform domain is rejected by `setCustomDomain`
+ *    and by a CHECK constraint, so it can never be a claim. The refusal costs
+ *    nothing and the mistake it prevents is a silent TLS outage across every
+ *    class site (a failed handshake has no status code, so health checks stay
+ *    green).
  *
  * The normalized `FlyCertificate` below covers the fields the product actually
  * renders. `raw` carries the untouched response alongside it, deliberately: the
@@ -33,10 +42,14 @@
  * should not need a service release.
  */
 
+import { isPlatformDomain } from '@classmoji/utils';
+
 /** Why a Fly certificate call failed, as something a caller can branch on. */
 export const FLY_CERT_ERROR = {
   /** FLY_CERTS_API_TOKEN or FLY_PAGES_APP is unset — the feature is off. */
   NOT_CONFIGURED: 'NOT_CONFIGURED',
+  /** We declined to make the call. Never Fly's opinion; always ours. */
+  REFUSED: 'REFUSED',
   /** Fly rejected the credential (401/403). Almost always token scope. */
   UNAUTHORIZED: 'UNAUTHORIZED',
   /** No certificate for this hostname on this app. */
@@ -352,8 +365,26 @@ export async function getCertStatus(
  * expressing "this hostname must not have a certificate", and a hostname that
  * already has none satisfies that. Throwing here would mean a site delete could
  * fail on cleanup it did not need to do.
+ *
+ * REFUSES platform hostnames, before it even reads the config. This app also
+ * holds the wildcard that terminates TLS for every `{subdomain}.classmoji.io`
+ * class site and the canonical `pages.` host; deleting either is a silent
+ * outage that no health check can see. No legitimate caller can reach this —
+ * a platform hostname can never be a claim — so the guard costs one comparison
+ * and closes the whole class of "our own certificate ended up in a delete list".
  */
 export async function removeCert(hostname: string): Promise<boolean> {
+  // Normalized for the comparison only; Fly is given the hostname as passed.
+  const normalized = String(hostname ?? '')
+    .trim()
+    .toLowerCase();
+  if (isPlatformDomain(normalized)) {
+    throw new FlyCertError(
+      FLY_CERT_ERROR.REFUSED,
+      `Refusing to delete the certificate for ${hostname}: that is a Classmoji platform hostname.`
+    );
+  }
+
   const config = requireConfig();
 
   try {

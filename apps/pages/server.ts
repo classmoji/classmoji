@@ -3,7 +3,11 @@ import { createRequestHandler } from '@react-router/express';
 import compression from 'compression';
 import morgan from 'morgan';
 
-import { buildSiteLoadContext, createSiteHostMiddleware } from './server/siteHost.ts';
+import {
+  buildSiteLoadContext,
+  createSiteHostMiddleware,
+  resolveSiteHostConfig,
+} from './server/siteHost.ts';
 import { createCustomDomainSnapshot } from './server/customDomains.ts';
 
 const app = express();
@@ -18,12 +22,21 @@ const app = express();
 // this is the one place that knows both halves. It starts empty and fills in
 // from the database within a second of boot — see server/customDomains.ts for
 // why a whole-table snapshot rather than a per-request lookup.
+//
+// It is built ONLY when the feature is on. With SITE_BASE_DOMAIN unset,
+// `resolveSiteRequest` passes on its first line and the map can never be read,
+// so constructing it would hold a second Postgres pool open and run a table
+// scan every 45 seconds for a result nobody can consult. Resolving the config
+// twice is free — it is pure, and its throw-on-malformed-SITE_BASE_DOMAIN keeps
+// startup, not requests, as the place that fails.
 // ─────────────────────────────────────────────────────────────────────────────
-const customDomains = createCustomDomainSnapshot();
+const siteConfig = resolveSiteHostConfig(process.env);
+const customDomains = siteConfig.siteBaseDomain ? createCustomDomainSnapshot() : null;
 
-const { sanitizeForwardedHost, rewriteSiteRequests } = createSiteHostMiddleware(process.env, {
-  resolveCustomHost: customDomains.resolve,
-});
+const { sanitizeForwardedHost, rewriteSiteRequests } = createSiteHostMiddleware(
+  process.env,
+  customDomains ? { resolveCustomHost: customDomains.resolve } : {}
+);
 
 // Strip the spoofable X-Forwarded-Host before ANY other middleware can read it
 // (@react-router/express honours it when building the request URL).

@@ -1,5 +1,10 @@
 import { schedules, logger } from '@trigger.dev/sdk';
-import { ClassmojiService, FlyCertService, isFlyCertsConfigured } from '@classmoji/services';
+import {
+  ClassmojiService,
+  FlyCertService,
+  isFlyCertsConfigured,
+  isPlatformDomain,
+} from '@classmoji/services';
 
 /**
  * Reconcile Fly certificates against the custom domains we actually claim.
@@ -24,9 +29,20 @@ import { ClassmojiService, FlyCertService, isFlyCertsConfigured } from '@classmo
  * re-requested them could burn that budget on a domain whose DNS was never
  * configured, on every run, forever. A claim missing its certificate is
  * reported and left for the admin's Retry button.
+ *
+ * NOT EVERY CERTIFICATE ON THE APP IS A TENANT'S. The same app carries the
+ * wildcard that terminates TLS for every `{subdomain}.classmoji.io` class site
+ * and the canonical `pages.` host — hostnames that can never appear in the claim
+ * list, because a custom domain under a platform domain is rejected both by
+ * `setCustomDomain` and by a CHECK constraint. A plain certs-minus-claims diff
+ * therefore classifies our own infrastructure as orphaned. They are filtered out
+ * here, and `removeCert` refuses them a second time at the deletion primitive.
  */
 
-/** Never delete more than this in one run. */
+/**
+ * Never delete more than this in one run — and if a run wants to, it deletes
+ * NOTHING. See the abort in `run` for why the cap is not a batch size.
+ */
 const MAX_DELETIONS_PER_RUN = 25;
 
 export const reconcileCustomDomainCerts = schedules.task({
@@ -44,32 +60,70 @@ export const reconcileCustomDomainCerts = schedules.task({
       FlyCertService.listCerts(),
     ]);
 
-    const claimedHosts = new Set(claimed.map(route => route.domain));
+    // Both sides normalized identically. A claim stored with different case
+    // would otherwise fail to match its own certificate and be swept.
+    const claimedHosts = claimed.map(route => route.domain.trim().toLowerCase());
+    const claimedSet = new Set(claimedHosts);
     const certHosts = new Set(certificates.map(hostname => hostname.trim().toLowerCase()));
 
-    // A certificate for a hostname nobody claims: the orphan case above.
-    const orphaned = [...certHosts].filter(hostname => !claimedHosts.has(hostname));
+    // A certificate for a hostname nobody claims: the orphan case above. The
+    // platform's own hostnames are never claims and are never orphans — the
+    // header explains why a bare certs-minus-claims diff points at our wildcard.
+    const orphaned = [...certHosts].filter(
+      hostname => !claimedSet.has(hostname) && !isPlatformDomain(hostname)
+    );
     // A claim with no certificate: reported, never auto-issued. See the header.
-    const missing = claimed.filter(route => !certHosts.has(route.domain)).map(r => r.domain);
+    const missing = claimedHosts.filter(domain => !certHosts.has(domain));
 
-    // The cap is a blast-radius guard, not a throughput one. If this ever wants
-    // to delete dozens of certificates at once, the likeliest explanation is
-    // that `listCustomDomainRoutes` returned a short list for a bad reason — a
-    // partially-applied migration, a replica mid-restore — and mass-deleting
-    // live certificates on that basis would take real sites offline. Stopping
-    // and reporting is the recoverable failure; deleting is not.
-    const toDelete = orphaned.slice(0, MAX_DELETIONS_PER_RUN);
-    if (orphaned.length > MAX_DELETIONS_PER_RUN) {
-      logger.warn('Unusually many orphaned certificates; deleting only the first batch', {
-        orphaned: orphaned.length,
+    // Reported by every branch, so an abort reads as legibly as a sweep.
+    const counts = {
+      claimed: claimedSet.size,
+      certificates: certHosts.size,
+      orphaned: orphaned.length,
+    };
+
+    // Two reads this refuses to act on, both saying the same thing: the claim
+    // list is far shorter than the certificates on the app, and the likeliest
+    // explanation is a bad read rather than a genuine mass release — a
+    // partially-applied migration, a replica mid-restore, or a worker whose
+    // DATABASE_URL and FLY_PAGES_APP came from different environments. Note the
+    // asymmetry that makes this necessary: a database ERROR is already safe (the
+    // read rejects and the run aborts before any delete), so the only bad read
+    // that reaches this point is an empty-or-short SUCCESSFUL one.
+    //
+    // The cap is therefore a blast-radius guard, not a batch size: a run that
+    // wants to delete more than it deletes NOTHING. Slicing would delete the
+    // first 25 of exactly the list we just decided not to trust.
+    //
+    // Tested against `orphaned`, deliberately never against the raw certificate
+    // count: the platform's own certificates sit on the app on every run, good
+    // read or bad, so counting them would flag a healthy zero-customer
+    // environment as suspicious every single night and bury the real signal.
+    const suspicious =
+      (claimedHosts.length === 0 && orphaned.length > 0) || orphaned.length > MAX_DELETIONS_PER_RUN;
+
+    if (suspicious) {
+      logger.error('Refusing to delete: the custom-domain claim list looks untrustworthy', {
+        ...counts,
+        missing: missing.length,
         limit: MAX_DELETIONS_PER_RUN,
+        wouldHaveRemoved: orphaned,
       });
+
+      return {
+        skipped: false as const,
+        suspicious: true,
+        ...counts,
+        removed: [] as string[],
+        failed: [] as string[],
+        missing,
+      };
     }
 
     const removed: string[] = [];
     const failed: string[] = [];
 
-    for (const hostname of toDelete) {
+    for (const hostname of orphaned) {
       try {
         await FlyCertService.removeCert(hostname);
         removed.push(hostname);
@@ -91,8 +145,7 @@ export const reconcileCustomDomainCerts = schedules.task({
     }
 
     logger.info('Reconciled custom-domain certificates', {
-      claimed: claimedHosts.size,
-      certificates: certHosts.size,
+      ...counts,
       removed: removed.length,
       failed: failed.length,
       missing: missing.length,
@@ -100,8 +153,8 @@ export const reconcileCustomDomainCerts = schedules.task({
 
     return {
       skipped: false as const,
-      claimed: claimedHosts.size,
-      certificates: certHosts.size,
+      suspicious: false,
+      ...counts,
       removed,
       failed,
       missing,

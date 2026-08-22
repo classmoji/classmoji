@@ -63,6 +63,13 @@ export {
   type FlyDnsRequirements,
 } from './fly/index.ts';
 
+// Re-exported from `@classmoji/utils` for `@classmoji/tasks`, which depends on
+// this package but not on utils. The nightly reconcile sweep needs the same "is
+// this hostname one of ours?" test the claim path uses, and a second copy of the
+// platform-domain list is exactly the drift that would put our own wildcard back
+// into a delete list.
+export { isPlatformDomain, PLATFORM_DOMAINS } from '@classmoji/utils';
+
 // Autograding: workflow (classroom.yml) generator (pure, client-safe)
 export { generateClassroomWorkflow } from './autograding/generateClassroomWorkflow.ts';
 export type {

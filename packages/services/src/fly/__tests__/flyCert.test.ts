@@ -222,6 +222,38 @@ describe('removeCert', () => {
     fetchMock.mockResolvedValue(respond(404, 'not found'));
     await expect(removeCert('gone.example')).resolves.toBe(false);
   });
+
+  describe('platform hostnames', () => {
+    // This app carries the wildcard that terminates TLS for every
+    // {subdomain}.classmoji.io class site, plus the canonical `pages.` host.
+    // Neither can ever be a claim, so nothing legitimate reaches this — and a
+    // handshake that fails has no HTTP status, so deleting one would be an
+    // outage every health check reports as healthy.
+    it.each([
+      '*.classmoji.io',
+      'classmoji.io',
+      'pages.classmoji.io',
+      '*.staging.classmoji.io',
+      'classmoji-pages.fly.dev',
+      'cs52.lvh.me',
+      '  PAGES.CLASSMOJI.IO  ',
+    ])('REFUSES to delete %s, without calling Fly at all', async hostname => {
+      const error = await removeCert(hostname).catch(e => e);
+      expect(error).toBeInstanceOf(FlyCertError);
+      expect(error.code).toBe(FLY_CERT_ERROR.REFUSED);
+      expect(calls).toHaveLength(0);
+    });
+
+    it('refuses before it even reads the config', async () => {
+      // The refusal is ours, not Fly's, so an unconfigured deployment must not
+      // report it as a configuration problem and mask what was attempted.
+      delete process.env.FLY_CERTS_API_TOKEN;
+      delete process.env.FLY_PAGES_APP;
+
+      const error = await removeCert('*.classmoji.io').catch(e => e);
+      expect(error.code).toBe(FLY_CERT_ERROR.REFUSED);
+    });
+  });
 });
 
 describe('listCerts', () => {
