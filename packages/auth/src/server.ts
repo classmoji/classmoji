@@ -10,7 +10,7 @@ import { ClassmojiService } from '@classmoji/services';
 // without importing betterAuth and Prisma. Re-exported here because
 // `import { AUTH_SECRET } from '@classmoji/auth/server'` is the established
 // entry point.
-import { AUTH_SECRET, COOKIE_PREFIX } from './secret.ts';
+import { AUTH_SECRET, COOKIE_DOMAIN, COOKIE_PREFIX } from './secret.ts';
 
 export { AUTH_SECRET, COOKIE_PREFIX };
 
@@ -342,23 +342,20 @@ export const auth = betterAuth({
       generateId: 'uuid',
     },
     cookiePrefix: COOKIE_PREFIX,
-    // Env-driven, with today's behaviour as the unset default.
-    //
-    //   COOKIE_DOMAIN set   → cross-subdomain cookies ON for that domain, in
-    //                         every environment. Staging sets
-    //                         `.staging.classmoji.io`; local development can
-    //                         opt in with `.lvh.me` (browse the app at
-    //                         app.lvh.me:PORT, not localhost).
-    //   COOKIE_DOMAIN unset → exactly what shipped before: on in production for
-    //                         `.classmoji.io`, off everywhere else.
+    // COOKIE_DOMAIN (see ./secret.ts for the full resolution): derived from
+    // SITE_BASE_DOMAIN in the normal case, COOKIE_DOMAIN as an explicit
+    // override, `.classmoji.io` for a prod deploy with neither set, and null
+    // in bare development (host-only cookies, so localhost keeps working).
     //
     // Course sites live at {subdomain}.{SITE_BASE_DOMAIN}, so a session cookie
     // scoped to the parent domain is what lets a signed-in visitor be
     // recognized there. It is NOT what authorizes them — see
     // ./siteReturnToken.ts for why tenant hosts are never auth trust origins.
-    crossSubDomainCookies: process.env.COOKIE_DOMAIN
-      ? { enabled: true, domain: process.env.COOKIE_DOMAIN }
-      : { enabled: process.env.NODE_ENV === 'production', domain: '.classmoji.io' },
+    crossSubDomainCookies: COOKIE_DOMAIN
+      ? { enabled: true, domain: COOKIE_DOMAIN }
+      : // domain is inert when disabled; kept so the shape matches what
+        // better-auth has always been handed here.
+        { enabled: false, domain: '.classmoji.io' },
   },
   // Map to your existing schema conventions
   user: {

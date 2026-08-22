@@ -33,3 +33,32 @@ export const AUTH_SECRET = process.env.BETTER_AUTH_SECRET || DEV_SECRET;
  * constant rather than hardcoding `classmoji.` — see `getAuthSession`.
  */
 export const COOKIE_PREFIX = process.env.COOKIE_PREFIX || 'classmoji';
+
+/**
+ * The domain the session cookie spans, or null for a host-only cookie.
+ *
+ * Resolution order:
+ *   1. `COOKIE_DOMAIN` — explicit override. Kept as an escape hatch for two
+ *      real cases: local devs who set SITE_BASE_DOMAIN but want to keep
+ *      logging in at localhost (a cookie can't be set for a domain the request
+ *      host isn't under), and a future where tenant sites move to a separate
+ *      TLD from the auth domain (the github.com / github.io pattern).
+ *   2. `.{SITE_BASE_DOMAIN}` — the normal case. The cookie's entire job is to
+ *      span the webapp and the class-site subdomains, and those live under
+ *      SITE_BASE_DOMAIN by definition, so the two values are in lockstep in
+ *      every real environment (classmoji.io / staging.classmoji.io / lvh.me).
+ *      Deriving removes the set-one-forget-the-other failure mode, which
+ *      presents as members silently appearing anonymous on sites.
+ *   3. Production fallback `.classmoji.io` — exactly what shipped before any
+ *      of this was configurable, for a prod deploy with neither var set.
+ *   4. null — development default: host-only cookies, localhost keeps working.
+ */
+export function resolveCookieDomain(env: Record<string, string | undefined>): string | null {
+  const explicit = env.COOKIE_DOMAIN?.trim();
+  if (explicit) return explicit;
+  const siteBase = env.SITE_BASE_DOMAIN?.trim();
+  if (siteBase) return `.${siteBase.replace(/^\.+/, '')}`;
+  return env.NODE_ENV === 'production' ? '.classmoji.io' : null;
+}
+
+export const COOKIE_DOMAIN: string | null = resolveCookieDomain(process.env);
