@@ -2,6 +2,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const classroomFindUnique = vi.fn();
 const moduleFindMany = vi.fn();
+const moduleFindFirst = vi.fn();
+const moduleUpdate = vi.fn();
 const itemFindFirst = vi.fn();
 const itemFindMany = vi.fn();
 const itemCreate = vi.fn();
@@ -11,7 +13,7 @@ const transaction = vi.fn();
 vi.mock('@classmoji/database', () => ({
   default: () => ({
     classroom: { findUnique: classroomFindUnique },
-    module: { findMany: moduleFindMany },
+    module: { findMany: moduleFindMany, findFirst: moduleFindFirst, update: moduleUpdate },
     moduleItem: {
       findFirst: itemFindFirst,
       findMany: itemFindMany,
@@ -24,8 +26,14 @@ vi.mock('@classmoji/database', () => ({
 
 vi.mock('@classmoji/utils', () => ({ titleToIdentifier: (s: string) => s.toLowerCase() }));
 
-const { isItemPublished, addItem, reorderItems, listForClassroom } =
-  await import('../module.service.ts');
+const {
+  isItemPublished,
+  isItemPubliclyVisible,
+  setPublic,
+  addItem,
+  reorderItems,
+  listForClassroom,
+} = await import('../module.service.ts');
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -55,6 +63,53 @@ describe('isItemPublished', () => {
 
   it('hides an item whose target is missing', () => {
     expect(isItemPublished({ item_type: 'SLIDE', slide: null } as never)).toBe(false);
+  });
+});
+
+describe('isItemPubliclyVisible', () => {
+  it('requires is_public on top of published, for pages and slides alike', () => {
+    // Published-to-students is not published-to-the-web.
+    const page = (is_draft: boolean, is_public: boolean) =>
+      isItemPubliclyVisible({ item_type: 'PAGE', page: { is_draft, is_public } } as never);
+    expect(page(false, true)).toBe(true);
+    expect(page(false, false)).toBe(false);
+    expect(page(true, true)).toBe(false);
+
+    const slide = (is_draft: boolean, is_public: boolean) =>
+      isItemPubliclyVisible({ item_type: 'SLIDE', slide: { is_draft, is_public } } as never);
+    expect(slide(false, true)).toBe(true);
+    expect(slide(false, false)).toBe(false);
+    expect(slide(true, true)).toBe(false);
+  });
+
+  it('never shows a repository or a quiz, however published', () => {
+    // Dropped entirely rather than rendered locked — the title alone leaks the
+    // assignment before the course wants it public.
+    expect(
+      isItemPubliclyVisible({
+        item_type: 'REPOSITORY',
+        repository: { is_published: true },
+      } as never)
+    ).toBe(false);
+    expect(
+      isItemPubliclyVisible({ item_type: 'QUIZ', quiz: { status: 'PUBLISHED' } } as never)
+    ).toBe(false);
+  });
+});
+
+describe('setPublic', () => {
+  it('flips only is_public, leaving the in-app publish state alone', async () => {
+    moduleUpdate.mockResolvedValue({ id: 'mod1' });
+    await setPublic('mod1', true);
+    expect(moduleUpdate).toHaveBeenCalledWith({ where: { id: 'mod1' }, data: { is_public: true } });
+  });
+
+  it('refuses a module from another classroom when a scope is given', async () => {
+    moduleFindFirst.mockResolvedValue(null);
+    await expect(setPublic('mod1', true, 'class-2')).rejects.toThrow(
+      'Module not found in classroom'
+    );
+    expect(moduleUpdate).not.toHaveBeenCalled();
   });
 });
 

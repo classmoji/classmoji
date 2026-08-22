@@ -2,33 +2,58 @@ import { redirect } from 'react-router';
 
 import { Alert } from 'antd';
 import { auth } from '@classmoji/auth/server';
+import { isSafeRelativePath } from '@classmoji/auth/site-return';
 import { authClient } from '@classmoji/auth/client';
 import SignInPage from './SignInPage';
 import type { Route } from './+types/route';
 
+/**
+ * `?redirect=` is honoured for RELATIVE PATHS ONLY, and generously bounded
+ * because /site-return carries a signed token in its query string.
+ *
+ * Absolute URLs are never honoured — not even to hosts we own. A course site
+ * that wants a visitor back sends them through /site-return with a signed
+ * token, which is re-verified and re-checked against the database; that is the
+ * one and only cross-origin mechanism. Widening this parameter would quietly
+ * become a second, unauthenticated one.
+ */
+const REDIRECT_PARAM_MAX_LENGTH = 1024;
+
 export const loader = async ({ request }: Route.LoaderArgs) => {
+  const url = new URL(request.url);
+
+  // Validated here, in the loader, and handed to the component already safe —
+  // so there is exactly one place that decides what this parameter may contain.
+  const requestedRedirect = url.searchParams.get('redirect');
+  const redirectPath = isSafeRelativePath(requestedRedirect, REDIRECT_PARAM_MAX_LENGTH)
+    ? requestedRedirect
+    : null;
+
   const session = await auth.api.getSession({ headers: request.headers });
 
   if (session?.user) {
-    return redirect('/select-organization');
+    // Already signed in: honour the destination they were headed for, e.g. an
+    // in-flight /site-return?token=… bounce.
+    return redirect(redirectPath ?? '/select-organization');
   }
 
-  const url = new URL(request.url);
   return {
     isDev: process.env.NODE_ENV === 'development',
     multipleTokens: process.env.MULTIPLE_TOKENS === 'true',
     setupComplete: url.searchParams.get('setup') === 'complete',
+    redirectPath,
   };
 };
 
 const Index = ({ loaderData }: Route.ComponentProps) => {
-  const { isDev, setupComplete, multipleTokens } = loaderData;
+  const { isDev, setupComplete, multipleTokens, redirectPath } = loaderData;
 
   const handleGitHubLogin = async () => {
-    // Use BetterAuth client for OAuth flow
+    // Use BetterAuth client for OAuth flow. `redirectPath` was validated in the
+    // loader; it is null unless it is a safe relative path.
     await authClient.signIn.social({
       provider: 'github',
-      callbackURL: '/select-organization',
+      callbackURL: redirectPath ?? '/select-organization',
     });
   };
 

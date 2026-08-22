@@ -97,8 +97,20 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
   const isPublicPageRoute = /^\/[^/]+\/pages\/[^/]+$/.test(url.pathname);
   if (isPublicPageRoute) return { user: null, publicToken };
 
-  // Routes that don't require full auth (registration flow)
-  const publicRoutes = ['/', '/select-registration', '/registration', '/login', '/test-login'];
+  // Routes that don't require full auth (registration flow).
+  //
+  // /site-return MUST be here: it is where a course site sends a visitor who is
+  // not signed in yet, and its whole job is to hand them to the landing page
+  // with a `?redirect=` back to itself. Bouncing it from here instead would
+  // drop the return trip and strand them on the dashboard.
+  const publicRoutes = [
+    '/',
+    '/select-registration',
+    '/registration',
+    '/login',
+    '/test-login',
+    '/site-return',
+  ];
   const isPublicRoute = publicRoutes.some(
     route =>
       url.pathname === route ||

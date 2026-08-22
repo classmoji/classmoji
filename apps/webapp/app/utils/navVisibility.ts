@@ -15,6 +15,12 @@ export interface NavVisibility {
    * so existing callers and error fallbacks default to showing it.
    */
   hasModules?: boolean;
+  /**
+   * Whether the classroom has any readable (non-draft) page. Same contract as
+   * hasModules, for the single Pages entry that replaced the per-page sidebar
+   * group: hidden from non-owners when false, defaulting to shown.
+   */
+  hasPages?: boolean;
 }
 
 export const DEFAULT_NAV_VISIBILITY: NavVisibility = {
@@ -22,6 +28,7 @@ export const DEFAULT_NAV_VISIBILITY: NavVisibility = {
   showPages: true,
   showRepos: true,
   hasModules: true,
+  hasPages: true,
 };
 
 // Settings arrive loosely typed (sanitized to Record<string, unknown>), so the

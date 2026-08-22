@@ -3,21 +3,30 @@ import type { Route } from './+types/route';
 import { CommonLayout, RequireRole } from '~/components';
 import { ClassmojiService } from '@classmoji/services';
 import { requireClassroomTeachingTeam } from '~/utils/routeAuth.server';
+import { PagePeekProvider } from '~/components/features/pages';
 import { DEFAULT_NAV_VISIBILITY, navVisibilityFromSettings } from '~/utils/navVisibility';
+import { EMPTY_PAGES_NAV, loadPagesNav } from '~/utils/pagesNav.server';
 
 export const loader = async ({ params, request }: Route.LoaderArgs) => {
   const { class: classSlug } = params;
+  const pagesUrl = process.env.PAGES_URL || 'http://localhost:7100';
 
   // Handle case where class param might not be present yet (e.g., at /assistant)
   if (!classSlug) {
-    return { menuPages: [], recentViewers: [], navVisibility: DEFAULT_NAV_VISIBILITY };
+    return {
+      recentViewers: [],
+      pagesUrl,
+      pagesNav: EMPTY_PAGES_NAV,
+      navVisibility: DEFAULT_NAV_VISIBILITY,
+    };
   }
 
   try {
     const { userId, classroom } = await requireClassroomTeachingTeam(request, classSlug);
 
-    // Fetch pages that should appear in menu (same as student)
-    const menuPages = await ClassmojiService.page.findForStudentMenu(classroom.id);
+    // Same single read the student layout does: nav visibility + the site links
+    // the peek drawer's ↗ needs.
+    const pagesNav = await loadPagesNav(classroom.id);
 
     // Check if recent viewers feature is enabled (settings included from findBySlug)
     const recentViewersEnabled = classroom.settings?.recent_viewers_enabled ?? true;
@@ -53,43 +62,51 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
     }
 
     return {
-      menuPages,
       recentViewers,
       isTeachingTeam: true,
-      pagesUrl: process.env.PAGES_URL || 'http://localhost:7100',
+      pagesUrl,
+      pagesNav,
       navVisibility: {
         ...navVisibilityFromSettings(classroom.settings),
         // Staff preview drafts, so any module (published or not) shows the tab.
         hasModules: await ClassmojiService.module.hasModulesForClassroom(classSlug, {
           includeUnpublished: true,
         }),
+        hasPages: pagesNav.hasPages,
       },
     };
   } catch {
-    // If classroom access fails, return empty menu pages
+    // If classroom access fails, return empty data
     return {
-      menuPages: [],
       recentViewers: [],
-      pagesUrl: process.env.PAGES_URL || 'http://localhost:7100',
+      pagesUrl,
+      pagesNav: EMPTY_PAGES_NAV,
       navVisibility: DEFAULT_NAV_VISIBILITY,
     };
   }
 };
 
-const Assistant = ({ loaderData }: Route.ComponentProps) => {
-  const { menuPages, recentViewers, isTeachingTeam, pagesUrl, navVisibility } = loaderData;
+const Assistant = ({ loaderData, params }: Route.ComponentProps) => {
+  const { recentViewers, isTeachingTeam, pagesUrl, pagesNav, navVisibility } = loaderData;
 
   return (
     <CommonLayout
-      menuPages={menuPages}
       recentViewers={recentViewers}
       groupViewersByRole={isTeachingTeam}
       pagesUrl={pagesUrl}
       navVisibility={navVisibility}
     >
-      <RequireRole roles={['ASSISTANT']}>
-        <Outlet />
-      </RequireRole>
+      <PagePeekProvider
+        classSlug={params.class ?? ''}
+        rolePath="/assistant"
+        pagesUrl={pagesUrl}
+        siteOrigin={pagesNav.siteOrigin}
+        siteSlugByPageId={pagesNav.siteSlugByPageId}
+      >
+        <RequireRole roles={['ASSISTANT']}>
+          <Outlet />
+        </RequireRole>
+      </PagePeekProvider>
     </CommonLayout>
   );
 };

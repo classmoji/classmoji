@@ -1,7 +1,7 @@
 import { Avatar, Tooltip } from 'antd';
 import { Link, useParams, useLocation, useRouteLoaderData } from 'react-router';
 import { useEffect, useRef, useState } from 'react';
-import { IconFileText, IconMenu2, IconApple, IconSparkles } from '@tabler/icons-react';
+import { IconMenu2, IconApple, IconSparkles } from '@tabler/icons-react';
 import useLocalStorageState from 'use-local-storage-state';
 import { Logo } from '@classmoji/ui-components';
 import { RequireRole, RecentViewers } from '~/components';
@@ -20,12 +20,14 @@ import ImportProgressBanner, {
 import type { AppUser, MembershipWithOrganization } from '~/types';
 
 // Lean owner navigation. New/imported instructors land in a small core that
-// maps to the GitHub-Classroom mental model (roster + repos + grades); the rest
-// of the platform stays one click away behind the "Show all features" toggle.
-// Other roles (student/assistant) are never reduced. Keyed by `route.link`.
+// maps to the GitHub-Classroom mental model (roster + repos + grades) plus the
+// class's public reading surface (Pages); the rest of the platform stays one
+// click away behind the "Show all features" toggle. Other roles
+// (student/assistant) are never reduced. Keyed by `route.link`.
 const OWNER_CORE_LINKS = new Set([
   '/dashboard',
   '/repos',
+  '/pages',
   '/students',
   '/teams',
   '/assistants',
@@ -33,11 +35,6 @@ const OWNER_CORE_LINKS = new Set([
   '/settings/general',
   '/support',
 ]);
-
-interface MenuPage {
-  id: string;
-  title: string;
-}
 
 interface Viewer {
   user: { id: string; name?: string | null; login?: string | null; avatar_url?: string | null };
@@ -59,11 +56,12 @@ interface NavVisibility {
   showRepos?: boolean;
   /** Whether the class has any modules; hides the empty Modules tab from non-owners. */
   hasModules?: boolean;
+  /** Whether the class has any published page; hides the empty Pages tab likewise. */
+  hasPages?: boolean;
 }
 
 interface CommonLayoutProps {
   children: React.ReactNode;
-  menuPages?: MenuPage[];
   recentViewers?: Viewer[];
   groupViewersByRole?: boolean;
   pagesUrl?: string;
@@ -84,7 +82,6 @@ interface CommonLayoutProps {
 
 const CommonLayout = ({
   children,
-  menuPages = [],
   recentViewers = [],
   groupViewersByRole = false,
   pagesUrl: _pagesUrl = 'http://localhost:7100',
@@ -151,6 +148,10 @@ const CommonLayout = ({
   // who never use the feature don't show students an empty tab. Defaults true
   // when unknown (store fallback / pre-loader render) to avoid hiding wrongly.
   const hasModules = navVisibility?.hasModules ?? true;
+  // Same treatment for the single Pages entry. It replaced the per-page group,
+  // so on a class with nothing published it would otherwise be a nav item that
+  // opens an empty reader.
+  const hasPages = navVisibility?.hasPages ?? true;
 
   const themeColors = getThemeByKey(classroom?.settings?.theme);
   const themeBackground = isDarkMode ? themeColors.darkBackground : themeColors.background;
@@ -238,6 +239,9 @@ const CommonLayout = ({
     // also hides when the class has none, so the tab never shows up empty.
     if (item.link === '/modules' && role !== 'OWNER' && (!showModules || !hasModules)) return null;
     if (item.link === '/repos' && role !== 'OWNER' && !showRepos) return null;
+    // `show_pages` used to gate the group of per-page links; it now gates the
+    // one Pages entry that replaced them.
+    if (item.link === '/pages' && role !== 'OWNER' && (!showPages || !hasPages)) return null;
 
     // Repos keeps its own label now that students have a real Modules tab.
     // (Previously the repos section was framed as "Modules" for students, which
@@ -302,53 +306,9 @@ const CommonLayout = ({
     // Student navigation visibility toggles (OWNER always retains access).
     if (item.link === '/modules' && role !== 'OWNER' && (!showModules || !hasModules)) return false;
     if (item.link === '/repos' && role !== 'OWNER' && !showRepos) return false;
+    if (item.link === '/pages' && role !== 'OWNER' && (!showPages || !hasPages)) return false;
 
     return true;
-  };
-
-  // Render dynamic menu pages for students and assistants
-  const renderMenuPages = () => {
-    if (!menuPages || menuPages.length === 0) return null;
-    if (role !== 'STUDENT' && role !== 'ASSISTANT') return null;
-    // Instructors can hide student-facing pages from the sidebar.
-    if (!showPages) return null;
-
-    const menuPageItems = menuPages.map((page: MenuPage) => {
-      return (
-        <Link
-          key={page.id}
-          to={`${roleSettings?.path}/${params.class}/pages/${page.id}`}
-          className={`
-            group flex items-center gap-2.5 rounded-md transition-colors duration-150 w-full
-            ${collapsed ? 'justify-center p-2 mx-1.5' : 'px-2 py-1.5 mx-1.5'}
-            hover:bg-gray-100/70 dark:hover:bg-neutral-800/60
-          `}
-          style={{ color: isDarkMode ? '#d1d5db' : '#374151' }}
-        >
-          {collapsed ? (
-            <Tooltip title={page.title} placement="right">
-              <IconFileText size={20} strokeWidth={1.75} />
-            </Tooltip>
-          ) : (
-            <>
-              <IconFileText size={20} strokeWidth={1.75} className="shrink-0" />
-              <span className="flex-1 truncate">{page.title}</span>
-            </>
-          )}
-        </Link>
-      );
-    });
-
-    return (
-      <div key="menu-pages" className={collapsed ? 'pt-3' : 'pt-5'}>
-        {!collapsed && (
-          <div className="px-3.5 mb-1 text-[11px] font-semibold uppercase tracking-wider text-ink-4 select-none">
-            Pages
-          </div>
-        )}
-        <div className="space-y-0.5">{menuPageItems}</div>
-      </div>
-    );
   };
 
   const renderAskMoji = () => {
@@ -481,8 +441,8 @@ const CommonLayout = ({
       );
     }),
 
-    // Add dynamic menu pages after Assessment category (for students only)
-    renderMenuPages(),
+    // (Pages used to hang here as one nav entry per page. It is a single
+    // "Pages" item in CONTENT now — see routeCategories.content.)
 
     // Owner-only "Show all features" reveal at the foot of the nav
     renderShowAllToggle(),
@@ -675,7 +635,9 @@ const CommonLayout = ({
         >
           <div
             className={
-              pathname.includes('/pages/') && !pathname.endsWith('/pages/new')
+              pathname.startsWith('/admin') &&
+              pathname.includes('/pages/') &&
+              !pathname.endsWith('/pages/new')
                 ? 'min-h-full'
                 : 'px-4 pt-14 pb-4 sm:px-6 lg:px-8 lg:pt-6 lg:pb-6 min-h-full'
             }

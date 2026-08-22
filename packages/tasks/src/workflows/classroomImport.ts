@@ -52,7 +52,6 @@ import {
   type ImportProgress,
   type ImportSummaryCounts,
 } from '@classmoji/services/import-progress'; // eslint-disable-line import/no-unresolved
-import { titleToIdentifier } from '@classmoji/utils';
 import { cloneContentRepo, type CloneSkipReason } from '../helpers/cloneContentRepo.ts';
 
 /**
@@ -545,8 +544,14 @@ function describeEmptyCopy(
  * exactly those paths in the fresh target repo. Only the header image URL is
  * rewritten, with the same pure helper that rewrote the pushed files, so a
  * deleted source repo cannot 404 the imported page's banner.
+ *
+ * Exported only so the warn-vs-throw split below can be tested directly. Every
+ * dependency it needs is already a parameter, so a unit test costs two stubs;
+ * reaching it through `importContentTask.run` would mean standing up loadJob, a
+ * ProgressWriter and a whole clone. Not part of the module's API — nothing else
+ * calls it.
  */
-async function importPageRows({
+export async function importPageRows({
   prisma,
   job,
   writer,
@@ -560,6 +565,7 @@ async function importPageRows({
   target: { orgLogin: string; repo: string };
 }): Promise<number> {
   const { rewriteContentUrls } = ClassmojiService.contentImport;
+  const { createWithUniquePageSlug, isPageSlugConflict } = ClassmojiService.page;
   const sourcePages = await prisma.page.findMany({
     where: { classroom_id: job.source_classroom_id },
     orderBy: { created_at: 'asc' },
@@ -576,34 +582,51 @@ async function importPageRows({
     // counts as done — it IS imported — and it is not warned about.
     if (already.has(page.id)) continue;
     try {
-      const row = await prisma.page.create({
-        data: {
-          classroom_id: job.classroom_id,
-          title: page.title,
-          slug: titleToIdentifier(page.title),
-          content_path: page.content_path,
-          created_by: job.requested_by,
-          is_draft: true,
-          is_public: false,
-          width: page.width,
-          show_in_student_menu: page.show_in_student_menu,
-          menu_order: page.menu_order,
-          header_image_url: page.header_image_url
-            ? rewriteContentUrls(page.header_image_url, {
-                sourceLogin: source.orgLogin,
-                sourceRepo: source.repo,
-                sourcePath: '',
-                targetLogin: target.orgLogin,
-                targetRepo: target.repo,
-                targetPath: '',
-              })
-            : page.header_image_url,
-          header_image_position: page.header_image_position,
-        },
-      });
+      // `slug` is unique per classroom, and two source pages can normalize to
+      // the same one ("Lab 1" and "Lab-1"). Writing the derived value straight
+      // in would make the second page 23505 and be swallowed by the catch below
+      // as a warning — an import that silently drops a page. The shared walker
+      // also yields NULL (never '') for a title with no usable characters.
+      const row = await createWithUniquePageSlug(page.title, slug =>
+        prisma.page.create({
+          data: {
+            classroom_id: job.classroom_id,
+            title: page.title,
+            slug,
+            content_path: page.content_path,
+            created_by: job.requested_by,
+            is_draft: true,
+            is_public: false,
+            width: page.width,
+            show_in_student_menu: page.show_in_student_menu,
+            menu_order: page.menu_order,
+            header_image_url: page.header_image_url
+              ? rewriteContentUrls(page.header_image_url, {
+                  sourceLogin: source.orgLogin,
+                  sourceRepo: source.repo,
+                  sourcePath: '',
+                  targetLogin: target.orgLogin,
+                  targetRepo: target.repo,
+                  targetPath: '',
+                })
+              : page.header_image_url,
+            header_image_position: page.header_image_position,
+          },
+        })
+      );
       writer.mergeIdMaps({ pages: { [page.id]: row.id } });
       created++;
     } catch (error: unknown) {
+      // A slug collision is NOT a warning. The walker above absorbs every 23505
+      // it can act on and exhausts into PAGE_SLUG_UNAVAILABLE, so a raw P2002 on
+      // [classroom_id, slug] reaching here means its premise is broken — most
+      // plausibly this code running against a database whose unique index
+      // predates it, where `slug` went straight in. Warning would drop a page
+      // per collision and still finish the job COMPLETED, which the retry
+      // endpoint refuses to replay; the instructor would be left with a
+      // silently incomplete classroom. Throwing fails the phase and keeps the
+      // job retryable, the same trade the 'missing' clone branch makes above.
+      if (isPageSlugConflict(error)) throw error;
       warnings.push(`pages: DB row failed for "${page.title}": ${errText(error)}`);
     } finally {
       done++;

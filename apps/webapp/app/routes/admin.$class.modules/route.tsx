@@ -1,6 +1,6 @@
-import { useNavigate, useParams } from 'react-router';
+import { useFetcher, useNavigate, useParams } from 'react-router';
 import { useState } from 'react';
-import { Table, Tag } from 'antd';
+import { Switch, Table, Tag, Tooltip } from 'antd';
 import { namedAction } from 'remix-utils/named-action';
 
 import { SearchInput, ButtonNew, RequireRole, TableActionButtons } from '~/components';
@@ -38,6 +38,7 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
     title?: string;
     description?: string | null;
     isPublished?: boolean;
+    isPublic?: boolean;
     moduleId?: string;
     moduleItemId?: string;
     itemType?: ModuleItemType;
@@ -92,6 +93,19 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
         return { error: 'Failed to update module visibility. Please try again.' };
       }
     },
+    async setPublic() {
+      try {
+        await ClassmojiService.module.setPublic(data.id!, Boolean(data.isPublic), classroom.id);
+        return {
+          success: data.isPublic
+            ? 'Module shown on the course website'
+            : 'Module hidden from the course website',
+        };
+      } catch (error: unknown) {
+        console.error('Module setPublic error:', error);
+        return { error: 'Failed to update module site visibility. Please try again.' };
+      }
+    },
     async addItem() {
       try {
         await ClassmojiService.module.addItem(
@@ -132,6 +146,59 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
 };
 
 type ModuleRow = Route.ComponentProps['loaderData']['modules'][number];
+
+/**
+ * Per-module switch for the public course website.
+ *
+ * Independent of "Published" on purpose — the site shows a module only when
+ * BOTH flags are true (site.service.listPublicModulesForViewer), so this can be
+ * turned on ahead of time without leaking anything. It is gated on
+ * `is_published` all the same, because a Public switch that changes nothing
+ * visible reads as broken.
+ *
+ * Its own fetcher per row: the rows submit independently, and each one wants
+ * its own spinner. The wrapping span exists twice over — a disabled antd Switch
+ * has `pointer-events: none`, so the tooltip needs a live element to hang off,
+ * and the row itself is a click target that navigates.
+ */
+const PublicSiteToggle = ({ module: m, classSlug }: { module: ModuleRow; classSlug: string }) => {
+  const fetcher = useFetcher<{ success?: string; error?: string }>();
+  const submitting = fetcher.state !== 'idle';
+
+  // Optimistic: show what was asked for while it is in flight, so the switch
+  // does not sit on its old value until the loader revalidates.
+  const pending = fetcher.json as { isPublic?: boolean } | undefined;
+  const checked =
+    submitting && typeof pending?.isPublic === 'boolean' ? pending.isPublic : m.is_public;
+
+  return (
+    <Tooltip
+      title={
+        m.is_published
+          ? 'Shown on the course website schedule'
+          : 'Publish this module first — only published modules reach the course website'
+      }
+    >
+      <span className="inline-flex" onClick={event => event.stopPropagation()}>
+        <Switch
+          size="small"
+          checked={checked}
+          disabled={!m.is_published}
+          loading={submitting}
+          aria-label={`Public site: ${m.title}`}
+          onChange={(value, event) => {
+            event.stopPropagation();
+            fetcher.submit(JSON.stringify({ id: m.id, isPublic: value }), {
+              method: 'post',
+              action: `/admin/${classSlug}/modules?/setPublic`,
+              encType: 'application/json',
+            });
+          }}
+        />
+      </span>
+    </Tooltip>
+  );
+};
 
 const ModulesIndex = ({ loaderData }: Route.ComponentProps) => {
   const { modules } = loaderData;
@@ -185,6 +252,15 @@ const ModulesIndex = ({ loaderData }: Route.ComponentProps) => {
         <Tag color={m.is_published ? 'green' : 'orange'}>
           {m.is_published ? 'Published' : 'Draft'}
         </Tag>
+      ),
+    },
+    {
+      title: 'Public',
+      key: 'public',
+      width: 100,
+      align: 'center' as const,
+      render: (_: unknown, m: ModuleRow) => (
+        <PublicSiteToggle module={m} classSlug={classSlug ?? ''} />
       ),
     },
     {

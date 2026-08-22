@@ -1,5 +1,6 @@
 import { redirect } from 'react-router';
 import type { Route } from './+types/route';
+import { COOKIE_DOMAIN } from '@classmoji/auth/secret';
 import { GitHubProvider } from '@classmoji/services';
 import getPrisma from '@classmoji/database';
 
@@ -176,10 +177,17 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
       console.log(`[test-login] Redirecting directly to ${redirectPath}`);
     }
 
-    // Set Better Auth session cookie and redirect
+    // Set Better Auth session cookie and redirect. Use the SAME resolved
+    // cookie domain as the real OAuth path (derived from SITE_BASE_DOMAIN,
+    // COOKIE_DOMAIN as override — see @classmoji/auth secret.ts) so the dev
+    // session spans app.lvh.me AND {sub}.lvh.me exactly like production.
+    const cookieDomain = COOKIE_DOMAIN;
+    const sessionCookie =
+      `classmoji.session_token=${sessionToken}; Path=/; HttpOnly; SameSite=Lax` +
+      (cookieDomain ? `; Domain=${cookieDomain}` : '');
     return redirect(redirectPath, {
       headers: {
-        'Set-Cookie': `classmoji.session_token=${sessionToken}; Path=/; HttpOnly; SameSite=Lax`,
+        'Set-Cookie': sessionCookie,
       },
     });
   } catch (error: unknown) {

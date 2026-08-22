@@ -14,6 +14,7 @@ import {
   IconWorld,
   IconPlayerPlay,
   IconFileText,
+  IconLayoutGrid,
 } from '@tabler/icons-react';
 
 import { Callout } from './CalloutBlock.tsx';
@@ -23,6 +24,7 @@ import { Divider } from './DividerBlock.tsx';
 import { Embed } from './EmbedBlock.tsx';
 import { Video } from './VideoBlock.tsx';
 import { PageLink } from './PageLinkBlock.tsx';
+import { NavGrid } from './NavGridBlock.tsx';
 
 /**
  * BlockNote schema with all built-in + custom block specs.
@@ -33,7 +35,8 @@ import { PageLink } from './PageLinkBlock.tsx';
  *
  * XL package (2): column, columnList
  *
- * Custom blocks (7): callout, terminal, profile, divider, embed, video, pageLink
+ * Custom blocks (8): callout, terminal, profile, divider, embed, video, pageLink,
+ * navGrid
  */
 // Remove audio, video, and codeBlock from default blocks
 const {
@@ -56,6 +59,7 @@ export const schema = BlockNoteSchema.create({
     embed: Embed(),
     video: Video(), // Custom video block
     pageLink: PageLink(), // Page link block (fetches pages via API)
+    navGrid: NavGrid(), // Page directory — authored navigation hub (class sites)
   },
 });
 
@@ -120,6 +124,17 @@ export const customSlashMenuItems = [
           editor.setTextCursorPosition(newBlockRef, 'end');
         }
       }, 0);
+    },
+  },
+  {
+    title: 'Page directory',
+    subtext: 'Grid of links to pages and external sites',
+    aliases: ['directory', 'nav', 'hub', 'links', 'pages'],
+    group: 'Basic blocks',
+    icon: <IconLayoutGrid size={18} />,
+    onItemClick: (editor: PageBlockEditor) => {
+      const currentBlock = editor.getTextCursorPosition().block;
+      editor.replaceBlocks([currentBlock], [{ type: 'navGrid' }]);
     },
   },
   {

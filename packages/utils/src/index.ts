@@ -21,6 +21,7 @@ export * from './emojis.ts';
 export * from './quiz.ts';
 export * from './content.ts';
 export * from './repoNames.ts';
+export * from './subdomains.ts';
 export * from './debounce.ts';
 export * from './processSafety.ts';
 export * from './roomStateStore.ts';

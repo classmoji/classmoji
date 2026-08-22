@@ -20,11 +20,10 @@
  */
 
 import getPrisma from '@classmoji/database';
-import { titleToIdentifier } from '@classmoji/utils';
 import { ContentService } from '../content/ContentService.ts';
 import { getGitProvider } from '../git/index.ts';
 import * as contentManifestService from './contentManifest.service.ts';
-import { ensureContentRepo } from './page.service.ts';
+import { createWithUniquePageSlug, ensureContentRepo, isPageSlugConflict } from './page.service.ts';
 import type { Prisma } from '@prisma/client';
 
 // GitHub Contents API caps single-file reads at 1MB; larger files return no
@@ -346,7 +345,11 @@ interface StagedItem<Source> {
  *  - a source with no configured content repo → zeros + a warning;
  *  - a target that cannot be provisioned (missing org/namespace, repo-create
  *    failure) THROWS — an unwritable target is a caller error, not per-item;
- *  - per-item read/DB failures and a per-type commit failure → warning + skip.
+ *  - per-item read/DB failures and a per-type commit failure → warning + skip;
+ *  - EXCEPT a page-slug unique violation, which THROWS all the way out. It
+ *    means the slug allocator's premise is broken, and every page after it
+ *    would be dropped the same silent way. A caller that sees this must not
+ *    treat the import as finished.
  */
 export const importClassroomContent = async (
   sourceClassroomId: string,
@@ -419,6 +422,12 @@ export const importClassroomContent = async (
       summary.pages = created;
       if (created > 0) createdAny = true;
     } catch (error: unknown) {
+      // The one failure this pass does NOT absorb. importPages rethrows a slug
+      // P2002 rather than warning (see the row loop); catching it here would
+      // put it straight back where it came from — a warning on a summary the
+      // caller still reads as success — only now with every page lost instead
+      // of one. It has to leave the orchestrator.
+      if (isPageSlugConflict(error)) throw error;
       warn('pages', `page import failed: ${errText(error)}`);
     }
   }
@@ -567,35 +576,54 @@ async function importPages({
   let created = 0;
   for (const item of staged) {
     try {
-      const row = await getPrisma().page.create({
-        data: {
-          classroom_id: target.classroomId,
-          title: item.targetTitle,
-          slug: titleToIdentifier(item.targetTitle),
-          content_path: item.targetContentPath,
-          created_by: createdByUserId,
-          is_draft: true,
-          is_public: false,
-          width: item.source.width,
-          show_in_student_menu: item.source.show_in_student_menu,
-          menu_order: item.source.menu_order,
-          // Same source→target URL repoint as the file contents get.
-          header_image_url: item.source.header_image_url
-            ? rewriteContentUrls(item.source.header_image_url, {
-                sourceLogin: source.login,
-                sourceRepo: source.repo,
-                sourcePath: item.source.content_path,
-                targetLogin: target.login,
-                targetRepo: target.repo,
-                targetPath: item.targetContentPath,
-              })
-            : item.source.header_image_url,
-          header_image_position: item.source.header_image_position,
-        } satisfies Prisma.PageUncheckedCreateInput,
-      });
+      // Slug allocation goes through the shared walker, not a bare
+      // titleToIdentifier: `slug` is unique per classroom now, and two source
+      // pages can normalize to one slug ("Lab 1" and "Lab-1"). Writing the
+      // derived value straight in would make the second page 23505 and be
+      // swallowed by the warn below — an import that silently drops a page.
+      // It also returns '' for a title with no usable characters, which the
+      // unique index treats as an ordinary, collidable value.
+      const row = await createWithUniquePageSlug(item.targetTitle, slug =>
+        getPrisma().page.create({
+          data: {
+            classroom_id: target.classroomId,
+            title: item.targetTitle,
+            slug,
+            content_path: item.targetContentPath,
+            created_by: createdByUserId,
+            is_draft: true,
+            is_public: false,
+            width: item.source.width,
+            show_in_student_menu: item.source.show_in_student_menu,
+            menu_order: item.source.menu_order,
+            // Same source→target URL repoint as the file contents get.
+            header_image_url: item.source.header_image_url
+              ? rewriteContentUrls(item.source.header_image_url, {
+                  sourceLogin: source.login,
+                  sourceRepo: source.repo,
+                  sourcePath: item.source.content_path,
+                  targetLogin: target.login,
+                  targetRepo: target.repo,
+                  targetPath: item.targetContentPath,
+                })
+              : item.source.header_image_url,
+            header_image_position: item.source.header_image_position,
+          } satisfies Prisma.PageUncheckedCreateInput,
+        })
+      );
       idMap[item.source.id] = row.id;
       created++;
     } catch (error: unknown) {
+      // A slug collision must never be downgraded to a warning. The walker
+      // above already absorbs every 23505 it can act on and exhausts into
+      // PAGE_SLUG_UNAVAILABLE, so a raw P2002 on [classroom_id, slug] arriving
+      // HERE means the walker's premise is broken — the likeliest cause being
+      // code running against a database whose unique index predates it, where
+      // `slug` was written straight through. Warning would then drop pages
+      // silently, one per collision, and report the import as a success with a
+      // line of noise. Fail the import instead: it is retryable, a half-empty
+      // classroom is not.
+      if (isPageSlugConflict(error)) throw error;
       warn('pages', `DB row failed for "${item.targetTitle}": ${errText(error)}`);
     }
   }
