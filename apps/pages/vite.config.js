@@ -48,9 +48,17 @@ export default () => {
       // HMR websocket on app port + 1 — the vite default (24678) is shared by
       // every vite app in the monorepo, so concurrent dev servers race for it.
       hmr: { port: (process.env.PORT ? Number(process.env.PORT) : 7100) + 1 },
-      // Class sites are served on {subdomain}.lvh.me in dev — vite's host check
-      // rejects them otherwise.
-      allowedHosts: ['.lvh.me', '.localhost'],
+      // Vite's host check lives INSIDE viteDevServer.middlewares, which
+      // server.ts mounts ahead of the class-site rewriter — so a Host it does
+      // not recognize is 403'd before any of our routing sees it. Class sites
+      // are served on {subdomain}.lvh.me in dev, and a PRO custom domain can be
+      // ANY hostname the instructor owns, which is unlistable ahead of time.
+      // `true` in dev is the honest answer: this server only ever runs locally,
+      // and the alternative is that the one local check that exercises the
+      // custom-domain path (`curl -H "Host: cs52.me"`) cannot reach it. The
+      // production server never constructs vite at all, but the list is kept
+      // for a prod-shaped run rather than shipping the check switched off.
+      allowedHosts: process.env.NODE_ENV === 'production' ? ['.lvh.me', '.localhost'] : true,
     },
     build: {
       sourcemap: process.env.NODE_ENV === 'production' ? 'hidden' : true,

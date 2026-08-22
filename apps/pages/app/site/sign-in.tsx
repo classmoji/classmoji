@@ -1,4 +1,4 @@
-import { data, useLoaderData } from 'react-router';
+import { data, redirect, useLoaderData } from 'react-router';
 import type { HeadersFunction, LoaderFunctionArgs, MetaFunction } from 'react-router';
 
 import { routeSiteHeaders, siteHeaders } from './headers.server.ts';
@@ -21,10 +21,26 @@ import { webappUrl } from './env.server.ts';
  */
 export const loader = async (args: LoaderFunctionArgs) => {
   const { request } = args;
-  const { site } = await resolveSiteContext(args);
+  const { site, customDomain, memberLinkOrigin } = await resolveSiteContext(args);
 
   const url = new URL(request.url);
   const returnTo = sanitizeReturnTo(url.searchParams.get('returnTo'));
+
+  // A custom domain cannot hold a Classmoji session cookie, so signing in from
+  // here would complete the OAuth round trip and land the visitor back on a
+  // host that still sees them as anonymous. Every link in the site chrome
+  // already points at the canonical subdomain's interstitial; this covers a
+  // direct visit, a bookmark, or a link shared before the domain was connected.
+  // The already-sanitized `returnTo` is carried across so the trip still ends
+  // where it started.
+  if (customDomain) {
+    const target =
+      returnTo === '/' ? '/sign-in' : `/sign-in?returnTo=${encodeURIComponent(returnTo)}`;
+    throw redirect(`${memberLinkOrigin}${target}`, {
+      status: 302,
+      headers: siteHeaders({ request, cacheable: false, noindex: true }),
+    });
+  }
 
   // Minted per request: the token has a 5-minute TTL, and this response is
   // `no-store` precisely so a cached copy can never hand out a dead one.

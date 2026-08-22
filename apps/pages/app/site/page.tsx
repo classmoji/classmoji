@@ -5,7 +5,7 @@ import { CoverImage, EditPagePill } from './chrome.tsx';
 import { routeSiteHeaders, siteHeaders } from './headers.server.ts';
 import { isMember, isStaff, publicPathOf, resolveSiteContext } from './tenant.server.ts';
 import { describeFromHtml, renderPageForViewer, type SitePageRow } from './pageRender.server.ts';
-import { pagesUrl, siteOrigin } from './env.server.ts';
+import { pagesUrl } from './env.server.ts';
 import { signInPathFor } from './returnTo.ts';
 import { ClassmojiService } from '~/utils/db.server.ts';
 
@@ -29,7 +29,7 @@ import { ClassmojiService } from '~/utils/db.server.ts';
 export const loader = async (args: LoaderFunctionArgs) => {
   const { request, params } = args;
   const context = await resolveSiteContext(args);
-  const { site, viewer } = context;
+  const { site, viewer, memberLinkOrigin, seoOrigin } = context;
 
   const url = new URL(request.url);
   const publicPath = publicPathOf(url.pathname, params.subdomain!);
@@ -48,7 +48,12 @@ export const loader = async (args: LoaderFunctionArgs) => {
 
   if (!ClassmojiService.site.isPageVisibleOnSite(page, viewer.role)) {
     if (!viewer.userId) {
-      throw redirect(signInPathFor(publicPath), {
+      // On a custom domain every visitor is anonymous by construction, and
+      // `memberLinkOrigin` sends them to the canonical subdomain's
+      // interstitial — the one host where signing in can actually produce a
+      // session for this classroom. On the subdomain it is empty and this stays
+      // the same relative redirect it has always been.
+      throw redirect(`${memberLinkOrigin}${signInPathFor(publicPath)}`, {
         headers: siteHeaders({ request, cacheable: false, noindex: true }),
       });
     }
@@ -59,7 +64,6 @@ export const loader = async (args: LoaderFunctionArgs) => {
   }
 
   const rendered = await renderPageForViewer(args, context, page);
-  const origin = siteOrigin(site.subdomain);
 
   return data(
     {
@@ -73,7 +77,14 @@ export const loader = async (args: LoaderFunctionArgs) => {
       html: rendered.html,
       coverImage: rendered.coverImage,
       description: describeFromHtml(rendered.html),
-      canonical: origin ? `${origin}${publicPath}` : null,
+      // The whole point of a custom domain is that it becomes the address of
+      // the course, so a verified one is what `rel=canonical`/`og:url` name —
+      // from BOTH hostnames. `seoOrigin` is the single decision; see
+      // canonicalOriginForSite.
+      //
+      // Members-only pages are `noindex` below, so this only ever names a URL
+      // that can actually serve the content a crawler would be told about.
+      canonical: seoOrigin ? `${seoOrigin}${publicPath}` : null,
       // Staff edit their pages in the app, never here. The pill is the whole
       // bridge between the two surfaces.
       editHref: isStaff(viewer) ? `${pagesUrl()}/${site.classroom.slug}/${page.id}` : null,

@@ -46,6 +46,71 @@ export function isValidSubdomain(subdomain: string | null | undefined): boolean 
 }
 
 /**
+ * A bare lowercase domain: two or more RFC 1123 labels, no scheme, port, path
+ * or trailing dot.
+ *
+ * This is the CUSTOM DOMAIN shape (`cs52.me`), as distinct from SUBDOMAIN_REGEX
+ * above, which is one label. Byte-identical to `BARE_DOMAIN` in
+ * apps/pages/server/siteHost.ts (the read-side check, which cannot import from
+ * here — it is loaded by bare node with no bundler) and to the CHECK constraint
+ * in the 20260822140000_add_custom_domains migration. Three copies by
+ * necessity; edit one and you MUST edit all three.
+ */
+export const CUSTOM_DOMAIN_REGEX =
+  /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$/;
+
+/** The longest a fully-qualified domain name may be, minus the root dot. */
+const MAX_DOMAIN_LENGTH = 253;
+
+/**
+ * Domains the platform itself answers for. A classroom claiming one of these —
+ * or any subdomain of one — would not be misconfiguring its own site; it would
+ * be claiming a hostname our wildcard certificate already serves.
+ *
+ * `classmoji.io` is the production site base domain (and the parent of the
+ * canonical app, pages and MCP hosts). `lvh.me` is the dev one. `fly.dev` is
+ * every Fly app's default hostname, our own apps included.
+ *
+ * Duplicated in the migration's CHECK constraint — see the comment there for
+ * why these three, and only these three, are enforced in the database.
+ */
+export const PLATFORM_DOMAINS: readonly string[] = ['classmoji.io', 'lvh.me', 'fly.dev'];
+
+/**
+ * Trim, lowercase, and strip ONE trailing dot.
+ *
+ * Slightly more forgiving than normalizeSubdomain because the input is
+ * something a human typed into a form after reading it off a registrar: a
+ * fully-qualified `cs52.me.` and a pasted `CS52.ME ` are both plainly the same
+ * hostname. Everything beyond that — a scheme, a port, a path, a leading `www.`
+ * the instructor did not mean — is a validation question, not a normalization
+ * one. Silently repairing those would hand back an address they did not ask for
+ * and cannot predict.
+ */
+export function normalizeCustomDomain(input: string | null | undefined): string {
+  const value = String(input ?? '')
+    .trim()
+    .toLowerCase();
+  return value.endsWith('.') ? value.slice(0, -1) : value;
+}
+
+/**
+ * Is this a well-formed, claimable custom domain? Expects an already-normalized
+ * value. Does NOT check availability — that is a database question.
+ */
+export function isValidCustomDomain(domain: string | null | undefined): boolean {
+  if (typeof domain !== 'string') return false;
+  if (domain.length === 0 || domain.length > MAX_DOMAIN_LENGTH) return false;
+  return CUSTOM_DOMAIN_REGEX.test(domain);
+}
+
+/** Is this hostname the platform's own, or a subdomain of one? */
+export function isPlatformDomain(domain: string | null | undefined): boolean {
+  const value = String(domain ?? '');
+  return PLATFORM_DOMAINS.some(base => value === base || value.endsWith(`.${base}`));
+}
+
+/**
  * DNS labels no classroom may claim.
  *
  * Three kinds, deliberately in one list because the failure is the same

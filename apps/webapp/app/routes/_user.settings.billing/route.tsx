@@ -55,6 +55,11 @@ const SettingsSubscription = ({ loaderData }: Route.ComponentProps) => {
       window.location.href = fetcher.data.checkoutSessionUrl;
     } else if (fetcher.data?.billingPortalSessionUrl) {
       window.location.href = fetcher.data.billingPortalSessionUrl;
+    } else if (fetcher.data?.error) {
+      // Nothing to navigate to — drop the fullscreen spinner, which otherwise
+      // covers the page until a reload.
+      setLoading(false);
+      callout.show({ variant: 'error', title: fetcher.data.error });
     }
   }, [fetcher.data]);
 
@@ -67,10 +72,10 @@ const SettingsSubscription = ({ loaderData }: Route.ComponentProps) => {
 
   const handleUpgrade = () => {
     setLoading(true);
+    // No price in the body: which price grants Pro is a server decision, and
+    // the action resolves it from the environment. See createCheckoutSession.
     fetcher.submit(
-      {
-        priceId: 'price_1Rn1QGFQBcAaaelWqEvAl324',
-      },
+      {},
       {
         method: 'post',
         encType: 'application/json',
@@ -205,14 +210,31 @@ const SettingsSubscription = ({ loaderData }: Route.ComponentProps) => {
   );
 };
 
+/**
+ * The Stripe price that grants Pro, resolved from the environment.
+ *
+ * The subscribed price is what the Stripe webhook asserts before writing a PRO
+ * row (apps/hook-station/src/routes/stripe.ts), so it is a server decision
+ * end to end. Returns '' when unset, and the caller refuses rather than
+ * creating a checkout session with an empty line item.
+ */
+const proPriceId = (): string => (process.env.STRIPE_PRO_PRICE_ID || '').trim();
+
 export const action = async ({ request }: Route.ActionArgs) => {
-  const data = await request.json();
+  await request.json();
   const authData = await getAuthSession(request);
   const classmojiUser = await ClassmojiService.user.findById(authData!.userId);
 
   return namedAction(request, {
     async createCheckoutSession() {
-      const { priceId } = data;
+      const priceId = proPriceId();
+      if (!priceId) {
+        console.error('STRIPE_PRO_PRICE_ID is not set — cannot start a Pro checkout.');
+        return {
+          error: 'Upgrades are not available right now. Please contact support.',
+        };
+      }
+
       let customerId = classmojiUser!.stripe_customer_id;
 
       if (!customerId) {

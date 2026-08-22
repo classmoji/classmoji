@@ -468,6 +468,22 @@ model ClassroomSite {
   // repair, never delete the site row (and with it the claimed subdomain).
   home_page_id String?
   show_schedule Boolean @default(true)
+  // An instructor-owned hostname (PRO only) that serves this same site, stored
+  // as a bare lowercase domain with no scheme, port or trailing dot — the exact
+  // shape a Host header normalizes to, because that is what it is compared
+  // against. Globally unique for the same reason `subdomain` is: the request
+  // host is all the edge has to resolve a tenant by. Shape is enforced by a
+  // CHECK in the add_custom_domains migration; the platform-domain and
+  // reserved-suffix refusals live in site.service (product policy, no
+  // migration when it changes).
+  custom_domain String? @unique
+  // Set the first time this claim actually SERVES over its own hostname — a
+  // completed TLS handshake on a cert we asked Fly to issue is the ownership
+  // proof. Per CLAIM, not per hostname: cleared whenever custom_domain is
+  // re-pointed, so a dangling DNS record plus a stale certificate can never
+  // hand the next claimant an already-verified domain. Gates the canonical/
+  // og:url flip, never the serving decision itself.
+  custom_domain_verified_at DateTime?
   created_at    DateTime @default(now())
   updated_at    DateTime @default(now()) @updatedAt
 

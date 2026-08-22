@@ -28,15 +28,47 @@ import type { NextFunction, Request, RequestHandler, Response } from 'express';
 
 export type HostClassification =
   | { kind: 'canonical' }
-  | { kind: 'site'; subdomain: string }
+  | { kind: 'site'; subdomain: string; customDomain?: string }
   | { kind: 'unknown' }
   | { kind: 'invalid' };
+
+/**
+ * Resolve an instructor-owned hostname to the tenant subdomain it serves, or
+ * null when nobody claims it.
+ *
+ * SYNCHRONOUS by contract. The whole point of the snapshot behind this is that
+ * classification does zero I/O: `Host` need not match SNI, so anyone who can
+ * complete a TLS handshake against one valid hostname may then send unlimited
+ * distinct `Host:` headers down it. An async lookup here would turn that into
+ * one unauthenticated database round trip per request, on a path that today
+ * touches nothing.
+ *
+ * The answer is a ROUTING HINT and nothing more. It is allowed to be stale, and
+ * the request-scoped tenant resolver re-reads the claim from the database
+ * before serving a byte — see `resolveSiteContext`. Without that second read a
+ * domain re-pointed from one classroom to another would keep serving the old
+ * classroom's content for as long as any machine held the previous map.
+ */
+export type CustomHostResolver = (host: string) => string | null;
 
 export type SiteHostConfig = {
   /** Bare base domain for class sites, or null when the feature is inert. */
   siteBaseDomain: string | null;
   /** Hosts that serve the normal pages app (editor, API, health). */
   canonicalHosts: string[];
+  /**
+   * Custom-domain lookup, INJECTED rather than imported.
+   *
+   * This module is loaded by bare node under `--experimental-strip-types` and
+   * deliberately has no runtime dependencies (see the header). Reaching for
+   * `@classmoji/services` here would drag its whole index — octokit, cheerio,
+   * the git providers — into the boot path of the request hot path. The owner
+   * of the snapshot builds it and hands the closure in; this file stays pure.
+   *
+   * Absent ⇒ custom domains are simply off, and every unclaimed host keeps its
+   * existing behaviour.
+   */
+  resolveCustomHost?: CustomHostResolver;
 };
 
 export type SiteRequestResolution =
@@ -45,7 +77,7 @@ export type SiteRequestResolution =
       action: 'not-found';
       reason: 'unknown-host' | 'invalid-host' | 'internal-path' | 'data-request' | 'dot-segment';
     }
-  | { action: 'rewrite'; url: string; subdomain: string };
+  | { action: 'rewrite'; url: string; subdomain: string; customDomain?: string };
 
 /** The slice of the environment this module reads (structurally `process.env`). */
 export type SiteHostEnv = {
@@ -136,6 +168,22 @@ export function classifyHost(hostHeader: unknown, config: SiteHostConfig): HostC
     const label = host.slice(0, host.length - base.length - 1);
     // Exactly ONE label: `a.b.lvh.me` is unknown, not a site.
     if (DNS_LABEL.test(label)) return { kind: 'site', subdomain: label };
+  }
+
+  // A hostname we do not own, that a PRO instructor pointed at us.
+  //
+  // Shape-checked BEFORE the lookup: `host` is attacker-controlled and the
+  // resolver is a hash lookup we would rather not perform for a single label or
+  // an IP literal. Checked again AFTER, on the answer: the map is loaded from a
+  // database column, and a subdomain that is not a plain DNS label would be
+  // spliced straight into a rewritten URL path by `computeSiteUrl`. Two cheap
+  // regexes standing between a table read and the internal route namespace.
+  const resolveCustomHost = config.resolveCustomHost;
+  if (resolveCustomHost && BARE_DOMAIN.test(host)) {
+    const subdomain = resolveCustomHost(host);
+    if (typeof subdomain === 'string' && DNS_LABEL.test(subdomain)) {
+      return { kind: 'site', subdomain, customDomain: host };
+    }
   }
 
   return { kind: 'unknown' };
@@ -279,11 +327,25 @@ export function resolveSiteRequest(
       //
       // Script-less site pages never issue React Router single-fetch requests;
       // refusing them removes a loader-serialization surface.
+      //
+      // A RESOLVED CUSTOM DOMAIN lands here too, and gets this branch verbatim
+      // — the same `.data` refusal, the same absence of a `.well-known`
+      // allowance. Grafting custom domains onto the `unknown` branch instead
+      // would have inherited its `.well-known` pass and dropped the `.data`
+      // refusal, which together mean the editor app served off a tenant's own
+      // domain. The ACME question that allowance exists for does not arise:
+      // Fly answers certificate challenges at its proxy (TLS-ALPN, or DNS-01),
+      // for issuance AND for the 90-day renewal, so no
+      // `/.well-known/acme-challenge/` request ever reaches this app. An
+      // UNCLAIMED hostname still falls through to `default` below and keeps
+      // that pass, which is what a domain pointed here before it is connected
+      // needs.
       if (path.endsWith('.data')) return { action: 'not-found', reason: 'data-request' };
       return {
         action: 'rewrite',
         url: computeSiteUrl(rawUrl, classification.subdomain),
         subdomain: classification.subdomain,
+        ...(classification.customDomain ? { customDomain: classification.customDomain } : {}),
       };
 
     case 'invalid':
@@ -345,6 +407,50 @@ function sendHealthy(res: Response): void {
   res.send('ok\n');
 }
 
+/**
+ * Where the middleware records "this request arrived on a custom domain".
+ *
+ * A property on the Express request, NEVER a header. An inbound header would be
+ * forgeable by anyone — and forging this one is not a small thing: it flips the
+ * `rel=canonical` and `og:url` of a shared-cacheable response, so a single
+ * crafted request could poison 60 seconds of a public page with an attacker's
+ * chosen canonical URL. This whole file exists in part to strip exactly that
+ * class of input (see `sanitizeForwardedHost`).
+ *
+ * A plain string key rather than a `Symbol`, because in DEV this module is
+ * loaded twice — by bare node for the middleware, and again through Vite for
+ * `server/app.ts` — and two `Symbol()` calls in two module instances are two
+ * different keys. A string survives the boundary.
+ */
+export const CUSTOM_DOMAIN_REQUEST_KEY = '__classmojiCustomDomain';
+
+/** The load context every class-site loader receives. */
+export type SiteLoadContext = {
+  /** The custom hostname this request arrived on, or null for every other host. */
+  customDomain: string | null;
+};
+
+/**
+ * Build the React Router load context from a request the middleware has seen.
+ *
+ * Wired into `createRequestHandler` in BOTH `server.ts` (prod) and
+ * `server/app.ts` (dev) — the two entry points construct their own handlers, so
+ * a marker wired into only one of them is a marker that silently does nothing
+ * in the other environment.
+ *
+ * Reads only what the middleware stamped. A request that never passed through
+ * `rewriteSiteRequests` — which cannot happen for a routed request, but can for
+ * a hand-built one in a test — reads as "not a custom domain", the safe answer.
+ */
+export function buildSiteLoadContext(req: unknown): SiteLoadContext {
+  const marker =
+    req && typeof req === 'object'
+      ? (req as Record<string, unknown>)[CUSTOM_DOMAIN_REQUEST_KEY]
+      : undefined;
+
+  return { customDomain: typeof marker === 'string' && marker.length > 0 ? marker : null };
+}
+
 export type SiteHostMiddleware = {
   /**
    * Mount FIRST, before vite/static/anything else: `X-Forwarded-Host` is
@@ -362,9 +468,20 @@ export type SiteHostMiddleware = {
 /**
  * Build the two host middlewares. Throws at boot on a malformed
  * SITE_BASE_DOMAIN; a missing one leaves the rewriter a no-op.
+ *
+ * `options.resolveCustomHost` is how custom domains are switched on. It is a
+ * parameter rather than an import so this module keeps its "no runtime
+ * dependencies" property — see the file header — and so tests can drive the
+ * whole rewriter off a `Map` with no database anywhere near it.
  */
-export function createSiteHostMiddleware(env: SiteHostEnv = process.env): SiteHostMiddleware {
-  const config = resolveSiteHostConfig(env);
+export function createSiteHostMiddleware(
+  env: SiteHostEnv = process.env,
+  options: { resolveCustomHost?: CustomHostResolver } = {}
+): SiteHostMiddleware {
+  const config: SiteHostConfig = {
+    ...resolveSiteHostConfig(env),
+    ...(options.resolveCustomHost ? { resolveCustomHost: options.resolveCustomHost } : {}),
+  };
 
   const sanitizeForwardedHost: RequestHandler = (
     req: Request,
@@ -373,6 +490,15 @@ export function createSiteHostMiddleware(env: SiteHostEnv = process.env): SiteHo
   ) => {
     delete req.headers['x-forwarded-host'];
     next();
+  };
+
+  /** Stamp (or clear) the custom-domain marker on a request. */
+  const markCustomDomain = (req: Request, customDomain: string | null): void => {
+    // Written unconditionally, including the null case. Express hands every
+    // request a fresh object so there is nothing to inherit today, but a marker
+    // that is only ever SET is one middleware reorder away from being sticky,
+    // and this one decides what a page calls itself.
+    (req as unknown as Record<string, unknown>)[CUSTOM_DOMAIN_REQUEST_KEY] = customDomain;
   };
 
   const rewriteSiteRequests: RequestHandler = (req: Request, res: Response, next: NextFunction) => {
@@ -399,6 +525,9 @@ export function createSiteHostMiddleware(env: SiteHostEnv = process.env): SiteHo
       // routing reads `url`.
       req.url = resolution.url;
       req.originalUrl = resolution.url;
+      markCustomDomain(req, resolution.customDomain ?? null);
+    } else {
+      markCustomDomain(req, null);
     }
 
     next();
