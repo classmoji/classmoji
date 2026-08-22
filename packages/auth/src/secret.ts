@@ -53,12 +53,39 @@ export const COOKIE_PREFIX = process.env.COOKIE_PREFIX || 'classmoji';
  *      of this was configurable, for a prod deploy with neither var set.
  *   4. null — development default: host-only cookies, localhost keeps working.
  */
+/** Same shape the other SITE_BASE_DOMAIN consumers enforce (see
+ * apps/pages/server.ts boot assert and siteReturn.ts's BARE_DOMAIN): a bare
+ * lowercase registrable domain — at least two labels, no scheme/port/path. */
+const BARE_DOMAIN = /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$/;
+
+/**
+ * Normalize one candidate into a `.domain` cookie attribute, or null.
+ *
+ * Fails CLOSED on malformed values (loudly — a bad domain attribute makes
+ * browsers drop every Set-Cookie, which presents as a silent sign-in loop
+ * with green health checks). Falling through to the next candidate in the
+ * chain is the recovery, never a mangled attribute.
+ */
+function asCookieDomain(raw: string | undefined, source: string): string | null {
+  const trimmed = raw?.trim().toLowerCase();
+  if (!trimmed) return null;
+  const bare = trimmed.replace(/^\.+/, '');
+  if (!BARE_DOMAIN.test(bare)) {
+    console.error(
+      `[auth] ${source}=${JSON.stringify(raw)} is not a bare domain; ` +
+        'ignoring it for the session-cookie domain.'
+    );
+    return null;
+  }
+  return `.${bare}`;
+}
+
 export function resolveCookieDomain(env: Record<string, string | undefined>): string | null {
-  const explicit = env.COOKIE_DOMAIN?.trim();
-  if (explicit) return explicit;
-  const siteBase = env.SITE_BASE_DOMAIN?.trim();
-  if (siteBase) return `.${siteBase.replace(/^\.+/, '')}`;
-  return env.NODE_ENV === 'production' ? '.classmoji.io' : null;
+  return (
+    asCookieDomain(env.COOKIE_DOMAIN, 'COOKIE_DOMAIN') ??
+    asCookieDomain(env.SITE_BASE_DOMAIN, 'SITE_BASE_DOMAIN') ??
+    (env.NODE_ENV === 'production' ? '.classmoji.io' : null)
+  );
 }
 
 export const COOKIE_DOMAIN: string | null = resolveCookieDomain(process.env);

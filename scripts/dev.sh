@@ -84,7 +84,7 @@ DEVPORT_NAME=${DEVPORT_NAME:-main}
 DEVPORT_ID=${DEVPORT_ID:-0}
 
 ## Services Running:
-- Webapp:     http://localhost:$WEBAPP_PORT
+- Webapp:     $WEBAPP_URL
 - Slides:     http://localhost:$SLIDES_PORT
 - Pages:      http://localhost:$PAGES_PORT
 - Hook:       http://localhost:$HOOK_PORT

@@ -35,7 +35,10 @@ export function getDevContext(): DevContext {
   if (devContextPath) {
     const content = readFileSync(devContextPath, 'utf-8');
 
-    const webappMatch = content.match(/Webapp:\s+(http:\/\/localhost:\d+)/);
+    // Not localhost-only: with SITE_BASE_DOMAIN set locally the webapp runs at
+    // app.lvh.me and its session cookies carry Domain=.lvh.me — a localhost
+    // baseURL would silently fail every authenticated spec (cookies never apply).
+    const webappMatch = content.match(/Webapp:\s+(https?:\/\/[^\s]+)/);
     const apiMatch = content.match(/API:\s+(http:\/\/localhost:\d+)/);
     const quizAgentMatch = content.match(/Quiz Agent:\s+(http:\/\/localhost:\d+)/);
     const dbMatch = content.match(/URL:\s+(postgresql:\/\/[^\s]+)/);
