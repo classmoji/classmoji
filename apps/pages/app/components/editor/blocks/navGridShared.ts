@@ -26,11 +26,32 @@ export type NavGridExternalEntry = {
   emoji?: string;
 };
 
-export type NavGridEntry = NavGridPageEntry | NavGridExternalEntry;
+/**
+ * The course schedule, as a first-class entry.
+ *
+ * It carries no target: the schedule lives at `/schedule` on the class site
+ * and nowhere else, so storing a URL would only create a way for it to be
+ * wrong. Instructors used to add it as an external link to their own site,
+ * which broke whenever the subdomain or the custom domain changed and could
+ * not be hidden when the schedule was switched off.
+ */
+export type NavGridScheduleEntry = {
+  kind: 'schedule';
+  /** Optional override for the default label. */
+  label?: string;
+  emoji?: string;
+};
+
+export type NavGridEntry = NavGridPageEntry | NavGridExternalEntry | NavGridScheduleEntry;
 
 export type NavGridColumns = 1 | 2;
 
 export const NAV_GRID_DEFAULT_COLUMNS: NavGridColumns = 2;
+
+/** Where the schedule lives on a class site. Never authored, never stored. */
+export const NAV_GRID_SCHEDULE_PATH = '/schedule';
+export const NAV_GRID_SCHEDULE_LABEL = 'Schedule';
+export const NAV_GRID_SCHEDULE_EMOJI = '📅';
 
 /** Empty serialized value — also the block prop default. */
 export const NAV_GRID_EMPTY_ENTRIES = '[]';
@@ -111,6 +132,20 @@ function parseEntry(value: unknown): NavGridEntry | null {
     return entry;
   }
 
+  // Nothing is required: an entry that says only `{"kind":"schedule"}` is a
+  // complete one, because the target is a property of the site rather than of
+  // the entry. Both optional fields are omitted rather than defaulted when
+  // empty, so a round-trip does not invent an authored label the instructor
+  // never typed — the defaults live at render time.
+  if (raw.kind === 'schedule') {
+    const entry: NavGridScheduleEntry = { kind: 'schedule' };
+    const label = (asString(raw.label) || asString(raw.title)).trim();
+    if (label) entry.label = label;
+    const emoji = sanitizeNavGridEmoji(raw.emoji);
+    if (emoji) entry.emoji = emoji;
+    return entry;
+  }
+
   return null;
 }
 
@@ -159,6 +194,7 @@ export function normalizeNavGridColumns(value: unknown): NavGridColumns {
 /** Text shown for an entry, with sensible fallbacks for un-labelled links. */
 export function navGridEntryLabel(entry: NavGridEntry): string {
   if (entry.kind === 'page') return entry.title || 'Untitled';
+  if (entry.kind === 'schedule') return entry.label || NAV_GRID_SCHEDULE_LABEL;
   if (entry.label) return entry.label;
   try {
     const parsed = new URL(entry.url);
@@ -166,6 +202,28 @@ export function navGridEntryLabel(entry: NavGridEntry): string {
   } catch {
     return entry.url;
   }
+}
+
+/**
+ * The emoji to draw for an entry: the authored one, or the schedule's default.
+ *
+ * Only the schedule has a default, and it is applied here rather than stored,
+ * so an instructor who clears the emoji gets the calendar back instead of a
+ * blank slot — and so the default can change without rewriting saved content.
+ */
+export function navGridEntryEmoji(entry: NavGridEntry): string {
+  if (entry.emoji) return entry.emoji;
+  return entry.kind === 'schedule' ? NAV_GRID_SCHEDULE_EMOJI : '';
+}
+
+/**
+ * Is the schedule already in this directory?
+ *
+ * One per grid: two tiles pointing at the same single page is a mistake with
+ * no upside, and the editor disables the button rather than letting it happen.
+ */
+export function hasNavGridScheduleEntry(entries: NavGridEntry[]): boolean {
+  return entries.some(entry => entry.kind === 'schedule');
 }
 
 /** Move an entry within the list. Returns a new array (no mutation). */

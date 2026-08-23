@@ -4,10 +4,13 @@ import {
   canSubmitDomain,
   certChip,
   certErrorNotice,
+  certProblems,
   checkDomainInput,
   customDomainErrorHint,
   customDomainRowState,
-  dnsRows,
+  dnsPlan,
+  manualCnameTarget,
+  manualDomainSetup,
   type CertSnapshot,
 } from '../customDomain.ts';
 
@@ -150,11 +153,18 @@ describe('certChip', () => {
   });
 
   it('says manual setup when certificate automation is off', () => {
-    // isFlyCertsConfigured() false: the feature degrades to "ask an admin",
-    // and it must not look like the instructor did something wrong.
+    // isFlyCertsConfigured() false: the feature degrades to a DNS record the
+    // instructor adds themselves, and it must not look like they did something
+    // wrong.
     const chip = certChip(cert({ status: 'active' }), { flyConfigured: false });
     expect(chip.tone).toBe('manual');
     expect(chip.label).toBe('Manual setup');
+  });
+
+  it('carries NO hint in manual mode — the setup block is the instruction', () => {
+    // The bug this pins: the hint and the NOT_CONFIGURED notice printed the
+    // same sentence one above the other, and neither told anyone what to do.
+    expect(certChip(null, { flyConfigured: false }).hint).toBe('');
   });
 
   it('reports an unreadable certificate as unknown, not as a failure', () => {
@@ -197,74 +207,258 @@ describe('certChip', () => {
   });
 });
 
-describe('dnsRows', () => {
+describe('dnsPlan', () => {
+  /** What Fly actually returns for a hostname on a fresh claim. */
+  const full = {
+    a: ['198.51.100.7'],
+    aaaa: ['2001:db8::1'],
+    cname: ['classmoji-pages.fly.dev'],
+    acme_challenge: ['cs52.me.abc.flydns.net'],
+    ownership: ['fly-verify-token'],
+  };
+
   it('renders nothing without requirements', () => {
-    expect(dnsRows(null, 'cs52.me')).toEqual([]);
-    expect(dnsRows(undefined, 'cs52.me')).toEqual([]);
-    expect(dnsRows({}, 'cs52.me')).toEqual([]);
+    for (const empty of [null, undefined, {}]) {
+      const plan = dnsPlan(empty, 'cs52.me');
+      expect(plan.routing).toEqual([]);
+      expect(plan.proof).toEqual([]);
+    }
+  });
+
+  it('presents the two routes as ALTERNATIVES, not as a checklist', () => {
+    // The bug this pins. A(+AAAA) and CNAME do the same job; an instructor who
+    // adds both has a CNAME beside an A on one name, which DNS hosts either
+    // refuse or resolve unpredictably.
+    const plan = dnsPlan(full, 'cs52.me');
+    expect(plan.routing.map(option => option.id)).toEqual(['direct', 'alias']);
+    expect(plan.heading).toBe('Point cs52.me at Classmoji — choose ONE of these:');
+  });
+
+  it('keeps AAAA with the addresses it routes, not among the proof records', () => {
+    const plan = dnsPlan(full, 'cs52.me');
+    const direct = plan.routing.find(option => option.id === 'direct')!;
+    expect(direct.rows.map(row => row.type)).toEqual(['A', 'AAAA']);
+    expect(direct.label).toBe('A + AAAA records');
+    expect(plan.proof.map(row => row.type)).toEqual(['CNAME', 'TXT']);
+  });
+
+  it('says out loud that the AAAA also settles ownership', () => {
+    // Fly validates ownership through the AAAA as well as the challenge and
+    // the TXT — an instructor who adds it has nothing left to do below.
+    const direct = dnsPlan(full, 'cs52.me').routing.find(option => option.id === 'direct')!;
+    expect(direct.note).toMatch(/prove/i);
+    expect(direct.note).toMatch(/skip/i);
+  });
+
+  it('claims nothing about ownership when Fly asked for no AAAA', () => {
+    const direct = dnsPlan({ a: ['198.51.100.7'] }, 'cs52.me').routing[0];
+    expect(direct.note).toBeNull();
+    expect(direct.label).toBe('A record');
+  });
+
+  it('warns that a CNAME often cannot live at a root domain', () => {
+    const alias = dnsPlan(full, 'cs52.me').routing.find(option => option.id === 'alias')!;
+    expect(alias.summary).toMatch(/ALIAS|flattening/i);
+  });
+
+  it('drops the "choose one" heading when Fly offered only one route', () => {
+    expect(dnsPlan({ cname: ['classmoji-pages.fly.dev'] }, 'cs52.me').heading).toBe(
+      'Point cs52.me at Classmoji'
+    );
   });
 
   it('renders the addresses Fly reported, never a hardcoded pair', () => {
     // The whole reason this is a function and not a constant: A/AAAA addresses
     // are per Fly APP, so staging and production differ.
-    const rows = dnsRows({ a: ['198.51.100.7'] }, 'cs52.me');
-    expect(rows).toEqual([{ type: 'A', name: 'cs52.me', value: '198.51.100.7', purpose: 'route' }]);
-  });
-
-  it('marks A and CNAME as routing, and the rest as ownership proof', () => {
-    const rows = dnsRows(
-      {
-        a: ['198.51.100.7'],
-        aaaa: ['2001:db8::1'],
-        acme_challenge: ['cs52.me.abc.flydns.net'],
-        ownership: ['fly-verify-token'],
-      },
-      'cs52.me'
-    );
-
-    expect(rows.filter(row => row.purpose === 'route').map(row => row.type)).toEqual(['A']);
-    expect(rows.filter(row => row.purpose === 'proof').map(row => row.type)).toEqual([
-      'AAAA',
-      'CNAME',
-      'TXT',
+    expect(dnsPlan({ a: ['198.51.100.7'] }, 'cs52.me').routing[0].rows).toEqual([
+      { type: 'A', name: 'cs52.me', value: '198.51.100.7' },
     ]);
   });
 
   it('prefixes the challenge and ownership names under the domain', () => {
-    const rows = dnsRows(
+    const plan = dnsPlan(
       { acme_challenge: ['cs52.me.abc.flydns.net'], ownership: ['token'] },
       'cs52.me'
     );
-    expect(rows.map(row => row.name)).toEqual([
+    expect(plan.proof.map(row => row.name)).toEqual([
       '_acme-challenge.cs52.me',
       '_fly-ownership.cs52.me',
     ]);
+    // Ownership records alone: nothing to route, so no routing section at all.
+    expect(plan.routing).toEqual([]);
   });
 
   it('accepts a bare string where Fly might send one instead of an array', () => {
-    expect(dnsRows({ cname: 'cs52.fly.dev' }, 'www.cs52.me')).toEqual([
-      { type: 'CNAME', name: 'www.cs52.me', value: 'cs52.fly.dev', purpose: 'route' },
+    expect(dnsPlan({ cname: 'cs52.fly.dev' }, 'www.cs52.me').routing[0].rows).toEqual([
+      { type: 'CNAME', name: 'www.cs52.me', value: 'cs52.fly.dev' },
     ]);
   });
 
   it('carries an unrecognized requirement through rather than dropping it', () => {
     // An instructor who can read an unfamiliar record off the screen is
     // unblocked; one who cannot has a domain that never issues and no clue why.
-    const rows = dnsRows({ caa: ['0 issue "letsencrypt.org"'] }, 'cs52.me');
-    expect(rows).toEqual([
-      { type: 'CAA', name: 'cs52.me', value: '0 issue "letsencrypt.org"', purpose: 'proof' },
+    // It lands under "any one of these", whose instruction stays true for a
+    // record we have never seen — never among the routing alternatives.
+    const plan = dnsPlan({ caa: ['0 issue "letsencrypt.org"'] }, 'cs52.me');
+    expect(plan.routing).toEqual([]);
+    expect(plan.proof).toEqual([
+      { type: 'CAA', name: 'cs52.me', value: '0 issue "letsencrypt.org"' },
     ]);
   });
 
   it('unwraps an object-shaped requirement value', () => {
-    expect(dnsRows({ cname: [{ value: 'cs52.fly.dev' }] }, 'cs52.me')[0].value).toBe(
-      'cs52.fly.dev'
-    );
+    expect(
+      dnsPlan({ cname: [{ value: 'cs52.fly.dev' }] }, 'cs52.me').routing[0].rows[0].value
+    ).toBe('cs52.fly.dev');
   });
 
   it('drops empty entries and duplicates', () => {
-    const rows = dnsRows({ a: ['198.51.100.7', '198.51.100.7', '', '   ', null] }, 'cs52.me');
-    expect(rows).toHaveLength(1);
+    const plan = dnsPlan({ a: ['198.51.100.7', '198.51.100.7', '', '   ', null] }, 'cs52.me');
+    expect(plan.routing[0].rows).toHaveLength(1);
+    // Two identical addresses are one address, and the label must not read
+    // "A + A records".
+    expect(plan.routing[0].label).toBe('A record');
+  });
+});
+
+describe('manualCnameTarget', () => {
+  it('derives the pages app’s own Fly hostname', () => {
+    expect(manualCnameTarget('classmoji-pages')).toBe('classmoji-pages.fly.dev');
+    expect(manualCnameTarget('classmoji-pages-staging')).toBe('classmoji-pages-staging.fly.dev');
+  });
+
+  it('normalizes surrounding space and case', () => {
+    expect(manualCnameTarget('  Classmoji-Pages  ')).toBe('classmoji-pages.fly.dev');
+  });
+
+  it('has no target without an app name', () => {
+    // No default, ever: staging and production share a fly.toml, and guessing
+    // here would print production's hostname on a staging screen.
+    expect(manualCnameTarget(null)).toBeNull();
+    expect(manualCnameTarget(undefined)).toBeNull();
+    expect(manualCnameTarget('')).toBeNull();
+    expect(manualCnameTarget('   ')).toBeNull();
+  });
+});
+
+describe('manualDomainSetup', () => {
+  const setup = manualDomainSetup({ domain: 'cs52.me', pagesApp: 'classmoji-pages' });
+
+  it('gives the instructor a record they can actually add', () => {
+    // The whole point. Who issues the certificate is our problem; the CNAME is
+    // the instructor's, and it is the same record either way.
+    expect(setup.state).toBe('dns');
+    if (setup.state !== 'dns') return;
+    expect(setup.heading).toBe('Point cs52.me at Classmoji');
+    expect(setup.rows).toEqual([
+      { type: 'CNAME', name: 'cs52.me', value: 'classmoji-pages.fly.dev' },
+    ]);
+  });
+
+  it('warns about the two ways this silently fails', () => {
+    if (setup.state !== 'dns') throw new Error('expected DNS guidance');
+    expect(setup.notes.some(note => /ALIAS|flattening/i.test(note))).toBe(true);
+    expect(setup.notes.some(note => /DNS only|grey cloud/i.test(note))).toBe(true);
+  });
+
+  it('promises issuance without mentioning who does it', () => {
+    if (setup.state !== 'dns') throw new Error('expected DNS guidance');
+    expect(setup.footer).toBe(
+      'Your certificate will be issued automatically once your domain points at Classmoji.'
+    );
+    expect(setup.footer).not.toMatch(/administrator/i);
+  });
+
+  it('normalizes the claimed domain the same way the record does', () => {
+    const upper = manualDomainSetup({ domain: '  CS52.ME ', pagesApp: 'classmoji-pages' });
+    if (upper.state !== 'dns') throw new Error('expected DNS guidance');
+    expect(upper.rows[0].name).toBe('cs52.me');
+    expect(upper.heading).toBe('Point cs52.me at Classmoji');
+  });
+
+  it('falls back to one honest line when the app name is unset too', () => {
+    // Nothing true left to say — but never the old jargon, and never a
+    // hostname we made up.
+    for (const pagesApp of [null, undefined, '', '   ']) {
+      const fallback = manualDomainSetup({ domain: 'cs52.me', pagesApp });
+      expect(fallback).toEqual({
+        state: 'unavailable',
+        message:
+          'Your Classmoji administrator needs to finish configuring custom domains — contact support.',
+      });
+    }
+  });
+
+  it('has nothing to point anywhere without a claimed domain', () => {
+    expect(manualDomainSetup({ domain: null, pagesApp: 'classmoji-pages' }).state).toBe(
+      'unavailable'
+    );
+    expect(manualDomainSetup({ domain: '  ', pagesApp: 'classmoji-pages' }).state).toBe(
+      'unavailable'
+    );
+  });
+});
+
+describe('certProblems', () => {
+  /** Exactly what Fly put on screen as a JSON blob. */
+  const mismatch = {
+    code: 'DNS_RECORD_MISMATCH',
+    message: 'The CNAME for cs52.me does not point at this app.',
+    remediation: 'Update the CNAME to classmoji-pages.fly.dev and check again.',
+  };
+
+  it('reads nothing out of an absent list', () => {
+    expect(certProblems(null)).toEqual([]);
+    expect(certProblems(undefined)).toEqual([]);
+    expect(certProblems([])).toEqual([]);
+  });
+
+  it('turns Fly’s object into a sentence, a fix and a tag', () => {
+    // The bug this pins: all three fields were rendered as one JSON blob, so
+    // the remediation — the only actionable half — was unreadable.
+    expect(certProblems([mismatch])).toEqual([
+      {
+        code: 'DNS_RECORD_MISMATCH',
+        message: 'The CNAME for cs52.me does not point at this app.',
+        remediation: 'Update the CNAME to classmoji-pages.fly.dev and check again.',
+      },
+    ]);
+  });
+
+  it('parses a JSON string, which is the shape that reached production', () => {
+    expect(certProblems([JSON.stringify(mismatch)])[0]).toEqual(certProblems([mismatch])[0]);
+  });
+
+  it('prints a plain sentence as-is', () => {
+    expect(certProblems(['awaiting certificate validation'])).toEqual([
+      { code: null, message: 'awaiting certificate validation', remediation: null },
+    ]);
+  });
+
+  it('prints a string that only looks like JSON as-is', () => {
+    // A leading brace earns one parse attempt, not a dropped error.
+    expect(certProblems(['{not really json'])[0].message).toBe('{not really json');
+  });
+
+  it('never drops an error it cannot read', () => {
+    // A certificate that will not issue and an empty error list is the worst
+    // screen this row can show.
+    const problems = certProblems([{ unexpected: 'shape' }, 42]);
+    expect(problems).toHaveLength(2);
+    expect(problems[0].message).toContain('unexpected');
+    expect(problems[1].message).toBe('42');
+  });
+
+  it('skips entries with nothing in them at all', () => {
+    expect(certProblems(['', '   ', null, undefined])).toEqual([]);
+  });
+
+  it('takes a missing code as no tag rather than as an empty one', () => {
+    expect(certProblems([{ message: 'Something is off.' }])[0]).toEqual({
+      code: null,
+      message: 'Something is off.',
+      remediation: null,
+    });
   });
 });
 
@@ -296,13 +490,7 @@ describe('certErrorNotice', () => {
     // setCustomDomain already committed the row. Telling the instructor the
     // save failed would be false, and would invite a re-claim that clears the
     // verification stamp for no reason.
-    for (const code of [
-      'NOT_CONFIGURED',
-      'UNAUTHORIZED',
-      'RATE_LIMITED',
-      'UPSTREAM',
-      'NOT_FOUND',
-    ]) {
+    for (const code of ['UNAUTHORIZED', 'RATE_LIMITED', 'UPSTREAM', 'NOT_FOUND']) {
       expect(certErrorNotice(code)).toMatch(/^Domain claimed/);
     }
   });
@@ -313,9 +501,11 @@ describe('certErrorNotice', () => {
     expect(certErrorNotice('UPSTREAM')).toMatch(/Check status/);
   });
 
-  it('does not offer a retry for an unconfigured environment', () => {
-    // Nothing the instructor presses can conjure credentials this process lacks.
-    expect(certErrorNotice('NOT_CONFIGURED')).not.toMatch(/Check status/);
+  it('says nothing at all for an unconfigured environment', () => {
+    // Nothing the instructor presses can conjure credentials this process
+    // lacks, and `manualDomainSetup` is already on screen telling them what
+    // they CAN do. A notice here only repeated it, one line higher.
+    expect(certErrorNotice('NOT_CONFIGURED')).toBeNull();
   });
 
   it('still explains an unfamiliar code', () => {
