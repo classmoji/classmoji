@@ -114,7 +114,13 @@ export async function renderPageForViewer(
 
   let rendered;
   try {
-    rendered = await renderSitePage({ blocks: content.blocks, resolveLink });
+    rendered = await renderSitePage({
+      blocks: content.blocks,
+      resolveLink,
+      // The site's setting, not the viewer's: `/schedule` 404s for everyone
+      // when it is off, so a directory tile pointing at it is dropped.
+      showSchedule: context.site.show_schedule === true,
+    });
   } catch (error) {
     if (error instanceof SiteRenderError) {
       console.error('[site] render failed:', error.message, error.cause);

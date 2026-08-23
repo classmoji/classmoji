@@ -399,6 +399,80 @@ test.describe('per-viewer visibility', () => {
     expect(badges[0].closest('.bn-nav-grid-item')?.getAttribute('href')).toBe('/solutions');
   });
 
+  /** A directory holding the schedule beside an ordinary page. */
+  const scheduleDocument = [
+    {
+      type: 'navGrid',
+      props: {
+        entries: JSON.stringify([
+          { kind: 'page', pageId: 'visible', title: 'Syllabus' },
+          { kind: 'schedule' },
+        ]),
+        columns: 2,
+      },
+    },
+  ];
+
+  test('a schedule entry links to /schedule when the schedule is published', async () => {
+    const { html } = await renderSitePage({
+      blocks: scheduleDocument,
+      resolveLink,
+      showSchedule: true,
+    });
+
+    const document = parse(html);
+    const tile = document.querySelector('.bn-nav-grid-item[data-kind="schedule"]');
+    expect(tile).not.toBeNull();
+    expect(tile!.getAttribute('href')).toBe('/schedule');
+    // Default label and emoji come from the render, never from storage.
+    expect(tile!.querySelector('.bn-nav-grid-label')?.textContent).toBe('Schedule');
+    expect(tile!.querySelector('.bn-nav-grid-emoji')?.textContent).toBe('📅');
+    // The page beside it is untouched.
+    expect(document.querySelectorAll('.bn-nav-grid-item')).toHaveLength(2);
+  });
+
+  test('a schedule entry disappears when the schedule is not published', async () => {
+    // `/schedule` 404s with the setting off, so the tile would be a link into
+    // a wall. Dropped the way an invisible page is — never rendered disabled.
+    const { html } = await renderSitePage({
+      blocks: scheduleDocument,
+      resolveLink,
+      showSchedule: false,
+    });
+
+    const document = parse(html);
+    expect(document.querySelector('[data-kind="schedule"]')).toBeNull();
+    expect(document.querySelectorAll('.bn-nav-grid-item')).toHaveLength(1);
+  });
+
+  test('a caller that never mentions the schedule does not link to it', async () => {
+    // The default is the safe one: every existing call site renders no tile
+    // rather than a link that may 404.
+    const { html } = await renderSitePage({ blocks: scheduleDocument, resolveLink });
+    expect(html).not.toContain('data-kind="schedule"');
+  });
+
+  test('an authored label and emoji win over the defaults', async () => {
+    const { html } = await renderSitePage({
+      blocks: [
+        {
+          type: 'navGrid',
+          props: {
+            entries: JSON.stringify([{ kind: 'schedule', label: 'Weekly plan', emoji: '🗓️' }]),
+            columns: 1,
+          },
+        },
+      ],
+      resolveLink,
+      showSchedule: true,
+    });
+
+    const document = parse(html);
+    const tile = document.querySelector('[data-kind="schedule"]')!;
+    expect(tile.querySelector('.bn-nav-grid-label')?.textContent).toBe('Weekly plan');
+    expect(tile.querySelector('.bn-nav-grid-emoji')?.textContent).toBe('🗓️');
+  });
+
   test('an anonymous viewer gets no badge, because the entry never resolves', async () => {
     // The flag is never what hides a page — the resolver is. This pins that
     // the badge cannot become a leak just by existing.

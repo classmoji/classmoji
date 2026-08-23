@@ -4,9 +4,11 @@ import { createReactBlockSpec } from '@blocknote/react';
 
 import { schema as editorSchema } from '~/components/editor/blocks/index.tsx';
 import {
+  navGridEntryEmoji,
   navGridEntryLabel,
   normalizeNavGridColumns,
   parseNavGridEntries,
+  NAV_GRID_SCHEDULE_PATH,
 } from '~/components/editor/blocks/navGridShared.ts';
 
 /**
@@ -278,7 +280,7 @@ function makeStaticPageLink(resolve: PageLinkResolver) {
   };
 }
 
-function makeStaticNavGrid(resolve: PageLinkResolver) {
+function makeStaticNavGrid(resolve: PageLinkResolver, showSchedule: boolean) {
   return function StaticNavGrid(props: RenderProps) {
     const entries = parseNavGridEntries(props.block.props.entries);
     const columns = normalizeNavGridColumns(props.block.props.columns);
@@ -319,6 +321,29 @@ function makeStaticNavGrid(resolve: PageLinkResolver) {
               link.membersOnly
                 ? h('span', { key: 'm', className: 'bn-nav-grid-badge' }, 'Members')
                 : null,
+            ]
+          )
+        );
+        return;
+      }
+
+      if (entry.kind === 'schedule') {
+        // Dropped exactly the way an invisible page is: the schedule route
+        // 404s when `show_schedule` is off, so rendering the tile anyway would
+        // be a link into a wall. Silently absent, never disabled-looking.
+        if (!showSchedule) return;
+        children.push(
+          h(
+            'a',
+            {
+              key: `schedule-${index}`,
+              className: 'bn-nav-grid-item',
+              'data-kind': 'schedule',
+              href: NAV_GRID_SCHEDULE_PATH,
+            },
+            [
+              emojiSlot(navGridEntryEmoji(entry)),
+              h('span', { key: 'l', className: 'bn-nav-grid-label' }, navGridEntryLabel(entry)),
             ]
           )
         );
@@ -429,8 +454,17 @@ function staticSpec(type: OverriddenBlockType, render: (props: never) => React.R
  * Per-request because `pageLink` and `navGrid` bake the viewer's visibility
  * decisions into their markup — there is no such thing as a shared "viewer
  * schema" once anonymous and member visitors must see different link sets.
+ *
+ * `showSchedule` is the site's own setting rather than a viewer's: a schedule
+ * entry in a directory is a link to `/schedule`, and that route 404s for
+ * everyone when the instructor has not published it.
  */
-export function createViewerSchema(resolveLink: PageLinkResolver) {
+export function createViewerSchema(
+  resolveLink: PageLinkResolver,
+  options: { showSchedule?: boolean } = {}
+) {
+  const showSchedule = options.showSchedule === true;
+
   const blockSpecs = {
     ...editorSchema.blockSpecs,
     callout: staticSpec('callout', StaticCallout),
@@ -440,7 +474,7 @@ export function createViewerSchema(resolveLink: PageLinkResolver) {
     embed: staticSpec('embed', StaticEmbed),
     video: staticSpec('video', StaticVideo),
     pageLink: staticSpec('pageLink', makeStaticPageLink(resolveLink)),
-    navGrid: staticSpec('navGrid', makeStaticNavGrid(resolveLink)),
+    navGrid: staticSpec('navGrid', makeStaticNavGrid(resolveLink, showSchedule)),
     codeBlock: staticSpec('codeBlock', StaticCodeBlock),
     toggleListItem: staticSpec('toggleListItem', StaticToggleListItem),
   };

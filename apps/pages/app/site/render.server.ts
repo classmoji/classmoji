@@ -151,6 +151,12 @@ export type RenderSitePageOptions = {
   blocks: unknown;
   /** Per-viewer page-id → link resolution (see PageLinkResolver). */
   resolveLink: PageLinkResolver;
+  /**
+   * Is `/schedule` published on this site? A page directory's schedule entry
+   * renders only when it is; defaults to false so a caller that has not
+   * decided never links somewhere that 404s.
+   */
+  showSchedule?: boolean;
 };
 
 /** BlockNote's own wrappers, in the order the client viewer nests them. */
@@ -172,6 +178,7 @@ const EMPTY_DOCUMENT = [{ type: 'paragraph', content: [] }];
 export async function renderSitePage({
   blocks,
   resolveLink,
+  showSchedule,
 }: RenderSitePageOptions): Promise<RenderedPage> {
   // Redact BEFORE serializing: BlockNote writes block props onto the wrapper
   // as data-* attributes, so a hidden page's title would ship in the HTML even
@@ -183,7 +190,9 @@ export async function renderSitePage({
   try {
     html = await withServerBlockNoteLock(async () => {
       // The schema is per-render because its link resolution is per-viewer.
-      const editor = ServerBlockNoteEditor.create({ schema: createViewerSchema(resolveLink) });
+      const editor = ServerBlockNoteEditor.create({
+        schema: createViewerSchema(resolveLink, { showSchedule }),
+      });
 
       // `editor.isEditable` is `true` inside ServerBlockNoteEditor and setting
       // it false is NOT a safety net (verified) — the static viewer schema is
