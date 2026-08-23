@@ -111,8 +111,15 @@ const FRAME_STYLE: React.CSSProperties = {
  * Per-viewer link resolution
  * ------------------------------------------------------------------ */
 
-/** What the renderer knows about a page another block links to. */
-export type SitePageLink = { href: string; title: string };
+/**
+ * What the renderer knows about a page another block links to.
+ *
+ * `membersOnly` is not a secret: a resolver returns a link at all only for a
+ * page THIS viewer may open, so it can only ever be true for someone who is
+ * already a member. It exists so a directory can mark the entries a signed-out
+ * classmate would not be able to follow.
+ */
+export type SitePageLink = { href: string; title: string; membersOnly?: boolean };
 
 /**
  * Resolves a page id to a link this viewer may follow, or `null`.
@@ -276,6 +283,12 @@ function makeStaticNavGrid(resolve: PageLinkResolver) {
     const entries = parseNavGridEntries(props.block.props.entries);
     const columns = normalizeNavGridColumns(props.block.props.columns);
 
+    // ALWAYS emitted, empty or not: the slot is a fixed-width column inside the
+    // tile, so an emoji on one entry and none on the next used to pull that
+    // tile's label left and leave a two-column grid visibly misaligned.
+    const emojiSlot = (emoji: string | undefined) =>
+      h('span', { key: 'e', className: 'bn-nav-grid-emoji', 'aria-hidden': 'true' }, emoji || '');
+
     const children: React.ReactNode[] = [];
     entries.forEach((entry, index) => {
       if (entry.kind === 'page') {
@@ -291,13 +304,7 @@ function makeStaticNavGrid(resolve: PageLinkResolver) {
               href: link.href,
             },
             [
-              entry.emoji
-                ? h(
-                    'span',
-                    { key: 'e', className: 'bn-nav-grid-emoji', 'aria-hidden': 'true' },
-                    entry.emoji
-                  )
-                : null,
+              emojiSlot(entry.emoji),
               h(
                 'span',
                 { key: 'l', className: 'bn-nav-grid-label' },
@@ -305,6 +312,13 @@ function makeStaticNavGrid(resolve: PageLinkResolver) {
                 // instructor may have renamed the entry on purpose.
                 entry.title || link.title || 'Untitled'
               ),
+              // Reachable only by a viewer who could already open the page —
+              // an anonymous visitor never resolved this entry at all — so it
+              // marks a link their signed-out classmates cannot follow rather
+              // than announcing that a hidden page exists.
+              link.membersOnly
+                ? h('span', { key: 'm', className: 'bn-nav-grid-badge' }, 'Members')
+                : null,
             ]
           )
         );
@@ -322,13 +336,7 @@ function makeStaticNavGrid(resolve: PageLinkResolver) {
             rel: 'noopener noreferrer',
           },
           [
-            entry.emoji
-              ? h(
-                  'span',
-                  { key: 'e', className: 'bn-nav-grid-emoji', 'aria-hidden': 'true' },
-                  entry.emoji
-                )
-              : null,
+            emojiSlot(entry.emoji),
             h('span', { key: 'l', className: 'bn-nav-grid-label' }, navGridEntryLabel(entry)),
             h('span', { key: 'x', className: 'bn-nav-grid-ext', 'aria-hidden': 'true' }, '↗'),
           ]

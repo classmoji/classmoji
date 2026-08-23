@@ -29,6 +29,8 @@ export type SitePageRow = {
   is_draft: boolean;
   header_image_url?: string | null;
   header_image_position?: number | null;
+  /** The editor's page-width setting (1-4). See `siteArticleWidthClass`. */
+  width?: number | null;
 };
 
 export type RenderedSitePage = {
@@ -65,9 +67,22 @@ export function createLinkResolver(
     ) {
       return null;
     }
-    return { href: sitePagePath(page), title: page.title || 'Untitled' };
+    // `membersOnly` is only ever computed for a viewer who has just passed the
+    // visibility check above, so it cannot tell an anonymous visitor that a
+    // page exists — it tells a MEMBER which links their signed-out classmates
+    // would not be able to follow.
+    return {
+      href: sitePagePath(page),
+      title: page.title || 'Untitled',
+      membersOnly: !page.is_public,
+    };
   };
 }
+
+// `siteArticleWidthClass` lives in render.server.ts, beside the wrapper it
+// sizes — and out of reach of this module's database import, so the unit
+// suite can exercise it without a Prisma client.
+export { siteArticleWidthClass } from './render.server.ts';
 
 /**
  * Load and render a page for the current viewer.

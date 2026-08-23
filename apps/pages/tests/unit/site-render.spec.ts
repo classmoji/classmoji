@@ -16,6 +16,8 @@
  *    serializing through process-global JSDOM.
  */
 
+import * as fs from 'fs';
+
 import { test, expect } from '@playwright/test';
 // @ts-expect-error -- jsdom ships no type declarations and `@types/jsdom` is
 // not a dependency; the cast below pins the shape this file uses.
@@ -24,9 +26,11 @@ import { JSDOM as UntypedJSDOM } from 'jsdom';
 import {
   addHeadingAnchors,
   renderSitePage,
+  siteArticleWidthClass,
   siteArticleWrapper,
   slugifyHeading,
 } from '~/site/render.server.ts';
+import { SITE_STYLES } from '~/site/styles.ts';
 import { redactDocumentForViewer } from '~/site/redact.server.ts';
 import { allBlockTypes, OVERRIDDEN_BLOCK_TYPES } from '~/site/viewerSchema.server.ts';
 import { migrateHtmlToBlockNote } from '~/utils/migration.server.ts';
@@ -73,15 +77,26 @@ const SAMPLES: Record<string, unknown> = {
   columnList: {
     type: 'columnList',
     children: [
-      { type: 'column', props: { width: 1 }, children: [{ type: 'paragraph', content: text('L') }] },
-      { type: 'column', props: { width: 1 }, children: [{ type: 'paragraph', content: text('R') }] },
+      {
+        type: 'column',
+        props: { width: 1 },
+        children: [{ type: 'paragraph', content: text('L') }],
+      },
+      {
+        type: 'column',
+        props: { width: 1 },
+        children: [{ type: 'paragraph', content: text('R') }],
+      },
     ],
   },
   // `column` never appears at the top level; it is exercised inside columnList.
   column: null,
   callout: { type: 'callout', props: { emoji: '💡' }, content: text('callout body') },
   terminal: { type: 'terminal', props: { code: 'npm run dev', title: 'Terminal' } },
-  profile: { type: 'profile', props: { name: 'Ada', title: 'Instructor', imageUrl: '', links: '' } },
+  profile: {
+    type: 'profile',
+    props: { name: 'Ada', title: 'Instructor', imageUrl: '', links: '' },
+  },
   divider: { type: 'divider' },
   embed: { type: 'embed', props: { url: 'https://example.test/embed', type: '' } },
   video: { type: 'video', props: { url: 'https://youtu.be/abc123', caption: 'a video' } },
@@ -326,6 +341,83 @@ test.describe('per-viewer visibility', () => {
     expect(html).toContain('repeat(1, minmax(0, 1fr))');
   });
 
+  test('every navGrid tile carries an emoji slot, with or without an emoji', async () => {
+    // The slot is a fixed-width column inside the tile. Emitting it only when
+    // an emoji was authored left every plain tile's label starting further
+    // left than its neighbour's.
+    const { html } = await renderSitePage({
+      blocks: [
+        {
+          type: 'navGrid',
+          props: {
+            entries: JSON.stringify([
+              { kind: 'page', pageId: 'visible', title: 'Syllabus', emoji: '📌' },
+              { kind: 'page', pageId: 'visible', title: 'Resources' },
+            ]),
+            columns: 2,
+          },
+        },
+      ],
+      resolveLink,
+    });
+
+    const document = parse(html);
+    const tiles = [...document.querySelectorAll('.bn-nav-grid-item')];
+    expect(tiles).toHaveLength(2);
+    expect(tiles[0].querySelector('.bn-nav-grid-emoji')?.textContent).toBe('📌');
+    expect(tiles[1].querySelector('.bn-nav-grid-emoji')?.textContent).toBe('');
+  });
+
+  test('a members-only entry is badged, for the member who can already open it', async () => {
+    const { html } = await renderSitePage({
+      blocks: [
+        {
+          type: 'navGrid',
+          props: {
+            entries: JSON.stringify([
+              { kind: 'page', pageId: 'members', title: 'Solutions' },
+              { kind: 'page', pageId: 'visible', title: 'Syllabus' },
+            ]),
+            columns: 2,
+          },
+        },
+      ],
+      // A member's resolver: both pages resolve, one of them members-only.
+      resolveLink: (pageId: string) =>
+        pageId === 'members'
+          ? { href: '/solutions', title: 'Solutions', membersOnly: true }
+          : pageId === 'visible'
+            ? { href: '/syllabus', title: 'Syllabus' }
+            : null,
+    });
+
+    const document = parse(html);
+    const badges = [...document.querySelectorAll('.bn-nav-grid-badge')];
+    expect(badges).toHaveLength(1);
+    expect(badges[0].textContent).toBe('Members');
+    // On the members-only tile, not the public one beside it.
+    expect(badges[0].closest('.bn-nav-grid-item')?.getAttribute('href')).toBe('/solutions');
+  });
+
+  test('an anonymous viewer gets no badge, because the entry never resolves', async () => {
+    // The flag is never what hides a page — the resolver is. This pins that
+    // the badge cannot become a leak just by existing.
+    const { html } = await renderSitePage({
+      blocks: [
+        {
+          type: 'navGrid',
+          props: {
+            entries: JSON.stringify([{ kind: 'page', pageId: 'members', title: 'Solutions' }]),
+            columns: 2,
+          },
+        },
+      ],
+      resolveLink: resolveNothing,
+    });
+    expect(html).not.toContain('bn-nav-grid-badge');
+    expect(html).not.toContain('Solutions');
+  });
+
   test('redaction reaches page links nested inside columns', () => {
     const nested = [
       {
@@ -542,5 +634,55 @@ test.describe('resilience', () => {
     results.forEach((html, i) => {
       expect(html).toContain(i % 2 === 0 ? `direct-${i}` : `migrated-${i}`);
     });
+  });
+});
+
+/**
+ * The site and the editor are two renderings of ONE page, and the places where
+ * they are styled by different stylesheets are where they drift apart in ways
+ * no unit test would otherwise see.
+ */
+test.describe('editor parity', () => {
+  /** Every `height:` declared for `.page-header-image`, in source order. */
+  const coverHeights = (css: string): string[] => {
+    const heights: string[] = [];
+    const blocks = css.matchAll(/\.page-header-image\s*\{([^}]*)\}/g);
+    for (const [, body] of blocks) {
+      const height = body.match(/height:\s*([^;]+);/);
+      if (height) heights.push(height[1].trim());
+    }
+    return heights;
+  };
+
+  test('the cover band is the same height on the site as in the editor', () => {
+    // A viewport-relative band on the site (20vh, 140-280px) against the
+    // editor's fixed 12/16/18rem meant the same cover was cropped differently
+    // in the two surfaces — so an author positioned an image against one crop
+    // and published another.
+    const editorCss = fs.readFileSync(
+      new URL('../../app/styles/page-viewer.css', import.meta.url),
+      'utf-8'
+    );
+
+    const editor = coverHeights(editorCss);
+    expect(editor, 'page-viewer.css should still size .page-header-image').not.toHaveLength(0);
+    expect(coverHeights(SITE_STYLES)).toEqual(editor);
+  });
+});
+
+test.describe('article width', () => {
+  test('mirrors the editor width map', () => {
+    // Same numbers as `widthClasses` in the editor's page route. A page
+    // authored at width 3 and served at max-w-3xl is the cramping this fixes.
+    expect(siteArticleWidthClass(1)).toBe('max-w-2xl');
+    expect(siteArticleWidthClass(2)).toBe('max-w-4xl');
+    expect(siteArticleWidthClass(3)).toBe('max-w-5xl');
+    expect(siteArticleWidthClass(4)).toBe('max-w-7xl');
+  });
+
+  test('an unreadable width keeps the width the site has always used', () => {
+    for (const width of [null, undefined, 0, 9, -1]) {
+      expect(siteArticleWidthClass(width)).toBe('max-w-3xl');
+    }
   });
 });

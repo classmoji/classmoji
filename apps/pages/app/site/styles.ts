@@ -59,13 +59,131 @@ export const SITE_STYLES = `
 .bn-site-frame { border-radius: 0.5rem; }
 
 /* Cover images: the same fixed band the editor uses, restated so a site page
-   does not depend on a stylesheet that exists for the editor's benefit. */
+   does not depend on a stylesheet that exists for the editor's benefit.
+
+   The numbers are page-viewer.css's, to the pixel, and that is the point. A
+   viewport-relative band here meant the same cover was cropped differently in
+   the two surfaces, so an author who positioned an image against the editor's
+   192/256/288px band published a different slice of it. If page-viewer.css
+   ever changes these, this block changes with it -- site-render.spec.ts fails
+   until it does. */
 .page-header-image {
-  height: 20vh;
-  min-height: 140px;
-  max-height: 280px;
+  height: 12rem;
   background-size: cover;
   background-repeat: no-repeat;
+}
+@media (min-width: 768px) {
+  .page-header-image { height: 16rem; }
+}
+@media (min-width: 1024px) {
+  .page-header-image { height: 18rem; }
+}
+
+/* --- page link -------------------------------------------------------- */
+
+/* The editor draws a pageLink as a bordered row around a SPAN, so its
+   border-bottom is the only underline on screen. The site renders that same
+   row around an <a>, which brings a real link underline with it, and the two
+   together read as a double underline under every page link. The link's own
+   underline is the one that carries meaning, so the border goes. */
+.site-article .page-link-display { border-bottom: none; }
+
+/* --- page directory (navGrid) ----------------------------------------- */
+
+/* Restated for the site rather than inherited from the editor's stylesheet,
+   for the same reason the cover band is: these tiles are a class site's
+   primary navigation, and they must not degrade into flat full-width rows
+   because a stylesheet that exists for the editor moved underneath them. */
+.site-article .bn-nav-grid,
+.site-article .nav-grid {
+  gap: 10px 14px;
+  /* Room between the hero above and the prose below: this block is usually
+     the first thing under the page title. */
+  margin: 1.25rem 0 1.5rem;
+}
+
+.site-article .bn-nav-grid .bn-nav-grid-item,
+.site-article .nav-grid .bn-nav-grid-item {
+  padding: 10px 13px;
+  border-radius: 10px;
+  border: 1px solid var(--color-border-default);
+  background: var(--color-bg-subtle);
+  cursor: pointer;
+  /* !important because the editor's own rule sets colour that way; without it
+     this rule would win every property except the one deciding legibility. */
+  color: var(--color-text-default) !important;
+}
+
+.site-article .bn-nav-grid .bn-nav-grid-item:hover,
+.site-article .nav-grid .bn-nav-grid-item:hover {
+  background: var(--color-bg-default);
+  border-color: var(--color-border-medium);
+  color: var(--color-text-default) !important;
+}
+
+/* A fixed slot, always rendered (see makeStaticNavGrid): a tile with an emoji
+   and one without must start their labels in the same place, or a two-column
+   grid reads as misaligned. */
+.site-article .bn-nav-grid-emoji {
+  width: 1.25em;
+  text-align: center;
+}
+
+/* Members-only entries -- shown only to the members who can already open
+   them. */
+.site-article .bn-nav-grid-badge {
+  margin-left: auto;
+  flex: none;
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--color-text-subtle);
+  border: 1px solid var(--color-border-medium);
+  border-radius: 999px;
+  padding: 1px 6px;
+}
+
+/* Two columns is unreadable on a phone. The grid template is an INLINE style
+   (the block carries its author's column count), and only !important reaches
+   past one. */
+@media (max-width: 640px) {
+  .site-article .bn-nav-grid,
+  .site-article .nav-grid {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+}
+
+/* --- profile cards ----------------------------------------------------- */
+
+/* Side-by-side profiles are authored as a column list, and each card sized
+   itself to its own content, so a two-line role beside a one-line role gave
+   two cards of different heights. The columns already stretch; the height has
+   to be carried down through BlockNote's wrapper divs to reach the card.
+
+   Scoped with :has() to the profile block deliberately: the same chain applied
+   to every block in a column would stretch callouts and terminals too, which
+   is a change nobody asked for. Where :has() is unsupported this does nothing
+   and the cards look exactly as they do today. */
+.site-article .bn-block-column .bn-block-outer:has(> .bn-block > [data-content-type='profile']),
+.site-article
+  .bn-block-column
+  .bn-block-outer:has(> .bn-block > [data-content-type='profile'])
+  > .bn-block,
+.site-article .bn-block-column .bn-block-content[data-content-type='profile'],
+.site-article .bn-block-content[data-content-type='profile'] > .profile-block {
+  height: 100%;
+}
+
+/* The avatar is a fixed 64px circle in the editor; a long name in a narrow
+   column must not squeeze it. */
+.site-article .profile-avatar-wrapper { flex: none; }
+
+/* A genuinely long name still wraps -- it just no longer breaks mid-word when
+   the column has room to spare. */
+.site-article .profile-display-name,
+.site-article .profile-display-title {
+  overflow-wrap: break-word;
 }
 
 /* --- dark mode -------------------------------------------------------- */
