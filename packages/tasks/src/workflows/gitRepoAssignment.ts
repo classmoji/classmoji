@@ -548,9 +548,16 @@ export const releaseAssignmentsNowTask = task({
 
     const recipients = uniqueLogins(logins);
 
+    // An empty roster is a valid pre-term state — the instructor is staging the
+    // course before anyone enrols. Releasing still has to mark the assignments
+    // published, because that flag is what makes them visible to whoever joins
+    // later; only the per-student fanout is skipped. Returning here instead left
+    // the assignment stuck in draft while the UI reported success. Late joiners
+    // are provisioned by activateMembership, and Sync backfills either way.
     if (recipients.length === 0) {
-      logger.info('No recipients to release to', { repositoryId: payload.repositoryId });
-      return;
+      logger.info('No recipients yet — releasing assignments without fanout', {
+        repositoryId: payload.repositoryId,
+      });
     }
 
     const repositorySlug = repository.slug || titleToIdentifier(repository.title);

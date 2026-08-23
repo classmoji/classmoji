@@ -15,10 +15,12 @@ import { repositoryRow } from '../../helpers/repos.helpers';
 /**
  * Assignment publish / unpublish round-trips and persists in the DB.
  *
- * publishAssignment only flips is_published directly when a GitRepo row already
- * exists for the repository; otherwise it enqueues a Trigger.dev task. Every spec
- * here seeds the repository with a backing GitRepo so publish takes the
- * deterministic flag-flip branch.
+ * publishAssignment flips is_published directly when a GitRepo row already
+ * exists for the repository, or when there is nobody to provision for (empty
+ * roster / no tagged teams); otherwise it enqueues a Trigger.dev task. Every
+ * spec here seeds the repository with a backing GitRepo so publish takes the
+ * deterministic flag-flip branch. The empty-roster branch is covered by the
+ * unit specs in app/routes/admin.$class.repos/__tests__/publishAssignment.test.ts.
  *
  * UI shape (AssignmentsTable): the primary action is an inline button — "Publish"
  * for drafts, "Sync" for published. Secondary/destructive actions (Unpublish,
