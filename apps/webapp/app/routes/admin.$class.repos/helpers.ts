@@ -47,12 +47,21 @@ export const publishAssignment = async (
         'STUDENT'
       );
 
-      if (students.length === 0)
-        return {
-          error: 'No students found.',
-        };
-
       const studentList = students.map(user => user.login || '').filter(login => login !== '');
+
+      // Nobody to provision for yet — an empty roster (pre-term staging) or a
+      // roster whose invites are all still pending, so no GitHub login to create
+      // a repo under. Publish is "make available to students", so it must still
+      // succeed: students who join later are provisioned on join, and Sync
+      // backfills anyone the join path missed. Returning early also avoids
+      // handing the UI a progress session with nothing to report.
+      if (studentList.length === 0) {
+        await ClassmojiService.repository.setPublished(repositoryId, true, classroomId);
+
+        return {
+          success: 'Repository published! Student repositories are created as students join.',
+        };
+      }
 
       numReposToCreate = studentList.length;
       numIssuesToCreate =
@@ -89,9 +98,14 @@ export const publishAssignment = async (
       // Instructor-assigned teams
       const teams = await ClassmojiService.organizationTag.findTeamsByTag(repository.tag_id!);
 
+      // No teams tagged yet — same pre-term staging case as the INDIVIDUAL
+      // branch above. Publish the container; team repos are created by Sync once
+      // the teams exist.
       if (teams.length === 0) {
+        await ClassmojiService.repository.setPublished(repositoryId, true, classroomId);
+
         return {
-          info: 'No team(s) found.',
+          success: 'Repository published! Team repositories are created once teams exist.',
         };
       }
 

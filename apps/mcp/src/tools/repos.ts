@@ -13,8 +13,12 @@
  * provisioning is never reimplemented here. Branches mirrored:
  *   - repos already exist (re-publish after unpublish): flip only.
  *   - INDIVIDUAL: trigger repo creation for every enrolled student, flip.
+ *   - INDIVIDUAL with no provisionable logins (empty roster / all invites still
+ *     pending): flip only — publishing before students enrol is a supported
+ *     pre-term state, and joiners are provisioned by activate_membership.
  *   - SELF_FORMED teams: flip only (repos created when students form teams).
  *   - instructor-assigned teams: trigger repo creation per tagged team, flip.
+ *   - instructor-assigned teams with no teams yet: flip only.
  * The web additionally mints a Trigger.dev public token so its UI can render
  * a live progress bar — that is a web-UI session concern and is not exposed
  * here (counts are returned instead).
@@ -94,6 +98,8 @@ export const repoPublishTool: ToolDefinition<RepoPublishArgs> = {
     'Publishes a repo (assignment container) to students and provisions their git repositories ' +
     'in the background (per-student for individual repos, per-team for instructor-assigned ' +
     'teams; self-formed team repos are created when students form teams). Owner only. ' +
+    'Works before anyone has enrolled — publishing an empty classroom marks the repo available ' +
+    'and provisions nothing; students who join later get their repos on join. ' +
     'Re-publishing a previously published repo just restores visibility — use the web Sync to ' +
     'backfill missing repositories.',
   scope: 'write',
@@ -135,10 +141,22 @@ export const repoPublishTool: ToolDefinition<RepoPublishArgs> = {
         classroom.classroomId,
         'STUDENT'
       );
-      if (students.length === 0) {
-        throw new ToolError('invalid_params', 'No students found.');
-      }
       const logins = students.map(user => user.login || '').filter(login => login !== '');
+
+      // Nobody to provision for yet — empty roster (pre-term staging) or every
+      // invite still pending, so there is no GitHub login to create a repo under.
+      // Publish still succeeds (route parity): joining students are provisioned
+      // on join, and Sync backfills anyone the join path missed.
+      if (logins.length === 0) {
+        await ClassmojiService.repository.setPublished(repository.id, true, classroom.classroomId);
+        await audit({ is_published: true, provisioning_triggered: false, repos_to_create: 0 });
+        return ok({
+          success: true,
+          is_published: true,
+          provisioning: { repos_to_create: 0 },
+          message: 'Repository published. Student repositories are created as students join.',
+        });
+      }
 
       const sessionId = randomUUID();
       triggerRepoProvisioning(logins, repository.title, classroomSlug, sessionId);
@@ -174,8 +192,17 @@ export const repoPublishTool: ToolDefinition<RepoPublishArgs> = {
 
     // Instructor-assigned teams.
     const teams = await ClassmojiService.organizationTag.findTeamsByTag(repository.tag_id!);
+
+    // No teams tagged yet — same pre-term staging case as INDIVIDUAL above.
     if (teams.length === 0) {
-      throw new ToolError('invalid_params', 'No team(s) found.');
+      await ClassmojiService.repository.setPublished(repository.id, true, classroom.classroomId);
+      await audit({ is_published: true, provisioning_triggered: false, repos_to_create: 0 });
+      return ok({
+        success: true,
+        is_published: true,
+        provisioning: { repos_to_create: 0 },
+        message: 'Repository published. Team repositories are created once teams exist.',
+      });
     }
 
     const sessionId = randomUUID();
