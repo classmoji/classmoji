@@ -4,7 +4,12 @@ import type { HeadersFunction, LoaderFunctionArgs, MetaFunction } from 'react-ro
 import { CoverImage, EditPagePill } from './chrome.tsx';
 import { routeSiteHeaders, siteHeaders } from './headers.server.ts';
 import { isMember, isStaff, publicPathOf, resolveSiteContext } from './tenant.server.ts';
-import { describeFromHtml, renderPageForViewer, type SitePageRow } from './pageRender.server.ts';
+import {
+  describeFromHtml,
+  renderPageForViewer,
+  siteArticleWidthClass,
+  type SitePageRow,
+} from './pageRender.server.ts';
 import { pagesUrl } from './env.server.ts';
 import { signInPathFor } from './returnTo.ts';
 import { ClassmojiService } from '~/utils/db.server.ts';
@@ -76,6 +81,10 @@ export const loader = async (args: LoaderFunctionArgs) => {
       isHomePage: page.id === site.home_page_id,
       html: rendered.html,
       coverImage: rendered.coverImage,
+      // The width the page was AUTHORED at, so the site column matches the
+      // editor's. Resolved here because the page row exists in the loader and
+      // nowhere else on this route.
+      widthClass: siteArticleWidthClass(page.width),
       description: describeFromHtml(rendered.html),
       // The whole point of a custom domain is that it becomes the address of
       // the course, so a verified one is what `rel=canonical`/`og:url` name —
@@ -135,12 +144,12 @@ export const meta: MetaFunction<typeof loader> = ({ data: loaderData }) => {
 };
 
 const SitePage = () => {
-  const { title, html, coverImage, editHref } = useLoaderData<typeof loader>();
+  const { title, html, coverImage, editHref, widthClass } = useLoaderData<typeof loader>();
 
   return (
     <article>
       <CoverImage coverImage={coverImage} />
-      <div className="mx-auto max-w-3xl px-4 pb-16 sm:px-6 site-article">
+      <div className={`mx-auto ${widthClass} px-4 pb-16 sm:px-6 site-article`}>
         <div className={coverImage?.url ? 'pt-10' : 'pt-14'}>
           {editHref ? <EditPagePill href={editHref} /> : null}
           <h1 className="mb-6 text-4xl font-bold text-gray-900 sm:text-5xl dark:text-white">

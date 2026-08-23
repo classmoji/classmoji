@@ -22,11 +22,14 @@ import {
   canSubmitDomain,
   certChip,
   certErrorNotice,
+  certProblems,
   checkDomainInput,
   customDomainErrorHint,
   customDomainRowState,
-  dnsRows,
+  dnsPlan,
+  manualDomainSetup,
   type CertSnapshot,
+  type DnsRow,
 } from './customDomain.ts';
 import type { SubdomainAvailabilityResponse } from '../api.site.availability/availability.ts';
 import type { Route } from './+types/route';
@@ -85,6 +88,13 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
 
   const flyConfigured = isFlyCertsConfigured();
 
+  // The Fly app that serves class sites. Rendered only when automation is off,
+  // as the CNAME target of the manual DNS instructions — the app's own public
+  // `{app}.fly.dev` name, which is the same hostname Fly would have handed back
+  // in `dns_requirements`, so nothing crosses to the browser that a `dig` at a
+  // working class site would not already show.
+  const pagesApp = (process.env.FLY_PAGES_APP ?? '').trim() || null;
+
   // A plain GET, deliberately: `{ check: true }` makes Fly re-resolve DNS and
   // belongs behind the explicit Check status button, not on every page load.
   // Failing soft to null — a Fly outage must not 500 the whole Website tab,
@@ -119,6 +129,7 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
     siteOrigin,
     isPro,
     flyConfigured,
+    pagesApp,
     cert,
     suggestedSubdomain: site ? '' : suggestSubdomainFromSlug(classroom.slug),
   };
@@ -400,6 +411,36 @@ const CHIP_TONES: Record<string, string> = {
     'bg-gray-100 text-gray-700 dark:bg-neutral-800 dark:text-neutral-300 ring-gray-500/20 dark:ring-neutral-400/20',
 };
 
+/**
+ * Three columns, wherever a zone-file record is printed.
+ *
+ * Every table here carries its own header row, including the ownership one that
+ * used to go without: the routing records are now grouped into alternatives, so
+ * there is no longer a single table above whose header the rest can borrow.
+ */
+const DnsTable = ({ rows }: { rows: DnsRow[] }) => (
+  <div className="overflow-x-auto">
+    <table className="w-full min-w-[32rem] text-left text-sm">
+      <thead>
+        <tr className="text-ink-3">
+          <th className="pb-2 pr-4 font-medium">Type</th>
+          <th className="pb-2 pr-4 font-medium">Name</th>
+          <th className="pb-2 font-medium">Value</th>
+        </tr>
+      </thead>
+      <tbody className="divide-y divide-line">
+        {rows.map(record => (
+          <tr key={`${record.type}-${record.name}-${record.value}`}>
+            <td className="py-2 pr-4 font-mono text-ink-2">{record.type}</td>
+            <td className="py-2 pr-4 font-mono break-all text-ink-2">{record.name}</td>
+            <td className="py-2 font-mono break-all text-ink-0">{record.value}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  </div>
+);
+
 /** The Pro badge on the locked row. */
 const ProPill = () => (
   <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-xs font-semibold text-amber-800 ring-1 ring-amber-600/20 dark:bg-amber-900/40 dark:text-amber-300 dark:ring-amber-400/20">
@@ -417,6 +458,7 @@ const SettingsWebsite = ({ loaderData }: Route.ComponentProps) => {
     suggestedSubdomain,
     isPro,
     flyConfigured,
+    pagesApp,
     cert,
   } = loaderData;
   const { class: classSlug } = useParams();
@@ -538,9 +580,16 @@ const SettingsWebsite = ({ loaderData }: Route.ComponentProps) => {
   // The Check press returns fresh state; until then the loader's read stands.
   const liveCert = (certFetcher.state === 'idle' ? certFetcher.data?.cert : undefined) ?? cert;
   const chip = certChip(liveCert, { flyConfigured });
-  const records = claimedDomain ? dnsRows(liveCert?.dnsRequirements, claimedDomain) : [];
-  const routeRecords = records.filter(record => record.purpose === 'route');
-  const proofRecords = records.filter(record => record.purpose === 'proof');
+  // Fly's requirements as ALTERNATIVES plus proof, never as one flat checklist.
+  // Null in manual mode, where `manualDomainSetup` below is the instruction —
+  // the two are mutually exclusive by construction rather than by guard order.
+  const plan =
+    claimedDomain && flyConfigured ? dnsPlan(liveCert?.dnsRequirements, claimedDomain) : null;
+  const problems = certProblems(liveCert?.validationErrors);
+  // With no Fly credential there is no `dns_requirements` to render — and there
+  // never will be, so waiting for one leaves the instructor with a claimed
+  // domain and no instructions. The CNAME below is derivable without Fly.
+  const manual = flyConfigured ? null : manualDomainSetup({ domain: claimedDomain, pagesApp });
   // A completed check SUPERSEDES the claim's verdict, including when it clears.
   // The save's `certError` lives on its fetcher until the next save, so reading
   // it first would leave "the certificate could not be requested" on screen
@@ -903,7 +952,10 @@ const SettingsWebsite = ({ loaderData }: Route.ComponentProps) => {
 
               {claimedDomain && !editingDomain && (
                 <>
-                  <div className="pt-2 text-sm text-ink-3">{chip.hint}</div>
+                  {/* Manual setup carries no hint — the block below is its
+                      whole instruction, and printing a chip hint too is how
+                      this row ended up saying the same thing twice. */}
+                  {chip.hint && <div className="pt-2 text-sm text-ink-3">{chip.hint}</div>}
 
                   {domainState === 'verified' ? (
                     <div className="pt-2 text-sm text-green-700 dark:text-green-400">
@@ -917,79 +969,97 @@ const SettingsWebsite = ({ loaderData }: Route.ComponentProps) => {
                     </div>
                   )}
 
-                  {liveCert && liveCert.validationErrors.length > 0 && (
-                    <ul className="mt-3 list-disc space-y-1 pl-5 text-sm text-red-600 dark:text-red-400">
-                      {liveCert.validationErrors.map((problem, index) => (
+                  {problems.length > 0 && (
+                    <ul className="mt-3 space-y-2 text-sm">
+                      {problems.map((problem, index) => (
                         <li key={index}>
-                          {typeof problem === 'string' ? problem : JSON.stringify(problem)}
+                          <div className="flex flex-wrap items-baseline gap-2">
+                            <span className="text-red-600 dark:text-red-400">
+                              {problem.message}
+                            </span>
+                            {problem.code && (
+                              <span className="rounded px-1.5 py-0.5 font-mono text-xs text-gray-700 bg-gray-100 dark:bg-neutral-800 dark:text-neutral-300">
+                                {problem.code}
+                              </span>
+                            )}
+                          </div>
+                          {problem.remediation && (
+                            <div className="pt-1 text-ink-3">{problem.remediation}</div>
+                          )}
                         </li>
                       ))}
                     </ul>
                   )}
 
-                  {records.length > 0 && (
+                  {/* Manual mode replaces the Fly-derived table outright, so
+                      the automated path below is untouched by it. */}
+                  {manual && (
                     <div className="mt-4 rounded-lg border border-line p-4">
-                      <p className="pb-3 text-sm text-ink-3">
-                        Add these at your DNS provider. Values come from Fly, which issues the
+                      {manual.state === 'unavailable' ? (
+                        <p className="text-sm text-ink-3">{manual.message}</p>
+                      ) : (
+                        <>
+                          <p className="text-sm font-medium text-ink-1">{manual.heading}</p>
+                          <p className="pt-1 pb-3 text-sm text-ink-3">
+                            Add this record wherever your domain&apos;s DNS is hosted — your
+                            registrar, or Cloudflare if you moved it there.
+                          </p>
+                          <DnsTable rows={manual.rows} />
+                          <ul className="mt-3 list-disc space-y-1 pl-5 text-sm text-ink-3">
+                            {manual.notes.map(note => (
+                              <li key={note}>{note}</li>
+                            ))}
+                          </ul>
+                          <p className="pt-3 text-sm text-ink-3">{manual.footer}</p>
+                        </>
+                      )}
+                    </div>
+                  )}
+
+                  {plan && (plan.routing.length > 0 || plan.proof.length > 0) && (
+                    <div className="mt-4 rounded-lg border border-line p-4">
+                      {/* No longer "add these": the routing records below are
+                          alternatives, and an instruction to add all of them
+                          contradicts the section heading. */}
+                      <p className="pb-1 text-sm text-ink-3">
+                        These go in at your DNS provider. The values come from Fly, which issues the
                         certificate — copy them exactly.
                       </p>
-                      {/* Guarded separately from `records`: Fly can require an
-                          ownership record and no routing one (a CNAME already
-                          in place), and a table with a header and no rows reads
-                          as "nothing to do here". */}
-                      {routeRecords.length > 0 && (
-                        <div className="overflow-x-auto">
-                          <table className="w-full min-w-[32rem] text-left text-sm">
-                            <thead>
-                              <tr className="text-ink-3">
-                                <th className="pb-2 pr-4 font-medium">Type</th>
-                                <th className="pb-2 pr-4 font-medium">Name</th>
-                                <th className="pb-2 font-medium">Value</th>
-                              </tr>
-                            </thead>
-                            <tbody className="divide-y divide-line">
-                              {routeRecords.map(record => (
-                                <tr key={`${record.type}-${record.name}-${record.value}`}>
-                                  <td className="py-2 pr-4 font-mono text-ink-2">{record.type}</td>
-                                  <td className="py-2 pr-4 font-mono break-all text-ink-2">
-                                    {record.name}
-                                  </td>
-                                  <td className="py-2 font-mono break-all text-ink-0">
-                                    {record.value}
-                                  </td>
-                                </tr>
-                              ))}
-                            </tbody>
-                          </table>
-                        </div>
+
+                      {/* Guarded separately from the proof records: Fly can
+                          require an ownership record and no routing one (a
+                          CNAME already in place), and a heading with nothing
+                          under it reads as "nothing to do here". */}
+                      {plan.routing.length > 0 && (
+                        <>
+                          <p className="pt-3 text-sm font-medium text-ink-1">{plan.heading}</p>
+                          {/* One card per ALTERNATIVE. The border is what makes
+                              "choose one" legible: a single flat table of A,
+                              AAAA and CNAME rows is what led instructors to add
+                              a CNAME beside an A on the same name. */}
+                          <div className="mt-2 space-y-3">
+                            {plan.routing.map(option => (
+                              <div key={option.id} className="rounded-lg border border-line p-3">
+                                <p className="text-sm font-medium text-ink-2">{option.label}</p>
+                                <p className="pt-1 pb-3 text-sm text-ink-3">{option.summary}</p>
+                                <DnsTable rows={option.rows} />
+                                {option.note && (
+                                  <p className="pt-2 text-sm text-ink-3">{option.note}</p>
+                                )}
+                              </div>
+                            ))}
+                          </div>
+                        </>
                       )}
 
-                      {proofRecords.length > 0 && (
+                      {plan.proof.length > 0 && (
                         <>
                           <p className="pt-4 pb-2 text-sm text-ink-3">
                             Then add <span className="font-medium text-ink-2">any one</span> of
                             these to prove you own the domain. Without one, the certificate stays
                             pending however long the records above have been live.
                           </p>
-                          <div className="overflow-x-auto">
-                            <table className="w-full min-w-[32rem] text-left text-sm">
-                              <tbody className="divide-y divide-line">
-                                {proofRecords.map(record => (
-                                  <tr key={`${record.type}-${record.name}-${record.value}`}>
-                                    <td className="py-2 pr-4 font-mono text-ink-2">
-                                      {record.type}
-                                    </td>
-                                    <td className="py-2 pr-4 font-mono break-all text-ink-2">
-                                      {record.name}
-                                    </td>
-                                    <td className="py-2 font-mono break-all text-ink-0">
-                                      {record.value}
-                                    </td>
-                                  </tr>
-                                ))}
-                              </tbody>
-                            </table>
-                          </div>
+                          <DnsTable rows={plan.proof} />
                         </>
                       )}
                     </div>

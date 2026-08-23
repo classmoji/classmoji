@@ -17,7 +17,9 @@
 
 import { test, expect } from '@playwright/test';
 import {
+  hasNavGridScheduleEntry,
   moveNavGridEntry,
+  navGridEntryEmoji,
   navGridEntryLabel,
   normalizeNavGridColumns,
   parseNavGridEntries,
@@ -167,5 +169,63 @@ test.describe('helpers', () => {
     expect(entries.map(e => (e as { pageId: string }).pageId)).toEqual(['a', 'b']);
     expect(moveNavGridEntry(entries, 0, 5)).toBe(entries);
     expect(moveNavGridEntry(entries, -1, 0)).toBe(entries);
+  });
+});
+
+/**
+ * The schedule entry: a directory tile whose target is a property of the SITE
+ * (`/schedule`, published or not) rather than of the entry. Nothing about it
+ * is authored except an optional emoji and label.
+ */
+test.describe('schedule entries', () => {
+  test('a bare schedule entry is a complete one', () => {
+    expect(parseNavGridEntries('[{"kind":"schedule"}]')).toEqual([{ kind: 'schedule' }]);
+  });
+
+  test('round-trips through serialize without inventing fields', () => {
+    // A stored `label: ""` would be an authored empty title, which is not the
+    // same thing as "use the default".
+    const entries = parseNavGridEntries('[{"kind":"schedule","label":"","emoji":"  "}]');
+    expect(entries).toEqual([{ kind: 'schedule' }]);
+    expect(serializeNavGridEntries(entries)).toBe('[{"kind":"schedule"}]');
+  });
+
+  test('keeps an authored label and emoji', () => {
+    const entries = parseNavGridEntries([{ kind: 'schedule', label: 'Calendar', emoji: '🗓️' }]);
+    expect(entries).toEqual([{ kind: 'schedule', label: 'Calendar', emoji: '🗓️' }]);
+    expect(parseNavGridEntries(serializeNavGridEntries(entries))).toEqual(entries);
+  });
+
+  test('accepts `title` as a label alias, as page entries do', () => {
+    expect(parseNavGridEntries([{ kind: 'schedule', title: 'Weekly plan' }])).toEqual([
+      { kind: 'schedule', label: 'Weekly plan' },
+    ]);
+  });
+
+  test('survives beside the other kinds, in order', () => {
+    const entries = parseNavGridEntries([
+      { kind: 'page', pageId: 'p', title: 'Syllabus' },
+      { kind: 'schedule' },
+      { kind: 'external', url: 'piazza.com', label: 'Piazza' },
+      { kind: 'nonsense' },
+    ]);
+    expect(entries.map(entry => entry.kind)).toEqual(['page', 'schedule', 'external']);
+  });
+
+  test('labels and emoji default at render time, not in storage', () => {
+    expect(navGridEntryLabel({ kind: 'schedule' })).toBe('Schedule');
+    expect(navGridEntryLabel({ kind: 'schedule', label: 'Calendar' })).toBe('Calendar');
+    expect(navGridEntryEmoji({ kind: 'schedule' })).toBe('📅');
+    expect(navGridEntryEmoji({ kind: 'schedule', emoji: '🗓️' })).toBe('🗓️');
+    // Nothing else has a default emoji.
+    expect(navGridEntryEmoji({ kind: 'page', pageId: 'p', title: 'A' })).toBe('');
+  });
+
+  test('one schedule per grid is a question the editor can ask', () => {
+    expect(hasNavGridScheduleEntry([])).toBe(false);
+    expect(hasNavGridScheduleEntry([{ kind: 'page', pageId: 'p', title: 'A' }])).toBe(false);
+    expect(
+      hasNavGridScheduleEntry([{ kind: 'page', pageId: 'p', title: 'A' }, { kind: 'schedule' }])
+    ).toBe(true);
   });
 });

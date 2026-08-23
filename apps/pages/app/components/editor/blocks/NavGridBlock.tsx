@@ -4,6 +4,7 @@ import { createReactBlockSpec, type ReactCustomBlockRenderProps } from '@blockno
 import {
   IconArrowUp,
   IconArrowDown,
+  IconCalendar,
   IconExternalLink,
   IconFileText,
   IconLayoutColumns,
@@ -13,7 +14,10 @@ import {
 
 import {
   NAV_GRID_EMPTY_ENTRIES,
+  NAV_GRID_SCHEDULE_PATH,
+  hasNavGridScheduleEntry,
   moveNavGridEntry,
+  navGridEntryEmoji,
   navGridEntryLabel,
   normalizeNavGridColumns,
   parseNavGridEntries,
@@ -58,9 +62,18 @@ interface DirectoryPage {
 export function NavGridStatic({
   entries,
   columns,
+  siteOrigin,
 }: {
   entries: NavGridEntry[];
   columns: NavGridColumns;
+  /**
+   * The class site's origin, when the surface rendering this knows it.
+   *
+   * Only the schedule entry needs it: its target is a property of the site,
+   * not of the entry. Absent (every in-app surface today) it degrades to the
+   * placeholder href that page entries already use.
+   */
+  siteOrigin?: string | null;
 }) {
   return (
     <nav
@@ -72,26 +85,61 @@ export function NavGridStatic({
       data-columns={columns}
       style={{ gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))` }}
     >
-      {entries.map((entry, index) =>
-        entry.kind === 'page' ? (
-          // Placeholder href: consumers (the class-site renderer) resolve the
-          // real per-viewer URL from data-page-id. Part of the export contract.
-          // eslint-disable-next-line jsx-a11y/anchor-is-valid -- resolved downstream
-          <a
-            key={`page-${entry.pageId}-${index}`}
-            className="bn-nav-grid-item"
-            data-kind="page"
-            data-page-id={entry.pageId}
-            href="#"
-          >
-            {entry.emoji ? (
-              <span className="bn-nav-grid-emoji" aria-hidden="true">
-                {entry.emoji}
-              </span>
-            ) : null}
-            <span className="bn-nav-grid-label">{navGridEntryLabel(entry)}</span>
-          </a>
-        ) : (
+      {entries.map((entry, index) => {
+        const emoji = navGridEntryEmoji(entry);
+        const emojiSlot = emoji ? (
+          <span className="bn-nav-grid-emoji" aria-hidden="true">
+            {emoji}
+          </span>
+        ) : null;
+
+        if (entry.kind === 'page') {
+          return (
+            // Placeholder href: consumers (the class-site renderer) resolve the
+            // real per-viewer URL from data-page-id. Part of the export contract.
+            // eslint-disable-next-line jsx-a11y/anchor-is-valid -- resolved downstream
+            <a
+              key={`page-${entry.pageId}-${index}`}
+              className="bn-nav-grid-item"
+              data-kind="page"
+              data-page-id={entry.pageId}
+              href="#"
+            >
+              {emojiSlot}
+              <span className="bn-nav-grid-label">{navGridEntryLabel(entry)}</span>
+            </a>
+          );
+        }
+
+        if (entry.kind === 'schedule') {
+          // The schedule lives on the class SITE, so an app-side surface can
+          // only link to it once it knows that site's origin. Given one, this
+          // opens the real page in a new tab; without one it falls back to the
+          // same placeholder contract page entries use, and the site's own
+          // navGrid override (which knows both the origin and whether the
+          // schedule is published at all) resolves it there.
+          const href = siteOrigin ? `${siteOrigin}${NAV_GRID_SCHEDULE_PATH}` : '#';
+          return (
+            // eslint-disable-next-line jsx-a11y/anchor-is-valid -- resolved downstream
+            <a
+              key={`schedule-${index}`}
+              className="bn-nav-grid-item"
+              data-kind="schedule"
+              href={href}
+              {...(siteOrigin ? { target: '_blank', rel: 'noopener noreferrer' } : {})}
+            >
+              {emojiSlot}
+              <span className="bn-nav-grid-label">{navGridEntryLabel(entry)}</span>
+              {siteOrigin ? (
+                <span className="bn-nav-grid-ext" aria-hidden="true">
+                  ↗
+                </span>
+              ) : null}
+            </a>
+          );
+        }
+
+        return (
           <a
             key={`external-${index}`}
             className="bn-nav-grid-item"
@@ -99,18 +147,14 @@ export function NavGridStatic({
             href={entry.url}
             rel="noopener noreferrer"
           >
-            {entry.emoji ? (
-              <span className="bn-nav-grid-emoji" aria-hidden="true">
-                {entry.emoji}
-              </span>
-            ) : null}
+            {emojiSlot}
             <span className="bn-nav-grid-label">{navGridEntryLabel(entry)}</span>
             <span className="bn-nav-grid-ext" aria-hidden="true">
               ↗
             </span>
           </a>
-        )
-      )}
+        );
+      })}
     </nav>
   );
 }
@@ -435,7 +479,17 @@ function EntryRow({
       {draft ? <span className="nav-grid-badge nav-grid-badge-draft">Draft</span> : null}
       {membersOnly ? <span className="nav-grid-badge">Members</span> : null}
 
-      {entry.kind === 'external' ? (
+      {entry.kind === 'schedule' ? (
+        // No target to change: the schedule is always this site's /schedule.
+        // The slot keeps its column so rows stay aligned.
+        <span
+          className="nav-grid-icon-btn nav-grid-ext-btn"
+          title="Always links to this site's schedule"
+          aria-hidden="true"
+        >
+          <IconCalendar size={14} />
+        </span>
+      ) : entry.kind === 'external' ? (
         <button
           type="button"
           className="nav-grid-icon-btn nav-grid-ext-btn"
@@ -692,6 +746,7 @@ const navGridImplementation = {
 
     /* ---------------------- interactive render ------------------------ */
     const pickerPages = pages.filter(page => page.id !== currentPageId);
+    const scheduleAdded = hasNavGridScheduleEntry(entries);
 
     return (
       <div className="nav-grid-block nav-grid-block-editing" contentEditable={false}>
@@ -802,6 +857,28 @@ const navGridImplementation = {
           >
             <IconPlus size={14} />
             Add external link
+          </button>
+          {/* One schedule per grid: a second tile would point at the same
+              single page. Disabled rather than hidden, so the button explains
+              why it is not available instead of vanishing. */}
+          <button
+            type="button"
+            className="nav-grid-btn"
+            disabled={scheduleAdded}
+            title={
+              scheduleAdded
+                ? 'This directory already links to the schedule'
+                : "Link to this site's schedule"
+            }
+            onClick={() => {
+              setPickerTarget(null);
+              setExternalForm(null);
+              setFormError('');
+              commitEntries([...entries, { kind: 'schedule' }]);
+            }}
+          >
+            <IconPlus size={14} />
+            Add schedule
           </button>
 
           {pickerTarget ? (

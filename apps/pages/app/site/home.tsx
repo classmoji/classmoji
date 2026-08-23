@@ -10,7 +10,12 @@ import {
   loadSitePageIndex,
   resolveSiteContext,
 } from './tenant.server.ts';
-import { describeFromHtml, renderPageForViewer, type SitePageRow } from './pageRender.server.ts';
+import {
+  describeFromHtml,
+  renderPageForViewer,
+  siteArticleWidthClass,
+  type SitePageRow,
+} from './pageRender.server.ts';
 import { pagesUrl } from './env.server.ts';
 import { ClassmojiService } from '~/utils/db.server.ts';
 
@@ -67,6 +72,9 @@ export const loader = async (args: LoaderFunctionArgs) => {
         coverImage: null,
         description: null,
         editHref: null,
+        // The landing has no page behind it; the default keeps its column
+        // exactly where it has always been.
+        widthClass: siteArticleWidthClass(null),
       },
       {
         headers: siteHeaders({
@@ -92,6 +100,9 @@ export const loader = async (args: LoaderFunctionArgs) => {
       coverImage: rendered.coverImage,
       description: describeFromHtml(rendered.html),
       editHref: isStaff(viewer) ? `${pagesUrl()}/${site.classroom.slug}/${home.id}` : null,
+      // The home page is a page like any other, and it is the one most likely
+      // to have been widened for a directory or a row of profiles.
+      widthClass: siteArticleWidthClass(home.width),
     },
     {
       headers: siteHeaders({
@@ -129,8 +140,17 @@ export const meta: MetaFunction<typeof loader> = ({ data: loaderData }) => {
 };
 
 const SiteHome = () => {
-  const { kind, courseName, title, html, coverImage, editHref, isAnonymous, signInHref } =
-    useLoaderData<typeof loader>();
+  const {
+    kind,
+    courseName,
+    title,
+    html,
+    coverImage,
+    editHref,
+    isAnonymous,
+    signInHref,
+    widthClass,
+  } = useLoaderData<typeof loader>();
 
   if (kind === 'landing') {
     return (
@@ -159,7 +179,7 @@ const SiteHome = () => {
   return (
     <article>
       <CoverImage coverImage={coverImage} />
-      <div className="site-article mx-auto max-w-3xl px-4 pb-16 sm:px-6">
+      <div className={`site-article mx-auto ${widthClass} px-4 pb-16 sm:px-6`}>
         <div className={coverImage?.url ? 'pt-10' : 'pt-14'}>
           {editHref ? <EditPagePill href={editHref} /> : null}
           <h1 className="mb-6 text-4xl font-bold text-gray-900 sm:text-5xl dark:text-white">
