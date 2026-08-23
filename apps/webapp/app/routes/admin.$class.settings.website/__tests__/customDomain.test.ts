@@ -4,10 +4,11 @@ import {
   canSubmitDomain,
   certChip,
   certErrorNotice,
+  certProblems,
   checkDomainInput,
   customDomainErrorHint,
   customDomainRowState,
-  dnsRows,
+  dnsPlan,
   manualCnameTarget,
   manualDomainSetup,
   type CertSnapshot,
@@ -206,74 +207,117 @@ describe('certChip', () => {
   });
 });
 
-describe('dnsRows', () => {
+describe('dnsPlan', () => {
+  /** What Fly actually returns for a hostname on a fresh claim. */
+  const full = {
+    a: ['198.51.100.7'],
+    aaaa: ['2001:db8::1'],
+    cname: ['classmoji-pages.fly.dev'],
+    acme_challenge: ['cs52.me.abc.flydns.net'],
+    ownership: ['fly-verify-token'],
+  };
+
   it('renders nothing without requirements', () => {
-    expect(dnsRows(null, 'cs52.me')).toEqual([]);
-    expect(dnsRows(undefined, 'cs52.me')).toEqual([]);
-    expect(dnsRows({}, 'cs52.me')).toEqual([]);
+    for (const empty of [null, undefined, {}]) {
+      const plan = dnsPlan(empty, 'cs52.me');
+      expect(plan.routing).toEqual([]);
+      expect(plan.proof).toEqual([]);
+    }
+  });
+
+  it('presents the two routes as ALTERNATIVES, not as a checklist', () => {
+    // The bug this pins. A(+AAAA) and CNAME do the same job; an instructor who
+    // adds both has a CNAME beside an A on one name, which DNS hosts either
+    // refuse or resolve unpredictably.
+    const plan = dnsPlan(full, 'cs52.me');
+    expect(plan.routing.map(option => option.id)).toEqual(['direct', 'alias']);
+    expect(plan.heading).toBe('Point cs52.me at Classmoji — choose ONE of these:');
+  });
+
+  it('keeps AAAA with the addresses it routes, not among the proof records', () => {
+    const plan = dnsPlan(full, 'cs52.me');
+    const direct = plan.routing.find(option => option.id === 'direct')!;
+    expect(direct.rows.map(row => row.type)).toEqual(['A', 'AAAA']);
+    expect(direct.label).toBe('A + AAAA records');
+    expect(plan.proof.map(row => row.type)).toEqual(['CNAME', 'TXT']);
+  });
+
+  it('says out loud that the AAAA also settles ownership', () => {
+    // Fly validates ownership through the AAAA as well as the challenge and
+    // the TXT — an instructor who adds it has nothing left to do below.
+    const direct = dnsPlan(full, 'cs52.me').routing.find(option => option.id === 'direct')!;
+    expect(direct.note).toMatch(/prove/i);
+    expect(direct.note).toMatch(/skip/i);
+  });
+
+  it('claims nothing about ownership when Fly asked for no AAAA', () => {
+    const direct = dnsPlan({ a: ['198.51.100.7'] }, 'cs52.me').routing[0];
+    expect(direct.note).toBeNull();
+    expect(direct.label).toBe('A record');
+  });
+
+  it('warns that a CNAME often cannot live at a root domain', () => {
+    const alias = dnsPlan(full, 'cs52.me').routing.find(option => option.id === 'alias')!;
+    expect(alias.summary).toMatch(/ALIAS|flattening/i);
+  });
+
+  it('drops the "choose one" heading when Fly offered only one route', () => {
+    expect(dnsPlan({ cname: ['classmoji-pages.fly.dev'] }, 'cs52.me').heading).toBe(
+      'Point cs52.me at Classmoji'
+    );
   });
 
   it('renders the addresses Fly reported, never a hardcoded pair', () => {
     // The whole reason this is a function and not a constant: A/AAAA addresses
     // are per Fly APP, so staging and production differ.
-    const rows = dnsRows({ a: ['198.51.100.7'] }, 'cs52.me');
-    expect(rows).toEqual([{ type: 'A', name: 'cs52.me', value: '198.51.100.7', purpose: 'route' }]);
-  });
-
-  it('marks A and CNAME as routing, and the rest as ownership proof', () => {
-    const rows = dnsRows(
-      {
-        a: ['198.51.100.7'],
-        aaaa: ['2001:db8::1'],
-        acme_challenge: ['cs52.me.abc.flydns.net'],
-        ownership: ['fly-verify-token'],
-      },
-      'cs52.me'
-    );
-
-    expect(rows.filter(row => row.purpose === 'route').map(row => row.type)).toEqual(['A']);
-    expect(rows.filter(row => row.purpose === 'proof').map(row => row.type)).toEqual([
-      'AAAA',
-      'CNAME',
-      'TXT',
+    expect(dnsPlan({ a: ['198.51.100.7'] }, 'cs52.me').routing[0].rows).toEqual([
+      { type: 'A', name: 'cs52.me', value: '198.51.100.7' },
     ]);
   });
 
   it('prefixes the challenge and ownership names under the domain', () => {
-    const rows = dnsRows(
+    const plan = dnsPlan(
       { acme_challenge: ['cs52.me.abc.flydns.net'], ownership: ['token'] },
       'cs52.me'
     );
-    expect(rows.map(row => row.name)).toEqual([
+    expect(plan.proof.map(row => row.name)).toEqual([
       '_acme-challenge.cs52.me',
       '_fly-ownership.cs52.me',
     ]);
+    // Ownership records alone: nothing to route, so no routing section at all.
+    expect(plan.routing).toEqual([]);
   });
 
   it('accepts a bare string where Fly might send one instead of an array', () => {
-    expect(dnsRows({ cname: 'cs52.fly.dev' }, 'www.cs52.me')).toEqual([
-      { type: 'CNAME', name: 'www.cs52.me', value: 'cs52.fly.dev', purpose: 'route' },
+    expect(dnsPlan({ cname: 'cs52.fly.dev' }, 'www.cs52.me').routing[0].rows).toEqual([
+      { type: 'CNAME', name: 'www.cs52.me', value: 'cs52.fly.dev' },
     ]);
   });
 
   it('carries an unrecognized requirement through rather than dropping it', () => {
     // An instructor who can read an unfamiliar record off the screen is
     // unblocked; one who cannot has a domain that never issues and no clue why.
-    const rows = dnsRows({ caa: ['0 issue "letsencrypt.org"'] }, 'cs52.me');
-    expect(rows).toEqual([
-      { type: 'CAA', name: 'cs52.me', value: '0 issue "letsencrypt.org"', purpose: 'proof' },
+    // It lands under "any one of these", whose instruction stays true for a
+    // record we have never seen — never among the routing alternatives.
+    const plan = dnsPlan({ caa: ['0 issue "letsencrypt.org"'] }, 'cs52.me');
+    expect(plan.routing).toEqual([]);
+    expect(plan.proof).toEqual([
+      { type: 'CAA', name: 'cs52.me', value: '0 issue "letsencrypt.org"' },
     ]);
   });
 
   it('unwraps an object-shaped requirement value', () => {
-    expect(dnsRows({ cname: [{ value: 'cs52.fly.dev' }] }, 'cs52.me')[0].value).toBe(
-      'cs52.fly.dev'
-    );
+    expect(
+      dnsPlan({ cname: [{ value: 'cs52.fly.dev' }] }, 'cs52.me').routing[0].rows[0].value
+    ).toBe('cs52.fly.dev');
   });
 
   it('drops empty entries and duplicates', () => {
-    const rows = dnsRows({ a: ['198.51.100.7', '198.51.100.7', '', '   ', null] }, 'cs52.me');
-    expect(rows).toHaveLength(1);
+    const plan = dnsPlan({ a: ['198.51.100.7', '198.51.100.7', '', '   ', null] }, 'cs52.me');
+    expect(plan.routing[0].rows).toHaveLength(1);
+    // Two identical addresses are one address, and the label must not read
+    // "A + A records".
+    expect(plan.routing[0].label).toBe('A record');
   });
 });
 
@@ -307,7 +351,7 @@ describe('manualDomainSetup', () => {
     if (setup.state !== 'dns') return;
     expect(setup.heading).toBe('Point cs52.me at Classmoji');
     expect(setup.rows).toEqual([
-      { type: 'CNAME', name: 'cs52.me', value: 'classmoji-pages.fly.dev', purpose: 'route' },
+      { type: 'CNAME', name: 'cs52.me', value: 'classmoji-pages.fly.dev' },
     ]);
   });
 
@@ -352,6 +396,69 @@ describe('manualDomainSetup', () => {
     expect(manualDomainSetup({ domain: '  ', pagesApp: 'classmoji-pages' }).state).toBe(
       'unavailable'
     );
+  });
+});
+
+describe('certProblems', () => {
+  /** Exactly what Fly put on screen as a JSON blob. */
+  const mismatch = {
+    code: 'DNS_RECORD_MISMATCH',
+    message: 'The CNAME for cs52.me does not point at this app.',
+    remediation: 'Update the CNAME to classmoji-pages.fly.dev and check again.',
+  };
+
+  it('reads nothing out of an absent list', () => {
+    expect(certProblems(null)).toEqual([]);
+    expect(certProblems(undefined)).toEqual([]);
+    expect(certProblems([])).toEqual([]);
+  });
+
+  it('turns Fly’s object into a sentence, a fix and a tag', () => {
+    // The bug this pins: all three fields were rendered as one JSON blob, so
+    // the remediation — the only actionable half — was unreadable.
+    expect(certProblems([mismatch])).toEqual([
+      {
+        code: 'DNS_RECORD_MISMATCH',
+        message: 'The CNAME for cs52.me does not point at this app.',
+        remediation: 'Update the CNAME to classmoji-pages.fly.dev and check again.',
+      },
+    ]);
+  });
+
+  it('parses a JSON string, which is the shape that reached production', () => {
+    expect(certProblems([JSON.stringify(mismatch)])[0]).toEqual(certProblems([mismatch])[0]);
+  });
+
+  it('prints a plain sentence as-is', () => {
+    expect(certProblems(['awaiting certificate validation'])).toEqual([
+      { code: null, message: 'awaiting certificate validation', remediation: null },
+    ]);
+  });
+
+  it('prints a string that only looks like JSON as-is', () => {
+    // A leading brace earns one parse attempt, not a dropped error.
+    expect(certProblems(['{not really json'])[0].message).toBe('{not really json');
+  });
+
+  it('never drops an error it cannot read', () => {
+    // A certificate that will not issue and an empty error list is the worst
+    // screen this row can show.
+    const problems = certProblems([{ unexpected: 'shape' }, 42]);
+    expect(problems).toHaveLength(2);
+    expect(problems[0].message).toContain('unexpected');
+    expect(problems[1].message).toBe('42');
+  });
+
+  it('skips entries with nothing in them at all', () => {
+    expect(certProblems(['', '   ', null, undefined])).toEqual([]);
+  });
+
+  it('takes a missing code as no tag rather than as an empty one', () => {
+    expect(certProblems([{ message: 'Something is off.' }])[0]).toEqual({
+      code: null,
+      message: 'Something is off.',
+      remediation: null,
+    });
   });
 });
 

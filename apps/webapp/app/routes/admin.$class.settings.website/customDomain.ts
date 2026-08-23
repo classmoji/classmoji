@@ -205,26 +205,32 @@ export interface DnsRow {
   name: string;
   /** What Fly said to point it at. */
   value: string;
-  /**
-   * `route` records carry traffic; `proof` records prove ownership and ANY ONE
-   * of them is enough. An A record alone routes but proves nothing, which is
-   * the single most common reason a claim sits on Pending DNS forever.
-   */
-  purpose: 'route' | 'proof';
 }
+
+/**
+ * Which part of the setup a requirement belongs to.
+ *
+ * `direct` and `alias` are two ways to do the SAME job — carry traffic — and
+ * the instructor picks one. `proof` is the separate ownership question, where
+ * any single record is enough. Fly returns all of them in one flat
+ * `dns_requirements` object with nothing marking the difference, which is how
+ * a table headed "add these, copy them exactly" came to present a set of
+ * alternatives as a checklist.
+ */
+type RequirementGroup = 'direct' | 'alias' | 'proof';
 
 /** How each `dns_requirements` key is presented. Order is the order shown. */
 const REQUIREMENT_SHAPES: ReadonlyArray<{
   key: string;
   type: string;
   prefix?: string;
-  purpose: 'route' | 'proof';
+  group: RequirementGroup;
 }> = [
-  { key: 'a', type: 'A', purpose: 'route' },
-  { key: 'cname', type: 'CNAME', purpose: 'route' },
-  { key: 'aaaa', type: 'AAAA', purpose: 'proof' },
-  { key: 'acme_challenge', type: 'CNAME', prefix: '_acme-challenge', purpose: 'proof' },
-  { key: 'ownership', type: 'TXT', prefix: '_fly-ownership', purpose: 'proof' },
+  { key: 'a', type: 'A', group: 'direct' },
+  { key: 'aaaa', type: 'AAAA', group: 'direct' },
+  { key: 'cname', type: 'CNAME', group: 'alias' },
+  { key: 'acme_challenge', type: 'CNAME', prefix: '_acme-challenge', group: 'proof' },
+  { key: 'ownership', type: 'TXT', prefix: '_fly-ownership', group: 'proof' },
 ];
 
 /** Render whatever Fly put in a requirement slot, without guessing at its shape. */
@@ -245,30 +251,18 @@ function displayValue(value: unknown): string | null {
   return null;
 }
 
-/**
- * The DNS records to publish, straight from Fly's `dns_requirements`.
- *
- * Rendered, never hardcoded. The A/AAAA addresses are per Fly APP, so staging
- * and production differ despite sharing a `fly.toml` — printing a constant pair
- * of addresses in this tab would send half our instructors to the wrong anycast
- * address, and would go stale silently the day Fly renumbers.
- *
- * Unknown keys are carried through as-is rather than dropped: if Fly starts
- * requiring a record type we have never seen, an instructor who can read it off
- * the screen is unblocked, whereas one who cannot has a domain that never
- * issues and no way to find out why.
- */
-export function dnsRows(
+/** Fly's requirements, sorted into the three groups, values already rendered. */
+function groupRequirements(
   requirements: Record<string, unknown> | null | undefined,
   domain: string
-): DnsRow[] {
-  if (!requirements || typeof requirements !== 'object') return [];
+): Record<RequirementGroup, DnsRow[]> {
+  const groups: Record<RequirementGroup, DnsRow[]> = { direct: [], alias: [], proof: [] };
+  if (!requirements || typeof requirements !== 'object') return groups;
 
-  const rows: DnsRow[] = [];
   const seen = new Set<string>();
 
   const push = (
-    shape: { type: string; prefix?: string; purpose: 'route' | 'proof' },
+    shape: { type: string; prefix?: string; group: RequirementGroup },
     raw: unknown
   ) => {
     const value = displayValue(raw);
@@ -277,12 +271,12 @@ export function dnsRows(
     const dedupe = `${shape.type}|${name}|${value}`;
     if (seen.has(dedupe)) return;
     seen.add(dedupe);
-    rows.push({ type: shape.type, name, value, purpose: shape.purpose });
+    groups[shape.group].push({ type: shape.type, name, value });
   };
 
   const consume = (
     key: string,
-    shape: { type: string; prefix?: string; purpose: 'route' | 'proof' }
+    shape: { type: string; prefix?: string; group: RequirementGroup }
   ) => {
     const entry = (requirements as Record<string, unknown>)[key];
     if (entry === undefined || entry === null) return;
@@ -292,13 +286,103 @@ export function dnsRows(
 
   for (const shape of REQUIREMENT_SHAPES) consume(shape.key, shape);
 
+  // Unknown keys land in `proof`, the section whose instruction ("any one of
+  // these") stays true for a record we have never seen. Putting them among the
+  // routing alternatives would claim they are interchangeable with a CNAME.
   const known = new Set(REQUIREMENT_SHAPES.map(shape => shape.key));
   for (const key of Object.keys(requirements)) {
     if (known.has(key)) continue;
-    consume(key, { type: key.toUpperCase(), purpose: 'proof' });
+    consume(key, { type: key.toUpperCase(), group: 'proof' });
   }
 
-  return rows;
+  return groups;
+}
+
+/** One way to route the hostname here. The instructor picks exactly one. */
+export interface DnsRouteOption {
+  id: 'direct' | 'alias';
+  /** The record types this option is made of, as a heading. */
+  label: string;
+  /** When to pick this one. */
+  summary: string;
+  rows: DnsRow[];
+  /** Set only when these records ALSO settle the ownership question. */
+  note: string | null;
+}
+
+export interface DnsPlan {
+  /** Empty when Fly asked for no routing records at all. */
+  heading: string;
+  /** ALTERNATIVES. One is enough; adding both is not required. */
+  routing: DnsRouteOption[];
+  /** Any ONE of these proves ownership. */
+  proof: DnsRow[];
+}
+
+/**
+ * Fly's `dns_requirements`, arranged the way they actually work.
+ *
+ * Fly returns `a`, `aaaa`, `cname`, `acme_challenge` and `ownership` side by
+ * side in one object, and a flat table of all of them reads as a checklist.
+ * It is not one: A(+AAAA) and CNAME are two ROUTES to the same place, and an
+ * instructor who dutifully adds both has published a CNAME alongside an A on
+ * the same name — a configuration many DNS hosts refuse outright and the rest
+ * resolve unpredictably.
+ *
+ * The values themselves are rendered, never hardcoded: the addresses behind a
+ * Fly app are per APP, so staging and production differ despite sharing a
+ * `fly.toml`, and a constant pair printed here would go stale the day Fly
+ * renumbers.
+ *
+ * AAAA is deliberately shown with A rather than among the proof records, even
+ * though Fly accepts it as ownership proof. It is a routing record first — it
+ * is how IPv6 clients reach the site — and its double duty is stated in the
+ * option's note instead, where it reads as "you can skip the next section"
+ * rather than as a sixth thing to add.
+ */
+export function dnsPlan(
+  requirements: Record<string, unknown> | null | undefined,
+  domain: string
+): DnsPlan {
+  const groups = groupRequirements(requirements, domain);
+  const routing: DnsRouteOption[] = [];
+
+  if (groups.direct.length > 0) {
+    const provesOwnership = groups.direct.some(row => row.type === 'AAAA');
+    // Deduplicated: Fly can return two A addresses, and "A + A records" is not
+    // a description of anything.
+    const types = [...new Set(groups.direct.map(row => row.type))];
+    routing.push({
+      id: 'direct',
+      label: `${types.join(' + ')} ${types.length > 1 ? 'records' : 'record'}`,
+      summary:
+        'Point the name straight at our addresses. Works anywhere, including at a root domain like cs52.me where a CNAME often cannot go.',
+      rows: groups.direct,
+      note: provesOwnership
+        ? 'The AAAA does double duty: it routes IPv6 traffic AND proves you own the domain, so adding it lets you skip the records below.'
+        : null,
+    });
+  }
+
+  if (groups.alias.length > 0) {
+    routing.push({
+      id: 'alias',
+      label: 'CNAME record',
+      summary:
+        'One record, and it follows us if our addresses ever change. Many DNS hosts refuse a CNAME at a root domain — there, use their ALIAS, ANAME or CNAME flattening record (Cloudflare flattens automatically), or take the addresses instead.',
+      rows: groups.alias,
+      note: null,
+    });
+  }
+
+  return {
+    heading:
+      routing.length > 1
+        ? `Point ${domain} at Classmoji — choose ONE of these:`
+        : `Point ${domain} at Classmoji`,
+    routing,
+    proof: groups.proof,
+  };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -362,13 +446,108 @@ export function manualDomainSetup(input: {
   return {
     state: 'dns',
     heading: `Point ${domain} at Classmoji`,
-    rows: [{ type: 'CNAME', name: domain, value: target, purpose: 'route' }],
+    rows: [{ type: 'CNAME', name: domain, value: target }],
     notes: [
       'If this is a root domain (no www in front), some DNS hosts will not accept a CNAME there — use their ALIAS, ANAME or CNAME flattening record with the same value instead. Cloudflare does this for you automatically.',
       'On Cloudflare, set the record to DNS only (the grey cloud). Leaving it proxied on the orange cloud stops the certificate from being issued.',
     ],
     footer: 'Your certificate will be issued automatically once your domain points at Classmoji.',
   };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// What Fly says is wrong with the records
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** One of Fly's `validation_errors`, as a sentence rather than a payload. */
+export interface CertProblem {
+  /** Fly's machine code, for the muted tag. Null when it did not give one. */
+  code: string | null;
+  /** The human sentence. Never empty — falls back to the raw text. */
+  message: string;
+  /** What to do about it, when Fly said. */
+  remediation: string | null;
+}
+
+/** A trimmed string field, or null for anything else. */
+function textField(source: Record<string, unknown>, field: string): string | null {
+  const value = source[field];
+  return typeof value === 'string' && value.trim() ? value.trim() : null;
+}
+
+/**
+ * Fly's validation errors, made readable.
+ *
+ * These were rendered with `JSON.stringify`, so an instructor whose CNAME
+ * pointed at the wrong host was shown
+ * `{"code":"DNS_RECORD_MISMATCH","message":…,"remediation":…}` — a payload
+ * carrying, in `remediation`, the exact fix, which nobody reads out of a brace
+ * soup. The message and the remediation are the whole value here; the code is
+ * kept because it is what a support conversation can be searched on.
+ *
+ * Three shapes are tolerated because we do not control any of them: an object,
+ * a STRING holding that object's JSON (which is how the blob reached the screen
+ * in the first place), and a plain sentence. Anything unrecognized is printed
+ * as-is rather than dropped — a certificate that will not issue and an empty
+ * error list is the worst screen this row can show.
+ */
+export function certProblems(errors: unknown[] | null | undefined): CertProblem[] {
+  if (!Array.isArray(errors)) return [];
+
+  const problems: CertProblem[] = [];
+
+  for (const entry of errors) {
+    let source: Record<string, unknown> | null = null;
+    let fallback = '';
+
+    if (entry && typeof entry === 'object' && !Array.isArray(entry)) {
+      source = entry as Record<string, unknown>;
+    } else if (typeof entry === 'string') {
+      fallback = entry.trim();
+      if (!fallback) continue;
+      // Fly hands some of these over as a JSON string; a brace here is worth
+      // one parse attempt before giving up and printing the sentence.
+      if (fallback.startsWith('{')) {
+        try {
+          const parsed: unknown = JSON.parse(fallback);
+          if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+            source = parsed as Record<string, unknown>;
+          }
+        } catch {
+          // Not JSON after all. `fallback` already holds what to show.
+        }
+      }
+    } else if (entry !== null && entry !== undefined) {
+      fallback = String(entry);
+    }
+
+    if (!source) {
+      if (fallback) problems.push({ code: null, message: fallback, remediation: null });
+      continue;
+    }
+
+    const message =
+      textField(source, 'message') ??
+      textField(source, 'detail') ??
+      textField(source, 'error') ??
+      // Never nothing: an object with no field we know still beats a silently
+      // shorter list.
+      (() => {
+        try {
+          return JSON.stringify(source);
+        } catch {
+          return fallback || 'Fly reported a problem with this domain.';
+        }
+      })();
+
+    problems.push({
+      code: textField(source, 'code'),
+      message,
+      remediation: textField(source, 'remediation'),
+    });
+  }
+
+  return problems;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
