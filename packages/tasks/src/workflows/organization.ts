@@ -1,6 +1,7 @@
 import { task } from '@trigger.dev/sdk';
 import { ClassmojiService, getGitProvider, getTeamNameForClassroom } from '@classmoji/services';
-import { createRepositoryTask } from './gitRepo.ts';
+import { nanoid } from 'nanoid';
+import { createRepositoriesTask } from './gitRepo.ts';
 import invariant from 'tiny-invariant';
 
 interface MemberAddedPayload {
@@ -83,46 +84,50 @@ async function activateMembership({
       continue;
     }
 
+    // Published INDIVIDUAL repositories are what a joining student owes work on.
+    // `type` is a field on Repository and never on Assignment, so the previous
+    // per-assignment `'type' in assignment` test was always false at runtime and
+    // this branch silently provisioned nothing. Selecting on the repository also
+    // covers a repository published before any assignment exists (pre-term
+    // staging): the student still needs the repo, and the assignment issues are
+    // filed later when each assignment releases.
     const repositories = await ClassmojiService.repository.findByClassroomSlug(
       membership.classroom.slug
     );
-    const assignments = repositories.flatMap(repository =>
-      repository.assignments
-        .filter(a => a.is_published === true && 'type' in a && a.type === 'INDIVIDUAL')
-        .map(assignment => ({ ...assignment, repository }))
+    const publishedIndividualRepositories = repositories.filter(
+      repository => repository.is_published === true && repository.type === 'INDIVIDUAL'
     );
 
-    // Skip assignments whose student repo already exists so re-runs (and users who
-    // were already in the org) don't try to re-create repos they already have.
-    const existingByRepository = new Map<string, { student_id: string | null }[]>();
-    for (const { repository } of assignments) {
-      if (!existingByRepository.has(repository.id)) {
-        existingByRepository.set(
-          repository.id,
-          await ClassmojiService.gitRepo.findByRepository(membership.classroom.slug, repository.id)
-        );
+    // Skip repositories whose student repo already exists so re-runs (webhook
+    // redelivery, retries, re-joins, users already in the org) don't re-create
+    // repos they already have.
+    const missingRepositories = [];
+    for (const repository of publishedIndividualRepositories) {
+      const existingRepos = await ClassmojiService.gitRepo.findByRepository(
+        membership.classroom.slug,
+        repository.id
+      );
+      if (!existingRepos.some(repo => repo.student_id === user.id)) {
+        missingRepositories.push(repository);
       }
     }
-    const missingAssignments = assignments.filter(assignment => {
-      const existing = existingByRepository.get(assignment.repository.id) ?? [];
-      return !existing.some(repo => repo.student_id === user.id);
-    });
 
+    // Reuse the same provisioning pipeline that publish and Sync drive, scoped to
+    // this one student, rather than re-implementing the fanout here. It resolves
+    // the template, token and org plan itself and files issues for assignments
+    // that have already released.
     await Promise.all(
-      missingAssignments.map(assignment => {
-        const [templateOwner, templateRepo] = assignment.repository.template.split('/');
-        return createRepositoryTask.trigger(
+      missingRepositories.map(repository =>
+        createRepositoriesTask.trigger(
           {
-            templateOwner,
-            templateRepo,
-            organization: membership.classroom,
-            repoName: `${assignment.repository.slug}-${user.login}`,
-            assignment,
-            student: user,
+            logins: [user.login as string],
+            assignmentTitle: repository.title,
+            org: membership.classroom.slug,
+            sessionId: nanoid(),
           },
-          { concurrencyKey: gitOrganization.login }
-        );
-      })
+          { concurrencyKey: membership.classroom.slug }
+        )
+      )
     );
   }
 }
