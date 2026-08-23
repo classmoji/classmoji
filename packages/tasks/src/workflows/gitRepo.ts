@@ -249,6 +249,13 @@ export const createRepositoryTask = task({
   },
   run: async (payload: CreateRepositoryTaskPayload, { ctx }: RepositoryTaskContext) => {
     try {
+      // NOTE: this branch rebuilds the standard payload field-by-field and so
+      // silently DROPS `provisionOnly` — a legacy payload always normalizes to
+      // the publish-writing behaviour. Harmless today because nothing that emits
+      // the legacy shape is join-triggered (activateMembership goes through
+      // createRepositoriesTask, which builds the standard payload directly). If
+      // you ever route join-time provisioning through a legacy payload, forward
+      // the flag here or the joiner will re-publish repos and release drafts.
       const normalizedPayload = isLegacyCreateRepositoryPayload(payload)
         ? await (async (): Promise<StandardCreateRepositoryTaskPayload> => {
             const classroom = payload.organization;
