@@ -25,6 +25,7 @@ interface RepositoryAssignmentRecord {
   body?: string | null;
   description?: string | null;
   release_at: Date | string | null;
+  is_published?: boolean;
 }
 
 interface RepositoryRecord {
@@ -66,6 +67,18 @@ interface CreateRepositoriesTaskPayload {
   assignmentTitle: string;
   org: string;
   sessionId: string;
+  /**
+   * Provision repos WITHOUT writing any publish state. Set by the join path
+   * (activateMembership), where a student accepting an org invite must never
+   * decide what is published: the trailing repository `setPublished(true)`
+   * would re-publish a repo the instructor unpublished while the run sat in
+   * the concurrency-1 queue — notifying the whole roster — and the assignment
+   * release below would flip drafts whose `release_at` has already passed. A
+   * joiner receives what is already published and publishes nothing itself.
+   * Omitted on the instructor-driven publish/sync paths, which rely on both
+   * side effects (the daily release cron publishes the repository this way).
+   */
+  provisionOnly?: boolean;
 }
 
 interface StandardCreateRepositoryTaskPayload extends Omit<CreateRepositoryPayload, 'classroom'> {
@@ -73,6 +86,8 @@ interface StandardCreateRepositoryTaskPayload extends Omit<CreateRepositoryPaylo
   repository: RepositoryRecord;
   student?: StudentRecord;
   team?: TeamRecord;
+  /** See CreateRepositoriesTaskPayload.provisionOnly. */
+  provisionOnly?: boolean;
 }
 
 interface LegacyCreateRepositoryTaskPayload {
@@ -134,7 +149,7 @@ export const createRepositoriesTask = task({
     concurrencyLimit: 1,
   },
   run: async (payload: CreateRepositoriesTaskPayload) => {
-    const { logins, assignmentTitle, org, sessionId } = payload;
+    const { logins, assignmentTitle, org, sessionId, provisionOnly } = payload;
     const uniqueLogins = [...new Set(logins.map(login => login.trim()).filter(Boolean))];
 
     const repository = await ClassmojiService.repository.findBySlugAndTitle(org, assignmentTitle);
@@ -169,6 +184,7 @@ export const createRepositoriesTask = task({
         templateRepo,
         token,
         organizationGithubPlan,
+        provisionOnly,
       };
 
       if (repository.type === 'INDIVIDUAL') {
@@ -219,7 +235,10 @@ export const createRepositoriesTask = task({
 
     await createRepositoryTask.batchTriggerAndWait(reposData);
 
-    await ClassmojiService.repository.setPublished(repository.id, true, classroom.id);
+    // Join-time provisioning never writes publish state — see provisionOnly.
+    if (!provisionOnly) {
+      await ClassmojiService.repository.setPublished(repository.id, true, classroom.id);
+    }
   },
 });
 
@@ -307,8 +326,15 @@ export const createRepositoryTask = task({
         );
       }
 
-      const filteredAssignments = normalizedPayload.repository.assignments.filter(assignment =>
-        dayjs(assignment.release_at).isSameOrBefore(dayjs())
+      // A joining student gets issues for assignments that are ALREADY
+      // published; releasing on their behalf is not theirs to do. Without the
+      // extra predicate a joiner would accelerate the nightly cron and release
+      // any draft whose release_at has passed. Instructor-driven runs keep the
+      // release semantics the daily cron and Publish depend on.
+      const filteredAssignments = normalizedPayload.repository.assignments.filter(
+        assignment =>
+          dayjs(assignment.release_at).isSameOrBefore(dayjs()) &&
+          (!normalizedPayload.provisionOnly || assignment.is_published === true)
       );
 
       const assignmentPayloads = filteredAssignments.map(assignment => ({
@@ -324,10 +350,12 @@ export const createRepositoryTask = task({
       if (assignmentPayloads.length) {
         await createGithubRepositoryAssignmentTask.batchTriggerAndWait(assignmentPayloads);
 
-        for (const assignmentPayload of assignmentPayloads) {
-          ClassmojiService.assignment.update(assignmentPayload.payload.assignment.id, {
-            is_published: true,
-          });
+        if (!normalizedPayload.provisionOnly) {
+          for (const assignmentPayload of assignmentPayloads) {
+            await ClassmojiService.assignment.update(assignmentPayload.payload.assignment.id, {
+              is_published: true,
+            });
+          }
         }
       }
     } catch (error: unknown) {

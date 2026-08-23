@@ -115,7 +115,9 @@ async function activateMembership({
     // Reuse the same provisioning pipeline that publish and Sync drive, scoped to
     // this one student, rather than re-implementing the fanout here. It resolves
     // the template, token and org plan itself and files issues for assignments
-    // that have already released.
+    // that have already released. `provisionOnly` keeps the run read-only with
+    // respect to publish state: a student joining must never re-publish a repo
+    // the instructor unpublished, nor release a draft assignment.
     await Promise.all(
       missingRepositories.map(repository =>
         createRepositoriesTask.trigger(
@@ -124,6 +126,7 @@ async function activateMembership({
             assignmentTitle: repository.title,
             org: membership.classroom.slug,
             sessionId: nanoid(),
+            provisionOnly: true,
           },
           { concurrencyKey: membership.classroom.slug }
         )

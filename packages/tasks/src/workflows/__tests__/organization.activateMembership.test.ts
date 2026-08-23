@@ -121,6 +121,20 @@ describe('activate_membership — join after publish', () => {
     expect(options).toMatchObject({ concurrencyKey: CLASSROOM_SLUG });
   });
 
+  it('provisions read-only: a joiner never writes publish state', async () => {
+    // Without provisionOnly the shared pipeline would re-publish a repository
+    // the instructor unpublished while this run sat in the queue — notifying
+    // the whole roster — and would release any draft assignment whose
+    // release_at has already passed.
+    mocks.findRepositoriesByClassroomSlug.mockResolvedValue([repository()]);
+
+    await run();
+
+    expect(mocks.createRepositoriesTrigger.mock.calls[0][0]).toMatchObject({
+      provisionOnly: true,
+    });
+  });
+
   it('provisions a published repository that has no assignments yet (pre-term staging)', async () => {
     // The exact shape of Tim's case: publish the container before the course
     // starts, add assignments later. The student still needs the repo.
