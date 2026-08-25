@@ -30,9 +30,52 @@ export const AUTH_SECRET = process.env.BETTER_AUTH_SECRET || DEV_SECRET;
  * Unset ⇒ `classmoji`, i.e. exactly what shipped before this was configurable.
  *
  * Anything that parses a cookie header by name MUST build the name from this
- * constant rather than hardcoding `classmoji.` — see `getAuthSession`.
+ * constant rather than hardcoding `classmoji.` — use `sessionCookieRegexFor`
+ * or `sessionTokenFromCookieHeader` below rather than rolling another one.
  */
 export const COOKIE_PREFIX = process.env.COOKIE_PREFIX || 'classmoji';
+
+/**
+ * Match the session cookie better-auth sets for a given `cookiePrefix`, and
+ * capture its value.
+ *
+ * THE one place the cookie name becomes a pattern. It lives in this
+ * dependency-free module so every consumer can reach it without dragging
+ * betterAuth and Prisma along: `./server.ts`'s dev-login fallback,
+ * `apps/pages`' cache-privacy check, and `apps/slides`' socket handshake each
+ * carried their own copy of this expression — three chances to hardcode
+ * `classmoji.`, and one `COOKIE_PREFIX=classmoji-staging` deploy away from
+ * three different answers to "is this request signed in?".
+ *
+ * The prefix is escaped because it comes from the environment and both `.` and
+ * `-` are regex-active: an unescaped `classmoji-staging` would happily match
+ * `classmojiXstaging`.
+ *
+ * `__Secure-` is optional because better-auth prepends it whenever it sets
+ * secure cookies — i.e. in every deployed environment, but not in local dev.
+ *
+ * The value group is `[^;]*`, not `[^;]+`, on purpose: a present-but-empty
+ * cookie still means a session cookie was sent, so presence checks keep seeing
+ * it, while callers extracting a token get `''` and fall through their own
+ * truthiness guard exactly as a non-match would.
+ */
+export function sessionCookieRegexFor(prefix: string): RegExp {
+  const escaped = prefix.replace(/[.*+?^${}()|[\]\\-]/g, '\\$&');
+  return new RegExp(`(?:^|;\\s*)(?:__Secure-)?${escaped}\\.session_token=([^;]*)`);
+}
+
+/** The session-cookie matcher for THIS deployment's configured prefix. */
+const SESSION_COOKIE = sessionCookieRegexFor(COOKIE_PREFIX);
+
+/**
+ * The session token carried by a raw `Cookie` header, or null.
+ *
+ * Takes the header string rather than a `Request` because the socket.io
+ * handshake in `apps/slides/server.ts` only ever has the string.
+ */
+export function sessionTokenFromCookieHeader(cookieHeader: string): string | null {
+  return cookieHeader.match(SESSION_COOKIE)?.[1] || null;
+}
 
 /**
  * The domain the session cookie spans, or null for a host-only cookie.
