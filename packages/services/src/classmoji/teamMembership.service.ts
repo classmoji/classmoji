@@ -16,13 +16,16 @@ export const addMemberToTeam = async (teamId: string, userId: string) => {
   });
 };
 
+/**
+ * Idempotent by design: deleteMany reports `{ count: 0 }` for a membership that
+ * is already gone, where the previous `delete` threw P2025 and turned a
+ * repeated (or raced) removal into a 500.
+ */
 export const removeMemberFromTeam = async (teamId: string, userId: string) => {
-  return getPrisma().teamMembership.delete({
+  return getPrisma().teamMembership.deleteMany({
     where: {
-      team_id_user_id: {
-        team_id: teamId,
-        user_id: userId,
-      },
+      team_id: teamId,
+      user_id: userId,
     },
   });
 };

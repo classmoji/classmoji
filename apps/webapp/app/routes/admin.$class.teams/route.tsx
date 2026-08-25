@@ -9,7 +9,7 @@ import {
   SearchInput,
   TableActionButtons,
 } from '~/components';
-import { ClassmojiService, getGitProvider } from '@classmoji/services';
+import { ClassmojiService, TeamServiceError } from '@classmoji/services';
 import { useGlobalFetcher } from '~/hooks';
 import { ActionTypes } from '~/constants';
 import { requireClassroomAdmin, assertClassroomMutationAllowed } from '~/utils/routeAuth.server';
@@ -176,6 +176,11 @@ const AdminTeams = ({ loaderData }: Route.ComponentProps) => {
   );
 };
 
+const DELETE_ERRORS: Partial<Record<TeamServiceError['code'], string>> = {
+  team_not_found: 'That team no longer exists in this classroom.',
+  no_org_configured: 'Git organization not configured',
+};
+
 export const action = async ({ params, request }: Route.ActionArgs) => {
   const classSlug = params.class!;
 
@@ -188,10 +193,20 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
   const data = await request.json();
   const { team } = data;
 
-  const gitProvider = getGitProvider(classroom.git_organization);
-
-  await gitProvider.deleteTeam(classroom.git_organization.login, team.slug);
-  await ClassmojiService.team.deleteBySlug(classroom.id, team.slug);
+  try {
+    await ClassmojiService.teamAdmin.deleteTeam({
+      classroomId: classroom.id,
+      slugOrId: team.slug,
+    });
+  } catch (error: unknown) {
+    if (error instanceof TeamServiceError) {
+      return {
+        error: DELETE_ERRORS[error.code] ?? 'Could not delete this team.',
+        action: ActionTypes.DELETE_TEAM,
+      };
+    }
+    throw error;
+  }
 
   return {
     success: 'Team deleted successfully',

@@ -118,8 +118,10 @@ const AdminSingleTeamView = ({ loaderData }: Route.ComponentProps) => {
   const onAddTags = () => {
     notify(ActionTypes.ADD_TEAM_TAG, 'Adding tag(s) to team...');
 
+    // The team is identified by the URL slug the action already reads; sending
+    // a teamId from the client would just be a second, untrusted source.
     fetcher!.submit(
-      { teamId: team!.id, tags: tagsToAdd },
+      { tags: tagsToAdd },
       { method: 'post', encType: 'application/json', action: '?/addTeamTags' }
     );
 

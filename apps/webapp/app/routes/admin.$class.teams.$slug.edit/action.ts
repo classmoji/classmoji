@@ -1,17 +1,38 @@
-import async from 'async';
 import { namedAction } from 'remix-utils/named-action';
 import invariant from 'tiny-invariant';
-import { sleep } from '~/utils/helpers';
-import getPrisma from '@classmoji/database';
-import { ClassmojiService, getGitProvider } from '@classmoji/services';
+import { ClassmojiService, TeamServiceError } from '@classmoji/services';
 import { ActionTypes } from '~/constants';
 import { requireClassroomAdmin, assertClassroomMutationAllowed } from '~/utils/routeAuth.server';
 import type { Route } from './+types/route';
 
-interface RepoRename {
-  id: string;
-  name: string;
-}
+/**
+ * Every mutation here delegates to ClassmojiService.teamAdmin, which resolves
+ * the team through the classroom before it touches GitHub. The route keeps the
+ * auth gates and the callout payload shapes; the service owns validation,
+ * ordering and per-item failure reporting.
+ */
+const errorMessage = (error: TeamServiceError, slug: string) => {
+  switch (error.code) {
+    case 'invalid_name':
+      return 'New team name is required';
+    case 'no_org_configured':
+      return 'Git organization not configured';
+    case 'provider_unsupported':
+      return 'Team rename is only supported for GitHub organizations';
+    case 'team_not_found':
+      return `Team @${slug} was not found in this classroom.`;
+    case 'reserved_name':
+      return 'That name is reserved for classroom teams. Please choose a different name.';
+    case 'name_collision':
+      return 'A team with that name already exists in this classroom.';
+    case 'user_not_found':
+      return 'No user with that login.';
+    case 'tag_not_found':
+      return 'That tag is not on this team.';
+    default:
+      return 'Could not complete this action.';
+  }
+};
 
 export const action = async ({ request, params }: Route.ActionArgs) => {
   const classSlug = params.class!;
@@ -27,49 +48,66 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
 
   const data = await request.json();
 
+  // Map the typed service failures onto the `{ error, action }` payload the
+  // global fetcher turns into a toast; anything else keeps bubbling.
+  const run = async <T>(actionType: string, work: () => Promise<T>) => {
+    try {
+      return { ok: true as const, value: await work() };
+    } catch (error: unknown) {
+      if (error instanceof TeamServiceError) {
+        return {
+          ok: false as const,
+          payload: { error: errorMessage(error, slug), action: actionType },
+        };
+      }
+      throw error;
+    }
+  };
+
   return namedAction(request, {
     async addMembersToTeam() {
-      const { members } = data;
+      const { members } = data as { members?: string[] };
 
-      const gitOrgLogin = classroom.git_organization?.login;
-      if (!gitOrgLogin) {
-        throw new Response('Git organization not configured', { status: 400 });
+      const result = await run(ActionTypes.ADD_TEAM_MEMBER, () =>
+        ClassmojiService.teamAdmin.addTeamMembers({
+          classroomId: classroom.id,
+          slugOrId: slug,
+          logins: members ?? [],
+        })
+      );
+      if (!result.ok) return result.payload;
+
+      const { succeeded, failed } = result.value;
+      if (succeeded.length === 0 && failed.length > 0) {
+        return {
+          error: `Could not add ${failed.length} student(s) to @${slug}.`,
+          action: ActionTypes.ADD_TEAM_MEMBER,
+          failed,
+        };
       }
-      const team = await ClassmojiService.team.findBySlugAndClassroomId(slug, classroom.id);
-      const gitProvider = getGitProvider(classroom.git_organization);
-
-      const membersQueue = async.queue(async (login: string) => {
-        const user = await ClassmojiService.user.findByLogin(login);
-
-        await gitProvider.addTeamMember(gitOrgLogin, slug, login);
-        await ClassmojiService.teamMembership.addMemberToTeam(team!.id, user!.id);
-        await sleep(250);
-      }, 1);
-
-      membersQueue.push(members);
-      await membersQueue.drain();
 
       return {
-        success: `Added student(s) to @${slug}.`,
+        success:
+          failed.length === 0
+            ? `Added student(s) to @${slug}.`
+            : `Added ${succeeded.length} student(s) to @${slug}. ${failed.length} failed.`,
         action: ActionTypes.ADD_TEAM_MEMBER,
+        failed,
       };
     },
 
     async removeMemberFromTeam() {
-      const { login } = data;
+      const { login } = data as { login: string };
 
-      const user = await getPrisma().user.findUnique({
-        where: { login },
-      });
-      const gitOrgLogin = classroom.git_organization?.login;
-      if (!gitOrgLogin) {
-        throw new Response('Git organization not configured', { status: 400 });
-      }
-      const team = await ClassmojiService.team.findBySlugAndClassroomId(slug, classroom.id);
-      const gitProvider = getGitProvider(classroom.git_organization);
+      const result = await run(ActionTypes.REMOVE_TEAM_MEMBER, () =>
+        ClassmojiService.teamAdmin.removeTeamMember({
+          classroomId: classroom.id,
+          slugOrId: slug,
+          login,
+        })
+      );
+      if (!result.ok) return result.payload;
 
-      await gitProvider.removeTeamMember(gitOrgLogin, slug, login);
-      await ClassmojiService.teamMembership.removeMemberFromTeam(team!.id, user!.id);
       return {
         success: `Removed ${login} from @${slug}.`,
         action: ActionTypes.REMOVE_TEAM_MEMBER,
@@ -77,19 +115,41 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
     },
 
     async addTeamTags() {
-      const { teamId, tags } = data;
+      // The team comes from the URL, never from the request body — the client
+      // used to send the teamId it wanted tagged.
+      const { tags } = data as { tags?: string[] };
 
-      await Promise.all(tags.map((tag: string) => ClassmojiService.teamTag.create(teamId, tag)));
+      const result = await run(ActionTypes.ADD_TEAM_TAG, () =>
+        ClassmojiService.teamAdmin.addTeamTags({
+          classroomId: classroom.id,
+          slugOrId: slug,
+          tagIds: tags ?? [],
+        })
+      );
+      if (!result.ok) return result.payload;
+
+      const { added, failed } = result.value;
+      if (added.length === 0 && failed.length > 0) {
+        return { error: 'Tag could not be added', action: ActionTypes.ADD_TEAM_TAG };
+      }
 
       return {
-        success: 'Tag added successfully',
+        success:
+          failed.length === 0
+            ? 'Tag added successfully'
+            : `Added ${added.length} tag(s). ${failed.length} failed.`,
         action: ActionTypes.ADD_TEAM_TAG,
       };
     },
 
     async removeTeamTag() {
-      const { id } = data;
-      await ClassmojiService.teamTag.delete(id);
+      const { id } = data as { id: string };
+
+      const result = await run(ActionTypes.REMOVE_TEAM_TAG, () =>
+        ClassmojiService.teamAdmin.removeTeamTag({ classroomId: classroom.id, teamTagId: id })
+      );
+      if (!result.ok) return result.payload;
+
       return {
         success: 'Tag removed successfully',
         action: ActionTypes.REMOVE_TEAM_TAG,
@@ -98,80 +158,17 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
 
     async renameTeam() {
       const { newName } = data as { newName?: string };
-      const trimmed = typeof newName === 'string' ? newName.trim() : '';
-      if (!trimmed) {
-        throw new Response('New team name is required', { status: 400 });
-      }
 
-      const gitOrgLogin = classroom.git_organization?.login;
-      if (!gitOrgLogin) {
-        throw new Response('Git organization not configured', { status: 400 });
-      }
-      if (classroom.git_organization?.provider !== 'GITHUB') {
-        throw new Response('Team rename is only supported for GitHub organizations', {
-          status: 400,
-        });
-      }
+      const result = await run(ActionTypes.RENAME_TEAM, () =>
+        ClassmojiService.teamAdmin.renameTeam({
+          classroomId: classroom.id,
+          slugOrId: slug,
+          newName: newName ?? '',
+        })
+      );
+      if (!result.ok) return result.payload;
 
-      const team = await ClassmojiService.team.findBySlugAndClassroomId(slug, classroom.id);
-      if (!team) {
-        throw new Response('Team not found', { status: 404 });
-      }
-
-      const teamWithRepos = await ClassmojiService.team.findByIdWithRepositories(team.id);
-      const repositories = teamWithRepos?.git_repos ?? [];
-
-      const gitProvider = getGitProvider(classroom.git_organization);
-
-      // Rename GitHub team first — it is authoritative for the new slug.
-      const updated = await gitProvider.updateTeam(gitOrgLogin, slug, { name: trimmed });
-      const newSlug = updated.slug;
-
-      // Collision guard: ensure another local team doesn't already occupy the new slug.
-      if (newSlug !== slug) {
-        const existing = await ClassmojiService.team.findBySlugAndClassroomId(
-          newSlug,
-          classroom.id
-        );
-        if (existing && existing.id !== team.id) {
-          throw new Response(`A team with slug "${newSlug}" already exists in this classroom`, {
-            status: 409,
-          });
-        }
-      }
-
-      const oldSuffix = `-${slug}`;
-      const failed: { name: string; error: string }[] = [];
-      const succeeded: RepoRename[] = [];
-
-      const renameQueue = async.queue<(typeof repositories)[number]>(async repo => {
-        if (!repo.name.includes(oldSuffix)) {
-          return;
-        }
-        const newRepoName = repo.name.split(oldSuffix).join(`-${newSlug}`);
-        try {
-          await gitProvider.updateRepo(gitOrgLogin, repo.name, { name: newRepoName });
-          succeeded.push({ id: repo.id, name: newRepoName });
-        } catch (error: unknown) {
-          failed.push({
-            name: repo.name,
-            error: error instanceof Error ? error.message : String(error),
-          });
-        }
-        await sleep(250);
-      }, 1);
-
-      if (repositories.length > 0) {
-        renameQueue.push(repositories);
-        await renameQueue.drain();
-      }
-
-      await ClassmojiService.team.renameAndRepos({
-        teamId: team.id,
-        newName: updated.name,
-        newSlug,
-        repoRenames: succeeded,
-      });
+      const { newSlug, failed } = result.value;
 
       return {
         success:
