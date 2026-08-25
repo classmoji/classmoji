@@ -50,6 +50,21 @@ import { extensionPurchaseTool } from './extensions.ts';
 import { repoCreateTool, repoPublishTool, repoUnpublishTool } from './repos.ts';
 import { rosterAddStudentTool, rosterRemoveStudentTool } from './roster.ts';
 import { assistantAddTool, assistantUpdateTool, assistantRemoveTool } from './assistants.ts';
+import { quizCreateTool, quizUpdateTool, quizPublishTool, quizDeleteTool } from './quizzes.ts';
+import {
+  classroomSettingsUpdateTool,
+  classroomStatusUpdateTool,
+  orgRepoSettingsUpdateTool,
+} from './settings.ts';
+import {
+  teamCreateTool,
+  teamDeleteTool,
+  teamRenameTool,
+  teamMembersAddTool,
+  teamMemberRemoveTool,
+  teamTagAddTool,
+  teamTagRemoveTool,
+} from './teams.ts';
 
 export function registerAllTools(): void {
   // Identity / bootstrap
@@ -123,6 +138,13 @@ export function registerAllTools(): void {
   registerToolDefinition(deckPreviewAcceptTool);
   registerToolDefinition(deckPreviewDiscardTool);
 
+  // Quizzes (OWNER+ASSISTANT — the quiz surface excludes TEACHER; each tool
+  // also re-checks Pro tier + quizzes_enabled in-handler)
+  registerToolDefinition(quizCreateTool);
+  registerToolDefinition(quizUpdateTool);
+  registerToolDefinition(quizPublishTool);
+  registerToolDefinition(quizDeleteTool);
+
   // Tokens (OWNER)
   registerToolDefinition(tokenGrantTool);
 
@@ -143,4 +165,22 @@ export function registerAllTools(): void {
   registerToolDefinition(repoCreateTool);
   registerToolDefinition(repoPublishTool);
   registerToolDefinition(repoUnpublishTool);
+
+  // Classroom settings + lifecycle status (OWNER). The org tool writes
+  // ORGANIZATION-WIDE GitHub settings, so it sits beside the repo tools it
+  // affects and carries a tighter rate limit.
+  registerToolDefinition(classroomSettingsUpdateTool);
+  registerToolDefinition(classroomStatusUpdateTool);
+  registerToolDefinition(orgRepoSettingsUpdateTool);
+
+  // Teams (OWNER — the write surface behind list_teams). create/rename/members
+  // touch real GitHub teams; delete is destructive and confirm-gated; the tag
+  // tools are Classmoji-only links.
+  registerToolDefinition(teamCreateTool);
+  registerToolDefinition(teamDeleteTool);
+  registerToolDefinition(teamRenameTool);
+  registerToolDefinition(teamMembersAddTool);
+  registerToolDefinition(teamMemberRemoveTool);
+  registerToolDefinition(teamTagAddTool);
+  registerToolDefinition(teamTagRemoveTool);
 }

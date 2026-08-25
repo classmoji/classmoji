@@ -208,8 +208,12 @@ interface QuizRow {
  * The `ends_at` test is NOT reimplemented here. It lives once, in
  * `subscription.getProStateForClassroomId`, precisely so this file and the
  * webapp cannot drift into gating on different definitions of "active".
+ *
+ * EXPORTED because the quiz WRITE tools (tools/quizzes.ts) apply the same gate
+ * the webapp's quiz action applies before every mutation. One definition, one
+ * import — the read resource and the write tools cannot drift apart.
  */
-async function assertProTier(classroomId: string): Promise<void> {
+export async function assertProTier(classroomId: string): Promise<void> {
   const proState = await ClassmojiService.subscription.getProStateForClassroomId(classroomId);
   if (!proState.isPro) {
     throw new ToolError('forbidden', 'This feature requires a Pro subscription');

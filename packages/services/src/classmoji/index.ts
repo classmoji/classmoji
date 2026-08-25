@@ -4,6 +4,7 @@ import * as classroomService from './classroom.service.ts';
 import * as classroomMembershipService from './classroomMembership.service.ts';
 import * as rosterService from './roster.service.ts';
 import * as assistantService from './assistant.service.ts';
+import * as teamAdminService from './teamAdmin.service.ts';
 import * as moduleService from './module.service.ts';
 import * as repositoryService from './repository.service.ts';
 import * as autogradingTestService from './autogradingTest.service.ts';
@@ -79,6 +80,7 @@ const ClassmojiService = {
   subscription: subscriptionService,
   teamMembership: teamMembershipService,
   team: teamService,
+  teamAdmin: teamAdminService,
   teamTag: teamTagService,
   token: tokenService,
   user: userService,
@@ -136,6 +138,7 @@ export {
   subscriptionService,
   teamMembershipService,
   teamService,
+  teamAdminService,
   teamTagService,
   tokenService,
   userService,
