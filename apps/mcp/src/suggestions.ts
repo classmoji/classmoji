@@ -27,6 +27,7 @@ export const FACULTY_SUGGESTIONS: readonly string[] = [
   'What assignments are due this week?',
   'How is grading going across my TAs — who still has submissions outstanding?',
   'Draft a quiz on this week’s material, then publish it when I say so.',
+  'Attach my slides for this week to the right assignment so students can find them.',
 ];
 
 /** Student-facing starters (upcoming work, grades, tokens, regrades). */

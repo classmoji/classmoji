@@ -18,10 +18,19 @@ interface ManifestModuleEntry {
  */
 
 /**
- * Save the content manifest to GitHub
- * @param {number} classroomId - The classroom ID
+ * Save the content manifest to GitHub.
+ *
+ * Returns whether the manifest actually reached the content repo: `true` only
+ * after the commit lands, `false` when the push was skipped (no git
+ * organization configured) or failed. Callers that report a manifest state to a
+ * user should relay it; the ones that only refresh the manifest as a side
+ * effect can keep ignoring it. Throwing behaviour is unchanged — a GitHub
+ * failure is still swallowed, since the database write it follows is already
+ * committed.
+ *
+ * @param {string} classroomId - The classroom ID
  */
-export async function saveManifest(classroomId: string): Promise<void> {
+export async function saveManifest(classroomId: string): Promise<boolean> {
   // Get classroom with git organization
   const classroom = await getPrisma().classroom.findUnique({
     where: { id: classroomId },
@@ -30,7 +39,7 @@ export async function saveManifest(classroomId: string): Promise<void> {
 
   if (!classroom?.git_organization) {
     console.warn('Cannot save manifest: git organization not configured');
-    return;
+    return false;
   }
 
   // Build manifest from database
@@ -107,5 +116,8 @@ export async function saveManifest(classroomId: string): Promise<void> {
       'Failed to save content manifest:',
       error instanceof Error ? error.message : String(error)
     );
+    return false;
   }
+
+  return true;
 }

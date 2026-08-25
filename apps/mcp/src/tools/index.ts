@@ -57,6 +57,11 @@ import {
   orgRepoSettingsUpdateTool,
 } from './settings.ts';
 import {
+  resourceLinkAddTool,
+  resourceLinkRemoveTool,
+  resourceLinksListTool,
+} from './resourceLinks.ts';
+import {
   teamCreateTool,
   teamDeleteTool,
   teamRenameTool,
@@ -172,6 +177,14 @@ export function registerAllTools(): void {
   registerToolDefinition(classroomSettingsUpdateTool);
   registerToolDefinition(classroomStatusUpdateTool);
   registerToolDefinition(orgRepoSettingsUpdateTool);
+
+  // Resource links (OWNER+TEACHER — the web resources kanban tier, which
+  // deliberately excludes ASSISTANT). Attaching a page/deck to a repo or
+  // assignment is what makes it visible to students there; both writes also
+  // commit an updated content manifest to the classroom content repo.
+  registerToolDefinition(resourceLinkAddTool);
+  registerToolDefinition(resourceLinkRemoveTool);
+  registerToolDefinition(resourceLinksListTool);
 
   // Teams (OWNER — the write surface behind list_teams). create/rename/members
   // touch real GitHub teams; delete is destructive and confirm-gated; the tag
