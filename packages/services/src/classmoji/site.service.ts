@@ -10,7 +10,7 @@ import {
 import { isItemPublished, isItemPubliclyVisible } from './module.service.ts';
 import { getProStateForClassroomId } from './subscription.service.ts';
 import { removeCert, isFlyCertsConfigured } from '../fly/index.ts';
-import type { Prisma, Role } from '@prisma/client';
+import type { ModuleItemType, Prisma, Role } from '@prisma/client';
 
 /**
  * Public course sites: subdomain claiming, site settings, and every visibility
@@ -49,6 +49,8 @@ export const SITE_ERROR = {
   DOMAIN_TAKEN: 'DOMAIN_TAKEN',
   /** Custom domains are a PRO feature and this classroom is not on PRO. */
   PRO_REQUIRED: 'PRO_REQUIRED',
+  /** Not an IANA zone name this runtime's tz data knows. */
+  TIMEZONE_INVALID: 'TIMEZONE_INVALID',
 } as const;
 
 export type SiteErrorCode = (typeof SITE_ERROR)[keyof typeof SITE_ERROR];
@@ -264,7 +266,41 @@ export type SiteSettingsInput = {
   is_enabled?: boolean;
   home_page_id?: string | null;
   show_schedule?: boolean;
+  /** IANA zone name; `null` clears it back to the UTC fallback. */
+  timezone?: string | null;
 };
+
+/**
+ * The canonical form of an IANA zone name, or null if this runtime has never
+ * heard of it.
+ *
+ * Asks Intl to BUILD a formatter rather than checking membership in
+ * `Intl.supportedValuesOf('timeZone')`, and the difference matters. The
+ * schedule renders through `dayjs.utc(...).tz(zone)`, which is Intl underneath,
+ * so "Intl can format with this" is precisely the invariant that has to hold —
+ * whereas the supported-values list omits aliases (`Etc/UTC`, `US/Eastern`) and
+ * its exact contents move with the ICU build. Validating against the list would
+ * refuse zones that would have rendered perfectly well.
+ *
+ * The RESOLVED name is what comes back, not the caller's spelling. Intl accepts
+ * zone names case-insensitively, so `america/new_york` from a script or a future
+ * API caller is stored as `America/New_York` — one spelling per zone in the
+ * column, which is what keeps the settings <select> able to show the stored
+ * value as its selected option.
+ */
+function canonicalizeTimeZone(zone: string): string | null {
+  const trimmed = zone.trim();
+  if (!trimmed) return null;
+
+  try {
+    return new Intl.DateTimeFormat(undefined, { timeZone: trimmed }).resolvedOptions().timeZone;
+  } catch {
+    // RangeError is the documented rejection for an unknown zone. Caught
+    // broadly anyway: this runs on an admin write path, and no Intl failure is
+    // worth a 500 when the honest answer is "that is not a zone we can use".
+    return null;
+  }
+}
 
 /**
  * Update a site's settings, enforcing the invariant the schema cannot: an
@@ -283,6 +319,13 @@ export type SiteSettingsInput = {
  * NULL, which leaves an enabled site with a null home page. That is deliberate:
  * losing a page must not delete the site row and release its subdomain. PR2's
  * serving code has to treat that shape as a repairable landing state.)
+ *
+ * `timezone` follows the same three-state convention as every other key here:
+ * absent means "leave it alone", `null` (or a blank string, which is what an
+ * emptied form control submits) CLEARS it back to the UTC fallback, and a
+ * non-blank string is validated against the runtime's tz data and stored
+ * canonicalized. A bad zone is refused rather than silently dropped — writing
+ * it would produce a public schedule that formats in a zone nobody chose.
  */
 export async function upsertSiteSettings(classroomId: string, input: SiteSettingsInput) {
   const prisma = getPrisma();
@@ -346,12 +389,31 @@ export async function upsertSiteSettings(classroomId: string, input: SiteSetting
     );
   }
 
+  // Resolved before the write so a rejected zone costs nothing, and so the row
+  // stores Intl's canonical spelling rather than the caller's.
+  let nextTimezone: string | null | undefined;
+  if (input.timezone !== undefined) {
+    if (input.timezone === null || input.timezone.trim() === '') {
+      nextTimezone = null;
+    } else {
+      const canonical = canonicalizeTimeZone(input.timezone);
+      if (!canonical) {
+        throw new SiteError(
+          SITE_ERROR.TIMEZONE_INVALID,
+          `'${input.timezone}' is not a time zone we recognize. Pick one from the list, or clear it to use UTC.`
+        );
+      }
+      nextTimezone = canonical;
+    }
+  }
+
   return prisma.classroomSite.update({
     where: { classroom_id: classroomId },
     data: {
       ...(input.is_enabled === undefined ? {} : { is_enabled: input.is_enabled }),
       ...(input.home_page_id === undefined ? {} : { home_page_id: input.home_page_id }),
       ...(input.show_schedule === undefined ? {} : { show_schedule: input.show_schedule }),
+      ...(nextTimezone === undefined ? {} : { timezone: nextTimezone }),
     },
   });
 }
@@ -809,15 +871,78 @@ export async function getPageBySlugForSite(classroomId: string, slugOrId: string
   return prisma.page.findFirst({ where: { classroom_id: classroomId, id: slugOrId } });
 }
 
-// Only the fields a visibility decision or a link needs. Notably absent: a
-// repository's assignments, attached resources and quizzes — the in-app module
-// tree pulls those, and an anonymous request has no business loading them.
+// Only the fields a visibility decision, a link, or a redacted placeholder's
+// date needs. Notably absent: a repository's attached resources and quizzes,
+// and — the point of the narrow `assignments` select — every assignment column
+// except the deadline. An anonymous request loads DATES, never coursework text,
+// so no query on this path can put an assignment title in the process at all.
 const SITE_ITEM_INCLUDE = {
   page: { select: { id: true, title: true, slug: true, is_draft: true, is_public: true } },
   slide: { select: { id: true, title: true, slug: true, is_draft: true, is_public: true } },
-  repository: { select: { id: true, title: true, is_published: true } },
-  quiz: { select: { id: true, name: true, status: true } },
+  repository: {
+    select: {
+      id: true,
+      title: true,
+      is_published: true,
+      // Published only, mirroring the student module tree: a placeholder must
+      // never show a date off an assignment an enrolled student cannot see.
+      assignments: { where: { is_published: true }, select: { student_deadline: true } },
+    },
+  },
+  quiz: { select: { id: true, name: true, status: true, due_date: true } },
 } satisfies Prisma.ModuleItemInclude;
+
+type SiteModuleItem = Prisma.ModuleItemGetPayload<{ include: typeof SITE_ITEM_INCLUDE }>;
+type SiteModule = Prisma.ModuleGetPayload<{
+  include: { items: { include: typeof SITE_ITEM_INCLUDE } };
+}>;
+
+/** An item this viewer may open: carries its target, and renders as a link. */
+export type SiteScheduleVisibleItem = SiteModuleItem & { kind: 'visible' };
+
+/**
+ * An item this viewer may NOT open, kept in place rather than deleted.
+ *
+ * Deliberately not a narrowed `SiteModuleItem`: it is BUILT from three fields
+ * rather than derived by omitting the rest, so the only way a title, slug,
+ * template or link could reach an anonymous renderer is if someone added it to
+ * this type on purpose. `id` is the ModuleItem's own uuid — a React key, not a
+ * content identifier, and it resolves to nothing without a session.
+ */
+export type SiteSchedulePlaceholderItem = {
+  kind: 'placeholder';
+  id: string;
+  item_type: ModuleItemType;
+  /** The item's deadline when it has one; null for pages and slides, which never do. */
+  due_at: Date | null;
+};
+
+export type SiteScheduleItem = SiteScheduleVisibleItem | SiteSchedulePlaceholderItem;
+export type SiteScheduleModule = Omit<SiteModule, 'items'> & { items: SiteScheduleItem[] };
+
+/**
+ * The date a placeholder is allowed to show.
+ *
+ * A deadline is not a content identifier — "something is due Sep 12" says the
+ * course has a rhythm, not what the work is — and it is the one fact that makes
+ * a redacted row useful to a prospective student reading the public schedule.
+ *
+ * Repositories reduce to their EARLIEST published assignment deadline, the same
+ * reduction the admin repo summary makes ("earliest assignment deadline =
+ * repository due date"). Quizzes carry their own. Pages and slides have no
+ * date at all, and get a bare placeholder.
+ */
+function placeholderDueAt(item: SiteModuleItem): Date | null {
+  if (item.item_type === 'QUIZ') return item.quiz?.due_date ?? null;
+  if (item.item_type !== 'REPOSITORY') return null;
+
+  const deadlines = (item.repository?.assignments ?? [])
+    .map(assignment => assignment.student_deadline)
+    .filter((deadline): deadline is Date => deadline !== null);
+
+  if (deadlines.length === 0) return null;
+  return deadlines.reduce((earliest, deadline) => (deadline < earliest ? deadline : earliest));
+}
 
 /**
  * The classroom's modules as this viewer may see them.
@@ -826,14 +951,31 @@ const SITE_ITEM_INCLUDE = {
  * so a public site can never expose coursework that was only ever meant for
  * enrolled students.
  *
- * Items are then filtered per viewer: anonymous visitors get
- * isItemPubliclyVisible (published-AND-public pages and slides only;
- * repositories and quizzes dropped entirely, titles included), members get the
- * app's ordinary isItemPublished. Modules left with no visible items are
- * dropped rather than rendered empty — an empty shell still leaks the module
- * title and, by its position, that something is hidden there.
+ * Items are then resolved per viewer. Members get the app's ordinary
+ * isItemPublished, and modules left with nothing are dropped, exactly as
+ * before. An ANONYMOUS visitor gets a three-way split:
+ *
+ *   - isItemPubliclyVisible          → the item itself (a public page or deck)
+ *   - published but not public       → a placeholder: type and date only
+ *   - not published at all           → nothing
+ *
+ * That last line is the one worth stating out loud. A draft page, a DRAFT quiz
+ * or an unpublished repo is invisible to enrolled students too, so a
+ * placeholder for it would advertise unreleased coursework to the open web —
+ * strictly worse than the leak this function exists to prevent.
+ *
+ * The middle case is a reversal of the old behaviour, which dropped
+ * members-only items and then dropped any module they emptied. That hid the
+ * course's SHAPE, not just its contents: a "Welcome" module holding one repo
+ * rendered as "Nothing has been published yet", which is both wrong and
+ * useless to the audience a public site is for. Structure — how many units,
+ * what kinds of work, when things are due — is exactly what a prospective
+ * student should see; the titles are what they should not.
  */
-export async function listPublicModulesForViewer(classroomId: string, role: SiteViewerRole) {
+export async function listPublicModulesForViewer(
+  classroomId: string,
+  role: SiteViewerRole
+): Promise<SiteScheduleModule[]> {
   const modules = await getPrisma().module.findMany({
     where: { classroom_id: classroomId, is_published: true, is_public: true },
     include: { items: { orderBy: { position: 'asc' }, include: SITE_ITEM_INCLUDE } },
@@ -841,9 +983,33 @@ export async function listPublicModulesForViewer(classroomId: string, role: Site
     orderBy: [{ position: 'asc' }, { created_at: 'asc' }],
   });
 
-  const visible = role === null ? isItemPubliclyVisible : isItemPublished;
+  if (role !== null) {
+    return modules
+      .map(module => ({
+        ...module,
+        items: module.items
+          .filter(isItemPublished)
+          .map((item): SiteScheduleItem => ({ ...item, kind: 'visible' })),
+      }))
+      .filter(module => module.items.length > 0);
+  }
 
-  return modules
-    .map(module => ({ ...module, items: module.items.filter(visible) }))
-    .filter(module => module.items.length > 0);
+  return modules.map(module => ({
+    ...module,
+    // flatMap, not filter+map: the empty array is how "not published, so not
+    // even a placeholder" is expressed, and item ORDER is preserved throughout
+    // so placeholders sit at the positions the instructor put them.
+    items: module.items.flatMap((item): SiteScheduleItem[] => {
+      if (isItemPubliclyVisible(item)) return [{ ...item, kind: 'visible' }];
+      if (!isItemPublished(item)) return [];
+      return [
+        {
+          kind: 'placeholder',
+          id: item.id,
+          item_type: item.item_type,
+          due_at: placeholderDueAt(item),
+        },
+      ];
+    }),
+  }));
 }

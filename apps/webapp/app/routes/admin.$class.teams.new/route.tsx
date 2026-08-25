@@ -5,8 +5,7 @@ import { Input, Modal, Form, Radio, Select } from 'antd';
 import type { ButtonProps } from 'antd';
 
 import { useGlobalFetcher, useDisclosure } from '~/hooks';
-import { ClassmojiService, getGitProvider, GitHubProvider } from '@classmoji/services';
-import { GetTeamAvatarQuery } from './queries';
+import { ClassmojiService, TeamServiceError } from '@classmoji/services';
 import { ActionTypes } from '~/constants';
 import { requireClassroomAdmin, assertClassroomMutationAllowed } from '~/utils/routeAuth.server';
 import type { Route } from './+types/route';
@@ -33,7 +32,10 @@ const AdminNewTeam = ({ loaderData }: Route.ComponentProps) => {
   const [name, setName] = useState('');
   const [tagsList, setTagsList] = useState([]);
 
-  const [visibility, setVisibility] = useState('secret');
+  // 'closed' (Visible) is the default: the choice used to be ignored and every
+  // team ended up visible, so this keeps the effective default unchanged now
+  // that the radio actually reaches the database.
+  const [visibility, setVisibility] = useState('closed');
   const [nameError, setNameError] = useState(false);
 
   const { show, close, visible } = useDisclosure();
@@ -129,74 +131,54 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
   assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
 
   const data = await request.json();
-  const { name, visibility: _visibility, tags } = data;
-
-  const gitOrgLogin = classroom.git_organization?.login;
-  if (!gitOrgLogin) {
-    throw new Response('Git organization not configured', { status: 400 });
-  }
+  const { name, visibility, tags } = data as {
+    name: string;
+    visibility?: string;
+    tags?: string[];
+  };
 
   return namedAction(request, {
     async createTeam() {
-      const gitProvider = getGitProvider(classroom.git_organization);
-
-      // GitHub converts team names to slugs: lowercase, spaces become hyphens
-      const expectedSlug = name.toLowerCase().replace(/\s+/g, '-');
-
-      // Check if this would collide with classroom teams (e.g., "cs101-25w-students")
-      if (expectedSlug.endsWith('-students') || expectedSlug.endsWith('-assistants')) {
-        return {
-          error: `Team name "${name}" is reserved for classroom teams. Please choose a different name.`,
-          action: ActionTypes.SAVE_TEAM,
-        };
-      }
-
-      // Check if team already exists in GitHub (prevent cross-classroom collisions)
       try {
-        await gitProvider.getTeam(gitOrgLogin, expectedSlug);
-        // If we get here, team exists - reject the creation
+        const { tagsFailed } = await ClassmojiService.teamAdmin.createTeam({
+          classroomId: classroom.id,
+          name,
+          // The form's "Secret" option finally has an effect: only "closed"
+          // (Visible) stores the team as visible to non-members.
+          isVisible: visibility === 'closed',
+          tagIds: tags ?? [],
+        });
+
         return {
-          error: `A team named "${name}" already exists in this GitHub organization. Please choose a different name.`,
+          success:
+            tagsFailed.length === 0
+              ? 'Team created successfully'
+              : `Team created, but ${tagsFailed.length} tag(s) could not be attached.`,
           action: ActionTypes.SAVE_TEAM,
         };
       } catch (error: unknown) {
-        // 404 means team doesn't exist - this is what we want
-        if ((error as Record<string, unknown>)?.status !== 404) {
-          throw error;
+        if (error instanceof TeamServiceError) {
+          return { error: createErrorMessage(error, name), action: ActionTypes.SAVE_TEAM };
         }
+        throw error;
       }
-
-      const githubTeam = await gitProvider.createTeam(gitOrgLogin, name);
-
-      // Need to refetch with graphql because the GitHub API doesn't have avatarUrl
-      // for team in the return response for some reason
-      const octokit = await (gitProvider as GitHubProvider).getOctokit();
-      const teamQuery = await octokit.graphql<{ organization: { team: { avatarUrl: string } } }>(
-        GetTeamAvatarQuery,
-        {
-          org: gitOrgLogin,
-          slug: githubTeam.slug,
-        }
-      );
-
-      const team = await ClassmojiService.team.create({
-        providerId: githubTeam.id,
-        provider: 'GITHUB',
-        name: githubTeam.name,
-        slug: githubTeam.slug,
-        avatarUrl: teamQuery.organization.team.avatarUrl,
-        privacy: 'closed',
-        classroomId: classroom.id,
-      });
-
-      await Promise.all(tags.map((tag: string) => ClassmojiService.teamTag.create(team.id, tag)));
-
-      return {
-        success: 'Team created successfully',
-        action: ActionTypes.SAVE_TEAM,
-      };
     },
   });
+};
+
+const createErrorMessage = (error: TeamServiceError, name: string) => {
+  switch (error.code) {
+    case 'invalid_name':
+      return 'Team name is required';
+    case 'reserved_name':
+      return `Team name "${name}" is reserved for classroom teams. Please choose a different name.`;
+    case 'name_collision':
+      return `A team named "${name}" already exists in this GitHub organization. Please choose a different name.`;
+    case 'no_org_configured':
+      return 'Git organization not configured';
+    default:
+      return 'Could not create this team.';
+  }
 };
 
 export default AdminNewTeam;

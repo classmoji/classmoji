@@ -35,6 +35,13 @@ export const TEACHING_TEAM = ['OWNER', 'TEACHER', 'ASSISTANT'] as const;
 export const OWNER_TEACHER = ['OWNER', 'TEACHER'] as const;
 /** requireClassroomAdmin routes (modules, tokens, settings, grader assignment). */
 export const OWNER_ONLY = ['OWNER'] as const;
+/**
+ * Quiz admin surface (admin.$class.quizzes loader + action, and the assistant
+ * route that re-exports it): allowedRoles ['OWNER','ASSISTANT']. TEACHER is
+ * genuinely excluded there, so it is excluded here (S4 role parity). Mirrors
+ * QUIZ_ROLES in resources/shape.ts minus STUDENT, which has no write surface.
+ */
+export const OWNER_ASSISTANT = ['OWNER', 'ASSISTANT'] as const;
 
 // ─── Results & errors ────────────────────────────────────────────────────────
 
@@ -326,6 +333,22 @@ export async function loadRepositoryInClassroom(
   const record = await ClassmojiService.repository.findById(id);
   if (!record || record.classroom_id !== requireClassroomCtx(ctx).classroomId) {
     throw scopedNotFound('Repo');
+  }
+  return record;
+}
+
+type QuizRecord = NonNullable<Awaited<ReturnType<typeof ClassmojiService.quiz.findById>>>;
+
+/**
+ * Load a Quiz and verify its classroom_id (S1). Quiz carries classroom_id
+ * directly, so the comparison is a single hop — same uniform rejection as every
+ * other loader, so an unknown id and another classroom's quiz are
+ * indistinguishable to the caller.
+ */
+export async function loadQuizInClassroom(id: string, ctx: ToolContext): Promise<QuizRecord> {
+  const record = await ClassmojiService.quiz.findById(id);
+  if (!record || record.classroom_id !== requireClassroomCtx(ctx).classroomId) {
+    throw scopedNotFound('Quiz');
   }
   return record;
 }

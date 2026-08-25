@@ -7,8 +7,10 @@ import {
   type DragStartEvent,
   type DragEndEvent,
 } from '@dnd-kit/core';
-import { useFetcher, useRevalidator } from 'react-router';
+import { useFetcher } from 'react-router';
+import { useEffect } from 'react';
 import { Input, Switch } from 'antd';
+import { useCallout } from '@classmoji/ui-components';
 import { IconSearch, IconFile, IconPresentation } from '@tabler/icons-react';
 import { useResourcesBoard } from './useResourcesBoard';
 import { ModuleColumn, SourceColumn } from './KanbanColumn';
@@ -36,7 +38,20 @@ interface ResourcesKanbanProps {
 
 const ResourcesKanban = ({ repositories, pages, slides }: ResourcesKanbanProps) => {
   const fetcher = useFetcher();
-  const revalidator = useRevalidator();
+  const callout = useCallout();
+
+  // The action RETURNS its failures rather than throwing them (a thrown
+  // Response would skip fetcher.data and take over the page via the root error
+  // boundary), so a rejected link surfaces here as a callout and the board
+  // stays put. Returning also lets React Router revalidate on its own, which is
+  // what refreshes the stale loader data behind a rejected duplicate drag.
+  useEffect(() => {
+    if (fetcher.state === 'idle' && fetcher.data?.error) {
+      callout.show({ variant: 'error', title: fetcher.data.error, autoDismissMs: 3000 });
+    }
+    // `callout` is stable per CalloutProvider, so it is not a dep.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fetcher.state, fetcher.data]);
 
   const {
     allPages,
@@ -85,12 +100,15 @@ const ResourcesKanban = ({ repositories, pages, slides }: ResourcesKanbanProps) 
 
     if (!targetType || !targetId) return;
 
-    // Check if already linked
+    // Drop-time duplicate check. It reads loader data that may be a moment
+    // behind the server, so it is a courtesy, not the guard — the service
+    // re-checks and reports `already_linked`, which lands in the callout above.
     if (isLinked(resource, resourceType, targetType, targetId)) {
       return;
     }
 
-    // Submit to server
+    // React Router revalidates once the action resolves, so the board refreshes
+    // from the server rather than from a timer racing the manifest push.
     fetcher.submit(
       {
         resourceId: resource.id,
@@ -104,9 +122,6 @@ const ResourcesKanban = ({ repositories, pages, slides }: ResourcesKanbanProps) 
         encType: 'application/json',
       }
     );
-
-    // Revalidate to get updated data
-    setTimeout(() => revalidator.revalidate(), 100);
   };
 
   const handleDragCancel = () => {
@@ -122,8 +137,6 @@ const ResourcesKanban = ({ repositories, pages, slides }: ResourcesKanbanProps) 
         encType: 'application/json',
       }
     );
-
-    setTimeout(() => revalidator.revalidate(), 100);
   };
 
   return (

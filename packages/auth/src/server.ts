@@ -10,7 +10,12 @@ import { ClassmojiService } from '@classmoji/services';
 // without importing betterAuth and Prisma. Re-exported here because
 // `import { AUTH_SECRET } from '@classmoji/auth/server'` is the established
 // entry point.
-import { AUTH_SECRET, COOKIE_DOMAIN, COOKIE_PREFIX } from './secret.ts';
+import {
+  AUTH_SECRET,
+  COOKIE_DOMAIN,
+  COOKIE_PREFIX,
+  sessionTokenFromCookieHeader,
+} from './secret.ts';
 
 export { AUTH_SECRET, COOKIE_PREFIX };
 
@@ -25,22 +30,6 @@ export {
   SITE_RETURN_MAX_PATH_LENGTH,
   type SiteReturnPayload,
 } from './siteReturnToken.ts';
-
-/** `classmoji.session_token`, or whatever COOKIE_PREFIX makes it. */
-const SESSION_COOKIE_NAME = `${COOKIE_PREFIX}.session_token`;
-
-/**
- * Matches the session cookie by its CONFIGURED name.
- *
- * Built from COOKIE_PREFIX rather than hardcoded: staging runs
- * COOKIE_PREFIX=classmoji-staging so its sessions do not shadow production's on
- * the shared parent domain, and a literal `classmoji.` here would quietly stop
- * matching there. The prefix is escaped because `.` and `-` are regex-active and
- * the value comes from the environment.
- */
-const SESSION_COOKIE_REGEX = new RegExp(
-  `(?:^|;\\s*)${SESSION_COOKIE_NAME.replace(/[.*+?^${}()|[\]\\-]/g, '\\$&')}=([^;]+)`
-);
 
 // ─── Interfaces ──────────────────────────────────────────────────────────────
 
@@ -469,9 +458,9 @@ export const auth = betterAuth({
  * @returns {Promise<{userId: string, token: string, userLogin: string} | null>}
  */
 export async function getAuthSession(request: Request): Promise<AuthSessionResult | null> {
-  const cookieHeader = request.headers.get('cookie') || '';
-  const sessionTokenMatch = cookieHeader.match(SESSION_COOKIE_REGEX);
-  const tokenFromCookie = sessionTokenMatch?.[1];
+  // Read by the CONFIGURED cookie name — see `sessionCookieRegexFor` in
+  // ./secret.ts for why this must never be a hardcoded `classmoji.`.
+  const tokenFromCookie = sessionTokenFromCookieHeader(request.headers.get('cookie') || '');
 
   // Try BetterAuth's getSession first (validates session cookie, not OAuth token)
   const session = await auth.api.getSession({ headers: request.headers });

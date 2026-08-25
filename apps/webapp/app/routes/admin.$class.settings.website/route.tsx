@@ -16,6 +16,7 @@ import {
   canToggleSiteEnabled,
   homePageNotice,
   suggestSubdomainFromSlug,
+  timezoneOptions,
   type SitePageOption,
 } from './siteSettings.ts';
 import {
@@ -74,6 +75,11 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
         is_enabled: row.is_enabled,
         home_page_id: row.home_page_id,
         show_schedule: row.show_schedule,
+        // Needed here even though the SERVING path never reads this projection:
+        // apps/pages resolves a site through getSiteBySubdomain, which returns
+        // the whole row. This one is the admin form's own narrow copy, and the
+        // zone control has to render the stored value.
+        timezone: row.timezone,
         custom_domain: row.custom_domain,
         custom_domain_verified_at: row.custom_domain_verified_at,
       }
@@ -238,6 +244,7 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
     is_enabled?: boolean;
     home_page_id?: string | null;
     show_schedule?: boolean;
+    timezone?: string | null;
     custom_domain?: string;
   };
 
@@ -264,6 +271,7 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
           ...(data.is_enabled === undefined ? {} : { is_enabled: data.is_enabled }),
           ...(data.home_page_id === undefined ? {} : { home_page_id: data.home_page_id }),
           ...(data.show_schedule === undefined ? {} : { show_schedule: data.show_schedule }),
+          ...(data.timezone === undefined ? {} : { timezone: data.timezone }),
         });
         return { success: 'Website settings updated' };
       } catch (error: unknown) {
@@ -474,6 +482,7 @@ const SettingsWebsite = ({ loaderData }: Route.ComponentProps) => {
   const enableFetcher = useFetcher<ActionResult>();
   const homePageFetcher = useFetcher<ActionResult>();
   const scheduleFetcher = useFetcher<ActionResult>();
+  const timezoneFetcher = useFetcher<ActionResult>();
   const removeFetcher = useFetcher<ActionResult>();
   const availabilityFetcher = useFetcher<SubdomainAvailabilityResponse>();
   const domainFetcher = useFetcher<ActionResult>();
@@ -789,6 +798,36 @@ const SettingsWebsite = ({ loaderData }: Route.ComponentProps) => {
             stay hidden.
           </div>
           <RowError fetcher={scheduleFetcher} />
+
+          {/* The zone the schedule's dates are rendered in — shown only once
+              the schedule is on, because it is a property of that page and
+              nothing else. The public schedule ships no JavaScript, so its
+              dates cannot land in the reader's own zone the way every
+              member-facing view's do; without this the server's zone (UTC in
+              production) decides, and a late-evening deadline publishes on the
+              wrong day. */}
+          {site?.show_schedule && (
+            <div className="pt-4">
+              <div className="pb-1 text-sm font-medium text-ink-2">Time zone</div>
+              <Select
+                className="w-full max-w-sm"
+                value={site?.timezone ?? undefined}
+                disabled={!site}
+                loading={timezoneFetcher.state !== 'idle'}
+                placeholder="UTC (not set)"
+                showSearch
+                allowClear
+                optionFilterProp="label"
+                aria-label="Schedule time zone"
+                onChange={value => saveSetting(timezoneFetcher, { timezone: value ?? null })}
+                options={timezoneOptions(site?.timezone)}
+              />
+              <div className="pt-2 text-sm text-ink-3">
+                Dates on the public schedule are shown in this time zone.
+              </div>
+              <RowError fetcher={timezoneFetcher} />
+            </div>
+          )}
         </div>
       </SettingSection>
 

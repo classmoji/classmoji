@@ -82,10 +82,14 @@ export const isItemPublished = (item: ModuleItemVisibility): boolean => {
  *
  *   - PAGE and SLIDE additionally require `is_public`. Published-to-students is
  *     not published-to-the-web; the author opts in per resource.
- *   - REPOSITORY and QUIZ are never shown, published or not — and are dropped
- *     entirely rather than rendered locked, because the title alone leaks the
- *     assignment ("Final Project: Raytracer", "Quiz 3: Pointers") before the
- *     course wants it public.
+ *   - REPOSITORY and QUIZ are never shown, published or not, because the title
+ *     alone leaks the assignment ("Final Project: Raytracer", "Quiz 3:
+ *     Pointers") before the course wants it public.
+ *
+ * This is a predicate about the ITEM, not about whether a row appears. The
+ * public schedule reads it together with isItemPublished and renders a typed,
+ * title-free placeholder in between the two (site.listPublicModulesForViewer) —
+ * so `false` here means "never with its title", not "never at all".
  *
  * Members (any role) go through isItemPublished instead: a signed-in student
  * still must not see an unpublished repo just because its module is public.

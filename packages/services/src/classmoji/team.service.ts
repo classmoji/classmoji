@@ -6,8 +6,13 @@ interface TeamCreatePayload {
   provider?: GitProvider | null;
   name: string;
   slug: string;
-  avatarUrl?: string | null;
-  privacy?: string | null;
+  /**
+   * Whether students who are not members can see the team. Defaults to false,
+   * matching the schema default. This used to be derived from a `privacy`
+   * string that every caller hard-coded to 'closed', so the visibility choice
+   * offered in the UI never reached the database.
+   */
+  isVisible?: boolean;
   classroomId: string;
   tag?: unknown;
 }
@@ -22,16 +27,7 @@ interface TeamCreateWithMembershipAndTagPayload {
 }
 
 export const create = async (payload: TeamCreatePayload) => {
-  const {
-    providerId,
-    provider,
-    name,
-    slug,
-    avatarUrl: _avatarUrl,
-    privacy,
-    classroomId,
-    tag,
-  } = payload;
+  const { providerId, provider, name, slug, isVisible = false, classroomId, tag } = payload;
   const teamCreateData: unknown = {
     provider_id: providerId ? String(providerId) : null,
     provider: provider || null,
@@ -39,7 +35,7 @@ export const create = async (payload: TeamCreatePayload) => {
     slug: slug,
     tag: tag,
     classroom_id: classroomId,
-    is_visible: privacy !== 'secret',
+    is_visible: isVisible,
   };
   // TODO: narrow further once legacy team relation writes are aligned with generated Prisma input types.
   return getPrisma().team.create({

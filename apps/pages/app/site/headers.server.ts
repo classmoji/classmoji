@@ -1,4 +1,4 @@
-import { COOKIE_PREFIX } from '@classmoji/auth/secret';
+import { COOKIE_PREFIX, sessionCookieRegexFor } from '@classmoji/auth/secret';
 
 import { frameAncestorOrigins } from './env.server.ts';
 
@@ -38,24 +38,20 @@ export const DARK_MODE_SCRIPT_HASH = "'sha256-zE9lMCBH7j47LO0x2JTz3HAviU8juJhY/n
 /**
  * Match the session cookie better-auth sets for a given `cookiePrefix`.
  *
- * Built from the prefix rather than hardcoded, because it is configurable:
- * staging runs `COOKIE_PREFIX=classmoji-staging` so its sessions do not shadow
- * production's on a shared parent domain. A hardcoded `classmoji.` here would
- * mean a real staging session looks ANONYMOUS to `siteHeaders`, and a
- * signed-in member's members-only page would go out `public, max-age=60` — a
- * cache poisoning of personalized content, invisible until someone else is
- * served it.
+ * The builder now lives in `@classmoji/auth/secret` — the same dependency-free
+ * module this already imports `COOKIE_PREFIX` from — so that slides' socket
+ * handshake and auth's own dev-login fallback share ONE escape rule with this.
+ * Three private copies meant three chances to hardcode `classmoji.`, and a
+ * hardcoded prefix here is the nastiest of the three: a real staging session
+ * looks ANONYMOUS to `siteHeaders`, so a signed-in member's members-only page
+ * goes out `public, max-age=60` — personalized content poisoned into a shared
+ * cache, invisible until someone else is served it.
  *
- * Escaping matches `packages/auth/src/server.ts` exactly: both `.` and `-` are
- * regex-active and both occur in real prefixes.
- *
- * Exported so drift is testable — `COOKIE_PREFIX` resolves at import time, so
- * a test cannot get at other prefixes any other way.
+ * Re-exported rather than merely used, because `COOKIE_PREFIX` resolves at
+ * import time: `tests/unit/site-headers.spec.ts` cannot reach other prefixes
+ * any other way.
  */
-export function sessionCookieRegexFor(prefix: string): RegExp {
-  const escaped = prefix.replace(/[.*+?^${}()|[\]\\-]/g, '\\$&');
-  return new RegExp(`(?:^|;\\s*)(?:__Secure-)?${escaped}\\.session_token=`);
-}
+export { sessionCookieRegexFor };
 
 /** Session cookie name(s) better-auth sets, for THIS deployment's prefix. */
 const SESSION_COOKIE = sessionCookieRegexFor(COOKIE_PREFIX);

@@ -17,11 +17,14 @@
  * serializes it with the same `JSON.stringify(payload, null, 2)` the resource
  * read uses. Resource and tool are therefore byte-identical by construction.
  *
- * Two tools are NOT pure mirrors:
+ * Three tools are NOT pure mirrors:
  *   - list_submissions   adds server-side filters over the grading-queue data
  *     (shares loadGradingQueueData + queueRow with the grading-queue resource).
  *   - list_teaching_team is a NEW capability (no resource lists staff-with-ids)
  *     that resolves the grader_id an agent needs for grader_assign.
+ *   - grading_report     is a NEW capability (per-TA grading oversight) on a
+ *     TIGHTER tier than the rest: OWNER/TEACHER, since it exposes each TA's
+ *     throughput and grading patterns to whoever reads it.
  */
 
 import { UriTemplate } from '@modelcontextprotocol/sdk/shared/uriTemplate.js';
@@ -30,7 +33,7 @@ import { IssueStatus, type Role } from '@prisma/client';
 import { z, type ZodRawShape } from 'zod';
 import type { ResourceDefinition, ToolDefinition } from '../mcp/registry.ts';
 import { parseClassroomRef } from '../authz/pure.ts';
-import { ok, requireClassroomCtx, TEACHING_TEAM } from './shared.ts';
+import { ok, OWNER_TEACHER, requireClassroomCtx, TEACHING_TEAM } from './shared.ts';
 import { orgLogin, type SubmissionLike } from '../resources/shape.ts';
 import { meResource } from '../resources/me.ts';
 import { classroomInfoResource } from '../resources/classroomInfo.ts';
@@ -420,6 +423,55 @@ export const listTeachingTeamTool: ToolDefinition<ListTeachingTeamArgs> = {
   },
 };
 
+// ─── grading_report (TA grading oversight) ──────────────────────────────────
+
+interface GradingReportArgs {
+  classroom: string;
+  assignment_id?: string;
+  grader_id?: string;
+}
+
+export const gradingReportTool: ToolDefinition<GradingReportArgs> = {
+  name: 'grading_report',
+  title: 'Grading report (per TA, per assignment)',
+  description:
+    'Per-TA per-assignment grading oversight: who is assigned to grade what (assigned_count), how ' +
+    'many of those they have actually graded (graded_count), the emoji grade distribution they ' +
+    'are handing out, and when they last graded (last_graded_at). Optional filters: assignment_id ' +
+    '(from list_repos) and grader_id (from list_teaching_team). A grader who graded a submission ' +
+    'without being formally assigned to it still gets a row, with assigned_count 0 — real work is ' +
+    'never hidden. OWNER and TEACHER only.',
+  scope: 'read',
+  // Personnel oversight: this exposes a TA's own throughput and grading
+  // patterns, so assistants must not read their peers' stats through MCP.
+  roles: OWNER_TEACHER,
+  inputSchema: {
+    classroom: z.string().describe("Classroom reference as 'org/slug'"),
+    assignment_id: z.string().uuid().optional().describe('Limit the report to one Assignment id'),
+    grader_id: z.string().uuid().optional().describe('Limit the report to one grader (user id)'),
+  },
+  handler: async (args, ctx) => {
+    const { classroomId } = requireClassroomCtx(ctx);
+    // The service scopes every query by classroomId, so an unknown or
+    // cross-classroom assignment_id/grader_id simply matches nothing. For a
+    // read that is the right answer — empty rows, no existence signal.
+    const rows = await ClassmojiService.gitRepoAssignmentGrader.gradingReport({
+      classroomId,
+      assignmentId: args.assignment_id ?? null,
+      graderId: args.grader_id ?? null,
+    });
+
+    return ok({
+      total_rows: rows.length,
+      graders: new Set(rows.map(row => row.grader.id)).size,
+      rows: rows.map(row => ({
+        ...row,
+        last_graded_at: row.last_graded_at ? new Date(row.last_graded_at).toISOString() : null,
+      })),
+    });
+  },
+};
+
 // ─── Manifest (registration + listing order) ────────────────────────────────
 
 export const readTools: ToolDefinition<never>[] = [
@@ -435,6 +487,7 @@ export const readTools: ToolDefinition<never>[] = [
   listRegradeRequestsTool,
   myRegradeRequestsTool,
   listTeachingTeamTool,
+  gradingReportTool,
   listQuizzesTool,
   listPagesTool,
   listModulesTool,

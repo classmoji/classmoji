@@ -142,17 +142,22 @@ export const findByClassroomId = async (classroomId: string) => {
  * Find all GitRepoAssignments for an Assignment
  * @param {string} assignmentId - UUID of the Assignment
  * @param {string} [classroomSlug] - Optional classroom slug filter
+ * @param {string} [classroomId] - Optional classroom id filter. Preferred by
+ *   callers that already hold the id: it scopes on the primary key rather than
+ *   on a slug, and combines with the slug filter when both are supplied.
  * @returns {Promise<Object[]>}
  */
 export const findByAssignmentId = async (
   assignmentId: string,
-  classroomSlug: string | null = null
+  classroomSlug: string | null = null,
+  classroomId: string | null = null
 ) => {
   const where: Prisma.GitRepoAssignmentWhereInput = { assignment_id: assignmentId };
 
-  if (classroomSlug) {
+  if (classroomSlug || classroomId) {
     where.git_repo = {
-      classroom: { slug: classroomSlug },
+      ...(classroomSlug ? { classroom: { slug: classroomSlug } } : {}),
+      ...(classroomId ? { classroom_id: classroomId } : {}),
     };
   }
 

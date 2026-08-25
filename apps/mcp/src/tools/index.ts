@@ -14,7 +14,7 @@ import { registerToolDefinition } from '../mcp/registry.ts';
 import { whoamiTool } from './whoami.ts';
 import { readTools } from './reads.ts';
 import { gradeAddTool, gradeRemoveTool, gradeRemoveAllTool } from './grades.ts';
-import { graderAssignTool, graderUnassignTool } from './graders.ts';
+import { graderAssignTool, graderUnassignTool, graderAssignBulkTool } from './graders.ts';
 import { emojiMappingUpsertTool, letterGradeMappingUpsertTool } from './mappings.ts';
 import { assignmentCreateTool, assignmentUpdateTool, assignmentDeleteTool } from './assignments.ts';
 import { regradeCreateTool, regradeResolveTool } from './regrades.ts';
@@ -49,6 +49,27 @@ import { tokenGrantTool } from './tokens.ts';
 import { extensionPurchaseTool } from './extensions.ts';
 import { repoCreateTool, repoPublishTool, repoUnpublishTool } from './repos.ts';
 import { rosterAddStudentTool, rosterRemoveStudentTool } from './roster.ts';
+import { assistantAddTool, assistantUpdateTool, assistantRemoveTool } from './assistants.ts';
+import { quizCreateTool, quizUpdateTool, quizPublishTool, quizDeleteTool } from './quizzes.ts';
+import {
+  classroomSettingsUpdateTool,
+  classroomStatusUpdateTool,
+  orgRepoSettingsUpdateTool,
+} from './settings.ts';
+import {
+  resourceLinkAddTool,
+  resourceLinkRemoveTool,
+  resourceLinksListTool,
+} from './resourceLinks.ts';
+import {
+  teamCreateTool,
+  teamDeleteTool,
+  teamRenameTool,
+  teamMembersAddTool,
+  teamMemberRemoveTool,
+  teamTagAddTool,
+  teamTagRemoveTool,
+} from './teams.ts';
 
 export function registerAllTools(): void {
   // Identity / bootstrap
@@ -64,9 +85,11 @@ export function registerAllTools(): void {
   registerToolDefinition(gradeRemoveTool);
   registerToolDefinition(gradeRemoveAllTool);
 
-  // Grader assignment (OWNER — route-derived)
+  // Grader assignment (OWNER — route-derived); bulk distributes across a whole
+  // assignment in one call.
   registerToolDefinition(graderAssignTool);
   registerToolDefinition(graderUnassignTool);
+  registerToolDefinition(graderAssignBulkTool);
 
   // Grading scale (OWNER)
   registerToolDefinition(emojiMappingUpsertTool);
@@ -120,12 +143,25 @@ export function registerAllTools(): void {
   registerToolDefinition(deckPreviewAcceptTool);
   registerToolDefinition(deckPreviewDiscardTool);
 
+  // Quizzes (OWNER+ASSISTANT — the quiz surface excludes TEACHER; each tool
+  // also re-checks Pro tier + quizzes_enabled in-handler)
+  registerToolDefinition(quizCreateTool);
+  registerToolDefinition(quizUpdateTool);
+  registerToolDefinition(quizPublishTool);
+  registerToolDefinition(quizDeleteTool);
+
   // Tokens (OWNER)
   registerToolDefinition(tokenGrantTool);
 
   // Roster (OWNER — add sends real emails; remove is destructive, confirm-gated)
   registerToolDefinition(rosterAddStudentTool);
   registerToolDefinition(rosterRemoveStudentTool);
+
+  // Assistants / TAs (OWNER — add sends a real GitHub org invite; remove is
+  // destructive, confirm-gated, and can drop them from the org)
+  registerToolDefinition(assistantAddTool);
+  registerToolDefinition(assistantUpdateTool);
+  registerToolDefinition(assistantRemoveTool);
 
   // Extensions (STUDENT self)
   registerToolDefinition(extensionPurchaseTool);
@@ -134,4 +170,30 @@ export function registerAllTools(): void {
   registerToolDefinition(repoCreateTool);
   registerToolDefinition(repoPublishTool);
   registerToolDefinition(repoUnpublishTool);
+
+  // Classroom settings + lifecycle status (OWNER). The org tool writes
+  // ORGANIZATION-WIDE GitHub settings, so it sits beside the repo tools it
+  // affects and carries a tighter rate limit.
+  registerToolDefinition(classroomSettingsUpdateTool);
+  registerToolDefinition(classroomStatusUpdateTool);
+  registerToolDefinition(orgRepoSettingsUpdateTool);
+
+  // Resource links (OWNER+TEACHER — the web resources kanban tier, which
+  // deliberately excludes ASSISTANT). Attaching a page/deck to a repo or
+  // assignment is what makes it visible to students there; both writes also
+  // commit an updated content manifest to the classroom content repo.
+  registerToolDefinition(resourceLinkAddTool);
+  registerToolDefinition(resourceLinkRemoveTool);
+  registerToolDefinition(resourceLinksListTool);
+
+  // Teams (OWNER — the write surface behind list_teams). create/rename/members
+  // touch real GitHub teams; delete is destructive and confirm-gated; the tag
+  // tools are Classmoji-only links.
+  registerToolDefinition(teamCreateTool);
+  registerToolDefinition(teamDeleteTool);
+  registerToolDefinition(teamRenameTool);
+  registerToolDefinition(teamMembersAddTool);
+  registerToolDefinition(teamMemberRemoveTool);
+  registerToolDefinition(teamTagAddTool);
+  registerToolDefinition(teamTagRemoveTool);
 }
