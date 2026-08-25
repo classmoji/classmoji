@@ -43,7 +43,12 @@ export interface RemoveAssistantResult {
 
 /** Thrown for every caller-fixable failure so routes/tools can map it to a message. */
 export class AssistantServiceError extends Error {
-  code: 'classroom_not_found' | 'git_user_not_found' | 'assistant_not_found' | 'no_org_configured';
+  code:
+    | 'classroom_not_found'
+    | 'git_user_not_found'
+    | 'assistant_not_found'
+    | 'no_org_configured'
+    | 'login_conflict';
 
   constructor(code: AssistantServiceError['code'], message: string) {
     super(message);
@@ -51,6 +56,16 @@ export class AssistantServiceError extends Error {
     this.code = code;
   }
 }
+
+/** A git provider 404 — the login genuinely names nobody (same shape the providers throw). */
+const isProviderNotFound = (error: unknown): boolean =>
+  error instanceof Error &&
+  'status' in error &&
+  (error as Error & { status: number }).status === 404;
+
+/** A Prisma unique-constraint violation (e.g. the membership already exists). */
+const isUniqueViolation = (error: unknown): boolean =>
+  typeof error === 'object' && error !== null && (error as { code?: unknown }).code === 'P2002';
 
 const loadClassroom = async (classroomId: string) => {
   const classroom = await classroomService.findById(classroomId);
@@ -98,8 +113,10 @@ export const addAssistant = async ({
 
   // Idempotency BEFORE any GitHub write: re-inviting an existing assistant
   // would re-add them to the team and then still fail on the unique constraint.
-  const existingUser = await getPrisma().user.findUnique({
-    where: { login: cleanLogin },
+  // Git logins are case-insensitive while Postgres is not, so match the stored
+  // login insensitively — 'Ada' and 'ada' are the same person.
+  const existingUser = await getPrisma().user.findFirst({
+    where: { login: { equals: cleanLogin, mode: 'insensitive' } },
     select: { id: true, login: true, name: true },
   });
   if (existingUser) {
@@ -126,11 +143,13 @@ export const addAssistant = async ({
   try {
     gitUser = await gitProvider.getUserByLogin(cleanLogin);
   } catch (error: unknown) {
+    // Only a 404 means the username is wrong. A rate limit, a network blip or a
+    // bad token must surface as itself — telling the operator "no such user"
+    // would send them off fixing a name that was never the problem.
+    if (!isProviderNotFound(error)) throw error;
     throw new AssistantServiceError(
       'git_user_not_found',
-      `[assistant] git user ${cleanLogin} not found: ${
-        error instanceof Error ? error.message : String(error)
-      }`
+      `[assistant] git user ${cleanLogin} not found`
     );
   }
   if (!gitUser?.login) {
@@ -138,6 +157,41 @@ export const addAssistant = async ({
       'git_user_not_found',
       `[assistant] git user ${cleanLogin} not found`
     );
+  }
+
+  // The provider hands back the canonical casing, which may differ from what the
+  // caller typed. Re-check with it BEFORE any GitHub write (ensureClassroomTeam
+  // creates the team) so a differently-cased login is still a no-op.
+  const canonicalUser = await getPrisma().user.findFirst({
+    where: { login: { equals: gitUser.login, mode: 'insensitive' } },
+    select: { id: true, login: true, name: true, provider_id: true },
+  });
+
+  if (canonicalUser) {
+    // The stored row is keyed to a different provider account than the one this
+    // login resolves to today — refuse rather than relink the existing record.
+    if (canonicalUser.provider_id && canonicalUser.provider_id !== String(gitUser.id)) {
+      throw new AssistantServiceError(
+        'login_conflict',
+        `[assistant] login ${gitUser.login} resolves to a different provider account than the stored user record`
+      );
+    }
+
+    const existingMembership = await classroomMembershipService.findByClassroomAndUser(
+      classroomId,
+      canonicalUser.id,
+      'ASSISTANT'
+    );
+    if (existingMembership) {
+      return {
+        created: false,
+        alreadyExists: true,
+        userId: canonicalUser.id,
+        login: canonicalUser.login ?? gitUser.login,
+        name: canonicalUser.name,
+        alreadyOrgMember: true,
+      };
+    }
   }
 
   const team = await ensureClassroomTeam(
@@ -166,8 +220,12 @@ export const addAssistant = async ({
   }
 
   // Upsert user and account, then create the ASSISTANT membership.
+  // Target an already-known row by id: `where: { login }` is an exact match, so
+  // a row stored under different casing would be missed and duplicated.
+  // `update: {}` on purpose — adding someone as an assistant must not rewrite
+  // any field of a user record that already exists.
   const user = await getPrisma().user.upsert({
-    where: { login: gitUser.login },
+    where: canonicalUser ? { id: canonicalUser.id } : { login: gitUser.login },
     create: {
       login: gitUser.login,
       name: name || gitUser.name || gitUser.login,
@@ -177,9 +235,7 @@ export const addAssistant = async ({
       email: email ?? null,
       provider_email: gitUser.email ?? null,
     },
-    update: {
-      role: 'user',
-    },
+    update: {},
   });
 
   await getPrisma().account.upsert({
@@ -197,13 +253,28 @@ export const addAssistant = async ({
     update: {},
   });
 
-  await getPrisma().classroomMembership.create({
-    data: {
-      classroom_id: classroom.id,
-      user_id: user.id,
-      role: 'ASSISTANT',
-    },
-  });
+  try {
+    await getPrisma().classroomMembership.create({
+      data: {
+        classroom_id: classroom.id,
+        user_id: user.id,
+        role: 'ASSISTANT',
+      },
+    });
+  } catch (error: unknown) {
+    // Last line of defence for the idempotency contract: if the membership row
+    // turned up anyway (a concurrent add, or a lookup that missed it), report
+    // the same already-exists result rather than a generic failure.
+    if (!isUniqueViolation(error)) throw error;
+    return {
+      created: false,
+      alreadyExists: true,
+      userId: user.id,
+      login: user.login ?? gitUser.login,
+      name: user.name,
+      alreadyOrgMember: alreadyMember,
+    };
+  }
 
   // Already-in-org assistants get no `member_added` webhook, so flip
   // has_accepted_invite now that the membership exists.

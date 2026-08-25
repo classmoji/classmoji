@@ -10,14 +10,14 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-const userFindUnique = vi.fn();
+const userFindFirst = vi.fn();
 const userUpsert = vi.fn();
 const accountUpsert = vi.fn();
 const membershipCreate = vi.fn();
 vi.mock('@classmoji/database', () => ({
   default: () => ({
     user: {
-      findUnique: (...a: unknown[]) => userFindUnique(...a),
+      findFirst: (...a: unknown[]) => userFindFirst(...a),
       upsert: (...a: unknown[]) => userUpsert(...a),
     },
     account: { upsert: (...a: unknown[]) => accountUpsert(...a) },
@@ -76,7 +76,7 @@ beforeEach(() => {
   ensureClassroomTeam.mockResolvedValue({ id: 42, slug: 'cs1-25f-assistants' });
   getUserByLogin.mockResolvedValue({ id: 999, login: 'ada', name: 'Ada L', email: 'ada@gh.dev' });
   isUserMemberOfOrganization.mockResolvedValue(false);
-  userFindUnique.mockResolvedValue(null);
+  userFindFirst.mockResolvedValue(null);
   userUpsert.mockResolvedValue({ id: 'u-1', login: 'ada', name: 'Ada L' });
   triggerTask.mockResolvedValue({ id: 'run-1' });
 });
@@ -127,7 +127,7 @@ describe('assistant.addAssistant', () => {
   });
 
   it('is idempotent: an existing ASSISTANT membership short-circuits before any GitHub write', async () => {
-    userFindUnique.mockResolvedValue({ id: 'u-1', login: 'ada', name: 'Ada L' });
+    userFindFirst.mockResolvedValue({ id: 'u-1', login: 'ada', name: 'Ada L' });
     findByClassroomAndUser.mockResolvedValue({ id: 'm-1', role: 'ASSISTANT' });
 
     const result = await assistant.addAssistant({ classroomId: 'class-1', login: 'ada' });
@@ -137,6 +137,87 @@ describe('assistant.addAssistant', () => {
     expect(ensureClassroomTeam).not.toHaveBeenCalled();
     expect(inviteToOrganization).not.toHaveBeenCalled();
     expect(membershipCreate).not.toHaveBeenCalled();
+  });
+
+  it('matches the stored login case-insensitively', async () => {
+    userFindFirst.mockResolvedValue({ id: 'u-1', login: 'ada', name: 'Ada L' });
+    findByClassroomAndUser.mockResolvedValue({ id: 'm-1', role: 'ASSISTANT' });
+
+    await assistant.addAssistant({ classroomId: 'class-1', login: 'Ada' });
+
+    expect(userFindFirst.mock.calls[0][0].where).toEqual({
+      login: { equals: 'Ada', mode: 'insensitive' },
+    });
+  });
+
+  it('leaves an existing user record untouched: the upsert update branch is empty', async () => {
+    await assistant.addAssistant({ classroomId: 'class-1', login: 'ada', name: 'Ada Lovelace' });
+
+    // Adding an assistant must not rewrite any field of a user row that already
+    // exists — every value the service supplies belongs to `create` only.
+    expect(userUpsert.mock.calls[0][0].update).toEqual({});
+  });
+
+  it('re-checks with the canonical casing after resolution and skips the GitHub writes', async () => {
+    // The caller typed 'Ada'; nothing matches until the provider hands back the
+    // canonical 'ada', which the second lookup finds with a live membership.
+    getUserByLogin.mockResolvedValue({ id: 999, login: 'ada', name: 'Ada L' });
+    userFindFirst.mockResolvedValueOnce(null).mockResolvedValueOnce({
+      id: 'u-1',
+      login: 'ada',
+      name: 'Ada L',
+      provider_id: '999',
+    });
+    findByClassroomAndUser.mockResolvedValue({ id: 'm-1', role: 'ASSISTANT' });
+
+    const result = await assistant.addAssistant({ classroomId: 'class-1', login: 'Ada' });
+
+    expect(result).toMatchObject({ created: false, alreadyExists: true, userId: 'u-1' });
+    // Resolution itself is required (it is what yields the canonical casing),
+    // but nothing may be written to GitHub afterwards.
+    expect(getUserByLogin).toHaveBeenCalledWith('Ada');
+    expect(ensureClassroomTeam).not.toHaveBeenCalled();
+    expect(addTeamMember).not.toHaveBeenCalled();
+    expect(inviteToOrganization).not.toHaveBeenCalled();
+    expect(membershipCreate).not.toHaveBeenCalled();
+  });
+
+  it('refuses when the stored row is keyed to a different provider account', async () => {
+    userFindFirst.mockResolvedValueOnce(null).mockResolvedValueOnce({
+      id: 'u-1',
+      login: 'ada',
+      name: 'Ada L',
+      provider_id: '111',
+    });
+
+    await expect(
+      assistant.addAssistant({ classroomId: 'class-1', login: 'ada' })
+    ).rejects.toMatchObject({ code: 'login_conflict' });
+    expect(ensureClassroomTeam).not.toHaveBeenCalled();
+    expect(userUpsert).not.toHaveBeenCalled();
+  });
+
+  it('maps only a 404 to git_user_not_found and propagates everything else', async () => {
+    const rateLimited = Object.assign(new Error('API rate limit exceeded'), { status: 403 });
+    getUserByLogin.mockRejectedValue(rateLimited);
+
+    await expect(assistant.addAssistant({ classroomId: 'class-1', login: 'ada' })).rejects.toThrow(
+      'API rate limit exceeded'
+    );
+    expect(ensureClassroomTeam).not.toHaveBeenCalled();
+
+    getUserByLogin.mockRejectedValue(Object.assign(new Error('Not Found'), { status: 404 }));
+    await expect(
+      assistant.addAssistant({ classroomId: 'class-1', login: 'ada' })
+    ).rejects.toMatchObject({ code: 'git_user_not_found' });
+  });
+
+  it('reports already-exists when the membership row turns up on create', async () => {
+    membershipCreate.mockRejectedValue(Object.assign(new Error('unique'), { code: 'P2002' }));
+
+    const result = await assistant.addAssistant({ classroomId: 'class-1', login: 'ada' });
+
+    expect(result).toMatchObject({ created: false, alreadyExists: true, userId: 'u-1' });
   });
 });
 

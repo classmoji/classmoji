@@ -164,6 +164,18 @@ describe('grader_assign_bulk — EXISTING', () => {
     expect(mocks.assignGraders).not.toHaveBeenCalled();
   });
 
+  it('rejects an assignment used as its own template — before any lookup', async () => {
+    await expect(
+      graderAssignBulkTool.handler({ ...ARGS, template_assignment_id: ASSIGNMENT_ID }, CTX)
+    ).rejects.toMatchObject({
+      kind: 'invalid_params',
+      message: 'template_assignment_id must be a different assignment than assignment_id',
+    });
+    expect(mocks.assignmentFindById).not.toHaveBeenCalled();
+    expect(mocks.assignGraders).not.toHaveBeenCalled();
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
+  });
+
   it('maps the service template_required backstop to invalid_params', async () => {
     mocks.assignGraders.mockRejectedValue(
       new AssignGradersError('template_required', '[assign-graders] EXISTING requires a template')

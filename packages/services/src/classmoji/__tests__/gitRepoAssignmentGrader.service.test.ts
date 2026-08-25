@@ -180,6 +180,45 @@ describe('assignGradersToAssignment — EXISTING', () => {
     ]);
   });
 
+  it('queues nothing when no submission matches the template', async () => {
+    findByAssignmentId.mockImplementation((assignmentId: string) => {
+      if (assignmentId === 'a-target') {
+        return Promise.resolve([repoAssignment('ra-1', 'repo-a', 'stu-1', null)]);
+      }
+      // The template covers a different cohort entirely — nothing lines up.
+      return Promise.resolve([
+        {
+          ...repoAssignment('t-1', 'repo-z', 'stu-other', null),
+          graders: [{ grader: { id: 'ta-1', login: 'ada' } }],
+        },
+      ]);
+    });
+
+    const result = await service.assignGradersToAssignment({
+      classroomId: 'class-1',
+      assignmentId: 'a-target',
+      method: 'EXISTING',
+      templateAssignmentId: 'a-template',
+    });
+
+    expect(result).toEqual({ numAssignmentsToAddGradersTo: 0 });
+    expect(batchTrigger).not.toHaveBeenCalled();
+  });
+
+  it('scopes both submission lookups to the classroom', async () => {
+    findByAssignmentId.mockResolvedValue([]);
+
+    await service.assignGradersToAssignment({
+      classroomId: 'class-1',
+      assignmentId: 'a-target',
+      method: 'EXISTING',
+      templateAssignmentId: 'a-template',
+    });
+
+    expect(findByAssignmentId).toHaveBeenCalledWith('a-target', 'cs1-25f', 'class-1');
+    expect(findByAssignmentId).toHaveBeenCalledWith('a-template', 'cs1-25f', 'class-1');
+  });
+
   it('requires a templateAssignmentId', async () => {
     await expect(
       service.assignGradersToAssignment({
@@ -241,6 +280,38 @@ describe('gradingReport', () => {
         last_graded_at: new Date('2026-02-01'),
       },
     ]);
+  });
+
+  it('narrows both queries to the classroom and skips ungraded rows', async () => {
+    graderFindMany.mockResolvedValue([]);
+    gradeFindMany.mockResolvedValue([]);
+
+    await service.gradingReport({ classroomId: 'class-1' });
+
+    // Both halves of the report must be classroom-scoped through the repo.
+    expect(graderFindMany.mock.calls[0][0].where).toMatchObject({
+      git_repo_assignment: { git_repo: { classroom_id: 'class-1' } },
+    });
+    expect(gradeFindMany.mock.calls[0][0].where).toMatchObject({
+      grader_id: { not: null },
+      git_repo_assignment: { git_repo: { classroom_id: 'class-1' } },
+    });
+  });
+
+  it('filters by grader and assignment when both are supplied', async () => {
+    graderFindMany.mockResolvedValue([]);
+    gradeFindMany.mockResolvedValue([]);
+
+    await service.gradingReport({ classroomId: 'class-1', assignmentId: 'a-1', graderId: 'ta-1' });
+
+    expect(graderFindMany.mock.calls[0][0].where).toMatchObject({
+      grader_id: 'ta-1',
+      git_repo_assignment: { assignment_id: 'a-1', git_repo: { classroom_id: 'class-1' } },
+    });
+    expect(gradeFindMany.mock.calls[0][0].where).toMatchObject({
+      grader_id: 'ta-1',
+      git_repo_assignment: { assignment_id: 'a-1', git_repo: { classroom_id: 'class-1' } },
+    });
   });
 
   it('reports grading done on submissions the grader was never assigned', async () => {

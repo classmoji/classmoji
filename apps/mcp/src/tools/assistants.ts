@@ -34,6 +34,9 @@ import { ok, OWNER_ONLY, requireClassroomCtx, scopedNotFound, writeAudit } from 
  *   "assistant of another classroom" are indistinguishable to the caller).
  * - `no_org_configured` → invalid_params: the classroom is not linked to a git
  *   organization, so assistants cannot be managed until that is fixed.
+ * - `login_conflict` → invalid_params with a neutral message: the stored user
+ *   record is keyed to a different account than this login resolves to, which
+ *   only a human with both records in front of them can untangle.
  * - `classroom_not_found` is unreachable (the id comes from a resolved ctx) and
  *   anything else is returned unchanged for the registry's generic wrapper.
  */
@@ -48,6 +51,11 @@ function mapAssistantError(error: unknown): unknown {
       return new ToolError(
         'invalid_params',
         'This classroom has no linked GitHub organization — assistants cannot be managed'
+      );
+    case 'login_conflict':
+      return new ToolError(
+        'invalid_params',
+        'This login is associated with a different account — contact support'
       );
     default:
       return error;
@@ -76,6 +84,9 @@ export const assistantAddTool: ToolDefinition<AssistantAddArgs> = {
     'current staff, and assistant_update to make them a grader.',
   scope: 'write',
   roles: OWNER_ONLY,
+  // Tighter than the default bucket: every call can send a real GitHub org
+  // invitation, so cap it at a burst of 5 and roughly 3 per minute sustained.
+  rateLimit: { capacity: 5, refillPerSecond: 0.05 },
   inputSchema: {
     classroom: z.string().describe("Classroom reference as 'org/slug'"),
     login: z.string().min(1).max(100).describe('The assistant GitHub username'),
@@ -175,10 +186,11 @@ export const assistantUpdateTool: ToolDefinition<AssistantUpdateArgs> = {
   handler: async (args, ctx) => {
     const classroom = requireClassroomCtx(ctx);
 
+    let membership;
     try {
       // Role-scoped inside the service: a user who is both OWNER and ASSISTANT
       // here has two membership rows and only the ASSISTANT one is touched.
-      await ClassmojiService.assistant.updateAssistant({
+      membership = await ClassmojiService.assistant.updateAssistant({
         classroomId: classroom.classroomId,
         login: args.login,
         isGrader: args.is_grader,
@@ -187,10 +199,20 @@ export const assistantUpdateTool: ToolDefinition<AssistantUpdateArgs> = {
       throw mapAssistantError(error);
     }
 
+    // resource_id identifies WHICH assistant was updated. It is also what keeps
+    // back-to-back updates to different assistants as separate audit rows: the
+    // audit dedup key includes it, so without it two flips inside the dedup
+    // window would collapse into one record.
     await writeAudit(ctx, {
       resource_type: 'ASSISTANTS',
+      resource_id: membership.user_id,
       action: 'UPDATE',
-      data: { tool: 'assistant_update', login: args.login, is_grader: args.is_grader },
+      data: {
+        tool: 'assistant_update',
+        user_id: membership.user_id,
+        login: args.login,
+        is_grader: args.is_grader,
+      },
     });
 
     return ok({ success: true, login: args.login, is_grader: args.is_grader });
@@ -215,7 +237,9 @@ export const assistantRemoveTool: ToolDefinition<AssistantRemoveArgs> = {
     'assistant team on GitHub and, IF they hold no other role in that GitHub organization, ' +
     'removes them from the org entirely (revoking their access) — the workflow is role-aware, so ' +
     'another membership (e.g. they also own or take a class in the same org) keeps them in the ' +
-    'org. Deletes only the ASSISTANT membership row. Runs in the background.',
+    'org. Deletes only the ASSISTANT membership row. Runs in the background. Because the removal ' +
+    'is processed asynchronously it can still fail after this call reports success — check ' +
+    'list_teaching_team afterwards to confirm they are gone.',
   scope: 'write',
   roles: OWNER_ONLY,
   inputSchema: {

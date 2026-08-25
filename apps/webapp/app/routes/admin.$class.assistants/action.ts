@@ -53,15 +53,25 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
     },
 
     async updateAssistant() {
-      await ClassmojiService.assistant.updateAssistant({
-        classroomId: classroom.id,
-        login: data.login,
-        isGrader: data.isGrader,
-      });
-      return {
-        success: 'Assistant updated',
-        action: ActionTypes.SAVE_USER,
-      };
+      try {
+        await ClassmojiService.assistant.updateAssistant({
+          classroomId: classroom.id,
+          login: data.login,
+          isGrader: data.isGrader,
+        });
+        return {
+          success: 'Assistant updated',
+          action: ActionTypes.SAVE_USER,
+        };
+      } catch (error: unknown) {
+        // Same shape as the sibling branches: a service failure becomes a
+        // callout, not a trip through the route error boundary.
+        console.error('updateAssistant failed:', error);
+        return {
+          action: ActionTypes.SAVE_USER,
+          error: 'Failed to update assistant.',
+        };
+      }
     },
 
     async removeAssistant() {

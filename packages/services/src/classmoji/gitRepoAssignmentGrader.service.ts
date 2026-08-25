@@ -306,9 +306,12 @@ export const assignGradersToAssignment = async ({
   const gitOrganization = classroom.git_organization;
   const classroomSlug = classroom.slug;
 
+  // Scope on the classroom id as well as the slug — we already hold the id, and
+  // the primary key is the stronger of the two filters.
   const repoAssignments = await gitRepoAssignmentService.findByAssignmentId(
     assignmentId,
-    classroomSlug
+    classroomSlug,
+    classroom.id
   );
 
   let graderLoginList: GraderInfo[] = [];
@@ -335,7 +338,8 @@ export const assignGradersToAssignment = async ({
   } else {
     const templateRepoAssignments = await gitRepoAssignmentService.findByAssignmentId(
       templateAssignmentId!,
-      classroomSlug
+      classroomSlug,
+      classroom.id
     );
 
     graderLoginList = templateRepoAssignments.map(repoAssignment => ({

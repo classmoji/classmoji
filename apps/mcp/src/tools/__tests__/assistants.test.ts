@@ -174,6 +174,22 @@ describe('assistant_add', () => {
     });
   });
 
+  it('maps login_conflict to invalid_params with a neutral message', async () => {
+    mocks.addAssistant.mockRejectedValue(
+      new AssistantServiceError('login_conflict', '[assistant] login resolves elsewhere')
+    );
+
+    await expect(assistantAddTool.handler(ARGS, CTX)).rejects.toMatchObject({
+      kind: 'invalid_params',
+      message: 'This login is associated with a different account — contact support',
+    });
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
+  });
+
+  it('carries a tighter rate-limit bucket than the default (each call can invite)', () => {
+    expect(assistantAddTool.rateLimit).toEqual({ capacity: 5, refillPerSecond: 0.05 });
+  });
+
   it('lets an unexpected service failure through for the generic wrapper', async () => {
     mocks.addAssistant.mockRejectedValue(new Error('boom'));
     await expect(assistantAddTool.handler(ARGS, CTX)).rejects.toThrow('boom');
@@ -184,7 +200,7 @@ describe('assistant_update', () => {
   const ARGS = { classroom: 'org/w26', login: 'ta-ann', is_grader: true };
 
   it('flips is_grader via the service using ctx classroomId and audits the update', async () => {
-    mocks.updateAssistant.mockResolvedValue({ id: 'm-2', is_grader: true });
+    mocks.updateAssistant.mockResolvedValue({ id: 'm-2', user_id: 'ta-1', is_grader: true });
 
     const payload = parse(await assistantUpdateTool.handler(ARGS, CTX));
     expect(payload).toMatchObject({ success: true, login: 'ta-ann', is_grader: true });
@@ -198,7 +214,14 @@ describe('assistant_update', () => {
     const audit = auditRow();
     expect(audit.action).toBe('UPDATE');
     expect(audit.classroom_id).toBe('class-1');
-    expect(audit.data).toMatchObject({ tool: 'assistant_update', is_grader: true });
+    // resource_id names the updated assistant; it is also part of the audit
+    // dedup key, so two updates to DIFFERENT assistants stay two rows.
+    expect(audit.resource_id).toBe('ta-1');
+    expect(audit.data).toMatchObject({
+      tool: 'assistant_update',
+      user_id: 'ta-1',
+      is_grader: true,
+    });
   });
 
   it('refuses someone who is not an assistant here (uniform scopedNotFound)', async () => {

@@ -5,7 +5,7 @@ import { nanoid } from 'nanoid';
 import { auth } from '@trigger.dev/sdk';
 
 import { useDisclosure, useGlobalFetcher } from '~/hooks';
-import { ClassmojiService } from '@classmoji/services';
+import { AssignGradersError, ClassmojiService } from '@classmoji/services';
 import { useCallout } from '@classmoji/ui-components';
 import { assignGradersToAssignmentsHandler } from './utils';
 import { requireClassroomAdmin, assertClassroomMutationAllowed } from '~/utils/routeAuth.server';
@@ -152,10 +152,22 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
     },
   });
 
-  const { numAssignmentsToAddGradersTo } = await assignGradersToAssignmentsHandler(
-    { ...data, classroomId: classroom.id },
-    sessionId
-  );
+  let numAssignmentsToAddGradersTo: number;
+  try {
+    ({ numAssignmentsToAddGradersTo } = await assignGradersToAssignmentsHandler(
+      { ...data, classroomId: classroom.id },
+      sessionId
+    ));
+  } catch (error: unknown) {
+    // The service's caller-fixable failures (no graders flagged, missing
+    // template) carry a usable message — surface it as a callout instead of
+    // letting it reach the route error boundary. Anything else still throws.
+    if (error instanceof AssignGradersError) {
+      console.error('assignGraders failed:', error);
+      return { error: error.message };
+    }
+    throw error;
+  }
 
   const triggerSession = {
     accessToken,

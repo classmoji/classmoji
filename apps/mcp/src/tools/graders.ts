@@ -202,11 +202,19 @@ export const graderAssignBulkTool: ToolDefinition<GraderAssignBulkArgs> = {
   handler: async (args, ctx) => {
     const classroom = requireClassroomCtx(ctx);
 
-    // Cheapest check first — no lookups needed to know this is unusable.
+    // Cheapest checks first — no lookups needed to know these are unusable.
     if (args.method === 'EXISTING' && !args.template_assignment_id) {
       throw new ToolError(
         'invalid_params',
         'template_assignment_id is required when method is EXISTING'
+      );
+    }
+    // Copying an assignment's grader mapping onto itself is a no-op at best;
+    // the web UI filters the target out of the template list for the same reason.
+    if (args.method === 'EXISTING' && args.template_assignment_id === args.assignment_id) {
+      throw new ToolError(
+        'invalid_params',
+        'template_assignment_id must be a different assignment than assignment_id'
       );
     }
 
