@@ -240,6 +240,26 @@ describe('classroom_status_update', () => {
     expect(mocks.classroomUpdate.mock.calls[0][1]).toEqual({ is_archived: true });
   });
 
+  it('never forwards extra argument keys to the classroom row', async () => {
+    // classroom.update takes an arbitrary ClassroomUpdateInput — slug (the key
+    // in every URL and two HMAC credentials) and git_org_id are exactly what
+    // the web route's PROFILE_FIELDS whitelist exists to keep unwritable.
+    await classroomStatusUpdateTool.handler(
+      {
+        classroom: 'org/w26',
+        status: 'LOCKED',
+        slug: 'hijacked',
+        git_org_id: 'other-org',
+      } as unknown as Parameters<typeof classroomStatusUpdateTool.handler>[0],
+      CTX
+    );
+
+    const updates = mocks.classroomUpdate.mock.calls[0][1] as Record<string, unknown>;
+    expect(updates).toEqual({ status: 'LOCKED' });
+    expect(updates).not.toHaveProperty('slug');
+    expect(updates).not.toHaveProperty('git_org_id');
+  });
+
   it('accepts only the three lifecycle statuses and is marked idempotent', () => {
     const status = classroomStatusUpdateTool.inputSchema.status;
     for (const value of ['ACTIVE', 'LOCKED', 'UNPUBLISHED']) {
