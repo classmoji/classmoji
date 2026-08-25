@@ -10,7 +10,7 @@ import {
 import { isItemPublished, isItemPubliclyVisible } from './module.service.ts';
 import { getProStateForClassroomId } from './subscription.service.ts';
 import { removeCert, isFlyCertsConfigured } from '../fly/index.ts';
-import type { Prisma, Role } from '@prisma/client';
+import type { ModuleItemType, Prisma, Role } from '@prisma/client';
 
 /**
  * Public course sites: subdomain claiming, site settings, and every visibility
@@ -809,15 +809,78 @@ export async function getPageBySlugForSite(classroomId: string, slugOrId: string
   return prisma.page.findFirst({ where: { classroom_id: classroomId, id: slugOrId } });
 }
 
-// Only the fields a visibility decision or a link needs. Notably absent: a
-// repository's assignments, attached resources and quizzes — the in-app module
-// tree pulls those, and an anonymous request has no business loading them.
+// Only the fields a visibility decision, a link, or a redacted placeholder's
+// date needs. Notably absent: a repository's attached resources and quizzes,
+// and — the point of the narrow `assignments` select — every assignment column
+// except the deadline. An anonymous request loads DATES, never coursework text,
+// so no query on this path can put an assignment title in the process at all.
 const SITE_ITEM_INCLUDE = {
   page: { select: { id: true, title: true, slug: true, is_draft: true, is_public: true } },
   slide: { select: { id: true, title: true, slug: true, is_draft: true, is_public: true } },
-  repository: { select: { id: true, title: true, is_published: true } },
-  quiz: { select: { id: true, name: true, status: true } },
+  repository: {
+    select: {
+      id: true,
+      title: true,
+      is_published: true,
+      // Published only, mirroring the student module tree: a placeholder must
+      // never show a date off an assignment an enrolled student cannot see.
+      assignments: { where: { is_published: true }, select: { student_deadline: true } },
+    },
+  },
+  quiz: { select: { id: true, name: true, status: true, due_date: true } },
 } satisfies Prisma.ModuleItemInclude;
+
+type SiteModuleItem = Prisma.ModuleItemGetPayload<{ include: typeof SITE_ITEM_INCLUDE }>;
+type SiteModule = Prisma.ModuleGetPayload<{
+  include: { items: { include: typeof SITE_ITEM_INCLUDE } };
+}>;
+
+/** An item this viewer may open: carries its target, and renders as a link. */
+export type SiteScheduleVisibleItem = SiteModuleItem & { kind: 'visible' };
+
+/**
+ * An item this viewer may NOT open, kept in place rather than deleted.
+ *
+ * Deliberately not a narrowed `SiteModuleItem`: it is BUILT from three fields
+ * rather than derived by omitting the rest, so the only way a title, slug,
+ * template or link could reach an anonymous renderer is if someone added it to
+ * this type on purpose. `id` is the ModuleItem's own uuid — a React key, not a
+ * content identifier, and it resolves to nothing without a session.
+ */
+export type SiteSchedulePlaceholderItem = {
+  kind: 'placeholder';
+  id: string;
+  item_type: ModuleItemType;
+  /** The item's deadline when it has one; null for pages and slides, which never do. */
+  due_at: Date | null;
+};
+
+export type SiteScheduleItem = SiteScheduleVisibleItem | SiteSchedulePlaceholderItem;
+export type SiteScheduleModule = Omit<SiteModule, 'items'> & { items: SiteScheduleItem[] };
+
+/**
+ * The date a placeholder is allowed to show.
+ *
+ * A deadline is not a content identifier — "something is due Sep 12" says the
+ * course has a rhythm, not what the work is — and it is the one fact that makes
+ * a redacted row useful to a prospective student reading the public schedule.
+ *
+ * Repositories reduce to their EARLIEST published assignment deadline, the same
+ * reduction the admin repo summary makes ("earliest assignment deadline =
+ * repository due date"). Quizzes carry their own. Pages and slides have no
+ * date at all, and get a bare placeholder.
+ */
+function placeholderDueAt(item: SiteModuleItem): Date | null {
+  if (item.item_type === 'QUIZ') return item.quiz?.due_date ?? null;
+  if (item.item_type !== 'REPOSITORY') return null;
+
+  const deadlines = (item.repository?.assignments ?? [])
+    .map(assignment => assignment.student_deadline)
+    .filter((deadline): deadline is Date => deadline !== null);
+
+  if (deadlines.length === 0) return null;
+  return deadlines.reduce((earliest, deadline) => (deadline < earliest ? deadline : earliest));
+}
 
 /**
  * The classroom's modules as this viewer may see them.
@@ -826,14 +889,31 @@ const SITE_ITEM_INCLUDE = {
  * so a public site can never expose coursework that was only ever meant for
  * enrolled students.
  *
- * Items are then filtered per viewer: anonymous visitors get
- * isItemPubliclyVisible (published-AND-public pages and slides only;
- * repositories and quizzes dropped entirely, titles included), members get the
- * app's ordinary isItemPublished. Modules left with no visible items are
- * dropped rather than rendered empty — an empty shell still leaks the module
- * title and, by its position, that something is hidden there.
+ * Items are then resolved per viewer. Members get the app's ordinary
+ * isItemPublished, and modules left with nothing are dropped, exactly as
+ * before. An ANONYMOUS visitor gets a three-way split:
+ *
+ *   - isItemPubliclyVisible          → the item itself (a public page or deck)
+ *   - published but not public       → a placeholder: type and date only
+ *   - not published at all           → nothing
+ *
+ * That last line is the one worth stating out loud. A draft page, a DRAFT quiz
+ * or an unpublished repo is invisible to enrolled students too, so a
+ * placeholder for it would advertise unreleased coursework to the open web —
+ * strictly worse than the leak this function exists to prevent.
+ *
+ * The middle case is a reversal of the old behaviour, which dropped
+ * members-only items and then dropped any module they emptied. That hid the
+ * course's SHAPE, not just its contents: a "Welcome" module holding one repo
+ * rendered as "Nothing has been published yet", which is both wrong and
+ * useless to the audience a public site is for. Structure — how many units,
+ * what kinds of work, when things are due — is exactly what a prospective
+ * student should see; the titles are what they should not.
  */
-export async function listPublicModulesForViewer(classroomId: string, role: SiteViewerRole) {
+export async function listPublicModulesForViewer(
+  classroomId: string,
+  role: SiteViewerRole
+): Promise<SiteScheduleModule[]> {
   const modules = await getPrisma().module.findMany({
     where: { classroom_id: classroomId, is_published: true, is_public: true },
     include: { items: { orderBy: { position: 'asc' }, include: SITE_ITEM_INCLUDE } },
@@ -841,9 +921,33 @@ export async function listPublicModulesForViewer(classroomId: string, role: Site
     orderBy: [{ position: 'asc' }, { created_at: 'asc' }],
   });
 
-  const visible = role === null ? isItemPubliclyVisible : isItemPublished;
+  if (role !== null) {
+    return modules
+      .map(module => ({
+        ...module,
+        items: module.items
+          .filter(isItemPublished)
+          .map((item): SiteScheduleItem => ({ ...item, kind: 'visible' })),
+      }))
+      .filter(module => module.items.length > 0);
+  }
 
-  return modules
-    .map(module => ({ ...module, items: module.items.filter(visible) }))
-    .filter(module => module.items.length > 0);
+  return modules.map(module => ({
+    ...module,
+    // flatMap, not filter+map: the empty array is how "not published, so not
+    // even a placeholder" is expressed, and item ORDER is preserved throughout
+    // so placeholders sit at the positions the instructor put them.
+    items: module.items.flatMap((item): SiteScheduleItem[] => {
+      if (isItemPubliclyVisible(item)) return [{ ...item, kind: 'visible' }];
+      if (!isItemPublished(item)) return [];
+      return [
+        {
+          kind: 'placeholder',
+          id: item.id,
+          item_type: item.item_type,
+          due_at: placeholderDueAt(item),
+        },
+      ];
+    }),
+  }));
 }

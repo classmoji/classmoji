@@ -1,0 +1,192 @@
+import dayjs from 'dayjs';
+import type { ModuleItemType } from '@prisma/client';
+
+/**
+ * `/schedule`'s items → rows, as a pure function.
+ *
+ * Split out of the route for two reasons. It is the layer where a redacted
+ * placeholder is turned into text, which is exactly the thing that must be
+ * tested without a browser or a database; and it is the only place that decides
+ * what a viewer READS, which keeps that decision from drifting into JSX where
+ * it is checkable only by looking.
+ *
+ * The service has already decided what this viewer may see — this never
+ * re-filters, and it never invents a link for a placeholder.
+ */
+
+/** The kind label shown on every row, visible or redacted. */
+const ITEM_TYPE_LABEL: Record<ModuleItemType, string> = {
+  PAGE: 'Page',
+  SLIDE: 'Slides',
+  REPOSITORY: 'Assignment',
+  QUIZ: 'Quiz',
+};
+
+/**
+ * Dates are formatted HERE, not in the component, and with an explicit pattern
+ * rather than `toLocaleDateString()`.
+ *
+ * The anonymous schedule is shared-cacheable for 60s, so one server's rendering
+ * is served to everyone: a locale-dependent format would make the output depend
+ * on which machine happened to fill the cache. An explicit pattern is the same
+ * string everywhere, and it is the same string a spec can assert.
+ */
+const DATE_FORMAT = 'MMM D, YYYY';
+
+/**
+ * The service's schedule item, stated structurally.
+ *
+ * Not imported from `@classmoji/services`: that package only exports its root,
+ * and pulling the route's db module in here would put Prisma inside a function
+ * whose whole value is that it needs nothing. The coupling is still checked —
+ * `schedule.tsx` passes the service's own result to `toScheduleSections`, so a
+ * shape change fails to compile at that call site.
+ */
+export type ScheduleItem =
+  | {
+      kind: 'visible';
+      item_type: ModuleItemType;
+      page?: { id: string; title: string; slug: string | null } | null;
+      slide?: { id: string; title: string } | null;
+      repository?: { id: string; title: string } | null;
+      quiz?: { id: string; name: string } | null;
+    }
+  | {
+      kind: 'placeholder';
+      id: string;
+      item_type: ModuleItemType;
+      due_at: Date | string | null;
+    };
+
+export type ScheduleModule = { id: string; title: string; items: ScheduleItem[] };
+
+/** A row the visitor may open. */
+export type ScheduleLinkRow = {
+  kind: 'link';
+  label: string;
+  href: string;
+  typeLabel: string;
+  /** Leaves this site — gets `rel="noopener noreferrer"` and a ↗ marker. */
+  external: boolean;
+};
+
+/** A row standing in for an item this visitor may not open. Carries no identity. */
+export type SchedulePlaceholderRow = {
+  kind: 'placeholder';
+  id: string;
+  typeLabel: string;
+  /** Preformatted, or null when the item has no deadline. */
+  due: string | null;
+};
+
+export type ScheduleRow = ScheduleLinkRow | SchedulePlaceholderRow;
+
+export type ScheduleSection = { id: string; title: string; rows: ScheduleRow[] };
+
+/** Where each item type's link points, supplied by the route that knows the host. */
+export type ScheduleTargets = {
+  /** A page on this site: its slug, or its id when the title reduced to nothing. */
+  pagePath: (page: { slug: string | null; id: string }) => string;
+  /** Origin of the slides service. */
+  slidesUrl: string;
+  /** The viewer's in-app classroom base, e.g. `https://app.example/student/cs52`. */
+  appBase: string;
+};
+
+/** Format a placeholder's deadline, tolerating the string a serialized Date becomes. */
+function formatDue(dueAt: Date | string | null): string | null {
+  if (!dueAt) return null;
+  const day = dayjs(dueAt);
+  return day.isValid() ? day.format(DATE_FORMAT) : null;
+}
+
+function toLinkRow(item: Extract<ScheduleItem, { kind: 'visible' }>, targets: ScheduleTargets) {
+  const label = (value: string | undefined) => value || 'Untitled';
+
+  if (item.item_type === 'PAGE' && item.page) {
+    return {
+      kind: 'link' as const,
+      label: label(item.page.title),
+      href: targets.pagePath(item.page),
+      typeLabel: ITEM_TYPE_LABEL.PAGE,
+      external: false,
+    };
+  }
+  if (item.item_type === 'SLIDE' && item.slide) {
+    return {
+      kind: 'link' as const,
+      label: label(item.slide.title),
+      href: `${targets.slidesUrl}/${item.slide.id}`,
+      typeLabel: ITEM_TYPE_LABEL.SLIDE,
+      external: true,
+    };
+  }
+  if (item.item_type === 'REPOSITORY' && item.repository) {
+    return {
+      kind: 'link' as const,
+      label: label(item.repository.title),
+      href: `${targets.appBase}/repos`,
+      typeLabel: ITEM_TYPE_LABEL.REPOSITORY,
+      external: true,
+    };
+  }
+  if (item.item_type === 'QUIZ' && item.quiz) {
+    return {
+      kind: 'link' as const,
+      label: label(item.quiz.name),
+      href: `${targets.appBase}/quizzes`,
+      typeLabel: ITEM_TYPE_LABEL.QUIZ,
+      external: true,
+    };
+  }
+  // A visible item whose target row vanished between the include and here.
+  // Dropped rather than rendered as a placeholder: a placeholder is a promise
+  // that something is there, and nothing is.
+  return null;
+}
+
+/**
+ * One module's items as rows, in item order.
+ *
+ * Placeholders keep their positions rather than being collected at the end:
+ * where a redacted item sits is part of the structure the public schedule is
+ * meant to convey, and re-sorting would imply an ordering the instructor did
+ * not author.
+ */
+export function toScheduleRows(items: ScheduleItem[], targets: ScheduleTargets): ScheduleRow[] {
+  return items.flatMap((item): ScheduleRow[] => {
+    if (item.kind === 'placeholder') {
+      return [
+        {
+          kind: 'placeholder',
+          id: item.id,
+          typeLabel: ITEM_TYPE_LABEL[item.item_type],
+          due: formatDue(item.due_at),
+        },
+      ];
+    }
+
+    const row = toLinkRow(item, targets);
+    return row ? [row] : [];
+  });
+}
+
+/**
+ * Every module as a section, INCLUDING the ones whose rows are all placeholders
+ * and the ones with no rows at all.
+ *
+ * Nothing is dropped here on purpose. The service already decided which modules
+ * a viewer may know about (`is_published && is_public`), and for the anonymous
+ * schedule a module's existence is the point: a bare title with no rows says
+ * "this unit is coming", which is true and is not a leak.
+ */
+export function toScheduleSections(
+  modules: ScheduleModule[],
+  targets: ScheduleTargets
+): ScheduleSection[] {
+  return modules.map(module => ({
+    id: module.id,
+    title: module.title,
+    rows: toScheduleRows(module.items, targets),
+  }));
+}

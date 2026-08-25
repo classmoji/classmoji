@@ -571,14 +571,24 @@ describe('site.listPublicModulesForViewer', () => {
         { id: 'i3', item_type: 'PAGE', page: { id: 'p3', is_draft: true, is_public: true } },
         { id: 'i4', item_type: 'SLIDE', slide: { id: 's1', is_draft: false, is_public: true } },
         { id: 'i5', item_type: 'SLIDE', slide: { id: 's2', is_draft: false, is_public: false } },
-        { id: 'i6', item_type: 'REPOSITORY', repository: { id: 'r1', is_published: true } },
-        { id: 'i7', item_type: 'QUIZ', quiz: { id: 'q1', status: 'PUBLISHED' } },
+        {
+          id: 'i6',
+          item_type: 'REPOSITORY',
+          repository: { id: 'r1', is_published: true, assignments: [] },
+        },
+        { id: 'i7', item_type: 'QUIZ', quiz: { id: 'q1', status: 'PUBLISHED', due_date: null } },
       ],
     },
     {
       id: 'mod-2',
       title: 'Week 2',
-      items: [{ id: 'i8', item_type: 'REPOSITORY', repository: { id: 'r2', is_published: true } }],
+      items: [
+        {
+          id: 'i8',
+          item_type: 'REPOSITORY',
+          repository: { id: 'r2', is_published: true, assignments: [] },
+        },
+      ],
     },
   ];
 
@@ -593,14 +603,166 @@ describe('site.listPublicModulesForViewer', () => {
     );
   });
 
-  it('shows an anonymous visitor only public, published pages and slides', async () => {
+  it('loads a repository assignment DEADLINE and nothing else it could print', async () => {
+    // The narrow select is the no-leak guarantee at its source: an assignment
+    // title never enters the process on an anonymous request, so no renderer
+    // downstream can print one by accident.
+    moduleFindMany.mockResolvedValue([]);
+    await listPublicModulesForViewer('class-1', null);
+
+    const include = moduleFindMany.mock.calls[0][0].include.items.include;
+    expect(include.repository.select.assignments).toEqual({
+      where: { is_published: true },
+      select: { student_deadline: true },
+    });
+  });
+
+  it('gives an anonymous visitor public pages and slides as real items', async () => {
     moduleFindMany.mockResolvedValue(modules);
     const result = await listPublicModulesForViewer('class-1', null);
 
-    // No repository or quiz survives — dropped entirely, so not even the title
-    // leaks, and mod-2 disappears with its only item.
+    const visible = result[0].items.filter(item => item.kind === 'visible');
+    expect(visible.map(item => item.id)).toEqual(['i1', 'i4']);
+  });
+
+  it('replaces every members-only item with a typed placeholder, in item order', async () => {
+    moduleFindMany.mockResolvedValue(modules);
+    const result = await listPublicModulesForViewer('class-1', null);
+
+    // i3 is a DRAFT page: invisible to enrolled students too, so it gets no
+    // placeholder either — a public site must not advertise unreleased work.
+    expect(result[0].items.map(item => [item.id, item.kind])).toEqual([
+      ['i1', 'visible'],
+      ['i2', 'placeholder'],
+      ['i4', 'visible'],
+      ['i5', 'placeholder'],
+      ['i6', 'placeholder'],
+      ['i7', 'placeholder'],
+    ]);
+    expect(result[0].items.map(item => item.kind === 'placeholder' && item.item_type)).toEqual([
+      false,
+      'PAGE',
+      false,
+      'SLIDE',
+      'REPOSITORY',
+      'QUIZ',
+    ]);
+  });
+
+  it('never lets a placeholder carry anything but its type and its date', async () => {
+    // The assertion that has to survive every future change to the include:
+    // a placeholder is BUILT from these four keys, not derived by omission, so
+    // a title/name/slug/template can only appear here if someone adds it.
+    moduleFindMany.mockResolvedValue(modules);
+    const result = await listPublicModulesForViewer('class-1', null);
+
+    const placeholders = result.flatMap(module =>
+      module.items.filter(item => item.kind === 'placeholder')
+    );
+    expect(placeholders.length).toBeGreaterThan(0);
+    for (const placeholder of placeholders) {
+      expect(Object.keys(placeholder).sort()).toEqual(['due_at', 'id', 'item_type', 'kind']);
+    }
+  });
+
+  it('keeps a module whose every item is redacted, title and all', async () => {
+    moduleFindMany.mockResolvedValue(modules);
+    const result = await listPublicModulesForViewer('class-1', null);
+
+    // mod-2 holds one members-only repo. It used to vanish, taking the shape of
+    // the course with it; now it is a titled section with one locked row.
+    expect(result.map(module => module.id)).toEqual(['mod-1', 'mod-2']);
+    expect(result[1].items).toEqual([
+      { kind: 'placeholder', id: 'i8', item_type: 'REPOSITORY', due_at: null },
+    ]);
+  });
+
+  it("renders Tim's Welcome module: a dated repo placeholder beside an undated page one", async () => {
+    // The case this behaviour was built for. One public+published module whose
+    // only contents are a repository with a deadline and a members-only page:
+    // the schedule used to say "nothing has been published yet".
+    const due = new Date('2026-09-12T23:59:00Z');
+    moduleFindMany.mockResolvedValue([
+      {
+        id: 'mod-welcome',
+        title: 'Welcome',
+        items: [
+          {
+            id: 'item-repo',
+            item_type: 'REPOSITORY',
+            repository: {
+              id: 'repo-hello-world',
+              is_published: true,
+              assignments: [
+                { student_deadline: new Date('2026-09-26T23:59:00Z') },
+                { student_deadline: due },
+                { student_deadline: null },
+              ],
+            },
+          },
+          {
+            id: 'item-page',
+            item_type: 'PAGE',
+            page: { id: 'page-1', is_draft: false, is_public: false },
+          },
+        ],
+      },
+    ]);
+
+    const result = await listPublicModulesForViewer('class-1', null);
+
     expect(result).toHaveLength(1);
-    expect(result[0].items.map(i => i.id)).toEqual(['i1', 'i4']);
+    expect(result[0].title).toBe('Welcome');
+    expect(result[0].items).toEqual([
+      // Earliest published deadline wins — the repository's "due date", the
+      // same reduction the admin repo summary makes.
+      { kind: 'placeholder', id: 'item-repo', item_type: 'REPOSITORY', due_at: due },
+      { kind: 'placeholder', id: 'item-page', item_type: 'PAGE', due_at: null },
+    ]);
+  });
+
+  it("carries a quiz's own due date onto its placeholder", async () => {
+    const due = new Date('2026-10-01T16:00:00Z');
+    moduleFindMany.mockResolvedValue([
+      {
+        id: 'mod-quiz',
+        title: 'Quizzes',
+        items: [
+          { id: 'i-q', item_type: 'QUIZ', quiz: { id: 'q9', status: 'PUBLISHED', due_date: due } },
+        ],
+      },
+    ]);
+
+    const result = await listPublicModulesForViewer('class-1', null);
+    expect(result[0].items[0]).toEqual({
+      kind: 'placeholder',
+      id: 'i-q',
+      item_type: 'QUIZ',
+      due_at: due,
+    });
+  });
+
+  it('gives an anonymous visitor NO row at all for an unpublished item', async () => {
+    // Unpublished is not "members-only": an enrolled student cannot see these
+    // either, so a placeholder would announce coursework nobody has been given.
+    moduleFindMany.mockResolvedValue([
+      {
+        id: 'mod-3',
+        title: 'Later',
+        items: [
+          {
+            id: 'i9',
+            item_type: 'REPOSITORY',
+            repository: { id: 'r3', is_published: false, assignments: [] },
+          },
+          { id: 'i10', item_type: 'QUIZ', quiz: { id: 'q2', status: 'DRAFT', due_date: null } },
+        ],
+      },
+    ]);
+
+    const result = await listPublicModulesForViewer('class-1', null);
+    // The module still exists — it is published and public — but it is bare.
+    expect(result).toEqual([expect.objectContaining({ id: 'mod-3', title: 'Later', items: [] })]);
   });
 
   it('shows a member every published item, including repos and quizzes', async () => {
@@ -608,9 +770,11 @@ describe('site.listPublicModulesForViewer', () => {
     const result = await listPublicModulesForViewer('class-1', 'STUDENT');
 
     // Members get the app's ordinary publish rules: is_public stops mattering,
-    // but the draft page (i3) is still hidden.
+    // but the draft page (i3) is still hidden. No placeholder ever reaches a
+    // member — everything they may see, they see in full.
     expect(result.map(m => m.id)).toEqual(['mod-1', 'mod-2']);
     expect(result[0].items.map(i => i.id)).toEqual(['i1', 'i2', 'i4', 'i5', 'i6', 'i7']);
+    expect(result.every(m => m.items.every(i => i.kind === 'visible'))).toBe(true);
   });
 
   it('hides an unpublished repo from a member even inside a public module', async () => {
@@ -618,17 +782,25 @@ describe('site.listPublicModulesForViewer', () => {
       {
         id: 'mod-3',
         items: [
-          { id: 'i9', item_type: 'REPOSITORY', repository: { id: 'r3', is_published: false } },
-          { id: 'i10', item_type: 'QUIZ', quiz: { id: 'q2', status: 'DRAFT' } },
+          {
+            id: 'i9',
+            item_type: 'REPOSITORY',
+            repository: { id: 'r3', is_published: false, assignments: [] },
+          },
+          { id: 'i10', item_type: 'QUIZ', quiz: { id: 'q2', status: 'DRAFT', due_date: null } },
         ],
       },
     ]);
+    // Members keep the old rule: a module left with nothing is dropped, so a
+    // signed-in student never sees an empty shell where staff see drafts.
     await expect(listPublicModulesForViewer('class-1', 'STUDENT')).resolves.toEqual([]);
   });
 
-  it('drops modules left with no visible items rather than rendering empty shells', async () => {
-    moduleFindMany.mockResolvedValue([{ id: 'mod-4', title: 'Secret Week', items: [] }]);
-    await expect(listPublicModulesForViewer('class-1', null)).resolves.toEqual([]);
+  it('keeps an empty public module as a bare title for an anonymous visitor', async () => {
+    moduleFindMany.mockResolvedValue([{ id: 'mod-4', title: 'Week 3', items: [] }]);
+    await expect(listPublicModulesForViewer('class-1', null)).resolves.toEqual([
+      { id: 'mod-4', title: 'Week 3', items: [] },
+    ]);
   });
 });
 
