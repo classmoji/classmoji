@@ -56,6 +56,15 @@ import {
   classroomStatusUpdateTool,
   orgRepoSettingsUpdateTool,
 } from './settings.ts';
+import {
+  teamCreateTool,
+  teamDeleteTool,
+  teamRenameTool,
+  teamMembersAddTool,
+  teamMemberRemoveTool,
+  teamTagAddTool,
+  teamTagRemoveTool,
+} from './teams.ts';
 
 export function registerAllTools(): void {
   // Identity / bootstrap
@@ -163,4 +172,15 @@ export function registerAllTools(): void {
   registerToolDefinition(classroomSettingsUpdateTool);
   registerToolDefinition(classroomStatusUpdateTool);
   registerToolDefinition(orgRepoSettingsUpdateTool);
+
+  // Teams (OWNER — the write surface behind list_teams). create/rename/members
+  // touch real GitHub teams; delete is destructive and confirm-gated; the tag
+  // tools are Classmoji-only links.
+  registerToolDefinition(teamCreateTool);
+  registerToolDefinition(teamDeleteTool);
+  registerToolDefinition(teamRenameTool);
+  registerToolDefinition(teamMembersAddTool);
+  registerToolDefinition(teamMemberRemoveTool);
+  registerToolDefinition(teamTagAddTool);
+  registerToolDefinition(teamTagRemoveTool);
 }
