@@ -6,6 +6,10 @@ import compression from 'compression';
 import morgan from 'morgan';
 import getPrisma from '@classmoji/database';
 import { auth } from '@classmoji/auth/server';
+// The light subpath: the cookie-name builder with none of betterAuth/Prisma
+// behind it (server.ts already pulls those in, but provenance matters — this
+// is the same module apps/pages reads the prefix from).
+import { sessionTokenFromCookieHeader } from '@classmoji/auth/secret';
 import { RoomStateStore } from '@classmoji/utils';
 
 // Helper to get session from socket cookie header
@@ -26,10 +30,17 @@ async function getSocketAuthSession(cookieHeader: string) {
     return user;
   }
 
-  // Fallback: Direct DB lookup for dev test sessions
+  // Fallback: Direct DB lookup for dev test sessions.
+  //
+  // Read by the CONFIGURED cookie name. This used to be a regex literal with
+  // the production prefix baked into it, which meant a deployment running
+  // COOKIE_PREFIX=classmoji-staging had a socket auth path that could never
+  // match its own cookie — and, worse, one that would still match a leftover
+  // PRODUCTION cookie sitting in the same browser under the shared parent
+  // domain. See `sessionCookieRegexFor` in packages/auth/src/secret.ts.
+  // `tests/unit/session-cookie.spec.ts` fails if the literal comes back.
   if (process.env.NODE_ENV === 'development') {
-    const sessionTokenMatch = cookieHeader.match(/classmoji\.session_token=([^;]+)/);
-    const tokenFromCookie = sessionTokenMatch?.[1];
+    const tokenFromCookie = sessionTokenFromCookieHeader(cookieHeader);
 
     if (tokenFromCookie) {
       const tokenOnly = tokenFromCookie.split('.')[0];
