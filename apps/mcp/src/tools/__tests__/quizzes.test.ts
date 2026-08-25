@@ -259,6 +259,32 @@ describe('quiz_update', () => {
     expect(mocks.quizUpdate).toHaveBeenCalledTimes(1); // only the null-disconnect call
   });
 
+  it('clears the due date on null and forwards a supplied one', async () => {
+    mocks.quizFindById.mockResolvedValue(QUIZ_ROW);
+    mocks.quizUpdate.mockResolvedValue(QUIZ_ROW);
+
+    // null reaches the service as a clear; the service maps falsy → null.
+    await quizUpdateTool.handler({ classroom: 'org/w26', quiz_id: 'quiz-1', due_date: null }, CTX);
+    expect(mocks.quizUpdate).toHaveBeenCalledWith('quiz-1', { dueDate: null });
+    expect(mocks.auditCreate.mock.calls[0][0].data.fields).toEqual(['due_date']);
+
+    await quizUpdateTool.handler(
+      { classroom: 'org/w26', quiz_id: 'quiz-1', due_date: '2026-07-20T23:59:00-04:00' },
+      CTX
+    );
+    expect(mocks.quizUpdate).toHaveBeenLastCalledWith('quiz-1', {
+      dueDate: '2026-07-20T23:59:00-04:00',
+    });
+  });
+
+  it('accepts null but not a malformed string for due_date', () => {
+    const dueDate = quizUpdateTool.inputSchema.due_date;
+    expect(dueDate.safeParse(null).success).toBe(true);
+    expect(dueDate.safeParse(undefined).success).toBe(true);
+    expect(dueDate.safeParse('2026-07-20T23:59:00-04:00').success).toBe(true);
+    expect(dueDate.safeParse('next friday').success).toBe(false);
+  });
+
   it('rejects PUBLISHED and ARCHIVED in the status schema', () => {
     const status = quizUpdateTool.inputSchema.status;
     expect(status.safeParse('DRAFT').success).toBe(true);

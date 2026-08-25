@@ -43,6 +43,10 @@ vi.mock('@classmoji/services', () => {
   }
   return {
     TeamServiceError,
+    // The reason→phrase mapper is pure; the tools only need it to produce a
+    // non-empty phrase per code, so the fake keeps the test independent of the
+    // exact wording.
+    describeTeamFailureReason: (reason: string) => `reason:${reason}`,
     ClassmojiService: {
       teamAdmin: {
         createTeam: (...a: unknown[]) => mocks.createTeam(...a),
@@ -156,7 +160,7 @@ describe('team_create', () => {
     mocks.createTeam.mockResolvedValue({
       team: { id: 'team-1', name: 'Team Rocket', slug: 'team-rocket', isVisible: false },
       tagsAdded: ['tag-1'],
-      tagsFailed: [{ tagId: 'tag-9', error: 'Tag does not belong to this classroom' }],
+      tagsFailed: [{ tagId: 'tag-9', error: 'invalid' }],
     });
 
     const payload = parse(await teamCreateTool.handler(ARGS, CTX));
@@ -164,7 +168,8 @@ describe('team_create', () => {
       success: true,
       team: { id: 'team-1', name: 'Team Rocket', slug: 'team-rocket', is_visible: false },
       tags_added: ['tag-1'],
-      tags_failed: [{ tag_id: 'tag-9', error: 'Tag does not belong to this classroom' }],
+      // The service's closed reason vocabulary, plus its phrase.
+      tags_failed: [{ tag_id: 'tag-9', error: 'invalid', error_description: expect.any(String) }],
     });
 
     // classroomId comes from ctx, never from args; is_visible defaults to false.
@@ -254,6 +259,8 @@ describe('team_delete', () => {
       name: 'Team Rocket',
       slug: 'team-rocket',
       removedFromProvider: true,
+      reposDeleted: 0,
+      deletedRepoNames: [],
     });
 
     const payload = parse(await teamDeleteTool.handler(ARGS, CTX));
@@ -262,6 +269,7 @@ describe('team_delete', () => {
       id: 'team-1',
       slug: 'team-rocket',
       removed_from_provider: true,
+      repos_deleted: 0,
     });
 
     expect(mocks.deleteTeam).toHaveBeenCalledWith({
@@ -282,10 +290,39 @@ describe('team_delete', () => {
       name: 'Team Rocket',
       slug: 'team-rocket',
       removedFromProvider: false,
+      reposDeleted: 0,
+      deletedRepoNames: [],
     });
 
     const payload = parse(await teamDeleteTool.handler(ARGS, CTX));
     expect(payload.removed_from_provider).toBe(false);
+  });
+
+  it('carries the blast radius into the response, the message and the audit row', async () => {
+    mocks.deleteTeam.mockResolvedValue({
+      id: 'team-1',
+      name: 'Team Rocket',
+      slug: 'team-rocket',
+      removedFromProvider: true,
+      reposDeleted: 3,
+      deletedRepoNames: ['hw1-team-rocket', 'hw2-team-rocket', 'hw3-team-rocket'],
+    });
+
+    const payload = parse(await teamDeleteTool.handler(ARGS, CTX));
+    expect(payload.repos_deleted).toBe(3);
+    expect(payload.deleted_repo_names).toEqual([
+      'hw1-team-rocket',
+      'hw2-team-rocket',
+      'hw3-team-rocket',
+    ]);
+    expect(payload.message).toContain('3 linked repository record(s)');
+
+    // The repo records are gone, so the audit trail is the only remaining
+    // record of what the delete took with it.
+    expect(auditRow().data).toMatchObject({
+      repos_deleted: 3,
+      deleted_repo_names: ['hw1-team-rocket', 'hw2-team-rocket', 'hw3-team-rocket'],
+    });
   });
 
   it('refuses an unknown / cross-classroom team and audits nothing', async () => {
@@ -352,11 +389,19 @@ describe('team_rename', () => {
       newName: 'Team Magma',
       newSlug: 'team-magma',
       renamedRepos: ['hw1-team-magma'],
-      failed: [{ name: 'hw2-team-rocket', error: 'Not Found' }],
+      failed: [{ name: 'hw2-team-rocket', error: 'provider_error' }],
     });
 
     const payload = parse(await teamRenameTool.handler(ARGS, CTX));
-    expect(payload.failed).toEqual([{ name: 'hw2-team-rocket', error: 'Not Found' }]);
+    // The service's closed reason vocabulary, plus its phrase — never a raw
+    // provider message.
+    expect(payload.failed).toEqual([
+      {
+        name: 'hw2-team-rocket',
+        error: 'provider_error',
+        error_description: expect.any(String),
+      },
+    ]);
     expect(payload.failed_count).toBe(1);
     // Top-level, not buried: the client must not miss a partial rename.
     expect(payload.warning).toContain('hw2-team-rocket');
@@ -399,7 +444,7 @@ describe('team_members_add', () => {
   it('adds classroom members via the service and audits the UPDATE', async () => {
     mocks.addTeamMembers.mockResolvedValue({
       succeeded: [{ login: 'ada' }],
-      failed: [{ login: 'Grace', error: 'Not Found' }],
+      failed: [{ login: 'Grace', error: 'provider_error' }],
     });
 
     const payload = parse(await teamMembersAddTool.handler(ARGS, CTX));
@@ -409,7 +454,7 @@ describe('team_members_add', () => {
       team_slug: 'team-rocket',
       succeeded: ['ada'],
       succeeded_count: 1,
-      failed: [{ login: 'Grace', error: 'Not Found' }],
+      failed: [{ login: 'Grace', error: 'provider_error', error_description: expect.any(String) }],
       failed_count: 1,
     });
     expectNoServiceRowLeak(payload);
@@ -463,8 +508,10 @@ describe('team_members_add', () => {
       message: 'Team not found in this classroom',
     });
 
-    // The team lookup is classroom-scoped, and nothing else ran.
+    // The team lookup is classroom-scoped, and nothing else ran — not even the
+    // membership check, which is what "before" means here.
     expect(mocks.findTeamsByClassroomId).toHaveBeenCalledWith('class-1');
+    expect(mocks.findMembershipsByClassroomId).not.toHaveBeenCalled();
     for (const mock of teamAdminMocks()) expect(mock).not.toHaveBeenCalled();
     expect(mocks.auditCreate).not.toHaveBeenCalled();
   });
@@ -505,7 +552,9 @@ describe('team_member_remove', () => {
     expect(teamMemberRemoveTool.annotations).toMatchObject({ idempotent: true });
   });
 
-  it('maps user_not_found to a plain not_found', async () => {
+  it('keeps mapping the service user_not_found as a backstop', async () => {
+    // The pre-check makes this branch unreachable through the tool, but the
+    // mapping stays: the service is the shared path, not a private one.
     mocks.removeTeamMember.mockRejectedValue(
       new TeamServiceError('user_not_found', '[team] no user with login nope')
     );
@@ -515,6 +564,47 @@ describe('team_member_remove', () => {
       message: 'No Classmoji user with that login',
     });
     expect(mocks.auditCreate).not.toHaveBeenCalled();
+  });
+
+  it('refuses a login that is not a classroom member BEFORE any service call', async () => {
+    await expect(
+      teamMemberRemoveTool.handler({ ...ARGS, login: 'mallory' }, CTX)
+    ).rejects.toMatchObject({
+      kind: 'invalid_params',
+      data: { logins: ['mallory'] },
+    });
+
+    for (const mock of teamAdminMocks()) expect(mock).not.toHaveBeenCalled();
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
+  });
+
+  it('answers a login with no Classmoji user exactly as it answers a non-member', async () => {
+    // Both refusals must look identical, so the tool never reports whether an
+    // account exists on the platform.
+    const nonMember = await teamMemberRemoveTool
+      .handler({ ...ARGS, login: 'grace-from-another-class' }, CTX)
+      .catch((e: unknown) => e);
+    const unknownUser = await teamMemberRemoveTool
+      .handler({ ...ARGS, login: 'nobody-at-all' }, CTX)
+      .catch((e: unknown) => e);
+
+    const shape = (e: unknown) => ({
+      kind: (e as { kind: string }).kind,
+      message: (e as { message: string }).message.replace(/: .*$/, ''),
+    });
+    expect(shape(nonMember)).toEqual(shape(unknownUser));
+    expect(shape(nonMember).kind).toBe('invalid_params');
+  });
+
+  it('matches classroom membership case-insensitively', async () => {
+    mocks.removeTeamMember.mockResolvedValue({ teamId: 'team-1', login: 'Grace', removed: true });
+
+    // The roster stores 'Grace'; '@grace' is the same person.
+    await teamMemberRemoveTool.handler({ ...ARGS, login: '@grace' }, CTX);
+
+    expect(mocks.removeTeamMember).toHaveBeenCalledWith(
+      expect.objectContaining({ login: '@grace' })
+    );
   });
 
   it('refuses an unknown / cross-classroom team', async () => {
@@ -535,7 +625,7 @@ describe('team_tag_add', () => {
   it('attaches tags via the service and audits the UPDATE', async () => {
     mocks.addTeamTags.mockResolvedValue({
       added: ['tag-1'],
-      failed: [{ tagId: 'tag-9', error: 'Tag does not belong to this classroom' }],
+      failed: [{ tagId: 'tag-9', error: 'invalid' }],
     });
 
     const payload = parse(await teamTagAddTool.handler(ARGS, CTX));
@@ -545,7 +635,7 @@ describe('team_tag_add', () => {
       team_slug: 'team-rocket',
       added: ['tag-1'],
       added_count: 1,
-      failed: [{ tag_id: 'tag-9', error: 'Tag does not belong to this classroom' }],
+      failed: [{ tag_id: 'tag-9', error: 'invalid', error_description: expect.any(String) }],
       failed_count: 1,
     });
     expectNoServiceRowLeak(payload);

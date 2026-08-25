@@ -4,7 +4,7 @@ import { useState, useEffect } from 'react';
 import { useFetcher, Link } from 'react-router';
 import { namedAction } from 'remix-utils/named-action';
 import type { Route } from './+types/route';
-import { ClassmojiService, getGitProvider } from '@classmoji/services';
+import { ClassmojiService, getGitProvider, isReservedSlug } from '@classmoji/services';
 import { useCallout } from '@classmoji/ui-components';
 import { assertClassroomAccess, assertClassroomMutationAllowed } from '~/utils/helpers';
 import { titleToIdentifier } from '@classmoji/utils';
@@ -125,6 +125,17 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
 
       const teamSlug = titleToIdentifier(teamName);
 
+      // `{classroom-slug}-students` / `-assistants` name the classroom's own
+      // GitHub membership teams, which have no local Team row and must not be
+      // reachable from this form. The check runs on the slug BEFORE the
+      // provider call, because gitProvider.createTeam adopts an existing team
+      // on a 422 rather than failing — so a request landing on one of those
+      // slugs would come back holding the classroom's membership team. A name
+      // that slugifies to nothing is refused here too.
+      if (!teamSlug || isReservedSlug(teamSlug)) {
+        return { error: 'That team name is not available.' };
+      }
+
       // Check if team name already exists
       const existingTeam = await ClassmojiService.team.findBySlugAndClassroomId(
         teamSlug,
@@ -155,6 +166,18 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
         return {
           error: 'Failed to create team on GitHub. Please try again or contact your instructor.',
         };
+      }
+
+      // GitHub is authoritative for the slug, so the same check runs again on
+      // what it returned. Deliberately NO rollback here: createTeam adopts an
+      // existing team on a 422, so the team in hand may be one that already
+      // existed — deleting it could remove the classroom's own membership
+      // team. Nothing local has been written yet, so refusing is enough.
+      if (isReservedSlug(githubTeam.slug)) {
+        console.error(
+          `[team] refusing to record a team on the reserved slug ${githubTeam.slug} in ${orgLogin}`
+        );
+        return { error: 'That team name is not available.' };
       }
 
       // Create team in database with membership and tag
@@ -205,10 +228,12 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
         return { error: 'You are already on a team. Leave your current team first.' };
       }
 
-      // Get the team
+      // Get the team. teamId comes from the request body, so the row is scoped
+      // to THIS classroom before it is used — an id naming a team in another
+      // classroom resolves to nothing, exactly like an id naming nothing.
       const team = await ClassmojiService.team.findById(teamId);
 
-      if (!team) {
+      if (!team || team.classroom_id !== classroom.id) {
         return { error: 'Team not found' };
       }
 
@@ -222,8 +247,8 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
         return { error: 'This team is full' };
       }
 
-      // Add user to team
-      await ClassmojiService.teamMembership.addMemberToTeam(teamId, userId);
+      // Add user to team — the RESOLVED row's id, not the raw body value.
+      await ClassmojiService.teamMembership.addMemberToTeam(team.id, userId);
 
       // Add user to GitHub team
       try {

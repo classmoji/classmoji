@@ -30,7 +30,12 @@
  * spread into a response — every payload below is built field by field.
  */
 
-import { ClassmojiService, TeamServiceError } from '@classmoji/services';
+import {
+  ClassmojiService,
+  TeamServiceError,
+  describeTeamFailureReason,
+  type TeamFailureReason,
+} from '@classmoji/services';
 import { z } from 'zod';
 import { ToolError } from '../mcp/errors.ts';
 import type { ToolContext, ToolDefinition } from '../mcp/registry.ts';
@@ -108,15 +113,47 @@ async function resolveTeamInClassroom(ref: string, ctx: ToolContext): Promise<Te
   return team;
 }
 
+/**
+ * Per-item failures carry the service's CLOSED reason vocabulary, never the
+ * raw provider/database message (which the service logs instead). Both the
+ * code and its phrase are surfaced: the code is what a caller can branch on,
+ * the phrase is what it can repeat to a user.
+ */
+const describeFailure = (reason: TeamFailureReason) => ({
+  error: reason,
+  error_description: describeTeamFailureReason(reason),
+});
+
 /** Per-tag failure in platform vocabulary (the service uses camelCase). */
-const tagFailures = (failed: Array<{ tagId: string; error: string }>) =>
-  failed.map(f => ({ tag_id: f.tagId, error: f.error }));
+const tagFailures = (failed: Array<{ tagId: string; error: TeamFailureReason }>) =>
+  failed.map(f => ({ tag_id: f.tagId, ...describeFailure(f.error) }));
 
 /**
  * Normalize a login the way teamAdmin.service does before its case-insensitive
  * lookup, so the membership pre-check accepts exactly what the service accepts.
  */
 const normalizeLogin = (login: string) => login.replace('@', '').trim().toLowerCase();
+
+/**
+ * The normalized logins of everyone who belongs to the authorized classroom in
+ * any role.
+ *
+ * DELIBERATELY STRICTER THAN THE WEB FORMS, which forward whatever logins they
+ * are given: on this surface every login named by a team tool must belong to
+ * THIS classroom, so an arbitrary GitHub account can neither be pulled into an
+ * organization team nor probed against one.
+ */
+async function classroomMemberLogins(classroomId: string): Promise<Set<string>> {
+  const memberships = (await ClassmojiService.classroomMembership.findByClassroomId(
+    classroomId
+  )) as Array<{ user?: { login?: string | null } | null }>;
+  return new Set(
+    memberships
+      .map(m => m.user?.login)
+      .filter((login): login is string => Boolean(login))
+      .map(normalizeLogin)
+  );
+}
 
 const teamRefSchema = z.string().min(1).describe("The team's slug or id (from list_teams)");
 
@@ -229,13 +266,14 @@ export const teamDeleteTool: ToolDefinition<TeamDeleteArgs> = {
   title: 'Delete a team',
   description:
     'Deletes a team: the team in the classroom GitHub organization and its Classmoji record. ' +
-    'Owner only, destructive, requires confirm:true. The GitHub REPOSITORIES themselves are not ' +
-    "deleted — they stay in the organization. Classmoji's records of them are not kept, though: " +
-    "the team's linked repo records are removed along with the team, and that takes their " +
-    'submissions, grades, grader assignments, regrade requests, token transactions and analytics ' +
-    'with them. That history cannot be restored from this surface, so prefer team_rename, or ' +
-    'removing members, when the team has graded work. Team memberships and tag links go too. If ' +
-    'the team is already gone on GitHub the local record is still removed and ' +
+    'Owner only, destructive, requires confirm:true. The GitHub REPOSITORIES themselves survive — ' +
+    "they stay in the organization. Classmoji's RECORDS of them do not: every linked repo record " +
+    'is permanently deleted along with the team, and that takes its submissions, grades, grader ' +
+    'assignments, regrade requests, token transactions and analytics with it. That history cannot ' +
+    'be restored from this surface or any other, so when the team has graded work use team_rename ' +
+    '(or remove its members) instead. Team memberships and tag links go too. The response reports ' +
+    'repos_deleted — check it against list_repos BEFORE confirming if you are unsure what the ' +
+    'team owns. If the team is already gone on GitHub the local record is still removed and ' +
     'removed_from_provider comes back false.',
   scope: 'write',
   roles: OWNER_ONLY,
@@ -246,7 +284,7 @@ export const teamDeleteTool: ToolDefinition<TeamDeleteArgs> = {
       .literal(true)
       .describe(
         'Must be true — acknowledges the GitHub team and the linked repo records (with their ' +
-          'grading history) are deleted'
+          'grading history) are permanently deleted'
       ),
   },
   handler: async (args, ctx) => {
@@ -271,8 +309,19 @@ export const teamDeleteTool: ToolDefinition<TeamDeleteArgs> = {
         team_id: result.id,
         slug: result.slug,
         removed_from_provider: result.removedFromProvider,
+        // Blast radius on the audit row: the repo records (and their grading
+        // history) are gone, so the trail is the only place left that says
+        // what the delete cost.
+        repos_deleted: result.reposDeleted,
+        deleted_repo_names: result.deletedRepoNames,
       },
     });
+
+    const repoNote =
+      result.reposDeleted > 0
+        ? ` ${result.reposDeleted} linked repository record(s) were deleted with it, along with ` +
+          'their submissions, grades and analytics; the GitHub repositories themselves remain.'
+        : '';
 
     return ok({
       success: true,
@@ -280,9 +329,13 @@ export const teamDeleteTool: ToolDefinition<TeamDeleteArgs> = {
       name: result.name,
       slug: result.slug,
       removed_from_provider: result.removedFromProvider,
-      message: result.removedFromProvider
-        ? `Team '${result.slug}' was deleted on GitHub and removed from Classmoji.`
-        : `Team '${result.slug}' was already gone on GitHub; the Classmoji record was removed.`,
+      repos_deleted: result.reposDeleted,
+      deleted_repo_names: result.deletedRepoNames,
+      message:
+        (result.removedFromProvider
+          ? `Team '${result.slug}' was deleted on GitHub and removed from Classmoji.`
+          : `Team '${result.slug}' was already gone on GitHub; the Classmoji record was removed.`) +
+        repoNote,
     });
   },
 };
@@ -342,7 +395,7 @@ export const teamRenameTool: ToolDefinition<TeamRenameArgs> = {
       },
     });
 
-    const failed = result.failed.map(f => ({ name: f.name, error: f.error }));
+    const failed = result.failed.map(f => ({ name: f.name, ...describeFailure(f.error) }));
     return ok({
       success: true,
       team_id: result.teamId,
@@ -408,20 +461,9 @@ export const teamMembersAddTool: ToolDefinition<TeamMembersAddArgs> = {
     // the audit row can name the team (addTeamMembers returns no team id).
     const team = await resolveTeamInClassroom(args.team, ctx);
 
-    // DELIBERATELY STRICTER THAN THE WEB FORM: the web action forwards whatever
-    // logins it is given, which lets any GitHub account be pulled into an org
-    // team. Here every login must resolve to a member of THIS classroom (any
-    // role) or the whole call is refused — an MCP tool must not be a path for
-    // adding arbitrary GitHub accounts to the organization.
-    const memberships = (await ClassmojiService.classroomMembership.findByClassroomId(
-      classroom.classroomId
-    )) as Array<{ user?: { login?: string | null } | null }>;
-    const classroomLogins = new Set(
-      memberships
-        .map(m => m.user?.login)
-        .filter((login): login is string => Boolean(login))
-        .map(normalizeLogin)
-    );
+    // Every login must resolve to a member of THIS classroom (any role) or the
+    // whole call is refused — see classroomMemberLogins.
+    const classroomLogins = await classroomMemberLogins(classroom.classroomId);
 
     // Dedupe on the same normalized key the service matches on, so 'Ada' and
     // '@ada' do not cost two throttled provider calls.
@@ -473,7 +515,7 @@ export const teamMembersAddTool: ToolDefinition<TeamMembersAddArgs> = {
       team_slug: team.slug,
       succeeded: result.succeeded.map(s => s.login),
       succeeded_count: result.succeeded.length,
-      failed: result.failed.map(f => ({ login: f.login, error: f.error })),
+      failed: result.failed.map(f => ({ login: f.login, ...describeFailure(f.error) })),
       failed_count: result.failed.length,
     });
   },
@@ -494,19 +536,44 @@ export const teamMemberRemoveTool: ToolDefinition<TeamMemberRemoveArgs> = {
   annotations: { destructive: true, idempotent: true, openWorld: true },
   title: 'Remove a member from a team',
   description:
-    'Removes one person from a team, on GitHub and in Classmoji. Owner only. This only drops the ' +
-    'team membership — it does not remove them from the classroom or the GitHub organization, ' +
-    'and no repository is deleted; they simply lose the access the team granted. Idempotent: if ' +
-    'they were not a member, the call still succeeds and reports removed:false.',
+    'Removes one person from a team, on GitHub and in Classmoji. Owner only. The login must be a ' +
+    'member of THIS classroom in some role (get_roster and list_teaching_team show who is); any ' +
+    'other login is refused. This only drops the team membership — it does not remove them from ' +
+    'the classroom or the GitHub organization, and no repository is deleted; they simply lose the ' +
+    'access the team granted. Idempotent: if they were not a member of the team, the call still ' +
+    'succeeds and reports removed:false.',
   scope: 'write',
   roles: OWNER_ONLY,
   inputSchema: {
     classroom: z.string().describe("Classroom reference as 'org/slug'"),
     team: teamRefSchema,
-    login: z.string().min(1).max(100).describe('The member GitHub username'),
+    login: z
+      .string()
+      .min(1)
+      .max(100)
+      .describe('The member GitHub username; must be a member of this classroom'),
   },
   handler: async (args, ctx) => {
     const classroom = requireClassroomCtx(ctx);
+
+    // Same order as team_members_add: the team is resolved inside the
+    // authorized classroom first (S1), then the login is checked against
+    // classroom membership.
+    await resolveTeamInClassroom(args.team, ctx);
+
+    // ONE uniform refusal for both "no such Classmoji user" and "not in this
+    // classroom": without it the tool's two error shapes would differ, and the
+    // service's own user_not_found would answer a question about who exists on
+    // the platform. That branch of mapTeamError stays as a backstop.
+    const classroomLogins = await classroomMemberLogins(classroom.classroomId);
+    if (!classroomLogins.has(normalizeLogin(args.login))) {
+      throw new ToolError(
+        'invalid_params',
+        `Not a member of this classroom: ${args.login} — nobody was removed from the team.`,
+        undefined,
+        { logins: [args.login] }
+      );
+    }
 
     let result;
     try {

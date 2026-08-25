@@ -66,19 +66,29 @@ export interface TeamSummary {
   isVisible: boolean;
 }
 
+/**
+ * Closed vocabulary for per-item failures in the bulk operations.
+ *
+ * The raw provider/database message is logged server-side and never handed
+ * back: it carries organization internals, octokit request details and Prisma
+ * query text, none of which a caller needs (or should read) to understand that
+ * one item of a batch did not go through.
+ */
+export type TeamFailureReason = 'provider_error' | 'not_found' | 'db_error' | 'invalid';
+
 export interface TagFailure {
   tagId: string;
-  error: string;
+  error: TeamFailureReason;
 }
 
 export interface MemberFailure {
   login: string;
-  error: string;
+  error: TeamFailureReason;
 }
 
 export interface RepoRenameFailure {
   name: string;
-  error: string;
+  error: TeamFailureReason;
 }
 
 export interface CreateTeamResult {
@@ -94,6 +104,10 @@ export interface DeleteTeamResult {
   slug: string;
   /** false when the team was already gone on the provider side (404 tolerated). */
   removedFromProvider: boolean;
+  /** How many linked repository records went with the team. */
+  reposDeleted: number;
+  /** Names of those repositories, capped at MAX_REPORTED_REPO_NAMES. */
+  deletedRepoNames: string[];
 }
 
 export interface RenameTeamResult {
@@ -136,13 +150,48 @@ const isProviderNotFound = (error: unknown): boolean =>
 const isUniqueViolation = (error: unknown): boolean =>
   typeof error === 'object' && error !== null && (error as { code?: unknown }).code === 'P2002';
 
-const errorMessage = (error: unknown): string =>
-  error instanceof Error ? error.message : String(error);
+/**
+ * Classify a thrown error into the closed failure vocabulary and log the raw
+ * one with context, so the detail stays in the server logs rather than in a
+ * response body. Octokit errors carry a numeric `.status`; Prisma errors carry
+ * a string `.code`; anything else falls back to the caller's default.
+ */
+const failureReason = (
+  context: string,
+  error: unknown,
+  fallback: TeamFailureReason
+): TeamFailureReason => {
+  console.error(`[team] ${context}`, error);
+  if (typeof error === 'object' && error !== null) {
+    const status = (error as { status?: unknown }).status;
+    if (typeof status === 'number') return status === 404 ? 'not_found' : 'provider_error';
+    if (typeof (error as { code?: unknown }).code === 'string') return 'db_error';
+  }
+  return fallback;
+};
+
+const FAILURE_PHRASES: Record<TeamFailureReason, string> = {
+  provider_error: 'the git provider rejected the change',
+  not_found: 'not found',
+  db_error: 'the change could not be saved',
+  invalid: 'not valid for this classroom',
+};
+
+/**
+ * Turn a failure reason into a short phrase for a UI or tool response. Callers
+ * render the reason at their own boundary, so the vocabulary stays closed here
+ * and the wording stays in one place.
+ */
+export const describeTeamFailureReason = (reason: TeamFailureReason): string =>
+  FAILURE_PHRASES[reason] ?? 'the change could not be completed';
 
 /**
  * The slug GitHub will derive from a team name: lowercased, whitespace runs
- * collapsed to single hyphens. GitHub remains authoritative — this prediction
- * exists so collisions and reserved names can be caught BEFORE a provider write.
+ * collapsed to single hyphens. GitHub remains authoritative — it also strips
+ * and folds punctuation, which this prediction deliberately does not model.
+ * The prediction exists so collisions and reserved names can be caught BEFORE
+ * a provider write; every check it feeds is repeated against the slug the
+ * provider actually returns.
  */
 export const predictTeamSlug = (name: string): string =>
   name.trim().toLowerCase().replace(/\s+/g, '-');
@@ -151,9 +200,33 @@ export const predictTeamSlug = (name: string): string =>
  * Classroom teams are named `{classroom-slug}-students` / `-assistants` (see
  * getTeamNameForClassroom). A user-created team must never land on one of those
  * slugs, or managing it would manage the classroom's own membership team.
+ *
+ * Exported because the student self-service team form creates teams on its own
+ * path and has to apply the same rule.
  */
-const isReservedSlug = (slug: string): boolean =>
+export const isReservedSlug = (slug: string): boolean =>
   slug.endsWith('-students') || slug.endsWith('-assistants');
+
+/** How many repository names a delete result lists before it stops. */
+const MAX_REPORTED_REPO_NAMES = 20;
+
+/**
+ * Undo a provider team that failed the authoritative-slug checks.
+ *
+ * Best effort: the refusal is reported either way, and a cleanup that itself
+ * fails is logged so the stray provider team can be removed by hand.
+ */
+const rollbackProviderTeam = async (
+  gitProvider: { deleteTeam: (org: string, slug: string) => Promise<unknown> },
+  orgLogin: string,
+  slug: string
+): Promise<void> => {
+  try {
+    await gitProvider.deleteTeam(orgLogin, slug);
+  } catch (error: unknown) {
+    console.error(`[team] could not roll back provider team ${orgLogin}/${slug}`, error);
+  }
+};
 
 const requireName = (name: string | null | undefined): string => {
   const trimmed = typeof name === 'string' ? name.trim() : '';
@@ -222,7 +295,7 @@ const partitionClassroomTags = async (classroomId: string, tagIds: string[]) => 
     valid: unique.filter(id => found.has(id)),
     failed: unique
       .filter(id => !found.has(id))
-      .map(id => ({ tagId: id, error: 'Tag does not belong to this classroom' })),
+      .map(id => ({ tagId: id, error: 'invalid' as const })),
   };
 };
 
@@ -245,7 +318,10 @@ const attachTags = async (teamId: string, tagIds: string[]) => {
         added.push(tagId);
         continue;
       }
-      failed.push({ tagId, error: errorMessage(error) });
+      failed.push({
+        tagId,
+        error: failureReason(`attach tag ${tagId} to team ${teamId}`, error, 'db_error'),
+      });
     }
   }
 
@@ -264,8 +340,14 @@ const toSummary = (team: { id: string; name: string; slug: string; is_visible: b
  *
  * Order matters: the name is validated and the predicted slug is checked
  * against the reserved classroom-team suffixes and against the provider BEFORE
- * anything is created, so a rejected request never leaves an orphaned provider
- * team behind. Tag ids are resolved in the same pre-flight pass.
+ * anything is created, so a rejected request usually never reaches the
+ * provider at all. Tag ids are resolved in the same pre-flight pass.
+ *
+ * The prediction is not the last word, though — the provider derives the real
+ * slug and folds punctuation the prediction leaves alone, so both checks run
+ * again on the slug it returns. If the real slug fails one of them the
+ * provider team is deleted again and the call is refused, so no local row is
+ * ever created on a slug that the pre-flight checks would have rejected.
  *
  * `isVisible` maps to Team.is_visible, which decides whether students who are
  * not members can see the team. It defaults to false (the schema default, and
@@ -320,6 +402,27 @@ export const createTeam = async ({
 
   const providerTeam = await gitProvider.createTeam(orgLogin, trimmedName);
 
+  // The provider is authoritative for the slug and derives it from more than
+  // whitespace, so both pre-flight checks are repeated against the slug it
+  // actually returned. A team that lands on a slug those checks refuse is
+  // removed again before anything is stored locally.
+  const authoritativeSlug = providerTeam.slug;
+  if (isReservedSlug(authoritativeSlug)) {
+    await rollbackProviderTeam(gitProvider, orgLogin, authoritativeSlug);
+    throw new TeamServiceError(
+      'reserved_name',
+      `[team] "${trimmedName}" resolves to a reserved team slug`
+    );
+  }
+  const localCollision = await teamService.findBySlugAndClassroomId(authoritativeSlug, classroomId);
+  if (localCollision) {
+    await rollbackProviderTeam(gitProvider, orgLogin, authoritativeSlug);
+    throw new TeamServiceError(
+      'name_collision',
+      `[team] a team with slug "${authoritativeSlug}" already exists in this classroom`
+    );
+  }
+
   const team = await teamService.create({
     providerId: providerTeam.id,
     provider: gitOrganization.provider as GitProviderEnum,
@@ -346,6 +449,10 @@ export const createTeam = async ({
  * client-supplied slug and only then discover there was no local row to
  * delete). A provider 404 is tolerated — the team already being gone there is
  * the desired end state, and the local row still needs removing.
+ *
+ * The linked repository records go with the team (and take their submissions,
+ * grades and analytics with them), so they are counted BEFORE the delete and
+ * reported back: callers cannot describe what a delete cost afterwards.
  */
 export const deleteTeam = async ({
   classroomId,
@@ -358,6 +465,12 @@ export const deleteTeam = async ({
   const team = await resolveTeam(classroomId, slugOrId);
   const gitProvider = getGitProvider(gitOrganization);
 
+  const teamWithRepos = await teamService.findByIdWithRepositories(team.id);
+  const repositories = teamWithRepos?.git_repos ?? [];
+  const deletedRepoNames = repositories
+    .slice(0, MAX_REPORTED_REPO_NAMES)
+    .map((repo: { name: string }) => repo.name);
+
   let removedFromProvider = true;
   try {
     await gitProvider.deleteTeam(orgLogin, team.slug);
@@ -368,7 +481,14 @@ export const deleteTeam = async ({
 
   await teamService.deleteBySlug(classroomId, team.slug);
 
-  return { id: team.id, name: team.name, slug: team.slug, removedFromProvider };
+  return {
+    id: team.id,
+    name: team.name,
+    slug: team.slug,
+    removedFromProvider,
+    reposDeleted: repositories.length,
+    deletedRepoNames,
+  };
 };
 
 /**
@@ -433,7 +553,23 @@ export const renameTeam = async ({
   const updated = await gitProvider.updateTeam(orgLogin, team.slug, { name: trimmedName });
   const newSlug = updated.slug;
 
-  // GitHub is authoritative for the slug and may not produce the predicted one.
+  // GitHub is authoritative for the slug and may not produce the predicted one
+  // (it folds punctuation the prediction leaves alone), so BOTH pre-flight
+  // checks are repeated here. This runs before the repository cascade and
+  // before anything local is written, so a refusal leaves Classmoji untouched
+  // — but the provider rename has already happened, so the previous name is
+  // put back best-effort first.
+  if (isReservedSlug(newSlug)) {
+    try {
+      await gitProvider.updateTeam(orgLogin, newSlug, { name: team.name });
+    } catch (error: unknown) {
+      console.error(`[team] could not restore the provider name for ${orgLogin}/${newSlug}`, error);
+    }
+    throw new TeamServiceError(
+      'reserved_name',
+      `[team] "${trimmedName}" resolves to a reserved team slug`
+    );
+  }
   await assertSlugFree({ classroomId, slug: newSlug, teamId: team.id, currentSlug: team.slug });
 
   const oldSuffix = `-${team.slug}`;
@@ -449,7 +585,10 @@ export const renameTeam = async ({
       await gitProvider.updateRepo(orgLogin, repo.name, { name: newRepoName });
       succeeded.push({ id: repo.id, name: newRepoName });
     } catch (error: unknown) {
-      failed.push({ name: repo.name, error: errorMessage(error) });
+      failed.push({
+        name: repo.name,
+        error: failureReason(`rename repo ${orgLogin}/${repo.name}`, error, 'provider_error'),
+      });
     }
     await sleep(PROVIDER_THROTTLE_MS);
   }, 1);
@@ -525,7 +664,7 @@ export const addTeamMembers = async ({
     try {
       const user = await findUserByLogin(login);
       if (!user) {
-        failed.push({ login, error: 'No user with that login' });
+        failed.push({ login, error: 'not_found' });
         return;
       }
       const canonicalLogin = user.login ?? login;
@@ -533,7 +672,10 @@ export const addTeamMembers = async ({
       await teamMembershipService.addMemberToTeam(team.id, user.id);
       succeeded.push({ login: canonicalLogin });
     } catch (error: unknown) {
-      failed.push({ login, error: errorMessage(error) });
+      failed.push({
+        login,
+        error: failureReason(`add ${login} to team ${team.slug}`, error, 'provider_error'),
+      });
     }
     await sleep(PROVIDER_THROTTLE_MS);
   }, 1);

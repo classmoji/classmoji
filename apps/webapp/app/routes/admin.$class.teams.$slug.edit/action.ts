@@ -1,6 +1,11 @@
 import { namedAction } from 'remix-utils/named-action';
 import invariant from 'tiny-invariant';
-import { ClassmojiService, TeamServiceError } from '@classmoji/services';
+import {
+  ClassmojiService,
+  TeamServiceError,
+  describeTeamFailureReason,
+  type TeamFailureReason,
+} from '@classmoji/services';
 import { ActionTypes } from '~/constants';
 import { requireClassroomAdmin, assertClassroomMutationAllowed } from '~/utils/routeAuth.server';
 import type { Route } from './+types/route';
@@ -33,6 +38,15 @@ const errorMessage = (error: TeamServiceError, slug: string) => {
       return 'Could not complete this action.';
   }
 };
+
+/**
+ * The service reports per-item failures as reason CODES, not raw provider or
+ * database messages. The UI renders whatever it is handed, so the code is
+ * turned into its phrase here, at the boundary — the client never sees the
+ * vocabulary and the failure cards need no mapping of their own.
+ */
+const toDisplayFailures = <T extends { error: TeamFailureReason }>(failed: T[]) =>
+  failed.map(f => ({ ...f, error: describeTeamFailureReason(f.error) }));
 
 export const action = async ({ request, params }: Route.ActionArgs) => {
   const classSlug = params.class!;
@@ -78,11 +92,12 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
       if (!result.ok) return result.payload;
 
       const { succeeded, failed } = result.value;
+      const displayFailed = toDisplayFailures(failed);
       if (succeeded.length === 0 && failed.length > 0) {
         return {
           error: `Could not add ${failed.length} student(s) to @${slug}.`,
           action: ActionTypes.ADD_TEAM_MEMBER,
-          failed,
+          failed: displayFailed,
         };
       }
 
@@ -92,7 +107,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
             ? `Added student(s) to @${slug}.`
             : `Added ${succeeded.length} student(s) to @${slug}. ${failed.length} failed.`,
         action: ActionTypes.ADD_TEAM_MEMBER,
-        failed,
+        failed: displayFailed,
       };
     },
 
@@ -177,7 +192,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
             : `Renamed team to @${newSlug}. ${failed.length} repo(s) failed to rename.`,
         action: ActionTypes.RENAME_TEAM,
         newSlug,
-        failed,
+        failed: toDisplayFailures(failed),
       };
     },
   });

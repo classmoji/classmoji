@@ -28,9 +28,13 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
   const studentsObjects = _.keyBy(students, 'login');
 
   const team = await ClassmojiService.team.findBySlugAndClassroomId(slug, classroom.id);
-  const teamMembers = team!.memberships.map(({ user }) => user);
+  // The lookup is classroom-scoped, so a slug that resolves to nothing is a
+  // 404, not a crash on a non-null assertion.
+  if (!team) throw new Response(null, { status: 404 });
+
+  const teamMembers = team.memberships.map(({ user }) => user);
   const tags = await ClassmojiService.organizationTag.findByClassroomId(classroom.id);
-  const teamWithRepos = await ClassmojiService.team.findByIdWithRepositories(team!.id);
+  const teamWithRepos = await ClassmojiService.team.findByIdWithRepositories(team.id);
   const repositoryCount = teamWithRepos?.git_repos.length ?? 0;
   const canRenameTeam = classroom.git_organization?.provider === 'GITHUB';
 
@@ -41,7 +45,7 @@ const AdminSingleTeamView = ({ loaderData }: Route.ComponentProps) => {
   const { students, teamMembers, tags, team, repositoryCount, canRenameTeam } = loaderData;
   const [membersToAdd, setMembersToAdd] = useState<string[]>([]);
   const [tagsToAdd, setTagsToAdd] = useState<string[]>([]);
-  const [renameValue, setRenameValue] = useState(team!.name);
+  const [renameValue, setRenameValue] = useState(team.name);
   const [renameConfirmOpen, setRenameConfirmOpen] = useState(false);
   const [renameFailures, setRenameFailures] = useState<{ name: string; error: string }[]>([]);
   const renameSubmitted = useRef(false);
@@ -67,7 +71,7 @@ const AdminSingleTeamView = ({ loaderData }: Route.ComponentProps) => {
   }, [fetcher?.data, classSlug, navigate]);
 
   const trimmedRenameValue = renameValue.trim();
-  const renameDisabled = !trimmedRenameValue || trimmedRenameValue === team!.name;
+  const renameDisabled = !trimmedRenameValue || trimmedRenameValue === team.name;
 
   const onRenameSubmit = () => {
     if (renameDisabled) return;
@@ -261,7 +265,7 @@ const AdminSingleTeamView = ({ loaderData }: Route.ComponentProps) => {
             onChange={setTagsToAdd}
             options={tags
               .filter(tag => {
-                return !team!.tags.map(t => t.tag_id).includes(tag.id);
+                return !team.tags.map(t => t.tag_id).includes(tag.id);
               })
               .map(tag => {
                 return { label: tag.name, value: tag.id };
@@ -273,7 +277,7 @@ const AdminSingleTeamView = ({ loaderData }: Route.ComponentProps) => {
 
         <Table
           columns={tagColumns}
-          dataSource={team!.tags}
+          dataSource={team.tags}
           rowHoverable={false}
           size="small"
           className="mt-4"

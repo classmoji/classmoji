@@ -283,22 +283,24 @@ describe('classroom_status_update', () => {
 
 describe('org_repo_settings_update', () => {
   const ORG = { id: 'gorg-1', login: 'myorg', github_installation_id: '123' };
+  // The confirm gate lives in the schema; the handler takes it already parsed.
+  const BASE = { classroom: 'org/w26', confirm: true as const };
 
   beforeEach(() => {
     mocks.classroomFindById.mockResolvedValue({ id: 'class-1', git_organization: ORG });
   });
 
   it('requires at least one field', async () => {
-    await expect(
-      orgRepoSettingsUpdateTool.handler({ classroom: 'org/w26' }, CTX)
-    ).rejects.toMatchObject({ kind: 'invalid_params' });
+    await expect(orgRepoSettingsUpdateTool.handler(BASE, CTX)).rejects.toMatchObject({
+      kind: 'invalid_params',
+    });
     expect(mocks.updateOrganization).not.toHaveBeenCalled();
   });
 
   it('sends an exact object to updateOrganization for the ctx classroom org', async () => {
     const payload = parse(
       await orgRepoSettingsUpdateTool.handler(
-        { classroom: 'org/w26', default_repository_permission: 'read' },
+        { ...BASE, default_repository_permission: 'read' },
         CTX
       )
     );
@@ -318,12 +320,13 @@ describe('org_repo_settings_update', () => {
   it('never forwards extra argument keys to GitHub', async () => {
     await orgRepoSettingsUpdateTool.handler(
       {
-        classroom: 'org/w26',
+        ...BASE,
         members_can_create_repositories: true,
         billing_email: 'nope@x.edu',
       } as unknown as Parameters<typeof orgRepoSettingsUpdateTool.handler>[0],
       CTX
     );
+    // Neither the stray key nor `confirm` reaches the organization payload.
     expect(mocks.updateOrganization.mock.calls[0][1]).toEqual({
       members_can_create_repositories: true,
     });
@@ -338,18 +341,29 @@ describe('org_repo_settings_update', () => {
     expect(permission.safeParse('READ').success).toBe(false);
   });
 
-  it('is annotated openWorld (it writes to GitHub, not our database)', () => {
+  it('is annotated openWorld and destructive (it changes the whole organization)', () => {
     expect(orgRepoSettingsUpdateTool.annotations?.openWorld).toBe(true);
-    expect(orgRepoSettingsUpdateTool.annotations?.destructive).toBe(false);
+    expect(orgRepoSettingsUpdateTool.annotations?.destructive).toBe(true);
+  });
+
+  it('requires confirm:true in the schema', () => {
+    // The registry validates inputSchema before the handler runs, so the gate
+    // lives in the schema: only the literal `true` is accepted.
+    const confirm = orgRepoSettingsUpdateTool.inputSchema.confirm;
+    expect(confirm.safeParse(true).success).toBe(true);
+    expect(confirm.safeParse(false).success).toBe(false);
+    expect(confirm.safeParse(undefined).success).toBe(false);
+  });
+
+  it('says in its description that the change is organization-wide and immediate', () => {
+    expect(orgRepoSettingsUpdateTool.description).toContain('IMMEDIATELY');
+    expect(orgRepoSettingsUpdateTool.description).toContain('ORGANIZATION-WIDE');
   });
 
   it('refuses a classroom with no linked GitHub organization', async () => {
     mocks.classroomFindById.mockResolvedValue({ id: 'class-1', git_organization: null });
     await expect(
-      orgRepoSettingsUpdateTool.handler(
-        { classroom: 'org/w26', members_can_create_repositories: false },
-        CTX
-      )
+      orgRepoSettingsUpdateTool.handler({ ...BASE, members_can_create_repositories: false }, CTX)
     ).rejects.toMatchObject({ kind: 'invalid_params' });
     expect(mocks.updateOrganization).not.toHaveBeenCalled();
   });
@@ -360,10 +374,7 @@ describe('org_repo_settings_update', () => {
       git_organization: { ...ORG, github_installation_id: null },
     });
     await expect(
-      orgRepoSettingsUpdateTool.handler(
-        { classroom: 'org/w26', members_can_create_repositories: false },
-        CTX
-      )
+      orgRepoSettingsUpdateTool.handler({ ...BASE, members_can_create_repositories: false }, CTX)
     ).rejects.toMatchObject({ kind: 'invalid_params' });
     expect(mocks.updateOrganization).not.toHaveBeenCalled();
     expect(mocks.auditCreate).not.toHaveBeenCalled();
@@ -371,7 +382,7 @@ describe('org_repo_settings_update', () => {
 
   it('audits against REPO_SETTINGS after the GitHub write', async () => {
     await orgRepoSettingsUpdateTool.handler(
-      { classroom: 'org/w26', default_repository_permission: 'none' },
+      { ...BASE, default_repository_permission: 'none' },
       CTX
     );
     const audit = mocks.auditCreate.mock.calls[0][0] as {

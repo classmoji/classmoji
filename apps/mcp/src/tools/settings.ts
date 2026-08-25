@@ -255,22 +255,28 @@ interface OrgRepoSettingsUpdateArgs {
   classroom: string;
   default_repository_permission?: 'none' | 'read' | 'write';
   members_can_create_repositories?: boolean;
+  confirm: true;
 }
 
 export const orgRepoSettingsUpdateTool: ToolDefinition<OrgRepoSettingsUpdateArgs> = {
   name: 'org_repo_settings_update',
-  // Writes to GitHub, not our database → openWorld. Changes settings only.
-  annotations: { destructive: false, openWorld: true },
+  // Writes to GitHub, not our database → openWorld. It reaches far outside the
+  // classroom the caller was authorized for (every repository in the org, and
+  // widening default_repository_permission exposes existing student work), so
+  // it is declared destructive and gated on confirm:true.
+  annotations: { destructive: true, openWorld: true },
   title: 'Update GitHub organization repository settings',
   description:
     'Updates repository defaults on the GitHub ORGANIZATION this classroom belongs to. Owner ' +
-    'only. WARNING: these are ORGANIZATION-WIDE GitHub settings, not classroom settings — they ' +
-    'affect every classroom, every member and every repository in that organization, including ' +
-    'other courses hosted there, not just this class. default_repository_permission is the base ' +
-    'permission members get on org repos: none (students see only their own or their team’s ' +
-    'repos), read (students can read other students’ repos), or write (students can also write ' +
-    'to them). members_can_create_repositories lets students create repositories in the org. ' +
-    'Provide at least one.',
+    'only, destructive, requires confirm:true. WARNING: these are ORGANIZATION-WIDE GitHub ' +
+    'settings, not classroom settings — they take effect IMMEDIATELY and affect every classroom, ' +
+    'every member and every repository in that organization, including other courses hosted ' +
+    'there, not just this class. default_repository_permission is the base permission members get ' +
+    'on org repos: none (students see only their own or their team’s repos), read (students can ' +
+    'read other students’ repos, including existing ones), or write (students can also write to ' +
+    'them). members_can_create_repositories lets students create repositories in the org. ' +
+    'Confirm with the user which organization is affected before calling. Provide at least one ' +
+    'setting.',
   scope: 'write',
   roles: OWNER_ONLY,
   // Tighter than the default bucket: every call is a live GitHub org-settings
@@ -286,6 +292,12 @@ export const orgRepoSettingsUpdateTool: ToolDefinition<OrgRepoSettingsUpdateArgs
       .boolean()
       .optional()
       .describe('Whether org members may create repositories'),
+    confirm: z
+      .literal(true)
+      .describe(
+        'Must be true — acknowledges the change applies immediately to the whole GitHub ' +
+          'organization, not just this classroom'
+      ),
   },
   handler: async (args, ctx) => {
     const classroom = requireClassroomCtx(ctx);

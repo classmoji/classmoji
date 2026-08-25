@@ -54,8 +54,14 @@ export { ClassmojiService, HelperService, StripeService, FlyCertService, Markdow
 // Admin service result/error shapes shared by the web routes and the MCP tools.
 export { AssistantServiceError } from './classmoji/assistant.service.ts';
 export type { AddAssistantResult, RemoveAssistantResult } from './classmoji/assistant.service.ts';
-export { TeamServiceError } from './classmoji/teamAdmin.service.ts';
+export {
+  TeamServiceError,
+  describeTeamFailureReason,
+  isReservedSlug,
+  predictTeamSlug,
+} from './classmoji/teamAdmin.service.ts';
 export type {
+  TeamFailureReason,
   CreateTeamResult,
   DeleteTeamResult,
   RenameTeamResult,

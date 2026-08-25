@@ -32,7 +32,10 @@ const AdminNewTeam = ({ loaderData }: Route.ComponentProps) => {
   const [name, setName] = useState('');
   const [tagsList, setTagsList] = useState([]);
 
-  const [visibility, setVisibility] = useState('secret');
+  // 'closed' (Visible) is the default: the choice used to be ignored and every
+  // team ended up visible, so this keeps the effective default unchanged now
+  // that the radio actually reaches the database.
+  const [visibility, setVisibility] = useState('closed');
   const [nameError, setNameError] = useState(false);
 
   const { show, close, visible } = useDisclosure();

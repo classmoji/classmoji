@@ -99,6 +99,9 @@ const notFound = (message = 'Not Found') => Object.assign(new Error(message), { 
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // The service logs the raw provider/DB error behind every reported failure;
+  // the tests assert the reason code, so the log itself is silenced.
+  vi.spyOn(console, 'error').mockImplementation(() => {});
   classroomFindById.mockResolvedValue(CLASSROOM);
   teamFindFirst.mockResolvedValue(TEAM);
   teamFindBySlug.mockResolvedValue(null);
@@ -112,6 +115,10 @@ beforeEach(() => {
 
 describe('teamAdmin.createTeam', () => {
   it('creates on the provider then locally, wiring is_visible through honestly', async () => {
+    // The stored row is what the result echoes, so the mock has to agree with
+    // the flag that was asked for — otherwise the assertion proves nothing.
+    teamCreate.mockResolvedValue({ ...TEAM, is_visible: true });
+
     const result = await teamAdmin.createTeam({
       classroomId: 'class-1',
       name: '  Blue Team  ',
@@ -131,7 +138,7 @@ describe('teamAdmin.createTeam', () => {
       id: 'team-1',
       name: 'Blue Team',
       slug: 'blue-team',
-      isVisible: false,
+      isVisible: true,
     });
   });
 
@@ -193,9 +200,7 @@ describe('teamAdmin.createTeam', () => {
     expect(teamTagCreate).toHaveBeenCalledTimes(1);
     expect(teamTagCreate).toHaveBeenCalledWith('team-1', 'tag-ok');
     expect(result.tagsAdded).toEqual(['tag-ok']);
-    expect(result.tagsFailed).toEqual([
-      { tagId: 'tag-elsewhere', error: 'Tag does not belong to this classroom' },
-    ]);
+    expect(result.tagsFailed).toEqual([{ tagId: 'tag-elsewhere', error: 'invalid' }]);
   });
 
   it('reports a failing tag without losing the tags after it', async () => {
@@ -209,7 +214,9 @@ describe('teamAdmin.createTeam', () => {
     });
 
     expect(result.tagsAdded).toEqual(['tag-b']);
-    expect(result.tagsFailed).toEqual([{ tagId: 'tag-a', error: 'boom' }]);
+    // The reason is reported; the raw message stays in the server log.
+    expect(result.tagsFailed).toEqual([{ tagId: 'tag-a', error: 'db_error' }]);
+    expect(JSON.stringify(result.tagsFailed)).not.toContain('boom');
   });
 
   it('throws no_org_configured when the classroom has no git organization', async () => {
@@ -218,6 +225,46 @@ describe('teamAdmin.createTeam', () => {
     await expect(
       teamAdmin.createTeam({ classroomId: 'class-1', name: 'Blue Team' })
     ).rejects.toMatchObject({ code: 'no_org_configured' });
+  });
+
+  // The prediction collapses whitespace only; GitHub also folds punctuation, so
+  // a name whose PREDICTED slug passes the pre-flight checks can still land on
+  // an authoritative slug that fails them. Both checks therefore run again on
+  // the slug the provider returns.
+  it('refuses a reserved authoritative slug and deletes the team it just created', async () => {
+    // Predicted: 'cs1-25f-students!' — not reserved. GitHub: 'cs1-25f-students'.
+    createTeam.mockResolvedValue({ id: 9, slug: 'cs1-25f-students', name: 'CS1-25F Students!' });
+
+    await expect(
+      teamAdmin.createTeam({ classroomId: 'class-1', name: 'CS1-25F Students!' })
+    ).rejects.toMatchObject({ code: 'reserved_name' });
+
+    expect(deleteTeam).toHaveBeenCalledWith('cs1-org', 'cs1-25f-students');
+    expect(teamCreate).not.toHaveBeenCalled();
+  });
+
+  it('refuses an authoritative slug already used locally and rolls the team back', async () => {
+    createTeam.mockResolvedValue({ id: 9, slug: 'blue-team', name: 'Blue Team!' });
+    teamFindBySlug.mockResolvedValue({ id: 'other-team', slug: 'blue-team' });
+
+    await expect(
+      teamAdmin.createTeam({ classroomId: 'class-1', name: 'Blue Team!' })
+    ).rejects.toMatchObject({ code: 'name_collision' });
+
+    expect(teamFindBySlug).toHaveBeenCalledWith('blue-team', 'class-1');
+    expect(deleteTeam).toHaveBeenCalledWith('cs1-org', 'blue-team');
+    expect(teamCreate).not.toHaveBeenCalled();
+  });
+
+  it('still refuses when the rollback itself fails', async () => {
+    // Predicted: 'cs1-25f.assistants' — not reserved. GitHub: 'cs1-25f-assistants'.
+    createTeam.mockResolvedValue({ id: 9, slug: 'cs1-25f-assistants', name: 'CS1 25F.Assistants' });
+    deleteTeam.mockRejectedValueOnce(new Error('rollback failed'));
+
+    await expect(
+      teamAdmin.createTeam({ classroomId: 'class-1', name: 'CS1 25F.Assistants' })
+    ).rejects.toMatchObject({ code: 'reserved_name' });
+    expect(teamCreate).not.toHaveBeenCalled();
   });
 });
 
@@ -232,7 +279,34 @@ describe('teamAdmin.deleteTeam', () => {
       name: 'Blue Team',
       slug: 'blue-team',
       removedFromProvider: true,
+      reposDeleted: 0,
+      deletedRepoNames: [],
     });
+  });
+
+  it('counts the linked repo records that go with the team, before the delete', async () => {
+    teamFindByIdWithRepositories.mockResolvedValue({
+      git_repos: [
+        { id: 'r1', name: 'hw1-blue-team' },
+        { id: 'r2', name: 'hw2-blue-team' },
+      ],
+    });
+
+    const result = await teamAdmin.deleteTeam({ classroomId: 'class-1', slugOrId: 'blue-team' });
+
+    expect(result.reposDeleted).toBe(2);
+    expect(result.deletedRepoNames).toEqual(['hw1-blue-team', 'hw2-blue-team']);
+  });
+
+  it('caps the reported repo names at 20 while still counting them all', async () => {
+    teamFindByIdWithRepositories.mockResolvedValue({
+      git_repos: Array.from({ length: 25 }, (_, i) => ({ id: `r${i}`, name: `hw${i}-blue-team` })),
+    });
+
+    const result = await teamAdmin.deleteTeam({ classroomId: 'class-1', slugOrId: 'blue-team' });
+
+    expect(result.reposDeleted).toBe(25);
+    expect(result.deletedRepoNames).toHaveLength(20);
   });
 
   it('resolves first: an unknown slug is rejected with ZERO provider calls', async () => {
@@ -353,7 +427,28 @@ describe('teamAdmin.renameTeam', () => {
       repoRenames: [{ id: 'r1', name: 'hw1-green-team' }],
     });
     expect(result.renamedRepos).toEqual(['hw1-green-team']);
-    expect(result.failed).toEqual([{ name: 'hw2-blue-team', error: 'repo is archived' }]);
+    // The reason is reported; the provider's own message stays in the log.
+    expect(result.failed).toEqual([{ name: 'hw2-blue-team', error: 'provider_error' }]);
+  });
+
+  it('refuses a reserved authoritative slug and puts the provider name back', async () => {
+    // Predicted: 'cs1-25f-students!' — not reserved. GitHub: 'cs1-25f-students'.
+    updateTeam.mockResolvedValue({ id: 7, slug: 'cs1-25f-students', name: 'CS1-25F Students!' });
+
+    await expect(
+      teamAdmin.renameTeam({
+        classroomId: 'class-1',
+        slugOrId: 'blue-team',
+        newName: 'CS1-25F Students!',
+      })
+    ).rejects.toMatchObject({ code: 'reserved_name' });
+
+    // Best-effort revert on the provider; nothing local was written.
+    expect(updateTeam).toHaveBeenLastCalledWith('cs1-org', 'cs1-25f-students', {
+      name: 'Blue Team',
+    });
+    expect(updateRepo).not.toHaveBeenCalled();
+    expect(teamRenameAndRepos).not.toHaveBeenCalled();
   });
 
   it('rejects renaming onto a reserved classroom-team name', async () => {
@@ -404,9 +499,10 @@ describe('teamAdmin.addTeamMembers', () => {
 
     expect(result.succeeded).toEqual([{ login: 'ada' }]);
     expect(result.failed).toEqual([
-      { login: 'ghost', error: 'No user with that login' },
-      { login: 'grace', error: 'not in org' },
+      { login: 'ghost', error: 'not_found' },
+      { login: 'grace', error: 'provider_error' },
     ]);
+    expect(JSON.stringify(result.failed)).not.toContain('not in org');
     // The membership row is only written when the provider call succeeded.
     expect(addMemberToTeam).toHaveBeenCalledTimes(1);
   });
@@ -486,9 +582,7 @@ describe('teamAdmin.addTeamTags', () => {
 
     expect(teamTagCreate).toHaveBeenCalledTimes(1);
     expect(result.added).toEqual(['tag-ok']);
-    expect(result.failed).toEqual([
-      { tagId: 'tag-elsewhere', error: 'Tag does not belong to this classroom' },
-    ]);
+    expect(result.failed).toEqual([{ tagId: 'tag-elsewhere', error: 'invalid' }]);
   });
 
   it('treats an already-attached tag as added', async () => {
@@ -544,5 +638,22 @@ describe('TeamServiceError', () => {
     expect(error).toBeInstanceOf(Error);
     expect(error.name).toBe('TeamServiceError');
     expect(error.code).toBe('team_not_found');
+  });
+});
+
+describe('describeTeamFailureReason', () => {
+  it('gives every reason in the closed vocabulary a phrase', () => {
+    for (const reason of ['provider_error', 'not_found', 'db_error', 'invalid'] as const) {
+      expect(teamAdmin.describeTeamFailureReason(reason)).toBeTruthy();
+    }
+  });
+});
+
+describe('isReservedSlug', () => {
+  it('matches the classroom membership-team suffixes only', () => {
+    expect(teamAdmin.isReservedSlug('cs1-25f-students')).toBe(true);
+    expect(teamAdmin.isReservedSlug('cs1-25f-assistants')).toBe(true);
+    expect(teamAdmin.isReservedSlug('blue-team')).toBe(false);
+    expect(teamAdmin.isReservedSlug('cs1-25f-students-2')).toBe(false);
   });
 });

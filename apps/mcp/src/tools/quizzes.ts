@@ -253,7 +253,8 @@ interface QuizServiceUpdate {
   rubricPrompt?: string;
   subject?: string;
   difficultyLevel?: string;
-  dueDate?: string;
+  /** null clears the due date; the service maps a falsy value to null. */
+  dueDate?: string | null;
   status?: 'DRAFT' | 'CLOSED';
   weight?: number;
   questionCount?: number;
@@ -269,7 +270,7 @@ interface QuizUpdateArgs {
   rubric_prompt?: string;
   system_prompt?: string;
   repository_id?: string | null;
-  due_date?: string;
+  due_date?: string | null;
   status?: 'DRAFT' | 'CLOSED';
   weight?: number;
   question_count?: number;
@@ -289,7 +290,8 @@ export const quizUpdateTool: ToolDefinition<QuizUpdateArgs> = {
     'and quizzes enabled. Provide at least one field. status accepts only DRAFT (unpublish, ' +
     'hiding it from students again) or CLOSED (stop new attempts); publishing must go through ' +
     'quiz_publish, because only that path notifies students. Set repository_id to null to unlink ' +
-    'the repo. Editing prompts does not re-grade attempts already taken.',
+    'the repo, or due_date to null to clear the deadline. Editing prompts does not re-grade ' +
+    'attempts already taken.',
   scope: 'write',
   roles: OWNER_ASSISTANT,
   inputSchema: {
@@ -313,7 +315,9 @@ export const quizUpdateTool: ToolDefinition<QuizUpdateArgs> = {
       .nullable()
       .optional()
       .describe('Repo (assignment container) this quiz is about; null unlinks it'),
-    due_date: dueDateSchema.optional(),
+    // Nullable here but not on quiz_create: an update has an existing value to
+    // clear, and `set()` forwards null while it skips undefined.
+    due_date: dueDateSchema.nullable().optional().describe('Due date (ISO 8601); null clears it'),
     status: z
       .enum(['DRAFT', 'CLOSED'])
       .optional()
@@ -400,10 +404,10 @@ export const quizPublishTool: ToolDefinition<QuizPublishArgs> = {
   title: 'Publish a quiz',
   description:
     'Publishes a quiz so students can take it. Owner/assistant only; requires a Pro subscription ' +
-    'and quizzes enabled. This is the ONLY path that notifies students — every student in the ' +
-    'classroom gets a "Quiz published" notification, but only on the transition INTO published, ' +
-    'so republishing an already-published quiz notifies nobody. The response reports whether ' +
-    'students were notified. Use quiz_update with status DRAFT to unpublish.',
+    'and quizzes enabled. This is the ONLY path that notifies students — they get a "Quiz ' +
+    'published" notification, but only on the transition INTO published, so republishing an ' +
+    'already-published quiz notifies nobody. The response reports whether students were ' +
+    'notified. Use quiz_update with status DRAFT to unpublish.',
   scope: 'write',
   roles: OWNER_ASSISTANT,
   inputSchema: {
@@ -438,7 +442,7 @@ export const quizPublishTool: ToolDefinition<QuizPublishArgs> = {
       previous_status: quiz.status,
       students_notified: notified,
       message: notified
-        ? 'Quiz published — every student in the classroom has been notified.'
+        ? 'Quiz published — students have been notified.'
         : 'Quiz was already published — nothing changed and no notifications were sent.',
     });
   },
