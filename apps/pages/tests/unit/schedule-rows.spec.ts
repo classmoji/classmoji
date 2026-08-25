@@ -12,8 +12,11 @@
  *    than the empty schedule this replaced.
  *  - Order survives. Where a redacted item sits is part of the structure the
  *    public schedule exists to show.
- *  - Dates format identically on every machine — the anonymous schedule is
- *    shared-cacheable, so one server's rendering is served to everyone.
+ *  - Dates land on the day the COURSE means, not the day the server's zone
+ *    happens to make it. The anonymous schedule is shared-cacheable and ships
+ *    no JavaScript, so one process's rendering is what everyone reads and no
+ *    client pass will fix it. The runner is pinned to UTC (playwright.config)
+ *    to match production, which is where that goes wrong.
  */
 
 import { test, expect } from '@playwright/test';
@@ -24,7 +27,11 @@ const targets = {
   pagePath: (page: { slug: string | null; id: string }) => `/${page.slug || page.id}`,
   slidesUrl: 'https://slides.example',
   appBase: 'https://app.example/student/cs52',
+  timezone: 'America/New_York',
 };
+
+/** The same link targets with no zone configured — dates fall back to UTC. */
+const noZone = { ...targets, timezone: null };
 
 const visiblePage = (id: string, title: string, slug: string | null = null): ScheduleItem => ({
   kind: 'visible',
@@ -137,8 +144,13 @@ test.describe('placeholder rows', () => {
 
   test('a Date and its serialized form format identically', () => {
     // Loader data crosses a serialization boundary; both sides must read alike.
-    const asDate = toScheduleRows([placeholder('i1', 'QUIZ', new Date(2026, 8, 12, 12))], targets);
-    const asString = toScheduleRows([placeholder('i1', 'QUIZ', '2026-09-12T12:00:00')], targets);
+    // Built from a real instant rather than `new Date(2026, 8, 12, 12)`: a
+    // local-time constructor makes the two sides the same only by accident of
+    // the runner's zone, which is the class of fixture that let the bug below
+    // through in the first place.
+    const instant = new Date('2026-09-13T03:59:00Z');
+    const asDate = toScheduleRows([placeholder('i1', 'QUIZ', instant)], targets);
+    const asString = toScheduleRows([placeholder('i1', 'QUIZ', instant.toISOString())], targets);
     expect(asDate).toEqual(asString);
     expect(asDate[0]).toMatchObject({ due: 'Sep 12, 2026' });
   });
@@ -146,6 +158,78 @@ test.describe('placeholder rows', () => {
   test('an unparseable date degrades to no date instead of "Invalid Date"', () => {
     const [row] = toScheduleRows([placeholder('i1', 'QUIZ', 'not-a-date')], targets);
     expect(row).toMatchObject({ due: null });
+  });
+});
+
+test.describe('time zones', () => {
+  /**
+   * 23:59 on Sep 12 in America/New_York. Stored as 03:59Z on Sep 13, because
+   * that is the same moment — which is the entire problem: read in UTC it is a
+   * different CALENDAR DAY from the one the instructor set and the one every
+   * enrolled student sees in their browser.
+   */
+  const deadline = new Date('2026-09-13T03:59:00Z');
+
+  test('a late-evening deadline publishes on the day the course means', () => {
+    // The regression. Before the zone existed this rendered 'Sep 13, 2026' in
+    // production (alpine, UTC) while the app showed students 'Sep 12'.
+    const [row] = toScheduleRows([placeholder('i1', 'REPOSITORY', deadline)], targets);
+    expect(row).toMatchObject({ due: 'Sep 12, 2026' });
+  });
+
+  test('with no zone set the date is UTC and says so', () => {
+    // Never a bare date: on a page with no zone anywhere in it, an unlabelled
+    // deadline is one whose meaning depends on a server setting nobody can see.
+    const [row] = toScheduleRows([placeholder('i1', 'REPOSITORY', deadline)], noZone);
+    expect(row).toMatchObject({ due: 'Sep 13, 2026 (UTC)' });
+  });
+
+  test('the same instant reads differently on either side of the date line', () => {
+    // Proof the zone is genuinely applied rather than passed through: one
+    // instant, three configured zones, three answers.
+    const due = (timezone: string) =>
+      toScheduleRows([placeholder('i1', 'QUIZ', deadline)], { ...targets, timezone })[0];
+
+    expect(due('America/Los_Angeles')).toMatchObject({ due: 'Sep 12, 2026' });
+    expect(due('Europe/London')).toMatchObject({ due: 'Sep 13, 2026' });
+    expect(due('Asia/Tokyo')).toMatchObject({ due: 'Sep 13, 2026' });
+  });
+
+  test('an explicitly chosen UTC is not the unset fallback', () => {
+    // Choosing UTC is an answer; having no answer is not. Only the latter is
+    // stamped, so the suffix means "nobody set this" rather than "this is UTC".
+    const [row] = toScheduleRows([placeholder('i1', 'QUIZ', deadline)], {
+      ...targets,
+      timezone: 'UTC',
+    });
+    expect(row).toMatchObject({ due: 'Sep 13, 2026' });
+  });
+
+  test('a zone the runtime cannot resolve degrades to UTC rather than a 500', () => {
+    // The service refuses these, but the column is reachable by a psql session
+    // and the DB CHECK is shape-only. This render is public and unauthenticated.
+    const [row] = toScheduleRows([placeholder('i1', 'QUIZ', deadline)], {
+      ...targets,
+      timezone: 'Not/AZone',
+    });
+    expect(row).toMatchObject({ due: 'Sep 13, 2026 (UTC)' });
+  });
+
+  test('a naive timestamp is read as the UTC instant it was stored as', () => {
+    // Not as "03:59 wherever this container is". Postgres hands back an
+    // instant; a `Z`-less string must not silently become local time.
+    const [row] = toScheduleRows([placeholder('i1', 'QUIZ', '2026-09-13T03:59:00')], targets);
+    expect(row).toMatchObject({ due: 'Sep 12, 2026' });
+  });
+
+  test('no zone can conjure a date for an item that has none', () => {
+    for (const zone of ['America/New_York', null, 'UTC']) {
+      const [row] = toScheduleRows([placeholder('i1', 'PAGE', null)], {
+        ...targets,
+        timezone: zone,
+      });
+      expect(row).toMatchObject({ due: null });
+    }
   });
 });
 

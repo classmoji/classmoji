@@ -397,6 +397,88 @@ describe('site.upsertSiteSettings', () => {
     });
   });
 
+  // ── The public schedule's time zone ───────────────────────────────────────
+  //
+  // The column exists because /schedule formats deadlines on the SERVER and
+  // ships no JavaScript, so a wrong zone is a wrong calendar day on a public
+  // page. Validated against the runtime's own tz data rather than a list: Intl
+  // is what `dayjs.tz` uses downstream, so this checks the thing that actually
+  // has to work rather than a copy of it.
+  describe('timezone', () => {
+    // A settled, DISABLED site with a stored home page, so these exercise the
+    // zone rule alone instead of tripping the home-page invariants.
+    const settled = () => {
+      classroomSiteFindUnique.mockResolvedValue({
+        classroom_id: 'class-1',
+        is_enabled: false,
+        home_page_id: 'page-1',
+      });
+      classroomSiteUpdate.mockResolvedValue({});
+    };
+
+    const written = () => (classroomSiteUpdate.mock.calls[0][0] as { data: unknown }).data;
+
+    it('stores a valid IANA zone', async () => {
+      settled();
+      await upsertSiteSettings('class-1', { timezone: 'America/New_York' });
+      expect(written()).toEqual({ timezone: 'America/New_York' });
+    });
+
+    it("stores the canonical spelling, not the caller's", async () => {
+      // Intl matches zone names case-insensitively and resolves aliases. One
+      // spelling per zone in the column is what keeps the settings <select>
+      // able to render the stored value as a selected option.
+      settled();
+      await upsertSiteSettings('class-1', { timezone: 'america/new_york' });
+      expect(written()).toEqual({ timezone: 'America/New_York' });
+    });
+
+    it('accepts zones Intl.supportedValuesOf omits', async () => {
+      // Why this validates by BUILDING a formatter rather than by list
+      // membership: `UTC` is not in supportedValuesOf on this runtime, and
+      // refusing it would be absurd — it is the schedule's own fallback.
+      settled();
+      await upsertSiteSettings('class-1', { timezone: 'UTC' });
+      expect(written()).toEqual({ timezone: 'UTC' });
+    });
+
+    it.each([
+      ['a zone that does not exist', 'Not/AZone'],
+      ['a display name rather than a zone', 'Eastern Time'],
+      ['a bare offset', 'GMT+5'],
+      ['a near-miss the DB CHECK would also refuse', 'America/New York'],
+    ])('refuses %s', async (_case, zone) => {
+      settled();
+      await expect(upsertSiteSettings('class-1', { timezone: zone })).rejects.toMatchObject({
+        code: SITE_ERROR.TIMEZONE_INVALID,
+      });
+      // Refused BEFORE the write. A zone that reaches the column renders a
+      // public page in a zone nobody chose.
+      expect(classroomSiteUpdate).not.toHaveBeenCalled();
+    });
+
+    it('clears the zone on null, back to the UTC fallback', async () => {
+      settled();
+      await upsertSiteSettings('class-1', { timezone: null });
+      expect(written()).toEqual({ timezone: null });
+    });
+
+    it('treats a blank string as a clear, not as an invalid zone', async () => {
+      // What an emptied form control submits. Rejecting it would put an error
+      // on a row the admin had just reset.
+      settled();
+      await upsertSiteSettings('class-1', { timezone: '   ' });
+      expect(written()).toEqual({ timezone: null });
+    });
+
+    it('leaves the stored zone alone when the patch omits it', async () => {
+      // The three-state convention every key here follows: absent ≠ null.
+      settled();
+      await upsertSiteSettings('class-1', { show_schedule: true });
+      expect(written()).toEqual({ show_schedule: true });
+    });
+  });
+
   // ── The resulting home page, not the one in the patch ─────────────────────
   // An enable-only patch names no page, so a check keyed off `input.home_page_id`
   // never fires for it — and the site goes live pointed at whatever it already

@@ -4,11 +4,13 @@ import {
   canToggleSiteEnabled,
   homePageNotice,
   suggestSubdomainFromSlug,
+  timezoneOptions,
+  COMMON_TIMEZONES,
   type SitePageOption,
 } from '../siteSettings.ts';
 
 /**
- * The Website tab's three judgements. @classmoji/utils is deliberately NOT
+ * The Website tab's four judgements. @classmoji/utils is deliberately NOT
  * mocked: the subdomain regex and the reserved registry are exactly what
  * suggestSubdomainFromSlug is asking about, and a stub would test the stub.
  */
@@ -85,5 +87,63 @@ describe('homePageNotice', () => {
 
   it('says nothing about a page it cannot find rather than guessing', () => {
     expect(homePageNotice(pages, 'deleted-page')).toBeNull();
+  });
+});
+
+describe('timezoneOptions', () => {
+  it('offers the curated shortlist when nothing is stored', () => {
+    const options = timezoneOptions(null);
+    expect(options).toHaveLength(COMMON_TIMEZONES.length);
+    expect(options.map(option => option.value)).toEqual([...COMMON_TIMEZONES]);
+  });
+
+  it('leads with UTC, which is what an unset schedule falls back to', () => {
+    expect(timezoneOptions(undefined)[0]).toEqual({ value: 'UTC', label: 'UTC' });
+  });
+
+  it('carries a stored zone that is not on the list', () => {
+    // The reason this is a function at all. An antd Select whose value matches
+    // no option renders the bare string and reads as broken — so a zone set by
+    // an MCP tool, a script, or a release that trimmed this list would present
+    // a working configuration as corrupt.
+    const options = timezoneOptions('Antarctica/Troll');
+    expect(options.map(option => option.value)).toContain('Antarctica/Troll');
+    expect(options).toHaveLength(COMMON_TIMEZONES.length + 1);
+  });
+
+  it('does not duplicate a stored zone that is already on the list', () => {
+    const values = timezoneOptions('America/New_York').map(option => option.value);
+    expect(values.filter(value => value === 'America/New_York')).toHaveLength(1);
+  });
+
+  it('adds nothing for a blank stored value', () => {
+    expect(timezoneOptions('   ')).toHaveLength(COMMON_TIMEZONES.length);
+  });
+
+  it('labels a zone by its IANA name with the underscores spaced out', () => {
+    // Not a hand-written display name per zone: that is a second list to keep
+    // in sync with the first, and the IANA name is what is actually stored.
+    const option = timezoneOptions(null).find(entry => entry.value === 'America/New_York');
+    expect(option).toEqual({ value: 'America/New_York', label: 'America/New York' });
+  });
+
+  it('offers only zones this runtime can actually format with', () => {
+    // The list is not a validation boundary — upsertSiteSettings is — but an
+    // option the service would reject is a control that cannot be used. This is
+    // the same Intl check the service makes, run over every entry.
+    for (const zone of COMMON_TIMEZONES) {
+      expect(() => new Intl.DateTimeFormat(undefined, { timeZone: zone })).not.toThrow();
+    }
+  });
+
+  it('offers each zone in its canonical spelling', () => {
+    // A non-canonical entry (`US/Eastern`, `Asia/Calcutta`) would be stored by
+    // the service as something else, and the Select would then fail to match
+    // its own option against the saved value.
+    for (const zone of COMMON_TIMEZONES) {
+      const resolved = new Intl.DateTimeFormat(undefined, { timeZone: zone }).resolvedOptions()
+        .timeZone;
+      expect(resolved).toBe(zone);
+    }
   });
 });

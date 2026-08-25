@@ -49,6 +49,8 @@ export const SITE_ERROR = {
   DOMAIN_TAKEN: 'DOMAIN_TAKEN',
   /** Custom domains are a PRO feature and this classroom is not on PRO. */
   PRO_REQUIRED: 'PRO_REQUIRED',
+  /** Not an IANA zone name this runtime's tz data knows. */
+  TIMEZONE_INVALID: 'TIMEZONE_INVALID',
 } as const;
 
 export type SiteErrorCode = (typeof SITE_ERROR)[keyof typeof SITE_ERROR];
@@ -264,7 +266,41 @@ export type SiteSettingsInput = {
   is_enabled?: boolean;
   home_page_id?: string | null;
   show_schedule?: boolean;
+  /** IANA zone name; `null` clears it back to the UTC fallback. */
+  timezone?: string | null;
 };
+
+/**
+ * The canonical form of an IANA zone name, or null if this runtime has never
+ * heard of it.
+ *
+ * Asks Intl to BUILD a formatter rather than checking membership in
+ * `Intl.supportedValuesOf('timeZone')`, and the difference matters. The
+ * schedule renders through `dayjs.utc(...).tz(zone)`, which is Intl underneath,
+ * so "Intl can format with this" is precisely the invariant that has to hold —
+ * whereas the supported-values list omits aliases (`Etc/UTC`, `US/Eastern`) and
+ * its exact contents move with the ICU build. Validating against the list would
+ * refuse zones that would have rendered perfectly well.
+ *
+ * The RESOLVED name is what comes back, not the caller's spelling. Intl accepts
+ * zone names case-insensitively, so `america/new_york` from a script or a future
+ * API caller is stored as `America/New_York` — one spelling per zone in the
+ * column, which is what keeps the settings <select> able to show the stored
+ * value as its selected option.
+ */
+function canonicalizeTimeZone(zone: string): string | null {
+  const trimmed = zone.trim();
+  if (!trimmed) return null;
+
+  try {
+    return new Intl.DateTimeFormat(undefined, { timeZone: trimmed }).resolvedOptions().timeZone;
+  } catch {
+    // RangeError is the documented rejection for an unknown zone. Caught
+    // broadly anyway: this runs on an admin write path, and no Intl failure is
+    // worth a 500 when the honest answer is "that is not a zone we can use".
+    return null;
+  }
+}
 
 /**
  * Update a site's settings, enforcing the invariant the schema cannot: an
@@ -283,6 +319,13 @@ export type SiteSettingsInput = {
  * NULL, which leaves an enabled site with a null home page. That is deliberate:
  * losing a page must not delete the site row and release its subdomain. PR2's
  * serving code has to treat that shape as a repairable landing state.)
+ *
+ * `timezone` follows the same three-state convention as every other key here:
+ * absent means "leave it alone", `null` (or a blank string, which is what an
+ * emptied form control submits) CLEARS it back to the UTC fallback, and a
+ * non-blank string is validated against the runtime's tz data and stored
+ * canonicalized. A bad zone is refused rather than silently dropped — writing
+ * it would produce a public schedule that formats in a zone nobody chose.
  */
 export async function upsertSiteSettings(classroomId: string, input: SiteSettingsInput) {
   const prisma = getPrisma();
@@ -346,12 +389,31 @@ export async function upsertSiteSettings(classroomId: string, input: SiteSetting
     );
   }
 
+  // Resolved before the write so a rejected zone costs nothing, and so the row
+  // stores Intl's canonical spelling rather than the caller's.
+  let nextTimezone: string | null | undefined;
+  if (input.timezone !== undefined) {
+    if (input.timezone === null || input.timezone.trim() === '') {
+      nextTimezone = null;
+    } else {
+      const canonical = canonicalizeTimeZone(input.timezone);
+      if (!canonical) {
+        throw new SiteError(
+          SITE_ERROR.TIMEZONE_INVALID,
+          `'${input.timezone}' is not a time zone we recognize. Pick one from the list, or clear it to use UTC.`
+        );
+      }
+      nextTimezone = canonical;
+    }
+  }
+
   return prisma.classroomSite.update({
     where: { classroom_id: classroomId },
     data: {
       ...(input.is_enabled === undefined ? {} : { is_enabled: input.is_enabled }),
       ...(input.home_page_id === undefined ? {} : { home_page_id: input.home_page_id }),
       ...(input.show_schedule === undefined ? {} : { show_schedule: input.show_schedule }),
+      ...(nextTimezone === undefined ? {} : { timezone: nextTimezone }),
     },
   });
 }

@@ -48,6 +48,11 @@ export const loader = async (args: LoaderFunctionArgs) => {
     pagePath: sitePagePath,
     slidesUrl: slidesUrl(),
     appBase,
+    // The COURSE's zone, not the server's and not the reader's. This page ships
+    // no JavaScript, so whatever is formatted here is final — there is no
+    // client pass to re-render dates the way every member-facing view gets for
+    // free. Null (no zone chosen) renders in UTC and says so.
+    timezone: site.timezone,
   });
 
   return data(
