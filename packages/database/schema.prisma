@@ -468,6 +468,22 @@ model ClassroomSite {
   // repair, never delete the site row (and with it the claimed subdomain).
   home_page_id String?
   show_schedule Boolean @default(true)
+  // The IANA zone the PUBLIC schedule renders deadlines in, e.g.
+  // `America/New_York`. Null = fall back to UTC, and the schedule then LABELS
+  // the date as UTC rather than printing a bare, ambiguous one.
+  //
+  // This column exists because /schedule is the only surface that formats a
+  // deadline on the SERVER. Every member-facing view formats in the browser, so
+  // it lands in the reader's own zone for free; the public page ships no
+  // JavaScript and is shared-cacheable, so its dates came out in whatever zone
+  // the rendering process happened to be in — UTC on Fly. A 23:59 deadline
+  // therefore published a day late relative to what enrolled students saw.
+  //
+  // Validated in site.service against Intl, NOT by a full CHECK here: the IANA
+  // database gains and renames zones without a migration, so the authority has
+  // to be the runtime's own tz data (same reasoning as RESERVED_SUBDOMAINS).
+  // The CHECK in add_site_timezone is a shape floor only.
+  timezone     String?
   // An instructor-owned hostname (PRO only) that serves this same site, stored
   // as a bare lowercase domain with no scheme, port or trailing dot — the exact
   // shape a Host header normalizes to, because that is what it is compared
