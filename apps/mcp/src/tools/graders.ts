@@ -24,11 +24,12 @@
  * hold a teaching-team membership in THIS classroom.
  */
 
-import { ClassmojiService, HelperService } from '@classmoji/services';
+import { AssignGradersError, ClassmojiService, HelperService } from '@classmoji/services';
 import { z } from 'zod';
 import { ToolError } from '../mcp/errors.ts';
 import type { ToolDefinition } from '../mcp/registry.ts';
 import {
+  loadAssignmentInClassroom,
   loadGitRepoAssignmentInClassroom,
   ok,
   OWNER_ONLY,
@@ -154,5 +155,120 @@ export const graderUnassignTool: ToolDefinition<GraderArgs> = {
     });
 
     return ok({ success: true, removed_grader: assigned.grader.login });
+  },
+};
+
+// ─── Bulk grader assignment ──────────────────────────────────────────────────
+
+interface GraderAssignBulkArgs {
+  classroom: string;
+  assignment_id: string;
+  method: 'RANDOM' | 'EXISTING';
+  template_assignment_id?: string;
+}
+
+export const graderAssignBulkTool: ToolDefinition<GraderAssignBulkArgs> = {
+  name: 'grader_assign_bulk',
+  // Fans out GitHub issue-assignee writes (openWorld). Adds grader rows only —
+  // existing assignments are not cleared, so nothing is destroyed.
+  annotations: { destructive: false, openWorld: true },
+  title: 'Bulk-assign graders to an assignment',
+  description:
+    'Distributes graders across ALL submissions of one assignment at once. Owner only. ' +
+    "method=RANDOM shuffles the classroom's assistants that have is_grader set and walks them " +
+    'round-robin, so the load is spread evenly and each submission gets exactly one grader. ' +
+    'method=EXISTING copies the per-student/per-team grader mapping from template_assignment_id ' +
+    '(required for EXISTING, and it must be an assignment in this classroom) — submissions with ' +
+    'no match in the template are skipped. Graders are mirrored onto the GitHub issue assignees. ' +
+    'Runs in the background; `submissions_assigned` is the number of grader-assignment tasks ' +
+    'queued, so with a multi-grader template it can exceed the submission count. Assignment ids ' +
+    'come from list_repos. For one-off changes use grader_assign / grader_unassign instead.',
+  scope: 'write',
+  roles: OWNER_ONLY,
+  inputSchema: {
+    classroom: z.string().describe("Classroom reference as 'org/slug'"),
+    assignment_id: z.string().uuid().describe('Assignment whose submissions get graders'),
+    method: z
+      .enum(['RANDOM', 'EXISTING'])
+      .describe(
+        'RANDOM = even round-robin over is_grader assistants; EXISTING = copy the grader mapping from template_assignment_id'
+      ),
+    template_assignment_id: z
+      .string()
+      .uuid()
+      .optional()
+      .describe('Assignment to copy grader assignments from (required when method=EXISTING)'),
+  },
+  handler: async (args, ctx) => {
+    const classroom = requireClassroomCtx(ctx);
+
+    // Cheapest check first — no lookups needed to know this is unusable.
+    if (args.method === 'EXISTING' && !args.template_assignment_id) {
+      throw new ToolError(
+        'invalid_params',
+        'template_assignment_id is required when method is EXISTING'
+      );
+    }
+
+    // S1 — resolve BOTH assignments through repository.classroom_id before the
+    // service runs. This is load-bearing, not belt-and-braces: the service
+    // fetches submissions by (assignmentId, classroomSlug), so a foreign or
+    // unknown assignment would silently yield zero rows and report "success, 0
+    // assigned" instead of not_found. Missing and cross-classroom throw the
+    // SAME error, so a probe cannot enumerate another classroom's assignments.
+    const assignment = await loadAssignmentInClassroom(args.assignment_id, ctx);
+    if (args.template_assignment_id) {
+      await loadAssignmentInClassroom(args.template_assignment_id, ctx);
+    }
+
+    let result;
+    try {
+      // classroomId is ALWAYS the authorized classroom. sessionId is omitted:
+      // it only exists to tag runs for the web route's progress stream.
+      result = await ClassmojiService.gitRepoAssignmentGrader.assignGradersToAssignment({
+        classroomId: classroom.classroomId,
+        assignmentId: assignment.id,
+        method: args.method,
+        templateAssignmentId: args.template_assignment_id ?? null,
+      });
+    } catch (error) {
+      if (error instanceof AssignGradersError) {
+        if (error.code === 'no_graders') {
+          throw new ToolError(
+            'invalid_params',
+            'No assistants with is_grader=true in this classroom — flag at least one with assistant_update before assigning graders'
+          );
+        }
+        if (error.code === 'template_required') {
+          throw new ToolError(
+            'invalid_params',
+            'template_assignment_id is required when method is EXISTING'
+          );
+        }
+      }
+      // classroom_not_found is unreachable (the id comes from a resolved ctx);
+      // anything else goes to the registry's generic wrapper.
+      throw error;
+    }
+
+    await writeAudit(ctx, {
+      resource_type: 'GIT_REPO_ASSIGNMENT_GRADER',
+      resource_id: assignment.id,
+      action: 'CREATE',
+      data: {
+        tool: 'grader_assign_bulk',
+        assignment_id: assignment.id,
+        method: args.method,
+        template_assignment_id: args.template_assignment_id ?? null,
+        submissions_assigned: result.numAssignmentsToAddGradersTo,
+      },
+    });
+
+    return ok({
+      success: true,
+      queued: true,
+      submissions_assigned: result.numAssignmentsToAddGradersTo,
+      method: args.method,
+    });
   },
 };

@@ -25,6 +25,7 @@ export const FACULTY_SUGGESTIONS: readonly string[] = [
   "What's in my grading queue — any submissions still ungraded?",
   'Are there any open regrade requests I need to resolve?',
   'What assignments are due this week?',
+  'How is grading going across my TAs — who still has submissions outstanding?',
 ];
 
 /** Student-facing starters (upcoming work, grades, tokens, regrades). */

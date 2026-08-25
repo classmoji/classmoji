@@ -14,7 +14,7 @@ import { registerToolDefinition } from '../mcp/registry.ts';
 import { whoamiTool } from './whoami.ts';
 import { readTools } from './reads.ts';
 import { gradeAddTool, gradeRemoveTool, gradeRemoveAllTool } from './grades.ts';
-import { graderAssignTool, graderUnassignTool } from './graders.ts';
+import { graderAssignTool, graderUnassignTool, graderAssignBulkTool } from './graders.ts';
 import { emojiMappingUpsertTool, letterGradeMappingUpsertTool } from './mappings.ts';
 import { assignmentCreateTool, assignmentUpdateTool, assignmentDeleteTool } from './assignments.ts';
 import { regradeCreateTool, regradeResolveTool } from './regrades.ts';
@@ -49,6 +49,7 @@ import { tokenGrantTool } from './tokens.ts';
 import { extensionPurchaseTool } from './extensions.ts';
 import { repoCreateTool, repoPublishTool, repoUnpublishTool } from './repos.ts';
 import { rosterAddStudentTool, rosterRemoveStudentTool } from './roster.ts';
+import { assistantAddTool, assistantUpdateTool, assistantRemoveTool } from './assistants.ts';
 
 export function registerAllTools(): void {
   // Identity / bootstrap
@@ -64,9 +65,11 @@ export function registerAllTools(): void {
   registerToolDefinition(gradeRemoveTool);
   registerToolDefinition(gradeRemoveAllTool);
 
-  // Grader assignment (OWNER — route-derived)
+  // Grader assignment (OWNER — route-derived); bulk distributes across a whole
+  // assignment in one call.
   registerToolDefinition(graderAssignTool);
   registerToolDefinition(graderUnassignTool);
+  registerToolDefinition(graderAssignBulkTool);
 
   // Grading scale (OWNER)
   registerToolDefinition(emojiMappingUpsertTool);
@@ -126,6 +129,12 @@ export function registerAllTools(): void {
   // Roster (OWNER — add sends real emails; remove is destructive, confirm-gated)
   registerToolDefinition(rosterAddStudentTool);
   registerToolDefinition(rosterRemoveStudentTool);
+
+  // Assistants / TAs (OWNER — add sends a real GitHub org invite; remove is
+  // destructive, confirm-gated, and can drop them from the org)
+  registerToolDefinition(assistantAddTool);
+  registerToolDefinition(assistantUpdateTool);
+  registerToolDefinition(assistantRemoveTool);
 
   // Extensions (STUDENT self)
   registerToolDefinition(extensionPurchaseTool);

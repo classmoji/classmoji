@@ -24,6 +24,7 @@ const mocks = vi.hoisted(() => ({
   findByClassroomId: vi.fn(), // gitRepoAssignment.findByClassroomId
   findEmojiByClassroomId: vi.fn(), // emojiMapping.findByClassroomId
   findAssignedByGrader: vi.fn(), // gitRepoAssignmentGrader.findAssignedByGrader
+  gradingReport: vi.fn(), // gitRepoAssignmentGrader.gradingReport
   findBySlug: vi.fn(), // classroom.findBySlug
   calculateClassLeaderboard: vi.fn(), // helper.calculateClassLeaderboard
   membershipsByClassroom: vi.fn(), // classroomMembership.findByClassroomId
@@ -35,6 +36,7 @@ vi.mock('@classmoji/services', () => ({
     emojiMapping: { findByClassroomId: (...a: unknown[]) => mocks.findEmojiByClassroomId(...a) },
     gitRepoAssignmentGrader: {
       findAssignedByGrader: (...a: unknown[]) => mocks.findAssignedByGrader(...a),
+      gradingReport: (...a: unknown[]) => mocks.gradingReport(...a),
     },
     classroom: { findBySlug: (...a: unknown[]) => mocks.findBySlug(...a) },
     helper: {
@@ -46,7 +48,7 @@ vi.mock('@classmoji/services', () => ({
   },
 }));
 
-const { listSubmissionsTool, getLeaderboardTool, listTeachingTeamTool } =
+const { listSubmissionsTool, getLeaderboardTool, listTeachingTeamTool, gradingReportTool } =
   await import('../reads.ts');
 const { gradingQueueResource, leaderboardResource } = await import('../../resources/grading.ts');
 
@@ -231,5 +233,98 @@ describe('list_teaching_team', () => {
     expect(byId.u3).toBeUndefined(); // students are not teaching team
     // Only id/login/name/roles — no PII (email/school_id) or avatar.
     expect(Object.keys(byId.u1).sort()).toEqual(['id', 'login', 'name', 'roles']);
+  });
+});
+
+describe('grading_report', () => {
+  const GRADER_ID = '33333333-3333-4333-8333-333333333333';
+  const ASSIGNMENT_ID = '44444444-4444-4444-8444-444444444444';
+
+  function reportRows() {
+    return [
+      {
+        grader: { id: 'g-1', login: 'ta-ann', name: 'Ann' },
+        assignment: { id: 'a-1', title: 'HW1', repository_title: 'Lab 1' },
+        assigned_count: 5,
+        graded_count: 3,
+        grade_distribution: { '🟢': 2, '🟡': 1 },
+        last_graded_at: new Date('2026-08-20T15:04:05.000Z'),
+      },
+      {
+        grader: { id: 'g-1', login: 'ta-ann', name: 'Ann' },
+        assignment: { id: 'a-2', title: 'HW2', repository_title: 'Lab 2' },
+        assigned_count: 0, // graded without ever being formally assigned
+        graded_count: 1,
+        grade_distribution: { '🟢': 1 },
+        last_graded_at: null,
+      },
+      {
+        grader: { id: 'g-2', login: 'ta-bob', name: 'Bob' },
+        assignment: { id: 'a-1', title: 'HW1', repository_title: 'Lab 1' },
+        assigned_count: 4,
+        graded_count: 4,
+        grade_distribution: { '🔴': 4 },
+        last_graded_at: new Date('2026-08-21T09:00:00.000Z'),
+      },
+    ];
+  }
+
+  it('summarizes the rows and serializes last_graded_at to ISO', async () => {
+    mocks.gradingReport.mockResolvedValue(reportRows());
+
+    const payload = parse(
+      await gradingReportTool.handler({ classroom: CLASSROOM }, staffCtx('OWNER'))
+    );
+    expect(payload.total_rows).toBe(3);
+    expect(payload.graders).toBe(2); // DISTINCT graders, not row count
+
+    expect(payload.rows[0]).toMatchObject({
+      assigned_count: 5,
+      graded_count: 3,
+      grade_distribution: { '🟢': 2, '🟡': 1 },
+      last_graded_at: '2026-08-20T15:04:05.000Z',
+    });
+    // A grader who graded without being assigned is kept, with assigned_count 0.
+    expect(payload.rows[1]).toMatchObject({ assigned_count: 0, graded_count: 1 });
+    expect(payload.rows[1].last_graded_at).toBeNull();
+
+    // classroomId comes from ctx; absent filters are passed as explicit nulls.
+    expect(mocks.gradingReport).toHaveBeenCalledWith({
+      classroomId: 'class-1',
+      assignmentId: null,
+      graderId: null,
+    });
+  });
+
+  it('passes the assignment_id / grader_id filters straight through', async () => {
+    mocks.gradingReport.mockResolvedValue([]);
+
+    await gradingReportTool.handler(
+      { classroom: CLASSROOM, assignment_id: ASSIGNMENT_ID, grader_id: GRADER_ID },
+      staffCtx('OWNER')
+    );
+
+    expect(mocks.gradingReport).toHaveBeenCalledWith({
+      classroomId: 'class-1',
+      assignmentId: ASSIGNMENT_ID,
+      graderId: GRADER_ID,
+    });
+  });
+
+  it('returns an empty report (not an error) when nothing matches the filters', async () => {
+    mocks.gradingReport.mockResolvedValue([]);
+
+    const payload = parse(
+      await gradingReportTool.handler(
+        { classroom: CLASSROOM, grader_id: GRADER_ID },
+        staffCtx('OWNER')
+      )
+    );
+    expect(payload).toEqual({ total_rows: 0, graders: 0, rows: [] });
+  });
+
+  it('is gated to OWNER/TEACHER — assistants must not read peers grading stats', () => {
+    expect(gradingReportTool.roles).toEqual(['OWNER', 'TEACHER']);
+    expect(gradingReportTool.scope).toBe('read');
   });
 });
