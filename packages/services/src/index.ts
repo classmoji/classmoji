@@ -73,6 +73,14 @@ export type {
   TagFailure,
   RepoRenameFailure,
 } from './classmoji/teamAdmin.service.ts';
+export { ResourceLinkServiceError } from './classmoji/resourceLink.service.ts';
+export type {
+  ResourceLinkResourceType,
+  ResourceLinkTargetType,
+  CreatedResourceLink,
+  RemovedResourceLink,
+  ResourceLinkSummary,
+} from './classmoji/resourceLink.service.ts';
 export { AssignGradersError } from './classmoji/gitRepoAssignmentGrader.service.ts';
 export type {
   AssignGradersMethod,
