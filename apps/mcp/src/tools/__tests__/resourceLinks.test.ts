@@ -107,6 +107,7 @@ describe('resource_link_add', () => {
     targetId: 'repo-1',
     order: 0,
     createdAt: CREATED_AT,
+    manifestSynced: true,
   };
 
   it('links through the service using the ctx classroomId and audits the write', async () => {
@@ -131,6 +132,7 @@ describe('resource_link_add', () => {
       target_id: 'repo-1',
       order: 0,
       created_at: '2026-01-02T03:04:05.000Z',
+      manifest_synced: true,
     });
 
     const audit = auditRow();
@@ -152,6 +154,7 @@ describe('resource_link_add', () => {
     expect(Object.keys(result).sort()).toEqual([
       'created_at',
       'link_id',
+      'manifest_synced',
       'message',
       'order',
       'resource_id',
@@ -160,6 +163,16 @@ describe('resource_link_add', () => {
       'target_id',
       'target_type',
     ]);
+  });
+
+  it('reports a manifest commit that did not land instead of implying it did', async () => {
+    // The link row is committed regardless; the GitHub push is best effort, so
+    // the caller is told which of the two actually happened.
+    mocks.addLink.mockResolvedValue({ ...LINK, manifestSynced: false });
+
+    const result = parse(await resourceLinkAddTool.handler(ARGS, CTX));
+
+    expect(result).toMatchObject({ success: true, manifest_synced: false });
   });
 
   it.each([
@@ -215,7 +228,6 @@ describe('resource_link_add', () => {
   it('rejects an unknown resource_type at the schema before the service is reached', () => {
     expect(resourceLinkAddTool.inputSchema.resource_type.safeParse('quiz').success).toBe(false);
     expect(resourceLinkAddTool.inputSchema.target_type.safeParse('module').success).toBe(false);
-    expect(mocks.addLink).not.toHaveBeenCalled();
   });
 
   it('is a non-destructive, outward-reaching OWNER/TEACHER write', () => {
@@ -224,13 +236,22 @@ describe('resource_link_add', () => {
     expect(resourceLinkAddTool.roles).toEqual(['OWNER', 'TEACHER']);
     expect(resourceLinkAddTool.annotations).toEqual({ destructive: false, openWorld: true });
   });
+
+  it('is throttled below the default bucket', () => {
+    // Every call rebuilds the whole classroom manifest and pushes a commit.
+    expect(resourceLinkAddTool.rateLimit).toEqual({ capacity: 5, refillPerSecond: 0.05 });
+  });
 });
 
 describe('resource_link_remove', () => {
   const ARGS = { classroom: 'org/w26', resource_type: 'slide' as const, link_id: 'link-9' };
 
   it('removes through the service using the ctx classroomId and audits the delete', async () => {
-    mocks.removeLink.mockResolvedValue({ id: 'link-9', resourceType: 'slide' });
+    mocks.removeLink.mockResolvedValue({
+      id: 'link-9',
+      resourceType: 'slide',
+      manifestSynced: true,
+    });
 
     const result = parse(await resourceLinkRemoveTool.handler(ARGS, CTX));
 
@@ -239,7 +260,13 @@ describe('resource_link_remove', () => {
       resourceType: 'slide',
       linkId: 'link-9',
     });
-    expect(result).toMatchObject({ success: true, link_id: 'link-9', resource_type: 'slide' });
+    expect(result).toEqual({
+      success: true,
+      link_id: 'link-9',
+      resource_type: 'slide',
+      manifest_synced: true,
+      message: 'Link removed — the page/slide deck itself was not deleted.',
+    });
 
     const audit = auditRow();
     expect(audit).toMatchObject({
@@ -263,13 +290,29 @@ describe('resource_link_remove', () => {
     expect(mocks.auditCreate).not.toHaveBeenCalled();
   });
 
-  it('is explicitly non-destructive despite being a delete', () => {
-    // Only the link row goes; the page/deck and repo/assignment survive and the
-    // link can be recreated. The registry defaults an unset `destructive` on a
-    // write to true, so this must be stated.
+  it('reports a manifest commit that did not land instead of implying it did', async () => {
+    mocks.removeLink.mockResolvedValue({
+      id: 'link-9',
+      resourceType: 'slide',
+      manifestSynced: false,
+    });
+
+    const result = parse(await resourceLinkRemoveTool.handler(ARGS, CTX));
+
+    expect(result).toMatchObject({ success: true, manifest_synced: false });
+  });
+
+  it('is a destructive, outward-reaching OWNER/TEACHER write', () => {
+    // A delete is annotated destructive by the registry's convention, and this
+    // one takes student-facing visibility with it — the content stops appearing
+    // on the repo/assignment page.
     expect(resourceLinkRemoveTool.scope).toBe('write');
     expect(resourceLinkRemoveTool.roles).toEqual(['OWNER', 'TEACHER']);
-    expect(resourceLinkRemoveTool.annotations).toEqual({ destructive: false, openWorld: true });
+    expect(resourceLinkRemoveTool.annotations).toEqual({ destructive: true, openWorld: true });
+  });
+
+  it('is throttled below the default bucket', () => {
+    expect(resourceLinkRemoveTool.rateLimit).toEqual({ capacity: 5, refillPerSecond: 0.05 });
   });
 });
 
@@ -313,6 +356,8 @@ describe('resource_links_list', () => {
     });
     expect(result).toEqual({
       count: 2,
+      total_matched: 2,
+      truncated: false,
       links: [
         {
           id: 'link-1',
@@ -391,7 +436,26 @@ describe('resource_links_list', () => {
       targetType: 'assignment',
       targetId: 'assign-1',
     });
-    expect(result).toEqual({ count: 0, links: [] });
+    expect(result).toEqual({ count: 0, total_matched: 0, truncated: false, links: [] });
+  });
+
+  it('caps the page at limit and says the rest was cut off', async () => {
+    mocks.listLinks.mockResolvedValue([REPO_LINK, ASSIGNMENT_LINK]);
+
+    const result = parse(
+      await resourceLinksListTool.handler({ classroom: 'org/w26', limit: 1 }, CTX)
+    );
+
+    expect(result.count).toBe(1);
+    expect(result.total_matched).toBe(2);
+    expect(result.truncated).toBe(true);
+    expect(result.links.map((l: { id: string }) => l.id)).toEqual(['link-1']);
+  });
+
+  it('refuses a limit above the maximum at the schema', () => {
+    expect(resourceLinksListTool.inputSchema.limit.safeParse(501).success).toBe(false);
+    expect(resourceLinksListTool.inputSchema.limit.safeParse(0).success).toBe(false);
+    expect(resourceLinksListTool.inputSchema.limit.safeParse(500).success).toBe(true);
   });
 
   it('is a read at the OWNER/TEACHER tier and writes no audit row', async () => {

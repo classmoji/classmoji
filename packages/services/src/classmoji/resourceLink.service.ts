@@ -4,8 +4,11 @@
  * A "resource link" associates a page or a slide deck with either a repository
  * (the assignment container — content shows on the repo page) or one specific
  * assignment inside it. Extracted from the web admin.$class.resources action so
- * that route and the MCP resource-link tools take ONE code path — same
- * precedent as roster.service.ts, assistant.service.ts and teamAdmin.service.ts.
+ * that the resources kanban and the MCP resource-link tools share this path —
+ * same precedent as roster.service.ts, assistant.service.ts and
+ * teamAdmin.service.ts. It is not the only writer of these tables: the
+ * repository form route, page.service.linkPage and the slides importer all
+ * create links of their own and do not come through here.
  *
  * Three rules run through every function here:
  *
@@ -15,22 +18,31 @@
  *    Repository carry `classroom_id` directly; Assignment does not, and is
  *    reached through its Repository. A record that does not exist and a record
  *    belonging to another classroom raise the SAME typed error, so a probe
- *    cannot tell them apart.
+ *    cannot tell them apart. Reads apply the same rule to BOTH ends: a row
+ *    whose target resolves outside the classroom is dropped rather than
+ *    reported, since the writers above are not all classroom-scoped.
  *
- * 2. DUPLICATES ARE CAUGHT IN SQL, NOT IN THE UI. The web kanban hides
- *    already-linked targets client-side; an API caller has no such guard. The
- *    @@unique on (page_id, repository_id, assignment_id) does NOT catch this on
- *    its own: exactly one of the two target columns is always NULL, and the
- *    Postgres unique index is nulls-distinct (see the migration — no
- *    `NULLS NOT DISTINCT`), so a second identical row inserts happily. Hence the
- *    explicit pre-check below, with the P2002 catch kept as a race backstop.
+ * 2. DUPLICATES ARE CAUGHT BY THE PRE-CHECK, AND ONLY BY THE PRE-CHECK. The
+ *    kanban drops a duplicate drag before submitting, but it decides that from
+ *    loader data that may be stale, and an API caller has no such check at all.
+ *    The @@unique on (page_id, repository_id, assignment_id) cannot stand in
+ *    for one either: exactly one of the two target columns is always NULL, and
+ *    the Postgres unique index is nulls-distinct (see the migration — no
+ *    `NULLS NOT DISTINCT`), so a second identical row inserts happily. The
+ *    read-then-write pre-check below is therefore the whole guard, and two
+ *    identical adds racing each other can both pass it — a duplicate row from
+ *    concurrent adds is an ACCEPTED outcome here, not a prevented one. It is
+ *    cosmetic (the manifest keys content by slug, and either row can be
+ *    removed), and ruling it out needs an index change the existing rows would
+ *    have to be de-duplicated for first.
  *
- * 3. THE MANIFEST IS BEST EFFORT. Every successful write rebuilds
+ * 3. THE MANIFEST IS BEST EFFORT, AND SAYS SO. Every successful write rebuilds
  *    `.classmoji/manifest.json` in the classroom content repo. That push talks
  *    to a git host and must never turn a committed database write into a failed
- *    request, so it is wrapped: a failure is logged and the mutation still
- *    reports success. It runs ONLY after a write actually happened — a rejected
- *    add or a no-op remove leaves the manifest untouched.
+ *    request, so it is wrapped — but the outcome is not hidden: every mutation
+ *    reports `manifestSynced`, false when the push was skipped or failed. It
+ *    runs ONLY after a write actually happened — a rejected add or a no-op
+ *    remove leaves the manifest untouched.
  *
  * Authorization is NOT re-checked here. Callers (route auth gates / MCP tool
  * scopes) own that, exactly as in the sibling services above.
@@ -64,12 +76,16 @@ export interface CreatedResourceLink {
   targetId: string;
   order: number;
   createdAt: Date;
+  /** Whether the manifest push that follows the write actually landed. */
+  manifestSynced: boolean;
 }
 
 /** The row removed by `removeLink`. */
 export interface RemovedResourceLink {
   id: string;
   resourceType: ResourceLinkResourceType;
+  /** Whether the manifest push that follows the delete actually landed. */
+  manifestSynced: boolean;
 }
 
 /** One row of `listLinks`, resolved to human-readable resource and target names. */
@@ -90,7 +106,7 @@ export interface ResourceLinkSummary {
   };
 }
 
-/** A Prisma unique-constraint violation (the race backstop for a duplicate link). */
+/** A Prisma unique-constraint violation, mapped rather than surfaced raw. */
 const isUniqueViolation = (error: unknown): boolean =>
   typeof error === 'object' && error !== null && (error as { code?: unknown }).code === 'P2002';
 
@@ -112,51 +128,94 @@ function assertUsableId(
   }
 }
 
-/** Prove the page/slide being linked lives in this classroom. */
-async function assertResourceInClassroom(
+/** The resource half of a link row — exactly one of the two id columns. */
+type ResourceColumn = { page_id: string } | { slide_id: string };
+/** The target half — exactly one id, the other written as an explicit NULL. */
+type TargetColumns = { repository_id: string | null; assignment_id: string | null };
+
+/**
+ * Prove the page/slide being linked lives in this classroom, and hand back the
+ * column the write will use.
+ *
+ * `resourceType` is caller input like the ids are. Validating it in one place
+ * and returning the column from the SAME switch is what keeps the check and the
+ * write on the same side: a value that is neither literal cannot be validated
+ * as one kind and written as the other, it is refused here before any query
+ * runs — as the same not-found an unknown id gets.
+ */
+async function resolveResource(
   classroomId: string,
   resourceType: ResourceLinkResourceType,
   resourceId: string
-): Promise<void> {
+): Promise<ResourceColumn> {
   const where = { id: resourceId, classroom_id: classroomId };
-  const found =
-    resourceType === 'page'
-      ? await getPrisma().page.findFirst({ where, select: { id: true } })
-      : await getPrisma().slide.findFirst({ where, select: { id: true } });
-
-  if (!found) {
-    throw new ResourceLinkServiceError(
+  const notFound = () =>
+    new ResourceLinkServiceError(
       'resource_not_found',
       `[resourceLink] ${resourceType} ${resourceId} not found in classroom ${classroomId}`
     );
+
+  switch (resourceType) {
+    case 'page': {
+      const found = await getPrisma().page.findFirst({ where, select: { id: true } });
+      if (!found) throw notFound();
+      return { page_id: resourceId };
+    }
+    case 'slide': {
+      const found = await getPrisma().slide.findFirst({ where, select: { id: true } });
+      if (!found) throw notFound();
+      return { slide_id: resourceId };
+    }
+    default:
+      throw new ResourceLinkServiceError(
+        'resource_not_found',
+        `[resourceLink] ${String(resourceType)} is not a resource type`
+      );
   }
 }
 
 /**
- * Prove the link target lives in this classroom. Repository carries
- * `classroom_id` directly; Assignment is reached through its Repository.
+ * Prove the link target lives in this classroom, and hand back the pair of
+ * target columns the write will use. Repository carries `classroom_id`
+ * directly; Assignment is reached through its Repository.
+ *
+ * One switch decides both halves, for the same reason as `resolveResource`: an
+ * unrecognised `targetType` is refused before any query rather than checked
+ * against one table and written as the other.
  */
-async function assertTargetInClassroom(
+async function resolveTarget(
   classroomId: string,
   targetType: ResourceLinkTargetType,
   targetId: string
-): Promise<void> {
-  const found =
-    targetType === 'repository'
-      ? await getPrisma().repository.findFirst({
-          where: { id: targetId, classroom_id: classroomId },
-          select: { id: true },
-        })
-      : await getPrisma().assignment.findFirst({
-          where: { id: targetId, repository: { classroom_id: classroomId } },
-          select: { id: true },
-        });
-
-  if (!found) {
-    throw new ResourceLinkServiceError(
+): Promise<TargetColumns> {
+  const notFound = () =>
+    new ResourceLinkServiceError(
       'target_not_found',
       `[resourceLink] ${targetType} ${targetId} not found in classroom ${classroomId}`
     );
+
+  switch (targetType) {
+    case 'repository': {
+      const found = await getPrisma().repository.findFirst({
+        where: { id: targetId, classroom_id: classroomId },
+        select: { id: true },
+      });
+      if (!found) throw notFound();
+      return { repository_id: targetId, assignment_id: null };
+    }
+    case 'assignment': {
+      const found = await getPrisma().assignment.findFirst({
+        where: { id: targetId, repository: { classroom_id: classroomId } },
+        select: { id: true },
+      });
+      if (!found) throw notFound();
+      return { repository_id: null, assignment_id: targetId };
+    }
+    default:
+      throw new ResourceLinkServiceError(
+        'target_not_found',
+        `[resourceLink] ${String(targetType)} is not a target type`
+      );
   }
 }
 
@@ -166,16 +225,19 @@ async function assertTargetInClassroom(
  * Best effort by contract: the manifest describes the link graph for the
  * content repo, and the link row is already committed by the time this runs.
  * Failing the mutation because a git push did not land would report "nothing
- * happened" for a change that DID happen, so a failure is logged instead.
+ * happened" for a change that DID happen, so a failure is logged instead — and
+ * reported, as the boolean every mutation passes back to its caller. Best
+ * effort is not the same as invisible.
  */
-async function syncManifest(classroomId: string): Promise<void> {
+async function syncManifest(classroomId: string): Promise<boolean> {
   try {
-    await contentManifestService.saveManifest(classroomId);
+    return await contentManifestService.saveManifest(classroomId);
   } catch (error: unknown) {
     console.error(
       '[resourceLink] failed to update the content manifest:',
       error instanceof Error ? error.message : String(error)
     );
+    return false;
   }
 }
 
@@ -184,7 +246,8 @@ async function syncManifest(classroomId: string): Promise<void> {
  *
  * Both ends are proven to be in `classroomId` BEFORE the row is created, and an
  * existing identical link is reported as `already_linked` rather than inserted
- * twice. On success the content manifest is refreshed (best effort).
+ * twice. On success the content manifest is refreshed (best effort — the result
+ * comes back as `manifestSynced`).
  */
 export const addLink = async ({
   classroomId,
@@ -202,27 +265,23 @@ export const addLink = async ({
   assertUsableId(resourceId, 'resource_not_found', 'resourceId');
   assertUsableId(targetId, 'target_not_found', 'targetId');
 
-  await assertResourceInClassroom(classroomId, resourceType, resourceId);
-  await assertTargetInClassroom(classroomId, targetType, targetId);
-
-  // Exactly one target column is set; the other is explicitly NULL so the
-  // duplicate lookup and the insert describe the same row.
-  const repositoryId = targetType === 'repository' ? targetId : null;
-  const assignmentId = targetType === 'assignment' ? targetId : null;
-
-  const duplicateWhere =
-    resourceType === 'page'
-      ? { page_id: resourceId, repository_id: repositoryId, assignment_id: assignmentId }
-      : { slide_id: resourceId, repository_id: repositoryId, assignment_id: assignmentId };
+  // Each resolve validates its discriminant, proves its end of the link is in
+  // this classroom, and returns the columns for that end. Building the row from
+  // those return values is what makes the duplicate lookup and the insert
+  // describe the same row: the unset target column is an explicit NULL in both,
+  // never an `undefined` that Prisma would drop from the `where`.
+  const resourceColumn = await resolveResource(classroomId, resourceType, resourceId);
+  const targetColumns = await resolveTarget(classroomId, targetType, targetId);
+  const columns = { ...resourceColumn, ...targetColumns };
 
   const existing =
     resourceType === 'page'
       ? await getPrisma().pageLink.findFirst({
-          where: duplicateWhere as { page_id: string },
+          where: columns as { page_id: string },
           select: { id: true },
         })
       : await getPrisma().slideLink.findFirst({
-          where: duplicateWhere as { slide_id: string },
+          where: columns as { slide_id: string },
           select: { id: true },
         });
 
@@ -238,25 +297,18 @@ export const addLink = async ({
     created =
       resourceType === 'page'
         ? await getPrisma().pageLink.create({
-            data: {
-              page_id: resourceId,
-              repository_id: repositoryId,
-              assignment_id: assignmentId,
-            },
+            data: columns as { page_id: string } & TargetColumns,
             select: { id: true, order: true, created_at: true },
           })
         : await getPrisma().slideLink.create({
-            data: {
-              slide_id: resourceId,
-              repository_id: repositoryId,
-              assignment_id: assignmentId,
-            },
+            data: columns as { slide_id: string } & TargetColumns,
             select: { id: true, order: true, created_at: true },
           });
   } catch (error: unknown) {
-    // Race backstop for the pre-check above. It only fires where the unique
-    // index actually bites, but a concurrent add must never surface as an
-    // opaque database failure.
+    // The nulls-distinct index cannot fire on the rows written here (rule 2
+    // above), so this is not a race backstop — it is cheap insurance for the
+    // day the indexes are tightened, and it keeps a unique violation from
+    // reaching a caller as an opaque database failure either way.
     if (!isUniqueViolation(error)) throw error;
     throw new ResourceLinkServiceError(
       'already_linked',
@@ -264,7 +316,7 @@ export const addLink = async ({
     );
   }
 
-  await syncManifest(classroomId);
+  const manifestSynced = await syncManifest(classroomId);
 
   return {
     id: created.id,
@@ -274,6 +326,7 @@ export const addLink = async ({
     targetId,
     order: created.order,
     createdAt: created.created_at,
+    manifestSynced,
   };
 };
 
@@ -286,6 +339,10 @@ export const addLink = async ({
  * classroom's and nothing was deleted. That distinction is what keeps the
  * manifest from being rewritten to describe links that are still there (and
  * makes a cross-classroom delete a safe no-op rather than a leak).
+ *
+ * `resourceType` picks the table, so it is validated in the same switch that
+ * issues the delete: an unrecognised value is refused rather than falling
+ * through to the slide table and deleting from the wrong one.
  */
 export const removeLink = async ({
   classroomId,
@@ -298,14 +355,24 @@ export const removeLink = async ({
 }): Promise<RemovedResourceLink> => {
   assertUsableId(linkId, 'link_not_found', 'linkId');
 
-  const { count } =
-    resourceType === 'page'
-      ? await getPrisma().pageLink.deleteMany({
-          where: { id: linkId, page: { classroom_id: classroomId } },
-        })
-      : await getPrisma().slideLink.deleteMany({
-          where: { id: linkId, slide: { classroom_id: classroomId } },
-        });
+  let count: number;
+  switch (resourceType) {
+    case 'page':
+      ({ count } = await getPrisma().pageLink.deleteMany({
+        where: { id: linkId, page: { classroom_id: classroomId } },
+      }));
+      break;
+    case 'slide':
+      ({ count } = await getPrisma().slideLink.deleteMany({
+        where: { id: linkId, slide: { classroom_id: classroomId } },
+      }));
+      break;
+    default:
+      throw new ResourceLinkServiceError(
+        'link_not_found',
+        `[resourceLink] ${String(resourceType)} is not a resource type`
+      );
+  }
 
   if (count !== 1) {
     throw new ResourceLinkServiceError(
@@ -314,20 +381,25 @@ export const removeLink = async ({
     );
   }
 
-  await syncManifest(classroomId);
+  const manifestSynced = await syncManifest(classroomId);
 
-  return { id: linkId, resourceType };
+  return { id: linkId, resourceType, manifestSynced };
 };
 
-/** The include shared by both link queries — resolves names in ONE round trip each. */
+/**
+ * The include shared by both link queries — resolves names in ONE round trip
+ * each. `classroom_id` rides along on both repository selects because the
+ * `where` can only scope the RESOURCE side (that is where the classroom lives);
+ * the target side is checked per row in `toSummary`.
+ */
 const LINK_INCLUDE = {
-  repository: { select: { id: true, title: true, slug: true } },
+  repository: { select: { id: true, title: true, slug: true, classroom_id: true } },
   assignment: {
     select: {
       id: true,
       title: true,
       slug: true,
-      repository: { select: { id: true, title: true } },
+      repository: { select: { id: true, title: true, classroom_id: true } },
     },
   },
 } as const;
@@ -336,25 +408,51 @@ type LinkRow = {
   id: string;
   order: number;
   created_at: Date;
-  repository: { id: string; title: string; slug: string | null } | null;
+  repository: { id: string; title: string; slug: string | null; classroom_id: string } | null;
   assignment: {
     id: string;
     title: string;
     slug: string | null;
-    repository: { id: string; title: string } | null;
+    repository: { id: string; title: string; classroom_id: string } | null;
   } | null;
 };
 
-/** Fold a raw link row plus its resource into the allow-listed summary shape. */
+/**
+ * Fold a raw link row plus its resource into the allow-listed summary shape,
+ * or drop the row.
+ *
+ * A row is only reported when its target resolves to exactly one record IN THIS
+ * CLASSROOM. That second half matters because the `where` cannot express it —
+ * PageLink/SlideLink carry no classroom, so the query scopes the page/slide
+ * side and the target relations come back unfiltered. Not every writer of these
+ * tables is classroom-scoped, so a row pointing at another classroom's
+ * repository or assignment is possible; it is dropped and logged rather than
+ * folded into a list that claims to be one classroom's.
+ */
 function toSummary(
   row: LinkRow,
   resourceType: ResourceLinkResourceType,
-  resource: { id: string; title: string; slug: string | null }
+  resource: { id: string; title: string; slug: string | null },
+  classroomId: string
 ): ResourceLinkSummary | null {
-  // Exactly one of the two target columns is set. A row with neither is
-  // corrupt (or the target was deleted mid-read) and is dropped rather than
-  // reported with a hole in it.
+  const drop = (why: string) => {
+    console.warn(`[resourceLink] dropping ${resourceType} link ${row.id}: ${why}`);
+    return null;
+  };
+
+  // Exactly one of the two target columns is expected to be set.
+  if (row.repository && row.assignment) {
+    // Both set: the row does not describe one place, so report the narrower
+    // target (the repository the assignment sits in is a superset of it).
+    console.warn(
+      `[resourceLink] ${resourceType} link ${row.id} names both a repository and an assignment; using the repository`
+    );
+  }
+
   if (row.repository) {
+    if (row.repository.classroom_id !== classroomId) {
+      return drop('its repository target is in another classroom');
+    }
     return {
       id: row.id,
       resourceType,
@@ -365,7 +463,15 @@ function toSummary(
       target: { id: row.repository.id, title: row.repository.title, slug: row.repository.slug },
     };
   }
+
   if (row.assignment) {
+    // Assignment has no classroom of its own; its repository is what places it.
+    if (!row.assignment.repository) {
+      return drop('its assignment target has no repository to place it in a classroom');
+    }
+    if (row.assignment.repository.classroom_id !== classroomId) {
+      return drop('its assignment target is in another classroom');
+    }
     return {
       id: row.id,
       resourceType,
@@ -377,16 +483,15 @@ function toSummary(
         id: row.assignment.id,
         title: row.assignment.title,
         slug: row.assignment.slug,
-        ...(row.assignment.repository
-          ? {
-              repositoryId: row.assignment.repository.id,
-              repositoryTitle: row.assignment.repository.title,
-            }
-          : {}),
+        repositoryId: row.assignment.repository.id,
+        repositoryTitle: row.assignment.repository.title,
       },
     };
   }
-  return null;
+
+  // Neither column set — the row is corrupt, or the target was deleted
+  // mid-read. Dropped rather than reported with a hole in it.
+  return drop('it names neither a repository nor an assignment');
 }
 
 /**
@@ -413,7 +518,9 @@ function targetWhere(
  *
  * At most two queries (one per resource type, skipped when `resourceType`
  * narrows to one), each resolving its resource and target names through
- * includes — no per-row lookups.
+ * includes — no per-row lookups. The `where` scopes the page/slide side, which
+ * is the side that carries the classroom; the target side is confirmed row by
+ * row in `toSummary`, which drops anything resolving elsewhere.
  */
 export const listLinks = async ({
   classroomId,
@@ -443,7 +550,7 @@ export const listLinks = async ({
       orderBy: [{ created_at: 'asc' }],
     });
     for (const row of rows) {
-      const summary = toSummary(row as unknown as LinkRow, 'page', row.page);
+      const summary = toSummary(row as unknown as LinkRow, 'page', row.page, classroomId);
       if (summary) links.push(summary);
     }
   }
@@ -459,7 +566,7 @@ export const listLinks = async ({
       orderBy: [{ created_at: 'asc' }],
     });
     for (const row of rows) {
-      const summary = toSummary(row as unknown as LinkRow, 'slide', row.slide);
+      const summary = toSummary(row as unknown as LinkRow, 'slide', row.slide, classroomId);
       if (summary) links.push(summary);
     }
   }

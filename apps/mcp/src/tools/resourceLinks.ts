@@ -12,11 +12,13 @@
  * OWNER_TEACHER here, NOT the OWNER_ONLY most admin tools use. ASSISTANT is
  * excluded, exactly as on the web route.
  *
- * Backbone: ClassmojiService.resourceLink.*, extracted in phase 1 so the web
- * route and these tools take ONE code path (same precedent as roster/assistant/
- * teamAdmin). The service owns the scoping: it proves BOTH ends of a link live
- * in the classroom before writing, and deletes through a classroom compound
- * `where` that makes a foreign link id a no-op rather than a leak.
+ * Backbone: ClassmojiService.resourceLink.*, extracted in phase 1 so the
+ * resources kanban and these tools share that path (same precedent as roster/
+ * assistant/teamAdmin) — other writers of the link tables exist elsewhere and
+ * are not routed through it. The service owns the scoping: it proves BOTH ends
+ * of a link live in the classroom before writing, deletes through a classroom
+ * compound `where` that makes a foreign link id a no-op rather than a leak, and
+ * drops read rows whose target resolves into another classroom.
  *
  * S1: classroomId is ALWAYS ctx.classroom.classroomId, never request input. An
  * id that names nothing and an id belonging to another classroom come back as
@@ -102,12 +104,19 @@ export const resourceLinkAddTool: ToolDefinition<ResourceLinkAddArgs> = {
     'content visible to students on that repo/assignment page, so it is how you publish existing ' +
     'content to a place students will find it. Owner and teacher only. Use list_pages / ' +
     'list_slides for resource ids and list_repos for repository and assignment ids, and ' +
-    'resource_links_list to see what is already linked. A successful link also commits an updated ' +
-    'content manifest to the classroom content repository on GitHub. Distinct from ' +
-    'module_item_add, which places content in a curriculum module, and from calendar event links, ' +
-    'which attach content to a scheduled session.',
+    'resource_links_list to see what is already linked. Each successful link also rebuilds the ' +
+    'classroom content manifest and commits it to the content repository on GitHub: that commit ' +
+    'is best effort and its outcome is reported as manifest_synced, and because every call pays ' +
+    'for a whole-classroom rebuild plus a git write, heavy looping is deliberately throttled — ' +
+    'link in small batches rather than in a tight loop. Distinct from module_item_add, which ' +
+    'places content in a curriculum module, and from calendar event links, which attach content ' +
+    'to a scheduled session.',
   scope: 'write',
   roles: OWNER_TEACHER,
+  // Tighter than the default bucket: every call rebuilds the whole classroom
+  // manifest and pushes a commit through the process-wide write queue, so cap
+  // it at a burst of 5 and roughly 3 per minute sustained.
+  rateLimit: { capacity: 5, refillPerSecond: 0.05 },
   inputSchema: {
     classroom: classroomArg,
     resource_type: resourceTypeArg,
@@ -161,6 +170,9 @@ export const resourceLinkAddTool: ToolDefinition<ResourceLinkAddArgs> = {
       target_id: link.targetId,
       order: link.order,
       created_at: link.createdAt.toISOString(),
+      // The link row is committed either way; this says whether the manifest
+      // commit that follows it actually landed.
+      manifest_synced: link.manifestSynced,
       message: `Linked ${link.resourceType} ${link.resourceId} to ${link.targetType} ${link.targetId} — students will now see it there.`,
     });
   },
@@ -174,21 +186,28 @@ interface ResourceLinkRemoveArgs {
 
 export const resourceLinkRemoveTool: ToolDefinition<ResourceLinkRemoveArgs> = {
   name: 'resource_link_remove',
-  // Deletes the LINK row only: the page/slide and the repo/assignment both
-  // survive untouched and the link can simply be added again, so this is not
-  // destructive. Set explicitly — the registry defaults an unset `destructive`
-  // on a write to true. openWorld for the manifest commit, as with add.
-  annotations: { destructive: false, openWorld: true },
+  // Deletes a row, and student-facing visibility goes with it — the content
+  // disappears from the repo/assignment page. The registry's convention is that
+  // deletes are destructive, so this is one, even though the page/slide deck
+  // and the repo/assignment survive and the link can be added back. openWorld
+  // for the manifest commit, as with add.
+  annotations: { destructive: true, openWorld: true },
   title: 'Unlink a page or slide deck',
   description:
     'Removes a link between a page or slide deck and a repository or assignment. Owner and ' +
     'teacher only. Only the link is deleted — the page/slide deck and the repo/assignment are ' +
-    'left untouched, and the link can be recreated with resource_link_add. Students stop seeing ' +
-    'that content on the repo/assignment page. Get link ids from resource_links_list. A ' +
-    'successful removal also commits an updated content manifest to the classroom content ' +
-    'repository on GitHub.',
+    'left untouched, and the link can be recreated with resource_link_add — but students stop ' +
+    'seeing that content on the repo/assignment page, so it changes what the class can reach. ' +
+    'Get link ids from resource_links_list. Each successful removal also rebuilds the classroom ' +
+    'content manifest and commits it to the content repository on GitHub: that commit is best ' +
+    'effort and its outcome is reported as manifest_synced, and because every call pays for a ' +
+    'whole-classroom rebuild plus a git write, heavy looping is deliberately throttled — unlink ' +
+    'in small batches rather than in a tight loop.',
   scope: 'write',
   roles: OWNER_TEACHER,
+  // Same bucket as resource_link_add, and for the same reason: a manifest
+  // rebuild plus a git commit per call.
+  rateLimit: { capacity: 5, refillPerSecond: 0.05 },
   inputSchema: {
     classroom: classroomArg,
     resource_type: resourceTypeArg,
@@ -201,11 +220,12 @@ export const resourceLinkRemoveTool: ToolDefinition<ResourceLinkRemoveArgs> = {
   handler: async (args, ctx) => {
     const classroom = requireClassroomCtx(ctx);
 
+    let removed;
     try {
       // The service deletes through a classroom compound `where` and treats a
       // count other than 1 as a miss, so another classroom's link id is a no-op
       // reported as the same not-found an unknown id gets.
-      await ClassmojiService.resourceLink.removeLink({
+      removed = await ClassmojiService.resourceLink.removeLink({
         classroomId: classroom.classroomId,
         resourceType: args.resource_type,
         linkId: args.link_id,
@@ -229,10 +249,17 @@ export const resourceLinkRemoveTool: ToolDefinition<ResourceLinkRemoveArgs> = {
       success: true,
       link_id: args.link_id,
       resource_type: args.resource_type,
+      // The delete is committed either way; this says whether the manifest
+      // commit that follows it actually landed.
+      manifest_synced: removed.manifestSynced,
       message: 'Link removed — the page/slide deck itself was not deleted.',
     });
   },
 };
+
+/** A classroom's whole link graph can be long; cap what one call returns. */
+const LIST_LINKS_LIMIT_DEFAULT = 200;
+const LIST_LINKS_LIMIT_MAX = 500;
 
 interface ResourceLinksListArgs {
   classroom: string;
@@ -240,6 +267,7 @@ interface ResourceLinksListArgs {
   resource_id?: string;
   target_type?: TargetType;
   target_id?: string;
+  limit?: number;
 }
 
 export const resourceLinksListTool: ToolDefinition<ResourceLinksListArgs> = {
@@ -251,7 +279,9 @@ export const resourceLinksListTool: ToolDefinition<ResourceLinksListArgs> = {
     'only. Filter by resource_type/resource_id to see where one page or deck appears, or by ' +
     'target_type/target_id to see everything attached to one repo or assignment. The link ids ' +
     'returned here are what resource_link_remove takes; use list_pages, list_slides and ' +
-    'list_repos for the page, deck, repository and assignment ids that resource_link_add takes.',
+    `list_repos for the page, deck, repository and assignment ids that resource_link_add takes. ` +
+    `Returns at most ${LIST_LINKS_LIMIT_DEFAULT} links by default; total_matched and truncated ` +
+    'say whether a filter or a larger limit is needed to see the rest.',
   scope: 'read',
   roles: OWNER_TEACHER,
   inputSchema: {
@@ -276,6 +306,13 @@ export const resourceLinksListTool: ToolDefinition<ResourceLinksListArgs> = {
       .max(100)
       .optional()
       .describe('Only links pointing at this one repository or assignment'),
+    limit: z
+      .number()
+      .int()
+      .positive()
+      .max(LIST_LINKS_LIMIT_MAX)
+      .optional()
+      .describe(`Max links to return (default ${LIST_LINKS_LIMIT_DEFAULT})`),
   },
   handler: async (args, ctx) => {
     const classroom = requireClassroomCtx(ctx);
@@ -288,10 +325,17 @@ export const resourceLinksListTool: ToolDefinition<ResourceLinksListArgs> = {
       targetId: args.target_id,
     });
 
+    // Paged after the read, as list_submissions does: the service has no limit
+    // param, and `truncated` tells the caller when it is seeing a slice.
+    const limit = Math.min(args.limit ?? LIST_LINKS_LIMIT_DEFAULT, LIST_LINKS_LIMIT_MAX);
+    const page = links.slice(0, limit);
+
     // Allow-listed field by field — the service summaries are never spread.
     return ok({
-      count: links.length,
-      links: links.map(link => ({
+      count: page.length,
+      total_matched: links.length,
+      truncated: links.length > page.length,
+      links: page.map(link => ({
         id: link.id,
         resource_type: link.resourceType,
         resource: {
