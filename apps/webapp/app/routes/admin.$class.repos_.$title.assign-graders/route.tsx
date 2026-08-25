@@ -131,14 +131,14 @@ const AssignGraders = ({ loaderData }: Route.ComponentProps) => {
 export const action = async ({ params, request }: Route.ActionArgs) => {
   const { class: classSlug } = params;
 
-  const { classroom, userId: _userId, membership } = await requireClassroomAdmin(
-    request,
-    classSlug!,
-    {
-      resourceType: 'REPOSITORIES',
-      action: 'assign_graders',
-    }
-  );
+  const {
+    classroom,
+    userId: _userId,
+    membership,
+  } = await requireClassroomAdmin(request, classSlug!, {
+    resourceType: 'REPOSITORIES',
+    action: 'assign_graders',
+  });
   assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
 
   const data = await request.json();
@@ -153,7 +153,7 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
   });
 
   const { numAssignmentsToAddGradersTo } = await assignGradersToAssignmentsHandler(
-    { ...data, classroomSlug: classSlug },
+    { ...data, classroomId: classroom.id },
     sessionId
   );
 

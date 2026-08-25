@@ -51,6 +51,16 @@ export {
 
 export { ClassmojiService, HelperService, StripeService, FlyCertService, MarkdownImporter };
 
+// Admin service result/error shapes shared by the web routes and the MCP tools.
+export { AssistantServiceError } from './classmoji/assistant.service.ts';
+export type { AddAssistantResult, RemoveAssistantResult } from './classmoji/assistant.service.ts';
+export { AssignGradersError } from './classmoji/gitRepoAssignmentGrader.service.ts';
+export type {
+  AssignGradersMethod,
+  AssignGradersResult,
+  GradingReportRow,
+} from './classmoji/gitRepoAssignmentGrader.service.ts';
+
 // Fly certificate automation for class-site custom domains. Every method throws
 // a typed FlyCertError when the credentials are absent, so importing this in a
 // deployment that has none is safe.

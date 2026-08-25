@@ -1,33 +1,10 @@
 import { namedAction } from 'remix-utils/named-action';
-import { tasks } from '@trigger.dev/sdk';
 
-import { ClassmojiService, getGitProvider, ensureClassroomTeam } from '@classmoji/services';
-import getPrisma from '@classmoji/database';
+import { ClassmojiService } from '@classmoji/services';
 import { ActionTypes } from '~/constants';
 import { waitForRunCompletion } from '~/utils/helpers';
 import { requireClassroomAdmin, assertClassroomMutationAllowed } from '~/utils/routeAuth.server';
 import type { Route } from './+types/route';
-
-interface AssistantPayload {
-  id: string | number;
-  login: string;
-  name: string;
-  email?: string | null;
-  provider_email?: string | null;
-}
-
-interface AssistantClassroom {
-  id: string;
-  slug: string;
-  git_organization: {
-    id: string;
-    login: string;
-    provider: string;
-    github_installation_id?: string | null;
-    access_token?: string | null;
-    base_url?: string | null;
-  };
-}
 
 export const action = async ({ request, params }: Route.ActionArgs) => {
   const classSlug = params.class!;
@@ -43,13 +20,24 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
   return namedAction(request, {
     async createAssistant() {
       try {
-        // The classroom `requireClassroomAdmin` authorized above, not a fresh
-        // lookup on the same slug — re-resolving decides a second time which
-        // classroom this membership lands in.
-        await addAssistantHandler({
-          assistant: data,
-          classroom: classroom as unknown as AssistantClassroom,
+        // The GitHub profile is resolved server-side by the service from the
+        // login alone — the form's octokit lookup is UX validation only, so the
+        // client can no longer choose the provider_id we key the account to.
+        // `classroom.id` is the classroom requireClassroomAdmin authorized, not
+        // a fresh lookup on the same slug.
+        const result = await ClassmojiService.assistant.addAssistant({
+          classroomId: classroom.id,
+          login: data.login,
+          name: data.name,
+          email: data.email,
         });
+
+        if (result.alreadyExists) {
+          return {
+            action: ActionTypes.SAVE_USER,
+            error: `${result.login} is already an assistant in this class.`,
+          };
+        }
 
         return {
           success: 'Assistant created',
@@ -65,7 +53,11 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
     },
 
     async updateAssistant() {
-      await updateAssistantHandler(classroom.id, data.login, data.isGrader);
+      await ClassmojiService.assistant.updateAssistant({
+        classroomId: classroom.id,
+        login: data.login,
+        isGrader: data.isGrader,
+      });
       return {
         success: 'Assistant updated',
         action: ActionTypes.SAVE_USER,
@@ -74,16 +66,15 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
 
     async removeAssistant() {
       try {
-        const run = await tasks.trigger('remove_user_from_organization', {
-          payload: {
-            user: data.user,
-            gitOrganization: classroom.git_organization,
-            classroom: classroom,
-            role: 'ASSISTANT',
-          },
+        // The service resolves the target from the DB by (classroom, login) and
+        // builds the task payload entirely server-side; the route keeps awaiting
+        // the run so the UI can report the finished removal.
+        const { runId } = await ClassmojiService.assistant.removeAssistant({
+          classroomId: classroom.id,
+          login: data.user?.login,
         });
 
-        await waitForRunCompletion(run.id);
+        await waitForRunCompletion(runId);
 
         return {
           success: 'Assistant removed',
@@ -98,106 +89,4 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
       }
     },
   });
-};
-
-/** `classroomId` is the caller's already-authorized classroom, not a re-resolve. */
-export const updateAssistantHandler = async (
-  classroomId: string,
-  assistantLogin: string,
-  isGrader: boolean
-) => {
-  const assistant = await ClassmojiService.user.findByLogin(assistantLogin);
-
-  return ClassmojiService.classroomMembership.update(classroomId, assistant!.id, {
-    is_grader: isGrader,
-  });
-};
-
-export const addAssistantHandler = async ({
-  assistant,
-  classroom,
-}: {
-  assistant: AssistantPayload;
-  classroom: AssistantClassroom;
-}) => {
-  console.log('assistant', assistant);
-
-  const gitProvider = getGitProvider(classroom.git_organization);
-  const team = await ensureClassroomTeam(
-    gitProvider,
-    classroom.git_organization.login,
-    classroom,
-    'ASSISTANT'
-  );
-
-  // If the assistant is already in the org, a fresh invite 422s and no `member_added`
-  // webhook fires — so just add them to the assistant team and activate them below.
-  // Otherwise send the org invite as usual.
-  const alreadyMember = await gitProvider.isUserMemberOfOrganization(
-    classroom.git_organization.login,
-    assistant.login
-  );
-
-  if (alreadyMember) {
-    await gitProvider.addTeamMember(classroom.git_organization.login, team.slug, assistant.login);
-  } else {
-    try {
-      await gitProvider.inviteToOrganization(
-        classroom.git_organization.login,
-        String(assistant.id),
-        [team.id]
-      );
-    } catch (error: unknown) {
-      console.error('Error inviting assistant to organization:', error);
-    }
-  }
-
-  // Upsert user and membership using connectOrCreate
-  const user = await getPrisma().user.upsert({
-    where: { login: assistant.login },
-    create: {
-      login: assistant.login,
-      name: assistant.name,
-      provider: classroom.git_organization.provider as 'GITHUB' | 'GITLAB' | 'BITBUCKET',
-      provider_id: String(assistant.id),
-      role: 'user',
-      email: assistant.email,
-      provider_email: assistant.provider_email,
-    },
-    update: {
-      role: 'user',
-    },
-  });
-
-  await getPrisma().account.upsert({
-    where: {
-      provider_id_account_id: {
-        provider_id: classroom.git_organization.provider.toLowerCase(),
-        account_id: String(assistant.id),
-      },
-    },
-    create: {
-      provider_id: classroom.git_organization.provider.toLowerCase(),
-      account_id: String(assistant.id),
-      user_id: String(user.id),
-    },
-    update: {},
-  });
-
-  await getPrisma().classroomMembership.create({
-    data: {
-      classroom_id: classroom.id,
-      user_id: user.id,
-      role: 'ASSISTANT',
-    },
-  });
-
-  // Already-in-org assistants get no `member_added` webhook, so flip
-  // has_accepted_invite now that the membership exists.
-  if (alreadyMember) {
-    await tasks.trigger('activate_membership', {
-      login: assistant.login,
-      gitOrganizationId: classroom.git_organization.id,
-    });
-  }
 };
