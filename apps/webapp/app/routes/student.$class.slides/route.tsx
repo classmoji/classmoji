@@ -22,6 +22,11 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
   // deck by URL that they cannot find. Students stay on published decks only.
   // Editing is a separate, narrower rule and is not granted here: this list
   // offers no edit affordance to anyone.
+  //
+  // `membership.role` is the caller's HIGHEST role in this classroom
+  // (assertClassroomAccess resolves it in privilege order), so a TA who is also
+  // enrolled as a student is staff here — the same answer the slide gate gives
+  // them when they open one of these decks.
   const isStaff =
     membership?.role === 'OWNER' ||
     membership?.role === 'TEACHER' ||
@@ -32,6 +37,10 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
       classroom_id: classroom.id,
       ...(isStaff ? {} : { is_draft: false }),
     },
+    // Explicit: a Slide row carries multiplex_id / multiplex_secret, which are
+    // live presentation credentials rather than list data. Send only what the
+    // table below renders.
+    select: { id: true, title: true, is_draft: true },
     orderBy: { updated_at: 'desc' },
   });
 

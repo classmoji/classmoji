@@ -60,6 +60,11 @@ function whereClause() {
   return mocks.findMany.mock.calls[0][0].where as Record<string, unknown>;
 }
 
+/** The `select` the loader actually handed Prisma. */
+function selectClause() {
+  return mocks.findMany.mock.calls[0][0].select as Record<string, unknown>;
+}
+
 beforeEach(() => {
   for (const m of Object.values(mocks)) m.mockReset();
   mocks.findMany.mockResolvedValue([PUBLISHED_DECK, DRAFT_DECK]);
@@ -120,6 +125,43 @@ describe('slides loader — drafts follow the view tier', () => {
     await studentRoute.loader(loaderArgs('student'));
 
     expect(whereClause()).toEqual({ classroom_id: 'class-1', is_draft: false });
+  });
+});
+
+// ─── Only the columns the table renders leave the server ─────────────────────
+
+/**
+ * A Slide row carries multiplex_id and multiplex_secret. multiplex_id is a live
+ * capability — the slides socket server admits a follower on a matching share
+ * code — so it has no business riding along in a list payload. The loader
+ * therefore selects explicitly rather than returning the row.
+ */
+describe('slides loader — payload shape', () => {
+  it('selects only the fields the list renders', async () => {
+    grant('STUDENT');
+
+    await studentRoute.loader(loaderArgs('student'));
+
+    expect(selectClause()).toEqual({ id: true, title: true, is_draft: true });
+  });
+
+  it('never asks for the multiplex credentials', async () => {
+    grant('ASSISTANT');
+
+    await studentRoute.loader(loaderArgs('assistant'));
+
+    expect(selectClause()).not.toHaveProperty('multiplex_id');
+    expect(selectClause()).not.toHaveProperty('multiplex_secret');
+  });
+
+  it('selects the same narrow set for staff, who now also receive drafts', async () => {
+    // Drafts reaching more viewers is precisely why the row shape matters more
+    // than it used to.
+    grant('OWNER');
+
+    await studentRoute.loader(loaderArgs('assistant'));
+
+    expect(selectClause()).toEqual({ id: true, title: true, is_draft: true });
   });
 });
 
