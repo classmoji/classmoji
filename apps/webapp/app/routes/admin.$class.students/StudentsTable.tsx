@@ -26,15 +26,21 @@ interface StudentsTableProps {
   classroom?: Record<string, unknown>;
   /**
    * Whether the viewer owns this classroom, resolved server-side by the
-   * loader's membership. Everything the OWNER alone may see or do in this
-   * table hangs off it: the contact columns (which the loader does not even
-   * send to other staff), the row actions that post to the OWNER-only action,
-   * and the per-student detail page, whose own route is OWNER-gated.
+   * loader's membership. This governs the FIELDS on show — the contact columns,
+   * which the loader does not even send to other staff.
    */
   isOwner: boolean;
+  /**
+   * Whether the viewer may mutate the roster FROM THIS PAGE. Also computed
+   * server-side, from the role AND the route prefix: the same loader serves the
+   * assistant prefix, which exports no action and has no nested detail route,
+   * so ownership alone is not enough to justify rendering a control. Everything
+   * that submits or navigates hangs off this rather than off `isOwner`.
+   */
+  canManage: boolean;
 }
 
-const StudentsTable = ({ students, query, isOwner }: StudentsTableProps) => {
+const StudentsTable = ({ students, query, isOwner, canManage }: StudentsTableProps) => {
   const { class: classSlug } = useParams();
   const { pathname } = useLocation();
   const navigate = useNavigate();
@@ -94,8 +100,9 @@ const StudentsTable = ({ students, query, isOwner }: StudentsTableProps) => {
             id: student.id,
             login: student.login,
             name: student.name,
-            // Only an OWNER reaches this path, and an OWNER's rows carry the
-            // email; the fallback keeps the payload well-formed regardless.
+            // Only a viewer with canManage reaches this path — necessarily an
+            // OWNER, whose rows carry the email; the fallback keeps the payload
+            // well-formed regardless.
             email: student.email ?? null,
           },
         },
@@ -164,11 +171,13 @@ const StudentsTable = ({ students, query, isOwner }: StudentsTableProps) => {
       key: 'actions',
       width: 260,
       render: (_: unknown, student: Student) => {
-        // Every action in this column is OWNER-only: remove/revoke post to the
-        // OWNER-gated action, "View as" impersonates, and the detail page the
-        // View button opens is an OWNER-gated route. Other staff get a
-        // read-only row rather than controls that would be refused.
-        if (!isOwner) return null;
+        // Every action in this column is OWNER-only AND admin-prefix-only:
+        // remove/revoke post to the OWNER-gated action with a relative action
+        // path, "View as" impersonates, and the detail page the View button
+        // opens is a nested OWNER-gated route. Under the assistant prefix none
+        // of those targets exist, so `canManage` — not `isOwner` — decides.
+        // Anyone else gets a read-only row rather than controls that would fail.
+        if (!canManage) return null;
 
         // For invites, only show Remove action
         if (student._isInvite) {

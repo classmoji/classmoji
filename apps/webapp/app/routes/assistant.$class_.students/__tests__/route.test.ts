@@ -1,15 +1,21 @@
 /**
  * Unit tests for the roster under the ASSISTANT prefix.
  *
- * The admin roster loader already reads at the teaching-team tier, but until
- * this route existed an assistant had no way to reach it: the /admin layout
- * gates its outlet on OWNER, so the widened loader was unreachable in the
- * product. This route is the reachable half, and it must widen the READ only:
+ * The admin roster loader reads at the teaching-team tier, and it is reachable
+ * at BOTH prefixes. /admin's own OWNER check is not a server gate: the layout
+ * loader (routes/admin/route.tsx) CATCHES the thrown auth Response and degrades
+ * to an empty payload, and its `RequireRole` wrapper is client-side. So an
+ * assistant hitting /admin/:class/students gets a 200 from this loader and an
+ * emptied shell drawn around it. This route is the prefix where the same read
+ * is actually presented, and it must widen the READ only:
  *
  *   READ  — the same loader, so the OWNER-only field split travels with it.
  *   WRITE — absent. The route exports no `action`, so there is no POST target
  *           under /assistant at all. That is what these tests pin hardest: a
  *           future edit that re-exports the action would fail here.
+ *
+ * Because the loader is shared, it is also what tells the view which prefix it
+ * is on — see the `canManage` cases at the end.
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -169,9 +175,41 @@ describe('assistant students route — loader payload', () => {
     expect(serialized).not.toContain('grace@school.test');
   });
 
-  it('reports isOwner false, which is what suppresses the owner-only UI', async () => {
-    // The add button, the contact columns and the whole actions cell hang off
-    // this one flag — see StudentsTable.
+  it('reports isOwner false, which is what withholds the owner-only fields', async () => {
+    // The contact columns hang off this flag — see StudentsTable.
     expect((await assistantRoute.loader(loaderArgs())).isOwner).toBe(false);
+  });
+
+  it('reports canManage false, which is what withholds every control', async () => {
+    // Separate from isOwner: this prefix has no action and no detail route, so
+    // nothing here may render a control regardless of who is looking.
+    expect((await assistantRoute.loader(loaderArgs())).canManage).toBe(false);
+  });
+});
+
+// ─── An OWNER who reaches this prefix ────────────────────────────────────────
+
+describe('assistant students route — an OWNER on this prefix', () => {
+  beforeEach(() => {
+    // Nothing stops an owner hand-typing /assistant/:class/students: the gate
+    // is the teaching-team one, which an owner naturally passes.
+    mocks.requireClassroomTeachingTeam.mockResolvedValue({
+      userId: 'owner-1',
+      classroom: CLASSROOM,
+      membership: { id: 'm-1', role: 'OWNER' },
+    });
+  });
+
+  it('still receives the owner-only fields — those follow the role', async () => {
+    const data = await assistantRoute.loader(loaderArgs());
+
+    expect(data.isOwner).toBe(true);
+    expect(data.students[0]).toMatchObject({ email: 'ada@school.test' });
+  });
+
+  it('is refused the controls, because this prefix cannot service them', async () => {
+    // Both mutations post relative to the current route, which exports no
+    // action, and row "View" navigates to a nested route this prefix lacks.
+    expect((await assistantRoute.loader(loaderArgs())).canManage).toBe(false);
   });
 });

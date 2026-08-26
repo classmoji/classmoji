@@ -102,10 +102,10 @@ const OWNER_ONLY_FIELDS = [
   'comment',
 ] as const;
 
-const loaderArgs = () =>
+const loaderArgs = (prefix: 'admin' | 'assistant' = 'admin') =>
   ({
     params: { class: CLASS_SLUG },
-    request: new Request(`http://localhost/admin/${CLASS_SLUG}/students`),
+    request: new Request(`http://localhost/${prefix}/${CLASS_SLUG}/students`),
   }) as unknown as Parameters<typeof loader>[0];
 
 const actionArgs = (body: unknown, intent: string) =>
@@ -157,12 +157,61 @@ describe('students loader — who may read the roster', () => {
     }
   );
 
-  it('reports ownership to the view so owner-only controls can be withheld', async () => {
+  it('reports ownership to the view so owner-only fields can be withheld', async () => {
     grantLoader('ASSISTANT');
     expect((await loader(loaderArgs())).isOwner).toBe(false);
 
     grantLoader('OWNER');
     expect((await loader(loaderArgs())).isOwner).toBe(true);
+  });
+
+  it('maps the stored image onto avatar_url, which the thumbnail reads', async () => {
+    // The User column is `image`; UserThumbnailView reads `avatar_url`. Without
+    // the mapping the roster rendered no avatars at all.
+    grantLoader('OWNER');
+
+    const student = (await loader(loaderArgs())).students[0];
+
+    expect(student.avatar_url).toBe('https://example.test/ada.png');
+  });
+});
+
+// ─── Loader: what may be DONE from this page, per prefix ─────────────────────
+
+/**
+ * `isOwner` answers "may this viewer see the owner-only fields". `canManage`
+ * answers a second, narrower question: "may this viewer act FROM THIS PAGE".
+ *
+ * They come apart because this loader also serves /assistant/:class/students,
+ * which exports no `action` and has no nested per-student route. An owner who
+ * hand-types that URL passes the role half and fails the prefix half — every
+ * control there submits or navigates relative to the current route, so
+ * rendering them would produce a 405 on submit and a 404 on View.
+ */
+describe('students loader — canManage follows the role AND the prefix', () => {
+  it('is true for an OWNER on the /admin prefix', async () => {
+    grantLoader('OWNER');
+
+    expect((await loader(loaderArgs('admin'))).canManage).toBe(true);
+  });
+
+  it('is false for an OWNER who arrived on the /assistant prefix', async () => {
+    grantLoader('OWNER');
+
+    const data = await loader(loaderArgs('assistant'));
+
+    // The fields still follow the role — only the controls follow the prefix.
+    expect(data.canManage).toBe(false);
+    expect(data.isOwner).toBe(true);
+    expect(data.students[0]).toMatchObject({ email: 'ada@school.test' });
+  });
+
+  it.each([['TEACHER'], ['ASSISTANT']] as const)('is false for %s on either prefix', async role => {
+    grantLoader(role);
+    expect((await loader(loaderArgs('admin'))).canManage).toBe(false);
+
+    grantLoader(role);
+    expect((await loader(loaderArgs('assistant'))).canManage).toBe(false);
   });
 });
 

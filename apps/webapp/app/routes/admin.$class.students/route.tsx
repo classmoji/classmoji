@@ -30,6 +30,8 @@ interface RosterStudent {
   name: string | null;
   login: string | null;
   image: string | null;
+  /** UserThumbnailView reads `avatar_url`; the User model calls it `image`. */
+  avatar_url: string | null;
   is_grader: boolean;
   has_accepted_invite: boolean;
   email?: string | null;
@@ -63,13 +65,27 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
   // resource. Non-OWNER staff get identity + status only, and the split is done
   // HERE, server-side: the fields are never serialized into the page, so there
   // is nothing for the client to hide.
+  // `membership.role` is the caller's HIGHEST role in this classroom —
+  // assertClassroomAccess resolves it in privilege order, so an owner who also
+  // holds another role here still resolves as OWNER and keeps their own fields.
   const isOwner = membership?.role === 'OWNER';
+
+  // Whether the viewer may MUTATE the roster from this page, which takes the
+  // role AND the prefix they arrived on. This same loader serves
+  // /assistant/:class/students, where the route exports no `action` and no
+  // nested detail route exists — so an owner who hand-types that URL would
+  // otherwise be shown controls that post to a route with no action (405) and a
+  // View button pointing at a route that does not exist (404). Only the /admin
+  // prefix carries the mutations, so only it may render them.
+  const isAdminPrefix = new URL(request.url).pathname.startsWith('/admin/');
+  const canManage = isOwner && isAdminPrefix;
 
   const rosterStudents: RosterStudent[] = students.map(s => ({
     id: s.id,
     name: s.name,
     login: s.login,
     image: s.image,
+    avatar_url: s.image,
     is_grader: s.is_grader,
     has_accepted_invite: s.has_accepted_invite,
     ...(isOwner
@@ -91,11 +107,17 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
     ...(isOwner ? { school_email: inv.school_email } : {}),
   }));
 
-  return { students: rosterStudents, classroom, invitations: rosterInvitations, isOwner };
+  return {
+    students: rosterStudents,
+    classroom,
+    invitations: rosterInvitations,
+    isOwner,
+    canManage,
+  };
 };
 
 const StudentsScreen = ({ loaderData }: Route.ComponentProps) => {
-  const { students, classroom, invitations, isOwner } = loaderData;
+  const { students, classroom, invitations, isOwner, canManage } = loaderData;
   const { class: classSlug } = useParams();
   const navigate = useNavigate();
   const [query, setQuery] = useState('');
@@ -115,16 +137,17 @@ const StudentsScreen = ({ loaderData }: Route.ComponentProps) => {
     return [...students, ...inviteList];
   }, [students, invitations]);
 
+  // Search over the fields the row actually carries. Name and login are always
+  // present; the contact fields exist only in an OWNER's payload, so they widen
+  // the search for an owner and are simply absent for other staff — which is
+  // why the placeholder promises name or login.
   const filteredStudents = !query
     ? allStudents
     : allStudents.filter(student => {
         const q = query.toLowerCase();
-        return (
-          student.name?.toLowerCase().includes(q) ||
-          student.login?.toLowerCase().includes(q) ||
-          student.email?.toLowerCase().includes(q) ||
-          (student as Record<string, unknown>).provider_email?.toString().toLowerCase().includes(q)
-        );
+        const row = student as Record<string, unknown>;
+        const haystack = [student.name, student.login, row.email, row.provider_email];
+        return haystack.some(field => typeof field === 'string' && field.toLowerCase().includes(q));
       });
 
   return (
@@ -143,7 +166,7 @@ const StudentsScreen = ({ loaderData }: Route.ComponentProps) => {
             />
           </span>
 
-          {isOwner && (
+          {canManage && (
             <Button
               icon={<PlusCircleOutlined />}
               onClick={() => navigate(`/admin/${classSlug}/students/add`)}
@@ -161,6 +184,7 @@ const StudentsScreen = ({ loaderData }: Route.ComponentProps) => {
         classroom={classroom}
         query={query}
         isOwner={isOwner}
+        canManage={canManage}
       />
     </div>
   );
