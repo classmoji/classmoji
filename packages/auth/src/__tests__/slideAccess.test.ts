@@ -76,6 +76,25 @@ function signedInAs(role: Role | null, userId: string) {
   mocks.findByClassroomAndUser.mockResolvedValue(role ? { id: 'm-1', role } : null);
 }
 
+/**
+ * Sign the caller in holding SEVERAL roles at once.
+ *
+ * ClassroomMembership is unique on (classroom_id, user_id, role), so this is a
+ * routine shape: promoting a student to assistant adds a row rather than
+ * replacing one. The gate probes one role at a time, so the mock answers per
+ * requested role — which is exactly what makes the resolution deterministic.
+ */
+function signedInHolding(roles: Role[], userId: string) {
+  mocks.getSession.mockResolvedValue({ user: { id: userId, name: userId } });
+  mocks.findByClassroomAndUser.mockImplementation(
+    (_classroomId: unknown, _userId: unknown, requested: unknown) => {
+      const wanted = Array.isArray(requested) ? (requested as Role[]) : null;
+      const match = wanted ? wanted.find(role => roles.includes(role)) : roles[0];
+      return Promise.resolve(match ? { id: `m-${match}`, role: match } : null);
+    }
+  );
+}
+
 const accessTo = (slide: typeof DRAFT, accessType: 'view' | 'edit' | 'present' | 'speakerNotes') =>
   assertSlideAccess({ request: request(), slideId: SLIDE_ID, slide, accessType });
 
@@ -197,5 +216,150 @@ describe('view and edit are separate rules', () => {
     expect(result.canView).toBe(true);
     expect(result.accessGrantedVia).toBe('membership');
     expect(result.canEdit).toBe(false);
+  });
+});
+
+// ─── PRESENT and SPEAKER NOTES on a draft ────────────────────────────────────
+
+/**
+ * The two access types that were previously untested on a draft, which is why
+ * widening the draft view tier moved them without anyone noticing.
+ *
+ * PRESENT stays pinned to edit rights: reading a colleague's unfinished deck is
+ * expected, driving it in front of a class is not.
+ *
+ * SPEAKER NOTES follow staff-ness, not editability — `canViewSpeakerNotes` is
+ * `isStaff || (show_speaker_notes && canView)`. Since staff may now view a
+ * draft, an assistant gets the notes on a draft they cannot edit. That is the
+ * ACCEPTED policy (staff already get notes unconditionally on any deck they can
+ * view); these tests exist so a future change has to say so out loud.
+ */
+describe('draft deck — who may PRESENT', () => {
+  it.each([['OWNER'], ['TEACHER']] as const)('allows %s, who may also edit it', async role => {
+    signedInAs(role, 'staff-1');
+
+    const result = await accessTo(DRAFT, 'present');
+
+    expect(result.canPresent).toBe(true);
+  });
+
+  it('allows the ASSISTANT who created the deck', async () => {
+    signedInAs('ASSISTANT', CREATOR_ID);
+
+    expect((await accessTo(DRAFT, 'present')).canPresent).toBe(true);
+  });
+
+  it('allows any ASSISTANT once allow_team_edit is set', async () => {
+    signedInAs('ASSISTANT', 'ta-1');
+
+    expect((await accessTo({ ...DRAFT, allow_team_edit: true }, 'present')).canPresent).toBe(true);
+  });
+
+  it('still refuses an ASSISTANT who may VIEW the draft but not edit it', async () => {
+    // The pairing is the point: the same call would pass `view`.
+    signedInAs('ASSISTANT', 'ta-1');
+    expect((await accessTo(DRAFT, 'view')).canView).toBe(true);
+
+    signedInAs('ASSISTANT', 'ta-1');
+    await expect(accessTo(DRAFT, 'present')).rejects.toMatchObject({ status: 403 });
+  });
+
+  it('refuses a STUDENT', async () => {
+    signedInAs('STUDENT', 'student-1');
+
+    await expect(accessTo(DRAFT, 'present')).rejects.toMatchObject({ status: 403 });
+  });
+});
+
+describe('draft deck — who may read SPEAKER NOTES', () => {
+  it.each([['OWNER'], ['TEACHER'], ['ASSISTANT']] as const)(
+    'allows %s even with show_speaker_notes off',
+    async role => {
+      signedInAs(role, 'staff-1');
+
+      const result = await accessTo(DRAFT, 'speakerNotes');
+
+      expect(result.canViewSpeakerNotes).toBe(true);
+    }
+  );
+
+  it('allows an ASSISTANT on a draft they may view but NOT edit — accepted policy', async () => {
+    signedInAs('ASSISTANT', 'ta-1');
+
+    const result = await accessTo(DRAFT, 'speakerNotes');
+
+    expect(result.canViewSpeakerNotes).toBe(true);
+    expect(result.canEdit).toBe(false);
+  });
+
+  it('refuses a STUDENT, because notes ride on being able to view the deck', async () => {
+    // Even with the flag on: a student cannot view a draft, so there is nothing
+    // for show_speaker_notes to extend.
+    signedInAs('STUDENT', 'student-1');
+
+    await expect(
+      accessTo({ ...DRAFT, show_speaker_notes: true }, 'speakerNotes')
+    ).rejects.toMatchObject({ status: 403 });
+  });
+
+  it('extends to a STUDENT on a PUBLISHED deck when show_speaker_notes is on', async () => {
+    // The flag governs non-staff viewers; this is the case it exists for.
+    signedInAs('STUDENT', 'student-1');
+
+    const result = await accessTo(
+      { ...DRAFT, is_draft: false, show_speaker_notes: true },
+      'speakerNotes'
+    );
+
+    expect(result.canViewSpeakerNotes).toBe(true);
+  });
+});
+
+// ─── Users holding more than one role in the same classroom ──────────────────
+
+/**
+ * ClassroomMembership is unique on (classroom_id, user_id, role), so holding
+ * several roles in one classroom is normal — adding an assistant does not
+ * remove their existing student row. The gate resolves the caller's HIGHEST
+ * role, so the staff half of a dual-role membership decides the outcome.
+ */
+describe('a user holding several roles in the classroom', () => {
+  it('treats OWNER+STUDENT as an OWNER on a draft', async () => {
+    signedInHolding(['OWNER', 'STUDENT'], 'prof-1');
+
+    const result = await accessTo(DRAFT, 'view');
+
+    expect(result.membership).toMatchObject({ role: 'OWNER' });
+    expect(result.canView).toBe(true);
+    expect(result.canEdit).toBe(true);
+  });
+
+  it('treats ASSISTANT+STUDENT as an ASSISTANT on a draft', async () => {
+    signedInHolding(['ASSISTANT', 'STUDENT'], 'ta-1');
+
+    const result = await accessTo(DRAFT, 'view');
+
+    expect(result.membership).toMatchObject({ role: 'ASSISTANT' });
+    expect(result.canView).toBe(true);
+    // Still not an editor — the wider VIEW tier is all the assistant half buys.
+    expect(result.canEdit).toBe(false);
+  });
+
+  it('does not let the STUDENT half deny a draft the staff half may read', async () => {
+    // The regression this pins: an unordered lookup could resolve the STUDENT
+    // row and refuse a deck the same person may open as staff.
+    signedInHolding(['ASSISTANT', 'STUDENT'], 'ta-1');
+    await expect(accessTo(DRAFT, 'view')).resolves.toMatchObject({ canView: true });
+
+    signedInHolding(['ASSISTANT', 'STUDENT'], 'ta-1');
+    await expect(accessTo(DRAFT, 'speakerNotes')).resolves.toMatchObject({
+      canViewSpeakerNotes: true,
+    });
+  });
+
+  it('resolves the same way whichever order the roles come back in', async () => {
+    signedInHolding(['STUDENT', 'ASSISTANT'], 'ta-1');
+
+    expect((await accessTo(DRAFT, 'view')).membership).toMatchObject({ role: 'ASSISTANT' });
   });
 });

@@ -2,12 +2,12 @@
  * Unit tests for resolveClassroomContext's ambiguity guard (finding A1) and
  * deterministic multi-role resolution (finding U6).
  *
- * A1: Classroom is unique only on (git_org_id, slug); the org login is matched
- * case-insensitively, so two case-variant twin orgs each owning the same slug
- * can return >1 row from findAll. The resolver must REFUSE such an ambiguous
- * reference with a non-leaking `not_found` rather than silently resolving to
- * matches[0] (the newest twin). A normal unambiguous reference must still
- * resolve; a zero-match must stay an indistinguishable clean not_found.
+ * A1: resolving through findAll returns a LIST, and a list of surprising length
+ * must never be silently reduced to matches[0]. Classroom.slug is globally
+ * unique today, so more than one match cannot occur in practice and the guard
+ * is defense in depth — but it must hold: a >1 match has to be refused with a
+ * non-leaking `not_found`. A normal unambiguous reference must still resolve;
+ * a zero-match must stay an indistinguishable clean not_found.
  *
  * U6: ClassroomMembership is unique on (classroom_id, user_id, role) and
  * findByClassroomAndUser is an UNORDERED findFirst, so a single role-filtered
@@ -67,10 +67,9 @@ beforeEach(() => {
 });
 
 describe('resolveClassroomContext ambiguity guard (A1)', () => {
-  it('REFUSES an ambiguous org/slug (two case-variant twin orgs) with not_found', async () => {
-    // Two orgs whose logins differ only by case ("Classmoji-Dev" vs
-    // "classmoji-dev") each own slug "winter-2025"; the insensitive match
-    // returns both rows.
+  it('REFUSES an ambiguous org/slug match with not_found', async () => {
+    // Two rows come back for one reference. Unreachable while the slug is
+    // globally unique; the guard has to hold anyway.
     findAll.mockResolvedValue([classroomRow('twin-a'), classroomRow('twin-b')]);
 
     const err = await resolveClassroomContext(VIEWER, REF).catch(e => e);
@@ -116,6 +115,29 @@ describe('deterministic multi-role resolution (U6)', () => {
     expect(ctx.membership.role).toBe('OWNER');
     // Full matching set, highest privilege first.
     expect(ctx.roles).toEqual(['OWNER', 'ASSISTANT']);
+  });
+
+  it('resolves an ASSISTANT+STUDENT caller to ASSISTANT under an any-member gate', async () => {
+    // The `list_slides` surface shape (roles: MEMBER). Its handler branches on
+    // ctx.role via isStaff(), so a TA who is also enrolled as a student has to
+    // resolve as staff here or the deck listing silently narrows for them.
+    holdRoles('STUDENT', 'ASSISTANT'); // held order must not matter
+
+    const ctx = await resolveClassroomContext(VIEWER, REF, {
+      allowedRoles: ['OWNER', 'TEACHER', 'ASSISTANT', 'STUDENT'],
+    });
+    expect(ctx.role).toBe('ASSISTANT');
+    expect(ctx.roles).toEqual(['ASSISTANT', 'STUDENT']);
+  });
+
+  it('resolves an OWNER+STUDENT caller to OWNER under an any-member gate', async () => {
+    holdRoles('STUDENT', 'OWNER');
+
+    const ctx = await resolveClassroomContext(VIEWER, REF, {
+      allowedRoles: ['OWNER', 'TEACHER', 'ASSISTANT', 'STUDENT'],
+    });
+    expect(ctx.role).toBe('OWNER');
+    expect(ctx.roles).toEqual(['OWNER', 'STUDENT']);
   });
 
   it('only considers roles the gate allows (OWNER+STUDENT under a student-only gate)', async () => {
