@@ -2,7 +2,7 @@ import { betterAuth } from 'better-auth';
 import { prismaAdapter } from 'better-auth/adapters/prisma';
 import { admin, mcp } from 'better-auth/plugins';
 import getPrisma from '@classmoji/database';
-import type { Role, ClassroomStatus } from '@prisma/client';
+import type { Role } from '@prisma/client';
 import { ClassmojiService } from '@classmoji/services';
 
 // The signing secret and the cookie prefix live in ./secret.ts so that modules
