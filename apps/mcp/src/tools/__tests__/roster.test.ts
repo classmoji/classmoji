@@ -21,6 +21,11 @@ const mocks = vi.hoisted(() => ({
   taskTrigger: vi.fn(),
 }));
 
+// The payload builder is pure and has no dependencies, so the REAL one is used
+// here (via its own subpath) rather than a stub — what this file pins is that
+// the task payload is the narrowed one.
+const { buildRemoveUserPayload } = await import('@classmoji/services/remove-user-payload');
+
 vi.mock('@classmoji/services', () => ({
   ClassmojiService: {
     roster: { addStudents: (...a: unknown[]) => mocks.addStudents(...a) },
@@ -31,6 +36,7 @@ vi.mock('@classmoji/services', () => ({
     classroom: { findById: (...a: unknown[]) => mocks.classroomFindById(...a) },
     audit: { create: (...a: unknown[]) => mocks.auditCreate(...a) },
   },
+  buildRemoveUserPayload,
 }));
 
 vi.mock('@classmoji/tasks', () => ({
@@ -120,7 +126,8 @@ describe('roster_remove_student', () => {
   beforeEach(() => {
     mocks.classroomFindById.mockResolvedValue({
       id: 'class-1',
-      git_organization: { id: 'gorg-1', login: 'myorg' },
+      slug: 'w26',
+      git_organization: { id: 'gorg-1', login: 'myorg', provider: 'GITHUB' },
     });
   });
 
@@ -144,12 +151,51 @@ describe('roster_remove_student', () => {
       user: { id: 'stu-1', login: 'alice', has_accepted_invite: true },
       role: 'STUDENT',
     });
-    // organization carries the loaded classroom (with git org) for the task.
-    expect((arg[1].payload.organization as { id: string }).id).toBe('class-1');
+    // The classroom id/slug and the git-org fields the provider factory needs.
+    expect(arg[1].payload.classroom).toEqual({ id: 'class-1', slug: 'w26' });
 
     const audit = mocks.auditCreate.mock.calls[0][0] as { action: string; data: { login: string } };
     expect(audit.action).toBe('DELETE');
     expect(audit.data.login).toBe('alice');
+  });
+
+  it('sends the task only the fields it reads', async () => {
+    // classroom.findById returns the classroom WITH its settings row and its
+    // git organization. The task reads the classroom id/slug and the git-org
+    // fields the provider factory resolves; run payloads are stored and
+    // rendered by the task runner, so nothing else travels with them.
+    mocks.classroomFindById.mockResolvedValue({
+      id: 'class-1',
+      slug: 'w26',
+      git_organization: {
+        id: 'gorg-1',
+        login: 'myorg',
+        provider: 'GITHUB',
+        access_token: 'glpat-secret',
+      },
+      settings: { openai_api_key: 'sk-secret', anthropic_api_key: 'sk-ant-secret' },
+    });
+    mocks.findByLogin.mockResolvedValue({ id: 'stu-1', login: 'alice' });
+    mocks.findByClassroomAndUser.mockResolvedValue({
+      has_accepted_invite: true,
+      user: { id: 'stu-1', login: 'alice', name: 'Alice' },
+    });
+
+    await rosterRemoveStudentTool.handler(ARGS, CTX);
+
+    const [, { payload }] = mocks.taskTrigger.mock.calls[0] as [
+      string,
+      { payload: Record<string, unknown> },
+    ];
+    expect(Object.keys(payload).sort()).toEqual(['classroom', 'gitOrganization', 'role', 'user']);
+    expect(Object.keys(payload.gitOrganization as object).sort()).toEqual([
+      'base_url',
+      'github_installation_id',
+      'id',
+      'login',
+      'provider',
+    ]);
+    expect(JSON.stringify(payload)).not.toMatch(/secret/);
   });
 
   it('refuses an unknown login (scopedNotFound) and never fires the task', async () => {

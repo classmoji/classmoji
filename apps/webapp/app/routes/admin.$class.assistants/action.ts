@@ -25,9 +25,13 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
         // client can no longer choose the provider_id we key the account to.
         // `classroom.id` is the classroom requireClassroomAdmin authorized, not
         // a fresh lookup on the same slug.
-        const result = await ClassmojiService.assistant.addAssistant({
+        // This screen manages ASSISTANTs only; the staff service also supports
+        // TEACHER and OWNER (exposed through MCP today — a UI for the higher
+        // staff roles is a follow-up).
+        const result = await ClassmojiService.staff.addStaff({
           classroomId: classroom.id,
           login: data.login,
+          role: 'ASSISTANT',
           name: data.name,
           email: data.email,
         });
@@ -54,9 +58,10 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
 
     async updateAssistant() {
       try {
-        await ClassmojiService.assistant.updateAssistant({
+        await ClassmojiService.staff.updateStaff({
           classroomId: classroom.id,
           login: data.login,
+          role: 'ASSISTANT',
           isGrader: data.isGrader,
         });
         return {
@@ -79,9 +84,10 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
         // The service resolves the target from the DB by (classroom, login) and
         // builds the task payload entirely server-side; the route keeps awaiting
         // the run so the UI can report the finished removal.
-        const { runId } = await ClassmojiService.assistant.removeAssistant({
+        const { runId } = await ClassmojiService.staff.removeStaff({
           classroomId: classroom.id,
           login: data.user?.login,
+          role: 'ASSISTANT',
         });
 
         await waitForRunCompletion(runId);

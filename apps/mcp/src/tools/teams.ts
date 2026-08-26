@@ -8,7 +8,7 @@
  *
  * Backbone: ClassmojiService.teamAdmin.* (extracted so the web routes and these
  * tools take ONE code path — same precedent as roster.service.ts and
- * assistant.service.ts). Two properties of that service matter here:
+ * staff.service.ts). Two properties of that service matter here:
  *
  *   1. RESOLVE FIRST. Every function looks the team up by (classroom_id,
  *      slug|id) BEFORE anything reaches GitHub, so `team_not_found` always beats
@@ -480,7 +480,7 @@ export const teamMembersAddTool: ToolDefinition<TeamMembersAddArgs> = {
       throw new ToolError(
         'invalid_params',
         `Not a member of this classroom: ${logins.join(', ')} — add them to the classroom first ` +
-          '(roster_add_student or assistant_add). No one was added to the team.',
+          '(roster_add_student or staff_add). No one was added to the team.',
         undefined,
         { logins }
       );

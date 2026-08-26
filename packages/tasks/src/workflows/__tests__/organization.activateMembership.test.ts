@@ -28,7 +28,7 @@ const mocks = vi.hoisted(() => ({
   findByLogin: vi.fn(),
   findGitOrgById: vi.fn(),
   findMembershipsByUserId: vi.fn(),
-  updateMembership: vi.fn(),
+  updateMembershipById: vi.fn(),
   findRepositoriesByClassroomSlug: vi.fn(),
   findGitReposByRepository: vi.fn(),
   createRepositoriesTrigger: vi.fn(),
@@ -47,7 +47,7 @@ vi.mock('@classmoji/services', () => ({
     gitOrganization: { findById: (...a: unknown[]) => mocks.findGitOrgById(...a) },
     classroomMembership: {
       findByUserId: (...a: unknown[]) => mocks.findMembershipsByUserId(...a),
-      update: (...a: unknown[]) => mocks.updateMembership(...a),
+      updateById: (...a: unknown[]) => mocks.updateMembershipById(...a),
     },
     repository: {
       findByClassroomSlug: (...a: unknown[]) => mocks.findRepositoriesByClassroomSlug(...a),
@@ -94,12 +94,13 @@ beforeEach(() => {
   mocks.findGitOrgById.mockResolvedValue({ id: GIT_ORG_ID, login: 'dev-org' });
   mocks.findMembershipsByUserId.mockResolvedValue([
     {
+      id: 'm-1',
       classroom_id: 'class-1',
       role: 'STUDENT',
       classroom: { git_org_id: GIT_ORG_ID, slug: CLASSROOM_SLUG },
     },
   ]);
-  mocks.updateMembership.mockResolvedValue(undefined);
+  mocks.updateMembershipById.mockResolvedValue(undefined);
   mocks.findRepositoriesByClassroomSlug.mockResolvedValue([]);
   mocks.findGitReposByRepository.mockResolvedValue([]);
   mocks.createRepositoriesTrigger.mockResolvedValue({ id: 'run-1' });
@@ -216,7 +217,7 @@ describe('activate_membership — join after publish', () => {
   it('marks the membership accepted even when there is nothing to provision', async () => {
     await run();
 
-    expect(mocks.updateMembership).toHaveBeenCalledWith('class-1', 'user-1', {
+    expect(mocks.updateMembershipById).toHaveBeenCalledWith('m-1', {
       has_accepted_invite: true,
     });
     expect(mocks.createRepositoriesTrigger).not.toHaveBeenCalled();
@@ -225,6 +226,7 @@ describe('activate_membership — join after publish', () => {
   it('activates the membership but provisions nothing for a non-student role', async () => {
     mocks.findMembershipsByUserId.mockResolvedValue([
       {
+        id: 'm-1',
         classroom_id: 'class-1',
         role: 'ASSISTANT',
         classroom: { git_org_id: GIT_ORG_ID, slug: CLASSROOM_SLUG },
@@ -234,15 +236,44 @@ describe('activate_membership — join after publish', () => {
 
     await run();
 
-    expect(mocks.updateMembership).toHaveBeenCalledWith('class-1', 'user-1', {
+    expect(mocks.updateMembershipById).toHaveBeenCalledWith('m-1', {
       has_accepted_invite: true,
     });
     expect(mocks.createRepositoriesTrigger).not.toHaveBeenCalled();
   });
 
+  it('activates EVERY role a multi-role user holds in one classroom', async () => {
+    // Memberships are unique on (classroom, user, role), so this user has two
+    // rows in the same classroom. Each row is activated on its own id — resolving
+    // by (classroom, user) would activate one of them twice and leave the other
+    // pending.
+    mocks.findMembershipsByUserId.mockResolvedValue([
+      {
+        id: 'm-assistant',
+        classroom_id: 'class-1',
+        role: 'ASSISTANT',
+        classroom: { git_org_id: GIT_ORG_ID, slug: CLASSROOM_SLUG },
+      },
+      {
+        id: 'm-owner',
+        classroom_id: 'class-1',
+        role: 'OWNER',
+        classroom: { git_org_id: GIT_ORG_ID, slug: CLASSROOM_SLUG },
+      },
+    ]);
+
+    await run();
+
+    expect(mocks.updateMembershipById.mock.calls.map(([id]) => id)).toEqual([
+      'm-assistant',
+      'm-owner',
+    ]);
+  });
+
   it('ignores memberships in classrooms belonging to a different git organization', async () => {
     mocks.findMembershipsByUserId.mockResolvedValue([
       {
+        id: 'm-other',
         classroom_id: 'class-other',
         role: 'STUDENT',
         classroom: { git_org_id: 'some-other-org', slug: 'other-class' },
@@ -251,7 +282,7 @@ describe('activate_membership — join after publish', () => {
 
     await run();
 
-    expect(mocks.updateMembership).not.toHaveBeenCalled();
+    expect(mocks.updateMembershipById).not.toHaveBeenCalled();
     expect(mocks.createRepositoriesTrigger).not.toHaveBeenCalled();
   });
 });

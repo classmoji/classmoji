@@ -22,7 +22,7 @@
  * (fails safe) and there is no wait-timeout window for a retry to re-fire.
  */
 
-import { ClassmojiService } from '@classmoji/services';
+import { buildRemoveUserPayload, ClassmojiService } from '@classmoji/services';
 import Tasks from '@classmoji/tasks';
 import { tasks } from '@trigger.dev/sdk';
 import { z } from 'zod';
@@ -153,8 +153,8 @@ export const rosterRemoveStudentTool: ToolDefinition<RosterRemoveStudentArgs> = 
     // client-side user object); the removal task reads it as user.has_accepted_invite.
     const hasAcceptedInvite = membership.has_accepted_invite;
 
-    // Classroom-with-git-organization for the task payload (legacy shape the
-    // web route uses: task derives gitOrg from organization.git_organization).
+    // Classroom-with-git-organization, narrowed by buildRemoveUserPayload below
+    // to the fields the task reads.
     const classroomRecord = await ClassmojiService.classroom.findById(classroom.classroomId);
     if (!classroomRecord) throw new ToolError('internal', 'Classroom record unavailable');
 
@@ -172,20 +172,21 @@ export const rosterRemoveStudentTool: ToolDefinition<RosterRemoveStudentArgs> = 
     });
 
     // Trigger the single-source-of-truth removal task with a payload built
-    // ENTIRELY from resolved DB records — never from client input. Fire-and-
-    // forget: a dropped job fails safe (student stays), and there is no wait
-    // window for a client retry to re-fire a destructive GitHub op.
+    // ENTIRELY from resolved DB records — never from client input — and field
+    // by field, so it carries only what the task reads. Fire-and-forget: a
+    // dropped job fails safe (student stays), and there is no wait window for a
+    // client retry to re-fire a destructive GitHub op.
     void tasks
       .trigger('remove_user_from_organization', {
-        payload: {
+        payload: buildRemoveUserPayload({
           user: {
             id: target.id,
             login: target.login,
             has_accepted_invite: hasAcceptedInvite,
           },
-          organization: classroomRecord,
+          classroom: classroomRecord,
           role: 'STUDENT',
-        },
+        }),
       })
       .catch((error: unknown) => {
         console.error('[mcp] remove_user_from_organization trigger failed:', error);
