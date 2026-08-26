@@ -32,6 +32,7 @@ import { tasks } from '@trigger.dev/sdk';
 
 import getPrisma from '@classmoji/database';
 import { getGitProvider, ensureClassroomTeam } from '../git/index.ts';
+import { buildRemoveUserPayload } from './removeUserPayload.ts';
 import * as classroomService from './classroom.service.ts';
 import * as classroomMembershipService from './classroomMembership.service.ts';
 import * as userService from './user.service.ts';
@@ -380,8 +381,9 @@ export const updateStaff = async ({
  * guard stays as well — belt and braces.
  *
  * The payload is built ENTIRELY from resolved DB records — `has_accepted_invite`
- * is a MEMBERSHIP field, not a user field. Returns the run handle; the caller
- * decides whether to await it.
+ * is a MEMBERSHIP field, not a user field — and field by field via
+ * buildRemoveUserPayload, so it carries only what the task reads. Returns the
+ * run handle; the caller decides whether to await it.
  */
 export const removeStaff = async ({
   classroomId,
@@ -427,16 +429,15 @@ export const removeStaff = async ({
   }
 
   const run = await tasks.trigger('remove_user_from_organization', {
-    payload: {
+    payload: buildRemoveUserPayload({
       user: {
         id: user.id,
         login: user.login,
         has_accepted_invite: membership.has_accepted_invite,
       },
-      gitOrganization: classroom.git_organization,
       classroom,
       role,
-    },
+    }),
   });
 
   return { userId: user.id, login: user.login ?? login, role, runId: run.id };

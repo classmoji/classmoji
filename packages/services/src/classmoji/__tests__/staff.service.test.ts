@@ -358,8 +358,17 @@ describe('staff.removeStaff', () => {
         payload: {
           // has_accepted_invite comes from the MEMBERSHIP, not the user record.
           user: { id: 'u-1', login: 'ada', has_accepted_invite: true },
-          gitOrganization: CLASSROOM.git_organization,
-          classroom: CLASSROOM,
+          // Field by field: the classroom id and slug the task needs for the
+          // team name and the membership delete, and the git-org fields the
+          // provider factory resolves — not the loaded records themselves.
+          gitOrganization: {
+            id: 'org-1',
+            login: 'cs1-org',
+            provider: 'GITHUB',
+            github_installation_id: null,
+            base_url: null,
+          },
+          classroom: { id: 'class-1', slug: 'cs1-25f' },
           role,
         },
       });
@@ -395,6 +404,39 @@ describe('staff.removeStaff', () => {
     // otherwise the failure would surface inside the task and the caller would
     // have been told the removal succeeded.
     expect(triggerTask).not.toHaveBeenCalled();
+  });
+
+  it('sends the task only the fields it reads', async () => {
+    // classroom.findById returns the classroom WITH its settings row and its
+    // git organization. The task reads the classroom id/slug and the git-org
+    // fields the provider factory resolves; run payloads are stored and
+    // rendered by the task runner, so nothing else travels with them.
+    classroomFindById.mockResolvedValue({
+      ...CLASSROOM,
+      git_organization: { ...CLASSROOM.git_organization, access_token: 'glpat-secret' },
+      settings: {
+        openai_api_key: 'sk-secret',
+        anthropic_api_key: 'sk-ant-secret',
+        llm_model: 'claude',
+      },
+      tags: [],
+    });
+    userFindByLogin.mockResolvedValue({ id: 'u-1', login: 'ada' });
+    findByClassroomAndUser.mockResolvedValue({ id: 'm-1', has_accepted_invite: true });
+
+    await staff.removeStaff({ classroomId: 'class-1', login: 'ada', role: 'ASSISTANT' });
+
+    const { payload } = triggerTask.mock.calls[0][1] as { payload: Record<string, unknown> };
+    expect(Object.keys(payload).sort()).toEqual(['classroom', 'gitOrganization', 'role', 'user']);
+    expect(Object.keys(payload.classroom as object)).toEqual(['id', 'slug']);
+    expect(Object.keys(payload.gitOrganization as object).sort()).toEqual([
+      'base_url',
+      'github_installation_id',
+      'id',
+      'login',
+      'provider',
+    ]);
+    expect(JSON.stringify(payload)).not.toMatch(/secret/);
   });
 
   it('removes a non-last owner normally', async () => {
