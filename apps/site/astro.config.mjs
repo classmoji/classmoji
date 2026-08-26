@@ -46,6 +46,11 @@ export default defineConfig({
               badge: { text: 'New', variant: 'tip' },
             },
             { label: 'Manage your roster', slug: 'docs/instructors/roster' },
+            {
+              label: 'Who can do what',
+              slug: 'docs/instructors/permissions',
+              badge: { text: 'New', variant: 'tip' },
+            },
             { label: 'Repositories & assignments', slug: 'docs/instructors/modules-and-assignments' },
             {
               label: 'Autograding',

@@ -1,0 +1,138 @@
+---
+title: Who can do what
+description: A role-by-role map of what Owners, Teachers, TAs, and Students can do in a classroom.
+---
+
+{/*
+  MAINTAINERS: this matrix is hand-written and goes stale the moment a gate
+  changes. There is no codegen. Before editing a row — or after changing a
+  gate — check it against the authoritative sources:
+
+    - apps/mcp/src/tools/shared.ts       role tier constants: TEACHING_TEAM,
+                                         OWNER_TEACHER, OWNER_ONLY, OWNER_ASSISTANT
+    - apps/mcp/src/resources/shape.ts    the read-side tiers (MEMBER, QUIZ_ROLES,
+                                         TEACHING_TEAM, OWNER_ONLY, STUDENT_ONLY)
+    - apps/mcp/src/tools/index.ts        the tier each MCP tool is registered with
+    - apps/mcp/src/tools/*.ts            in-handler sub-gates (assertSlideEditable,
+                                         holdsRole, owner-only field checks)
+    - packages/auth/src/server.ts        requireClassroomAdmin (OWNER),
+                                         requireClassroomTeachingTeam (OWNER +
+                                         TEACHER + ASSISTANT), assertClassroomAccess,
+                                         assertSlideAccess, resolveHighestMembership
+    - apps/webapp/app/routes/**          the loader/action gate on each route
+
+  Where the MCP tier and the web route gate differ, this page documents what a
+  person can actually do through either surface, and names the surface in the
+  cell. If you change a gate, change this page in the same PR.
+*/}
+
+Everyone in a classroom holds a role: **Owner**, **Teacher**, **Assistant** — everyone says TA, and so do the tables below — or **Student**. [Core concepts](/docs/introduction/fundamentals) covers what the roles are for. This page is the detail: what each one can actually do.
+
+### How to read this
+
+**Yes** and **No** mean what you'd expect. Anything else in a cell is the condition attached to it, written out in the cell. No footnotes to chase.
+
+A few cells say **Via the AI assistant**. Those actions are real, but they only exist through the [MCP server](/docs/instructors/mcp-server) — there's no button for them in the web app yet.
+
+### People
+
+| People | Owner | Teacher | TA | Student |
+| --- | --- | --- | --- | --- |
+| See the roster | Yes | Names and logins | Names and logins | No |
+| See student emails and school IDs | Yes | No | No | No |
+| See letter grades and your private notes | Yes | No | No | No |
+| Add or remove students | Yes | No | No | No |
+| Add a TA | Yes | No | No | No |
+| Add a teacher or a co-owner | Via the AI assistant | No | No | No |
+| Mark a TA as a grader | Yes | No | No | No |
+| See who's on the teaching team | Yes | Via the AI assistant | Via the AI assistant | No |
+
+:::note[Coming from Canvas?]
+Three defaults are different here. In a standard Canvas course, TAs can see student email addresses, edit anything in the gradebook, and add or remove students. In Classmoji all three belong to the Owner. TAs still grade — that's the main thing the role is for — but the roster, the contact details, and the final letter grades stay with you.
+:::
+
+### Course content
+
+| Course content | Owner | Teacher | TA | Student |
+| --- | --- | --- | --- | --- |
+| See published pages, decks, and modules | Yes | Yes | Yes | Yes |
+| See unpublished decks and modules | Yes | Yes | Yes | No |
+| See an unpublished page | Yes | Yes | By direct link only | No |
+| Create, edit, or delete a page | Yes | Yes | No | No |
+| Create a slide deck | Yes | Yes | Yes | No |
+| Edit or delete a slide deck | Yes | Yes | Own decks, or team-editable ones | No |
+| Create, edit, or publish a module | Yes | No | No | No |
+| Attach a page or deck to a repository | Yes | Yes | No | No |
+| See the class calendar | Yes | Yes | Yes | Yes |
+| Add a calendar event | Yes | Yes | Yes | No |
+| Edit or delete a calendar event | Yes | Yes | Own events only | No |
+
+Two conditions worth knowing beyond the grid. Students only see pages and modules at all if those sections are switched on in **Settings**. And on the TA's own calendar page the only event type on offer is office hours — the full set lives on the admin calendar.
+
+### Assignments and grading
+
+| Assignments and grading | Owner | Teacher | TA | Student |
+| --- | --- | --- | --- | --- |
+| Grade a submission | Yes | Yes | Yes | No |
+| Remove a grade | Yes | Yes | Yes | No |
+| Clear every grade at once | Via the AI assistant | No | No | No |
+| Run autograding on a submission | Yes | Yes | No | No |
+| Assign graders to submissions | Yes | No | No | No |
+| See per-TA grading statistics | Via the AI assistant | Via the AI assistant | No | No |
+| Resolve a regrade request | Yes | Yes | Yes | No |
+| Ask for a regrade | No | No | No | Own work only |
+| Create or delete an assignment | Yes | No | No | No |
+| Move a deadline or release grades | Yes | Yes | No | No |
+| Change an assignment's weight | Yes | No | No | No |
+| Create and publish a repository | Yes | No | No | No |
+
+An assignment only has three editable fields, which is why "edit an assignment" splits into two rows: a Teacher can move the deadline and release the grades, but the weight is yours alone. And wiping a submission's grades in one shot is an owner-only assistant action — anyone who can grade can still take the emoji off one at a time.
+
+### Quizzes
+
+| Quizzes | Owner | Teacher | TA | Student |
+| --- | --- | --- | --- | --- |
+| See the quiz list | Yes | No | Yes | Published quizzes only |
+| Create, edit, publish, or delete a quiz | Yes | No | Yes | No |
+| Take a quiz | Yes | No | Yes | Yes |
+
+The Teacher column is not a typo. Teachers have no access to the quiz surface at all — not the editor, not even the list. Owners and TAs have both. That reads more like an oversight than a decision, so rather than dress it up: if you want a colleague building quizzes, make them a TA or a co-owner. (A Teacher does still see quiz titles and status wherever a quiz turns up inside a module.)
+
+### Classroom settings
+
+| Classroom settings | Owner | Teacher | TA | Student |
+| --- | --- | --- | --- | --- |
+| Change settings and feature toggles | Yes | No | No | No |
+| Set up emoji values and grade ranges | Yes | No | No | No |
+| Grant tokens to students | Yes | No | No | No |
+| Spend a token on an extension | On a student's behalf | On a student's behalf | No | Own work only |
+| Lock, unpublish, or archive the classroom | Yes | No | No | No |
+| Delete the classroom | Yes | No | No | No |
+
+Locking a classroom makes it read-only for everyone except Owners. Unpublishing goes further: non-owners can't get in at all. Either way, Teachers and TAs stop being able to change anything, even where the tables above say Yes.
+
+### Three things that trip people up
+
+#### Roles add up
+
+One person can hold more than one role in the same classroom. A TA who is also enrolled as a student is normal and fully supported. When that happens the most permissive role wins: every permission check resolves to the highest role you hold.
+
+Granting a role **adds** it, it doesn't replace what was there. Promote a TA to co-owner and they are now both. Remove the co-owner role later and the TA role is still sitting there, doing its job.
+
+#### A co-owner is a real owner
+
+Co-owner isn't a junior owner. Anyone holding the Owner role can change every setting, remove other staff — including whoever created the classroom — and delete the whole thing. There's no original owner who outranks the rest. The only guard is that you can't remove the last one.
+
+The sharp edge: Owner is a Classmoji role, not a Github organization role. Making someone a co-owner does **not** make them an admin of your Github org. That matters in one place. Deleting a classroom with the "also delete Github artifacts" option checked runs against that person's own Github account, not the app's, so if they aren't an org admin Github refuses and the whole delete is cancelled — the classroom stays put. They can still delete it by leaving that option unchecked, which removes the classroom from Classmoji and leaves Github alone.
+
+One more honest note: adding teachers and co-owners is only possible through the AI assistant today. The **Assistants** screen in the web app creates TAs and nothing else.
+
+#### All staff share one Github team
+
+Owners, teachers, and TAs all sit in the same Github team for the classroom, separate from the students' team. This is why removing one of someone's roles doesn't quietly break the other: if they still hold another staff role, they keep the team, and they keep their Github organization membership as long as any membership in that org still needs it. It's removing their *last* staff role that takes the Github access away.
+
+### What's next
+
+- [Manage your roster](/docs/instructors/roster)
+- [Grade assignments](/docs/instructors/grading)
+- [Connect the MCP server](/docs/instructors/mcp-server)

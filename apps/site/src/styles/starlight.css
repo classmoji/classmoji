@@ -35,6 +35,29 @@
   max-width: 49rem;
 }
 
+/* The prev/next footer links are flex items in a nowrap row, so they inherit
+   `min-width: auto` and refuse to shrink below their title's intrinsic width.
+   A long page title ("Repositories & assignments") therefore pushes the whole
+   document sideways at phone widths. Let them shrink and wrap instead.
+   Wide tables are already fine — Starlight gives them `display: block;
+   overflow: auto`, so they scroll inside their own box. */
+.pagination-links a,
+.pagination-links a > * {
+  min-width: 0;
+}
+
+/* On a phone the auto table layout squeezes the label column down to a few
+   characters, so a multi-column table (the roles matrix) turns every row into
+   a six-line paragraph. Give the label column a floor and let the table scroll
+   sideways instead — it already has its own scroll container, so this never
+   widens the page. Desktop layout is untouched. */
+@media (max-width: 50rem) {
+  .sl-markdown-content th:first-child,
+  .sl-markdown-content td:first-child {
+    min-width: 10.5rem;
+  }
+}
+
 /* =============================================================================
    Aside / callout overrides — match custom card design
    ============================================================================= */
