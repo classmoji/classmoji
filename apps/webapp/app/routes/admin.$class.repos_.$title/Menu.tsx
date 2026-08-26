@@ -10,6 +10,12 @@ interface MenuProps {
     assignments?: unknown[];
     [key: string]: unknown;
   };
+  /**
+   * The grader pool for this classroom: the grader-flagged ASSISTANT and
+   * TEACHER memberships, the same pair the bulk RANDOM distribution draws from.
+   * Supplied by the route loader, so this and the per-repo grader picker offer
+   * the same people.
+   */
   assistants: Array<{ id: string }>;
   repos?: unknown;
   fetcher?: unknown;

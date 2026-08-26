@@ -23,14 +23,30 @@ import { ActionTypes } from '~/constants';
 import { requireClassroomAdmin } from '~/utils/routeAuth.server';
 import type { Route } from './+types/route';
 
+/**
+ * The teaching team spans three roles, and roles are additive — a membership is
+ * unique on (classroom, user, role), so one person may hold more than one and
+ * appears once per role they hold. Listed highest-first.
+ */
+const STAFF_ROLES = ['OWNER', 'TEACHER', 'ASSISTANT'] as const;
+
+type StaffRole = (typeof STAFF_ROLES)[number];
+
 interface Assistant {
   id: string;
   name: string | null;
   login: string | null;
+  role: StaffRole;
   is_grader: boolean;
   has_accepted_invite: boolean;
   [key: string]: unknown;
 }
+
+const ROLE_LABEL: Record<StaffRole, { label: string; color: string }> = {
+  OWNER: { label: 'Owner', color: 'purple' },
+  TEACHER: { label: 'Teacher', color: 'blue' },
+  ASSISTANT: { label: 'Assistant', color: 'cyan' },
+};
 
 export const loader = async ({ params, request }: Route.LoaderArgs) => {
   const { class: classSlug } = params;
@@ -41,11 +57,18 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
   });
 
   const authData = await getAuthSession(request);
-  const assistants = await ClassmojiService.classroomMembership.findUsersByRole(
-    classroom.id,
-    'ASSISTANT'
+
+  // One query per role rather than findUsersByRoles: that helper de-duplicates
+  // by user id and drops the role, and this screen needs the role on every row.
+  const staffByRole = await Promise.all(
+    STAFF_ROLES.map(async role =>
+      (await ClassmojiService.classroomMembership.findUsersByRole(classroom.id, role)).map(
+        user => ({ ...user, role })
+      )
+    )
   );
-  return { assistants, token: authData?.token };
+
+  return { assistants: staffByRole.flat(), token: authData?.token };
 };
 
 const AdminAssistants = ({ loaderData }: Route.ComponentProps) => {
@@ -121,7 +144,7 @@ const AdminAssistants = ({ loaderData }: Route.ComponentProps) => {
 
   const columns = [
     {
-      title: 'Assistant',
+      title: 'Teaching team',
       dataIndex: 'name',
       key: 'name',
       width: 220,
@@ -130,11 +153,31 @@ const AdminAssistants = ({ loaderData }: Route.ComponentProps) => {
       },
     },
     {
+      title: 'Role',
+      dataIndex: 'role',
+      key: 'role',
+      width: 120,
+      render: (_: unknown, assistant: Assistant) => {
+        const { label, color } = ROLE_LABEL[assistant.role];
+        return (
+          <Tag color={color} className="font-semibold">
+            {label}
+          </Tag>
+        );
+      },
+    },
+    {
       title: 'Grader Role',
       dataIndex: 'is_grader',
       key: 'is_grader',
       width: 130,
       render: (_: unknown, assistant: Assistant) => {
+        // The grader flag belongs to the roles that grade, and this screen
+        // manages assistants: the toggle posts to updateAssistant, which
+        // addresses the ASSISTANT membership. Other roles are listed read-only.
+        if (assistant.role !== 'ASSISTANT') {
+          return <span className="text-gray-400 dark:text-gray-500">—</span>;
+        }
         return (
           <Radio.Group
             onChange={e => updateAssistantRole(assistant.login, e.target.value)}
@@ -170,6 +213,14 @@ const AdminAssistants = ({ loaderData }: Route.ComponentProps) => {
       key: 'actions',
       width: 200,
       render: (_: unknown, assistant: Assistant) => {
+        // Every action here acts on an ASSISTANT membership — the detail page,
+        // the impersonation target and removeAssistant all resolve one. Rows for
+        // the other staff roles are read-only until those actions are
+        // role-aware; they are managed with the staff tools meanwhile.
+        if (assistant.role !== 'ASSISTANT') {
+          return <span className="text-gray-400 dark:text-gray-500">—</span>;
+        }
+
         return (
           <TableActionButtons
             onView={() => {
@@ -250,6 +301,9 @@ const AdminAssistants = ({ loaderData }: Route.ComponentProps) => {
         <Table
           columns={columns}
           dataSource={filteredAssistants}
+          // A person holding two roles here has one row per role, so the user id
+          // alone is not unique across the table.
+          rowKey={(assistant: Assistant) => `${assistant.id}-${assistant.role}`}
           rowHoverable={false}
           pagination={{
             pageSize: 25,
