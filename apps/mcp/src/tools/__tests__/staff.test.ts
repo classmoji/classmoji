@@ -116,6 +116,21 @@ describe('staff_add', () => {
       github: 'invited',
       invite_pending: true,
     });
+    // Allow-list the response shape: the service result carries more than this
+    // (alreadyExists, alreadyOrgMember...), so pin the exact keys rather than
+    // letting an internal field ride along into the tool surface unnoticed.
+    expect(Object.keys(payload).sort()).toEqual([
+      'already_exists',
+      'created',
+      'github',
+      'invite_pending',
+      'login',
+      'message',
+      'name',
+      'role',
+      'success',
+      'user_id',
+    ]);
 
     // classroomId comes from ctx, never from args.
     expect(mocks.addStaff).toHaveBeenCalledWith({
@@ -200,6 +215,16 @@ describe('staff_add', () => {
       already_exists: true,
       role: 'ASSISTANT',
     });
+    // The no-op path reports no GitHub outcome — there was none.
+    expect(Object.keys(payload).sort()).toEqual([
+      'already_exists',
+      'created',
+      'login',
+      'message',
+      'role',
+      'success',
+      'user_id',
+    ]);
     // Nothing was mutated (the service short-circuits before any write), so
     // there is no mutation to audit.
     expect(mocks.auditCreate).not.toHaveBeenCalled();
@@ -295,6 +320,8 @@ describe('staff_update', () => {
       role: 'ASSISTANT',
       is_grader: true,
     });
+    // Allow-list: the membership row the service returns must not leak out.
+    expect(Object.keys(payload).sort()).toEqual(['is_grader', 'login', 'role', 'success']);
 
     expect(mocks.updateStaff).toHaveBeenCalledWith({
       classroomId: 'class-1',
@@ -383,7 +410,16 @@ describe('staff_remove', () => {
       user_id: 'ta-1',
       role: 'ASSISTANT',
     });
-    expect(payload.run_id).toBeUndefined();
+    // Allow-list: run_id in particular must NOT be here — the run is an
+    // internal handle the caller has no way to poll.
+    expect(Object.keys(payload).sort()).toEqual([
+      'login',
+      'message',
+      'queued',
+      'role',
+      'success',
+      'user_id',
+    ]);
 
     expect(mocks.removeStaff).toHaveBeenCalledWith({
       classroomId: 'class-1',
