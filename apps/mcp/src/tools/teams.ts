@@ -8,7 +8,7 @@
  *
  * Backbone: ClassmojiService.teamAdmin.* (extracted so the web routes and these
  * tools take ONE code path — same precedent as roster.service.ts and
- * assistant.service.ts). Two properties of that service matter here:
+ * staff.service.ts). Two properties of that service matter here:
  *
  *   1. RESOLVE FIRST. Every function looks the team up by (classroom_id,
  *      slug|id) BEFORE anything reaches GitHub, so `team_not_found` always beats

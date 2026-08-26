@@ -80,9 +80,16 @@ export function getGitHubProvider(installationId: string, orgLogin: string | nul
  * Format: {classroom-slug}-{students|assistants}
  * Example: cs101-25w-students (CS101 Winter 2025 students)
  *
+ * BY DESIGN this mapping is binary: STUDENT gets the students team and EVERY
+ * non-student role (ASSISTANT, TEACHER, OWNER) shares the ONE staff team,
+ * `{slug}-assistants`. One team is what the teaching staff need — they all get
+ * the same repository access — and the `-assistants` name is load-bearing:
+ * existing organizations already have teams under it, so splitting or renaming
+ * would be a migration of live GitHub state, not a code change.
+ *
  * @param {Object} classroom - Classroom object with slug
  * @param {string} classroom.slug - Unique classroom slug
- * @param {'STUDENT' | 'ASSISTANT' | 'TEACHER'} role - User role
+ * @param {'STUDENT' | 'ASSISTANT' | 'TEACHER' | 'OWNER'} role - User role
  * @returns {string} Team name (e.g., "cs101-25w-students")
  */
 export function getTeamNameForClassroom(classroom: { slug: string }, role: string) {
@@ -106,7 +113,8 @@ export function getTeamNameForClassroom(classroom: { slug: string }, role: strin
  * @param {Object} gitProvider - GitProvider instance
  * @param {string} orgLogin - GitHub organization login
  * @param {Object} classroom - Classroom object with slug
- * @param {'STUDENT' | 'ASSISTANT'} role - Role to create team for
+ * @param {'STUDENT' | 'ASSISTANT' | 'TEACHER' | 'OWNER'} role - Role to create
+ *   team for; every non-student role resolves to the same staff team
  * @returns {Promise<{id: number, slug: string, name: string}>} Team object
  */
 export async function ensureClassroomTeam(

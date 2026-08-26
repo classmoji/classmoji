@@ -24,9 +24,9 @@ vi.mock('../classroom.service.ts', () => ({
   findById: (...a: unknown[]) => classroomFindById(...a),
 }));
 
-const findUsersByRole = vi.fn();
+const findUsersByRoles = vi.fn();
 vi.mock('../classroomMembership.service.ts', () => ({
-  findUsersByRole: (...a: unknown[]) => findUsersByRole(...a),
+  findUsersByRoles: (...a: unknown[]) => findUsersByRoles(...a),
 }));
 
 const findByAssignmentId = vi.fn();
@@ -73,13 +73,13 @@ beforeEach(() => {
 });
 
 describe('assignGradersToAssignment — RANDOM', () => {
-  it('walks the is_grader assistants round-robin, one grader per submission', async () => {
+  it('walks the is_grader staff round-robin, one grader per submission', async () => {
     findByAssignmentId.mockResolvedValue([
       repoAssignment('ra-1', 'repo-a', 'stu-1', null),
       repoAssignment('ra-2', 'repo-b', 'stu-2', null),
       repoAssignment('ra-3', 'repo-c', 'stu-3', null),
     ]);
-    findUsersByRole.mockResolvedValue([
+    findUsersByRoles.mockResolvedValue([
       { id: 'ta-1', login: 'ada' },
       { id: 'ta-2', login: 'grace' },
     ]);
@@ -91,7 +91,11 @@ describe('assignGradersToAssignment — RANDOM', () => {
       sessionId: 'sess',
     });
 
-    expect(findUsersByRole).toHaveBeenCalledWith('class-1', 'ASSISTANT', { is_grader: true });
+    // The pool spans both grader-capable staff roles. OWNER is deliberately
+    // absent: is_grader cannot be set on an OWNER membership.
+    expect(findUsersByRoles).toHaveBeenCalledWith('class-1', ['ASSISTANT', 'TEACHER'], {
+      is_grader: true,
+    });
     expect(result).toEqual({ numAssignmentsToAddGradersTo: 3 });
 
     const [taskId, items] = batchTrigger.mock.calls[0];
@@ -106,7 +110,7 @@ describe('assignGradersToAssignment — RANDOM', () => {
 
   it('omits run tags when no sessionId is supplied (the MCP path)', async () => {
     findByAssignmentId.mockResolvedValue([repoAssignment('ra-1', 'repo-a', 'stu-1', null)]);
-    findUsersByRole.mockResolvedValue([{ id: 'ta-1', login: 'ada' }]);
+    findUsersByRoles.mockResolvedValue([{ id: 'ta-1', login: 'ada' }]);
 
     await service.assignGradersToAssignment({
       classroomId: 'class-1',
@@ -119,7 +123,7 @@ describe('assignGradersToAssignment — RANDOM', () => {
 
   it('throws instead of dividing by zero when nobody has is_grader', async () => {
     findByAssignmentId.mockResolvedValue([repoAssignment('ra-1', 'repo-a', 'stu-1', null)]);
-    findUsersByRole.mockResolvedValue([]);
+    findUsersByRoles.mockResolvedValue([]);
 
     await expect(
       service.assignGradersToAssignment({
@@ -127,7 +131,7 @@ describe('assignGradersToAssignment — RANDOM', () => {
         assignmentId: 'a-1',
         method: 'RANDOM',
       })
-    ).rejects.toThrow(/no assistants with is_grader/);
+    ).rejects.toThrow(/no staff with is_grader/);
     expect(batchTrigger).not.toHaveBeenCalled();
   });
 });

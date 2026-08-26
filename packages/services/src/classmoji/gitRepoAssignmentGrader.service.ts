@@ -317,23 +317,27 @@ export const assignGradersToAssignment = async ({
   let graderLoginList: GraderInfo[] = [];
 
   if (method === 'RANDOM') {
-    const assistants = _.shuffle(
-      await classroomMembershipService.findUsersByRole(classroomId, 'ASSISTANT', {
+    // The grader pool spans every staff role that can be flagged as a grader:
+    // ASSISTANT and TEACHER. OWNER is excluded on purpose — is_grader cannot be
+    // set on an OWNER membership (staff.updateStaff refuses it), so an OWNER row
+    // can only carry the column default.
+    const graders = _.shuffle(
+      await classroomMembershipService.findUsersByRoles(classroomId, ['ASSISTANT', 'TEACHER'], {
         is_grader: true,
       })
     );
 
     // The original modulo indexing divided by zero here and produced
     // `Cannot read properties of undefined` — fail with something actionable.
-    if (assistants.length === 0) {
+    if (graders.length === 0) {
       throw new AssignGradersError(
         'no_graders',
-        '[assign-graders] no assistants with is_grader set in this classroom'
+        '[assign-graders] no staff with is_grader set in this classroom'
       );
     }
 
     graderLoginList = repoAssignments.map(
-      (_repoAssignment, index) => assistants[index % assistants.length] as unknown as GraderInfo
+      (_repoAssignment, index) => graders[index % graders.length] as unknown as GraderInfo
     );
   } else {
     const templateRepoAssignments = await gitRepoAssignmentService.findByAssignmentId(

@@ -385,6 +385,57 @@ export const findUsersByRole = async (
 };
 
 /**
+ * Get users holding ANY of several roles in a classroom.
+ *
+ * Same shape as findUsersByRole (which stays single-role for its ~20 callers);
+ * this variant exists for pools that span roles — notably the grader pool,
+ * which draws from ASSISTANT and TEACHER memberships alike. A user holding two
+ * of the listed roles has two membership rows, so they are de-duplicated by
+ * user id, keeping the first row that sets is_grader.
+ *
+ * @param {string} classroomId - UUID of the Classroom
+ * @param {Role[]} roles - Roles to include
+ * @param {Object} [filters] - Additional filters
+ * @returns {Promise<Object[]>}
+ */
+export const findUsersByRoles = async (
+  classroomId: string,
+  roles: Role[],
+  filters: Prisma.ClassroomMembershipWhereInput = {}
+) => {
+  const memberships = await getPrisma().classroomMembership.findMany({
+    where: {
+      classroom_id: classroomId,
+      role: { in: roles },
+      ...filters,
+    },
+    include: {
+      user: true,
+    },
+    orderBy: {
+      user: {
+        name: 'asc',
+      },
+    },
+  });
+
+  const seen = new Set<string>();
+  return memberships
+    .filter(({ user_id }) => {
+      if (seen.has(user_id)) return false;
+      seen.add(user_id);
+      return true;
+    })
+    .map(({ user, is_grader, has_accepted_invite, letter_grade, comment }) => ({
+      ...user,
+      is_grader,
+      has_accepted_invite,
+      letter_grade,
+      comment,
+    }));
+};
+
+/**
  * Bulk create memberships
  * @param {Object[]} memberships - Array of membership data
  * @returns {Promise<{count: number}>}
