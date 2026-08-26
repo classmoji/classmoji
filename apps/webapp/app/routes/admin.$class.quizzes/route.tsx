@@ -1,4 +1,4 @@
-import { useFetcher, useNavigate, useParams, Outlet } from 'react-router';
+import { useFetcher, useLocation, useNavigate, useParams, Outlet } from 'react-router';
 import { Table, Button, Typography, Tag, Space, Tooltip, Popconfirm } from 'antd';
 import { IconSend, IconBook, IconCalendar, IconTrash } from '@tabler/icons-react';
 import { TableActionButtons, EditableCell, ButtonNew } from '~/components';
@@ -53,7 +53,7 @@ export async function loader({ params, request }: Route.LoaderArgs) {
   const { userId, classroom, membership } = await assertClassroomAccess({
     request,
     classroomSlug: classSlug,
-    allowedRoles: ['OWNER', 'ASSISTANT'],
+    allowedRoles: ['OWNER', 'TEACHER', 'ASSISTANT'],
     resourceType: 'ADMIN_QUIZ_ACCESS',
     attemptedAction: 'view_admin_quizzes',
   });
@@ -133,7 +133,7 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
   const { userId, classroom, membership } = await assertClassroomAccess({
     request,
     classroomSlug: classSlug,
-    allowedRoles: ['OWNER', 'ASSISTANT'],
+    allowedRoles: ['OWNER', 'TEACHER', 'ASSISTANT'],
     resourceType: 'ADMIN_QUIZ_ACTION',
     attemptedAction: data._action || 'unknown',
     metadata: {
@@ -220,9 +220,12 @@ export default function AdminQuizzes({ loaderData }: Route.ComponentProps) {
   const fetcher = useFetcher();
   const navigate = useNavigate();
   const { class: classSlug } = useParams();
+  // Served under every prefix this route's gate allows (/admin and /teacher),
+  // so links stay on the prefix the user arrived on.
+  const rolePrefix = useLocation().pathname.split('/')[1];
 
   const handleEditQuiz = (quiz: AdminQuiz) => {
-    navigate(`/admin/${classSlug}/quizzes/form?quizId=${quiz.id}`);
+    navigate(`/${rolePrefix}/${classSlug}/quizzes/form?quizId=${quiz.id}`);
   };
 
   const handleDeleteQuiz = (quizId: string) => {
@@ -258,7 +261,7 @@ export default function AdminQuizzes({ loaderData }: Route.ComponentProps) {
   };
 
   const handleViewQuiz = (quiz: AdminQuiz) => {
-    navigate(`/admin/${classSlug}/quizzes/${quiz.id}`);
+    navigate(`/${rolePrefix}/${classSlug}/quizzes/${quiz.id}`);
   };
 
   const totalWeight = quizzes
@@ -438,7 +441,7 @@ export default function AdminQuizzes({ loaderData }: Route.ComponentProps) {
             <Button icon={<IconTrash size={16} />}>Clear My Attempts</Button>
           </Popconfirm>
 
-          <ButtonNew action={() => navigate(`/admin/${classSlug}/quizzes/form`)}>
+          <ButtonNew action={() => navigate(`/${rolePrefix}/${classSlug}/quizzes/form`)}>
             New quiz
           </ButtonNew>
         </Space>

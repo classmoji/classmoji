@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useNavigate, useParams } from 'react-router';
+import { useLocation, useNavigate, useParams } from 'react-router';
 import { Drawer, ConfigProvider, theme, Modal } from 'antd';
 import { useRouteDrawer, useDarkMode } from '~/hooks';
 import { QuizAttemptInterface } from '~/components';
@@ -20,7 +20,7 @@ export async function loader({ params, request }: Route.LoaderArgs) {
   } = await assertClassroomAccess({
     request,
     classroomSlug: classSlug,
-    allowedRoles: ['OWNER', 'ASSISTANT'],
+    allowedRoles: ['OWNER', 'TEACHER', 'ASSISTANT'],
     resourceType: 'QUIZ_ATTEMPT',
     attemptedAction: 'view_student_attempt',
   });
@@ -94,10 +94,12 @@ export default function AdminQuizAttemptViewDrawer({ loaderData }: Route.Compone
   const { isDarkMode } = useDarkMode();
   const navigate = useNavigate();
   const { class: classSlug, quizId } = useParams();
+  // Served under every prefix this route's gate allows (/admin and /teacher).
+  const rolePrefix = useLocation().pathname.split('/')[1];
   const [showConfirm, setShowConfirm] = useState(false);
 
   const navigateAway = () => {
-    navigate(`/admin/${classSlug}/quizzes/${quizId}`);
+    navigate(`/${rolePrefix}/${classSlug}/quizzes/${quizId}`);
   };
 
   const handleClose = () => {

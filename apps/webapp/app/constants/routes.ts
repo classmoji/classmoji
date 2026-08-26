@@ -128,7 +128,7 @@ export const routes = {
     link: '/quizzes',
     label: 'Quizzes',
     icon: IconRobot,
-    roles: ['OWNER', 'STUDENT', 'ASSISTANT'],
+    roles: ['OWNER', 'TEACHER', 'STUDENT', 'ASSISTANT'],
     isProTier: true,
     category: 'assessment',
   },

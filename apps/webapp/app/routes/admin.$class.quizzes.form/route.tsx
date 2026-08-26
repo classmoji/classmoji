@@ -1,5 +1,5 @@
 import { useEffect, useState, useMemo } from 'react';
-import { useFetcher, useNavigate, useParams } from 'react-router';
+import { useFetcher, useLocation, useNavigate, useParams } from 'react-router';
 import {
   Drawer,
   ConfigProvider,
@@ -38,7 +38,7 @@ export async function loader({ params, request }: Route.LoaderArgs) {
   const { userId: _userId, classroom } = await assertClassroomAccess({
     request,
     classroomSlug: classSlug,
-    allowedRoles: ['OWNER', 'ASSISTANT'],
+    allowedRoles: ['OWNER', 'TEACHER', 'ASSISTANT'],
     resourceType: 'ADMIN_QUIZ_FORM',
     attemptedAction: quizId ? 'edit_quiz' : 'create_quiz',
   });
@@ -92,6 +92,10 @@ function QuizFormDrawer({ loaderData }: Route.ComponentProps) {
   const navigate = useNavigate();
   const { class: classSlug } = useParams();
   const fetcher = useFetcher();
+  // Served under every prefix this route's gate allows (/admin and /teacher).
+  // The submit target matters as much as the links: posting to the other
+  // prefix's list route would miss this drawer's parent action.
+  const rolePrefix = useLocation().pathname.split('/')[1];
 
   const [form] = Form.useForm();
   const [selectedExample, setSelectedExample] = useState('');
@@ -176,13 +180,13 @@ function QuizFormDrawer({ loaderData }: Route.ComponentProps) {
     if (fetcher.state === 'idle' && fetcher.data?.success) {
       // If a new quiz was created, navigate to its detail page
       if (fetcher.data.quizId) {
-        navigate(`/admin/${classSlug}/quizzes/${fetcher.data.quizId}`);
+        navigate(`/${rolePrefix}/${classSlug}/quizzes/${fetcher.data.quizId}`);
       } else {
         // For updates, just close the drawer
         close();
       }
     }
-  }, [fetcher.state, fetcher.data, navigate, classSlug, close]);
+  }, [fetcher.state, fetcher.data, navigate, classSlug, close, rolePrefix]);
 
   const handleExampleSelect = (exampleName: string) => {
     const example = examplePrompts.find(
@@ -209,7 +213,7 @@ function QuizFormDrawer({ loaderData }: Route.ComponentProps) {
       // Submit to parent route's action
       fetcher.submit(formData, {
         method: 'POST',
-        action: `/admin/${classSlug}/quizzes`,
+        action: `/${rolePrefix}/${classSlug}/quizzes`,
         encType: 'application/json',
       });
     });
@@ -221,7 +225,7 @@ function QuizFormDrawer({ loaderData }: Route.ComponentProps) {
         { _action: 'deleteQuiz', id: quiz.id },
         {
           method: 'POST',
-          action: `/admin/${classSlug}/quizzes`,
+          action: `/${rolePrefix}/${classSlug}/quizzes`,
           encType: 'application/json',
         }
       );

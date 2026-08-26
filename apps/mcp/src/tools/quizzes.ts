@@ -3,9 +3,8 @@
  *
  * ROUTE-DERIVED TIER: the web actions live in
  * apps/webapp/app/routes/admin.$class.quizzes/route.tsx, gated by
- * assertClassroomAccess with allowedRoles ['OWNER','ASSISTANT'] — TEACHER is
- * genuinely excluded from the quiz surface (S4 role parity), so these tools use
- * OWNER_ASSISTANT, not TEACHING_TEAM.
+ * assertClassroomAccess with allowedRoles ['OWNER','TEACHER','ASSISTANT'] (S4
+ * role parity), so these tools use QUIZ_STAFF.
  *
  * TWO EXTRA GATES run in-handler, because the registry pipeline (scope → rate
  * limit → role → mutation gate) does not know about them:
@@ -42,7 +41,7 @@ import {
   loadQuizInClassroom,
   loadRepositoryInClassroom,
   ok,
-  OWNER_ASSISTANT,
+  QUIZ_STAFF,
   requireClassroomCtx,
   writeAudit,
 } from './shared.ts';
@@ -160,7 +159,7 @@ export const quizCreateTool: ToolDefinition<QuizCreateArgs> = {
     'subscription and quizzes enabled. ALWAYS created as a DRAFT (students see nothing) — use ' +
     'quiz_publish to go live and notify students.',
   scope: 'write',
-  roles: OWNER_ASSISTANT,
+  roles: QUIZ_STAFF,
   inputSchema: {
     classroom: z.string().describe("Classroom reference as 'org/slug'"),
     name: z.string().min(1).max(200).describe('Quiz name'),
@@ -293,7 +292,7 @@ export const quizUpdateTool: ToolDefinition<QuizUpdateArgs> = {
     'the repo, or due_date to null to clear the deadline. Editing prompts does not re-grade ' +
     'attempts already taken.',
   scope: 'write',
-  roles: OWNER_ASSISTANT,
+  roles: QUIZ_STAFF,
   inputSchema: {
     classroom: z.string().describe("Classroom reference as 'org/slug'"),
     quiz_id: z.string().uuid().describe('Quiz id'),
@@ -409,7 +408,7 @@ export const quizPublishTool: ToolDefinition<QuizPublishArgs> = {
     'already-published quiz notifies nobody. The response reports whether students were ' +
     'notified. Use quiz_update with status DRAFT to unpublish.',
   scope: 'write',
-  roles: OWNER_ASSISTANT,
+  roles: QUIZ_STAFF,
   inputSchema: {
     classroom: z.string().describe("Classroom reference as 'org/slug'"),
     quiz_id: z.string().uuid().describe('Quiz id'),
@@ -466,7 +465,7 @@ export const quizDeleteTool: ToolDefinition<QuizDeleteArgs> = {
     'deleted with it, and the quiz is removed from any curriculum module that lists it. To take ' +
     'a quiz out of circulation without losing student work, use quiz_update with status CLOSED.',
   scope: 'write',
-  roles: OWNER_ASSISTANT,
+  roles: QUIZ_STAFF,
   inputSchema: {
     classroom: z.string().describe("Classroom reference as 'org/slug'"),
     quiz_id: z.string().uuid().describe('Quiz id'),

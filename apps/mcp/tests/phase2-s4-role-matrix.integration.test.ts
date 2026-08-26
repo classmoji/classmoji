@@ -1167,15 +1167,16 @@ describe('resource tiers', () => {
     expect(text).not.toMatch(/anthropic_api_key|openai_api_key|access_token/);
   });
 
-  it('quizzes: TEACHER is genuinely excluded by the role gate', async () => {
-    const denied = await readResource(teacher, `classmoji://${DEV_REF}/quizzes`);
-    expect(denied.error?.code).toBe(RESOURCE_FORBIDDEN);
-    // Tie the denial to the ROLE gate specifically: the Pro-tier and
-    // quizzes_enabled gates also answer -32003, so the code alone would keep
-    // passing if TEACHER were ever added to QUIZ_ROLES. INSUFFICIENT_ROLE is
-    // only ever attached by the role gate (authz/pure.ts requireRole).
-    expect((denied.error?.data as { code?: string } | undefined)?.code).toBe('INSUFFICIENT_ROLE');
-    expect(denied.error?.message).toMatch(/Required role/);
+  it('quizzes: TEACHER passes the role gate', async () => {
+    const result = await readResource(teacher, `classmoji://${DEV_REF}/quizzes`);
+    // TEACHER is in QUIZ_ROLES now, so the ROLE gate must not be what stops
+    // this read. The Pro-tier and quizzes_enabled gates answer with the same
+    // -32003 code, so assert on the inner code rather than on success: those
+    // two may legitimately deny depending on the fixture classroom's plan and
+    // settings, but INSUFFICIENT_ROLE must never appear again.
+    expect((result.error?.data as { code?: string } | undefined)?.code).not.toBe(
+      'INSUFFICIENT_ROLE'
+    );
   });
 });
 
