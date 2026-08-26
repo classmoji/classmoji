@@ -29,10 +29,18 @@ const resolveRoleUpdate = (
 /**
  * Guard against orphaning a classroom: throw when it would be left with zero
  * OWNER memberships. Call before removing an OWNER membership or demoting one.
+ *
+ * Pass the transaction client when the count and the write that depends on it
+ * must see the same snapshot (see `remove`); the default reads outside any
+ * transaction.
  * @param {string} classroomId - UUID of the Classroom
+ * @param {Object} [client] - Prisma client or transaction client
  */
-const assertNotLastOwner = async (classroomId: string): Promise<void> => {
-  const ownerCount = await getPrisma().classroomMembership.count({
+const assertNotLastOwner = async (
+  classroomId: string,
+  client: Prisma.TransactionClient = getPrisma()
+): Promise<void> => {
+  const ownerCount = await client.classroomMembership.count({
     where: { classroom_id: classroomId, role: 'OWNER' },
   });
   if (ownerCount <= 1) {
@@ -267,17 +275,31 @@ export const updateById = async (id: string, updates: Prisma.ClassroomMembership
  * @returns {Promise<Object>}
  */
 export const remove = async (classroomId: string, userId: string, role?: Role) => {
-  if (!role || role === 'OWNER') {
-    const ownerMembership = await getPrisma().classroomMembership.findFirst({
-      where: { classroom_id: classroomId, user_id: userId, role: 'OWNER' },
+  // Removing a named non-owner role cannot change the owner count, so it takes
+  // the plain delete.
+  if (role && role !== 'OWNER') {
+    return getPrisma().classroomMembership.deleteMany({
+      where: { classroom_id: classroomId, user_id: userId, role },
     });
-    if (ownerMembership) {
-      await assertNotLastOwner(classroomId);
-    }
   }
 
-  return getPrisma().classroomMembership.deleteMany({
-    where: { classroom_id: classroomId, user_id: userId, ...(role ? { role } : {}) },
+  // The count and the delete it authorizes must see the same state, so they run
+  // in ONE transaction behind a row lock on the classroom. Two removals that
+  // each target a different owner of the same classroom serialize on that lock,
+  // and the second one counts the owners the first one left behind.
+  return getPrisma().$transaction(async tx => {
+    const ownerMembership = await tx.classroomMembership.findFirst({
+      where: { classroom_id: classroomId, user_id: userId, role: 'OWNER' },
+    });
+
+    if (ownerMembership) {
+      await tx.$queryRaw`SELECT id FROM classrooms WHERE id = ${classroomId} FOR UPDATE`;
+      await assertNotLastOwner(classroomId, tx);
+    }
+
+    return tx.classroomMembership.deleteMany({
+      where: { classroom_id: classroomId, user_id: userId, ...(role ? { role } : {}) },
+    });
   });
 };
 

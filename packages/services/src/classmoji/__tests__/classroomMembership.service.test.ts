@@ -10,18 +10,27 @@ const countMock = vi.fn();
 const updateMock = vi.fn();
 const deleteManyMock = vi.fn();
 const deleteMock = vi.fn();
+const queryRawMock = vi.fn();
+const transactionMock = vi.fn((fn: (tx: unknown) => unknown) => fn(client));
+
+// The transaction client exposes the same model methods, so the assertions below
+// hold whether a call went through `$transaction` or not, plus the raw query
+// used for the row lock.
+const client = {
+  classroomMembership: {
+    findFirst: (...args: unknown[]) => findFirstMock(...args),
+    findUnique: (...args: unknown[]) => findUniqueMock(...args),
+    count: (...args: unknown[]) => countMock(...args),
+    update: (...args: unknown[]) => updateMock(...args),
+    deleteMany: (...args: unknown[]) => deleteManyMock(...args),
+    delete: (...args: unknown[]) => deleteMock(...args),
+  },
+  $queryRaw: (...args: unknown[]) => queryRawMock(...args),
+  $transaction: (fn: (tx: unknown) => unknown) => transactionMock(fn),
+};
 
 vi.mock('@classmoji/database', () => ({
-  default: () => ({
-    classroomMembership: {
-      findFirst: (...args: unknown[]) => findFirstMock(...args),
-      findUnique: (...args: unknown[]) => findUniqueMock(...args),
-      count: (...args: unknown[]) => countMock(...args),
-      update: (...args: unknown[]) => updateMock(...args),
-      deleteMany: (...args: unknown[]) => deleteManyMock(...args),
-      delete: (...args: unknown[]) => deleteMock(...args),
-    },
-  }),
+  default: () => client,
 }));
 
 const LAST_OWNER_ERROR = 'Cannot remove the last owner of a classroom';
@@ -35,10 +44,13 @@ beforeEach(() => {
   updateMock.mockReset();
   deleteManyMock.mockReset();
   deleteMock.mockReset();
+  queryRawMock.mockReset();
+  transactionMock.mockClear();
 
   updateMock.mockResolvedValue({ id: 'm1' });
   deleteManyMock.mockResolvedValue({ count: 1 });
   deleteMock.mockResolvedValue({ id: 'm1' });
+  queryRawMock.mockResolvedValue([{ id: 'c1' }]);
 });
 
 describe('remove', () => {
@@ -71,6 +83,8 @@ describe('remove', () => {
 
     expect(findFirstMock).not.toHaveBeenCalled();
     expect(countMock).not.toHaveBeenCalled();
+    // A named non-owner role cannot change the owner count, so no transaction.
+    expect(transactionMock).not.toHaveBeenCalled();
     expect(deleteManyMock).toHaveBeenCalledWith({
       where: { classroom_id: 'c1', user_id: 'u1', role: 'STUDENT' },
     });
@@ -82,6 +96,44 @@ describe('remove', () => {
 
     await expect(membershipService.remove('c1', 'u1', 'OWNER')).rejects.toThrow(LAST_OWNER_ERROR);
     expect(deleteManyMock).not.toHaveBeenCalled();
+  });
+
+  it('counts the owners inside the transaction, behind a row lock on the classroom', async () => {
+    findFirstMock.mockResolvedValue({ id: 'm1', role: 'OWNER' });
+    countMock.mockResolvedValue(2);
+
+    await membershipService.remove('c1', 'u1', 'OWNER');
+
+    expect(transactionMock).toHaveBeenCalledTimes(1);
+    const [strings, ...values] = queryRawMock.mock.calls[0] as [string[], ...unknown[]];
+    expect(strings.join('?')).toContain('FOR UPDATE');
+    expect(values).toEqual(['c1']);
+    // The lock is taken BEFORE the count that authorizes the delete, and the
+    // delete happens after both.
+    expect(queryRawMock.mock.invocationCallOrder[0]).toBeLessThan(
+      countMock.mock.invocationCallOrder[0]
+    );
+    expect(countMock.mock.invocationCallOrder[0]).toBeLessThan(
+      deleteManyMock.mock.invocationCallOrder[0]
+    );
+  });
+
+  it('leaves exactly one owner when two owner removals run at once', async () => {
+    findFirstMock.mockResolvedValue({ id: 'm1', role: 'OWNER' });
+    // Two owners to start with. The removals serialize on the classroom row
+    // lock, so the second one counts the owners the first one left behind and
+    // is refused — the classroom cannot end up with none.
+    countMock.mockResolvedValueOnce(2).mockResolvedValueOnce(1);
+
+    const results = await Promise.allSettled([
+      membershipService.remove('c1', 'owner-a', 'OWNER'),
+      membershipService.remove('c1', 'owner-b', 'OWNER'),
+    ]);
+
+    expect(results.map(r => r.status).sort()).toEqual(['fulfilled', 'rejected']);
+    const rejected = results.find(r => r.status === 'rejected') as PromiseRejectedResult;
+    expect((rejected.reason as Error).message).toBe(LAST_OWNER_ERROR);
+    expect(deleteManyMock).toHaveBeenCalledTimes(1);
   });
 });
 
