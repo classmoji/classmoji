@@ -71,10 +71,20 @@ export const create = async (data: AuditLogData) => {
   // Distinct tools acting on the same resource within the window must never
   // coalesce — when the payload names a tool, it joins the dedup key. Rows
   // without a tool keep the original key (unchanged behavior).
-  const tool =
+  const payload =
     data.data && typeof data.data === 'object' && !Array.isArray(data.data)
-      ? (data.data as Record<string, unknown>).tool
+      ? (data.data as Record<string, unknown>)
       : undefined;
+  const tool = payload?.tool;
+
+  // The role the payload ACTS ON (data.role — e.g. the staff role being granted
+  // or removed), which is a different thing from the top-level `role` column
+  // above (the actor's own role in the classroom). Two calls that differ only in
+  // the role they act on are two distinct records, so it joins the key too. A
+  // second `data` filter cannot sit beside the first in the same object, so the
+  // clause goes under `AND` — Prisma combines both conjunctively. Payloads
+  // without a role keep the key exactly as it was.
+  const payloadRole = payload?.role;
 
   const recentLog = await getPrisma().auditLog.findFirst({
     where: {
@@ -85,6 +95,9 @@ export const create = async (data: AuditLogData) => {
       resource_id: normalizedResourceId,
       action,
       ...(typeof tool === 'string' ? { data: { path: ['tool'], equals: tool } } : {}),
+      ...(typeof payloadRole === 'string'
+        ? { AND: [{ data: { path: ['role'], equals: payloadRole } }] }
+        : {}),
       timestamp: {
         gte: new Date(Date.now() - deduplicationWindowMs),
       },
