@@ -61,7 +61,7 @@ export const routes = {
     link: '/dashboard',
     label: 'Dashboard',
     icon: IconLayoutDashboard,
-    roles: ['OWNER', 'ASSISTANT', 'STUDENT'],
+    roles: ['OWNER', 'TEACHER', 'ASSISTANT', 'STUDENT'],
   },
 
   // Calendar - shown under dashboard
@@ -77,16 +77,16 @@ export const routes = {
     link: '/modules',
     label: 'Modules',
     icon: IconStack2,
-    // OWNER always sees Modules to build them; students/assistants only when
+    // OWNER always sees Modules to build them; every other role only when
     // the instructor enables it (gated by show_modules in CommonLayout).
-    roles: ['OWNER', 'ASSISTANT', 'STUDENT'],
+    roles: ['OWNER', 'TEACHER', 'ASSISTANT', 'STUDENT'],
     category: 'content',
   },
   repositories: {
     link: '/repos',
     label: 'Repositories',
     icon: IconFileText,
-    roles: ['OWNER', 'ASSISTANT', 'STUDENT'],
+    roles: ['OWNER', 'TEACHER', 'ASSISTANT', 'STUDENT'],
     category: 'content',
   },
   assignments: {
@@ -143,14 +143,16 @@ export const routes = {
     link: '/grading',
     label: 'Grading',
     icon: IconChecklist,
-    roles: ['ASSISTANT'],
+    // The queue lists what the viewer is assigned to grade, and any staff role
+    // can be flagged as a grader — not assistants alone.
+    roles: ['TEACHER', 'ASSISTANT'],
     category: 'assessment',
   },
   'regrade-requests': {
     link: '/regrade-requests',
     label: 'Resubmits',
     icon: IconRotate,
-    roles: ['OWNER', 'ASSISTANT', 'STUDENT'],
+    roles: ['OWNER', 'TEACHER', 'ASSISTANT', 'STUDENT'],
     category: 'assessment',
   },
 
@@ -159,10 +161,10 @@ export const routes = {
     link: '/students',
     label: 'Students',
     icon: IconUsers,
-    // Reading the roster is a teaching-team right, so assistants get the entry
-    // too; it resolves to /assistant/:class/students, which re-exports the
-    // admin loader and its OWNER-only field split.
-    roles: ['OWNER', 'ASSISTANT'],
+    // Reading the roster is a teaching-team right, so the whole team gets the
+    // entry; for non-owners it resolves to their own prefix, which re-exports
+    // the admin loader and its OWNER-only field split.
+    roles: ['OWNER', 'TEACHER', 'ASSISTANT'],
     category: 'people',
   },
   teams: {
@@ -217,7 +219,8 @@ export const routes = {
     link: '/settings',
     label: 'Settings',
     icon: IconSettings,
-    roles: ['STUDENT', 'ASSISTANT'],
+    // Personal member settings, not the owner-only classroom settings above.
+    roles: ['STUDENT', 'TEACHER', 'ASSISTANT'],
     category: 'settings',
   },
   support: {
