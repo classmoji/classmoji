@@ -318,9 +318,10 @@ export const assignGradersToAssignment = async ({
 
   if (method === 'RANDOM') {
     // The grader pool spans every staff role that can be flagged as a grader:
-    // ASSISTANT and TEACHER. OWNER is excluded on purpose — is_grader cannot be
-    // set on an OWNER membership (staff.updateStaff refuses it), so an OWNER row
-    // can only carry the column default.
+    // ASSISTANT and TEACHER. OWNER is excluded on purpose, and the role filter
+    // in this query is what enforces it — an OWNER row carrying is_grader (the
+    // generic membership writes accept the flag on any row; staff.updateStaff
+    // is the path that refuses it) is still never drawn into the pool.
     const graders = _.shuffle(
       await classroomMembershipService.findUsersByRoles(classroomId, ['ASSISTANT', 'TEACHER'], {
         is_grader: true,

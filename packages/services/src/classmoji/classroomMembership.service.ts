@@ -413,7 +413,9 @@ export const findUsersByRole = async (
  * this variant exists for pools that span roles — notably the grader pool,
  * which draws from ASSISTANT and TEACHER memberships alike. A user holding two
  * of the listed roles has two membership rows, so they are de-duplicated by
- * user id, keeping the first row that sets is_grader.
+ * user id. is_grader is sorted first, so the surviving row is the one that sets
+ * it — otherwise the tiebreak would be name order, which says nothing about
+ * which membership the caller means.
  *
  * @param {string} classroomId - UUID of the Classroom
  * @param {Role[]} roles - Roles to include
@@ -434,11 +436,7 @@ export const findUsersByRoles = async (
     include: {
       user: true,
     },
-    orderBy: {
-      user: {
-        name: 'asc',
-      },
-    },
+    orderBy: [{ is_grader: 'desc' }, { user: { name: 'asc' } }],
   });
 
   const seen = new Set<string>();

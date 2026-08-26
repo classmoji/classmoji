@@ -75,7 +75,10 @@ async function activateMembership({
   }
 
   for (const membership of relevantMemberships) {
-    await ClassmojiService.classroomMembership.update(membership.classroom_id, user.id, {
+    // By id: the loop already holds each membership row, and a user may hold
+    // several roles in one classroom — resolving by (classroom, user) again
+    // would activate whichever row came back first, once per iteration.
+    await ClassmojiService.classroomMembership.updateById(membership.id, {
       has_accepted_invite: true,
     });
 

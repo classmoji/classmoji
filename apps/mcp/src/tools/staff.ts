@@ -150,7 +150,11 @@ export const staffAddArgsSchema = z.object(staffAddShape).superRefine((args, ctx
 export const staffAddTool: ToolDefinition<StaffAddArgs> = {
   name: 'staff_add',
   // Sends a REAL GitHub org invite (openWorld). Adds a membership only —
-  // nothing is removed, so not destructive.
+  // nothing is removed, so not destructive. That holds for role:OWNER too: it
+  // creates a membership rather than destroying one, and the annotation follows
+  // the same convention as every other creating tool here. The extra weight an
+  // OWNER grant carries is expressed where it is enforced — the confirm gate in
+  // staffAddArgsSchema — not by re-labelling one tool differently from its peers.
   annotations: { destructive: false, openWorld: true },
   title: 'Add a teaching-staff member',
   description:
@@ -320,6 +324,19 @@ interface StaffRemoveArgs {
   confirm: true;
 }
 
+/** One shape for both surfaces (the registry's raw shape and the guard below). */
+const staffRemoveShape = {
+  classroom: z.string().describe("Classroom reference as 'org/slug'"),
+  login: z.string().min(1).max(100).describe('The staff member GitHub username'),
+  role: z.enum(STAFF_ROLES).describe('Which role to remove — the other roles they hold survive'),
+  confirm: z
+    .literal(true)
+    .describe('Must be true — acknowledges this can remove the user from the GitHub org'),
+};
+
+/** Exported so tests pin the confirm gate. */
+export const staffRemoveArgsSchema = z.object(staffRemoveShape);
+
 export const staffRemoveTool: ToolDefinition<StaffRemoveArgs> = {
   name: 'staff_remove',
   // Can remove the user from the GitHub org entirely → destructive + openWorld.
@@ -335,22 +352,28 @@ export const staffRemoveTool: ToolDefinition<StaffRemoveArgs> = {
     'staff role here (all staff roles share one team), and removes them from the GitHub ' +
     'organization entirely — revoking their access — only IF they hold no other membership in ' +
     'that organization (e.g. they also take a class in the same org). Removing the LAST ' +
-    'remaining owner is refused: add another owner first. Runs in the background. ' +
+    'remaining owner is refused: add another owner first, though an owner MAY remove their own ' +
+    'owner role while another owner exists — and if that was their only role in the ' +
+    'organization, doing so ends their own GitHub access to it. Runs in the background. ' +
     'Because the removal is processed ' +
     'asynchronously it can still fail after this call reports success — check list_teaching_team ' +
     'afterwards to confirm they are gone.',
   scope: 'write',
   roles: OWNER_ONLY,
-  inputSchema: {
-    classroom: z.string().describe("Classroom reference as 'org/slug'"),
-    login: z.string().min(1).max(100).describe('The staff member GitHub username'),
-    role: z.enum(STAFF_ROLES).describe('Which role to remove — the other roles they hold survive'),
-    confirm: z
-      .literal(true)
-      .describe('Must be true — acknowledges this can remove the user from the GitHub org'),
-  },
+  // Same tight bucket as staff_add: every call can revoke GitHub organization
+  // access, so cap it at a burst of 5 and roughly 3 per minute sustained.
+  rateLimit: { capacity: 5, refillPerSecond: 0.05 },
+  inputSchema: staffRemoveShape,
   handler: async (args, ctx) => {
     const classroom = requireClassroomCtx(ctx);
+
+    // confirm:true is in the schema the SDK validates, and re-parsed here so the
+    // gate is structural rather than dependent on that one validation running
+    // (same belt-and-braces as staff_add).
+    const parsed = staffRemoveArgsSchema.safeParse(args);
+    if (!parsed.success) {
+      throw new ToolError('invalid_params', parsed.error.issues[0]?.message ?? 'Invalid arguments');
+    }
 
     let result;
     try {
@@ -361,8 +384,8 @@ export const staffRemoveTool: ToolDefinition<StaffRemoveArgs> = {
       // last-owner guard runs BEFORE the enqueue for exactly that reason.
       result = await ClassmojiService.staff.removeStaff({
         classroomId: classroom.classroomId,
-        login: args.login,
-        role: args.role,
+        login: parsed.data.login,
+        role: parsed.data.role,
       });
     } catch (error) {
       throw mapStaffError(error);

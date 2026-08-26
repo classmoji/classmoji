@@ -58,11 +58,6 @@ vi.mock('../classroomMembership.service.ts', () => ({
   updateById: (...a: unknown[]) => updateById(...a),
 }));
 
-const userFindByLogin = vi.fn();
-vi.mock('../user.service.ts', () => ({
-  findByLogin: (...a: unknown[]) => userFindByLogin(...a),
-}));
-
 const triggerTask = vi.fn();
 vi.mock('@trigger.dev/sdk', () => ({
   tasks: { trigger: (...a: unknown[]) => triggerTask(...a) },
@@ -303,7 +298,7 @@ describe('staff.updateStaff', () => {
   it.each(['ASSISTANT', 'TEACHER'] as const)(
     'updates the %s membership row specifically',
     async role => {
-      userFindByLogin.mockResolvedValue({ id: 'u-1', login: 'ada' });
+      userFindFirst.mockResolvedValue({ id: 'u-1', login: 'ada' });
       findByClassroomAndUser.mockResolvedValue({ id: 'm-1', role });
 
       await staff.updateStaff({ classroomId: 'class-1', login: 'ada', role, isGrader: true });
@@ -325,12 +320,12 @@ describe('staff.updateStaff', () => {
         isGrader: true,
       })
     ).rejects.toMatchObject({ code: 'grader_flag_invalid' });
-    expect(userFindByLogin).not.toHaveBeenCalled();
+    expect(userFindFirst).not.toHaveBeenCalled();
     expect(updateById).not.toHaveBeenCalled();
   });
 
   it('throws staff_not_found when the user holds no membership at that role here', async () => {
-    userFindByLogin.mockResolvedValue({ id: 'u-1', login: 'ada' });
+    userFindFirst.mockResolvedValue({ id: 'u-1', login: 'ada' });
     findByClassroomAndUser.mockResolvedValue(null);
 
     await expect(
@@ -343,13 +338,32 @@ describe('staff.updateStaff', () => {
     ).rejects.toMatchObject({ code: 'staff_not_found' });
     expect(updateById).not.toHaveBeenCalled();
   });
+
+  it('resolves the login the way addStaff stored it: case-insensitively', async () => {
+    // addStaff stores the canonical casing the provider returns, which is often
+    // not what the caller typed, so 'ada' has to find the row stored as 'Ada'.
+    userFindFirst.mockResolvedValue({ id: 'u-1', login: 'Ada' });
+    findByClassroomAndUser.mockResolvedValue({ id: 'm-1', role: 'ASSISTANT' });
+
+    await staff.updateStaff({
+      classroomId: 'class-1',
+      login: '@ada',
+      role: 'ASSISTANT',
+      isGrader: true,
+    });
+
+    expect(userFindFirst.mock.calls[0][0].where).toEqual({
+      login: { equals: 'ada', mode: 'insensitive' },
+    });
+    expect(updateById).toHaveBeenCalledWith('m-1', { is_grader: true });
+  });
 });
 
 describe('staff.removeStaff', () => {
   it.each(['ASSISTANT', 'TEACHER'] as const)(
     'builds the %s task payload from DB records and returns the run handle',
     async role => {
-      userFindByLogin.mockResolvedValue({ id: 'u-1', login: 'ada' });
+      userFindFirst.mockResolvedValue({ id: 'u-1', login: 'ada' });
       findByClassroomAndUser.mockResolvedValue({ id: 'm-1', has_accepted_invite: true });
 
       const result = await staff.removeStaff({ classroomId: 'class-1', login: 'ada', role });
@@ -378,8 +392,25 @@ describe('staff.removeStaff', () => {
     }
   );
 
+  it.each(['ASSISTANT', 'TEACHER', 'OWNER'] as const)(
+    'looks the %s membership up at that role specifically',
+    async role => {
+      userFindFirst.mockResolvedValue({ id: 'u-1', login: 'ada' });
+      findByClassroomAndUser.mockResolvedValue({ id: 'm-1', has_accepted_invite: true });
+
+      const result = await staff.removeStaff({ classroomId: 'class-1', login: 'ada', role });
+
+      // Role-scoped: the other roles this user holds here are never the target.
+      expect(findByClassroomAndUser).toHaveBeenCalledWith('class-1', 'u-1', role);
+      // The role travels through to the task and back to the caller unchanged.
+      const { payload } = triggerTask.mock.calls[0][1] as { payload: { role: string } };
+      expect(payload.role).toBe(role);
+      expect(result.role).toBe(role);
+    }
+  );
+
   it('refuses to remove a user who does not hold that role in this classroom', async () => {
-    userFindByLogin.mockResolvedValue({ id: 'u-1', login: 'ada' });
+    userFindFirst.mockResolvedValue({ id: 'u-1', login: 'ada' });
     findByClassroomAndUser.mockResolvedValue(null);
 
     await expect(
@@ -388,8 +419,19 @@ describe('staff.removeStaff', () => {
     expect(triggerTask).not.toHaveBeenCalled();
   });
 
+  it('resolves the login the way addStaff stored it: case-insensitively', async () => {
+    userFindFirst.mockResolvedValue({ id: 'u-1', login: 'Ada' });
+    findByClassroomAndUser.mockResolvedValue({ id: 'm-1', has_accepted_invite: true });
+
+    await staff.removeStaff({ classroomId: 'class-1', login: '@ada', role: 'ASSISTANT' });
+
+    expect(userFindFirst.mock.calls[0][0].where).toEqual({
+      login: { equals: 'ada', mode: 'insensitive' },
+    });
+  });
+
   it('refuses to remove the LAST owner before anything is queued', async () => {
-    userFindByLogin.mockResolvedValue({ id: 'u-1', login: 'ada' });
+    userFindFirst.mockResolvedValue({ id: 'u-1', login: 'ada' });
     findByClassroomAndUser.mockResolvedValue({ id: 'm-1', has_accepted_invite: true });
     membershipCount.mockResolvedValue(1);
 
@@ -421,7 +463,7 @@ describe('staff.removeStaff', () => {
       },
       tags: [],
     });
-    userFindByLogin.mockResolvedValue({ id: 'u-1', login: 'ada' });
+    userFindFirst.mockResolvedValue({ id: 'u-1', login: 'ada' });
     findByClassroomAndUser.mockResolvedValue({ id: 'm-1', has_accepted_invite: true });
 
     await staff.removeStaff({ classroomId: 'class-1', login: 'ada', role: 'ASSISTANT' });
@@ -440,7 +482,7 @@ describe('staff.removeStaff', () => {
   });
 
   it('removes a non-last owner normally', async () => {
-    userFindByLogin.mockResolvedValue({ id: 'u-1', login: 'ada' });
+    userFindFirst.mockResolvedValue({ id: 'u-1', login: 'ada' });
     findByClassroomAndUser.mockResolvedValue({ id: 'm-1', has_accepted_invite: true });
     membershipCount.mockResolvedValue(2);
 
@@ -455,5 +497,40 @@ describe('staff.removeStaff', () => {
       expect.objectContaining({ payload: expect.objectContaining({ role: 'OWNER' }) })
     );
     expect(result).toEqual({ userId: 'u-1', login: 'ada', role: 'OWNER', runId: 'run-1' });
+  });
+});
+
+describe('the staff role is checked at runtime', () => {
+  // StaffRole is a TYPE and is gone at runtime, so a caller that is not the MCP
+  // schema — a script, a future route — can hand these functions any string.
+  // STUDENT memberships belong to the roster service and must not be creatable,
+  // flaggable or deletable through this path.
+  const notStaff = ['STUDENT', 'owner', ''] as const;
+
+  it.each(notStaff)('addStaff refuses %s before doing anything', async role => {
+    await expect(
+      staff.addStaff({ classroomId: 'class-1', login: 'ada', role: role as never })
+    ).rejects.toMatchObject({ code: 'invalid_role' });
+    expect(classroomFindById).not.toHaveBeenCalled();
+    expect(membershipCreate).not.toHaveBeenCalled();
+  });
+
+  it.each(notStaff)('updateStaff refuses %s before doing anything', async role => {
+    await expect(
+      staff.updateStaff({
+        classroomId: 'class-1',
+        login: 'ada',
+        role: role as never,
+        isGrader: true,
+      })
+    ).rejects.toMatchObject({ code: 'invalid_role' });
+    expect(updateById).not.toHaveBeenCalled();
+  });
+
+  it.each(notStaff)('removeStaff refuses %s before anything is queued', async role => {
+    await expect(
+      staff.removeStaff({ classroomId: 'class-1', login: 'ada', role: role as never })
+    ).rejects.toMatchObject({ code: 'invalid_role' });
+    expect(triggerTask).not.toHaveBeenCalled();
   });
 });

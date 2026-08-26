@@ -51,8 +51,13 @@ vi.mock('@classmoji/services', () => {
 });
 
 const { StaffServiceError } = await import('@classmoji/services');
-const { staffAddTool, staffUpdateTool, staffRemoveTool, staffAddArgsSchema } =
-  await import('../staff.ts');
+const {
+  staffAddTool,
+  staffUpdateTool,
+  staffRemoveTool,
+  staffAddArgsSchema,
+  staffRemoveArgsSchema,
+} = await import('../staff.ts');
 
 const CTX: ToolContext = {
   viewer: { userId: 'owner-1', clientId: 'c', scopes: new Set(['read', 'write']) },
@@ -439,6 +444,31 @@ describe('staff_remove', () => {
     });
   });
 
+  it.each(['ASSISTANT', 'TEACHER', 'OWNER'] as const)(
+    'passes role %s through to the service and records it in the audit row',
+    async role => {
+      mocks.removeStaff.mockResolvedValue({
+        userId: 'u-9',
+        login: 'pat',
+        role,
+        runId: 'run-2',
+      });
+
+      const payload = parse(await staffRemoveTool.handler({ ...ARGS, login: 'pat', role }, CTX));
+
+      // The requested role reaches the service — it is what decides WHICH
+      // membership row of a multi-role user is removed.
+      expect(mocks.removeStaff).toHaveBeenCalledWith({
+        classroomId: 'class-1',
+        login: 'pat',
+        role,
+      });
+      expect(payload).toMatchObject({ success: true, queued: true, role });
+      // The role is the whole point of the record.
+      expect(auditRow().data).toMatchObject({ tool: 'staff_remove', login: 'pat', role });
+    }
+  );
+
   it('refuses an unknown / cross-classroom staff member and audits nothing', async () => {
     mocks.removeStaff.mockRejectedValue(
       new StaffServiceError('staff_not_found', '[staff] user nope not found')
@@ -473,6 +503,31 @@ describe('staff_remove', () => {
     expect(confirm.safeParse(true).success).toBe(true);
     expect(confirm.safeParse(false).success).toBe(false);
     expect(confirm.safeParse(undefined).success).toBe(false);
+  });
+
+  it.each([false, undefined, 'yes'])(
+    're-checks confirm in the handler as well (%s never reaches the service)',
+    async confirm => {
+      // Same belt-and-braces as staff_add: the gate is enforced by the handler
+      // itself, not only by the validation the SDK runs ahead of it.
+      await expect(
+        staffRemoveTool.handler({ ...ARGS, confirm } as never, CTX)
+      ).rejects.toMatchObject({ kind: 'invalid_params' });
+      expect(mocks.removeStaff).not.toHaveBeenCalled();
+      expect(mocks.auditCreate).not.toHaveBeenCalled();
+    }
+  );
+
+  it('carries the same tight rate-limit bucket as staff_add (each call can revoke org access)', () => {
+    expect(staffRemoveTool.rateLimit).toEqual({ capacity: 5, refillPerSecond: 0.05 });
+  });
+
+  it('accepts only the three staff roles in the exported schema', () => {
+    const base = { classroom: 'org/w26', login: 'pat', confirm: true };
+    for (const role of ['ASSISTANT', 'TEACHER', 'OWNER']) {
+      expect(staffRemoveArgsSchema.safeParse({ ...base, role }).success).toBe(true);
+    }
+    expect(staffRemoveArgsSchema.safeParse({ ...base, role: 'STUDENT' }).success).toBe(false);
   });
 
   it('accepts only the three staff roles (never STUDENT)', () => {

@@ -465,7 +465,7 @@ export async function taOps(classroomId: string): Promise<TaOpsRow[]> {
   const prisma = getPrisma();
   const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
 
-  const taMemberships = await prisma.classroomMembership.findMany({
+  const staffMemberships = await prisma.classroomMembership.findMany({
     where: {
       classroom_id: classroomId,
       role: { in: ['ASSISTANT', 'TEACHER', 'OWNER'] },
@@ -474,6 +474,16 @@ export async function taOps(classroomId: string): Promise<TaOpsRow[]> {
       user: { select: { id: true, login: true, name: true } },
     },
   });
+
+  // One row PER ROLE, and a user may hold several of these in one classroom, so
+  // de-duplicate by user id — this report has one row per person.
+  const seen = new Set<string>();
+  const taMemberships = staffMemberships.filter(({ user }) => {
+    if (seen.has(user.id)) return false;
+    seen.add(user.id);
+    return true;
+  });
+
   if (taMemberships.length === 0) return [];
   const taIds = taMemberships.map(m => m.user.id);
 

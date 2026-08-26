@@ -35,10 +35,10 @@ import { getGitProvider, ensureClassroomTeam } from '../git/index.ts';
 import { buildRemoveUserPayload } from './removeUserPayload.ts';
 import * as classroomService from './classroom.service.ts';
 import * as classroomMembershipService from './classroomMembership.service.ts';
-import * as userService from './user.service.ts';
 
 /** The roles this service manages. STUDENT is the roster service's business. */
-export type StaffRole = 'ASSISTANT' | 'TEACHER' | 'OWNER';
+export const STAFF_ROLES = ['ASSISTANT', 'TEACHER', 'OWNER'] as const;
+export type StaffRole = (typeof STAFF_ROLES)[number];
 
 export interface AddStaffResult {
   /** false when a membership at the REQUESTED role already existed (no-op, not an error). */
@@ -70,7 +70,8 @@ export class StaffServiceError extends Error {
     | 'no_org_configured'
     | 'login_conflict'
     | 'last_owner'
-    | 'grader_flag_invalid';
+    | 'grader_flag_invalid'
+    | 'invalid_role';
 
   constructor(code: StaffServiceError['code'], message: string) {
     super(message);
@@ -89,10 +90,45 @@ const isProviderNotFound = (error: unknown): boolean =>
 const isUniqueViolation = (error: unknown): boolean =>
   typeof error === 'object' && error !== null && (error as { code?: unknown }).code === 'P2002';
 
+/**
+ * StaffRole is a TYPE, and types are gone at runtime — a caller reaching this
+ * service directly (a script, a future route) can pass any string. Every entry
+ * point asserts the role it was given is one this service manages, so STUDENT
+ * memberships stay the roster service's business and cannot be created, flagged
+ * or deleted through the staff path.
+ */
+const assertStaffRole = (role: string): void => {
+  if (!(STAFF_ROLES as readonly string[]).includes(role)) {
+    throw new StaffServiceError(
+      'invalid_role',
+      `[staff] ${role} is not a teaching-staff role (expected one of ${STAFF_ROLES.join(', ')})`
+    );
+  }
+};
+
+/**
+ * Resolve a user by git login, matching case-insensitively.
+ *
+ * Git logins are case-insensitive while Postgres is not, and addStaff stores the
+ * canonical casing the provider hands back — which is often not what the caller
+ * typed. Looking the same person up again therefore has to match the way
+ * addStaff matched, or 'ada' would not find the user stored as 'Ada'.
+ */
+const findUserByLoginInsensitive = async (login: string) => {
+  const cleanLogin = login.replace('@', '').trim();
+  return getPrisma().user.findFirst({
+    where: { login: { equals: cleanLogin, mode: 'insensitive' } },
+    select: { id: true, login: true, name: true },
+  });
+};
+
 const loadClassroom = async (classroomId: string) => {
   const classroom = await classroomService.findById(classroomId);
   if (!classroom) {
-    throw new StaffServiceError('classroom_not_found', `[staff] classroom ${classroomId} not found`);
+    throw new StaffServiceError(
+      'classroom_not_found',
+      `[staff] classroom ${classroomId} not found`
+    );
   }
   if (!classroom.git_organization) {
     throw new StaffServiceError(
@@ -130,19 +166,17 @@ export const addStaff = async ({
   name?: string | null;
   email?: string | null;
 }): Promise<AddStaffResult> => {
+  assertStaffRole(role);
+
   const classroom = await loadClassroom(classroomId);
   const gitOrganization = classroom.git_organization;
   const cleanLogin = login.replace('@', '').trim();
 
   // Idempotency BEFORE any GitHub write: re-inviting existing staff would
   // re-add them to the team and then still fail on the unique constraint.
-  // Git logins are case-insensitive while Postgres is not, so match the stored
-  // login insensitively — 'Ada' and 'ada' are the same person. Scoped to the
-  // REQUESTED role: another role held here is an additional grant, not a no-op.
-  const existingUser = await getPrisma().user.findFirst({
-    where: { login: { equals: cleanLogin, mode: 'insensitive' } },
-    select: { id: true, login: true, name: true },
-  });
+  // Scoped to the REQUESTED role: another role held here is an additional
+  // grant, not a no-op.
+  const existingUser = await findUserByLoginInsensitive(cleanLogin);
   if (existingUser) {
     const existingMembership = await classroomMembershipService.findByClassroomAndUser(
       classroomId,
@@ -337,6 +371,8 @@ export const updateStaff = async ({
   role: StaffRole;
   isGrader: boolean;
 }) => {
+  assertStaffRole(role);
+
   if (role === 'OWNER') {
     throw new StaffServiceError(
       'grader_flag_invalid',
@@ -344,7 +380,7 @@ export const updateStaff = async ({
     );
   }
 
-  const user = await userService.findByLogin(login);
+  const user = await findUserByLoginInsensitive(login);
   if (!user) {
     throw new StaffServiceError('staff_not_found', `[staff] user ${login} not found`);
   }
@@ -394,9 +430,11 @@ export const removeStaff = async ({
   login: string;
   role: StaffRole;
 }): Promise<RemoveStaffResult> => {
+  assertStaffRole(role);
+
   const classroom = await loadClassroom(classroomId);
 
-  const user = await userService.findByLogin(login);
+  const user = await findUserByLoginInsensitive(login);
   if (!user) {
     throw new StaffServiceError('staff_not_found', `[staff] user ${login} not found`);
   }
