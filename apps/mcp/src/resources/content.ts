@@ -12,9 +12,9 @@
  *                     assistant route re-exports): show_modules=false →
  *                     {enabled:false}; staff see unpublished, students see
  *                     published modules with published items only.
- *   quizzes         — roles OWNER/ASSISTANT/STUDENT (TEACHER is genuinely
- *                     excluded by both quiz routes). Gate order mirrors the
- *                     routes: role check → Pro-tier → quizzes_enabled. NOTE:
+ *   quizzes         — roles OWNER/TEACHER/ASSISTANT/STUDENT, matching the quiz
+ *                     routes. Gate order mirrors the routes: role check →
+ *                     Pro-tier → quizzes_enabled. NOTE:
  *                     the plan table lists isAIAgentConfigured() as a third
  *                     gate, but neither quiz LIST loader checks it (it only
  *                     gates the attempt/action flow + nav) — route wins, so
@@ -227,9 +227,9 @@ export const quizzesResource: ResourceDefinition = {
   uriTemplate: 'classmoji://{org}/{slug}/quizzes',
   title: 'Quizzes',
   description:
-    'AI-graded quizzes. Staff (OWNER/ASSISTANT) see all quizzes incl. drafts and prompts; ' +
-    'students see published quizzes with their own attempt summary. Requires a Pro ' +
-    'subscription and quizzes_enabled. (TEACHER is excluded, matching the web routes.)',
+    'AI-graded quizzes. Staff (OWNER/TEACHER/ASSISTANT) see all quizzes incl. drafts and ' +
+    'prompts; students see published quizzes with their own attempt summary. Requires a Pro ' +
+    'subscription and quizzes_enabled.',
   scope: 'read',
   roles: QUIZ_ROLES,
   handler: async (vars, ctx) => {
