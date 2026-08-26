@@ -2,7 +2,7 @@
  * Types used by the Classrooms Landing screen.
  */
 
-export type LandingRole = 'OWNER' | 'ASSISTANT' | 'STUDENT' | 'PENDING INVITE';
+export type LandingRole = 'OWNER' | 'TEACHER' | 'ASSISTANT' | 'STUDENT' | 'PENDING INVITE';
 
 export interface LandingClass {
   id: string;

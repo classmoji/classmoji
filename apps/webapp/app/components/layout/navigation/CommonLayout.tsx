@@ -635,7 +635,9 @@ const CommonLayout = ({
         >
           <div
             className={
-              pathname.startsWith('/admin') &&
+              // Full-bleed for the Pages editor, which both staff prefixes that
+              // carry the page CMS can reach (/admin and /teacher).
+              (pathname.startsWith('/admin') || pathname.startsWith('/teacher')) &&
               pathname.includes('/pages/') &&
               !pathname.endsWith('/pages/new')
                 ? 'min-h-full'

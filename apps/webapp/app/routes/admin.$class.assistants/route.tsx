@@ -19,7 +19,7 @@ export { action } from './action';
 import FormAssistant from './FormAssistant';
 
 import { useGlobalFetcher, useDisclosure } from '~/hooks';
-import { ActionTypes } from '~/constants';
+import { ActionTypes, roleSettings } from '~/constants';
 import { requireClassroomAdmin } from '~/utils/routeAuth.server';
 import type { Route } from './+types/route';
 
@@ -97,7 +97,12 @@ const AdminAssistants = ({ loaderData }: Route.ComponentProps) => {
         throw new Error(error.message || 'Failed to view as assistant');
       }
 
-      navigate(`/assistant/${classSlug}`);
+      // Route by the impersonated row's own role. This list spans the whole
+      // teaching team, so a hardcoded /assistant sent an owner or teacher to a
+      // prefix their membership does not open. Staff land on their dashboard,
+      // the same convention the classroom switcher and landing cards use.
+      const rolePath = roleSettings[assistant.role]?.path ?? '/assistant';
+      navigate(`${rolePath}/${classSlug}/dashboard`);
     } catch (error: unknown) {
       console.error('Impersonation failed:', error);
       callout.show({

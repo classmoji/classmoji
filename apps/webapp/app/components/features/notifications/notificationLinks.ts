@@ -17,6 +17,7 @@ const ASSISTANT_NOTIFICATION_TYPES = new Set(['TA_GRADING_ASSIGNED', 'TA_REGRADE
 const rolePrefix = (role: Role): string => {
   if (role === 'STUDENT') return 'student';
   if (role === 'ASSISTANT') return 'assistant';
+  if (role === 'TEACHER') return 'teacher';
   return 'admin';
 };
 
@@ -55,8 +56,10 @@ export const notificationLink = (
     case 'page':
       return `/${prefix}/${slug}/pages/${n.resource_id}`;
     case 'git_repo_assignment':
-      // TA grading queue only exists under the assistant route tree.
-      return prefix === 'assistant' ? `/${prefix}/${slug}/grading` : `/${prefix}/${slug}`;
+      // The grading queue exists under the assistant and teacher route trees.
+      return prefix === 'assistant' || prefix === 'teacher'
+        ? `/${prefix}/${slug}/grading`
+        : `/${prefix}/${slug}`;
     case 'regrade_request':
       return `/${prefix}/${slug}/regrade-requests`;
     default:
