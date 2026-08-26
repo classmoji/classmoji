@@ -17,9 +17,13 @@
  * teams (any member):
  *   Web reality: admin.$class.teams (OWNER) returns members as FULL User
  *   rows; the student team view (student.$class.repos_.$repo.team) narrows to
- *   {id,name,login,provider_id}. Mirror the narrow select for everyone —
- *   staff additionally see invisible (is_visible=false) teams; students see
- *   visible teams plus any team they belong to.
+ *   {id,name,login,provider_id}. Mirror the narrow select for everyone.
+ *   Tiers: the teaching team sees every team in the classroom; a STUDENT sees
+ *   the teams they are a member of, and only those. The web gives students no
+ *   classroom-wide team list at all, so own-teams-only is the closest mirror;
+ *   the self-formed team flow (student.$class.repos_.$repo.team) resolves its
+ *   candidate teams by TAG through team.findByTagId and does not read this
+ *   resource, so it is unaffected.
  */
 
 import { ClassmojiService } from '@classmoji/services';
@@ -93,7 +97,7 @@ export const teamsResource: ResourceDefinition = {
   title: 'Teams',
   description:
     'Teams in the classroom with member identities (id, name, login only — no contact PII). ' +
-    'Students see visible teams and their own; staff see all teams.',
+    'Students see the teams they belong to; the teaching team sees all teams.',
   scope: 'read',
   roles: MEMBER,
   handler: async (_vars, ctx) => {
@@ -101,11 +105,12 @@ export const teamsResource: ResourceDefinition = {
     const teams = (await ClassmojiService.team.findByClassroomId(classroomId)) as TeamRow[];
 
     const viewerId = ctx.viewer.userId;
+    // A student's team list is their OWN teams. Membership is the whole test —
+    // `is_visible` does not widen it, matching the web, which offers students
+    // no classroom-wide team list.
     const visible =
       role === 'STUDENT'
-        ? teams.filter(
-            t => t.is_visible || (t.memberships ?? []).some(m => m.user?.id === viewerId)
-          )
+        ? teams.filter(t => (t.memberships ?? []).some(m => m.user?.id === viewerId))
         : teams;
 
     return {

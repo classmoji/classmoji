@@ -5,8 +5,9 @@
  * Focus: S1 scoping (cross-classroom → scopedNotFound, no service touch),
  * the assertSlideEditable sub-gate matrix (OWNER/TEACHER pass via holdsRole,
  * ASSISTANT × creator × allow_team_edit, multi-role escape hatch), list_slides
- * role filtering (staff full incl. drafts; assistants/students published-only
- * with the minimal field set), delete's video-cleanup reporting, and audits.
+ * role filtering (the whole teaching team sees drafts — the VIEW tier, wider
+ * than the edit tier on purpose; students get the published-only list with the
+ * minimal field set), delete's video-cleanup reporting, and audits.
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -219,47 +220,65 @@ describe('list_slides', () => {
     { ...SLIDE, id: 's-2', title: 'Draft', is_draft: true },
   ];
 
-  it('OWNER/TEACHER get the full list incl. drafts, with visibility flags', async () => {
-    mocks.findByClassroomId.mockResolvedValue(ROWS);
-
-    const payload = parse(await listSlidesTool.handler({ classroom: 'org/x' }, TEACHER_CTX));
-
-    expect(mocks.findByClassroomId).toHaveBeenCalledWith('class-1', { includeDrafts: true });
-    expect(payload.slides).toHaveLength(2);
-    expect(payload.slides[0]).toMatchObject({
-      id: 's-1',
-      title: 'Published',
-      slug: 'intro-week',
-      is_draft: false,
-      is_public: false,
-      allow_team_edit: false,
-      show_speaker_notes: false,
-      created_by: 'teacher-1',
-    });
-  });
-
-  it.each([['ASSISTANT'], ['STUDENT']] as const)(
-    '%s gets the published-only list with the minimal field set',
+  // POLICY: the listing follows the VIEW tier, which is the whole teaching
+  // team — including an ASSISTANT who neither created the draft nor has
+  // allow_team_edit on it. Editing is the narrower tier and is pinned
+  // separately by the assertSlideEditable suite above. If a change makes an
+  // ASSISTANT fall into the published-only branch again, that is a policy
+  // regression, not a test that needs updating.
+  it.each([['OWNER'], ['TEACHER'], ['ASSISTANT']] as const)(
+    '%s gets the full list incl. drafts, with visibility flags',
     async role => {
-      mocks.findByClassroomId.mockResolvedValue([ROWS[0]]);
+      mocks.findByClassroomId.mockResolvedValue(ROWS);
 
       const payload = parse(
-        await listSlidesTool.handler({ classroom: 'org/x' }, makeCtx(role as 'STUDENT'))
+        await listSlidesTool.handler({ classroom: 'org/x' }, makeCtx(role as 'OWNER'))
       );
 
-      expect(mocks.findByClassroomId).toHaveBeenCalledWith('class-1', { includeDrafts: false });
-      expect(payload.slides).toHaveLength(1);
-      expect(payload.slides[0]).toEqual({
+      expect(mocks.findByClassroomId).toHaveBeenCalledWith('class-1', { includeDrafts: true });
+      expect(payload.slides).toHaveLength(2);
+      expect(payload.slides[0]).toMatchObject({
         id: 's-1',
         title: 'Published',
         slug: 'intro-week',
-        updated_at: expect.anything(),
+        is_draft: false,
+        is_public: false,
+        allow_team_edit: false,
+        show_speaker_notes: false,
+        created_by: 'teacher-1',
       });
-      // No draft/visibility internals leak to non-staff.
-      expect('is_draft' in payload.slides[0]).toBe(false);
-      expect('allow_team_edit' in payload.slides[0]).toBe(false);
+      expect(payload.slides[1]).toMatchObject({ id: 's-2', title: 'Draft', is_draft: true });
     }
   );
+
+  it('lists a draft to an ASSISTANT who is neither its creator nor covered by allow_team_edit', async () => {
+    mocks.findByClassroomId.mockResolvedValue([
+      { ...ROWS[1], created_by: 'someone-else', allow_team_edit: false },
+    ]);
+
+    const payload = parse(await listSlidesTool.handler({ classroom: 'org/x' }, ASSISTANT_CTX));
+
+    expect(payload.slides).toHaveLength(1);
+    expect(payload.slides[0]).toMatchObject({ id: 's-2', is_draft: true });
+  });
+
+  it('STUDENT gets the published-only list with the minimal field set', async () => {
+    mocks.findByClassroomId.mockResolvedValue([ROWS[0]]);
+
+    const payload = parse(await listSlidesTool.handler({ classroom: 'org/x' }, makeCtx('STUDENT')));
+
+    expect(mocks.findByClassroomId).toHaveBeenCalledWith('class-1', { includeDrafts: false });
+    expect(payload.slides).toHaveLength(1);
+    expect(payload.slides[0]).toEqual({
+      id: 's-1',
+      title: 'Published',
+      slug: 'intro-week',
+      updated_at: expect.anything(),
+    });
+    // No draft/visibility internals reach a student.
+    expect('is_draft' in payload.slides[0]).toBe(false);
+    expect('allow_team_edit' in payload.slides[0]).toBe(false);
+  });
 });
 
 // ─── slide_create ────────────────────────────────────────────────────────────

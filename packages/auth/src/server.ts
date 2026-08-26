@@ -928,7 +928,8 @@ export function assertClassroomMutationAllowed(args: ClassroomStatusInput): void
  * Handles draft mode, public/private visibility, and team editing permissions.
  *
  * Visibility tiers (checked in order):
- * 1. Draft: Only visible to users who can edit (owner/teacher/assistant with team_edit)
+ * 1. Draft: Visible to the classroom's teaching team (OWNER/TEACHER/ASSISTANT).
+ *    VIEW is deliberately wider than EDIT here — see the draft branch below.
  * 2. Public: World-readable (no auth required)
  * 3. Private: Classroom members only
  *
@@ -992,20 +993,29 @@ export async function assertSlideAccess({
   const isMember = !!membership;
   const isCreator = userId && slide.created_by === userId;
 
-  // Compute edit permission (used for draft visibility and edit access)
+  // Compute edit permission (used for edit access)
   // Owner/Teacher can edit any slide
   // Assistant can edit their own OR slides with allow_team_edit
   const canEdit = isOwnerOrTeacher || (isAssistant && (isCreator || slide.allow_team_edit));
+
+  // The classroom's teaching team (staff): OWNER, TEACHER, ASSISTANT.
+  const isStaff = isOwnerOrTeacher || isAssistant;
 
   // Compute view permission based on visibility tier
   let canView = false;
   let accessGrantedVia: SlideAccessResult['accessGrantedVia'] = null;
 
   if (slide.is_draft) {
-    // DRAFT MODE: Only those who can edit can view
+    // DRAFT MODE: any teaching-team member of the classroom may VIEW the deck.
+    // View is deliberately wider than edit: staff can read a colleague's
+    // work-in-progress deck, while editing stays with the creator (or decks
+    // that opt in via allow_team_edit). Keep these two rules separate.
     if (canEdit) {
       canView = true;
       accessGrantedVia = isOwnerOrTeacher ? 'role' : isCreator ? 'ownership' : 'team_edit';
+    } else if (isStaff) {
+      canView = true;
+      accessGrantedVia = 'role';
     }
   } else if (slide.is_public) {
     // PUBLIC: Anyone can view
@@ -1029,7 +1039,6 @@ export async function assertSlideAccess({
   // Speaker notes permission:
   // - Staff (Owner/Teacher/Assistant) always have access
   // - If show_speaker_notes=true, extend to whoever can view
-  const isStaff = isOwnerOrTeacher || isAssistant;
   const canViewSpeakerNotes = isStaff || (slide.show_speaker_notes && canView);
 
   // Check requested access type
@@ -1066,7 +1075,8 @@ export async function assertSlideAccess({
     // Provide specific error messages
     let errorMessage = 'Access denied';
     if (accessType === 'view') {
-      if (slide.is_draft && !canEdit) {
+      if (slide.is_draft) {
+        // Reaching here means the viewer is not on the teaching team.
         errorMessage = 'This slide is still in draft mode';
       } else if (!slide.is_public && !isMember) {
         errorMessage = 'Not a member of this classroom';

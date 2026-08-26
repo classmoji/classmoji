@@ -1,0 +1,282 @@
+/**
+ * Unit tests for the students (roster) route.
+ *
+ * The policy this route implements has two halves that must not drift into
+ * one another:
+ *
+ *   READ  — the whole teaching team (OWNER/TEACHER/ASSISTANT) may see who is
+ *           in the class, but contact details (email, provider_email,
+ *           school_id) and the membership grade fields (letter_grade, comment)
+ *           are OWNER-only. The split happens in the LOADER, so the fields are
+ *           never serialized into the page for other staff — there is nothing
+ *           for the client to hide. The MCP roster resource applies the same
+ *           split; the two are meant to stay in step.
+ *   WRITE — removing a student and revoking an invite stay OWNER-only. The
+ *           action carries its own gate, so widening the read can never widen
+ *           the write. That is the case these tests pin hardest.
+ */
+
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+const mocks = vi.hoisted(() => ({
+  requireClassroomTeachingTeam: vi.fn(),
+  requireClassroomAdmin: vi.fn(),
+  assertClassroomMutationAllowed: vi.fn(),
+  findUsersByRole: vi.fn(),
+  findInvitesByClassroomId: vi.fn(),
+  deleteInvite: vi.fn(),
+  taskTrigger: vi.fn(),
+  waitForRunCompletion: vi.fn(),
+}));
+
+vi.mock('~/utils/routeAuth.server', () => ({
+  requireClassroomTeachingTeam: (...a: unknown[]) => mocks.requireClassroomTeachingTeam(...a),
+  requireClassroomAdmin: (...a: unknown[]) => mocks.requireClassroomAdmin(...a),
+  assertClassroomMutationAllowed: (...a: unknown[]) => mocks.assertClassroomMutationAllowed(...a),
+}));
+
+vi.mock('@classmoji/services', () => ({
+  ClassmojiService: {
+    classroomMembership: { findUsersByRole: (...a: unknown[]) => mocks.findUsersByRole(...a) },
+    classroomInvite: {
+      findInvitesByClassroomId: (...a: unknown[]) => mocks.findInvitesByClassroomId(...a),
+      deleteInvite: (...a: unknown[]) => mocks.deleteInvite(...a),
+    },
+  },
+}));
+
+vi.mock('@trigger.dev/sdk', () => ({
+  tasks: { trigger: (...a: unknown[]) => mocks.taskTrigger(...a) },
+}));
+
+vi.mock('~/utils/helpers', () => ({
+  waitForRunCompletion: (...a: unknown[]) => mocks.waitForRunCompletion(...a),
+}));
+
+// Mirrors constants/actionTypes.ts — the `~/` specifiers are resolved by these
+// mock registrations, so every one the route imports needs an entry.
+vi.mock('~/constants', () => ({ ActionTypes: { REMOVE_USER: 'remove-user' } }));
+
+// The loader/action are what is under test; the view layer only needs to be
+// importable.
+vi.mock('../StudentsTable', () => ({ default: () => null }));
+vi.mock('~/components', () => ({ SearchInput: () => null }));
+vi.mock('antd', () => ({ Button: () => null }));
+vi.mock('@ant-design/icons', () => ({ PlusCircleOutlined: () => null }));
+
+const { loader, action } = await import('../route.tsx');
+
+const CLASS_SLUG = 'cs52-26f';
+const CLASSROOM = { id: 'class-1', slug: CLASS_SLUG, status: 'ACTIVE' };
+
+/** A roster row as the service returns it: the full User row + membership bits. */
+const STUDENT_ROW = {
+  id: 'student-1',
+  name: 'Ada Lovelace',
+  login: 'ada',
+  image: 'https://example.test/ada.png',
+  email: 'ada@school.test',
+  provider_email: 'ada@github.test',
+  school_id: 'F00123',
+  stripe_customer_id: 'cus_123',
+  banned: false,
+  ban_reason: null,
+  is_grader: false,
+  has_accepted_invite: true,
+  letter_grade: 'A-',
+  comment: 'strong on recursion',
+};
+
+const INVITE_ROW = {
+  id: 'invite-1',
+  student_name: 'Grace Hopper',
+  school_email: 'grace@school.test',
+  classroom_id: 'class-1',
+};
+
+const OWNER_ONLY_FIELDS = [
+  'email',
+  'provider_email',
+  'school_id',
+  'letter_grade',
+  'comment',
+] as const;
+
+const loaderArgs = () =>
+  ({
+    params: { class: CLASS_SLUG },
+    request: new Request(`http://localhost/admin/${CLASS_SLUG}/students`),
+  }) as unknown as Parameters<typeof loader>[0];
+
+const actionArgs = (body: unknown, intent: string) =>
+  ({
+    params: { class: CLASS_SLUG },
+    request: new Request(`http://localhost/admin/${CLASS_SLUG}/students?/${intent}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }),
+  }) as unknown as Parameters<typeof action>[0];
+
+beforeEach(() => {
+  for (const m of Object.values(mocks)) m.mockReset();
+  mocks.findUsersByRole.mockResolvedValue([STUDENT_ROW]);
+  mocks.findInvitesByClassroomId.mockResolvedValue([INVITE_ROW]);
+  mocks.taskTrigger.mockResolvedValue({ id: 'run-1' });
+  mocks.waitForRunCompletion.mockResolvedValue(undefined);
+  mocks.deleteInvite.mockResolvedValue(undefined);
+});
+
+function grantLoader(role: 'OWNER' | 'TEACHER' | 'ASSISTANT') {
+  mocks.requireClassroomTeachingTeam.mockResolvedValue({
+    userId: `${role.toLowerCase()}-1`,
+    classroom: CLASSROOM,
+    membership: { id: 'm-1', role },
+  });
+}
+
+// ─── Loader: the teaching team may read the roster ───────────────────────────
+
+describe('students loader — who may read the roster', () => {
+  it.each([['OWNER'], ['TEACHER'], ['ASSISTANT']] as const)(
+    'admits %s through the teaching-team gate',
+    async role => {
+      grantLoader(role);
+
+      const data = await loader(loaderArgs());
+
+      expect(mocks.requireClassroomTeachingTeam).toHaveBeenCalledWith(
+        expect.any(Request),
+        CLASS_SLUG,
+        { resourceType: 'STUDENT_ROSTER', action: 'view_roster' }
+      );
+      // The OWNER-only gate is not what guards the read.
+      expect(mocks.requireClassroomAdmin).not.toHaveBeenCalled();
+      expect(data.students).toHaveLength(1);
+      expect(data.students[0]).toMatchObject({ id: 'student-1', login: 'ada' });
+    }
+  );
+
+  it('reports ownership to the view so owner-only controls can be withheld', async () => {
+    grantLoader('ASSISTANT');
+    expect((await loader(loaderArgs())).isOwner).toBe(false);
+
+    grantLoader('OWNER');
+    expect((await loader(loaderArgs())).isOwner).toBe(true);
+  });
+});
+
+// ─── Loader: the OWNER-only field split ──────────────────────────────────────
+
+describe('students loader — field split', () => {
+  it('sends an OWNER the contact and grade fields', async () => {
+    grantLoader('OWNER');
+
+    const data = await loader(loaderArgs());
+
+    expect(data.students[0]).toMatchObject({
+      email: 'ada@school.test',
+      provider_email: 'ada@github.test',
+      school_id: 'F00123',
+      letter_grade: 'A-',
+      comment: 'strong on recursion',
+    });
+    expect(data.invitations[0]).toMatchObject({ school_email: 'grace@school.test' });
+  });
+
+  it.each([['TEACHER'], ['ASSISTANT']] as const)(
+    'omits the owner-only student fields entirely for %s',
+    async role => {
+      grantLoader(role);
+
+      const data = await loader(loaderArgs());
+      // Inspected as a bag of keys on purpose: the assertions below are about
+      // which keys EXIST, which the declared row type deliberately hides.
+      const student = data.students[0] as unknown as Record<string, unknown>;
+
+      // Identity and status still come through — the roster stays useful.
+      expect(student).toMatchObject({
+        id: 'student-1',
+        name: 'Ada Lovelace',
+        login: 'ada',
+        has_accepted_invite: true,
+      });
+      // The keys are ABSENT, not null: nothing to un-hide on the client.
+      for (const field of OWNER_ONLY_FIELDS) {
+        expect(field in student).toBe(false);
+      }
+      // The allowlist also keeps unrelated User columns off the wire.
+      expect('stripe_customer_id' in student).toBe(false);
+      expect('ban_reason' in student).toBe(false);
+
+      const serialized = JSON.stringify(data);
+      expect(serialized).not.toContain('ada@school.test');
+      expect(serialized).not.toContain('ada@github.test');
+      expect(serialized).not.toContain('F00123');
+      expect(serialized).not.toContain('strong on recursion');
+    }
+  );
+
+  it.each([['TEACHER'], ['ASSISTANT']] as const)(
+    "omits a pending invite's contact email for %s",
+    async role => {
+      grantLoader(role);
+
+      const data = await loader(loaderArgs());
+      const invite = data.invitations[0] as Record<string, unknown>;
+
+      expect(invite).toMatchObject({ id: 'invite-1', student_name: 'Grace Hopper' });
+      expect('school_email' in invite).toBe(false);
+      expect(JSON.stringify(data)).not.toContain('grace@school.test');
+    }
+  );
+});
+
+// ─── Action: mutations stay OWNER-only ───────────────────────────────────────
+
+describe('students action — mutations stay owner-only', () => {
+  it('guards every mutation with the OWNER gate, not the teaching-team gate', async () => {
+    mocks.requireClassroomAdmin.mockResolvedValue({
+      userId: 'owner-1',
+      classroom: CLASSROOM,
+      membership: { id: 'm-1', role: 'OWNER' },
+    });
+
+    await action(actionArgs({ user: { id: 'student-1', login: 'ada' } }, 'removeStudent'));
+
+    expect(mocks.requireClassroomAdmin).toHaveBeenCalledWith(expect.any(Request), CLASS_SLUG, {
+      resourceType: 'STUDENT_ROSTER',
+      action: 'remove_student',
+    });
+    expect(mocks.requireClassroomTeachingTeam).not.toHaveBeenCalled();
+    expect(mocks.taskTrigger).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([['removeStudent'], ['revokeInvite']] as const)(
+    '%s is refused for non-OWNER staff, before any work happens',
+    async intent => {
+      // What requireClassroomAdmin does to a TEACHER/ASSISTANT: it throws.
+      mocks.requireClassroomAdmin.mockRejectedValue(new Response('Forbidden', { status: 403 }));
+
+      await expect(
+        action(actionArgs({ user: { id: 'student-1' }, inviteId: 'invite-1' }, intent))
+      ).rejects.toMatchObject({ status: 403 });
+
+      expect(mocks.taskTrigger).not.toHaveBeenCalled();
+      expect(mocks.deleteInvite).not.toHaveBeenCalled();
+    }
+  );
+
+  it('revokes an invite for an OWNER', async () => {
+    mocks.requireClassroomAdmin.mockResolvedValue({
+      userId: 'owner-1',
+      classroom: CLASSROOM,
+      membership: { id: 'm-1', role: 'OWNER' },
+    });
+
+    const result = await action(actionArgs({ inviteId: 'invite-1' }, 'revokeInvite'));
+
+    expect(mocks.deleteInvite).toHaveBeenCalledWith('invite-1');
+    expect(result).toMatchObject({ action: 'REVOKE_INVITE' });
+  });
+});

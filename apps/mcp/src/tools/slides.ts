@@ -2,13 +2,18 @@
  * Slide tools (content-tools plan Phase 5, §7):
  * list_slides / slide_create / slide_update / slide_delete.
  *
- * Tier confirmed against the web routes: the slides list is OWNER/TEACHER for
- * the full listing (admin.$class.slides) with assistants and students getting
- * the published-only list (student.$class.slides, which the assistant route
- * re-exports). Writes are TEACHING_TEAM with the assertSlideAccess edit-tier
- * sub-gate (auth/server.ts): OWNER/TEACHER edit any deck; an ASSISTANT only
- * decks they created or decks with allow_team_edit (decided: slide_delete
- * mirrors the web too — assistants may delete own/team-edit decks).
+ * Tier: reading a deck and editing it are two different rules, deliberately.
+ *   VIEW  — the whole TEACHING TEAM (OWNER/TEACHER/ASSISTANT) sees every deck
+ *           of their classroom, drafts included; students see published decks
+ *           only. This matches the slides app's own list (apps/slides
+ *           routes/_index), which has always shown drafts to all three staff
+ *           roles, and the shared view gate (assertSlideAccess, auth/server.ts).
+ *   EDIT  — narrower and unchanged: OWNER/TEACHER edit any deck; an ASSISTANT
+ *           only decks they created or decks with allow_team_edit (decided:
+ *           slide_delete mirrors the web too — assistants may delete own /
+ *           team-edit decks). Enforced by the assertSlideEditable sub-gate.
+ * Do not collapse the two back together: a staff member reading a colleague's
+ * work-in-progress deck is expected; writing to it is not.
  *
  * S1: every by-id tool loads the slide WITH its classroom chain and compares
  * classroom_id before mutating (loadSlideInClassroom).
@@ -19,7 +24,7 @@ import type { Prisma } from '@prisma/client';
 import { z } from 'zod';
 import { ToolError } from '../mcp/errors.ts';
 import type { ToolDefinition } from '../mcp/registry.ts';
-import { MEMBER } from '../resources/shape.ts';
+import { MEMBER, isStaff } from '../resources/shape.ts';
 import {
   assertSlideEditable,
   loadSlideInClassroom,
@@ -60,9 +65,9 @@ export const listSlidesTool: ToolDefinition<ListSlidesArgs> = {
   name: 'list_slides',
   title: 'List slide decks',
   description:
-    "Lists the classroom's slide decks. OWNER/TEACHER see every deck incl. drafts (with " +
-    'visibility flags); assistants and students see the published list, as the web app does. ' +
-    "Use deck_outline/deck_get to read a deck's content.",
+    "Lists the classroom's slide decks. The teaching team (OWNER/TEACHER/ASSISTANT) sees every " +
+    'deck incl. drafts (with visibility flags); students see the published list. Use ' +
+    "deck_outline/deck_get to read a deck's content.",
   scope: 'read',
   roles: MEMBER,
   inputSchema: {
@@ -71,9 +76,11 @@ export const listSlidesTool: ToolDefinition<ListSlidesArgs> = {
   handler: async (_args, ctx) => {
     const { classroomId, role } = requireClassroomCtx(ctx);
 
-    // Full listing mirrors admin.$class.slides: OWNER + TEACHER. Assistants get
-    // the published list (the assistant web route re-exports the student one).
-    if (role === 'OWNER' || role === 'TEACHER') {
+    // Full listing = the teaching team, matching the view tier of the shared
+    // slide gate and the slides app's own list. Keeping the listing in step
+    // with deck_get/deck_outline means a deck a staff member may open is also
+    // a deck they can find.
+    if (isStaff(role)) {
       const slides = (await slideService.findByClassroomId(classroomId, {
         includeDrafts: true,
       })) as SlideRow[];

@@ -50,6 +50,16 @@ export const STUDENT_ONLY: readonly Role[] = ['STUDENT'];
 /** Quiz routes allow OWNER/ASSISTANT/STUDENT — TEACHER is genuinely excluded. */
 export const QUIZ_ROLES: readonly Role[] = ['OWNER', 'ASSISTANT', 'STUDENT'];
 
+/**
+ * "Staff" = the classroom's teaching team, exactly OWNER/TEACHER/ASSISTANT
+ * (i.e. TEACHING_TEAM as a set, STUDENT excluded).
+ *
+ * This is the intended tier for seeing UNPUBLISHED/DRAFT content in a read
+ * path — module items, calendar-linked pages and decks, slide listings. All
+ * three staff roles prepare course material together, so a draft being visible
+ * to a colleague is the expected behaviour, not a leak; what stays narrower is
+ * WRITING to it (see assertSlideEditable / the deck tools).
+ */
 export const STAFF_ROLES: ReadonlySet<Role> = new Set(['OWNER', 'TEACHER', 'ASSISTANT']);
 export const isStaff = (role: Role): boolean => STAFF_ROLES.has(role);
 

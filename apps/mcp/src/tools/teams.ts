@@ -181,8 +181,9 @@ export const teamCreateTool: ToolDefinition<TeamCreateArgs> = {
     'Classmoji record. Owner only. GitHub derives the slug from the name. Names that would ' +
     "collide with an existing org team, or that end in '-students' / '-assistants' (reserved for " +
     "the classroom's own membership teams), are refused before anything is created. is_visible " +
-    'controls student visibility: false (the default) means only its own members see the team in ' +
-    'list_teams — other students do not. tag_ids attach classroom tags at creation time; a tag id ' +
+    'is recorded on the team but no read path currently varies on it: in list_teams a student ' +
+    'sees the teams they belong to and the teaching team sees them all, either way. tag_ids ' +
+    'attach classroom tags at creation time; a tag id ' +
     'from another classroom is reported in tags_failed and the team is still created. Add members ' +
     'afterwards with team_members_add.',
   scope: 'write',
@@ -197,8 +198,8 @@ export const teamCreateTool: ToolDefinition<TeamCreateArgs> = {
       .boolean()
       .optional()
       .describe(
-        'Whether students who are not members can see this team (default false — invisible ' +
-          'teams are hidden from non-member students in list_teams)'
+        'Stored on the team as a visibility hint (default false). No read path reads it today: ' +
+          'list_teams shows a student their own teams regardless of this flag.'
       ),
     tag_ids: tagIdsSchema.optional(),
   },
