@@ -254,6 +254,49 @@ describe('assertSlideEditable sub-gate on deck writes', () => {
   });
 });
 
+// ─── Reads are the WIDER tier (policy pin) ───────────────────────────────────
+
+describe('deck reads follow the view tier, not the edit tier', () => {
+  // POLICY: reading a deck belongs to the whole teaching team; only writing is
+  // narrowed to the creator / allow_team_edit. These cases use the exact deck
+  // that the write sub-gate above refuses for this same caller — an ASSISTANT
+  // who is neither the creator nor covered by allow_team_edit — so if someone
+  // adds assertSlideEditable to the read tools, these fail immediately.
+  // Failing here means the policy changed, not that the test is stale.
+  const READ_ARGS = { classroom: 'org/x', slide_id: SLIDE_ID };
+
+  it.each([
+    ['deck_outline', () => deckOutlineTool.handler(READ_ARGS, ASSISTANT_CTX)],
+    ['deck_get', () => deckGetTool.handler(READ_ARGS, ASSISTANT_CTX)],
+  ])('%s: a non-creator ASSISTANT reads a locked deck they may not edit', async (_name, run) => {
+    mocks.slideFindById.mockResolvedValue({
+      ...SLIDE,
+      created_by: 'someone-else',
+      allow_team_edit: false,
+    });
+
+    const payload = parse((await run()) as { content: Array<{ text: string }> });
+
+    expect(payload.slide_id).toBe(SLIDE_ID);
+    expect(mocks.loadDeck).toHaveBeenCalled();
+  });
+
+  it.each([
+    ['deck_outline', () => deckOutlineTool.handler(READ_ARGS, ASSISTANT_CTX)],
+    ['deck_get', () => deckGetTool.handler(READ_ARGS, ASSISTANT_CTX)],
+  ])('%s: the same holds for a DRAFT deck', async (_name, run) => {
+    mocks.slideFindById.mockResolvedValue({
+      ...DRAFT_SLIDE,
+      created_by: 'someone-else',
+      allow_team_edit: false,
+    });
+
+    const payload = parse((await run()) as { content: Array<{ text: string }> });
+
+    expect(payload.slide_id).toBe(SLIDE_ID);
+  });
+});
+
 // ─── deck_outline ────────────────────────────────────────────────────────────
 
 describe('deck_outline', () => {

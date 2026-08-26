@@ -16,8 +16,17 @@
  * delete. A genuine same-slide conflict returns a structured per-unit report
  * instead of raw conflict markers. Discard = branch delete, main untouched.
  *
- * Tier: TEACHING_TEAM reads; writes add the assertSlideAccess edit-tier
- * sub-gate (OWNER/TEACHER any deck; ASSISTANT own or allow_team_edit).
+ * Tier — read and write are split ON PURPOSE, and the split is the policy:
+ *   READ  (deck_outline / deck_get) — TEACHING_TEAM, no further sub-gate. Any
+ *         OWNER/TEACHER/ASSISTANT of the classroom may read any of its decks,
+ *         drafts included. This is NOT an oversight: the same rule is what the
+ *         shared web gate applies for viewing (assertSlideAccess, view tier in
+ *         auth/server.ts) and what list_slides lists. Adding assertSlideEditable
+ *         to the read tools would narrow reading to the deck's creator — please
+ *         do not "fix" it that way.
+ *   WRITE (deck_apply / deck_preview_accept / deck_preview_discard) — the same
+ *         TEACHING_TEAM entry gate PLUS the assertSlideEditable sub-gate:
+ *         OWNER/TEACHER any deck; ASSISTANT own decks or allow_team_edit only.
  * S1: every tool loads the slide WITH its classroom chain and compares
  * classroom_id before touching GitHub (loadSlideInClassroom).
  *
@@ -267,6 +276,9 @@ export const deckOutlineTool: ToolDefinition<DeckOutlineArgs> = {
       .describe("Read target: 'main' (default) or the pending preview branch"),
   },
   handler: async (args, ctx) => {
+    // No assertSlideEditable here, deliberately: reading a deck is a
+    // teaching-team right (view tier), while editing it stays with the
+    // creator / allow_team_edit. See the read-vs-write note in the file header.
     const slide = await loadSlideInClassroom(args.slide_id, ctx);
     const status = await getDeckPreviewStatus(slide);
     const ref = previewReadRef(slide, args.at ?? 'main', status);
@@ -341,6 +353,9 @@ export const deckGetTool: ToolDefinition<DeckGetArgs> = {
       .describe("Read target: 'main' (default) or the pending preview branch"),
   },
   handler: async (args, ctx) => {
+    // No assertSlideEditable here, deliberately: reading a deck is a
+    // teaching-team right (view tier), while editing it stays with the
+    // creator / allow_team_edit. See the read-vs-write note in the file header.
     const slide = await loadSlideInClassroom(args.slide_id, ctx);
     const status = await getDeckPreviewStatus(slide);
     const ref = previewReadRef(slide, args.at ?? 'main', status);

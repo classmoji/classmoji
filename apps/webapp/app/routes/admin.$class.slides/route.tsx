@@ -79,6 +79,30 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
   });
   assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
 
+  if (!slideId) {
+    return { error: 'Slide not found' };
+  }
+
+  /**
+   * Apply an update to a deck OF THE CLASSROOM THIS REQUEST WAS AUTHORIZED FOR.
+   *
+   * The authorization above binds to the classroom in the URL, but `slideId`
+   * arrives in the form body, so the two have to be tied together explicitly:
+   * the update is bound to `{ id, classroom_id }` and is only treated as done
+   * when it matched exactly one row. Same pattern as the slides app's delete
+   * route, which re-checks the deck's classroom after its own gate.
+   */
+  const updateSlideInClassroom = async (data: Record<string, boolean>) => {
+    const { count } = await getPrisma().slide.updateMany({
+      where: { id: slideId, classroom_id: classroom.id },
+      data,
+    });
+    if (count !== 1) {
+      return { error: 'Slide not found' };
+    }
+    return { success: true };
+  };
+
   // Handle status changes (combines is_draft and is_public)
   if (field === 'status') {
     let is_draft = false;
@@ -95,22 +119,12 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
       is_public = true;
     }
 
-    await getPrisma().slide.update({
-      where: { id: slideId },
-      data: { is_draft, is_public },
-    });
-
-    return { success: true };
+    return updateSlideInClassroom({ is_draft, is_public });
   }
 
   // Handle boolean toggles (allow_team_edit, show_speaker_notes)
   if (field === 'allow_team_edit' || field === 'show_speaker_notes') {
-    await getPrisma().slide.update({
-      where: { id: slideId },
-      data: { [field]: value === 'true' },
-    });
-
-    return { success: true };
+    return updateSlideInClassroom({ [field]: value === 'true' });
   }
 
   return { error: 'Invalid field' };
