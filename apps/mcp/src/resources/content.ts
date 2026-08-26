@@ -145,9 +145,11 @@ export const modulesResource: ResourceDefinition = {
       includeUnpublished: isStaff(role),
     })) as ModuleRow[];
 
-    // listForClassroom resolves by BARE slug (unique per git org only). Guard:
-    // if the slug resolved to a different classroom, refuse rather than serve
-    // another classroom's modules (S1).
+    // listForClassroom resolves by BARE slug. The slug is globally unique
+    // (schema.prisma: `slug String @unique`), so it agrees with the authorized
+    // classroom by construction; the guard is kept as defense in depth — if the
+    // slug ever resolved elsewhere, refuse rather than serve another
+    // classroom's modules (S1).
     if (modules.some(m => m.classroom_id !== classroomId)) {
       throw new ToolError(
         'internal',

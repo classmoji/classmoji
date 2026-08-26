@@ -87,8 +87,8 @@ async function canMintOrgToken(org: Parameters<typeof getGitProvider>[0]): Promi
  * it keeps a [git_org_id, content_namespace] unique constraint and is no longer
  * user-editable — so a collision has to be resolved silently here instead of
  * being handed back as an error the user has no field to fix. Candidates, in
- * order: the org-prefix-stripped slug, the raw slug (unique per org), then
- * numeric suffixes.
+ * order: the org-prefix-stripped slug, the raw slug (itself globally unique),
+ * then numeric suffixes.
  */
 async function pickContentNamespace(gitOrgId: string, orgLogin: string, slug: string) {
   const suggested = suggestContentNamespace({ orgLogin, slug });

@@ -2,10 +2,10 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // findRepositoriesPerStudent builds two user.findMany queries. The isolation
 // invariant under test: the STUDENT query must scope by classroom_id, NOT slug.
-// Classroom.slug is unique only per git org (@@unique([git_org_id, slug])), so a
-// slug filter would match same-slug twin classrooms across DIFFERENT orgs and
-// leak another org's students + grades. We mock prisma and assert the where
-// clause the query is built with.
+// Classroom.slug is globally unique today (schema.prisma: `slug String @unique`),
+// but the id is the classroom's actual identity — scoping by it keeps the query
+// isolated by construction rather than by a property of another column. We mock
+// prisma and assert the where clause the query is built with.
 const findManyMock = vi.fn();
 
 vi.mock('@classmoji/database', () => ({
