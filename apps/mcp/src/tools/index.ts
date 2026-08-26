@@ -49,7 +49,7 @@ import { tokenGrantTool } from './tokens.ts';
 import { extensionPurchaseTool } from './extensions.ts';
 import { repoCreateTool, repoPublishTool, repoUnpublishTool } from './repos.ts';
 import { rosterAddStudentTool, rosterRemoveStudentTool } from './roster.ts';
-import { assistantAddTool, assistantUpdateTool, assistantRemoveTool } from './assistants.ts';
+import { staffAddTool, staffUpdateTool, staffRemoveTool } from './staff.ts';
 import { quizCreateTool, quizUpdateTool, quizPublishTool, quizDeleteTool } from './quizzes.ts';
 import {
   classroomSettingsUpdateTool,
@@ -157,11 +157,12 @@ export function registerAllTools(): void {
   registerToolDefinition(rosterAddStudentTool);
   registerToolDefinition(rosterRemoveStudentTool);
 
-  // Assistants / TAs (OWNER — add sends a real GitHub org invite; remove is
+  // Teaching staff — assistants/TAs, teachers and co-owners (OWNER — add sends
+  // a real GitHub org invite and needs confirm for OWNER; remove is
   // destructive, confirm-gated, and can drop them from the org)
-  registerToolDefinition(assistantAddTool);
-  registerToolDefinition(assistantUpdateTool);
-  registerToolDefinition(assistantRemoveTool);
+  registerToolDefinition(staffAddTool);
+  registerToolDefinition(staffUpdateTool);
+  registerToolDefinition(staffRemoveTool);
 
   // Extensions (STUDENT self)
   registerToolDefinition(extensionPurchaseTool);

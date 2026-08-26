@@ -480,7 +480,7 @@ export const teamMembersAddTool: ToolDefinition<TeamMembersAddArgs> = {
       throw new ToolError(
         'invalid_params',
         `Not a member of this classroom: ${logins.join(', ')} — add them to the classroom first ` +
-          '(roster_add_student or assistant_add). No one was added to the team.',
+          '(roster_add_student or staff_add). No one was added to the team.',
         undefined,
         { logins }
       );

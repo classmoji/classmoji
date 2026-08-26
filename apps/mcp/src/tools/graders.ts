@@ -175,8 +175,9 @@ export const graderAssignBulkTool: ToolDefinition<GraderAssignBulkArgs> = {
   title: 'Bulk-assign graders to an assignment',
   description:
     'Distributes graders across ALL submissions of one assignment at once. Owner only. ' +
-    "method=RANDOM shuffles the classroom's assistants that have is_grader set and walks them " +
-    'round-robin, so the load is spread evenly and each submission gets exactly one grader. ' +
+    "method=RANDOM shuffles the classroom's assistants and teachers that have is_grader set and " +
+    'walks them round-robin, so the load is spread evenly and each submission gets exactly one ' +
+    'grader. ' +
     'method=EXISTING copies the per-student/per-team grader mapping from template_assignment_id ' +
     '(required for EXISTING, and it must be an assignment in this classroom) — submissions with ' +
     'no match in the template are skipped. Graders are mirrored onto the GitHub issue assignees. ' +
@@ -191,7 +192,7 @@ export const graderAssignBulkTool: ToolDefinition<GraderAssignBulkArgs> = {
     method: z
       .enum(['RANDOM', 'EXISTING'])
       .describe(
-        'RANDOM = even round-robin over is_grader assistants; EXISTING = copy the grader mapping from template_assignment_id'
+        'RANDOM = even round-robin over is_grader assistants and teachers; EXISTING = copy the grader mapping from template_assignment_id'
       ),
     template_assignment_id: z
       .string()
@@ -244,7 +245,7 @@ export const graderAssignBulkTool: ToolDefinition<GraderAssignBulkArgs> = {
         if (error.code === 'no_graders') {
           throw new ToolError(
             'invalid_params',
-            'No assistants with is_grader=true in this classroom — flag at least one with assistant_update before assigning graders'
+            'No assistants or teachers with is_grader=true in this classroom — flag at least one with staff_update before assigning graders'
           );
         }
         if (error.code === 'template_required') {
