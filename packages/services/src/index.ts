@@ -52,8 +52,12 @@ export {
 export { ClassmojiService, HelperService, StripeService, FlyCertService, MarkdownImporter };
 
 // Admin service result/error shapes shared by the web routes and the MCP tools.
-export { AssistantServiceError } from './classmoji/assistant.service.ts';
-export type { AddAssistantResult, RemoveAssistantResult } from './classmoji/assistant.service.ts';
+export { StaffServiceError } from './classmoji/staff.service.ts';
+export type { AddStaffResult, RemoveStaffResult, StaffRole } from './classmoji/staff.service.ts';
+// One builder for the remove_user_from_organization payload, so every caller
+// sends the same fields.
+export { buildRemoveUserPayload } from './classmoji/removeUserPayload.ts';
+export type { RemoveUserPayload } from './classmoji/removeUserPayload.ts';
 export {
   TeamServiceError,
   describeTeamFailureReason,

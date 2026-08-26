@@ -5,7 +5,7 @@
  * (the assignment container — content shows on the repo page) or one specific
  * assignment inside it. Extracted from the web admin.$class.resources action so
  * that the resources kanban and the MCP resource-link tools share this path —
- * same precedent as roster.service.ts, assistant.service.ts and
+ * same precedent as roster.service.ts, staff.service.ts and
  * teamAdmin.service.ts. It is not the only writer of these tables: the
  * repository form route, page.service.linkPage and the slides importer all
  * create links of their own and do not come through here.

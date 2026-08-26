@@ -4,7 +4,7 @@
  * Create / delete / rename a classroom team, manage its members and its tags.
  * Shared by the web admin.$class.teams* actions and (later) the MCP team tools
  * so both take one code path — same precedent as roster.service.ts and
- * assistant.service.ts.
+ * staff.service.ts.
  *
  * Two rules run through every function here:
  *
@@ -22,7 +22,7 @@
  *    both back; callers must surface `failed`.
  *
  * Authorization is NOT re-checked here. Callers (route auth gates / MCP tool
- * scopes) own that, exactly as in roster.service.ts and assistant.service.ts.
+ * scopes) own that, exactly as in roster.service.ts and staff.service.ts.
  */
 import { queue } from 'async';
 

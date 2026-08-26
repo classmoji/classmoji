@@ -65,8 +65,16 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
   const autogradingTestCount = (
     await ClassmojiService.autogradingTest.findByRepositoryId(repository!.id)
   ).length;
+  // The grader pool spans every staff role that can be flagged as a grader —
+  // ASSISTANT and TEACHER — the same pair the RANDOM bulk assignment draws from.
+  // Listing only assistants here would offer a narrower set of options than the
+  // graders actually assigned to these repos.
   const assistants = (
-    await ClassmojiService.classroomMembership.findUsersByRole(classroom.id, 'ASSISTANT')
+    await ClassmojiService.classroomMembership.findUsersByRoles(
+      classroom.id,
+      ['ASSISTANT', 'TEACHER'],
+      { is_grader: true }
+    )
   ).filter(({ is_grader }) => is_grader);
 
   const emojiMappings = await ClassmojiService.emojiMapping.findByClassroomId(classroom.id);

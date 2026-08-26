@@ -11,6 +11,7 @@ import {
   MultiSelect,
 } from '~/components';
 import { ActionTypes } from '~/constants';
+import { useCallout } from '@classmoji/ui-components';
 import { useGlobalFetcher } from '~/hooks';
 import { openRepositoryAssignmentInGithub } from '~/utils/helpers.client';
 import { isRepositoryAssignmentDropped } from '@classmoji/utils';
@@ -110,6 +111,7 @@ const AssignmentTable = ({
   org,
 }: AssignmentTableProps) => {
   const { fetcher, notify } = useGlobalFetcher();
+  const callout = useCallout();
 
   const isIndividualAssignment = repository?.type === 'INDIVIDUAL';
   // Only surface the "Imported" column when at least one repo carries imported data.
@@ -129,7 +131,20 @@ const AssignmentTable = ({
     if (!repoAssignment) return;
     const { provider_issue_number, id: repoAssignmentId } = repoAssignment;
     const repoName = record.name;
-    const graderId = assistants.find(a => a.login === graderLogin)!.id;
+
+    // Resolve the grader's id without assuming the pool holds them. On a REMOVAL
+    // the authority is the assignment's own grader list: someone already
+    // assigned may no longer be selectable (their grader flag was cleared since,
+    // or they were assigned in bulk). On an ADD it is the pool the options came
+    // from. Both actions need the id — it keys the membership row they write.
+    const graderId =
+      repoAssignment.graders?.find(g => g.grader.login === graderLogin)?.grader.id ??
+      assistants.find(a => a.login === graderLogin)?.id;
+
+    if (!graderId) {
+      callout.show({ variant: 'error', title: `Could not resolve the grader ${graderLogin}` });
+      return;
+    }
 
     const input = {
       repoName,

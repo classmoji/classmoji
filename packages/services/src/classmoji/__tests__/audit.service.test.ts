@@ -1,8 +1,9 @@
 /**
  * audit.service dedup semantics: the 5s window must key on the acting TOOL
- * (data.tool) when present, so distinct tools hitting the same resource in
- * quick succession are never coalesced into one row — while payloads without
- * a tool keep the original (tool-less) dedup key.
+ * (data.tool) and on the role the payload ACTS ON (data.role) when present, so
+ * distinct tools — and distinct roles granted or removed for the same person —
+ * hitting the same resource in quick succession are never coalesced into one
+ * row, while payloads carrying neither keep the original dedup key.
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
@@ -84,11 +85,69 @@ describe('audit.create dedup key', () => {
 
     for (const call of findFirstMock.mock.calls) {
       expect((call[0] as WhereArg).where).not.toHaveProperty('data');
+      expect((call[0] as WhereArg).where).not.toHaveProperty('AND');
     }
   });
 
   it('a non-string tool value does not join the key', async () => {
     await audit.create({ ...baseEntry, data: { tool: 42 } });
     expect((findFirstMock.mock.calls[0][0] as WhereArg).where).not.toHaveProperty('data');
+  });
+
+  it('includes data.role in the dedup lookup when the payload names a role', async () => {
+    await audit.create({
+      ...baseEntry,
+      resource_type: 'STAFF',
+      action: 'CREATE',
+      data: { tool: 'staff_add', role: 'TEACHER' },
+    });
+
+    const where = (findFirstMock.mock.calls[0][0] as WhereArg).where;
+    // The role the payload acts on rides under AND: a second `data` filter
+    // cannot share the object with the tool filter.
+    expect(where).toMatchObject({
+      data: { path: ['tool'], equals: 'staff_add' },
+      AND: [{ data: { path: ['role'], equals: 'TEACHER' } }],
+    });
+    expect(createMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('two DIFFERENT granted roles within the window are never coalesced', async () => {
+    // Same person, same tool, same resource — only the granted role differs, so
+    // these are two distinct records and both must be written.
+    const entry = { ...baseEntry, resource_type: 'STAFF', action: 'CREATE' as const };
+    await audit.create({ ...entry, data: { tool: 'staff_add', role: 'TEACHER' } });
+    await audit.create({ ...entry, data: { tool: 'staff_add', role: 'OWNER' } });
+
+    const first = (findFirstMock.mock.calls[0][0] as WhereArg).where.AND;
+    const second = (findFirstMock.mock.calls[1][0] as WhereArg).where.AND;
+    expect(first).toEqual([{ data: { path: ['role'], equals: 'TEACHER' } }]);
+    expect(second).toEqual([{ data: { path: ['role'], equals: 'OWNER' } }]);
+    expect(createMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('the SAME role within the window still dedups (recent row found → skip)', async () => {
+    findFirstMock.mockResolvedValue({ id: 'existing-row' });
+
+    const result = await audit.create({
+      ...baseEntry,
+      data: { tool: 'staff_add', role: 'TEACHER' },
+    });
+
+    expect(result).toBeNull();
+    expect(createMock).not.toHaveBeenCalled();
+  });
+
+  it('a non-string role value does not join the key', async () => {
+    await audit.create({ ...baseEntry, data: { tool: 'staff_add', role: 42 } });
+    expect((findFirstMock.mock.calls[0][0] as WhereArg).where).not.toHaveProperty('AND');
+  });
+
+  it('a role without a tool joins the key on its own', async () => {
+    await audit.create({ ...baseEntry, data: { role: 'OWNER' } });
+
+    const where = (findFirstMock.mock.calls[0][0] as WhereArg).where;
+    expect(where).not.toHaveProperty('data');
+    expect(where.AND).toEqual([{ data: { path: ['role'], equals: 'OWNER' } }]);
   });
 });

@@ -75,7 +75,10 @@ async function activateMembership({
   }
 
   for (const membership of relevantMemberships) {
-    await ClassmojiService.classroomMembership.update(membership.classroom_id, user.id, {
+    // By id: the loop already holds each membership row, and a user may hold
+    // several roles in one classroom — resolving by (classroom, user) again
+    // would activate whichever row came back first, once per iteration.
+    await ClassmojiService.classroomMembership.updateById(membership.id, {
       has_accepted_invite: true,
     });
 
@@ -191,16 +194,41 @@ export const removeUserFromOrganizationTask = task({
       const gitProvider = getGitProvider(gitOrgData);
       const orgLogin = gitOrgData.login;
 
-      // Step 1: Remove user from classroom-specific team
+      // Step 1: Remove user from classroom-specific team, unless another role
+      // they still hold in this classroom maps to the SAME team. Every
+      // non-student role shares one staff team ({slug}-assistants — see
+      // getTeamNameForClassroom), and that team is what grants the staff their
+      // repository permission, so it must survive while any of those roles does.
+      // The role being removed is excluded from the check by construction, so
+      // the answer is the same whether it runs before or after the membership
+      // row is deleted below.
       const userRole = role || 'STUDENT';
       const teamSlug = getTeamNameForClassroom(classroomData, userRole);
-      try {
-        await gitProvider.removeTeamMember(orgLogin, teamSlug, user.login);
-      } catch (error: unknown) {
-        // Team might not exist or user not in team - log but continue
+
+      const rolesSharingTeam = (['OWNER', 'TEACHER', 'ASSISTANT', 'STUDENT'] as const).filter(
+        other => other !== userRole && getTeamNameForClassroom(classroomData, other) === teamSlug
+      );
+      const keepsTeam =
+        rolesSharingTeam.length > 0 &&
+        (await ClassmojiService.classroomMembership.hasRole(
+          classroomData.id,
+          user.id,
+          rolesSharingTeam
+        ));
+
+      if (keepsTeam) {
         console.log(
-          `[remove_user] Could not remove ${user.login} from team ${teamSlug}: ${error instanceof Error ? error.message : String(error)}`
+          `[remove_user] User ${user.login} holds another role in ${classroomData.slug} that shares team ${teamSlug}, keeping in team`
         );
+      } else {
+        try {
+          await gitProvider.removeTeamMember(orgLogin, teamSlug, user.login);
+        } catch (error: unknown) {
+          // Team might not exist or user not in team - log but continue
+          console.log(
+            `[remove_user] Could not remove ${user.login} from team ${teamSlug}: ${error instanceof Error ? error.message : String(error)}`
+          );
+        }
       }
 
       // Step 2: Check if user has other classroom memberships in this GitHub org

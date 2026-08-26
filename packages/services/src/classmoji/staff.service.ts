@@ -1,58 +1,81 @@
 /**
- * Assistant (TA) Service
+ * Teaching-staff Service
  *
- * Add / update / remove a classroom ASSISTANT. Shared by the web
- * admin.$class.assistants action and the MCP assistant tools so both take one
- * code path (same precedent as roster.service.ts).
+ * Add / update / remove a classroom staff member at ASSISTANT, TEACHER or
+ * OWNER. Shared by the web admin.$class.assistants action (which asks for
+ * ASSISTANT) and the MCP staff tools so both take one code path (same
+ * precedent as roster.service.ts).
+ *
+ * MULTI-ROLE SEMANTICS: memberships are unique on (classroom_id, user_id,
+ * role), so a user may legitimately hold several roles in one classroom.
+ * Adding a role to someone who already holds a DIFFERENT role therefore GRANTS
+ * AN ADDITIONAL role — it never replaces the existing one, and the existing
+ * row is left untouched. Every lookup here is scoped to the requested role for
+ * the same reason: the idempotency pre-check, the update and the removal must
+ * each see only the row they are about to act on. `resolveHighestMembership`
+ * (packages/auth) means such a user is treated at their HIGHEST role.
  *
  * The GitHub profile is resolved SERVER-SIDE from the login: the web form used
  * to resolve it client-side with the instructor's octokit and post the profile,
  * which an MCP caller cannot do (it only has a login) and which let a client
  * choose the provider_id the membership is keyed to.
  *
+ * All non-student roles share ONE GitHub staff team ({slug}-assistants) — see
+ * getTeamNameForClassroom in ../git/index.ts.
+ *
  * Trigger.dev tasks are fired via the raw `@trigger.dev/sdk` string ids (this
  * package cannot import @classmoji/tasks — tasks already depends on services).
- * `removeAssistant` returns the trigger HANDLE rather than awaiting it: the web
+ * `removeStaff` returns the trigger HANDLE rather than awaiting it: the web
  * route streams progress with waitForRunCompletion, MCP fires and forgets.
  */
 import { tasks } from '@trigger.dev/sdk';
 
 import getPrisma from '@classmoji/database';
 import { getGitProvider, ensureClassroomTeam } from '../git/index.ts';
+import { buildRemoveUserPayload } from './removeUserPayload.ts';
 import * as classroomService from './classroom.service.ts';
 import * as classroomMembershipService from './classroomMembership.service.ts';
-import * as userService from './user.service.ts';
 
-export interface AddAssistantResult {
-  /** false when an ASSISTANT membership already existed (no-op, not an error). */
+/** The roles this service manages. STUDENT is the roster service's business. */
+export const STAFF_ROLES = ['ASSISTANT', 'TEACHER', 'OWNER'] as const;
+export type StaffRole = (typeof STAFF_ROLES)[number];
+
+export interface AddStaffResult {
+  /** false when a membership at the REQUESTED role already existed (no-op, not an error). */
   created: boolean;
   alreadyExists: boolean;
   userId: string;
   login: string;
   name: string | null;
+  /** The role that was granted (echoed back so callers can audit it). */
+  role: StaffRole;
   /** true when the user was already in the GitHub org (team-added + activated). */
   alreadyOrgMember: boolean;
 }
 
-export interface RemoveAssistantResult {
+export interface RemoveStaffResult {
   userId: string;
   login: string;
+  role: StaffRole;
   /** Trigger.dev run handle — await it (waitForRunCompletion) or ignore it. */
   runId: string;
 }
 
 /** Thrown for every caller-fixable failure so routes/tools can map it to a message. */
-export class AssistantServiceError extends Error {
+export class StaffServiceError extends Error {
   code:
     | 'classroom_not_found'
     | 'git_user_not_found'
-    | 'assistant_not_found'
+    | 'staff_not_found'
     | 'no_org_configured'
-    | 'login_conflict';
+    | 'login_conflict'
+    | 'last_owner'
+    | 'grader_flag_invalid'
+    | 'invalid_role';
 
-  constructor(code: AssistantServiceError['code'], message: string) {
+  constructor(code: StaffServiceError['code'], message: string) {
     super(message);
-    this.name = 'AssistantServiceError';
+    this.name = 'StaffServiceError';
     this.code = code;
   }
 }
@@ -67,63 +90,98 @@ const isProviderNotFound = (error: unknown): boolean =>
 const isUniqueViolation = (error: unknown): boolean =>
   typeof error === 'object' && error !== null && (error as { code?: unknown }).code === 'P2002';
 
+/**
+ * StaffRole is a TYPE, and types are gone at runtime — a caller reaching this
+ * service directly (a script, a future route) can pass any string. Every entry
+ * point asserts the role it was given is one this service manages, so STUDENT
+ * memberships stay the roster service's business and cannot be created, flagged
+ * or deleted through the staff path.
+ */
+const assertStaffRole = (role: string): void => {
+  if (!(STAFF_ROLES as readonly string[]).includes(role)) {
+    throw new StaffServiceError(
+      'invalid_role',
+      `[staff] ${role} is not a teaching-staff role (expected one of ${STAFF_ROLES.join(', ')})`
+    );
+  }
+};
+
+/**
+ * Resolve a user by git login, matching case-insensitively.
+ *
+ * Git logins are case-insensitive while Postgres is not, and addStaff stores the
+ * canonical casing the provider hands back — which is often not what the caller
+ * typed. Looking the same person up again therefore has to match the way
+ * addStaff matched, or 'ada' would not find the user stored as 'Ada'.
+ */
+const findUserByLoginInsensitive = async (login: string) => {
+  const cleanLogin = login.replace('@', '').trim();
+  return getPrisma().user.findFirst({
+    where: { login: { equals: cleanLogin, mode: 'insensitive' } },
+    select: { id: true, login: true, name: true },
+  });
+};
+
 const loadClassroom = async (classroomId: string) => {
   const classroom = await classroomService.findById(classroomId);
   if (!classroom) {
-    throw new AssistantServiceError(
+    throw new StaffServiceError(
       'classroom_not_found',
-      `[assistant] classroom ${classroomId} not found`
+      `[staff] classroom ${classroomId} not found`
     );
   }
   if (!classroom.git_organization) {
-    throw new AssistantServiceError(
+    throw new StaffServiceError(
       'no_org_configured',
-      `[assistant] classroom ${classroomId} has no git organization`
+      `[staff] classroom ${classroomId} has no git organization`
     );
   }
   return classroom;
 };
 
 /**
- * Add a GitHub user as an ASSISTANT of a classroom.
+ * Add a GitHub user to a classroom's teaching staff at `role`.
  *
- * Resolves the login against the git provider, ensures the classroom assistant
+ * Resolves the login against the git provider, ensures the classroom staff
  * team exists, adds (already-org-members) or invites (everyone else) them, then
- * upserts the User + Account and creates the ASSISTANT membership.
+ * upserts the User + Account and creates the membership at the requested role.
  *
- * Idempotent: an existing ASSISTANT membership in this classroom returns
- * `{ created: false, alreadyExists: true }` instead of a unique-constraint
- * error. `name`/`email` are the instructor-supplied overrides from the web form;
- * when omitted the git profile's name and email are used.
+ * Idempotent PER ROLE: an existing membership at THIS role in this classroom
+ * returns `{ created: false, alreadyExists: true }` instead of a
+ * unique-constraint error. A membership at a DIFFERENT role is not a conflict —
+ * the new role is granted alongside it. `name`/`email` are the
+ * instructor-supplied overrides from the web form; when omitted the git
+ * profile's name and email are used.
  */
-export const addAssistant = async ({
+export const addStaff = async ({
   classroomId,
   login,
+  role,
   name,
   email,
 }: {
   classroomId: string;
   login: string;
+  role: StaffRole;
   name?: string | null;
   email?: string | null;
-}): Promise<AddAssistantResult> => {
+}): Promise<AddStaffResult> => {
+  assertStaffRole(role);
+
   const classroom = await loadClassroom(classroomId);
   const gitOrganization = classroom.git_organization;
   const cleanLogin = login.replace('@', '').trim();
 
-  // Idempotency BEFORE any GitHub write: re-inviting an existing assistant
-  // would re-add them to the team and then still fail on the unique constraint.
-  // Git logins are case-insensitive while Postgres is not, so match the stored
-  // login insensitively — 'Ada' and 'ada' are the same person.
-  const existingUser = await getPrisma().user.findFirst({
-    where: { login: { equals: cleanLogin, mode: 'insensitive' } },
-    select: { id: true, login: true, name: true },
-  });
+  // Idempotency BEFORE any GitHub write: re-inviting existing staff would
+  // re-add them to the team and then still fail on the unique constraint.
+  // Scoped to the REQUESTED role: another role held here is an additional
+  // grant, not a no-op.
+  const existingUser = await findUserByLoginInsensitive(cleanLogin);
   if (existingUser) {
     const existingMembership = await classroomMembershipService.findByClassroomAndUser(
       classroomId,
       existingUser.id,
-      'ASSISTANT'
+      role
     );
     if (existingMembership) {
       return {
@@ -132,6 +190,7 @@ export const addAssistant = async ({
         userId: existingUser.id,
         login: existingUser.login ?? cleanLogin,
         name: existingUser.name,
+        role,
         alreadyOrgMember: true,
       };
     }
@@ -147,16 +206,10 @@ export const addAssistant = async ({
     // bad token must surface as itself — telling the operator "no such user"
     // would send them off fixing a name that was never the problem.
     if (!isProviderNotFound(error)) throw error;
-    throw new AssistantServiceError(
-      'git_user_not_found',
-      `[assistant] git user ${cleanLogin} not found`
-    );
+    throw new StaffServiceError('git_user_not_found', `[staff] git user ${cleanLogin} not found`);
   }
   if (!gitUser?.login) {
-    throw new AssistantServiceError(
-      'git_user_not_found',
-      `[assistant] git user ${cleanLogin} not found`
-    );
+    throw new StaffServiceError('git_user_not_found', `[staff] git user ${cleanLogin} not found`);
   }
 
   // The provider hands back the canonical casing, which may differ from what the
@@ -171,16 +224,16 @@ export const addAssistant = async ({
     // The stored row is keyed to a different provider account than the one this
     // login resolves to today — refuse rather than relink the existing record.
     if (canonicalUser.provider_id && canonicalUser.provider_id !== String(gitUser.id)) {
-      throw new AssistantServiceError(
+      throw new StaffServiceError(
         'login_conflict',
-        `[assistant] login ${gitUser.login} resolves to a different provider account than the stored user record`
+        `[staff] login ${gitUser.login} resolves to a different provider account than the stored user record`
       );
     }
 
     const existingMembership = await classroomMembershipService.findByClassroomAndUser(
       classroomId,
       canonicalUser.id,
-      'ASSISTANT'
+      role
     );
     if (existingMembership) {
       return {
@@ -189,20 +242,18 @@ export const addAssistant = async ({
         userId: canonicalUser.id,
         login: canonicalUser.login ?? gitUser.login,
         name: canonicalUser.name,
+        role,
         alreadyOrgMember: true,
       };
     }
   }
 
-  const team = await ensureClassroomTeam(
-    gitProvider,
-    gitOrganization.login,
-    classroom,
-    'ASSISTANT'
-  );
+  // Every non-student role shares the one staff team, so this is the same team
+  // whether the new member is an assistant, a teacher or a co-owner.
+  const team = await ensureClassroomTeam(gitProvider, gitOrganization.login, classroom, role);
 
-  // If the assistant is already in the org, a fresh invite 422s and no `member_added`
-  // webhook fires — so just add them to the assistant team and activate them below.
+  // If they are already in the org, a fresh invite 422s and no `member_added`
+  // webhook fires — so just add them to the staff team and activate them below.
   // Otherwise send the org invite as usual.
   const alreadyMember = await gitProvider.isUserMemberOfOrganization(
     gitOrganization.login,
@@ -215,15 +266,15 @@ export const addAssistant = async ({
     try {
       await gitProvider.inviteToOrganization(gitOrganization.login, String(gitUser.id), [team.id]);
     } catch (error: unknown) {
-      console.error('Error inviting assistant to organization:', error);
+      console.error('Error inviting staff member to organization:', error);
     }
   }
 
-  // Upsert user and account, then create the ASSISTANT membership.
+  // Upsert user and account, then create the membership at the requested role.
   // Target an already-known row by id: `where: { login }` is an exact match, so
   // a row stored under different casing would be missed and duplicated.
-  // `update: {}` on purpose — adding someone as an assistant must not rewrite
-  // any field of a user record that already exists.
+  // `update: {}` on purpose — adding someone as staff must not rewrite any
+  // field of a user record that already exists.
   const user = await getPrisma().user.upsert({
     where: canonicalUser ? { id: canonicalUser.id } : { login: gitUser.login },
     create: {
@@ -258,7 +309,7 @@ export const addAssistant = async ({
       data: {
         classroom_id: classroom.id,
         user_id: user.id,
-        role: 'ASSISTANT',
+        role,
       },
     });
   } catch (error: unknown) {
@@ -272,11 +323,12 @@ export const addAssistant = async ({
       userId: user.id,
       login: user.login ?? gitUser.login,
       name: user.name,
+      role,
       alreadyOrgMember: alreadyMember,
     };
   }
 
-  // Already-in-org assistants get no `member_added` webhook, so flip
+  // Already-in-org staff get no `member_added` webhook, so flip
   // has_accepted_invite now that the membership exists.
   if (alreadyMember) {
     await tasks.trigger('activate_membership', {
@@ -291,41 +343,57 @@ export const addAssistant = async ({
     userId: user.id,
     login: user.login ?? gitUser.login,
     name: user.name,
+    role,
     alreadyOrgMember: alreadyMember,
   };
 };
 
 /**
- * Flip the is_grader flag on a user's ASSISTANT membership.
+ * Flip the is_grader flag on a user's membership at `role`.
  *
  * Role-scoped on purpose: the membership unique key is
  * (classroom_id, user_id, role), so a user who is both OWNER and ASSISTANT has
  * two rows and the generic membership update (findFirst, no role filter) could
  * pick the wrong one.
+ *
+ * `is_grader` is only meaningful for people who grade, and the RANDOM
+ * bulk-assignment pool draws from ASSISTANT + TEACHER rows only — so flagging
+ * an OWNER row would set a flag nothing reads. Refused with `grader_flag_invalid`.
  */
-export const updateAssistant = async ({
+export const updateStaff = async ({
   classroomId,
   login,
+  role,
   isGrader,
 }: {
   classroomId: string;
   login: string;
+  role: StaffRole;
   isGrader: boolean;
 }) => {
-  const user = await userService.findByLogin(login);
+  assertStaffRole(role);
+
+  if (role === 'OWNER') {
+    throw new StaffServiceError(
+      'grader_flag_invalid',
+      '[staff] is_grader applies to ASSISTANT and TEACHER memberships only'
+    );
+  }
+
+  const user = await findUserByLoginInsensitive(login);
   if (!user) {
-    throw new AssistantServiceError('assistant_not_found', `[assistant] user ${login} not found`);
+    throw new StaffServiceError('staff_not_found', `[staff] user ${login} not found`);
   }
 
   const membership = await classroomMembershipService.findByClassroomAndUser(
     classroomId,
     user.id,
-    'ASSISTANT'
+    role
   );
   if (!membership) {
-    throw new AssistantServiceError(
-      'assistant_not_found',
-      `[assistant] ${login} is not an assistant of classroom ${classroomId}`
+    throw new StaffServiceError(
+      'staff_not_found',
+      `[staff] ${login} does not hold the ${role} role in classroom ${classroomId}`
     );
   }
 
@@ -333,59 +401,82 @@ export const updateAssistant = async ({
 };
 
 /**
- * Queue removal of an ASSISTANT from a classroom.
+ * Queue removal of a staff member's `role` membership from a classroom.
  *
  * The `remove_user_from_organization` task is the single source of truth and is
- * role-aware: it removes the classroom's ASSISTANT team membership, removes the
- * user from the GitHub org ONLY when they hold no other membership in that org
- * (the (classroom, ASSISTANT) pair being removed is the only one excluded from
- * the count — an OWNER/STUDENT row in the same classroom keeps them in), and
- * deletes only the ASSISTANT membership row.
+ * role-aware: it removes the classroom's staff team membership on GitHub,
+ * removes the user from the GitHub org ONLY when they hold no other membership
+ * in that org (the (classroom, role) pair being removed is the only one excluded
+ * from the count — any other row in the same classroom keeps them in), and
+ * deletes only the membership row at that role.
+ *
+ * LAST-OWNER PRE-CHECK: the removal itself runs asynchronously, so the
+ * downstream `assertNotLastOwner` guard inside classroomMembership.remove would
+ * throw inside the task long after this call reported success. Check the owner
+ * count HERE, before triggering, so the caller learns about it. The downstream
+ * guard stays as well — belt and braces.
  *
  * The payload is built ENTIRELY from resolved DB records — `has_accepted_invite`
- * is a MEMBERSHIP field, not a user field. Returns the run handle; the caller
- * decides whether to await it.
+ * is a MEMBERSHIP field, not a user field — and field by field via
+ * buildRemoveUserPayload, so it carries only what the task reads. Returns the
+ * run handle; the caller decides whether to await it.
  */
-export const removeAssistant = async ({
+export const removeStaff = async ({
   classroomId,
   login,
+  role,
 }: {
   classroomId: string;
   login: string;
-}): Promise<RemoveAssistantResult> => {
+  role: StaffRole;
+}): Promise<RemoveStaffResult> => {
+  assertStaffRole(role);
+
   const classroom = await loadClassroom(classroomId);
 
-  const user = await userService.findByLogin(login);
+  const user = await findUserByLoginInsensitive(login);
   if (!user) {
-    throw new AssistantServiceError('assistant_not_found', `[assistant] user ${login} not found`);
+    throw new StaffServiceError('staff_not_found', `[staff] user ${login} not found`);
   }
 
-  // The target must be an ASSISTANT in THIS classroom — never touch the
+  // The target must hold THIS role in THIS classroom — never touch the
   // memberships another role of the same user holds here.
   const membership = await classroomMembershipService.findByClassroomAndUser(
     classroomId,
     user.id,
-    'ASSISTANT'
+    role
   );
   if (!membership) {
-    throw new AssistantServiceError(
-      'assistant_not_found',
-      `[assistant] ${login} is not an assistant of classroom ${classroomId}`
+    throw new StaffServiceError(
+      'staff_not_found',
+      `[staff] ${login} does not hold the ${role} role in classroom ${classroomId}`
     );
   }
 
+  // Refuse to orphan the classroom BEFORE the fire-and-forget trigger.
+  if (role === 'OWNER') {
+    const ownerCount = await getPrisma().classroomMembership.count({
+      where: { classroom_id: classroomId, role: 'OWNER' },
+    });
+    if (ownerCount <= 1) {
+      throw new StaffServiceError(
+        'last_owner',
+        `[staff] ${login} is the only owner of classroom ${classroomId}`
+      );
+    }
+  }
+
   const run = await tasks.trigger('remove_user_from_organization', {
-    payload: {
+    payload: buildRemoveUserPayload({
       user: {
         id: user.id,
         login: user.login,
         has_accepted_invite: membership.has_accepted_invite,
       },
-      gitOrganization: classroom.git_organization,
       classroom,
-      role: 'ASSISTANT',
-    },
+      role,
+    }),
   });
 
-  return { userId: user.id, login: user.login ?? login, runId: run.id };
+  return { userId: user.id, login: user.login ?? login, role, runId: run.id };
 };
