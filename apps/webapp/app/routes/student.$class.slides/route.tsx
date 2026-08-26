@@ -1,4 +1,5 @@
-import { Table } from 'antd';
+import { Table, Tag } from 'antd';
+import { IconEyeOff } from '@tabler/icons-react';
 import getPrisma from '@classmoji/database';
 import type { Route } from './+types/route';
 import { assertClassroomAccess } from '~/utils/helpers';
@@ -7,7 +8,7 @@ import { TableActionButtons } from '~/components';
 export const loader = async ({ request, params }: Route.LoaderArgs) => {
   const { class: classSlug } = params;
 
-  const { classroom } = await assertClassroomAccess({
+  const { classroom, membership } = await assertClassroomAccess({
     request,
     classroomSlug: classSlug!,
     allowedRoles: ['STUDENT', 'OWNER', 'TEACHER', 'ASSISTANT'],
@@ -15,11 +16,21 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
     attemptedAction: 'view_slides',
   });
 
-  // Get published slides for this classroom (exclude drafts for students)
+  // This route is shared: the assistant prefix re-exports it. Listing follows
+  // the VIEW tier of the shared slide gate (assertSlideAccess) — the teaching
+  // team may open a draft deck, so the list must show it, or staff can reach a
+  // deck by URL that they cannot find. Students stay on published decks only.
+  // Editing is a separate, narrower rule and is not granted here: this list
+  // offers no edit affordance to anyone.
+  const isStaff =
+    membership?.role === 'OWNER' ||
+    membership?.role === 'TEACHER' ||
+    membership?.role === 'ASSISTANT';
+
   const slides = await getPrisma().slide.findMany({
     where: {
       classroom_id: classroom.id,
-      is_draft: false, // Only show published slides to students
+      ...(isStaff ? {} : { is_draft: false }),
     },
     orderBy: { updated_at: 'desc' },
   });
@@ -39,14 +50,27 @@ export default function StudentSlides({ loaderData }: Route.ComponentProps) {
       title: 'Title',
       dataIndex: 'title',
       key: 'title',
-      render: (title: string) => <p className="font-medium">{title}</p>,
+      // Drafts only ever reach a staff viewer (the loader filters them out for
+      // students), so the badge marks the deck as a colleague's unpublished
+      // work — matching how the admin list labels the same state. It is a
+      // label, not a control: changing a deck's status stays on the admin page.
+      render: (title: string, record: { is_draft: boolean }) => (
+        <div className="flex items-center gap-2">
+          <span className="font-medium">{title}</span>
+          {record.is_draft && (
+            <Tag color="default" className="flex items-center gap-1 w-fit m-0">
+              <IconEyeOff size={12} />
+              Draft
+            </Tag>
+          )}
+        </div>
+      ),
     },
     {
       title: 'Repository',
       dataIndex: 'repository',
       key: 'repository',
-      render: (repository: string | null) =>
-        repository || <span className="text-ink-4">—</span>,
+      render: (repository: string | null) => repository || <span className="text-ink-4">—</span>,
     },
     {
       title: 'Actions',
