@@ -329,12 +329,14 @@ export const staffRemoveTool: ToolDefinition<StaffRemoveArgs> = {
   description:
     'Removes one role from a member of the classroom teaching team. Owner only, destructive, ' +
     'requires confirm:true. Because roles are additive, this deletes ONLY the membership row at ' +
-    'the given role — someone who also holds another role here keeps it. Triggers the standard ' +
-    'removal workflow: it removes them from the classroom staff team on GitHub and, IF they hold ' +
-    'no other role in that GitHub organization, removes them from the org entirely (revoking ' +
-    'their access) — the workflow is role-aware, so another membership (e.g. they also take a ' +
-    'class in the same org) keeps them in the org. Removing the LAST remaining owner is refused: ' +
-    'add another owner first. Runs in the background. Because the removal is processed ' +
+    'the given role — someone who also holds another role here keeps it, and keeps the access ' +
+    'that role carries. Triggers the standard removal workflow, which is role-aware throughout: ' +
+    'it removes them from the classroom staff team on GitHub UNLESS they still hold another ' +
+    'staff role here (all staff roles share one team), and removes them from the GitHub ' +
+    'organization entirely — revoking their access — only IF they hold no other membership in ' +
+    'that organization (e.g. they also take a class in the same org). Removing the LAST ' +
+    'remaining owner is refused: add another owner first. Runs in the background. ' +
+    'Because the removal is processed ' +
     'asynchronously it can still fail after this call reports success — check list_teaching_team ' +
     'afterwards to confirm they are gone.',
   scope: 'write',
