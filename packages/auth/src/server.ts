@@ -2,7 +2,7 @@ import { betterAuth } from 'better-auth';
 import { prismaAdapter } from 'better-auth/adapters/prisma';
 import { admin, mcp } from 'better-auth/plugins';
 import getPrisma from '@classmoji/database';
-import type { Role, ClassroomStatus } from '@prisma/client';
+import type { Role } from '@prisma/client';
 import { ClassmojiService } from '@classmoji/services';
 
 // The signing secret and the cookie prefix live in ./secret.ts so that modules
@@ -139,6 +139,48 @@ interface ClassroomAccessResult {
   isResourceOwner: boolean;
   accessGrantedVia: 'role' | 'ownership' | null;
 }
+
+/** Privilege order for deterministic multi-role resolution (highest first). */
+const ROLE_PRIORITY: readonly Role[] = ['OWNER', 'TEACHER', 'ASSISTANT', 'STUDENT'];
+
+/**
+ * Resolve the CALLER's membership in a classroom, deterministically.
+ *
+ * ClassroomMembership is unique on (classroom_id, user_id, role), so one person
+ * can hold several roles in the same classroom — routinely so: adding an
+ * assistant does not remove an existing student row. The service's
+ * `findByClassroomAndUser` is an unordered `findFirst`, so a single lookup over
+ * several allowed roles hands back an arbitrary one of them. Callers here then
+ * read `membership.role` to decide what the caller may see or do, so an
+ * arbitrary pick means arbitrary policy.
+ *
+ * Resolve each candidate role separately, in privilege order, and return the
+ * caller's HIGHEST role: "may this caller do X" is monotone in privilege, so
+ * the highest role is the right answer for every gate. `roles = null` means any
+ * membership.
+ *
+ * This is the same idiom the MCP server uses (apps/mcp/src/authz/
+ * classroomContext.ts). It is deliberately NOT pushed down into
+ * `findByClassroomAndUser`, because that function is also used to look up
+ * ANOTHER user's membership in a specific role (e.g. reading a student's grade
+ * comment, or confirming that someone is an assistant), where "highest role"
+ * is the wrong answer.
+ */
+const resolveHighestMembership = async (
+  classroomId: string,
+  userId: string,
+  roles: Role[] | null
+): Promise<ClassroomMembershipRecord> => {
+  const candidates =
+    roles && roles.length > 0 ? ROLE_PRIORITY.filter(role => roles.includes(role)) : ROLE_PRIORITY;
+
+  const found = await Promise.all(
+    candidates.map(role =>
+      ClassmojiService.classroomMembership.findByClassroomAndUser(classroomId, userId, [role])
+    )
+  );
+  return found.find(Boolean) ?? null;
+};
 
 // In-memory cache for access tokens (process-local, no persistence, no security risk)
 // Replaces file-based cache to avoid plaintext secrets on disk
@@ -662,7 +704,12 @@ export const assertClassroomAccess = async ({
       ...selfAccessRoles,
     ]),
   ];
-  const membership = await ClassmojiService.classroomMembership.findByClassroomAndUser(
+  // The caller's HIGHEST role among those looked up — see
+  // resolveHighestMembership. Callers read `membership.role` to shape what they
+  // return (the roster's owner-only fields, the slides list's drafts), so the
+  // resolution has to be deterministic rather than whichever row Postgres
+  // happened to return first.
+  const membership = await resolveHighestMembership(
     classroom.id,
     authData.userId,
     rolesForLookup.length ? rolesForLookup : null
@@ -884,7 +931,6 @@ import {
   type ClassroomStatusInput,
 } from './predicates.ts';
 
-
 /**
  * Throws a 403 Response with a JSON body `{ error: ClassroomStatusError, message: string }`.
  * This intentionally diverges from the plain-text 403s used elsewhere in this module —
@@ -928,9 +974,24 @@ export function assertClassroomMutationAllowed(args: ClassroomStatusInput): void
  * Handles draft mode, public/private visibility, and team editing permissions.
  *
  * Visibility tiers (checked in order):
- * 1. Draft: Only visible to users who can edit (owner/teacher/assistant with team_edit)
+ * 1. Draft: Visible to the classroom's teaching team (OWNER/TEACHER/ASSISTANT).
+ *    VIEW is deliberately wider than EDIT here — see the draft branch below.
  * 2. Public: World-readable (no auth required)
  * 3. Private: Classroom members only
+ *
+ * The four access types do not move together, on purpose:
+ * - view          — the tier above.
+ * - edit          — OWNER/TEACHER on any deck; an ASSISTANT only on decks they
+ *                   created or decks with allow_team_edit.
+ * - present       — on a DRAFT this requires edit rights, so an assistant who
+ *                   may read a colleague's draft still cannot present it.
+ * - speakerNotes  — staff get notes on any deck they can view, unconditionally.
+ *                   Since staff may view drafts, that includes a draft they are
+ *                   NOT allowed to edit. This is intended: speaker notes are
+ *                   preparation material shared across the teaching team, and
+ *                   the same staff-wide rule already applies to every published
+ *                   deck. The show_speaker_notes flag governs non-staff
+ *                   viewers, not colleagues.
  *
  * @param {Object} options
  * @param {Request} options.request - The request object
@@ -977,12 +1038,11 @@ export async function assertSlideAccess({
   let membership: SlideAccessMembership | null = null;
   const userId = authData?.userId || null;
 
-  // Get membership if authenticated
+  // Get membership if authenticated. Resolved at the caller's HIGHEST role: a
+  // teaching-team member who is also enrolled as a student in the same
+  // classroom is, for this gate, staff.
   if (userId) {
-    membership = await ClassmojiService.classroomMembership.findByClassroomAndUser(
-      slide.classroom_id,
-      userId
-    );
+    membership = await resolveHighestMembership(slide.classroom_id, userId, null);
   }
 
   const role = membership?.role;
@@ -992,20 +1052,29 @@ export async function assertSlideAccess({
   const isMember = !!membership;
   const isCreator = userId && slide.created_by === userId;
 
-  // Compute edit permission (used for draft visibility and edit access)
+  // Compute edit permission (used for edit access)
   // Owner/Teacher can edit any slide
   // Assistant can edit their own OR slides with allow_team_edit
   const canEdit = isOwnerOrTeacher || (isAssistant && (isCreator || slide.allow_team_edit));
+
+  // The classroom's teaching team (staff): OWNER, TEACHER, ASSISTANT.
+  const isStaff = isOwnerOrTeacher || isAssistant;
 
   // Compute view permission based on visibility tier
   let canView = false;
   let accessGrantedVia: SlideAccessResult['accessGrantedVia'] = null;
 
   if (slide.is_draft) {
-    // DRAFT MODE: Only those who can edit can view
+    // DRAFT MODE: any teaching-team member of the classroom may VIEW the deck.
+    // View is deliberately wider than edit: staff can read a colleague's
+    // work-in-progress deck, while editing stays with the creator (or decks
+    // that opt in via allow_team_edit). Keep these two rules separate.
     if (canEdit) {
       canView = true;
       accessGrantedVia = isOwnerOrTeacher ? 'role' : isCreator ? 'ownership' : 'team_edit';
+    } else if (isStaff) {
+      canView = true;
+      accessGrantedVia = 'role';
     }
   } else if (slide.is_public) {
     // PUBLIC: Anyone can view
@@ -1023,13 +1092,20 @@ export async function assertSlideAccess({
   }
 
   // Present permission: Owner/Teacher/Assistant for non-draft slides they can view
-  // For draft slides, only those who can edit can present
+  // For draft slides, only those who can edit can present. Deliberately NOT
+  // widened alongside view: reading a colleague's unfinished deck is expected,
+  // driving it in front of a class is not.
   const canPresent = slide.is_draft ? canEdit : isOwnerOrTeacher || isAssistant;
 
   // Speaker notes permission:
   // - Staff (Owner/Teacher/Assistant) always have access
   // - If show_speaker_notes=true, extend to whoever can view
-  const isStaff = isOwnerOrTeacher || isAssistant;
+  //
+  // Because staff can now view drafts, this grants notes on a draft a staff
+  // member cannot edit. That is the intended policy, not a side effect: notes
+  // are teaching-team preparation material, staff already get them on every
+  // deck they can view, and show_speaker_notes exists to govern students and
+  // the public rather than colleagues.
   const canViewSpeakerNotes = isStaff || (slide.show_speaker_notes && canView);
 
   // Check requested access type
@@ -1066,7 +1142,8 @@ export async function assertSlideAccess({
     // Provide specific error messages
     let errorMessage = 'Access denied';
     if (accessType === 'view') {
-      if (slide.is_draft && !canEdit) {
+      if (slide.is_draft) {
+        // Reaching here means the viewer is not on the teaching team.
         errorMessage = 'This slide is still in draft mode';
       } else if (!slide.is_public && !isMember) {
         errorMessage = 'Not a member of this classroom';

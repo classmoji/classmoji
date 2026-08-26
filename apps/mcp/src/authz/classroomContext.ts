@@ -64,16 +64,18 @@ export async function resolveClassroomContext(
 ): Promise<ClassroomContext> {
   const { org, slug } = parseClassroomRef(classroomRef);
 
-  // Classroom.slug is unique per git org only (@@unique([git_org_id, slug])),
-  // so resolve through the org login. GitHub logins are case-insensitive.
+  // Classroom.slug is GLOBALLY unique (schema.prisma: `slug String @unique`,
+  // migration 20260818103726_classroom_slug_global_unique). The org login is
+  // still part of the lookup so a reference has to name the org that actually
+  // owns the classroom — matched case-insensitively, as GitHub logins are.
   const matches = (await ClassmojiService.classroom.findAll({
     slug,
     git_organization: { login: { equals: org, mode: 'insensitive' } },
   })) as Classroom[];
-  // Classroom is unique only on (git_org_id, slug). The case-insensitive
-  // org-login match means case-variant twin orgs each owning this slug can
-  // return >1 row, and taking matches[0] would silently resolve to the newest
-  // twin. Refuse an ambiguous reference; a zero-match stays indistinguishable
+  // Defense in depth: the global unique index means a slug cannot match more
+  // than one classroom, so this cannot fire today. It stays because resolving
+  // through findAll returns a list, and a list of surprising length must never
+  // be silently reduced to matches[0]. A zero-match stays indistinguishable
   // from it, so a probe never leaks whether a classroom exists (S1).
   if (matches.length !== 1) {
     throw new ToolError('not_found', `Classroom '${org}/${slug}' not found`);

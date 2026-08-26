@@ -48,9 +48,15 @@ vi.mock('@classmoji/services', () => ({
   },
 }));
 
-const { listSubmissionsTool, getLeaderboardTool, listTeachingTeamTool, gradingReportTool } =
-  await import('../reads.ts');
+const {
+  listSubmissionsTool,
+  getLeaderboardTool,
+  listTeachingTeamTool,
+  gradingReportTool,
+  listTeamsTool,
+} = await import('../reads.ts');
 const { gradingQueueResource, leaderboardResource } = await import('../../resources/grading.ts');
+const { teamsResource } = await import('../../resources/roster.ts');
 
 const CLASSROOM = 'test-org/winter-2025';
 
@@ -233,6 +239,42 @@ describe('list_teaching_team', () => {
     expect(byId.u3).toBeUndefined(); // students are not teaching team
     // Only id/login/name/roles — no PII (email/school_id) or avatar.
     expect(Object.keys(byId.u1).sort()).toEqual(['id', 'login', 'name', 'roles']);
+  });
+});
+
+// ─── Mirror-tool description drift ───────────────────────────────────────────
+
+/**
+ * `mirrorResourceTool` copies a resource's roles and handler but keeps its OWN
+ * description, so a policy change made on the resource does not propagate here.
+ * On MCP the description IS the contract — a client picks and interprets the
+ * tool from it — so a stale one is a real defect, not a comment nit.
+ *
+ * These assertions are deliberately about MEANING rather than exact wording, so
+ * the description can be reworded without churn but cannot go back to promising
+ * a capability the handler does not provide.
+ */
+describe('list_teams — the description matches the handler policy', () => {
+  it('does not claim students can browse teams they are not in', () => {
+    const description = listTeamsTool.description.toLowerCase();
+
+    // The withdrawn promise: browsing by team visibility.
+    expect(description).not.toContain('visible teams');
+    expect(description).not.toContain('is_visible');
+  });
+
+  it('states the tier the handler actually implements', () => {
+    const description = listTeamsTool.description.toLowerCase();
+
+    expect(description).toContain('students');
+    expect(description).toContain('belong to');
+  });
+
+  it('mirrors the resource it wraps: same roles, same handler', () => {
+    // The description is the one thing NOT copied, which is why it needs a guard.
+    expect(listTeamsTool.roles).toEqual(teamsResource.roles);
+    expect(listTeamsTool.scope).toBe(teamsResource.scope);
+    expect(listTeamsTool.description).not.toBe(teamsResource.description);
   });
 });
 

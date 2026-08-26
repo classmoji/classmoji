@@ -101,11 +101,13 @@ export async function loadGradingQueueData(
 /**
  * Shared leaderboard computation with the twin-classroom guard (S1).
  *
- * helper.calculateClassLeaderboard resolves by BARE slug (findBySlug), but
- * slugs are only unique per git org. Guard: if the bare slug resolves to a
- * different classroom than the org/slug the caller was authorized for, refuse
- * rather than leak another classroom's leaderboard. Both the leaderboard
- * resource and the `get_leaderboard` tool call this so the guard never drifts.
+ * helper.calculateClassLeaderboard resolves by BARE slug (findBySlug). The slug
+ * is globally unique (schema.prisma: `slug String @unique`), so that lookup and
+ * the authorized classroom agree by construction. The guard is kept as defense
+ * in depth — if the bare slug ever resolves to a different classroom than the
+ * org/slug the caller was authorized for, refuse rather than return another
+ * classroom's leaderboard. Both the leaderboard resource and the
+ * `get_leaderboard` tool call this so the guard never drifts.
  */
 export async function computeLeaderboard(
   slug: string,

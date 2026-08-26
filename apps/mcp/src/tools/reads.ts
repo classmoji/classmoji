@@ -148,9 +148,13 @@ export const listTeamsTool = mirrorResourceTool({
   resource: teamsResource,
   name: 'list_teams',
   title: 'List teams',
+  // Kept in step with teamsResource by hand: mirrorResourceTool copies the
+  // resource's roles and handler but keeps its OWN description, and on MCP the
+  // description IS the contract the client reasons about. When the resource's
+  // policy changes, change this string too.
   description:
     'Teams in the classroom with member identities (id, name, login — no contact PII). Students ' +
-    'see visible teams and any team they belong to; staff see all teams.',
+    'see the teams they belong to, and only those; the teaching team sees every team.',
 });
 
 export const listReposTool = mirrorResourceTool({

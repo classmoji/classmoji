@@ -159,7 +159,11 @@ export const routes = {
     link: '/students',
     label: 'Students',
     icon: IconUsers,
-    roles: ['OWNER'],
+    // Reading the roster is a teaching-team right, so assistants get the entry
+    // too; it resolves to /assistant/:class/students, which re-exports the
+    // admin loader and its OWNER-only field split. TEACHER is absent because
+    // that role has no path in roleSettings — see the note there.
+    roles: ['OWNER', 'ASSISTANT'],
     category: 'people',
   },
   teams: {

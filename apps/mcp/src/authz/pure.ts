@@ -31,8 +31,11 @@ export interface ClassroomRef {
 
 /**
  * Parse a composite classroom reference of the form `org/slug`
- * (e.g. `dev-org/classmoji-dev-winter-2025`). Classroom.slug is only unique
- * per git org (`@@unique([git_org_id, slug])`), so a bare slug is ambiguous.
+ * (e.g. `dev-org/classmoji-dev-winter-2025`). The composite form is the locked
+ * addressing contract: Classroom.slug is globally unique (schema.prisma:
+ * `slug String @unique`) and would resolve on its own, but naming the owning
+ * org keeps a reference self-describing and makes a caller who means another
+ * org's classroom fail loudly instead of landing somewhere unexpected.
  */
 export function parseClassroomRef(ref: unknown): ClassroomRef {
   if (typeof ref !== 'string') {
