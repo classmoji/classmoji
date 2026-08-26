@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { useFetcher, Link, Outlet, useSearchParams, useNavigate } from 'react-router';
+import { useFetcher, Link, Outlet, useSearchParams, useNavigate, useLocation } from 'react-router';
 import { Table, Button, Input, Select, Switch, Tooltip } from 'antd';
 import { IconPlus, IconEyeOff, IconLock, IconWorld, IconMenu2, IconSearch } from '@tabler/icons-react';
 import { assertClassroomAccess, assertClassroomMutationAllowed } from '~/utils/helpers';
@@ -132,6 +132,10 @@ export default function AdminPages({ loaderData }: Route.ComponentProps) {
   const [searchText, setSearchText] = useState('');
   const navigate = useNavigate();
   const callout = useCallout();
+  // This route is served under more than one prefix (/admin and /teacher — both
+  // tiers the loader and action already allow), so links are built from the
+  // prefix the user actually arrived on rather than a hardcoded '/admin'.
+  const rolePrefix = useLocation().pathname.split('/')[1];
 
   // Show toast notification after delete (from redirect)
   useEffect(() => {
@@ -205,7 +209,7 @@ export default function AdminPages({ loaderData }: Route.ComponentProps) {
       sorter: (a: PageRecord, b: PageRecord) => a.title.localeCompare(b.title),
       render: (title: string, record: PageRecord) => (
         <Link
-          to={`/admin/${classSlug}/pages/${record.id}`}
+          to={`/${rolePrefix}/${classSlug}/pages/${record.id}`}
           className="font-medium !text-gray-600 dark:text-gray-100 hover:text-gray-900 dark:hover:text-gray-100"
         >
           {title}
@@ -305,7 +309,7 @@ export default function AdminPages({ loaderData }: Route.ComponentProps) {
       render: (_: unknown, record: PageRecord) => (
         <TableActionButtons
           onEdit={() => {
-            navigate(`/admin/${classSlug}/pages/${record.id}`);
+            navigate(`/${rolePrefix}/${classSlug}/pages/${record.id}`);
           }}
           onDelete={() =>
             fetcher.submit({ intent: 'delete', pageId: record.id }, { method: 'post' })
@@ -331,7 +335,7 @@ export default function AdminPages({ loaderData }: Route.ComponentProps) {
             onChange={e => setSearchText(e.target.value)}
             style={{ width: 260 }}
           />
-          <Link to={`/admin/${classSlug}/pages/new`} data-tour="pages-new">
+          <Link to={`/${rolePrefix}/${classSlug}/pages/new`} data-tour="pages-new">
             <Button type="primary" icon={<IconPlus size={16} />}>
               New Page
             </Button>

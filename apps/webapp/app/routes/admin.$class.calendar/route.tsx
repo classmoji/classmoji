@@ -3,7 +3,7 @@ import { Button, Modal } from 'antd';
 import { PlusOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import invariant from 'tiny-invariant';
-import { data, useFetcher, useParams } from 'react-router';
+import { data, useFetcher, useLocation, useParams } from 'react-router';
 import { ClassmojiService } from '@classmoji/services';
 import { useCallout } from '@classmoji/ui-components';
 import getPrisma from '@classmoji/database';
@@ -329,6 +329,10 @@ const AdminCalendar = ({ loaderData }: Route.ComponentProps) => {
   const fetcher = useFetcher();
   const eventsFetcher = useFetcher();
   const callout = useCallout();
+  // Resource links point back into the route tree the user is already in. This
+  // route is served under every prefix its loader and action allow (/admin and
+  // /teacher), so the prefix is read off the URL rather than hardcoded.
+  const rolePrefix = useLocation().pathname.split('/')[1];
 
   const [addModalOpen, setAddModalOpen] = useState(false);
   const [addEventDefaults, setAddEventDefaults] = useState<AddEventDefaults | null>(null);
@@ -581,6 +585,7 @@ const AdminCalendar = ({ loaderData }: Route.ComponentProps) => {
             onDelete={handleDeleteEvent as Parameters<typeof EditEventModal>[0]['onDelete']}
             loading={loading}
             classSlug={classSlug!}
+            rolePrefix={rolePrefix}
             slidesUrl={slidesUrl}
             pagesUrl={pagesUrl}
             pages={pages}
@@ -605,7 +610,7 @@ const AdminCalendar = ({ loaderData }: Route.ComponentProps) => {
             <EventLinks
               event={selectedEvent}
               classSlug={classSlug}
-              rolePrefix="admin"
+              rolePrefix={rolePrefix}
               slidesUrl={slidesUrl}
               pagesUrl={pagesUrl}
             />

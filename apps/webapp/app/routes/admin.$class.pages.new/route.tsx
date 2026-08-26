@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { useNavigate, useFetcher } from 'react-router';
+import { useNavigate, useFetcher, useLocation } from 'react-router';
 import { Form, Button, Alert, Modal, Tabs } from 'antd';
 import { FileTextOutlined, UploadOutlined } from '@ant-design/icons';
 import { assertClassroomAccess, assertClassroomMutationAllowed } from '~/utils/helpers';
@@ -188,6 +188,10 @@ export default function NewPage({ loaderData }: Route.ComponentProps) {
   const navigate = useNavigate();
   const { opened, close } = useRouteDrawer({});
   const callout = useCallout();
+  // Served under every prefix the loader and action already allow (/admin and
+  // /teacher), so the redirect targets and the submit target follow the prefix
+  // the user arrived on. Posting to the wrong prefix would miss this action.
+  const rolePrefix = useLocation().pathname.split('/')[1];
   const [form] = Form.useForm();
   const [activeTab, setActiveTab] = useState('create-blank');
   const [importFiles, setImportFiles] = useState<{ markdown: File | null; images: File[] }>({
@@ -223,9 +227,9 @@ export default function NewPage({ loaderData }: Route.ComponentProps) {
   useEffect(() => {
     if (fetcher.state === 'idle' && fetcher.data?.created && fetcher.data.page && !batchProgress) {
       callout.show({ variant: 'success', title: 'Page created successfully!' });
-      navigate(`/admin/${classroom.slug}/pages/${fetcher.data.page.id}`);
+      navigate(`/${rolePrefix}/${classroom.slug}/pages/${fetcher.data.page.id}`);
     }
-  }, [fetcher.state, fetcher.data, navigate, classroom.slug, batchProgress]);
+  }, [fetcher.state, fetcher.data, navigate, classroom.slug, batchProgress, rolePrefix]);
 
   // Handle batch import - process pages one by one with progress
   const handleBatchImport = async () => {
@@ -305,7 +309,7 @@ export default function NewPage({ loaderData }: Route.ComponentProps) {
           title: `Successfully imported ${total} page${total !== 1 ? 's' : ''}!`,
         });
       }
-      navigate(`/admin/${classroom.slug}/pages`);
+      navigate(`/${rolePrefix}/${classroom.slug}/pages`);
     } catch (err: unknown) {
       console.error('Batch import failed:', err);
       callout.show({
@@ -343,7 +347,7 @@ export default function NewPage({ loaderData }: Route.ComponentProps) {
     fetcher.submit(formData, {
       method: 'post',
       encType: 'multipart/form-data',
-      action: `/admin/${classroom.slug}/pages/new`,
+      action: `/${rolePrefix}/${classroom.slug}/pages/new`,
     });
   };
 
