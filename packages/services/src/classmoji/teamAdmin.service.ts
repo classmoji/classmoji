@@ -349,13 +349,18 @@ const toSummary = (team: { id: string; name: string; slug: string; is_visible: b
  * provider team is deleted again and the call is refused, so no local row is
  * ever created on a slug that the pre-flight checks would have rejected.
  *
- * `isVisible` maps to Team.is_visible. It defaults to false (the schema
- * default, and what the "Secret" option in the web form has always meant — the
- * form's choice previously had no effect and every team was stored visible).
- * The field is currently WRITE-ONLY across the product: the webapp never reads
- * it, and the MCP team list shows a student their own teams and the teaching
- * team every team, without consulting the flag. Whether it should drive a read
- * path again is an open product question — hence the column stays.
+ * `isVisible` maps to Team.is_visible and defaults to false here, which is the
+ * schema default and what the "Secret" option in the web form has always meant.
+ * That default is this path's, not the product's: teams a student forms for
+ * themselves (team.createWithMembershipAndTag) and teams brought in by the
+ * GitHub Classroom import are both stored is_visible = true.
+ *
+ * No read path GATES on the flag anywhere in the product. Several places read
+ * it and echo it back — the MCP teams resource returns it on each row, and
+ * team_create reports it — but nothing filters or hides a team by it: the MCP
+ * team list shows a student their own teams and the teaching team every team,
+ * whatever the flag says. Whether it should drive a read path again is an open
+ * product question, which is why the column stays.
  *
  * Tags are attached individually and reported per tag: creating the team
  * succeeds even if some tags could not be attached.

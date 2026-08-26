@@ -143,8 +143,10 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
         const { tagsFailed } = await ClassmojiService.teamAdmin.createTeam({
           classroomId: classroom.id,
           name,
-          // The form's "Secret" option finally has an effect: only "closed"
-          // (Visible) stores the team as visible to non-members.
+          // The form's choice is now carried through to Team.is_visible instead
+          // of being dropped — only "closed" (Visible) stores the team visible.
+          // The flag is recorded and echoed back, but no read path gates on it
+          // today, so the choice does not yet change who sees the team.
           isVisible: visibility === 'closed',
           tagIds: tags ?? [],
         });

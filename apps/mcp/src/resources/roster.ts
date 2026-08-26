@@ -19,10 +19,11 @@
  *   rows; the student team view (student.$class.repos_.$repo.team) narrows to
  *   {id,name,login,provider_id}. Mirror the narrow select for everyone.
  *   Tiers: the teaching team sees every team in the classroom; a STUDENT sees
- *   the teams they are a member of, and only those. The web gives students no
- *   classroom-wide team list at all, so own-teams-only is the closest mirror;
- *   the self-formed team flow (student.$class.repos_.$repo.team) resolves its
- *   candidate teams by TAG through team.findByTagId and does not read this
+ *   the teams they are a member of, and only those. The web has no
+ *   classroom-wide team list for students, so own-teams-only is the closest
+ *   mirror. It does show a student teams they have not joined in one place —
+ *   the self-formed team flow (student.$class.repos_.$repo.team) — but that
+ *   scopes its candidates by TAG through team.findByTagId and never reads this
  *   resource, so it is unaffected.
  */
 
@@ -106,8 +107,10 @@ export const teamsResource: ResourceDefinition = {
 
     const viewerId = ctx.viewer.userId;
     // A student's team list is their OWN teams. Membership is the whole test —
-    // `is_visible` does not widen it, matching the web, which offers students
-    // no classroom-wide team list.
+    // `is_visible` does not widen it. The web has no classroom-wide team list
+    // for students; the one place it shows a student teams they are not in is
+    // the tag-scoped join flow, which selects candidates by TAG
+    // (team.findByTagId) rather than by this classroom-wide listing.
     const visible =
       role === 'STUDENT'
         ? teams.filter(t => (t.memberships ?? []).some(m => m.user?.id === viewerId))
