@@ -8,8 +8,8 @@ import { PrismaClient } from '@prisma/client';
  * pre-create the user + a `github` account row carrying the local token, so the
  * /test-login route's DB-first lookup succeeds and never calls the GitHub API.
  *
- * All three test roles (owner/ta/student) resolve to prof-classmoji and share
- * one token (GITHUB_PROF_TOKEN), so a single account row covers every role.
+ * Each Playwright role gets its own identity and token, so a single account row
+ * per user covers the roles that user holds.
  *
  * Run:  npx dotenv -e .env -- node packages/database/scripts/seed-test-user.js
  */
@@ -21,6 +21,7 @@ const TEST_CLASSROOM = process.env.TEST_CLASSROOM || 'classmoji-dev-winter-2025'
  * One row per Playwright auth role. Each maps a (login, github id, token) to a
  * SINGLE classroom role so role-based access/denial tests are meaningful:
  *   - owner      = prof-classmoji  → OWNER (full instructor)
+ *   - teacher    = fake-teacher    → TEACHER only   (NON-owner)
  *   - assistant  = fake-ta         → ASSISTANT only (NON-owner)
  *   - student    = fake-student-1  → STUDENT only   (NON-owner)
  * Distinct tokens make /test-login's DB-first lookup resolve to distinct users.
@@ -41,6 +42,18 @@ const ROLES = [
     name: 'Dev TA',
     email: 'ta@dev.local',
     roles: ['ASSISTANT'],
+  },
+  {
+    // Matches the fake-teacher identity seeded by seed.js (provider_id
+    // 10000005). TEACHER is its own authz tier, so this user holds that role
+    // and nothing else — a second membership here would make every
+    // "denied for a teacher" assertion pass vacuously.
+    login: process.env.TEST_TEACHER_USER_LOGIN || 'fake-teacher',
+    githubId: process.env.TEST_TEACHER_USER_ID || '10000005',
+    token: process.env.GITHUB_INSTRUCTOR_TOKEN,
+    name: 'Dev Teacher',
+    email: 'teacher@dev.local',
+    roles: ['TEACHER'],
   },
   {
     login: process.env.TEST_STUDENT_USER_LOGIN || 'fake-student-1',

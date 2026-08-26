@@ -62,6 +62,17 @@ export default defineConfig({
       },
     },
 
+    // Teacher tests
+    {
+      name: 'teacher-tests',
+      testDir: './tests/teacher',
+      dependencies: ['auth-setup'],
+      use: {
+        ...devices['Desktop Chrome'],
+        storageState: './tests/.auth/teacher.json',
+      },
+    },
+
     // Assistant tests
     {
       name: 'assistant-tests',

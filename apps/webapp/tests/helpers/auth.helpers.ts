@@ -3,10 +3,12 @@ import { TEST_USER, TEST_ORG, ROLE_TEST_USERS, TestRole } from './env.helpers';
 // Import the actual cookie from the app to use correct serialization
 import { userCookie } from '../../app/utils/cookies.ts';
 
+export type TestUserRole = 'OWNER' | 'TEACHER' | 'ASSISTANT' | 'STUDENT';
+
 export interface TestUser {
   id: string;
   login: string;
-  role: 'OWNER' | 'ASSISTANT' | 'STUDENT';
+  role: TestUserRole;
   token: string;
   expiresAt: string;
 }
@@ -50,6 +52,13 @@ export const TEST_USERS: Record<TestRole, TestUser> = {
     role: 'OWNER',
     token: getTokenForRole('owner'),
     expiresAt: new Date(Date.now() + 8 * 60 * 60 * 1000).toISOString(), // 8 hours
+  },
+  teacher: {
+    id: ROLE_TEST_USERS.teacher.id,
+    login: ROLE_TEST_USERS.teacher.login,
+    role: 'TEACHER',
+    token: getTokenForRole('teacher'),
+    expiresAt: new Date(Date.now() + 8 * 60 * 60 * 1000).toISOString(),
   },
   assistant: {
     id: ROLE_TEST_USERS.assistant.id,
@@ -151,13 +160,12 @@ export function parseAuthCookie(cookieValue: string): Partial<TestUser> | null {
 /**
  * Get the dashboard URL for a specific role
  */
-export function getDashboardUrl(
-  role: 'OWNER' | 'ASSISTANT' | 'STUDENT',
-  org: string = TEST_ORG
-): string {
+export function getDashboardUrl(role: TestUserRole, org: string = TEST_ORG): string {
   switch (role) {
     case 'OWNER':
       return `/admin/${org}/dashboard`;
+    case 'TEACHER':
+      return `/teacher/${org}/dashboard`;
     case 'ASSISTANT':
       return `/assistant/${org}/dashboard`;
     case 'STUDENT':
@@ -168,13 +176,12 @@ export function getDashboardUrl(
 /**
  * Get the base route prefix for a specific role
  */
-export function getRoutePrefix(
-  role: 'OWNER' | 'ASSISTANT' | 'STUDENT',
-  org: string = TEST_ORG
-): string {
+export function getRoutePrefix(role: TestUserRole, org: string = TEST_ORG): string {
   switch (role) {
     case 'OWNER':
       return `/admin/${org}`;
+    case 'TEACHER':
+      return `/teacher/${org}`;
     case 'ASSISTANT':
       return `/assistant/${org}`;
     case 'STUDENT':

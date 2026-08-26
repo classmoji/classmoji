@@ -6,6 +6,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 // evaluate (vi.hoisted runs first). identityFingerprint only hashes them.
 vi.hoisted(() => {
   process.env.GITHUB_PROF_TOKEN ||= 'unit-prof-token';
+  process.env.GITHUB_INSTRUCTOR_TOKEN ||= 'unit-instructor-token';
   process.env.GITHUB_TA_TOKEN ||= 'unit-ta-token';
   process.env.GITHUB_STUDENT_TOKEN ||= 'unit-student-token';
 });

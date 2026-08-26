@@ -31,6 +31,7 @@ setup.describe.configure({ mode: 'serial' });
  */
 const ROLE_TO_LOGIN_PARAM: Record<TestRole, string> = {
   owner: 'admin',
+  teacher: 'teacher',
   assistant: 'ta',
   student: 'student',
 };
@@ -46,6 +47,7 @@ const ROLE_TO_LOGIN_PARAM: Record<TestRole, string> = {
  *
  * Storage states saved:
  * - owner.json: Admin/owner role
+ * - teacher.json: Teacher role
  * - assistant.json: Teaching assistant role
  * - student.json: Student role
  */
@@ -72,7 +74,9 @@ for (const [role, user] of Object.entries(TEST_USERS) as [
       // This avoids GitHub API rate limiting issues
       console.log(`🔐 Logging in as ${role} via /test-login?role=${loginParam}`);
 
-      const dashboardUrlPattern = new RegExp(`/(admin|assistant|student)/${TEST_CLASSROOM}`);
+      const dashboardUrlPattern = new RegExp(
+        `/(admin|teacher|assistant|student)/${TEST_CLASSROOM}`
+      );
 
       // Navigate and wait for redirect to complete
       await page.goto(`/test-login?role=${loginParam}`, { timeout: 30000 });
@@ -108,20 +112,21 @@ for (const [role, user] of Object.entries(TEST_USERS) as [
 }
 
 /**
- * Guard: the three role sessions MUST resolve to three DISTINCT users.
+ * Guard: every role session MUST resolve to a DISTINCT user.
  *
- * This is the backstop for the role-collapse footgun: if the TA/student tokens
- * (or TEST_*_USER_* config) accidentally point at the same GitHub account as the
- * owner, every `403 for non-owner` assertion would pass while actually exercising
- * the OWNER. We read each saved storage state's `classmoji.session_token`, look up
- * the session's user_id in the DB, and fail loudly on any collision — rather than
- * letting the whole suite go green against a single identity.
+ * This is the backstop for the role-collapse footgun: if the teacher/TA/student
+ * tokens (or TEST_*_USER_* config) accidentally point at the same GitHub account
+ * as the owner, every `403 for non-owner` assertion would pass while actually
+ * exercising the OWNER. We read each saved storage state's
+ * `classmoji.session_token`, look up the session's user_id in the DB, and fail
+ * loudly on any collision — rather than letting the whole suite go green against
+ * a single identity.
  *
- * Runs last (serial mode) so all three state files exist.
+ * Runs last (serial mode) so all state files exist.
  */
 setup('verify distinct role identities', async () => {
   const prisma = getTestPrisma();
-  const roles: TestRole[] = ['owner', 'assistant', 'student'];
+  const roles: TestRole[] = ['owner', 'teacher', 'assistant', 'student'];
   const resolved: Record<string, string> = {};
 
   for (const role of roles) {
@@ -144,7 +149,8 @@ setup('verify distinct role identities', async () => {
   expect(
     new Set(ids).size,
     `Role sessions must resolve to distinct users but got ${JSON.stringify(resolved)}. ` +
-      `Check GITHUB_{PROF,TA,STUDENT}_TOKEN and TEST_{TA,STUDENT}_USER_* — at least two roles ` +
-      `share one GitHub identity, which would make every role-gating/403 assertion vacuous.`
-  ).toBe(3);
+      `Check GITHUB_{PROF,INSTRUCTOR,TA,STUDENT}_TOKEN and TEST_{TEACHER,TA,STUDENT}_USER_* — ` +
+      `at least two roles share one GitHub identity, which would make every role-gating/403 ` +
+      `assertion vacuous.`
+  ).toBe(roles.length);
 });
