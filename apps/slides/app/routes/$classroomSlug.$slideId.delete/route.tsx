@@ -12,6 +12,7 @@ import { assertSlideAccess } from '@classmoji/auth/server';
 import { slideService } from '@classmoji/services/slides';
 import { useUser } from '~/root';
 import { deleteSlideVideos } from '~/utils/cloudinaryService.server';
+import { webappClassUrl } from '~/utils/webappLinks';
 
 export const loader = async ({
   params,
@@ -25,7 +26,7 @@ export const loader = async ({
 
   // Authorization: require edit permission to delete slides
   // Uses same permissions as editing (owner/teacher/assistant with team_edit)
-  await assertSlideAccess({
+  const { membership } = await assertSlideAccess({
     request,
     slideId,
     accessType: 'edit',
@@ -76,6 +77,15 @@ export const loader = async ({
     otherSlidesUsingTheme: slideInfo.otherSlidesUsingTheme || 0,
     slideList: slideInfo.slideList || [],
     webappUrl: process.env.WEBAPP_URL || 'http://localhost:3000',
+    // Where "Cancel" and "Back to slides list" go. Built from the role the
+    // server resolved, because each webapp role tree is gated to its own role —
+    // the /admin tree is OWNER-only, so a teacher sent there gets a 403.
+    slidesListUrl: webappClassUrl(
+      process.env.WEBAPP_URL || 'http://localhost:3000',
+      membership?.role,
+      classroomSlug,
+      'slides'
+    ),
   };
 };
 
@@ -93,7 +103,7 @@ export const action = async ({
   const deleteTheme = formData.get('deleteTheme') === 'true';
 
   // Authorization: require edit permission to delete slides
-  const { slide } = await assertSlideAccess({
+  const { slide, membership } = await assertSlideAccess({
     request,
     slideId,
     accessType: 'edit',
@@ -109,9 +119,11 @@ export const action = async ({
   try {
     await slideService.deleteSlide({ slideId, deleteTheme, onDeleteVideos: deleteSlideVideos });
 
-    // Redirect back to webapp slides list
+    // Redirect back to webapp slides list, in the acting role's own tree: the
+    // webapp's /admin routes are OWNER-only, so a teacher or assistant landing
+    // there after a successful delete would be bounced by the role gate.
     const webappUrl = process.env.WEBAPP_URL || 'http://localhost:3000';
-    return redirect(`${webappUrl}/admin/${classroomSlug}/slides`);
+    return redirect(webappClassUrl(webappUrl, membership?.role, classroomSlug, 'slides'));
   } catch (error: unknown) {
     console.error('Failed to delete slide:', error);
     const message = error instanceof Error ? error.message : 'Failed to delete slide';
@@ -129,6 +141,7 @@ export default function DeleteSlidePage() {
     otherSlidesUsingTheme,
     slideList,
     webappUrl,
+    slidesListUrl,
   } = useLoaderData<typeof loader>();
   const userContext = useUser();
   const user = userContext?.user;
@@ -186,7 +199,7 @@ export default function DeleteSlidePage() {
             </div>
           </div>
           <a
-            href={`${webappUrl}/admin/${classroomSlug}/slides`}
+            href={slidesListUrl}
             className="text-sm text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"
           >
             Cancel
@@ -295,7 +308,7 @@ export default function DeleteSlidePage() {
             {/* Actions */}
             <div className="flex justify-end gap-3">
               <a
-                href={`${webappUrl}/admin/${classroomSlug}/slides`}
+                href={slidesListUrl}
                 className="px-4 py-2 text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-md"
               >
                 Cancel
@@ -321,7 +334,7 @@ export default function DeleteSlidePage() {
         {/* Back link */}
         <div className="mt-6 text-center">
           <a
-            href={`${webappUrl}/admin/${classroomSlug}/slides`}
+            href={slidesListUrl}
             className="text-sm text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300"
           >
             ← Back to slides list

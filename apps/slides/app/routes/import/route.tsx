@@ -14,6 +14,7 @@ import { ClassmojiService } from '@classmoji/services';
 import { getContentRepoName } from '@classmoji/utils';
 import { requireClassroomStaff } from '@classmoji/auth/server';
 import { useUser } from '~/root';
+import { webappClassUrl } from '~/utils/webappLinks';
 import { listSavedThemes } from '~/utils/themeService.server';
 import { analyzeZipForVideos } from '~/utils/zipAnalyzer';
 import VideoSelectionModal from '~/components/VideoSelectionModal';
@@ -37,7 +38,7 @@ export const loader = async ({ request }: { request: Request }) => {
   }
 
   // Authorization: require OWNER or TEACHER role to import slides
-  await requireClassroomStaff(request, classroomSlug, {
+  const { membership } = await requireClassroomStaff(request, classroomSlug, {
     resourceType: 'SLIDE_CONTENT',
   });
 
@@ -76,6 +77,15 @@ export const loader = async ({ request }: { request: Request }) => {
     savedThemes,
     slidesUrl: process.env.SLIDES_URL || 'http://localhost:6500',
     webappUrl: process.env.WEBAPP_URL || 'http://localhost:3000',
+    // Where "Cancel" goes. Built from the role the server resolved, because
+    // each webapp role tree is gated to its own role — the /admin tree is
+    // OWNER-only, so a teacher sent there gets a 403.
+    slidesListUrl: webappClassUrl(
+      process.env.WEBAPP_URL || 'http://localhost:3000',
+      membership?.role,
+      classroomSlug,
+      'slides'
+    ),
   };
 };
 
@@ -83,7 +93,7 @@ export const loader = async ({ request }: { request: Request }) => {
 // and stream progress via SSE
 
 export default function ImportPage() {
-  const { classroomSlug, classroom, repositories, savedThemes, webappUrl } =
+  const { classroomSlug, classroom, repositories, savedThemes, webappUrl, slidesListUrl } =
     useLoaderData<typeof loader>();
   const userContext = useUser();
   const user = userContext?.user;
@@ -297,7 +307,7 @@ export default function ImportPage() {
             </p>
           </div>
           <a
-            href={`${webappUrl}/admin/${classroomSlug}/slides`}
+            href={slidesListUrl}
             className="text-sm text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"
           >
             Cancel
@@ -572,7 +582,7 @@ export default function ImportPage() {
             {/* Submit Button */}
             <div className="flex justify-end gap-3">
               <a
-                href={`${webappUrl}/admin/${classroomSlug}/slides`}
+                href={slidesListUrl}
                 className="px-4 py-2 text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-md"
               >
                 Cancel
