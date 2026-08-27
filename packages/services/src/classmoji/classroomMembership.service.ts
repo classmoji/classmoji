@@ -327,7 +327,10 @@ export const updateById = async (id: string, updates: Prisma.ClassroomMembership
  *
  * This is opt-in: `updateById` and all of its existing callers are unchanged.
  *
- * Four fields are deliberately not updatable here:
+ * The payload is an ALLOWLIST, enforced at runtime rather than only in the
+ * type. `Omit<...>` is erased at compile time and every caller's payload
+ * originates in `request.json()`, whose type is `any` — so the type says
+ * nothing about what actually arrives. What the allowlist keeps out:
  *
  * - `role`, because the last-owner guard lives in `updateById`/`update` and a
  *   second copy of it would be a second place to forget it.
@@ -336,22 +339,35 @@ export const updateById = async (id: string, updates: Prisma.ClassroomMembership
  *   inside the authorized classroom and then re-parent the row out of it —
  *   precisely the move this function exists to prevent.
  *
+ * An unexpected key THROWS rather than being dropped: silently ignoring one
+ * would turn a future `is_grader` write into a no-op that still reported
+ * success. To add a field here, add it to UPDATABLE_FIELDS deliberately.
+ *
  * @param {string} id - UUID of the membership
  * @param {string} classroomId - UUID of the Classroom the membership must be in
- * @param {Object} updates - Fields to update, excluding the identity columns
+ * @param {Object} updates - Fields to update, from UPDATABLE_FIELDS
  * @returns {Promise<boolean>} - true when exactly one row was updated
  */
+const UPDATABLE_FIELDS = ['letter_grade', 'comment'] as const;
+
+type UpdatableField = (typeof UPDATABLE_FIELDS)[number];
+
 export const updateInClassroom = async (
   id: string,
   classroomId: string,
-  updates: Omit<
-    Prisma.ClassroomMembershipUncheckedUpdateInput,
-    'role' | 'id' | 'classroom_id' | 'user_id'
-  >
+  updates: Pick<Prisma.ClassroomMembershipUncheckedUpdateInput, UpdatableField>
 ) => {
+  const data: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(updates)) {
+    if (!(UPDATABLE_FIELDS as readonly string[]).includes(key)) {
+      throw new Error(`updateInClassroom cannot update "${key}"`);
+    }
+    data[key] = value;
+  }
+
   const { count } = await getPrisma().classroomMembership.updateMany({
     where: { id, classroom_id: classroomId },
-    data: updates,
+    data,
   });
   return count === 1;
 };

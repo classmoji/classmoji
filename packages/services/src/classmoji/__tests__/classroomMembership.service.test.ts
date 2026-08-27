@@ -8,6 +8,7 @@ const findFirstMock = vi.fn();
 const findUniqueMock = vi.fn();
 const countMock = vi.fn();
 const updateMock = vi.fn();
+const updateManyMock = vi.fn();
 const deleteManyMock = vi.fn();
 const deleteMock = vi.fn();
 const queryRawMock = vi.fn();
@@ -22,6 +23,7 @@ const client = {
     findUnique: (...args: unknown[]) => findUniqueMock(...args),
     count: (...args: unknown[]) => countMock(...args),
     update: (...args: unknown[]) => updateMock(...args),
+    updateMany: (...args: unknown[]) => updateManyMock(...args),
     deleteMany: (...args: unknown[]) => deleteManyMock(...args),
     delete: (...args: unknown[]) => deleteMock(...args),
   },
@@ -42,12 +44,14 @@ beforeEach(() => {
   findUniqueMock.mockReset();
   countMock.mockReset();
   updateMock.mockReset();
+  updateManyMock.mockReset();
   deleteManyMock.mockReset();
   deleteMock.mockReset();
   queryRawMock.mockReset();
   transactionMock.mockClear();
 
   updateMock.mockResolvedValue({ id: 'm1' });
+  updateManyMock.mockResolvedValue({ count: 1 });
   deleteManyMock.mockResolvedValue({ count: 1 });
   deleteMock.mockResolvedValue({ id: 'm1' });
   queryRawMock.mockResolvedValue([{ id: 'c1' }]);
@@ -233,6 +237,64 @@ describe('updateById', () => {
     expect(findUniqueMock).not.toHaveBeenCalled();
     expect(countMock).not.toHaveBeenCalled();
     expect(updateMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+/**
+ * The classroom-bound membership write.
+ *
+ * Its callers are route actions whose payload starts life as `request.json()`,
+ * so the compile-time shape of `updates` guarantees nothing about what arrives
+ * at runtime. The allowlist is what actually holds — in particular against a
+ * `classroom_id` in the payload, which on an updateMany would match inside the
+ * authorized classroom and then re-parent the row out of it.
+ */
+describe('updateInClassroom', () => {
+  it('binds the write to both the membership id and the classroom', async () => {
+    const updated = await membershipService.updateInClassroom('m1', 'c1', {
+      letter_grade: 'A-',
+    });
+
+    expect(updated).toBe(true);
+    expect(updateManyMock).toHaveBeenCalledExactlyOnceWith({
+      where: { id: 'm1', classroom_id: 'c1' },
+      data: { letter_grade: 'A-' },
+    });
+  });
+
+  it('reports false when no row matched, rather than throwing', async () => {
+    // How a membership from another classroom is refused: the id is real, the
+    // binding is not, so the update matches nothing.
+    updateManyMock.mockResolvedValue({ count: 0 });
+
+    expect(await membershipService.updateInClassroom('m1', 'c1', { comment: 'x' })).toBe(false);
+  });
+
+  it.each([
+    ['classroom_id', 'would re-parent the row out of the classroom it is bound to'],
+    ['role', 'would bypass the last-owner guard that lives in update/updateById'],
+    ['id', 'is part of the binding'],
+    ['user_id', 'is part of the binding'],
+  ])('refuses a payload carrying %s — it %s', async field => {
+    await expect(
+      membershipService.updateInClassroom('m1', 'c1', {
+        comment: 'ok',
+        [field]: 'smuggled',
+      } as Parameters<typeof membershipService.updateInClassroom>[2])
+    ).rejects.toThrow(field);
+
+    // Refused BEFORE the query, so no partial write lands.
+    expect(updateManyMock).not.toHaveBeenCalled();
+  });
+
+  it('throws on an unknown field instead of silently dropping it', async () => {
+    // A silent drop would make a future is_grader write a no-op that still
+    // reported success — worse than refusing it.
+    await expect(
+      membershipService.updateInClassroom('m1', 'c1', {
+        is_grader: true,
+      } as Parameters<typeof membershipService.updateInClassroom>[2])
+    ).rejects.toThrow('is_grader');
   });
 });
 
