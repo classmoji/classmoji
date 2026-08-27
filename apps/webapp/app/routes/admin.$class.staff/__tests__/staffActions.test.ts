@@ -71,15 +71,22 @@ const CLASSROOM = { id: 'class-1', slug: CLASS_SLUG, status: 'ACTIVE' };
  * The fetcher posts JSON and names the branch in the query string
  * (`action: '?/createStaff'`), which is how remix-utils' namedAction routes it.
  */
-const run = (name: string, body: Record<string, unknown>, method = 'POST') =>
+const runRaw = (name: string, body: string, method = 'POST') =>
   action({
     params: { class: CLASS_SLUG },
     request: new Request(`http://localhost/admin/${CLASS_SLUG}/staff?/${name}`, {
       method,
-      body: JSON.stringify(body),
+      body,
       headers: { 'Content-Type': 'application/json' },
     }),
-  } as unknown as Parameters<typeof action>[0]) as Promise<{ error?: string; success?: string }>;
+  } as unknown as Parameters<typeof action>[0]) as Promise<{
+    error?: string;
+    success?: string;
+    action?: string;
+  }>;
+
+const run = (name: string, body: Record<string, unknown>, method = 'POST') =>
+  runRaw(name, JSON.stringify(body), method);
 
 beforeEach(() => {
   for (const m of Object.values(mocks)) m.mockReset();
@@ -306,5 +313,124 @@ describe('staff action — role-scoped update and removal', () => {
 
     expect(mocks.removeStaff).not.toHaveBeenCalled();
     expect(result.error).toBe('That is not a teaching-staff role.');
+  });
+});
+
+// ─── The rest of the body gets the same treatment as the role ───────────────
+
+describe('staff action — the sibling body fields', () => {
+  /**
+   * `role` was validated and its siblings were not, so a login or a grader flag
+   * of the wrong type reached the service and threw — a 500 through the route
+   * error boundary rather than the inline callout the role branch produces. The
+   * whole body is client input; all of it is checked the same way.
+   */
+
+  it('refuses a login that is not a string, without calling the service', async () => {
+    const result = await run('createStaff', { login: { toString: 'nope' }, role: 'ASSISTANT' });
+
+    expect(mocks.addStaff).not.toHaveBeenCalled();
+    expect(result.error).toBe('Enter the GitHub username of the person to add.');
+  });
+
+  it('refuses a blank login', async () => {
+    const result = await run('createStaff', { login: '   ', role: 'ASSISTANT' });
+
+    expect(mocks.addStaff).not.toHaveBeenCalled();
+    expect(result.error).toBeTruthy();
+  });
+
+  it('refuses a login with whitespace in it — that is never one account', async () => {
+    const result = await run('createStaff', { login: 'ada lovelace', role: 'ASSISTANT' });
+
+    expect(mocks.addStaff).not.toHaveBeenCalled();
+    expect(result.error).toBeTruthy();
+  });
+
+  it('trims the login and drops a leading @, as the form does', async () => {
+    await run('createStaff', { login: ' @ada ', role: 'ASSISTANT' });
+
+    expect(mocks.addStaff).toHaveBeenCalledWith(expect.objectContaining({ login: 'ada' }));
+  });
+
+  it('treats an absent, blank or non-string override as no override', async () => {
+    // The service falls back to the git profile on a null, which is the whole
+    // point of the fields being optional. An empty string is not nullish, so it
+    // would have been written to the user record as an empty name.
+    await run('createStaff', { login: 'ada', role: 'ASSISTANT', name: '  ', email: 42 });
+
+    expect(mocks.addStaff).toHaveBeenCalledWith(
+      expect.objectContaining({ name: null, email: null })
+    );
+  });
+
+  it('keeps a real override', async () => {
+    await run('createStaff', {
+      login: 'ada',
+      role: 'ASSISTANT',
+      name: ' Ada Lovelace ',
+      email: 'ada@school.test',
+    });
+
+    expect(mocks.addStaff).toHaveBeenCalledWith(
+      expect.objectContaining({ name: 'Ada Lovelace', email: 'ada@school.test' })
+    );
+  });
+
+  it('refuses a grader flag that is not a boolean', async () => {
+    // It lands in a Prisma boolean column, so anything else fails in the driver.
+    const result = await run(
+      'updateStaff',
+      { login: 'ada', role: 'TEACHER', isGrader: 'yes' },
+      'PUT'
+    );
+
+    expect(mocks.updateStaff).not.toHaveBeenCalled();
+    expect(result.error).toBe('The grader flag has to be yes or no.');
+  });
+
+  it('refuses a missing grader flag rather than writing a guess', async () => {
+    const result = await run('updateStaff', { login: 'ada', role: 'TEACHER' }, 'PUT');
+
+    expect(mocks.updateStaff).not.toHaveBeenCalled();
+    expect(result.error).toBeTruthy();
+  });
+
+  it('refuses a bad login on update and on removal too', async () => {
+    const updated = await run('updateStaff', { role: 'TEACHER', isGrader: true }, 'PUT');
+    const removed = await run('removeStaff', { role: 'TEACHER' }, 'DELETE');
+
+    expect(mocks.updateStaff).not.toHaveBeenCalled();
+    expect(mocks.removeStaff).not.toHaveBeenCalled();
+    expect(updated.error).toBe('Could not tell which staff member that was — reload the page.');
+    expect(removed.error).toBe('Could not tell which staff member that was — reload the page.');
+  });
+});
+
+describe('staff action — an unreadable body', () => {
+  it('answers a callout instead of throwing into the error boundary', async () => {
+    const result = await runRaw('createStaff', 'not json at all');
+
+    expect(mocks.addStaff).not.toHaveBeenCalled();
+    expect(result.error).toBe('Could not read that request. Reload the page and try again.');
+  });
+
+  it('treats valid JSON that is not an object the same way', async () => {
+    // `JSON.parse('5')` succeeds; reading `.role` off it does not throw, it just
+    // yields undefined, and the branch would then have blamed the role.
+    const result = await runRaw('createStaff', '5');
+
+    expect(mocks.addStaff).not.toHaveBeenCalled();
+    expect(result.error).toBe('Could not read that request. Reload the page and try again.');
+  });
+
+  it('names the branch the client is waiting on, so its callout resolves', async () => {
+    // notify() opens a persistent progress callout keyed by ActionTypes and the
+    // response closes it by the same key. A mismatch leaves it spinning.
+    const created = await runRaw('createStaff', '{');
+    const removed = await runRaw('removeStaff', '{', 'DELETE');
+
+    expect(created.action).toBe('save-user');
+    expect(removed.action).toBe('remove-user');
   });
 });

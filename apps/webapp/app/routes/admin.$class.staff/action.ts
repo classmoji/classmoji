@@ -27,6 +27,35 @@ const parseRole = (value: unknown): StaffRole | null =>
     : null;
 
 /**
+ * The login is client input in exactly the way the role is, so it gets the same
+ * treatment: checked here, where the answer is an inline message, rather than
+ * left to throw somewhere downstream and surface as a 500 through the route
+ * error boundary.
+ *
+ * SHAPE ONLY. Login rules differ by provider (GitHub allows alphanumerics and
+ * dashes; GitLab also dots and underscores), so this asks for a plausible
+ * single token and leaves the identity question to the provider lookup, which
+ * answers it properly with git_user_not_found.
+ */
+const parseLogin = (value: unknown): string | null => {
+  if (typeof value !== 'string') return null;
+  const login = value.replace('@', '').trim();
+  return login.length > 0 && login.length <= 100 && !/\s/.test(login) ? login : null;
+};
+
+/** The grader flag reaches a Prisma boolean column — anything else is a 500. */
+const parseGraderFlag = (value: unknown): boolean | null =>
+  typeof value === 'boolean' ? value : null;
+
+/**
+ * The instructor's optional overrides. Absent and empty both mean "use the git
+ * profile", which is what the service does with a null; anything that is not a
+ * string is not an override at all.
+ */
+const parseOverride = (value: unknown): string | null =>
+  typeof value === 'string' && value.trim().length > 0 ? value.trim() : null;
+
+/**
  * Turn a StaffServiceError into the sentence the instructor needs.
  *
  * Each of these is a different thing to go and fix, so collapsing them into one
@@ -77,7 +106,25 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
   });
   assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
 
-  const data = await request.json();
+  // namedAction picks the branch from the query string, so the branch is known
+  // even when the body is not readable — which is what decides the ActionTypes
+  // below. Getting that wrong would leave the progress callout the client
+  // opened spinning until the page unmounted, since the two are matched by it.
+  const isRemoval = new URL(request.url).search.startsWith('?/removeStaff');
+
+  let data: Record<string, unknown>;
+  try {
+    const body = await request.json();
+    if (typeof body !== 'object' || body === null || Array.isArray(body)) {
+      throw new Error('body is not an object');
+    }
+    data = body as Record<string, unknown>;
+  } catch {
+    return {
+      action: isRemoval ? ActionTypes.REMOVE_USER : ActionTypes.SAVE_USER,
+      error: 'Could not read that request. Reload the page and try again.',
+    };
+  }
 
   return namedAction(request, {
     async createStaff() {
@@ -86,6 +133,14 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
         return {
           action: ActionTypes.SAVE_USER,
           error: 'Pick a role for this staff member.',
+        };
+      }
+
+      const login = parseLogin(data.login);
+      if (!login) {
+        return {
+          action: ActionTypes.SAVE_USER,
+          error: 'Enter the GitHub username of the person to add.',
         };
       }
 
@@ -99,10 +154,10 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
         // different role here adds a membership rather than replacing theirs.
         const result = await ClassmojiService.staff.addStaff({
           classroomId: classroom.id,
-          login: data.login,
+          login,
           role,
-          name: data.name,
-          email: data.email,
+          name: parseOverride(data.name),
+          email: parseOverride(data.email),
         });
 
         if (result.alreadyExists) {
@@ -131,15 +186,31 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
         return { action: ActionTypes.SAVE_USER, error: 'That is not a teaching-staff role.' };
       }
 
+      const login = parseLogin(data.login);
+      if (!login) {
+        return {
+          action: ActionTypes.SAVE_USER,
+          error: 'Could not tell which staff member that was — reload the page.',
+        };
+      }
+
+      const isGrader = parseGraderFlag(data.isGrader);
+      if (isGrader === null) {
+        return {
+          action: ActionTypes.SAVE_USER,
+          error: 'The grader flag has to be yes or no.',
+        };
+      }
+
       try {
         // The role travels with the login: memberships are unique on
         // (classroom, user, role), so a user who holds two roles here has two
         // rows and the flag belongs to exactly one of them.
         await ClassmojiService.staff.updateStaff({
           classroomId: classroom.id,
-          login: data.login,
+          login,
           role,
-          isGrader: data.isGrader,
+          isGrader,
         });
         return {
           success: 'Staff member updated',
@@ -162,6 +233,14 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
         return { action: ActionTypes.REMOVE_USER, error: 'That is not a teaching-staff role.' };
       }
 
+      const login = parseLogin(data.login);
+      if (!login) {
+        return {
+          action: ActionTypes.REMOVE_USER,
+          error: 'Could not tell which staff member that was — reload the page.',
+        };
+      }
+
       try {
         // The service resolves the target from the DB by (classroom, login,
         // role) and builds the task payload entirely server-side; the route
@@ -170,7 +249,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
         // which is why that failure arrives here rather than inside the task.
         const { runId } = await ClassmojiService.staff.removeStaff({
           classroomId: classroom.id,
-          login: data.login,
+          login,
           role,
         });
 
