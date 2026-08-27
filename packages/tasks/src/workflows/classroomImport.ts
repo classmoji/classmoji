@@ -238,25 +238,33 @@ function phaseProgress(
 }
 
 /**
- * Re-verify that the requester still OWNS the source classroom, at the moment
- * the copy actually happens.
+ * Re-verify that the requester still owns or teaches the source classroom, at
+ * the moment the copy actually happens.
  *
  * Defense in depth: the create-classroom action already checked this before
  * creating the row, but the copy now runs later, in a different process, from
- * data on a row. Ownership can be revoked in between, and settings can carry
- * API keys — so the task refuses rather than trusting its own input.
+ * data on a row, and the membership can be revoked in between.
+ *
+ * Membership is all this checks. The owner-only distinction — copying the
+ * source's API keys — is settled in the action, which strips the selection
+ * before it is ever persisted here (see the strip in create-classroom's
+ * action.ts). This task never applies `selections.config`; it reads
+ * `selections.content` only.
  */
-async function assertSourceOwnership(prisma: PrismaClient, job: LoadedImportJob): Promise<void> {
+export async function assertSourceAccess(
+  prisma: PrismaClient,
+  job: LoadedImportJob
+): Promise<void> {
   const membership = await prisma.classroomMembership.findFirst({
     where: {
       classroom_id: job.source_classroom_id,
       user_id: job.requested_by,
-      role: 'OWNER',
+      role: { in: ['OWNER', 'TEACHER'] },
     },
     select: { id: true },
   });
   if (!membership) {
-    throw new Error('Requester no longer owns the source classroom — import refused');
+    throw new Error('Requester no longer has access to the source classroom — import refused');
   }
 }
 
@@ -797,7 +805,7 @@ async function runImport(prisma: PrismaClient, importJobId: string) {
   {
     let job = await loadJob(prisma, importJobId);
 
-    await assertSourceOwnership(prisma, job);
+    await assertSourceAccess(prisma, job);
 
     await prisma.importJob.update({
       where: { id: job.id },

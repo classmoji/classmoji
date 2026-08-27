@@ -10,7 +10,7 @@ import type {
   GitOrganizationOption,
   ImportSelections,
   ModuleConfig,
-  OwnedClassroom,
+  ImportableClassroom,
 } from './types';
 
 interface StepReviewProps {
@@ -19,20 +19,27 @@ interface StepReviewProps {
   slugPreview: string;
   contentRepoName?: string | null;
   importEnabled: boolean;
-  sourceClassroom?: OwnedClassroom;
+  sourceClassroom?: ImportableClassroom;
   selectedModules: Map<string, ModuleConfig>;
   importSelections?: ImportSelections;
 }
 
 /** Distinct non-empty template refs across a classroom's repositories. */
-const distinctTemplateCount = (classroom?: OwnedClassroom): number =>
+const distinctTemplateCount = (classroom?: ImportableClassroom): number =>
   new Set((classroom?.repositories ?? []).map(m => (m.template ?? '').trim()).filter(Boolean)).size;
 
-/** Human labels for the enabled "Also copy" groups, with counts where known. */
+/**
+ * Human labels for the enabled "Also copy" groups, with counts where known.
+ *
+ * `isSourceOwner` gates the API-keys line rather than trusting the selection:
+ * the server refuses to copy keys out of a class the requester only teaches, so
+ * listing them here would promise something that is about to be stripped.
+ */
 const copySummaryParts = (
   selections: ImportSelections,
-  counts?: OwnedClassroom['_count'],
-  templateCount = 0
+  counts?: ImportableClassroom['_count'],
+  templateCount = 0,
+  isSourceOwner = false
 ): string[] => {
   const parts: string[] = [];
   if (selections.grading) parts.push('grading & late penalty');
@@ -41,12 +48,10 @@ const copySummaryParts = (
   if (selections.tokens) parts.push('tokens');
   if (selections.features) parts.push('features & appearance');
   if (selections.aiConfig) parts.push('AI config');
-  if (selections.apiKeys) parts.push('API keys');
+  if (selections.apiKeys && isSourceOwner) parts.push('API keys');
   if (selections.pages && (counts?.pages ?? 0) > 0) parts.push(`pages (${counts?.pages})`);
-  if (selections.slides && (counts?.slides ?? 0) > 0)
-    parts.push(`slide decks (${counts?.slides})`);
-  if (selections.modules && (counts?.modules ?? 0) > 0)
-    parts.push(`modules (${counts?.modules})`);
+  if (selections.slides && (counts?.slides ?? 0) > 0) parts.push(`slide decks (${counts?.slides})`);
+  if (selections.modules && (counts?.modules ?? 0) > 0) parts.push(`modules (${counts?.modules})`);
   if (selections.duplicateTemplates && templateCount > 0)
     parts.push(`private template copies (${templateCount})`);
   if (selections.calendar && (counts?.calendar_events ?? 0) > 0)
@@ -137,7 +142,8 @@ const StepReview = ({
             const parts = copySummaryParts(
               importSelections,
               sourceClassroom._count,
-              distinctTemplateCount(sourceClassroom)
+              distinctTemplateCount(sourceClassroom),
+              sourceClassroom.is_owner
             );
             return parts.length > 0 ? (
               <div className="text-sm text-gray-700 dark:text-gray-300">
