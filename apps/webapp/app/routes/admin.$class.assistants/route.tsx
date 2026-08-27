@@ -83,7 +83,9 @@ const AdminAssistants = ({ loaderData }: Route.ComponentProps) => {
 
   const handleImpersonate = async (assistant: Assistant) => {
     if (!assistant.login) {
-      callout.show({ variant: 'error', title: 'Assistant has not accepted invite.' });
+      // Reachable from teacher rows as well as assistant ones now, so the copy
+      // no longer names a single role.
+      callout.show({ variant: 'error', title: 'They have not accepted their invite yet.' });
       return;
     }
 
@@ -94,7 +96,7 @@ const AdminAssistants = ({ loaderData }: Route.ComponentProps) => {
       });
 
       if (error) {
-        throw new Error(error.message || 'Failed to view as assistant');
+        throw new Error(error.message || 'Failed to open their view');
       }
 
       // Route by the impersonated row's own role. This list spans the whole
@@ -107,7 +109,7 @@ const AdminAssistants = ({ loaderData }: Route.ComponentProps) => {
       console.error('Impersonation failed:', error);
       callout.show({
         variant: 'error',
-        title: error instanceof Error ? error.message : 'Failed to view as assistant',
+        title: error instanceof Error ? error.message : 'Failed to open their view',
       });
     } finally {
       setImpersonating(false);
@@ -218,12 +220,44 @@ const AdminAssistants = ({ loaderData }: Route.ComponentProps) => {
       key: 'actions',
       width: 200,
       render: (_: unknown, assistant: Assistant) => {
-        // Every action here acts on an ASSISTANT membership — the detail page,
-        // the impersonation target and removeAssistant all resolve one. Rows for
-        // the other staff roles are read-only until those actions are
-        // role-aware; they are managed with the staff tools meanwhile.
-        if (assistant.role !== 'ASSISTANT') {
+        // The actions here are not all equally role-aware, so they are offered
+        // per role rather than all-or-nothing:
+        //
+        // - "View as" (impersonation) already routes by the row's own role —
+        //   handleImpersonate resolves the prefix through roleSettings — so it
+        //   works for a TEACHER as well as an ASSISTANT.
+        // - The detail page requires an ASSISTANT membership outright
+        //   (admin.$class.assistants.$login rejects any other role), and
+        //   removeAssistant resolves an ASSISTANT membership too. Both stay
+        //   assistant-only until they are role-aware.
+        //
+        // OWNER rows keep no actions: stepping into another owner's session is
+        // a different question from seeing what your staff see.
+        if (assistant.role === 'OWNER') {
           return <span className="text-gray-400 dark:text-gray-500">—</span>;
+        }
+
+        const isAssistantRow = assistant.role === 'ASSISTANT';
+
+        const viewAsControl = (
+          <RequireRole roles={['OWNER']} key="view-as">
+            <div
+              onClick={e => {
+                e.stopPropagation();
+                if (!impersonating) {
+                  handleImpersonate(assistant);
+                }
+              }}
+              className={`flex items-center gap-1 text-gray-600 hover:text-gray-800 dark:text-gray-300 dark:hover:text-gray-100 cursor-pointer ${impersonating ? 'opacity-50' : ''}`}
+            >
+              <IconUserSearch size={16} />
+              <span>View as</span>
+            </div>
+          </RequireRole>
+        );
+
+        if (!isAssistantRow) {
+          return <TableActionButtons>{viewAsControl}</TableActionButtons>;
         }
 
         return (
@@ -236,20 +270,7 @@ const AdminAssistants = ({ loaderData }: Route.ComponentProps) => {
               }
             }}
           >
-            <RequireRole roles={['OWNER']}>
-              <div
-                onClick={e => {
-                  e.stopPropagation();
-                  if (!impersonating) {
-                    handleImpersonate(assistant);
-                  }
-                }}
-                className={`flex items-center gap-1 text-gray-600 hover:text-gray-800 dark:text-gray-300 dark:hover:text-gray-100 cursor-pointer ${impersonating ? 'opacity-50' : ''}`}
-              >
-                <IconUserSearch size={16} />
-                <span>View as</span>
-              </div>
-            </RequireRole>
+            {viewAsControl}
             <RequireRole roles={['OWNER']}>
               <Popconfirm
                 title="Remove Assistant"
