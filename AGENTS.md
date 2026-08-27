@@ -77,7 +77,7 @@ When working on features that span admin/assistant/student routes, avoid duplica
 Slides, pages, and ai-agent are moving toward self-contained services. When working on these, keep code consolidated within each service rather than adding cross-app dependencies. Prefer importing from shared packages (`@classmoji/services`, `@classmoji/utils`, `@classmoji/database`) over reaching into another app's internals.
 
 ### Standard Page Layout
-List/index pages (admin/student route pages with a header + table or list) should follow this uniform pattern. Reference: `apps/webapp/app/routes/admin.$class.assistants/route.tsx`.
+List/index pages (admin/student route pages with a header + table or list) should follow this uniform pattern. Reference: `apps/webapp/app/routes/admin.$class.staff/route.tsx`.
 
 ```jsx
 <div className="min-h-full relative">

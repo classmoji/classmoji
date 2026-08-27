@@ -2,9 +2,9 @@
  * Teaching-staff Service
  *
  * Add / update / remove a classroom staff member at ASSISTANT, TEACHER or
- * OWNER. Shared by the web admin.$class.assistants action (which asks for
- * ASSISTANT) and the MCP staff tools so both take one code path (same
- * precedent as roster.service.ts).
+ * OWNER. Shared by the web admin.$class.staff action and the MCP staff tools so
+ * both take one code path (same precedent as roster.service.ts). Both callers
+ * span the whole staff range.
  *
  * MULTI-ROLE SEMANTICS: memberships are unique on (classroom_id, user_id,
  * role), so a user may legitimately hold several roles in one classroom.
