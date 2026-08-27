@@ -19,6 +19,27 @@ import {
 
 export { AUTH_SECRET, COOKIE_PREFIX };
 
+/**
+ * Platform admins, by User.id, from `PLATFORM_ADMIN_USER_IDS` (comma-separated).
+ *
+ * This is a DIFFERENT axis from the Prisma `Role` enum
+ * (OWNER/TEACHER/ASSISTANT/STUDENT), which is per-classroom membership. A
+ * platform admin is global: they can see and impersonate any user in any
+ * classroom. The `/admin/:class` URL prefix means the *classroom* sense — do not
+ * conflate the two.
+ *
+ * Deliberately env-driven rather than `User.role`: better-auth checks
+ * `adminUserIds` before the role lookup, and because nothing in the app writes
+ * this list there is no in-app path to grant oneself platform admin.
+ *
+ * Read at module load, so changes need a restart. That is intentional — this is
+ * deployment configuration, not runtime state.
+ */
+export const PLATFORM_ADMIN_USER_IDS: string[] = (process.env.PLATFORM_ADMIN_USER_IDS ?? '')
+  .split(',')
+  .map(id => id.trim())
+  .filter(Boolean);
+
 // Signed sign-in-return tokens for public course sites. Re-exported from the
 // server entry for callers already importing from here; site code that must not
 // pull in betterAuth/Prisma should import '@classmoji/auth/site-return'.
@@ -273,6 +294,17 @@ async function getValidGitHubToken(userId: string): Promise<GitHubTokenResult | 
 export const auth = betterAuth({
   basePath: '/api/auth',
   baseURL: process.env.WEBAPP_URL,
+  // Previously unset, which meant better-auth trusted only `baseURL`
+  // (WEBAPP_URL). apps/admin mounts its own auth handler on a different origin,
+  // so its origin must be trusted or every auth call from it is rejected.
+  //
+  // Listing WEBAPP_URL explicitly is a no-op — better-auth already trusts
+  // baseURL — so this preserves existing behaviour for webapp/mcp/slides/pages
+  // and only adds the admin origin. Tenant/course-site hosts are deliberately
+  // NOT here: they are never auth trust origins (see ./siteReturnToken.ts).
+  trustedOrigins: [process.env.WEBAPP_URL, process.env.ADMIN_URL].filter(
+    (o): o is string => Boolean(o)
+  ),
   secret: AUTH_SECRET,
   database: prismaAdapter(getPrisma(), {
     provider: 'postgresql',
@@ -444,6 +476,14 @@ export const auth = betterAuth({
       // Allow users with 'admin' role to impersonate
       // OWNER users need to have role='admin' set in the database
       adminRoles: ['admin'],
+      // Platform admins, by user id, from the environment. better-auth checks
+      // this list BEFORE the role lookup, so it needs no migration and no DB
+      // state — and unlike `role`, nothing in the app can write it, so there is
+      // no in-app path to escalate into platform admin.
+      adminUserIds: PLATFORM_ADMIN_USER_IDS,
+      // `allowImpersonatingAdmins` is deliberately left off (defaults false):
+      // better-auth then refuses admin-on-admin takeover, which closes the
+      // escalation path of impersonating a peer admin to inherit their access.
     }),
     // OAuth 2.1 authorization server for MCP clients (discovery, dynamic client
     // registration, PKCE, consent, DB-backed access/refresh tokens). The MCP
@@ -605,6 +645,69 @@ export async function requireAuth(request: Request): Promise<AuthSessionResult> 
   }
 
   return authData;
+}
+
+export interface PlatformAdminResult {
+  userId: string;
+  user: { id: string; login: string | null; email: string | null; name: string | null };
+}
+
+/**
+ * Require the caller to be a platform admin (see PLATFORM_ADMIN_USER_IDS).
+ *
+ * Unlike every other guard in this file, this one is NOT classroom-scoped and
+ * resolves no ClassroomMembership — a platform admin is global by definition, so
+ * there is no membership to check and none is returned.
+ *
+ * Throws a bare `Response` like the classroom guards: 401 when unauthenticated,
+ * 403 when authenticated but not on the allowlist. Callers should let it
+ * propagate to the route's ErrorBoundary rather than redirecting to sign-in — a
+ * signed-in non-admin who gets redirected to login just loops.
+ *
+ * Note: denials are logged to stderr, not to AuditLog. `AuditLog.classroom_id`
+ * is non-nullable with an FK to Classroom, and a platform-scoped denial has no
+ * classroom; writing one would require a schema migration on a hot table.
+ */
+export async function requirePlatformAdmin(request: Request): Promise<PlatformAdminResult> {
+  const authData = await getAuthSession(request);
+
+  if (!authData?.userId) {
+    throw new Response('Unauthorized', {
+      status: 401,
+      headers: { 'Content-Type': 'text/plain' },
+    });
+  }
+
+  if (!PLATFORM_ADMIN_USER_IDS.includes(authData.userId)) {
+    console.warn(
+      '[requirePlatformAdmin] ACCESS_DENIED',
+      JSON.stringify({
+        user_id: authData.userId,
+        login: authData.userLogin,
+        path: new URL(request.url).pathname,
+        allowlist_configured: PLATFORM_ADMIN_USER_IDS.length > 0,
+      })
+    );
+    throw new Response('Forbidden', {
+      status: 403,
+      headers: { 'Content-Type': 'text/plain' },
+    });
+  }
+
+  const user = await getPrisma().user.findUnique({
+    where: { id: authData.userId },
+    select: { id: true, login: true, email: true, name: true },
+  });
+
+  if (!user) {
+    // Allowlisted id with no row: a stale env entry, or a deleted user.
+    throw new Response('Forbidden', {
+      status: 403,
+      headers: { 'Content-Type': 'text/plain' },
+    });
+  }
+
+  return { userId: user.id, user };
 }
 
 /**

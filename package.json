@@ -40,6 +40,9 @@
     "slides:build": "dotenv -e .env -- turbo run slides:build --filter=@classmoji/slides",
     "slides:start": "dotenv -e .env -- turbo run slides:start --filter=@classmoji/slides",
     "pages:dev": "dotenv -e .env -- turbo run pages:dev --filter=@classmoji/pages --log-prefix=none",
+    "admin:dev": "dotenv -e .env -- turbo run admin:dev --filter=@classmoji/admin --log-prefix=none",
+    "admin:build": "dotenv -e .env -- turbo run admin:build --filter=@classmoji/admin",
+    "admin:start": "dotenv -e .env -- turbo run admin:start --filter=@classmoji/admin",
     "pages:build": "dotenv -e .env -- turbo run pages:build --filter=@classmoji/pages",
     "pages:start": "dotenv -e .env -- turbo run pages:start --filter=@classmoji/pages",
     "slides:test": "dotenv -e .env -- ./scripts/devport.sh run turbo run test --filter=@classmoji/slides",
@@ -58,6 +61,7 @@
     "fly:slides": "fly deploy --config apps/slides/fly.toml --dockerfile apps/slides/Dockerfile --no-cache",
     "fly:hooks": "fly deploy --config apps/hook-station/fly.toml --dockerfile apps/hook-station/Dockerfile --no-cache",
     "fly:pages": "fly deploy --config apps/pages/fly.toml --dockerfile apps/pages/Dockerfile --no-cache",
+    "fly:admin": "fly deploy --config apps/admin/fly.toml --dockerfile apps/admin/Dockerfile --no-cache",
     "fly:ai": "fly deploy --config apps/ai-agent/fly.toml --dockerfile apps/ai-agent/Dockerfile --no-cache",
     "cleanup:github-teams": "dotenv -e .env -- node scripts/cleanup-github-teams.js",
     "commit": "cz"

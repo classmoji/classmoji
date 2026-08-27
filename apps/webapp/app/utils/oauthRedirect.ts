@@ -1,24 +1,13 @@
 /**
- * Shared validation for OAuth redirect targets.
+ * Re-export of the shared OAuth redirect guard.
  *
- * Guards the open-redirect -> XSS vector on the MCP OAuth flow: a maliciously
- * registered client could set a `javascript:` / `data:` redirect_uri that later
- * gets handed back to the consent screen and executed via
- * `window.location.href`, running attacker JS in our authenticated origin.
- * Only absolute http(s) targets are ever considered safe.
+ * The implementation moved to `@classmoji/auth/oauth-redirect` when apps/admin
+ * began mounting its own `auth.handler` — every app that does so inherits the
+ * mcp plugin's Dynamic Client Registration endpoints and needs the identical
+ * check, and a per-app copy of a security guard is a copy that drifts.
  *
- * Used both at the root cause (Dynamic Client Registration in
- * `routes/api.auth.$.ts`) and at the sink (`routes/oauth.consent/route.tsx`).
+ * Kept as a re-export so existing `~/utils/oauthRedirect` imports (the DCR
+ * interception in `routes/api.auth.$.ts`, the sink in
+ * `routes/oauth.consent/route.tsx`) and their tests keep resolving unchanged.
  */
-
-/** True only when `target` parses as an absolute http(s) URL. */
-export function isHttpRedirectUri(target: unknown): target is string {
-  if (typeof target !== 'string') return false;
-  try {
-    const { protocol } = new URL(target);
-    return protocol === 'https:' || protocol === 'http:';
-  } catch {
-    // Not an absolute, parseable URL (or a non-http scheme like javascript:).
-    return false;
-  }
-}
+export { isHttpRedirectUri } from '@classmoji/auth/oauth-redirect';
