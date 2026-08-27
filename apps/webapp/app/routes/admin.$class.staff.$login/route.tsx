@@ -8,6 +8,7 @@ import { ClassmojiService } from '@classmoji/services';
 import { useCallout } from '@classmoji/ui-components';
 import { RequireRole, StatsCard } from '~/components';
 import { requireClassroomAdmin } from '~/utils/routeAuth.server';
+import { resolveHighestMembership } from '@classmoji/auth/server';
 import { addAuditLog } from '~/utils/helpers';
 import { authClient } from '@classmoji/auth/client';
 import { getEmojiSymbol } from '@classmoji/utils';
@@ -33,7 +34,7 @@ interface ModuleAssignmentsGroup {
  * memberships. An OWNER row has no grading queue to show, and the list page
  * offers no View link on one.
  */
-const GRADING_ROLES = ['ASSISTANT', 'TEACHER'] as const;
+const GRADING_ROLES = ['TEACHER', 'ASSISTANT'] as const;
 
 export const loader = async ({ params, request }: Route.LoaderArgs) => {
   const { class: classSlug, login } = params;
@@ -52,13 +53,12 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
   }
 
   // Role-scoped on purpose: memberships are unique on (classroom, user, role),
-  // so filtering in the query is what keeps a multi-role user's OWNER row out
-  // of the answer rather than relying on which row findFirst happens to pick.
-  const membership = await ClassmojiService.classroomMembership.findByClassroomAndUser(
-    classroom.id,
-    staffUser.id,
-    [...GRADING_ROLES]
-  );
+  // so filtering by role is what keeps a multi-role user's OWNER row out of the
+  // answer. HIGHEST-first rather than the service's unordered findFirst, which
+  // handed back an arbitrary one of the two for somebody who is both a teacher
+  // and an assistant here — and the role decides both the Tag below and which
+  // prefix "View as" lands on, so arbitrary there is arbitrary in the UI.
+  const membership = await resolveHighestMembership(classroom.id, staffUser.id, [...GRADING_ROLES]);
 
   if (!membership) {
     throw new Response('User does not grade in this classroom', { status: 403 });

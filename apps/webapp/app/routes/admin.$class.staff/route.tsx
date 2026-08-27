@@ -142,7 +142,11 @@ const AdminStaff = ({ loaderData }: Route.ComponentProps) => {
         throw new Error(error.message || 'Failed to view as this staff member');
       }
 
-      navigate(`/assistant/${classSlug}`);
+      // Land on the prefix that matches the role being viewed, exactly as the
+      // detail drawer does — a teacher dropped on /assistant would be looking
+      // at the wrong shell.
+      const prefix = member.role === 'TEACHER' ? 'teacher' : 'assistant';
+      navigate(`/${prefix}/${classSlug}/dashboard`);
     } catch (error: unknown) {
       console.error('Impersonation failed:', error);
       callout.show({
@@ -294,7 +298,11 @@ const AdminStaff = ({ loaderData }: Route.ComponentProps) => {
                         }
                   }
                 >
-                  {member.role === 'ASSISTANT' && (
+                  {/* Same roles the drawer offers it for: an owner viewing as
+                      another owner would be looking at their own shell, and
+                      the impersonation prefix only has an assistant and a
+                      teacher form. */}
+                  {member.role !== 'OWNER' && (
                     <div
                       onClick={e => {
                         e.stopPropagation();

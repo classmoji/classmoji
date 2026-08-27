@@ -187,6 +187,20 @@ describe('Teaching Staff screen with canManage=true', () => {
       'data-testid="table-action-view"'
     );
   });
+
+  it('offers "View as" on the same roles the drawer does', () => {
+    // The list used to offer it on ASSISTANT alone while the drawer offered it
+    // for TEACHER too, so the same person had it in one place and not the
+    // other. Teacher in both is the intent.
+    expect(renderScreen({ staff: [ASSISTANT_ROW], canManage: true })).toContain('View as');
+    expect(renderScreen({ staff: [TEACHER_ROW], canManage: true })).toContain('View as');
+  });
+
+  it('offers no "View as" on an owner row', () => {
+    // There is no owner shell to view: the impersonation prefixes are the
+    // assistant and teacher ones.
+    expect(renderScreen({ staff: [OWNER_ROW], canManage: true })).not.toContain('View as');
+  });
 });
 
 // ─── The add form ───────────────────────────────────────────────────────────
