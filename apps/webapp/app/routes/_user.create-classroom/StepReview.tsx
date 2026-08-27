@@ -10,7 +10,7 @@ import type {
   GitOrganizationOption,
   ImportSelections,
   ModuleConfig,
-  OwnedClassroom,
+  ImportableClassroom,
 } from './types';
 
 interface StepReviewProps {
@@ -19,19 +19,19 @@ interface StepReviewProps {
   slugPreview: string;
   contentRepoName?: string | null;
   importEnabled: boolean;
-  sourceClassroom?: OwnedClassroom;
+  sourceClassroom?: ImportableClassroom;
   selectedModules: Map<string, ModuleConfig>;
   importSelections?: ImportSelections;
 }
 
 /** Distinct non-empty template refs across a classroom's repositories. */
-const distinctTemplateCount = (classroom?: OwnedClassroom): number =>
+const distinctTemplateCount = (classroom?: ImportableClassroom): number =>
   new Set((classroom?.repositories ?? []).map(m => (m.template ?? '').trim()).filter(Boolean)).size;
 
 /** Human labels for the enabled "Also copy" groups, with counts where known. */
 const copySummaryParts = (
   selections: ImportSelections,
-  counts?: OwnedClassroom['_count'],
+  counts?: ImportableClassroom['_count'],
   templateCount = 0
 ): string[] => {
   const parts: string[] = [];
@@ -43,10 +43,8 @@ const copySummaryParts = (
   if (selections.aiConfig) parts.push('AI config');
   if (selections.apiKeys) parts.push('API keys');
   if (selections.pages && (counts?.pages ?? 0) > 0) parts.push(`pages (${counts?.pages})`);
-  if (selections.slides && (counts?.slides ?? 0) > 0)
-    parts.push(`slide decks (${counts?.slides})`);
-  if (selections.modules && (counts?.modules ?? 0) > 0)
-    parts.push(`modules (${counts?.modules})`);
+  if (selections.slides && (counts?.slides ?? 0) > 0) parts.push(`slide decks (${counts?.slides})`);
+  if (selections.modules && (counts?.modules ?? 0) > 0) parts.push(`modules (${counts?.modules})`);
   if (selections.duplicateTemplates && templateCount > 0)
     parts.push(`private template copies (${templateCount})`);
   if (selections.calendar && (counts?.calendar_events ?? 0) > 0)

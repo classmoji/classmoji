@@ -143,8 +143,10 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
     useInstalledFilter = true;
   }
 
-  // Fetch the displayable orgs and the user's owned classrooms in parallel.
-  const [gitOrgs, ownedClassrooms] = await Promise.all([
+  // Fetch the displayable orgs and the classrooms this user may import FROM in
+  // parallel. Import sources are OWNER *or* TEACHER — a teacher may copy a class
+  // they teach, minus the API keys (see the strip in action.ts).
+  const [gitOrgs, importableClassrooms] = await Promise.all([
     getPrisma().gitOrganization.findMany({
       where: {
         provider: 'GITHUB',
@@ -166,7 +168,7 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
         memberships: {
           some: {
             user_id: user.id,
-            role: 'OWNER',
+            role: { in: ['OWNER', 'TEACHER'] },
           },
         },
       },
@@ -174,6 +176,13 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
         id: true,
         slug: true,
         name: true,
+        // THIS viewer's roles only, and only the role column — enough to derive
+        // `is_owner` below. A wider select would serialize every member's
+        // membership rows into the picker payload.
+        memberships: {
+          where: { user_id: user.id },
+          select: { role: true },
+        },
         git_organization: {
           select: {
             login: true,
@@ -218,16 +227,25 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
     avatar_url: avatarByProviderId.get(org.provider_id) ?? null,
   }));
 
+  // Collapse the viewer's membership rows to a single flag and DROP the rows —
+  // the picker needs "may this person copy the API keys too", nothing more.
+  // `some(OWNER)` rather than reading one row's role: roles are additive and a
+  // person may hold both OWNER and TEACHER here, in which case they are an owner.
+  const importSources = importableClassrooms.map(({ memberships, ...classroom }) => ({
+    ...classroom,
+    is_owner: memberships.some(m => m.role === 'OWNER'),
+  }));
+
   return {
     user,
     gitOrgs: gitOrgsWithAvatars,
-    ownedClassrooms,
+    importableClassrooms: importSources,
     githubAppName: process.env.GITHUB_APP_NAME,
   };
 };
 
 const CreateClassroom = ({ loaderData }: Route.ComponentProps) => {
-  const { gitOrgs, ownedClassrooms, githubAppName } = loaderData;
+  const { gitOrgs, importableClassrooms, githubAppName } = loaderData;
   const navigate = useNavigate();
   const { fetcher, notify } = useGlobalFetcher();
   const { openInstallPopup, isRefreshing } = useGitHubAppInstallPopup(githubAppName);
@@ -396,8 +414,7 @@ const CreateClassroom = ({ loaderData }: Route.ComponentProps) => {
 
     // Build import config if applicable
     let importConfig = null;
-    const anySelection =
-      selectedModules.size > 0 || Object.values(importSelections).some(Boolean);
+    const anySelection = selectedModules.size > 0 || Object.values(importSelections).some(Boolean);
     if (importEnabled && sourceClassroomId && anySelection) {
       const { pages, slides, modules, duplicateTemplates, ...config } = importSelections;
       importConfig = {
@@ -423,7 +440,7 @@ const CreateClassroom = ({ loaderData }: Route.ComponentProps) => {
     );
   };
 
-  const sourceClassroom = ownedClassrooms.find(c => c.id === sourceClassroomId);
+  const sourceClassroom = importableClassrooms.find(c => c.id === sourceClassroomId);
 
   return (
     <div className="max-w-2xl mx-auto">
@@ -480,7 +497,7 @@ const CreateClassroom = ({ loaderData }: Route.ComponentProps) => {
 
             {currentStep === 1 && (
               <StepImportModules
-                ownedClassrooms={ownedClassrooms}
+                importableClassrooms={importableClassrooms}
                 importEnabled={importEnabled}
                 setImportEnabled={setImportEnabled}
                 sourceClassroomId={sourceClassroomId}

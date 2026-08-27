@@ -22,10 +22,18 @@ export interface ClassroomModule {
   };
 }
 
-export interface OwnedClassroom {
+/**
+ * A classroom the viewer may import FROM — one they OWN or TEACH.
+ *
+ * `is_owner` is derived server-side in the loader and decides one thing only:
+ * whether the API-keys option is offered. Teachers may copy everything else.
+ * It is display logic — the server strips the keys regardless (action.ts).
+ */
+export interface ImportableClassroom {
   id: string;
   slug?: string;
   name: string;
+  is_owner: boolean;
   git_organization?: {
     login: string;
     avatar_url?: string | null;

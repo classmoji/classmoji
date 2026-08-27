@@ -7,14 +7,14 @@ import {
   QuestionCircleOutlined,
 } from '@ant-design/icons';
 import ModuleSelectionDrawer from './ModuleSelectionDrawer';
-import type { ClassroomModule, ImportSelections, OwnedClassroom } from './types';
+import type { ClassroomModule, ImportSelections, ImportableClassroom } from './types';
 
 interface ModuleConfig {
   includeQuizzes: boolean;
 }
 
 interface StepImportModulesProps {
-  ownedClassrooms: OwnedClassroom[];
+  importableClassrooms: ImportableClassroom[];
   importEnabled: boolean;
   setImportEnabled: (enabled: boolean) => void;
   sourceClassroomId: string | null;
@@ -35,7 +35,7 @@ interface CopyGroupRow {
 }
 
 const StepImportModules = ({
-  ownedClassrooms,
+  importableClassrooms,
   importEnabled,
   setImportEnabled,
   sourceClassroomId,
@@ -47,7 +47,7 @@ const StepImportModules = ({
 }: StepImportModulesProps) => {
   const [drawerOpen, setDrawerOpen] = useState(false);
 
-  const sourceClassroom = ownedClassrooms.find(c => c.id === sourceClassroomId);
+  const sourceClassroom = importableClassrooms.find(c => c.id === sourceClassroomId);
   const repositories = sourceClassroom?.repositories || [];
 
   const handleModuleToggle = (moduleId: string, checked: boolean) => {
@@ -119,7 +119,7 @@ const StepImportModules = ({
 
       {importEnabled && (
         <>
-          {ownedClassrooms.length === 0 ? (
+          {importableClassrooms.length === 0 ? (
             <Empty
               description="You don't have any other classrooms to import from"
               className="py-8"
@@ -141,7 +141,7 @@ const StepImportModules = ({
                       .includes(input.toLowerCase())
                   }
                 >
-                  {ownedClassrooms.map(classroom => (
+                  {importableClassrooms.map(classroom => (
                     <Select.Option key={classroom.id} value={classroom.id}>
                       <div className="flex items-center gap-2">
                         {(classroom.git_organization as { avatar_url?: string } | null)
@@ -261,11 +261,18 @@ const StepImportModules = ({
                           label: 'AI & quiz config',
                           sublabel: 'models, temperature, syllabus bot',
                         },
-                        {
-                          key: 'apiKeys',
-                          label: 'AI API keys',
-                          sublabel: 'secrets — copy only if you mean to',
-                        },
+                        // Owners only. A teacher may copy a class they teach but
+                        // not lift its LLM credentials out of it; the server
+                        // strips this regardless of what the form posts.
+                        ...(sourceClassroom?.is_owner
+                          ? [
+                              {
+                                key: 'apiKeys' as const,
+                                label: 'AI API keys',
+                                sublabel: 'secrets — copy only if you mean to',
+                              },
+                            ]
+                          : []),
                         {
                           key: 'pages',
                           label: 'Pages',
