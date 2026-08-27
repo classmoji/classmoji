@@ -1,6 +1,6 @@
 ---
 title: Manage your roster
-description: How to add students and assistants to your classroom
+description: How to add students and teaching staff to your classroom
 ---
 
 import Screenshot from '~/components/Screenshot.astro';
@@ -30,17 +30,29 @@ What happens next depends on whether they're already on Classmoji:
 
 When a student accesses the classroom for the first time, they'll receive a Github organization invite. They need to accept it to access their classroom dashboard and get repo access. (Yes, there's an extra step here. Github's rules, not ours.)
 
-### Adding assistants
+### Adding teaching staff
 
-Go to the **Assistants** tab and click **New assistant**.
+Go to the **Teaching Staff** tab and click **New staff member**.
 
-Enter their Github username, name, and email, then confirm.
+Pick the role, enter their Github username, and confirm. The username is the only thing you have to type — name and email are optional, and default to whatever their Github profile says.
 
-<Screenshot src={assistantsImg} alt="The Assistants list showing a TA with a grader-role toggle and status" frame url="app.classmoji.io/admin/cs-101/assistants" size="lg" />
+The three roles:
+
+- **Assistant**: grades the work assigned to them and helps run the class.
+- **Teacher**: teaches the class — content, quizzes, and grading — but not class settings.
+- **Co-owner**: full control of the classroom, including changing every setting, managing the whole teaching staff, and deleting the classroom and everything in it. Adding one asks you to confirm, because there's no undo for what they delete.
+
+Co-owner is a Classmoji role, not a Github organization admin. Anything that runs with your own Github credentials — such as the Github cleanup offered when a classroom is deleted — will fail for a co-owner who isn't an admin of the Github organization.
+
+Roles add up rather than replace: granting someone a second role in the same class leaves the first one alone, and they appear once per role they hold.
+
+<Screenshot src={assistantsImg} alt="A teaching staff list showing a TA with a grader-role toggle and status" frame caption="An earlier version of this screen, from when it listed assistants only." size="lg" />
 
 ### Removing someone
 
 Find the person in the table and click **Remove** in the actions column. Pending invites can be revoked the same way. This removes them from the classroom and the Github organization, but any existing data they have stays intact.
+
+On the Teaching Staff tab you're removing the role on that row, so someone who holds two roles keeps the other one. A classroom always needs at least one owner, so removing the last one is refused.
 
 ### Pending vs Active
 
