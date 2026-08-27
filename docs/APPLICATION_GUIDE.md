@@ -120,7 +120,8 @@ classmoji/
 | Role | Description | Key Permissions |
 |------|-------------|-----------------|
 | **OWNER** | Instructor/Professor | Full administrative access, create assignments, manage settings, view all data |
-| **ASSISTANT** | Teaching Assistant | Grade assignments, view student data, manage regrade requests |
+| **TEACHER** | Co-instructor | Content and assessment: pages, slides, quizzes, the gradebook and grading — not classroom configuration |
+| **ASSISTANT** | Teaching Assistant | Grade assignments, manage quizzes, view student data, manage regrade requests |
 | **STUDENT** | Student | View own assignments, submit work, take quizzes, request extensions |
 
 ### Authorization System
@@ -147,15 +148,16 @@ await assertClassroomAccess({
 
 ### Permission Matrix Examples
 
-| Resource | Student (Own) | Student (Others) | Assistant | Owner |
-|----------|--------------|------------------|-----------|-------|
-| View Grades | ✅ | ❌ | ✅ | ✅ |
-| Grant Tokens | ❌ | ❌ | ❌ | ✅ |
-| Grade Assignments | ❌ | ❌ | ✅ | ✅ |
-| Cancel Token Transaction | ✅ | ❌ | ❌ | ✅ |
-| Take Quiz | ✅ | ❌ | ❌ | ❌* |
-| View Quiz Attempts | ✅ | ❌ | ✅ | ✅ |
-| Manage Settings | ❌ | ❌ | ❌ | ✅ |
+| Resource | Student (Own) | Student (Others) | Assistant | Teacher | Owner |
+|----------|--------------|------------------|-----------|---------|-------|
+| View Gradebook (letter grades, comments) | ❌ | ❌ | ❌ | ✅ | ✅ |
+| Grant Tokens | ❌ | ❌ | ❌ | ❌ | ✅ |
+| Grade Assignments (grading queue) | ❌ | ❌ | ✅ | ✅ | ✅ |
+| Manage Quizzes | ❌ | ❌ | ✅ | ✅ | ✅ |
+| Cancel Token Transaction | ✅ | ❌ | ❌ | ❌ | ✅ |
+| Take Quiz | ✅ | ❌ | ❌ | ❌ | ❌* |
+| View Quiz Attempts | ✅ | ❌ | ✅ | ✅ | ✅ |
+| Manage Settings | ❌ | ❌ | ❌ | ❌ | ✅ |
 
 *Owners can take quizzes but typically don't
 

@@ -52,15 +52,17 @@ describe('notificationLink — the teacher prefix', () => {
     expect(notificationLink(notification(resourceType), ['TEACHER'])).toBe(expected);
   });
 
-  it('gives a teacher the quiz DETAIL page, which their tree has', () => {
-    // Students and assistants land on the list instead — that detail route
-    // exists only under /admin and /teacher.
+  it('gives every staff role the quiz DETAIL page, which their trees have', () => {
+    // The assistant prefix now serves the quiz management screens too, so it
+    // gets the deep link like the other staff trees. Only a student lands on
+    // the list, because the student tree has no detail route.
     expect(notificationLink(notification('quiz'), ['TEACHER'])).toBe(
       `/teacher/${SLUG}/quizzes/res-1`
     );
     expect(notificationLink(notification('quiz'), ['ASSISTANT'])).toBe(
-      `/assistant/${SLUG}/quizzes`
+      `/assistant/${SLUG}/quizzes/res-1`
     );
+    expect(notificationLink(notification('quiz'), ['STUDENT'])).toBe(`/student/${SLUG}/quizzes`);
   });
 
   it('falls back to the class root for an assignment, which only students list', () => {
