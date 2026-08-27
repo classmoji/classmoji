@@ -45,9 +45,14 @@ interface StaffMember {
   id: string;
   name: string | null;
   login: string | null;
-  image: string | null;
-  /** UserThumbnailView reads `avatar_url`; the User model calls it `image`. */
-  avatar_url: string | null;
+  /**
+   * The COMPUTED field from the Prisma result extension (packages/database),
+   * derived from provider_id — never null, and not the same thing as the User
+   * model's `image` column. `image` is written at sign-in, so a staff member who
+   * has been invited but has not signed in yet has none; reading it here left
+   * every fresh invite with a blank thumbnail.
+   */
+  avatar_url: string;
   role: StaffRole;
   is_grader: boolean;
   has_accepted_invite: boolean;
@@ -95,8 +100,11 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
           id: user.id,
           name: user.name,
           login: user.login,
-          image: user.image,
-          avatar_url: user.image,
+          // The cast is the price of the result extension: packages/database
+          // re-casts the `$extends` client back to a plain PrismaClient, so the
+          // computed fields it adds are invisible to the static type. The field
+          // is there at runtime for every User row.
+          avatar_url: (user as typeof user & { avatar_url: string }).avatar_url,
           role,
           is_grader: user.is_grader,
           has_accepted_invite: user.has_accepted_invite,

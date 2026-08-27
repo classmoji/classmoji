@@ -90,7 +90,11 @@ const RAW_STAFF_ROW = {
   id: 'user-1',
   name: 'Ada Lovelace',
   login: 'ada',
+  // `image` and `avatar_url` are deliberately DIFFERENT urls: they are two
+  // different fields (the sign-in column and the result extension's computed
+  // one) and the loader must be seen to read the computed one.
   image: 'https://example.test/ada.png',
+  avatar_url: 'https://avatars.githubusercontent.com/u/424242?v=4',
   email: 'ada@school.test',
   provider_email: 'ada@github.test',
   school_id: 'F00123',
@@ -187,7 +191,6 @@ describe('staff loader — payload allowlist', () => {
       'avatar_url',
       'has_accepted_invite',
       'id',
-      'image',
       'is_grader',
       'login',
       'name',
@@ -246,11 +249,37 @@ describe('staff loader — payload allowlist', () => {
     expect('token' in data).toBe(false);
   });
 
-  it('maps image onto avatar_url, which is the key the thumbnail reads', async () => {
+  it('reads the COMPUTED avatar_url, not the raw image column', async () => {
+    // UserThumbnailView renders its <img> only when `avatar_url` is truthy and
+    // has no fallback, and `image` is written at sign-in — so reading `image`
+    // here left every freshly invited staff member with a blank thumbnail until
+    // their first OAuth round trip. The Prisma result extension in
+    // packages/database computes `avatar_url` from provider_id instead, which is
+    // never null (a GitHub avatar, else a default icon).
     asOwner();
     const data = await adminRoute.loader(loaderArgs(`/admin/${CLASS_SLUG}/staff`));
 
-    expect(data.staff[0].avatar_url).toBe('https://example.test/ada.png');
+    expect(data.staff[0].avatar_url).toBe('https://avatars.githubusercontent.com/u/424242?v=4');
+  });
+
+  it('still has an avatar for a staff member who has never signed in', async () => {
+    // The regression this pins: `image` is null right up until the invited
+    // person first signs in, which is exactly when an owner is looking at the
+    // row they just created.
+    asOwner();
+    mocks.findUsersByRole.mockResolvedValue([{ ...RAW_STAFF_ROW, image: null }]);
+
+    const data = await adminRoute.loader(loaderArgs(`/admin/${CLASS_SLUG}/staff`));
+
+    expect(data.staff[0].avatar_url).toBe('https://avatars.githubusercontent.com/u/424242?v=4');
+  });
+
+  it('does not ship the raw image column at all — nothing reads it', async () => {
+    asOwner();
+    const data = await adminRoute.loader(loaderArgs(`/admin/${CLASS_SLUG}/staff`));
+    const row = data.staff[0] as unknown as Record<string, unknown>;
+
+    expect('image' in row).toBe(false);
   });
 });
 
