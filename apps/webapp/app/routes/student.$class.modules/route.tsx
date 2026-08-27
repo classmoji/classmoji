@@ -1,5 +1,6 @@
 import getPrisma from '@classmoji/database';
 import { Tag } from 'antd';
+import { useLocation } from 'react-router';
 import type { Route } from './+types/route';
 import { ClassmojiService } from '@classmoji/services';
 import { assertClassroomAccess } from '~/utils/helpers';
@@ -177,6 +178,10 @@ const buildModuleNodes = (
   });
 
 const StudentModules = ({ loaderData }: Route.ComponentProps) => {
+  // Hook first: it must run on every render, including the disabled early
+  // return below.
+  const rolePrefix = useLocation().pathname.split('/')[1];
+
   if (!loaderData.enabled) {
     return (
       <div className="min-h-full">
@@ -193,7 +198,9 @@ const StudentModules = ({ loaderData }: Route.ComponentProps) => {
 
   const { modules, repoById, raByAssignmentId, slidesUrl, pagesUrl, classSlug, isStaff } =
     loaderData;
-  const ctx: StudentTreeCtx = { classSlug, slidesUrl, pagesUrl };
+  // Served under every prefix this route's gate allows, so resource links stay
+  // on the prefix the viewer arrived on.
+  const ctx: StudentTreeCtx = { classSlug, slidesUrl, pagesUrl, rolePrefix };
   const nodes = buildModuleNodes(
     modules,
     repoById as Record<string, AnyRepository>,

@@ -42,6 +42,37 @@ interface QuizMembership {
   userId?: string | null;
 }
 
+/**
+ * Roles that may read the staff view of a classroom's quizzes — the whole
+ * teaching team, matching the route gates on /admin, /teacher and /assistant
+ * quizzes and the MCP QUIZ_ROLES set. Kept as a named constant rather than an
+ * inline array so a future role addition has one place to land.
+ */
+export const QUIZ_STAFF_ROLES = ['OWNER', 'TEACHER', 'ASSISTANT'] as const;
+
+/**
+ * Thrown when the caller's membership does not entitle them to the staff quiz
+ * list.
+ *
+ * A TYPED error rather than a bare `Error` on purpose: callers cannot tell an
+ * authorization refusal from a genuine fault in a plain `Error`, so a role gap
+ * here surfaced to the user as a 500 rather than a 403 — which is exactly how
+ * the TEACHER gap in this function stayed invisible. `status` lets a route map
+ * it without string-matching the message, and `code` lets MCP tools branch on
+ * the reason the same way they do for StaffServiceError.
+ */
+export class QuizAccessError extends Error {
+  code: 'membership_required' | 'role_not_allowed' | 'classroom_mismatch';
+  /** HTTP status a web caller should surface. Always a refusal, never a fault. */
+  status = 403;
+
+  constructor(code: QuizAccessError['code'], message: string) {
+    super(message);
+    this.name = 'QuizAccessError';
+    this.code = code;
+  }
+}
+
 export const create = async (data: QuizCreateInput) => {
   return getPrisma().quiz.create({
     data: {
@@ -147,17 +178,23 @@ export const getQuizzesByOrganization = async (
   membership: QuizMembership | null
 ) => {
   if (!membership) {
-    throw new Error('Membership required to access classroom quizzes');
+    throw new QuizAccessError(
+      'membership_required',
+      'Membership required to access classroom quizzes'
+    );
   }
 
-  const allowedRoles = ['OWNER', 'ASSISTANT'];
-  if (!allowedRoles.includes(membership.role)) {
-    throw new Error('Unauthorized classroom quiz access');
+  if (!(QUIZ_STAFF_ROLES as readonly string[]).includes(membership.role)) {
+    throw new QuizAccessError(
+      'role_not_allowed',
+      `[quiz] ${membership.role} may not read the staff quiz list ` +
+        `(expected one of ${QUIZ_STAFF_ROLES.join(', ')})`
+    );
   }
 
   const membershipClassroomId = membership.classroom_id?.toString() ?? null;
   if (membershipClassroomId && membershipClassroomId !== classroomId.toString()) {
-    throw new Error('Membership does not match classroom');
+    throw new QuizAccessError('classroom_mismatch', 'Membership does not match classroom');
   }
 
   const quizzes = await getPrisma().quiz.findMany({

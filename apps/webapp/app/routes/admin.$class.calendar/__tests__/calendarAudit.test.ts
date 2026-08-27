@@ -245,3 +245,64 @@ describe('calendar action — audit rows', () => {
     expect(mocks.addClassroomAuditLog).not.toHaveBeenCalled();
   });
 });
+
+/**
+ * The office-hours limit on assistants is a ROLE policy, so it has to be
+ * enforced on the role — not on which of the two URLs serving this action the
+ * client happened to POST to.
+ *
+ * The /assistant variant of this page has always rejected non-OFFICE_HOURS
+ * creates, but this action's gate admits ASSISTANT as well, and in React Router
+ * a POST runs the matched leaf's action directly — the /admin layout's loader
+ * is not in that path. So an assistant POSTing here bypassed the restriction
+ * entirely until the check moved onto `isAdmin`, which the update, delete and
+ * deadline branches already consulted.
+ */
+describe('calendar action — the assistant event-type limit follows the role', () => {
+  const asAssistant = () =>
+    mocks.assertClassroomAccess.mockResolvedValue({
+      userId: 'ta-1',
+      classroom: CLASSROOM,
+      membership: { id: 'm-2', role: 'ASSISTANT' },
+    });
+
+  it('refuses an assistant creating a lecture on the admin URL', async () => {
+    asAssistant();
+
+    const response = (await submit({
+      intent: 'create',
+      eventData: JSON.stringify({ title: 'Lecture 4', event_type: 'LECTURE' }),
+    })) as { init?: { status?: number } };
+
+    expect(response.init?.status).toBe(403);
+    expect(mocks.createEvent).not.toHaveBeenCalled();
+    expect(mocks.addClassroomAuditLog).not.toHaveBeenCalled();
+  });
+
+  it('still lets an assistant create office hours', async () => {
+    asAssistant();
+
+    await submit({
+      intent: 'create',
+      eventData: JSON.stringify({ title: 'OH', event_type: 'OFFICE_HOURS' }),
+    });
+
+    expect(mocks.createEvent).toHaveBeenCalled();
+    expect(auditEntry()).toMatchObject({ action: 'CREATE', resourceType: 'CALENDAR' });
+  });
+
+  it.each(['OWNER', 'TEACHER'])('does not limit a %s to office hours', async role => {
+    mocks.assertClassroomAccess.mockResolvedValue({
+      userId: 'staff-1',
+      classroom: CLASSROOM,
+      membership: { id: 'm-3', role },
+    });
+
+    await submit({
+      intent: 'create',
+      eventData: JSON.stringify({ title: 'Lecture 4', event_type: 'LECTURE' }),
+    });
+
+    expect(mocks.createEvent).toHaveBeenCalled();
+  });
+});

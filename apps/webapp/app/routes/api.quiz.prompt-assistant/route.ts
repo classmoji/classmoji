@@ -63,7 +63,7 @@ async function handleInitSession(request: Request, formData: FormData) {
   const { userId, classroom, membership } = await assertClassroomAccess({
     request,
     classroomSlug,
-    allowedRoles: ['OWNER', 'ASSISTANT'],
+    allowedRoles: ['OWNER', 'TEACHER', 'ASSISTANT'],
     resourceType: 'PROMPT_ASSISTANT',
     attemptedAction: 'init_session',
   });
@@ -155,7 +155,7 @@ async function handleSendMessage(request: Request, formData: FormData) {
   const { classroom: smClassroom, membership: smMembership } = await assertClassroomAccess({
     request,
     classroomSlug,
-    allowedRoles: ['OWNER', 'ASSISTANT'],
+    allowedRoles: ['OWNER', 'TEACHER', 'ASSISTANT'],
     resourceType: 'PROMPT_ASSISTANT',
     attemptedAction: 'send_message',
   });
@@ -220,7 +220,7 @@ async function handleEndSession(request: Request, formData: FormData) {
   await assertClassroomAccess({
     request,
     classroomSlug,
-    allowedRoles: ['OWNER', 'ASSISTANT'],
+    allowedRoles: ['OWNER', 'TEACHER', 'ASSISTANT'],
     resourceType: 'PROMPT_ASSISTANT',
     attemptedAction: 'end_session',
   });

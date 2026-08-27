@@ -152,6 +152,20 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
     const eventData = JSON.parse(formData.get('eventData') as string);
     const { linkedPageIds, linkedSlideIds, linkedAssignmentIds, ...createData } = eventData;
 
+    // Assistants may only add office hours. The sibling /assistant variant of
+    // this page enforces that, but the gate above admits ASSISTANT here too and
+    // this branch is reached by POSTing to this URL — so without this check the
+    // restriction is keyed on which URL the client chose, not on the caller's
+    // role. `isAdmin` already guards update/delete/update_deadline below;
+    // create was the one branch that skipped it, and it is the branch where the
+    // policy actually applies.
+    if (!isAdmin && createData.event_type !== 'OFFICE_HOURS') {
+      return data(
+        { success: false, error: 'Assistants can only create Office Hours events' },
+        { status: 403 }
+      );
+    }
+
     const newEvent = await ClassmojiService.calendar.createEvent(classroom.id, userId, createData);
 
     // If links were provided (non-recurring events only), add them

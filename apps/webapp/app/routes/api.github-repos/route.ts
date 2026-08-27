@@ -42,11 +42,12 @@ export async function loader({ request }: Route.LoaderArgs) {
     });
   }
 
-  // Verify user is OWNER or ASSISTANT
+  // Verify the caller is on the teaching team. This backs the repo picker on
+  // the quiz detail page, so it carries the same roles as the quiz routes.
   const { classroom } = await assertClassroomAccess({
     request,
     classroomSlug,
-    allowedRoles: ['OWNER', 'ASSISTANT'],
+    allowedRoles: ['OWNER', 'TEACHER', 'ASSISTANT'],
     resourceType: 'GITHUB_REPOS',
     attemptedAction: 'list',
   });

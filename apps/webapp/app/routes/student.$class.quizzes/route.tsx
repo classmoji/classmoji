@@ -77,7 +77,11 @@ export async function loader({ params, request }: Route.LoaderArgs) {
   const { userId, classroom, membership } = await assertClassroomAccess({
     request,
     classroomSlug: classSlug,
-    allowedRoles: ['STUDENT', 'ASSISTANT', 'OWNER'],
+    // Staff reach this list through the modules tree's quiz leaf, so it admits
+    // the whole teaching team — the leaf loader throws before any client-side
+    // guard runs, so a missing role here replaces the entire app render with a
+    // 403 rather than degrading one link.
+    allowedRoles: ['STUDENT', 'ASSISTANT', 'TEACHER', 'OWNER'],
     resourceType: 'STUDENT_QUIZ_ACCESS',
     attemptedAction: 'view_student_quizzes',
   });

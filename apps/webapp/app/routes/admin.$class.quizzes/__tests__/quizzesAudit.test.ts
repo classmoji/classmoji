@@ -1,15 +1,25 @@
 /**
- * Unit tests for the admin quiz action's audit rows.
+ * Unit tests for the admin quiz action.
  *
- * Every branch here mutates and, until now, none of them recorded anything —
- * while the MCP quiz tools have always audited theirs. The rows are shaped to
- * match: resource_type 'QUIZ', the quiz id, and the AuditLogAction enum.
+ * Two properties, and they hold each other up:
  *
- * That enum has no PUBLISH, so publishing and re-weighting are both UPDATE with
- * the intent carried in `data.tool`. `tool` is load-bearing beyond naming: the
- * audit service dedups inside a 5-second window on (user, classroom, role,
- * resource_type, resource_id, action) plus `data.tool`, so a publish followed
- * immediately by a weight change would otherwise collapse to one row.
+ * 1. Every branch here mutates and, until now, none of them recorded anything —
+ *    while the MCP quiz tools have always audited theirs. The rows are shaped to
+ *    match: resource_type 'QUIZ', the quiz id, and the AuditLogAction enum.
+ *
+ *    That enum has no PUBLISH, so publishing and re-weighting are both UPDATE
+ *    with the intent carried in `data.tool`. `tool` is load-bearing beyond
+ *    naming: the audit service dedups inside a 5-second window on (user,
+ *    classroom, role, resource_type, resource_id, action) plus `data.tool`, so a
+ *    publish followed immediately by a weight change would otherwise collapse to
+ *    one row.
+ *
+ * 2. Each write is bound to a quiz IN THE AUTHORIZED CLASSROOM. Authorization
+ *    binds to `params.class`, but the quiz id arrives in the JSON body and
+ *    `quiz.service` resolves quizzes by id alone — so without the binding the
+ *    two are unrelated, and an audit row naming the authorized classroom would
+ *    be describing a write that landed somewhere else. Same invariant the MCP
+ *    quiz tools get from `loadQuizInClassroom`.
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -23,6 +33,8 @@ const mocks = vi.hoisted(() => ({
   update: vi.fn(),
   remove: vi.fn(),
   publish: vi.fn(),
+  findById: vi.fn(),
+  repositoryFindById: vi.fn(),
   clearForUser: vi.fn(),
 }));
 
@@ -40,12 +52,15 @@ vi.mock('@classmoji/services', () => ({
       update: (...a: unknown[]) => mocks.update(...a),
       delete: (...a: unknown[]) => mocks.remove(...a),
       publish: (...a: unknown[]) => mocks.publish(...a),
+      findById: (...a: unknown[]) => mocks.findById(...a),
       findByClassroom: vi.fn(),
     },
+    repository: { findById: (...a: unknown[]) => mocks.repositoryFindById(...a) },
     quizAttempt: { clearForUser: (...a: unknown[]) => mocks.clearForUser(...a) },
     classroom: { getClassroomSettingsForServer: vi.fn() },
     user: { findById: vi.fn() },
   },
+  QuizAccessError: class QuizAccessError extends Error {},
 }));
 
 // The action is what is under test; the view layer only needs to import.
@@ -81,6 +96,8 @@ const route = await import('../route.tsx');
 
 const CLASS_SLUG = 'cs52-26f';
 const CLASSROOM = { id: 'class-1', slug: CLASS_SLUG, status: 'ACTIVE' };
+const OWN_QUIZ = 'quiz-1';
+const FOREIGN_QUIZ = 'quiz-in-another-classroom';
 
 const submit = (body: Record<string, unknown>) =>
   route.action({
@@ -112,6 +129,9 @@ beforeEach(() => {
   mocks.update.mockResolvedValue({});
   mocks.remove.mockResolvedValue({});
   mocks.publish.mockResolvedValue({});
+  // By default the named quiz lives in the authorized classroom.
+  mocks.findById.mockResolvedValue({ id: OWN_QUIZ, classroom_id: 'class-1', name: 'Week 1' });
+  mocks.repositoryFindById.mockResolvedValue({ id: 'repo-1', classroom_id: 'class-1' });
   mocks.clearForUser.mockResolvedValue({ deletedCount: 3 });
 });
 
@@ -208,5 +228,79 @@ describe('admin quizzes action — audit rows', () => {
     await expect(submit({ _action: 'deleteQuiz', id: 'quiz-1' })).rejects.toBeInstanceOf(Response);
     expect(mocks.remove).not.toHaveBeenCalled();
     expect(mocks.addClassroomAuditLog).not.toHaveBeenCalled();
+  });
+});
+
+describe('admin quizzes action — writes stay inside the authorized classroom', () => {
+  /** Every mutation that takes a quiz id from the request body. */
+  const bodyIdMutations: Array<[string, Record<string, unknown>]> = [
+    ['updateQuiz', { _action: 'updateQuiz', id: FOREIGN_QUIZ, name: 'Renamed' }],
+    ['deleteQuiz', { _action: 'deleteQuiz', id: FOREIGN_QUIZ }],
+    ['publishQuiz', { _action: 'publishQuiz', id: FOREIGN_QUIZ }],
+    ['updateWeight', { _action: 'updateWeight', id: FOREIGN_QUIZ, weight: 40 }],
+  ];
+
+  it.each(bodyIdMutations)(
+    '%s refuses a quiz belonging to another classroom, and audits nothing',
+    async (_name, body) => {
+      mocks.findById.mockResolvedValue({ id: FOREIGN_QUIZ, classroom_id: 'other-class' });
+
+      const response = (await submit(body)) as Response;
+
+      expect(response.status).toBe(404);
+      expect(mocks.update).not.toHaveBeenCalled();
+      expect(mocks.remove).not.toHaveBeenCalled();
+      expect(mocks.publish).not.toHaveBeenCalled();
+      expect(mocks.addClassroomAuditLog).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each(bodyIdMutations)('%s refuses a quiz id that does not exist', async (_name, body) => {
+    mocks.findById.mockResolvedValue(null);
+
+    const response = (await submit(body)) as Response;
+
+    expect(response.status).toBe(404);
+    expect(mocks.addClassroomAuditLog).not.toHaveBeenCalled();
+  });
+
+  it('resolves the quiz before writing, not after', async () => {
+    // The ordering is the point: a write that lands and is only then found to
+    // be out of scope has already happened.
+    await submit({ _action: 'publishQuiz', id: OWN_QUIZ });
+
+    expect(mocks.findById).toHaveBeenCalledWith(OWN_QUIZ);
+    expect(mocks.findById.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.publish.mock.invocationCallOrder[0]
+    );
+  });
+
+  it('refuses to link a quiz to a repository from another classroom', async () => {
+    // quiz.create/update connect the repository relation by id with no
+    // classroom check of their own.
+    mocks.repositoryFindById.mockResolvedValue({ id: 'repo-9', classroom_id: 'other-class' });
+
+    const response = (await submit({
+      _action: 'createQuiz',
+      name: 'Week 1',
+      repositoryId: 'repo-9',
+    })) as Response;
+
+    expect(response.status).toBe(404);
+    expect(mocks.create).not.toHaveBeenCalled();
+    expect(mocks.addClassroomAuditLog).not.toHaveBeenCalled();
+  });
+
+  it('allows an unlinked quiz, where no repository is named at all', async () => {
+    await submit({ _action: 'createQuiz', name: 'Week 1' });
+
+    expect(mocks.repositoryFindById).not.toHaveBeenCalled();
+    expect(mocks.create).toHaveBeenCalled();
+  });
+
+  it('clearMyAttempts is scoped by the caller and the classroom, not by a body id', async () => {
+    await submit({ _action: 'clearMyAttempts', classroomId: 'other-class' });
+
+    expect(mocks.clearForUser).toHaveBeenCalledWith('owner-1', 'class-1');
   });
 });

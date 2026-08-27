@@ -76,7 +76,11 @@ export async function action({ request }: Route.ActionArgs) {
       return jsonResponse(400, 'Invalid action');
     }
 
-    const allowedRoles: Role[] = ['STUDENT', 'ASSISTANT', 'OWNER'];
+    // The single gate for start/send/complete/metrics. TEACHER belongs here for
+    // the same reason OWNER and ASSISTANT do: staff take quizzes to preview
+    // them, and the code-aware branch below already expects a TEACHER to reach
+    // it (see the `isInstructor` check in startQuiz).
+    const allowedRoles: Role[] = ['STUDENT', 'ASSISTANT', 'TEACHER', 'OWNER'];
 
     const resolveOrgContext = async () => {
       switch (data._action) {
