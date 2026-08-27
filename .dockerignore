@@ -9,3 +9,26 @@ test-results
 playwright-report
 **/build
 **/.astro
+
+# Every app builds from the monorepo root, so anything left here is uploaded to
+# the builder on every deploy of every app. The entries below were ~91 MB of a
+# ~108 MB context and are used by none of the images.
+
+# Trigger.dev's LOCAL build cache, created by `npm run trigger:dev`. Not tracked
+# in git, so it only exists on developer machines — which is why CI never saw
+# the cost. Workflows deploy via `trigger.dev deploy`, never from this dir.
+packages/tasks/.trigger
+
+# The Astro marketing site builds from its OWN context (CI runs flyctl with
+# working-directory: apps/site, so apps/site/.dockerignore applies there, not
+# this file). Nothing built from the repo root serves it.
+#
+# Only the blog content is dropped, not the whole directory: apps/site is a
+# workspace in the root package.json, and removing its package.json would break
+# `npm ci`'s workspace resolution for every image.
+apps/site/src/content
+
+# Playwright fixtures (including a 4.6 MB import .zip). Tests run against a
+# live dev stack, never inside an image.
+**/tests
+**/playwright.config.ts
