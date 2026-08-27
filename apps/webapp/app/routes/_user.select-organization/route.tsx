@@ -142,7 +142,11 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
 
 function deriveRole(role: string, hasAcceptedInvite: boolean): LandingRole {
   if (!hasAcceptedInvite && role !== 'OWNER') return 'PENDING INVITE';
-  if (role === 'TEACHER' || role === 'OWNER') return 'OWNER';
+  if (role === 'OWNER') return 'OWNER';
+  // TEACHER used to fold into the OWNER card, which sent teachers to
+  // /admin/:class/dashboard — a prefix their membership cannot open. It carries
+  // its own landing role so the card routes to /teacher.
+  if (role === 'TEACHER') return 'TEACHER';
   if (role === 'ASSISTANT') return 'ASSISTANT';
   return 'STUDENT';
 }

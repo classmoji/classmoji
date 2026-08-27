@@ -47,8 +47,8 @@ export const OWNER_ONLY: readonly Role[] = ['OWNER'];
 export const TEACHING_TEAM: readonly Role[] = ['OWNER', 'TEACHER', 'ASSISTANT'];
 export const MEMBER: readonly Role[] = ['OWNER', 'TEACHER', 'ASSISTANT', 'STUDENT'];
 export const STUDENT_ONLY: readonly Role[] = ['STUDENT'];
-/** Quiz routes allow OWNER/ASSISTANT/STUDENT — TEACHER is genuinely excluded. */
-export const QUIZ_ROLES: readonly Role[] = ['OWNER', 'ASSISTANT', 'STUDENT'];
+/** Quiz routes allow the whole teaching team plus STUDENT. */
+export const QUIZ_ROLES: readonly Role[] = ['OWNER', 'TEACHER', 'ASSISTANT', 'STUDENT'];
 
 /**
  * "Staff" = the classroom's teaching team, exactly OWNER/TEACHER/ASSISTANT

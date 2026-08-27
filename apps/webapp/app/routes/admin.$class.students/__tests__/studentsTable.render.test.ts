@@ -55,6 +55,7 @@ vi.mock('@classmoji/ui-components', () => ({ useCallout: () => ({ show: vi.fn() 
 vi.mock('@classmoji/auth/client', () => ({
   authClient: { admin: { impersonateUser: vi.fn() } },
 }));
+vi.mock('~/utils/impersonationReturn', () => ({ rememberImpersonationReturn: vi.fn() }));
 
 const StudentsTable = (await import('../StudentsTable')).default;
 

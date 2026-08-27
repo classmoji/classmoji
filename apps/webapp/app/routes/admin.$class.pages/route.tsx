@@ -1,8 +1,12 @@
 import { useState, useEffect } from 'react';
-import { useFetcher, Link, Outlet, useSearchParams, useNavigate } from 'react-router';
+import { useFetcher, Link, Outlet, useSearchParams, useNavigate, useLocation } from 'react-router';
 import { Table, Button, Input, Select, Switch, Tooltip } from 'antd';
 import { IconPlus, IconEyeOff, IconLock, IconWorld, IconMenu2, IconSearch } from '@tabler/icons-react';
-import { assertClassroomAccess, assertClassroomMutationAllowed } from '~/utils/helpers';
+import {
+  addClassroomAuditLog,
+  assertClassroomAccess,
+  assertClassroomMutationAllowed,
+} from '~/utils/helpers';
 import { ClassmojiService } from '@classmoji/services';
 import { useCallout } from '@classmoji/ui-components';
 import getPrisma from '@classmoji/database';
@@ -50,7 +54,7 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
 export const action = async ({ request, params }: Route.ActionArgs) => {
   const { class: classSlug } = params;
 
-  const { classroom, membership } = await assertClassroomAccess({
+  const { userId, classroom, membership } = await assertClassroomAccess({
     request,
     classroomSlug: classSlug!,
     allowedRoles: ['OWNER', 'TEACHER'],
@@ -65,9 +69,51 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
   const field = formData.get('field') as string | null;
   const value = formData.get('value') as string | null;
 
+  // Every mutation below records an audit row AFTER the write lands, using the
+  // classroom and role this request was authorized with. This mirrors the MCP
+  // server's invariant (apps/mcp/src/tools/shared.ts: every mutation writes an
+  // audit row) and uses the same resource_type vocabulary — 'PAGES' — so the
+  // two surfaces can be queried together.
+  const audit = (action: string, resourceId: string, metadata: Record<string, unknown>) =>
+    addClassroomAuditLog({
+      classroomId: classroom.id,
+      userId,
+      role: membership!.role,
+      action,
+      resourceType: 'PAGES',
+      resourceId,
+      metadata,
+    });
+
+  /**
+   * Apply an update to a page OF THE CLASSROOM THIS REQUEST WAS AUTHORIZED FOR.
+   *
+   * Authorization binds to the classroom in the URL, but `pageId` arrives in the
+   * form body, so the two are tied together in the query itself: the update is
+   * bound to `{ id, classroom_id }` and only counts when it matched exactly one
+   * row. Same pattern as the sibling slides route's `updateSlideInClassroom`.
+   * It is also what makes the audit row truthful — a row naming the authorized
+   * classroom must describe a write that landed in that classroom.
+   */
+  const updatePageInClassroom = async (data: Record<string, boolean>) => {
+    const { count } = await getPrisma().page.updateMany({
+      where: { id: pageId, classroom_id: classroom.id },
+      data,
+    });
+    return count === 1;
+  };
+
   // Handle delete action
   if (intent === 'delete') {
+    // deletePage() resolves the page by id alone, so the classroom is proved
+    // here before it is called.
+    const page = await ClassmojiService.page.findById(pageId, { includeClassroom: false });
+    if (!page || page.classroom_id !== classroom.id) {
+      return { error: 'Page not found' };
+    }
+
     await ClassmojiService.page.deletePage(pageId);
+    await audit('DELETE', pageId, { tool: 'web:pages.delete', title: page.title });
     return { success: true, intent: 'delete' };
   }
 
@@ -88,18 +134,29 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
       is_public = true;
     }
 
-    await getPrisma().page.update({
-      where: { id: pageId },
-      data: { is_draft, is_public },
+    if (!(await updatePageInClassroom({ is_draft, is_public }))) {
+      return { error: 'Page not found' };
+    }
+    await audit('UPDATE', pageId, {
+      tool: 'web:pages.status',
+      field: 'status',
+      value,
+      is_draft,
+      is_public,
     });
     return { success: true };
   }
 
   // Handle boolean toggles (show_in_student_menu)
   if (field === 'show_in_student_menu') {
-    await getPrisma().page.update({
-      where: { id: pageId },
-      data: { show_in_student_menu: value === 'true' },
+    const show_in_student_menu = value === 'true';
+    if (!(await updatePageInClassroom({ show_in_student_menu }))) {
+      return { error: 'Page not found' };
+    }
+    await audit('UPDATE', pageId, {
+      tool: 'web:pages.show_in_student_menu',
+      field: 'show_in_student_menu',
+      value: show_in_student_menu,
     });
     return { success: true };
   }
@@ -132,6 +189,10 @@ export default function AdminPages({ loaderData }: Route.ComponentProps) {
   const [searchText, setSearchText] = useState('');
   const navigate = useNavigate();
   const callout = useCallout();
+  // This route is served under more than one prefix (/admin and /teacher — both
+  // tiers the loader and action already allow), so links are built from the
+  // prefix the user actually arrived on rather than a hardcoded '/admin'.
+  const rolePrefix = useLocation().pathname.split('/')[1];
 
   // Show toast notification after delete (from redirect)
   useEffect(() => {
@@ -205,7 +266,7 @@ export default function AdminPages({ loaderData }: Route.ComponentProps) {
       sorter: (a: PageRecord, b: PageRecord) => a.title.localeCompare(b.title),
       render: (title: string, record: PageRecord) => (
         <Link
-          to={`/admin/${classSlug}/pages/${record.id}`}
+          to={`/${rolePrefix}/${classSlug}/pages/${record.id}`}
           className="font-medium !text-gray-600 dark:text-gray-100 hover:text-gray-900 dark:hover:text-gray-100"
         >
           {title}
@@ -305,7 +366,7 @@ export default function AdminPages({ loaderData }: Route.ComponentProps) {
       render: (_: unknown, record: PageRecord) => (
         <TableActionButtons
           onEdit={() => {
-            navigate(`/admin/${classSlug}/pages/${record.id}`);
+            navigate(`/${rolePrefix}/${classSlug}/pages/${record.id}`);
           }}
           onDelete={() =>
             fetcher.submit({ intent: 'delete', pageId: record.id }, { method: 'post' })
@@ -331,7 +392,7 @@ export default function AdminPages({ loaderData }: Route.ComponentProps) {
             onChange={e => setSearchText(e.target.value)}
             style={{ width: 260 }}
           />
-          <Link to={`/admin/${classSlug}/pages/new`} data-tour="pages-new">
+          <Link to={`/${rolePrefix}/${classSlug}/pages/new`} data-tour="pages-new">
             <Button type="primary" icon={<IconPlus size={16} />}>
               New Page
             </Button>

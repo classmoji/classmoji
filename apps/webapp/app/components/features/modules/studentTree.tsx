@@ -20,6 +20,17 @@ export interface StudentTreeCtx {
   classSlug: string;
   slidesUrl: string;
   pagesUrl: string;
+  /**
+   * Route prefix the viewer arrived on ('student' | 'teacher' | 'assistant' |
+   * 'admin'), used to keep the quiz leaf on that prefix.
+   *
+   * These trees render under every prefix, but the quiz href used to be
+   * hardcoded to /student — and the student quizzes loader gates on role, so a
+   * teacher following it got a full-page 403 rather than a broken link (the
+   * leaf loader throws before any client-side guard runs). Defaults to
+   * 'student' so an unset ctx keeps the original behaviour.
+   */
+  rolePrefix?: string;
   /** Org login, used to build the repository "View" fallback to the source repo. */
   gitOrgLogin?: string | null;
   /**
@@ -64,7 +75,7 @@ export const resourceLeaves = (
 ): ModuleTreeNode[] =>
   buildResourceLeaves(input, level, keyPrefix, {
     ...ctx,
-    quizzesHref: `/student/${ctx.classSlug}/quizzes`,
+    quizzesHref: `/${ctx.rolePrefix ?? 'student'}/${ctx.classSlug}/quizzes`,
   });
 
 /**

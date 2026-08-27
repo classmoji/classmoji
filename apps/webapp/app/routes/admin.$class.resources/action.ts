@@ -1,6 +1,10 @@
 import { namedAction } from 'remix-utils/named-action';
 import { ClassmojiService, ResourceLinkServiceError } from '@classmoji/services';
-import { assertClassroomAccess, assertClassroomMutationAllowed } from '~/utils/helpers';
+import {
+  addClassroomAuditLog,
+  assertClassroomAccess,
+  assertClassroomMutationAllowed,
+} from '~/utils/helpers';
 import type { Route } from './+types/route';
 
 /**
@@ -55,7 +59,7 @@ const linkErrorMessage = (
 export const action = async ({ request, params }: Route.ActionArgs) => {
   const classSlug = params.class!;
 
-  const { classroom, membership } = await assertClassroomAccess({
+  const { userId, classroom, membership } = await assertClassroomAccess({
     request,
     classroomSlug: classSlug,
     allowedRoles: ['OWNER', 'TEACHER'],
@@ -63,6 +67,22 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
     attemptedAction: 'manage_links',
   });
   assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
+
+  // Both link mutations record an audit row, matching the MCP resource-link
+  // tools (apps/mcp/src/tools/resourceLinks.ts) field for field: resource_type
+  // 'RESOURCES', the LINK id as resource_id, and a `tool` discriminator. The
+  // web and MCP surfaces write the same rows for the same act, so a link's
+  // history reads the same whichever surface performed it.
+  const audit = (action: string, linkId: string, metadata: Record<string, unknown>) =>
+    addClassroomAuditLog({
+      classroomId: classroom.id,
+      userId,
+      role: membership!.role,
+      action,
+      resourceType: 'RESOURCES',
+      resourceId: linkId,
+      metadata,
+    });
 
   return namedAction(request, {
     async addLink() {
@@ -91,6 +111,15 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
         return { error: linkErrorMessage(error, { resourceType, targetType }) };
       }
 
+      await audit('CREATE', link.id, {
+        tool: 'web:resources.add_link',
+        link_id: link.id,
+        resource_type: link.resourceType,
+        resource_id: link.resourceId,
+        target_type: link.targetType,
+        target_id: link.targetId,
+      });
+
       // The link is committed; the manifest push that follows it is best effort,
       // so report which of the two actually happened rather than just "ok".
       return { success: true, manifest_synced: link.manifestSynced };
@@ -117,6 +146,12 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
       } catch (error) {
         return { error: linkErrorMessage(error, { resourceType }) };
       }
+
+      await audit('DELETE', linkId, {
+        tool: 'web:resources.remove_link',
+        link_id: linkId,
+        resource_type: resourceType === 'page' ? 'page' : 'slide',
+      });
 
       return { success: true, manifest_synced: removed.manifestSynced };
     },

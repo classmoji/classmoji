@@ -1,7 +1,7 @@
 import { useState, useMemo } from 'react';
 import { Table, Checkbox, ConfigProvider, Segmented, Popover, Input } from 'antd';
 import { IconAdjustmentsHorizontal, IconMessagePlus, IconSearch } from '@tabler/icons-react';
-import { useParams, useNavigate } from 'react-router';
+import { useParams, useNavigate, useLocation } from 'react-router';
 import { mean, median } from 'simple-statistics';
 
 import { UserThumbnailView, TableActionButtons } from '~/components';
@@ -22,14 +22,25 @@ interface ModuleData {
   assignments: Array<{ id: string | number; title: string; weight: number }>;
 }
 
+/**
+ * A gradebook row as it leaves the loader.
+ *
+ * Declared as a CLOSED shape on purpose. This used to carry an
+ * `[key: string]: unknown` index signature, which meant the loader could hand
+ * the whole `User` row over — contact details, ban state, the Stripe customer
+ * id — and the compiler had nothing to say about it. The contact fields stay
+ * optional because the loader includes them for an OWNER only.
+ */
 interface Student {
   id: string;
-  name: string;
-  login: string;
-  email?: string;
-  provider_email?: string;
+  name: string | null;
+  login: string | null;
+  /** UserThumbnailView reads `avatar_url`; the User model calls it `image`. */
+  avatar_url: string | null;
   git_repos: GitRepo[];
-  [key: string]: unknown;
+  email?: string | null;
+  provider_email?: string | null;
+  school_id?: string | null;
 }
 
 interface Membership {
@@ -66,6 +77,9 @@ const GradesTable = (props: GradesTableProps) => {
   const [searchQuery, setSearchQuery] = useState('');
   const { class: classSlug } = useParams();
   const navigate = useNavigate();
+  // Served under every prefix this route's gate allows (/admin and /teacher),
+  // so links stay on the prefix the user arrived on.
+  const rolePrefix = useLocation().pathname.split('/')[1];
   const { fetcher } = useGlobalFetcher();
   const { isDarkMode } = useDarkMode();
 
@@ -153,14 +167,21 @@ const GradesTable = (props: GradesTableProps) => {
         return (
           <div className="pl-2">
             <TableActionButtons
-              onView={() => {
-                navigate(`/admin/${classSlug}/students/${student.login}`);
-              }}
+              // The student detail drawer is owner-only and exists under the
+              // /admin prefix alone, so the link is offered there alone rather
+              // than pointing a teacher at a screen that would refuse them.
+              onView={
+                rolePrefix === 'admin'
+                  ? () => {
+                      navigate(`/admin/${classSlug}/students/${student.login}`);
+                    }
+                  : undefined
+              }
             >
               <button
                 className="cursor-pointer hover:text-blue-600"
                 onClick={() => {
-                  navigate(`/admin/${classSlug}/grades/${student.login}`);
+                  navigate(`/${rolePrefix}/${classSlug}/grades/${student.login}`);
                 }}
                 title="Add comment"
               >

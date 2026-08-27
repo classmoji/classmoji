@@ -122,11 +122,12 @@ test.describe('Owner revokes a pending student invite', () => {
   });
 });
 
-test.describe('Owner invites a teacher / TA', () => {
-  // known issue: TA invite needs live GitHub Octokit + org invite, unverifiable in CI.
+test.describe('Owner invites a teacher / TA / co-owner', () => {
+  // known issue: a staff invite resolves the GitHub profile server-side and
+  // sends a live org invite, so it cannot run in CI.
   test.fixme(
     true,
-    'MISSING: TA invite needs live GitHub Octokit validation + org invite; no classroom_invites row is created for assistants (they become memberships directly) — unverifiable in CI'
+    'MISSING: a Teaching Staff invite resolves the login against live GitHub and sends an org invite; no classroom_invites row is created for staff (they become memberships at the chosen role directly) — unverifiable in CI'
   );
 });
 

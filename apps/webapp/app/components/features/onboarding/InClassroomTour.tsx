@@ -60,8 +60,7 @@ const OWNER_STEPS: FeatureStep[] = [
     selector: '[data-tour="dashboard-grading-tabs"]',
     placement: 'top',
     title: 'Grading tabs',
-    description:
-      'Switch between per-assignment grading progress and TA grading activity.',
+    description: 'Switch between per-assignment grading progress and TA grading activity.',
   },
   {
     link: '/repos',
@@ -82,7 +81,8 @@ const OWNER_STEPS: FeatureStep[] = [
     selector: '[data-tour="repos-form-title"]',
     placement: 'bottom',
     title: 'Name the repository',
-    description: 'Type the repository title, which becomes the GitHub repo name in lowercase with dashes.',
+    description:
+      'Type the repository title, which becomes the GitHub repo name in lowercase with dashes.',
   },
   {
     link: '/repos/form',
@@ -96,14 +96,16 @@ const OWNER_STEPS: FeatureStep[] = [
     selector: '[data-tour="repos-form-add-assignment"]',
     placement: 'left',
     title: 'Add assignments',
-    description: 'Open the assignment editor to define each gradable assignment in this repository.',
+    description:
+      'Open the assignment editor to define each gradable assignment in this repository.',
   },
   {
     link: '/repos/form',
     selector: '[data-tour="repos-form-submit"]',
     placement: 'top',
     title: 'Create repository',
-    description: 'Save everything to create the repository with its assignments and linked content.',
+    description:
+      'Save everything to create the repository with its assignments and linked content.',
   },
   {
     link: '/repos',
@@ -180,27 +182,30 @@ const OWNER_STEPS: FeatureStep[] = [
     selector: '[data-tour="teams-new-visibility"]',
     placement: 'top',
     title: 'Team visibility',
-    description: 'Choose whether the team is secret (members only) or visible to the whole organization.',
+    description:
+      'Choose whether the team is secret (members only) or visible to the whole organization.',
   },
   {
     link: '/teams/new',
     selector: '[data-tour="teams-new-submit"]',
     placement: 'top',
     title: 'Create team',
-    description: 'Click to create the team in your GitHub organization and add it to the classroom.',
-  },
-  {
-    link: '/assistants',
-    title: 'Teaching assistants',
     description:
-      'Assistants help you run and grade the class. You add a TA by GitHub username, then assign them specific submissions to grade from the repository view. This spreads grading across your staff so it scales even in a large course.',
+      'Click to create the team in your GitHub organization and add it to the classroom.',
   },
   {
-    link: '/assistants',
-    selector: '[data-tour="assistants-new"]',
+    link: '/staff',
+    title: 'Teaching staff',
+    description:
+      'Your teaching staff help you run and grade the class. You add someone by GitHub username, then assign them specific submissions to grade from the repository view. This spreads grading across your staff so it scales even in a large course.',
+  },
+  {
+    link: '/staff',
+    selector: '[data-tour="staff-new"]',
     placement: 'bottom',
-    title: 'Add assistant',
-    description: 'Invite a new teaching assistant to this classroom.',
+    title: 'Add staff',
+    description:
+      'Invite an assistant, a teacher or a co-owner to this classroom by GitHub username.',
   },
   {
     link: '/grades',
@@ -577,7 +582,8 @@ export function InClassroomTour() {
     return () => mq.removeEventListener('change', update);
   }, []);
 
-  const phaseRole = tourPhase === 'instructor' ? 'OWNER' : tourPhase === 'student' ? 'STUDENT' : null;
+  const phaseRole =
+    tourPhase === 'instructor' ? 'OWNER' : tourPhase === 'student' ? 'STUDENT' : null;
   const pathPrefix =
     tourPhase === 'instructor' ? '/admin' : tourPhase === 'student' ? '/student' : null;
   const featureSteps = tourPhase === 'student' ? STUDENT_STEPS : OWNER_STEPS;
@@ -731,7 +737,8 @@ export function InClassroomTour() {
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== 'ArrowRight' && e.key !== 'ArrowLeft') return;
       const el = document.activeElement as HTMLElement | null;
-      if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable)) return;
+      if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable))
+        return;
       e.preventDefault();
       if (e.key === 'ArrowLeft') {
         if (tourStep > 0) setTourStep(tourStep - 1);

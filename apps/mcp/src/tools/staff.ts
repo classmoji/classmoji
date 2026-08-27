@@ -2,10 +2,10 @@
  * Teaching-staff tools — staff_add / staff_update / staff_remove.
  *
  * ROUTE-DERIVED TIER: the web actions live in
- * apps/webapp/app/routes/admin.$class.assistants/action.ts, gated by
- * requireClassroomAdmin — OWNER only for all three. The web screen manages
- * ASSISTANTs; these tools cover the whole staff range (ASSISTANT / TEACHER /
- * OWNER), which is why granting OWNER carries its own confirm gate.
+ * apps/webapp/app/routes/admin.$class.staff/action.ts, gated by
+ * requireClassroomAdmin — OWNER only for all three. Both that screen and these
+ * tools cover the whole staff range (ASSISTANT / TEACHER / OWNER), which is why
+ * granting OWNER carries its own confirm gate.
  *
  * Backbone: ClassmojiService.staff.* (extracted in phase A so the web route
  * and these tools take ONE code path — same precedent as roster.service.ts).

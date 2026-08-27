@@ -3,9 +3,8 @@
  *
  * ROUTE-DERIVED TIER: the web actions live in
  * apps/webapp/app/routes/admin.$class.quizzes/route.tsx, gated by
- * assertClassroomAccess with allowedRoles ['OWNER','ASSISTANT'] — TEACHER is
- * genuinely excluded from the quiz surface (S4 role parity), so these tools use
- * OWNER_ASSISTANT, not TEACHING_TEAM.
+ * assertClassroomAccess with allowedRoles ['OWNER','TEACHER','ASSISTANT'] (S4
+ * role parity), so these tools use QUIZ_STAFF.
  *
  * TWO EXTRA GATES run in-handler, because the registry pipeline (scope → rate
  * limit → role → mutation gate) does not know about them:
@@ -42,7 +41,7 @@ import {
   loadQuizInClassroom,
   loadRepositoryInClassroom,
   ok,
-  OWNER_ASSISTANT,
+  QUIZ_STAFF,
   requireClassroomCtx,
   writeAudit,
 } from './shared.ts';
@@ -156,11 +155,11 @@ export const quizCreateTool: ToolDefinition<QuizCreateArgs> = {
     'Creates an AI-conversation quiz. There is NO stored question bank: the AI generates and ' +
     'asks questions live from rubric_prompt (required) and system_prompt, and question_count ' +
     'just tells it how many to ask. Set include_code_context to have it explore the student’s ' +
-    'repository for the linked repo while questioning them. Owner/assistant only; requires a Pro ' +
+    'repository for the linked repo while questioning them. Teaching-team only (owner, teacher or assistant); requires a Pro ' +
     'subscription and quizzes enabled. ALWAYS created as a DRAFT (students see nothing) — use ' +
     'quiz_publish to go live and notify students.',
   scope: 'write',
-  roles: OWNER_ASSISTANT,
+  roles: QUIZ_STAFF,
   inputSchema: {
     classroom: z.string().describe("Classroom reference as 'org/slug'"),
     name: z.string().min(1).max(200).describe('Quiz name'),
@@ -286,14 +285,14 @@ export const quizUpdateTool: ToolDefinition<QuizUpdateArgs> = {
   annotations: { destructive: false, openWorld: false },
   title: 'Update a quiz',
   description:
-    'Updates a quiz’s settings and prompts. Owner/assistant only; requires a Pro subscription ' +
+    'Updates a quiz’s settings and prompts. Teaching-team only (owner, teacher or assistant); requires a Pro subscription ' +
     'and quizzes enabled. Provide at least one field. status accepts only DRAFT (unpublish, ' +
     'hiding it from students again) or CLOSED (stop new attempts); publishing must go through ' +
     'quiz_publish, because only that path notifies students. Set repository_id to null to unlink ' +
     'the repo, or due_date to null to clear the deadline. Editing prompts does not re-grade ' +
     'attempts already taken.',
   scope: 'write',
-  roles: OWNER_ASSISTANT,
+  roles: QUIZ_STAFF,
   inputSchema: {
     classroom: z.string().describe("Classroom reference as 'org/slug'"),
     quiz_id: z.string().uuid().describe('Quiz id'),
@@ -403,13 +402,13 @@ export const quizPublishTool: ToolDefinition<QuizPublishArgs> = {
   annotations: { destructive: false, idempotent: true, openWorld: false },
   title: 'Publish a quiz',
   description:
-    'Publishes a quiz so students can take it. Owner/assistant only; requires a Pro subscription ' +
+    'Publishes a quiz so students can take it. Teaching-team only (owner, teacher or assistant); requires a Pro subscription ' +
     'and quizzes enabled. This is the ONLY path that notifies students — they get a "Quiz ' +
     'published" notification, but only on the transition INTO published, so republishing an ' +
     'already-published quiz notifies nobody. The response reports whether students were ' +
     'notified. Use quiz_update with status DRAFT to unpublish.',
   scope: 'write',
-  roles: OWNER_ASSISTANT,
+  roles: QUIZ_STAFF,
   inputSchema: {
     classroom: z.string().describe("Classroom reference as 'org/slug'"),
     quiz_id: z.string().uuid().describe('Quiz id'),
@@ -460,13 +459,13 @@ export const quizDeleteTool: ToolDefinition<QuizDeleteArgs> = {
   annotations: { destructive: true, openWorld: false },
   title: 'Delete a quiz',
   description:
-    'Permanently deletes a quiz. Owner/assistant only, destructive, requires confirm:true; ' +
+    'Permanently deletes a quiz. Teaching-team only (owner, teacher or assistant), destructive, requires confirm:true; ' +
     'requires a Pro subscription and quizzes enabled. THIS CANNOT BE UNDONE and cascades: every ' +
     'student attempt at this quiz — transcripts, scores, and focus metrics — is permanently ' +
     'deleted with it, and the quiz is removed from any curriculum module that lists it. To take ' +
     'a quiz out of circulation without losing student work, use quiz_update with status CLOSED.',
   scope: 'write',
-  roles: OWNER_ASSISTANT,
+  roles: QUIZ_STAFF,
   inputSchema: {
     classroom: z.string().describe("Classroom reference as 'org/slug'"),
     quiz_id: z.string().uuid().describe('Quiz id'),

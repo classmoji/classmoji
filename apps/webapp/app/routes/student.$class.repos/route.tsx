@@ -1,4 +1,5 @@
 import getPrisma from '@classmoji/database';
+import { useLocation } from 'react-router';
 import type { Route } from './+types/route';
 import { ClassmojiService } from '@classmoji/services';
 import { assertClassroomAccess } from '~/utils/helpers';
@@ -119,6 +120,7 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
 };
 
 const StudentRepositories = ({ loaderData }: Route.ComponentProps) => {
+  const rolePrefix = useLocation().pathname.split('/')[1];
   const {
     repositories,
     repoAssignmentsByAssignmentId,
@@ -130,6 +132,8 @@ const StudentRepositories = ({ loaderData }: Route.ComponentProps) => {
     classSlug,
   } = loaderData;
 
+  // Served under every prefix this route's gate allows, so resource links stay
+  // on the prefix the viewer arrived on.
   const ctx = {
     classSlug,
     slidesUrl,
@@ -137,6 +141,7 @@ const StudentRepositories = ({ loaderData }: Route.ComponentProps) => {
     gitOrgLogin,
     studentRepoByRepositoryId,
     autogradingByRepositoryId,
+    rolePrefix,
   };
   const nodes = (repositories as AnyRepository[]).map(r =>
     buildRepositoryNode(

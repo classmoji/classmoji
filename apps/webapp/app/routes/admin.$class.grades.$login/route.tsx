@@ -5,29 +5,63 @@ import { useState, useEffect } from 'react';
 import { ClassmojiService } from '@classmoji/services';
 import { useGlobalFetcher } from '~/hooks';
 import { UserThumbnailView } from '~/components';
-import { assertClassroomAccess, assertClassroomMutationAllowed } from '~/utils/helpers';
+import {
+  addClassroomAuditLog,
+  assertClassroomAccess,
+  assertClassroomMutationAllowed,
+} from '~/utils/helpers';
 import type { Route } from './+types/route';
 
 export const loader = async ({ params, request }: Route.LoaderArgs) => {
   const { login, class: classSlug } = params;
 
-  // Authorize: only OWNER/ASSISTANT can view student grade comments
+  // Authorize: OWNER/TEACHER can view student grade comments. Same list as the
+  // parent grades route, which is what lets this drawer be served under both
+  // the /admin and /teacher prefixes.
   const { classroom } = await assertClassroomAccess({
     request,
     classroomSlug: classSlug!,
-    allowedRoles: ['OWNER', 'ASSISTANT'],
+    allowedRoles: ['OWNER', 'TEACHER'],
     resourceType: 'GRADES',
     attemptedAction: 'view_student_grade',
   });
 
-  const student = await ClassmojiService.user.findByLogin(login!);
-  const membership = await ClassmojiService.classroomMembership.findByClassroomAndUser(
+  // One classroom-scoped, role-pinned, projected lookup.
+  //
+  // This used to resolve the student with the GLOBAL `user.findByLogin`, which
+  // includes every classroom that student belongs to, each one's
+  // git_organization row and each one's owner memberships — and this route
+  // returned it. There is no entry.server.tsx here, so React Router's default
+  // entry serialises whatever a loader returns straight into the page: the
+  // drawer was shipping other classrooms' data to render a comment box.
+  //
+  // The membership was then read with no role filter. One person can hold
+  // several roles in a classroom, so the unfiltered lookup could return, say,
+  // their grader row — and the drawer both reads the comment from it and posts
+  // its id back as the write target.
+  const enrollment = await ClassmojiService.classroomMembership.findStudentByLoginInClassroom(
     classroom.id,
-    student!.id
+    login!
   );
 
-  // Only return what the component needs - organization not needed in UI
-  return { student, membership };
+  // No such student in THIS classroom. An unknown login and a login that
+  // belongs to someone outside the classroom are indistinguishable from here,
+  // which is the intent. Previously this dereferenced a null user and answered
+  // with a 500.
+  if (!enrollment) {
+    throw new Response('Student not found', { status: 404 });
+  }
+
+  return {
+    student: {
+      id: enrollment.user.id,
+      name: enrollment.user.name,
+      login: enrollment.user.login,
+      // UserThumbnailView reads `avatar_url`; the User column is `image`.
+      avatar_url: enrollment.user.image,
+    },
+    membership: { id: enrollment.id, comment: enrollment.comment },
+  };
 };
 
 const GradeComment = ({ loaderData }: Route.ComponentProps) => {
@@ -68,11 +102,7 @@ const GradeComment = ({ loaderData }: Route.ComponentProps) => {
       okText="Save"
     >
       <div className="py-4">
-        <UserThumbnailView
-          user={
-            student as { avatar_url?: string | null; name?: string | null; login?: string | null }
-          }
-        />
+        <UserThumbnailView user={student} />
       </div>
       <p className="pb-4 text-gray-500 text-sm">
         You can provide comments on <span className=" underline text-sm">{student?.name}</span>
@@ -86,19 +116,55 @@ const GradeComment = ({ loaderData }: Route.ComponentProps) => {
 export const action = async ({ params, request }: Route.ActionArgs) => {
   const { class: classSlug } = params;
 
-  // Authorize: only OWNER/ASSISTANT can modify student grade comments
-  const { classroom, membership } = await assertClassroomAccess({
+  // Authorize: OWNER/TEACHER can modify student grade comments. This action
+  // carries its own gate — a layout loader does not gate it, because React
+  // Router runs the leaf action before any loader.
+  const { userId, classroom, membership } = await assertClassroomAccess({
     request,
     classroomSlug: classSlug!,
-    allowedRoles: ['OWNER', 'ASSISTANT'],
+    allowedRoles: ['OWNER', 'TEACHER'],
     resourceType: 'GRADES',
     attemptedAction: 'modify_student_grade',
   });
   assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
 
   const data = await request.json();
-  const { membershipId, comment } = data;
-  await ClassmojiService.classroomMembership.updateById(membershipId, { comment });
+  const membershipId = typeof data?.membershipId === 'string' ? data.membershipId : null;
+  // An empty comment is legitimate — it clears the note — so this checks the
+  // type, not the truthiness.
+  const comment = typeof data?.comment === 'string' ? data.comment : null;
+
+  if (!membershipId || comment === null) {
+    return { action: 'ADD_GRADE_COMMENT', error: 'Invalid request.' };
+  }
+
+  // Authorization binds to `params.class`, but the membership id arrives in the
+  // JSON body — so the write is bound to `{ id, classroom_id }` and only counts
+  // when it matched exactly one row. Same shape as the page and quiz writes on
+  // this branch.
+  const updated = await ClassmojiService.classroomMembership.updateInClassroom(
+    membershipId,
+    classroom.id,
+    { comment }
+  );
+
+  if (!updated) {
+    return { action: 'ADD_GRADE_COMMENT', error: 'Student not found.' };
+  }
+
+  // Audited only once the write has landed, so a row naming this classroom
+  // always describes a change that happened in it. The comment TEXT is not
+  // recorded — it is a private note about a named student, and the audit trail
+  // answers who changed what and when, not what it said.
+  await addClassroomAuditLog({
+    classroomId: classroom.id,
+    userId,
+    role: membership!.role,
+    action: 'UPDATE',
+    resourceType: 'GRADES',
+    resourceId: membershipId,
+    metadata: { tool: 'web:grades.update_comment', cleared: comment === '' },
+  });
 
   return { action: 'ADD_GRADE_COMMENT', success: 'Saved comment.' };
 };

@@ -145,10 +145,18 @@ export function isMember(viewer: SiteViewer): boolean {
 
 /**
  * The webapp path prefix a role's dashboard lives under.
- * Assistants have their own route tree; everyone else is admin or student.
+ *
+ * One tree per role, and each tree is gated to its own role: `/admin` is
+ * OWNER-only, so a teacher routed there would be turned away at the door even
+ * though the page they wanted exists for them under `/teacher`. Teachers are
+ * still staff everywhere else — `isStaff` and `STAFF_ROLES` are unchanged;
+ * this is a link target, not a permission.
  */
-export function rolePrefix(role: SiteViewerRole): 'admin' | 'assistant' | 'student' | null {
+export function rolePrefix(
+  role: SiteViewerRole
+): 'admin' | 'teacher' | 'assistant' | 'student' | null {
   if (role === null) return null;
+  if (role === 'TEACHER') return 'teacher';
   if (role === 'ASSISTANT') return 'assistant';
   if (STAFF_ROLES.has(role)) return 'admin';
   return 'student';

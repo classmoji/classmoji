@@ -1,5 +1,5 @@
 import { test as base, Page } from '@playwright/test';
-import { TEST_USERS, TestUser, getDashboardUrl } from '../helpers/auth.helpers';
+import { getTestUser, TestUser, TestUserRole, getDashboardUrl } from '../helpers/auth.helpers';
 import { TEST_CLASSROOM } from '../helpers/env.helpers';
 
 /**
@@ -39,17 +39,21 @@ export const test = base.extend<AuthFixtures>({
 
     // Resolve role explicitly from file path or project name; throw rather than
     // default to a role, which would mask authorization bugs.
-    let role: 'owner' | 'assistant' | 'student' | undefined;
+    let role: 'owner' | 'teacher' | 'assistant' | 'student' | undefined;
 
     // File path is the most specific signal — check it first.
     if (testInfo.file.includes('/owner/')) {
       role = 'owner';
+    } else if (testInfo.file.includes('/teacher/')) {
+      role = 'teacher';
     } else if (testInfo.file.includes('/assistant/')) {
       role = 'assistant';
     } else if (testInfo.file.includes('/student/')) {
       role = 'student';
     } else if (projectName.includes('owner') || projectName.includes('smoke')) {
       role = 'owner';
+    } else if (projectName.includes('teacher')) {
+      role = 'teacher';
     } else if (projectName.includes('assistant')) {
       role = 'assistant';
     } else if (projectName.includes('student')) {
@@ -60,12 +64,14 @@ export const test = base.extend<AuthFixtures>({
       throw new Error(
         `auth.fixture: could not resolve a test-user role for project "${projectName}" / file "${testInfo.file}". ` +
           `Refusing to silently default to 'student' (would mask authorization bugs). ` +
-          `Place the spec under tests/{owner,assistant,student}/ or give its Playwright project a name ` +
-          `containing one of: owner, smoke, assistant, student.`
+          `Place the spec under tests/{owner,teacher,assistant,student}/ or give its Playwright project a name ` +
+          `containing one of: owner, smoke, teacher, assistant, student.`
       );
     }
 
-    await use(TEST_USERS[role]);
+    // Resolved here, not at import: only the role this spec actually needs has
+    // to have its token configured.
+    await use(getTestUser(role));
   },
 
   testOrg: async ({}, use) => {
@@ -95,7 +101,7 @@ export { expect } from '@playwright/test';
  */
 export async function goToDashboard(
   page: Page,
-  role: 'OWNER' | 'ASSISTANT' | 'STUDENT',
+  role: TestUserRole,
   classroom: string = TEST_CLASSROOM
 ): Promise<void> {
   await page.goto(getDashboardUrl(role, classroom));

@@ -121,8 +121,17 @@ const OrgSelect = ({ memberships }: OrgSelectProps) => {
               onClick={() => {
                 // Students go to class root (student.$class._index handles default page)
                 const suffix = membershipOption.role === 'STUDENT' ? '' : '/dashboard';
+                // A membership carries a raw DB role, which is not guaranteed to
+                // have an entry here — a role added to the enum before it is
+                // given a prefix used to crash the switcher on undefined.path.
+                // Fall back to the classroom picker rather than throwing.
+                const rolePath = (
+                  roleSettings as Record<string, { path: string; color: string } | undefined>
+                )[membershipOption.role]?.path;
                 navigate(
-                  `${(roleSettings as Record<string, { path: string; color: string }>)[membershipOption.role].path}/${membershipOption.organization.login}${suffix}`
+                  rolePath
+                    ? `${rolePath}/${membershipOption.organization.login}${suffix}`
+                    : '/select-organization'
                 );
               }}
             >

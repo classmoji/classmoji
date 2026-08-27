@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useNavigate, useParams } from 'react-router';
+import { useLocation, useNavigate, useParams } from 'react-router';
 import { Drawer, ConfigProvider, theme, Modal } from 'antd';
 import { useRouteDrawer, useDarkMode } from '~/hooks';
 import { QuizAttemptInterface } from '~/components';
@@ -7,7 +7,7 @@ import { assertClassroomAccess, assertProTier } from '~/utils/helpers';
 import type { Route } from './+types/route';
 
 export async function loader({ params, request }: Route.LoaderArgs) {
-  const { ClassmojiService } = await import('@classmoji/services');
+  const { ClassmojiService, QuizAttemptNotFoundError } = await import('@classmoji/services');
   const classSlug = params.class!;
   const quizId = params.quizId!;
   const attemptId = params.attemptId!;
@@ -16,7 +16,7 @@ export async function loader({ params, request }: Route.LoaderArgs) {
   const { userId, classroom } = await assertClassroomAccess({
     request,
     classroomSlug: classSlug,
-    allowedRoles: ['OWNER', 'ASSISTANT'],
+    allowedRoles: ['OWNER', 'TEACHER', 'ASSISTANT'],
     resourceType: 'QUIZ_PREVIEW',
     attemptedAction: 'preview',
   });
@@ -29,9 +29,19 @@ export async function loader({ params, request }: Route.LoaderArgs) {
     throw new Response('Quiz not found', { status: 404 });
   }
 
-  // 3. Fetch attempt with messages
-  const attemptData = await ClassmojiService.quizAttempt.findWithMessages(attemptId);
-  if (!attemptData?.attempt) {
+  // 3. Fetch attempt with messages, bound to the quiz resolved above.
+  // `findWithMessages` resolves an attempt by id alone and throws when there is
+  // none, so both an id naming nothing and an id naming another quiz's attempt
+  // land on the same 404 — checked before ownership, so a foreign id is never
+  // confirmed to exist. Only that one error becomes a 404; anything else the
+  // query raises still surfaces.
+  const attemptData = await ClassmojiService.quizAttempt
+    .findWithMessages(attemptId)
+    .catch((error: unknown) => {
+      if (error instanceof QuizAttemptNotFoundError) return null;
+      throw error;
+    });
+  if (!attemptData?.attempt || attemptData.attempt.quiz_id.toString() !== quiz.id.toString()) {
     throw new Response('Attempt not found', { status: 404 });
   }
 
@@ -88,15 +98,17 @@ export default function AdminQuizPreviewDrawer({ loaderData }: Route.ComponentPr
   const { isDarkMode } = useDarkMode();
   const navigate = useNavigate();
   const { class: classSlug, quizId } = useParams();
+  // Served under every prefix this route's gate allows (/admin and /teacher).
+  const rolePrefix = useLocation().pathname.split('/')[1];
   const [showConfirm, setShowConfirm] = useState(false);
 
   const navigateAway = (newAttemptId?: string) => {
     if (newAttemptId) {
       // If a new attempt was created (from restart), navigate to it
-      navigate(`/admin/${classSlug}/quizzes/${quizId}/preview/${newAttemptId}`);
+      navigate(`/${rolePrefix}/${classSlug}/quizzes/${quizId}/preview/${newAttemptId}`);
     } else {
       // Otherwise go back to quiz detail page
-      navigate(`/admin/${classSlug}/quizzes/${quizId}`);
+      navigate(`/${rolePrefix}/${classSlug}/quizzes/${quizId}`);
     }
   };
 

@@ -1,13 +1,15 @@
 /**
  * Unit tests for the roster under the ASSISTANT prefix.
  *
- * The admin roster loader reads at the teaching-team tier, and it is reachable
- * at BOTH prefixes. /admin's own OWNER check is not a server gate: the layout
- * loader (routes/admin/route.tsx) CATCHES the thrown auth Response and degrades
- * to an empty payload, and its `RequireRole` wrapper is client-side. So an
- * assistant hitting /admin/:class/students gets a 200 from this loader and an
- * emptied shell drawn around it. This route is the prefix where the same read
- * is actually presented, and it must widen the READ only:
+ * The admin roster loader reads at the teaching-team tier, and the same loader
+ * is re-exported here. /admin/:class/** is now closed to non-owner navigation
+ * by `admin.$class/route.tsx`, whose loader THROWS a 403 — so this prefix is
+ * where an assistant actually reaches this read, rather than one of two places.
+ * (It used to be reachable at /admin too: that layout had no loader at all, and
+ * the /admin parent above it catches and degrades rather than refusing.)
+ *
+ * These tests call the loader and action DIRECTLY, so no layout gate runs in
+ * them either way. What they pin is this route's own surface:
  *
  *   READ  — the same loader, so the OWNER-only field split travels with it.
  *   WRITE — absent. The route exports no `action`, so there is no POST target
@@ -54,6 +56,13 @@ vi.mock('@trigger.dev/sdk', () => ({
 vi.mock('~/utils/helpers', () => ({
   waitForRunCompletion: (...a: unknown[]) => mocks.waitForRunCompletion(...a),
 }));
+
+// The REAL field-split helper, by its relative path — see the admin roster
+// test for why it is not stubbed.
+vi.mock(
+  '~/utils/studentFields.server',
+  async () => await import('../../../utils/studentFields.server.ts')
+);
 
 vi.mock('~/constants', () => ({ ActionTypes: { REMOVE_USER: 'remove-user' } }));
 
@@ -200,11 +209,19 @@ describe('assistant students route — an OWNER on this prefix', () => {
     });
   });
 
-  it('still receives the owner-only fields — those follow the role', async () => {
+  it('is shown the ASSISTANT view of the roster, not their own', async () => {
+    // This is where "Preview as → Assistant" lands, so the answer has to be
+    // what an assistant actually sees: identity and status, no contact or grade
+    // fields. Showing the owner their own view under an assistant label would
+    // answer the wrong question.
+    //
+    // Narrowing only — the prefix can subtract fields, never add them. An owner
+    // keeps everything on /admin.
     const data = await assistantRoute.loader(loaderArgs());
 
-    expect(data.isOwner).toBe(true);
-    expect(data.students[0]).toMatchObject({ email: 'ada@school.test' });
+    expect(data.isOwner).toBe(false);
+    expect(data.students[0]).not.toHaveProperty('email');
+    expect(data.students[0]).not.toHaveProperty('letter_grade');
   });
 
   it('is refused the controls, because this prefix cannot service them', async () => {

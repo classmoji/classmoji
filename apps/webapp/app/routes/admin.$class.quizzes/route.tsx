@@ -1,10 +1,11 @@
-import { useFetcher, useNavigate, useParams, Outlet } from 'react-router';
+import { useFetcher, useLocation, useNavigate, useParams, Outlet } from 'react-router';
 import { Table, Button, Typography, Tag, Space, Tooltip, Popconfirm } from 'antd';
 import { IconSend, IconBook, IconCalendar, IconTrash } from '@tabler/icons-react';
 import { TableActionButtons, EditableCell, ButtonNew } from '~/components';
-import { ClassmojiService } from '@classmoji/services';
+import { ClassmojiService, QuizAccessError } from '@classmoji/services';
 import { namedAction } from 'remix-utils/named-action';
 import {
+  addClassroomAuditLog,
   assertClassroomAccess,
   assertClassroomMutationAllowed,
   assertProTier,
@@ -53,7 +54,7 @@ export async function loader({ params, request }: Route.LoaderArgs) {
   const { userId, classroom, membership } = await assertClassroomAccess({
     request,
     classroomSlug: classSlug,
-    allowedRoles: ['OWNER', 'ASSISTANT'],
+    allowedRoles: ['OWNER', 'TEACHER', 'ASSISTANT'],
     resourceType: 'ADMIN_QUIZ_ACCESS',
     attemptedAction: 'view_admin_quizzes',
   });
@@ -70,8 +71,22 @@ export async function loader({ params, request }: Route.LoaderArgs) {
 
   const user = await ClassmojiService.user.findById(userId);
 
-  // Get all quizzes for admin (including drafts)
-  const quizzesWithAttempts = await ClassmojiService.quiz.findByClassroom(classroom.id, membership);
+  // Get all quizzes for admin (including drafts).
+  //
+  // The service keeps its own role list, so it can disagree with the gate above
+  // — and when it did, its bare Error surfaced as a 500 rather than a refusal.
+  // A QuizAccessError is always a refusal, so it is answered as one: a future
+  // role gap between the two lists fails visibly instead of looking like a
+  // server fault.
+  let quizzesWithAttempts;
+  try {
+    quizzesWithAttempts = await ClassmojiService.quiz.findByClassroom(classroom.id, membership);
+  } catch (error) {
+    if (error instanceof QuizAccessError) {
+      throw new Response('You do not have access to this classroom’s quizzes', { status: 403 });
+    }
+    throw error;
+  }
 
   // Transform quizzes for frontend compatibility
   const transformedQuizzes = quizzesWithAttempts.map(quiz => {
@@ -133,7 +148,7 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
   const { userId, classroom, membership } = await assertClassroomAccess({
     request,
     classroomSlug: classSlug,
-    allowedRoles: ['OWNER', 'ASSISTANT'],
+    allowedRoles: ['OWNER', 'TEACHER', 'ASSISTANT'],
     resourceType: 'ADMIN_QUIZ_ACTION',
     attemptedAction: data._action || 'unknown',
     metadata: {
@@ -149,12 +164,81 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
     formData.append('_action', data._action);
   }
 
+  // Each branch audits once its write has landed, under the MCP quiz tools'
+  // resource_type ('QUIZ') and keyed on the quiz id. The AuditLogAction enum
+  // has no PUBLISH, so publish and weight changes are UPDATE with the intent
+  // carried in `tool` — which is also what stops the audit service's 5-second
+  // dedup from folding a publish and a weight change into one row.
+  const audit = (action: string, resourceId: string, metadata: Record<string, unknown>) =>
+    addClassroomAuditLog({
+      classroomId: classroom.id,
+      userId,
+      role: membership!.role,
+      action,
+      resourceType: 'QUIZ',
+      resourceId,
+      metadata,
+    });
+
+  const notFound = () =>
+    new Response(JSON.stringify({ error: 'Quiz not found' }), {
+      status: 404,
+      headers: { 'Content-Type': 'application/json' },
+    });
+
+  /**
+   * Resolve a quiz THAT BELONGS TO THE CLASSROOM THIS REQUEST WAS AUTHORIZED
+   * FOR, or answer 404.
+   *
+   * Authorization binds to `params.class`, but the quiz id arrives in the JSON
+   * body and `quiz.service` resolves quizzes by id alone — so without this the
+   * two are unrelated and a caller authorized for one classroom could name a
+   * quiz in another. Every mutation below proves the classroom BEFORE it writes
+   * and before it audits, which is also what keeps the audit row truthful: a
+   * row naming this classroom must describe a write that landed here.
+   *
+   * Same check the MCP quiz tools make via `loadQuizInClassroom`
+   * (apps/mcp/src/tools/shared.ts), and the same uniform rejection: an unknown
+   * id and another classroom's quiz are indistinguishable to the caller.
+   */
+  const loadQuizInClassroom = async (quizId: string) => {
+    if (!quizId) return null;
+    const quiz = await ClassmojiService.quiz.findById(quizId);
+    return quiz && quiz.classroom_id === classroom.id ? quiz : null;
+  };
+
+  /**
+   * Resolve a repository id supplied in the body against this classroom.
+   *
+   * `quiz.create`/`quiz.update` connect the repository relation by id with no
+   * classroom check of their own, so an id from another classroom would link
+   * across the boundary. Absent/null is legitimate (an unlinked quiz) and
+   * passes through; a NAMED repository must live in this classroom.
+   */
+  const resolveRepositoryId = async (repositoryId: unknown) => {
+    if (repositoryId === undefined || repositoryId === null || repositoryId === '') {
+      return { ok: true as const, value: repositoryId };
+    }
+    const repository = await ClassmojiService.repository.findById(String(repositoryId));
+    if (!repository || repository.classroom_id !== classroom.id) {
+      return { ok: false as const, value: null };
+    }
+    return { ok: true as const, value: repositoryId };
+  };
+
   return namedAction(formData, {
     async createQuiz() {
       const { ...quizData } = data;
+      const repository = await resolveRepositoryId(quizData.repositoryId);
+      if (!repository.ok) return notFound();
       const newQuiz = await ClassmojiService.quiz.create({
         ...quizData,
         classroomId: classroom.id,
+      });
+      await audit('CREATE', newQuiz.id, {
+        tool: 'web:quizzes.create',
+        name: newQuiz.name,
+        repository_id: newQuiz.repository_id ?? null,
       });
       return new Response(
         JSON.stringify({ success: 'Quiz created successfully', quizId: newQuiz.id }),
@@ -166,7 +250,16 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
     },
 
     async updateQuiz() {
+      if (!(await loadQuizInClassroom(data.id))) return notFound();
+      const repository = await resolveRepositoryId(data.repositoryId);
+      if (!repository.ok) return notFound();
       await ClassmojiService.quiz.update(data.id, data);
+      await audit('UPDATE', data.id, {
+        tool: 'web:quizzes.update',
+        // Field NAMES only. The body carries system and rubric prompts, which
+        // are long free text and do not belong in an audit payload.
+        fields: Object.keys(data).filter(key => key !== '_action' && key !== 'id'),
+      });
       return new Response(JSON.stringify({ success: 'Quiz updated successfully' }), {
         status: 200,
         headers: { 'Content-Type': 'application/json' },
@@ -174,7 +267,10 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
     },
 
     async deleteQuiz() {
+      const quiz = await loadQuizInClassroom(data.id);
+      if (!quiz) return notFound();
       await ClassmojiService.quiz.delete(data.id);
+      await audit('DELETE', data.id, { tool: 'web:quizzes.delete', name: quiz.name });
       return new Response(JSON.stringify({ success: 'Quiz deleted successfully' }), {
         status: 200,
         headers: { 'Content-Type': 'application/json' },
@@ -182,7 +278,9 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
     },
 
     async publishQuiz() {
+      if (!(await loadQuizInClassroom(data.id))) return notFound();
       await ClassmojiService.quiz.publish(data.id);
+      await audit('UPDATE', data.id, { tool: 'web:quizzes.publish', published: true });
       return new Response(JSON.stringify({ success: 'Quiz published successfully' }), {
         status: 200,
         headers: { 'Content-Type': 'application/json' },
@@ -190,7 +288,13 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
     },
 
     async updateWeight() {
+      if (!(await loadQuizInClassroom(data.id))) return notFound();
       await ClassmojiService.quiz.update(data.id, {
+        weight: data.weight,
+      });
+      await audit('UPDATE', data.id, {
+        tool: 'web:quizzes.update_weight',
+        fields: ['weight'],
         weight: data.weight,
       });
       return new Response(JSON.stringify({ success: 'Quiz weight updated successfully' }), {
@@ -200,7 +304,17 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
     },
 
     async clearMyAttempts() {
+      // Takes no id from the body: the service scopes the delete by BOTH the
+      // caller's user id and this classroom, so there is nothing here for a
+      // request body to redirect at another classroom.
       const result = await ClassmojiService.quizAttempt.clearForUser(userId, classroom.id);
+      // Classroom-wide clear of the caller's OWN preview attempts, so it is not
+      // keyed on any one quiz — the classroom is the affected resource.
+      await audit('DELETE', classroom.id, {
+        tool: 'web:quizzes.clear_my_attempts',
+        scope: 'classroom',
+        deleted_count: result.deletedCount,
+      });
       return new Response(
         JSON.stringify({
           success: `Cleared ${result.deletedCount} quiz attempt(s)`,
@@ -220,9 +334,12 @@ export default function AdminQuizzes({ loaderData }: Route.ComponentProps) {
   const fetcher = useFetcher();
   const navigate = useNavigate();
   const { class: classSlug } = useParams();
+  // Served under every prefix this route's gate allows (/admin and /teacher),
+  // so links stay on the prefix the user arrived on.
+  const rolePrefix = useLocation().pathname.split('/')[1];
 
   const handleEditQuiz = (quiz: AdminQuiz) => {
-    navigate(`/admin/${classSlug}/quizzes/form?quizId=${quiz.id}`);
+    navigate(`/${rolePrefix}/${classSlug}/quizzes/form?quizId=${quiz.id}`);
   };
 
   const handleDeleteQuiz = (quizId: string) => {
@@ -258,7 +375,7 @@ export default function AdminQuizzes({ loaderData }: Route.ComponentProps) {
   };
 
   const handleViewQuiz = (quiz: AdminQuiz) => {
-    navigate(`/admin/${classSlug}/quizzes/${quiz.id}`);
+    navigate(`/${rolePrefix}/${classSlug}/quizzes/${quiz.id}`);
   };
 
   const totalWeight = quizzes
@@ -438,7 +555,7 @@ export default function AdminQuizzes({ loaderData }: Route.ComponentProps) {
             <Button icon={<IconTrash size={16} />}>Clear My Attempts</Button>
           </Popconfirm>
 
-          <ButtonNew action={() => navigate(`/admin/${classSlug}/quizzes/form`)}>
+          <ButtonNew action={() => navigate(`/${rolePrefix}/${classSlug}/quizzes/form`)}>
             New quiz
           </ButtonNew>
         </Space>

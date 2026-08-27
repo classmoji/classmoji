@@ -1167,15 +1167,28 @@ describe('resource tiers', () => {
     expect(text).not.toMatch(/anthropic_api_key|openai_api_key|access_token/);
   });
 
-  it('quizzes: TEACHER is genuinely excluded by the role gate', async () => {
-    const denied = await readResource(teacher, `classmoji://${DEV_REF}/quizzes`);
-    expect(denied.error?.code).toBe(RESOURCE_FORBIDDEN);
-    // Tie the denial to the ROLE gate specifically: the Pro-tier and
-    // quizzes_enabled gates also answer -32003, so the code alone would keep
-    // passing if TEACHER were ever added to QUIZ_ROLES. INSUFFICIENT_ROLE is
-    // only ever attached by the role gate (authz/pure.ts requireRole).
-    expect((denied.error?.data as { code?: string } | undefined)?.code).toBe('INSUFFICIENT_ROLE');
-    expect(denied.error?.message).toMatch(/Required role/);
+  it('quizzes: TEACHER gets the staff view, same as an ASSISTANT', async () => {
+    const result = await readResource(teacher, `classmoji://${DEV_REF}/quizzes`);
+
+    // Assert SUCCESS, not merely "not INSUFFICIENT_ROLE". The weaker form
+    // passes on ANY other failure — including the service throwing, which is
+    // exactly how a 500 hid behind this test while the feature was dead.
+    //
+    // Success is the correct expectation, not a guess: the fixture classroom is
+    // known Pro-tier with quizzes_enabled, because phase2-behavior asserts the
+    // single-role ASSISTANT reads this same resource without error. TEACHER
+    // carries the same quiz rights, so anything other than success here is a
+    // regression.
+    expect(result.error).toBeUndefined();
+    expect(Array.isArray(result.payload!.quizzes)).toBe(true);
+
+    // And it is the STAFF projection, not the student one — the staff-only
+    // fields must be present in the row shape.
+    const rows = result.payload!.quizzes as Array<Record<string, unknown>>;
+    for (const row of rows) {
+      expect(row).toHaveProperty('system_prompt');
+      expect(row).toHaveProperty('rubric_prompt');
+    }
   });
 });
 

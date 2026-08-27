@@ -68,7 +68,8 @@ Monorepo via npm workspaces + Turbo; Node 22+ required.
 
 ### Cross-Role Route Patterns
 When working on features that span admin/assistant/student routes, avoid duplicating code:
-- **Re-export** where possible: assistant routes should re-export from student routes (see `assistant.$class_.quizzes/route.jsx` for the pattern)
+- **Re-export** where possible: a role-prefix route re-exports from whichever route already serves that screen — the student one for student-facing views, the admin one for staff views (see `assistant.$class_.quizzes/route.tsx`, which re-exports the admin quiz management screens). Re-export `action` ONLY when the source route's own gate admits the role that prefix serves; omitting it means the mutation has no POST target under that prefix at all, which is usually what you want.
+- **`/admin` is the OWNER namespace for navigation.** `admin.$class/route.tsx` carries a `requireClassroomAdmin` loader, so every screen under `/admin/:class/**` is owner-only to BROWSE, regardless of its own leaf gate. A screen a teacher or assistant should reach needs a route under `/teacher` or `/assistant`. That layout loader is not a mutation boundary and must never be read as one: React Router matches only the action route for a submission and revalidates loaders afterwards, so a POST to a leaf under `/admin` runs before the namespace loader refuses. Every action keeps its own gate — that is what actually decides who may write.
 - **Shared components** go in `apps/webapp/app/components/features/`
 - **Shared business logic** goes in `packages/services` or `packages/utils`
 - Check existing role routes before creating new ones — the feature may already exist under a different role prefix.
@@ -77,7 +78,7 @@ When working on features that span admin/assistant/student routes, avoid duplica
 Slides, pages, and ai-agent are moving toward self-contained services. When working on these, keep code consolidated within each service rather than adding cross-app dependencies. Prefer importing from shared packages (`@classmoji/services`, `@classmoji/utils`, `@classmoji/database`) over reaching into another app's internals.
 
 ### Standard Page Layout
-List/index pages (admin/student route pages with a header + table or list) should follow this uniform pattern. Reference: `apps/webapp/app/routes/admin.$class.assistants/route.tsx`.
+List/index pages (admin/student route pages with a header + table or list) should follow this uniform pattern. Reference: `apps/webapp/app/routes/admin.$class.staff/route.tsx`.
 
 ```jsx
 <div className="min-h-full relative">

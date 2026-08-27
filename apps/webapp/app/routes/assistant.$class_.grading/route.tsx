@@ -5,7 +5,13 @@ import RepositoryAssignmentsTable from './RepositoryAssignmentsTable';
 
 export const loader = async ({ request, params }: Route.LoaderArgs) => {
   const { class: classSlug } = params;
-  const { userId, classroom } = await requireClassroomTeachingTeam(request, classSlug!);
+  // Named so a denial is identifiable rather than the shared default
+  // 'TEACHING_RESOURCE'/'access'. Served under /assistant and /teacher alike,
+  // and the name describes the resource rather than the prefix.
+  const { userId, classroom } = await requireClassroomTeachingTeam(request, classSlug!, {
+    resourceType: 'GRADING_QUEUE',
+    action: 'view_grading_queue',
+  });
   const assignedGraderItems =
     await ClassmojiService.gitRepoAssignmentGrader.findAssignedByGrader(userId, classroom.id);
   const myRepositoryAssignments = assignedGraderItems.map(item => item.git_repo_assignment);
@@ -33,10 +39,6 @@ const AssistantGrading = ({ loaderData }: Route.ComponentProps) => {
       />
     </div>
   );
-};
-
-export const action = () => {
-  return { message: 'Success' };
 };
 
 export default AssistantGrading;

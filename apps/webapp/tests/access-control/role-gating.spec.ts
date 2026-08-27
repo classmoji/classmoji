@@ -84,13 +84,38 @@ test.describe('Access Control: a student cannot reach owner-only routes', () => 
   });
 });
 
-test.describe('Access Control: an assistant cannot reach owner-only routes', () => {
+test.describe('Access Control: an assistant cannot reach the /admin namespace', () => {
   test.use({ storageState: './tests/.auth/assistant.json' });
 
   test('an assistant navigating to the admin repositories route is denied (403)', async ({
     authenticatedPage: page,
   }) => {
     const response = await page.goto(`/admin/${TEST_CLASSROOM}/repos`);
+    expect(response?.status()).toBe(403);
+  });
+
+  test('an assistant is denied at /admin even where the screen itself admits them (403)', async ({
+    authenticatedPage: page,
+  }) => {
+    // The quizzes route's own gate lists ASSISTANT, so before /admin/:class
+    // carried a loader this URL rendered for them. /admin is the OWNER
+    // namespace; the refusal here comes from the namespace, not the screen.
+    const response = await page.goto(`/admin/${TEST_CLASSROOM}/quizzes`);
+    expect(response?.status()).toBe(403);
+  });
+
+  // The other half — an assistant REACHING quiz management at /assistant — is
+  // deliberately not asserted here: the quizzes screen sits behind a Pro-tier
+  // and an AI-agent gate that this suite's seed classroom does not guarantee,
+  // so the assertion would be testing the seed rather than the prefix.
+
+  test('an assistant no longer reaches the grades screen at any prefix (403)', async ({
+    authenticatedPage: page,
+  }) => {
+    // Letter grades and comments moved to OWNER + TEACHER. There is deliberately
+    // no /assistant grades route, so this is a 404-or-403 at that prefix and a
+    // 403 under /admin; the admin URL is the one worth pinning.
+    const response = await page.goto(`/admin/${TEST_CLASSROOM}/grades`);
     expect(response?.status()).toBe(403);
   });
 

@@ -1,5 +1,6 @@
 import getPrisma from '@classmoji/database';
 import { Tag } from 'antd';
+import { useLocation } from 'react-router';
 import type { Route } from './+types/route';
 import { ClassmojiService } from '@classmoji/services';
 import { assertClassroomAccess } from '~/utils/helpers';
@@ -42,11 +43,22 @@ const REPO_INCLUDE = {
 export const loader = async ({ params, request }: Route.LoaderArgs) => {
   const classSlug = params.class!;
 
+  // This loader is re-exported by the assistant and teacher prefixes, which
+  // serve it as a STAFF view: it shows unpublished modules and draft items that
+  // students never see. Logging those denials as 'STUDENT_REPOSITORIES' would
+  // describe the wrong thing, so the staff prefixes are named for what they
+  // actually are, using the vocabulary the MCP module tools already write.
+  //
+  // The student prefix keeps 'STUDENT_REPOSITORIES' exactly as before — this
+  // narrows the description of the staff case rather than changing the
+  // student one.
+  const isStaffPrefix = /^\/(teacher|assistant)\//.test(new URL(request.url).pathname);
+
   const { userId, classroom, membership } = await assertClassroomAccess({
     request,
     classroomSlug: classSlug,
     allowedRoles: ['OWNER', 'TEACHER', 'ASSISTANT', 'STUDENT'],
-    resourceType: 'STUDENT_REPOSITORIES',
+    resourceType: isStaffPrefix ? 'MODULES' : 'STUDENT_REPOSITORIES',
     attemptedAction: 'view_modules',
   });
 
@@ -166,6 +178,10 @@ const buildModuleNodes = (
   });
 
 const StudentModules = ({ loaderData }: Route.ComponentProps) => {
+  // Hook first: it must run on every render, including the disabled early
+  // return below.
+  const rolePrefix = useLocation().pathname.split('/')[1];
+
   if (!loaderData.enabled) {
     return (
       <div className="min-h-full">
@@ -182,7 +198,9 @@ const StudentModules = ({ loaderData }: Route.ComponentProps) => {
 
   const { modules, repoById, raByAssignmentId, slidesUrl, pagesUrl, classSlug, isStaff } =
     loaderData;
-  const ctx: StudentTreeCtx = { classSlug, slidesUrl, pagesUrl };
+  // Served under every prefix this route's gate allows, so resource links stay
+  // on the prefix the viewer arrived on.
+  const ctx: StudentTreeCtx = { classSlug, slidesUrl, pagesUrl, rolePrefix };
   const nodes = buildModuleNodes(
     modules,
     repoById as Record<string, AnyRepository>,

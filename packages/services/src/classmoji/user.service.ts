@@ -48,11 +48,23 @@ interface TeamMembershipWithRepositories {
   };
 }
 
+/**
+ * A row of `findRepositoriesPerStudent`, which selects whole `User` rows.
+ *
+ * The identity and contact columns are named here rather than left to the index
+ * signature so a caller projecting this down to a payload can be type-checked
+ * while doing it. `image` is the User column the avatar lives in — this
+ * previously declared a non-existent `avatar_url`, which is a name only the
+ * view layer uses.
+ */
 interface StudentRepositoriesRecord {
   id: string;
   name?: string | null;
-  avatar_url?: string;
+  image?: string | null;
   login?: string | null;
+  email?: string | null;
+  provider_email?: string | null;
+  school_id?: string | null;
   git_repos?: RepositoryWithRelations[];
   team_memberships?: TeamMembershipWithRepositories[];
   [key: string]: unknown;

@@ -187,7 +187,10 @@ export const calculateClassLeaderboard = async (classroomSlug: string) => {
       id: student.id,
       name: student.name ?? null,
       grade,
-      avatar_url: student.avatar_url ?? null,
+      // `image` is the User column; `avatar_url` is the name the view layer
+      // uses. Reading `avatar_url` off the row left every leaderboard entry
+      // without an avatar.
+      avatar_url: student.image ?? null,
       login: student.login ?? null,
     });
   });

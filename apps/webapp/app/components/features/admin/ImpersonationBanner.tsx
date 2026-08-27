@@ -3,6 +3,7 @@ import { IconUserOff } from '@tabler/icons-react';
 import { useState } from 'react';
 import { useNavigate } from 'react-router';
 import { authClient } from '@classmoji/auth/client';
+import { clearImpersonationReturn, takeImpersonationReturn } from '~/utils/impersonationReturn';
 
 interface ImpersonationBannerProps {
   session?: {
@@ -65,29 +66,32 @@ const ImpersonationBanner = ({
       clearImpersonationOrigin(impersonationCookieDomain);
 
       // Started from the standalone admin app: send them back there. Checked
-      // first because such a session has no originating classroom, so the
-      // slug-based branch below would fall through to /select-organization.
+      // first because such a session has no originating page in this app.
       // A full navigation, not navigate() — different origin.
       if (returnToAdminUrl) {
+        clearImpersonationReturn();
         window.location.href = returnToAdminUrl;
         return;
       }
 
-      // Navigate back to the appropriate admin page for the current class
-      const currentPath = window.location.pathname;
-      const classMatch = currentPath.match(/\/(student|admin|assistant)\/([^/]+)/);
-      const classSlug = classMatch ? classMatch[2] : null;
-
-      if (classSlug) {
-        // Navigate back to assistants page if viewing as assistant, otherwise students page
-        if (currentPath.includes('/assistant/')) {
-          navigate(`/admin/${classSlug}/assistants`);
-        } else {
-          navigate(`/admin/${classSlug}/students`);
-        }
-      } else {
-        navigate('/select-organization');
-      }
+      // Return to the page the "View as" was started FROM, recorded at that
+      // moment by rememberImpersonationReturn.
+      //
+      // This used to be inferred from the CURRENT pathname instead: parse a
+      // class slug out of wherever the session had wandered to, then jump to
+      // /admin/<slug>/staff or /admin/<slug>/students. Both halves were
+      // guesses. An impersonated session can move between classrooms, and
+      // /admin/:class/** is closed to non-owner navigation — so an actor who
+      // owns the classroom they started in but is only a teacher or assistant
+      // in the one they ended up in was sent to a page that refuses them, just
+      // after their elevated session ended. The recorded origin is a page they
+      // demonstrably could open, so it needs no such inference.
+      //
+      // This component is mounted at the root, under every prefix, so a
+      // hard-coded /admin/... destination here was the general hazard rather
+      // than one bad branch.
+      const returnPath = takeImpersonationReturn();
+      navigate(returnPath ?? '/select-organization');
     } catch (error: unknown) {
       console.error('[STOP_IMPERSONATE] Failed to stop impersonating:', error);
       setStopping(false);

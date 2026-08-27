@@ -41,7 +41,7 @@ export const routeCategories = {
   },
   people: {
     label: 'People',
-    items: ['students', 'teams', 'assistants'],
+    items: ['students', 'teams', 'staff'],
   },
   integrations: {
     label: 'Integrations',
@@ -61,7 +61,7 @@ export const routes = {
     link: '/dashboard',
     label: 'Dashboard',
     icon: IconLayoutDashboard,
-    roles: ['OWNER', 'ASSISTANT', 'STUDENT'],
+    roles: ['OWNER', 'TEACHER', 'ASSISTANT', 'STUDENT'],
   },
 
   // Calendar - shown under dashboard
@@ -77,16 +77,16 @@ export const routes = {
     link: '/modules',
     label: 'Modules',
     icon: IconStack2,
-    // OWNER always sees Modules to build them; students/assistants only when
+    // OWNER always sees Modules to build them; every other role only when
     // the instructor enables it (gated by show_modules in CommonLayout).
-    roles: ['OWNER', 'ASSISTANT', 'STUDENT'],
+    roles: ['OWNER', 'TEACHER', 'ASSISTANT', 'STUDENT'],
     category: 'content',
   },
   repositories: {
     link: '/repos',
     label: 'Repositories',
     icon: IconFileText,
-    roles: ['OWNER', 'ASSISTANT', 'STUDENT'],
+    roles: ['OWNER', 'TEACHER', 'ASSISTANT', 'STUDENT'],
     category: 'content',
   },
   assignments: {
@@ -128,7 +128,7 @@ export const routes = {
     link: '/quizzes',
     label: 'Quizzes',
     icon: IconRobot,
-    roles: ['OWNER', 'STUDENT', 'ASSISTANT'],
+    roles: ['OWNER', 'TEACHER', 'STUDENT', 'ASSISTANT'],
     isProTier: true,
     category: 'assessment',
   },
@@ -136,21 +136,26 @@ export const routes = {
     link: '/grades',
     label: 'Grades',
     icon: IconNumber,
-    roles: ['OWNER'],
+    // Letter grades and per-student comments are a teaching-staff surface:
+    // OWNER and TEACHER, matching the gate on the grades route itself. The
+    // per-grader queue below is the assistant's assessment entry.
+    roles: ['OWNER', 'TEACHER'],
     category: 'assessment',
   },
   grading: {
     link: '/grading',
     label: 'Grading',
     icon: IconChecklist,
-    roles: ['ASSISTANT'],
+    // The queue lists what the viewer is assigned to grade, and any staff role
+    // can be flagged as a grader — not assistants alone.
+    roles: ['TEACHER', 'ASSISTANT'],
     category: 'assessment',
   },
   'regrade-requests': {
     link: '/regrade-requests',
     label: 'Resubmits',
     icon: IconRotate,
-    roles: ['OWNER', 'ASSISTANT', 'STUDENT'],
+    roles: ['OWNER', 'TEACHER', 'ASSISTANT', 'STUDENT'],
     category: 'assessment',
   },
 
@@ -159,11 +164,10 @@ export const routes = {
     link: '/students',
     label: 'Students',
     icon: IconUsers,
-    // Reading the roster is a teaching-team right, so assistants get the entry
-    // too; it resolves to /assistant/:class/students, which re-exports the
-    // admin loader and its OWNER-only field split. TEACHER is absent because
-    // that role has no path in roleSettings — see the note there.
-    roles: ['OWNER', 'ASSISTANT'],
+    // Reading the roster is a teaching-team right, so the whole team gets the
+    // entry; for non-owners it resolves to their own prefix, which re-exports
+    // the admin loader and its OWNER-only field split.
+    roles: ['OWNER', 'TEACHER', 'ASSISTANT'],
     category: 'people',
   },
   teams: {
@@ -173,11 +177,14 @@ export const routes = {
     roles: ['OWNER'],
     category: 'people',
   },
-  assistants: {
-    link: '/assistants',
-    label: 'Assistants',
+  staff: {
+    link: '/staff',
+    label: 'Teaching Staff',
     icon: IconUserCheck,
-    roles: ['OWNER'],
+    // Seeing who is on the team is a teaching-team right, so the whole team
+    // gets the entry; for non-owners it resolves to their own prefix, which
+    // re-exports the admin loader (read only — no action lives there).
+    roles: ['OWNER', 'TEACHER', 'ASSISTANT'],
     category: 'people',
   },
 
@@ -218,7 +225,8 @@ export const routes = {
     link: '/settings',
     label: 'Settings',
     icon: IconSettings,
-    roles: ['STUDENT', 'ASSISTANT'],
+    // Personal member settings, not the owner-only classroom settings above.
+    roles: ['STUDENT', 'TEACHER', 'ASSISTANT'],
     category: 'settings',
   },
   support: {
