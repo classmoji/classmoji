@@ -301,6 +301,30 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
   const classSlug = params.class!;
   const quizId = params.quizId!;
 
+  // Authenticate FIRST, before the tier check and before the body is read.
+  //
+  // This gate used to live inside the one named branch below, which made the
+  // action's coverage a property of how many branches happened to exist rather
+  // than of the action: a second branch added later would have been ungated by
+  // default, and an unauthenticated caller could reach assertProTier and
+  // request.json() on the way in. Hoisting it makes the guarantee structural.
+  // The list is unchanged — the teaching team may clear their own preview
+  // attempts — and this route is now served under /assistant and /teacher as
+  // well as /admin, so it answers for three prefixes.
+  const { userId, classroom, membership } = await assertClassroomAccess({
+    request,
+    classroomSlug: classSlug,
+    allowedRoles: ['OWNER', 'TEACHER', 'ASSISTANT'],
+    resourceType: 'QUIZ_PREVIEW_ATTEMPTS',
+    attemptedAction: 'clear_own_attempts',
+    metadata: {
+      quiz_id: quizId,
+    },
+  });
+  // Every branch of this action mutates, so the classroom-status check belongs
+  // with the gate rather than inside a branch.
+  assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
+
   await assertProTier(classSlug);
 
   const data = await request.json();
@@ -314,20 +338,6 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
 
   return namedAction(formData, {
     async clearMyAttempts() {
-      // SECURITY: Only admins (OWNER/ASSISTANT) can clear preview attempts
-      // The service layer scopes deletion to only the authenticated user's attempts
-      const { userId, classroom, membership } = await assertClassroomAccess({
-        request,
-        classroomSlug: classSlug,
-        allowedRoles: ['OWNER', 'TEACHER', 'ASSISTANT'],
-        resourceType: 'QUIZ_PREVIEW_ATTEMPTS',
-        attemptedAction: 'clear_own_attempts',
-        metadata: {
-          quiz_id: quizId,
-        },
-      });
-      assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
-
       // Delete only this authenticated user's attempts for this specific quiz
       // The userId from assertClassroomAccess ensures we only clear the authenticated user's attempts
       await ClassmojiService.quizAttempt.clearForUserAndQuiz(userId, quizId, classroom.id);
@@ -856,9 +866,7 @@ const QuizView = ({ loaderData }: Route.ComponentProps) => {
             onClick={() => navigate(`/${rolePrefix}/${classSlug}/quizzes`)}
             aria-label="Back to quizzes"
           />
-          <h1 className="text-lg font-semibold text-ink-1 truncate">
-            Quiz: {quiz.name}
-          </h1>
+          <h1 className="text-lg font-semibold text-ink-1 truncate">Quiz: {quiz.name}</h1>
         </div>
 
         <Space>
