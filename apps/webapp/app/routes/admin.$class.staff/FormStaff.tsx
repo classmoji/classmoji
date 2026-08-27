@@ -62,7 +62,6 @@ interface FormStaffProps {
 const FormStaff = ({ close, initialRole = 'ASSISTANT' }: FormStaffProps) => {
   const { fetcher, notify } = useGlobalFetcher();
   const [form] = Form.useForm();
-  const [loading, setLoading] = useState(false);
   const [role, setRole] = useState<StaffRole>(initialRole);
   const callout = useCallout();
 
@@ -70,18 +69,21 @@ const FormStaff = ({ close, initialRole = 'ASSISTANT' }: FormStaffProps) => {
   // click. Same convention as the row-level removals and the danger zone.
   const grantsOwnership = role === 'OWNER';
 
-  const onFinish = (values: { name?: string; login: string; email: string }) => {
-    setLoading(true);
-
+  const onFinish = (values: { name?: string; login: string; email?: string }) => {
     // Only the login, the role and the instructor's optional overrides.
     // Everything the membership is keyed to — the provider id above all — is
     // the server's to decide from the login it resolves.
     const login = values.login.replace('@', '').trim();
 
+    // A touched-then-cleared field hands back '' rather than undefined, and an
+    // empty string is not nullish — posting one would write an empty email onto
+    // the new user record instead of falling back to the git profile.
+    const optional = (value?: string) => value?.trim() || null;
+
     notify(ActionTypes.SAVE_USER, 'Adding new staff member...');
 
     fetcher!.submit(
-      { login, role, name: values.name ?? null, email: values.email ?? null },
+      { login, role, name: optional(values.name), email: optional(values.email) },
       {
         method: 'post',
         action: '?/createStaff',
@@ -89,12 +91,11 @@ const FormStaff = ({ close, initialRole = 'ASSISTANT' }: FormStaffProps) => {
       }
     );
 
-    setLoading(false);
     close();
   };
 
   const onFinishFailed = () => {
-    callout.show({ variant: 'error', title: 'Please fill in all required fields' });
+    callout.show({ variant: 'error', title: 'Enter the GitHub username of the person to add' });
   };
 
   const submitButton = (
@@ -104,7 +105,6 @@ const FormStaff = ({ close, initialRole = 'ASSISTANT' }: FormStaffProps) => {
       // path submits from onConfirm instead of from the button itself.
       htmlType={grantsOwnership ? 'button' : 'submit'}
       danger={grantsOwnership}
-      loading={loading}
       icon={<IconUser size={16} />}
     >
       {grantsOwnership ? 'Add co-owner' : 'Add staff member'}
@@ -117,7 +117,6 @@ const FormStaff = ({ close, initialRole = 'ASSISTANT' }: FormStaffProps) => {
       layout="vertical"
       onFinish={onFinish}
       onFinishFailed={onFinishFailed}
-      disabled={loading}
       initialValues={{ role: initialRole }}
     >
       <Form.Item
@@ -162,28 +161,9 @@ const FormStaff = ({ close, initialRole = 'ASSISTANT' }: FormStaffProps) => {
         </div>
       )}
 
-      <Form.Item
-        label="Name"
-        name="name"
-        rules={[
-          { required: true, message: 'Please enter a name' },
-          { min: 2, message: 'Name must be at least 2 characters' },
-        ]}
-      >
-        <Input placeholder="Enter their full name" prefix={<IconUser size={16} />} />
-      </Form.Item>
-
-      <Form.Item
-        label="Email"
-        name="email"
-        rules={[
-          { required: true, message: 'Please enter an email' },
-          { type: 'email', message: 'Please enter a valid email address' },
-        ]}
-      >
-        <Input placeholder="Enter their email" prefix={<IconMail size={16} />} />
-      </Form.Item>
-
+      {/* The username is the whole input: everything else about the person is
+          resolved from their git profile, so the other two fields stay empty
+          unless the instructor wants to override what GitHub says. */}
       <Form.Item
         label="GitHub Username"
         name="login"
@@ -203,11 +183,27 @@ const FormStaff = ({ close, initialRole = 'ASSISTANT' }: FormStaffProps) => {
         <Input placeholder="github-username" prefix={<IconBrandGithubCopilot size={16} />} />
       </Form.Item>
 
+      {/* OPTIONAL OVERRIDES. These were required back when the form filled them
+          in itself from a client-side GitHub lookup; that lookup is gone (the
+          service resolves the profile server-side and `addStaff` falls back to
+          the git profile's name and email), so demanding them only stopped an
+          instructor inviting someone whose real name they did not have to
+          hand. */}
+      <Form.Item label="Name (optional)" name="name">
+        <Input placeholder="Defaults to their GitHub name" prefix={<IconUser size={16} />} />
+      </Form.Item>
+
+      <Form.Item
+        label="Email (optional)"
+        name="email"
+        rules={[{ type: 'email', message: 'Please enter a valid email address' }]}
+      >
+        <Input placeholder="Defaults to their GitHub email" prefix={<IconMail size={16} />} />
+      </Form.Item>
+
       <Form.Item className="mb-0 mt-6">
         <Space className="w-full justify-end">
-          <Button onClick={close} disabled={loading}>
-            Cancel
-          </Button>
+          <Button onClick={close}>Cancel</Button>
           {grantsOwnership ? (
             <Popconfirm
               title="Make this person a co-owner?"

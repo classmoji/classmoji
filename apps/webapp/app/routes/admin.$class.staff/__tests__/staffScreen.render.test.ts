@@ -214,6 +214,29 @@ describe('FormStaff — the role selector', () => {
   });
 });
 
+describe('FormStaff — what the instructor has to type', () => {
+  it('demands the username and nothing else', () => {
+    // The form used to require a name and an email because it filled them in
+    // itself from a client-side GitHub lookup. That lookup is gone and addStaff
+    // falls back to the git profile for both, so requiring them only blocked an
+    // invite. antd marks a required field's label with this class, so the count
+    // is the evidence that exactly one field is mandatory.
+    const html = renderForm();
+
+    expect(html.match(/ant-form-item-required/g) ?? []).toHaveLength(1);
+    expect(html).toMatch(/ant-form-item-required[^>]*>GitHub Username/);
+  });
+
+  it('labels name and email as optional and says what they default to', () => {
+    const html = renderForm();
+
+    expect(html).toContain('Name (optional)');
+    expect(html).toContain('Email (optional)');
+    expect(html).toContain('Defaults to their GitHub name');
+    expect(html).toContain('Defaults to their GitHub email');
+  });
+});
+
 describe('FormStaff — granting OWNER', () => {
   it('cannot be submitted by the button itself', () => {
     // The submit control degrades to a plain button wrapped in a Popconfirm, so
