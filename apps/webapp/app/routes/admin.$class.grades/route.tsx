@@ -4,7 +4,7 @@ import { Skeleton } from 'antd';
 
 import GradesTable from './GradesTable';
 import { ClassmojiService } from '@classmoji/services';
-import { addAuditLog } from '~/utils/helpers';
+import { addAuditLog, addClassroomAuditLog } from '~/utils/helpers';
 import { pickOwnerOnlyContactFields } from '~/utils/studentFields.server';
 import { requireClassroomStaff, assertClassroomMutationAllowed } from '~/utils/routeAuth.server';
 import type { Route } from './+types/route';
@@ -138,7 +138,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
   // Same OWNER+TEACHER list as the loader. This action carries its own gate —
   // a layout loader does not gate it, because React Router runs the leaf action
   // before any loader.
-  const { classroom, membership } = await requireClassroomStaff(request, classSlug!, {
+  const { userId, classroom, membership } = await requireClassroomStaff(request, classSlug!, {
     resourceType: 'GRADES',
     action: 'update_grades',
   });
@@ -168,6 +168,23 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
   if (!updated) {
     return { error: 'Student not found.' };
   }
+
+  // Audited only once the write has landed, so a row naming this classroom
+  // always describes a change that happened in it — same rule the quiz and page
+  // mutations follow. The loader logs a VIEW; this is the surface's only write,
+  // and it now has a second role that can reach it.
+  await addClassroomAuditLog({
+    classroomId: classroom.id,
+    userId,
+    role: membership!.role,
+    action: 'UPDATE',
+    resourceType: 'GRADES',
+    resourceId: membershipId,
+    metadata: {
+      tool: 'web:grades.update_letter_grade',
+      letter_grade: rawLetterGrade ? rawLetterGrade : null,
+    },
+  });
 
   return {
     success: true,

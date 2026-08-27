@@ -296,6 +296,47 @@ describe('grades loader — the contact fields are OWNER-only', () => {
   );
 });
 
+// ─── Action: the audit row ───────────────────────────────────────────────────
+
+describe('grades action — the letter-grade write is audited', () => {
+  it('records the write against the membership it landed on', async () => {
+    await route.action(actionArgs({ membership_id: OWN_MEMBERSHIP, letter_grade: 'A-' }));
+
+    expect(mocks.addClassroomAuditLog).toHaveBeenCalledExactlyOnceWith({
+      classroomId: 'class-1',
+      userId: 'teacher-1',
+      role: 'TEACHER',
+      action: 'UPDATE',
+      resourceType: 'GRADES',
+      resourceId: OWN_MEMBERSHIP,
+      metadata: { tool: 'web:grades.update_letter_grade', letter_grade: 'A-' },
+    });
+  });
+
+  it('records a cleared grade as cleared', async () => {
+    await route.action(actionArgs({ membership_id: OWN_MEMBERSHIP, letter_grade: '' }));
+
+    expect(mocks.addClassroomAuditLog).toHaveBeenCalledWith(
+      expect.objectContaining({ metadata: expect.objectContaining({ letter_grade: null }) })
+    );
+  });
+
+  it('writes no row when the write did not land', async () => {
+    // A row naming this classroom must describe a change that happened in it.
+    mocks.updateInClassroom.mockResolvedValue(false);
+
+    await route.action(actionArgs({ membership_id: FOREIGN_MEMBERSHIP, letter_grade: 'A' }));
+
+    expect(mocks.addClassroomAuditLog).not.toHaveBeenCalled();
+  });
+
+  it('writes no row when the body was refused', async () => {
+    await route.action(actionArgs({ letter_grade: 'A' }));
+
+    expect(mocks.addClassroomAuditLog).not.toHaveBeenCalled();
+  });
+});
+
 describe('grades action — writes stay inside the authorized classroom', () => {
   it('binds the letter-grade write to the classroom that was authorized', async () => {
     const result = await route.action(

@@ -24,6 +24,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({
   assertClassroomAccess: vi.fn(),
   assertClassroomMutationAllowed: vi.fn(),
+  addClassroomAuditLog: vi.fn(),
   updateInClassroom: vi.fn(),
   findStudentByLoginInClassroom: vi.fn(),
 }));
@@ -31,6 +32,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock('~/utils/helpers', () => ({
   assertClassroomAccess: (...a: unknown[]) => mocks.assertClassroomAccess(...a),
   assertClassroomMutationAllowed: (...a: unknown[]) => mocks.assertClassroomMutationAllowed(...a),
+  addClassroomAuditLog: (...a: unknown[]) => mocks.addClassroomAuditLog(...a),
 }));
 
 vi.mock('@classmoji/services', () => ({
@@ -161,6 +163,49 @@ describe('grade-comment loader — the payload carries only what the drawer rend
 
     await expect(route.loader(loaderArgs())).rejects.toBeInstanceOf(Response);
     expect(mocks.findStudentByLoginInClassroom).not.toHaveBeenCalled();
+  });
+});
+
+describe('grade-comment action — the comment write is audited', () => {
+  it('records the write against the membership it landed on', async () => {
+    await route.action(actionArgs({ membershipId: OWN_MEMBERSHIP, comment: 'Strong finish.' }));
+
+    expect(mocks.addClassroomAuditLog).toHaveBeenCalledExactlyOnceWith({
+      classroomId: 'class-1',
+      userId: 'teacher-1',
+      role: 'TEACHER',
+      action: 'UPDATE',
+      resourceType: 'GRADES',
+      resourceId: OWN_MEMBERSHIP,
+      metadata: { tool: 'web:grades.update_comment', cleared: false },
+    });
+  });
+
+  it('records that a comment was cleared without recording what it said', async () => {
+    // The note is a private remark about a named student; the trail answers
+    // who changed what and when, not its contents.
+    await route.action(actionArgs({ membershipId: OWN_MEMBERSHIP, comment: '' }));
+
+    const [row] = mocks.addClassroomAuditLog.mock.calls[0] as [Record<string, unknown>];
+    expect(row.metadata).toEqual({ tool: 'web:grades.update_comment', cleared: true });
+  });
+
+  it('does not put the comment text in the audit row', async () => {
+    await route.action(
+      actionArgs({ membershipId: OWN_MEMBERSHIP, comment: 'struggling with recursion' })
+    );
+
+    const [row] = mocks.addClassroomAuditLog.mock.calls[0] as [Record<string, unknown>];
+    expect(JSON.stringify(row)).not.toContain('struggling with recursion');
+  });
+
+  it('writes no row when the write did not land, or the body was refused', async () => {
+    mocks.updateInClassroom.mockResolvedValue(false);
+    await route.action(actionArgs({ membershipId: FOREIGN_MEMBERSHIP, comment: 'nope' }));
+    expect(mocks.addClassroomAuditLog).not.toHaveBeenCalled();
+
+    await route.action(actionArgs({ comment: 'orphan' }));
+    expect(mocks.addClassroomAuditLog).not.toHaveBeenCalled();
   });
 });
 

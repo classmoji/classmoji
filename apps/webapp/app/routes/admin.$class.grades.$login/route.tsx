@@ -5,7 +5,11 @@ import { useState, useEffect } from 'react';
 import { ClassmojiService } from '@classmoji/services';
 import { useGlobalFetcher } from '~/hooks';
 import { UserThumbnailView } from '~/components';
-import { assertClassroomAccess, assertClassroomMutationAllowed } from '~/utils/helpers';
+import {
+  addClassroomAuditLog,
+  assertClassroomAccess,
+  assertClassroomMutationAllowed,
+} from '~/utils/helpers';
 import type { Route } from './+types/route';
 
 export const loader = async ({ params, request }: Route.LoaderArgs) => {
@@ -115,7 +119,7 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
   // Authorize: OWNER/TEACHER can modify student grade comments. This action
   // carries its own gate — a layout loader does not gate it, because React
   // Router runs the leaf action before any loader.
-  const { classroom, membership } = await assertClassroomAccess({
+  const { userId, classroom, membership } = await assertClassroomAccess({
     request,
     classroomSlug: classSlug!,
     allowedRoles: ['OWNER', 'TEACHER'],
@@ -147,6 +151,20 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
   if (!updated) {
     return { action: 'ADD_GRADE_COMMENT', error: 'Student not found.' };
   }
+
+  // Audited only once the write has landed, so a row naming this classroom
+  // always describes a change that happened in it. The comment TEXT is not
+  // recorded — it is a private note about a named student, and the audit trail
+  // answers who changed what and when, not what it said.
+  await addClassroomAuditLog({
+    classroomId: classroom.id,
+    userId,
+    role: membership!.role,
+    action: 'UPDATE',
+    resourceType: 'GRADES',
+    resourceId: membershipId,
+    metadata: { tool: 'web:grades.update_comment', cleared: comment === '' },
+  });
 
   return { action: 'ADD_GRADE_COMMENT', success: 'Saved comment.' };
 };
