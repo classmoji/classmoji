@@ -28,3 +28,6 @@ apps/pages/build
 
 # Local Codex CLI config (holds MCP server credentials)
 .codex/
+
+# Generated scale-to-zero fly configs for staging/dev (see scripts/fly-autostop-config.sh)
+apps/*/fly.autostop.generated.toml

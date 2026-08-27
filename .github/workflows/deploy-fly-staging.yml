@@ -72,7 +72,9 @@ jobs:
         run: npm install --package-lock-only --no-audit --no-fund --legacy-peer-deps
       - uses: superfly/flyctl-actions/setup-flyctl@master
       - name: Deploy webapp
-        run: flyctl deploy --config apps/webapp/fly.toml --dockerfile apps/webapp/Dockerfile --remote-only --app classmoji-webapp-staging
+        run: |
+          CONFIG=$(scripts/fly-autostop-config.sh apps/webapp/fly.toml stop)
+          flyctl deploy --config "$CONFIG" --dockerfile apps/webapp/Dockerfile --remote-only --app classmoji-webapp-staging
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
 
@@ -96,7 +98,9 @@ jobs:
         run: npm install --package-lock-only --no-audit --no-fund --legacy-peer-deps
       - uses: superfly/flyctl-actions/setup-flyctl@master
       - name: Deploy ai-agent
-        run: flyctl deploy --config apps/ai-agent/fly.toml --dockerfile apps/ai-agent/Dockerfile --remote-only --app classmoji-ai-agent-staging
+        run: |
+          CONFIG=$(scripts/fly-autostop-config.sh apps/ai-agent/fly.toml suspend)
+          flyctl deploy --config "$CONFIG" --dockerfile apps/ai-agent/Dockerfile --remote-only --app classmoji-ai-agent-staging
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
 
@@ -116,7 +120,9 @@ jobs:
         run: npm install --package-lock-only --no-audit --no-fund --legacy-peer-deps
       - uses: superfly/flyctl-actions/setup-flyctl@master
       - name: Deploy hook-station
-        run: flyctl deploy --config apps/hook-station/fly.toml --dockerfile apps/hook-station/Dockerfile --remote-only --app classmoji-hook-station-staging
+        run: |
+          CONFIG=$(scripts/fly-autostop-config.sh apps/hook-station/fly.toml stop)
+          flyctl deploy --config "$CONFIG" --dockerfile apps/hook-station/Dockerfile --remote-only --app classmoji-hook-station-staging
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
 
@@ -138,7 +144,8 @@ jobs:
       - name: Deploy mcp
         run: |
           if flyctl status --app classmoji-mcp-staging >/dev/null 2>&1; then
-            flyctl deploy --config apps/mcp/fly.toml --dockerfile apps/mcp/Dockerfile --remote-only --app classmoji-mcp-staging
+            CONFIG=$(scripts/fly-autostop-config.sh apps/mcp/fly.toml stop)
+            flyctl deploy --config "$CONFIG" --dockerfile apps/mcp/Dockerfile --remote-only --app classmoji-mcp-staging
           else
             echo "::notice::Skipping mcp deploy because Fly app classmoji-mcp-staging is not provisioned."
           fi
@@ -164,7 +171,8 @@ jobs:
         working-directory: apps/site
         run: |
           if flyctl status --app classmoji-site-staging >/dev/null 2>&1; then
-            flyctl deploy --remote-only --app classmoji-site-staging
+            CONFIG=$(../../scripts/fly-autostop-config.sh fly.toml stop)
+            flyctl deploy --config "$CONFIG" --remote-only --app classmoji-site-staging
           else
             echo "::notice::Skipping site deploy because Fly app classmoji-site-staging is not provisioned."
           fi
@@ -187,7 +195,9 @@ jobs:
         run: npm install --package-lock-only --no-audit --no-fund --legacy-peer-deps
       - uses: superfly/flyctl-actions/setup-flyctl@master
       - name: Deploy slides
-        run: flyctl deploy --config apps/slides/fly.toml --dockerfile apps/slides/Dockerfile --remote-only --app classmoji-slides-staging
+        run: |
+          CONFIG=$(scripts/fly-autostop-config.sh apps/slides/fly.toml stop)
+          flyctl deploy --config "$CONFIG" --dockerfile apps/slides/Dockerfile --remote-only --app classmoji-slides-staging
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
 
@@ -207,7 +217,9 @@ jobs:
         run: npm install --package-lock-only --no-audit --no-fund --legacy-peer-deps
       - uses: superfly/flyctl-actions/setup-flyctl@master
       - name: Deploy pages
-        run: flyctl deploy --config apps/pages/fly.toml --dockerfile apps/pages/Dockerfile --remote-only --app classmoji-pages-staging
+        run: |
+          CONFIG=$(scripts/fly-autostop-config.sh apps/pages/fly.toml stop)
+          flyctl deploy --config "$CONFIG" --dockerfile apps/pages/Dockerfile --remote-only --app classmoji-pages-staging
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
 
