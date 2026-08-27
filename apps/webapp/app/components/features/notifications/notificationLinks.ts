@@ -21,11 +21,25 @@ const rolePrefix = (role: Role): string => {
   return 'admin';
 };
 
+/**
+ * Most privileged first — the same order `resolveHighestMembership` uses in
+ * packages/auth. Selecting by priority rather than by whichever role happens to
+ * come first in the caller's array is what makes the chosen prefix stable: a
+ * user holding several roles in one classroom would otherwise get a different
+ * link depending on the order the memberships were queried in.
+ */
+const ROLE_PRIORITY: readonly Role[] = ['OWNER', 'TEACHER', 'ASSISTANT', 'STUDENT'];
+
+const highestRole = (roles: Role[]): Role | null =>
+  ROLE_PRIORITY.find(role => roles.includes(role)) ?? null;
+
 const roleForNotification = (type: string, roles: Role[]): Role | null => {
   if (roles.length === 0) return null;
+  // A notification aimed at a specific role is read in that role's view, even
+  // when the reader also holds a higher one.
   if (STUDENT_NOTIFICATION_TYPES.has(type) && roles.includes('STUDENT')) return 'STUDENT';
   if (ASSISTANT_NOTIFICATION_TYPES.has(type) && roles.includes('ASSISTANT')) return 'ASSISTANT';
-  return roles.find(role => role === 'OWNER' || role === 'TEACHER') ?? roles[0] ?? null;
+  return highestRole(roles);
 };
 
 /**

@@ -67,18 +67,29 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
   // is nothing for the client to hide.
   // `membership.role` is the caller's HIGHEST role in this classroom —
   // assertClassroomAccess resolves it in privilege order, so an owner who also
-  // holds another role here still resolves as OWNER and keeps their own fields.
-  const isOwner = membership?.role === 'OWNER';
+  // holds another role here still resolves as OWNER.
+  const isRealOwner = membership?.role === 'OWNER';
 
-  // Whether the viewer may MUTATE the roster from this page, which takes the
-  // role AND the prefix they arrived on. This same loader serves
-  // /assistant/:class/students, where the route exports no `action` and no
-  // nested detail route exists — so an owner who hand-types that URL would
-  // otherwise be shown controls that post to a route with no action (405) and a
-  // View button pointing at a route that does not exist (404). Only the /admin
-  // prefix carries the mutations, so only it may render them.
+  // This same loader serves /assistant/:class/students and
+  // /teacher/:class/students, which is where an owner lands when they use
+  // "Preview as". A preview that still showed them owner-only columns would
+  // answer the wrong question — the control exists to show what that role
+  // actually sees.
   const isAdminPrefix = new URL(request.url).pathname.startsWith('/admin/');
-  const canManage = isOwner && isAdminPrefix;
+
+  // NARROWING ONLY, and it must stay that way: this can remove fields from a
+  // response, never add them. A non-owner is not an owner on any prefix, so the
+  // `isRealOwner &&` conjunct is what guarantees that — the prefix can only
+  // subtract from what the role already allowed. (Pinned by the preview test in
+  // __tests__/studentsRoster.test.ts.)
+  const isOwner = isRealOwner && isAdminPrefix;
+
+  // Whether the viewer may MUTATE the roster from this page. The /assistant and
+  // /teacher routes export no `action` and have no nested detail route, so an
+  // owner on those prefixes would otherwise be shown controls that post to a
+  // route with no action (405) and a View button pointing at a route that does
+  // not exist (404). Only the /admin prefix carries the mutations.
+  const canManage = isOwner;
 
   const rosterStudents: RosterStudent[] = students.map(s => ({
     id: s.id,

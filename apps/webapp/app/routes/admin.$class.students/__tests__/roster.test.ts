@@ -102,7 +102,7 @@ const OWNER_ONLY_FIELDS = [
   'comment',
 ] as const;
 
-const loaderArgs = (prefix: 'admin' | 'assistant' = 'admin') =>
+const loaderArgs = (prefix: 'admin' | 'teacher' | 'assistant' = 'admin') =>
   ({
     params: { class: CLASS_SLUG },
     request: new Request(`http://localhost/${prefix}/${CLASS_SLUG}/students`),
@@ -195,16 +195,16 @@ describe('students loader — canManage follows the role AND the prefix', () => 
     expect((await loader(loaderArgs('admin'))).canManage).toBe(true);
   });
 
-  it('is false for an OWNER who arrived on the /assistant prefix', async () => {
-    grantLoader('OWNER');
+  it.each([['teacher'], ['assistant']] as const)(
+    'is false for an OWNER who arrived on the /%s prefix',
+    async prefix => {
+      grantLoader('OWNER');
 
-    const data = await loader(loaderArgs('assistant'));
+      const data = await loader(loaderArgs(prefix));
 
-    // The fields still follow the role — only the controls follow the prefix.
-    expect(data.canManage).toBe(false);
-    expect(data.isOwner).toBe(true);
-    expect(data.students[0]).toMatchObject({ email: 'ada@school.test' });
-  });
+      expect(data.canManage).toBe(false);
+    }
+  );
 
   it.each([['TEACHER'], ['ASSISTANT']] as const)('is false for %s on either prefix', async role => {
     grantLoader(role);
@@ -212,6 +212,58 @@ describe('students loader — canManage follows the role AND the prefix', () => 
 
     grantLoader(role);
     expect((await loader(loaderArgs('assistant'))).canManage).toBe(false);
+  });
+});
+
+/**
+ * An owner using "Preview as" lands on this same loader under /teacher or
+ * /assistant. The point of that control is to show what the role actually sees,
+ * so the field split follows the prefix as well as the role — otherwise the
+ * preview shows the owner their own view wearing another role's label.
+ *
+ * The direction is the whole safety property: this can only ever REMOVE fields.
+ * A non-owner is not an owner on any prefix, so no prefix can turn one into the
+ * other — which is what the last test here pins.
+ */
+describe('students loader — a preview shows what that role really sees', () => {
+  it.each([['teacher'], ['assistant']] as const)(
+    'withholds the owner-only fields from an owner previewing on /%s',
+    async prefix => {
+      grantLoader('OWNER');
+
+      const data = await loader(loaderArgs(prefix));
+
+      expect(data.isOwner).toBe(false);
+      for (const field of OWNER_ONLY_FIELDS) {
+        expect(data.students[0]).not.toHaveProperty(field);
+      }
+      expect(data.invitations[0]).not.toHaveProperty('school_email');
+    }
+  );
+
+  it('still sends an owner everything on their own prefix', async () => {
+    grantLoader('OWNER');
+
+    const data = await loader(loaderArgs('admin'));
+
+    expect(data.isOwner).toBe(true);
+    expect(data.students[0]).toMatchObject({ email: 'ada@school.test' });
+  });
+
+  it('NEVER grants fields the role alone would not have — narrowing only', async () => {
+    // The prefix is only allowed to subtract. If a prefix could ever add, this
+    // is where it would show up: a non-owner on the owner's own prefix.
+    for (const role of ['TEACHER', 'ASSISTANT'] as const) {
+      for (const prefix of ['admin', 'teacher', 'assistant'] as const) {
+        grantLoader(role);
+        const data = await loader(loaderArgs(prefix));
+
+        expect(data.isOwner).toBe(false);
+        for (const field of OWNER_ONLY_FIELDS) {
+          expect(data.students[0]).not.toHaveProperty(field);
+        }
+      }
+    }
   });
 });
 

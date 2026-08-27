@@ -167,8 +167,4 @@ const AssistantDashboard = ({ loaderData }: Route.ComponentProps) => {
   );
 };
 
-export const action = () => {
-  return { message: 'Success' };
-};
-
 export default AssistantDashboard;

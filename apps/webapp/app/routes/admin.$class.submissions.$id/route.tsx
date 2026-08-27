@@ -75,8 +75,15 @@ const SubmissionAnalytics = ({ loaderData }: Route.ComponentProps) => {
   } = loaderData;
 
   const { pathname } = useLocation();
-  const isAssistant = pathname.startsWith('/assistant/');
-  const backHref = isAssistant ? `/assistant/${classSlug}/grading` : `/admin/${classSlug}/grades`;
+  // Where "back" goes depends on where the viewer came from, because the
+  // prefixes do not serve the same page. /admin/:class/grades is owner-gated,
+  // so a teacher sent there lands on a 403 — they and assistants both return to
+  // the grading queue, which is the list their prefix actually serves.
+  const rolePrefix = pathname.split('/')[1];
+  const backHref =
+    rolePrefix === 'assistant' || rolePrefix === 'teacher'
+      ? `/${rolePrefix}/${classSlug}/grading`
+      : `/admin/${classSlug}/grades`;
 
   const [refreshing, setRefreshing] = useState(false);
   const [refreshError, setRefreshError] = useState<string | null>(null);
@@ -108,8 +115,7 @@ const SubmissionAnalytics = ({ loaderData }: Route.ComponentProps) => {
           </Button>
         </Link>
         <h1 className="text-base font-semibold text-ink-0">
-          {assignmentTitle}{' '}
-          <span className="font-mono text-sm text-ink-3">· {repoName}</span>
+          {assignmentTitle} <span className="font-mono text-sm text-ink-3">· {repoName}</span>
         </h1>
       </div>
 

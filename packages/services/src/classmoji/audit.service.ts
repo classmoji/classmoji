@@ -86,6 +86,25 @@ export const create = async (data: AuditLogData) => {
   // without a role keep the key exactly as it was.
   const payloadRole = payload?.role;
 
+  // The VALUE the payload wrote (data.value). Without it, repeated edits of the
+  // same field through the same tool collapse: flipping a page public → draft →
+  // public inside the window records only the first, so the log ends up
+  // asserting a state the record is no longer in. The value is what makes those
+  // writes distinguishable, so it joins the key. A genuine double-submit — the
+  // same field set to the same value twice — still dedups, which is the case
+  // the window exists for. Payloads without a value keep the key unchanged.
+  const payloadValue = payload?.value;
+  const isScalar = (v: unknown): v is string | number | boolean =>
+    typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean';
+
+  // Each extra JSON-path filter needs its own `data` clause, and two cannot sit
+  // beside each other in one object — they go under `AND`, which Prisma
+  // combines conjunctively with the rest.
+  const payloadFilters = [
+    ...(typeof payloadRole === 'string' ? [{ data: { path: ['role'], equals: payloadRole } }] : []),
+    ...(isScalar(payloadValue) ? [{ data: { path: ['value'], equals: payloadValue } }] : []),
+  ];
+
   const recentLog = await getPrisma().auditLog.findFirst({
     where: {
       user_id,
@@ -95,9 +114,7 @@ export const create = async (data: AuditLogData) => {
       resource_id: normalizedResourceId,
       action,
       ...(typeof tool === 'string' ? { data: { path: ['tool'], equals: tool } } : {}),
-      ...(typeof payloadRole === 'string'
-        ? { AND: [{ data: { path: ['role'], equals: payloadRole } }] }
-        : {}),
+      ...(payloadFilters.length > 0 ? { AND: payloadFilters } : {}),
       timestamp: {
         gte: new Date(Date.now() - deduplicationWindowMs),
       },

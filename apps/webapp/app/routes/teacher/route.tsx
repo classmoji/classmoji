@@ -23,13 +23,22 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
 
   try {
     // Named so a denial is identifiable. Unlike the leaf routes, this one is
-    // specific to the /teacher prefix, and it is the gate a non-staff user hits
-    // first when they try the prefix — so the row should say which shell was
-    // refused, not the shared default 'TEACHING_RESOURCE'/'access'.
-    const { userId, classroom } = await requireClassroomTeachingTeam(request, classSlug, {
-      resourceType: 'TEACHER_LAYOUT',
-      action: 'enter_teacher_prefix',
-    });
+    // specific to the /teacher prefix, so the row should say which shell was
+    // refused rather than the shared default 'TEACHING_RESOURCE'/'access'.
+    //
+    // NOT an authorization boundary for what renders beneath it: the catch
+    // below turns a denial into an empty shell rather than a 403, and the
+    // RequireRole in the component is client-side. Each leaf route carries its
+    // own gate, and for a POST this loader does not run first at all — React
+    // Router runs the matched leaf's action, then revalidates parents.
+    const { userId, classroom, membership } = await requireClassroomTeachingTeam(
+      request,
+      classSlug,
+      {
+        resourceType: 'TEACHER_LAYOUT',
+        action: 'enter_teacher_prefix',
+      }
+    );
 
     // Same single read the assistant layout does: nav visibility + the site links
     // the peek drawer's ↗ needs.
@@ -49,14 +58,18 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
       const url = new URL(request.url);
       const resourcePath = ClassmojiService.resourceView.normalizePath(url.pathname);
 
-      // Fire-and-forget: record the view without blocking
-      // Teacher route is always viewed as TEACHER
+      // Fire-and-forget: record the view without blocking.
+      //
+      // The viewer's REAL role, not the prefix. An owner previewing the class
+      // as a teacher is still an owner, and recording them as TEACHER would put
+      // them in the teacher bucket of the recent-viewers list — which is read
+      // as "who on the teaching team has seen this".
       Promise.resolve().then(() => {
         ClassmojiService.resourceView.recordView({
           resourcePath,
           userId,
           classroomId: classroom.id,
-          viewedAsRole: 'TEACHER',
+          viewedAsRole: membership?.role ?? 'TEACHER',
         });
       });
 
