@@ -24,8 +24,8 @@ const ROLE_CONFIG: Record<string, string> = {
 const ROLE_TO_MEMBERSHIP: Record<string, string> = {
   admin: 'OWNER',
   owner: 'OWNER',
-  instructor: 'ASSISTANT',
-  teacher: 'ASSISTANT',
+  instructor: 'TEACHER',
+  teacher: 'TEACHER',
   ta: 'ASSISTANT',
   assistant: 'ASSISTANT',
   student: 'STUDENT',
@@ -36,6 +36,7 @@ const ROLE_TO_MEMBERSHIP: Record<string, string> = {
  */
 const MEMBERSHIP_TO_PATH: Record<string, string> = {
   OWNER: 'admin',
+  TEACHER: 'teacher',
   ASSISTANT: 'assistant',
   STUDENT: 'student',
 };
@@ -48,6 +49,7 @@ const MEMBERSHIP_TO_PATH: Record<string, string> = {
  * Usage:
  *   /test-login              - Login as admin (default, uses GITHUB_PROF_TOKEN)
  *   /test-login?role=admin   - Login as admin (uses GITHUB_PROF_TOKEN)
+ *   /test-login?role=teacher - Login as teacher (uses GITHUB_INSTRUCTOR_TOKEN)
  *   /test-login?role=ta      - Login as TA (uses GITHUB_TA_TOKEN)
  *   /test-login?role=student - Login as student (uses GITHUB_STUDENT_TOKEN)
  */
@@ -152,7 +154,7 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
     const membership = await getPrisma().classroomMembership.findFirst({
       where: {
         user_id: user.id,
-        role: expectedMembershipRole as 'OWNER' | 'ASSISTANT' | 'STUDENT',
+        role: expectedMembershipRole as 'OWNER' | 'TEACHER' | 'ASSISTANT' | 'STUDENT',
         classroom: {
           is_archived: false,
           slug: testClassroom, // Target specific test classroom

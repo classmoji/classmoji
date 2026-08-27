@@ -25,7 +25,7 @@ const SyllabusBotRoot = () => {
   const [currentRole, setCurrentRole] = useState<string | null>(null);
 
   useEffect(() => {
-    const match = pathname.match(/^\/(student|admin|assistant)\/([^/]+)/);
+    const match = pathname.match(/^\/(student|admin|teacher|assistant)\/([^/]+)/);
     if (match) {
       const rolePrefix = match[1];
       const classroomSlug = match[2];

@@ -53,8 +53,12 @@ vi.mock('@classmoji/services', () => ({
   },
 }));
 
-const { assertClassroomAccess, requireClassroomAdmin, requireClassroomTeachingTeam } =
-  await import('../server.ts');
+const {
+  assertClassroomAccess,
+  requireClassroomAdmin,
+  requireClassroomTeachingTeam,
+  resolveHighestMembership,
+} = await import('../server.ts');
 
 type Role = 'OWNER' | 'TEACHER' | 'ASSISTANT' | 'STUDENT';
 
@@ -211,5 +215,49 @@ describe('the gates the roster and slide-list routes actually call', () => {
     const result = await requireClassroomTeachingTeam(request(), CLASS_SLUG);
 
     expect(result.membership?.role).toBe('ASSISTANT');
+  });
+});
+
+// ─── The resolver itself, now that it is exported ────────────────────────────
+
+/**
+ * `resolveHighestMembership` used to be private to this module. It is exported
+ * because the webapp's audit trail needs the same answer the gates get: its
+ * audit helper resolved the actor with the service's unordered `findFirst`, so
+ * a multi-role user's action could be attributed to whichever row came back
+ * first — an owner's page delete recorded against their STUDENT membership.
+ *
+ * These pin the contract that helper depends on, directly rather than through a
+ * gate: highest role wins, `null` means "consider every role", an explicit
+ * filter still bounds the answer, and no membership resolves to null.
+ */
+describe('resolveHighestMembership', () => {
+  it.each([
+    [['OWNER', 'STUDENT'], 'OWNER'],
+    [['TEACHER', 'STUDENT'], 'TEACHER'],
+    [['ASSISTANT', 'STUDENT'], 'ASSISTANT'],
+    [['OWNER', 'TEACHER', 'ASSISTANT', 'STUDENT'], 'OWNER'],
+  ] as const)('resolves a caller holding %s to %s when roles is null', async (held, expected) => {
+    signedInHolding([...held]);
+
+    await expect(resolveHighestMembership('class-1', 'user-1', null)).resolves.toMatchObject({
+      role: expected,
+    });
+  });
+
+  it('stays bounded by an explicit role filter', async () => {
+    // The filter still narrows the answer: asking only about STUDENT must not
+    // start reporting the caller's OWNER row.
+    signedInHolding(['OWNER', 'STUDENT']);
+
+    await expect(resolveHighestMembership('class-1', 'user-1', ['STUDENT'])).resolves.toMatchObject(
+      { role: 'STUDENT' }
+    );
+  });
+
+  it('returns null for a user with no membership', async () => {
+    signedInHolding([]);
+
+    await expect(resolveHighestMembership('class-1', 'user-1', null)).resolves.toBeNull();
   });
 });

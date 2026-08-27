@@ -16,7 +16,7 @@ export async function loader({ params, request }: Route.LoaderArgs) {
   const { userId, classroom, membership } = await assertClassroomAccess({
     request,
     classroomSlug: classSlug,
-    allowedRoles: ['STUDENT', 'ASSISTANT', 'OWNER'],
+    allowedRoles: ['STUDENT', 'ASSISTANT', 'TEACHER', 'OWNER'],
     resourceType: 'QUIZ_ATTEMPT',
     attemptedAction: 'view',
   });

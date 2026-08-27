@@ -10,7 +10,11 @@ import {
   IconNotes,
 } from '@tabler/icons-react';
 import getPrisma from '@classmoji/database';
-import { assertClassroomAccess, assertClassroomMutationAllowed } from '~/utils/helpers';
+import {
+  addClassroomAuditLog,
+  assertClassroomAccess,
+  assertClassroomMutationAllowed,
+} from '~/utils/helpers';
 import { ClassmojiService } from '@classmoji/services';
 import { TableActionButtons, RecentViewers } from '~/components';
 import type { Route } from './+types/route';
@@ -70,7 +74,7 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
   const value = formData.get('value') as string;
 
   // Authorization: require OWNER or TEACHER to modify slide settings
-  const { classroom, membership } = await assertClassroomAccess({
+  const { userId, classroom, membership } = await assertClassroomAccess({
     request,
     classroomSlug: classSlug,
     allowedRoles: ['OWNER', 'TEACHER'],
@@ -91,8 +95,17 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
    * the update is bound to `{ id, classroom_id }` and is only treated as done
    * when it matched exactly one row. Same pattern as the slides app's delete
    * route, which re-checks the deck's classroom after its own gate.
+   *
+   * On success it records an audit row, matching the MCP slide tools' shape
+   * (resource_type 'SLIDES', the deck id, action UPDATE). `tool` names the
+   * specific toggle: the audit service dedups UPDATEs on the same deck inside a
+   * 5-second window, so flipping two switches in quick succession would
+   * otherwise leave only the first one recorded.
    */
-  const updateSlideInClassroom = async (data: Record<string, boolean>) => {
+  const updateSlideInClassroom = async (
+    data: Record<string, boolean>,
+    audit: { tool: string; metadata: Record<string, unknown> }
+  ) => {
     const { count } = await getPrisma().slide.updateMany({
       where: { id: slideId, classroom_id: classroom.id },
       data,
@@ -100,6 +113,15 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
     if (count !== 1) {
       return { error: 'Slide not found' };
     }
+    await addClassroomAuditLog({
+      classroomId: classroom.id,
+      userId,
+      role: membership!.role,
+      action: 'UPDATE',
+      resourceType: 'SLIDES',
+      resourceId: slideId,
+      metadata: { tool: audit.tool, ...audit.metadata },
+    });
     return { success: true };
   };
 
@@ -119,12 +141,19 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
       is_public = true;
     }
 
-    return updateSlideInClassroom({ is_draft, is_public });
+    return updateSlideInClassroom(
+      { is_draft, is_public },
+      { tool: 'web:slides.status', metadata: { field: 'status', value, is_draft, is_public } }
+    );
   }
 
   // Handle boolean toggles (allow_team_edit, show_speaker_notes)
   if (field === 'allow_team_edit' || field === 'show_speaker_notes') {
-    return updateSlideInClassroom({ [field]: value === 'true' });
+    const enabled = value === 'true';
+    return updateSlideInClassroom(
+      { [field]: enabled },
+      { tool: `web:slides.${field}`, metadata: { field, value: enabled } }
+    );
   }
 
   return { error: 'Invalid field' };

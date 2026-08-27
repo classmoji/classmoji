@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useNavigate, useParams } from 'react-router';
+import { useLocation, useNavigate, useParams } from 'react-router';
 import { Drawer, ConfigProvider, theme, Modal } from 'antd';
 import { useRouteDrawer, useDarkMode } from '~/hooks';
 import { QuizAttemptInterface } from '~/components';
@@ -16,7 +16,7 @@ export async function loader({ params, request }: Route.LoaderArgs) {
   const { userId, classroom } = await assertClassroomAccess({
     request,
     classroomSlug: classSlug,
-    allowedRoles: ['OWNER', 'ASSISTANT'],
+    allowedRoles: ['OWNER', 'TEACHER', 'ASSISTANT'],
     resourceType: 'QUIZ_PREVIEW',
     attemptedAction: 'preview',
   });
@@ -88,15 +88,17 @@ export default function AdminQuizPreviewDrawer({ loaderData }: Route.ComponentPr
   const { isDarkMode } = useDarkMode();
   const navigate = useNavigate();
   const { class: classSlug, quizId } = useParams();
+  // Served under every prefix this route's gate allows (/admin and /teacher).
+  const rolePrefix = useLocation().pathname.split('/')[1];
   const [showConfirm, setShowConfirm] = useState(false);
 
   const navigateAway = (newAttemptId?: string) => {
     if (newAttemptId) {
       // If a new attempt was created (from restart), navigate to it
-      navigate(`/admin/${classSlug}/quizzes/${quizId}/preview/${newAttemptId}`);
+      navigate(`/${rolePrefix}/${classSlug}/quizzes/${quizId}/preview/${newAttemptId}`);
     } else {
       // Otherwise go back to quiz detail page
-      navigate(`/admin/${classSlug}/quizzes/${quizId}`);
+      navigate(`/${rolePrefix}/${classSlug}/quizzes/${quizId}`);
     }
   };
 

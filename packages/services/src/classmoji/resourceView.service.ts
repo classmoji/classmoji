@@ -22,8 +22,11 @@ export function normalizePath(pathname: string): string {
   // Remove leading slash, split by /
   const segments = pathname.replace(/^\//, '').split('/');
 
-  // Role prefixes that should be stripped
-  const rolePatterns = ['admin', 'student', 'assistant'];
+  // Role prefixes that should be stripped. Every prefix the app serves must be
+  // listed: an unlisted one falls through to the non-role branch below, which
+  // strips only ONE segment, so the same page recorded under two prefixes
+  // produces two different resource_paths and the viewers never merge.
+  const rolePatterns = ['admin', 'teacher', 'student', 'assistant'];
 
   if (rolePatterns.includes(segments[0])) {
     // Skip role (segments[0]) and classroom slug (segments[1])

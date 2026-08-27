@@ -37,11 +37,11 @@ export const OWNER_TEACHER = ['OWNER', 'TEACHER'] as const;
 export const OWNER_ONLY = ['OWNER'] as const;
 /**
  * Quiz admin surface (admin.$class.quizzes loader + action, and the assistant
- * route that re-exports it): allowedRoles ['OWNER','ASSISTANT']. TEACHER is
- * genuinely excluded there, so it is excluded here (S4 role parity). Mirrors
- * QUIZ_ROLES in resources/shape.ts minus STUDENT, which has no write surface.
+ * and teacher routes that re-export it): allowedRoles
+ * ['OWNER','TEACHER','ASSISTANT']. Mirrors QUIZ_ROLES in resources/shape.ts
+ * minus STUDENT, which has no write surface.
  */
-export const OWNER_ASSISTANT = ['OWNER', 'ASSISTANT'] as const;
+export const QUIZ_STAFF = ['OWNER', 'TEACHER', 'ASSISTANT'] as const;
 
 // ─── Results & errors ────────────────────────────────────────────────────────
 

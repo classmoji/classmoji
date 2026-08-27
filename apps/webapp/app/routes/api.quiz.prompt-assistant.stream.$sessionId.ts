@@ -40,7 +40,7 @@ export async function loader({ params, request }: LoaderFunctionArgs) {
     const { userId } = await assertClassroomAccess({
       request,
       classroomSlug,
-      allowedRoles: ['OWNER', 'ASSISTANT'],
+      allowedRoles: ['OWNER', 'TEACHER', 'ASSISTANT'],
       resourceType: 'PROMPT_ASSISTANT_STREAM',
       attemptedAction: 'subscribe',
     });
@@ -94,7 +94,7 @@ export async function loader({ params, request }: LoaderFunctionArgs) {
         await assertClassroomAccess({
           request,
           classroomSlug: sessionOwnership.classroomSlug,
-          allowedRoles: ['OWNER', 'ASSISTANT'],
+          allowedRoles: ['OWNER', 'TEACHER', 'ASSISTANT'],
           resourceType: 'PROMPT_ASSISTANT_STREAM',
           attemptedAction: 'subscribe',
         });

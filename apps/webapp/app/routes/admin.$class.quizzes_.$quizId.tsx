@@ -1,4 +1,4 @@
-import { useNavigate, useParams, Outlet, useFetcher } from 'react-router';
+import { useLocation, useNavigate, useParams, Outlet, useFetcher } from 'react-router';
 import { useEffect, useState } from 'react';
 import type { Route } from './+types/admin.$class.quizzes_.$quizId';
 import { Table, Button, Tag, Tooltip, Badge, Space, Modal, message, Select, Spin } from 'antd';
@@ -95,7 +95,7 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
   const { userId, classroom } = await assertClassroomAccess({
     request,
     classroomSlug: classSlug,
-    allowedRoles: ['OWNER', 'ASSISTANT'],
+    allowedRoles: ['OWNER', 'TEACHER', 'ASSISTANT'],
     resourceType: 'QUIZ_DETAILS',
     attemptedAction: 'view',
   });
@@ -296,7 +296,8 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
 
 export const action = async ({ params, request }: Route.ActionArgs) => {
   const { ClassmojiService } = await import('@classmoji/services');
-  const { assertClassroomAccess, assertProTier } = await import('~/utils/helpers');
+  const { addClassroomAuditLog, assertClassroomAccess, assertProTier } =
+    await import('~/utils/helpers');
   const classSlug = params.class!;
   const quizId = params.quizId!;
 
@@ -318,7 +319,7 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
       const { userId, classroom, membership } = await assertClassroomAccess({
         request,
         classroomSlug: classSlug,
-        allowedRoles: ['OWNER', 'ASSISTANT'],
+        allowedRoles: ['OWNER', 'TEACHER', 'ASSISTANT'],
         resourceType: 'QUIZ_PREVIEW_ATTEMPTS',
         attemptedAction: 'clear_own_attempts',
         metadata: {
@@ -330,6 +331,19 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
       // Delete only this authenticated user's attempts for this specific quiz
       // The userId from assertClassroomAccess ensures we only clear the authenticated user's attempts
       await ClassmojiService.quizAttempt.clearForUserAndQuiz(userId, quizId, classroom.id);
+
+      // This route's loader already logs a VIEW; the mutation logged nothing.
+      // Scoped to one quiz, so the quiz is the affected resource — which is
+      // what distinguishes it from the classroom-wide clear on the quiz list.
+      await addClassroomAuditLog({
+        classroomId: classroom.id,
+        userId,
+        role: membership!.role,
+        action: 'DELETE',
+        resourceType: 'QUIZ',
+        resourceId: quizId,
+        metadata: { tool: 'web:quiz.clear_my_attempts', scope: 'quiz' },
+      });
 
       return new Response(
         JSON.stringify({ success: 'Your preview attempts for this quiz have been cleared' }),
@@ -347,6 +361,9 @@ const QuizView = ({ loaderData }: Route.ComponentProps) => {
   const navigate = useNavigate();
   const { class: classSlug, quizId } = useParams();
   const fetcher = useFetcher();
+  // Served under every prefix this route's gate allows (/admin and /teacher),
+  // so links stay on the prefix the user arrived on.
+  const rolePrefix = useLocation().pathname.split('/')[1];
 
   // Repo selection state for code-aware quiz preview
   const [repoModalVisible, setRepoModalVisible] = useState(false);
@@ -412,7 +429,7 @@ const QuizView = ({ loaderData }: Route.ComponentProps) => {
       }
 
       // Navigate to preview route - QuizAttemptInterface will call startQuiz
-      navigate(`/admin/${classSlug}/quizzes/${quizId}/preview/${result.attemptId}`);
+      navigate(`/${rolePrefix}/${classSlug}/quizzes/${quizId}/preview/${result.attemptId}`);
     } catch (error: unknown) {
       console.error('[Preview] Error creating attempt:', error);
       Modal.error({
@@ -425,7 +442,7 @@ const QuizView = ({ loaderData }: Route.ComponentProps) => {
   // Resume existing attempt - just navigate, quiz continues with existing context
   // QuizAttemptInterface won't auto-start because messages already exist
   const resumePreviewAttempt = () => {
-    navigate(`/admin/${classSlug}/quizzes/${quizId}/preview/${adminAttempt!.id}`);
+    navigate(`/${rolePrefix}/${classSlug}/quizzes/${quizId}/preview/${adminAttempt!.id}`);
   };
 
   const handlePreviewQuiz = () => {
@@ -469,7 +486,7 @@ const QuizView = ({ loaderData }: Route.ComponentProps) => {
           cancelText: 'Resume',
           onOk: () => createNewPreviewAttempt(),
           onCancel: () => {
-            navigate(`/admin/${classSlug}/quizzes/${quizId}/preview/${adminAttempt.id}`);
+            navigate(`/${rolePrefix}/${classSlug}/quizzes/${quizId}/preview/${adminAttempt.id}`);
           },
         });
       } else {
@@ -563,7 +580,7 @@ const QuizView = ({ loaderData }: Route.ComponentProps) => {
   };
 
   const handleViewAttempt = (attemptId: string) => {
-    navigate(`/admin/${classSlug}/quizzes/${quizId}/attempt/${attemptId}`);
+    navigate(`/${rolePrefix}/${classSlug}/quizzes/${quizId}/attempt/${attemptId}`);
   };
 
   // Grading strategy labels
@@ -836,7 +853,7 @@ const QuizView = ({ loaderData }: Route.ComponentProps) => {
             type="text"
             className="text-gray-600! hover:text-gray-900! dark:text-gray-100! dark:hover:text-white!"
             icon={<IconArrowLeft size={20} />}
-            onClick={() => navigate(`/admin/${classSlug}/quizzes`)}
+            onClick={() => navigate(`/${rolePrefix}/${classSlug}/quizzes`)}
             aria-label="Back to quizzes"
           />
           <h1 className="text-lg font-semibold text-ink-1 truncate">

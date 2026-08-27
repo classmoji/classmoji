@@ -1,7 +1,7 @@
 /**
  * Authentication flow E2E tests.
  *
- *   - Sign in: GitHub OAuth is bypassed in dev via GET /test-login?role=admin|ta|student,
+ *   - Sign in: GitHub OAuth is bypassed in dev via GET /test-login?role=admin|teacher|ta|student,
  *     which creates a Better Auth `Session` row and a `classmoji.session_token` cookie,
  *     then redirects straight to the role dashboard.
  *   - Returning user: an existing session reaches the dashboard without re-auth.
@@ -25,6 +25,7 @@ import { getTestPrisma, getUserByLogin } from '../helpers/prisma.helpers';
  */
 const PROTECTED_ROUTES = {
   owner: `/admin/${TEST_CLASSROOM}/dashboard`,
+  teacher: `/teacher/${TEST_CLASSROOM}/dashboard`,
   assistant: `/assistant/${TEST_CLASSROOM}/dashboard`,
   student: `/student/${TEST_CLASSROOM}/dashboard`,
 } as const;
@@ -40,7 +41,7 @@ async function countActiveSessions(userId: string): Promise<number> {
 /** Log in via the dev-only test-login backdoor and wait until the dashboard URL is reached. */
 async function loginAs(page: Page, role: 'admin' | 'ta' | 'student'): Promise<void> {
   await page.goto(`/test-login?role=${role}`);
-  await page.waitForURL(new RegExp(`/(admin|assistant|student)/${TEST_CLASSROOM}`));
+  await page.waitForURL(new RegExp(`/(admin|teacher|assistant|student)/${TEST_CLASSROOM}`));
 }
 
 /**
@@ -171,7 +172,9 @@ test.describe('Authentication: invalid / expired session', () => {
     page,
   }) => {
     const response = await page.goto('/test-login?role=not-a-real-role');
-    expect(page.url()).not.toMatch(new RegExp(`/(admin|assistant|student)/${TEST_CLASSROOM}`));
+    expect(page.url()).not.toMatch(
+      new RegExp(`/(admin|teacher|assistant|student)/${TEST_CLASSROOM}`)
+    );
     expect(response?.status() ?? 500).toBeGreaterThanOrEqual(400);
   });
 });

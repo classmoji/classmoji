@@ -143,8 +143,8 @@ export function registerAllTools(): void {
   registerToolDefinition(deckPreviewAcceptTool);
   registerToolDefinition(deckPreviewDiscardTool);
 
-  // Quizzes (OWNER+ASSISTANT — the quiz surface excludes TEACHER; each tool
-  // also re-checks Pro tier + quizzes_enabled in-handler)
+  // Quizzes (OWNER+TEACHER+ASSISTANT; each tool also re-checks Pro tier +
+  // quizzes_enabled in-handler)
   registerToolDefinition(quizCreateTool);
   registerToolDefinition(quizUpdateTool);
   registerToolDefinition(quizPublishTool);

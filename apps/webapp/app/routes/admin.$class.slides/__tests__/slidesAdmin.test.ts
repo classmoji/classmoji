@@ -21,11 +21,13 @@ const mocks = vi.hoisted(() => ({
   update: vi.fn(),
   updateMany: vi.fn(),
   getRecentViewersForPaths: vi.fn(),
+  addClassroomAuditLog: vi.fn(),
 }));
 
 vi.mock('~/utils/helpers', () => ({
   assertClassroomAccess: (...a: unknown[]) => mocks.assertClassroomAccess(...a),
   assertClassroomMutationAllowed: (...a: unknown[]) => mocks.assertClassroomMutationAllowed(...a),
+  addClassroomAuditLog: (...a: unknown[]) => mocks.addClassroomAuditLog(...a),
 }));
 
 vi.mock('@classmoji/database', () => ({
@@ -218,6 +220,77 @@ describe('slides action — inputs it will not act on', () => {
       route.action(actionArgs({ slideId: OWN_SLIDE, field: 'status', value: 'public' }))
     ).rejects.toBeInstanceOf(Response);
     expect(mocks.updateMany).not.toHaveBeenCalled();
+  });
+});
+
+// ─── Every successful toggle leaves an audit row ─────────────────────────────
+
+/**
+ * The MCP slide tools have always audited their writes; this surface did not.
+ * The rows are shaped to match theirs — resource_type 'SLIDES', the deck id,
+ * action UPDATE — so both surfaces can be queried together.
+ *
+ * `tool` is not decoration. The audit service dedups within a 5-second window
+ * on (user, classroom, role, resource_type, resource_id, action) plus
+ * `data.tool`; without a distinct tool per toggle, flipping two switches on one
+ * deck in quick succession would record only the first.
+ */
+describe('slides action — audit rows', () => {
+  it('audits a status change with the flags it wrote', async () => {
+    await route.action(actionArgs({ slideId: OWN_SLIDE, field: 'status', value: 'public' }));
+
+    expect(mocks.addClassroomAuditLog).toHaveBeenCalledExactlyOnceWith({
+      classroomId: 'class-1',
+      userId: 'owner-1',
+      role: 'OWNER',
+      action: 'UPDATE',
+      resourceType: 'SLIDES',
+      resourceId: OWN_SLIDE,
+      metadata: {
+        tool: 'web:slides.status',
+        field: 'status',
+        value: 'public',
+        is_draft: false,
+        is_public: true,
+      },
+    });
+  });
+
+  it.each([['allow_team_edit'], ['show_speaker_notes']] as const)(
+    'audits the %s toggle under its own tool name',
+    async field => {
+      await route.action(actionArgs({ slideId: OWN_SLIDE, field, value: 'true' }));
+
+      expect(mocks.addClassroomAuditLog).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          action: 'UPDATE',
+          resourceType: 'SLIDES',
+          resourceId: OWN_SLIDE,
+          metadata: { tool: `web:slides.${field}`, field, value: true },
+        })
+      );
+    }
+  );
+
+  it('gives the two toggles distinct tool names so neither is deduped away', async () => {
+    await route.action(actionArgs({ slideId: OWN_SLIDE, field: 'allow_team_edit', value: 'true' }));
+    await route.action(
+      actionArgs({ slideId: OWN_SLIDE, field: 'show_speaker_notes', value: 'true' })
+    );
+
+    const tools = mocks.addClassroomAuditLog.mock.calls.map(
+      ([entry]) => (entry as { metadata: { tool: string } }).metadata.tool
+    );
+    expect(new Set(tools).size).toBe(2);
+  });
+
+  it('writes no row for a deck that is not in this classroom', async () => {
+    // count !== 1 means nothing was updated, so there is nothing to record.
+    mocks.updateMany.mockResolvedValue({ count: 0 });
+
+    await route.action(actionArgs({ slideId: FOREIGN_SLIDE, field: 'status', value: 'public' }));
+
+    expect(mocks.addClassroomAuditLog).not.toHaveBeenCalled();
   });
 });
 

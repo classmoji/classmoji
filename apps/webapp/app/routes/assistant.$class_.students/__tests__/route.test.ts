@@ -200,11 +200,19 @@ describe('assistant students route — an OWNER on this prefix', () => {
     });
   });
 
-  it('still receives the owner-only fields — those follow the role', async () => {
+  it('is shown the ASSISTANT view of the roster, not their own', async () => {
+    // This is where "Preview as → Assistant" lands, so the answer has to be
+    // what an assistant actually sees: identity and status, no contact or grade
+    // fields. Showing the owner their own view under an assistant label would
+    // answer the wrong question.
+    //
+    // Narrowing only — the prefix can subtract fields, never add them. An owner
+    // keeps everything on /admin.
     const data = await assistantRoute.loader(loaderArgs());
 
-    expect(data.isOwner).toBe(true);
-    expect(data.students[0]).toMatchObject({ email: 'ada@school.test' });
+    expect(data.isOwner).toBe(false);
+    expect(data.students[0]).not.toHaveProperty('email');
+    expect(data.students[0]).not.toHaveProperty('letter_grade');
   });
 
   it('is refused the controls, because this prefix cannot service them', async () => {

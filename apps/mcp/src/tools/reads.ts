@@ -222,9 +222,9 @@ export const listQuizzesTool = mirrorResourceTool({
   name: 'list_quizzes',
   title: 'List quizzes',
   description:
-    'AI-graded quizzes. Staff (OWNER/ASSISTANT) see all quizzes incl. drafts and prompts; students ' +
-    'see published quizzes with their own attempt summary. Requires a Pro subscription and ' +
-    'quizzes_enabled. TEACHER is excluded (matches the web routes).',
+    'AI-graded quizzes. Staff (OWNER/TEACHER/ASSISTANT) see all quizzes incl. drafts and prompts; ' +
+    'students see published quizzes with their own attempt summary. Requires a Pro subscription ' +
+    'and quizzes_enabled.',
 });
 
 export const listPagesTool = mirrorResourceTool({

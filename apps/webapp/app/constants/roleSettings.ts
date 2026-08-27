@@ -4,6 +4,7 @@
 
 export const roleSettings = {
   OWNER: { path: '/admin', color: 'red' },
+  TEACHER: { path: '/teacher', color: 'purple' },
   ASSISTANT: { path: '/assistant', color: 'blue' },
   STUDENT: { path: '/student', color: 'green' },
   'PENDING INVITE': { path: '', color: 'yellow' },

@@ -54,6 +54,8 @@ export { ClassmojiService, HelperService, StripeService, FlyCertService, Markdow
 // Admin service result/error shapes shared by the web routes and the MCP tools.
 export { StaffServiceError } from './classmoji/staff.service.ts';
 export type { AddStaffResult, RemoveStaffResult, StaffRole } from './classmoji/staff.service.ts';
+// Quiz authorization refusal, so routes can answer 403 instead of 500.
+export { QuizAccessError, QUIZ_STAFF_ROLES } from './classmoji/quiz.service.ts';
 // One builder for the remove_user_from_organization payload, so every caller
 // sends the same fields.
 export { buildRemoveUserPayload } from './classmoji/removeUserPayload.ts';

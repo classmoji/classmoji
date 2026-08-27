@@ -17,14 +17,29 @@ const ASSISTANT_NOTIFICATION_TYPES = new Set(['TA_GRADING_ASSIGNED', 'TA_REGRADE
 const rolePrefix = (role: Role): string => {
   if (role === 'STUDENT') return 'student';
   if (role === 'ASSISTANT') return 'assistant';
+  if (role === 'TEACHER') return 'teacher';
   return 'admin';
 };
 
+/**
+ * Most privileged first — the same order `resolveHighestMembership` uses in
+ * packages/auth. Selecting by priority rather than by whichever role happens to
+ * come first in the caller's array is what makes the chosen prefix stable: a
+ * user holding several roles in one classroom would otherwise get a different
+ * link depending on the order the memberships were queried in.
+ */
+const ROLE_PRIORITY: readonly Role[] = ['OWNER', 'TEACHER', 'ASSISTANT', 'STUDENT'];
+
+const highestRole = (roles: Role[]): Role | null =>
+  ROLE_PRIORITY.find(role => roles.includes(role)) ?? null;
+
 const roleForNotification = (type: string, roles: Role[]): Role | null => {
   if (roles.length === 0) return null;
+  // A notification aimed at a specific role is read in that role's view, even
+  // when the reader also holds a higher one.
   if (STUDENT_NOTIFICATION_TYPES.has(type) && roles.includes('STUDENT')) return 'STUDENT';
   if (ASSISTANT_NOTIFICATION_TYPES.has(type) && roles.includes('ASSISTANT')) return 'ASSISTANT';
-  return roles.find(role => role === 'OWNER' || role === 'TEACHER') ?? roles[0] ?? null;
+  return highestRole(roles);
 };
 
 /**
@@ -43,8 +58,9 @@ export const notificationLink = (
 
   switch (n.resource_type) {
     case 'quiz':
-      // Only the admin route tree has a quiz detail page; students/assistants land on the list.
-      return prefix === 'admin'
+      // The quiz detail page exists in the admin and teacher route trees;
+      // students/assistants land on the list.
+      return prefix === 'admin' || prefix === 'teacher'
         ? `/${prefix}/${slug}/quizzes/${n.resource_id}`
         : `/${prefix}/${slug}/quizzes`;
     case 'assignment':
@@ -55,8 +71,10 @@ export const notificationLink = (
     case 'page':
       return `/${prefix}/${slug}/pages/${n.resource_id}`;
     case 'git_repo_assignment':
-      // TA grading queue only exists under the assistant route tree.
-      return prefix === 'assistant' ? `/${prefix}/${slug}/grading` : `/${prefix}/${slug}`;
+      // The grading queue exists under the assistant and teacher route trees.
+      return prefix === 'assistant' || prefix === 'teacher'
+        ? `/${prefix}/${slug}/grading`
+        : `/${prefix}/${slug}`;
     case 'regrade_request':
       return `/${prefix}/${slug}/regrade-requests`;
     default:

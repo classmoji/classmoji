@@ -75,12 +75,14 @@ const ImpersonationBanner = ({
 
       // Navigate back to the appropriate admin page for the current class
       const currentPath = window.location.pathname;
-      const classMatch = currentPath.match(/\/(student|admin|assistant)\/([^/]+)/);
+      const classMatch = currentPath.match(/\/(student|admin|teacher|assistant)\/([^/]+)/);
       const classSlug = classMatch ? classMatch[2] : null;
 
       if (classSlug) {
-        // Navigate back to assistants page if viewing as assistant, otherwise students page
-        if (currentPath.includes('/assistant/')) {
+        // Return to the list the impersonated user was picked from: teaching
+        // team members (teachers and assistants alike) live on the assistants
+        // page, everyone else on the roster.
+        if (currentPath.includes('/assistant/') || currentPath.includes('/teacher/')) {
           navigate(`/admin/${classSlug}/assistants`);
         } else {
           navigate(`/admin/${classSlug}/students`);

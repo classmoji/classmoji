@@ -77,7 +77,11 @@ export async function loader({ params, request }: Route.LoaderArgs) {
   const { userId, classroom, membership } = await assertClassroomAccess({
     request,
     classroomSlug: classSlug,
-    allowedRoles: ['STUDENT', 'ASSISTANT', 'OWNER'],
+    // Staff reach this list through the modules tree's quiz leaf, so it admits
+    // the whole teaching team — the leaf loader throws before any client-side
+    // guard runs, so a missing role here replaces the entire app render with a
+    // 403 rather than degrading one link.
+    allowedRoles: ['STUDENT', 'ASSISTANT', 'TEACHER', 'OWNER'],
     resourceType: 'STUDENT_QUIZ_ACCESS',
     attemptedAction: 'view_student_quizzes',
   });
@@ -92,10 +96,21 @@ export async function loader({ params, request }: Route.LoaderArgs) {
     throw new Response('Quizzes are currently disabled for this classroom', { status: 403 });
   }
 
-  const [quizzes, user] = await Promise.all([
-    ClassmojiService.quiz.getQuizzesForStudent(classroom.id, userId, membership),
-    ClassmojiService.user.findById(userId),
-  ]);
+  // The service keeps its own role list, so it can disagree with the gate above
+  // — and a bare throw from it would surface as a 500 rather than a refusal.
+  const { QuizAccessError } = await import('@classmoji/services');
+  let quizzes, user;
+  try {
+    [quizzes, user] = await Promise.all([
+      ClassmojiService.quiz.getQuizzesForStudent(classroom.id, userId, membership),
+      ClassmojiService.user.findById(userId),
+    ]);
+  } catch (error) {
+    if (error instanceof QuizAccessError) {
+      throw new Response('You do not have access to this classroom’s quizzes', { status: 403 });
+    }
+    throw error;
+  }
 
   // Transform quizzes for frontend compatibility
   const transformedQuizzes = quizzes.map(quiz => {
@@ -173,8 +188,10 @@ export default function StudentQuizzes({ loaderData }: Route.ComponentProps) {
   };
 
   const handleNewAttempt = async (quiz: StudentQuiz) => {
-    // Check if this is a code-aware quiz and user is TA/admin
-    const isInstructor = userRole ? ['OWNER', 'ASSISTANT'].includes(userRole) : false;
+    // Check if this is a code-aware quiz and the viewer is staff. TEACHER is
+    // included for the same reason the server's isInstructor branch includes it
+    // — staff pick a repo to preview a code-aware quiz against.
+    const isInstructor = userRole ? ['OWNER', 'TEACHER', 'ASSISTANT'].includes(userRole) : false;
     if (quiz.include_code_context && isInstructor) {
       // Show repo selection modal first
       setPendingQuiz(quiz);

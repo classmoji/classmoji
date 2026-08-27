@@ -10,7 +10,7 @@
  *      right classroom per org, and the slug-keyed guards (modules,
  *      leaderboard) must refuse ambiguity rather than serve the twin's data.
  *   4. Quiz prompt stripping: system_prompt/rubric_prompt are visible to the
- *      quiz staff tier (OWNER+ASSISTANT) and stripped for students.
+ *      quiz staff tier and stripped for students.
  *
  * NOTE: HelperService token minting/reversal is intentionally fire-and-forget
  * (not awaited), so token assertions poll via waitUntil.
@@ -421,8 +421,8 @@ describe('quiz prompt stripping', () => {
     });
     cleanup.add('behavior quiz', () => prisma.quiz.deleteMany({ where: { id: quiz.id } }));
 
-    // Staff tier (OWNER+ASSISTANT): prompts present. fake-ta is the
-    // unambiguous single-role staff identity.
+    // Staff tier: prompts present. fake-ta is an unambiguous single-role
+    // staff identity.
     const staffView = await readResource(ta, `classmoji://${DEV_REF}/quizzes`);
     expect(staffView.error).toBeUndefined();
     const staffQuiz = (staffView.payload!.quizzes as Array<Record<string, unknown>>).find(

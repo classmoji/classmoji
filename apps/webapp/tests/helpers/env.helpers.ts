@@ -109,6 +109,7 @@ export const TEST_USER = {
  *
  * Token env vars:
  * - GITHUB_PROF_TOKEN: For admin/owner role
+ * - GITHUB_INSTRUCTOR_TOKEN: For teacher role
  * - GITHUB_TA_TOKEN: For TA/assistant role
  * - GITHUB_STUDENT_TOKEN: For student role
  */
@@ -119,11 +120,17 @@ export const ROLE_TEST_USERS = {
     name: 'Professor',
     tokenEnvVar: 'GITHUB_PROF_TOKEN',
   },
-  // Defaults MUST match packages/database/scripts/seed-test-user.js (fake-ta /
-  // fake-student-1) so that, even with the TEST_*_USER_* env vars unset, the
-  // assistant/student roles resolve to genuinely NON-owner identities. Defaulting
+  // Defaults MUST match packages/database/scripts/seed-test-user.js (fake-teacher
+  // / fake-ta / fake-student-1) so that, even with the TEST_*_USER_* env vars
+  // unset, these roles resolve to genuinely NON-owner identities. Defaulting
   // these to prof-classmoji (the owner) would silently collapse every role and
   // make 403/role-gating assertions pass while exercising owner access.
+  teacher: {
+    id: process.env.TEST_TEACHER_USER_ID || '10000005',
+    login: process.env.TEST_TEACHER_USER_LOGIN || 'fake-teacher',
+    name: 'Teacher',
+    tokenEnvVar: 'GITHUB_INSTRUCTOR_TOKEN',
+  },
   assistant: {
     id: process.env.TEST_TA_USER_ID || '10000001',
     login: process.env.TEST_TA_USER_LOGIN || 'fake-ta',
