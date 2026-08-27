@@ -7,6 +7,8 @@
  * 3. Attempt Ownership Verification:
  *    - sendMessage: Verifies user owns the attempt before allowing messages
  *    - completeQuiz: Verifies user owns the attempt before marking complete
+ *    - restartQuiz: Ends the prior ai-agent session only when the named attempt
+ *      is the caller's own attempt on the quiz being restarted
  * 4. Audit Logging: All unauthorized access attempts are logged
  * 5. Admin Access: Admins preview quizzes as themselves, creating their own attempts
  *    - This ensures data isolation between admin previews and student attempts
@@ -157,10 +159,19 @@ export async function action({ request }: Route.ActionArgs) {
             return { response: jsonResponse(404, 'Quiz not found') };
           }
 
+          // `attemptId` names the session to tear down and nothing else — the
+          // attempt this branch creates always belongs to the caller. Resolve it
+          // here so the branch below can hold it against this quiz and this
+          // caller before ending anything.
+          const attempt = data.attemptId
+            ? await ClassmojiService.quizAttempt.findById(data.attemptId)
+            : null;
+
           return {
             context: {
               classroomId: quiz.classroom_id,
               quiz,
+              attempt,
               metadata: { quiz_id: data.quizId },
             },
           };
@@ -890,8 +901,18 @@ export async function action({ request }: Route.ActionArgs) {
 
       case 'restartQuiz': {
         try {
-          // Cleanup via ai-agent service BEFORE creating new attempt
-          if (data.attemptId) {
+          // Cleanup via ai-agent service BEFORE creating new attempt.
+          // The attempt created below is the caller's own, so the only session
+          // worth ending is the caller's own attempt on this same quiz. An id
+          // that names anything else is skipped rather than refused, which is
+          // what an id naming an already-deleted attempt has always done.
+          const previousAttempt = context.attempt;
+          const isCallersAttemptOnThisQuiz =
+            !!previousAttempt &&
+            previousAttempt.quiz_id.toString() === data.quizId.toString() &&
+            (previousAttempt.user_id.toString() === userId.toString() || isImpersonating);
+
+          if (isCallersAttemptOnThisQuiz) {
             await endQuizSession(data.attemptId);
           }
 
