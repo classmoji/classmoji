@@ -13,9 +13,6 @@ import tokenImage from '~/assets/images/token.png';
 import githubLogo from '~/assets/images/github_logo.svg';
 import ProfileDropdown from '../../features/profile/ProfileDropdown';
 import SupportModal from '../../features/support/SupportModal';
-import PreviewRoleSwitcher from '../../features/admin/PreviewRoleSwitcher';
-import PreviewModeBanner from '../../features/admin/PreviewModeBanner';
-import { resolvePreviewState } from '~/utils/previewRole';
 import { LockedBanner } from '~/components/features/classroom/LockedBanner';
 import ImportProgressBanner, {
   type ImportProgressBannerProps,
@@ -137,19 +134,6 @@ const CommonLayout = ({
   const askMojiActive = useStore(s => s.askMojiActive);
   const setAskMojiOpen = useStore(s => s.setAskMojiOpen);
   const { isDarkMode, background: tweaksBackground } = useDarkMode();
-
-  // "Preview as" — an owner looking at the class the way their staff and
-  // students see it. Resolved from the signed-in user's REAL memberships, never
-  // from the store: during a preview the store role is the relabeled one, so a
-  // store-gated control would disappear exactly when the way out is needed.
-  // This layout is shared by all four prefix layouts, so mounting the switcher
-  // and the banner here covers /admin, /teacher, /assistant and /student at
-  // once. See ~/utils/previewRole for why this cannot grant anything.
-  const preview = resolvePreviewState({
-    memberships,
-    classroomSlug: params.class,
-    rolePrefix: pathname.split('/')[1],
-  });
 
   // Effective student-nav visibility: prefer the fresh value from the layout
   // loader (navVisibility), fall back to the store. Defaults match the schema
@@ -552,11 +536,6 @@ const CommonLayout = ({
           <div className={leanNav ? 'space-y-1.5' : 'space-y-0.5'}>{tabs}</div>
         </nav>
 
-        {/* Owner-only "Preview as". Sits with the profile controls rather than
-            in the nav list: it changes who you are looking as, not where you
-            are. Renders nothing for everyone else. */}
-        <PreviewRoleSwitcher preview={preview} classroomSlug={params.class} collapsed={collapsed} />
-
         {/* Bottom row: profile + GitHub + collapse */}
         <div className="mx-4 h-px bg-line shrink-0" />
         <div
@@ -665,9 +644,6 @@ const CommonLayout = ({
                 : 'px-4 pt-14 pb-4 sm:px-6 lg:px-8 lg:pt-6 lg:pb-6 min-h-full'
             }
           >
-            {/* Pinned above everything else on the page: while previewing, an
-                owner must never be in doubt about whose view they are in. */}
-            <PreviewModeBanner preview={preview} classroomSlug={params.class} />
             {classroom?.status === 'LOCKED' && role !== 'OWNER' && <LockedBanner />}
             {/* Pinned above the page content on every teaching route, because
                 the import outlives the page the user started it from. */}
