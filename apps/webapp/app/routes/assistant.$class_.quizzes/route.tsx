@@ -1,10 +1,13 @@
 // Re-export from the admin route — the quiz management list, mirroring the
-// teacher prefix. Its loader and action both list
-// ['OWNER', 'TEACHER', 'ASSISTANT'], so this prefix serves exactly the roles
-// they already admit; the Pro-tier and quizzes_enabled gates in front of them
-// are unchanged and still apply here.
+// teacher prefix. Same loader, same action, same gates; this file adds no
+// policy of its own, so anything true of the admin route is true here.
 //
-// This replaces the student-facing quiz list that used to be served here. That
-// view is unchanged and still reachable at /student/:class/quizzes, whose own
-// gate lists ASSISTANT.
+// This REPLACES the student-facing quiz list that used to be served at this
+// path. An assistant no longer has a student-styled quiz view anywhere:
+// /student/:class/quizzes nests under student.$class, whose loader is
+// requireStudentAccess (STUDENT alone) and does not catch, so an assistant is
+// refused at the layout before the quizzes leaf is reached. The old
+// arrangement worked only because it pulled the student leaf into the
+// assistant tree. Losing it is the intended trade — assistants gained the
+// management screens, which carry their own preview.
 export { loader, action, default } from '../admin.$class.quizzes/route';

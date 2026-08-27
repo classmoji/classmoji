@@ -1,13 +1,15 @@
 /**
  * Unit tests for the roster under the ASSISTANT prefix.
  *
- * The admin roster loader reads at the teaching-team tier, and it is reachable
- * at BOTH prefixes. /admin's own OWNER check is not a server gate: the layout
- * loader (routes/admin/route.tsx) CATCHES the thrown auth Response and degrades
- * to an empty payload, and its `RequireRole` wrapper is client-side. So an
- * assistant hitting /admin/:class/students gets a 200 from this loader and an
- * emptied shell drawn around it. This route is the prefix where the same read
- * is actually presented, and it must widen the READ only:
+ * The admin roster loader reads at the teaching-team tier, and the same loader
+ * is re-exported here. /admin/:class/** is now closed to non-owner navigation
+ * by `admin.$class/route.tsx`, whose loader THROWS a 403 — so this prefix is
+ * where an assistant actually reaches this read, rather than one of two places.
+ * (It used to be reachable at /admin too: that layout had no loader at all, and
+ * the /admin parent above it catches and degrades rather than refusing.)
+ *
+ * These tests call the loader and action DIRECTLY, so no layout gate runs in
+ * them either way. What they pin is this route's own surface:
  *
  *   READ  — the same loader, so the OWNER-only field split travels with it.
  *   WRITE — absent. The route exports no `action`, so there is no POST target
