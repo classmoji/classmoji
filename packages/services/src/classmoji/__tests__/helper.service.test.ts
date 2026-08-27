@@ -71,10 +71,16 @@ describe('calculateClassLeaderboard', () => {
 
     // Each student carries a sentinel score on its first repo; the mocked grade
     // calculator returns it, letting us assert mapping + sort order deterministically.
+    //
+    // The source rows carry `image`, which is the User column findRepositories-
+    // PerStudent actually selects; `avatar_url` is the name the view layer uses
+    // and appears on the OUTPUT alone. This fixture used to supply `avatar_url`
+    // on the input, which made a leaderboard that read the wrong column look
+    // correct — every real entry came back without an avatar.
     findReposPerStudentMock.mockResolvedValue([
-      { id: 's-bob', name: 'Bob', avatar_url: 'bob.png', login: 'bob', git_repos: [{ score: 80 }] },
-      { id: 's-alice', name: 'Alice', avatar_url: null, login: 'alice', git_repos: [{ score: 20 }] },
-      { id: 's-nemo', name: null, avatar_url: 'nemo.png', login: null, git_repos: [{ score: 50 }] },
+      { id: 's-bob', name: 'Bob', image: 'bob.png', login: 'bob', git_repos: [{ score: 80 }] },
+      { id: 's-alice', name: 'Alice', image: null, login: 'alice', git_repos: [{ score: 20 }] },
+      { id: 's-nemo', name: null, image: 'nemo.png', login: null, git_repos: [{ score: 50 }] },
     ]);
     calcGradeMock.mockImplementation((gitRepos: Array<{ score: number }>) => gitRepos[0].score);
 

@@ -22,14 +22,25 @@ interface ModuleData {
   assignments: Array<{ id: string | number; title: string; weight: number }>;
 }
 
+/**
+ * A gradebook row as it leaves the loader.
+ *
+ * Declared as a CLOSED shape on purpose. This used to carry an
+ * `[key: string]: unknown` index signature, which meant the loader could hand
+ * the whole `User` row over — contact details, ban state, the Stripe customer
+ * id — and the compiler had nothing to say about it. The contact fields stay
+ * optional because the loader includes them for an OWNER only.
+ */
 interface Student {
   id: string;
-  name: string;
-  login: string;
-  email?: string;
-  provider_email?: string;
+  name: string | null;
+  login: string | null;
+  /** UserThumbnailView reads `avatar_url`; the User model calls it `image`. */
+  avatar_url: string | null;
   git_repos: GitRepo[];
-  [key: string]: unknown;
+  email?: string | null;
+  provider_email?: string | null;
+  school_id?: string | null;
 }
 
 interface Membership {

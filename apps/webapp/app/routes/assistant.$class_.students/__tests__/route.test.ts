@@ -55,6 +55,13 @@ vi.mock('~/utils/helpers', () => ({
   waitForRunCompletion: (...a: unknown[]) => mocks.waitForRunCompletion(...a),
 }));
 
+// The REAL field-split helper, by its relative path — see the admin roster
+// test for why it is not stubbed.
+vi.mock(
+  '~/utils/studentFields.server',
+  async () => await import('../../../utils/studentFields.server.ts')
+);
+
 vi.mock('~/constants', () => ({ ActionTypes: { REMOVE_USER: 'remove-user' } }));
 
 // The loader is what is under test; the view layer only needs to be importable.

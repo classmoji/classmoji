@@ -5,6 +5,7 @@ import { Skeleton } from 'antd';
 import GradesTable from './GradesTable';
 import { ClassmojiService } from '@classmoji/services';
 import { addAuditLog } from '~/utils/helpers';
+import { pickOwnerOnlyContactFields } from '~/utils/studentFields.server';
 import { requireClassroomStaff, assertClassroomMutationAllowed } from '~/utils/routeAuth.server';
 import type { Route } from './+types/route';
 
@@ -14,26 +15,63 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
   // OWNER and TEACHER. Letter grades and comments are a teaching-staff surface
   // rather than an owner-only one, and this route is served under both the
   // /admin and /teacher prefixes.
-  const { classroom } = await requireClassroomStaff(request, classSlug!, {
+  const { classroom, membership } = await requireClassroomStaff(request, classSlug!, {
     resourceType: 'GRADES',
     action: 'view_grades',
   });
 
+  // `membership.role` is the caller's HIGHEST role in this classroom, resolved
+  // in privilege order — an owner who also holds another role here still
+  // resolves as OWNER. Same split the roster route applies, and the contact
+  // trio is shared with it so the two cannot drift.
+  const isRealOwner = membership?.role === 'OWNER';
+
   const promises = {
     emojiMappings: ClassmojiService.emojiMapping.findByClassroomId(classroom.id),
     repositories: ClassmojiService.repository.findByClassroomSlug(classSlug!),
-    students: ClassmojiService.user.findRepositoriesPerStudent(classroom),
-    // Everything returned here is serialised to the browser, and the table
-    // reads exactly one field out of the settings row — the late penalty used
-    // by calculateStudentFinalGrade. Project it down to that field rather than
-    // handing the whole server-side row to the client.
+    // Everything below is serialised to the browser, so each source is
+    // projected down to the fields the table renders. The services return whole
+    // `User` and `ClassroomMembership` rows — which carry contact details, the
+    // global better-auth role, ban state and the Stripe customer id — and none
+    // of that belongs in a page.
+    students: ClassmojiService.user.findRepositoriesPerStudent(classroom).then(students =>
+      students.map(student => ({
+        id: student.id,
+        name: student.name,
+        login: student.login,
+        // UserThumbnailView reads `avatar_url`; the User column is `image`.
+        // Without the mapping the table rendered no avatars at all.
+        avatar_url: student.image,
+        // Passed through whole and untouched: calculateStudentFinalGrade
+        // walks the nested assignments, grades and token transactions.
+        git_repos: student.git_repos,
+        ...pickOwnerOnlyContactFields(student, isRealOwner),
+      }))
+    ),
+    // The table reads exactly one field out of the settings row — the late
+    // penalty used by calculateStudentFinalGrade.
     settings: ClassmojiService.classroom
       .getClassroomSettingsForServer(classroom.id)
       .then(settings => ({
         late_penalty_points_per_hour: settings?.late_penalty_points_per_hour ?? 0,
       })),
     letterGradeMappings: ClassmojiService.letterGradeMapping.findByClassroomId(classroom.id),
-    memberships: ClassmojiService.classroomMembership.findByClassroomId(classroom.id),
+    // STUDENT rows only. ClassroomMembership is unique on
+    // (classroom_id, user_id, role), so one person routinely holds several rows
+    // in the same classroom — and the table joins these to students by
+    // `user_id` with a `find`. Handed every role, that find could return a
+    // teaching-staff row for a dual-role user, which would both display the
+    // wrong grade and send that row's id back as the write target.
+    memberships: ClassmojiService.classroomMembership
+      .findByClassroomId(classroom.id, 'STUDENT')
+      .then(memberships =>
+        memberships.map(m => ({
+          id: m.id,
+          user_id: m.user_id,
+          comment: m.comment,
+          letter_grade: m.letter_grade,
+        }))
+      ),
   };
 
   addAuditLog({

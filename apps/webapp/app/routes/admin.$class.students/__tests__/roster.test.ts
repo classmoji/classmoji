@@ -53,6 +53,15 @@ vi.mock('~/utils/helpers', () => ({
   waitForRunCompletion: (...a: unknown[]) => mocks.waitForRunCompletion(...a),
 }));
 
+// The REAL field-split helper, by its relative path — this file exists to pin
+// which contact fields cross the boundary, so a stand-in would pin the
+// stand-in. It is shared with the gradebook loader, which is what keeps the
+// two screens' contact policy from drifting.
+vi.mock(
+  '~/utils/studentFields.server',
+  async () => await import('../../../utils/studentFields.server.ts')
+);
+
 // Mirrors constants/actionTypes.ts — the `~/` specifiers are resolved by these
 // mock registrations, so every one the route imports needs an entry.
 vi.mock('~/constants', () => ({ ActionTypes: { REMOVE_USER: 'remove-user' } }));
