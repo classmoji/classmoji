@@ -22,7 +22,14 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
   }
 
   try {
-    const { userId, classroom } = await requireClassroomTeachingTeam(request, classSlug);
+    // Named so a denial is identifiable. Unlike the leaf routes, this one is
+    // specific to the /teacher prefix, and it is the gate a non-staff user hits
+    // first when they try the prefix — so the row should say which shell was
+    // refused, not the shared default 'TEACHING_RESOURCE'/'access'.
+    const { userId, classroom } = await requireClassroomTeachingTeam(request, classSlug, {
+      resourceType: 'TEACHER_LAYOUT',
+      action: 'enter_teacher_prefix',
+    });
 
     // Same single read the assistant layout does: nav visibility + the site links
     // the peek drawer's ↗ needs.

@@ -15,7 +15,16 @@ import {
 
 export const loader = async ({ request, params }: Route.LoaderArgs) => {
   const { class: classSlug } = params;
-  const { userId, classroom } = await requireClassroomTeachingTeam(request, classSlug!);
+  // Named so a denial is identifiable. Without options this gate logs the
+  // default 'TEACHING_RESOURCE'/'access', which every teaching-team route in
+  // the app shares — so the row says someone was refused something, somewhere.
+  // This loader is served under both /assistant and /teacher (which re-exports
+  // it), and the name describes the resource, not the prefix, so it is right
+  // for both consumers.
+  const { userId, classroom } = await requireClassroomTeachingTeam(request, classSlug!, {
+    resourceType: 'STAFF_DASHBOARD',
+    action: 'view_dashboard',
+  });
 
   const cockpitPromise = Promise.all([
     ClassmojiService.taDashboard.overdueQueue(userId, classroom.id),

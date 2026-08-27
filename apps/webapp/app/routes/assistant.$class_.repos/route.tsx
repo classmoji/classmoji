@@ -5,7 +5,13 @@ import ModuleAccordion from '../student.$class.repos/ModuleAccordion';
 
 export const loader = async ({ params, request }: Route.LoaderArgs) => {
   const { class: classSlug } = params;
-  const { classroom } = await requireClassroomTeachingTeam(request, classSlug!);
+  // Named so a denial is identifiable rather than the shared default
+  // 'TEACHING_RESOURCE'/'access'. 'REPOSITORIES' is the vocabulary the MCP repo
+  // tools already write. Served under /assistant and /teacher alike.
+  const { classroom } = await requireClassroomTeachingTeam(request, classSlug!, {
+    resourceType: 'REPOSITORIES',
+    action: 'view_repos',
+  });
 
   const repositories = await getPrisma().repository.findMany({
     where: { classroom_id: classroom.id, is_published: true },
