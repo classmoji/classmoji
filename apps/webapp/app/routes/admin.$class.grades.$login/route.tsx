@@ -101,8 +101,28 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
   assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
 
   const data = await request.json();
-  const { membershipId, comment } = data;
-  await ClassmojiService.classroomMembership.updateById(membershipId, { comment });
+  const membershipId = typeof data?.membershipId === 'string' ? data.membershipId : null;
+  // An empty comment is legitimate — it clears the note — so this checks the
+  // type, not the truthiness.
+  const comment = typeof data?.comment === 'string' ? data.comment : null;
+
+  if (!membershipId || comment === null) {
+    return { action: 'ADD_GRADE_COMMENT', error: 'Invalid request.' };
+  }
+
+  // Authorization binds to `params.class`, but the membership id arrives in the
+  // JSON body — so the write is bound to `{ id, classroom_id }` and only counts
+  // when it matched exactly one row. Same shape as the page and quiz writes on
+  // this branch.
+  const updated = await ClassmojiService.classroomMembership.updateInClassroom(
+    membershipId,
+    classroom.id,
+    { comment }
+  );
+
+  if (!updated) {
+    return { action: 'ADD_GRADE_COMMENT', error: 'Student not found.' };
+  }
 
   return { action: 'ADD_GRADE_COMMENT', success: 'Saved comment.' };
 };

@@ -268,6 +268,44 @@ export const updateById = async (id: string, updates: Prisma.ClassroomMembership
 };
 
 /**
+ * Update a membership by id, BOUND TO THE CLASSROOM IT MUST BELONG TO.
+ *
+ * `updateById` above resolves by primary key alone, which is right for callers
+ * that already hold a membership they resolved themselves. It is the wrong
+ * shape for a caller that authorized against a classroom in the URL and then
+ * takes the membership id from a request body: there, the two have to be tied
+ * together in the query itself, or the write is free to land outside the
+ * classroom the caller was authorized for.
+ *
+ * Same shape as the page and quiz writes — bound to `{ id, classroom_id }`,
+ * and it only counts when it matched exactly one row. Returns false otherwise,
+ * so an unknown id and another classroom's membership are indistinguishable to
+ * the caller.
+ *
+ * This is opt-in: `updateById` and all of its existing callers are unchanged.
+ *
+ * `role` is deliberately not updatable here. The last-owner guard lives in
+ * `updateById`/`update`, and a second copy of it would be a second place to
+ * forget it.
+ *
+ * @param {string} id - UUID of the membership
+ * @param {string} classroomId - UUID of the Classroom the membership must be in
+ * @param {Object} updates - Fields to update, excluding `role`
+ * @returns {Promise<boolean>} - true when exactly one row was updated
+ */
+export const updateInClassroom = async (
+  id: string,
+  classroomId: string,
+  updates: Omit<Prisma.ClassroomMembershipUncheckedUpdateInput, 'role'>
+) => {
+  const { count } = await getPrisma().classroomMembership.updateMany({
+    where: { id, classroom_id: classroomId },
+    data: updates,
+  });
+  return count === 1;
+};
+
+/**
  * Delete a membership
  * @param {string} classroomId - UUID of the Classroom
  * @param {string} userId - UUID of the User

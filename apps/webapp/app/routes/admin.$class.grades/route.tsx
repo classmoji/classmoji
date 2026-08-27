@@ -57,9 +57,7 @@ const Grades = ({ loaderData }: Route.ComponentProps) => {
       <Suspense
         fallback={
           <div className="min-h-full">
-            <h1 className="mt-2 mb-4 text-lg font-semibold text-ink-1">
-              Grades
-            </h1>
+            <h1 className="mt-2 mb-4 text-lg font-semibold text-ink-1">Grades</h1>
             <Skeleton active />
           </div>
         }
@@ -78,7 +76,9 @@ const Grades = ({ loaderData }: Route.ComponentProps) => {
                 resolvedEmojiMappings as Parameters<typeof GradesTable>[0]['emojiMappings']
               }
               repositories={resolvedModules as Parameters<typeof GradesTable>[0]['repositories']}
-              students={resolvedStudents as unknown as Parameters<typeof GradesTable>[0]['students']}
+              students={
+                resolvedStudents as unknown as Parameters<typeof GradesTable>[0]['students']
+              }
               settings={resolvedSettings as Parameters<typeof GradesTable>[0]['settings']}
               letterGradeMappings={
                 resolvedLetterGradeMappings as Parameters<
@@ -107,11 +107,29 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
   assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
 
   const data = await request.json();
-  const { membership_id, letter_grade } = data;
+  const membershipId = typeof data?.membership_id === 'string' ? data.membership_id : null;
+  const rawLetterGrade = data?.letter_grade;
+  const letterGradeIsValid =
+    rawLetterGrade === undefined || rawLetterGrade === null || typeof rawLetterGrade === 'string';
 
-  await ClassmojiService.classroomMembership.updateById(membership_id, {
-    letter_grade: letter_grade ? letter_grade : null,
-  });
+  if (!membershipId || !letterGradeIsValid) {
+    return { error: 'Invalid request.' };
+  }
+
+  // Authorization binds to `params.class`, but the membership id arrives in the
+  // JSON body — so the write is bound to `{ id, classroom_id }` and only counts
+  // when it matched exactly one row. Same shape as the page and quiz writes on
+  // this branch. An empty string clears the grade, which is how the table's
+  // editable cell sends a cleared value.
+  const updated = await ClassmojiService.classroomMembership.updateInClassroom(
+    membershipId,
+    classroom.id,
+    { letter_grade: rawLetterGrade ? rawLetterGrade : null }
+  );
+
+  if (!updated) {
+    return { error: 'Student not found.' };
+  }
 
   return {
     success: true,
