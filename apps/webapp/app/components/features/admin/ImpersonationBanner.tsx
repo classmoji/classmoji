@@ -16,9 +16,28 @@ interface ImpersonationBannerProps {
    * slug-based return below has nothing to work with.
    */
   returnToAdminUrl?: string | null;
+  /**
+   * Scope the breadcrumb cookie was set with, so it can be deleted with a
+   * matching domain. Null in bare development (host-only cookies).
+   */
+  impersonationCookieDomain?: string | null;
 }
 
-const ImpersonationBanner = ({ session, returnToAdminUrl }: ImpersonationBannerProps) => {
+/** Name must match apps/admin's `ORIGIN_COOKIE`. */
+const ORIGIN_COOKIE = 'cm_impersonation_origin';
+
+const clearImpersonationOrigin = (cookieDomain?: string | null) => {
+  const parts = [`${ORIGIN_COOKIE}=`, 'path=/', 'max-age=0', 'samesite=lax'];
+  if (cookieDomain) parts.push(`domain=${cookieDomain}`);
+  if (window.location.protocol === 'https:') parts.push('secure');
+  document.cookie = parts.join('; ');
+};
+
+const ImpersonationBanner = ({
+  session,
+  returnToAdminUrl,
+  impersonationCookieDomain,
+}: ImpersonationBannerProps) => {
   const navigate = useNavigate();
   const [stopping, setStopping] = useState(false);
 
@@ -37,6 +56,13 @@ const ImpersonationBanner = ({ session, returnToAdminUrl }: ImpersonationBannerP
       if (error) {
         throw new Error(error.message || 'Failed to stop impersonating');
       }
+
+      // Clear the breadcrumb apps/admin dropped before handing off. It carries
+      // max-age=3600, so leaving it set would make the NEXT impersonation --
+      // including an ordinary classroom "View as" -- return to the admin app
+      // too. Deleting a cookie requires the same domain and path it was set
+      // with, hence impersonationCookieDomain coming down from the loader.
+      clearImpersonationOrigin(impersonationCookieDomain);
 
       // Started from the standalone admin app: send them back there. Checked
       // first because such a session has no originating classroom, so the

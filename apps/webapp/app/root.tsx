@@ -21,6 +21,7 @@ import { auth as triggerAuth } from '@trigger.dev/sdk';
 import { GitHubProvider, ClassmojiService } from '@classmoji/services';
 import { CalloutProvider, CalloutSlot } from '@classmoji/ui-components';
 import { auth, getAuthSession } from '@classmoji/auth/server';
+import { COOKIE_DOMAIN } from '@classmoji/auth/secret';
 import { isAIAgentConfigured } from '~/utils/aiFeatures.server';
 import type { Route } from './+types/root';
 import type { MembershipWithOrganization, AppUser, Role } from '~/types';
@@ -284,9 +285,10 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
     // return-to-roster behaviour. Read server-side so the value is a trusted
     // env URL, never anything the cookie itself supplies.
     impersonationReturnUrl:
-      isImpersonating && startedFromAdminApp(request)
-        ? (process.env.ADMIN_URL ?? null)
-        : null,
+      isImpersonating && startedFromAdminApp(request) ? (process.env.ADMIN_URL ?? null) : null,
+    // Scope apps/admin set the breadcrumb with, so the banner can delete it
+    // with a matching domain once impersonation ends.
+    impersonationCookieDomain: COOKIE_DOMAIN,
   };
 };
 
@@ -298,7 +300,7 @@ const FetcherProvider = ({ children }: { children: React.ReactNode }) => {
 };
 
 const App = ({ loaderData }: Route.ComponentProps) => {
-  const { user, session, impersonationReturnUrl } = loaderData;
+  const { user, session, impersonationReturnUrl, impersonationCookieDomain } = loaderData;
   const { isDarkMode, accent } = useDarkMode();
   const { pathname } = useLocation();
   const {
@@ -472,6 +474,7 @@ const App = ({ loaderData }: Route.ComponentProps) => {
                       key={(session as Record<string, Record<string, string>>)?.session?.id}
                       session={session}
                       returnToAdminUrl={impersonationReturnUrl}
+                      impersonationCookieDomain={impersonationCookieDomain}
                     />
                     <Outlet />
                     <SyllabusBotRoot />
