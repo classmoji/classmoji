@@ -40,6 +40,21 @@ export const PREVIEWABLE_ROLES = ['TEACHER', 'ASSISTANT', 'STUDENT'] as const;
 
 export type PreviewableRole = (typeof PREVIEWABLE_ROLES)[number];
 
+/**
+ * Roles whose landing page an OWNER can reach on their owner membership alone.
+ *
+ * The teacher and assistant dashboards gate on the teaching team, which an
+ * owner is part of — so previewing those needs nothing extra. The STUDENT
+ * dashboard is different: `/student/:slug` gates on `requireStudentAccess`,
+ * which admits STUDENT only. An owner without a student membership following
+ * the Student option gets a 403 instead of a preview, so the option is offered
+ * only when they actually hold one (see `previewableRolesFor`).
+ *
+ * Widening `requireStudentAccess` would be a permission change, not a bug fix,
+ * so it is deliberately not done here.
+ */
+const TEACHING_TEAM_PREVIEWS = ['TEACHER', 'ASSISTANT'] as const;
+
 /** The prefix an owner's own, unprevewed view lives under. */
 export const OWNER_PREFIX = 'admin';
 
@@ -71,12 +86,35 @@ interface MembershipLike {
 export const holdsOwnerMembership = (
   memberships: MembershipLike[] | undefined | null,
   classroomSlug: string | undefined | null
+): boolean => holdsRoleIn(memberships, classroomSlug, 'OWNER');
+
+/** Does this viewer hold `role` in THIS classroom, matched by slug? */
+const holdsRoleIn = (
+  memberships: MembershipLike[] | undefined | null,
+  classroomSlug: string | undefined | null,
+  role: string
 ): boolean => {
   if (!classroomSlug) return false;
   return (memberships ?? []).some(
-    membership => membership?.role === 'OWNER' && membership?.organization?.login === classroomSlug
+    membership => membership?.role === role && membership?.organization?.login === classroomSlug
   );
 };
+
+/**
+ * The roles this owner can actually be offered, given what they hold.
+ *
+ * Offering a role whose landing page then refuses them is worse than not
+ * offering it: the control exists to answer "what do my TAs see", and a 403 is
+ * not an answer. Student is therefore conditional on a real STUDENT membership
+ * in this classroom — the memberships the root loader already sent.
+ */
+export const previewableRolesFor = (
+  memberships: MembershipLike[] | undefined | null,
+  classroomSlug: string | undefined | null
+): PreviewableRole[] => [
+  ...TEACHING_TEAM_PREVIEWS,
+  ...(holdsRoleIn(memberships, classroomSlug, 'STUDENT') ? (['STUDENT'] as const) : []),
+];
 
 export interface PreviewState {
   /** Show the owner the preview control at all. */
@@ -85,12 +123,15 @@ export interface PreviewState {
   previewRole: PreviewableRole | null;
   /** Convenience: the owner is looking at someone else's view of the class. */
   isPreviewing: boolean;
+  /** Roles to offer — only those whose landing page this owner can open. */
+  availableRoles: PreviewableRole[];
 }
 
 const NOT_PREVIEWING: PreviewState = {
   canPreview: false,
   previewRole: null,
   isPreviewing: false,
+  availableRoles: [],
 };
 
 /**
@@ -112,9 +153,11 @@ export const resolvePreviewState = ({
 }): PreviewState => {
   if (!holdsOwnerMembership(memberships, classroomSlug)) return NOT_PREVIEWING;
 
+  const availableRoles = previewableRolesFor(memberships, classroomSlug);
+
   // The owner's own prefix is not a preview.
   if (!rolePrefix || rolePrefix === OWNER_PREFIX) {
-    return { canPreview: true, previewRole: null, isPreviewing: false };
+    return { canPreview: true, previewRole: null, isPreviewing: false, availableRoles };
   }
 
   // Only a prefix that names a previewable role counts. An unrelated prefix
@@ -127,6 +170,7 @@ export const resolvePreviewState = ({
     canPreview: true,
     previewRole,
     isPreviewing: previewRole !== null,
+    availableRoles,
   };
 };
 

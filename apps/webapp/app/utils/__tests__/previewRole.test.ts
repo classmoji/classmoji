@@ -29,6 +29,7 @@ const {
   previewPathFor,
   ownerExitPath,
   previewRoleLabel,
+  previewableRolesFor,
   PREVIEWABLE_ROLES,
 } = await import('../previewRole.ts');
 
@@ -73,6 +74,7 @@ describe('resolvePreviewState — a non-owner can never reach the preview state'
       canPreview: false,
       previewRole: null,
       isPreviewing: false,
+      availableRoles: [],
     });
   });
 
@@ -95,6 +97,7 @@ describe('resolvePreviewState — a non-owner can never reach the preview state'
       canPreview: false,
       previewRole: null,
       isPreviewing: false,
+      availableRoles: [],
     });
   });
 
@@ -114,6 +117,8 @@ describe('resolvePreviewState — an owner', () => {
       canPreview: true,
       previewRole: null,
       isPreviewing: false,
+      // No student membership here, so Student is not on the menu.
+      availableRoles: ['TEACHER', 'ASSISTANT'],
     });
   });
 
@@ -126,6 +131,7 @@ describe('resolvePreviewState — an owner', () => {
       canPreview: true,
       previewRole: expected,
       isPreviewing: true,
+      availableRoles: ['TEACHER', 'ASSISTANT'],
     });
   });
 
@@ -141,6 +147,7 @@ describe('resolvePreviewState — an owner', () => {
       canPreview: true,
       previewRole: null,
       isPreviewing: false,
+      availableRoles: ['TEACHER', 'ASSISTANT'],
     });
   });
 
@@ -179,6 +186,47 @@ describe('preview navigation targets', () => {
 
   it('never offers OWNER as something to preview', () => {
     expect(PREVIEWABLE_ROLES).not.toContain('OWNER');
+  });
+
+  /**
+   * Student is the one previewable role whose landing page an owner cannot open
+   * on their owner membership alone: /student/:slug gates on
+   * `requireStudentAccess`, which admits STUDENT only. Teacher and assistant
+   * dashboards gate on the teaching team, which an owner is part of.
+   *
+   * So the option is offered only when the owner genuinely holds a STUDENT
+   * membership in that classroom — otherwise the control would navigate
+   * straight into a 403, which is not an answer to "what do my students see".
+   */
+  describe('the Student option is offered only when the owner can open it', () => {
+    it('is withheld from an owner with no student membership', () => {
+      expect(previewableRolesFor([membership('OWNER')], CLASS)).toEqual(['TEACHER', 'ASSISTANT']);
+    });
+
+    it('is offered to an owner who is also enrolled as a student', () => {
+      expect(previewableRolesFor([membership('OWNER'), membership('STUDENT')], CLASS)).toEqual([
+        'TEACHER',
+        'ASSISTANT',
+        'STUDENT',
+      ]);
+    });
+
+    it('does not count a STUDENT membership in a DIFFERENT classroom', () => {
+      expect(
+        previewableRolesFor([membership('OWNER'), membership('STUDENT', OTHER_CLASS)], CLASS)
+      ).toEqual(['TEACHER', 'ASSISTANT']);
+    });
+
+    it('always offers the two teaching-team roles, which an owner can always open', () => {
+      for (const memberships of [
+        [membership('OWNER')],
+        [membership('OWNER'), membership('STUDENT')],
+      ]) {
+        expect(previewableRolesFor(memberships, CLASS)).toEqual(
+          expect.arrayContaining(['TEACHER', 'ASSISTANT'])
+        );
+      }
+    });
   });
 
   it('labels roles for display', () => {

@@ -3,7 +3,6 @@ import type { MenuProps } from 'antd';
 import { IconEye, IconArrowBackUp } from '@tabler/icons-react';
 import { useNavigate } from 'react-router';
 import {
-  PREVIEWABLE_ROLES,
   ownerExitPath,
   previewPathFor,
   previewRoleLabel,
@@ -41,12 +40,17 @@ const PreviewRoleSwitcher = ({
 
   if (!preview.canPreview || !classroomSlug) return null;
 
+  // Only the roles whose landing page this owner can actually open. Student is
+  // absent unless they hold a student membership here, because the student
+  // dashboard admits STUDENT only — offering it otherwise navigates to a 403.
+  const offeredRoles = preview.availableRoles;
+
   const items: MenuProps['items'] = [
     {
       key: 'heading',
       type: 'group',
       label: <span className="text-xs text-gray-500 dark:text-gray-400">Preview the class as</span>,
-      children: PREVIEWABLE_ROLES.map(role => ({
+      children: offeredRoles.map(role => ({
         key: role,
         label: previewRoleLabel(role),
         icon: <IconEye size={16} />,
@@ -71,7 +75,7 @@ const PreviewRoleSwitcher = ({
       navigate(ownerExitPath(classroomSlug));
       return;
     }
-    if ((PREVIEWABLE_ROLES as readonly string[]).includes(key)) {
+    if ((offeredRoles as readonly string[]).includes(key)) {
       navigate(previewPathFor(key as PreviewableRole, classroomSlug));
     }
   };
