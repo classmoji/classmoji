@@ -46,6 +46,7 @@ vi.mock('@classmoji/ui-components', () => ({ useCallout: () => ({ show: vi.fn() 
 vi.mock('@classmoji/auth/client', () => ({
   authClient: { admin: { impersonateUser: vi.fn() } },
 }));
+vi.mock('~/utils/impersonationReturn', () => ({ rememberImpersonationReturn: vi.fn() }));
 
 // The loader half of the route module pulls in the service layer and the auth
 // helpers; only the component is under test here.

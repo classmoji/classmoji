@@ -5,6 +5,7 @@ import { IconUserSearch, IconTrash } from '@tabler/icons-react';
 import { Table, Radio, Popconfirm, Modal, Tag } from 'antd';
 
 import { authClient } from '@classmoji/auth/client';
+import { rememberImpersonationReturn } from '~/utils/impersonationReturn';
 import { ButtonNew, UserThumbnailView, SearchInput, TableActionButtons } from '~/components';
 import { ClassmojiService } from '@classmoji/services';
 import { useCallout } from '@classmoji/ui-components';
@@ -141,6 +142,9 @@ const AdminStaff = ({ loaderData }: Route.ComponentProps) => {
       if (error) {
         throw new Error(error.message || 'Failed to view as this staff member');
       }
+
+      // Record where "Stop viewing" should land, while still standing on it.
+      rememberImpersonationReturn();
 
       // Land on the prefix that matches the role being viewed, exactly as the
       // detail drawer does — a teacher dropped on /assistant would be looking

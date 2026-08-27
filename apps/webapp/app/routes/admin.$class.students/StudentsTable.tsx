@@ -7,6 +7,7 @@ import { TableActionButtons, UserThumbnailView } from '~/components';
 import { useGlobalFetcher } from '~/hooks';
 import { useCallout } from '@classmoji/ui-components';
 import { ActionTypes } from '~/constants';
+import { rememberImpersonationReturn } from '~/utils/impersonationReturn';
 import { authClient } from '@classmoji/auth/client';
 
 interface Student {
@@ -65,6 +66,12 @@ const StudentsTable = ({ students, query, isOwner, canManage }: StudentsTablePro
       if (error) {
         throw new Error(error.message || 'Failed to view as student');
       }
+
+      // Record where "Stop viewing" should land, while still standing on the
+      // page it should land on. Working it out afterwards means guessing at a
+      // classroom and a role from wherever the impersonated session wandered
+      // to; this page is one the actor could open a moment ago.
+      rememberImpersonationReturn();
 
       // Navigate to class root - student.$class._index handles default page redirect
       navigate(`/student/${classSlug}`);
