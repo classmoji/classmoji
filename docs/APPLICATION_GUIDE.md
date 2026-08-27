@@ -150,16 +150,26 @@ await assertClassroomAccess({
 
 | Resource | Student (Own) | Student (Others) | Assistant | Teacher | Owner |
 |----------|--------------|------------------|-----------|---------|-------|
+| View Assignment Grades | ✅ | ❌ | ✅ | ✅ | ✅ |
 | View Gradebook (letter grades, comments) | ❌ | ❌ | ❌ | ✅ | ✅ |
+| View Roster Contact Details (email, school ID) | ❌ | ❌ | ❌ | ❌ | ✅ |
 | Grant Tokens | ❌ | ❌ | ❌ | ❌ | ✅ |
 | Grade Assignments (grading queue) | ❌ | ❌ | ✅ | ✅ | ✅ |
 | Manage Quizzes | ❌ | ❌ | ✅ | ✅ | ✅ |
 | Cancel Token Transaction | ✅ | ❌ | ❌ | ❌ | ✅ |
 | Take Quiz | ✅ | ❌ | ❌ | ❌ | ❌* |
 | View Quiz Attempts | ✅ | ❌ | ✅ | ✅ | ✅ |
+| View Roster | ❌ | ❌ | ✅ | ✅ | ✅ |
+| Manage Roster (add/remove students) | ❌ | ❌ | ❌ | ❌ | ✅ |
 | Manage Settings | ❌ | ❌ | ❌ | ❌ | ✅ |
 
 *Owners can take quizzes but typically don't
+
+A student still sees their OWN grades — the per-assignment marks on their
+assignments page, and via the `my_grades` MCP tool. The **gradebook** row above
+is the staff-facing screen: every student's row at once, plus the letter-grade
+override and the private performance comment. Those two fields are what a
+student never sees, not their marks.
 
 ---
 

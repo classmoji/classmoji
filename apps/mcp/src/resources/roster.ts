@@ -2,16 +2,23 @@
  * `roster` + `teams` — classmoji://{org}/{slug}/roster, …/teams.
  *
  * roster (TEACHING TEAM, with OWNER-only grade fields):
- *   The web's roster route (admin.$class.students) is requireClassroomAdmin —
- *   OWNER only — which DISAGREES with the plan §7 table ("teaching-team").
- *   However the web already exposes every student's identity (full User rows)
- *   to the whole teaching team through the grading routes
+ *   The web's roster route (admin.$class.students) READS at the teaching-team
+ *   tier and applies exactly this split in its loader: identity plus the
+ *   grader/invite flags for the whole teaching team, with contact PII
+ *   (`email`, `provider_email`, `school_id`) and the membership grade fields
+ *   (`letter_grade`, `comment`) added for an OWNER alone. Its MUTATIONS stay
+ *   OWNER-only and carry their own gate.
+ *
+ *   The grade fields are NOT owner-only everywhere: the gradebook
+ *   (admin.$class.grades, OWNER + TEACHER, also served at /teacher) exists to
+ *   show them, which is why they travel with the membership there. They stay
+ *   owner-only on the ROSTER, and this resource mirrors the roster.
+ *
+ *   Identity alone was never the sensitive part: the web already exposes every
+ *   student's identity to the whole teaching team through the grading routes
  *   (assistant.$class_.grading → gitRepoAssignment.findByClassroomId includes
- *   git_repo.student), so a teaching-team roster of public identity fields
- *   grants nothing the web doesn't. Resolution: teaching-team sees identity +
- *   grader/invite flags; the membership grade fields (`letter_grade`,
- *   `comment`) and contact PII (`email`, `school_id`) — which only the
- *   OWNER-gated route returns — are stripped for non-OWNER callers.
+ *   git_repo.student).
+ *
  *   There is deliberately no student-facing roster (nothing to mirror).
  *
  * teams (any member):
