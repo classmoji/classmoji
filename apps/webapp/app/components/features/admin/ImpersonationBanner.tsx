@@ -80,10 +80,10 @@ const ImpersonationBanner = ({
 
       if (classSlug) {
         // Return to the list the impersonated user was picked from: teaching
-        // team members (teachers and assistants alike) live on the assistants
-        // page, everyone else on the roster.
+        // team members (teachers and assistants alike) live on the Teaching
+        // Staff page, everyone else on the roster.
         if (currentPath.includes('/assistant/') || currentPath.includes('/teacher/')) {
-          navigate(`/admin/${classSlug}/assistants`);
+          navigate(`/admin/${classSlug}/staff`);
         } else {
           navigate(`/admin/${classSlug}/students`);
         }

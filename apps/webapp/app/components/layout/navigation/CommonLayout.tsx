@@ -30,7 +30,7 @@ const OWNER_CORE_LINKS = new Set([
   '/pages',
   '/students',
   '/teams',
-  '/assistants',
+  '/staff',
   '/grades',
   '/settings/general',
   '/support',
@@ -188,8 +188,14 @@ const CommonLayout = ({
 
   const renderNavItem = (item: NavItem, key: string) => {
     const to = `${roleSettings?.path}/${params.class}${item.link}`;
+    // Anchored to a whole path SEGMENT: a bare `includes('/staff')` also matches
+    // a classroom whose slug starts with "staff", which would light up the wrong
+    // nav entry on every page of that class. Deeper paths still count as active
+    // (`/staff/ada` is the staff screen), which is why the trailing slash is a
+    // match too.
+    const onSegment = pathname.includes(`${item.link}/`) || pathname.endsWith(item.link);
     const active =
-      (pathname.includes(item.link) && !pathname.includes('settings')) ||
+      (onSegment && !pathname.includes('settings')) ||
       (item.link.includes('setting') && pathname.includes('settings'));
 
     const isDemoClassroom = Number(classroom?.id) === DEMO_ORG_ID;
@@ -619,7 +625,10 @@ const CommonLayout = ({
             pathname.includes('/regrade-requests') ||
             pathname.includes('/settings') ||
             pathname.includes('/students') ||
-            pathname.includes('/assistants') ||
+            // Segment-anchored, unlike its neighbours: '/staff' is short enough
+            // to appear inside a classroom slug ('/admin/staffing-101/…'), which
+            // would give that whole class the bare canvas.
+            pathname.match(/\/staff(\/|$)/) ||
             pathname.includes('/tokens') ||
             pathname.includes('/teams') ||
             pathname.includes('/grading') ||

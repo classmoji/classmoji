@@ -37,6 +37,8 @@ const ROUTES_DIR = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const INTENTIONALLY_NO_ACTION: Record<string, string> = {
   'teacher.$class_.students':
     'roster mutation (add/remove students) stays on the owner-only /admin route',
+  'teacher.$class_.staff':
+    'staff mutation (add/update/remove teaching staff) stays on the owner-only /admin route',
 };
 
 interface TeacherRoute {

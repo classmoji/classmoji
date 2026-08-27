@@ -1,7 +1,7 @@
 /**
  * Unit tests for staff.addStaff / updateStaff / removeStaff — the teaching-staff
- * logic shared by the web admin.$class.assistants action (ASSISTANT only) and
- * the MCP staff tools (ASSISTANT / TEACHER / OWNER). Prisma, the git provider,
+ * logic shared by the web admin.$class.staff action and the MCP staff tools,
+ * both of which span ASSISTANT / TEACHER / OWNER. Prisma, the git provider,
  * the sibling services and Trigger.dev are mocked; the tests pin the per-role
  * idempotency short-circuit (no GitHub writes when a membership at the
  * REQUESTED role already exists), the server-side login → profile resolution,
