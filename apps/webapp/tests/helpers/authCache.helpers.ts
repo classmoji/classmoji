@@ -1,6 +1,6 @@
 import { createHash } from 'crypto';
 import { existsSync, readFileSync, statSync } from 'fs';
-import { TEST_USERS } from './auth.helpers';
+import { getTestUser } from './auth.helpers';
 import { TestRole } from './env.helpers';
 
 /**
@@ -22,7 +22,7 @@ export const CACHE_VALIDITY_MS = 60 * 60 * 1000;
  * role-gating assertions pass against the wrong identity.
  */
 export function identityFingerprint(role: TestRole): string {
-  const u = TEST_USERS[role];
+  const u = getTestUser(role);
   return createHash('sha256').update(`${u.id}:${u.login}:${u.token}`).digest('hex');
 }
 

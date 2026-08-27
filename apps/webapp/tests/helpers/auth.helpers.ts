@@ -32,49 +32,49 @@ function getTokenForRole(role: TestRole): string {
   return token;
 }
 
+/** The classroom role each test-user key stands for. */
+const ROLE_OF: Record<TestRole, TestUserRole> = {
+  owner: 'OWNER',
+  teacher: 'TEACHER',
+  assistant: 'ASSISTANT',
+  student: 'STUDENT',
+};
+
+/** Every role key, so callers can iterate without touching a resolved map. */
+export const TEST_ROLES = Object.keys(ROLE_OF) as TestRole[];
+
 /**
- * Test users for each role.
- * Each role uses a different GitHub user for realistic permission testing.
+ * Resolve the test user for one role, reading its token AT CALL TIME.
  *
- * Required env vars:
- * - GITHUB_PROF_TOKEN: Token for admin/owner user
- * - GITHUB_TA_TOKEN: Token for TA/assistant user
- * - GITHUB_STUDENT_TOKEN: Token for student user
+ * Deliberately a function and not a module-scope map. A map has to resolve all
+ * four tokens the moment the module is imported, and `getTokenForRole` throws
+ * on a missing one — so a single unset env var took down every spec that
+ * imports this file, including the three roles whose tokens were present. (A
+ * getter-based map is no better: `Object.entries` invokes getters, and the auth
+ * setup enumerates the map.) Resolving per role means one missing token can only
+ * fail the tests that actually need that role.
+ *
+ * Required env vars, one per role:
+ * - GITHUB_PROF_TOKEN: owner
+ * - GITHUB_INSTRUCTOR_TOKEN: teacher
+ * - GITHUB_TA_TOKEN: assistant
+ * - GITHUB_STUDENT_TOKEN: student
  *
  * Optional (to use different GitHub accounts per role):
+ * - TEST_TEACHER_USER_ID + TEST_TEACHER_USER_LOGIN
  * - TEST_TA_USER_ID + TEST_TA_USER_LOGIN
  * - TEST_STUDENT_USER_ID + TEST_STUDENT_USER_LOGIN
  */
-export const TEST_USERS: Record<TestRole, TestUser> = {
-  owner: {
-    id: ROLE_TEST_USERS.owner.id,
-    login: ROLE_TEST_USERS.owner.login,
-    role: 'OWNER',
-    token: getTokenForRole('owner'),
+export function getTestUser(role: TestRole): TestUser {
+  const config = ROLE_TEST_USERS[role];
+  return {
+    id: config.id,
+    login: config.login,
+    role: ROLE_OF[role],
+    token: getTokenForRole(role),
     expiresAt: new Date(Date.now() + 8 * 60 * 60 * 1000).toISOString(), // 8 hours
-  },
-  teacher: {
-    id: ROLE_TEST_USERS.teacher.id,
-    login: ROLE_TEST_USERS.teacher.login,
-    role: 'TEACHER',
-    token: getTokenForRole('teacher'),
-    expiresAt: new Date(Date.now() + 8 * 60 * 60 * 1000).toISOString(),
-  },
-  assistant: {
-    id: ROLE_TEST_USERS.assistant.id,
-    login: ROLE_TEST_USERS.assistant.login,
-    role: 'ASSISTANT',
-    token: getTokenForRole('assistant'),
-    expiresAt: new Date(Date.now() + 8 * 60 * 60 * 1000).toISOString(),
-  },
-  student: {
-    id: ROLE_TEST_USERS.student.id,
-    login: ROLE_TEST_USERS.student.login,
-    role: 'STUDENT',
-    token: getTokenForRole('student'),
-    expiresAt: new Date(Date.now() + 8 * 60 * 60 * 1000).toISOString(),
-  },
-};
+  };
+}
 
 /**
  * Create the user-auth cookie using the app's actual cookie serialization

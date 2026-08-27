@@ -1,5 +1,5 @@
 import { test as base, Page } from '@playwright/test';
-import { TEST_USERS, TestUser, TestUserRole, getDashboardUrl } from '../helpers/auth.helpers';
+import { getTestUser, TestUser, TestUserRole, getDashboardUrl } from '../helpers/auth.helpers';
 import { TEST_CLASSROOM } from '../helpers/env.helpers';
 
 /**
@@ -69,7 +69,9 @@ export const test = base.extend<AuthFixtures>({
       );
     }
 
-    await use(TEST_USERS[role]);
+    // Resolved here, not at import: only the role this spec actually needs has
+    // to have its token configured.
+    await use(getTestUser(role));
   },
 
   testOrg: async ({}, use) => {

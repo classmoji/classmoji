@@ -1,5 +1,5 @@
 import { test as setup, expect } from '@playwright/test';
-import { TEST_USERS } from './helpers/auth.helpers';
+import { TEST_ROLES } from './helpers/auth.helpers';
 import { TEST_CLASSROOM, TestRole } from './helpers/env.helpers';
 import { getTestPrisma } from './helpers/prisma.helpers';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
@@ -52,11 +52,13 @@ const ROLE_TO_LOGIN_PARAM: Record<TestRole, string> = {
  * - student.json: Student role
  */
 
-// Create storage states for each role
-for (const [role, user] of Object.entries(TEST_USERS) as [
-  TestRole,
-  (typeof TEST_USERS)[TestRole],
-][]) {
+// Create storage states for each role.
+//
+// Iterates the role KEYS, never a map of resolved users: building that map at
+// module scope resolves all four tokens on import, so one unset token threw
+// before any setup ran and took every role down with it. Each role's token is
+// now read inside its own setup, where a failure is that role's failure.
+for (const role of TEST_ROLES) {
   setup(`setup ${role} state`, async ({ page }) => {
     const stateFile = join(authDir, `${role}.json`);
 

@@ -24,8 +24,14 @@ env:
   WEBAPP_URL: http://localhost:3000
   PORT: '3000'
   GITHUB_PROF_TOKEN: e2e_prof_token_owner
+  # One token per role. TEACHER is its own authorization tier, so it needs its
+  # own identity here — sharing another role's token would collapse the two and
+  # make every teacher role assertion answer for the wrong user.
+  GITHUB_INSTRUCTOR_TOKEN: e2e_instructor_token_teacher_only
   GITHUB_TA_TOKEN: e2e_ta_token_assistant_only
   GITHUB_STUDENT_TOKEN: e2e_student_token_student_only
+  TEST_TEACHER_USER_ID: '10000005'
+  TEST_TEACHER_USER_LOGIN: fake-teacher
   TEST_TA_USER_ID: '10000001'
   TEST_TA_USER_LOGIN: fake-ta
   TEST_STUDENT_USER_ID: '10000002'
