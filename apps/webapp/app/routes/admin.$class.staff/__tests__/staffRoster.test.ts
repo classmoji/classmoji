@@ -71,6 +71,7 @@ vi.mock('@classmoji/ui-components', () => ({ useCallout: () => ({ show: () => {}
 vi.mock('@classmoji/auth/client', () => ({
   authClient: { admin: { impersonateUser: () => {} } },
 }));
+vi.mock('~/utils/impersonationReturn', () => ({ rememberImpersonationReturn: () => {} }));
 vi.mock('../FormStaff', () => ({ default: () => null }));
 
 const adminRoute = await import('../route.tsx');

@@ -11,6 +11,7 @@ import { requireClassroomAdmin } from '~/utils/routeAuth.server';
 import { resolveHighestMembership } from '@classmoji/auth/server';
 import { addAuditLog } from '~/utils/helpers';
 import { authClient } from '@classmoji/auth/client';
+import { rememberImpersonationReturn } from '~/utils/impersonationReturn';
 import { getEmojiSymbol } from '@classmoji/utils';
 import type { Route } from './+types/route';
 
@@ -162,6 +163,9 @@ const AdminStaffDrawer = ({ loaderData }: Route.ComponentProps) => {
       if (error) {
         throw new Error(error.message || 'Failed to view as this staff member');
       }
+
+      // Record where "Stop viewing" should land, while still standing on it.
+      rememberImpersonationReturn();
 
       // Land on the prefix that matches the role being impersonated. This
       // drawer now covers TEACHER as well as ASSISTANT, and a teacher dropped

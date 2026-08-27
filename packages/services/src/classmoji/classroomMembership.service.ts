@@ -74,6 +74,49 @@ export const findByClassroomAndUser = async (
 };
 
 /**
+ * Find one STUDENT membership in a classroom by the student's login, projected
+ * to the identity a staff-facing drawer renders.
+ *
+ * Deliberately NOT `user.findByLogin` + a separate membership lookup. That
+ * pairing has two problems this shape does not:
+ *
+ *  - `findByLogin` is a GLOBAL lookup that includes the user's memberships,
+ *    each one's classroom and each classroom's git_organization row. Returning
+ *    it from a route serialises every OTHER classroom the student belongs to
+ *    into the page, credentials included. Here the classroom is part of the
+ *    query, and the select names the four fields the caller may have.
+ *  - Resolving the user first and the membership second leaves the ROLE
+ *    unpinned. ClassroomMembership is unique on (classroom_id, user_id, role),
+ *    so one person routinely holds several rows in the same classroom, and an
+ *    unfiltered `findFirst` returns an arbitrary one — which is then read from
+ *    and written back to. The role is in the `where` here.
+ *
+ * Returns null when no such student is enrolled, which a caller should answer
+ * as a 404 rather than dereferencing.
+ *
+ * @param {string} classroomId - UUID of the Classroom
+ * @param {string} login - The student's git provider login
+ * @returns {Promise<Object|null>}
+ */
+export const findStudentByLoginInClassroom = async (classroomId: string, login: string) => {
+  return getPrisma().classroomMembership.findFirst({
+    where: {
+      classroom_id: classroomId,
+      role: 'STUDENT',
+      user: { login },
+    },
+    select: {
+      id: true,
+      comment: true,
+      letter_grade: true,
+      user: {
+        select: { id: true, name: true, login: true, image: true },
+      },
+    },
+  });
+};
+
+/**
  * Find all memberships for a user
  * @param {string} userId - UUID of the User
  * @returns {Promise<Object[]>}
@@ -265,6 +308,68 @@ export const updateById = async (id: string, updates: Prisma.ClassroomMembership
       classroom: true,
     },
   });
+};
+
+/**
+ * Update a membership by id, BOUND TO THE CLASSROOM IT MUST BELONG TO.
+ *
+ * `updateById` above resolves by primary key alone, which is right for callers
+ * that already hold a membership they resolved themselves. It is the wrong
+ * shape for a caller that authorized against a classroom in the URL and then
+ * takes the membership id from a request body: there, the two have to be tied
+ * together in the query itself, or the write is free to land outside the
+ * classroom the caller was authorized for.
+ *
+ * Same shape as the page and quiz writes — bound to `{ id, classroom_id }`,
+ * and it only counts when it matched exactly one row. Returns false otherwise,
+ * so an unknown id and another classroom's membership are indistinguishable to
+ * the caller.
+ *
+ * This is opt-in: `updateById` and all of its existing callers are unchanged.
+ *
+ * The payload is an ALLOWLIST, enforced at runtime rather than only in the
+ * type. `Omit<...>` is erased at compile time and every caller's payload
+ * originates in `request.json()`, whose type is `any` — so the type says
+ * nothing about what actually arrives. What the allowlist keeps out:
+ *
+ * - `role`, because the last-owner guard lives in `updateById`/`update` and a
+ *   second copy of it would be a second place to forget it.
+ * - `id`, `classroom_id` and `user_id`, because they are what the binding is
+ *   made of. This is an updateMany, so a `classroom_id` in `data` would match
+ *   inside the authorized classroom and then re-parent the row out of it —
+ *   precisely the move this function exists to prevent.
+ *
+ * An unexpected key THROWS rather than being dropped: silently ignoring one
+ * would turn a future `is_grader` write into a no-op that still reported
+ * success. To add a field here, add it to UPDATABLE_FIELDS deliberately.
+ *
+ * @param {string} id - UUID of the membership
+ * @param {string} classroomId - UUID of the Classroom the membership must be in
+ * @param {Object} updates - Fields to update, from UPDATABLE_FIELDS
+ * @returns {Promise<boolean>} - true when exactly one row was updated
+ */
+const UPDATABLE_FIELDS = ['letter_grade', 'comment'] as const;
+
+type UpdatableField = (typeof UPDATABLE_FIELDS)[number];
+
+export const updateInClassroom = async (
+  id: string,
+  classroomId: string,
+  updates: Pick<Prisma.ClassroomMembershipUncheckedUpdateInput, UpdatableField>
+) => {
+  const data: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(updates)) {
+    if (!(UPDATABLE_FIELDS as readonly string[]).includes(key)) {
+      throw new Error(`updateInClassroom cannot update "${key}"`);
+    }
+    data[key] = value;
+  }
+
+  const { count } = await getPrisma().classroomMembership.updateMany({
+    where: { id, classroom_id: classroomId },
+    data,
+  });
+  return count === 1;
 };
 
 /**

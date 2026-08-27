@@ -58,11 +58,12 @@ export const notificationLink = (
 
   switch (n.resource_type) {
     case 'quiz':
-      // The quiz detail page exists in the admin and teacher route trees;
-      // students/assistants land on the list.
-      return prefix === 'admin' || prefix === 'teacher'
-        ? `/${prefix}/${slug}/quizzes/${n.resource_id}`
-        : `/${prefix}/${slug}/quizzes`;
+      // The quiz detail page exists in every staff route tree — admin, teacher
+      // and assistant all serve the management screens. Only students land on
+      // the list, because the student tree has no detail page.
+      return prefix === 'student'
+        ? `/${prefix}/${slug}/quizzes`
+        : `/${prefix}/${slug}/quizzes/${n.resource_id}`;
     case 'assignment':
       // Only the student route tree has an assignments list page.
       return prefix === 'student' ? `/${prefix}/${slug}/assignments` : `/${prefix}/${slug}`;

@@ -1,5 +1,5 @@
 /**
- * Unit tests for the quiz detail route's clearMyAttempts audit row.
+ * Unit tests for the quiz detail route's ACTION — its gate and its audit row.
  *
  * This route's LOADER already logged a VIEW, so the absence of any row for the
  * mutation was conspicuous: reading the page was recorded, deleting attempt
@@ -8,6 +8,10 @@
  * The row is keyed on the quiz, which is what distinguishes it from the
  * classroom-wide clear on the quiz list route — the two clear different amounts
  * of data and must not look identical in the trail.
+ *
+ * The last block pins WHERE the gate runs rather than merely that it does. It
+ * sits at the top of the action, so authentication is a property of the action
+ * and not of the single branch that happens to exist beneath it.
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -149,5 +153,58 @@ describe('quiz detail action — clearMyAttempts audit row', () => {
     await expect(submit({ _action: 'clearMyAttempts' })).rejects.toBeInstanceOf(Response);
     expect(mocks.clearForUserAndQuiz).not.toHaveBeenCalled();
     expect(mocks.addClassroomAuditLog).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * The gate is the FIRST thing this action does, not something the one named
+ * branch happens to do.
+ *
+ * Stated as a property of the action so it survives a second branch being
+ * added: a branch that forgot to gate itself would inherit the gate rather
+ * than run ungated. Pinned by asserting on work that happens BEFORE any
+ * branch is selected — the tier check and the body read.
+ */
+describe('quiz detail action — the gate runs before any other work', () => {
+  it('refuses an unauthorized caller before the tier check', async () => {
+    mocks.assertClassroomAccess.mockRejectedValue(new Response('Forbidden', { status: 403 }));
+
+    await expect(submit({ _action: 'clearMyAttempts' })).rejects.toBeInstanceOf(Response);
+
+    expect(mocks.assertProTier).not.toHaveBeenCalled();
+  });
+
+  it('refuses an unauthorized caller before the request body is read', async () => {
+    mocks.assertClassroomAccess.mockRejectedValue(new Response('Forbidden', { status: 403 }));
+    // A body that would throw if parsed: reaching it at all is the failure.
+    const request = new Request(`http://localhost/admin/${CLASS_SLUG}/quizzes/${QUIZ_ID}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: 'not json',
+    });
+
+    const thrown = await route
+      .action({
+        params: { class: CLASS_SLUG, quizId: QUIZ_ID },
+        request,
+      } as unknown as Parameters<typeof route.action>[0])
+      .catch((e: unknown) => e);
+
+    // The auth refusal, not a JSON parse error.
+    expect(thrown).toBeInstanceOf(Response);
+    expect((thrown as Response).status).toBe(403);
+  });
+
+  it('gates an unnamed action too, rather than only the branch that exists', async () => {
+    await expect(submit({ _action: 'someFutureBranch' })).rejects.toBeTruthy();
+
+    // It got as far as branch selection, which means it passed the gate — the
+    // point being that it had to pass one at all.
+    expect(mocks.assertClassroomAccess).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        allowedRoles: ['OWNER', 'TEACHER', 'ASSISTANT'],
+        resourceType: 'QUIZ_PREVIEW_ATTEMPTS',
+      })
+    );
   });
 });

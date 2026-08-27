@@ -136,7 +136,10 @@ export const routes = {
     link: '/grades',
     label: 'Grades',
     icon: IconNumber,
-    roles: ['OWNER'],
+    // Letter grades and per-student comments are a teaching-staff surface:
+    // OWNER and TEACHER, matching the gate on the grades route itself. The
+    // per-grader queue below is the assistant's assessment entry.
+    roles: ['OWNER', 'TEACHER'],
     category: 'assessment',
   },
   grading: {

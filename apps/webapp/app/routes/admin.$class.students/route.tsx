@@ -16,6 +16,7 @@ import {
   assertClassroomMutationAllowed,
 } from '~/utils/routeAuth.server';
 import { SearchInput } from '~/components';
+import { pickOwnerOnlyContactFields } from '~/utils/studentFields.server';
 import type { Route } from './+types/route';
 
 /**
@@ -99,15 +100,12 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
     avatar_url: s.image,
     is_grader: s.is_grader,
     has_accepted_invite: s.has_accepted_invite,
-    ...(isOwner
-      ? {
-          email: s.email,
-          provider_email: s.provider_email,
-          school_id: s.school_id,
-          letter_grade: s.letter_grade,
-          comment: s.comment,
-        }
-      : {}),
+    ...pickOwnerOnlyContactFields(s, isOwner),
+    // The membership grade fields are gated HERE rather than in the shared
+    // helper: they are OWNER-only on this roster, but they are the whole point
+    // of the gradebook, which serves them to a TEACHER too. Only the contact
+    // trio is a policy the two screens share.
+    ...(isOwner ? { letter_grade: s.letter_grade, comment: s.comment } : {}),
   }));
 
   // Pending invites are shaped the same way: an invite's school_email is a

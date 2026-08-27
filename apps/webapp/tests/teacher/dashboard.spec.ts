@@ -52,9 +52,13 @@ test.describe('Teacher shell', () => {
     // below covers on the page itself.
     await expect(page.getByRole('link', { name: 'Teaching Staff' })).toBeVisible();
 
+    // Letter grades and per-student comments are a teaching-staff surface —
+    // the nav entry lists OWNER and TEACHER — so a teacher SHOULD have this
+    // one, served under their own prefix.
+    await expect(page.getByRole('link', { name: 'Grades' })).toBeVisible();
+
     // Owner-only entries must not appear for a teacher.
     await expect(page.getByRole('link', { name: 'Class Settings' })).not.toBeVisible();
-    await expect(page.getByRole('link', { name: 'Grades' })).not.toBeVisible();
   });
 
   test('every teacher nav link stays on the /teacher prefix', async ({
@@ -80,12 +84,30 @@ test.describe('Teacher shell', () => {
 });
 
 test.describe('Teacher authorization', () => {
-  test('an owner-only route refuses a teacher (403)', async ({
+  test('the /admin namespace refuses a teacher (403), grades included', async ({
     authenticatedPage: page,
     testOrg,
   }) => {
+    // /admin/:class/** is owner-only at the server, so this is a 403 even
+    // though the grades route's own gate now admits a teacher. The prefix is
+    // what is being refused here, not the screen.
     const response = await page.goto(`/admin/${testOrg}/grades`);
     expect(response?.status()).toBe(403);
+  });
+
+  test('a teacher reaches grades at their own prefix', async ({
+    authenticatedPage: page,
+    testOrg,
+  }) => {
+    // The other half of the assertion above: letter grades and comments are a
+    // teaching-staff surface, served to a teacher under /teacher.
+    await page.goto(`/teacher/${testOrg}/grades`);
+    await waitForDataLoad(page);
+
+    await expect(page).toHaveURL(new RegExp(`/teacher/${testOrg}/grades`));
+    // .first(): the Suspense fallback carries the same heading while the
+    // deferred payload resolves.
+    await expect(page.getByRole('heading', { name: 'Grades' }).first()).toBeVisible();
   });
 
   test('a teacher may READ the teaching-staff list, with no management controls', async ({
