@@ -22,14 +22,42 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
     attemptedAction: 'view_student_grade',
   });
 
-  const student = await ClassmojiService.user.findByLogin(login!);
-  const membership = await ClassmojiService.classroomMembership.findByClassroomAndUser(
+  // One classroom-scoped, role-pinned, projected lookup.
+  //
+  // This used to resolve the student with the GLOBAL `user.findByLogin`, which
+  // includes every classroom that student belongs to, each one's
+  // git_organization row and each one's owner memberships — and this route
+  // returned it. There is no entry.server.tsx here, so React Router's default
+  // entry serialises whatever a loader returns straight into the page: the
+  // drawer was shipping other classrooms' data to render a comment box.
+  //
+  // The membership was then read with no role filter. One person can hold
+  // several roles in a classroom, so the unfiltered lookup could return, say,
+  // their grader row — and the drawer both reads the comment from it and posts
+  // its id back as the write target.
+  const enrollment = await ClassmojiService.classroomMembership.findStudentByLoginInClassroom(
     classroom.id,
-    student!.id
+    login!
   );
 
-  // Only return what the component needs - organization not needed in UI
-  return { student, membership };
+  // No such student in THIS classroom. An unknown login and a login that
+  // belongs to someone outside the classroom are indistinguishable from here,
+  // which is the intent. Previously this dereferenced a null user and answered
+  // with a 500.
+  if (!enrollment) {
+    throw new Response('Student not found', { status: 404 });
+  }
+
+  return {
+    student: {
+      id: enrollment.user.id,
+      name: enrollment.user.name,
+      login: enrollment.user.login,
+      // UserThumbnailView reads `avatar_url`; the User column is `image`.
+      avatar_url: enrollment.user.image,
+    },
+    membership: { id: enrollment.id, comment: enrollment.comment },
+  };
 };
 
 const GradeComment = ({ loaderData }: Route.ComponentProps) => {
@@ -70,11 +98,7 @@ const GradeComment = ({ loaderData }: Route.ComponentProps) => {
       okText="Save"
     >
       <div className="py-4">
-        <UserThumbnailView
-          user={
-            student as { avatar_url?: string | null; name?: string | null; login?: string | null }
-          }
-        />
+        <UserThumbnailView user={student} />
       </div>
       <p className="pb-4 text-gray-500 text-sm">
         You can provide comments on <span className=" underline text-sm">{student?.name}</span>

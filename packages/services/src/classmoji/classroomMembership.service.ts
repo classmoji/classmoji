@@ -74,6 +74,49 @@ export const findByClassroomAndUser = async (
 };
 
 /**
+ * Find one STUDENT membership in a classroom by the student's login, projected
+ * to the identity a staff-facing drawer renders.
+ *
+ * Deliberately NOT `user.findByLogin` + a separate membership lookup. That
+ * pairing has two problems this shape does not:
+ *
+ *  - `findByLogin` is a GLOBAL lookup that includes the user's memberships,
+ *    each one's classroom and each classroom's git_organization row. Returning
+ *    it from a route serialises every OTHER classroom the student belongs to
+ *    into the page, credentials included. Here the classroom is part of the
+ *    query, and the select names the four fields the caller may have.
+ *  - Resolving the user first and the membership second leaves the ROLE
+ *    unpinned. ClassroomMembership is unique on (classroom_id, user_id, role),
+ *    so one person routinely holds several rows in the same classroom, and an
+ *    unfiltered `findFirst` returns an arbitrary one — which is then read from
+ *    and written back to. The role is in the `where` here.
+ *
+ * Returns null when no such student is enrolled, which a caller should answer
+ * as a 404 rather than dereferencing.
+ *
+ * @param {string} classroomId - UUID of the Classroom
+ * @param {string} login - The student's git provider login
+ * @returns {Promise<Object|null>}
+ */
+export const findStudentByLoginInClassroom = async (classroomId: string, login: string) => {
+  return getPrisma().classroomMembership.findFirst({
+    where: {
+      classroom_id: classroomId,
+      role: 'STUDENT',
+      user: { login },
+    },
+    select: {
+      id: true,
+      comment: true,
+      letter_grade: true,
+      user: {
+        select: { id: true, name: true, login: true, image: true },
+      },
+    },
+  });
+};
+
+/**
  * Find all memberships for a user
  * @param {string} userId - UUID of the User
  * @returns {Promise<Object[]>}

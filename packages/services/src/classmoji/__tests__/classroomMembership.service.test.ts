@@ -235,3 +235,33 @@ describe('updateById', () => {
     expect(updateMock).toHaveBeenCalledTimes(1);
   });
 });
+
+/**
+ * The drawer-facing lookup. It replaces a global `user.findByLogin` plus an
+ * unfiltered membership read, and the two properties that made that pairing
+ * wrong — an unbounded classroom scope and an unpinned role — are properties
+ * of THIS QUERY, so they are asserted on the query rather than on a fixture.
+ */
+describe('findStudentByLoginInClassroom', () => {
+  it('scopes to the classroom, pins the role, and selects only the drawer fields', async () => {
+    findFirstMock.mockResolvedValue(null);
+
+    await membershipService.findStudentByLoginInClassroom('c1', 'ada');
+
+    expect(findFirstMock).toHaveBeenCalledExactlyOnceWith({
+      where: { classroom_id: 'c1', role: 'STUDENT', user: { login: 'ada' } },
+      select: {
+        id: true,
+        comment: true,
+        letter_grade: true,
+        user: { select: { id: true, name: true, login: true, image: true } },
+      },
+    });
+  });
+
+  it('returns null when no such student is enrolled', async () => {
+    findFirstMock.mockResolvedValue(null);
+
+    expect(await membershipService.findStudentByLoginInClassroom('c1', 'nobody')).toBeNull();
+  });
+});

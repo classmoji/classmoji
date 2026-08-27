@@ -1,11 +1,19 @@
 /**
- * Unit tests for the grade-comment action.
+ * Unit tests for the grade-comment drawer — its loader's payload and its
+ * comment write.
  *
- * Authorization binds to the classroom in the URL, but `membershipId` arrives
- * in the JSON body. The write is therefore bound to `{ id, classroom_id }` and
- * only counts when it matched exactly one row, so it cannot land outside the
- * classroom the caller was authorized for. Same property the sibling pages and
- * quizzes actions hold.
+ * LOADER. This drawer renders a name, an avatar and a comment box. It reads
+ * them through ONE classroom-scoped, role-pinned, projected lookup, and these
+ * tests pin the payload's key set exactly. The route has no entry.server.tsx
+ * above it, so whatever a loader returns is turbo-stream-serialised into the
+ * page as-is — a global user lookup here would put every other classroom that
+ * student belongs to, and those classrooms' provider credentials, in the HTML.
+ *
+ * ACTION. Authorization binds to the classroom in the URL, but `membershipId`
+ * arrives in the JSON body. The write is therefore bound to
+ * `{ id, classroom_id }` and only counts when it matched exactly one row, so it
+ * cannot land outside the classroom the caller was authorized for. Same
+ * property the sibling pages and quizzes actions hold.
  *
  * The role list is asserted here too: this surface moved to OWNER + TEACHER,
  * and the test is what keeps the loader and the action from drifting apart.
@@ -17,8 +25,7 @@ const mocks = vi.hoisted(() => ({
   assertClassroomAccess: vi.fn(),
   assertClassroomMutationAllowed: vi.fn(),
   updateInClassroom: vi.fn(),
-  findByLogin: vi.fn(),
-  findByClassroomAndUser: vi.fn(),
+  findStudentByLoginInClassroom: vi.fn(),
 }));
 
 vi.mock('~/utils/helpers', () => ({
@@ -30,9 +37,8 @@ vi.mock('@classmoji/services', () => ({
   ClassmojiService: {
     classroomMembership: {
       updateInClassroom: (...a: unknown[]) => mocks.updateInClassroom(...a),
-      findByClassroomAndUser: (...a: unknown[]) => mocks.findByClassroomAndUser(...a),
+      findStudentByLoginInClassroom: (...a: unknown[]) => mocks.findStudentByLoginInClassroom(...a),
     },
-    user: { findByLogin: (...a: unknown[]) => mocks.findByLogin(...a) },
   },
 }));
 
@@ -62,6 +68,28 @@ const actionArgs = (body: unknown) =>
     }),
   }) as unknown as Parameters<typeof route.action>[0];
 
+/**
+ * An enrollment as the service returns it: the membership's own comment plus
+ * the four projected user fields. Nothing else is selectable through it.
+ */
+const ENROLLMENT = {
+  id: OWN_MEMBERSHIP,
+  comment: 'strong on recursion',
+  letter_grade: 'A-',
+  user: {
+    id: 'student-1',
+    name: 'Ada Lovelace',
+    login: 'ada',
+    image: 'https://example.test/ada.png',
+  },
+};
+
+const loaderArgs = (prefix: 'admin' | 'teacher' = 'admin') =>
+  ({
+    params: { class: CLASS_SLUG, login: 'ada' },
+    request: new Request(`http://localhost/${prefix}/${CLASS_SLUG}/grades/ada`),
+  }) as unknown as Parameters<typeof route.loader>[0];
+
 beforeEach(() => {
   for (const m of Object.values(mocks)) m.mockReset();
   mocks.assertClassroomAccess.mockResolvedValue({
@@ -70,6 +98,70 @@ beforeEach(() => {
     membership: { id: 'm-1', role: 'TEACHER' },
   });
   mocks.updateInClassroom.mockResolvedValue(true);
+  mocks.findStudentByLoginInClassroom.mockResolvedValue(ENROLLMENT);
+});
+
+// ─── Loader: exactly what leaves the server ──────────────────────────────────
+
+describe('grade-comment loader — the payload carries only what the drawer renders', () => {
+  it('pins the student key set — id, name, login, avatar_url', async () => {
+    const { student } = await route.loader(loaderArgs());
+
+    expect(Object.keys(student as object).sort()).toEqual(
+      ['avatar_url', 'id', 'login', 'name'].sort()
+    );
+    // The User column is `image`; UserThumbnailView reads `avatar_url`.
+    expect(student.avatar_url).toBe('https://example.test/ada.png');
+  });
+
+  it('pins the membership key set — id and comment', async () => {
+    const { membership } = await route.loader(loaderArgs());
+
+    expect(Object.keys(membership as object).sort()).toEqual(['comment', 'id'].sort());
+  });
+
+  it('resolves the student inside the classroom, pinned to the STUDENT role', async () => {
+    // Both halves matter: the classroom keeps other classrooms out of the
+    // payload, and the role keeps a dual-role user's other membership from
+    // becoming the row this drawer reads and writes.
+    await route.loader(loaderArgs());
+
+    expect(mocks.findStudentByLoginInClassroom).toHaveBeenCalledExactlyOnceWith('class-1', 'ada');
+  });
+
+  it('answers an unknown login with a 404 rather than a 500', async () => {
+    mocks.findStudentByLoginInClassroom.mockResolvedValue(null);
+
+    const thrown = await route.loader(loaderArgs()).catch((e: unknown) => e);
+
+    expect(thrown).toBeInstanceOf(Response);
+    expect((thrown as Response).status).toBe(404);
+  });
+
+  it('serialises no other classroom, and no provider credential', async () => {
+    // What a global user lookup would have dragged in: the student's other
+    // classrooms, each one's git_organization row (installation id and access
+    // token) and those classrooms' owner memberships.
+    const serialized = JSON.stringify(await route.loader(loaderArgs()));
+
+    for (const leak of [
+      'git_organization',
+      'access_token',
+      'github_installation_id',
+      'memberships',
+      'organization',
+      'classroom_memberships',
+    ]) {
+      expect(serialized).not.toContain(leak);
+    }
+  });
+
+  it('does not read the student before the authorization gate has passed', async () => {
+    mocks.assertClassroomAccess.mockRejectedValue(new Response('Forbidden', { status: 403 }));
+
+    await expect(route.loader(loaderArgs())).rejects.toBeInstanceOf(Response);
+    expect(mocks.findStudentByLoginInClassroom).not.toHaveBeenCalled();
+  });
 });
 
 describe('grade-comment action — writes stay inside the authorized classroom', () => {
@@ -116,19 +208,18 @@ describe('grade-comment action — role list', () => {
     );
   });
 
-  it('reads with the same role list it writes with', async () => {
-    mocks.findByLogin.mockResolvedValue({ id: 'user-1' });
-    mocks.findByClassroomAndUser.mockResolvedValue({ id: OWN_MEMBERSHIP, comment: '' });
+  it.each([['admin'], ['teacher']] as const)(
+    'reads with the same role list it writes with, on the /%s prefix',
+    async prefix => {
+      // The drawer is served under both prefixes a TEACHER's gradebook is, so
+      // the /teacher path is exercised rather than assumed.
+      await route.loader(loaderArgs(prefix));
 
-    await route.loader({
-      params: { class: CLASS_SLUG, login: 'ada' },
-      request: new Request(`http://localhost/admin/${CLASS_SLUG}/grades/ada`),
-    } as unknown as Parameters<typeof route.loader>[0]);
-
-    expect(mocks.assertClassroomAccess).toHaveBeenCalledWith(
-      expect.objectContaining({ allowedRoles: ['OWNER', 'TEACHER'] })
-    );
-  });
+      expect(mocks.assertClassroomAccess).toHaveBeenCalledWith(
+        expect.objectContaining({ allowedRoles: ['OWNER', 'TEACHER'] })
+      );
+    }
+  );
 });
 
 describe('grade-comment action — body validation', () => {
