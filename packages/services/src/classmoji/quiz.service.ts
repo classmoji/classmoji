@@ -51,6 +51,13 @@ interface QuizMembership {
 export const QUIZ_STAFF_ROLES = ['OWNER', 'TEACHER', 'ASSISTANT'] as const;
 
 /**
+ * Roles that may read the STUDENT view of a classroom's quizzes: students, plus
+ * the teaching team previewing what a student sees. Matches the gate on the
+ * student quizzes route, which every prefix's modules tree links into.
+ */
+export const QUIZ_STUDENT_VIEW_ROLES = ['STUDENT', ...QUIZ_STAFF_ROLES] as const;
+
+/**
  * Thrown when the caller's membership does not entitle them to the staff quiz
  * list.
  *
@@ -246,9 +253,16 @@ export const getQuizzesForStudent = async (
     throw new Error('Membership does not match classroom');
   }
 
-  const allowedRoles = ['STUDENT', 'ASSISTANT', 'OWNER'];
-  if (!allowedRoles.includes(membership.role)) {
-    throw new Error('Unauthorized role for student quiz access');
+  // Students plus the whole teaching team: staff open this list to preview a
+  // quiz the way a student sees it, and the modules tree's quiz leaf lands
+  // every role here. Same set as the route gate — when the two disagreed, the
+  // route admitted a role the service then refused.
+  if (!(QUIZ_STUDENT_VIEW_ROLES as readonly string[]).includes(membership.role)) {
+    throw new QuizAccessError(
+      'role_not_allowed',
+      `[quiz] ${membership.role} may not read the student quiz list ` +
+        `(expected one of ${QUIZ_STUDENT_VIEW_ROLES.join(', ')})`
+    );
   }
 
   if (membership.role === 'STUDENT') {
@@ -280,8 +294,10 @@ export const getQuizzesForStudent = async (
     const maxAttempts = quiz.max_attempts ?? 1;
     const hasUnlimitedAttempts = maxAttempts === 0;
 
-    // Check if user can create new attempts
-    const isInstructor = ['OWNER', 'ASSISTANT'].includes(membership.role);
+    // Check if user can create new attempts. Staff preview quizzes repeatedly,
+    // so they are not held to max_attempts — TEACHER included, or a teacher
+    // would be locked out of their own quiz after one preview.
+    const isInstructor = (QUIZ_STAFF_ROLES as readonly string[]).includes(membership.role);
     const canCreateNew = isInstructor || hasUnlimitedAttempts || attemptCount < maxAttempts;
 
     // Process all attempts with metadata (without counting flag yet)
