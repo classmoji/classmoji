@@ -68,7 +68,8 @@ Monorepo via npm workspaces + Turbo; Node 22+ required.
 
 ### Cross-Role Route Patterns
 When working on features that span admin/assistant/student routes, avoid duplicating code:
-- **Re-export** where possible: assistant routes should re-export from student routes (see `assistant.$class_.quizzes/route.jsx` for the pattern)
+- **Re-export** where possible: a role-prefix route re-exports from whichever route already serves that screen — the student one for student-facing views, the admin one for staff views (see `assistant.$class_.quizzes/route.tsx`, which re-exports the admin quiz management screens). Re-export `action` ONLY when the source route's own gate admits the role that prefix serves; omitting it means the mutation has no POST target under that prefix at all, which is usually what you want.
+- **`/admin` is the OWNER namespace.** `admin.$class/route.tsx` carries a `requireClassroomAdmin` loader, so every screen under `/admin/:class/**` is owner-only regardless of its own leaf gate. A screen a teacher or assistant should reach needs a route under `/teacher` or `/assistant`. That layout loader does NOT gate child actions — React Router runs a leaf action before any parent loader — so every action keeps its own gate.
 - **Shared components** go in `apps/webapp/app/components/features/`
 - **Shared business logic** goes in `packages/services` or `packages/utils`
 - Check existing role routes before creating new ones — the feature may already exist under a different role prefix.

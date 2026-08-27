@@ -76,9 +76,10 @@ const SubmissionAnalytics = ({ loaderData }: Route.ComponentProps) => {
 
   const { pathname } = useLocation();
   // Where "back" goes depends on where the viewer came from, because the
-  // prefixes do not serve the same page. /admin/:class/grades is owner-gated,
-  // so a teacher sent there lands on a 403 — they and assistants both return to
-  // the grading queue, which is the list their prefix actually serves.
+  // prefixes do not serve the same list. /admin is the owner namespace, so a
+  // teacher or an assistant sent there lands on a 403; both return to the
+  // grading queue, which is the list their own prefix serves and the one they
+  // reached this submission from.
   const rolePrefix = pathname.split('/')[1];
   const backHref =
     rolePrefix === 'assistant' || rolePrefix === 'teacher'
