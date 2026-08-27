@@ -33,13 +33,21 @@ export async function loader({ params, request }: Route.LoaderArgs) {
     throw new Response('Quiz not found', { status: 404 });
   }
 
-  // 3. Fetch attempt with messages
-  const attemptData = await ClassmojiService.quizAttempt.findWithMessages(attemptId);
-  if (!attemptData?.attempt) {
+  // 3. Fetch attempt with messages, bound to the quiz resolved above.
+  // `findWithMessages` resolves an attempt by id alone and throws when there is
+  // none, so both an id naming nothing and an id naming another quiz's attempt
+  // land on the same 404 — a foreign id tells the caller nothing.
+  const attemptData = await ClassmojiService.quizAttempt
+    .findWithMessages(attemptId)
+    .catch(() => null);
+  if (!attemptData?.attempt || attemptData.attempt.quiz_id.toString() !== quiz.id.toString()) {
     throw new Response('Attempt not found', { status: 404 });
   }
 
-  // 4. Admins can view any student's attempt (no ownership check needed)
+  // 4. Any attempt OF THIS QUIZ is readable here, whoever sat it: staff read
+  // their own students' transcripts, so there is no ownership check. Step 2
+  // binds the quiz to the authorized classroom and step 3 binds the attempt to
+  // that quiz, which is what keeps "any attempt" inside this classroom.
 
   // 5. Calculate focus metrics for completed attempts
   const totalMs = Number(attemptData.attempt.total_duration_ms || 0);

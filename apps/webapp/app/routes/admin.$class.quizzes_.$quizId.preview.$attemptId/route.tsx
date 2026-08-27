@@ -29,9 +29,15 @@ export async function loader({ params, request }: Route.LoaderArgs) {
     throw new Response('Quiz not found', { status: 404 });
   }
 
-  // 3. Fetch attempt with messages
-  const attemptData = await ClassmojiService.quizAttempt.findWithMessages(attemptId);
-  if (!attemptData?.attempt) {
+  // 3. Fetch attempt with messages, bound to the quiz resolved above.
+  // `findWithMessages` resolves an attempt by id alone and throws when there is
+  // none, so both an id naming nothing and an id naming another quiz's attempt
+  // land on the same 404 — checked before ownership, so a foreign id is never
+  // confirmed to exist.
+  const attemptData = await ClassmojiService.quizAttempt
+    .findWithMessages(attemptId)
+    .catch(() => null);
+  if (!attemptData?.attempt || attemptData.attempt.quiz_id.toString() !== quiz.id.toString()) {
     throw new Response('Attempt not found', { status: 404 });
   }
 
