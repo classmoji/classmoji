@@ -163,7 +163,11 @@ const AdminStaffDrawer = ({ loaderData }: Route.ComponentProps) => {
         throw new Error(error.message || 'Failed to view as this staff member');
       }
 
-      navigate(`/assistant/${classSlug}/dashboard`);
+      // Land on the prefix that matches the role being impersonated. This
+      // drawer now covers TEACHER as well as ASSISTANT, and a teacher dropped
+      // on /assistant would be looking at the wrong shell.
+      const prefix = membership.role === 'TEACHER' ? 'teacher' : 'assistant';
+      navigate(`/${prefix}/${classSlug}/dashboard`);
     } catch (error: unknown) {
       console.error('Impersonation failed:', error);
       callout.show({
