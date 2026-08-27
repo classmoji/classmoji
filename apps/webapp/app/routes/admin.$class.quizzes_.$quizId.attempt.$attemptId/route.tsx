@@ -7,7 +7,7 @@ import { assertClassroomAccess, assertProTier } from '~/utils/helpers';
 import type { Route } from './+types/route';
 
 export async function loader({ params, request }: Route.LoaderArgs) {
-  const { ClassmojiService } = await import('@classmoji/services');
+  const { ClassmojiService, QuizAttemptNotFoundError } = await import('@classmoji/services');
   const classSlug = params.class!;
   const quizId = params.quizId!;
   const attemptId = params.attemptId!;
@@ -36,10 +36,14 @@ export async function loader({ params, request }: Route.LoaderArgs) {
   // 3. Fetch attempt with messages, bound to the quiz resolved above.
   // `findWithMessages` resolves an attempt by id alone and throws when there is
   // none, so both an id naming nothing and an id naming another quiz's attempt
-  // land on the same 404 — a foreign id tells the caller nothing.
+  // land on the same 404 — a foreign id tells the caller nothing. Only that
+  // one error becomes a 404; anything else the query raises still surfaces.
   const attemptData = await ClassmojiService.quizAttempt
     .findWithMessages(attemptId)
-    .catch(() => null);
+    .catch((error: unknown) => {
+      if (error instanceof QuizAttemptNotFoundError) return null;
+      throw error;
+    });
   if (!attemptData?.attempt || attemptData.attempt.quiz_id.toString() !== quiz.id.toString()) {
     throw new Response('Attempt not found', { status: 404 });
   }

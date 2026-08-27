@@ -61,7 +61,7 @@ export async function action({ request }: Route.ActionArgs) {
   }
 
   // Import server-only repositories
-  const { ClassmojiService } = await import('@classmoji/services');
+  const { ClassmojiService, QuizAttemptNotFoundError } = await import('@classmoji/services');
   const { getInstallationToken } = await import('../student.$class.quizzes/helpers.server');
   const { initializeQuizViaAgent, sendMessageToAgent, endQuizSession } =
     await import('../student.$class.quizzes/aiAgent.server');
@@ -162,10 +162,13 @@ export async function action({ request }: Route.ActionArgs) {
           // `attemptId` names the session to tear down and nothing else — the
           // attempt this branch creates always belongs to the caller. Resolve it
           // here so the branch below can hold it against this quiz and this
-          // caller before ending anything.
-          const attempt = data.attemptId
-            ? await ClassmojiService.quizAttempt.findById(data.attemptId)
-            : null;
+          // caller before ending anything. Anything that is not a string names
+          // no attempt: the column is text, and handing Prisma a number raises
+          // a validation error rather than simply missing.
+          const attempt =
+            typeof data.attemptId === 'string' && data.attemptId
+              ? await ClassmojiService.quizAttempt.findById(data.attemptId)
+              : null;
 
           return {
             context: {
@@ -316,10 +319,14 @@ export async function action({ request }: Route.ActionArgs) {
             // the pro-tier check all answer for THAT quiz's classroom, so an
             // attempt on any other one would run under gates that never
             // examined it. `findWithMessages` throws when there is no such
-            // attempt, so both cases land on the same 404 below.
+            // attempt, so both cases land on the same 404 below — and only
+            // that error does; anything else the query raises still surfaces.
             const attemptData = await ClassmojiService.quizAttempt
               .findWithMessages(data.attemptId)
-              .catch(() => null);
+              .catch((error: unknown) => {
+                if (error instanceof QuizAttemptNotFoundError) return null;
+                throw error;
+              });
             if (
               !attemptData?.attempt ||
               attemptData.attempt.quiz_id.toString() !== data.quizId.toString()
@@ -915,8 +922,14 @@ export async function action({ request }: Route.ActionArgs) {
           // Cleanup via ai-agent service BEFORE creating new attempt.
           // The attempt created below is the caller's own, so the only session
           // worth ending is the caller's own attempt on this same quiz. An id
-          // that names anything else is skipped rather than refused, which is
-          // what an id naming an already-deleted attempt has always done.
+          // that fails either half is skipped rather than refused: the restart
+          // still proceeds, and a foreign id is answered exactly like one that
+          // names nothing, so it reports nothing about what exists.
+          //
+          // The trade-off is that an id whose row is already gone — a preview
+          // attempt deleted between page load and the restart click — no longer
+          // gets its best-effort teardown, so its ai-agent session can outlive
+          // the row until that session's own expiry.
           const previousAttempt = context.attempt;
           const isCallersAttemptOnThisQuiz =
             !!previousAttempt &&

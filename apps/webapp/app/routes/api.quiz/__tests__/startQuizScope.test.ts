@@ -38,6 +38,7 @@ vi.mock('@classmoji/services', () => ({
     aiConversation: { addMessage: vi.fn() },
     audit: { create: vi.fn() },
   },
+  QuizAttemptNotFoundError: class QuizAttemptNotFoundError extends Error {},
 }));
 
 vi.mock('~/utils/helpers', () => ({
@@ -72,6 +73,11 @@ vi.mock('@classmoji/auth/server', () => ({
 }));
 
 const { action } = await import('../route.ts');
+// The service's own "no such attempt" signal, taken from the mocked module so
+// the action's instanceof check sees the same class it does in production.
+const { QuizAttemptNotFoundError } = (await import('@classmoji/services')) as unknown as {
+  QuizAttemptNotFoundError: new (message?: string) => Error;
+};
 
 const QUIZ_ID = 'quiz-1';
 /** The caller's own attempt on QUIZ_ID — the resume the flow is built for. */
@@ -126,7 +132,7 @@ describe('api.quiz startQuiz — writes stay inside the authorized classroom', (
     // back, so these tests never reach the ai-agent seam.
     findWithMessagesMock.mockImplementation(async (id: string) => {
       const attempt = ATTEMPTS[id];
-      if (!attempt) throw new Error('Attempt not found');
+      if (!attempt) throw new QuizAttemptNotFoundError('Attempt not found');
       return { attempt, messages: [{ id: 'm1', role: 'assistant', content: 'Question 1' }] };
     });
     createNewMock.mockResolvedValue({ success: true, attemptId: 'attempt-new' });
@@ -174,6 +180,17 @@ describe('api.quiz startQuiz — writes stay inside the authorized classroom', (
 
     expect(response.status).toBe(403);
     expect(await response.json()).toEqual({ error: 'Unauthorized' });
+  });
+
+  it('lets a query failure surface instead of reporting the attempt as absent', async () => {
+    // Only the service's "no such attempt" becomes a 404; a dropped connection
+    // keeps its 500, so a student mid-quiz is not told their attempt is gone.
+    findWithMessagesMock.mockRejectedValue(new Error('connection pool timeout'));
+
+    const response = await start(OWN_ATTEMPT);
+
+    expect(response.status).toBe(500);
+    expect(await response.json()).toEqual({ error: 'connection pool timeout' });
   });
 
   it('creates a new attempt when none is named, leaving the resume path alone', async () => {

@@ -41,6 +41,7 @@ vi.mock('@classmoji/services', () => ({
     aiConversation: { addMessage: vi.fn() },
     audit: { create: vi.fn() },
   },
+  QuizAttemptNotFoundError: class QuizAttemptNotFoundError extends Error {},
 }));
 
 vi.mock('~/utils/helpers', () => ({
@@ -84,8 +85,8 @@ const OWN_ATTEMPT = 'attempt-own';
 const FOREIGN_ATTEMPT = 'attempt-foreign';
 /** The caller's own attempt, but on a different quiz. */
 const OWN_OTHER_QUIZ_ATTEMPT = 'attempt-own-other-quiz';
-/** A student's attempt on QUIZ_ID — a quiz its own staff administer. */
-const STUDENT_ATTEMPT = 'attempt-student';
+/** Another member's in-progress attempt on QUIZ_ID: same quiz, different sitter. */
+const PEER_ATTEMPT = 'attempt-peer';
 const MISSING_ATTEMPT = 'attempt-missing';
 
 const ATTEMPTS: Record<string, { id: string; quiz_id: string; user_id: string }> = {
@@ -96,7 +97,7 @@ const ATTEMPTS: Record<string, { id: string; quiz_id: string; user_id: string }>
     quiz_id: 'quiz-elsewhere',
     user_id: 'student-1',
   },
-  [STUDENT_ATTEMPT]: { id: STUDENT_ATTEMPT, quiz_id: QUIZ_ID, user_id: 'student-1' },
+  [PEER_ATTEMPT]: { id: PEER_ATTEMPT, quiz_id: QUIZ_ID, user_id: 'student-2' },
 };
 
 const postRequest = (body: unknown) =>
@@ -169,6 +170,17 @@ describe('api.quiz restartQuiz — writes stay inside the authorized classroom',
     expect(endQuizSessionMock).not.toHaveBeenCalled();
   });
 
+  it("does not end a peer's session on the quiz the caller is restarting", async () => {
+    // The plain case the binding exists for: one classroom member naming
+    // another member's in-progress attempt on a quiz they can both reach.
+    const response = await restart(PEER_ATTEMPT);
+
+    expect(response.status).toBe(200);
+    expect(endQuizSessionMock).not.toHaveBeenCalled();
+    // The caller still gets their own restart; only the teardown is withheld.
+    expect(createNewMock).toHaveBeenCalledWith(QUIZ_ID, 'student-1', { role: 'STUDENT' });
+  });
+
   it("leaves the caller's own attempt on another quiz alone", async () => {
     // Owning the attempt is not enough — the restart is of THIS quiz, so the
     // session it ends must belong to this quiz too.
@@ -189,7 +201,7 @@ describe('api.quiz restartQuiz — writes stay inside the authorized classroom',
       membership: { role: 'OWNER' },
     });
 
-    const response = await restart(STUDENT_ATTEMPT);
+    const response = await restart(PEER_ATTEMPT);
 
     expect(response.status).toBe(200);
     expect(endQuizSessionMock).not.toHaveBeenCalled();
@@ -208,13 +220,26 @@ describe('api.quiz restartQuiz — writes stay inside the authorized classroom',
       session: { session: { impersonatedBy: 'owner-1' } },
     });
 
-    await restart(STUDENT_ATTEMPT);
+    await restart(PEER_ATTEMPT);
 
-    expect(endQuizSessionMock).toHaveBeenCalledWith(STUDENT_ATTEMPT);
+    expect(endQuizSessionMock).toHaveBeenCalledWith(PEER_ATTEMPT);
   });
 
   it('restarts with no attemptId named at all — the plain student flow', async () => {
     const response = await restart(null);
+
+    expect(response.status).toBe(200);
+    expect(attemptFindByIdMock).not.toHaveBeenCalled();
+    expect(endQuizSessionMock).not.toHaveBeenCalled();
+    expect(createNewMock).toHaveBeenCalledWith(QUIZ_ID, 'student-1', { role: 'STUDENT' });
+  });
+
+  it('treats an attemptId that is not a string as naming nothing', async () => {
+    // The column is text, so handing Prisma a number raises a validation error
+    // rather than simply missing. The type is checked before the query.
+    const response = (await action({
+      request: postRequest({ _action: 'restartQuiz', quizId: QUIZ_ID, attemptId: 123 }),
+    } as unknown as Parameters<typeof action>[0])) as Response;
 
     expect(response.status).toBe(200);
     expect(attemptFindByIdMock).not.toHaveBeenCalled();

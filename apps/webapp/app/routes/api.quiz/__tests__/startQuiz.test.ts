@@ -47,6 +47,9 @@ vi.mock('@classmoji/services', () => ({
     gitRepo: { findByStudent: (...a: unknown[]) => gitRepoFindByStudentMock(...a) },
     aiConversation: { addMessage: (...a: unknown[]) => addMessageMock(...a) },
   },
+  // The action destructures this alongside ClassmojiService to tell "no such
+  // attempt" apart from a query that failed for another reason.
+  QuizAttemptNotFoundError: class QuizAttemptNotFoundError extends Error {},
 }));
 
 vi.mock('~/utils/helpers', () => ({

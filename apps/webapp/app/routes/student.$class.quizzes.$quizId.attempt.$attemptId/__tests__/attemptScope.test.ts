@@ -27,6 +27,7 @@ vi.mock('@classmoji/services', () => ({
     quiz: { findById: (...a: unknown[]) => quizFindByIdMock(...a) },
     quizAttempt: { findWithMessages: (...a: unknown[]) => findWithMessagesMock(...a) },
   },
+  QuizAttemptNotFoundError: class QuizAttemptNotFoundError extends Error {},
 }));
 
 vi.mock('~/utils/helpers', () => ({
@@ -53,6 +54,11 @@ vi.mock('antd', () => ({
 }));
 
 const route = await import('../route.tsx');
+// The service's own "no such attempt" signal, taken from the mocked module so
+// the route's instanceof check sees the same class it does in production.
+const { QuizAttemptNotFoundError } = (await import('@classmoji/services')) as unknown as {
+  QuizAttemptNotFoundError: new (message?: string) => Error;
+};
 
 const CLASS_SLUG = 'cs52-26f';
 const CLASSROOM = { id: 'class-1', slug: CLASS_SLUG, status: 'ACTIVE' };
@@ -168,12 +174,24 @@ describe('student quiz attempt loader — reads stay inside the authorized class
 
     // `findWithMessages` throws rather than returning null when there is no
     // such attempt; both paths have to end at the same answer.
-    findWithMessagesMock.mockRejectedValue(new Error('Attempt not found'));
+    findWithMessagesMock.mockRejectedValue(new QuizAttemptNotFoundError('Attempt not found'));
     const missing = (await load('attempt-missing').catch(e => e)) as Response;
 
     expect(missing).toBeInstanceOf(Response);
     expect(missing.status).toBe(foreign.status);
     expect(await missing.text()).toBe(await foreign.text());
+  });
+
+  it('lets a query failure surface instead of reporting the attempt as absent', async () => {
+    // Only the service's "no such attempt" becomes a 404. A student reloading
+    // mid-quiz through a dropped connection must not be told their attempt is
+    // gone, with nothing in the logs to contradict it.
+    findWithMessagesMock.mockRejectedValue(new Error('connection pool timeout'));
+
+    const thrown = (await load().catch(e => e)) as Error;
+
+    expect(thrown).not.toBeInstanceOf(Response);
+    expect(thrown.message).toBe('connection pool timeout');
   });
 
   it("keeps refusing a student another student's attempt on this same quiz", async () => {
