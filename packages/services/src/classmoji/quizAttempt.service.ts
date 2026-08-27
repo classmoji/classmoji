@@ -2,6 +2,21 @@ import getPrisma from '@classmoji/database';
 import type { MessageRole, Prisma } from '@prisma/client';
 import { checkForCompletion, DEFAULT_EMOJI_GRADE_MAPPINGS } from '@classmoji/utils';
 
+/**
+ * Thrown when an attempt id names no row.
+ *
+ * Typed so a caller can tell "there is no such attempt" apart from a query that
+ * failed for some other reason. Both arrive as a rejection, and a route that
+ * treats them alike answers 404 to a database outage — telling a student their
+ * in-progress attempt does not exist, and logging nothing.
+ */
+export class QuizAttemptNotFoundError extends Error {
+  constructor(message: string = 'Attempt not found') {
+    super(message);
+    this.name = 'QuizAttemptNotFoundError';
+  }
+}
+
 interface QuizAttemptDurationMetrics {
   totalDurationMs?: number | string | null;
   total_duration_ms?: number | string | null;
@@ -533,7 +548,7 @@ export const recordModalClosed = async (
     `;
 
     if (!current || current.length === 0) {
-      throw new Error('Attempt not found');
+      throw new QuizAttemptNotFoundError();
     }
 
     const row = current[0];
@@ -623,7 +638,7 @@ export const calculateAndApplyModalGap = async (attemptId: string) => {
     `;
 
     if (!current || current.length === 0) {
-      throw new Error('Attempt not found');
+      throw new QuizAttemptNotFoundError();
     }
 
     const row = current[0];
@@ -819,7 +834,7 @@ export const getUserAttemptForQuiz = async (quizId: string, userId: string) => {
 export const findWithMessages = async (attemptId: string) => {
   const attempt = await findById(attemptId);
   if (!attempt) {
-    throw new Error('Attempt not found');
+    throw new QuizAttemptNotFoundError();
   }
 
   // All messages are stored in AIConversation (ai-agent owns persistence)

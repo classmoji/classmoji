@@ -7,6 +7,8 @@
  * 3. Attempt Ownership Verification:
  *    - sendMessage: Verifies user owns the attempt before allowing messages
  *    - completeQuiz: Verifies user owns the attempt before marking complete
+ *    - restartQuiz: Ends the prior ai-agent session only when the named attempt
+ *      is the caller's own attempt on the quiz being restarted
  * 4. Audit Logging: All unauthorized access attempts are logged
  * 5. Admin Access: Admins preview quizzes as themselves, creating their own attempts
  *    - This ensures data isolation between admin previews and student attempts
@@ -59,7 +61,7 @@ export async function action({ request }: Route.ActionArgs) {
   }
 
   // Import server-only repositories
-  const { ClassmojiService } = await import('@classmoji/services');
+  const { ClassmojiService, QuizAttemptNotFoundError } = await import('@classmoji/services');
   const { getInstallationToken } = await import('../student.$class.quizzes/helpers.server');
   const { initializeQuizViaAgent, sendMessageToAgent, endQuizSession } =
     await import('../student.$class.quizzes/aiAgent.server');
@@ -157,10 +159,22 @@ export async function action({ request }: Route.ActionArgs) {
             return { response: jsonResponse(404, 'Quiz not found') };
           }
 
+          // `attemptId` names the session to tear down and nothing else — the
+          // attempt this branch creates always belongs to the caller. Resolve it
+          // here so the branch below can hold it against this quiz and this
+          // caller before ending anything. Anything that is not a string names
+          // no attempt: the column is text, and handing Prisma a number raises
+          // a validation error rather than simply missing.
+          const attempt =
+            typeof data.attemptId === 'string' && data.attemptId
+              ? await ClassmojiService.quizAttempt.findById(data.attemptId)
+              : null;
+
           return {
             context: {
               classroomId: quiz.classroom_id,
               quiz,
+              attempt,
               metadata: { quiz_id: data.quizId },
             },
           };
@@ -299,9 +313,24 @@ export async function action({ request }: Route.ActionArgs) {
           let attempt;
 
           if (data.attemptId) {
-            // Resume specific attempt (e.g., admin preview with pre-created attempt)
-            const attemptData = await ClassmojiService.quizAttempt.findWithMessages(data.attemptId);
-            if (!attemptData?.attempt) {
+            // Resume specific attempt (e.g., admin preview with pre-created attempt).
+            // Bound to `quizId`, because that is the quiz every gate above was
+            // resolved from: the classroom membership, the mutation check and
+            // the pro-tier check all answer for THAT quiz's classroom, so an
+            // attempt on any other one would run under gates that never
+            // examined it. `findWithMessages` throws when there is no such
+            // attempt, so both cases land on the same 404 below — and only
+            // that error does; anything else the query raises still surfaces.
+            const attemptData = await ClassmojiService.quizAttempt
+              .findWithMessages(data.attemptId)
+              .catch((error: unknown) => {
+                if (error instanceof QuizAttemptNotFoundError) return null;
+                throw error;
+              });
+            if (
+              !attemptData?.attempt ||
+              attemptData.attempt.quiz_id.toString() !== data.quizId.toString()
+            ) {
               return new Response(JSON.stringify({ error: 'Attempt not found' }), {
                 status: 404,
                 headers: { 'Content-Type': 'application/json' },
@@ -890,8 +919,24 @@ export async function action({ request }: Route.ActionArgs) {
 
       case 'restartQuiz': {
         try {
-          // Cleanup via ai-agent service BEFORE creating new attempt
-          if (data.attemptId) {
+          // Cleanup via ai-agent service BEFORE creating new attempt.
+          // The attempt created below is the caller's own, so the only session
+          // worth ending is the caller's own attempt on this same quiz. An id
+          // that fails either half is skipped rather than refused: the restart
+          // still proceeds, and a foreign id is answered exactly like one that
+          // names nothing, so it reports nothing about what exists.
+          //
+          // The trade-off is that an id whose row is already gone — a preview
+          // attempt deleted between page load and the restart click — no longer
+          // gets its best-effort teardown, so its ai-agent session can outlive
+          // the row until that session's own expiry.
+          const previousAttempt = context.attempt;
+          const isCallersAttemptOnThisQuiz =
+            !!previousAttempt &&
+            previousAttempt.quiz_id.toString() === data.quizId.toString() &&
+            (previousAttempt.user_id.toString() === userId.toString() || isImpersonating);
+
+          if (isCallersAttemptOnThisQuiz) {
             await endQuizSession(data.attemptId);
           }
 

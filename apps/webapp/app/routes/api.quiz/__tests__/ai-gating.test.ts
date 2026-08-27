@@ -42,6 +42,9 @@ vi.mock('@classmoji/services', () => ({
     classroom: { findById: vi.fn() },
     quizAttempt: { findWithMessages: (...a: unknown[]) => findWithMessagesMock(...a) },
   },
+  // The action destructures this alongside ClassmojiService to tell "no such
+  // attempt" apart from a query that failed for another reason.
+  QuizAttemptNotFoundError: class QuizAttemptNotFoundError extends Error {},
 }));
 vi.mock('../../student.$class.quizzes/helpers.server', () => ({
   getInstallationToken: vi.fn(),
