@@ -30,7 +30,7 @@ const OWNER_CORE_LINKS = new Set([
   '/pages',
   '/students',
   '/teams',
-  '/assistants',
+  '/staff',
   '/grades',
   '/settings/general',
   '/support',
@@ -619,7 +619,7 @@ const CommonLayout = ({
             pathname.includes('/regrade-requests') ||
             pathname.includes('/settings') ||
             pathname.includes('/students') ||
-            pathname.includes('/assistants') ||
+            pathname.includes('/staff') ||
             pathname.includes('/tokens') ||
             pathname.includes('/teams') ||
             pathname.includes('/grading') ||

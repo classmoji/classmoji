@@ -190,17 +190,18 @@ const OWNER_STEPS: FeatureStep[] = [
     description: 'Click to create the team in your GitHub organization and add it to the classroom.',
   },
   {
-    link: '/assistants',
-    title: 'Teaching assistants',
+    link: '/staff',
+    title: 'Teaching staff',
     description:
-      'Assistants help you run and grade the class. You add a TA by GitHub username, then assign them specific submissions to grade from the repository view. This spreads grading across your staff so it scales even in a large course.',
+      'Your teaching staff help you run and grade the class. You add someone by GitHub username, then assign them specific submissions to grade from the repository view. This spreads grading across your staff so it scales even in a large course.',
   },
   {
-    link: '/assistants',
-    selector: '[data-tour="assistants-new"]',
+    link: '/staff',
+    selector: '[data-tour="staff-new"]',
     placement: 'bottom',
-    title: 'Add assistant',
-    description: 'Invite a new teaching assistant to this classroom.',
+    title: 'Add staff',
+    description:
+      'Invite an assistant, a teacher or a co-owner to this classroom by GitHub username.',
   },
   {
     link: '/grades',

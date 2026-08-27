@@ -16,7 +16,7 @@ import {
 import { ClassmojiService } from '@classmoji/services';
 import { useCallout } from '@classmoji/ui-components';
 export { action } from './action';
-import FormAssistant from './FormAssistant';
+import FormStaff from './FormStaff';
 
 import { useGlobalFetcher, useDisclosure } from '~/hooks';
 import { ActionTypes } from '~/constants';
@@ -225,7 +225,7 @@ const AdminAssistants = ({ loaderData }: Route.ComponentProps) => {
           <TableActionButtons
             onView={() => {
               if (assistant.login) {
-                navigate(`/admin/${classSlug}/assistants/${assistant.login}`);
+                navigate(`/admin/${classSlug}/staff/${assistant.login}`);
               } else {
                 callout.show({ variant: 'error', title: 'Assistant has not accepted invite.' });
               }
@@ -271,30 +271,30 @@ const AdminAssistants = ({ loaderData }: Route.ComponentProps) => {
       <Outlet />
 
       <div className="flex items-center justify-between gap-3 mt-2 mb-4">
-        <h1 className="text-lg font-semibold text-ink-1 shrink-0">Assistants</h1>
+        <h1 className="text-lg font-semibold text-ink-1 shrink-0">Teaching Staff</h1>
 
         <div className="flex gap-3 min-w-0">
           <SearchInput
             query={query}
             setQuery={setQuery}
-            placeholder="Search assistants..."
+            placeholder="Search teaching staff..."
             className="min-w-0 flex-1 sm:flex-initial sm:w-80"
           />
-          <span data-tour="assistants-new" className="shrink-0">
-            <ButtonNew action={show}>New assistant</ButtonNew>
+          <span data-tour="staff-new" className="shrink-0">
+            <ButtonNew action={show}>New staff member</ButtonNew>
           </span>
         </div>
       </div>
 
       <Modal
-        title="Add New Assistant"
+        title="Add Teaching Staff"
         open={visible}
         onOk={close}
         onCancel={close}
         footer={null}
         className="rounded-lg"
       >
-        <FormAssistant close={close} token={token} />
+        <FormStaff close={close} token={token} />
       </Modal>
 
       <div className="rounded-2xl bg-panel ring-1 ring-line p-5 sm:p-6 min-h-[calc(100vh-10rem)]">
@@ -308,7 +308,7 @@ const AdminAssistants = ({ loaderData }: Route.ComponentProps) => {
           pagination={{
             pageSize: 25,
             showSizeChanger: true,
-            showTotal: (total, range) => `${range[0]}-${range[1]} of ${total} assistants`,
+            showTotal: (total, range) => `${range[0]}-${range[1]} of ${total} staff`,
           }}
           size="middle"
           scroll={{ x: 'max-content' }}
@@ -316,14 +316,14 @@ const AdminAssistants = ({ loaderData }: Route.ComponentProps) => {
             emptyText: query ? (
               <div className="text-center py-12 text-gray-500">
                 <div className="font-medium">
-                  No assistants found matching &ldquo;{query}&rdquo;
+                  No teaching staff found matching &ldquo;{query}&rdquo;
                 </div>
                 <div className="text-sm">Try adjusting your search terms</div>
               </div>
             ) : (
               <div className="text-center py-12 text-gray-500">
-                <div className="font-medium">No assistants added yet</div>
-                <div className="text-sm">Add your first teaching assistant to get started!</div>
+                <div className="font-medium">No teaching staff added yet</div>
+                <div className="text-sm">Add your first staff member to get started!</div>
               </div>
             ),
           }}

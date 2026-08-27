@@ -3,7 +3,7 @@ import { getTestPrisma, getClassroomBySlug } from '../../helpers/prisma.helpers'
 import { TEST_CLASSROOM } from '../../helpers/env.helpers';
 import { waitForDataLoad } from '../../helpers/wait.helpers';
 
-const ASSISTANTS_PATH = (org: string) => `/admin/${org}/assistants`;
+const STAFF_PATH = (org: string) => `/admin/${org}/staff`;
 
 // Stable login so cleanup/upsert always target the same throwaway assistant user.
 const TA = {
@@ -79,7 +79,7 @@ test.describe('Owner changes a teaching-team member role', () => {
     const { classroomId, userId } = await seedAssistant({ isGrader: false });
     expect(await readIsGrader(classroomId, userId)).toBe(false);
 
-    await page.goto(ASSISTANTS_PATH(testOrg));
+    await page.goto(STAFF_PATH(testOrg));
     await waitForDataLoad(page);
 
     const row = page.locator('.ant-table-tbody tr.ant-table-row').filter({ hasText: TA.name });
@@ -98,7 +98,7 @@ test.describe('Owner changes a teaching-team member role', () => {
     const { classroomId, userId } = await seedAssistant({ isGrader: true });
     expect(await readIsGrader(classroomId, userId)).toBe(true);
 
-    await page.goto(ASSISTANTS_PATH(testOrg));
+    await page.goto(STAFF_PATH(testOrg));
     await waitForDataLoad(page);
 
     const row = page.locator('.ant-table-tbody tr.ant-table-row').filter({ hasText: TA.name });
@@ -115,7 +115,7 @@ test.describe('Owner promotes a student to TA', () => {
   // known issue: no in-app control promotes a STUDENT membership to ASSISTANT.
   test.fixme(
     true,
-    'MISSING: no in-app control promotes an existing STUDENT membership to ASSISTANT (role is never mutated by the people UI); the assistants form creates a new membership via live GitHub instead'
+    'MISSING: no in-app control promotes an existing STUDENT membership to ASSISTANT (role is never mutated by the people UI); the Teaching Staff form creates a new membership at the chosen role via live GitHub instead'
   );
 });
 

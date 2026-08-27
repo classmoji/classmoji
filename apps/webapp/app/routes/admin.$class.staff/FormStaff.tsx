@@ -10,12 +10,12 @@ import { ActionTypes } from '~/constants';
 
 const { Text } = Typography;
 
-interface FormAssistantProps {
+interface FormStaffProps {
   close: () => void;
   token?: string | null;
 }
 
-const FormAssistant = ({ close, token }: FormAssistantProps) => {
+const FormStaff = ({ close, token }: FormStaffProps) => {
   const { fetcher, notify } = useGlobalFetcher();
   const [form] = Form.useForm();
   const [loading, setLoading] = useState(false);
@@ -171,4 +171,4 @@ const FormAssistant = ({ close, token }: FormAssistantProps) => {
   );
 };
 
-export default FormAssistant;
+export default FormStaff;

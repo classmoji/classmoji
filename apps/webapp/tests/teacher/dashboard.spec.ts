@@ -87,7 +87,7 @@ test.describe('Teacher authorization', () => {
     authenticatedPage: page,
     testOrg,
   }) => {
-    const response = await page.goto(`/admin/${testOrg}/assistants`);
+    const response = await page.goto(`/admin/${testOrg}/staff`);
     expect(response?.status()).toBe(403);
   });
 });

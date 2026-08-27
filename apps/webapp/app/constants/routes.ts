@@ -41,7 +41,7 @@ export const routeCategories = {
   },
   people: {
     label: 'People',
-    items: ['students', 'teams', 'assistants'],
+    items: ['students', 'teams', 'staff'],
   },
   integrations: {
     label: 'Integrations',
@@ -174,11 +174,14 @@ export const routes = {
     roles: ['OWNER'],
     category: 'people',
   },
-  assistants: {
-    link: '/assistants',
-    label: 'Assistants',
+  staff: {
+    link: '/staff',
+    label: 'Teaching Staff',
     icon: IconUserCheck,
-    roles: ['OWNER'],
+    // Seeing who is on the team is a teaching-team right, so the whole team
+    // gets the entry; for non-owners it resolves to their own prefix, which
+    // re-exports the admin loader (read only — no action lives there).
+    roles: ['OWNER', 'TEACHER', 'ASSISTANT'],
     category: 'people',
   },
 

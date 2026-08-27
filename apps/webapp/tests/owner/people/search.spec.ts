@@ -115,18 +115,18 @@ test.describe('Owner People search', () => {
   });
 });
 
-test.describe('Owner Assistants search', () => {
-  test('owner searching assistants by gibberish shows the assistants empty state', async ({
+test.describe('Owner Teaching Staff search', () => {
+  test('owner searching staff by gibberish shows the teaching-staff empty state', async ({
     authenticatedPage: page,
     testOrg,
   }) => {
-    await page.goto(`/admin/${testOrg}/assistants`);
+    await page.goto(`/admin/${testOrg}/staff`);
     await waitForDataLoad(page);
 
     const query = 'no-such-assistant-zzz-qa';
-    await page.getByPlaceholder('Search assistants...').fill(query);
+    await page.getByPlaceholder('Search teaching staff...').fill(query);
 
-    await expect(page.getByText(`No assistants found matching “${query}”`)).toBeVisible();
+    await expect(page.getByText(`No teaching staff found matching “${query}”`)).toBeVisible();
     await expect(page.locator('.ant-table-tbody tr.ant-table-row')).toHaveCount(0);
   });
 });

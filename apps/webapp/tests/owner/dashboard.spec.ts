@@ -129,7 +129,7 @@ test.describe('Owner Dashboard Navigation', () => {
     await expect(nav.getByRole('link', { name: 'Tokens' })).toBeVisible();
     await expect(nav.getByRole('link', { name: 'Students' })).toBeVisible();
     await expect(nav.getByRole('link', { name: 'Teams' })).toBeVisible();
-    await expect(nav.getByRole('link', { name: 'Assistants' })).toBeVisible();
+    await expect(nav.getByRole('link', { name: 'Teaching Staff' })).toBeVisible();
     await expect(nav.getByRole('link', { name: 'Class Settings' })).toBeVisible();
   });
 
