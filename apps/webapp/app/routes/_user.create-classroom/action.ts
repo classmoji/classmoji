@@ -29,6 +29,7 @@ import {
   suggestContentNamespace,
 } from '@classmoji/utils';
 import { slugify } from './utils';
+import { resolveSourceAccess, SOURCE_ROLES, API_KEYS_STRIPPED_WARNING } from './sourceAccess';
 
 /** Background work needs Trigger.dev; without it the async phases can't run. */
 const isTriggerConfigured = () =>
@@ -237,18 +238,28 @@ export const action = checkAuth(async ({ request }: { request: Request }) => {
   // returning an error after it leaves an orphaned classroom that also blocks
   // a same-slug retry. Source-ownership for imports is part of that gate.
   const sourceClassroomId: string | undefined = importConfig?.sourceClassroomId;
-  const configSelections = importConfig?.config ?? {};
+  // Reassigned below when a non-owner requests the source's API keys — the
+  // sanitized object is what reaches both the inline apply and the job row.
+  let configSelections: Record<string, boolean> = importConfig?.config ?? {};
   // A COPY of the request's content toggles: the GitHub pre-flight below drops
   // the ones this environment cannot honor, and everything downstream (the
   // `wants*` flags, the phase totals, whether a job is created at all, and the
   // selections persisted on the job for a later retry) reads them from here.
   const contentSelections: Record<string, boolean> = { ...(importConfig?.content ?? {}) };
-  const anyConfigSelected = Object.values(configSelections).some(Boolean);
+  // Two DIFFERENT questions, deliberately not one variable:
+  //   `anyConfigRequested` — what the request asked for, used only to decide
+  //     whether an import was attempted at all. Must stay pre-strip, so that a
+  //     request asking ONLY for API keys still runs the membership gate below
+  //     instead of quietly becoming a no-op that skips it.
+  //   `anyConfigSelected` — what will actually be applied, recomputed after the
+  //     strip and read by every downstream branch.
+  const anyConfigRequested = Object.values(configSelections).some(Boolean);
+  let anyConfigSelected = anyConfigRequested;
   const anyContentSelected = Object.values(contentSelections).some(Boolean);
   const requestedRepos: Array<{ id: string; includeQuizzes?: boolean }> =
     importConfig?.repositories ?? [];
   const importRequested =
-    !!sourceClassroomId && (requestedRepos.length > 0 || anyConfigSelected || anyContentSelected);
+    !!sourceClassroomId && (requestedRepos.length > 0 || anyConfigRequested || anyContentSelected);
 
   /** Per-item notes; surfaced on the response and seeded onto the job row. */
   const importWarnings: string[] = [];
@@ -258,16 +269,39 @@ export const action = checkAuth(async ({ request }: { request: Request }) => {
   let githubUnavailableNote: string | null = null;
 
   if (importRequested) {
-    // The picker only OFFERS owned classrooms, but every id here arrives from
-    // the request body — re-verify ownership server-side before copying
-    // anything (settings can carry API keys; content must not be exfiltrated
-    // from classrooms the requester doesn't own).
-    const sourceMembership = await getPrisma().classroomMembership.findFirst({
-      where: { classroom_id: sourceClassroomId, user_id: user.id, role: 'OWNER' },
+    // The picker only OFFERS classrooms the user owns or teaches, but every id
+    // here arrives from the request body — re-verify server-side before copying
+    // anything, so content cannot be lifted out of a classroom the requester has
+    // no standing in.
+    //
+    // findMany, not findFirst: roles are additive (unique per classroom+user+role)
+    // and someone may hold OWNER *and* TEACHER here. An unordered findFirst could
+    // hand back the TEACHER row and strip API keys from a genuine owner.
+    const sourceMemberships = await getPrisma().classroomMembership.findMany({
+      where: {
+        classroom_id: sourceClassroomId,
+        user_id: user.id,
+        role: { in: [...SOURCE_ROLES] },
+      },
+      select: { role: true },
     });
-    if (!sourceMembership) {
-      return { error: 'You must own the source classroom to import from it' };
+
+    const access = resolveSourceAccess(
+      sourceMemberships.map(m => m.role),
+      configSelections
+    );
+    if (!access.allowed) {
+      return { error: 'You must own or teach the source classroom to import from it' };
     }
+
+    // The sanitized selections replace the request's: this is what reaches both
+    // the inline config apply AND the job row, so a future retry path cannot
+    // resurrect a stripped key.
+    configSelections = access.configSelections;
+    importWarnings.push(...access.warnings);
+    // Recomputed: a teacher who selected ONLY apiKeys has an empty config now,
+    // and `importRequested` was decided before the strip.
+    anyConfigSelected = Object.values(configSelections).some(Boolean);
 
     // ── GitHub pre-flight ────────────────────────────────────────────────────
     // Template duplication and the page/deck copy all READ the source org, so
@@ -620,11 +654,19 @@ export const action = checkAuth(async ({ request }: { request: Request }) => {
   if (githubUnavailableNote) {
     successMessage += ` ${githubUnavailableNote}`;
   }
+  // Same treatment, same reason. The generic counter below points at server logs
+  // and at the job row's warning list, and a config-only import has neither: it
+  // writes no ImportJob, and this note is never logged. Said outright or the
+  // user is told "1 item skipped" with nowhere to find out which.
+  if (importWarnings.includes(API_KEYS_STRIPPED_WARNING)) {
+    successMessage += ` ${API_KEYS_STRIPPED_WARNING}`;
+  }
   if (importJobId) {
     successMessage += ' Import continuing in the background.';
   }
-  if (importWarnings.length > 0) {
-    successMessage += ` (${importWarnings.length} item${importWarnings.length === 1 ? '' : 's'} skipped — see server logs)`;
+  const countedWarnings = importWarnings.filter(w => w !== API_KEYS_STRIPPED_WARNING);
+  if (countedWarnings.length > 0) {
+    successMessage += ` (${countedWarnings.length} item${countedWarnings.length === 1 ? '' : 's'} skipped — see server logs)`;
   }
 
   return {

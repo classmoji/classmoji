@@ -7,14 +7,14 @@ import {
   QuestionCircleOutlined,
 } from '@ant-design/icons';
 import ModuleSelectionDrawer from './ModuleSelectionDrawer';
-import type { ClassroomModule, ImportSelections, OwnedClassroom } from './types';
+import type { ClassroomModule, ImportSelections, ImportableClassroom } from './types';
 
 interface ModuleConfig {
   includeQuizzes: boolean;
 }
 
 interface StepImportModulesProps {
-  ownedClassrooms: OwnedClassroom[];
+  importableClassrooms: ImportableClassroom[];
   importEnabled: boolean;
   setImportEnabled: (enabled: boolean) => void;
   sourceClassroomId: string | null;
@@ -35,7 +35,7 @@ interface CopyGroupRow {
 }
 
 const StepImportModules = ({
-  ownedClassrooms,
+  importableClassrooms,
   importEnabled,
   setImportEnabled,
   sourceClassroomId,
@@ -47,7 +47,7 @@ const StepImportModules = ({
 }: StepImportModulesProps) => {
   const [drawerOpen, setDrawerOpen] = useState(false);
 
-  const sourceClassroom = ownedClassrooms.find(c => c.id === sourceClassroomId);
+  const sourceClassroom = importableClassrooms.find(c => c.id === sourceClassroomId);
   const repositories = sourceClassroom?.repositories || [];
 
   const handleModuleToggle = (moduleId: string, checked: boolean) => {
@@ -68,8 +68,16 @@ const StepImportModules = ({
   };
 
   const handleSourceChange = (classroomId: string) => {
+    const next = importableClassrooms.find(c => c.id === classroomId);
     setSourceClassroomId(classroomId);
     setSelectedModules(new Map());
+    // Switching to a class the user only TEACHES unmounts the API-keys row, so a
+    // selection made against a previously-picked owned class would be stranded:
+    // still set, still summarised on the review step, and impossible to untick
+    // because the checkbox is gone. Clear it with the source that justified it.
+    if (!next?.is_owner && importSelections.apiKeys) {
+      setImportSelections({ ...importSelections, apiKeys: false });
+    }
   };
 
   const handleSelectAll = () => {
@@ -111,7 +119,7 @@ const StepImportModules = ({
         <div>
           <div className="font-medium">Import from existing classroom</div>
           <div className="text-sm text-gray-500">
-            Copy repositories and assignments from another classroom you own
+            Copy repositories and assignments from another classroom you own or teach
           </div>
         </div>
         <Switch checked={importEnabled} onChange={setImportEnabled} />
@@ -119,7 +127,7 @@ const StepImportModules = ({
 
       {importEnabled && (
         <>
-          {ownedClassrooms.length === 0 ? (
+          {importableClassrooms.length === 0 ? (
             <Empty
               description="You don't have any other classrooms to import from"
               className="py-8"
@@ -141,7 +149,7 @@ const StepImportModules = ({
                       .includes(input.toLowerCase())
                   }
                 >
-                  {ownedClassrooms.map(classroom => (
+                  {importableClassrooms.map(classroom => (
                     <Select.Option key={classroom.id} value={classroom.id}>
                       <div className="flex items-center gap-2">
                         {(classroom.git_organization as { avatar_url?: string } | null)
@@ -261,11 +269,18 @@ const StepImportModules = ({
                           label: 'AI & quiz config',
                           sublabel: 'models, temperature, syllabus bot',
                         },
-                        {
-                          key: 'apiKeys',
-                          label: 'AI API keys',
-                          sublabel: 'secrets — copy only if you mean to',
-                        },
+                        // Owners only. A teacher may copy a class they teach but
+                        // not lift its LLM credentials out of it; the server
+                        // strips this regardless of what the form posts.
+                        ...(sourceClassroom?.is_owner
+                          ? [
+                              {
+                                key: 'apiKeys' as const,
+                                label: 'AI API keys',
+                                sublabel: 'secrets — copy only if you mean to',
+                              },
+                            ]
+                          : []),
                         {
                           key: 'pages',
                           label: 'Pages',
