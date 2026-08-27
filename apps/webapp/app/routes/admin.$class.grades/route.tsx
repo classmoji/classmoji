@@ -5,13 +5,16 @@ import { Skeleton } from 'antd';
 import GradesTable from './GradesTable';
 import { ClassmojiService } from '@classmoji/services';
 import { addAuditLog } from '~/utils/helpers';
-import { requireClassroomAdmin, assertClassroomMutationAllowed } from '~/utils/routeAuth.server';
+import { requireClassroomStaff, assertClassroomMutationAllowed } from '~/utils/routeAuth.server';
 import type { Route } from './+types/route';
 
 export const loader = async ({ request, params }: Route.LoaderArgs) => {
   const { class: classSlug } = params;
 
-  const { classroom } = await requireClassroomAdmin(request, classSlug!, {
+  // OWNER and TEACHER. Letter grades and comments are a teaching-staff surface
+  // rather than an owner-only one, and this route is served under both the
+  // /admin and /teacher prefixes.
+  const { classroom } = await requireClassroomStaff(request, classSlug!, {
     resourceType: 'GRADES',
     action: 'view_grades',
   });
@@ -20,7 +23,15 @@ export const loader = async ({ request, params }: Route.LoaderArgs) => {
     emojiMappings: ClassmojiService.emojiMapping.findByClassroomId(classroom.id),
     repositories: ClassmojiService.repository.findByClassroomSlug(classSlug!),
     students: ClassmojiService.user.findRepositoriesPerStudent(classroom),
-    settings: ClassmojiService.classroom.getClassroomSettingsForServer(classroom.id),
+    // Everything returned here is serialised to the browser, and the table
+    // reads exactly one field out of the settings row — the late penalty used
+    // by calculateStudentFinalGrade. Project it down to that field rather than
+    // handing the whole server-side row to the client.
+    settings: ClassmojiService.classroom
+      .getClassroomSettingsForServer(classroom.id)
+      .then(settings => ({
+        late_penalty_points_per_hour: settings?.late_penalty_points_per_hour ?? 0,
+      })),
     letterGradeMappings: ClassmojiService.letterGradeMapping.findByClassroomId(classroom.id),
     memberships: ClassmojiService.classroomMembership.findByClassroomId(classroom.id),
   };
@@ -86,7 +97,10 @@ const Grades = ({ loaderData }: Route.ComponentProps) => {
 export const action = async ({ request, params }: Route.ActionArgs) => {
   const { class: classSlug } = params;
 
-  const { classroom, membership } = await requireClassroomAdmin(request, classSlug!, {
+  // Same OWNER+TEACHER list as the loader. This action carries its own gate —
+  // a layout loader does not gate it, because React Router runs the leaf action
+  // before any loader.
+  const { classroom, membership } = await requireClassroomStaff(request, classSlug!, {
     resourceType: 'GRADES',
     action: 'update_grades',
   });

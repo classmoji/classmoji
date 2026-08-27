@@ -11,11 +11,13 @@ import type { Route } from './+types/route';
 export const loader = async ({ params, request }: Route.LoaderArgs) => {
   const { login, class: classSlug } = params;
 
-  // Authorize: only OWNER/ASSISTANT can view student grade comments
+  // Authorize: OWNER/TEACHER can view student grade comments. Same list as the
+  // parent grades route, which is what lets this drawer be served under both
+  // the /admin and /teacher prefixes.
   const { classroom } = await assertClassroomAccess({
     request,
     classroomSlug: classSlug!,
-    allowedRoles: ['OWNER', 'ASSISTANT'],
+    allowedRoles: ['OWNER', 'TEACHER'],
     resourceType: 'GRADES',
     attemptedAction: 'view_student_grade',
   });
@@ -86,11 +88,13 @@ const GradeComment = ({ loaderData }: Route.ComponentProps) => {
 export const action = async ({ params, request }: Route.ActionArgs) => {
   const { class: classSlug } = params;
 
-  // Authorize: only OWNER/ASSISTANT can modify student grade comments
+  // Authorize: OWNER/TEACHER can modify student grade comments. This action
+  // carries its own gate — a layout loader does not gate it, because React
+  // Router runs the leaf action before any loader.
   const { classroom, membership } = await assertClassroomAccess({
     request,
     classroomSlug: classSlug!,
-    allowedRoles: ['OWNER', 'ASSISTANT'],
+    allowedRoles: ['OWNER', 'TEACHER'],
     resourceType: 'GRADES',
     attemptedAction: 'modify_student_grade',
   });
