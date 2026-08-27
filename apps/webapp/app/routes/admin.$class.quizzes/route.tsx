@@ -5,6 +5,7 @@ import { TableActionButtons, EditableCell, ButtonNew } from '~/components';
 import { ClassmojiService } from '@classmoji/services';
 import { namedAction } from 'remix-utils/named-action';
 import {
+  addClassroomAuditLog,
   assertClassroomAccess,
   assertClassroomMutationAllowed,
   assertProTier,
@@ -149,12 +150,33 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
     formData.append('_action', data._action);
   }
 
+  // Each branch audits once its write has landed, under the MCP quiz tools'
+  // resource_type ('QUIZ') and keyed on the quiz id. The AuditLogAction enum
+  // has no PUBLISH, so publish and weight changes are UPDATE with the intent
+  // carried in `tool` — which is also what stops the audit service's 5-second
+  // dedup from folding a publish and a weight change into one row.
+  const audit = (action: string, resourceId: string, metadata: Record<string, unknown>) =>
+    addClassroomAuditLog({
+      classroomId: classroom.id,
+      userId,
+      role: membership!.role,
+      action,
+      resourceType: 'QUIZ',
+      resourceId,
+      metadata,
+    });
+
   return namedAction(formData, {
     async createQuiz() {
       const { ...quizData } = data;
       const newQuiz = await ClassmojiService.quiz.create({
         ...quizData,
         classroomId: classroom.id,
+      });
+      await audit('CREATE', newQuiz.id, {
+        tool: 'web:quizzes.create',
+        name: newQuiz.name,
+        repository_id: newQuiz.repository_id ?? null,
       });
       return new Response(
         JSON.stringify({ success: 'Quiz created successfully', quizId: newQuiz.id }),
@@ -167,6 +189,12 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
 
     async updateQuiz() {
       await ClassmojiService.quiz.update(data.id, data);
+      await audit('UPDATE', data.id, {
+        tool: 'web:quizzes.update',
+        // Field NAMES only. The body carries system and rubric prompts, which
+        // are long free text and do not belong in an audit payload.
+        fields: Object.keys(data).filter(key => key !== '_action' && key !== 'id'),
+      });
       return new Response(JSON.stringify({ success: 'Quiz updated successfully' }), {
         status: 200,
         headers: { 'Content-Type': 'application/json' },
@@ -175,6 +203,7 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
 
     async deleteQuiz() {
       await ClassmojiService.quiz.delete(data.id);
+      await audit('DELETE', data.id, { tool: 'web:quizzes.delete' });
       return new Response(JSON.stringify({ success: 'Quiz deleted successfully' }), {
         status: 200,
         headers: { 'Content-Type': 'application/json' },
@@ -183,6 +212,7 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
 
     async publishQuiz() {
       await ClassmojiService.quiz.publish(data.id);
+      await audit('UPDATE', data.id, { tool: 'web:quizzes.publish', published: true });
       return new Response(JSON.stringify({ success: 'Quiz published successfully' }), {
         status: 200,
         headers: { 'Content-Type': 'application/json' },
@@ -193,6 +223,11 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
       await ClassmojiService.quiz.update(data.id, {
         weight: data.weight,
       });
+      await audit('UPDATE', data.id, {
+        tool: 'web:quizzes.update_weight',
+        fields: ['weight'],
+        weight: data.weight,
+      });
       return new Response(JSON.stringify({ success: 'Quiz weight updated successfully' }), {
         status: 200,
         headers: { 'Content-Type': 'application/json' },
@@ -201,6 +236,13 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
 
     async clearMyAttempts() {
       const result = await ClassmojiService.quizAttempt.clearForUser(userId, classroom.id);
+      // Classroom-wide clear of the caller's OWN preview attempts, so it is not
+      // keyed on any one quiz — the classroom is the affected resource.
+      await audit('DELETE', classroom.id, {
+        tool: 'web:quizzes.clear_my_attempts',
+        scope: 'classroom',
+        deleted_count: result.deletedCount,
+      });
       return new Response(
         JSON.stringify({
           success: `Cleared ${result.deletedCount} quiz attempt(s)`,

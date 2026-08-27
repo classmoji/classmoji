@@ -165,8 +165,15 @@ const ROLE_PRIORITY: readonly Role[] = ['OWNER', 'TEACHER', 'ASSISTANT', 'STUDEN
  * ANOTHER user's membership in a specific role (e.g. reading a student's grade
  * comment, or confirming that someone is an assistant), where "highest role"
  * is the wrong answer.
+ *
+ * EXPORTED because audit logging needs the same answer: the webapp's
+ * `addAuditLog` (apps/webapp/app/utils/helpers.ts) records the acting user's
+ * role, and reaching for a bare `findFirst` there recorded an arbitrary one of
+ * a multi-role user's rows. An audit trail that attributes an owner's action to
+ * their STUDENT membership is worse than no attribution at all, so both gates
+ * and the audit trail resolve the caller the same way.
  */
-const resolveHighestMembership = async (
+export const resolveHighestMembership = async (
   classroomId: string,
   userId: string,
   roles: Role[] | null

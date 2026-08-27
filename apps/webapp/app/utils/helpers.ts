@@ -2,7 +2,7 @@ import pWaitFor from 'p-wait-for';
 import { runs } from '@trigger.dev/sdk';
 import { redirect } from 'react-router';
 
-import { getAuthSession } from '@classmoji/auth/server';
+import { getAuthSession, resolveHighestMembership } from '@classmoji/auth/server';
 import { ClassmojiService } from '@classmoji/services';
 
 export const sleep = async (ms: number) => {
@@ -76,6 +76,114 @@ interface AuditLogParams {
   metadata?: Record<string, unknown> | null;
 }
 
+interface ClassroomAuditParams {
+  /** The classroom the gate authorized — never a slug re-resolved afterwards. */
+  classroomId: string | undefined;
+  /** The acting user, as returned by the gate. */
+  userId: string;
+  /**
+   * The role the gate ENFORCED, i.e. `membership.role` from
+   * `assertClassroomAccess`. That is already the caller's highest role among
+   * the roles the route allows (assertClassroomAccess resolves it through
+   * `resolveHighestMembership`), and it is the same thing the MCP server
+   * records — `writeAudit` in apps/mcp/src/tools/shared.ts logs
+   * `classroom.role`, the role its registry gate resolved.
+   */
+  role: string | undefined;
+  action: string;
+  resourceType: string;
+  resourceId?: string | number | null;
+  metadata?: Record<string, unknown> | null;
+}
+
+/**
+ * THE audit write site for the webapp. Both `addAuditLog` (which resolves the
+ * caller from the request) and `addClassroomAuditLog` (which is handed an
+ * already-resolved gate result) funnel through here, so there is exactly one
+ * place that builds an audit row.
+ *
+ * Never throws. A mutation that has already been committed must not be turned
+ * into a 500 because the row describing it could not be written — the write is
+ * awaited so the failure is observable in logs (and so tests can assert
+ * deterministically), but a rejection is reported and swallowed.
+ */
+const writeAuditRow = async ({
+  classroomId,
+  userId,
+  role,
+  action,
+  resourceType,
+  resourceId = null,
+  metadata = null,
+}: ClassroomAuditParams) => {
+  const auditData: {
+    classroom_id: string | undefined;
+    user_id: string;
+    role: string | undefined;
+    resource_id: string | null;
+    resource_type: string;
+    action: string;
+    data?: Record<string, unknown>;
+  } = {
+    classroom_id: classroomId,
+    user_id: userId,
+    role,
+    resource_id: normalizeAuditResourceId(resourceId),
+    resource_type: resourceType,
+    action,
+  };
+
+  const dataPayload = {
+    ...(metadata || {}),
+  };
+
+  if (Object.keys(dataPayload).length > 0) {
+    auditData.data = dataPayload;
+  }
+
+  try {
+    await ClassmojiService.audit.create(
+      auditData as Parameters<typeof ClassmojiService.audit.create>[0]
+    );
+  } catch (error: unknown) {
+    console.error('[audit] Failed to write audit log', error);
+  }
+};
+
+/**
+ * Record a mutation from a route that has ALREADY passed a classroom gate.
+ *
+ * Prefer this over `addAuditLog` inside actions: the gate has just handed back
+ * `{ userId, classroom, membership }`, so re-deriving them from the request
+ * costs a session lookup, a slug lookup and a membership lookup for an answer
+ * the caller is already holding — and re-resolving by slug would also unbind
+ * the logged classroom from the one the mutation was authorized against.
+ *
+ * `metadata.tool` is load-bearing, not decoration: the audit service dedups on
+ * a 5-second window keyed on (user, classroom, role, resource_type,
+ * resource_id, action) plus `data.tool` when present (see
+ * packages/services/src/classmoji/audit.service.ts). Two different edits to the
+ * same record in quick succession — flipping a page's status and then its menu
+ * flag — are both UPDATE on the same resource_id, so without a distinct `tool`
+ * the second row is silently dropped as a duplicate. Callers therefore pass a
+ * route+intent identifier, which doubles as the field that makes the web and
+ * MCP surfaces queryable together.
+ */
+export const addClassroomAuditLog = async (auditParams: ClassroomAuditParams) =>
+  writeAuditRow(auditParams);
+
+/**
+ * Record an action, resolving the caller and classroom from the request.
+ *
+ * Use where a gate result is not at hand. The role recorded is the caller's
+ * HIGHEST role in the classroom: ClassroomMembership is unique on
+ * (classroom_id, user_id, role), so one person routinely holds several rows in
+ * the same classroom (adding someone as an assistant does not remove their
+ * student row). This previously called the service's unordered `findFirst`,
+ * which handed back an arbitrary one of them — so an owner's action could be
+ * attributed to their STUDENT membership, which is exactly the attribution an
+ * audit trail exists to get right.
+ */
 export const addAuditLog = async ({
   request,
   params,
@@ -90,40 +198,30 @@ export const addAuditLog = async ({
     return;
   }
   const { userId } = authData;
-  const classroom = await ClassmojiService.classroom.findBySlug(params.class!);
-  const membership = await ClassmojiService.classroomMembership.findByClassroomAndUser(
-    classroom?.id ?? '',
-    userId
-  );
 
-  const normalizedResourceId = normalizeAuditResourceId(resourceId);
+  // Every existing caller invokes this without awaiting, so a rejection here
+  // would surface as an unhandled rejection rather than as a failed request.
+  // Resolution failures are reported and dropped, exactly like write failures.
+  try {
+    const classroom = await ClassmojiService.classroom.findBySlug(params.class!);
+    // `null` roles = consider every role, so this is the caller's highest
+    // membership overall rather than the highest among some allowed subset.
+    const membership = classroom
+      ? await resolveHighestMembership(classroom.id, userId, null)
+      : null;
 
-  const auditData: {
-    classroom_id: string | undefined;
-    user_id: string;
-    role: string | undefined;
-    resource_id: string | null;
-    resource_type: string;
-    action: string;
-    data?: Record<string, unknown>;
-  } = {
-    classroom_id: classroom?.id,
-    user_id: userId,
-    role: membership?.role,
-    resource_id: normalizedResourceId,
-    resource_type: resourceType,
-    action,
-  };
-
-  const dataPayload = {
-    ...(metadata || {}),
-  };
-
-  if (Object.keys(dataPayload).length > 0) {
-    auditData.data = dataPayload;
+    await writeAuditRow({
+      classroomId: classroom?.id,
+      userId,
+      role: membership?.role,
+      action,
+      resourceType,
+      resourceId,
+      metadata,
+    });
+  } catch (error: unknown) {
+    console.error('[audit] Failed to resolve audit context', error);
   }
-
-  ClassmojiService.audit.create(auditData as Parameters<typeof ClassmojiService.audit.create>[0]);
 };
 
 // Re-export from shared auth package for backward compatibility

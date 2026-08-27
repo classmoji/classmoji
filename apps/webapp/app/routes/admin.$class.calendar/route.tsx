@@ -7,7 +7,11 @@ import { data, useFetcher, useLocation, useParams } from 'react-router';
 import { ClassmojiService } from '@classmoji/services';
 import { useCallout } from '@classmoji/ui-components';
 import getPrisma from '@classmoji/database';
-import { assertClassroomAccess, assertClassroomMutationAllowed } from '~/utils/helpers';
+import {
+  addClassroomAuditLog,
+  assertClassroomAccess,
+  assertClassroomMutationAllowed,
+} from '~/utils/helpers';
 import { buildCalendarUrl, getCalendarDateRange } from '~/utils/calendar.server';
 import type { Route } from './+types/route';
 import CourseCalendar from '~/components/features/calendar/CourseCalendar';
@@ -119,6 +123,28 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
 
   const isAdmin = ['OWNER', 'TEACHER'].includes(membership!.role);
 
+  // Every branch below records an audit row once its write has landed, using
+  // the classroom and role this request was authorized with. Events use the
+  // MCP calendar tools' resource_type ('CALENDAR'); the deadline branch mutates
+  // an Assignment, so it uses theirs ('ASSIGNMENT'). `tool` names the intent —
+  // the audit service dedups on it, so editing an event and then deleting it
+  // inside the same few seconds stays two rows.
+  const audit = (
+    action: string,
+    resourceType: string,
+    resourceId: string,
+    metadata: Record<string, unknown>
+  ) =>
+    addClassroomAuditLog({
+      classroomId: classroom.id,
+      userId,
+      role: membership!.role,
+      action,
+      resourceType,
+      resourceId,
+      metadata,
+    });
+
   const formData = await request.formData();
   const intent = formData.get('intent');
 
@@ -142,6 +168,20 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
         null
       ); // null occurrence_date for non-recurring events
     }
+
+    await audit('CREATE', 'CALENDAR', newEvent.id, {
+      tool: 'web:calendar.create_event',
+      title: createData.title ?? null,
+      event_type: createData.event_type ?? null,
+      is_recurring: Boolean(createData.recurrence_rule),
+      linked: hasLinks
+        ? {
+            pages: linkedPageIds?.length ?? 0,
+            slides: linkedSlideIds?.length ?? 0,
+            assignments: linkedAssignmentIds?.length ?? 0,
+          }
+        : null,
+    });
 
     return data({ success: true });
   }
@@ -211,6 +251,17 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
       );
     }
 
+    await audit('UPDATE', 'CALENDAR', eventId, {
+      tool: 'web:calendar.update_event',
+      // Which fields moved, not their contents — descriptions can be long.
+      fields: Object.keys(updateData),
+      // A recurring edit changes a different number of occurrences depending on
+      // scope, so the scope is part of what was done.
+      edit_scope: editScope ?? null,
+      occurrence_date: occurrenceDate ?? null,
+      links_updated: hasLinkUpdates,
+    });
+
     return data({ success: true });
   }
 
@@ -246,6 +297,14 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
       } else {
         await ClassmojiService.calendar.deleteEvent(eventId as string);
       }
+
+      await audit('DELETE', 'CALENDAR', eventId, {
+        tool: 'web:calendar.delete_event',
+        title: event.title,
+        // Scope decides whether one occurrence or the whole series went away.
+        delete_scope: options?.editScope ?? null,
+        occurrence_date: options?.occurrenceDate ?? null,
+      });
 
       return data({ success: true });
     } catch (error: unknown) {
@@ -284,8 +343,20 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
       );
     }
 
+    const previousDeadline = assignment.student_deadline;
+
     await ClassmojiService.assignment.update(assignmentId as string, {
       student_deadline: new Date(newDeadline as string),
+    });
+
+    // An Assignment, not a CalendarEvent — so this uses the resource_type the
+    // MCP assignment tools write, keyed on the assignment id. Both ends of the
+    // move are recorded: "the deadline changed" is not a useful audit row.
+    await audit('UPDATE', 'ASSIGNMENT', assignmentId, {
+      tool: 'web:calendar.update_deadline',
+      fields: ['student_deadline'],
+      previous_deadline: previousDeadline ? new Date(previousDeadline).toISOString() : null,
+      new_deadline: new Date(newDeadline as string).toISOString(),
     });
 
     return data({ success: true });

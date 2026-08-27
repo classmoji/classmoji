@@ -2,7 +2,11 @@ import { useState, useEffect } from 'react';
 import { useNavigate, useFetcher, useLocation } from 'react-router';
 import { Form, Button, Alert, Modal, Tabs } from 'antd';
 import { FileTextOutlined, UploadOutlined } from '@ant-design/icons';
-import { assertClassroomAccess, assertClassroomMutationAllowed } from '~/utils/helpers';
+import {
+  addClassroomAuditLog,
+  assertClassroomAccess,
+  assertClassroomMutationAllowed,
+} from '~/utils/helpers';
 import { ClassmojiService } from '@classmoji/services';
 import { useCallout } from '@classmoji/ui-components';
 import { processMarkdownImport } from '~/utils/markdownImporter.server';
@@ -159,6 +163,24 @@ export const action = async ({ request, params }: Route.ActionArgs) => {
       files,
       createdBy: userId,
       ...(intent === 'import' ? { commitMessage: `Import page: ${title}` } : {}),
+    });
+
+    // Audited after the page exists, with the same 'PAGES'/'CREATE' shape the
+    // MCP page_create tool writes. The two creation flows this action serves
+    // differ in what they put on disk, so `tool` distinguishes them — and,
+    // because the audit service dedups on it, keeps two quick creates apart.
+    await addClassroomAuditLog({
+      classroomId: classroom.id,
+      userId,
+      role: membership!.role,
+      action: 'CREATE',
+      resourceType: 'PAGES',
+      resourceId: page.id,
+      metadata: {
+        tool: intent === 'import' ? 'web:pages.create_import' : 'web:pages.create_blank',
+        title,
+        ...(intent === 'import' ? { imported_files: files.length } : {}),
+      },
     });
 
     return { created: true, page };

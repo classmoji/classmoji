@@ -22,6 +22,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const addLink = vi.fn();
 const removeLinkService = vi.fn();
+const addClassroomAuditLog = vi.fn();
 
 vi.mock('@classmoji/services', () => {
   // The route branches on `instanceof`, so the class it imports must be the
@@ -47,10 +48,12 @@ vi.mock('@classmoji/services', () => {
 
 vi.mock('~/utils/helpers', () => ({
   assertClassroomAccess: vi.fn(async () => ({
+    userId: 'user-1',
     classroom: { id: 'classroom-1', status: 'ACTIVE' },
     membership: { role: 'OWNER' },
   })),
   assertClassroomMutationAllowed: vi.fn(),
+  addClassroomAuditLog: (...a: unknown[]) => addClassroomAuditLog(...a),
 }));
 
 const { ResourceLinkServiceError } = await import('@classmoji/services');
@@ -239,5 +242,91 @@ describe('admin.$class.resources addLink', () => {
     addLink.mockRejectedValue(new Error('connection lost'));
 
     await expect(submit('addLink', BODY)).rejects.toThrow('connection lost');
+  });
+});
+
+/**
+ * Both link mutations write an audit row, closing the gap against the MCP
+ * resource-link tools — which have always audited both (their plan states the
+ * invariant outright: every mutation writes an audit row). The rows are shaped
+ * to match those tools field for field, so a link's history reads the same
+ * whichever surface performed it.
+ */
+describe('admin.$class.resources — audit rows', () => {
+  it('audits a successful addLink against the authorized classroom', async () => {
+    addLink.mockResolvedValue({
+      id: 'link-1',
+      resourceType: 'page',
+      resourceId: 'page-1',
+      targetType: 'repository',
+      targetId: 'repo-1',
+      manifestSynced: true,
+    });
+
+    await submit('addLink', {
+      resourceId: 'page-1',
+      resourceType: 'page',
+      targetType: 'repository',
+      targetId: 'repo-1',
+    });
+
+    expect(addClassroomAuditLog).toHaveBeenCalledExactlyOnceWith({
+      classroomId: 'classroom-1',
+      userId: 'user-1',
+      role: 'OWNER',
+      action: 'CREATE',
+      resourceType: 'RESOURCES',
+      // The LINK id, exactly as the MCP tool records it.
+      resourceId: 'link-1',
+      metadata: {
+        tool: 'web:resources.add_link',
+        link_id: 'link-1',
+        resource_type: 'page',
+        resource_id: 'page-1',
+        target_type: 'repository',
+        target_id: 'repo-1',
+      },
+    });
+  });
+
+  it('audits a successful removeLink as a DELETE on the link id', async () => {
+    removeLinkService.mockResolvedValue({ id: 'link-1', manifestSynced: true });
+
+    await removeLink({ linkId: 'link-1', resourceType: 'slide' });
+
+    expect(addClassroomAuditLog).toHaveBeenCalledExactlyOnceWith({
+      classroomId: 'classroom-1',
+      userId: 'user-1',
+      role: 'OWNER',
+      action: 'DELETE',
+      resourceType: 'RESOURCES',
+      resourceId: 'link-1',
+      metadata: {
+        tool: 'web:resources.remove_link',
+        link_id: 'link-1',
+        resource_type: 'slide',
+      },
+    });
+  });
+
+  it('writes no row when the link was rejected before anything changed', async () => {
+    // Nothing was deleted, so there is nothing to record. An audit row for a
+    // mutation that never happened is worse than a missing one.
+    await removeLink({ linkId: '', resourceType: 'page' });
+
+    expect(addClassroomAuditLog).not.toHaveBeenCalled();
+  });
+
+  it('writes no row when the service refused the link', async () => {
+    addLink.mockRejectedValue(new ResourceLinkServiceError('already_linked', 'nope'));
+
+    await submit('addLink', {
+      resourceId: 'page-1',
+      resourceType: 'page',
+      targetType: 'repository',
+      targetId: 'repo-1',
+    });
+
+    expect(addClassroomAuditLog).not.toHaveBeenCalled();
   });
 });

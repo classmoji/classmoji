@@ -1,4 +1,8 @@
-import { assertClassroomAccess, assertClassroomMutationAllowed } from '~/utils/helpers';
+import {
+  addClassroomAuditLog,
+  assertClassroomAccess,
+  assertClassroomMutationAllowed,
+} from '~/utils/helpers';
 import { ClassmojiService } from '@classmoji/services';
 import { processMarkdownImport } from '~/utils/markdownImporter.server';
 import { wrapHtmlContent } from '~/utils/htmlWrapper';
@@ -123,6 +127,25 @@ export const action = async ({ request }: Route.ActionArgs) => {
         linkRepositoryId: moduleId,
         ensureRepo: false,
         commitMessage: `Import page: ${title}`,
+      });
+
+      // The batch flow posts here once per page, so this is where batch page
+      // creation is recorded — the admin.$class.pages.new action only handles
+      // the single blank/import case. Same 'PAGES'/'CREATE' shape as that
+      // action and as the MCP page_create tool.
+      await addClassroomAuditLog({
+        classroomId: classroom.id,
+        userId,
+        role: membership!.role,
+        action: 'CREATE',
+        resourceType: 'PAGES',
+        resourceId: page.id,
+        metadata: {
+          tool: 'web:pages.create_batch',
+          title,
+          imported_files: uploadFiles.length,
+          linked_repository_id: moduleId,
+        },
       });
 
       return Response.json({ created: true, page });
