@@ -29,13 +29,22 @@ export async function loader({ params, request }: Route.LoaderArgs) {
     throw new Response('Quiz not found', { status: 404 });
   }
 
-  // 3. Fetch attempt with messages
-  const attemptData = await ClassmojiService.quizAttempt.findWithMessages(attemptId);
-  if (!attemptData?.attempt) {
+  // 3. Fetch attempt with messages, bound to the quiz resolved above.
+  // `findWithMessages` resolves an attempt by id alone and throws when there is
+  // none, so both an id naming nothing and an id naming another quiz's attempt
+  // land on the same 404 — checked before ownership, so a foreign id is never
+  // confirmed to exist by a 403.
+  const attemptData = await ClassmojiService.quizAttempt
+    .findWithMessages(attemptId)
+    .catch(() => null);
+  if (!attemptData?.attempt || attemptData.attempt.quiz_id.toString() !== quiz.id.toString()) {
     throw new Response('Attempt not found', { status: 404 });
   }
 
-  // 4. Verify ownership (students can only view their own attempts)
+  // 4. Verify ownership (students can only view their own attempts). Staff read
+  // any attempt OF THIS QUIZ without owning it, which is only inside the
+  // authorized classroom because step 2 binds the quiz to it and step 3 binds
+  // the attempt to that quiz.
   const isInstructor = membership
     ? ['OWNER', 'ASSISTANT', 'TEACHER'].includes(membership.role)
     : false;
