@@ -1,6 +1,5 @@
 import { Form, Input, Button, Space, Typography } from 'antd';
 import { useState } from 'react';
-import { Octokit } from '@octokit/rest';
 
 import { IconMail, IconUser, IconBrandGithubCopilot } from '@tabler/icons-react';
 
@@ -12,95 +11,50 @@ const { Text } = Typography;
 
 interface FormStaffProps {
   close: () => void;
-  token?: string | null;
 }
 
-const FormStaff = ({ close, token }: FormStaffProps) => {
+/**
+ * Add a member of the teaching staff by git login.
+ *
+ * The GitHub profile is resolved SERVER-SIDE, inside ClassmojiService.staff
+ * .addStaff. This form used to do its own `octokit.users.getByUsername` with the
+ * requesting instructor's access token — which meant the loader had to ship that
+ * token to the browser. The lookup was never authoritative (the service resolves
+ * the profile again regardless, and only its answer is trusted), so it is gone
+ * along with the token: an unknown login now comes back from the action as
+ * `git_user_not_found`.
+ */
+const FormStaff = ({ close }: FormStaffProps) => {
   const { fetcher, notify } = useGlobalFetcher();
   const [form] = Form.useForm();
   const [loading, setLoading] = useState(false);
-  const [verifying, setVerifying] = useState(false);
   const callout = useCallout();
-  const octokit = new Octokit({ auth: token });
 
-  const validateGitHubUser = async (login: string) => {
-    if (!login) return null;
-
-    setVerifying(true);
-    try {
-      const { data: user } = await octokit.users.getByUsername({
-        username: login.replace('@', ''), // Remove @ if present
-      });
-      setVerifying(false);
-      return user;
-    } catch {
-      setVerifying(false);
-      throw new Error('GitHub user not found');
-    }
-  };
-
-  const onFinish = async (values: { name?: string; login: string; email: string }) => {
-    const { name, login } = values;
+  const onFinish = (values: { name?: string; login: string; email: string }) => {
     setLoading(true);
 
-    try {
-      const user = await validateGitHubUser(login);
+    // Only the login, and the instructor's optional overrides. Everything the
+    // membership is keyed to — the provider id above all — is the server's to
+    // decide from the login it resolves.
+    const login = values.login.replace('@', '').trim();
 
-      if (!user) {
-        callout.show({ variant: 'error', title: 'GitHub login is required' });
-        setLoading(false);
-        return;
-      }
+    notify(ActionTypes.SAVE_USER, 'Adding new staff member...');
 
-      notify(ActionTypes.SAVE_USER, 'Adding new assistant...');
-
-      const submissionValues = {
-        id: user.id,
-        name: name || user.name || user.login, // Fallback to GitHub name/login if name not provided
-        login: user.login,
-        avatar_url: user.avatar_url,
-        provider_email: user.email,
-        email: values.email,
-      };
-
-      console.log('submissionValues', submissionValues);
-
-      fetcher!.submit(submissionValues, {
+    fetcher!.submit(
+      { login, name: values.name ?? null, email: values.email ?? null },
+      {
         method: 'post',
-        action: '?/createAssistant',
+        action: '?/createStaff',
         encType: 'application/json',
-      });
+      }
+    );
 
-      close();
-    } catch (error: unknown) {
-      callout.show({
-        variant: 'error',
-        title: error instanceof Error ? error.message : 'Failed to verify GitHub user',
-      });
-    } finally {
-      setLoading(false);
-    }
+    setLoading(false);
+    close();
   };
 
   const onFinishFailed = () => {
     callout.show({ variant: 'error', title: 'Please fill in all required fields' });
-  };
-
-  const handleGitHubLoginChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const login = e.target.value.replace('@', '').trim();
-    form.setFieldValue('login', login);
-
-    // Auto-fill name if login is valid and name is empty
-    if (login && !form.getFieldValue('name')) {
-      try {
-        const user = await validateGitHubUser(login);
-        if (user && (user.name || user.login)) {
-          form.setFieldValue('name', user.name || user.login);
-        }
-      } catch {
-        // Silently fail for auto-fill
-      }
-    }
   };
 
   return (
@@ -115,22 +69,22 @@ const FormStaff = ({ close, token }: FormStaffProps) => {
         label="Name"
         name="name"
         rules={[
-          { required: true, message: 'Please enter assistant name' },
+          { required: true, message: 'Please enter a name' },
           { min: 2, message: 'Name must be at least 2 characters' },
         ]}
       >
-        <Input placeholder="Enter assistant's full name" prefix={<IconUser size={16} />} />
+        <Input placeholder="Enter their full name" prefix={<IconUser size={16} />} />
       </Form.Item>
 
       <Form.Item
         label="Email"
         name="email"
         rules={[
-          { required: true, message: 'Please enter assistant email' },
+          { required: true, message: 'Please enter an email' },
           { type: 'email', message: 'Please enter a valid email address' },
         ]}
       >
-        <Input placeholder="Enter assistant's email" prefix={<IconMail size={16} />} />
+        <Input placeholder="Enter their email" prefix={<IconMail size={16} />} />
       </Form.Item>
 
       <Form.Item
@@ -149,12 +103,7 @@ const FormStaff = ({ close, token }: FormStaffProps) => {
           </Text>
         }
       >
-        <Input
-          placeholder="github-username"
-          prefix={<IconBrandGithubCopilot size={16} />}
-          onChange={handleGitHubLoginChange}
-          {...({ loading: verifying } as Record<string, unknown>)}
-        />
+        <Input placeholder="github-username" prefix={<IconBrandGithubCopilot size={16} />} />
       </Form.Item>
 
       <Form.Item className="mb-0 mt-6">
@@ -163,7 +112,7 @@ const FormStaff = ({ close, token }: FormStaffProps) => {
             Cancel
           </Button>
           <Button type="primary" htmlType="submit" loading={loading} icon={<IconUser size={16} />}>
-            {loading ? 'Creating...' : 'Create Assistant'}
+            {loading ? 'Adding...' : 'Add staff member'}
           </Button>
         </Space>
       </Form.Item>

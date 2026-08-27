@@ -83,11 +83,18 @@ test.describe('Teacher authorization', () => {
     expect(response?.status()).toBe(403);
   });
 
-  test('the teaching-team list is owner-only for a teacher (403)', async ({
+  test('a teacher may READ the teaching-staff list, with no management controls', async ({
     authenticatedPage: page,
     testOrg,
   }) => {
-    const response = await page.goto(`/admin/${testOrg}/staff`);
-    expect(response?.status()).toBe(403);
+    // Seeing who is on the team is a teaching-team right, so this is no longer
+    // a 403. What stays owner-only is MANAGING the team: the loader derives
+    // `canManage` from role AND path, and this prefix exports no action at all.
+    await page.goto(`/teacher/${testOrg}/staff`);
+    await waitForDataLoad(page);
+
+    await expect(page.getByRole('heading', { name: 'Teaching Staff' })).toBeVisible();
+    await expect(page.getByRole('button', { name: /New staff member/i })).toHaveCount(0);
+    await expect(page.getByRole('columnheader', { name: 'Actions' })).toHaveCount(0);
   });
 });
