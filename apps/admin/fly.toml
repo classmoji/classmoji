@@ -10,6 +10,9 @@ primary_region = 'iad'
 [http_service]
   internal_port = 8080
   force_https = true
+  # These three autoscale keys are REWRITTEN at deploy time for staging and dev
+  # by scripts/fly-autostop-config.sh, which hard-fails if any of them stops
+  # being declared here. Keep all three, even at their production values.
   auto_stop_machines = 'off'
   auto_start_machines = true
   min_machines_running = 1
@@ -31,3 +34,4 @@ primary_region = 'iad'
 [[vm]]
   memory = '512mb'
   cpus = 1
+  memory_mb = 512

@@ -18,7 +18,7 @@ const StatusBadge = ({ row }: { row: ClassroomRow }) => {
 };
 
 const Classrooms = () => {
-  const { rows, total, query } = useLoaderData<typeof loader>();
+  const { rows, total, query, includeExamples, hiddenExamples } = useLoaderData<typeof loader>();
   const { inputRef, onSearchChange, searching } = useDebouncedSearch(query);
 
   return (
@@ -55,13 +55,35 @@ const Classrooms = () => {
               </button>
             </noscript>
           </div>
+          {/* Carried through the form so toggling and searching compose rather
+              than clobbering each other. */}
+          {includeExamples ? <input type="hidden" name="examples" value="1" /> : null}
         </Form>
       </div>
 
-      <div className="rounded-2xl bg-panel ring-1 ring-line p-5 sm:p-6 min-h-[calc(100vh-14rem)]">
-        <p className="text-xs text-ink-3 mb-3">
-          {query ? `${total} matching “${query}”` : `${total} classrooms`}
-        </p>
+      <div className="rounded-2xl bg-panel ring-1 ring-line px-3 py-4 sm:px-4 min-h-[calc(100vh-14rem)]">
+        <div className="flex flex-wrap items-baseline justify-between gap-2 mb-3 px-1">
+          <p className="text-xs text-ink-3">
+            {query ? `${total} matching “${query}”` : `${total} classrooms`}
+          </p>
+          {includeExamples || hiddenExamples > 0 ? (
+            <Link
+              to={
+                includeExamples
+                  ? `?${new URLSearchParams(query ? { q: query } : {})}`
+                  : `?${new URLSearchParams(query ? { q: query, examples: '1' } : { examples: '1' })}`
+              }
+              className="text-xs text-ink-3 hover:text-ink-1 underline underline-offset-2"
+              // One per signed-up user, from the onboarding tour — almost never
+              // what an admin is looking for, so hidden by default.
+              title="Auto-provisioned onboarding sandboxes"
+            >
+              {includeExamples
+                ? 'Hide example classrooms'
+                : `Show ${hiddenExamples} example classroom${hiddenExamples === 1 ? '' : 's'}`}
+            </Link>
+          ) : null}
+        </div>
 
         {rows.length === 0 ? (
           <div className="text-center py-12 text-gray-500">

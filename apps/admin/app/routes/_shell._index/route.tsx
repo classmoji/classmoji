@@ -109,8 +109,8 @@ const AdminUsers = () => {
         </div>
       ) : null}
 
-      <div className="rounded-2xl bg-panel ring-1 ring-line p-5 sm:p-6 min-h-[calc(100vh-14rem)]">
-        <div className="flex items-baseline justify-between mb-3">
+      <div className="rounded-2xl bg-panel ring-1 ring-line px-3 py-4 sm:px-4 min-h-[calc(100vh-14rem)]">
+        <div className="flex items-baseline justify-between mb-3 px-1">
           <p className="text-xs text-ink-3">
             {query ? `${total} matching “${query}”` : `${total} users`}
             {truncated ? ` · showing first ${limit}` : ''}
