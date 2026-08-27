@@ -46,9 +46,14 @@ test.describe('Teacher shell', () => {
     await expect(page.getByRole('link', { name: 'Pages' })).toBeVisible();
     await expect(page.getByRole('link', { name: 'Students' })).toBeVisible();
 
+    // Seeing who is on the teaching staff is a teaching-team right — the nav
+    // entry lists OWNER, TEACHER and ASSISTANT — so a teacher SHOULD have this
+    // one. What stays owner-only is MANAGING the team, which the sibling test
+    // below covers on the page itself.
+    await expect(page.getByRole('link', { name: 'Teaching Staff' })).toBeVisible();
+
     // Owner-only entries must not appear for a teacher.
     await expect(page.getByRole('link', { name: 'Class Settings' })).not.toBeVisible();
-    await expect(page.getByRole('link', { name: 'Assistants' })).not.toBeVisible();
     await expect(page.getByRole('link', { name: 'Grades' })).not.toBeVisible();
   });
 
@@ -87,9 +92,11 @@ test.describe('Teacher authorization', () => {
     authenticatedPage: page,
     testOrg,
   }) => {
-    // Seeing who is on the team is a teaching-team right, so this is no longer
-    // a 403. What stays owner-only is MANAGING the team: the loader derives
-    // `canManage` from role AND path, and this prefix exports no action at all.
+    // The other half of the nav assertion above: the entry is there for a
+    // teacher, and so is the page behind it — seeing who is on the team is a
+    // teaching-team right, so this is no longer a 403. What stays owner-only is
+    // MANAGING the team: the loader derives `canManage` from role AND path, and
+    // this prefix exports no action at all.
     await page.goto(`/teacher/${testOrg}/staff`);
     await waitForDataLoad(page);
 
