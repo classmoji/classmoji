@@ -47,6 +47,7 @@ export {
   assignmentService,
   gitRepoAssignmentService,
   notificationService,
+  ClassroomSettingsEntitlementError,
 } from './classmoji/index.ts';
 
 export { ClassmojiService, HelperService, StripeService, FlyCertService, MarkdownImporter };

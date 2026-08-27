@@ -1,6 +1,7 @@
 import getPrisma from '@classmoji/database';
 import type { Prisma } from '@prisma/client';
 import { ModuleItemType } from '@prisma/client';
+import * as entitlementService from './entitlement.service.ts';
 
 type RepositoryImportClient = Prisma.TransactionClient | ReturnType<typeof getPrisma>;
 
@@ -17,9 +18,9 @@ export interface ConfigImportSelections {
   /** default_tokens_per_hour */
   tokens?: boolean;
   /**
-   * quizzes_enabled, slides_enabled, syllabus_bot_enabled,
-   * recent_viewers_enabled, show_modules, show_pages, show_repos,
-   * default_student_page, theme
+   * quizzes_enabled, slides_enabled, syllabus_bot_enabled, recent_viewers_enabled,
+   * show_modules, show_pages, show_repos, default_student_page, theme.
+   * syllabus_bot_enabled only lands on a Pro target — see importClassroomConfig.
    */
   features?: boolean;
   /** llm_provider, llm_model, llm_temperature, llm_max_tokens, code_aware_model, syllabus_bot_model */
@@ -36,6 +37,13 @@ export interface ConfigImportSelections {
 export interface ConfigImportSummary {
   /** Which ClassroomSettings fields were written (post null/undefined filtering). */
   settings_fields: string[];
+  /**
+   * Fields deliberately NOT written because the target classroom is not
+   * entitled to them (today: syllabus_bot_enabled on a non-Pro target). Present
+   * only when something was skipped, so the caller can say so rather than
+   * letting the setting vanish silently.
+   */
+  settings_fields_skipped?: string[];
   /** Number of EmojiMapping rows inserted (skipDuplicates applied). */
   emoji_mappings: number;
   /** Number of LetterGradeMapping rows inserted (skipDuplicates applied). */
@@ -60,6 +68,10 @@ export const SETTINGS_FIELD_GROUPS: Record<
   features: [
     'quizzes_enabled',
     'slides_enabled',
+    // Pro-gated. This writer bypasses `updateSettings`, so the entitlement of
+    // the TARGET classroom is checked in importClassroomConfig below and the
+    // field dropped from the patch when it is not allowed. Listed here so a
+    // Pro -> Pro clone still carries it.
     'syllabus_bot_enabled',
     'recent_viewers_enabled',
     'show_modules',
@@ -161,10 +173,26 @@ export const importClassroomConfig = async (
     const sourceRecord = source as unknown as Record<string, unknown>;
     const patch: Record<string, unknown> = {};
     const written: string[] = [];
+    const skipped: string[] = [];
+
+    // This writer does not go through `updateSettings`, so the Pro gate on
+    // syllabus_bot_enabled has to be applied here. Only ENABLING is gated —
+    // copying a `false` is always fine — and the check runs once, only when the
+    // source actually has it on.
+    const copyingBotOn =
+      fields.includes('syllabus_bot_enabled') && sourceRecord.syllabus_bot_enabled === true;
+    const botAllowedOnTarget = copyingBotOn
+      ? (await entitlementService.canUseSyllabusBot(targetClassroomId)).allowed
+      : false;
+
     for (const field of fields) {
       const value = sourceRecord[field];
       // Skip null/undefined; false/0 are not null/undefined so they copy verbatim.
       if (value === null || value === undefined) continue;
+      if (field === 'syllabus_bot_enabled' && value === true && !botAllowedOnTarget) {
+        skipped.push(field);
+        continue;
+      }
       patch[field] = value;
       written.push(field);
     }
@@ -176,6 +204,7 @@ export const importClassroomConfig = async (
       });
     }
     summary.settings_fields = written;
+    if (skipped.length > 0) summary.settings_fields_skipped = skipped;
   }
 
   // --- Grade scales (emoji + letter grade mappings) ----------------------

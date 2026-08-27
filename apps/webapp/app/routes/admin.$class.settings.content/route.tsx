@@ -4,7 +4,7 @@ import { IconInfoCircle, IconExternalLink } from '@tabler/icons-react';
 
 import { namedAction } from 'remix-utils/named-action';
 
-import { ClassmojiService } from '@classmoji/services';
+import { ClassmojiService, ClassroomSettingsEntitlementError } from '@classmoji/services';
 import { getContentRepoName } from '@classmoji/utils';
 import { SettingSection } from '~/components';
 import { ActionTypes } from '~/constants';
@@ -25,12 +25,20 @@ export const loader = async ({ params, request }: Route.LoaderArgs) => {
     attemptedAction: 'view',
   });
 
+  // The syllabus bot is Pro-only; the toggle is disabled (not hidden) on Free
+  // so owners can see the feature exists and why it is unavailable.
+  const syllabusBotEntitlement = await ClassmojiService.entitlement.canUseSyllabusBot(classroom.id);
+
   // Return classroom with settings for display (API keys stripped by assertClassroomAccess)
-  return { organization: classroom, aiAgentAvailable: isAIAgentConfigured() };
+  return {
+    organization: classroom,
+    aiAgentAvailable: isAIAgentConfigured(),
+    syllabusBotProRequired: !syllabusBotEntitlement.allowed,
+  };
 };
 
 const SettingsContent = ({ loaderData }: Route.ComponentProps) => {
-  const { organization, aiAgentAvailable } = loaderData;
+  const { organization, aiAgentAvailable, syllabusBotProRequired } = loaderData;
   const { class: classSlug } = useParams();
 
   const { fetcher } = useGlobalFetcher();
@@ -191,11 +199,36 @@ const SettingsContent = ({ loaderData }: Route.ComponentProps) => {
             <Switch
               checked={settings.syllabus_bot_enabled ?? false}
               onChange={handleSyllabusBotToggle}
-              disabled={!aiAgentAvailable}
+              // The feature predates the Pro gate, so Free classrooms with a
+              // stale `true` exist. Turning it OFF stays allowed (the server
+              // gates only the `true` direction) — otherwise those owners are
+              // stuck with a flag they cannot clear.
+              disabled={
+                !aiAgentAvailable || (syllabusBotProRequired && !settings.syllabus_bot_enabled)
+              }
             />
           </Form.Item>
 
-          {settings.syllabus_bot_enabled && (
+          {syllabusBotProRequired && (
+            <div className="flex items-start gap-2 rounded-lg bg-stone-50 p-3 text-sm text-gray-600 dark:bg-neutral-800 dark:text-gray-400">
+              <IconInfoCircle size={16} className="mt-0.5 shrink-0" />
+              <span>
+                The Syllabus Bot is available on the Pro plan.{' '}
+                <a
+                  href="/settings/billing"
+                  className="text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300"
+                >
+                  Upgrade to enable it
+                </a>
+                .
+              </span>
+            </div>
+          )}
+
+          {/* Hidden when Pro is required: on a grandfathered Free classroom the
+              flag can still read `true`, but the runtime gate means students do
+              NOT see the Course Assistant button, so this panel would be lying. */}
+          {settings.syllabus_bot_enabled && !syllabusBotProRequired && (
             <div className="mt-4 p-4 bg-nav-hover rounded-lg border border-gray-200 dark:border-neutral-700">
               <div className="flex items-center gap-2 mb-3">
                 <IconInfoCircle size={16} className="text-ink-3" />
@@ -267,7 +300,19 @@ export const action = async ({ params, request }: Route.ActionArgs) => {
 
     async saveContentSettings() {
       const { _action, ...updateData } = data;
-      await ClassmojiService.classroom.updateSettings(classroom.id, updateData);
+      // updateSettings is the hard gate; catching here only turns the refusal
+      // into a readable message instead of a 500.
+      try {
+        await ClassmojiService.classroom.updateSettings(classroom.id, updateData);
+      } catch (error: unknown) {
+        if (error instanceof ClassroomSettingsEntitlementError) {
+          return {
+            error: error.message,
+            action: ActionTypes.SAVE_CONTENT_SETTINGS,
+          };
+        }
+        throw error;
+      }
       return {
         success: 'Content settings updated',
         action: ActionTypes.SAVE_CONTENT_SETTINGS,
