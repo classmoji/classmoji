@@ -310,9 +310,20 @@ export async function action({ request }: Route.ActionArgs) {
           let attempt;
 
           if (data.attemptId) {
-            // Resume specific attempt (e.g., admin preview with pre-created attempt)
-            const attemptData = await ClassmojiService.quizAttempt.findWithMessages(data.attemptId);
-            if (!attemptData?.attempt) {
+            // Resume specific attempt (e.g., admin preview with pre-created attempt).
+            // Bound to `quizId`, because that is the quiz every gate above was
+            // resolved from: the classroom membership, the mutation check and
+            // the pro-tier check all answer for THAT quiz's classroom, so an
+            // attempt on any other one would run under gates that never
+            // examined it. `findWithMessages` throws when there is no such
+            // attempt, so both cases land on the same 404 below.
+            const attemptData = await ClassmojiService.quizAttempt
+              .findWithMessages(data.attemptId)
+              .catch(() => null);
+            if (
+              !attemptData?.attempt ||
+              attemptData.attempt.quiz_id.toString() !== data.quizId.toString()
+            ) {
               return new Response(JSON.stringify({ error: 'Attempt not found' }), {
                 status: 404,
                 headers: { 'Content-Type': 'application/json' },
