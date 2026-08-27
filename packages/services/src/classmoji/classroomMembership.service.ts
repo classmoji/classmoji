@@ -284,19 +284,27 @@ export const updateById = async (id: string, updates: Prisma.ClassroomMembership
  *
  * This is opt-in: `updateById` and all of its existing callers are unchanged.
  *
- * `role` is deliberately not updatable here. The last-owner guard lives in
- * `updateById`/`update`, and a second copy of it would be a second place to
- * forget it.
+ * Four fields are deliberately not updatable here:
+ *
+ * - `role`, because the last-owner guard lives in `updateById`/`update` and a
+ *   second copy of it would be a second place to forget it.
+ * - `id`, `classroom_id` and `user_id`, because they are what the binding is
+ *   made of. This is an updateMany, so a `classroom_id` in `data` would match
+ *   inside the authorized classroom and then re-parent the row out of it —
+ *   precisely the move this function exists to prevent.
  *
  * @param {string} id - UUID of the membership
  * @param {string} classroomId - UUID of the Classroom the membership must be in
- * @param {Object} updates - Fields to update, excluding `role`
+ * @param {Object} updates - Fields to update, excluding the identity columns
  * @returns {Promise<boolean>} - true when exactly one row was updated
  */
 export const updateInClassroom = async (
   id: string,
   classroomId: string,
-  updates: Omit<Prisma.ClassroomMembershipUncheckedUpdateInput, 'role'>
+  updates: Omit<
+    Prisma.ClassroomMembershipUncheckedUpdateInput,
+    'role' | 'id' | 'classroom_id' | 'user_id'
+  >
 ) => {
   const { count } = await getPrisma().classroomMembership.updateMany({
     where: { id, classroom_id: classroomId },
