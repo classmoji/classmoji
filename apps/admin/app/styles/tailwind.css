@@ -1,0 +1,52 @@
+@import 'tailwindcss';
+
+/* The webapp's design system, from the shared package — same colors, same type
+   scale, same dark tokens, one source of truth. See
+   packages/ui-components/styles/. */
+@import '@classmoji/ui-components/styles/theme.css';
+@import '@classmoji/ui-components/styles/tokens.css';
+@import '@classmoji/ui-components/styles/fonts.css';
+@import '@classmoji/ui-components/styles/components.css';
+
+@variant dark (&:where(.dark, .dark *));
+
+/*
+  The default border color changed to `currentcolor` in Tailwind CSS v4; this
+  keeps borders looking as they did under v3, matching webapp/slides/pages.
+*/
+@layer base {
+  *,
+  ::after,
+  ::before,
+  ::backdrop,
+  ::file-selector-button {
+    border-color: var(--color-gray-200, currentcolor);
+  }
+}
+
+/* Root font-size drives every rem in the app — the single biggest reason the
+   webapp looks the way it does. It is NOT in the shared package (the webapp
+   sets it alongside a runtime override from the Tweaks panel, which this app
+   does not have), so it must be repeated here or all type renders ~6% small. */
+html {
+  font-size: 17px;
+  overflow-x: hidden;
+}
+
+body {
+  font-family: var(--font-sans);
+  color: var(--ink-0);
+  background: var(--bg-page);
+  font-size: 0.8125rem;
+  line-height: 1.45;
+  /* Mona Sans renders light; the webapp bumps the default weight the same way. */
+  font-weight: 450;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+button:not(:disabled) {
+  cursor: pointer;
+}

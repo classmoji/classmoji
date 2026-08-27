@@ -1,0 +1,37 @@
+app = 'classmoji-admin'
+primary_region = 'iad'
+
+[build]
+
+[env]
+  HOST = '0.0.0.0'
+  PORT = '8080'
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  # These three autoscale keys are REWRITTEN at deploy time for staging and dev
+  # by scripts/fly-autostop-config.sh, which hard-fails if any of them stops
+  # being declared here. Keep all three, even at their production values.
+  auto_stop_machines = 'off'
+  auto_start_machines = true
+  min_machines_running = 1
+
+  # Without a check, a boot crash still reads as a green deploy (learned the
+  # hard way on pages: the image once shipped without `server/` and crash-looped
+  # while the deploy job passed).
+  [[http_service.checks]]
+    interval = '15s'
+    timeout = '5s'
+    grace_period = '30s'
+    method = 'GET'
+    path = '/health'
+
+# NOTE: deliberately no [deploy] release_command. Only apps/webapp runs
+# `prisma migrate deploy`; a second migrator racing it is how you get partial
+# schema states.
+
+[[vm]]
+  memory = '512mb'
+  cpus = 1
+  memory_mb = 512

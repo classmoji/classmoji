@@ -4,7 +4,8 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
-    "./sandpack": "./src/Sandpack/index.ts"
+    "./sandpack": "./src/Sandpack/index.ts",
+    "./styles/*": "./styles/*"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",

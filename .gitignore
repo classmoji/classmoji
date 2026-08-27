@@ -22,9 +22,13 @@ apps/slides/build/
 # Cloned student repositories
 packages/tasks/repos/
 apps/pages/build
+apps/admin/build
 
 # Local GitHub Classroom export dumps (contain real student logins; used only as local import fixtures)
 /classrooms/
 
 # Local Codex CLI config (holds MCP server credentials)
 .codex/
+
+# Generated scale-to-zero fly configs for staging/dev (see scripts/fly-autostop-config.sh)
+apps/*/fly.autostop.generated.toml

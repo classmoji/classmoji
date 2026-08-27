@@ -10,6 +10,7 @@ Classmoji is a classroom management platform for CS education. Instructors creat
 - apps/hook-station: Webhook listener for GitHub/Stripe (`apps/hook-station/src/**`).
 - apps/slides: Slide presentation app with Reveal.js editor (`apps/slides/app/**`).
 - apps/site: Astro marketing/blog site (`apps/site/src/**`).
+- apps/admin: Platform-admin app (`apps/admin/app/**`). Cross-classroom user search + account impersonation via better-auth's admin plugin. Access is gated on `PLATFORM_ADMIN_USER_IDS` (comma-separated `User.id`s) — empty means nobody, and the app 403s. Separate origin from the webapp; sessions are shared through the cookie, not passed.
 
 ### Packages
 - packages/database: Prisma schema, migrations, seed.
@@ -19,7 +20,7 @@ Classmoji is a classroom management platform for CS education. Instructors creat
 - packages/tasks: Trigger.dev workflows (`packages/tasks/src/workflows/**`).
 - packages/auth: Authentication utilities.
 - packages/content: Content management utilities.
-- packages/ui-components: Shared React UI components.
+- packages/ui-components: Shared React UI components, plus the shared design system in `packages/ui-components/styles/` (`theme.css` Tailwind `@theme`, `tokens.css` raw CSS vars, `fonts.css`, `components.css` for `.btn`/`.card`/`.chip`). The webapp, slides, and admin all import from here — do NOT fork these into an app. Note `html { font-size: 17px }` and the `@fontsource-variable/mona-sans` import are per-app and must be repeated.
 - packages/eslint-config: Shared ESLint configuration.
 
 Monorepo via npm workspaces + Turbo; Node 22+ required.
