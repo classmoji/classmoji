@@ -22,6 +22,7 @@ jobs:
       site: ${{ steps.filter.outputs.site == 'true' || github.event_name == 'workflow_dispatch' }}
       slides: ${{ steps.filter.outputs.slides == 'true' || github.event_name == 'workflow_dispatch' }}
       pages: ${{ steps.filter.outputs.pages == 'true' || github.event_name == 'workflow_dispatch' }}
+      admin: ${{ steps.filter.outputs.admin == 'true' || github.event_name == 'workflow_dispatch' }}
       tasks: ${{ steps.filter.outputs.tasks == 'true' || github.event_name == 'workflow_dispatch' }}
     steps:
       - uses: actions/checkout@v4
@@ -49,6 +50,9 @@ jobs:
               - 'packages/**'
             pages:
               - 'apps/pages/**'
+              - 'packages/**'
+            admin:
+              - 'apps/admin/**'
               - 'packages/**'
             tasks:
               - 'packages/tasks/**'
@@ -220,6 +224,28 @@ jobs:
         run: |
           CONFIG=$(scripts/fly-autostop-config.sh apps/pages/fly.toml stop)
           flyctl deploy --config "$CONFIG" --dockerfile apps/pages/Dockerfile --remote-only --app classmoji-pages-staging
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+
+  deploy-admin:
+    needs: [changes, deploy-webapp]
+    if: always() && needs.changes.outputs.admin == 'true' && (needs.deploy-webapp.result == 'success' || needs.deploy-webapp.result == 'skipped')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+          token: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Heal package-lock.json against submodule workspaces
+        run: npm install --package-lock-only --no-audit --no-fund --legacy-peer-deps
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+      - name: Deploy admin
+        run: |
+          CONFIG=$(scripts/fly-autostop-config.sh apps/admin/fly.toml stop)
+          flyctl deploy --config "$CONFIG" --dockerfile apps/admin/Dockerfile --remote-only --app classmoji-admin-staging
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
 

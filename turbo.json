@@ -80,6 +80,14 @@
     "pages:start": {
       "dependsOn": ["^db:generate"]
     },
+    "admin:dev": {
+      "persistent": true,
+      "cache": false
+    },
+    "admin:build": {},
+    "admin:start": {
+      "dependsOn": ["^db:generate"]
+    },
     "db:generate": {},
     "db:start": {},
     "db:deploy": {
@@ -158,6 +166,9 @@
     "SLIDES_URL",
     "PAGES_URL",
     "PAGES_PORT",
+    "ADMIN_URL",
+    "ADMIN_PORT",
+    "PLATFORM_ADMIN_USER_IDS",
     "SITE_BASE_DOMAIN",
     "COOKIE_DOMAIN",
     "COOKIE_PREFIX",

@@ -9,9 +9,16 @@ interface ImpersonationBannerProps {
     session?: { impersonatedBy?: string };
     user?: { name?: string; email?: string };
   } | null;
+  /**
+   * Set when the impersonation was started from the standalone admin app
+   * (apps/admin), which drops a `cm_impersonation_origin=admin` cookie before
+   * handing off. Such a session has no originating classroom, so the
+   * slug-based return below has nothing to work with.
+   */
+  returnToAdminUrl?: string | null;
 }
 
-const ImpersonationBanner = ({ session }: ImpersonationBannerProps) => {
+const ImpersonationBanner = ({ session, returnToAdminUrl }: ImpersonationBannerProps) => {
   const navigate = useNavigate();
   const [stopping, setStopping] = useState(false);
 
@@ -29,6 +36,15 @@ const ImpersonationBanner = ({ session }: ImpersonationBannerProps) => {
 
       if (error) {
         throw new Error(error.message || 'Failed to stop impersonating');
+      }
+
+      // Started from the standalone admin app: send them back there. Checked
+      // first because such a session has no originating classroom, so the
+      // slug-based branch below would fall through to /select-organization.
+      // A full navigation, not navigate() — different origin.
+      if (returnToAdminUrl) {
+        window.location.href = returnToAdminUrl;
+        return;
       }
 
       // Navigate back to the appropriate admin page for the current class

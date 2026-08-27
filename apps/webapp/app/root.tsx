@@ -57,6 +57,17 @@ export const meta = () => {
   return [{ title: 'Classmoji' }];
 };
 
+/**
+ * True when this impersonation was started from the standalone admin app, which
+ * drops `cm_impersonation_origin=admin` before handing off.
+ *
+ * The cookie is only ever a boolean breadcrumb — the URL it maps to comes from
+ * `ADMIN_URL` on the server. A cookie is attacker-settable in principle, so it
+ * must never supply the redirect target itself.
+ */
+const startedFromAdminApp = (request: Request): boolean =>
+  /(?:^|;\s*)cm_impersonation_origin=admin(?:;|$)/.test(request.headers.get('cookie') ?? '');
+
 export const loader = async ({ request }: Route.LoaderArgs) => {
   const url = new URL(request.url);
 
@@ -267,6 +278,15 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
     memberships,
     session,
     aiAgentAvailable: isAIAgentConfigured(),
+    // Where "Stop viewing" should return to. Only set when apps/admin started
+    // this impersonation (it drops the breadcrumb cookie before handing off) —
+    // a classroom-initiated "View as" leaves this null and keeps its existing
+    // return-to-roster behaviour. Read server-side so the value is a trusted
+    // env URL, never anything the cookie itself supplies.
+    impersonationReturnUrl:
+      isImpersonating && startedFromAdminApp(request)
+        ? (process.env.ADMIN_URL ?? null)
+        : null,
   };
 };
 
@@ -278,7 +298,7 @@ const FetcherProvider = ({ children }: { children: React.ReactNode }) => {
 };
 
 const App = ({ loaderData }: Route.ComponentProps) => {
-  const { user, session } = loaderData;
+  const { user, session, impersonationReturnUrl } = loaderData;
   const { isDarkMode, accent } = useDarkMode();
   const { pathname } = useLocation();
   const {
@@ -451,6 +471,7 @@ const App = ({ loaderData }: Route.ComponentProps) => {
                     <ImpersonationBanner
                       key={(session as Record<string, Record<string, string>>)?.session?.id}
                       session={session}
+                      returnToAdminUrl={impersonationReturnUrl}
                     />
                     <Outlet />
                     <SyllabusBotRoot />

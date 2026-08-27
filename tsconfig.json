@@ -4,6 +4,7 @@
   "references": [
     { "path": "./apps/hook-station" },
     { "path": "./apps/pages" },
+    { "path": "./apps/admin" },
     { "path": "./apps/site" },
     { "path": "./apps/slides" },
     { "path": "./apps/webapp" },

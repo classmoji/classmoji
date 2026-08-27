@@ -22,6 +22,7 @@ apps/slides/build/
 # Cloned student repositories
 packages/tasks/repos/
 apps/pages/build
+apps/admin/build
 
 # Local GitHub Classroom export dumps (contain real student logins; used only as local import fixtures)
 /classrooms/

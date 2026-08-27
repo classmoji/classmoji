@@ -2,6 +2,16 @@
 @import 'tailwindcss/theme' layer(theme);
 @import 'tailwindcss/preflight' layer(base);
 
+/* Backs the class-only shells in @classmoji/ui-components (Button -> .btn,
+   Card -> .card, Chip -> .chip). Slides imports those components but had none
+   of their CSS, so they rendered unstyled.
+
+   tokens.css + components.css only — deliberately NOT theme.css or fonts.css.
+   Slides is built on stock Tailwind utilities (bg-white, dark:bg-gray-900) and
+   the default type scale; adding those would restyle the whole app. */
+@import '@classmoji/ui-components/styles/tokens.css';
+@import '@classmoji/ui-components/styles/components.css';
+
 @custom-variant dark (&:where(.dark, .dark *));
 
 /*
