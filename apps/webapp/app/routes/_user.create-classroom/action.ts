@@ -29,7 +29,7 @@ import {
   suggestContentNamespace,
 } from '@classmoji/utils';
 import { slugify } from './utils';
-import { resolveSourceAccess, SOURCE_ROLES } from './sourceAccess';
+import { resolveSourceAccess, SOURCE_ROLES, API_KEYS_STRIPPED_WARNING } from './sourceAccess';
 
 /** Background work needs Trigger.dev; without it the async phases can't run. */
 const isTriggerConfigured = () =>
@@ -246,12 +246,20 @@ export const action = checkAuth(async ({ request }: { request: Request }) => {
   // `wants*` flags, the phase totals, whether a job is created at all, and the
   // selections persisted on the job for a later retry) reads them from here.
   const contentSelections: Record<string, boolean> = { ...(importConfig?.content ?? {}) };
-  let anyConfigSelected = Object.values(configSelections).some(Boolean);
+  // Two DIFFERENT questions, deliberately not one variable:
+  //   `anyConfigRequested` — what the request asked for, used only to decide
+  //     whether an import was attempted at all. Must stay pre-strip, so that a
+  //     request asking ONLY for API keys still runs the membership gate below
+  //     instead of quietly becoming a no-op that skips it.
+  //   `anyConfigSelected` — what will actually be applied, recomputed after the
+  //     strip and read by every downstream branch.
+  const anyConfigRequested = Object.values(configSelections).some(Boolean);
+  let anyConfigSelected = anyConfigRequested;
   const anyContentSelected = Object.values(contentSelections).some(Boolean);
   const requestedRepos: Array<{ id: string; includeQuizzes?: boolean }> =
     importConfig?.repositories ?? [];
   const importRequested =
-    !!sourceClassroomId && (requestedRepos.length > 0 || anyConfigSelected || anyContentSelected);
+    !!sourceClassroomId && (requestedRepos.length > 0 || anyConfigRequested || anyContentSelected);
 
   /** Per-item notes; surfaced on the response and seeded onto the job row. */
   const importWarnings: string[] = [];
@@ -646,11 +654,19 @@ export const action = checkAuth(async ({ request }: { request: Request }) => {
   if (githubUnavailableNote) {
     successMessage += ` ${githubUnavailableNote}`;
   }
+  // Same treatment, same reason. The generic counter below points at server logs
+  // and at the job row's warning list, and a config-only import has neither: it
+  // writes no ImportJob, and this note is never logged. Said outright or the
+  // user is told "1 item skipped" with nowhere to find out which.
+  if (importWarnings.includes(API_KEYS_STRIPPED_WARNING)) {
+    successMessage += ` ${API_KEYS_STRIPPED_WARNING}`;
+  }
   if (importJobId) {
     successMessage += ' Import continuing in the background.';
   }
-  if (importWarnings.length > 0) {
-    successMessage += ` (${importWarnings.length} item${importWarnings.length === 1 ? '' : 's'} skipped — see server logs)`;
+  const countedWarnings = importWarnings.filter(w => w !== API_KEYS_STRIPPED_WARNING);
+  if (countedWarnings.length > 0) {
+    successMessage += ` (${countedWarnings.length} item${countedWarnings.length === 1 ? '' : 's'} skipped — see server logs)`;
   }
 
   return {

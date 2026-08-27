@@ -103,6 +103,16 @@ describe('resolveSourceAccess', () => {
       expect(access.configSelections).toEqual({});
       expect(access.warnings).toEqual([]);
     });
+
+    // An explicit `false` is not a request, so it must pass through silently —
+    // warning here would tell a teacher their keys were refused when they never
+    // asked for them.
+    it('passes an explicit apiKeys:false through without a warning', () => {
+      const access = resolveSourceAccess(['TEACHER'], { grading: true, apiKeys: false });
+      if (!access.allowed) throw new Error('expected allowed');
+      expect(access.configSelections).toEqual({ grading: true, apiKeys: false });
+      expect(access.warnings).toEqual([]);
+    });
   });
 
   describe('the returned selections are what gets persisted', () => {
@@ -123,6 +133,17 @@ describe('resolveSourceAccess', () => {
       const requested = { grading: true, apiKeys: true };
       resolveSourceAccess(['TEACHER'], requested);
       expect(requested.apiKeys).toBe(true);
+    });
+
+    // The owner path returns early, so it is the branch where an alias could
+    // slip back in unnoticed — nothing downstream mutates the object today, and
+    // that is exactly why a regression here would be silent.
+    it('returns a fresh object on the owner path too', () => {
+      const requested = { grading: true, apiKeys: true };
+      const access = resolveSourceAccess(['OWNER'], requested);
+      if (!access.allowed) throw new Error('expected allowed');
+      expect(access.configSelections).not.toBe(requested);
+      expect(access.configSelections).toEqual(requested);
     });
   });
 

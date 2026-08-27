@@ -55,7 +55,9 @@ export const resolveSourceAccess = (
 
   const isOwner = usable.includes('OWNER');
   if (isOwner || !configSelections.apiKeys) {
-    return { allowed: true, isOwner, configSelections, warnings: [] };
+    // Copied on this branch too, so the caller's object is never aliased and the
+    // "returns a fresh object" contract holds regardless of which path ran.
+    return { allowed: true, isOwner, configSelections: { ...configSelections }, warnings: [] };
   }
 
   // Rewritten to `false` rather than deleted: the key is what the review step

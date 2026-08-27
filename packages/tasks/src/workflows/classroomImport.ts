@@ -251,7 +251,10 @@ function phaseProgress(
  * action.ts). This task never applies `selections.config`; it reads
  * `selections.content` only.
  */
-async function assertSourceAccess(prisma: PrismaClient, job: LoadedImportJob): Promise<void> {
+export async function assertSourceAccess(
+  prisma: PrismaClient,
+  job: LoadedImportJob
+): Promise<void> {
   const membership = await prisma.classroomMembership.findFirst({
     where: {
       classroom_id: job.source_classroom_id,

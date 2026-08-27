@@ -68,8 +68,16 @@ const StepImportModules = ({
   };
 
   const handleSourceChange = (classroomId: string) => {
+    const next = importableClassrooms.find(c => c.id === classroomId);
     setSourceClassroomId(classroomId);
     setSelectedModules(new Map());
+    // Switching to a class the user only TEACHES unmounts the API-keys row, so a
+    // selection made against a previously-picked owned class would be stranded:
+    // still set, still summarised on the review step, and impossible to untick
+    // because the checkbox is gone. Clear it with the source that justified it.
+    if (!next?.is_owner && importSelections.apiKeys) {
+      setImportSelections({ ...importSelections, apiKeys: false });
+    }
   };
 
   const handleSelectAll = () => {
@@ -111,7 +119,7 @@ const StepImportModules = ({
         <div>
           <div className="font-medium">Import from existing classroom</div>
           <div className="text-sm text-gray-500">
-            Copy repositories and assignments from another classroom you own
+            Copy repositories and assignments from another classroom you own or teach
           </div>
         </div>
         <Switch checked={importEnabled} onChange={setImportEnabled} />

@@ -14,6 +14,7 @@ import StepBasicInfo from './StepBasicInfo';
 import StepImportModules from './StepImportModules';
 import StepReview from './StepReview';
 import { slugify, STEPS } from './utils';
+import { SOURCE_ROLES } from './sourceAccess';
 import type { ImportSelections } from './types';
 import type { Route } from './+types/route';
 
@@ -168,7 +169,10 @@ export const loader = async ({ request }: Route.LoaderArgs) => {
         memberships: {
           some: {
             user_id: user.id,
-            role: { in: ['OWNER', 'TEACHER'] },
+            // Shared with the action's re-verification. If these two ever drift,
+            // the picker offers a source the action refuses — a dead end reached
+            // only after the whole wizard has been filled in.
+            role: { in: [...SOURCE_ROLES] },
           },
         },
       },
