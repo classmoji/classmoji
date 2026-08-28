@@ -298,7 +298,14 @@ const SyllabusBotChat = ({
             onBlur={() => setInputFocused(false)}
             disabled={isStreaming || isInitializing}
           />
-          {inputValue || inputFocused ? (
+          {isInitializing ? (
+            // The composer is genuinely disabled while the course content is
+            // being fetched, which can take a while on a cold start. Saying so
+            // is the difference between "waiting" and "broken".
+            <span className="askmoji-input-display askmoji-input-display--empty">
+              Reading the course materials&hellip;
+            </span>
+          ) : inputValue || inputFocused ? (
             <span className="askmoji-input-display">
               {inputValue}
               {!isStreaming && !isInitializing && <span className="askmoji-cursor" />}
