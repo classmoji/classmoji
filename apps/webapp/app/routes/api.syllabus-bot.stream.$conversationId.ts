@@ -15,6 +15,7 @@ import type { LoaderFunctionArgs } from 'react-router';
 import { getAuthSession } from '@classmoji/auth/server';
 import { verifySessionOwnership, AgentType } from '~/utils/agentVerification.server';
 import agentStreamManager from '~/utils/agentStreamManager';
+import { ClassmojiService } from '@classmoji/services';
 
 export async function loader({ params, request }: LoaderFunctionArgs) {
   const conversationId = params.conversationId!;
@@ -42,6 +43,20 @@ export async function loader({ params, request }: LoaderFunctionArgs) {
     if (!(verification as { valid: boolean }).valid) {
       console.warn(
         `[syllabus-bot-stream] Forbidden access: User ${authData.userId} tried to access conversation ${conversationId}`
+      );
+      return new Response('Forbidden', {
+        status: 403,
+        headers: { 'Content-Type': 'text/plain' },
+      });
+    }
+
+    // 2b. Pro gate. Ownership alone isn't enough — a conversation opened while
+    // the classroom was Pro must not keep streaming after the plan lapses.
+    const entitlement =
+      await ClassmojiService.entitlement.canUseSyllabusBotForConversation(conversationId);
+    if (!entitlement.allowed) {
+      console.warn(
+        `[syllabus-bot-stream] Pro required for conversation ${conversationId} (user ${authData.userId})`
       );
       return new Response('Forbidden', {
         status: 403,

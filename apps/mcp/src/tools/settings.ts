@@ -22,7 +22,11 @@
  * return, which carries the raw settings row (API keys included).
  */
 
-import { ClassmojiService, getGitProvider } from '@classmoji/services';
+import {
+  ClassmojiService,
+  ClassroomSettingsEntitlementError,
+  getGitProvider,
+} from '@classmoji/services';
 import { z } from 'zod';
 import { ToolError } from '../mcp/errors.ts';
 import type { ToolDefinition } from '../mcp/registry.ts';
@@ -159,14 +163,25 @@ export const classroomSettingsUpdateTool: ToolDefinition<ClassroomSettingsUpdate
       throw new ToolError('invalid_params', 'Provide at least one setting to update');
     }
 
+    // Settings BEFORE the classroom row: `updateSettings` refuses a Pro-only
+    // field on an unentitled classroom, and doing it first means that refusal
+    // cannot leave a committed `name` change behind with no audit entry.
+    if (Object.keys(settings).length > 0) {
+      try {
+        await ClassmojiService.classroom.updateSettings(classroom.classroomId, settings);
+      } catch (error: unknown) {
+        if (error instanceof ClassroomSettingsEntitlementError) {
+          throw new ToolError('forbidden', error.message, 'PRO_REQUIRED');
+        }
+        throw error;
+      }
+    }
+
     // The Classroom row itself: `name` ONLY, mirroring the web route's
     // PROFILE_FIELDS whitelist (slug is the key in every URL and two HMAC
     // credentials; git_org_id would move the classroom to another org).
     if (args.name !== undefined) {
       await ClassmojiService.classroom.update(classroom.classroomId, { name: args.name });
-    }
-    if (Object.keys(settings).length > 0) {
-      await ClassmojiService.classroom.updateSettings(classroom.classroomId, settings);
     }
 
     await writeAudit(ctx, {

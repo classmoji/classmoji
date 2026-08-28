@@ -1,6 +1,23 @@
 import getPrisma from '@classmoji/database';
 import { GitHubProvider } from '../git/index.ts';
+import * as entitlementService from './entitlement.service.ts';
 import type { Prisma, Role } from '@prisma/client';
+
+/**
+ * Thrown when a settings write is refused on plan grounds. A distinct class so
+ * callers can map it to a 403 rather than letting it surface as a 500 — see
+ * `admin.$class.settings.content` and `apps/mcp/src/tools/settings.ts`, both of
+ * which catch it. A caller that does not catch it gets a 500, which is the safe
+ * direction: the write is refused either way.
+ */
+export class ClassroomSettingsEntitlementError extends Error {
+  readonly reason = 'pro_required';
+
+  constructor(message: string) {
+    super(message);
+    this.name = 'ClassroomSettingsEntitlementError';
+  }
+}
 
 /**
  * Whitelist of setting fields that are SAFE to expose to the client.
@@ -691,6 +708,29 @@ export const updateSettings = async (
   classroomId: string,
   updates: Prisma.ClassroomSettingsUncheckedCreateWithoutClassroomInput
 ) => {
+  // Turning the syllabus bot ON is Pro-only. Enforced here rather than in the
+  // callers because this upsert is the write path shared by the web settings
+  // actions and the MCP classroom_settings_update tool. Turning it OFF is
+  // always allowed — the feature predates the gate, so Free classrooms with a
+  // stale `true` exist and their owners must be able to clear it.
+  //
+  // NOT the only writer: `classroomConfigImport` and the classroom-creation
+  // paths write `classroomSettings` directly. Those are handled at their own
+  // sites (config import gates the field in; creation paths default it false).
+  // Any NEW raw writer has to account for this itself.
+  //
+  // Tested against anything other than `false`/absent rather than `=== true`,
+  // so a JSON body carrying the string "true" cannot slip past a strict
+  // comparison into Prisma.
+  if (updates.syllabus_bot_enabled !== undefined && updates.syllabus_bot_enabled !== false) {
+    const entitlement = await entitlementService.canUseSyllabusBot(classroomId);
+    if (!entitlement.allowed) {
+      throw new ClassroomSettingsEntitlementError(
+        'The syllabus assistant requires a Pro subscription'
+      );
+    }
+  }
+
   return getPrisma().classroomSettings.upsert({
     where: { classroom_id: classroomId },
     create: {
