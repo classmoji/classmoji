@@ -110,7 +110,11 @@ export const findStudentByLoginInClassroom = async (classroomId: string, login: 
       comment: true,
       letter_grade: true,
       user: {
-        select: { id: true, name: true, login: true, image: true },
+        // `school_id` is owner-only contact info (see
+        // apps/webapp/app/utils/studentFields.server.ts). Selected here because
+        // the student detail drawer shows it, but callers still choose what to
+        // return — the grades drawer projects it away.
+        select: { id: true, name: true, login: true, image: true, school_id: true },
       },
     },
   });
