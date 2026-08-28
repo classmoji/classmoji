@@ -50,9 +50,16 @@ interface StudentRepoAssignment {
   is_late_override: boolean;
   num_late_hours: number;
   extension_hours: number;
-  repository: {
+  // The student's own repo. Named `repository` until 574339e renamed the
+  // relation (module -> repository, repository -> gitRepo) in services; this
+  // interface kept the old name, which is why the compiler never flagged the
+  // two dereferences below it.
+  git_repo: {
     name: string;
-    student_id: string;
+    // Nullable in the schema: a GitRepo belongs to EITHER a student or a team.
+    // Every row here is a student repo — findAllForStudent filters on
+    // git_repo.student_id — but the type must not claim more than the schema.
+    student_id: string | null;
     [key: string]: unknown;
   };
   graders: Array<{ grader: { id: string; login: string; name: string } }>;
@@ -255,9 +262,19 @@ const SingleStudentView = (props: SingleStudentViewProps) => {
               repositoryAssignment={{
                 id: record.id,
                 assignment_id: record.assignment_id,
-                studentId: record.repository.student_id,
+                // Mirrors the same EmojiGrader call in
+                // assistant.$class_.grading/RepositoryAssignmentsTable.tsx,
+                // which was updated when the relation was renamed. This one was
+                // missed, and `record.repository` has been undefined ever since
+                // — `.student_id` on it threw during the initial render of the
+                // auto-expanded assignment table, taking the whole page down for
+                // any student with graded work.
+                studentId: record.git_repo.student_id ?? undefined,
                 grades: record.grades,
-                repository: record.repository,
+                // EmojiGrader reads `repository?.name` to build the repoName it
+                // posts to addGrade, so this being undefined silently submitted
+                // a null repo name once the crash above was out of the way.
+                repository: record.git_repo,
               }}
               emojiMappings={emojiMappings as Record<string, unknown>}
             />
