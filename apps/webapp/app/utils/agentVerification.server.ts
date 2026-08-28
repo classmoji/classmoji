@@ -130,12 +130,30 @@ export async function verifySessionOwnership({
     const handler = (message: {
       type: string;
       requestId?: string;
-      payload: VerificationResult;
+      payload: VerificationResult & { error?: string; code?: string };
     }) => {
       // Filter by requestId for proper correlation
-      if (message.type === 'SESSION_VERIFIED' && message.requestId === requestId) {
+      if (message.requestId !== requestId) return;
+
+      if (message.type === 'SESSION_VERIFIED') {
         cleanup();
         resolve(message.payload);
+        return;
+      }
+
+      // ai-agent answers a rejected signature with ERROR, not SESSION_VERIFIED.
+      // Listening only for SESSION_VERIFIED meant a hard auth failure looked
+      // exactly like silence: the promise hung for the full 5s and the caller
+      // then reported a *timeout*, which the SSE route maps to 503 "try again".
+      // That is how a clock-skew auth rejection surfaced as a transient outage.
+      if (message.type === 'ERROR') {
+        cleanup();
+        reject(
+          new Error(
+            `ai-agent rejected verification: ${message.payload?.error || 'unknown error'}` +
+              (message.payload?.code ? ` (${message.payload.code})` : '')
+          )
+        );
       }
     };
 
