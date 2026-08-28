@@ -59,6 +59,23 @@ export async function loader({ params, request }: Route.LoaderArgs) {
     });
   }
 
+  // Pro-gated, same as quizzes. Entitlement is checked on every request rather
+  // than baked into settings, so a lapsed plan stops serving the bot without
+  // anyone rewriting syllabus_bot_enabled.
+  const entitlement = await ClassmojiService.entitlement.canUseSyllabusBot(classroom.id);
+  if (!entitlement.allowed) {
+    const staff = ['OWNER', 'TEACHER'].includes(membership!.role);
+    return jsonResponse({
+      enabled: false,
+      hasContentRepo: false,
+      userRole: membership!.role,
+      isInstructor: staff,
+      orgName: classroom.name,
+      // Staff get a reason so the UI can explain/upsell; students just see it off.
+      ...(staff ? { reason: entitlement.reason } : {}),
+    });
+  }
+
   const settings = await ClassmojiService.classroom.getClassroomSettingsForServer(classroom.id);
   const isInstructor = ['OWNER', 'TEACHER'].includes(membership!.role);
 
@@ -116,6 +133,12 @@ async function handleInitConversation(request: Request, classSlug: string, formD
     attemptedAction: 'init_conversation',
   });
   assertClassroomMutationAllowed({ status: classroom.status, role: membership!.role });
+
+  // After the access check, so this never reveals a classroom's plan to a non-member.
+  const entitlement = await ClassmojiService.entitlement.canUseSyllabusBot(classroom.id);
+  if (!entitlement.allowed) {
+    return jsonResponse({ error: 'The syllabus assistant requires a Pro subscription' }, 403);
+  }
 
   const settings = await ClassmojiService.classroom.getClassroomSettingsForServer(classroom.id);
 
@@ -225,6 +248,14 @@ async function handleSendMessage(request: Request, classSlug: string, formData: 
     attemptedAction: 'send_message',
   });
   assertClassroomMutationAllowed({ status: smClassroom.status, role: smMembership!.role });
+
+  // Gate the expensive path too — a session created before the plan lapsed must
+  // not keep buying inference. endConversation is deliberately NOT gated, so an
+  // already-open session can still be cleaned up.
+  const smEntitlement = await ClassmojiService.entitlement.canUseSyllabusBot(smClassroom.id);
+  if (!smEntitlement.allowed) {
+    return jsonResponse({ error: 'The syllabus assistant requires a Pro subscription' }, 403);
+  }
 
   if (!conversationId || !content) {
     return jsonResponse({ error: 'Missing conversationId or content' }, 400);
