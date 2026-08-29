@@ -437,7 +437,10 @@
 /* ── Input bar ── */
 .askmoji-input-bar {
   display: flex;
-  align-items: center;
+  /* flex-start, not center: the composer grows downward as the text wraps,
+     and the prompt chevron should stay on the first line rather than drift
+     to the vertical middle of a five-line block. */
+  align-items: flex-start;
   gap: 8px;
   padding: 12px 16px;
   background: var(--am-header-bg);
@@ -445,13 +448,17 @@
   flex-shrink: 0;
 }
 
-
 .askmoji-input-wrap {
   flex: 1;
+  /* Flex items default to min-width:auto, which floors them at their content
+     width -- long text pushes the box wider instead of wrapping inside it.
+     This is what let the line run off sideways. */
+  min-width: 0;
   position: relative;
   min-height: 20px;
-  display: flex;
-  align-items: center;
+  /* Grow with the text, but stop before the composer eats the transcript. */
+  max-height: 96px;
+  overflow-y: auto;
   cursor: text;
 }
 
@@ -464,13 +471,19 @@
   cursor: text;
 }
 
+/* The real <input> above is invisible and only holds the value; this span is
+   what the user actually sees, so wrapping is decided here, not on the input.
+   It stays inline so the blinking cursor flows after the last character
+   instead of being pinned beside a flex line box. */
 .askmoji-input-display {
   font-size: 14px;
+  line-height: 20px;
   color: var(--am-text-moji);
-  white-space: pre;
+  /* pre-wrap keeps typed runs of spaces but allows line breaks; anywhere
+     breaks an unbroken token (a pasted URL) rather than overflowing. */
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
   pointer-events: none;
-  display: flex;
-  align-items: center;
 }
 
 .askmoji-input-display--empty {
