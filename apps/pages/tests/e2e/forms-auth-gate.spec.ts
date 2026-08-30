@@ -31,23 +31,38 @@ import { getTestClassroomSlug, loginAs } from '../helpers';
 const CLASS = getTestClassroomSlug();
 
 /**
- * A slug no form holds. Deliberate: the public fill route must answer for a
- * stranger BEFORE anything is known about the form, so asserting against a
- * missing form proves the 200 comes from the gate and not from a fixture.
+ * A slug no form holds. Deliberate, and this file stays FIXTURE-FREE: what is
+ * under test is the gate, not the form. With no form in the database the only
+ * thing that can decide the answer is `root.tsx`, so "did the request reach a
+ * route module at all?" is asked with nothing else in the way.
+ *
+ * The answer for a missing form is now 404 (the fill route's own decision — a
+ * DRAFT and a never-created slug are indistinguishable on purpose). A 404 and a
+ * 200 both prove the same thing here; a 302 to the webapp login would not.
+ * `forms-fill.spec.ts` covers the 200 against a real published form.
  */
 const SOME_FORM = 'a-form-that-does-not-exist';
 
+/** The gate's failure mode: a hand-off to the webapp login. */
+const isLoginRedirect = (status: number, location: string | undefined): boolean =>
+  status === 302 && Boolean(location?.includes('redirect='));
+
 test.describe('forms auth gate', () => {
-  test('anonymous GET of a public fill path is 200, not a login redirect', async ({ page }) => {
+  test('anonymous GET of a public fill path reaches the route, not the login', async ({ page }) => {
     const response = await page.request.get(`/${CLASS}/forms/${SOME_FORM}`, { maxRedirects: 0 });
-    expect(response.status()).toBe(200);
+    // The route answered for itself: no such form.
+    expect(response.status()).toBe(404);
+    expect(isLoginRedirect(response.status(), response.headers()['location'])).toBe(false);
   });
 
-  test('anonymous GET of the magic-link verify path is 200', async ({ page }) => {
+  test('anonymous GET of the magic-link verify path reaches the route', async ({ page }) => {
+    // No token, so the route renders its "this link is incomplete" state — a
+    // 200, and emphatically not a login redirect.
     const response = await page.request.get(`/${CLASS}/forms/${SOME_FORM}/verify`, {
       maxRedirects: 0,
     });
     expect(response.status()).toBe(200);
+    expect(await response.text()).toContain('Request a new link');
   });
 
   test('anonymous GET of the admin list redirects to the webapp login', async ({ page }) => {
@@ -103,8 +118,13 @@ test.describe('forms auth gate', () => {
     expect(html).not.toContain('New Page');
   });
 
-  test('the fill page does not inherit the pages sidebar', async ({ page }) => {
-    const response = await page.request.get(`/${CLASS}/forms/${SOME_FORM}`, { maxRedirects: 0 });
+  test('the verify page does not inherit the pages sidebar', async ({ page }) => {
+    // The public surface with no fixture behind it, so this stays fixture-free.
+    // `forms-fill.spec.ts` makes the same assertion against a real, rendered
+    // form, where the layout would have the most to leak.
+    const response = await page.request.get(`/${CLASS}/forms/${SOME_FORM}/verify`, {
+      maxRedirects: 0,
+    });
     const html = await response.text();
 
     // If the forms subtree were nested under the `$classroomSlug` layout, that
@@ -112,7 +132,5 @@ test.describe('forms auth gate', () => {
     // classroom's page list — would be in a document an anonymous stranger is
     // allowed to see.
     expect(html).not.toContain('New Page');
-    // And the placeholder really is what rendered.
-    expect(html).toContain('will be fillable here shortly');
   });
 });

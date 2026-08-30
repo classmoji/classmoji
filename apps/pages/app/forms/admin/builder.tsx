@@ -59,6 +59,28 @@ const fieldsOf = (payload: unknown): FormField[] => {
   return ((payload as { fields?: FormField[] }).fields ?? []) as FormField[];
 };
 
+/**
+ * A stored instant as the local wall-clock string a `datetime-local` input
+ * wants (`YYYY-MM-DDTHH:mm`).
+ *
+ * `toISOString().slice(0, 16)` is the tempting one-liner and it is wrong: it
+ * yields UTC, so an instructor in New York setting "5pm" would see "10pm" on
+ * the next page load and, believing they had mistyped, would fix it — moving
+ * the real deadline five hours earlier.
+ *
+ * Returns '' for an unset or unparseable value, which is what clears the input.
+ */
+const toLocalInput = (iso: string): string => {
+  if (!iso) return '';
+  const when = new Date(iso);
+  if (Number.isNaN(when.getTime())) return '';
+  const pad = (value: number) => String(value).padStart(2, '0');
+  return (
+    `${when.getFullYear()}-${pad(when.getMonth() + 1)}-${pad(when.getDate())}` +
+    `T${pad(when.getHours())}:${pad(when.getMinutes())}`
+  );
+};
+
 export const loader = async ({
   params,
   request,
@@ -96,7 +118,12 @@ export const loader = async ({
       published: Boolean(form.current_revision_id),
       version: revisions[0]?.version ?? 0,
       responseCap: form.response_cap,
-      closesAt: form.closes_at ? form.closes_at.toISOString().slice(0, 10) : '',
+      // The full instant, not a date. The browser turns it into the local
+      // wall-clock value the `datetime-local` input wants, because only the
+      // browser knows what zone "5pm" means to the person reading it — the
+      // server rendering that string would be answering in ITS zone and
+      // silently moving the deadline for everyone else.
+      closesAtIso: form.closes_at ? form.closes_at.toISOString() : '',
       allowMultiple: form.allow_multiple,
     },
     fields: fieldsOf(form.draft_fields),
@@ -230,6 +257,20 @@ export default function FormBuilder() {
   const [expanded, setExpanded] = useState<string | null>(null);
   const [dirty, setDirty] = useState(false);
   const [title, setTitle] = useState(data.form.title);
+
+  /**
+   * The close time, as local wall-clock text.
+   *
+   * Starts EMPTY and is filled in on mount rather than rendered from the
+   * loader: the conversion needs the browser's zone, which the server does not
+   * have, so rendering it server-side would be a hydration mismatch on every
+   * form that has a close time — and React would silently keep whichever value
+   * it happened to prefer.
+   */
+  const [closesAt, setClosesAt] = useState('');
+  useEffect(() => {
+    setClosesAt(toLocalInput(data.form.closesAtIso));
+  }, [data.form.closesAtIso]);
 
   const status = data.form.status;
   const isDraft = status === 'DRAFT';
@@ -436,14 +477,28 @@ export default function FormBuilder() {
         <label className="text-xs font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">
           Closes
           <input
-            type="date"
-            defaultValue={data.form.closesAt}
+            type="datetime-local"
+            value={closesAt}
+            onChange={event => setClosesAt(event.target.value)}
             onBlur={event => {
-              if (event.target.value === data.form.closesAt) return;
-              post({ intent: 'save-meta', closesAt: event.target.value || null });
+              const next = event.target.value;
+              if (next === toLocalInput(data.form.closesAtIso)) return;
+              // An INSTANT goes to the server. `new Date('2026-01-12T17:00')`
+              // is parsed in the browser's zone, which is the zone the
+              // instructor typed in; sending the bare local string instead
+              // would be re-parsed in the SERVER's zone and land hours off.
+              post({
+                intent: 'save-meta',
+                closesAt: next ? new Date(next).toISOString() : null,
+              });
             }}
             className="mt-1 block rounded-md border border-gray-300 bg-white px-2 py-1 text-sm normal-case tracking-normal text-gray-900 dark:border-gray-600 dark:bg-gray-900 dark:text-white"
           />
+          {closesAt ? (
+            <span className="mt-1 block text-[11px] font-normal normal-case tracking-normal text-gray-400">
+              Your local time
+            </span>
+          ) : null}
         </label>
         <label className="text-xs font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">
           Response cap

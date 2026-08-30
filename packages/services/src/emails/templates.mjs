@@ -208,6 +208,58 @@ Need help, email us at hello@classmoji.io`,
   },
 
   {
+    name: 'Form — Verify link',
+    alias: 'form-verify-link',
+    // "Confirm", not "verify": the recipient is finishing something they
+    // started, not proving something about themselves. The form's title is in
+    // the subject because someone who filled in three of these needs to know
+    // which one this is.
+    subject: '[Classmoji] Confirm your response to {{{FORM_TITLE}}}',
+    // Every one of these is user-authored (a form title, a classroom name, a
+    // name the filler typed about themselves) and Resend substitutes variables
+    // RAW — `formResponse.service` runs them through `escapeVars` before they
+    // get here. Keys are UPPERCASE to match what that service composes.
+    variables: [
+      { key: 'RECIPIENT_NAME', type: 'string', fallbackValue: 'there' },
+      { key: 'FORM_TITLE', type: 'string' },
+      { key: 'CLASSROOM_NAME', type: 'string' },
+      { key: 'VERIFY_URL', type: 'string' },
+      { key: 'EXPIRES_HOURS', type: 'string', fallbackValue: '48' },
+    ],
+    html: shell({
+      title: 'Confirm your form response',
+      preheader: 'Click to confirm your response to {{{FORM_TITLE}}}.',
+      rows: [
+        heading('Confirm your response'),
+        text(
+          'Hi {{{RECIPIENT_NAME}}}, you filled in <strong>{{{FORM_TITLE}}}</strong> for {{{CLASSROOM_NAME}}}. Open it to look your answers over and confirm them.'
+        ),
+        // Said plainly and BEFORE the button. Someone who assumes they are
+        // already done will otherwise never find out that an unconfirmed
+        // response is swept away after two days.
+        text('Your response is not recorded until you do.', {
+          size: 14,
+          lh: 22,
+          color: MUTED,
+          pb: 20,
+        }),
+        button('{{{VERIFY_URL}}}', 'Review and confirm'),
+        text(
+          'This link works for {{{EXPIRES_HOURS}}} hours and can be used once. Later on, filling the form in again with the same address will email you a fresh link to the response you already have.',
+          { size: 14, lh: 22, color: MUTED, pb: 8 }
+        ),
+        // A public form is a link anyone can share, so the recipient may
+        // genuinely not have submitted anything — that has to be a real option,
+        // and "ignore this" has to be the first thing the sentence says.
+        text(
+          'If you did not fill in this form, ignore this email. Nothing is recorded, and the entry disappears on its own.',
+          { size: 14, lh: 22, color: MUTED, pb: 24 }
+        ),
+      ],
+    }),
+  },
+
+  {
     name: 'Regrade — Requested',
     alias: 'regrade-requested',
     subject: '[Classmoji] Action required: Regrade requested',
