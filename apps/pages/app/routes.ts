@@ -41,6 +41,12 @@ export default [
     route('new', 'forms/admin/new.tsx'),
   ]),
   route(':classroomSlug/forms/:formSlug/edit', 'forms/admin/builder.tsx'),
+  route(':classroomSlug/forms/:formSlug/responses', 'forms/admin/responses.tsx'),
+  // A resource route (no component): it answers with text/csv and has no
+  // business rendering anything. Static `responses` outranks `:formSlug`, and
+  // `RESERVED_FORM_SLUGS` refuses `responses` at create, so neither of these can
+  // ever be shadowed by a real form.
+  route(':classroomSlug/forms/:formSlug/responses/export', 'forms/admin/responsesExport.ts'),
 
   // The public fill surfaces, exempted from the root login redirect (see
   // app/utils/formsPaths.ts). Placeholders until the renderer lands; they are

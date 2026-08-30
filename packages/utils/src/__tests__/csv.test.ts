@@ -1,0 +1,77 @@
+import { describe, expect, it } from 'vitest';
+
+import { csvCell, csvTextCell, toCsv } from '../csv.ts';
+
+describe('csvTextCell', () => {
+  it('marks text that a spreadsheet would otherwise read as a formula', () => {
+    expect(csvTextCell('=SUM(A1:A9)')).toBe("'=SUM(A1:A9)");
+    expect(csvTextCell('+1 on this')).toBe("'+1 on this");
+    expect(csvTextCell('-Anne')).toBe("'-Anne");
+    expect(csvTextCell('@channel')).toBe("'@channel");
+    expect(csvTextCell('\tindented')).toBe("'\tindented");
+    expect(csvTextCell('\rreturn')).toBe("'\rreturn");
+  });
+
+  it('leaves ordinary text exactly as it was typed', () => {
+    expect(csvTextCell('Maya Chen')).toBe('Maya Chen');
+    expect(csvTextCell('emailed 8/25 — waiting')).toBe('emailed 8/25 — waiting');
+    // Only the FIRST character decides. A formula character anywhere else is
+    // ordinary punctuation and must not move the rest of the cell.
+    expect(csvTextCell('a = b')).toBe('a = b');
+    expect(csvTextCell('')).toBe('');
+  });
+});
+
+describe('csvCell', () => {
+  it('passes numbers through untouched', () => {
+    // The case the string-only rule exists for: a negative number is a number,
+    // not text that happens to start with a minus sign.
+    expect(csvCell(-5)).toBe('-5');
+    expect(csvCell(0)).toBe('0');
+    expect(csvCell(7.5)).toBe('7.5');
+  });
+
+  it('renders nothing for null and undefined', () => {
+    expect(csvCell(null)).toBe('');
+    expect(csvCell(undefined)).toBe('');
+  });
+
+  it('renders booleans as spreadsheet booleans', () => {
+    expect(csvCell(true)).toBe('TRUE');
+    expect(csvCell(false)).toBe('FALSE');
+  });
+
+  it('applies text-cell handling to strings', () => {
+    expect(csvCell('=1+1')).toBe("'=1+1");
+    expect(csvCell('plain')).toBe('plain');
+  });
+
+  it('renders a non-finite number as empty rather than the literal NaN', () => {
+    expect(csvCell(Number.NaN)).toBe('');
+    expect(csvCell(Number.POSITIVE_INFINITY)).toBe('');
+  });
+});
+
+describe('toCsv', () => {
+  it('quotes cells carrying a delimiter, a quote, or a newline', () => {
+    expect(toCsv([['a,b', 'say "hi"', 'line\nbreak']])).toBe('"a,b","say ""hi""","line\nbreak"');
+  });
+
+  it('joins rows with CRLF and leaves simple cells unquoted', () => {
+    expect(
+      toCsv([
+        ['Name', 'Score'],
+        ['Maya', 9],
+      ])
+    ).toBe('Name,Score\r\nMaya,9');
+  });
+
+  it('marks a formula-shaped cell AND quotes it when both rules apply', () => {
+    expect(toCsv([['=CONCAT(A1,"x")']])).toBe('"\'=CONCAT(A1,""x"")"');
+  });
+
+  it('renders a ragged row as its own cells, and an empty document as empty', () => {
+    expect(toCsv([])).toBe('');
+    expect(toCsv([[], ['a']])).toBe('\r\na');
+  });
+});

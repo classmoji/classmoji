@@ -19,7 +19,15 @@ import { isDisplayField } from './fieldTypes.ts';
 
 const REQUIRED = <span className="ml-0.5 text-red-500">*</span>;
 
-function FieldShell({ field, children }: { field: FormField; children?: React.ReactNode }) {
+/**
+ * Label + required marker + control slot + help text.
+ *
+ * Exported because the response drawer renders stored ANSWERS through the same
+ * shell (see `AnswerView.tsx`): an instructor reading a submission should see
+ * the questions laid out exactly as the person answering them did, and two
+ * shells would drift into two different-looking forms.
+ */
+export function FieldShell({ field, children }: { field: FormField; children?: React.ReactNode }) {
   const label = field.label as string | undefined;
   const help = field.help as string | undefined;
 

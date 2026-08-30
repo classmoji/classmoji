@@ -326,10 +326,19 @@ export default function FormsList() {
                     </select>
                   </td>
                   <td className="px-4 py-3 text-sm text-gray-600 dark:text-gray-300">
-                    {form.responses}
-                    {form.responseCap ? (
-                      <span className="text-gray-400"> / {form.responseCap}</span>
-                    ) : null}
+                    {/* The count IS the way in: the responses surface has no
+                        nav entry of its own, and a form's responses are only
+                        ever reached through the form. */}
+                    <Link
+                      to={`/${classroomSlug}/forms/${form.slug}/responses`}
+                      title={`Responses to ${form.title}`}
+                      className="hover:text-blue-600 hover:underline dark:hover:text-blue-400"
+                    >
+                      {form.responses}
+                      {form.responseCap ? (
+                        <span className="text-gray-400"> / {form.responseCap}</span>
+                      ) : null}
+                    </Link>
                   </td>
                   <td className="px-4 py-3 text-sm text-gray-500 dark:text-gray-400">
                     {form.closesAt ? dayjs(form.closesAt).format('MMM D, YYYY') : '—'}
