@@ -1030,6 +1030,42 @@ export async function requireStudentAccess(
   });
 }
 
+/**
+ * Throws a 403 Response unless the classroom holds an active PRO subscription.
+ * Use after a classroom access check in loaders/actions that gate pro-only
+ * features (quizzes, the website settings tab, forms).
+ *
+ * The tier decision itself lives in `subscription.getProStateForClassroomId` —
+ * this is only the HTTP shell around it. The `ends_at` test used to be inlined
+ * here and hand-copied into the MCP server and `useSubscription`, which is
+ * exactly how a lapsed `{tier:'PRO', ends_at: <past>}` row could keep a feature
+ * open in one surface after it had closed in another. It also resolved the
+ * owner as `memberships[0]`, so a multi-owner classroom's tier depended on row
+ * order.
+ *
+ * Takes a SLUG: slugs are globally unique (schema.prisma, `slug String
+ * @unique`), so this resolves to exactly one classroom. A slug nobody holds is
+ * a 403 rather than a 404 — this always runs after an access check that already
+ * proved the classroom exists, so the only way here is a race, and refusing is
+ * the safe end of it.
+ *
+ * LIVES HERE, not in the webapp: apps/pages gates the forms subtree with the
+ * same rule, and apps/mcp still hand-mirrors this decision (its own batch will
+ * retire that copy). `apps/webapp/app/utils/helpers.ts` re-exports this name, so
+ * every existing webapp call site — and every test that mocks `~/utils/helpers`
+ * — is unchanged.
+ */
+export const assertProTier = async (classroomSlug: string) => {
+  const classroom = await ClassmojiService.classroom.findBySlug(classroomSlug);
+  const proState = classroom
+    ? await ClassmojiService.subscription.getProStateForClassroomId(classroom.id)
+    : null;
+
+  if (!proState?.isPro) {
+    throw new Response('This feature requires a Pro subscription', { status: 403 });
+  }
+};
+
 // Pure decision logic lives in ./predicates.ts (side-effect-free, shared
 // with apps/mcp); this module keeps the webapp's Response-throwing wrappers.
 export * from './predicates.ts';

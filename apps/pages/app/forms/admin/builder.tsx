@@ -1,0 +1,581 @@
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { Link, useFetcher, useLoaderData, type SubmitTarget } from 'react-router';
+import {
+  DndContext,
+  KeyboardSensor,
+  PointerSensor,
+  closestCenter,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+} from '@dnd-kit/core';
+import {
+  SortableContext,
+  arrayMove,
+  sortableKeyboardCoordinates,
+  verticalListSortingStrategy,
+} from '@dnd-kit/sortable';
+import { IconLock, IconPlus } from '@tabler/icons-react';
+import type { FormField } from '@classmoji/services/form-contract';
+
+import { ClassmojiService } from '~/utils/db.server.ts';
+import { assertFormAdmin, formMutationBlocked } from '~/utils/formAuth.server.ts';
+import FormPreview from '~/components/forms/FormPreview.tsx';
+import FieldCard from '~/components/forms/builder/FieldCard.tsx';
+import type { ScopeChoices } from '~/components/forms/builder/FieldConfig.tsx';
+import { FIELD_TYPE_META, makeField } from '~/components/forms/fieldTypes.ts';
+
+/**
+ * The builder: a field LIST on the left, a live preview on the right.
+ *
+ * ── What the client edits ──────────────────────────────────────────────────
+ * The NORMALIZED definition the server stored, never a translated editing
+ * shape. The loader hands back `draft_fields` exactly as `parseFormDefinition`
+ * left it, the builder patches objects in place (minting ids for anything new),
+ * and the save posts the result straight back through the same parse. Field ids
+ * therefore survive every edit, which is what keeps answers collected against
+ * an earlier revision pointing at the fields they were given.
+ *
+ * ── Saving vs. publishing ──────────────────────────────────────────────────
+ * `form.service.update` accepts a field list only while the form is a DRAFT:
+ * once responses can exist, a changed definition is a new REVISION rather than
+ * an edit of the one people already answered. So there are two paths, and the
+ * second is not "save then publish":
+ *
+ *   DRAFT   → Save writes draft_fields. Publish snapshots them into revision 1.
+ *   OPEN /  → Save is disabled. "Publish a new version" runs, server-side and
+ *   CLOSED    in one action, quickUpdate(DRAFT) → update(fields) → publish() —
+ *             the only sequence the service permits, and one the client must
+ *             not attempt as three round trips, because a failure between them
+ *             would leave a live form parked in DRAFT.
+ */
+
+type FormAccess = 'PUBLIC' | 'CLASSROOM';
+type FormStatus = 'DRAFT' | 'OPEN' | 'CLOSED';
+
+const fieldsOf = (payload: unknown): FormField[] => {
+  if (!payload) return [];
+  if (Array.isArray(payload)) return payload as FormField[];
+  return ((payload as { fields?: FormField[] }).fields ?? []) as FormField[];
+};
+
+export const loader = async ({
+  params,
+  request,
+}: {
+  params: Record<string, string | undefined>;
+  request: Request;
+}) => {
+  const classroomSlug = params.classroomSlug!;
+  const { classroom } = await assertFormAdmin(classroomSlug, request, { action: 'edit_form' });
+
+  const form = await ClassmojiService.form.findBySlug(classroom.id, params.formSlug!, {
+    includeCurrentRevision: true,
+  });
+  if (!form) throw new Response('Form not found', { status: 404 });
+
+  // Team-review scopes. Read here rather than in the component because both
+  // lists are classroom-scoped data and the picker must never be able to name a
+  // tag or an assignment from another classroom.
+  const [tags, repositories] = await Promise.all([
+    ClassmojiService.organizationTag.findByClassroomId(classroom.id),
+    ClassmojiService.repository.findByClassroomId(classroom.id),
+  ]);
+
+  const revisions = (form as { revisions?: Array<{ version: number }> }).revisions ?? [];
+
+  return {
+    classroomSlug,
+    form: {
+      id: form.id,
+      title: form.title,
+      slug: form.slug,
+      description: form.description,
+      access: form.access as FormAccess,
+      status: form.status as FormStatus,
+      published: Boolean(form.current_revision_id),
+      version: revisions[0]?.version ?? 0,
+      responseCap: form.response_cap,
+      closesAt: form.closes_at ? form.closes_at.toISOString().slice(0, 10) : '',
+      allowMultiple: form.allow_multiple,
+    },
+    fields: fieldsOf(form.draft_fields),
+    scopes: {
+      tags: tags.map(tag => ({ id: tag.id, name: tag.name })),
+      repositories: repositories
+        .filter(repo => repo.type === 'GROUP')
+        .map(repo => ({ id: repo.id, title: repo.title })),
+    } satisfies ScopeChoices,
+  };
+};
+
+export const action = async ({
+  params,
+  request,
+}: {
+  params: Record<string, string | undefined>;
+  request: Request;
+}) => {
+  const classroomSlug = params.classroomSlug!;
+  const { classroom, userId, membership } = await assertFormAdmin(classroomSlug, request, {
+    action: 'edit_form',
+  });
+
+  const blocked = formMutationBlocked(classroom, membership.role);
+  if (blocked) return blocked;
+
+  const body = (await request.json()) as {
+    intent?: string;
+    fields?: unknown;
+    title?: string;
+    access?: FormAccess;
+    responseCap?: number | null;
+    closesAt?: string | null;
+    allowMultiple?: boolean;
+  };
+
+  // Resolve by (classroom, slug), never by an id from the request body: the
+  // form is addressed by the same pair the URL was authorized against, so a
+  // form in another classroom is unreachable from here by construction.
+  const form = await ClassmojiService.form.findBySlug(classroom.id, params.formSlug!);
+  if (!form) throw new Response('Form not found', { status: 404 });
+
+  const audit = (action: 'UPDATE', tool: string, data: Record<string, unknown> = {}) =>
+    ClassmojiService.audit.create({
+      user_id: userId,
+      classroom_id: classroom.id,
+      role: membership.role,
+      resource_type: 'FORMS',
+      resource_id: form.id,
+      action,
+      data: { tool, slug: form.slug, ...data },
+    });
+
+  try {
+    switch (body.intent) {
+      case 'save-fields': {
+        await ClassmojiService.form.update(form.id, { fields: body.fields });
+        await audit('UPDATE', 'forms.builder.save-fields');
+        return { ok: true, savedAt: new Date().toISOString() };
+      }
+
+      case 'publish': {
+        // A draft with unsaved edits must be written before it is snapshotted,
+        // or Publish would quietly ship the previously saved list.
+        if (body.fields !== undefined) {
+          await ClassmojiService.form.update(form.id, { fields: body.fields });
+        }
+        const { revision } = await ClassmojiService.form.publish(form.id);
+        await audit('UPDATE', 'forms.builder.publish', { version: revision.version });
+        return { ok: true, published: true, version: revision.version };
+      }
+
+      case 'new-version': {
+        // The only sequence `form.service` allows for editing a live form. All
+        // three steps run here so a failure cannot strand an OPEN form in
+        // DRAFT with a half-written definition.
+        await ClassmojiService.form.quickUpdate(form.id, { status: 'DRAFT' });
+        await ClassmojiService.form.update(form.id, { fields: body.fields });
+        const { revision } = await ClassmojiService.form.publish(form.id);
+        await audit('UPDATE', 'forms.builder.new-version', { version: revision.version });
+        return { ok: true, published: true, version: revision.version };
+      }
+
+      case 'save-meta': {
+        await ClassmojiService.form.update(form.id, {
+          ...(body.title !== undefined ? { title: body.title } : {}),
+          ...(body.access !== undefined ? { access: body.access } : {}),
+          ...(body.responseCap !== undefined ? { response_cap: body.responseCap } : {}),
+          ...(body.closesAt !== undefined
+            ? { closes_at: body.closesAt ? new Date(body.closesAt) : null }
+            : {}),
+          ...(body.allowMultiple !== undefined ? { allow_multiple: body.allowMultiple } : {}),
+        });
+        await audit('UPDATE', 'forms.builder.save-meta');
+        return { ok: true, savedAt: new Date().toISOString() };
+      }
+
+      default:
+        return { error: 'Unknown intent' };
+    }
+  } catch (error) {
+    const code = (error as { code?: string }).code;
+    // Every one of these is a rule the service owns and the UI should explain
+    // rather than re-implement.
+    if (
+      code === 'FORM_NOT_DRAFT' ||
+      code === 'FORM_ACCESS_FROZEN' ||
+      code === 'FORM_NO_FIELDS' ||
+      code === 'FORM_DEFINITION_INVALID' ||
+      code === 'FORM_DEFINITION_TOO_LARGE' ||
+      code === 'FORM_FIELD_ACCESS_VIOLATION'
+    ) {
+      return { error: (error as Error).message };
+    }
+    throw error;
+  }
+};
+
+export default function FormBuilder() {
+  const data = useLoaderData<typeof loader>();
+  const fetcher = useFetcher<{
+    error?: string;
+    ok?: boolean;
+    published?: boolean;
+    version?: number;
+    savedAt?: string;
+  }>();
+
+  const [fields, setFields] = useState<FormField[]>(data.fields as FormField[]);
+  const [expanded, setExpanded] = useState<string | null>(null);
+  const [dirty, setDirty] = useState(false);
+  const [title, setTitle] = useState(data.form.title);
+
+  const status = data.form.status;
+  const isDraft = status === 'DRAFT';
+  const access = data.form.access;
+  const busy = fetcher.state !== 'idle';
+
+  /**
+   * The intent of the last action posted from this page.
+   *
+   * React Router revalidates every loaded route after ANY fetcher action, and
+   * the loader hands back a fresh `fields` array each time — a new reference
+   * even when the stored draft is byte-identical. So the effect below fires
+   * after a settings save too, and without this guard it would overwrite the
+   * instructor's unsaved field edits with the last SAVED draft: type a
+   * question, tab out of the response-cap box, and the question is gone. A
+   * metadata save touches no field list, so it must not adopt one.
+   */
+  const lastIntent = useRef<string | null>(null);
+
+  // After a field-list write (save / publish / new version) the server's list
+  // is authoritative — adopt it and drop the dirty flag rather than leaving the
+  // pane claiming unsaved edits it has already stored.
+  useEffect(() => {
+    if (lastIntent.current === 'save-meta') return;
+    setFields(data.fields as FormField[]);
+    setDirty(false);
+  }, [data.fields]);
+
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
+  );
+
+  const mutate = (next: FormField[]) => {
+    setFields(next);
+    setDirty(true);
+  };
+
+  const onDragEnd = (event: DragEndEvent) => {
+    const { active, over } = event;
+    if (!over || active.id === over.id) return;
+    const from = fields.findIndex(field => field.id === active.id);
+    const to = fields.findIndex(field => field.id === over.id);
+    if (from === -1 || to === -1) return;
+    mutate(arrayMove(fields, from, to));
+  };
+
+  const addField = (type: Parameters<typeof makeField>[0]) => {
+    const field = makeField(type);
+    mutate([...fields, field]);
+    setExpanded(field.id);
+  };
+
+  // One cast, here: a normalized field list is `Record<string, unknown>` by
+  // design (its shape is per-type), which no structural JSON type can describe.
+  // The action re-parses whatever arrives through the contract anyway, so the
+  // type on this boundary buys nothing the validator does not already provide.
+  const post = (payload: Record<string, unknown>) => {
+    lastIntent.current = String(payload.intent ?? '');
+    fetcher.submit(payload as SubmitTarget, { method: 'post', encType: 'application/json' });
+  };
+
+  const save = () => post({ intent: 'save-fields', fields });
+  const publish = () => post({ intent: 'publish', fields });
+
+  const newVersion = () => {
+    if (
+      !confirm(
+        'Publishing creates a NEW VERSION of this form.\n\n' +
+          'Responses already collected keep the version they were filled against. ' +
+          'Anyone with the form open will be asked to reload before they can submit.'
+      )
+    ) {
+      return;
+    }
+    post({ intent: 'new-version', fields });
+  };
+
+  const saveTitle = () => {
+    if (title.trim() && title !== data.form.title)
+      post({ intent: 'save-meta', title: title.trim() });
+  };
+
+  const paletteNote = useMemo(
+    () =>
+      access === 'PUBLIC'
+        ? 'Roster-sourced field types unlock when access is Classroom — and the server rejects them on a public form whatever the browser sends.'
+        : 'All field types are available on a classroom form.',
+    [access]
+  );
+
+  return (
+    <div className="mx-auto max-w-7xl px-6 py-8">
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+        <div className="min-w-0">
+          <Link
+            to={`/${data.classroomSlug}/forms`}
+            className="text-xs text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
+          >
+            ← Forms
+          </Link>
+          <input
+            value={title}
+            onChange={event => setTitle(event.target.value)}
+            onBlur={saveTitle}
+            aria-label="Form title"
+            className="block w-full max-w-lg border-none bg-transparent p-0 text-xl font-bold text-gray-900 focus:outline-none dark:text-white"
+          />
+          <div className="text-xs text-gray-400">
+            /{data.form.slug}
+            {data.form.published
+              ? ` · published version ${data.form.version}`
+              : ' · never published'}
+          </div>
+        </div>
+
+        <div className="flex items-center gap-2">
+          {isDraft ? (
+            <>
+              <button
+                type="button"
+                onClick={save}
+                disabled={busy || !dirty}
+                className="rounded-md border border-gray-300 px-3 py-2 text-sm font-medium text-gray-700 disabled:opacity-40 dark:border-gray-600 dark:text-gray-200"
+              >
+                {dirty ? 'Save draft' : 'Saved'}
+              </button>
+              <button
+                type="button"
+                onClick={publish}
+                disabled={busy || fields.length === 0}
+                title={fields.length === 0 ? 'Add at least one field first' : undefined}
+                className="rounded-md bg-gray-900 px-4 py-2 text-sm font-medium text-white disabled:opacity-40 dark:bg-white dark:text-gray-900"
+              >
+                {data.form.published ? 'Publish new version' : 'Publish'}
+              </button>
+            </>
+          ) : (
+            <>
+              <span
+                className="rounded-md border border-gray-200 px-3 py-2 text-xs text-gray-500 dark:border-gray-700 dark:text-gray-400"
+                title="A published form's questions are frozen. Publishing again creates a new version."
+              >
+                Save is off while this form is {status.toLowerCase()}
+              </span>
+              <button
+                type="button"
+                onClick={newVersion}
+                disabled={busy || fields.length === 0}
+                className="rounded-md bg-gray-900 px-4 py-2 text-sm font-medium text-white disabled:opacity-40 dark:bg-white dark:text-gray-900"
+              >
+                Publish new version
+              </button>
+            </>
+          )}
+        </div>
+      </div>
+
+      <div className="mb-4 flex flex-wrap items-center gap-2 rounded-lg border border-gray-200 px-3 py-2 text-sm dark:border-gray-700">
+        <span className="text-xs font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">
+          Access
+        </span>
+        <span
+          className={`rounded-full px-2 py-0.5 text-xs font-medium ${
+            access === 'PUBLIC'
+              ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900 dark:text-emerald-200'
+              : 'bg-indigo-100 text-indigo-800 dark:bg-indigo-900 dark:text-indigo-200'
+          }`}
+        >
+          {access === 'PUBLIC' ? 'Public link' : 'Classroom'}
+        </span>
+        <span className="text-xs text-gray-500 dark:text-gray-400">
+          {access === 'PUBLIC'
+            ? 'anyone with the link · identity is their email, verified by a link'
+            : 'members only, signed in · identity comes from the session'}
+        </span>
+        {isDraft ? (
+          <button
+            type="button"
+            onClick={() =>
+              post({ intent: 'save-meta', access: access === 'PUBLIC' ? 'CLASSROOM' : 'PUBLIC' })
+            }
+            disabled={busy}
+            className="ml-auto text-xs font-medium text-blue-600 hover:underline disabled:opacity-40 dark:text-blue-400"
+          >
+            Switch to {access === 'PUBLIC' ? 'Classroom' : 'Public link'}
+          </button>
+        ) : (
+          <span className="ml-auto flex items-center gap-1 text-xs text-gray-400">
+            <IconLock size={13} /> Frozen — responses under two identity modes cannot be mixed
+          </span>
+        )}
+      </div>
+
+      {/* Collection settings. Unlike the field list these are NOT frozen by
+          publishing — `update` only refuses `fields` and `access` on a live
+          form — so closing a form early or lifting a cap needs no new version.
+
+          Each posts on BLUR, and only when the value actually changed: an
+          unguarded blur would write an audit row saying the instructor edited
+          the form when they only tabbed through it, and trigger a revalidation
+          for nothing. */}
+      <div className="mb-5 flex flex-wrap items-end gap-4 rounded-lg border border-gray-200 px-3 py-2.5 dark:border-gray-700">
+        <label className="text-xs font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">
+          Closes
+          <input
+            type="date"
+            defaultValue={data.form.closesAt}
+            onBlur={event => {
+              if (event.target.value === data.form.closesAt) return;
+              post({ intent: 'save-meta', closesAt: event.target.value || null });
+            }}
+            className="mt-1 block rounded-md border border-gray-300 bg-white px-2 py-1 text-sm normal-case tracking-normal text-gray-900 dark:border-gray-600 dark:bg-gray-900 dark:text-white"
+          />
+        </label>
+        <label className="text-xs font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">
+          Response cap
+          <input
+            type="number"
+            min={1}
+            placeholder="none"
+            defaultValue={data.form.responseCap ?? ''}
+            onBlur={event => {
+              if (event.target.value === String(data.form.responseCap ?? '')) return;
+              post({
+                intent: 'save-meta',
+                responseCap: event.target.value === '' ? null : Number(event.target.value),
+              });
+            }}
+            className="mt-1 block w-28 rounded-md border border-gray-300 bg-white px-2 py-1 text-sm normal-case tracking-normal text-gray-900 dark:border-gray-600 dark:bg-gray-900 dark:text-white"
+          />
+        </label>
+        <label className="flex items-center gap-2 pb-1 text-sm text-gray-700 dark:text-gray-200">
+          <input
+            type="checkbox"
+            defaultChecked={data.form.allowMultiple}
+            onChange={event => post({ intent: 'save-meta', allowMultiple: event.target.checked })}
+          />
+          Let one person submit more than once
+        </label>
+      </div>
+
+      {fetcher.data?.error ? (
+        <div
+          role="alert"
+          className="mb-4 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800 dark:border-red-900 dark:bg-red-950 dark:text-red-200"
+        >
+          {fetcher.data.error}
+        </div>
+      ) : null}
+      {fetcher.data?.published ? (
+        <div
+          role="status"
+          className="mb-4 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800 dark:border-emerald-900 dark:bg-emerald-950 dark:text-emerald-200"
+        >
+          Published as version {fetcher.data.version}. Responses already collected keep the version
+          they were filled against.
+        </div>
+      ) : null}
+
+      <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_360px]">
+        <div>
+          <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onDragEnd}>
+            <SortableContext
+              items={fields.map(field => field.id)}
+              strategy={verticalListSortingStrategy}
+            >
+              <div className="space-y-2">
+                {fields.map(field => (
+                  <FieldCard
+                    key={field.id}
+                    field={field}
+                    scopes={data.scopes as ScopeChoices}
+                    expanded={expanded === field.id}
+                    onToggle={() =>
+                      setExpanded(current => (current === field.id ? null : field.id))
+                    }
+                    onChange={patch =>
+                      mutate(
+                        fields.map(other =>
+                          other.id === field.id ? ({ ...other, ...patch } as FormField) : other
+                        )
+                      )
+                    }
+                    onRemove={() => mutate(fields.filter(other => other.id !== field.id))}
+                  />
+                ))}
+              </div>
+            </SortableContext>
+          </DndContext>
+
+          {fields.length === 0 ? (
+            <div className="rounded-lg border border-dashed border-gray-300 py-10 text-center text-sm text-gray-400 dark:border-gray-600">
+              No fields yet — add one below.
+            </div>
+          ) : null}
+
+          <div className="mt-6">
+            <div className="mb-2 text-xs font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">
+              Add a field
+            </div>
+            <div className="flex flex-wrap gap-1.5">
+              {FIELD_TYPE_META.map(meta => {
+                // The lock mirrors the registry's `classroomOnly` flag, which is
+                // the same flag `assertFieldsAllowedForAccess` refuses a save
+                // on. The UI never decides this independently.
+                const locked = meta.classroomOnly && access === 'PUBLIC';
+                return (
+                  <button
+                    key={meta.type}
+                    type="button"
+                    disabled={locked}
+                    onClick={() => addField(meta.type)}
+                    title={
+                      locked
+                        ? `${meta.label} reads the roster, which only a classroom form can do.`
+                        : meta.hint
+                    }
+                    className={`flex items-center gap-1 rounded-md border px-2.5 py-1.5 text-xs ${
+                      locked
+                        ? 'cursor-not-allowed border-gray-200 text-gray-300 dark:border-gray-700 dark:text-gray-600'
+                        : 'border-gray-200 text-gray-700 hover:border-gray-400 dark:border-gray-700 dark:text-gray-200'
+                    }`}
+                  >
+                    {locked ? <IconLock size={11} /> : <IconPlus size={11} />}
+                    {meta.label}
+                  </button>
+                );
+              })}
+            </div>
+            <p className="mt-2 text-xs text-gray-500 dark:text-gray-400">{paletteNote}</p>
+          </div>
+        </div>
+
+        <aside className="lg:sticky lg:top-6 lg:self-start">
+          <div className="mb-2 text-xs font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">
+            Live preview
+          </div>
+          <div className="rounded-lg border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-800">
+            <FormPreview fields={fields} />
+          </div>
+          <p className="mt-2 text-xs text-gray-400">
+            An approximation — the controls here do nothing. Open the form itself to fill it in.
+          </p>
+        </aside>
+      </div>
+    </div>
+  );
+}
