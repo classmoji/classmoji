@@ -102,19 +102,47 @@ export const MAGIC_TOKEN_TTL_MS = 48 * 60 * 60 * 1000;
 /**
  * Links per response inside the rolling window.
  *
- * Raised from three when the verification mail moved to blur time. An ordinary
- * honest interaction now costs TWO links, not one — the address is typed, and
- * then the form is submitted — so a budget of three refused somebody their
- * second attempt inside the hour, which is exactly the person a "we could not
- * find your response" support thread is about. Five keeps roughly two full
- * attempts plus a resend, and keeps the ceiling on what one mailbox can be sent
- * low enough to stay a ceiling.
+ * THREE, and it stayed three because an honest interaction costs ONE link.
+ *
+ * It briefly went to five, when moving the verification mail to blur time made
+ * an ordinary journey cost two — typing the address minted one, submitting
+ * minted another — and three then refused somebody their second attempt inside
+ * the hour. Reuse (see `MAGIC_TOKEN_REUSE_MS`) removed the second link instead
+ * of paying for it, so the reason for the loosening is gone and the ceiling on
+ * what one mailbox can be sent goes back to where it was. Three now buys the
+ * link itself plus two resends the person explicitly asked for, which is more
+ * headroom than five bought when every step minted.
  *
  * The per-CLIENT limit in the pages app is the primary defence against a mail
  * relay; this one bounds what can be aimed at a single mailbox.
  */
-export const MAGIC_TOKEN_MAX_PER_WINDOW = 5;
+export const MAGIC_TOKEN_MAX_PER_WINDOW = 3;
 export const MAGIC_TOKEN_WINDOW_MS = 60 * 60 * 1000;
+/**
+ * How recently a link must have been minted for the next send to REUSE it
+ * rather than mint a second one.
+ *
+ * ── Why there is a reuse rule at all ───────────────────────────────────────
+ * Typing an address mints a link, and submitting used to mint another. Two
+ * mails for one action reads as broken to the person receiving them, and the
+ * second makes the first ambiguous: which one do I click? Both worked, so it
+ * was never incorrect — just noisy, and noisy on the one surface where a
+ * stranger can make us send mail. The link is already in their inbox; the right
+ * thing to do with it is point at it.
+ *
+ * ── Why HALF the token's life ──────────────────────────────────────────────
+ * A link's usefulness is bounded by its 48-hour life, not by minutes: somebody
+ * filling in a long form, or coming back to it after lunch, should be told
+ * about the link they already have rather than handed a second one. But a link
+ * minted 47 hours ago is about to die, and reusing THAT would strand them. One
+ * constant settles both: reuse only inside the first half of the life, and the
+ * link handed back always has at least another 24 hours on it.
+ *
+ * A link is reusable only while it is also unspent and unexpired — see
+ * `findLiveLink`. Anything else mints fresh, so nobody is ever left with no
+ * live link at all.
+ */
+export const MAGIC_TOKEN_REUSE_MS = MAGIC_TOKEN_TTL_MS / 2;
 /** Abandoned server-side partials are swept after this long. */
 export const DRAFT_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 /**
@@ -424,17 +452,36 @@ export interface FormVerifyEmail {
 
 export interface BeginPublicSubmissionResult {
   responseId: string;
-  /** The raw link token. Returned ONCE — never stored, never recoverable. */
-  rawToken: string;
+  /**
+   * The raw link token, returned ONCE — never stored, never recoverable.
+   *
+   * NULL when a live link already covers this response and none was minted; see
+   * `linkAlreadySentAt`. Null is not a failure and must never be reported as
+   * one: it means the person already has a working link, and `emails` is empty
+   * precisely so the caller's dispatch is a no-op rather than a decision.
+   */
+  rawToken: string | null;
   /** The full link. Also embedded in `emails`; exposed for dev-mode logging. */
-  verifyUrl: string;
+  verifyUrl: string | null;
   /** 'existing' means this email already had a response; its answers are untouched. */
   mode: 'new' | 'existing';
   /**
-   * Composed mail for the CALLER to send. Services must not import
-   * @classmoji/tasks (tasks already depends on services — that would be
-   * circular), so composition lives here and the trigger stays with the route,
-   * exactly as roster.service.addStudents does it.
+   * When the link this submission is relying on was minted, if it was minted
+   * earlier rather than now.
+   *
+   * FOR LOGGING AND TESTS ONLY, on exactly the terms `AddressVerificationResult.sent`
+   * is. A route that rendered this would be telling anyone who can type an
+   * address when that mailbox last asked for a link — the membership oracle in a
+   * helpful-looking sentence. The check-email screen says "already sent" from
+   * what the BROWSER itself did, never from this.
+   */
+  linkAlreadySentAt: Date | null;
+  /**
+   * Composed mail for the CALLER to send — EMPTY when a live link already
+   * covers this response. Services must not import @classmoji/tasks (tasks
+   * already depends on services — that would be circular), so composition lives
+   * here and the trigger stays with the route, exactly as
+   * roster.service.addStudents does it.
    */
   emails: FormVerifyEmail[];
 }
@@ -533,6 +580,41 @@ async function mintLinkFor(
 }
 
 /**
+ * When this response last got a link that is STILL WORTH POINTING AT, or null.
+ *
+ * Three conditions, and each one is a way the reuse could otherwise strand
+ * somebody with a dead link and no mail:
+ *
+ *  - unspent (`used_at` null) — a link that has been clicked opens nothing;
+ *  - unexpired — the obvious one;
+ *  - minted inside `MAGIC_TOKEN_REUSE_MS` — so what is handed back has real
+ *    life left, not the last twenty minutes of it.
+ *
+ * The RAW token is not recoverable (only its digest is stored), which is
+ * exactly right: reuse means "send nothing", never "send the old link again".
+ * The one already in their inbox is the copy.
+ *
+ * Called inside the form's row lock by every path that would otherwise mint, so
+ * two concurrent sends for one address cannot both decide they are the first.
+ */
+async function findLiveLink(
+  tx: Prisma.TransactionClient,
+  responseId: string,
+  now: Date
+): Promise<{ created_at: Date } | null> {
+  return tx.formMagicToken.findFirst({
+    where: {
+      response_id: responseId,
+      used_at: null,
+      expires_at: { gt: now },
+      created_at: { gt: new Date(now.getTime() - MAGIC_TOKEN_REUSE_MS) },
+    },
+    orderBy: { created_at: 'desc' },
+    select: { created_at: true },
+  });
+}
+
+/**
  * Store a public submission as PENDING_VERIFICATION and mint a magic link.
  *
  * Nothing counts until the link is clicked: the row holds the (form_id,
@@ -545,7 +627,9 @@ async function mintLinkFor(
  *
  * The caller composes and sends the mail (or logs the link in dev) — the same
  * "service prepares, route delivers" split roster.service uses for invites — so
- * this function stays testable and free of transport concerns.
+ * this function stays testable and free of transport concerns. `emails` is
+ * EMPTY, and `rawToken` null, when a live link already covers this response;
+ * see `MAGIC_TOKEN_REUSE_MS`.
  *
  * @throws MAGIC_LINK_COOLDOWN, FORM_NOT_OPEN, FORM_CLOSED, FORM_REVISION_STALE,
  *   FORM_ACCESS_MISMATCH, and the contract's answer-validation codes.
@@ -646,6 +730,36 @@ export async function beginPublicSubmission({
       }
     }
 
+    /**
+     * ── The second mail that used not to be worth sending ─────────────────
+     *
+     * Somebody who typed their address (which mailed a link) and then submitted
+     * without opening it used to get a SECOND mail, seconds after the first.
+     * Two mails for one action reads as broken, and the second one makes the
+     * first ambiguous. The link minted on blur opens this very row — the
+     * placeholder overwrite above has just put the real answers into it — so
+     * there is nothing the new link would do that the old one does not.
+     *
+     * Nobody is stranded by this. Reuse requires a link that is unspent,
+     * unexpired and young (`findLiveLink`), so the alternative to a mail is
+     * always a working link rather than silence; the check-email screen's
+     * resend button force-mints for the person who cannot find it; and the
+     * unverified-reminder sweep mints a fresh one six hours later on its own,
+     * because `submitted_at` moves to now here and the reused token predates
+     * it.
+     */
+    const live = await findLiveLink(tx, responseId, now);
+    if (live) {
+      return {
+        responseId,
+        rawToken: null,
+        verifyUrl: null,
+        mode: existing ? ('existing' as const) : ('new' as const),
+        linkAlreadySentAt: live.created_at,
+        emails: [],
+      };
+    }
+
     const raw = await mintLinkFor(tx, responseId, now);
     const verifyUrl = verifyUrlFor({
       classroomSlug: loadedForm.classroom.slug,
@@ -658,6 +772,7 @@ export async function beginPublicSubmission({
       rawToken: raw,
       verifyUrl,
       mode: existing ? ('existing' as const) : ('new' as const),
+      linkAlreadySentAt: null,
       emails: [
         composeLinkEmail({
           to: email.trim(),
@@ -704,6 +819,12 @@ export interface AddressVerificationResult {
  * the token is minted through the same cooldown. By the time the person
  * presses Submit, the link is already in their inbox — and if they clicked it
  * on the way, the submit lands in one round trip instead of two.
+ *
+ * ── An address that already holds a live link ──────────────────────────────
+ * No mail either. One live link per address is the whole policy — see
+ * `MAGIC_TOKEN_REUSE_MS` — so re-typing the same address, on this page load or
+ * on tomorrow's, points at the link already in the inbox rather than adding to
+ * it. `force` is the one way past it.
  *
  * ── An address that has already responded ──────────────────────────────────
  * No mail. Somebody typing their address into a form they filled in last week
@@ -801,6 +922,20 @@ export async function beginAddressVerification({
           select: { id: true },
         })
       ).id;
+
+    /**
+     * A live link already covers this address — so nothing is sent.
+     *
+     * The same rule the submit follows, and here it is what keeps the per-
+     * mailbox ceiling meaningful: without it, reloading the form and re-typing
+     * the same address mints a link every time, and three reloads would leave
+     * the resend button refused for an hour. `force` skips it, because a resend
+     * is the person on the screen telling us the first one did not arrive.
+     */
+    if (!force) {
+      const live = await findLiveLink(tx, responseId, now);
+      if (live) return { emails: [], verifyUrl: null, sent: false };
+    }
 
     const raw = await mintLinkFor(tx, responseId, now);
     const verifyUrl = verifyUrlFor({

@@ -28,6 +28,10 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
  *  2. a link opened before the form is finished says so, and does not render an
  *     empty answer set as if it were a submission;
  *  3. a verified browser submits in one step — and NO second mail is sent;
+ *  3b. neither does an UNVERIFIED one: the submit reuses the link already in
+ *     the inbox, and the check-email screen says so rather than promising a
+ *     message nobody sent. A submit with nothing to reuse still mails, and a
+ *     spent link puts the mail back — nobody is left holding no link;
  *  4. THE BINDING: a browser holding a verified link for one address cannot
  *     submit under another;
  *  5. the old two-step flow still works untouched, because the early send is an
@@ -47,6 +51,8 @@ const fillPath = `/${CLASS}/forms/${FORM_SLUG}`;
 
 let formId: string | null = null;
 let revisionId: string | null = null;
+/** Field id by label, for the tests that post an answer set directly. */
+let fieldIdByLabel: Record<string, string> = {};
 
 const NAME_LABEL = 'Full name';
 const EMAIL_LABEL = 'School email';
@@ -120,6 +126,11 @@ test.beforeAll(async () => {
   await prisma.form.deleteMany({ where: { classroom_id: classroomId, slug: FORM_SLUG } });
 
   const definition = parseFormDefinition(presetByKey('waitlist').fields());
+  fieldIdByLabel = Object.fromEntries(
+    (definition.fields as unknown as Array<{ id: string; label?: string }>)
+      .filter(field => Boolean(field.label))
+      .map(field => [field.label as string, field.id])
+  );
 
   const form = await prisma.form.create({
     data: {
@@ -174,6 +185,21 @@ async function typeEmailAndLeave(page: Page, email: string) {
   await page.getByLabel(EMAIL_LABEL, { exact: true }).fill(email);
   // Moving focus is the trigger — a person tabs on, or clicks the next question.
   await page.getByLabel(NAME_LABEL, { exact: true }).click();
+}
+
+/**
+ * The whole preset, answered — for the tests that POST instead of typing.
+ *
+ * Keyed by the labels the browser tests address, so the two ways of filling
+ * this form in stay describable in the same terms.
+ */
+function answersFor(email: string, name: string): Record<string, unknown> {
+  return {
+    [fieldIdByLabel[NAME_LABEL]]: name,
+    [fieldIdByLabel[EMAIL_LABEL]]: email,
+    [fieldIdByLabel[SCALE_LABEL]]: 7,
+    [fieldIdByLabel[LONG_LABEL]]: 'Everything, ideally.',
+  };
 }
 
 async function fillTheRest(page: Page, name = 'Maya Chen') {
@@ -308,11 +334,22 @@ test.describe('the link, opened before the form is finished', () => {
     expect(linksFor(email)).toHaveLength(1);
   });
 
-  test('submitting without ever opening the link still works the old way', async ({ page }) => {
+  /**
+   * THE UNINTERRUPTED PATH, and the reason the submit stopped sending.
+   *
+   * Type an address (one mail), fill the form in, press Submit without ever
+   * opening the link. That used to be TWO mails seconds apart, which reads as
+   * broken and makes the first one ambiguous — which of these do I click? The
+   * submit now finds the live link and stands down, so the count for the whole
+   * journey is one, the screen says so rather than promising a message that was
+   * never sent, and the link already in the inbox is the one that finishes the
+   * job.
+   */
+  test('submitting without opening the link sends no second mail', async ({ page }) => {
     const email = freshEmail('oldway');
     await page.goto(fillPath);
     await typeEmailAndLeave(page, email);
-    await waitForLinks(email, 1);
+    const [link] = await waitForLinks(email, 1);
 
     await page.getByLabel(EMAIL_LABEL, { exact: true }).fill(email);
     await fillTheRest(page, 'Old Way');
@@ -322,8 +359,20 @@ test.describe('the link, opened before the form is finished', () => {
     // leaves the two-step flow exactly as it was.
     await expect(page.getByRole('heading', { name: 'Check your email' })).toBeVisible();
 
-    const links = await waitForLinks(email, 2);
-    await page.goto(linkTarget(links[links.length - 1]));
+    // And the screen is honest about which mail it means: the one this browser
+    // caused when the address was typed, not a fresh one.
+    const already = page.getByTestId('forms-already-sent');
+    await expect(already).toBeVisible();
+    await expect(already).toContainText('We already sent a link to');
+    await expect(already).toContainText(email);
+    await expect(already).toContainText(/just now|minutes? ago/);
+
+    // ONE mail for the whole journey.
+    await page.waitForTimeout(750);
+    expect(linksFor(email)).toHaveLength(1);
+
+    // And the original link still verifies and completes the submission.
+    await page.goto(linkTarget(link));
     await expect(page.getByRole('button', { name: 'Confirm' })).toBeVisible();
     await page.getByRole('button', { name: 'Confirm' }).click();
     await expect(page.getByRole('heading', { name: "You're in" })).toBeVisible();
@@ -331,6 +380,86 @@ test.describe('the link, opened before the form is finished', () => {
     const rows = await responsesOf(formId!);
     expect(rows).toHaveLength(1);
     expect(rows[0].submission_state).toBe('SUBMITTED');
+    expect(Object.values(rows[0].answers as Record<string, unknown>)).toContain('Old Way');
+  });
+
+});
+
+// ─── One live link per address ──────────────────────────────────────────────
+
+/**
+ * The two ways the reuse could have gone wrong, and neither does.
+ *
+ * Reuse stands in for a mail only when there is genuinely a working link to
+ * stand in for. Everywhere else — nothing sent before, or a link that has been
+ * spent — the mail comes back, because the one state nobody may end up in is
+ * "submitted, no mail, no link".
+ */
+test.describe('a submit that has nothing to reuse still mails', () => {
+  /**
+   * THE FALLBACK, and the case that must never be silent.
+   *
+   * A submit with no earlier send has nothing to reuse, so it mails — exactly
+   * once. Posted directly rather than driven through the page because clicking
+   * Submit in a real browser blurs the email field on the way, which races a
+   * blur send against the submit and makes "was there an earlier link?"
+   * a matter of timing. The API request is the only deterministic way to be
+   * the first thing this address has ever done.
+   */
+  test('a submit with no earlier send mails exactly once', async ({ page }) => {
+    const email = freshEmail('noblur');
+
+    const response = await page.request.post(fillPath, {
+      maxRedirects: 0,
+      headers: { 'content-type': 'application/json' },
+      data: {
+        answers: answersFor(email, 'No Blur'),
+        identity: { email, name: 'No Blur' },
+        revisionId,
+        trap: '',
+      },
+    });
+    expect(response.status()).toBe(200);
+
+    const links = await waitForLinks(email, 1);
+    await page.waitForTimeout(750);
+    expect(linksFor(email)).toHaveLength(1);
+
+    await page.goto(linkTarget(links[0]));
+    await page.getByRole('button', { name: 'Confirm' }).click();
+    await expect(page.getByRole('heading', { name: "You're in" })).toBeVisible();
+  });
+
+  /**
+   * NOBODY IS STRANDED. Reuse only ever stands in for a link that still works,
+   * so a spent one puts the mail back — which is the difference between "you
+   * already have it" and "you have nothing".
+   */
+  test('a spent earlier link makes the submit mail again', async ({ page }) => {
+    const email = freshEmail('respend');
+    await page.goto(fillPath);
+    await typeEmailAndLeave(page, email);
+    const [first] = await waitForLinks(email, 1);
+
+    // Open and spend it — this browser now holds a verified, USED token.
+    await page.goto(linkTarget(first));
+    await page.getByTestId('forms-go-finish').click();
+    await page.getByLabel(EMAIL_LABEL, { exact: true }).fill(email);
+    await fillTheRest(page, 'Spent First');
+    await page.getByRole('button', { name: 'Submit' }).click();
+    await expect(page.getByRole('heading', { name: "You're in" })).toBeVisible();
+
+    // A second pass has no live link to lean on, so it mails a fresh edit link
+    // rather than leaving somebody looking at "check your email" for nothing.
+    await page.goto(fillPath);
+    await page.getByLabel(EMAIL_LABEL, { exact: true }).fill(email);
+    await fillTheRest(page, 'Second Pass');
+    await page.getByRole('button', { name: 'Submit' }).click();
+    await expect(page.getByRole('heading', { name: 'Check your email' })).toBeVisible();
+
+    const links = await waitForLinks(email, 2);
+    expect(links).toHaveLength(2);
+    expect(links[1]).not.toBe(first);
   });
 });
 
@@ -440,10 +569,12 @@ test.describe('resend and wrong-address', () => {
     await page.getByRole('button', { name: 'Submit' }).click();
     await expect(page.getByRole('heading', { name: 'Check your email' })).toBeVisible();
 
-    // Two links so far: the blur send when focus left the address, and the
-    // submit. Waited for explicitly, so "did the resend send one?" below is a
-    // question about the resend and not about log flushing.
-    const before = (await waitForLinks(email, 2)).length;
+    // ONE link so far: the blur send when focus left the address. The submit
+    // reused it and sent nothing. Waited for explicitly, so "did the resend
+    // send one?" below is a question about the resend and not about log
+    // flushing.
+    const before = (await waitForLinks(email, 1)).length;
+    expect(before).toBe(1);
 
     // Throttled the moment the screen appears, and it SAYS how long — a
     // disabled button with no explanation is the thing people click twice.

@@ -32,11 +32,18 @@ import { loadPublicForm, type PublicFormLoad } from './publicForm.server.ts';
  * single-use link; the response becomes real only when that link is clicked.
  *
  * Every outcome a caller can distinguish — a first submission, a second one
- * from an address that already responded, a cooldown, and a bot that filled the
- * honeypot — renders the IDENTICAL "check your email" view. Any difference
- * between them is a membership oracle: type an address, learn whether that
- * person applied. `beginPublicSubmission` returns a `mode` that says exactly
- * that, and this action deliberately drops it on the floor.
+ * from an address that already responded, a cooldown, a submission whose link
+ * was already in the inbox, and a bot that filled the honeypot — renders the
+ * IDENTICAL "check your email" view. Any difference between them is a
+ * membership oracle: type an address, learn whether that person applied.
+ * `beginPublicSubmission` returns a `mode` and a `linkAlreadySentAt` that say
+ * exactly that, and this action deliberately drops both on the floor.
+ *
+ * The check-email screen DOES say "we already sent this" when that is true —
+ * but it says it from what THIS BROWSER did (it fired the blur send and knows
+ * when), never from what the server found in the database. The distinction is
+ * the whole difference between a helpful sentence and an oracle: the browser
+ * only ever knows about its own sends.
  */
 
 /**
@@ -88,6 +95,29 @@ const NO_STORE = { 'Cache-Control': 'no-store' };
  * seconds and leave them unable to try again when it would have helped.
  */
 const RESEND_COOLDOWN_MS = 30_000;
+
+/**
+ * Compare two addresses the way the server files them — trimmed and lowercased.
+ * Only ever used to decide which SENTENCE to render; the server does its own
+ * normalizing for everything that matters.
+ */
+const normalizeAddress = (email: string): string => email.trim().toLowerCase();
+
+/**
+ * "just now" / "4 minutes ago" / "2 hours ago", for a link this browser sent.
+ *
+ * Deliberately coarse. The point of the line is "it is already in your inbox,
+ * go and look" — a to-the-second timestamp invites someone to compare it
+ * against what they can see and conclude something is wrong when the clocks
+ * disagree by a few seconds.
+ */
+function sentAgo(ms: number): string {
+  const minutes = Math.floor(ms / 60_000);
+  if (minutes < 1) return 'just now';
+  if (minutes < 60) return `${minutes} minute${minutes === 1 ? '' : 's'} ago`;
+  const hours = Math.floor(minutes / 60);
+  return `${hours} hour${hours === 1 ? '' : 's'} ago`;
+}
 
 /**
  * Loader headers, plus whatever the ACTION set on a document POST.
@@ -613,7 +643,14 @@ export const action = async ({
       revisionId,
     });
 
-    await dispatchVerifyEmail(result.emails, result.verifyUrl);
+    /**
+     * An EMPTY `emails` means a live link already covers this address — the one
+     * minted when they typed it — and dispatching nothing is the correct
+     * outcome, not a swallowed failure. The service only returns empty when it
+     * has confirmed an unspent, unexpired, young token exists, so "no mail" is
+     * never "no link".
+     */
+    await dispatchVerifyEmail(result.emails, result.verifyUrl ?? '');
 
     return { state: 'check-email', email: identity.email } satisfies ActionResult;
   } catch (error) {
@@ -998,6 +1035,27 @@ export default function FormFill() {
     resendReadyAt === null ? 0 : Math.max(0, Math.ceil((resendReadyAt - clock) / 1000));
   const resendReady = resendIn === 0;
 
+  /**
+   * The address THIS BROWSER has already had a link sent for, and when.
+   *
+   * Why the browser and not the server: the submit no longer mails when a live
+   * link already covers the address, so "check your email" would otherwise
+   * promise a message that was never sent. The honest fix is to say the link
+   * went out earlier — but the SERVER'S version of that fact is "this mailbox
+   * has a live link", which is the membership oracle the whole flow is built to
+   * avoid. What the browser saw itself do is a fact about the person reading
+   * the screen, exactly as the resend countdown is.
+   *
+   * Keyed by address, because "wrong address? change it" is a supported path
+   * and a link sent for the typo says nothing about the corrected one.
+   */
+  const [linkSentFor, setLinkSentFor] = useState<{ email: string; at: number } | null>(null);
+  useEffect(() => {
+    if (linkResult?.state === 'link-sent') {
+      setLinkSentFor({ email: linkResult.email, at: Date.now() });
+    }
+  }, [linkResult]);
+
   if (data.view === 'signin') {
     return (
       <SignInInterstitial
@@ -1085,16 +1143,48 @@ export default function FormFill() {
 
   if (checkEmail) {
     const resent = linkResult?.state === 'link-sent' && linkResult.resent;
+
+    /**
+     * The link went out EARLIER — when they typed the address — and submitting
+     * did not send a second one.
+     *
+     * One state, one screen, one adapted sentence: a separate "you already have
+     * a link" view would make the same moment look like two different outcomes
+     * depending on how the person got here, and both of them still end at the
+     * same inbox and the same resend button.
+     */
+    const alreadySent =
+      linkSentFor && normalizeAddress(linkSentFor.email) === normalizeAddress(checkEmail)
+        ? linkSentFor
+        : null;
+
     return (
       <FormCanvas theme={data.theme} classroomName={data.classroomName}>
         <FormNotice icon="📧" title="Check your email">
-          <p>
-            We sent a link to <strong className="font-semibold">{checkEmail}</strong> — click it to
-            review your answers and lock in your spot.
-          </p>
+          {alreadySent ? (
+            <p data-testid="forms-already-sent">
+              We already sent a link to <strong className="font-semibold">{checkEmail}</strong> —
+              sent {sentAgo(Math.max(0, clock - alreadySent.at))}. Check your inbox and click it to
+              review your answers and lock in your spot.
+            </p>
+          ) : (
+            <p>
+              We sent a link to <strong className="font-semibold">{checkEmail}</strong> — click it
+              to review your answers and lock in your spot.
+            </p>
+          )}
           <p className="mt-3 text-gray-500 dark:text-gray-400">
-            Nothing is recorded until you click it. The link works for 48 hours, and the same link
-            lets you change your answers later.
+            {alreadySent ? (
+              <>
+                Nothing is recorded until you click it. That link is still the one to use, and it
+                also lets you change your answers later.
+              </>
+            ) : (
+              <>
+                Nothing is recorded until you click it. The link works for 48 hours, and the same
+                link lets you change your answers later.
+              </>
+            )}
           </p>
 
           {/* The two things that actually go wrong at this screen: the mail did
