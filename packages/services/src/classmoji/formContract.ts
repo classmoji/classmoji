@@ -49,14 +49,33 @@ export const FORM_LIMITS = {
   MAX_FIELDS: 60,
   /** Options on one choice field, and rows/columns are capped separately. */
   MAX_OPTIONS: 30,
+  /**
+   * Options on a `roster_select`. A much larger ceiling than an AUTHORED list
+   * gets, because nobody types these: `form.service.publish` materializes them
+   * from the classroom's memberships, and a hundred-person course is ordinary.
+   * The cap is still real — a runaway roster must not produce a pathological
+   * revision — it is just sized for a roster rather than for a rubric.
+   */
+  MAX_ROSTER_OPTIONS: 400,
   MAX_MATRIX_ROWS: 20,
   MAX_MATRIX_COLUMNS: 10,
   /** Labels — a field label, an option label, a matrix row/column label. */
   MAX_LABEL_CHARS: 300,
   /** Help text, descriptions, and display-block prose. */
   MAX_HELP_CHARS: 2000,
-  /** Serialized `fields` payload of one revision. */
+  /** Serialized `fields` payload of an AUTHORED definition (a draft). */
   MAX_DEFINITION_BYTES: 64 * 1024,
+  /**
+   * Serialized `fields` payload of a PUBLISHED revision.
+   *
+   * Deliberately larger than the authored cap and checked in a different place.
+   * `MAX_DEFINITION_BYTES` guards what a person or an MCP call writes; this
+   * guards what publish PRODUCES, which is the authored definition plus every
+   * roster option materialized into it. A 400-name roster is tens of kilobytes
+   * that no author typed, and refusing it against the authoring cap would make
+   * a legitimate publish fail for a limit it has no way to satisfy.
+   */
+  MAX_REVISION_BYTES: 256 * 1024,
   /** Serialized `answers` payload of one response. */
   MAX_ANSWERS_BYTES: 256 * 1024,
   /** Ranks a ranked_choice field may ask for. */
@@ -121,12 +140,18 @@ const optionSchema = optionInput.transform((raw): FormOption => {
   };
 });
 
-/** An option list, capped and (after normalization) free of duplicate ids. */
-const optionList = (min: number) =>
+/**
+ * An option list, capped and (after normalization) free of duplicate ids.
+ *
+ * `max` defaults to the authored ceiling. `roster_select` passes the larger
+ * roster ceiling instead — its options are not authored, they are materialized
+ * from the classroom's memberships at publish.
+ */
+const optionList = (min: number, max: number = FORM_LIMITS.MAX_OPTIONS) =>
   z
     .array(optionSchema)
     .min(min)
-    .max(FORM_LIMITS.MAX_OPTIONS)
+    .max(max)
     .superRefine((options, ctx) => {
       const seen = new Set<string>();
       for (const option of options) {
@@ -272,7 +297,7 @@ const rosterSelectDef = z
     optionSource: z.enum(['roster', 'teaching_team']),
     /** Pick several people ("who would you like to work with") vs. exactly one. */
     multiple: z.boolean().default(false),
-    options: optionList(0).default([]),
+    options: optionList(0, FORM_LIMITS.MAX_ROSTER_OPTIONS).default([]),
   })
   .strict();
 

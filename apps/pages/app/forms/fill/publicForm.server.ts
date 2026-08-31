@@ -1,6 +1,7 @@
 import { getThemeByKey } from '@classmoji/utils/themes';
 
-import { ClassmojiService, getAuthSession, prisma } from '~/utils/db.server.ts';
+import { ClassmojiService, prisma } from '~/utils/db.server.ts';
+import { resolveClassroomForm, type ClassroomFormLoad } from './classroomForm.server.ts';
 
 /**
  * Resolving a form for a PUBLIC, possibly anonymous visitor — the one place
@@ -38,13 +39,6 @@ export interface PublicFormSummary {
 }
 
 export type PublicFormLoad =
-  | { view: 'signin'; theme: CanvasTheme; classroomName: string; loginUrl: string }
-  | {
-      view: 'classroom-placeholder';
-      theme: CanvasTheme;
-      classroomName: string;
-      form: PublicFormSummary;
-    }
   | { view: 'closed'; theme: CanvasTheme; classroomName: string; form: PublicFormSummary }
   | {
       view: 'fill';
@@ -53,7 +47,11 @@ export type PublicFormLoad =
       form: PublicFormSummary;
       revisionId: string;
       fields: unknown[];
-    };
+    }
+  // A CLASSROOM form's outcomes (sign-in, not-a-member, closed, the authed
+  // fill) come back through the same union: one loader, one `view` switch on
+  // the page, whichever mode the form turned out to be in.
+  | ClassroomFormLoad;
 
 /** The two hex values the fill pages paint their canvas with. */
 export const themeFor = (themeKey: string | null | undefined): CanvasTheme => {
@@ -115,27 +113,19 @@ export async function loadPublicForm({
   };
 
   // ── Access mode, before status ──────────────────────────────────────────
+  //
+  // Everything past this point is the PUBLIC path. The classroom path — session,
+  // membership, roster-materialized options, the member's own draft — lives in
+  // its own module, and this one has no import that could reach a roster.
   if (form.access === 'CLASSROOM') {
-    const session = await getAuthSession(request).catch(() => null);
-    const userId = session?.userId;
-
-    const membership = userId
-      ? await prisma.classroomMembership.findFirst({
-          where: { classroom_id: classroom.id, user_id: userId },
-          select: { id: true },
-        })
-      : null;
-
-    // A signed-in non-member gets the same interstitial as a stranger. Telling
-    // them "you are signed in but not on this roster" would confirm the form
-    // exists to someone with no business knowing.
-    if (!membership) {
-      return { view: 'signin', theme, classroomName, loginUrl: loginUrlFor(request) };
-    }
-
-    // Mission 6 replaces this with the authed renderer: session identity, roster
-    // options resolved behind the membership check, server-side draft autosave.
-    return { view: 'classroom-placeholder', theme, classroomName, form: summary };
+    return resolveClassroomForm({
+      classroom: { id: classroom.id },
+      form,
+      theme,
+      classroomName,
+      request,
+      loginUrl: loginUrlFor(request),
+    });
   }
 
   // ── Open, or shut ───────────────────────────────────────────────────────

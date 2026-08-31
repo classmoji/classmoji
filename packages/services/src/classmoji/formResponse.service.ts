@@ -622,9 +622,20 @@ export async function submitClassroom({
  *
  * Keyed by `userId` (classroom fills, and public fills after verification) or by
  * `draftToken` (anonymous fills, only when the form's `save_partials` is on and
- * the on-form disclosure is shown). A row that has already been SUBMITTED or is
- * PENDING_VERIFICATION keeps its state — an autosave must never walk a real
- * submission backwards.
+ * the on-form disclosure is shown).
+ *
+ * ── A draft may only ever overwrite a draft ────────────────────────────────
+ * A row that has been SUBMITTED or is PENDING_VERIFICATION is not written at
+ * all — not its state, and not its answers. Preserving only the STATE would be
+ * the more obvious rule and is not enough: it would leave a row marked
+ * SUBMITTED holding a half-typed answer set, which is worse than either honest
+ * outcome.
+ *
+ * The guard is in the `where` clause of the update, not in an `if` above it,
+ * because the caller's check is a read and the write is a separate statement. A
+ * debounced autosave in flight while its own form is being submitted lands
+ * BETWEEN them, and only the database can decide that race. The caller's cheap
+ * check still runs — this is what makes it unnecessary to be right.
  */
 export async function upsertDraft({
   formId,
@@ -685,12 +696,16 @@ export async function upsertDraft({
   };
 
   if (existing) {
-    return getPrisma().formResponse.update({
-      where: { id: existing.id },
-      // Deliberately no submission_state: a draft save never downgrades a row
-      // that has already been submitted or is awaiting verification.
+    // `updateMany` rather than `update`, only so the state can be part of the
+    // WHERE. A no-op means the row stopped being a draft while this save was in
+    // flight; the row is returned unchanged, and the caller is told nothing,
+    // because a dropped autosave is not something a filler can act on.
+    const { count } = await getPrisma().formResponse.updateMany({
+      where: { id: existing.id, submission_state: 'DRAFT' },
       data: payload,
     });
+    if (count === 0) return existing;
+    return getPrisma().formResponse.findUniqueOrThrow({ where: { id: existing.id } });
   }
 
   return getPrisma().formResponse.create({

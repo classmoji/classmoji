@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   useForm,
   type Resolver,
@@ -53,9 +53,19 @@ import {
  * response is actually confirmed. Every access is wrapped: Safari's private
  * mode throws on `setItem`, and a form that white-screens because it could not
  * save a draft is worse than one that silently does not.
+ *
+ * A CLASSROOM fill passes `draftKey: null` and `onDraft` instead: the draft
+ * belongs to an identified member and lives on the server, so it follows them
+ * to another machine. The two are mutually exclusive by intent — a member's
+ * answers should not also be sitting in a shared lab browser's localStorage.
  */
 
 const DRAFT_DEBOUNCE_MS = 1000;
+/**
+ * Longer than the localStorage debounce because each tick is a round trip, not
+ * a synchronous write. ~1.5s of quiet is the plan's figure.
+ */
+const SERVER_DRAFT_DEBOUNCE_MS = 1500;
 
 export interface RendererIdentity {
   name?: string | null;
@@ -74,8 +84,21 @@ export interface FormRendererProps {
   /** Answers to prefill: a stored response, or a repopulate after a stale error. */
   storedAnswers?: Record<string, unknown> | null;
   identityDefaults?: RendererIdentity;
+  /**
+   * A CLASSROOM fill's session identity. When set the form shows it as a locked
+   * row ("from your account") and renders NO identity inputs — including for a
+   * definition with no email field of its own, which is exactly when the public
+   * path would have added them.
+   */
+  lockedIdentity?: { name: string; email: string } | null;
   /** localStorage key for the draft. Omit (or null) to disable autosave. */
   draftKey?: string | null;
+  /**
+   * Server-side autosave. Called with the current answers after ~1.5s of quiet,
+   * never on mount, and never when nothing has been typed. The caller decides
+   * what to do with it (and whether the row is safe to write at all).
+   */
+  onDraft?: ((answers: Record<string, unknown>) => void) | null;
   submitLabel: string;
   busy?: boolean;
   /** A server-side error to show above the submit button. */
@@ -198,7 +221,9 @@ export default function FormRenderer({
   fields,
   storedAnswers,
   identityDefaults,
+  lockedIdentity,
   draftKey,
+  onDraft,
   submitLabel,
   busy = false,
   error,
@@ -206,7 +231,8 @@ export default function FormRenderer({
   footnote,
 }: FormRendererProps) {
   const plan: IdentityPlan = useMemo(() => identityPlan(fields), [fields]);
-  const needsIdentityInputs = plan.emailFieldId === null;
+  // A locked identity answers the question the identity inputs exist to ask.
+  const needsIdentityInputs = plan.emailFieldId === null && !lockedIdentity;
 
   /**
    * A draft is read ONCE, synchronously, into the initial values.
@@ -303,11 +329,87 @@ export default function FormRenderer({
     // signal, and the debounce is what keeps it from being a write per keypress.
   }, [draftKey, values]);
 
+  /**
+   * ── Debounced server autosave (classroom fills) ─────────────────────────
+   *
+   * Two guards, and BOTH are load-bearing. `watch()` hands back a fresh object
+   * on every render, not on every edit, which is what makes the effect's
+   * dependency a change signal at all — and also what makes it dangerous here.
+   *
+   *  - The first run is skipped, so merely OPENING a form does not create a
+   *    DRAFT row. Otherwise the partial-response list fills up with people who
+   *    never typed anything.
+   *
+   *  - The answers are compared to what was last SENT. Without that, this loops
+   *    forever: the save is a fetcher submit, a fetcher submit re-renders (and
+   *    revalidates the loader, which re-renders again), a re-render reschedules
+   *    the timer, and the timer saves. A tab left open would POST every couple
+   *    of seconds for as long as it stayed open. The localStorage autosave
+   *    above has the identical shape and is safe only because writing to
+   *    localStorage causes no render.
+   *
+   * The comparison is against the last SENT value rather than the last SEEN
+   * one on purpose: a re-render while a save is still pending must RESCHEDULE
+   * the timer, not cancel it — React runs the previous cleanup before this
+   * effect, so an early return there would silently drop the save.
+   */
+  const draftReady = useRef(false);
+  const lastSentDraft = useRef<string>('');
+  // Held in a ref so the effect can depend on `values` alone. Callers pass an
+  // inline arrow (it closes over a fetcher), which is a new function identity
+  // every render — in the dependency array it would say "changed" on renders
+  // where nothing about the draft did.
+  const draftSink = useRef(onDraft);
+  draftSink.current = onDraft;
+
+  useEffect(() => {
+    if (!draftSink.current) return;
+
+    const serialized = JSON.stringify(values.answers ?? {});
+    if (!draftReady.current) {
+      draftReady.current = true;
+      lastSentDraft.current = serialized;
+      return;
+    }
+    if (serialized === lastSentDraft.current) return;
+
+    const handle = window.setTimeout(() => {
+      lastSentDraft.current = serialized;
+      draftSink.current?.(values.answers as Record<string, unknown>);
+    }, SERVER_DRAFT_DEBOUNCE_MS);
+    return () => window.clearTimeout(handle);
+  }, [values]);
+
+  /**
+   * Has this form become interactive?
+   *
+   * Server-rendered markup looks like a working form and is not one: a
+   * `<select>` set before hydration is reset by React's first controlled
+   * render, and a click on a roster name does nothing at all. The attribute
+   * this drives is the only honest signal of the difference — the DOM is
+   * otherwise identical before and after — and it is what the e2e suite waits
+   * on instead of racing the bundle.
+   */
+  const [hydrated, setHydrated] = useState(false);
+  useEffect(() => setHydrated(true), []);
+
   const answerErrors = (errors.answers ?? {}) as Record<string, { message?: string } | undefined>;
   const errorFor = (fieldId: string): string | undefined => answerErrors[fieldId]?.message;
 
   const submit = handleSubmit(data => {
     const answers = data.answers as Record<string, unknown>;
+
+    // A locked identity is the session's, and the server re-derives it from the
+    // session anyway. Sending it is a courtesy to the staff table, not a claim.
+    if (lockedIdentity) {
+      onSubmit({
+        answers,
+        identity: { email: lockedIdentity.email, name: lockedIdentity.name || null },
+        trapped: false,
+      });
+      return;
+    }
+
     const emailFromAnswers = plan.emailFieldId ? answers[plan.emailFieldId] : undefined;
     const nameFromAnswers = plan.nameFieldId ? answers[plan.nameFieldId] : undefined;
 
@@ -334,7 +436,9 @@ export default function FormRenderer({
       setValue={setValue}
       errorFor={errorFor}
       needsIdentityInputs={needsIdentityInputs}
+      lockedIdentity={lockedIdentity ?? null}
       identityEmailError={errors.identityEmail?.message as string | undefined}
+      hydrated={hydrated}
       didRestore={didRestore}
       submit={submit}
       submitLabel={submitLabel}
@@ -366,6 +470,165 @@ interface ControlProps {
   watch: UseFormWatch<FormValues>;
   setValue: UseFormSetValue<FormValues>;
   invalid: boolean;
+}
+
+/** How many matches the roster list shows before it asks for a narrower query. */
+const ROSTER_VISIBLE_MATCHES = 40;
+
+/**
+ * `roster_select` — one control, two behaviours.
+ *
+ * The options are people, materialized into the revision at publish, and there
+ * may be a hundred of them. A `<select>` of a hundred names is technically a
+ * control and practically a wall, which is why this is a search box over a
+ * filtered list: type three letters of a name, click the person.
+ *
+ * `multiple` decides the shape of the answer AND the shape of the control:
+ * chips you can remove (Mockup 4's "Jordan Okafor ✕  Sam Whitfield ✕") versus a
+ * single chosen name. The stored answer is user ids either way — a list for
+ * multi, a bare id for single — which is what `coerceValue` and the contract's
+ * answer schema both expect.
+ *
+ * The list is INLINE rather than a popover. A popover needs focus-loss
+ * handling, an escape key, and a decision about what a click outside means; a
+ * bordered box with a scroll needs none of that, works identically on a phone,
+ * and cannot end up in the state where the options are open over the submit
+ * button. `useState` lives here (a module-scope component) and not in the
+ * renderer — see the note above `FormBody` for why that placement is
+ * load-bearing.
+ */
+// `register` is in the props (it is the shared ControlProps shape) and
+// deliberately unused: this field is not a DOM input, so there is nothing to
+// register. Its value reaches `handleSubmit` the same way the opinion scale's
+// does — `defaultValueFor` seeds it into the form state and `setValue` moves it.
+function RosterSelect({ field, watch, setValue, invalid }: ControlProps) {
+  const name = `answers.${field.id}` as const;
+  const multiple = Boolean(field.multiple);
+  const options = optionsOf(field);
+  const label = String(field.label ?? 'people');
+  const [query, setQuery] = useState('');
+
+  const raw = watch(name) as unknown;
+  const selectedIds: string[] = multiple
+    ? ((Array.isArray(raw) ? raw : []).filter(Boolean) as string[])
+    : typeof raw === 'string' && raw
+      ? [raw]
+      : [];
+
+  const byId = new Map(options.map(option => [option.id, option]));
+  const selected = selectedIds.map(id => byId.get(id)).filter(Boolean) as FormOption[];
+  const chosen = new Set(selectedIds);
+
+  const needle = query.trim().toLowerCase();
+  const matches = options.filter(
+    option => !chosen.has(option.id) && (!needle || option.label.toLowerCase().includes(needle))
+  );
+
+  const choose = (optionId: string) => {
+    setValue(name, multiple ? [...selectedIds, optionId] : optionId, { shouldDirty: true });
+    setQuery('');
+  };
+
+  const drop = (optionId: string) => {
+    setValue(name, multiple ? selectedIds.filter(id => id !== optionId) : '', {
+      shouldDirty: true,
+    });
+  };
+
+  if (options.length === 0) {
+    return (
+      <p className="rounded-md border border-dashed border-gray-300 px-3 py-2 text-sm italic text-gray-500 dark:border-gray-600 dark:text-gray-400">
+        Nobody is on this list yet — ask the course staff to publish the form again once the roster
+        is loaded.
+      </p>
+    );
+  }
+
+  return (
+    <div
+      // Two roster fields on one form offer the SAME people. Without a handle
+      // per field, "click Jordan Okafor" is ambiguous on the page and in a test.
+      data-testid={`roster-${field.id}`}
+      className={`rounded-md border bg-white dark:bg-gray-900 ${
+        invalid ? 'border-red-400' : 'border-gray-300 dark:border-gray-600'
+      }`}
+    >
+      {selected.length > 0 ? (
+        <div className="flex flex-wrap gap-1.5 px-2 pt-2">
+          {selected.map(option => (
+            <span
+              key={option.id}
+              className="inline-flex items-center gap-1.5 rounded-full bg-gray-100 py-1 pl-3 pr-1.5 text-sm text-gray-800 dark:bg-gray-800 dark:text-gray-100"
+            >
+              {option.label}
+              <button
+                type="button"
+                onClick={() => drop(option.id)}
+                aria-label={`Remove ${option.label}`}
+                className="flex h-5 w-5 items-center justify-center rounded-full text-gray-500 hover:bg-gray-200 hover:text-gray-900 dark:text-gray-400 dark:hover:bg-gray-700 dark:hover:text-white"
+              >
+                ✕
+              </button>
+            </span>
+          ))}
+        </div>
+      ) : null}
+
+      {/* Single-pick: once someone is chosen the search box goes away, so the
+          control reads as an answer rather than as an unfinished search. */}
+      {multiple || selected.length === 0 ? (
+        <>
+          <input
+            type="text"
+            role="combobox"
+            // The list is always rendered below the box (no popover), so it is
+            // permanently "expanded" — and it is the element this control owns.
+            aria-expanded="true"
+            aria-controls={`roster-${field.id}-list`}
+            aria-autocomplete="list"
+            aria-label={`Search ${label}`}
+            autoComplete="off"
+            value={query}
+            onChange={event => setQuery(event.target.value)}
+            placeholder={
+              field.optionSource === 'teaching_team'
+                ? 'Search the teaching team…'
+                : 'Search the roster…'
+            }
+            aria-invalid={invalid}
+            className="w-full border-0 bg-transparent px-3 py-2 text-sm text-gray-900 placeholder:text-gray-400 focus:outline-none dark:text-white dark:placeholder:text-gray-500"
+          />
+          <ul
+            id={`roster-${field.id}-list`}
+            className="max-h-48 overflow-y-auto border-t border-gray-200 py-1 dark:border-gray-700"
+          >
+            {matches.slice(0, ROSTER_VISIBLE_MATCHES).map(option => (
+              <li key={option.id}>
+                <button
+                  type="button"
+                  onClick={() => choose(option.id)}
+                  className="block w-full px-3 py-1.5 text-left text-sm text-gray-800 hover:bg-gray-100 dark:text-gray-100 dark:hover:bg-gray-800"
+                >
+                  {option.label}
+                  <OptionDescription text={option.description} />
+                </button>
+              </li>
+            ))}
+            {matches.length === 0 ? (
+              <li className="px-3 py-1.5 text-sm italic text-gray-500 dark:text-gray-400">
+                No matches.
+              </li>
+            ) : null}
+            {matches.length > ROSTER_VISIBLE_MATCHES ? (
+              <li className="px-3 py-1.5 text-xs text-gray-500 dark:text-gray-400">
+                {matches.length - ROSTER_VISIBLE_MATCHES} more — keep typing to narrow it down.
+              </li>
+            ) : null}
+          </ul>
+        </>
+      ) : null}
+    </div>
+  );
 }
 
 function Control({ field, register, watch, setValue, invalid }: ControlProps) {
@@ -568,6 +831,17 @@ function Control({ field, register, watch, setValue, invalid }: ControlProps) {
         );
       }
 
+      case 'roster_select':
+        return (
+          <RosterSelect
+            field={field}
+            register={register}
+            watch={watch}
+            setValue={setValue}
+            invalid={invalid}
+          />
+        );
+
       case 'ranked_choice': {
         const ranks = (field.ranks as number) ?? 1;
         const current = (watch(name) as unknown[] | undefined) ?? [];
@@ -736,7 +1010,9 @@ interface FormBodyProps {
   setValue: UseFormSetValue<FormValues>;
   errorFor: (fieldId: string) => string | undefined;
   needsIdentityInputs: boolean;
+  lockedIdentity: { name: string; email: string } | null;
   identityEmailError?: string;
+  hydrated: boolean;
   didRestore: boolean;
   submit: (event?: React.BaseSyntheticEvent) => Promise<void>;
   submitLabel: string;
@@ -752,7 +1028,9 @@ function FormBody({
   setValue,
   errorFor,
   needsIdentityInputs,
+  lockedIdentity,
   identityEmailError,
+  hydrated,
   didRestore,
   submit,
   submitLabel,
@@ -763,7 +1041,23 @@ function FormBody({
   const answerable = answerableFields(fields);
 
   return (
-    <form onSubmit={submit} noValidate>
+    <form onSubmit={submit} noValidate data-hydrated={hydrated ? 'true' : 'false'}>
+      {/* Mockup 4's locked identity row. It sits ABOVE the questions, not among
+          them: it is not a question, it is the answer to "who is filling this
+          in", and it is already settled by the session. */}
+      {lockedIdentity ? (
+        <div className="mb-6 rounded-md border border-gray-200 bg-gray-50 px-3 py-2.5 dark:border-gray-700 dark:bg-gray-800/60">
+          <div className="text-xs font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">
+            Your name
+          </div>
+          <div className="mt-0.5 text-sm text-gray-900 dark:text-white">
+            {lockedIdentity.name || lockedIdentity.email}{' '}
+            <span className="text-gray-500 dark:text-gray-400">— from your account</span>
+          </div>
+          <div className="text-xs text-gray-500 dark:text-gray-400">{lockedIdentity.email}</div>
+        </div>
+      ) : null}
+
       {didRestore ? (
         <p className="mb-5 rounded-md bg-gray-100 px-3 py-2 text-xs text-gray-600 dark:bg-gray-800 dark:text-gray-300">
           We restored the answers you started on this device.

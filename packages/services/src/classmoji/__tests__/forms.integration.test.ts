@@ -877,6 +877,47 @@ describe.skipIf(!RUN)('forms services (integration)', () => {
       });
       expect(after.submission_state).toBe('SUBMITTED');
       expect(after.verified_at).toBeInstanceOf(Date);
+      // And the ANSWERS survive too. Preserving only the state would leave a
+      // row marked SUBMITTED holding a half-typed answer set — this is the
+      // race a debounced autosave loses against its own submit.
+      expect((after.answers as Record<string, unknown>)[fieldId]).toBe('Final');
+    });
+
+    it('a draft save leaves a PENDING_VERIFICATION row alone as well', async () => {
+      const { formId, revisionId } = await makeOpenForm();
+      const fieldId = await nameFieldId(revisionId);
+      const email = `pending-draft-${suite}@example.test`;
+
+      await responseService.beginPublicSubmission({
+        formId,
+        email,
+        answers: { [fieldId]: 'Submitted, awaiting the link' },
+        revisionId,
+      });
+
+      // Keyed by draft token, so this is a DIFFERENT row — the point is the one
+      // that would collide: the public path autosaves under the same user once
+      // a response is verified, and an unverified row must not be writable
+      // either. Reached here through the same guard.
+      const pending = await getPrisma().formResponse.findFirstOrThrow({
+        where: { form_id: formId, email_normalized: email },
+      });
+      await getPrisma().formResponse.update({
+        where: { id: pending.id },
+        data: { user_id: studentBId },
+      });
+
+      const after = await responseService.upsertDraft({
+        formId,
+        revisionId,
+        userId: studentBId,
+        email,
+        answers: { [fieldId]: 'Still typing' },
+      });
+      expect(after.submission_state).toBe('PENDING_VERIFICATION');
+      expect((after.answers as Record<string, unknown>)[fieldId]).toBe(
+        'Submitted, awaiting the link'
+      );
     });
 
     it('staff status and note round-trip, and suggest the labels already used', async () => {
@@ -1012,6 +1053,159 @@ describe.skipIf(!RUN)('forms services (integration)', () => {
           revisionId,
         })
       ).resolves.toMatchObject({ mode: 'new' });
+    });
+  });
+
+  // ── Tier-1 option sourcing ───────────────────────────────────────────────
+
+  describe('roster materialization at publish', () => {
+    /** A roster field, minus the options publish is supposed to supply. */
+    const rosterField = (patch: Record<string, unknown> = {}) => ({
+      type: 'roster_select',
+      label: 'Who would you like to work with?',
+      optionSource: 'roster',
+      ...patch,
+    });
+
+    /** The materialized options of the Nth roster field on a revision. */
+    const rosterOptions = async (revisionId: string, index = 0) => {
+      const revision = await prisma.formRevision.findUniqueOrThrow({ where: { id: revisionId } });
+      const fields = formService
+        .fieldsOf(revision.fields)
+        .flatMap(field =>
+          field.type === 'repeat_group' ? ((field.fields as (typeof field)[]) ?? []) : [field]
+        )
+        .filter(field => field.type === 'roster_select');
+      return (fields[index]?.options ?? []) as Array<{ id: string; label: string }>;
+    };
+
+    beforeAll(async () => {
+      await prisma.classroomMembership.createMany({
+        data: [
+          { classroom_id: classroomId, user_id: studentAId, role: 'STUDENT' },
+          { classroom_id: classroomId, user_id: studentBId, role: 'STUDENT' },
+          { classroom_id: classroomId, user_id: ownerId, role: 'OWNER' },
+          // The same person twice on the teaching team. Dual-role memberships
+          // are ordinary in this product (the seeded dev owner is OWNER and
+          // ASSISTANT and STUDENT), and two options sharing an id is a
+          // definition the contract rejects.
+          { classroom_id: classroomId, user_id: ownerId, role: 'ASSISTANT' },
+        ],
+        skipDuplicates: true,
+      });
+    });
+
+    it('freezes the live roster into the revision as {id: user_id, label}', async () => {
+      const form = await makeForm({ access: 'CLASSROOM', fields: [rosterField()] });
+      const { revision } = await formService.publish(form.id);
+
+      const options = await rosterOptions(revision.id);
+      expect(options.map(option => option.id).sort()).toEqual([studentAId, studentBId].sort());
+      // "Form Test a (formtest-<suite>-a)" — name plus login, so two students
+      // called Alex stay distinguishable.
+      expect(options.every(option => option.label.startsWith('Form Test'))).toBe(true);
+      expect(options[0].label).toMatch(/\(formtest-.+\)$/);
+    });
+
+    it('sources the teaching team as OWNER | TEACHER | ASSISTANT, deduped by person', async () => {
+      const form = await makeForm({
+        access: 'CLASSROOM',
+        fields: [rosterField({ optionSource: 'teaching_team', label: 'Pick a TA' })],
+      });
+      const { revision } = await formService.publish(form.id);
+
+      const options = await rosterOptions(revision.id);
+      expect(options).toHaveLength(1);
+      expect(options[0].id).toBe(ownerId);
+    });
+
+    it('leaves the draft empty and re-materializes on the next publish', async () => {
+      const form = await makeForm({ access: 'CLASSROOM', fields: [rosterField()] });
+      const first = await formService.publish(form.id);
+      expect(await rosterOptions(first.revision.id)).toHaveLength(2);
+
+      // The DRAFT never holds a roster: it is not what the author wrote.
+      const draftFields = formService.fieldsOf(
+        (await prisma.form.findUniqueOrThrow({ where: { id: form.id } })).draft_fields
+      );
+      expect(draftFields[0].options).toEqual([]);
+
+      const latecomer = await makeUser('latecomer');
+      await prisma.classroomMembership.create({
+        data: { classroom_id: classroomId, user_id: latecomer, role: 'STUDENT' },
+      });
+
+      const second = await formService.publish(form.id);
+      const options = await rosterOptions(second.revision.id);
+      expect(options.map(option => option.id)).toContain(latecomer);
+      expect(options).toHaveLength(3);
+
+      // The FIRST revision is untouched — a response filed against it still
+      // reads back with the roster the person actually saw.
+      expect(await rosterOptions(first.revision.id)).toHaveLength(2);
+    });
+
+    it('materializes a roster field nested in a repeat group', async () => {
+      const form = await makeForm({
+        access: 'CLASSROOM',
+        fields: [
+          {
+            type: 'repeat_group',
+            label: 'Review each teammate',
+            repeat: { over: 'teammates', scope: { by: 'classroom' } },
+            fields: [rosterField({ label: 'Who else did they work with?', multiple: true })],
+          },
+        ],
+      });
+      const { revision } = await formService.publish(form.id);
+      expect(await rosterOptions(revision.id).then(options => options.length)).toBeGreaterThan(0);
+    });
+
+    it('accepts a materialized user id at submit and refuses a stranger', async () => {
+      const form = await makeForm({
+        access: 'CLASSROOM',
+        fields: [rosterField({ required: true })],
+      });
+      const { revision } = await formService.publish(form.id);
+      const fieldId = formService.fieldsOf(revision.fields)[0].id;
+
+      const submit = (userId: string, choice: string) =>
+        responseService.submitClassroom({
+          formId: form.id,
+          userId,
+          email: `formtest-${suite}-a@example.test`,
+          answers: { [fieldId]: choice },
+          revisionId: revision.id,
+        });
+
+      await expect(submit(studentAId, studentBId)).resolves.toMatchObject({
+        submission_state: 'SUBMITTED',
+      });
+      // Nothing special guards this — the materialized options ARE the option
+      // set the contract's `oneOf` is built from, so an id nobody on the roster
+      // holds is simply not an option.
+      expect(await codeOf(submit(studentBId, randomUUID()))).toBe('FORM_ANSWERS_INVALID');
+    });
+
+    it('refuses to publish a roster field on a PUBLIC form', async () => {
+      const form = await makeForm({ access: 'PUBLIC' });
+      // Written straight to the column: `update` already refuses this, and the
+      // point here is that PUBLISH refuses it too — a draft written before the
+      // mode was settled must not become live under it.
+      await prisma.form.update({
+        where: { id: form.id },
+        data: {
+          draft_fields: {
+            definition_version: 1,
+            fields: [{ ...rosterField(), id: randomUUID(), required: false, options: [] }],
+          },
+        },
+      });
+
+      expect(await codeOf(formService.publish(form.id))).toBe('FORM_FIELD_ACCESS_VIOLATION');
+      const published = await prisma.form.findUniqueOrThrow({ where: { id: form.id } });
+      expect(published.status).toBe('DRAFT');
+      expect(published.current_revision_id).toBeNull();
     });
   });
 });

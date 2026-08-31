@@ -2,12 +2,18 @@ import getPrisma from '@classmoji/database';
 import { titleToIdentifier } from '@classmoji/utils';
 import {
   DEFINITION_VERSION,
+  FORM_DEFINITION_TOO_LARGE,
+  FORM_LIMITS,
   assertFieldsAllowedForAccess,
+  definitionByteSize,
+  flattenFields,
+  formContractError,
   parseFormDefinition,
   type FormDefinition,
   type FormField,
+  type FormOption,
 } from './formContract.ts';
-import type { Prisma, FormAccess, FormStatus } from '@prisma/client';
+import type { Prisma, FormAccess, FormStatus, Role } from '@prisma/client';
 
 /**
  * Form Service
@@ -36,6 +42,8 @@ export const FORM_ACCESS_FROZEN = 'FORM_ACCESS_FROZEN';
 export const FORM_NOT_DRAFT = 'FORM_NOT_DRAFT';
 /** Publish called on a form with no field list saved yet. */
 export const FORM_NO_FIELDS = 'FORM_NO_FIELDS';
+/** A roster-sourced field would need more options than one field may hold. */
+export const FORM_ROSTER_TOO_LARGE = 'FORM_ROSTER_TOO_LARGE';
 
 /**
  * Paths the forms subtree owns inside `/{class}/forms/…`. A form slugged
@@ -336,6 +344,128 @@ export async function update(formId: string, updates: UpdateFormInput) {
   return getPrisma().form.update({ where: { id: formId }, data });
 }
 
+// ─── Tier-1 option sourcing (roster_select) ─────────────────────────────────
+
+/**
+ * Which memberships each `optionSource` means.
+ *
+ * `teaching_team` is the platform's teaching team — the same OWNER | TEACHER |
+ * ASSISTANT set `requireClassroomTeachingTeam` and the `list_teaching_team` MCP
+ * tool use. It is deliberately NOT `classroomMembership.findStaff`, which is
+ * OWNER | TEACHER only: a TA is on the teaching team everywhere else in the
+ * product, and a "pick a TA" field that silently omitted them would be a
+ * different meaning of the same words.
+ */
+const OPTION_SOURCE_ROLES: Record<string, Role[]> = {
+  roster: ['STUDENT'],
+  teaching_team: ['OWNER', 'TEACHER', 'ASSISTANT'],
+};
+
+/** How a person is labelled in a roster option: "Maya Chen (mchen)". */
+const memberLabel = (user: { name: string | null; login: string | null }, userId: string): string => {
+  if (user.name && user.login) return `${user.name} (${user.login})`;
+  return user.name || user.login || `Unknown member ${userId.slice(0, 8)}`;
+};
+
+/**
+ * Resolve one `optionSource` to `[{ id: user_id, label }]`, deduped by user.
+ *
+ * The dedupe is not defensive tidying — it is required. A person can hold more
+ * than one membership in the same classroom (the seeded dev owner is OWNER and
+ * ASSISTANT and STUDENT), so `teaching_team` genuinely returns the same user
+ * twice, and two options sharing an id is a definition the contract rejects and
+ * a `<select>` that behaves unpredictably.
+ */
+async function resolveOptionSource(
+  tx: Prisma.TransactionClient,
+  classroomId: string,
+  source: string
+): Promise<FormOption[]> {
+  const roles = OPTION_SOURCE_ROLES[source];
+  if (!roles) return [];
+
+  const memberships = await tx.classroomMembership.findMany({
+    where: { classroom_id: classroomId, role: { in: roles } },
+    select: { user_id: true, user: { select: { name: true, login: true } } },
+    orderBy: [{ user: { name: 'asc' } }, { user: { login: 'asc' } }],
+  });
+
+  const byUser = new Map<string, FormOption>();
+  for (const membership of memberships) {
+    if (byUser.has(membership.user_id)) continue;
+    byUser.set(membership.user_id, {
+      id: membership.user_id,
+      label: memberLabel(membership.user, membership.user_id),
+    });
+  }
+  return [...byUser.values()];
+}
+
+/**
+ * Freeze the live roster into every `roster_select` in a field list.
+ *
+ * ── Why at publish, and only at publish ────────────────────────────────────
+ * These are the plan's TIER-1 sourced options: resolved once, into the
+ * immutable revision, rather than per render. Answers store option ids — here,
+ * user ids — so a response stays readable after someone drops the course, and
+ * two people filling the same revision are answering the same question. The
+ * draft keeps its empty `options` array; a re-publish re-materializes against
+ * the roster as it stands then, which is how an instructor picks up the four
+ * students who enrolled last week.
+ *
+ * ── Access ─────────────────────────────────────────────────────────────────
+ * Never called for a PUBLIC form. `publish` runs
+ * `assertFieldsAllowedForAccess` FIRST, so a PUBLIC form carrying a
+ * roster-sourced field is refused before a single membership row is read — the
+ * render layer of the three-layer rule holds here too: not "we don't look", but
+ * "we never got here".
+ *
+ * Repeat-group children are materialized as well (`roster_select` is nestable),
+ * which is why the walk is `flattenFields`-shaped rather than a top-level map.
+ */
+export async function materializeSourcedOptions(
+  tx: Prisma.TransactionClient,
+  classroomId: string,
+  fields: FormField[]
+): Promise<FormField[]> {
+  const sourced = flattenFields(fields).filter(field => field.type === 'roster_select');
+  if (sourced.length === 0) return fields;
+
+  // One query per distinct source, not per field: a bidding form asks "who do
+  // you want to work with" and "who would you rather not" off the same roster.
+  const cache = new Map<string, FormOption[]>();
+  for (const field of sourced) {
+    const source = String(field.optionSource ?? 'roster');
+    if (cache.has(source)) continue;
+    cache.set(source, await resolveOptionSource(tx, classroomId, source));
+  }
+
+  // The ceiling is a refusal, never a truncation. Silently dropping the tail of
+  // a roster would make a person unpickable with no signal on any surface.
+  for (const [source, options] of cache) {
+    if (options.length > FORM_LIMITS.MAX_ROSTER_OPTIONS) {
+      throw serviceError(
+        FORM_ROSTER_TOO_LARGE,
+        `The ${source} has ${options.length} people; a roster-sourced field holds at most ${FORM_LIMITS.MAX_ROSTER_OPTIONS}.`
+      );
+    }
+  }
+
+  const materialize = (field: FormField): FormField => {
+    if (field.type === 'repeat_group') {
+      const inner = (field.fields as FormField[] | undefined) ?? [];
+      return { ...field, fields: inner.map(materialize) } as FormField;
+    }
+    if (field.type !== 'roster_select') return field;
+    return {
+      ...field,
+      options: cache.get(String(field.optionSource ?? 'roster')) ?? [],
+    } as FormField;
+  };
+
+  return fields.map(materialize);
+}
+
 /**
  * Snapshot the draft field list into a new immutable revision and open the form.
  *
@@ -344,6 +474,11 @@ export async function update(formId: string, updates: UpdateFormInput) {
  * moves to the new revision in the same transaction — a fill page loaded a
  * moment earlier now carries a stale revision id and gets FORM_REVISION_STALE
  * on submit, which is the "this form changed" notice.
+ *
+ * Publish is also where TIER-1 options are frozen: every `roster_select` gets
+ * the live roster (or teaching team) baked into the revision as
+ * `[{ id: user_id, label }]`. See `materializeSourcedOptions`. The draft is left
+ * alone, so re-publishing after four late enrollments is what picks them up.
  */
 export async function publish(formId: string) {
   return getPrisma().$transaction(async tx => {
@@ -351,7 +486,7 @@ export async function publish(formId: string) {
 
     const form = await tx.form.findUnique({
       where: { id: formId },
-      select: { id: true, status: true, access: true, draft_fields: true },
+      select: { id: true, classroom_id: true, status: true, access: true, draft_fields: true },
     });
     if (!form) throw serviceError(FORM_NOT_FOUND, `Form ${formId} not found`);
 
@@ -361,8 +496,27 @@ export async function publish(formId: string) {
     }
 
     // The access rule is re-checked at publish, not just at save: a definition
-    // written before the mode was chosen must not become live under it.
+    // written before the mode was chosen must not become live under it. It runs
+    // BEFORE materialization on purpose — a PUBLIC form carrying a roster field
+    // is refused without a single membership row being read.
     assertFieldsAllowedForAccess(fields, form.access);
+
+    const materialized = await materializeSourcedOptions(tx, form.classroom_id, fields);
+
+    const definition: FormDefinition = {
+      definition_version: DEFINITION_VERSION,
+      fields: materialized,
+    };
+
+    // Sized against the REVISION cap, not the authoring one: what publish
+    // produces is the author's definition plus a roster nobody typed.
+    const bytes = definitionByteSize(definition);
+    if (bytes > FORM_LIMITS.MAX_REVISION_BYTES) {
+      throw formContractError(
+        FORM_DEFINITION_TOO_LARGE,
+        `This form's published revision would be ${bytes} bytes; the limit is ${FORM_LIMITS.MAX_REVISION_BYTES}.`
+      );
+    }
 
     const latest = await tx.formRevision.findFirst({
       where: { form_id: formId },
@@ -374,10 +528,7 @@ export async function publish(formId: string) {
       data: {
         form_id: formId,
         version: (latest?.version ?? 0) + 1,
-        fields: {
-          definition_version: DEFINITION_VERSION,
-          fields,
-        } as unknown as Prisma.InputJsonValue,
+        fields: definition as unknown as Prisma.InputJsonValue,
       },
     });
 

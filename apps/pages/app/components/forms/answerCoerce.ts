@@ -50,6 +50,11 @@ export function defaultValueFor(field: FormField): unknown {
     case 'multiselect':
     case 'ranked_choice':
       return [];
+    // One type, two shapes: `multiple` decides whether the answer is a list of
+    // user ids or a single one, and seeding the wrong one puts `''` where the
+    // contract wants an array (or `[]` into a single-value control).
+    case 'roster_select':
+      return field.multiple ? [] : '';
     case 'switch':
       return false;
     case 'matrix':
@@ -112,8 +117,15 @@ export function coerceValue(field: FormField, raw: unknown): unknown {
     }
 
     case 'dropdown':
-    case 'roster_select':
       return raw === '' || raw === null ? undefined : raw;
+
+    case 'roster_select': {
+      // A multi-pick roster field answers with a LIST of user ids; a single-pick
+      // one answers with a user id, or nothing.
+      if (!field.multiple) return raw === '' || raw === null ? undefined : raw;
+      if (!Array.isArray(raw)) return raw === '' || raw == null ? [] : [raw];
+      return raw.filter(value => value !== '' && value !== null && value !== undefined);
+    }
 
     case 'multiselect':
     case 'ranked_choice': {
@@ -288,6 +300,108 @@ export function extractIdentity(
   ).trim();
 
   return { email, name: name || null };
+}
+
+// ─── Classroom identity ─────────────────────────────────────────────────────
+
+/**
+ * A `short_text` field that is asking the filler's own name.
+ *
+ * Much tighter than `identityPlan`'s `/\bname\b/i`, and deliberately so: that
+ * heuristic only picked a display fallback, and getting it wrong cost a blank
+ * column in the staff table. THIS one decides whether a question is removed
+ * from the form and answered from the session, and "Project name" or "Your
+ * partner's name" must not be. The whole label has to BE the question.
+ */
+const SELF_NAME_LABEL = /^(your |full |preferred |legal )*name\s*[?:*]?$/i;
+
+export interface ClassroomIdentity {
+  name: string;
+  email: string;
+}
+
+export interface ClassroomIdentityPlan {
+  /** Field ids the renderer must not show; the server answers them instead. */
+  hiddenIds: string[];
+  /** `{ [fieldId]: value }` the server writes over whatever the client sent. */
+  injected: Record<string, string>;
+}
+
+/**
+ * Which of a definition's own questions the SESSION answers, on a classroom
+ * fill.
+ *
+ * Mockup 4 shows identity as a locked row ("Maya Chen — from your account"),
+ * not as questions. But a preset written for a public link may still contain an
+ * email field, and simply hiding it client-side would be two bugs: cosmetic
+ * (the value is still whatever the client posts) and fatal (a required email
+ * with no answer fails `parseAnswers` on the server, on a question the person
+ * was never shown).
+ *
+ * So hiding and answering are ONE decision, made by this function, called by
+ * the loader (to decide what to render) and by the action (to decide what to
+ * write) from the same field list. The action overwrites the injected keys
+ * unconditionally — a client that posts its own value for a hidden field is not
+ * refused, it is ignored, which is the same outcome with fewer error paths.
+ *
+ * ── The safety valve ───────────────────────────────────────────────────────
+ * A field is locked ONLY when the account's value actually satisfies it. A
+ * `@dartmouth.edu`-restricted email field and a session email that is not one
+ * would otherwise produce an unfixable form: the question is hidden, the
+ * injected answer fails validation, and nobody can do anything about it. In
+ * that case the field stays visible and the member fills it in — the identity
+ * on the RESPONSE row still comes from the session either way, so this is a
+ * question the form asks, not a hole in who the response belongs to.
+ */
+export function classroomIdentityPlan(
+  fields: FormField[],
+  identity: ClassroomIdentity
+): ClassroomIdentityPlan {
+  const hiddenIds: string[] = [];
+  const injected: Record<string, string> = {};
+
+  const accepts = (field: FormField, value: string): boolean => {
+    // Each registry entry's `answerSchema` is typed against ITS OWN parsed field
+    // shape, so the registry as a whole has no single callable signature. This
+    // is the same erasure `specFor` above does, widened by one step to reach the
+    // factory — the call is guarded and the result is only ever a boolean.
+    const spec = (
+      FIELD_TYPE_REGISTRY as unknown as Record<
+        string,
+        { answerSchema?: (field: FormField, ctx: object) => z.ZodTypeAny } | undefined
+      >
+    )[field.type];
+    if (!spec?.answerSchema) return false;
+    try {
+      return spec.answerSchema(field, {}).safeParse(value).success;
+    } catch {
+      return false;
+    }
+  };
+
+  for (const field of fields) {
+    const isEmail = field.type === 'email';
+    const isSelfName =
+      field.type === 'short_text' && SELF_NAME_LABEL.test(String(field.label ?? '').trim());
+    if (!isEmail && !isSelfName) continue;
+
+    const value = isEmail ? identity.email : identity.name;
+    if (!value || !accepts(field, value)) continue;
+
+    hiddenIds.push(field.id);
+    injected[field.id] = value;
+  }
+
+  return { hiddenIds, injected };
+}
+
+/** The fields a classroom fill actually renders — identity questions removed. */
+export function visibleClassroomFields(
+  fields: FormField[],
+  plan: ClassroomIdentityPlan
+): FormField[] {
+  const hidden = new Set(plan.hiddenIds);
+  return fields.filter(field => !hidden.has(field.id));
 }
 
 /** Options a choice field offers, exposed for the renderer's control markup. */
