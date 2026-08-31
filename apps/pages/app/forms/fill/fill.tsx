@@ -83,7 +83,14 @@ type ActionResult =
   | { state: 'draft-skipped' }
   | { state: 'recorded' }
   /** A submit against a form this person has already answered, finally. */
-  | { state: 'already-recorded' };
+  | { state: 'already-recorded' }
+  /**
+   * A teammate joined between the page rendering and the click. The answers
+   * come back so nothing typed is lost, and React Router's post-action
+   * revalidation re-runs the loader — which re-resolves the team, so the
+   * re-render already carries the new person's card.
+   */
+  | { state: 'team-changed'; answers: Record<string, unknown> };
 
 /** The submission envelope, before anything in it is believed. */
 interface SubmissionBody {
@@ -93,6 +100,13 @@ interface SubmissionBody {
   trapped?: boolean;
   /** Classroom only. Absent means "submit". */
   intent?: 'autosave' | 'submit';
+  /**
+   * Classroom only. Per repeat group, the review targets the BROWSER rendered.
+   * Not trusted for anything — the server re-resolves the team under the form's
+   * row lock — and read only to tell "your team changed" apart from a
+   * validation error the filler could not have avoided.
+   */
+  renderedTargets?: Record<string, string[]>;
 }
 
 /**
@@ -134,6 +148,11 @@ async function classroomWrite(
         formId: loaded.form.id,
         revisionId: loaded.revisionId,
         userId: loaded.server.userId,
+        // Makes the draft snapshot its Tier-2 targets. That snapshot is the
+        // only server-written record that a teammate who later leaves was ever
+        // a teammate, and therefore the only thing that lets their review
+        // survive the split.
+        classroomId: loaded.server.classroomId,
         email: loaded.identity.email,
         name: loaded.identity.name || null,
         answers,
@@ -168,6 +187,7 @@ async function classroomWrite(
       name: loaded.identity.name || null,
       answers,
       revisionId,
+      renderedTargets: body.renderedTargets,
     });
     return { state: 'recorded' };
   } catch (error) {
@@ -180,6 +200,15 @@ async function classroomWrite(
         email: loaded.identity.email,
         name: loaded.identity.name || null,
       };
+    }
+
+    if (code === 'FORM_TEAM_CHANGED') return { state: 'team-changed', answers };
+
+    // The loader renders an explanation instead of the form for every
+    // unresolvable team, so this only answers a crafted request. Reported as an
+    // error rather than as `closed`, which would be untrue.
+    if (code === 'FORM_TEAM_UNRESOLVED') {
+      return { state: 'error', message: (error as Error).message };
     }
 
     if (
@@ -348,6 +377,60 @@ function SignInInterstitial({
 }
 
 type ClassroomFillData = Extract<ClientFormLoad, { view: 'classroom-fill' }>;
+type ReviewGroup = ClassroomFillData['reviewGroups'][number];
+
+/**
+ * What to tell someone whose review block could not be resolved.
+ *
+ * Three states, three genuinely different fixes — and each names the person who
+ * can apply it. "Something went wrong" would send every one of them to the same
+ * (wrong) place, which is the whole reason the resolver answers with a state
+ * instead of an empty list.
+ */
+function reviewBlockedNotice(group: ReviewGroup): { title: string; body: React.ReactNode } {
+  if (group.state === 'NO_TEAM') {
+    return {
+      title: 'You are not on a team for this form yet',
+      body: (
+        <p>
+          This form asks you to review your teammates, and you are not on a team in this course yet.
+          Once the teaching team puts you on one, come back and the review will be here.
+        </p>
+      ),
+    };
+  }
+
+  if (group.state === 'AMBIGUOUS_TEAM') {
+    return {
+      title: 'You are on more than one team',
+      body: (
+        <>
+          <p>
+            This form does not say which of your teams to review
+            {group.teamNames?.length ? ` — you are on ${group.teamNames.join(' and ')}` : ''}. Ask
+            the teaching team to point the review at one team set; we will not guess.
+          </p>
+        </>
+      ),
+    };
+  }
+
+  return {
+    title: 'This review is not pointed at your team',
+    body: (
+      <>
+        <p>
+          {group.detail === 'no-team-with-tag'
+            ? 'You are on a team, but it is not part of the team set this review covers.'
+            : 'The team set this review is pointed at cannot be found in this course.'}
+        </p>
+        <p className="mt-3 text-gray-500 dark:text-gray-400">
+          That is something the teaching team fixes on the form — send them this page.
+        </p>
+      </>
+    ),
+  };
+}
 
 /**
  * The classroom fill surface (Mockup 4).
@@ -356,6 +439,15 @@ type ClassroomFillData = Extract<ClientFormLoad, { view: 'classroom-fill' }>;
  * public path has no use for — a second fetcher for the autosave, and the
  * "Draft saved" line that fetcher drives.
  */
+/** `{ [groupId]: userIds }` — the review targets this page actually drew. */
+const renderedTargets = (data: ClassroomFillData): Record<string, string[]> =>
+  Object.fromEntries(
+    Object.entries(data.reviewTargets).map(([groupId, targets]) => [
+      groupId,
+      targets.filter(target => !target.optional).map(target => target.user_id),
+    ])
+  );
+
 function ClassroomFill({ data }: { data: ClassroomFillData }) {
   const submitter = useFetcher<ActionResult>();
   const autosave = useFetcher<ActionResult>();
@@ -370,10 +462,21 @@ function ClassroomFill({ data }: { data: ClassroomFillData }) {
   const { mode } = data;
   const recorded = mode !== 'fill';
 
+  /**
+   * A review block whose team could not be resolved replaces the whole form.
+   *
+   * Not a field-level error: half of a peer review is not a partial answer, and
+   * offering a Submit button under an explanation of why the review cannot be
+   * filled in would only produce a response with an empty review in it.
+   */
+  const blocked = data.reviewBlocked;
+  const blockedNotice = blocked ? reviewBlockedNotice(blocked) : null;
+
   const post = (payload: Record<string, unknown>) =>
     submitter.submit(payload as SubmitTarget, { method: 'post', encType: 'application/json' });
 
   const stale = result?.state === 'stale' ? result : null;
+  const teamChanged = result?.state === 'team-changed' ? result : null;
 
   const draftLine =
     autosave.state !== 'idle'
@@ -390,7 +493,13 @@ function ClassroomFill({ data }: { data: ClassroomFillData }) {
         Members of {data.classroomName} only · responses are confidential to the teaching team
       </p>
 
-      {recorded ? (
+      {blocked ? (
+        <FormNotice icon="👥" title={blockedNotice!.title}>
+          {blockedNotice!.body}
+        </FormNotice>
+      ) : null}
+
+      {!blocked && recorded ? (
         <div
           role="status"
           className="mb-6 rounded-md border border-green-200 bg-green-50 px-3 py-2.5 text-sm text-green-900 dark:border-green-900 dark:bg-green-950 dark:text-green-200"
@@ -437,6 +546,20 @@ function ClassroomFill({ data }: { data: ClassroomFillData }) {
         </div>
       ) : null}
 
+      {/* Somebody joined the team mid-fill. The loader has already re-resolved
+          by the time this renders (React Router revalidates after an action),
+          so the card for the new person is on the page below this line. */}
+      {teamChanged ? (
+        <div
+          role="alert"
+          data-testid="forms-team-changed"
+          className="mb-6 rounded-md border border-amber-200 bg-amber-50 px-3 py-2.5 text-sm text-amber-900 dark:border-amber-900 dark:bg-amber-950 dark:text-amber-200"
+        >
+          Your team changed while you were filling this in. Everything you wrote is still here —
+          there is someone new to review below.
+        </div>
+      ) : null}
+
       {/* The renderer's own "restored on this device" line is for the
           localStorage draft, which is off here. A server draft deserves the
           same courtesy for the opposite reason: answers appearing in a form the
@@ -449,7 +572,7 @@ function ClassroomFill({ data }: { data: ClassroomFillData }) {
         </p>
       ) : null}
 
-      {mode === 'recorded' ? (
+      {blocked ? null : mode === 'recorded' ? (
         /* Final: their answers, read-only. The same view the staff drawer uses,
            over the same revision — there is no second way to render an answer.
            The identity row is repeated here because this branch does not mount
@@ -465,13 +588,15 @@ function ClassroomFill({ data }: { data: ClassroomFillData }) {
           <AnswerView
             fields={data.fields as FormField[]}
             answers={(data.storedAnswers ?? {}) as Record<string, unknown>}
+            resolvedContext={data.resolvedContext}
           />
         </>
       ) : (
         <FormRenderer
           key={data.revisionId}
           fields={data.fields as FormField[]}
-          storedAnswers={stale?.answers ?? data.storedAnswers ?? null}
+          reviewTargets={data.reviewTargets}
+          storedAnswers={teamChanged?.answers ?? stale?.answers ?? data.storedAnswers ?? null}
           lockedIdentity={data.identity}
           /* localStorage OFF. The draft belongs to an identified member and
              lives on the server, so it follows them to another machine — and
@@ -505,6 +630,10 @@ function ClassroomFill({ data }: { data: ClassroomFillData }) {
               intent: 'submit',
               answers: submission.answers,
               revisionId: data.revisionId,
+              // What this page was showing. The server re-resolves the team
+              // regardless; this only lets it tell "your team changed" apart
+              // from an answer set that was wrong to begin with.
+              renderedTargets: renderedTargets(data),
             })
           }
         />

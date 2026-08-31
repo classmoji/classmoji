@@ -12,6 +12,7 @@ import {
   buildResponseSchema,
   type FormField,
   type FormOption,
+  type ResolvedTargetRef,
 } from '@classmoji/services/form-contract';
 
 import { FieldShell } from './FormPreview.tsx';
@@ -79,8 +80,27 @@ export interface RendererSubmission {
   trapped: boolean;
 }
 
+/**
+ * One review target, as the renderer needs it: the schema key plus the name the
+ * card is headed with. `optional` marks a DEPARTED teammate — their stored
+ * review still rides along in the form state and is still accepted by the
+ * server, but no card is drawn for them and nothing is required of them.
+ */
+export interface ReviewTarget extends ResolvedTargetRef {
+  name: string;
+  login?: string | null;
+}
+
 export interface FormRendererProps {
   fields: FormField[];
+  /**
+   * Per `repeat_group` field id, the teammates THIS person reviews — resolved
+   * server-side in the classroom loader and passed down whole. Required
+   * whenever the definition contains a repeat group: `buildResponseSchema`
+   * refuses to build one without it, deliberately, so that a renderer which
+   * forgot to resolve fails loudly instead of accepting reviews of anyone.
+   */
+  reviewTargets?: Record<string, ReviewTarget[]>;
   /** Answers to prefill: a stored response, or a repopulate after a stale error. */
   storedAnswers?: Record<string, unknown> | null;
   identityDefaults?: RendererIdentity;
@@ -219,6 +239,7 @@ function DisplayBlock({ field }: { field: FormField }) {
 
 export default function FormRenderer({
   fields,
+  reviewTargets,
   storedAnswers,
   identityDefaults,
   lockedIdentity,
@@ -250,7 +271,11 @@ export default function FormRenderer({
   const schema = useMemo(
     () =>
       z.object({
-        answers: buildResponseSchema(fields),
+        // The SAME context the submit path builds server-side: current
+        // teammates plus any departed one whose review is still on file. The
+        // browser cannot widen it — it only renders what the loader resolved —
+        // and the server rebuilds it from scratch regardless.
+        answers: buildResponseSchema(fields, { resolved: reviewTargets }),
         identityName: z.string().max(300).optional(),
         identityEmail: needsIdentityInputs
           ? z
@@ -263,7 +288,7 @@ export default function FormRenderer({
         // here — the caller reads it and the server decides.
         website: z.string().optional(),
       }),
-    [fields, needsIdentityInputs]
+    [fields, needsIdentityInputs, reviewTargets]
   );
 
   /**
@@ -303,10 +328,14 @@ export default function FormRenderer({
   } = useForm<FormValues>({
     resolver,
     defaultValues: {
-      answers: defaultAnswers(fields, {
-        ...(storedAnswers ?? {}),
-        ...(draft.answers ?? {}),
-      }),
+      answers: defaultAnswers(
+        fields,
+        {
+          ...(storedAnswers ?? {}),
+          ...(draft.answers ?? {}),
+        },
+        reviewTargets
+      ),
       identityName: draft.identityName ?? identityDefaults?.name ?? '',
       identityEmail: draft.identityEmail ?? identityDefaults?.email ?? '',
       website: '',
@@ -393,8 +422,28 @@ export default function FormRenderer({
   const [hydrated, setHydrated] = useState(false);
   useEffect(() => setHydrated(true), []);
 
-  const answerErrors = (errors.answers ?? {}) as Record<string, { message?: string } | undefined>;
-  const errorFor = (fieldId: string): string | undefined => answerErrors[fieldId]?.message;
+  /**
+   * The message for one answer path, walking the nested error tree.
+   *
+   * A path is a list because a repeat group's inner controls live two levels
+   * down — `answers.{groupId}.{targetId}.{fieldId}` — and a lookup keyed only on
+   * a field id would find nothing for any of them, so every card would render
+   * as valid while the submit silently failed.
+   *
+   * `root` is checked alongside `message`: react-hook-form parks an error
+   * raised ON an object (the group's own min/max refinement) under `root` when
+   * the object also has per-key errors, and under `message` when it does not.
+   */
+  const errorFor = (...path: string[]): string | undefined => {
+    let node: unknown = errors.answers;
+    for (const step of path) {
+      if (!node || typeof node !== 'object') return undefined;
+      node = (node as Record<string, unknown>)[step];
+    }
+    if (!node || typeof node !== 'object') return undefined;
+    const entry = node as { message?: string; root?: { message?: string } };
+    return entry.message ?? entry.root?.message;
+  };
 
   const submit = handleSubmit(data => {
     const answers = data.answers as Record<string, unknown>;
@@ -431,6 +480,7 @@ export default function FormRenderer({
   return (
     <FormBody
       fields={fields}
+      reviewTargets={reviewTargets}
       register={register}
       watch={watch}
       setValue={setValue}
@@ -464,8 +514,26 @@ export default function FormRenderer({
 // `forms-fill.spec.ts` is the assertion that actually discriminates it, and it
 // is there permanently for that reason.
 
+/**
+ * A react-hook-form path into the answer set. Named because it appears in six
+ * signatures and because RHF's own `Path<FormValues>` is a template literal —
+ * a bare `string` does not satisfy it, and widening the form values to make it
+ * would give up every other name check in this file.
+ */
+type AnswerPath = `answers.${string}`;
+
 interface ControlProps {
   field: FormField;
+  /**
+   * The field's FULL react-hook-form path — `answers.{id}` at the top level and
+   * `answers.{groupId}.{targetId}.{id}` inside a review card.
+   *
+   * Passed in rather than derived from `field.id`, because a repeat group
+   * renders the SAME inner definition once per teammate: derived names would
+   * collide, every card would share one value, and typing in one would type in
+   * all of them.
+   */
+  name: AnswerPath;
   register: UseFormRegister<FormValues>;
   watch: UseFormWatch<FormValues>;
   setValue: UseFormSetValue<FormValues>;
@@ -501,8 +569,7 @@ const ROSTER_VISIBLE_MATCHES = 40;
 // deliberately unused: this field is not a DOM input, so there is nothing to
 // register. Its value reaches `handleSubmit` the same way the opinion scale's
 // does — `defaultValueFor` seeds it into the form state and `setValue` moves it.
-function RosterSelect({ field, watch, setValue, invalid }: ControlProps) {
-  const name = `answers.${field.id}` as const;
+function RosterSelect({ field, name, watch, setValue, invalid }: ControlProps) {
   const multiple = Boolean(field.multiple);
   const options = optionsOf(field);
   const label = String(field.label ?? 'people');
@@ -631,10 +698,9 @@ function RosterSelect({ field, watch, setValue, invalid }: ControlProps) {
   );
 }
 
-function Control({ field, register, watch, setValue, invalid }: ControlProps) {
+function Control({ field, name, register, watch, setValue, invalid }: ControlProps) {
   {
-    const name = `answers.${field.id}` as const;
-    const described = invalid ? `${field.id}-error` : undefined;
+    const described = invalid ? `${name}-error` : undefined;
     const description = field.description as string | undefined;
     /**
      * Every control names ITSELF.
@@ -835,6 +901,7 @@ function Control({ field, register, watch, setValue, invalid }: ControlProps) {
         return (
           <RosterSelect
             field={field}
+            name={name}
             register={register}
             watch={watch}
             setValue={setValue}
@@ -937,7 +1004,7 @@ function Control({ field, register, watch, setValue, invalid }: ControlProps) {
                         <input
                           type="radio"
                           value={column.id}
-                          {...register(`answers.${field.id}.${row.id}`)}
+                          {...register(`${name}.${row.id}` as AnswerPath)}
                           aria-label={`${row.label}: ${column.label}`}
                           className="h-4 w-4"
                         />
@@ -967,11 +1034,178 @@ function Control({ field, register, watch, setValue, invalid }: ControlProps) {
   }
 }
 
-interface FieldProps extends Omit<ControlProps, 'invalid'> {
-  message?: string;
+// ─── Review cards (repeat_group) ────────────────────────────────────────────
+//
+// MODULE SCOPE, like every other control here, and for the same reason: this
+// component owns `useState` for which cards are open, and a component declared
+// inside `FormRenderer` would be a new function identity on every keystroke —
+// unmounting the open card mid-sentence. See the note above `ControlProps`.
+
+/** The read of one card's answers, narrowed the way the resolver will see it. */
+const reviewAt = (
+  watch: UseFormWatch<FormValues>,
+  groupId: string,
+  targetId: string
+): Record<string, unknown> => {
+  const value = watch(`answers.${groupId}.${targetId}` as AnswerPath) as unknown;
+  return value && typeof value === 'object' ? (value as Record<string, unknown>) : {};
+};
+
+interface RepeatGroupProps {
+  field: FormField;
+  targets: ReviewTarget[];
+  register: UseFormRegister<FormValues>;
+  watch: UseFormWatch<FormValues>;
+  setValue: UseFormSetValue<FormValues>;
+  errorFor: (...path: string[]) => string | undefined;
 }
 
-function Field({ field, register, watch, setValue, message }: FieldProps) {
+/**
+ * One collapsible card per teammate — Mockup 4's peer-review block.
+ *
+ * ── Completion is computed, not tracked ────────────────────────────────────
+ * A card's tick comes from running the group's INNER definition through the
+ * same `buildResponseSchema` the whole form uses, over the same coerced values.
+ * Nothing counts "have they touched it" — a card is done when its answers would
+ * actually validate, which is the only definition that agrees with what the
+ * submit button will do.
+ *
+ * ── Which cards are open ───────────────────────────────────────────────────
+ * The first one, plus any card holding an error, plus whatever the person has
+ * opened. Auto-opening on error is load-bearing rather than polish: a required
+ * review inside a collapsed card would otherwise refuse the submit while
+ * showing nothing at all to fix.
+ */
+function RepeatGroup({ field, targets, register, watch, setValue, errorFor }: RepeatGroupProps) {
+  const groupId = field.id;
+  const inner = useMemo(() => (field.fields as FormField[] | undefined) ?? [], [field]);
+  // Departed teammates ride along in the form values and are never drawn: the
+  // card would invite a review of somebody who is no longer on the team.
+  const visible = targets.filter(target => !target.optional);
+
+  const innerSchema = useMemo(() => buildResponseSchema(inner), [inner]);
+  const [opened, setOpened] = useState<Record<string, boolean>>({});
+
+  const completion = visible.map(target => {
+    const review = reviewAt(watch, groupId, target.user_id);
+    return innerSchema.safeParse(coerceAnswers(inner, review)).success;
+  });
+  const done = completion.filter(Boolean).length;
+
+  if (visible.length === 0) {
+    return (
+      <p className="rounded-md border border-dashed border-gray-300 px-3 py-2.5 text-sm text-gray-600 dark:border-gray-600 dark:text-gray-300">
+        You are the only person on your team, so there is nobody to review. The rest of the form is
+        still yours to fill in.
+      </p>
+    );
+  }
+
+  return (
+    <div data-testid={`review-group-${groupId}`}>
+      <p
+        data-testid={`review-progress-${groupId}`}
+        className="mb-3 text-xs font-medium text-gray-500 dark:text-gray-400"
+      >
+        {done} of {visible.length} reviewed
+      </p>
+
+      {visible.map((target, index) => {
+        const complete = completion[index];
+        /**
+         * Two different errors, shown in two different places.
+         *
+         * `targetError` is raised ON the card — "this one is required" for a
+         * teammate nobody has reviewed, which is what `require_all_targets`
+         * produces. It has no inner field to attach to, so it is rendered
+         * beside the card's heading whether the card is open or shut.
+         *
+         * `innerError` is a question inside the card, which the card's own
+         * fields render for themselves. It only decides whether the card
+         * springs open: a required review hidden inside a collapsed card would
+         * refuse the submit while showing nothing at all to fix.
+         */
+        const targetError = errorFor(groupId, target.user_id);
+        const innerError = inner
+          .map(child => errorFor(groupId, target.user_id, child.id))
+          .find(message => Boolean(message));
+        const cardError = targetError ?? innerError;
+        const open = opened[target.user_id] ?? (index === 0 || Boolean(innerError));
+
+        return (
+          <div
+            key={target.user_id}
+            data-testid={`review-card-${target.user_id}`}
+            data-complete={complete ? 'true' : 'false'}
+            className={`mb-3 rounded-md border ${
+              cardError
+                ? 'border-red-300 dark:border-red-800'
+                : 'border-gray-200 dark:border-gray-700'
+            }`}
+          >
+            <button
+              type="button"
+              aria-expanded={open}
+              onClick={() => setOpened(current => ({ ...current, [target.user_id]: !open }))}
+              className="flex w-full items-center gap-2 px-3 py-2.5 text-left"
+            >
+              <span aria-hidden="true" className="text-xs text-gray-400">
+                {open ? '▾' : '▸'}
+              </span>
+              <span className="flex-1 text-sm font-medium text-gray-900 dark:text-white">
+                {target.name}
+              </span>
+              <span
+                aria-label={complete ? `${target.name} reviewed` : `${target.name} not reviewed`}
+                className={`text-xs font-medium ${
+                  complete
+                    ? 'text-green-600 dark:text-green-400'
+                    : 'text-gray-400 dark:text-gray-500'
+                }`}
+              >
+                {complete ? '✓' : '—'}
+              </span>
+            </button>
+
+            {open ? (
+              <div className="border-t border-gray-100 px-3 pb-1 pt-3 dark:border-gray-800">
+                {inner.map(child => (
+                  <Field
+                    key={child.id}
+                    field={child}
+                    name={`answers.${groupId}.${target.user_id}.${child.id}` as AnswerPath}
+                    register={register}
+                    watch={watch}
+                    setValue={setValue}
+                    message={errorFor(groupId, target.user_id, child.id)}
+                  />
+                ))}
+              </div>
+            ) : null}
+
+            {targetError ? (
+              <p
+                role="alert"
+                className="px-3 pb-2.5 text-xs font-medium text-red-600 dark:text-red-400"
+              >
+                {targetError}
+              </p>
+            ) : null}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+interface FieldProps extends Omit<ControlProps, 'invalid'> {
+  message?: string;
+  /** Only a repeat_group needs these, and only at the top level. */
+  targets?: ReviewTarget[];
+  errorFor?: (...path: string[]) => string | undefined;
+}
+
+function Field({ field, name, register, watch, setValue, message, targets, errorFor }: FieldProps) {
   if (isDisplayField(field.type)) return <DisplayBlock field={field} />;
 
   const description = field.description as string | undefined;
@@ -983,16 +1217,28 @@ function Field({ field, register, watch, setValue, message }: FieldProps) {
       {description && field.type !== 'switch' ? (
         <p className="mb-2 text-sm text-gray-500 dark:text-gray-400">{description}</p>
       ) : null}
-      <Control
-        field={field}
-        register={register}
-        watch={watch}
-        setValue={setValue}
-        invalid={Boolean(message)}
-      />
+      {field.type === 'repeat_group' ? (
+        <RepeatGroup
+          field={field}
+          targets={targets ?? []}
+          register={register}
+          watch={watch}
+          setValue={setValue}
+          errorFor={errorFor ?? (() => undefined)}
+        />
+      ) : (
+        <Control
+          field={field}
+          name={name}
+          register={register}
+          watch={watch}
+          setValue={setValue}
+          invalid={Boolean(message)}
+        />
+      )}
       {message ? (
         <p
-          id={`${field.id}-error`}
+          id={`${name}-error`}
           role="alert"
           className="mt-1.5 text-xs font-medium text-red-600 dark:text-red-400"
         >
@@ -1005,10 +1251,11 @@ function Field({ field, register, watch, setValue, message }: FieldProps) {
 
 interface FormBodyProps {
   fields: FormField[];
+  reviewTargets?: Record<string, ReviewTarget[]>;
   register: UseFormRegister<FormValues>;
   watch: UseFormWatch<FormValues>;
   setValue: UseFormSetValue<FormValues>;
-  errorFor: (fieldId: string) => string | undefined;
+  errorFor: (...path: string[]) => string | undefined;
   needsIdentityInputs: boolean;
   lockedIdentity: { name: string; email: string } | null;
   identityEmailError?: string;
@@ -1023,6 +1270,7 @@ interface FormBodyProps {
 
 function FormBody({
   fields,
+  reviewTargets,
   register,
   watch,
   setValue,
@@ -1068,9 +1316,15 @@ function FormBody({
         <Field
           key={field.id}
           field={field}
+          name={`answers.${field.id}` as AnswerPath}
+          targets={reviewTargets?.[field.id]}
+          errorFor={errorFor}
           register={register}
           watch={watch}
           setValue={setValue}
+          // A repeat group's own message would be its min/max refinement; the
+          // per-card errors are rendered inside the group, so this stays for
+          // the group-level rule only.
           message={errorFor(field.id)}
         />
       ))}

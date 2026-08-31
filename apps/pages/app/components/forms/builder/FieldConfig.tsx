@@ -1,7 +1,23 @@
-import { IconPlus, IconTrash } from '@tabler/icons-react';
+import {
+  DndContext,
+  KeyboardSensor,
+  PointerSensor,
+  closestCenter,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+} from '@dnd-kit/core';
+import {
+  SortableContext,
+  arrayMove,
+  sortableKeyboardCoordinates,
+  useSortable,
+  verticalListSortingStrategy,
+} from '@dnd-kit/sortable';
+import { IconGripVertical, IconPlus, IconTrash } from '@tabler/icons-react';
 import { FORM_LIMITS, type FormField, type FormOption } from '@classmoji/services/form-contract';
 
-import { FIELD_TYPE_META, isDisplayField, makeField, metaFor } from '../fieldTypes.ts';
+import { NESTABLE_FIELD_TYPE_META, isDisplayField, makeField, metaFor } from '../fieldTypes.ts';
 import OptionsEditor from './OptionsEditor.tsx';
 
 /**
@@ -42,6 +58,128 @@ const Row = ({ label, children }: { label: string; children: React.ReactNode }) 
     {children}
   </div>
 );
+
+/**
+ * One inner field of a repeat group: a drag handle, a type chip, and its own
+ * configuration body.
+ *
+ * MODULE SCOPE, because it calls `useSortable`. Declared inside `TypeSpecific`
+ * it would be a fresh component type on every keystroke in the config pane, and
+ * dnd-kit would re-register a brand-new sortable node each time — the drag
+ * would drop the moment anything else re-rendered.
+ */
+function SortableInnerField({
+  field,
+  scopes,
+  onChange,
+  onRemove,
+  canRemove,
+}: {
+  field: FormField;
+  scopes: ScopeChoices;
+  onChange: (patch: Record<string, unknown>) => void;
+  onRemove: () => void;
+  canRemove: boolean;
+}) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
+    id: field.id,
+  });
+
+  const style: React.CSSProperties = {
+    transform: transform ? `translate3d(${transform.x}px, ${transform.y}px, 0)` : undefined,
+    transition,
+  };
+
+  return (
+    <div
+      ref={setNodeRef}
+      style={style}
+      className={`rounded-md border p-2.5 ${
+        isDragging ? 'border-blue-400 opacity-80' : 'border-gray-200 dark:border-gray-700'
+      }`}
+    >
+      <div className="mb-1.5 flex items-center justify-between gap-2">
+        <div className="flex items-center gap-1.5">
+          <button
+            type="button"
+            {...attributes}
+            {...listeners}
+            aria-label={`Reorder ${String(field.label ?? metaFor(field.type)?.label ?? field.type)}`}
+            className="cursor-grab text-gray-300 hover:text-gray-500 dark:text-gray-600"
+          >
+            <IconGripVertical size={14} />
+          </button>
+          <span className="rounded bg-gray-100 px-1.5 py-0.5 text-[11px] uppercase tracking-wide text-gray-500 dark:bg-gray-800 dark:text-gray-400">
+            {metaFor(field.type)?.label ?? field.type}
+          </span>
+        </div>
+        <button
+          type="button"
+          onClick={onRemove}
+          disabled={!canRemove}
+          aria-label="Remove inner field"
+          className="text-gray-400 hover:text-red-600 disabled:opacity-30"
+        >
+          <IconTrash size={14} />
+        </button>
+      </div>
+      <FieldConfig field={field} scopes={scopes} nested onChange={onChange} />
+    </div>
+  );
+}
+
+/** The inner question list of a repeat group, reorderable within itself. */
+function InnerFieldList({
+  fields,
+  scopes,
+  onChange,
+}: {
+  fields: FormField[];
+  scopes: ScopeChoices;
+  onChange: (fields: FormField[]) => void;
+}) {
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
+  );
+
+  const onDragEnd = (event: DragEndEvent) => {
+    const { active, over } = event;
+    if (!over || active.id === over.id) return;
+    const from = fields.findIndex(field => field.id === active.id);
+    const to = fields.findIndex(field => field.id === over.id);
+    if (from === -1 || to === -1) return;
+    onChange(arrayMove(fields, from, to));
+  };
+
+  return (
+    <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onDragEnd}>
+      <SortableContext items={fields.map(field => field.id)} strategy={verticalListSortingStrategy}>
+        <div className="space-y-2">
+          {fields.map(child => (
+            <SortableInnerField
+              key={child.id}
+              field={child}
+              scopes={scopes}
+              // The last question cannot go: an empty repeat group is a
+              // definition the contract refuses (`innerFieldList` is `.min(1)`),
+              // so removing it would make the form unsavable with no clue why.
+              canRemove={fields.length > 1}
+              onRemove={() => onChange(fields.filter(other => other.id !== child.id))}
+              onChange={patch =>
+                onChange(
+                  fields.map(other =>
+                    other.id === child.id ? ({ ...other, ...patch } as FormField) : other
+                  )
+                )
+              }
+            />
+          ))}
+        </div>
+      </SortableContext>
+    </DndContext>
+  );
+}
 
 /** Display blocks carry prose and nothing else — no label, no required. */
 function DisplayConfig({ field, onChange }: Pick<FieldConfigProps, 'field' | 'onChange'>) {
@@ -352,7 +490,11 @@ function TypeSpecific({ field, onChange, scopes, nested }: FieldConfigProps) {
       return (
         <>
           <Row label="Which teams define the teammates">
+            {/* `Row` draws its label as a div, so every control in this panel
+                names ITSELF — without that a screen reader announces four
+                unlabelled selects, and the panel is unusable. */}
             <select
+              aria-label="Which teams define the teammates"
               value={repeat.scope.by}
               onChange={event => setScope(event.target.value as 'tag' | 'repository' | 'classroom')}
               className={inputClass}
@@ -370,6 +512,7 @@ function TypeSpecific({ field, onChange, scopes, nested }: FieldConfigProps) {
           {repeat.scope.by === 'tag' ? (
             <Row label="Tag">
               <select
+                aria-label="Team set tag"
                 value={repeat.scope.tag_id ?? ''}
                 onChange={event =>
                   onChange({
@@ -398,6 +541,7 @@ function TypeSpecific({ field, onChange, scopes, nested }: FieldConfigProps) {
           {repeat.scope.by === 'repository' ? (
             <Row label="Assignment">
               <select
+                aria-label="Team-based assignment"
                 value={repeat.scope.repository_id ?? ''}
                 onChange={event =>
                   onChange({
@@ -426,6 +570,19 @@ function TypeSpecific({ field, onChange, scopes, nested }: FieldConfigProps) {
             </Row>
           ) : null}
 
+          {/* `exclude_self` is `z.literal(true)` in the contract — nobody
+              reviews themselves, and v1 does not offer the other answer. Shown
+              rather than hidden so the rule is visible where the rest of the
+              group is configured, and disabled so it cannot promise a setting
+              the save would refuse. */}
+          <label className="mb-3 flex items-start gap-2 text-sm text-gray-500 dark:text-gray-400">
+            <input type="checkbox" checked disabled className="mt-0.5" />
+            <span>
+              Leave the person filling the form out of their own review list
+              <span className="block text-xs">Always on — nobody reviews themselves.</span>
+            </span>
+          </label>
+
           <label className="mb-3 flex items-center gap-2 text-sm text-gray-700 dark:text-gray-200">
             <input
               type="checkbox"
@@ -437,49 +594,75 @@ function TypeSpecific({ field, onChange, scopes, nested }: FieldConfigProps) {
             Every teammate must be reviewed before the form can be submitted
           </label>
 
+          {/* Bounds on how many teammates get reviewed. Left empty they follow
+              the team: "all of them" when every teammate is required, "as many
+              as you like" when they are not. An explicit number is the escape
+              hatch for a seven-person team where three reviews is the ask. */}
+          <div className="mb-3 grid grid-cols-2 gap-2">
+            <div>
+              <div className="mb-1 text-xs font-medium uppercase tracking-wide text-gray-500">
+                Fewest reviews
+              </div>
+              <input
+                type="number"
+                aria-label="Fewest reviews"
+                min={0}
+                placeholder={repeat.require_all_targets ? 'everyone' : 'no minimum'}
+                value={repeat.min_entries ?? ''}
+                onChange={event =>
+                  onChange({
+                    repeat: {
+                      ...repeat,
+                      min_entries:
+                        event.target.value === '' ? undefined : Number(event.target.value),
+                    },
+                  })
+                }
+                className={inputClass}
+              />
+            </div>
+            <div>
+              <div className="mb-1 text-xs font-medium uppercase tracking-wide text-gray-500">
+                Most reviews
+              </div>
+              <input
+                type="number"
+                aria-label="Most reviews"
+                min={1}
+                placeholder="the whole team"
+                value={repeat.max_entries ?? ''}
+                onChange={event =>
+                  onChange({
+                    repeat: {
+                      ...repeat,
+                      max_entries:
+                        event.target.value === '' ? undefined : Number(event.target.value),
+                    },
+                  })
+                }
+                className={inputClass}
+              />
+            </div>
+          </div>
+
           <div className="mb-2 mt-4 border-t border-gray-200 pt-3 text-xs font-medium uppercase tracking-wide text-gray-500 dark:border-gray-700 dark:text-gray-400">
             Asked about each teammate
           </div>
-          <div className="space-y-2">
-            {inner.map(child => (
-              <div
-                key={child.id}
-                className="rounded-md border border-gray-200 p-2.5 dark:border-gray-700"
-              >
-                <div className="mb-1.5 flex items-center justify-between gap-2">
-                  <span className="rounded bg-gray-100 px-1.5 py-0.5 text-[11px] uppercase tracking-wide text-gray-500 dark:bg-gray-800 dark:text-gray-400">
-                    {metaFor(child.type)?.label ?? child.type}
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() =>
-                      onChange({ fields: inner.filter(other => other.id !== child.id) })
-                    }
-                    disabled={inner.length <= 1}
-                    aria-label="Remove inner field"
-                    className="text-gray-400 hover:text-red-600 disabled:opacity-30"
-                  >
-                    <IconTrash size={14} />
-                  </button>
-                </div>
-                <FieldConfig
-                  field={child}
-                  scopes={scopes}
-                  nested
-                  onChange={patch =>
-                    onChange({
-                      fields: inner.map(other =>
-                        other.id === child.id ? ({ ...other, ...patch } as FormField) : other
-                      ),
-                    })
-                  }
-                />
-              </div>
-            ))}
-          </div>
 
-          <div className="mt-2 flex flex-wrap gap-1.5">
-            {FIELD_TYPE_META.filter(meta => meta.type !== 'repeat_group').map(meta => (
+          {/* The inner list gets its OWN DndContext. Two contexts is what makes
+              a cross-boundary drag impossible rather than merely discouraged:
+              this one cannot see the outer field list's sortable ids, so an
+              inner question can be reordered among its siblings and can never
+              be dropped into the form body (where a `repeat_group` child would
+              become a top-level field asking about nobody). */}
+          <InnerFieldList
+            fields={inner}
+            scopes={scopes}
+            onChange={fields => onChange({ fields })}
+          />
+
+          <div data-testid={`inner-palette-${field.id}`} className="mt-2 flex flex-wrap gap-1.5">
+            {NESTABLE_FIELD_TYPE_META.map(meta => (
               <button
                 key={meta.type}
                 type="button"
@@ -533,17 +716,23 @@ export default function FieldConfig(props: FieldConfigProps) {
 
       <TypeSpecific {...props} />
 
-      <label className="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-200">
-        <input
-          type="checkbox"
-          checked={Boolean(field.required)}
-          onChange={event => onChange({ required: event.target.checked })}
-        />
-        Required
-        {field.type === 'switch' ? (
-          <span className="text-xs text-gray-500">— must be switched on to submit</span>
-        ) : null}
-      </label>
+      {/* A repeat group has no meaningful "required" of its own: what it demands
+          is "every teammate reviewed", which is `require_all_targets` above. A
+          required group would also be unsatisfiable for a team of one, whose
+          answer is legitimately an empty object. */}
+      {field.type === 'repeat_group' ? null : (
+        <label className="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-200">
+          <input
+            type="checkbox"
+            checked={Boolean(field.required)}
+            onChange={event => onChange({ required: event.target.checked })}
+          />
+          Required
+          {field.type === 'switch' ? (
+            <span className="text-xs text-gray-500">— must be switched on to submit</span>
+          ) : null}
+        </label>
+      )}
     </div>
   );
 }

@@ -419,6 +419,27 @@ const bannerDef = z
 // ─── Answer schemas, per type ───────────────────────────────────────────────
 
 /**
+ * One review target, as the per-respondent resolver hands it to the schema.
+ *
+ * `optional` is what a DEPARTED teammate looks like. A person who was on the
+ * team when the review was written and has since left still has answers on
+ * file, and those answers must keep validating — but they are no longer part of
+ * what `require_all_targets` demands, and they no longer count toward the
+ * group's min/max. So the key stays ACCEPTED (`.strict()` would otherwise
+ * reject the review that was legitimately collected) and stops being REQUIRED.
+ *
+ * It is set by the server's re-resolution, never by a client: the allowed set is
+ * "resolved now" ∪ "recorded in this response's own server-written snapshot",
+ * which is why a filler cannot smuggle in a review of someone who was never a
+ * teammate by claiming they departed.
+ */
+export interface ResolvedTargetRef {
+  user_id: string;
+  /** Departed: answers are still accepted, but nothing is required of them. */
+  optional?: boolean;
+}
+
+/**
  * Per-respondent context for Tier-2 (render-resolved) sourcing. `resolved` is
  * keyed by repeat_group field id and lists the review targets that were
  * resolved for THIS filler; buildResponseSchema turns each into a required (or
@@ -426,7 +447,7 @@ const bannerDef = z
  * answer aimed at anyone who is not a teammate.
  */
 export interface ResponseSchemaContext {
-  resolved?: Record<string, Array<{ user_id: string }>>;
+  resolved?: Record<string, ResolvedTargetRef[]>;
 }
 
 type AnswerSchemaFactory<TField> = (field: TField, ctx: ResponseSchemaContext) => z.ZodTypeAny;
@@ -650,16 +671,27 @@ export const FIELD_TYPE_REGISTRY = {
       }
       const inner = buildAnswerObject(field.fields as FormField[], ctx);
       const requireAll = field.repeat.require_all_targets;
+      // Departed targets (`optional: true`) are accepted but never demanded,
+      // and they are invisible to the counting rules below — an instructor who
+      // set `max_entries: 3` meant three TEAMMATES, and a kept review of
+      // someone who has since left must not spend one of those slots.
+      const current = targets.filter(target => !target.optional);
+      const currentIds = new Set(current.map(target => target.user_id));
       const shape = Object.fromEntries(
-        targets.map(target => [target.user_id, requireAll ? inner : inner.optional()])
+        targets.map(target => [
+          target.user_id,
+          requireAll && !target.optional ? inner : inner.optional(),
+        ])
       );
-      const min = field.repeat.min_entries ?? (requireAll ? targets.length : 0);
-      const max = field.repeat.max_entries ?? targets.length;
+      const min = field.repeat.min_entries ?? (requireAll ? current.length : 0);
+      const max = field.repeat.max_entries ?? current.length;
       return z
         .object(shape)
         .strict()
         .superRefine((answer, issueCtx) => {
-          const filled = Object.values(answer).filter(value => value !== undefined).length;
+          const filled = Object.entries(answer).filter(
+            ([targetId, value]) => value !== undefined && currentIds.has(targetId)
+          ).length;
           if (filled < min) {
             issueCtx.addIssue({
               code: z.ZodIssueCode.custom,

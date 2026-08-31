@@ -6,7 +6,16 @@ import {
   requiresResolvedContext,
   FORM_ANSWERS_TOO_LARGE,
   FORM_LIMITS,
+  type ResolvedTargetRef,
 } from './formContract.ts';
+import {
+  buildResolvedContext,
+  isBlockingRepeatState,
+  newTargetsSince,
+  resolveRepeatGroups,
+  schemaContextFor,
+  type RepeatResolution,
+} from './formTeamResolver.ts';
 import { escapeVars, pagesUrl } from '../emails/escape.ts';
 import { fieldsOf } from './form.service.ts';
 import type { Prisma, SubmissionState } from '@prisma/client';
@@ -48,6 +57,20 @@ export const FORM_ALREADY_SUBMITTED = 'FORM_ALREADY_SUBMITTED';
 export const FORM_RESPONSE_NOT_FOUND = 'FORM_RESPONSE_NOT_FOUND';
 /** Server-side partials are off for this form. */
 export const FORM_PARTIALS_DISABLED = 'FORM_PARTIALS_DISABLED';
+/**
+ * A teammate JOINED the filler's team between the page rendering and the
+ * submit. Refused rather than half-accepted: `require_all_targets` is a
+ * promise about a team, and quietly recording a review set that misses its
+ * newest member would break it silently. The route re-renders with a notice and
+ * the answers intact — the same shape as FORM_REVISION_STALE.
+ */
+export const FORM_TEAM_CHANGED = 'FORM_TEAM_CHANGED';
+/**
+ * The filler cannot be resolved to a reviewable team (no team, an untagged one,
+ * or more than one). The loader normally catches this and renders the form's
+ * error state instead of the form; this is the submit-path backstop.
+ */
+export const FORM_TEAM_UNRESOLVED = 'FORM_TEAM_UNRESOLVED';
 
 export const MAGIC_LINK_INVALID = 'MAGIC_LINK_INVALID';
 export const MAGIC_LINK_EXPIRED = 'MAGIC_LINK_EXPIRED';
@@ -169,19 +192,25 @@ function assertRevisionCurrent(form: LockedFormRow, revisionId: string): void {
   }
 }
 
-/** Load a form + the revision the caller claims, and validate the answers. */
+/**
+ * Load a form + the revision the caller claims, and validate the answers.
+ *
+ * PUBLIC path only. The classroom path validates INSIDE its transaction
+ * instead, because its answer schema depends on a teammate resolution that has
+ * to happen under the form's row lock — and because no caller may hand this
+ * function a `resolved` context: the one place review targets come from is the
+ * server-side resolver.
+ */
 async function validateAgainstRevision({
   formId,
   revisionId,
   answers,
   expectedAccess,
-  resolved,
 }: {
   formId: string;
   revisionId: string;
   answers: unknown;
   expectedAccess: 'PUBLIC' | 'CLASSROOM';
-  resolved?: Record<string, Array<{ user_id: string }>>;
 }) {
   const form = await getPrisma().form.findUnique({
     where: { id: formId },
@@ -208,7 +237,7 @@ async function validateAgainstRevision({
     throw serviceError(FORM_REVISION_STALE, 'Unknown form revision.');
   }
 
-  const validated = parseAnswers(fieldsOf(revision.fields), answers, { resolved });
+  const validated = parseAnswers(fieldsOf(revision.fields), answers);
   return { form, revision, validated };
 }
 
@@ -546,7 +575,7 @@ export async function submitClassroom({
   name,
   answers,
   revisionId,
-  resolvedContext,
+  renderedTargets,
 }: {
   formId: string;
   userId: string;
@@ -554,19 +583,34 @@ export async function submitClassroom({
   name?: string | null;
   answers: unknown;
   revisionId: string;
-  /** Tier-2 per-respondent snapshot (teammates), when the form has repeat groups. */
-  resolvedContext?: { targets?: Record<string, Array<{ user_id: string }>> } & Record<
-    string,
-    unknown
-  >;
+  /**
+   * Per repeat group, the target ids the BROWSER says it rendered. Untrusted —
+   * see `newTargetsSince`. Used only to decide whether a changed team earns a
+   * "your team changed" notice instead of a validation error. The set the
+   * answers are actually validated against is re-resolved here, under the lock.
+   */
+  renderedTargets?: Record<string, string[]>;
 }) {
-  const { validated } = await validateAgainstRevision({
-    formId,
-    revisionId,
-    answers,
-    expectedAccess: 'CLASSROOM',
-    resolved: resolvedContext?.targets,
+  // Pre-flight, outside the transaction: the access mode and a clean staleness
+  // error before any lock is taken. Everything it decides is decided AGAIN
+  // under the row lock below, which is what actually makes it safe.
+  const preflight = await getPrisma().form.findUnique({
+    where: { id: formId },
+    select: { id: true, access: true, classroom_id: true, current_revision_id: true },
   });
+  if (!preflight) throw serviceError(FORM_NOT_FOUND, `Form ${formId} not found`);
+  if (preflight.access !== 'CLASSROOM') {
+    throw serviceError(
+      FORM_ACCESS_MISMATCH,
+      `This form is ${preflight.access} — it cannot be submitted through the CLASSROOM path.`
+    );
+  }
+  if (preflight.current_revision_id !== revisionId) {
+    throw serviceError(
+      FORM_REVISION_STALE,
+      'This form changed while you were filling it in — reload to see the current version.'
+    );
+  }
 
   const now = new Date();
 
@@ -575,9 +619,78 @@ export async function submitClassroom({
     assertAccepting(form, now);
     assertRevisionCurrent(form, revisionId);
 
+    const revision = await tx.formRevision.findUnique({ where: { id: revisionId } });
+    if (!revision || revision.form_id !== formId) {
+      throw serviceError(FORM_REVISION_STALE, 'Unknown form revision.');
+    }
+    const fields = fieldsOf(revision.fields);
+
     const existing = await tx.formResponse.findFirst({
       where: { form_id: formId, user_id: userId },
     });
+
+    /**
+     * ── Tier-2 re-resolution, under the lock ────────────────────────────────
+     *
+     * The teammates are resolved HERE, not taken from the caller, and not taken
+     * from the request. Between the page load and this click somebody may have
+     * joined the team or left it, and each of those needs a different answer:
+     *
+     *  - JOINED  → refuse with FORM_TEAM_CHANGED. `require_all_targets` is a
+     *    promise about a whole team; silently recording a set that misses its
+     *    newest member would break it without telling anyone.
+     *  - LEFT    → keep the review. The answers stay, the snapshot marks the
+     *    person `removed`, and the schema stops requiring anything of them.
+     *
+     * The set a departed target may be drawn from is this response's OWN
+     * server-written snapshot — never the request body — so "they left" cannot
+     * be claimed as a way to file a review of somebody who was never on the
+     * team.
+     */
+    let resolutions: Record<string, RepeatResolution> = {};
+    let resolved: Record<string, ResolvedTargetRef[]> | undefined;
+    let snapshot: Prisma.InputJsonValue | undefined;
+
+    if (requiresResolvedContext(fields)) {
+      resolutions = await resolveRepeatGroups({
+        classroomId: preflight.classroom_id,
+        userId,
+        fields,
+        client: tx,
+      });
+
+      // NO_TEAM / TEAM_UNTAGGED / AMBIGUOUS_TEAM never render a fillable block,
+      // so reaching here means a crafted request. Refused explicitly rather
+      // than left to the schema: an unresolved group has an EMPTY target set,
+      // which `.strict()` would accept as "no reviews written" and file as a
+      // real submission of a peer review nobody could have filled in.
+      const unresolved = Object.entries(resolutions).filter(([, resolution]) =>
+        isBlockingRepeatState(resolution.state)
+      );
+      if (unresolved.length > 0) {
+        throw serviceError(
+          FORM_TEAM_UNRESOLVED,
+          'This form reviews your teammates, and your team could not be resolved.'
+        );
+      }
+
+      const changed = newTargetsSince(resolutions, renderedTargets);
+      if (changed.length > 0) {
+        throw serviceError(
+          FORM_TEAM_CHANGED,
+          'Your team changed while you were filling this in — reload to see everyone you need to review.'
+        );
+      }
+
+      resolved = schemaContextFor({ resolutions, previous: existing?.resolved_context });
+      snapshot = buildResolvedContext({
+        resolutions,
+        previous: existing?.resolved_context,
+        resolvedAt: now,
+      }) as unknown as Prisma.InputJsonValue;
+    }
+
+    const validated = parseAnswers(fields, answers, { resolved });
 
     if (existing && existing.submission_state === 'SUBMITTED' && !form.allow_multiple) {
       throw serviceError(FORM_ALREADY_SUBMITTED, 'You have already responded to this form.');
@@ -596,9 +709,7 @@ export async function submitClassroom({
       answers: validated as unknown as Prisma.InputJsonValue,
       submission_state: 'SUBMITTED' as SubmissionState,
       verified_at: existing?.verified_at ?? now,
-      ...(resolvedContext
-        ? { resolved_context: resolvedContext as unknown as Prisma.InputJsonValue }
-        : {}),
+      ...(snapshot ? { resolved_context: snapshot } : {}),
     };
 
     if (existing) {
@@ -645,6 +756,7 @@ export async function upsertDraft({
   email,
   name,
   answers,
+  classroomId,
 }: {
   formId: string;
   revisionId: string;
@@ -653,6 +765,12 @@ export async function upsertDraft({
   email: string;
   name?: string | null;
   answers: unknown;
+  /**
+   * Set on a CLASSROOM draft. When the revision has repeat groups the draft
+   * carries a `resolved_context` snapshot too, MERGED with whatever the row
+   * already held — see below.
+   */
+  classroomId?: string;
 }) {
   if (!userId && !draftToken) {
     throw serviceError(
@@ -687,12 +805,39 @@ export async function upsertDraft({
       : { form_id: formId, draft_token: draftToken },
   });
 
+  /**
+   * The draft's teammate snapshot.
+   *
+   * A draft is the ONLY server-written record that a departed teammate was ever
+   * a teammate: submit reads it to decide which reviews may be kept as
+   * `removed`, and without it a teammate who leaves mid-fill takes their review
+   * with them (the answer key becomes unknown and `.strict()` refuses it).
+   *
+   * MERGED, never replaced — `buildResolvedContext` unions the fresh resolution
+   * with what the row already held. An autosave landing the moment after
+   * somebody left must not erase the evidence it exists to preserve.
+   */
+  let snapshot: Prisma.InputJsonValue | undefined;
+  if (userId && classroomId) {
+    const revision = await getPrisma().formRevision.findUnique({ where: { id: revisionId } });
+    const fields = revision && revision.form_id === formId ? fieldsOf(revision.fields) : [];
+    if (requiresResolvedContext(fields)) {
+      const resolutions = await resolveRepeatGroups({ classroomId, userId, fields });
+      snapshot = buildResolvedContext({
+        resolutions,
+        previous: existing?.resolved_context,
+        resolvedAt: new Date(),
+      }) as unknown as Prisma.InputJsonValue;
+    }
+  }
+
   const payload = {
     revision_id: revisionId,
     email: email.trim(),
     email_normalized: normalizeEmail(email),
     name: name ?? null,
     answers: (answers ?? {}) as Prisma.InputJsonValue,
+    ...(snapshot ? { resolved_context: snapshot } : {}),
   };
 
   if (existing) {

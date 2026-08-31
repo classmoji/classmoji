@@ -21,6 +21,7 @@ import * as calendarService from './calendar.service.ts';
 import * as icsGeneratorService from './icsGenerator.service.ts';
 import * as formService from './form.service.ts';
 import * as formResponseService from './formResponse.service.ts';
+import * as formTeamResolverService from './formTeamResolver.ts';
 import * as pageService from './page.service.ts';
 import * as pageContentService from './pageContent.service.ts';
 import * as siteService from './site.service.ts';
@@ -76,6 +77,7 @@ const ClassmojiService = {
   icsGenerator: icsGeneratorService,
   form: formService,
   formResponse: formResponseService,
+  formTeam: formTeamResolverService,
   page: pageService,
   pageContent: pageContentService,
   site: siteService,
@@ -138,6 +140,7 @@ export {
   icsGeneratorService,
   formService,
   formResponseService,
+  formTeamResolverService,
   pageService,
   pageContentService,
   siteService,

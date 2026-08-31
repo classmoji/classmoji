@@ -223,19 +223,40 @@ function Control({ field }: { field: FormField }) {
       );
     }
 
+    /**
+     * TWO placeholder teammates, not one.
+     *
+     * The whole point of the block is that it repeats, and a single card looks
+     * exactly like an ordinary group of questions — the instructor cannot tell
+     * from it whether they have built a review that repeats or one that does
+     * not. Two makes the repetition the thing you see. Who they are is not
+     * knowable here: teammates resolve per respondent at fill time, which the
+     * note says.
+     */
     case 'repeat_group': {
       const inner = (field.fields as FormField[]) ?? [];
       return (
         <div className="rounded-md border border-dashed border-gray-300 p-3 dark:border-gray-600">
           <div className="mb-2 text-xs uppercase tracking-wide text-gray-400">
-            Once per teammate · placeholder shown
+            Repeats once per teammate
           </div>
-          <div className="mb-3 text-sm font-medium text-gray-700 dark:text-gray-200">
-            Teammate 1
-          </div>
-          {inner.map(child => (
-            <FieldPreview key={child.id} field={child} />
+          {['Teammate 1', 'Teammate 2'].map((who, index) => (
+            <div
+              key={who}
+              className={
+                index === 0 ? 'mb-4' : 'mb-1 border-t border-gray-200 pt-3 dark:border-gray-700'
+              }
+            >
+              <div className="mb-3 text-sm font-medium text-gray-700 dark:text-gray-200">{who}</div>
+              {inner.map(child => (
+                <FieldPreview key={child.id} field={child} />
+              ))}
+            </div>
           ))}
+          <p className="text-xs italic text-gray-400">
+            Placeholders — the real cards are this person’s actual teammates, resolved when they
+            open the form.
+          </p>
         </div>
       );
     }

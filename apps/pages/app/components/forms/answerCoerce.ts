@@ -57,7 +57,12 @@ export function defaultValueFor(field: FormField): unknown {
       return field.multiple ? [] : '';
     case 'switch':
       return false;
+    // A matrix answers `{ [rowId]: colId }`; a repeat group answers
+    // `{ [targetId]: { [fieldId]: value } }`. Both start EMPTY — `defaultAnswers`
+    // fills a repeat group's cards in, one per resolved teammate, because only
+    // it knows who they are.
     case 'matrix':
+    case 'repeat_group':
       return {};
     case 'opinion_scale':
     case 'number':
@@ -78,15 +83,60 @@ export function defaultValueFor(field: FormField): unknown {
  */
 export function defaultAnswers(
   fields: FormField[],
-  stored?: Record<string, unknown> | null
+  stored?: Record<string, unknown> | null,
+  /**
+   * Per repeat_group field id, the review targets this respondent resolved to.
+   * Each gets a seeded card, because every inner control is controlled and an
+   * input that flips from `undefined` to a string mid-edit loses its first
+   * keystroke.
+   */
+  targets?: Record<string, Array<{ user_id: string }>>
 ): Record<string, unknown> {
   const values: Record<string, unknown> = {};
   for (const field of answerableFields(fields)) {
     const existing = stored?.[field.id];
+
+    if (field.type === 'repeat_group') {
+      values[field.id] = defaultReviews(field, existing, targets?.[field.id] ?? []);
+      continue;
+    }
+
     values[field.id] =
       existing === undefined || existing === null ? defaultValueFor(field) : existing;
   }
   return values;
+}
+
+/**
+ * The seeded answer for one repeat group: a card per CURRENT target, plus every
+ * stored review whose target is no longer among them.
+ *
+ * Keeping the strays is not tidiness. A draft written before a teammate left
+ * still holds their review, and the server accepts it (its own snapshot
+ * remembers they were a teammate) — but only if the browser sends it back.
+ * Dropping it here would silently discard collected work at the moment the form
+ * is re-opened.
+ */
+function defaultReviews(
+  field: FormField,
+  stored: unknown,
+  targets: Array<{ user_id: string }>
+): Record<string, unknown> {
+  const inner = (field.fields as FormField[] | undefined) ?? [];
+  const existing = (stored ?? {}) as Record<string, unknown>;
+  const reviews: Record<string, unknown> = {};
+
+  for (const target of targets) {
+    reviews[target.user_id] = defaultAnswers(
+      inner,
+      (existing[target.user_id] ?? null) as Record<string, unknown> | null
+    );
+  }
+  for (const [targetId, review] of Object.entries(existing)) {
+    if (targetId in reviews) continue;
+    reviews[targetId] = review;
+  }
+  return reviews;
 }
 
 /**
@@ -148,9 +198,54 @@ export function coerceValue(field: FormField, raw: unknown): unknown {
       return out;
     }
 
+    /**
+     * A repeat group nests exactly one level, so its coercion is the same walk
+     * one level down — the inner fields are ordinary types producing the same
+     * browser-shaped strings.
+     *
+     * An UNTOUCHED card is dropped rather than sent as a blank review. Every
+     * card is seeded with the inner fields' empty values (they are controlled
+     * inputs; they have to be), so without this every teammate would arrive as
+     * a started-but-invalid review: on an optional group that turns "I reviewed
+     * two of four" into four broken ones, and on a required group it scatters
+     * per-field errors across cards nobody has opened instead of saying, once
+     * per card, that it has not been done.
+     *
+     * A card with ANY value in it is kept whole, so a half-finished review
+     * still reports which of its own fields are missing.
+     */
+    case 'repeat_group': {
+      const inner = (field.fields as FormField[] | undefined) ?? [];
+      const answer = raw as Record<string, unknown> | null | undefined;
+      if (!answer || typeof answer !== 'object' || Array.isArray(answer)) return {};
+      const out: Record<string, unknown> = {};
+      for (const [targetId, value] of Object.entries(answer)) {
+        if (!value || typeof value !== 'object') continue;
+        const coerced = coerceAnswers(inner, value as Record<string, unknown>);
+        if (isBlankReview(coerced)) continue;
+        out[targetId] = coerced;
+      }
+      return out;
+    }
+
     default:
       return raw;
   }
+}
+
+/**
+ * Has this review been touched at all?
+ *
+ * Blank is per-shape rather than falsy: `0` is a real answer to a number and to
+ * an opinion scale, and `false` is what an untouched switch holds either way.
+ */
+function isBlankReview(review: Record<string, unknown>): boolean {
+  return Object.values(review).every(value => {
+    if (value === '' || value === null || value === undefined || value === false) return true;
+    if (Array.isArray(value)) return value.length === 0;
+    if (typeof value === 'object') return Object.keys(value as object).length === 0;
+    return false;
+  });
 }
 
 /** Every value of an answer set, narrowed. Display blocks contribute nothing. */

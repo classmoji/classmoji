@@ -34,6 +34,8 @@ export interface FieldTypeMeta {
   classroomOnly: boolean;
   /** From the registry: display blocks collect no answer. */
   isDisplay: boolean;
+  /** From the registry: may a repeat group contain this type? */
+  nestable: boolean;
 }
 
 /** Client-side id minting. Same source the contract uses when ids are absent. */
@@ -97,7 +99,22 @@ export const FIELD_TYPE_META: FieldTypeMeta[] = [...FIELD_TYPES]
     hint: META[type]?.hint ?? '',
     classroomOnly: FIELD_TYPE_REGISTRY[type].classroomOnly,
     isDisplay: FIELD_TYPE_REGISTRY[type].kind === 'display',
+    nestable: FIELD_TYPE_REGISTRY[type].nestable,
   }));
+
+/**
+ * The palette a repeat group's INNER list offers — everything the contract will
+ * accept inside one.
+ *
+ * Derived from the registry's own `nestable` flag rather than written out as
+ * "everything except repeat_group". The contract already refuses a nested group
+ * (`fieldDispatch` validates the inner list against the nestable set), so a
+ * hand-maintained exclusion here would be a second copy of that rule, free to
+ * drift, and the UI would eventually offer a field the save refuses.
+ */
+export const NESTABLE_FIELD_TYPE_META: FieldTypeMeta[] = FIELD_TYPE_META.filter(
+  meta => meta.nestable
+);
 
 export const metaFor = (type: string): FieldTypeMeta | undefined =>
   FIELD_TYPE_META.find(entry => entry.type === type);

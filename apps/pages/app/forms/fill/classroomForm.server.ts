@@ -1,6 +1,7 @@
-import type { FormField } from '@classmoji/services/form-contract';
+import { requiresResolvedContext, type FormField } from '@classmoji/services/form-contract';
 
 import { ClassmojiService, getAuthSession, prisma } from '~/utils/db.server.ts';
+import type { ReviewTarget } from '~/components/forms/FormRenderer.tsx';
 import {
   classroomIdentityPlan,
   visibleClassroomFields,
@@ -43,6 +44,26 @@ interface SessionMember {
   email: string;
 }
 
+/**
+ * What the page knows about one `repeat_group` after Tier-2 resolution.
+ *
+ * The TARGETS are client-safe and deliberately so: a peer review is a form
+ * whose questions are "what about Sam" — the names are the questions. What does
+ * NOT cross is anything about the reviews themselves, which is why this carries
+ * an identity and nothing else.
+ */
+export interface ReviewGroupView {
+  fieldId: string;
+  label: string;
+  state: 'OK' | 'SOLO_TEAM' | 'NO_TEAM' | 'TEAM_UNTAGGED' | 'AMBIGUOUS_TEAM';
+  /** TEAM_UNTAGGED only — which of the three ways it happened. */
+  detail?: string;
+  teamName?: string | null;
+  /** AMBIGUOUS_TEAM only — the sets that collided, so the fix is obvious. */
+  teamNames?: string[];
+  targets: ReviewTarget[];
+}
+
 export type ClassroomFormLoad =
   | { view: 'signin'; theme: CanvasTheme; classroomName: string; loginUrl: string }
   | {
@@ -74,6 +95,12 @@ export type ClassroomFormLoad =
       /** True when `storedAnswers` came from a DRAFT (show "we brought it back"). */
       restoredDraft: boolean;
       /**
+       * The response's own Tier-2 snapshot, for the read-only view of a
+       * recorded peer review: the names it shows are the ones the reviewer
+       * saw, not whoever is on the team today.
+       */
+      resolvedContext: unknown;
+      /**
        * The form was republished after this person answered. Their answers key
        * to questions that are no longer the current ones, so a fillable page
        * starts empty and says why.
@@ -86,6 +113,21 @@ export type ClassroomFormLoad =
        */
       mode: 'fill' | 'update' | 'recorded';
       /**
+       * Tier-2 resolution, one entry per `repeat_group` in the current
+       * definition. Empty for every form that has none, which is almost all of
+       * them — the resolver runs no queries in that case.
+       */
+      reviewGroups: ReviewGroupView[];
+      /**
+       * The first group whose state cannot be filled in (no team, an untagged
+       * team, more than one team). When set the page renders an explanation
+       * INSTEAD of the form: a peer review whose team could not be worked out
+       * is not a form with a broken field, it is a form that cannot be answered.
+       */
+      reviewBlocked: ReviewGroupView | null;
+      /** `{ [groupId]: targets }` — the renderer's schema context. */
+      reviewTargets: Record<string, ReviewTarget[]>;
+      /**
        * SERVER ONLY. The route loader strips this before answering, because a
        * loader's return value is shipped to the browser and none of it is the
        * browser's business. The ACTION gets its own copy by calling this
@@ -93,6 +135,7 @@ export type ClassroomFormLoad =
        */
       server: {
         userId: string;
+        classroomId: string;
         /** `{ [fieldId]: value }` written over the client's answers at submit. */
         injected: Record<string, string>;
       };
@@ -300,6 +343,69 @@ export async function resolveClassroomForm({
   // how a person ends up submitting something they never read.
   const showStored = Boolean(own && (mode === 'recorded' || !revisionChanged));
 
+  /**
+   * ── Tier-2: who does this person review ──────────────────────────────────
+   *
+   * Only for a page that will be FILLED. A recorded response is rendered from
+   * its own `resolved_context` snapshot, which is the team as it was when the
+   * review was written — re-resolving there would relabel a finished review
+   * with today's roster.
+   *
+   * Resolved against the CURRENT revision's fields, because that is what a
+   * submit is validated against.
+   */
+  const currentFields = ClassmojiService.form.fieldsOf(revision.fields);
+  const reviewGroups: ReviewGroupView[] = [];
+  const reviewTargets: Record<string, ReviewTarget[]> = {};
+
+  if (mode !== 'recorded' && requiresResolvedContext(currentFields)) {
+    const resolutions = await ClassmojiService.formTeam.resolveRepeatGroups({
+      classroomId: classroom.id,
+      userId: member.userId,
+      fields: currentFields,
+    });
+    // Teammates this response already holds a review for who are no longer on
+    // the team. They get no card, and their answers ride along untouched — see
+    // `ReviewTarget.optional`. Read from the row's own SERVER-written snapshot,
+    // never from anything the browser sends.
+    const prior = ClassmojiService.formTeam.priorTargets(own?.resolved_context);
+
+    for (const group of currentFields.filter(field => field.type === 'repeat_group')) {
+      const resolution = resolutions[group.id];
+      if (!resolution) continue;
+
+      const live: ReviewTarget[] = resolution.targets.map(target => ({
+        user_id: target.user_id,
+        name: target.name,
+        login: target.login ?? null,
+      }));
+      const liveIds = new Set(live.map(target => target.user_id));
+      const departed: ReviewTarget[] = (prior[group.id] ?? [])
+        .filter(target => !liveIds.has(target.user_id))
+        .map(target => ({
+          user_id: target.user_id,
+          name: target.name,
+          login: target.login ?? null,
+          optional: true,
+        }));
+
+      reviewTargets[group.id] = [...live, ...departed];
+      reviewGroups.push({
+        fieldId: group.id,
+        label: String(group.label ?? 'Review each teammate'),
+        state: resolution.state,
+        ...(resolution.state === 'TEAM_UNTAGGED' ? { detail: resolution.detail } : {}),
+        ...('team' in resolution ? { teamName: resolution.team.name } : {}),
+        ...(resolution.state === 'AMBIGUOUS_TEAM' ? { teamNames: resolution.teamNames } : {}),
+        targets: reviewTargets[group.id],
+      });
+    }
+  }
+
+  const reviewBlocked =
+    reviewGroups.find(group => ClassmojiService.formTeam.isBlockingRepeatState(group.state)) ??
+    null;
+
   return {
     view: 'classroom-fill',
     theme,
@@ -311,9 +417,17 @@ export async function resolveClassroomForm({
     fields: visibleClassroomFields(displayFields, displayPlan),
     identity,
     storedAnswers: showStored ? (own?.answers as Record<string, unknown>) : null,
+    resolvedContext: showStored ? (own?.resolved_context ?? null) : null,
     restoredDraft: Boolean(own && !submitted && !revisionChanged),
     revisionChanged,
     mode,
-    server: { userId: member.userId, injected: currentPlan.injected },
+    reviewGroups,
+    reviewBlocked,
+    reviewTargets,
+    server: {
+      userId: member.userId,
+      classroomId: classroom.id,
+      injected: currentPlan.injected,
+    },
   };
 }
