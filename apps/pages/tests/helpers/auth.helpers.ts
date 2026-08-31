@@ -61,6 +61,7 @@ export async function loginAsLogin(page: Page, login: string): Promise<void> {
       user_agent: 'playwright',
     },
   });
+  mintedSessionTokens.push(token);
 
   await page.context().clearCookies();
   await page.context().addCookies([
@@ -72,6 +73,36 @@ export async function loginAsLogin(page: Page, login: string): Promise<void> {
       sameSite: 'Lax',
     },
   ]);
+}
+
+/**
+ * Every session row `loginAsLogin` has written in this worker.
+ *
+ * These are REAL, eight-hour, valid credentials in the devport database. The
+ * peer-review suite alone mints one per student per test, and each one outlived
+ * the run that made it — a developer's dev database quietly accumulated live
+ * sessions for seeded accounts, every one of them a working cookie for anyone
+ * who could read the table. A test fixture must not leave credentials lying
+ * about; `clearCookies` only forgets them on the client side.
+ */
+const mintedSessionTokens: string[] = [];
+
+/**
+ * Delete every session this worker minted. Call from a suite's `afterAll`.
+ *
+ * Best-effort on purpose: a failed cleanup must not turn a passing suite red,
+ * and the sessions expire on their own within eight hours regardless. It is
+ * idempotent, so calling it from several suites in one worker is fine.
+ */
+export async function clearMintedSessions(): Promise<void> {
+  if (mintedSessionTokens.length === 0) return;
+  const tokens = mintedSessionTokens.splice(0, mintedSessionTokens.length);
+  try {
+    const prisma = await getTestPrisma();
+    await prisma.session.deleteMany({ where: { token: { in: tokens } } });
+  } catch (error) {
+    console.warn('[tests] could not clear minted sessions', error);
+  }
 }
 
 /**

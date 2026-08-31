@@ -8,17 +8,44 @@ describe('csvTextCell', () => {
     expect(csvTextCell('+1 on this')).toBe("'+1 on this");
     expect(csvTextCell('-Anne')).toBe("'-Anne");
     expect(csvTextCell('@channel')).toBe("'@channel");
-    expect(csvTextCell('\tindented')).toBe("'\tindented");
-    expect(csvTextCell('\rreturn')).toBe("'\rreturn");
+  });
+
+  /**
+   * PADDING IS NOT PROTECTION.
+   *
+   * Excel trims a cell before deciding what it is, so `" =1+1"` and `"=1+1"` are
+   * the same formula to it. The check used to look at the LITERAL first
+   * character, which meant one leading space walked straight past it — and a
+   * space is the easiest thing in the world to type into a form field. Every
+   * whitespace a spreadsheet skips has to be skipped here too, or the guard is
+   * only stopping the attempts that were not really trying.
+   */
+  it('sees through leading whitespace, which is how the guard was bypassed', () => {
+    for (const pad of [' ', '  ', '\t', '\r', '\n', '\r\n', '\u00a0', '\ufeff', ' \t\n ']) {
+      const cell = `${pad}=cmd|'/c calc'!A1`;
+      // The apostrophe goes on, and the cell keeps what the person actually
+      // typed — padding included. Neutralizing it is the job; tidying is not.
+      expect(csvTextCell(cell), JSON.stringify(pad)).toBe(`'${cell}`);
+    }
+
+    // Every formula starter, not only `=`.
+    expect(csvTextCell(' +1 on this')).toBe("' +1 on this");
+    expect(csvTextCell('\t-Anne')).toBe("'\t-Anne");
+    expect(csvTextCell('\n@channel')).toBe("'\n@channel");
   });
 
   it('leaves ordinary text exactly as it was typed', () => {
     expect(csvTextCell('Maya Chen')).toBe('Maya Chen');
     expect(csvTextCell('emailed 8/25 — waiting')).toBe('emailed 8/25 — waiting');
-    // Only the FIRST character decides. A formula character anywhere else is
-    // ordinary punctuation and must not move the rest of the cell.
+    // Only the first SIGNIFICANT character decides. A formula character anywhere
+    // else is ordinary punctuation and must not move the rest of the cell — and
+    // indented prose is prose.
     expect(csvTextCell('a = b')).toBe('a = b');
+    expect(csvTextCell('  indented note')).toBe('  indented note');
     expect(csvTextCell('')).toBe('');
+    // All-whitespace has no significant character to judge, and must not be
+    // mistaken for one.
+    expect(csvTextCell('   ')).toBe('   ');
   });
 });
 

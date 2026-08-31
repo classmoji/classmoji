@@ -38,10 +38,7 @@ const listPath = `/${CLASS}/forms`;
 
 /** Expand the repeat group's card in the field list. */
 async function expandGroupCard(page: import('@playwright/test').Page) {
-  await page
-    .locator('button[aria-expanded]')
-    .filter({ hasText: 'Review each teammate' })
-    .click();
+  await page.locator('button[aria-expanded]').filter({ hasText: 'Review each teammate' }).click();
 }
 
 /** The stored draft's repeat group, straight off the column. */
@@ -51,7 +48,11 @@ async function storedGroup() {
   const fields = (form.draft_fields as { fields?: Array<Record<string, unknown>> }).fields ?? [];
   return fields.find(field => field.type === 'repeat_group') as
     | (Record<string, unknown> & {
-        repeat: { scope: { by: string; tag_id?: string }; min_entries?: number; max_entries?: number };
+        repeat: {
+          scope: { by: string; tag_id?: string };
+          min_entries?: number;
+          max_entries?: number;
+        };
         fields: Array<Record<string, unknown>>;
       })
     | undefined;

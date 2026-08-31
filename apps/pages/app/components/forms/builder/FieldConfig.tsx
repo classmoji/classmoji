@@ -17,7 +17,13 @@ import {
 import { IconGripVertical, IconPlus, IconTrash } from '@tabler/icons-react';
 import { FORM_LIMITS, type FormField, type FormOption } from '@classmoji/services/form-contract';
 
-import { NESTABLE_FIELD_TYPE_META, isDisplayField, makeField, metaFor } from '../fieldTypes.ts';
+import {
+  NESTABLE_FIELD_TYPE_META,
+  isDisplayField,
+  makeField,
+  metaFor,
+  unhandledFieldType,
+} from '../fieldTypes.ts';
 import OptionsEditor from './OptionsEditor.tsx';
 
 /**
@@ -677,8 +683,25 @@ function TypeSpecific({ field, onChange, scopes, nested }: FieldConfigProps) {
       );
     }
 
-    default:
+    // Types with no settings of their own beyond the shared label/help/required
+    // row `FieldConfig` draws above this. Listed one by one rather than left to
+    // fall through: `null` is a legitimate answer for THESE, and an unhelpful
+    // silence for anything new, so the two cases must not share a branch.
+    case 'short_text':
+    case 'long_text':
+    case 'switch':
       return null;
+
+    // Display blocks are configured by `DisplayConfig`, not here.
+    case 'heading':
+    case 'paragraph':
+    case 'banner':
+      return null;
+
+    default:
+      // A silent `null` used to be the fallback, so a new type's settings panel
+      // was simply empty — the field was addable and unconfigurable.
+      return unhandledFieldType(field.type, 'FieldConfig.TypeSpecific');
   }
 }
 

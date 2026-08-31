@@ -1,9 +1,12 @@
 import { z } from 'zod';
 import {
   FIELD_TYPE_REGISTRY,
+  FORM_LIMITS,
   type FormField,
   type FormOption,
 } from '@classmoji/services/form-contract';
+
+import { unhandledFieldType } from './fieldTypes.ts';
 
 /**
  * The bridge between what HTML inputs produce and what the answer contract
@@ -67,8 +70,21 @@ export function defaultValueFor(field: FormField): unknown {
     case 'opinion_scale':
     case 'number':
       return '';
-    default:
+    // Text-shaped controls and an unpicked `<select>` (whose empty option's
+    // value is `''`), plus the display blocks that never reach here
+    // (`answerableFields` filters them out) — all start as an empty string.
+    case 'short_text':
+    case 'long_text':
+    case 'email':
+    case 'dropdown':
+    case 'heading':
+    case 'paragraph':
+    case 'banner':
       return '';
+    default:
+      // `''` used to be the silent fallback, which is the wrong seed for any
+      // control that is not a text box — and nothing would have said so.
+      return unhandledFieldType(field.type, 'answerCoerce.defaultValueFor');
   }
 }
 
@@ -228,8 +244,23 @@ export function coerceValue(field: FormField, raw: unknown): unknown {
       return out;
     }
 
-    default:
+    // Text-shaped answers pass through: `''` IS the right stored value for a
+    // blank one — the contract accepts it on an optional field and rejects it
+    // on a required one, which is the distinction it should be making.
+    case 'short_text':
+    case 'long_text':
+    case 'email':
       return raw;
+
+    // Display blocks carry no answer. Filtered out upstream; enumerated here so
+    // the switch is exhaustive rather than trusting the caller to have done it.
+    case 'heading':
+    case 'paragraph':
+    case 'banner':
+      return raw;
+
+    default:
+      return unhandledFieldType(field.type, 'answerCoerce.coerceValue');
   }
 }
 
@@ -369,6 +400,30 @@ export interface SubmissionIdentity {
 }
 
 /**
+ * The ceiling on an identity string, and why it needs one at all.
+ *
+ * Every ANSWER is capped by its field's schema — `MAX_LABEL_CHARS` for a short
+ * text, and the whole set again by `MAX_ANSWERS_BYTES`. The identity is the one
+ * pair of strings that escapes that: it is lifted out of the submission and
+ * written to `email` / `name` columns BEFORE `parseAnswers` runs, and when the
+ * definition has no email field of its own it comes from the envelope's
+ * `identity` block, which no field schema describes. An anonymous caller could
+ * therefore post a hundred kilobytes of "name" per row.
+ *
+ * Same cap the contract puts on a short-text answer, because that is what these
+ * are: a name and an address someone typed into a box.
+ */
+const MAX_IDENTITY_CHARS = FORM_LIMITS.MAX_LABEL_CHARS;
+
+/**
+ * Truncated, not rejected. An over-long identity is either a paste accident or
+ * an abuse attempt, and neither is worth turning into an error page for the
+ * person filling in the form — the address still has to satisfy the email
+ * schema afterwards, and a name is a display convenience.
+ */
+const bounded = (value: string): string => value.slice(0, MAX_IDENTITY_CHARS);
+
+/**
  * Pull the identity out of a submission, given the plan its definition implies.
  *
  * `fallback` carries what the dedicated identity inputs collected; it is used
@@ -385,14 +440,18 @@ export function extractIdentity(
   const plan = identityPlan(fields);
 
   const fromAnswers = plan.emailFieldId ? answers?.[plan.emailFieldId] : undefined;
-  const email = String(
-    (typeof fromAnswers === 'string' && fromAnswers.trim() ? fromAnswers : fallback.email) ?? ''
-  ).trim();
+  const email = bounded(
+    String(
+      (typeof fromAnswers === 'string' && fromAnswers.trim() ? fromAnswers : fallback.email) ?? ''
+    ).trim()
+  );
 
   const nameAnswer = plan.nameFieldId ? answers?.[plan.nameFieldId] : undefined;
-  const name = String(
-    (typeof nameAnswer === 'string' && nameAnswer.trim() ? nameAnswer : fallback.name) ?? ''
-  ).trim();
+  const name = bounded(
+    String(
+      (typeof nameAnswer === 'string' && nameAnswer.trim() ? nameAnswer : fallback.name) ?? ''
+    ).trim()
+  );
 
   return { email, name: name || null };
 }
@@ -498,6 +557,3 @@ export function visibleClassroomFields(
   const hidden = new Set(plan.hiddenIds);
   return fields.filter(field => !hidden.has(field.id));
 }
-
-/** Options a choice field offers, exposed for the renderer's control markup. */
-export const fieldOptions = optionsOf;

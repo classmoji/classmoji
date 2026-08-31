@@ -197,23 +197,24 @@ interface QuizRow {
 }
 
 /**
- * The Pro gate, re-exported from its home in ../authz/proTier.ts.
+ * The Pro gate this file APPLIES (in the quizzes resource below) and no longer
+ * owns.
  *
- * This file used to CARRY the gate — a hand-mirrored copy of the webapp's
+ * It used to CARRY the gate: a hand-mirrored copy of the webapp's
  * `assertProTier` that reached into `subscription.getProStateForClassroomId`
  * itself and raised its own error. That copy is retired.
  * `@classmoji/auth/server`'s lifted `assertProTier` is now the single
  * implementation the webapp, apps/pages' forms subtree and this server all gate
- * on; ../authz/proTier.ts does nothing but translate its thrown 403 Response
- * into a ToolError.
+ * on; `../authz/proTier.ts` does nothing but translate its thrown 403 Response
+ * into a ToolError, and it takes the whole ToolContext (reading the
+ * already-authorized classroom's slug off it) rather than a bare classroom id.
  *
- * The name stays exported HERE because the quizzes read resource below, the
- * quiz write tools (tools/quizzes.ts) and the forms tools all apply this gate —
- * one definition, one decision, no drift between read and write. Note the
- * argument change: the wrapper takes the whole ToolContext (it reads the
- * already-authorized classroom's slug off it), not a bare classroom id.
+ * An `export { assertProTier }` used to sit here, left over from that move: a
+ * pass-through of a symbol this module does not define and that no module ever
+ * imported from it — the quiz write tools and the forms tools both take it from
+ * `../authz/proTier.ts` directly. A re-export nobody uses reads like a second
+ * home for a decision that must have exactly one, so it is gone.
  */
-export { assertProTier };
 
 export const quizzesResource: ResourceDefinition = {
   name: 'quizzes',

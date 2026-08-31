@@ -926,6 +926,43 @@ export interface ListResponsesFilters {
 }
 
 /**
+ * The columns a staff read of a response returns — and, by omission, the two it
+ * never does.
+ *
+ * `draft_token` is a BEARER CREDENTIAL: it is the cookie value that resumes an
+ * anonymous half-filled form, so anything holding it can open somebody else's
+ * partial submission. `email_normalized` is the identity key behind the partial
+ * unique index; the as-typed `email` beside it is the one a human should read,
+ * and shipping both invites a caller to key on the wrong one.
+ *
+ * Both were previously excluded by DISCIPLINE — every consumer hand-wrote an
+ * allowlist on the way out (the web's `toResponseRow`, the MCP's
+ * `responseSummary`), and each of those is one forgotten field from a leak on a
+ * surface nobody was thinking about. This makes the exclusion a property of the
+ * QUERY: a new consumer cannot echo a column the row does not carry.
+ *
+ * Listed positively rather than with `omit` so that adding a column to the
+ * schema is a decision made here, not a default that ships.
+ */
+const RESPONSE_SELECT = {
+  id: true,
+  form_id: true,
+  revision_id: true,
+  user_id: true,
+  email: true,
+  name: true,
+  answers: true,
+  resolved_context: true,
+  submission_state: true,
+  verified_at: true,
+  staff_status: true,
+  staff_note: true,
+  submitted_at: true,
+  created_at: true,
+  updated_at: true,
+} satisfies Prisma.FormResponseSelect;
+
+/**
  * Every response to a form, staff columns included.
  *
  * STAFF ONLY, by contract. This is the ONLY read path that returns rows
@@ -957,6 +994,7 @@ export async function listByFormId(formId: string, filters: ListResponsesFilters
 
   return getPrisma().formResponse.findMany({
     where,
+    select: RESPONSE_SELECT,
     orderBy: { submitted_at: 'asc' },
     ...(filters.take === undefined ? {} : { take: filters.take }),
     ...(filters.skip === undefined ? {} : { skip: filters.skip }),

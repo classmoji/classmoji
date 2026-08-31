@@ -14,11 +14,21 @@
  * ── Two schemas, one registry ──────────────────────────────────────────────
  * A field type is declared in exactly ONE place: FIELD_TYPE_REGISTRY. Each
  * entry carries the DEFINITION schema (what the builder may save), the ANSWER
- * schema factory (what a filler may submit for a field of that type), the
- * access-mode flag, and the renderer key phase 3 will dispatch on. The
- * definition union, the access-mode check, and buildResponseSchema are all
- * DERIVED from that object — adding a field type means adding one registry
- * entry and its two schemas, and touching nothing else here.
+ * schema factory (what a filler may submit for a field of that type), and the
+ * access-mode flag. The definition union, the nestable set, the access-mode
+ * check, and buildResponseSchema are all DERIVED from that object — adding a
+ * field type means adding one registry entry and its two schemas, and touching
+ * nothing else HERE.
+ *
+ * It does mean touching things elsewhere, and that is deliberate. The
+ * presentation layer — renderer, preview, config panel, answer formatter,
+ * builder palette — is code, not data, and cannot be derived from a schema. It
+ * is held to the registry by EXHAUSTIVENESS instead: every one of those
+ * dispatches is typed over `FormFieldType` and ends in
+ * `fieldTypes.unhandledFieldType`, so a new entry here is a COMPILE ERROR in
+ * each of them until it is handled. (An earlier `rendererKey` field on this
+ * interface named a component for every type and was read by nothing; a
+ * documented mechanism that does not run reads as a guarantee, so it is gone.)
  *
  * ── Ids ────────────────────────────────────────────────────────────────────
  * Every field and every option carries a uuid, and answers key on those uuids —
@@ -78,6 +88,22 @@ export const FORM_LIMITS = {
   MAX_REVISION_BYTES: 256 * 1024,
   /** Serialized `answers` payload of one response. */
   MAX_ANSWERS_BYTES: 256 * 1024,
+  /**
+   * Deepest container nesting an answer payload may carry.
+   *
+   * Not a tidiness rule — a DoS ceiling. `JSON.parse` accepts nesting far deeper
+   * than `JSON.stringify` can walk (V8 parses 20,000 nested arrays happily and
+   * then overflows the stack serializing them), so a 40KB anonymous POST of
+   * `[[[[…]]]]` used to reach `answersByteSize`, throw a RangeError with no
+   * `code`, miss every catch branch, and answer 500. The measurement is now
+   * failure-proof AND the shape is refused before it is measured.
+   *
+   * The real ceiling is low: the deepest legitimate answer is a matrix nested
+   * inside a repeat group — `answers[group][target][field][row]`, five levels
+   * with the envelope. Sixteen leaves generous room for a shape nobody has
+   * thought of yet and still refuses anything pathological.
+   */
+  MAX_ANSWER_DEPTH: 16,
   /** Ranks a ranked_choice field may ask for. */
   MAX_RANKS: 30,
 } as const;
@@ -290,11 +316,26 @@ const opinionScaleDef = z
  * a draft and populated by form.service.publish — never resolved at render.
  * CLASSROOM-only: the public renderer has no code path that can read a roster.
  */
+/**
+ * The membership sets a `roster_select` may be sourced from.
+ *
+ * EXPORTED, and the zod enum is built from it, because the other half of this
+ * rule lives in `form.service.materializeSourcedOptions` — which has to turn
+ * each name into a set of roles. Those two lists could not see each other: the
+ * service looked its source up in a plain `Record<string, Role[]>` and returned
+ * `[]` for a miss, so adding a third source here would have published a field
+ * with an empty option list and no error anywhere. One declaration, and the
+ * service's map is typed against it.
+ */
+export const OPTION_SOURCES = ['roster', 'teaching_team'] as const;
+
+export type OptionSource = (typeof OPTION_SOURCES)[number];
+
 const rosterSelectDef = z
   .object({
     ...inputFieldBase,
     type: z.literal('roster_select'),
-    optionSource: z.enum(['roster', 'teaching_team']),
+    optionSource: z.enum(OPTION_SOURCES),
     /** Pick several people ("who would you like to work with") vs. exactly one. */
     multiple: z.boolean().default(false),
     options: optionList(0, FORM_LIMITS.MAX_ROSTER_OPTIONS).default([]),
@@ -471,16 +512,22 @@ interface FieldTypeSpec<TDef = never> {
   /** May a repeat_group contain this type? False for repeat_group itself. */
   nestable: boolean;
   defSchema: z.ZodTypeAny;
-  /** Reserved for the phase-3 renderer registry; one lookup, not a switch. */
-  rendererKey: string;
   answerSchema?: AnswerSchemaFactory<TDef>;
 }
 
 /**
  * THE single place a field type is declared. Everything else in this module —
  * the definition union, the inner (nestable) union, the access-mode check, and
- * buildResponseSchema — reads this object. Adding `file_upload` or
- * `date_picker` later means adding one entry here plus its two schemas.
+ * buildResponseSchema — reads this object. Adding `file_upload` or `date_picker`
+ * later means adding one entry here plus its two schemas.
+ *
+ * And then implementing it, in six places, because the compiler will not let the
+ * build finish otherwise: the renderer's control switch, the builder preview,
+ * the field-config panel, the answer formatter (which is also the CSV), and the
+ * palette's label/order/starter maps in `apps/pages/…/fieldTypes.ts`. Verified
+ * by adding a throwaway `date` entry here: eight compile errors across those six
+ * modules, and not one silent fallback. That is the whole promise — one
+ * declaration, N required implementations, all of them enforced.
  */
 export const FIELD_TYPE_REGISTRY = {
   short_text: {
@@ -488,7 +535,6 @@ export const FIELD_TYPE_REGISTRY = {
     classroomOnly: false,
     nestable: true,
     defSchema: shortTextDef,
-    rendererKey: 'ShortText',
     answerSchema: field =>
       field.required
         ? z.string().trim().min(1).max(FORM_LIMITS.MAX_LABEL_CHARS)
@@ -500,7 +546,6 @@ export const FIELD_TYPE_REGISTRY = {
     classroomOnly: false,
     nestable: true,
     defSchema: longTextDef,
-    rendererKey: 'LongText',
     answerSchema: field =>
       field.required
         ? z
@@ -516,7 +561,6 @@ export const FIELD_TYPE_REGISTRY = {
     classroomOnly: false,
     nestable: true,
     defSchema: emailDef,
-    rendererKey: 'Email',
     answerSchema: field => {
       const address = z.string().trim().toLowerCase().email();
       const schema: z.ZodTypeAny = field.domain
@@ -535,7 +579,6 @@ export const FIELD_TYPE_REGISTRY = {
     classroomOnly: false,
     nestable: true,
     defSchema: numberDef,
-    rendererKey: 'Number',
     answerSchema: field => {
       let schema = z.number().finite();
       if (field.min !== undefined) schema = schema.min(field.min);
@@ -549,7 +592,6 @@ export const FIELD_TYPE_REGISTRY = {
     classroomOnly: false,
     nestable: true,
     defSchema: dropdownDef,
-    rendererKey: 'Dropdown',
     answerSchema: field => oneOf(field.options),
   } satisfies FieldTypeSpec<z.infer<typeof dropdownDef>>,
 
@@ -558,7 +600,6 @@ export const FIELD_TYPE_REGISTRY = {
     classroomOnly: false,
     nestable: true,
     defSchema: multiselectDef,
-    rendererKey: 'MultiSelect',
     answerSchema: field =>
       z
         .array(oneOf(field.options))
@@ -574,7 +615,6 @@ export const FIELD_TYPE_REGISTRY = {
     classroomOnly: false,
     nestable: true,
     defSchema: switchDef,
-    rendererKey: 'Switch',
     // A REQUIRED switch is the acknowledgment pattern ("no Canvas, check
     // Slack") — it is not satisfied by answering "no".
     answerSchema: field => (field.required ? z.literal(true) : z.boolean()),
@@ -585,7 +625,6 @@ export const FIELD_TYPE_REGISTRY = {
     classroomOnly: false,
     nestable: true,
     defSchema: opinionScaleDef,
-    rendererKey: 'OpinionScale',
     answerSchema: field => z.number().int().min(field.scale.min).max(field.scale.max),
   } satisfies FieldTypeSpec<z.infer<typeof opinionScaleDef>>,
 
@@ -594,7 +633,6 @@ export const FIELD_TYPE_REGISTRY = {
     classroomOnly: true,
     nestable: true,
     defSchema: rosterSelectDef,
-    rendererKey: 'RosterSelect',
     answerSchema: field =>
       field.multiple
         ? z
@@ -612,7 +650,6 @@ export const FIELD_TYPE_REGISTRY = {
     classroomOnly: false,
     nestable: true,
     defSchema: rankedChoiceDef,
-    rendererKey: 'RankedChoice',
     // Ranks are positional: index 0 is the first choice. Each option may be
     // used once — the constraint Fillout could only express as a warning banner.
     answerSchema: field =>
@@ -630,7 +667,6 @@ export const FIELD_TYPE_REGISTRY = {
     classroomOnly: false,
     nestable: true,
     defSchema: matrixDef,
-    rendererKey: 'Matrix',
     answerSchema: field => {
       const { rows, columns, required_rows } = field.matrix as {
         rows: FormOption[];
@@ -657,7 +693,6 @@ export const FIELD_TYPE_REGISTRY = {
     classroomOnly: true,
     nestable: false,
     defSchema: repeatGroupDef,
-    rendererKey: 'RepeatGroup',
     answerSchema: (field, ctx) => {
       const targets = ctx.resolved?.[field.id as string];
       // No silent pass-through: a repeat group with no resolved context means
@@ -713,7 +748,6 @@ export const FIELD_TYPE_REGISTRY = {
     classroomOnly: false,
     nestable: true,
     defSchema: headingDef,
-    rendererKey: 'Heading',
   } satisfies FieldTypeSpec,
 
   paragraph: {
@@ -721,7 +755,6 @@ export const FIELD_TYPE_REGISTRY = {
     classroomOnly: false,
     nestable: true,
     defSchema: paragraphDef,
-    rendererKey: 'Paragraph',
   } satisfies FieldTypeSpec,
 
   banner: {
@@ -729,7 +762,6 @@ export const FIELD_TYPE_REGISTRY = {
     classroomOnly: false,
     nestable: true,
     defSchema: bannerDef,
-    rendererKey: 'Banner',
   } satisfies FieldTypeSpec,
 } as const;
 
@@ -799,9 +831,50 @@ export function definitionByteSize(definition: FormDefinition): number {
   return new TextEncoder().encode(JSON.stringify(definition)).length;
 }
 
-/** Serialized size of an answer set, in bytes, as it will be stored. */
+/**
+ * Does this value nest deeper than `limit` levels of arrays/objects?
+ *
+ * ITERATIVE on purpose. A recursive depth check overflows the stack on exactly
+ * the input it exists to reject, which would make the guard a second copy of the
+ * bug it is guarding. The explicit stack also makes the walk terminate on a
+ * cyclic value — anything at or past the limit answers `true` and stops.
+ *
+ * Exported because the submission routes run it on the whole request envelope,
+ * before any query: refusing a pathological body costs one walk, and the
+ * alternative is doing database work on behalf of an anonymous caller who sent
+ * something no form could produce.
+ */
+export function exceedsMaxDepth(
+  value: unknown,
+  limit: number = FORM_LIMITS.MAX_ANSWER_DEPTH
+): boolean {
+  const stack: Array<{ node: unknown; depth: number }> = [{ node: value, depth: 0 }];
+  while (stack.length > 0) {
+    const { node, depth } = stack.pop()!;
+    if (node === null || typeof node !== 'object') continue;
+    if (depth >= limit) return true;
+    const children = Array.isArray(node) ? node : Object.values(node as Record<string, unknown>);
+    for (const child of children) stack.push({ node: child, depth: depth + 1 });
+  }
+  return false;
+}
+
+/**
+ * Serialized size of an answer set, in bytes, as it will be stored.
+ *
+ * `JSON.stringify` is recursive in V8 and throws a RangeError on a deeply
+ * nested value — a plain Error with no `code`, which would sail past every
+ * `error.code === …` branch on the submission paths and become a 500 for an
+ * anonymous caller. A size probe must not be able to fail louder than the thing
+ * it is sizing, so an unserializable value is reported as infinitely large and
+ * the caller's existing "too large" branch handles it.
+ */
 export function answersByteSize(answers: unknown): number {
-  return new TextEncoder().encode(JSON.stringify(answers ?? null)).length;
+  try {
+    return new TextEncoder().encode(JSON.stringify(answers ?? null)).length;
+  } catch {
+    return Number.POSITIVE_INFINITY;
+  }
 }
 
 /**
@@ -928,11 +1001,23 @@ export function parseAnswers(
   answers: unknown,
   ctx: ResponseSchemaContext = {}
 ): Record<string, unknown> {
+  // Shape before size: a value too deep to serialize cannot be measured, and
+  // measuring it is what used to crash. Reported as TOO_LARGE rather than as a
+  // new code so every existing caller's catch chain already handles it.
+  if (exceedsMaxDepth(answers)) {
+    throw formContractError(
+      FORM_ANSWERS_TOO_LARGE,
+      `Response nests deeper than ${FORM_LIMITS.MAX_ANSWER_DEPTH} levels; no form definition can produce an answer that shape.`
+    );
+  }
+
   const bytes = answersByteSize(answers);
   if (bytes > FORM_LIMITS.MAX_ANSWERS_BYTES) {
     throw formContractError(
       FORM_ANSWERS_TOO_LARGE,
-      `Response is ${bytes} bytes; the limit is ${FORM_LIMITS.MAX_ANSWERS_BYTES}.`
+      Number.isFinite(bytes)
+        ? `Response is ${bytes} bytes; the limit is ${FORM_LIMITS.MAX_ANSWERS_BYTES}.`
+        : 'Response could not be measured — it is too large or too deeply nested to serialize.'
     );
   }
 

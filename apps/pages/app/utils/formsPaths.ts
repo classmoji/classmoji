@@ -74,9 +74,22 @@ function segmentsOf(pathname: string): string[] {
  */
 export function classifyFormsPath(pathname: string): FormsRouteKind | null {
   const segments = segmentsOf(pathname);
-  if (segments.length < 2 || segments[1] !== 'forms') return null;
+  if (segments.length < 2 || segments[1].toLowerCase() !== 'forms') return null;
 
-  const rest = segments.slice(2);
+  /**
+   * Lower-cased before the set lookups, because the ROUTER is case-insensitive
+   * about these and this function was not — and it disagreed in both directions.
+   *
+   *  - `/cs52/forms/NEW` resolved to the admin new-form drawer and classified as
+   *    PUBLIC, exempting an admin surface from the login redirect;
+   *  - `/cs52/forms/waitlist/VERIFY` served the magic-link page and classified
+   *    as ADMIN, so a link whose case a mail client had touched demanded a
+   *    Classmoji account from someone who has never had one.
+   *
+   * Only the SUBPATH names are folded. The slug itself is never compared here,
+   * and the raw-not-decoded rule above still stands: `%4eEW` is not `NEW`.
+   */
+  const rest = segments.slice(2).map(segment => segment.toLowerCase());
 
   // /{class}/forms — the admin list.
   if (rest.length === 0) return 'admin';

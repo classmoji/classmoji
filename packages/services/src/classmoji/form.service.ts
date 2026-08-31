@@ -4,6 +4,8 @@ import {
   DEFINITION_VERSION,
   FORM_DEFINITION_TOO_LARGE,
   FORM_LIMITS,
+  OPTION_SOURCES,
+  type OptionSource,
   assertFieldsAllowedForAccess,
   definitionByteSize,
   flattenFields,
@@ -36,7 +38,7 @@ export const FORM_NOT_FOUND = 'FORM_NOT_FOUND';
 export const FORM_SLUG_UNAVAILABLE = 'FORM_SLUG_UNAVAILABLE';
 /** The requested slug is a platform-owned path inside the forms subtree. */
 export const FORM_SLUG_RESERVED = 'FORM_SLUG_RESERVED';
-/** Attempted to change `access` on a form that has left DRAFT. */
+/** Attempted to change `access` on a form that has ever been published. */
 export const FORM_ACCESS_FROZEN = 'FORM_ACCESS_FROZEN';
 /** Attempted a DRAFT-only operation (a field-list edit) on a published form. */
 export const FORM_NOT_DRAFT = 'FORM_NOT_DRAFT';
@@ -44,6 +46,12 @@ export const FORM_NOT_DRAFT = 'FORM_NOT_DRAFT';
 export const FORM_NO_FIELDS = 'FORM_NO_FIELDS';
 /** A roster-sourced field would need more options than one field may hold. */
 export const FORM_ROSTER_TOO_LARGE = 'FORM_ROSTER_TOO_LARGE';
+/**
+ * A `roster_select` names an `optionSource` this service has no roles for.
+ * Unreachable through any save path (the contract's enum is the same list) —
+ * it exists so a future divergence between the two is loud rather than empty.
+ */
+export const FORM_UNKNOWN_OPTION_SOURCE = 'FORM_UNKNOWN_OPTION_SOURCE';
 
 /**
  * Paths the forms subtree owns inside `/{class}/forms/…`. A form slugged
@@ -286,9 +294,9 @@ export interface UpdateFormInput {
  * Two rules are enforced here rather than in the UI, because the MCP tools and
  * any future API write through this same function:
  *
- *  - `access` is FROZEN once the form leaves DRAFT. A CLASSROOM→PUBLIC flip
- *    mid-collection would put session-identified and email-identified responses
- *    in one set, under two different uniqueness rules.
+ *  - `access` is FROZEN from the moment a form has EVER been published, not
+ *    merely while it is out of DRAFT. See the guard below — that distinction is
+ *    the whole fix for a roster disclosure, not a tightening for tidiness.
  *  - the field list may only change while the form is a DRAFT. Once responses
  *    can exist, a new definition is a new REVISION (see `publish`), never an
  *    edit of the one people already answered.
@@ -299,17 +307,54 @@ export interface UpdateFormInput {
 export async function update(formId: string, updates: UpdateFormInput) {
   const form = await getPrisma().form.findUnique({
     where: { id: formId },
-    select: { id: true, status: true, access: true, draft_fields: true },
+    select: {
+      id: true,
+      status: true,
+      access: true,
+      draft_fields: true,
+      current_revision_id: true,
+    },
   });
   if (!form) throw serviceError(FORM_NOT_FOUND, `Form ${formId} not found`);
 
   const isDraft = form.status === 'DRAFT';
+  const published = form.current_revision_id !== null;
   const nextAccess = updates.access ?? form.access;
 
-  if (updates.access !== undefined && updates.access !== form.access && !isDraft) {
+  /**
+   * Access is frozen by PUBLICATION, not by status.
+   *
+   * "Not DRAFT" was the old condition and it had a hole with teeth: moving a
+   * form back to DRAFT is a supported operation (`quickUpdate`) that leaves
+   * `current_revision_id` pointing at the live revision, so
+   *
+   *   quickUpdate(DRAFT) → update({ access: 'PUBLIC', fields: [clean] })
+   *                      → quickUpdate(OPEN)
+   *
+   * flipped a CLASSROOM form to PUBLIC while the SERVED revision still held
+   * `roster_select` options materialized as `[{ id: user_id, label: "Name
+   * (login)" }]` for every student. The field-list rewrite only touched
+   * `draft_fields`; the published revision — the one the fill page renders — was
+   * never re-checked, and an anonymous visitor was then handed the roster.
+   *
+   * Two fixes were possible: refuse the change, or null `current_revision_id`
+   * and force a republish. We refuse. Nulling the revision would still let a
+   * CLASSROOM form that had ALREADY COLLECTED responses become PUBLIC, mixing
+   * session-keyed (`user_id`) and email-keyed rows under two different
+   * uniqueness rules — precisely what this error was written to prevent. A
+   * published form that needs a different audience is a different form.
+   *
+   * The render layer carries the same rule independently
+   * (`loadPublicForm` re-asserts it against the revision it is about to serve),
+   * because a single guard on a write path is one bug away from being the only
+   * thing between a roster and the internet.
+   */
+  if (updates.access !== undefined && updates.access !== form.access && (published || !isDraft)) {
     throw serviceError(
       FORM_ACCESS_FROZEN,
-      `Access is frozen once a form leaves DRAFT (this form is ${form.status}). Responses collected under one identity mode cannot be mixed with another.`
+      published
+        ? 'Access is frozen once a form has been published — its live revision was built for the audience it had then. Create a new form for a different audience.'
+        : `Access is frozen once a form leaves DRAFT (this form is ${form.status}). Responses collected under one identity mode cannot be mixed with another.`
     );
   }
 
@@ -355,14 +400,23 @@ export async function update(formId: string, updates: UpdateFormInput) {
  * OWNER | TEACHER only: a TA is on the teaching team everywhere else in the
  * product, and a "pick a TA" field that silently omitted them would be a
  * different meaning of the same words.
+ *
+ * Keyed on the contract's own `OptionSource`, not on `string`. The two lists
+ * used to be independent — the contract's zod enum here, this map there — and a
+ * source added to the enum would have resolved to `undefined` roles and
+ * published a roster field with NO options and no error on any surface. Typing
+ * the map against the enum makes that a compile error instead.
  */
-const OPTION_SOURCE_ROLES: Record<string, Role[]> = {
+const OPTION_SOURCE_ROLES: Record<OptionSource, Role[]> = {
   roster: ['STUDENT'],
   teaching_team: ['OWNER', 'TEACHER', 'ASSISTANT'],
 };
 
 /** How a person is labelled in a roster option: "Maya Chen (mchen)". */
-const memberLabel = (user: { name: string | null; login: string | null }, userId: string): string => {
+const memberLabel = (
+  user: { name: string | null; login: string | null },
+  userId: string
+): string => {
   if (user.name && user.login) return `${user.name} (${user.login})`;
   return user.name || user.login || `Unknown member ${userId.slice(0, 8)}`;
 };
@@ -381,8 +435,17 @@ async function resolveOptionSource(
   classroomId: string,
   source: string
 ): Promise<FormOption[]> {
-  const roles = OPTION_SOURCE_ROLES[source];
-  if (!roles) return [];
+  const roles = OPTION_SOURCE_ROLES[source as OptionSource];
+  // An empty list used to be the answer here, which published a "choose a
+  // teammate" field with nobody in it. The contract's enum makes an unknown
+  // source unreachable through any save path, so reaching this line means the
+  // two declarations have drifted — a bug to be told about, not absorbed.
+  if (!roles) {
+    throw serviceError(
+      FORM_UNKNOWN_OPTION_SOURCE,
+      `No membership roles are defined for option source '${source}'. Known sources: ${OPTION_SOURCES.join(', ')}.`
+    );
+  }
 
   const memberships = await tx.classroomMembership.findMany({
     where: { classroom_id: classroomId, role: { in: roles } },
@@ -481,7 +544,24 @@ export async function materializeSourcedOptions(
  * alone, so re-publishing after four late enrollments is what picks them up.
  */
 export async function publish(formId: string) {
-  return getPrisma().$transaction(async tx => {
+  return getPrisma().$transaction(tx => publishWithin(tx, formId));
+}
+
+/**
+ * The body of `publish`, taking the transaction rather than opening one.
+ *
+ * Extracted so `publishNewVersion` can run the draft write and the snapshot in
+ * ONE transaction: Prisma has no nested interactive transactions, so a
+ * `publishNewVersion` that called `publish` would either open a second
+ * connection (and lose atomicity, which is the entire point) or deadlock on the
+ * row lock it already holds.
+ *
+ * Re-taking `FOR UPDATE` inside a transaction that already holds the lock is
+ * free — Postgres row locks are re-entrant for the holding transaction — so the
+ * lock stays here rather than becoming the caller's responsibility to remember.
+ */
+async function publishWithin(tx: Prisma.TransactionClient, formId: string) {
+  {
     await tx.$queryRaw`SELECT id FROM forms WHERE id = ${formId} FOR UPDATE`;
 
     const form = await tx.form.findUnique({
@@ -538,6 +618,56 @@ export async function publish(formId: string) {
     });
 
     return { form: updated, revision };
+  }
+}
+
+/**
+ * Edit a LIVE form's questions and publish the result — atomically.
+ *
+ * ── Why this exists ────────────────────────────────────────────────────────
+ * `update` refuses a field list on anything but a DRAFT, so editing a published
+ * form is not "save, then publish". It is three moves: back to DRAFT, write the
+ * new list, snapshot it. The builder used to make those three calls in a row
+ * from its action, and any failure between them — an invalid definition, a
+ * roster over the ceiling, a dropped connection — left the form sitting in
+ * DRAFT. A DRAFT form 404s for every filler. The instructor's report is "I
+ * edited my form and it disappeared", and the only recovery is knowing to press
+ * Publish again.
+ *
+ * All three moves now happen under one transaction and one row lock, so the
+ * form is either still OPEN on the revision people were already filling in, or
+ * OPEN on the new one. There is no third state to be stranded in.
+ *
+ * The status is written to DRAFT inside the transaction rather than skipped,
+ * because `update`'s DRAFT-only rule is a real invariant and this is not a
+ * licence to bypass it — the write goes through the same validation the builder
+ * would have triggered, in an order no other observer can see.
+ */
+export async function publishNewVersion(formId: string, fields: unknown) {
+  return getPrisma().$transaction(async tx => {
+    await tx.$queryRaw`SELECT id FROM forms WHERE id = ${formId} FOR UPDATE`;
+
+    const form = await tx.form.findUnique({
+      where: { id: formId },
+      select: { id: true, access: true },
+    });
+    if (!form) throw serviceError(FORM_NOT_FOUND, `Form ${formId} not found`);
+
+    // Validate BEFORE touching the row: the overwhelmingly common failure is a
+    // definition the contract rejects, and a rejection that happens before any
+    // write needs no rollback to be correct.
+    const definition = parseFormDefinition(fields);
+    assertFieldsAllowedForAccess(definition.fields, form.access);
+
+    await tx.form.update({
+      where: { id: formId },
+      data: {
+        draft_fields: definition as unknown as Prisma.InputJsonValue,
+        status: 'DRAFT',
+      },
+    });
+
+    return publishWithin(tx, formId);
   });
 }
 

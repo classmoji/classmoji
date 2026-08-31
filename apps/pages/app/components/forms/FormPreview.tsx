@@ -1,6 +1,6 @@
 import type { FormField, FormOption } from '@classmoji/services/form-contract';
 
-import { isDisplayField } from './fieldTypes.ts';
+import { isDisplayField, unhandledFieldType } from './fieldTypes.ts';
 
 /**
  * A READ-ONLY approximation of a form, rendered straight from a definition.
@@ -261,8 +261,23 @@ function Control({ field }: { field: FormField }) {
       );
     }
 
-    default:
+    // A one-line box, drawn empty. The only type whose preview really IS the
+    // bare box, which is why it is named rather than left to fall through.
+    case 'short_text':
       return <div className={inputBox()} />;
+
+    // Display blocks are routed to `DisplayBlock` before this is reached. Named
+    // so the switch is exhaustive rather than trusting the caller to have done
+    // the routing.
+    case 'heading':
+    case 'paragraph':
+    case 'banner':
+      return null;
+
+    default:
+      // The grey box used to be the fallback, so a new field type previewed as
+      // a convincing-looking wrong control and told nobody.
+      return unhandledFieldType(field.type, 'FormPreview.Control');
   }
 }
 

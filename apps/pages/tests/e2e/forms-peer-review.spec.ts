@@ -2,6 +2,7 @@ import { test, expect, type Page } from '@playwright/test';
 import { parseFormDefinition } from '@classmoji/services/form-contract';
 
 import {
+  clearMintedSessions,
   getClassroomIdBySlug,
   getTestClassroomSlug,
   getTestPrisma,
@@ -246,6 +247,12 @@ test.afterAll(async () => {
   await prisma.tag.deleteMany({
     where: { classroom_id: classroomId, name: { startsWith: 'zz-e2e-team' } },
   });
+
+  // `loginAsLogin` mints a REAL eight-hour session row per sign-in, and this
+  // file signs three students in and out repeatedly. Left behind they are live
+  // credentials for seeded accounts sitting in a developer's database long after
+  // the run — clearing the cookie only forgets them on the client.
+  await clearMintedSessions();
 });
 
 test.beforeEach(async ({ page }) => {
@@ -266,8 +273,7 @@ async function openFill(page: Page, path: string) {
   }
 }
 
-const cardFor = (page: Page, login: string) =>
-  page.getByTestId(`review-card-${userIds[login]}`);
+const cardFor = (page: Page, login: string) => page.getByTestId(`review-card-${userIds[login]}`);
 
 /** Open a teammate's card if it is collapsed. */
 async function expandCard(page: Page, login: string) {
@@ -442,7 +448,9 @@ test.describe('resolver states', () => {
     await loginAs(page, 'ta');
     await openFill(page, trioPath);
 
-    await expect(page.getByRole('heading', { name: /not on a team for this form yet/i })).toBeVisible();
+    await expect(
+      page.getByRole('heading', { name: /not on a team for this form yet/i })
+    ).toBeVisible();
     await expect(page.getByRole('button', { name: /Submit|Update/ })).toHaveCount(0);
     await expect(page.getByTestId(`review-group-${F.group}`)).toHaveCount(0);
   });
@@ -524,6 +532,35 @@ test.describe('isolation', () => {
     expect(body).not.toContain('Student three carried us');
     expect(body).not.toContain(mine.id);
     expect(body).not.toContain('student1@dev.local');
+  });
+
+  /**
+   * A REVIEWER DOES NOT GET A CONTACT LIST.
+   *
+   * The response's `resolved_context` snapshots each teammate's name, login AND
+   * email, so a staff export can still identify a reviewee who has left the
+   * course. The fill page renders names; it was shipping the addresses too, in
+   * the loader payload behind a page that displays none of them.
+   *
+   * The reviewer's own address stays — it is who the response is from, and the
+   * page prints it in the "Submitted as" line.
+   */
+  test('a reviewer’s own payload carries teammate names, never their emails', async ({ page }) => {
+    await studentOneReviews(page);
+
+    await loginAsLogin(page, S1);
+    for (const target of [trioPath, `${trioPath}.data`]) {
+      const response = await page.request.get(target, { maxRedirects: 0 });
+      const body = await response.text();
+
+      expect(body, target).not.toContain('student2@dev.local');
+      expect(body, target).not.toContain('student3@dev.local');
+      // The names ARE there — otherwise this would pass on a page that failed
+      // to render the review block at all.
+      expect(body, target).toContain('Dev Student 2');
+      // And the reviewer's own identity is untouched.
+      expect(body, target).toContain('student1@dev.local');
+    }
   });
 
   test.describe('a tampered submit cannot review a non-teammate', () => {
@@ -746,7 +783,11 @@ test.describe('the staff surfaces', () => {
 
     await loginAsLogin(page, S2);
     const response = await page.request.get(`${trioPath}/responses`, { maxRedirects: 0 });
-    expect(response.status()).toBeGreaterThanOrEqual(300);
+    // The exact code, not `>= 300`: that range accepts a 302 to the login page,
+    // which for a signed-in student would mean the gate had failed to recognise
+    // them rather than refused them — the wrong outcome passing as the right
+    // one. A member without staff rights gets a flat 403.
+    expect(response.status()).toBe(403);
     const body = await response.text();
     expect(body).not.toContain('Student one on student two');
   });

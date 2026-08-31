@@ -20,11 +20,7 @@
  */
 
 import { test, expect } from '@playwright/test';
-import {
-  classifyFormsPath,
-  isFormsPath,
-  isPublicFormsPath,
-} from '../../app/utils/formsPaths.ts';
+import { classifyFormsPath, isFormsPath, isPublicFormsPath } from '../../app/utils/formsPaths.ts';
 
 test.describe('classifyFormsPath — outside the subtree', () => {
   test('returns null for paths that are not forms paths', () => {
@@ -123,6 +119,36 @@ test.describe('classifyFormsPath — normalization', () => {
   test('doubled and trailing slashes do not change the answer', () => {
     expect(classifyFormsPath('/cs52//forms//waitlist')).toBe('public');
     expect(classifyFormsPath('/cs52/forms//')).toBe('admin');
+  });
+
+  /**
+   * The ROUTER matches these case-insensitively. This function did not, and it
+   * disagreed with the router in both directions at once:
+   *
+   *  - `/cs52/forms/NEW` served the admin new-form drawer and classified as
+   *    PUBLIC, exempting an admin surface from the login redirect;
+   *  - `/cs52/forms/waitlist/VERIFY` served the magic-link review page and
+   *    classified as ADMIN, so a link whose case a mail client had touched
+   *    demanded a Classmoji account from a person who has never had one.
+   *
+   * Two different failures, one cause: a gate that does not agree with the
+   * router about which page it is guarding.
+   */
+  test('the subpath names are matched the way the router matches them', () => {
+    for (const spelling of ['new', 'NEW', 'New', 'nEw']) {
+      expect(classifyFormsPath(`/cs52/forms/${spelling}`), spelling).toBe('admin');
+    }
+    for (const spelling of ['verify', 'VERIFY', 'Verify']) {
+      expect(classifyFormsPath(`/cs52/forms/waitlist/${spelling}`), spelling).toBe('public');
+    }
+    for (const spelling of ['forms', 'FORMS', 'Forms']) {
+      expect(classifyFormsPath(`/cs52/${spelling}/waitlist`), spelling).toBe('public');
+      expect(classifyFormsPath(`/cs52/${spelling}`), spelling).toBe('admin');
+    }
+    // An ordinary slug is still a slug whatever its case — folding the subpath
+    // names must not start folding form slugs into reserved words.
+    expect(classifyFormsPath('/cs52/forms/Waitlist')).toBe('public');
+    expect(classifyFormsPath('/cs52/forms/waitlist/EDIT')).toBe('admin');
   });
 
   test('a percent-encoded segment is not read as "forms"', () => {

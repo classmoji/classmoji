@@ -1,4 +1,5 @@
 import { getThemeByKey } from '@classmoji/utils/themes';
+import { assertFieldsAllowedForAccess, type FormField } from '@classmoji/services/form-contract';
 
 import { ClassmojiService, prisma } from '~/utils/db.server.ts';
 import { resolveClassroomForm, type ClassroomFormLoad } from './classroomForm.server.ts';
@@ -20,11 +21,20 @@ import { resolveClassroomForm, type ClassroomFormLoad } from './classroomForm.se
  * answered before open/closed — so an anonymous visitor never learns a
  * members-only form's title or status. Reordering these is a security change.
  *
- * ── What is NOT here ───────────────────────────────────────────────────────
- * The roster. A PUBLIC form cannot contain a roster-sourced field (the contract
- * refuses to save one), and this module has no code path that could resolve one
- * if it did. That is the render layer of the plan's three-layer access rule:
- * not "we don't ask", but "there is nothing here to ask with".
+ * ── What is NOT here, and what is ──────────────────────────────────────────
+ * This module never RESOLVES a roster: there is no membership query on the
+ * public path, so it cannot go and fetch one. That is necessary and it is not
+ * sufficient, because a roster does not have to be fetched to be leaked — it
+ * can already be sitting inside the revision being served. `form.service.publish`
+ * materializes every `roster_select` into the revision as `[{ id: user_id,
+ * label: "Name (login)" }]`, and a form whose `access` changed after that
+ * publish would hand those rows to an anonymous visitor with no query at all.
+ *
+ * So this module also ASSERTS, on the way out: the fields about to be shipped
+ * to a public caller are re-checked against the form's current access mode
+ * (`assertFieldsAllowedForAccess`, below). The service refuses the access flip
+ * that produces such a state; this is the independent second layer, so a future
+ * write path that forgets the rule still cannot serve a roster to a stranger.
  */
 
 export interface CanvasTheme {
@@ -150,12 +160,36 @@ export async function loadPublicForm({
   const revision = await ClassmojiService.form.getCurrentRevision(form.id);
   if (!revision) return notFound();
 
+  const fields = ClassmojiService.form.fieldsOf(revision.fields) as FormField[];
+
+  /**
+   * The render backstop. `fields` here is a PUBLISHED revision, which is the one
+   * place a materialized roster can be sitting in a payload nobody re-validated:
+   * the contract checks the DRAFT at save and checks the definition at publish,
+   * and neither runs again if `access` changes afterwards.
+   *
+   * A mismatch means a form is in a state no supported write path can produce
+   * any more, so it is logged at error level and answered with the same 404 a
+   * DRAFT gets — refusing to render is always safe, and the alternative is
+   * dumping the roster.
+   */
+  try {
+    assertFieldsAllowedForAccess(fields, form.access);
+  } catch (error) {
+    console.error('[forms:public] refused to serve a revision that violates its access mode', {
+      formId: form.id,
+      revisionId: revision.id,
+      code: (error as { code?: string }).code,
+    });
+    return notFound();
+  }
+
   return {
     view: 'fill',
     theme,
     classroomName,
     form: summary,
     revisionId: revision.id,
-    fields: ClassmojiService.form.fieldsOf(revision.fields),
+    fields,
   };
 }

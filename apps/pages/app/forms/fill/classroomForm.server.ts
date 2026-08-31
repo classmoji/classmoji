@@ -417,7 +417,14 @@ export async function resolveClassroomForm({
     fields: visibleClassroomFields(displayFields, displayPlan),
     identity,
     storedAnswers: showStored ? (own?.answers as Record<string, unknown>) : null,
-    resolvedContext: showStored ? (own?.resolved_context ?? null) : null,
+    // Names only. The stored snapshot keeps every teammate's EMAIL so the staff
+    // CSV can still identify a reviewee who has left the course; this page
+    // renders `name` and nothing else, so shipping those addresses into a
+    // member's browser would hand them a list the UI has no use for — and one
+    // the course never offered them.
+    resolvedContext: showStored
+      ? ClassmojiService.formTeam.withoutTargetEmails(own?.resolved_context ?? null)
+      : null,
     restoredDraft: Boolean(own && !submitted && !revisionChanged),
     revisionChanged,
     mode,

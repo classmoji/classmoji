@@ -77,6 +77,22 @@ test.afterAll(async () => {
 });
 
 test.describe('builder — the close time', () => {
+  /**
+   * ORDER-DEPENDENT, and now saying so.
+   *
+   * One fixture form, mutated in sequence: the first test SETS a close time,
+   * the second renders that stored instant back in the viewer's zone, and the
+   * third clears it. Each depends on the state the previous one left. Run in
+   * parallel, or shuffled, they read each other's writes.
+   *
+   * That holds today only because `playwright.config.ts` sets
+   * `fullyParallel: false` with `workers: 1` — a global setting made for a
+   * different reason (every spec shares the seeded database). Declaring the
+   * dependency here is what keeps this file correct if someone turns
+   * parallelism on.
+   */
+  test.describe.configure({ mode: 'serial' });
+
   test('is a datetime input, and stores the instant the instructor meant', async ({ page }) => {
     await loginAs(page, 'owner');
     await page.goto(builderPath);

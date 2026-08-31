@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react';
-import { useFetcher, useLoaderData, type SubmitTarget } from 'react-router';
-import type { FormField } from '@classmoji/services/form-contract';
+import { data, useFetcher, useLoaderData, type SubmitTarget } from 'react-router';
+import { exceedsMaxDepth, type FormField } from '@classmoji/services/form-contract';
 
 import { ClassmojiService } from '~/utils/db.server.ts';
 import { checkOrigin, readCappedBody } from '~/utils/originCheck.server.ts';
+import { clientIpFor, recordSubmissionAttempt } from '~/utils/submissionRate.server.ts';
 import { dispatchVerifyEmail } from '~/utils/tasks.server.ts';
 import {
   FormCanvas,
@@ -48,13 +49,51 @@ export type ClientFormLoad =
   | Exclude<PublicFormLoad, { view: 'classroom-fill' }>
   | Omit<Extract<PublicFormLoad, { view: 'classroom-fill' }>, 'server'>;
 
+/**
+ * Never cached, on either transport.
+ *
+ * The `classroom-fill` view is one member's identity, their saved draft, their
+ * submitted answers, and the names of their teammates — served under a session
+ * cookie, from a URL every member of the course shares. A shared proxy or a
+ * `bfcache`-adjacent disk hit that reused that response would show one student
+ * another student's work. The public view is milder but not nothing: it is a
+ * form whose OPEN/CLOSED state and cap are decided per request.
+ *
+ * Same two-part arrangement `verify.tsx` uses, and for the same reason: the
+ * headers on `data(…)` reach only the single-fetch `.data` response, so a
+ * DOCUMENT request — the first load, the one a person actually arrives on —
+ * drops them unless the route hands the loader's headers back from `headers`.
+ */
+const NO_STORE = { 'Cache-Control': 'no-store' };
+
+/**
+ * Loader headers, plus whatever the ACTION set on a document POST.
+ *
+ * Returning `loaderHeaders` alone (what `verify.tsx` can safely do, since its
+ * action sets none) silently discards the action's own headers on a document
+ * request — which threw away the `Retry-After` on a rate-limited submission,
+ * leaving a 429 a client cannot act on. Merging keeps `no-store` on every
+ * response and lets the action speak for itself when it has something to say.
+ */
+export const headers = ({
+  loaderHeaders,
+  actionHeaders,
+}: {
+  loaderHeaders: Headers;
+  actionHeaders: Headers;
+}) => {
+  const merged = new Headers(loaderHeaders);
+  actionHeaders.forEach((value, key) => merged.set(key, value));
+  return merged;
+};
+
 export const loader = async ({
   params,
   request,
 }: {
   params: Record<string, string | undefined>;
   request: Request;
-}): Promise<ClientFormLoad> => {
+}) => {
   const loaded = await loadPublicForm({
     classroomSlug: params.classroomSlug!,
     formSlug: params.formSlug!,
@@ -63,9 +102,9 @@ export const loader = async ({
 
   if (loaded.view === 'classroom-fill') {
     const { server: _server, ...clientSafe } = loaded;
-    return clientSafe;
+    return data(clientSafe satisfies ClientFormLoad, { headers: NO_STORE });
   }
-  return loaded;
+  return data(loaded satisfies ClientFormLoad, { headers: NO_STORE });
 };
 
 // ─── Action ─────────────────────────────────────────────────────────────────
@@ -97,7 +136,16 @@ interface SubmissionBody {
   answers?: Record<string, unknown>;
   identity?: { email?: string; name?: string | null };
   revisionId?: string;
-  trapped?: boolean;
+  /**
+   * The RAW honeypot value, exactly as it came off the hidden input.
+   *
+   * Not a boolean the page computed. "Was the trap sprung?" is a decision about
+   * whether to write a row and send mail, and a decision the CLIENT makes is one
+   * a bot simply declines to make — posting `trapped: false` alongside a filled
+   * trap used to be enough to walk straight past it. The page's only job is to
+   * report what is in the field; this server decides what that means.
+   */
+  trap?: string;
   /** Classroom only. Absent means "submit". */
   intent?: 'autosave' | 'submit';
   /**
@@ -262,6 +310,27 @@ export const action = async ({
     return new Response('Malformed submission.', { status: 400 });
   }
 
+  /**
+   * Shape, checked with the size and the origin — before any query.
+   *
+   * `JSON.parse` accepts nesting that `JSON.stringify` cannot walk, so a 40KB
+   * anonymous body of `[[[[…]]]]` used to sail through every cap here, reach
+   * the contract's size probe, and blow the stack: a RangeError carries no
+   * `code`, so it missed every branch below and answered 500 — an unauthenticated
+   * denial of service that costs the attacker forty kilobytes.
+   *
+   * The contract refuses the same shape on its own account (`parseAnswers`),
+   * which is what protects the classroom and MCP paths. This check is here so
+   * the ANONYMOUS path never gets as far as a database connection.
+   */
+  if (exceedsMaxDepth(body)) {
+    console.warn('[forms:fill] refused a pathologically nested submission', {
+      path: new URL(request.url).pathname,
+      bytes: raw.length,
+    });
+    return new Response('Malformed submission.', { status: 400 });
+  }
+
   const loaded = await loadPublicForm({
     classroomSlug: params.classroomSlug!,
     formSlug: params.formSlug!,
@@ -290,8 +359,12 @@ export const action = async ({
    * written: no row, no token, no cooldown consumed. A bot gets the same page a
    * person gets — telling it that it failed is how a bot learns to leave the
    * field alone next time.
+   *
+   * Decided HERE, from the raw field value. The page used to send a boolean it
+   * had computed itself, which meant the check ran on the attacker's side of the
+   * wire: fill the trap, post `trapped: false`, and the trap was not there.
    */
-  if (body.trapped) {
+  if (typeof body.trap === 'string' && body.trap.trim() !== '') {
     return { state: 'check-email', email: identity.email } satisfies ActionResult;
   }
 
@@ -300,6 +373,32 @@ export const action = async ({
       state: 'error',
       message: 'We need an email address so we can send you a confirmation link.',
     } satisfies ActionResult;
+  }
+
+  /**
+   * The per-sender ceiling, immediately before the only call that can send mail.
+   *
+   * The service's own cooldown counts per (form, email) — the unit a mail bomb
+   * aimed at ONE mailbox would use — so varying the address evades it entirely
+   * and one anonymous caller can mail unlimited strangers under a course's name.
+   * Counting per (client, form) closes the direction the cooldown cannot see.
+   *
+   * Placed after the honeypot and the identity check on purpose: a trapped bot
+   * and a submission with no address never reach a mailer, so spending budget on
+   * them would let a bot exhaust a real visitor's headroom for free. See
+   * `submissionRate.server.ts` for the single-machine caveat and for why an
+   * unattributable request is not counted.
+   */
+  const rate = recordSubmissionAttempt(clientIpFor(request), loaded.form.id);
+  if (!rate.allowed) {
+    console.warn('[forms:fill] rate-limited an anonymous submission', {
+      formId: loaded.form.id,
+      path: new URL(request.url).pathname,
+    });
+    return new Response('Too many submissions from this address. Try again shortly.', {
+      status: 429,
+      headers: { 'Retry-After': String(rate.retryAfterSeconds) },
+    });
   }
 
   try {
@@ -799,7 +898,8 @@ export default function FormFill() {
               answers: submission.answers,
               identity: submission.identity,
               revisionId: data.revisionId,
-              trapped: submission.trapped,
+              // The raw honeypot value. The action decides what it means.
+              trap: submission.trap,
             } as SubmitTarget,
             { method: 'post', encType: 'application/json' }
           )

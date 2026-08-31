@@ -46,6 +46,7 @@ const mocks = vi.hoisted(() => ({
   responseListByFormId: vi.fn(),
   responseStatusLabels: vi.fn(),
   responseUpdateStaff: vi.fn(),
+  withoutTargetEmails: vi.fn(),
   auditCreate: vi.fn(),
 }));
 
@@ -74,6 +75,18 @@ vi.mock('@classmoji/services', () => ({
       updateStaff: (...a: unknown[]) => mocks.responseUpdateStaff(...a),
     },
     audit: { create: (...a: unknown[]) => mocks.auditCreate(...a) },
+    /**
+     * The reviewee-email projection.
+     *
+     * Mocked like every other service call, and asserted the same way: the
+     * MCP layer's job is to DELEGATE to the shared projection rather than echo
+     * the raw snapshot, and that is what the tests below pin. What the
+     * projection itself removes is `formTeamResolver`'s own property, covered
+     * in `packages/services/…/forms.teamReview.test.ts` — it cannot be imported
+     * here, because that module opens a Prisma client at module scope and this
+     * suite exists to run without one.
+     */
+    formTeam: { withoutTargetEmails: (...a: unknown[]) => mocks.withoutTargetEmails(...a) },
   },
 }));
 
@@ -184,6 +197,27 @@ beforeEach(() => {
   mocks.auditCreate.mockResolvedValue(undefined);
   mocks.formListRevisions.mockResolvedValue([]);
   mocks.responseStatusLabels.mockResolvedValue([]);
+  // Stands in for the real projection: strips `email` from every target and
+  // leaves the rest of the snapshot alone, so a payload assertion still reads
+  // the shape the tools actually emit.
+  mocks.withoutTargetEmails.mockImplementation((snapshot: unknown) => {
+    if (!snapshot || typeof snapshot !== 'object') return snapshot;
+    const context = snapshot as { targets?: unknown };
+    if (!context.targets || typeof context.targets !== 'object') return snapshot;
+    const targets = Object.fromEntries(
+      Object.entries(context.targets as Record<string, unknown>).map(([groupId, list]) => [
+        groupId,
+        Array.isArray(list)
+          ? list.map(entry => {
+              if (!entry || typeof entry !== 'object') return entry;
+              const { email: _email, ...rest } = entry as Record<string, unknown>;
+              return rest;
+            })
+          : list,
+      ])
+    );
+    return { ...context, targets };
+  });
 });
 
 // ─── Definition-level guarantees (the registry enforces these pre-handler) ───
@@ -436,6 +470,71 @@ describe('response allowlist', () => {
     }
   });
 
+  /**
+   * A PEER REVIEW is a response about other people.
+   *
+   * `resolved_context` snapshots each REVIEWEE's name, login and email so the
+   * staff CSV can still identify someone who has left the course. Echoed
+   * verbatim, a single `list_form_responses` on a peer-review form hands an
+   * agent every teammate's address once per response — a class roster's worth of
+   * PII, in a payload a model may quote back or carry into another tool call.
+   *
+   * The reviewer's own address stays (it is who the response is FROM, and the
+   * allowlist above pins it). The reviewees keep their name and user id, which
+   * is what every read surface actually displays.
+   */
+  it('strips reviewee emails from the resolved_context snapshot', async () => {
+    const withReview = {
+      ...RESPONSE_ROW,
+      resolved_context: {
+        targets: {
+          'group-1': [
+            {
+              user_id: 'user-11',
+              name: 'Ari Patel',
+              login: 'apatel',
+              email: 'ari.patel@dartmouth.edu',
+              removed: false,
+            },
+            {
+              user_id: 'user-12',
+              name: 'Jo Rivera',
+              login: 'jrivera',
+              email: 'jo.rivera@dartmouth.edu',
+              removed: true,
+            },
+          ],
+        },
+        groups: { 'group-1': { team_id: 't-1', team_name: 'Team Otter' } },
+      },
+    };
+    mocks.responseListByFormId.mockResolvedValue([withReview]);
+
+    const payload = parse(
+      await formResponseGetTool.handler(
+        { classroom: 'org/w26', form_id: 'form-1', response_id: 'resp-1' } as never,
+        CTX
+      )
+    );
+    const json = JSON.stringify(payload);
+
+    expect(json).not.toContain('ari.patel@dartmouth.edu');
+    expect(json).not.toContain('jo.rivera@dartmouth.edu');
+    // Everything an instructor reads a review by is still there, including the
+    // departed-teammate marker the export depends on.
+    expect(json).toContain('Ari Patel');
+    expect(json).toContain('user-12');
+    expect(json).toContain('Team Otter');
+    expect(payload.response.resolved_context.targets['group-1'][1].removed).toBe(true);
+    // The reviewer is not a reviewee: their own address is the identity of the
+    // response and must survive.
+    expect(json).toContain('Maya.Chen@dartmouth.edu');
+
+    // And the tool DELEGATES rather than re-implementing the rule — the same
+    // projection the fill page uses, so the two cannot drift.
+    expect(mocks.withoutTargetEmails).toHaveBeenCalledWith(withReview.resolved_context);
+  });
+
   it('serializes dates as ISO strings, not raw Date objects', async () => {
     const payload = parse(
       await formResponseGetTool.handler(
@@ -627,7 +726,7 @@ describe('form_update', () => {
 
   it('surfaces the frozen-access rule from the service', async () => {
     mocks.formUpdate.mockRejectedValue(
-      Object.assign(new Error('Access is frozen once a form leaves DRAFT (this form is OPEN).'), {
+      Object.assign(new Error('Access is frozen once a form has been published.'), {
         code: 'FORM_ACCESS_FROZEN',
       })
     );
@@ -635,6 +734,106 @@ describe('form_update', () => {
       .handler({ classroom: 'org/w26', form_id: 'form-1', access: 'CLASSROOM' } as never, CTX)
       .catch(e => e);
     expect((error as ToolError).code).toBe('FORM_ACCESS_FROZEN');
+  });
+
+  /**
+   * THE ROSTER LEAK, from the agent's side of the wire.
+   *
+   * An instructor who legitimately owns a CLASSROOM form could once ask an
+   * agent for three ordinary-looking calls and end up serving every student's
+   * name, login, and user id to anonymous visitors:
+   *
+   *   form_publish { action: 'draft' }
+   *   form_update  { access: 'PUBLIC', fields: [<nothing roster-shaped>] }
+   *   form_publish { action: 'reopen' }
+   *
+   * The published revision — the one the fill page renders — still held the
+   * materialized roster, and nothing re-checked it against the new access mode.
+   * `form.service.update` now refuses the middle call outright (see
+   * forms.builderLifecycle.test.ts, which drives the same three functions
+   * against a real database and a real roster).
+   *
+   * What is asserted HERE is the MCP layer's own contribution to that refusal:
+   * the tool must hand the access change to the service on the SAME call as the
+   * field list — never split into a softer sequence, never applied itself — and
+   * it must relay the refusal instead of reporting a success the caller would
+   * believe. A tool that quietly dropped `access` from the update would leave
+   * every service-level test green and the agent misinformed.
+   */
+  it('cannot walk a published form from CLASSROOM to PUBLIC in three calls', async () => {
+    const CLASSROOM_FORM = {
+      ...FORM_ROW,
+      access: 'CLASSROOM',
+      status: 'OPEN',
+      current_revision_id: 'rev-1',
+    };
+
+    // ── 1. form_publish { action: 'draft' } ────────────────────────────────
+    mocks.formFindById.mockResolvedValue(CLASSROOM_FORM);
+    mocks.formQuickUpdate.mockResolvedValue({ ...CLASSROOM_FORM, status: 'DRAFT' });
+    await formPublishTool.handler(
+      { classroom: 'org/w26', form_id: 'form-1', action: 'draft' } as never,
+      CTX
+    );
+    expect(mocks.formQuickUpdate).toHaveBeenCalledWith('form-1', { status: 'DRAFT' });
+    // Taking a form back to DRAFT must not disturb the live revision — that is
+    // exactly the property the leak exploited, so it is pinned rather than
+    // assumed.
+    expect(mocks.formQuickUpdate.mock.calls[0][1]).not.toHaveProperty('current_revision_id');
+
+    // ── 2. form_update { access: 'PUBLIC', fields } ────────────────────────
+    mocks.auditCreate.mockClear();
+    mocks.formFindById.mockResolvedValue({ ...CLASSROOM_FORM, status: 'DRAFT' });
+    mocks.formUpdate.mockRejectedValue(
+      Object.assign(
+        new Error(
+          'Access is frozen once a form has been published — its live revision was built for ' +
+            'the audience it had then.'
+        ),
+        { code: 'FORM_ACCESS_FROZEN' }
+      )
+    );
+
+    const error = await formUpdateTool
+      .handler(
+        {
+          classroom: 'org/w26',
+          form_id: 'form-1',
+          access: 'PUBLIC',
+          fields: [{ type: 'short_text', label: 'Your name', required: true }],
+        } as never,
+        CTX
+      )
+      .catch(e => e);
+
+    // One call, carrying both — the service decides, and it has everything it
+    // needs to decide with.
+    expect(mocks.formUpdate).toHaveBeenCalledTimes(1);
+    const [updatedId, updates] = mocks.formUpdate.mock.calls[0] as [
+      string,
+      { access?: string; fields?: unknown },
+    ];
+    expect(updatedId).toBe('form-1');
+    expect(updates.access).toBe('PUBLIC');
+    expect(updates.fields).toBeDefined();
+
+    expect((error as ToolError).kind).toBe('invalid_params');
+    expect((error as ToolError).code).toBe('FORM_ACCESS_FROZEN');
+    // A refused write is not an event: no audit row claims the form changed.
+    expect(mocks.auditCreate).not.toHaveBeenCalled();
+
+    // ── 3. form_publish { action: 'reopen' } ───────────────────────────────
+    // Reopening is still allowed; it just reopens the CLASSROOM form it always
+    // was, on the revision it always had.
+    mocks.formReopen.mockResolvedValue(CLASSROOM_FORM);
+    const payload = parse(
+      await formPublishTool.handler(
+        { classroom: 'org/w26', form_id: 'form-1', action: 'reopen' } as never,
+        CTX
+      )
+    );
+    expect(payload.form.access).toBe('CLASSROOM');
+    expect(mocks.formPublish).not.toHaveBeenCalled();
   });
 
   it('does not swallow an unexpected failure as bad input', async () => {

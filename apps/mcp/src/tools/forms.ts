@@ -247,6 +247,13 @@ function formSummary(form: FormRow) {
  *     ability to resume somebody else's half-filled form.
  *   - `email_normalized` — the identity key behind the uniqueness index; the
  *     as-typed `email` is the one a human should read.
+ *
+ * And `resolved_context` is projected rather than echoed: the snapshot carries
+ * each REVIEWEE's email address so the staff CSV can identify someone who has
+ * left the course, and a peer-review form turns that into "every teammate's
+ * address, once per response" in a payload an agent will read and may quote.
+ * The reviewer's own `email` is right there above it; the reviewees are
+ * identified by name and user id, which is what every read surface displays.
  */
 function responseSummary(row: ResponseRow) {
   return {
@@ -262,7 +269,7 @@ function responseSummary(row: ResponseRow) {
     staff_note: row.staff_note ?? null,
     revision_id: row.revision_id,
     answers: (row.answers ?? {}) as Record<string, unknown>,
-    resolved_context: row.resolved_context ?? null,
+    resolved_context: ClassmojiService.formTeam.withoutTargetEmails(row.resolved_context ?? null),
   };
 }
 
@@ -300,7 +307,10 @@ const fieldsArg = z
   .describe(
     'Field list: either an array of field objects or { definition_version: 1, fields: [...] }. ' +
       'Each field is { type, label, help?, required?, options?, optionSource?, scale?, ranks?, ' +
-      'matrix?, repeat?, fields? }; ids are minted server-side, so omit them when authoring. ' +
+      'matrix?, repeat?, fields? }. Field and option ids are minted server-side, so omit them ' +
+      'when authoring something NEW — but when EDITING an existing draft, send back the ids ' +
+      'exactly as get_form returned them: answers key on those ids, and a field that comes back ' +
+      'without one is minted a fresh id and orphans every response already collected for it. ' +
       'Validated and normalized by the same contract the builder uses — an invalid definition ' +
       'comes back as FORM_DEFINITION_INVALID with the precise reason.'
   );
@@ -309,7 +319,9 @@ const accessArg = z
   .enum(['PUBLIC', 'CLASSROOM'])
   .describe(
     'PUBLIC = anyone with the link (email-verified); CLASSROOM = signed-in members only, with ' +
-      'roster-sourced and teammate-resolved field types available. Frozen once the form leaves DRAFT.'
+      'roster-sourced and teammate-resolved field types available. Frozen once the form has been ' +
+      'published even once — taking it back to DRAFT does NOT unfreeze it, because the published ' +
+      'revision still holds the roster it was materialized with.'
   );
 
 // ─── list_forms ─────────────────────────────────────────────────────────────
@@ -413,7 +425,8 @@ export const formCreateTool: ToolDefinition<FormCreateArgs> = {
   description:
     'Creates a form as a DRAFT — nobody can fill it until form_publish. Staff only (owner or ' +
     'teacher); requires a Pro subscription. `access` is a required choice and is FROZEN once the ' +
-    'form leaves DRAFT: CLASSROOM forms may use roster_select / repeat_group (teammate) fields, ' +
+    'form has been published even once: CLASSROOM forms may use roster_select / repeat_group ' +
+    '(teammate) fields, ' +
     'PUBLIC ones may not and are rejected at save if they try. The slug is derived from the title ' +
     'server-side and is the form’s permanent address — it cannot be supplied or changed. Optional ' +
     '`fields` seeds the draft field list.',
@@ -520,7 +533,9 @@ export const formUpdateTool: ToolDefinition<FormUpdateArgs> = {
     'enforces: the FIELD LIST may only be edited in DRAFT (on a published form, take it back to ' +
     'DRAFT with form_publish action "draft", edit, then publish again — that is the new-version ' +
     'flow, and it creates revision N+1 rather than rewriting the one people already answered); ' +
-    '`access` is FROZEN once the form leaves DRAFT; and the slug is immutable, so it cannot be ' +
+    '`access` is FROZEN once the form has been published even once — coming back to DRAFT does ' +
+    'not reopen it, since the published revision still holds the roster it was built with; and ' +
+    'the slug is immutable, so it cannot be ' +
     'set here at all. Editing the draft field list does NOT change what fillers see until you ' +
     'publish.',
   scope: 'write',

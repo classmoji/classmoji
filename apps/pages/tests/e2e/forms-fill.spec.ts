@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import * as fs from 'fs';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
@@ -11,6 +12,7 @@ import {
 } from '../helpers';
 import { parseFormDefinition } from '@classmoji/services/form-contract';
 import { presetByKey } from '../../app/components/forms/presets.ts';
+import { SUBMISSION_RATE_LIMIT } from '../../app/utils/submissionRate.server.ts';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -49,15 +51,21 @@ const CLASS = getTestClassroomSlug();
 const FORM_SLUG = 'zz-e2e-fill';
 const CLASSROOM_FORM_SLUG = 'zz-e2e-fill-members';
 const TYPES_FORM_SLUG = 'zz-e2e-fill-types';
+/** A form in the state the CLASSROOM→PUBLIC flip used to leave behind. */
+const LEAK_FORM_SLUG = 'zz-e2e-fill-roster-leak';
 
 const fillPath = `/${CLASS}/forms/${FORM_SLUG}`;
 const verifyPath = `${fillPath}/verify`;
 const typesPath = `/${CLASS}/forms/${TYPES_FORM_SLUG}`;
+const leakPath = `/${CLASS}/forms/${LEAK_FORM_SLUG}`;
 
 let formId: string | null = null;
 let classroomFormId: string | null = null;
 let typesFormId: string | null = null;
+let leakFormId: string | null = null;
 let revisionId: string | null = null;
+/** A real roster label — `Name (login)` — that must never reach the wire. */
+let leakedLabel: string | null = null;
 
 /**
  * Fixed ids for the every-control fixture, so the stored answers can be read
@@ -161,7 +169,7 @@ test.beforeAll(async () => {
   await prisma.form.deleteMany({
     where: {
       classroom_id: classroomId,
-      slug: { in: [FORM_SLUG, CLASSROOM_FORM_SLUG, TYPES_FORM_SLUG] },
+      slug: { in: [FORM_SLUG, CLASSROOM_FORM_SLUG, TYPES_FORM_SLUG, LEAK_FORM_SLUG] },
     },
   });
 
@@ -298,11 +306,70 @@ test.beforeAll(async () => {
     where: { id: typesForm.id },
     data: { current_revision_id: typesRevision.id },
   });
+
+  // ── The poisoned form ──────────────────────────────────────────────────
+  //
+  // A PUBLIC form whose LIVE revision holds a materialized roster. There is no
+  // longer any supported write path that produces this — `form.service.update`
+  // refuses the CLASSROOM→PUBLIC flip on a form that has ever been published —
+  // so the row is built directly, which is the only way to reach the render
+  // backstop that exists for exactly this state.
+  //
+  // The options are shaped the way `materializeSourcedOptions` shapes them:
+  // one entry per member, `{ id: <user_id>, label: "Name (login)" }`. That is
+  // the payload the fill page used to hand to anonymous visitors.
+  const roster = await prisma.classroomMembership.findMany({
+    where: { classroom_id: classroomId, role: 'STUDENT' },
+    select: { user_id: true, user: { select: { name: true, login: true } } },
+    take: 5,
+  });
+  if (roster.length === 0) throw new Error('no STUDENT memberships — is the dev database seeded?');
+
+  const rosterOptions = roster.map(member => ({
+    id: member.user_id,
+    label: `${member.user.name} (${member.user.login})`,
+  }));
+  leakedLabel = rosterOptions[0].label;
+
+  const poisoned = {
+    definition_version: 1,
+    fields: [
+      {
+        id: '0198f00d-f00d-4f00-8f00-f00df00df00d',
+        type: 'roster_select',
+        label: 'Who would you like to work with?',
+        required: true,
+        optionSource: 'roster',
+        multiple: false,
+        options: rosterOptions,
+      },
+    ],
+  };
+
+  const leakForm = await prisma.form.create({
+    data: {
+      classroom_id: classroomId,
+      title: 'ZZ E2E Roster Leak',
+      slug: LEAK_FORM_SLUG,
+      access: 'CLASSROOM',
+      status: 'OPEN',
+      created_by: owner.user_id,
+      draft_fields: poisoned as never,
+    },
+  });
+  leakFormId = leakForm.id;
+  const leakRevision = await prisma.formRevision.create({
+    data: { form_id: leakForm.id, version: 1, fields: poisoned as never },
+  });
+  await prisma.form.update({
+    where: { id: leakForm.id },
+    data: { current_revision_id: leakRevision.id, access: 'PUBLIC' },
+  });
 });
 
 test.afterAll(async () => {
   const prisma = await getTestPrisma();
-  for (const id of [formId, classroomFormId, typesFormId]) {
+  for (const id of [formId, classroomFormId, typesFormId, leakFormId]) {
     if (id) await prisma.form.delete({ where: { id } }).catch(() => {});
   }
 });
@@ -575,6 +642,209 @@ test.describe('public fill — abuse surfaces', () => {
     expect(await responsesOf(formId!)).toHaveLength(0);
   });
 
+  /**
+   * A SMALL body that is expensive to look at.
+   *
+   * Forty kilobytes of `[[[[…]]]]` is well under every size cap, parses without
+   * complaint, and then overflows the stack the moment anything serializes it —
+   * `JSON.parse` accepts nesting `JSON.stringify` cannot walk. The resulting
+   * RangeError carries no `code`, so it missed every branch in the action's
+   * catch chain and came back as a 500: an unauthenticated caller could make the
+   * server do that as fast as it could send.
+   *
+   * Both endpoints are checked. `/verify` takes a body from anyone holding or
+   * guessing a token and reaches the same serializer.
+   */
+  test('a pathologically nested body is refused with a 400, not a 500', async ({ page }) => {
+    // Written as TEXT, not as an object Playwright will serialize for us —
+    // `JSON.stringify` is exactly what cannot walk this value, so handing it to
+    // the client would crash the test instead of the assertion it is making.
+    // That is also what makes this a faithful reproduction: an attacker writes
+    // bytes, they do not build a JavaScript object.
+    const deep = '['.repeat(20_000) + ']'.repeat(20_000);
+    const body =
+      `{"answers":{"deep":${deep}},` +
+      `"identity":{"email":"zz-e2e-deep@example.edu","name":"Deep"},` +
+      `"token":"not-a-real-token","revisionId":${JSON.stringify(revisionId)}}`;
+
+    // Comfortably inside every size cap — this is not the oversized-body case
+    // wearing a different hat.
+    expect(body.length).toBeLessThan(100 * 1024);
+
+    for (const target of [fillPath, verifyPath]) {
+      const response = await page.request.post(target, {
+        maxRedirects: 0,
+        headers: { 'content-type': 'application/json' },
+        data: body,
+      });
+
+      expect(response.status(), target).toBe(400);
+    }
+
+    expect(await responsesOf(formId!)).toHaveLength(0);
+  });
+
+  /**
+   * The honeypot decision belongs to the SERVER.
+   *
+   * The browser test above fills the trap through the DOM, which proves the
+   * page reports it. It cannot prove the check would survive a client that
+   * simply lies — and until this fix the check lived on the client: the page
+   * computed a `trapped` boolean and the action believed it, so a bot that
+   * filled the trap and posted `trapped: false` walked through untouched.
+   *
+   * Posting the raw value directly is the only way to test the half that
+   * matters. Both shapes are sent together — the filled trap AND the old
+   * client-side "I am not a bot" claim — because a server that still honoured
+   * the boolean would pass a test that sent only the value.
+   */
+  test('the server decides the honeypot, not the page that reports it', async ({ page }) => {
+    const prisma = await getTestPrisma();
+    const revision = await prisma.formRevision.findUniqueOrThrow({ where: { id: revisionId! } });
+    const fields = (revision.fields as { fields: Array<Record<string, unknown>> }).fields;
+    const idFor = (label: string) =>
+      String(fields.find(field => field.label === label)!.id as string);
+
+    const submission = (email: string, extra: Record<string, unknown>) => ({
+      answers: {
+        [idFor(NAME_LABEL)]: 'Definitely A Person',
+        [idFor(EMAIL_LABEL)]: email,
+        [idFor(SCALE_LABEL)]: 7,
+      },
+      identity: { email, name: 'Definitely A Person' },
+      revisionId,
+      ...extra,
+    });
+
+    // CONTROL: the identical submission with an empty trap is recorded. Without
+    // it, "no row was written" would be satisfied by a body that was simply
+    // invalid, and the test would prove nothing about the honeypot.
+    const control = await page.request.post(fillPath, {
+      maxRedirects: 0,
+      headers: { 'content-type': 'application/json' },
+      data: submission('zz-e2e-control@example.edu', { trap: '' }),
+    });
+    expect(control.status()).toBe(200);
+    expect(await responsesOf(formId!)).toHaveLength(1);
+
+    // THE BOT: same body, trap filled, and the old client-side "I am not a bot"
+    // claim attached. A server that still honoured that boolean would record it.
+    const bot = await page.request.post(fillPath, {
+      maxRedirects: 0,
+      headers: { 'content-type': 'application/json' },
+      data: submission('zz-e2e-liar@example.edu', {
+        trap: 'https://spam.example',
+        trapped: false,
+      }),
+    });
+    expect(bot.status()).toBe(200);
+
+    // Still one row — the control's. No second row, and no token, so the trap
+    // also cannot be used to burn someone else's send cooldown.
+    const rows = await responsesOf(formId!);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].email).toBe('zz-e2e-control@example.edu');
+    expect(await prisma.formMagicToken.count({ where: { response: { form_id: formId! } } })).toBe(
+      1
+    );
+  });
+
+  /**
+   * THE SPAM RELAY.
+   *
+   * `beginPublicSubmission` mails a branded verification link to whatever
+   * address it is given, and its own cooldown counts per (form, email) — the
+   * unit a bomb aimed at ONE mailbox uses. Vary the address and that cooldown
+   * never fires: one anonymous caller could send unlimited Classmoji-branded
+   * mail to unlimited recipients, burning the platform's sender reputation and
+   * leaving a PENDING_VERIFICATION row behind each time.
+   *
+   * A fresh random address per run, sent as the forwarded hop: the limiter keeps
+   * its counters in memory for ten minutes, so a fixed address would make this
+   * test fail on its second run inside that window rather than on a regression.
+   */
+  test('a burst of distinct addresses from one client is cut off', async ({ page }) => {
+    // A fresh key per run. The limiter treats the forwarded hop as an opaque
+    // string, so a uuid is a perfectly good "address" and — unlike a random
+    // octet — cannot collide with a previous run still inside the ten-minute
+    // window and fail on the FIRST submission instead of the last.
+    const ip = `e2e-${randomUUID()}`;
+
+    // VALID answers, read off the live revision. Invalid ones would be refused
+    // before the mailer for a reason that has nothing to do with rate limiting,
+    // and the test would then prove only that a broken submission is broken.
+    const prisma = await getTestPrisma();
+    const revision = await prisma.formRevision.findUniqueOrThrow({ where: { id: revisionId! } });
+    const fields = (revision.fields as { fields: Array<Record<string, unknown>> }).fields;
+    const idFor = (label: string) =>
+      String(fields.find(field => field.label === label)!.id as string);
+
+    const answersFor = (n: number) => ({
+      [idFor(NAME_LABEL)]: `Victim ${n}`,
+      [idFor(EMAIL_LABEL)]: `zz-e2e-relay-${n}@example.edu`,
+      [idFor(SCALE_LABEL)]: 5,
+    });
+
+    const post = (n: number) =>
+      page.request.post(fillPath, {
+        maxRedirects: 0,
+        headers: { 'content-type': 'application/json', 'x-forwarded-for': ip },
+        data: {
+          answers: answersFor(n),
+          identity: { email: `zz-e2e-relay-${n}@example.edu`, name: `Victim ${n}` },
+          revisionId,
+        },
+      });
+
+    // Every one of these is a DIFFERENT recipient, so the per-address cooldown
+    // is never consulted. Only a per-sender limit can see this pattern at all.
+    for (let n = 0; n < SUBMISSION_RATE_LIMIT; n++) {
+      const allowed = await post(n);
+      expect(allowed.status(), `submission ${n}`).toBe(200);
+    }
+
+    // Each of those really did mail a stranger — which is the abuse, and the
+    // reason a ceiling has to exist at all.
+    expect(await responsesOf(formId!)).toHaveLength(SUBMISSION_RATE_LIMIT);
+
+    const refused = await post(SUBMISSION_RATE_LIMIT);
+    expect(refused.status()).toBe(429);
+    expect(Number(refused.headers()['retry-after'])).toBeGreaterThan(0);
+
+    // The refusal lands BEFORE the mailer: the last address got no row and no
+    // token, which is the whole point of placing the check where it is.
+    const overflow = await prisma.formResponse.findFirst({
+      where: { form_id: formId!, email: `zz-e2e-relay-${SUBMISSION_RATE_LIMIT}@example.edu` },
+      select: { id: true },
+    });
+    expect(overflow).toBeNull();
+
+    // A different client is unaffected — the limit is per sender, never global,
+    // so an abuser cannot close the form for the people it is meant for.
+    const other = await page.request.post(fillPath, {
+      maxRedirects: 0,
+      headers: { 'content-type': 'application/json', 'x-forwarded-for': `e2e-${randomUUID()}` },
+      data: {
+        answers: answersFor(9_000),
+        identity: { email: 'zz-e2e-bystander@example.edu', name: 'Bystander' },
+        revisionId,
+      },
+    });
+    expect(other.status()).toBe(200);
+    expect(await responsesOf(formId!)).toHaveLength(SUBMISSION_RATE_LIMIT + 1);
+  });
+
+  /**
+   * Deliberately the LAST `page.request` test in this block.
+   *
+   * The 413 is answered from `Content-Length` alone, without reading the body —
+   * which is the whole point of the cap, and also leaves an undrained request on
+   * the socket, so Node resets the connection. Playwright's request context
+   * keeps that socket in its pool and the NEXT API call on it dies with
+   * ECONNRESET. Everything after this test is browser-driven and gets a fresh
+   * connection; adding another `page.request` case below it will fail for
+   * reasons that have nothing to do with what it is testing.
+   */
   test('an oversized body is refused before it is parsed', async ({ page }) => {
     const response = await page.request.post(fillPath, {
       maxRedirects: 0,
@@ -714,6 +984,36 @@ test.describe('public fill — non-form states', () => {
     // account.
     await expect(page.getByText('ZZ E2E Members Only')).toHaveCount(0);
   });
+
+  /**
+   * THE RENDER BACKSTOP for the roster leak.
+   *
+   * The write-side rule lives in `form.service.update` and is tested against a
+   * real database in `forms.builderLifecycle.test.ts`. This is the second
+   * layer, and it is the one that matters if a future write path forgets:
+   * whatever produced it, a PUBLIC form serving a revision full of
+   * `roster_select` options must not render.
+   *
+   * BOTH transports are checked. React Router serves a route twice — the
+   * server-rendered document, and the `.data` payload a client-side navigation
+   * fetches — and it is entirely possible to close one and leave the other
+   * open, because they are produced by different code paths from the same
+   * loader. The document is the one a human sees; `.data` is the one that is
+   * trivially scriptable.
+   */
+  test('a PUBLIC form whose live revision holds a roster is a 404 on both transports', async ({
+    page,
+  }) => {
+    for (const target of [leakPath, `${leakPath}.data`]) {
+      const response = await page.request.get(target, { maxRedirects: 0 });
+      expect(response.status(), `${target} must not render`).toBe(404);
+
+      const body = await response.text();
+      // Not just "the page did not render" — the roster is not in the bytes.
+      expect(body).not.toContain(leakedLabel!);
+      expect(body).not.toContain('roster_select');
+    }
+  });
 });
 
 // ─── The link itself ────────────────────────────────────────────────────────
@@ -777,6 +1077,34 @@ test.describe('magic link', () => {
     });
     expect(response.headers()['cache-control']).toBe('no-store');
   });
+});
+
+// ─── Caching ────────────────────────────────────────────────────────────────
+
+test.describe('cache headers', () => {
+  /**
+   * The FILL page is never cached either, on either transport.
+   *
+   * On a CLASSROOM form this same route serves a member's identity, their
+   * server-side draft, their submitted answers, and their teammates' names — at
+   * a URL every member of the course shares. A cached copy is one student
+   * holding another student's response.
+   *
+   * `.data` is asserted alongside the document because they are two different
+   * responses built from one loader: `data(…, { headers })` covers only the
+   * former, and only the route's `headers` export carries them onto the latter.
+   * Testing one would not catch losing the other.
+   */
+  for (const [label, target] of [
+    ['document', fillPath],
+    ['single-fetch payload', `${fillPath}.data`],
+  ] as const) {
+    test(`the fill page is never cached (${label})`, async ({ page }) => {
+      const response = await page.request.get(target, { maxRedirects: 0 });
+      expect(response.status()).toBe(200);
+      expect(response.headers()['cache-control']).toBe('no-store');
+    });
+  }
 });
 
 // ─── Drafts ─────────────────────────────────────────────────────────────────

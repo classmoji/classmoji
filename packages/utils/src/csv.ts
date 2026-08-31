@@ -20,12 +20,35 @@
  * it silently mangle a fraction of the rows.
  */
 
-/** The leading characters a spreadsheet reads as "this cell is a formula". */
-const TEXT_CELL_PREFIXES = ['=', '+', '-', '@', '\t', '\r'];
+/**
+ * The leading characters a spreadsheet reads as "this cell is a formula".
+ *
+ * `\t`, `\r` and `\n` are NOT in this list any more, and their coverage went UP
+ * rather than down: they were only ever here because a formula can be padded
+ * with them, and the padding is now stripped before this list is consulted —
+ * which also catches a plain leading SPACE, the variant the old
+ * first-character test missed entirely.
+ */
+const TEXT_CELL_PREFIXES = ['=', '+', '-', '@'];
+
+/**
+ * Whitespace a spreadsheet skips before deciding what a cell is.
+ *
+ * `\s` covers space, tab, CR, LF and the Unicode spaces. The byte-order mark is
+ * listed separately: it is not whitespace to a regular expression and IS skipped
+ * by Excel, which makes a BOM-prefixed `=…` a live formula.
+ */
+const LEADING_WHITESPACE = /^[\s\uFEFF]+/;
 
 /**
  * Mark a string cell as literal text when it would otherwise be interpreted as
  * a formula.
+ *
+ * The test is on the first NON-WHITESPACE character, not on the first character.
+ * A spreadsheet trims a cell before parsing it, so `" =1+1"` and `"=1+1"` are
+ * the same formula to Excel — and only the second was being escaped. Prefixing a
+ * space is all it took to walk past the guard, which makes the leading-space
+ * variant the one an attacker would actually use.
  *
  * STRINGS ONLY, by design. Numbers must reach this function already as numbers
  * (see `csvCell`) so that `-5` stays a negative number and does not become the
@@ -33,7 +56,9 @@ const TEXT_CELL_PREFIXES = ['=', '+', '-', '@', '\t', '\r'];
  */
 export function csvTextCell(value: string): string {
   if (value.length === 0) return value;
-  return TEXT_CELL_PREFIXES.includes(value[0]) ? `'${value}` : value;
+  const significant = value.replace(LEADING_WHITESPACE, '');
+  if (significant.length === 0) return value;
+  return TEXT_CELL_PREFIXES.includes(significant[0]) ? `'${value}` : value;
 }
 
 /**

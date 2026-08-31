@@ -820,6 +820,67 @@ describe.skipIf(!RUN)('forms services (integration)', () => {
       expect(await responseService.listByFormId(formId)).toHaveLength(2);
     });
 
+    /**
+     * THE STAFF READ CARRIES NO CREDENTIAL.
+     *
+     * `draft_token` is the cookie value that resumes an anonymous half-filled
+     * form — a bearer credential for someone else's submission. It used to ride
+     * on every row this returns, kept out of actual responses only because each
+     * consumer hand-wrote an allowlist on the way out (the web's
+     * `toResponseRow`, the MCP's `responseSummary`). That is one rule enforced by
+     * discipline in two places, and a third consumer added later inherits none
+     * of it.
+     *
+     * Asserted against the DATABASE, not against a shape: the row is created
+     * WITH a draft token, and the read still must not have one.
+     */
+    it('never returns draft_token or email_normalized, whatever the caller does', async () => {
+      const { formId, revisionId } = await makeOpenForm();
+      const fieldId = await nameFieldId(revisionId);
+      await formService.update(formId, { save_partials: true });
+
+      const token = randomUUID();
+      await responseService.upsertDraft({
+        formId,
+        revisionId,
+        draftToken: token,
+        email: `formtest-${suite}-tokened@example.test`,
+        answers: { [fieldId]: 'a partial answer' },
+      });
+
+      // The token really is on the row — otherwise the assertions below would
+      // pass against a fixture that had nothing to leak.
+      const stored = await prisma.formResponse.findFirstOrThrow({ where: { form_id: formId } });
+      expect(stored.draft_token).toBe(token);
+      expect(stored.email_normalized).toBe(`formtest-${suite}-tokened@example.test`);
+
+      const [row] = await responseService.listByFormId(formId);
+      expect(row).not.toHaveProperty('draft_token');
+      expect(row).not.toHaveProperty('email_normalized');
+      expect(JSON.stringify(row)).not.toContain(token);
+
+      // Everything the staff surfaces and the CSV export actually read is still
+      // there — a select that dropped a needed column would be the worse bug.
+      for (const column of [
+        'id',
+        'form_id',
+        'revision_id',
+        'user_id',
+        'email',
+        'name',
+        'answers',
+        'resolved_context',
+        'submission_state',
+        'verified_at',
+        'staff_status',
+        'staff_note',
+        'submitted_at',
+        'updated_at',
+      ]) {
+        expect(row, column).toHaveProperty(column);
+      }
+    });
+
     it('findOwnResponseByDraftToken is scoped to the form and the token', async () => {
       const { formId, revisionId } = await makeOpenForm();
       await formService.update(formId, { save_partials: true });

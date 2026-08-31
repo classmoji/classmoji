@@ -88,6 +88,22 @@ test.afterAll(async () => {
 });
 
 test.describe('builder — publishing a new version', () => {
+  /**
+   * ORDER-DEPENDENT, and now saying so.
+   *
+   * These tests share ONE fixture form and mutate it: the first publishes a new
+   * revision (version 1 → 2), and the second asserts that pressing Escape
+   * leaves the version exactly where the first left it. Run in parallel, or
+   * shuffled, they read each other's writes.
+   *
+   * That holds today only because `playwright.config.ts` sets
+   * `fullyParallel: false` with `workers: 1` — a global setting made for a
+   * different reason (every spec shares the seeded database). Declaring the
+   * dependency here is what keeps this file correct if someone ever turns
+   * parallelism on.
+   */
+  test.describe.configure({ mode: 'serial' });
+
   test('asks in an in-app dialog, never a native one', async ({ page }) => {
     // Recorded, not thrown from: an exception inside a page event handler does
     // not reliably fail the test, and dismissing keeps the run from hanging if

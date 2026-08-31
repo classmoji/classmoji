@@ -436,6 +436,43 @@ export function buildResolvedContext({
   return snapshot;
 }
 
+/**
+ * The same snapshot with every target's `email` removed.
+ *
+ * `resolved_context` stores a teammate's address so an instructor's CSV export
+ * can still identify a reviewee who has left the course. Nothing that RENDERS
+ * shows it — the fill page, the answer view, and the staff drawer all print
+ * `name` — so any surface that ships the snapshot to a browser or to a model is
+ * shipping an address list it never uses.
+ *
+ * That matters most on the student's own fill page, which is where the snapshot
+ * leaves the building with the LEAST privilege attached: a member opening a peer
+ * review would receive every teammate's email in the loader payload, which is
+ * not something the page asked for and not something the course promised.
+ *
+ * Redacted at the boundary rather than removed from the column, because the
+ * export genuinely needs it. Every other key is preserved exactly — this is a
+ * projection, not a rewrite, and the shape the read surfaces walk is unchanged.
+ */
+export function withoutTargetEmails(snapshot: unknown): unknown {
+  if (!snapshot || typeof snapshot !== 'object') return snapshot;
+  const context = snapshot as { targets?: unknown };
+  if (!context.targets || typeof context.targets !== 'object') return snapshot;
+
+  const targets: Record<string, unknown> = {};
+  for (const [groupId, value] of Object.entries(context.targets as Record<string, unknown>)) {
+    targets[groupId] = Array.isArray(value)
+      ? value.map(entry => {
+          if (!entry || typeof entry !== 'object') return entry;
+          const { email: _email, ...rest } = entry as Record<string, unknown>;
+          return rest;
+        })
+      : value;
+  }
+
+  return { ...context, targets };
+}
+
 /** The targets recorded in a stored snapshot, read defensively. */
 export function priorTargets(previous: unknown): Record<string, SnapshotTarget[]> {
   const context = (previous ?? {}) as { targets?: unknown };

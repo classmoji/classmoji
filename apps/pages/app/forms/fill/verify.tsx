@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link, data, useFetcher, useLoaderData, type SubmitTarget } from 'react-router';
-import type { FormField } from '@classmoji/services/form-contract';
+import { exceedsMaxDepth, type FormField } from '@classmoji/services/form-contract';
 
 import { ClassmojiService, prisma } from '~/utils/db.server.ts';
 import { checkOrigin, readCappedBody } from '~/utils/originCheck.server.ts';
@@ -177,6 +177,17 @@ export const action = async ({ request }: { request: Request }) => {
   try {
     body = JSON.parse(raw) as typeof body;
   } catch {
+    return new Response('Malformed submission.', { status: 400 });
+  }
+
+  // The same shape guard the fill action runs, for the same reason: this
+  // endpoint is reachable by anyone holding (or guessing at) a token, and a body
+  // nested deeper than `JSON.stringify` can walk must be refused before it
+  // reaches the contract's size probe. See the note in fill.tsx.
+  if (exceedsMaxDepth(body)) {
+    console.warn('[forms:verify] refused a pathologically nested submission', {
+      bytes: raw.length,
+    });
     return new Response('Malformed submission.', { status: 400 });
   }
 

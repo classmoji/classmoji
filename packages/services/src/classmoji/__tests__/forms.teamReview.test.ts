@@ -532,6 +532,69 @@ describe.skipIf(!RUN)('forms team review', () => {
       expect(context.groups[GROUP].state).toBe('SOLO_TEAM');
     });
 
+    /**
+     * A REVIEWEE'S EMAIL IS NOT PART OF A REVIEW.
+     *
+     * `resolved_context` snapshots each teammate's address so a staff CSV can
+     * still identify somebody who has since left the course. Nothing that
+     * RENDERS uses it — the fill page, the answer view and the staff drawer all
+     * print `name` — so every surface shipping the snapshot outward was shipping
+     * an address list it had no use for. Most sharply on the student's own fill
+     * page: a member opening a peer review received every teammate's email in
+     * the loader payload.
+     *
+     * The column keeps them; the boundary drops them. Asserted over a REAL
+     * stored snapshot rather than a hand-built one, so it fails if
+     * `buildResolvedContext` ever changes shape underneath it.
+     */
+    it('projects reviewee emails out of a snapshot without disturbing anything else', async () => {
+      const solo = await publishReviewForm(reviewForm(tagScope(labTagId)));
+      formId = solo.formId;
+      revisionId = solo.revisionId;
+
+      const stored = await submit(people.s1, { [GROUP]: {} });
+      const raw = stored.resolved_context as {
+        targets: Record<string, Array<Record<string, unknown>>>;
+        groups: unknown;
+      };
+
+      // A solo team resolves to no CURRENT targets, so the snapshot is exercised
+      // with one written by hand into the same shape `buildResolvedContext`
+      // produces — the projection has to hold for a departed teammate too, which
+      // is precisely the row that still carries an address.
+      const withTarget = {
+        ...raw,
+        targets: {
+          [GROUP]: [
+            {
+              user_id: people.s2,
+              name: 'Departed Teammate',
+              login: 'departed',
+              email: `formteam-${suite}-s2@example.test`,
+              removed: true,
+            },
+          ],
+        },
+      };
+
+      const projected = resolver.withoutTargetEmails(withTarget) as typeof withTarget;
+      const safe = projected.targets[GROUP][0];
+
+      expect(safe).not.toHaveProperty('email');
+      expect(JSON.stringify(projected)).not.toContain(`formteam-${suite}-s2@example.test`);
+      // Identity and provenance survive: a projection, not a rewrite, so every
+      // read surface walks the shape it walked before.
+      expect(safe.user_id).toBe(people.s2);
+      expect(safe.name).toBe('Departed Teammate');
+      expect(safe.login).toBe('departed');
+      expect(safe.removed).toBe(true);
+      expect(projected.groups).toEqual(raw.groups);
+
+      // Defensive over the shapes the column can actually hold.
+      expect(resolver.withoutTargetEmails(null)).toBeNull();
+      expect(resolver.withoutTargetEmails({ groups: {} })).toEqual({ groups: {} });
+    });
+
     it('materializes the group into the revision with its inner fields intact', async () => {
       const revision = await prisma.formRevision.findUniqueOrThrow({ where: { id: revisionId } });
       const fields = formService.fieldsOf(revision.fields) as FormField[];

@@ -1,4 +1,6 @@
-import type { FormField, FormOption } from '@classmoji/services/form-contract';
+import type { FormField, FormFieldType, FormOption } from '@classmoji/services/form-contract';
+
+import { unhandledFieldType } from './fieldTypes.ts';
 
 /**
  * Turning a stored answer back into something a human reads.
@@ -42,23 +44,44 @@ export function matrixOf(field: FormField): { rows: FormOption[]; columns: FormO
 export const MULTI_JOIN = '; ';
 
 /**
- * Types whose answer is a single readable value — the ones that can sit in a
- * table cell or a CSV column without a header of their own.
+ * How each type occupies a table or a CSV.
  *
- * Matrix and repeat_group are the two that cannot: one needs a sub-column per
- * row, the other a row per review target. Both are handled explicitly wherever
- * they matter, and this predicate is what keeps them out of the places that
- * assume one column per field.
+ * `scalar` fits one cell. `wide` cannot: a matrix needs a sub-column per row and
+ * a repeat_group needs a row per review target, so both are handled explicitly
+ * wherever they matter and this map is what keeps them out of the places that
+ * assume one column per field. `display` collects nothing and never becomes a
+ * column at all.
+ *
+ * A `Record<FormFieldType, …>` rather than a `Set` of the exceptions: a set of
+ * exceptions silently classifies an unknown new type as scalar, which is the
+ * one answer that is wrong for anything interesting. This does not compile until
+ * a new type says which it is.
  */
-const WIDE_TYPES = new Set(['matrix', 'repeat_group']);
+const LAYOUT: Record<FormFieldType, 'scalar' | 'wide' | 'display'> = {
+  short_text: 'scalar',
+  long_text: 'scalar',
+  email: 'scalar',
+  number: 'scalar',
+  dropdown: 'scalar',
+  multiselect: 'scalar',
+  switch: 'scalar',
+  opinion_scale: 'scalar',
+  ranked_choice: 'scalar',
+  roster_select: 'scalar',
+  matrix: 'wide',
+  repeat_group: 'wide',
+  heading: 'display',
+  paragraph: 'display',
+  banner: 'display',
+};
 
 export function isScalarField(field: FormField): boolean {
-  return !WIDE_TYPES.has(field.type) && !isDisplayOnly(field);
+  return LAYOUT[field.type] === 'scalar';
 }
 
 /** Display blocks collect nothing, so they never become a column. */
 export function isDisplayOnly(field: FormField): boolean {
-  return field.type === 'heading' || field.type === 'paragraph' || field.type === 'banner';
+  return LAYOUT[field.type] === 'display';
 }
 
 /**
@@ -116,8 +139,25 @@ export function formatAnswer(field: FormField, value: unknown): string {
     case 'repeat_group':
       return `${reviewedTargets(value).length} reviewed`;
 
+    // Plain scalars: what was stored IS what a person typed.
+    case 'short_text':
+    case 'long_text':
+    case 'email':
+    case 'number':
+      return String(value);
+
+    // Display blocks carry no answer, so there is nothing to format. They are
+    // filtered out upstream by `isDisplayOnly`; this is here so the switch is
+    // exhaustive rather than relying on the caller having remembered.
+    case 'heading':
+    case 'paragraph':
+    case 'banner':
+      return '';
+
     default:
-      return typeof value === 'object' ? JSON.stringify(value) : String(value);
+      // The old `String(value)` fallback is why a new type would have exported
+      // a raw ISO timestamp into a spreadsheet and told nobody.
+      return unhandledFieldType(field.type, 'answerFormat.formatAnswer');
   }
 }
 

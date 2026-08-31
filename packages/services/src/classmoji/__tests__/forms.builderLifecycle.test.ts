@@ -284,6 +284,182 @@ describe.skipIf(!RUN)('forms builder lifecycle (integration)', () => {
     );
   });
 
+  /**
+   * PUBLISHING A NEW VERSION IS ONE MOVE, OR IT IS A BUG.
+   *
+   * Editing a live form needs three writes — DRAFT, save fields, publish — and
+   * the builder used to make them as three separate service calls. A throw
+   * anywhere in the middle left the form in DRAFT, and a DRAFT form 404s for
+   * every filler: the instructor's edit takes the form off the internet and
+   * nothing says so.
+   *
+   * The failure is provoked with an invalid definition rather than a mocked
+   * connection error, because that is the one that actually happens — the
+   * builder posts whatever is on the canvas, and the contract is strict.
+   */
+  it('publishes a new version atomically, or leaves the live one alone', async () => {
+    const form = await formService.create({
+      classroomId,
+      title: `Atomic Version ${suite}`,
+      access: 'PUBLIC',
+      createdBy: ownerId,
+      fields: [{ type: 'short_text', label: 'Name', required: true }],
+    });
+    const { revision: live } = await formService.publish(form.id);
+
+    // ── The failure ────────────────────────────────────────────────────────
+    const badFields = [{ type: 'short_text' /* no label */ }];
+    expect(await codeOf(formService.publishNewVersion(form.id, badFields))).toBe(
+      'FORM_DEFINITION_INVALID'
+    );
+
+    const afterFailure = await prisma.form.findUniqueOrThrow({ where: { id: form.id } });
+    // Still OPEN, still serving the revision people were already filling in,
+    // and the saved draft was not half-written either.
+    expect(afterFailure.status).toBe('OPEN');
+    expect(afterFailure.current_revision_id).toBe(live.id);
+    expect(formService.fieldsOf(afterFailure.draft_fields)).toHaveLength(1);
+    expect(await prisma.formRevision.count({ where: { form_id: form.id } })).toBe(1);
+
+    // The three-call sequence it replaces DOES strand the form — which is why
+    // the single call has to exist. Asserting it here keeps the test honest
+    // about what it is protecting against.
+    await formService.quickUpdate(form.id, { status: 'DRAFT' });
+    expect(await codeOf(formService.update(form.id, { fields: badFields }))).toBe(
+      'FORM_DEFINITION_INVALID'
+    );
+    const stranded = await prisma.form.findUniqueOrThrow({ where: { id: form.id } });
+    expect(stranded.status).toBe('DRAFT');
+
+    // ── The success ────────────────────────────────────────────────────────
+    const { revision: second, form: reopened } = await formService.publishNewVersion(form.id, [
+      ...formService.fieldsOf(stranded.draft_fields),
+      { type: 'long_text', label: 'Anything else?' },
+    ] as unknown as FormField[]);
+
+    expect(second.version).toBe(2);
+    expect(reopened.status).toBe('OPEN');
+    expect(reopened.current_revision_id).toBe(second.id);
+    expect(formService.fieldsOf(second.fields)).toHaveLength(2);
+    // Revision 1 is untouched, so responses filed against it still resolve.
+    expect(await prisma.formRevision.count({ where: { form_id: form.id } })).toBe(2);
+  });
+
+  it('refuses a new version whose fields break the form’s access mode', async () => {
+    // The access check runs BEFORE the row is touched, so a Team Review pasted
+    // onto a PUBLIC form is refused without taking the form down first.
+    const form = await formService.create({
+      classroomId,
+      title: `Atomic Access ${suite}`,
+      access: 'PUBLIC',
+      createdBy: ownerId,
+      fields: [{ type: 'short_text', label: 'Name', required: true }],
+    });
+    const { revision: live } = await formService.publish(form.id);
+
+    expect(
+      await codeOf(
+        formService.publishNewVersion(form.id, [
+          {
+            type: 'roster_select',
+            label: 'Pick a partner',
+            optionSource: 'roster',
+          },
+        ])
+      )
+    ).toBe('FORM_FIELD_ACCESS_VIOLATION');
+
+    const after = await prisma.form.findUniqueOrThrow({ where: { id: form.id } });
+    expect(after.status).toBe('OPEN');
+    expect(after.current_revision_id).toBe(live.id);
+  });
+
+  /**
+   * THE ROSTER LEAK. A published CLASSROOM form must not be able to become
+   * PUBLIC by way of the supported "take it back to DRAFT" move.
+   *
+   * The sequence below is the exact three-call path both the builder's
+   * new-version action and the MCP tools expose:
+   *
+   *   form_publish { action: 'draft' }              → quickUpdate({ status: DRAFT })
+   *   form_update  { access: 'PUBLIC', fields: [] } → update(...)
+   *   form_publish { action: 'reopen' }             → reopen()
+   *
+   * `quickUpdate(DRAFT)` deliberately LEAVES `current_revision_id` in place, so
+   * the middle call used to pass every guard: `!isDraft` was false, and the
+   * stale-fields check at the end of `update` inspects `draft_fields`, not the
+   * published revision. The result was an OPEN, PUBLIC form still serving a
+   * revision whose `roster_select` options are one object per student —
+   * `{ id: <user_id>, label: "Name (login)" }` — to anonymous visitors.
+   */
+  it('refuses a CLASSROOM→PUBLIC flip on a form that has ever been published', async () => {
+    const student = await prisma.user.create({
+      data: {
+        login: `formbuild-${suite}-student`,
+        email: `formbuild-${suite}-student@example.test`,
+        name: 'Rostered Student',
+      },
+    });
+    await prisma.classroomMembership.create({
+      data: { classroom_id: classroomId, user_id: student.id, role: 'STUDENT' },
+    });
+
+    const form = await formService.create({
+      classroomId,
+      title: `Roster Leak ${suite}`,
+      access: 'CLASSROOM',
+      createdBy: ownerId,
+      fields: [
+        {
+          id: randomUUID(),
+          type: 'roster_select',
+          label: 'Who would you like to work with?',
+          optionSource: 'roster',
+          required: true,
+        },
+      ] as unknown as FormField[],
+    });
+
+    const { revision } = await formService.publish(form.id);
+
+    // Precondition: the revision really does hold the roster. Without this the
+    // rest of the test would pass against a form that had nothing to leak.
+    const materialized = formService.fieldsOf(revision.fields)[0] as unknown as {
+      options: Array<{ id: string; label: string }>;
+    };
+    expect(materialized.options.map(option => option.id)).toContain(student.id);
+    expect(materialized.options.map(option => option.label)).toContain(
+      `Rostered Student (formbuild-${suite}-student)`
+    );
+
+    // ── The three calls ────────────────────────────────────────────────────
+    await formService.quickUpdate(form.id, { status: 'DRAFT' });
+
+    const cleanFields = [
+      { id: randomUUID(), type: 'short_text', label: 'Your name', required: true },
+    ] as unknown as FormField[];
+
+    expect(
+      await codeOf(formService.update(form.id, { access: 'PUBLIC', fields: cleanFields }))
+    ).toBe(formService.FORM_ACCESS_FROZEN);
+
+    // Nothing moved: not the access mode, not the revision the fill page serves.
+    const after = await prisma.form.findUniqueOrThrow({ where: { id: form.id } });
+    expect(after.access).toBe('CLASSROOM');
+    expect(after.current_revision_id).toBe(revision.id);
+
+    // And the flip is refused on its own too — the field list is not what makes
+    // it dangerous, so dropping it from the call must not make it allowed.
+    expect(await codeOf(formService.update(form.id, { access: 'PUBLIC' }))).toBe(
+      formService.FORM_ACCESS_FROZEN
+    );
+
+    // Reopening still works and still serves the CLASSROOM revision.
+    const reopened = await formService.reopen(form.id);
+    expect(reopened.status).toBe('OPEN');
+    expect(reopened.access).toBe('CLASSROOM');
+  });
+
   it('rejects a Team Review preset saved onto a PUBLIC form, whatever the client sent', async () => {
     // The palette locks `repeat_group` when access is PUBLIC. This is the
     // server-side half of that rule — the half a hand-written request, an MCP

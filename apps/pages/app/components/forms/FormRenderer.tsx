@@ -16,7 +16,7 @@ import {
 } from '@classmoji/services/form-contract';
 
 import { FieldShell } from './FormPreview.tsx';
-import { isDisplayField } from './fieldTypes.ts';
+import { isDisplayField, unhandledFieldType } from './fieldTypes.ts';
 import {
   answerableFields,
   coerceAnswers,
@@ -76,8 +76,14 @@ export interface RendererIdentity {
 export interface RendererSubmission {
   answers: Record<string, unknown>;
   identity: { email: string; name: string | null };
-  /** True when the hidden honeypot was filled — a human never does this. */
-  trapped: boolean;
+  /**
+   * The hidden honeypot's RAW value. A person never types into it, so anything
+   * non-blank is a bot — but that conclusion is the SERVER'S to draw. This used
+   * to be a boolean this component computed, which put the anti-bot check on the
+   * bot's side of the wire: fill the trap, post `false`, walk through. Report
+   * the field, do not judge it.
+   */
+  trap: string;
 }
 
 /**
@@ -454,7 +460,9 @@ export default function FormRenderer({
       onSubmit({
         answers,
         identity: { email: lockedIdentity.email, name: lockedIdentity.name || null },
-        trapped: false,
+        // The classroom path draws no honeypot: it is behind a session, so
+        // there is no anonymous bot to catch and nothing to report.
+        trap: '',
       });
       return;
     }
@@ -473,7 +481,7 @@ export default function FormRenderer({
             (typeof nameFromAnswers === 'string' && nameFromAnswers) || data.identityName || ''
           ).trim() || null,
       },
-      trapped: Boolean(data.website && data.website.trim()),
+      trap: typeof data.website === 'string' ? data.website : '',
     });
   });
 
@@ -1018,7 +1026,10 @@ function Control({ field, name, register, watch, setValue, invalid }: ControlPro
         );
       }
 
-      default:
+      // The plain one-line box. Named rather than left to fall through: it is
+      // the right control for exactly ONE type, and it used to be what every
+      // unrecognised type quietly got as well.
+      case 'short_text':
         return (
           <input
             {...register(name)}
@@ -1030,6 +1041,19 @@ function Control({ field, name, register, watch, setValue, invalid }: ControlPro
             className={inputClass}
           />
         );
+
+      // Routed before this component is reached — `Field` sends display blocks
+      // to `DisplayBlock` and a repeat group to `RepeatGroup`. Enumerated here
+      // so the switch is exhaustive rather than depending on that routing being
+      // remembered.
+      case 'repeat_group':
+      case 'heading':
+      case 'paragraph':
+      case 'banner':
+        return null;
+
+      default:
+        return unhandledFieldType(field.type, 'FormRenderer.Control');
     }
   }
 }

@@ -20,8 +20,10 @@ import {
   FORM_DEFINITION_TOO_LARGE,
   FORM_FIELD_ACCESS_VIOLATION,
   FORM_REPEAT_CONTEXT_MISSING,
+  answersByteSize,
   assertFieldsAllowedForAccess,
   buildResponseSchema,
+  exceedsMaxDepth,
   flattenFields,
   parseAnswers,
   parseFormDefinition,
@@ -488,6 +490,72 @@ describe('formContract — answers', () => {
         parseAnswers(fields, { [fields[0].id]: 'x'.repeat(FORM_LIMITS.MAX_ANSWERS_BYTES + 10) })
       )
     ).toBe(FORM_ANSWERS_TOO_LARGE);
+  });
+});
+
+// ─── The nesting guard ──────────────────────────────────────────────────────
+
+/**
+ * `JSON.parse` accepts far deeper nesting than `JSON.stringify` can walk. A
+ * ~40KB body of `[[[[…]]]]` parses fine and then overflows the stack the moment
+ * anything serializes it — and a RangeError carries no `code`, so it missed
+ * every `error.code === …` branch on the submission paths and surfaced as a 500
+ * to an anonymous caller. Denial of service for the price of forty kilobytes.
+ *
+ * 20,000 is chosen empirically, not decoratively: 5,000 still serializes on this
+ * Node, 10,000 does not. Building the value with a loop rather than a recursive
+ * helper keeps the TEST from overflowing on its own fixture.
+ */
+const nested = (depth: number): unknown => {
+  let value: unknown = [];
+  for (let i = 0; i < depth; i++) value = [value];
+  return value;
+};
+
+describe('formContract — deeply nested answers', () => {
+  it('confirms the hazard is real: JSON.stringify cannot walk the fixture', () => {
+    expect(() => JSON.stringify(nested(20_000))).toThrow(RangeError);
+  });
+
+  it('sizes an unserializable value as infinite rather than throwing', () => {
+    expect(answersByteSize(nested(20_000))).toBe(Number.POSITIVE_INFINITY);
+    // And still measures an ordinary one exactly.
+    expect(answersByteSize({ a: 'bc' })).toBe(10);
+  });
+
+  it('spots excessive depth without recursing itself', () => {
+    expect(exceedsMaxDepth(nested(20_000))).toBe(true);
+    expect(exceedsMaxDepth(nested(FORM_LIMITS.MAX_ANSWER_DEPTH + 1))).toBe(true);
+    expect(exceedsMaxDepth(nested(2))).toBe(false);
+    // A cycle is not a hang: the walk stops at the limit like anything else.
+    const cyclic: Record<string, unknown> = {};
+    cyclic.self = cyclic;
+    expect(exceedsMaxDepth(cyclic)).toBe(true);
+  });
+
+  it('refuses a pathologically nested answer set as TOO_LARGE, never a RangeError', () => {
+    const { fields } = parseFormDefinition([SAMPLES.long_text]);
+    const answers = { [fields[0].id]: nested(20_000) };
+
+    // The code matters more than the refusal: every submission path branches on
+    // it, and an uncoded error is what became a 500.
+    expect(codeOf(() => parseAnswers(fields, answers))).toBe(FORM_ANSWERS_TOO_LARGE);
+
+    let thrown: unknown;
+    try {
+      parseAnswers(fields, answers);
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).not.toBeInstanceOf(RangeError);
+    expect((thrown as { code?: string }).code).toBe(FORM_ANSWERS_TOO_LARGE);
+  });
+
+  it('still accepts the deepest shape a real form can produce', () => {
+    // answers[group][target][field][row] = column — a matrix inside a repeat
+    // group, which is the deepest legitimate answer in the product.
+    const deepest = { g: { u: { f: { row: 'col' } } } };
+    expect(exceedsMaxDepth(deepest)).toBe(false);
   });
 });
 

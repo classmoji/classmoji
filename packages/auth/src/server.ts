@@ -309,8 +309,8 @@ export const auth = betterAuth({
   // baseURL — so this preserves existing behaviour for webapp/mcp/slides/pages
   // and only adds the admin origin. Tenant/course-site hosts are deliberately
   // NOT here: they are never auth trust origins (see ./siteReturnToken.ts).
-  trustedOrigins: [process.env.WEBAPP_URL, process.env.ADMIN_URL].filter(
-    (o): o is string => Boolean(o)
+  trustedOrigins: [process.env.WEBAPP_URL, process.env.ADMIN_URL].filter((o): o is string =>
+    Boolean(o)
   ),
   secret: AUTH_SECRET,
   database: prismaAdapter(getPrisma(), {

@@ -197,8 +197,10 @@ test.beforeAll(async () => {
 
   const services = await getTestServices();
   const published = services.form.fieldsOf(multi.revision.fields) as FormField[];
-  rosterOptions = (published.find(field => field.id === F.partner)?.options ??
-    []) as Array<{ id: string; label: string }>;
+  rosterOptions = (published.find(field => field.id === F.partner)?.options ?? []) as Array<{
+    id: string;
+    label: string;
+  }>;
   if (rosterOptions.length < 2) {
     throw new Error(
       `expected the ${CLASS} roster to materialize at least 2 options, got ${rosterOptions.length}`
@@ -728,6 +730,26 @@ test.describe('isolation', () => {
     await expect(page.getByLabel('Anything else?', { exact: true })).toHaveValue('');
     expect(await page.content()).not.toContain('Student one only');
     expect(await page.content()).not.toContain('student1@dev.local');
+  });
+
+  /**
+   * A member's own fill page is not cacheable.
+   *
+   * Every isolation test around it is about who the SERVER hands a response to.
+   * A cacheable response moves that decision to a shared proxy, or to the disk
+   * cache of a lab machine the next student signs into — the server-side guard
+   * would still be correct and would still have been bypassed. Both transports,
+   * because `data(…, { headers })` covers only `.data` and only the route's
+   * `headers` export carries them onto the document.
+   */
+  test('a member’s fill page is never cached, on either transport', async ({ page }) => {
+    await loginAs(page, 'student');
+
+    for (const target of [multiPath, `${multiPath}.data`]) {
+      const response = await page.request.get(target, { maxRedirects: 0 });
+      expect(response.status(), target).toBe(200);
+      expect(response.headers()['cache-control'], target).toBe('no-store');
+    }
   });
 
   test('nor in the loader payload the single-fetch route returns', async ({ page }) => {

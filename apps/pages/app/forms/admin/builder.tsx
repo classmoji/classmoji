@@ -199,12 +199,17 @@ export const action = async ({
       }
 
       case 'new-version': {
-        // The only sequence `form.service` allows for editing a live form. All
-        // three steps run here so a failure cannot strand an OPEN form in
-        // DRAFT with a half-written definition.
-        await ClassmojiService.form.quickUpdate(form.id, { status: 'DRAFT' });
-        await ClassmojiService.form.update(form.id, { fields: body.fields });
-        const { revision } = await ClassmojiService.form.publish(form.id);
+        // ONE service call, one transaction, one row lock.
+        //
+        // This used to be three un-transacted calls — DRAFT, save fields,
+        // publish — under a comment claiming that running all three "here" kept
+        // a failure from stranding the form. It did not: three writes in one
+        // request handler are not three writes in one transaction, and a throw
+        // between the first and the third left a LIVE form sitting in DRAFT,
+        // which 404s for every filler until someone thinks to press Publish
+        // again. `publishNewVersion` leaves the form on the old revision or on
+        // the new one, and there is no third outcome.
+        const { revision } = await ClassmojiService.form.publishNewVersion(form.id, body.fields);
         await audit('UPDATE', 'forms.builder.new-version', { version: revision.version });
         return { ok: true, published: true, version: revision.version };
       }
