@@ -30,6 +30,7 @@
 import { ClassmojiService } from '@classmoji/services';
 import { ToolError } from '../mcp/errors.ts';
 import type { ResourceDefinition, ToolContext } from '../mcp/registry.ts';
+import { assertProTier } from '../authz/proTier.ts';
 import { MEMBER, QUIZ_ROLES, classroomCtx, isStaff, sanitizedSettings } from './shape.ts';
 
 // ─── pages ───────────────────────────────────────────────────────────────────
@@ -196,31 +197,23 @@ interface QuizRow {
 }
 
 /**
- * The MCP face of the webapp's assertProTier (apps/webapp/app/utils/helpers.ts)
- * — same decision, different error type.
+ * The Pro gate, re-exported from its home in ../authz/proTier.ts.
  *
- * Resolves by classroom ID, which is what the authorization context already
- * carries. The previous version took the slug, looked the classroom up again
- * and refused when the two disagreed, on the premise that a bare slug was
- * unique only per git org — that premise has been false since the global unique
- * index landed (schema.prisma: `slug String @unique`), so the guard could never
- * fire and the round trip bought nothing. Passing the ID straight through is
- * both simpler and strictly safer: there is no second lookup to disagree with.
+ * This file used to CARRY the gate — a hand-mirrored copy of the webapp's
+ * `assertProTier` that reached into `subscription.getProStateForClassroomId`
+ * itself and raised its own error. That copy is retired.
+ * `@classmoji/auth/server`'s lifted `assertProTier` is now the single
+ * implementation the webapp, apps/pages' forms subtree and this server all gate
+ * on; ../authz/proTier.ts does nothing but translate its thrown 403 Response
+ * into a ToolError.
  *
- * The `ends_at` test is NOT reimplemented here. It lives once, in
- * `subscription.getProStateForClassroomId`, precisely so this file and the
- * webapp cannot drift into gating on different definitions of "active".
- *
- * EXPORTED because the quiz WRITE tools (tools/quizzes.ts) apply the same gate
- * the webapp's quiz action applies before every mutation. One definition, one
- * import — the read resource and the write tools cannot drift apart.
+ * The name stays exported HERE because the quizzes read resource below, the
+ * quiz write tools (tools/quizzes.ts) and the forms tools all apply this gate —
+ * one definition, one decision, no drift between read and write. Note the
+ * argument change: the wrapper takes the whole ToolContext (it reads the
+ * already-authorized classroom's slug off it), not a bare classroom id.
  */
-export async function assertProTier(classroomId: string): Promise<void> {
-  const proState = await ClassmojiService.subscription.getProStateForClassroomId(classroomId);
-  if (!proState.isPro) {
-    throw new ToolError('forbidden', 'This feature requires a Pro subscription');
-  }
-}
+export { assertProTier };
 
 export const quizzesResource: ResourceDefinition = {
   name: 'quizzes',
@@ -236,7 +229,7 @@ export const quizzesResource: ResourceDefinition = {
     const { classroomId, role, membership } = classroomCtx(ctx);
 
     // Gate order mirrors the routes: access (done) → Pro tier → quizzes_enabled.
-    await assertProTier(classroomId);
+    await assertProTier(ctx);
     if (sanitizedSettings(ctx).quizzes_enabled === false) {
       throw new ToolError('forbidden', 'Quizzes are currently disabled for this classroom');
     }
