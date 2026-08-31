@@ -15,7 +15,7 @@ import {
   sortableKeyboardCoordinates,
   verticalListSortingStrategy,
 } from '@dnd-kit/sortable';
-import { IconLock, IconPlus } from '@tabler/icons-react';
+import { IconListDetails, IconLock, IconPlus } from '@tabler/icons-react';
 import type { FormField } from '@classmoji/services/form-contract';
 
 import { ClassmojiService } from '~/utils/db.server.ts';
@@ -390,6 +390,18 @@ export default function FormBuilder() {
         </div>
 
         <div className="flex items-center gap-2">
+          {/* Always rendered, including on a form that has never been published
+              and has no responses yet. The builder is where staff sit, and the
+              responses page owns its own empty state — gating this on a count
+              would hide the link in precisely the case where someone is
+              wondering whether anything has come in. */}
+          <Link
+            to={`/${data.classroomSlug}/forms/${data.form.slug}/responses`}
+            title="See the responses collected by this form"
+            className="flex items-center gap-1.5 rounded-md border border-gray-300 px-3 py-2 text-sm font-medium text-gray-700 hover:border-gray-400 hover:text-gray-900 dark:border-gray-600 dark:text-gray-200 dark:hover:border-gray-500 dark:hover:text-white"
+          >
+            <IconListDetails size={16} /> Responses
+          </Link>
           {isDraft ? (
             <>
               <button

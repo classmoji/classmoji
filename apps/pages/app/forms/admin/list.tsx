@@ -5,6 +5,7 @@ import relativeTime from 'dayjs/plugin/relativeTime';
 import {
   IconCopy,
   IconExternalLink,
+  IconListDetails,
   IconPencil,
   IconPlus,
   IconSearch,
@@ -325,13 +326,16 @@ export default function FormsList() {
                     </select>
                   </td>
                   <td className="px-4 py-3 text-sm text-gray-600 dark:text-gray-300">
-                    {/* The count IS the way in: the responses surface has no
-                        nav entry of its own, and a form's responses are only
-                        ever reached through the form. */}
+                    {/* One of TWO ways in — the other is the Actions column's
+                        responses button. The count is styled as a link at rest,
+                        not on hover: a bare "0" that only reveals itself when
+                        the pointer happens to cross it is exactly the state in
+                        which staff most need to reach this page, and it read as
+                        plain text. */}
                     <Link
                       to={`/${classroomSlug}/forms/${form.slug}/responses`}
                       title={`Responses to ${form.title}`}
-                      className="hover:text-blue-600 hover:underline dark:hover:text-blue-400"
+                      className="text-blue-600 hover:underline dark:text-blue-400"
                     >
                       {form.responses}
                       {form.responseCap ? (
@@ -347,6 +351,18 @@ export default function FormsList() {
                   </td>
                   <td className="px-4 py-3">
                     <div className="flex items-center justify-end gap-2">
+                      {/* First, and an ICON like the rest: responses is the
+                          most-used staff action on a live form, and it was
+                          previously reachable only by guessing that the count
+                          in the Responses column was clickable. */}
+                      <Link
+                        to={`/${classroomSlug}/forms/${form.slug}/responses`}
+                        title="See the responses collected by this form"
+                        aria-label={`Responses to ${form.title}`}
+                        className="text-gray-400 hover:text-blue-600 dark:hover:text-blue-400"
+                      >
+                        <IconListDetails size={16} />
+                      </Link>
                       <button
                         type="button"
                         onClick={() => copyLink(form)}
