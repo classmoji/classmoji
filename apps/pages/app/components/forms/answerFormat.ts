@@ -1,5 +1,6 @@
 import type { FormField, FormFieldType, FormOption } from '@classmoji/services/form-contract';
 
+import { identityPlan } from './answerCoerce.ts';
 import { unhandledFieldType } from './fieldTypes.ts';
 
 /**
@@ -82,6 +83,36 @@ export function isScalarField(field: FormField): boolean {
 /** Display blocks collect nothing, so they never become a column. */
 export function isDisplayOnly(field: FormField): boolean {
   return LAYOUT[field.type] === 'display';
+}
+
+/**
+ * The answer columns the STAFF TABLE shows beside its own Name and Email
+ * columns — the first few scalar fields that are not already the identity.
+ *
+ * The exclusion is the whole point. A response row's `name` and `email` are not
+ * separate data: `extractIdentity` LIFTS them out of the answers, using the
+ * field ids `identityPlan` names. So a waitlist that asks "Full name" and
+ * "School email" — which is what a public form has to ask, because the magic
+ * link is its entire authentication — used to render each of those answers
+ * twice: once in the identity column it became, and again as an answer column.
+ * Two duplicate columns is most of why the table outgrew its container in the
+ * first place, and the second copy told nobody anything.
+ *
+ * `identityPlan` is asked rather than re-derived. A second heuristic here that
+ * disagreed with the one the fill path actually used would be strictly worse
+ * than the duplication: the NAME column would show one field and the table
+ * would hide a different one. Where the plan finds nothing — a form built from
+ * dedicated identity inputs, with no email question and no name-ish short text
+ * — nothing is excluded and every scalar field is a candidate, which is right:
+ * none of them is being shown anywhere else.
+ *
+ * This is a TABLE rule, not an export rule. The CSV keeps every field: an
+ * export is the whole response, and a spreadsheet has no width to run out of.
+ */
+export function answerColumnFields(fields: FormField[], max: number): FormField[] {
+  const plan = identityPlan(fields);
+  const consumed = new Set([plan.emailFieldId, plan.nameFieldId].filter(Boolean) as string[]);
+  return fields.filter(field => isScalarField(field) && !consumed.has(field.id)).slice(0, max);
 }
 
 /**

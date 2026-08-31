@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { Link, data, useFetcher, useLoaderData } from 'react-router';
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
@@ -7,7 +8,7 @@ import type { FormField } from '@classmoji/services/form-contract';
 
 import AnswerView from '~/components/forms/AnswerView.tsx';
 import { ConfirmDialog } from '~/components/forms/ConfirmDialog.tsx';
-import { formatAnswer, isScalarField } from '~/components/forms/answerFormat.ts';
+import { answerColumnFields, formatAnswer } from '~/components/forms/answerFormat.ts';
 import { ClassmojiService } from '~/utils/db.server.ts';
 import { formMutationBlocked } from '~/utils/formAuth.server.ts';
 import { hasRepeatGroup } from './responsesCsv.server.ts';
@@ -51,6 +52,28 @@ dayjs.extend(relativeTime);
 const MAX_BULK = 200;
 /** Answer columns in the table; everything else lives in the drawer. */
 const MAX_ANSWER_COLUMNS = 3;
+/**
+ * The ceiling on any one cell — an answer, a note, a question label.
+ *
+ * A `<td>` will not honour `max-width` under `table-layout: auto`, so the cap
+ * has to live on a block INSIDE the cell; that is what every `CellText` below
+ * is for. Without it one long-text answer sets the column's width to its own
+ * `max-content` and drags the whole table past its container, which is half of
+ * why this table needed to be scrolled at all.
+ */
+const CELL_CLAMP = 'block max-w-48 truncate';
+/**
+ * The same cap for the identity columns, which get a little more room: an email
+ * address is how a response is recognised, and clipping it earlier than the
+ * answers costs more than it saves.
+ */
+const IDENTITY_CLAMP = 'block max-w-56 truncate';
+/**
+ * And a tighter one for the HEADERS, because a question is a sentence. "How
+ * familiar are you with the material?" was setting a 256px column over a cell
+ * reading "7 / 10" — the header, not the data, was most of the table's width.
+ */
+const HEADER_CLAMP = 'block max-w-40 truncate';
 
 export const loader = async ({
   params,
@@ -201,11 +224,13 @@ export default function FormResponses() {
   const [bulkStatusOpen, setBulkStatusOpen] = useState(false);
 
   // The answer columns: the first few TOP-LEVEL fields with a single readable
-  // value. A matrix or a review block cannot be a column, and a form with
-  // twenty questions would produce an unreadable table — the drawer is where
-  // the whole response lives.
+  // value, MINUS the ones already standing as the Name and Email columns. A
+  // matrix or a review block cannot be a column, and a form with twenty
+  // questions would produce an unreadable table — the drawer is where the whole
+  // response lives. See `answerColumnFields` for why the identity fields come
+  // out.
   const answerColumns = useMemo(
-    () => (currentFields as FormField[]).filter(isScalarField).slice(0, MAX_ANSWER_COLUMNS),
+    () => answerColumnFields(currentFields as FormField[], MAX_ANSWER_COLUMNS),
     [currentFields]
   );
 
@@ -279,8 +304,19 @@ export default function FormResponses() {
   const allVisibleSelected = visible.length > 0 && visible.every(row => selected.has(row.id));
   const selectedIds = [...selected];
 
+  /**
+   * `max-w-[96rem]`, wider than the rest of the forms admin (`max-w-7xl`), and
+   * only on this page.
+   *
+   * This one is a data grid, not a document: identity, up to three answers, a
+   * timestamp and two triage columns. At `max-w-7xl` the waitlist overflowed its
+   * own container on a 1440-wide laptop by about 80px — enough to slice the Note
+   * column off, nothing like enough to be worth scrolling for. The cap only
+   * binds above roughly a 1330px viewport; below that the shell is viewport-
+   * bound and this changes nothing.
+   */
   return (
-    <div className="mx-auto max-w-7xl px-6 py-8">
+    <div className="mx-auto max-w-[96rem] px-6 py-8">
       <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
         <h1 className="text-base font-semibold text-gray-600 dark:text-gray-400">
           <Link
@@ -442,7 +478,14 @@ export default function FormResponses() {
                     key={`${heading}-${index}`}
                     className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400"
                   >
-                    {heading}
+                    {/* A question is a whole sentence — "How familiar are you
+                        with the material?" — and left to wrap it makes a header
+                        three lines tall, or left to run it makes the column as
+                        wide as the sentence. One clamped line, with the wording
+                        intact on hover. */}
+                    <span className={HEADER_CLAMP} title={heading}>
+                      {heading}
+                    </span>
                   </th>
                 ))}
                 <th className="px-3 py-3" />
@@ -556,6 +599,151 @@ function ExportButton({
 
 // ─── Inline triage editors ──────────────────────────────────────────────────
 
+/** Popover width, and the breathing room kept between it and the viewport edge. */
+const POPOVER_WIDTH = 208;
+const VIEWPORT_MARGIN = 8;
+/** Popover-to-anchor gap. */
+const ANCHOR_GAP = 4;
+
+interface PopoverPlacement {
+  left: number;
+  /** Exactly one of these is set — `bottom` is the flipped-above case. */
+  top?: number;
+  bottom?: number;
+  maxHeight: number;
+}
+
+/**
+ * Where a dropdown anchored to `anchor` goes, in VIEWPORT coordinates.
+ *
+ * Viewport coordinates because the layer is `position: fixed` and lives in a
+ * portal on `document.body` — see `SuggestionPopover` for why it has to.
+ *
+ * It never measures the popover, and so never has to render it once to find out
+ * where to put it. Instead it hands the popover the space that is actually
+ * there: whichever side of the anchor has more room, and `maxHeight` set to
+ * that room. A list too long for the space scrolls inside itself rather than
+ * running off the screen, which makes "is it visible" true by construction
+ * instead of true by arithmetic that a short window would get wrong.
+ */
+function placePopover(anchor: DOMRect): PopoverPlacement {
+  const left = Math.max(
+    VIEWPORT_MARGIN,
+    Math.min(anchor.left, window.innerWidth - POPOVER_WIDTH - VIEWPORT_MARGIN)
+  );
+  const below = window.innerHeight - anchor.bottom - ANCHOR_GAP - VIEWPORT_MARGIN;
+  const above = anchor.top - ANCHOR_GAP - VIEWPORT_MARGIN;
+
+  // The LAST ROW of a long table is the case this exists for: below the anchor
+  // there is nothing left, so the list opens upward.
+  return below >= above
+    ? { left, top: anchor.bottom + ANCHOR_GAP, maxHeight: Math.max(below, 0) }
+    : { left, bottom: window.innerHeight - anchor.top + ANCHOR_GAP, maxHeight: Math.max(above, 0) };
+}
+
+/**
+ * Two placements that would paint identically.
+ *
+ * This is what lets `place()` be called after EVERY render without looping: a
+ * fresh object from `placePopover` is never `===` the one in state, so an
+ * unguarded `setPlacement` would re-render, re-run the effect, and set state
+ * again forever. Comparing by value makes the update idempotent, which in turn
+ * means the effect that keeps the list pinned as it filters needs no dependency
+ * array to get right.
+ */
+const samePlacement = (a: PopoverPlacement | null, b: PopoverPlacement): boolean =>
+  a !== null &&
+  a.left === b.left &&
+  a.top === b.top &&
+  a.bottom === b.bottom &&
+  a.maxHeight === b.maxHeight;
+
+/**
+ * The suggestion list, rendered into `document.body` rather than beside its
+ * input.
+ *
+ * The table it sits in scrolls sideways (`overflow-x-auto`), and a scroll
+ * container clips in BOTH axes — a browser cannot offer a horizontal scrollbar
+ * and still let content spill out vertically. So an absolutely-positioned
+ * dropdown on the last row was sliced off at the container's bottom edge, which
+ * is exactly what Tim's screenshot shows: the control still worked, but nobody
+ * could see what they were choosing. No amount of `z-index` fixes that; `z-index`
+ * orders painting, and this is clipping.
+ *
+ * A portal takes the layer out of the clipping ancestor entirely, and `fixed`
+ * positioning re-anchors it to the input by measurement. React events still
+ * bubble through the REACT tree, so the wrapper's `stopPropagation` keeps a
+ * click in here from also opening the row's drawer.
+ *
+ * `z-50` puts it over the response drawer (`z-40`), which is the other place a
+ * `StatusCell` is edited.
+ */
+function SuggestionPopover({
+  anchorRef,
+  children,
+}: {
+  anchorRef: React.RefObject<HTMLInputElement | null>;
+  children: React.ReactNode;
+}) {
+  const [placement, setPlacement] = useState<PopoverPlacement | null>(null);
+
+  const place = useCallback(() => {
+    const anchor = anchorRef.current;
+    if (!anchor) return;
+    const next = placePopover(anchor.getBoundingClientRect());
+    setPlacement(current => (samePlacement(current, next) ? current : next));
+  }, [anchorRef]);
+
+  // `useLayoutEffect` so the first paint is already in the right place — a
+  // frame at the window's top-left corner is a visible jump.
+  //
+  // No dependency array: the anchor also moves when the TABLE re-lays out (a
+  // row committed, the filter narrowed the list), and re-measuring after every
+  // render is both the simplest way to catch that and — because `place` bails
+  // when nothing moved — a fixed point rather than a loop.
+  useLayoutEffect(place);
+
+  useLayoutEffect(() => {
+    // Capture phase: the scroll that moves this anchor is the TABLE's, not the
+    // window's, and a bubbling listener on window never hears it.
+    window.addEventListener('scroll', place, true);
+    window.addEventListener('resize', place);
+    return () => {
+      window.removeEventListener('scroll', place, true);
+      window.removeEventListener('resize', place);
+    };
+  }, [place]);
+
+  // Nothing to portal into during SSR. In practice this control only ever
+  // mounts from a click, but a null first render costs nothing and makes that
+  // an invariant rather than a habit.
+  if (typeof document === 'undefined' || !placement) return null;
+
+  return createPortal(
+    <div
+      data-status-suggestions
+      // A mousedown on the list's own SCROLLBAR lands on this div, not on one of
+      // the buttons — none of their `preventDefault` runs, the input blurs, and
+      // the 150ms cancel closes the list out from under the drag. Only reachable
+      // once the list is taller than the space it was given, which is precisely
+      // the short-viewport case the flip exists for.
+      onMouseDown={event => event.preventDefault()}
+      style={{
+        position: 'fixed',
+        left: placement.left,
+        top: placement.top,
+        bottom: placement.bottom,
+        width: POPOVER_WIDTH,
+        maxHeight: placement.maxHeight,
+      }}
+      className="z-50 overflow-y-auto rounded-md border border-gray-200 bg-white py-1 shadow-lg dark:border-gray-700 dark:bg-gray-900"
+    >
+      {children}
+    </div>,
+    document.body
+  );
+}
+
 /**
  * The status combobox: free text, with the labels already used on THIS form as
  * suggestions.
@@ -611,7 +799,7 @@ function StatusEditor({
         onBlur={() => setTimeout(onCancel, 150)}
         className="w-40 rounded-md border border-gray-300 bg-white px-2 py-1 text-xs text-gray-900 dark:border-gray-600 dark:bg-gray-900 dark:text-white"
       />
-      <div className="absolute left-0 top-full z-20 mt-1 w-52 rounded-md border border-gray-200 bg-white py-1 shadow-lg dark:border-gray-700 dark:bg-gray-900">
+      <SuggestionPopover anchorRef={inputRef}>
         {matches.map(suggestion => (
           <button
             key={suggestion.label}
@@ -649,7 +837,7 @@ function StatusEditor({
         >
           Clear status
         </button>
-      </div>
+      </SuggestionPopover>
     </div>
   );
 }
@@ -733,7 +921,7 @@ function NoteCell({
           setEditing(false);
           if (text.trim() !== (value ?? '')) onCommit(text.trim() ? text.trim() : null);
         }}
-        className="w-full min-w-40 rounded-md border border-gray-300 bg-white px-2 py-1 text-xs text-gray-900 dark:border-gray-600 dark:bg-gray-900 dark:text-white"
+        className="w-56 max-w-full rounded-md border border-gray-300 bg-white px-2 py-1 text-xs text-gray-900 dark:border-gray-600 dark:bg-gray-900 dark:text-white"
       />
     );
   }
@@ -748,7 +936,7 @@ function NoteCell({
       title={value ?? undefined}
       className={
         value
-          ? 'block max-w-56 truncate text-left text-xs text-gray-600 dark:text-gray-300'
+          ? `${CELL_CLAMP} text-left text-xs text-gray-600 dark:text-gray-300`
           : 'text-xs text-gray-400 hover:text-gray-600 dark:hover:text-gray-300'
       }
     >
@@ -803,7 +991,15 @@ function ResponseTableRow({
       </td>
       <td className="px-4 py-3">
         <div className="flex items-center gap-2">
-          <span className={`text-sm font-medium ${partial ? '' : 'text-gray-900 dark:text-white'}`}>
+          {/* Clamped like every other cell: `extractIdentity` bounds a name at
+              MAX_LABEL_CHARS, which is long enough that one pasted paragraph
+              would set this column's width for the whole table. */}
+          <span
+            title={row.name || undefined}
+            className={`${IDENTITY_CLAMP} text-sm font-medium ${
+              partial ? '' : 'text-gray-900 dark:text-white'
+            }`}
+          >
             {row.name || '—'}
           </span>
           {chip ? (
@@ -816,17 +1012,23 @@ function ResponseTableRow({
           ) : null}
         </div>
       </td>
-      <td className="px-4 py-3 text-sm text-gray-600 dark:text-gray-300">{row.email}</td>
-      {answerColumns.map(field => (
-        <td
-          key={field.id}
-          className="max-w-48 truncate px-4 py-3 text-sm text-gray-600 dark:text-gray-300"
-        >
-          {formatAnswer(field, row.answers?.[field.id])}
-        </td>
-      ))}
+      <td className="px-4 py-3 text-sm text-gray-600 dark:text-gray-300">
+        <span className={IDENTITY_CLAMP} title={row.email}>
+          {row.email}
+        </span>
+      </td>
+      {answerColumns.map(field => {
+        const text = formatAnswer(field, row.answers?.[field.id]);
+        return (
+          <td key={field.id} className="px-4 py-3 text-sm text-gray-600 dark:text-gray-300">
+            <span className={CELL_CLAMP} title={text || undefined}>
+              {text}
+            </span>
+          </td>
+        );
+      })}
       <td
-        className="px-4 py-3 text-sm text-gray-500 dark:text-gray-400"
+        className="whitespace-nowrap px-4 py-3 text-sm text-gray-500 dark:text-gray-400"
         title={absolute(row.submittedAt)}
       >
         {dayjs(row.submittedAt).fromNow()}

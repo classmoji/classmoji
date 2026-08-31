@@ -37,6 +37,13 @@ const FORM_SLUG = 'zz-e2e-responses';
 /** Field ids are what answers key on; fixed here so the assertions can read them. */
 const NAME_FIELD = '11111111-1111-4111-8111-111111111111';
 const SCALE_FIELD = '22222222-2222-4222-8222-222222222222';
+/**
+ * The fixture asks for an address as a QUESTION, the way a public form has to:
+ * the magic link is its entire authentication, so `identityPlan` reads the
+ * response's email out of this answer. Together with "Full name" that makes this
+ * the waitlist shape — the one whose table used to print both twice.
+ */
+const EMAIL_FIELD = '33333333-3333-4333-8333-333333333333';
 
 let formId: string | null = null;
 
@@ -77,6 +84,7 @@ test.beforeAll(async () => {
         definition_version: 1,
         fields: [
           { id: NAME_FIELD, type: 'short_text', label: 'Full name', required: true },
+          { id: EMAIL_FIELD, type: 'email', label: 'School email', required: true },
           {
             id: SCALE_FIELD,
             type: 'opinion_scale',
@@ -102,7 +110,11 @@ test.beforeAll(async () => {
       email: 'zz-e2e-applicant@example.edu',
       email_normalized: 'zz-e2e-applicant@example.edu',
       name: '=Applicant Zero',
-      answers: { [NAME_FIELD]: '=Applicant Zero', [SCALE_FIELD]: 7 },
+      answers: {
+        [NAME_FIELD]: '=Applicant Zero',
+        [EMAIL_FIELD]: 'zz-e2e-applicant@example.edu',
+        [SCALE_FIELD]: 7,
+      },
       submission_state: 'SUBMITTED',
       verified_at: new Date(),
       staff_status: 'Responded to',
@@ -126,7 +138,11 @@ test.beforeAll(async () => {
         email,
         email_normalized: email.toLowerCase(),
         name: student.user.name,
-        answers: { [NAME_FIELD]: student.user.name ?? 'Student', [SCALE_FIELD]: 4 },
+        answers: {
+          [NAME_FIELD]: student.user.name ?? 'Student',
+          [EMAIL_FIELD]: email,
+          [SCALE_FIELD]: 4,
+        },
         submission_state: 'SUBMITTED',
         verified_at: new Date(),
       },
@@ -317,6 +333,91 @@ test.describe('forms responses — owner', () => {
     ).toBeVisible();
     const after = await prisma.formResponse.findUnique({ where: { id: target!.id } });
     expect(after?.staff_status).toBe('Responded to');
+  });
+
+  test('the answer columns do not repeat the identity columns', async ({ page }) => {
+    await loginAs(page, 'owner');
+    await page.goto(responsesPath);
+
+    // A public form asks for a name and an address as QUESTIONS, and the
+    // response's Name and Email are lifted out of those two answers. Showing
+    // them again as answer columns printed the same data twice and is most of
+    // why this table outgrew its container.
+    // `allInnerTexts` reports the RENDERED text, which this header row
+    // uppercases in CSS — hence the comparison in upper case.
+    const headings = (await page.locator('table thead th').allInnerTexts()).map(heading =>
+      heading.trim()
+    );
+
+    // The whole header row, exactly: the two identity columns, the form's one
+    // remaining question, and the triage columns. Asserting the WHOLE list
+    // rather than a couple of absences is what would catch a future duplicate
+    // arriving under a label nobody thought to exclude.
+    expect(headings).toEqual([
+      '',
+      'NAME',
+      'EMAIL',
+      'FAMILIARITY',
+      'SUBMITTED',
+      'STATUS',
+      'NOTE',
+      '',
+    ]);
+    expect(headings).not.toContain('FULL NAME');
+    expect(headings).not.toContain('SCHOOL EMAIL');
+
+    // Not merely absent from the header — the address appears once per row, in
+    // the Email column, rather than in two cells of the same row.
+    const applicantRow = page.locator('tr', { hasText: 'zz-e2e-applicant@example.edu' });
+    await expect(
+      applicantRow.locator('td', { hasText: 'zz-e2e-applicant@example.edu' })
+    ).toHaveCount(1);
+  });
+
+  test('the status suggestions escape the table’s scroll container on the last row', async ({
+    page,
+  }) => {
+    await loginAs(page, 'owner');
+    // Short on purpose: the last row sits near the bottom edge, which is the
+    // case in the bug report — the list had nowhere to go and was sliced off by
+    // the table's own `overflow-x-auto` (a scroll container clips in BOTH axes).
+    await page.setViewportSize({ width: 1024, height: 560 });
+    await page.goto(responsesPath);
+
+    const lastRow = page.locator('tbody tr').last();
+    await lastRow
+      .getByRole('button', { name: /^(Set a status|Status: )/ })
+      .click();
+
+    const popover = page.locator('[data-status-suggestions]');
+    await expect(popover).toBeVisible();
+
+    const escaped = await popover.evaluate(node => {
+      const rect = node.getBoundingClientRect();
+      return {
+        // Portalled out of the clipping ancestor entirely, not merely painted
+        // above it — `z-index` orders painting; this is clipping.
+        insideScrollContainer: Boolean(node.closest('.overflow-x-auto')),
+        fullyVisible:
+          rect.top >= 0 &&
+          rect.left >= 0 &&
+          rect.bottom <= window.innerHeight &&
+          rect.right <= window.innerWidth,
+        height: rect.height,
+      };
+    });
+    expect(escaped.insideScrollContainer).toBe(false);
+    expect(escaped.fullyVisible).toBe(true);
+    expect(escaped.height).toBeGreaterThan(0);
+
+    // And still commits: a portal that could not be clicked through would be a
+    // different bug wearing the same screenshot.
+    const suggestion = page.locator('[data-status-suggestion="Responded to"]');
+    await expect(suggestion).toBeVisible();
+    await suggestion.click();
+    await expect(
+      lastRow.getByRole('button', { name: 'Status: Responded to. Change it.' })
+    ).toBeVisible();
   });
 
   test('the export honours a selection', async ({ page }) => {
