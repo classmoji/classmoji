@@ -427,15 +427,21 @@ describe.skipIf(!RUN)('forms services (integration)', () => {
           revisionId,
         });
 
-      await submit();
+      const first = await submit();
       const second = await submit();
       expect(second.mode).toBe('existing');
-      await submit();
+      // Read from the constant rather than hard-coded: the budget moved when
+      // the mail moved to blur time, and a test that pins the number would have
+      // to be edited every time the policy is retuned — which is precisely when
+      // you want it still asserting the SHAPE.
+      for (let n = 2; n < responseService.MAGIC_TOKEN_MAX_PER_WINDOW; n++) await submit();
       expect(await codeOf(submit())).toBe(responseService.MAGIC_LINK_COOLDOWN);
 
       // The refused send must not have left a token behind.
-      const responseId = second.responseId;
-      expect(await prisma.formMagicToken.count({ where: { response_id: responseId } })).toBe(3);
+      expect(first.responseId).toBe(second.responseId);
+      expect(await prisma.formMagicToken.count({ where: { response_id: second.responseId } })).toBe(
+        responseService.MAGIC_TOKEN_MAX_PER_WINDOW
+      );
     });
 
     it('a second begin for the same email opens the SAME row and keeps its answers', async () => {
@@ -640,8 +646,8 @@ describe.skipIf(!RUN)('forms services (integration)', () => {
       const rows = await prisma.formResponse.findMany({ where: { form_id: formId } });
       expect(rows).toHaveLength(1);
 
-      // The row-lock serializes them, so the cooldown is exact too: three links
-      // are sent, the rest are refused.
+      // The row-lock serializes them, so the cooldown is exact too: the window's
+      // budget is spent, and the rest are refused.
       const fulfilled = outcomes.filter(outcome => outcome.status === 'fulfilled');
       expect(fulfilled).toHaveLength(responseService.MAGIC_TOKEN_MAX_PER_WINDOW);
       for (const outcome of outcomes) {
@@ -651,7 +657,9 @@ describe.skipIf(!RUN)('forms services (integration)', () => {
           );
         }
       }
-      expect(await prisma.formMagicToken.count({ where: { response_id: rows[0].id } })).toBe(3);
+      expect(await prisma.formMagicToken.count({ where: { response_id: rows[0].id } })).toBe(
+        responseService.MAGIC_TOKEN_MAX_PER_WINDOW
+      );
     });
 
     it('the partial unique index refuses a second row for one classroom user', async () => {
@@ -1114,6 +1122,735 @@ describe.skipIf(!RUN)('forms services (integration)', () => {
           revisionId,
         })
       ).resolves.toMatchObject({ mode: 'new' });
+    });
+  });
+
+  // ── Verifying the ADDRESS early ──────────────────────────────────────────
+
+  describe('early address verification', () => {
+    /** The raw token inside a composed link mail. */
+    const tokenIn = (result: {
+      emails: Array<{ payload: { template: { variables: Record<string, string | number> } } }>;
+    }): string =>
+      new URL(String(result.emails[0].payload.template.variables.VERIFY_URL)).searchParams.get(
+        'token'
+      )!;
+
+    const rowFor = async (formId: string, email: string) =>
+      prisma.formResponse.findFirstOrThrow({
+        where: { form_id: formId, email_normalized: email.toLowerCase() },
+      });
+
+    it('typing an address stores a placeholder and mails a link', async () => {
+      const { formId, revisionId } = await makeOpenForm();
+      const email = `early-${suite}@example.test`;
+
+      const result = await responseService.beginAddressVerification({
+        formId,
+        email,
+        name: 'Maya',
+        revisionId,
+      });
+
+      expect(result.sent).toBe(true);
+      expect(result.emails).toHaveLength(1);
+      expect(result.emails[0].payload.template.id).toBe('form-verify-link');
+      expect(result.emails[0].payload.to).toBe(email);
+
+      const row = await rowFor(formId, email);
+      // A slot held, and nothing else: no answers, nothing verified, nothing
+      // visible to the cap.
+      expect(row.submission_state).toBe('PENDING_VERIFICATION');
+      expect(row.answers).toEqual({});
+      expect(row.verified_at).toBeNull();
+      expect(await prisma.formMagicToken.count({ where: { response_id: row.id } })).toBe(1);
+    });
+
+    it('the submit that follows fills the placeholder in and takes its position then', async () => {
+      const { formId, revisionId } = await makeOpenForm();
+      const fieldId = await nameFieldId(revisionId);
+      const email = `early-fill-${suite}@example.test`;
+
+      await responseService.beginAddressVerification({ formId, email, revisionId });
+      const placeholder = await rowFor(formId, email);
+
+      await new Promise(resolve => setTimeout(resolve, 25));
+      await responseService.beginPublicSubmission({
+        formId,
+        email,
+        name: 'Maya',
+        answers: { [fieldId]: 'Maya' },
+        revisionId,
+      });
+
+      // ONE row — the placeholder, filled in. A second would mean the address
+      // slot had been lost, and the person would hold two half-responses.
+      const rows = await prisma.formResponse.findMany({ where: { form_id: formId } });
+      expect(rows).toHaveLength(1);
+      expect(rows[0].id).toBe(placeholder.id);
+      expect(rows[0].answers).toEqual({ [fieldId]: 'Maya' });
+      // The FIFO position is the SUBMISSION, not the moment an address was
+      // typed — otherwise opening a form early would buy a place in the queue.
+      expect(rows[0].submitted_at.getTime()).toBeGreaterThan(placeholder.submitted_at.getTime());
+    });
+
+    it('answers already on an unverified row are never overwritten', async () => {
+      const { formId, revisionId } = await makeOpenForm();
+      const fieldId = await nameFieldId(revisionId);
+      const email = `early-vandal-${suite}@example.test`;
+
+      await responseService.beginPublicSubmission({
+        formId,
+        email,
+        answers: { [fieldId]: 'The real applicant' },
+        revisionId,
+      });
+      // Anyone can type anyone's address. The worst they may achieve is mailing
+      // that person a link — never replacing what they wrote.
+      await responseService.beginPublicSubmission({
+        formId,
+        email,
+        answers: { [fieldId]: 'Vandalism' },
+        revisionId,
+      });
+
+      expect((await rowFor(formId, email)).answers).toEqual({ [fieldId]: 'The real applicant' });
+    });
+
+    it('an address that already responded is not mailed — unless it asks', async () => {
+      const { formId, revisionId } = await makeOpenForm();
+      const fieldId = await nameFieldId(revisionId);
+      const email = `early-done-${suite}@example.test`;
+
+      const begun = await responseService.beginPublicSubmission({
+        formId,
+        email,
+        answers: { [fieldId]: 'Maya' },
+        revisionId,
+      });
+      await responseService.confirmSubmission(begun.rawToken);
+
+      const quiet = await responseService.beginAddressVerification({ formId, email, revisionId });
+      expect(quiet.sent).toBe(false);
+      expect(quiet.emails).toHaveLength(0);
+
+      // …and the resend button, which is the person themselves asking.
+      const asked = await responseService.beginAddressVerification({
+        formId,
+        email,
+        revisionId,
+        force: true,
+      });
+      expect(asked.sent).toBe(true);
+      expect(asked.emails).toHaveLength(1);
+
+      // Neither call touched the stored answers.
+      expect((await rowFor(formId, email)).answers).toEqual({ [fieldId]: 'Maya' });
+    });
+
+    it('opening the link before submitting verifies the address and does not spend it', async () => {
+      const { formId, revisionId } = await makeOpenForm();
+      const email = `early-open-${suite}@example.test`;
+
+      const sent = await responseService.beginAddressVerification({ formId, email, revisionId });
+      const rawToken = tokenIn(sent);
+
+      const first = await responseService.verifyAddressByToken(rawToken);
+      expect(first.verifiedAt).toBeInstanceOf(Date);
+
+      // Idempotent, and NOT consumed — a mail scanner opening the link ahead of
+      // the human must not leave them holding a spent one.
+      const again = await responseService.verifyAddressByToken(rawToken);
+      expect(again.verifiedAt.getTime()).toBe(first.verifiedAt.getTime());
+      const after = await prisma.formMagicToken.findUniqueOrThrow({
+        where: { token_hash: responseService.hashToken(rawToken) },
+      });
+      expect(after.used_at).toBeNull();
+
+      // Still not a submission: verified, but holding no answers and no slot.
+      const verified = await rowFor(formId, email);
+      expect(verified.submission_state).toBe('PENDING_VERIFICATION');
+      expect(verified.verified_at).not.toBeNull();
+
+      // Coming back to the form and tabbing past the address again sends
+      // nothing: there is nothing left to prove, and the browser already holds
+      // the link. Noise for the recipient, and a wasted slice of the cooldown.
+      const again2 = await responseService.beginAddressVerification({
+        formId,
+        email,
+        revisionId,
+      });
+      expect(again2.sent).toBe(false);
+      expect(again2.emails).toHaveLength(0);
+    });
+
+    it('confirming a placeholder is refused rather than filed as an empty response', async () => {
+      const { formId, revisionId } = await makeOpenForm();
+      const email = `early-empty-${suite}@example.test`;
+
+      const sent = await responseService.beginAddressVerification({ formId, email, revisionId });
+
+      expect(await codeOf(responseService.confirmSubmission(tokenIn(sent)))).toBe(
+        'FORM_NOT_SUBMITTED_YET'
+      );
+      expect((await rowFor(formId, email)).submission_state).toBe('PENDING_VERIFICATION');
+    });
+
+    // ── The binding ────────────────────────────────────────────────────────
+
+    describe('one-round-trip submit', () => {
+      /** A form, an address verified early, and the raw token that proved it. */
+      const verifiedSetup = async (label: string) => {
+        const { formId, revisionId } = await makeOpenForm();
+        const fieldId = await nameFieldId(revisionId);
+        const email = `bound-${label}-${suite}@example.test`;
+        const sent = await responseService.beginAddressVerification({ formId, email, revisionId });
+        const rawToken = tokenIn(sent);
+        await responseService.verifyAddressByToken(rawToken);
+        return { formId, revisionId, fieldId, email, rawToken };
+      };
+
+      it('records the response and spends the link', async () => {
+        const { formId, revisionId, fieldId, email, rawToken } = await verifiedSetup('ok');
+
+        const response = await responseService.submitVerifiedPublic({
+          rawToken,
+          formId,
+          email,
+          name: 'Maya',
+          answers: { [fieldId]: 'Maya' },
+          revisionId,
+        });
+
+        expect(response.submission_state).toBe('SUBMITTED');
+        expect(response.verified_at).not.toBeNull();
+        expect(response.answers).toEqual({ [fieldId]: 'Maya' });
+
+        const token = await prisma.formMagicToken.findUniqueOrThrow({
+          where: { token_hash: responseService.hashToken(rawToken) },
+        });
+        expect(token.used_at).not.toBeNull();
+      });
+
+      /**
+       * THE BINDING.
+       *
+       * Verification is a property of the (form, address) pair, and the row is
+       * found FROM THE TOKEN. So a caller holding a perfectly good token for
+       * one address cannot submit under another: the addresses are compared,
+       * they differ, and the request falls back to the ordinary flow. There is
+       * no flag to forge and no id to swap — this is the whole attack surface
+       * of the shortcut, and it is one string equality over server-read values.
+       */
+      it('a verified link cannot be used to submit under a different address', async () => {
+        const { formId, revisionId, fieldId, rawToken } = await verifiedSetup('other');
+
+        expect(
+          await codeOf(
+            responseService.submitVerifiedPublic({
+              rawToken,
+              formId,
+              email: `victim-${suite}@example.test`,
+              answers: { [fieldId]: 'Not Me' },
+              revisionId,
+            })
+          )
+        ).toBe('MAGIC_LINK_NOT_BOUND');
+
+        // Nothing was written under either address.
+        expect(
+          await prisma.formResponse.count({
+            where: { form_id: formId, submission_state: 'SUBMITTED' },
+          })
+        ).toBe(0);
+        expect(
+          await prisma.formResponse.findFirst({
+            where: { form_id: formId, email_normalized: `victim-${suite}@example.test` },
+          })
+        ).toBeNull();
+      });
+
+      it("a link for another form does not bind, whoever's it is", async () => {
+        const { rawToken } = await verifiedSetup('crossform');
+        const other = await makeOpenForm();
+        const otherField = await nameFieldId(other.revisionId);
+
+        expect(
+          await codeOf(
+            responseService.submitVerifiedPublic({
+              rawToken,
+              formId: other.formId,
+              email: `bound-crossform-${suite}@example.test`,
+              answers: { [otherField]: 'Maya' },
+              revisionId: other.revisionId,
+            })
+          )
+        ).toBe('MAGIC_LINK_NOT_BOUND');
+      });
+
+      /**
+       * TWO DEVICES, and the row gets there first.
+       *
+       * Verify the address on a phone, then submit the form from the laptop
+       * that still holds the cookie — but in between, the response is submitted
+       * and confirmed through the ordinary two-step flow. The laptop's token is
+       * still live, still bound to the same address, and the row is now
+       * SUBMITTED and counted.
+       *
+       * That is an EDIT, and the `counted` branch is the only place in this
+       * service that says so about a public one-round-trip write: the answers
+       * are replaced, the cap is not re-entered, and — the part a FIFO waitlist
+       * cares about — neither `verified_at` nor `submitted_at` moves, so
+       * changing an answer never costs somebody their place in the queue.
+       */
+      it('a live cookie on a response that got submitted elsewhere is an edit', async () => {
+        const { formId, revisionId, fieldId, email, rawToken } = await verifiedSetup('elsewhere');
+
+        // The other device: an ordinary submission, and its own fresh link.
+        const begun = await responseService.beginPublicSubmission({
+          formId,
+          email,
+          answers: { [fieldId]: 'From the phone' },
+          revisionId,
+        });
+        await responseService.confirmSubmission(begun.rawToken);
+        const counted = await prisma.formResponse.findUniqueOrThrow({
+          where: { id: begun.responseId },
+        });
+        expect(counted.submission_state).toBe('SUBMITTED');
+
+        const edited = await responseService.submitVerifiedPublic({
+          rawToken,
+          formId,
+          email,
+          answers: { [fieldId]: 'From the laptop' },
+          revisionId,
+        });
+
+        expect(edited.id).toBe(counted.id);
+        expect(edited.answers).toEqual({ [fieldId]: 'From the laptop' });
+        // The place in the queue is untouched, in both of the columns that
+        // decide it.
+        expect(edited.verified_at?.getTime()).toBe(counted.verified_at?.getTime());
+        expect(edited.submitted_at.getTime()).toBe(counted.submitted_at.getTime());
+        // Still exactly one response, still counted exactly once.
+        expect(
+          await prisma.formResponse.count({
+            where: { form_id: formId, submission_state: 'SUBMITTED', verified_at: { not: null } },
+          })
+        ).toBe(1);
+        // And the link it rode in on is spent.
+        expect(
+          (
+            await prisma.formMagicToken.findUniqueOrThrow({
+              where: { token_hash: responseService.hashToken(rawToken) },
+            })
+          ).used_at
+        ).not.toBeNull();
+      });
+
+      it('a link that was never opened does not bind', async () => {
+        const { formId, revisionId } = await makeOpenForm();
+        const fieldId = await nameFieldId(revisionId);
+        const email = `bound-unopened-${suite}@example.test`;
+        const sent = await responseService.beginAddressVerification({ formId, email, revisionId });
+
+        // Minted and mailed, but nobody clicked it — `verified_at` is null, so
+        // the shortcut is not available and the ordinary flow still applies.
+        expect(
+          await codeOf(
+            responseService.submitVerifiedPublic({
+              rawToken: tokenIn(sent),
+              formId,
+              email,
+              answers: { [fieldId]: 'Maya' },
+              revisionId,
+            })
+          )
+        ).toBe('MAGIC_LINK_NOT_BOUND');
+      });
+
+      it('a spent link does not bind a second time', async () => {
+        const { formId, revisionId, fieldId, email, rawToken } = await verifiedSetup('spent');
+        await responseService.submitVerifiedPublic({
+          rawToken,
+          formId,
+          email,
+          answers: { [fieldId]: 'Maya' },
+          revisionId,
+        });
+
+        expect(
+          await codeOf(
+            responseService.submitVerifiedPublic({
+              rawToken,
+              formId,
+              email,
+              answers: { [fieldId]: 'Changed' },
+              revisionId,
+            })
+          )
+        ).toBe('MAGIC_LINK_NOT_BOUND');
+      });
+
+      it('a verified placeholder still has to pass the cap', async () => {
+        const { formId, revisionId } = await makeOpenForm({ response_cap: 1 });
+        const fieldId = await nameFieldId(revisionId);
+
+        // Someone else fills the only slot.
+        const taken = await responseService.beginPublicSubmission({
+          formId,
+          email: `cap-taken-${suite}@example.test`,
+          answers: { [fieldId]: 'First' },
+          revisionId,
+        });
+        await responseService.confirmSubmission(taken.rawToken);
+
+        const email = `cap-late-${suite}@example.test`;
+        const sent = await responseService.beginAddressVerification({ formId, email, revisionId });
+        const rawToken = tokenIn(sent);
+        await responseService.verifyAddressByToken(rawToken);
+
+        // `verified_at` is set, and it buys nothing: the row was never counted,
+        // so this is a first entry into the cap and the cap is full.
+        expect(
+          await codeOf(
+            responseService.submitVerifiedPublic({
+              rawToken,
+              formId,
+              email,
+              answers: { [fieldId]: 'Late' },
+              revisionId,
+            })
+          )
+        ).toBe('FORM_CAP_REACHED');
+      });
+    });
+  });
+
+  // ── FIFO ─────────────────────────────────────────────────────────────────
+
+  describe('queue position', () => {
+    /**
+     * THE SLOW INBOX.
+     *
+     * Two people, one slot. The first submits at t0, the second at t1 — and the
+     * second's mail arrives first, so they confirm first. Before the
+     * reservation rule that simply handed them the slot and told the earlier
+     * person the form had filled up, which made a waitlist a race between mail
+     * servers rather than a queue.
+     */
+    it('the earlier submission holds the slot even when the later one verifies first', async () => {
+      const { formId, revisionId } = await makeOpenForm({ response_cap: 1 });
+      const fieldId = await nameFieldId(revisionId);
+
+      const early = await responseService.beginPublicSubmission({
+        formId,
+        email: `fifo-early-${suite}@example.test`,
+        answers: { [fieldId]: 'Early' },
+        revisionId,
+      });
+      await new Promise(resolve => setTimeout(resolve, 25));
+      const late = await responseService.beginPublicSubmission({
+        formId,
+        email: `fifo-late-${suite}@example.test`,
+        answers: { [fieldId]: 'Late' },
+        revisionId,
+      });
+
+      // The LATER submission gets to the link first, and is turned away —
+      // somebody who submitted before them is still inside the window.
+      expect(await codeOf(responseService.confirmSubmission(late.rawToken))).toBe(
+        'FORM_CAP_REACHED'
+      );
+
+      const { response } = await responseService.confirmSubmission(early.rawToken);
+      expect(response.submission_state).toBe('SUBMITTED');
+
+      const submitted = await prisma.formResponse.findMany({
+        where: { form_id: formId, submission_state: 'SUBMITTED' },
+      });
+      expect(submitted).toHaveLength(1);
+      expect(submitted[0].email).toBe(`fifo-early-${suite}@example.test`);
+    });
+
+    it('an unverified row stops holding a place once its window closes', async () => {
+      const { formId, revisionId } = await makeOpenForm({ response_cap: 1 });
+      const fieldId = await nameFieldId(revisionId);
+
+      const stale = await responseService.beginPublicSubmission({
+        formId,
+        email: `fifo-stale-${suite}@example.test`,
+        answers: { [fieldId]: 'Stale' },
+        revisionId,
+      });
+      await new Promise(resolve => setTimeout(resolve, 25));
+      const fresher = await responseService.beginPublicSubmission({
+        formId,
+        email: `fifo-fresher-${suite}@example.test`,
+        answers: { [fieldId]: 'Fresher' },
+        revisionId,
+      });
+
+      // Submitted three days ago and still holding a perfectly good link — the
+      // kind a reminder mints. The window is measured from the SUBMISSION, so a
+      // renewable token cannot renew a reservation forever.
+      await prisma.formResponse.update({
+        where: { id: stale.responseId },
+        data: { submitted_at: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000) },
+      });
+
+      const { response: fresherResponse } = await responseService.confirmSubmission(
+        fresher.rawToken
+      );
+      expect(fresherResponse.submission_state).toBe('SUBMITTED');
+    });
+
+    it('an unverified row whose link has expired stops holding a place', async () => {
+      const { formId, revisionId } = await makeOpenForm({ response_cap: 1 });
+      const fieldId = await nameFieldId(revisionId);
+
+      const abandoned = await responseService.beginPublicSubmission({
+        formId,
+        email: `fifo-abandoned-${suite}@example.test`,
+        answers: { [fieldId]: 'Abandoned' },
+        revisionId,
+      });
+      await new Promise(resolve => setTimeout(resolve, 25));
+      const later = await responseService.beginPublicSubmission({
+        formId,
+        email: `fifo-later-${suite}@example.test`,
+        answers: { [fieldId]: 'Later' },
+        revisionId,
+      });
+
+      // A reservation is a promise for the length of the window, not forever.
+      await prisma.formMagicToken.updateMany({
+        where: { response_id: abandoned.responseId },
+        data: { expires_at: new Date(Date.now() - 1000) },
+      });
+
+      const { response } = await responseService.confirmSubmission(later.rawToken);
+      expect(response.submission_state).toBe('SUBMITTED');
+    });
+
+    it('a placeholder nobody has submitted through reserves nothing', async () => {
+      const { formId, revisionId } = await makeOpenForm({ response_cap: 1 });
+      const fieldId = await nameFieldId(revisionId);
+
+      // Somebody typed an address into the form and walked away. It must not
+      // cost the next person the last slot.
+      await responseService.beginAddressVerification({
+        formId,
+        email: `fifo-placeholder-${suite}@example.test`,
+        revisionId,
+      });
+      await new Promise(resolve => setTimeout(resolve, 25));
+
+      const real = await responseService.beginPublicSubmission({
+        formId,
+        email: `fifo-real-${suite}@example.test`,
+        answers: { [fieldId]: 'Real' },
+        revisionId,
+      });
+      const { response } = await responseService.confirmSubmission(real.rawToken);
+      expect(response.submission_state).toBe('SUBMITTED');
+    });
+  });
+
+  // ── Reminders ────────────────────────────────────────────────────────────
+
+  describe('unverified reminders', () => {
+    /**
+     * Move a response and everything that has happened to it `ms` further into
+     * the past, as if the sweep were running that much later.
+     *
+     * RELATIVE, not absolute, and that is the whole point: the idempotence rule
+     * compares a token's age against the response's, so stamping them all with
+     * one timestamp would collapse "the reminder we already sent" onto "the
+     * moment they submitted" and make every stage look unserved again. Time
+     * passing moves everything together.
+     */
+    const age = async (responseId: string, ms: number) => {
+      const row = await prisma.formResponse.findUniqueOrThrow({ where: { id: responseId } });
+      await prisma.formResponse.update({
+        where: { id: responseId },
+        data: {
+          submitted_at: new Date(row.submitted_at.getTime() - ms),
+          created_at: new Date(row.created_at.getTime() - ms),
+        },
+      });
+      for (const token of await prisma.formMagicToken.findMany({
+        where: { response_id: responseId },
+      })) {
+        await prisma.formMagicToken.update({
+          where: { id: token.id },
+          data: {
+            created_at: new Date(token.created_at.getTime() - ms),
+            expires_at: new Date(token.expires_at.getTime() - ms),
+          },
+        });
+      }
+    };
+
+    const SIX_HOURS = 6 * 60 * 60 * 1000;
+    const ONE_DAY = 24 * 60 * 60 * 1000;
+
+    /** Only this suite's rows — the sweep is global by design. */
+    const mine = (result: {
+      emails: Array<{ payload: { to: string; template: { id: string } } }>;
+    }) => result.emails.filter(email => email.payload.to.includes(suite));
+
+    it('nudges a six-hour-old unverified submission exactly once', async () => {
+      const { formId, revisionId } = await makeOpenForm();
+      const fieldId = await nameFieldId(revisionId);
+      const begun = await responseService.beginPublicSubmission({
+        formId,
+        email: `remind-six-${suite}@example.test`,
+        answers: { [fieldId]: 'Maya' },
+        revisionId,
+      });
+      await age(begun.responseId, SIX_HOURS + 60_000);
+
+      const first = mine(await responseService.remindUnverified());
+      expect(first).toHaveLength(1);
+      expect(first[0].payload.template.id).toBe('form-verify-reminder');
+      expect(first[0].payload.to).toBe(`remind-six-${suite}@example.test`);
+
+      // IDEMPOTENT. The token the first pass minted is dated after the stage
+      // boundary, which IS the record that the stage has been served — so a
+      // second run finds nothing due, with no column tracking it.
+      expect(mine(await responseService.remindUnverified())).toHaveLength(0);
+    });
+
+    it('nudges again at twenty-four hours, and then stops', async () => {
+      const { formId, revisionId } = await makeOpenForm();
+      const fieldId = await nameFieldId(revisionId);
+      const begun = await responseService.beginPublicSubmission({
+        formId,
+        email: `remind-day-${suite}@example.test`,
+        answers: { [fieldId]: 'Maya' },
+        revisionId,
+      });
+
+      await age(begun.responseId, SIX_HOURS + 60_000);
+      expect(mine(await responseService.remindUnverified())).toHaveLength(1);
+
+      // Another day goes by. The six-hour nudge ages with everything else, so
+      // it no longer sits after the twenty-four-hour boundary — which is what
+      // makes the second stage due exactly once.
+      await age(begun.responseId, ONE_DAY);
+      expect(mine(await responseService.remindUnverified())).toHaveLength(1);
+      expect(mine(await responseService.remindUnverified())).toHaveLength(0);
+
+      // No third stage. Somebody who has ignored two mails has answered.
+      await age(begun.responseId, 3 * ONE_DAY);
+      expect(mine(await responseService.remindUnverified())).toHaveLength(0);
+    });
+
+    it('leaves alone what is not waiting on a click', async () => {
+      const { formId, revisionId } = await makeOpenForm();
+      const fieldId = await nameFieldId(revisionId);
+
+      // Too young.
+      await responseService.beginPublicSubmission({
+        formId,
+        email: `remind-fresh-${suite}@example.test`,
+        answers: { [fieldId]: 'Fresh' },
+        revisionId,
+      });
+
+      // Already verified — there is nothing left for them to do.
+      const done = await responseService.beginPublicSubmission({
+        formId,
+        email: `remind-done-${suite}@example.test`,
+        answers: { [fieldId]: 'Done' },
+        revisionId,
+      });
+      await responseService.confirmSubmission(done.rawToken);
+      await age(done.responseId, 2 * ONE_DAY);
+
+      // An address somebody typed and abandoned. No entry, so "finish your
+      // entry" is not a sentence we get to send — and the address may not even
+      // belong to whoever typed it.
+      const placeholder = await responseService.beginAddressVerification({
+        formId,
+        email: `remind-placeholder-${suite}@example.test`,
+        revisionId,
+      });
+      expect(placeholder.sent).toBe(true);
+      const placeholderRow = await prisma.formResponse.findFirstOrThrow({
+        where: { form_id: formId, email_normalized: `remind-placeholder-${suite}@example.test` },
+      });
+      await age(placeholderRow.id, 2 * ONE_DAY);
+
+      expect(mine(await responseService.remindUnverified())).toHaveLength(0);
+    });
+
+    it('says nothing about a form that has closed', async () => {
+      const { formId, revisionId } = await makeOpenForm();
+      const fieldId = await nameFieldId(revisionId);
+      const begun = await responseService.beginPublicSubmission({
+        formId,
+        email: `remind-closed-${suite}@example.test`,
+        answers: { [fieldId]: 'Maya' },
+        revisionId,
+      });
+      await age(begun.responseId, ONE_DAY + 60_000);
+      await prisma.form.update({ where: { id: formId }, data: { status: 'CLOSED' } });
+
+      expect(mine(await responseService.remindUnverified())).toHaveLength(0);
+    });
+  });
+
+  // ── Retention ────────────────────────────────────────────────────────────
+
+  describe('unverified rows are not deleted quietly', () => {
+    it('an unverified row outlives its link by weeks, and a staff label keeps it', async () => {
+      const { formId, revisionId } = await makeOpenForm();
+      const fieldId = await nameFieldId(revisionId);
+
+      const threeDays = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000);
+      const forever = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000);
+
+      const recent = await responseService.beginPublicSubmission({
+        formId,
+        email: `retain-recent-${suite}@example.test`,
+        answers: { [fieldId]: 'Recent' },
+        revisionId,
+      });
+      await prisma.formResponse.update({
+        where: { id: recent.responseId },
+        data: { created_at: threeDays },
+      });
+
+      const labelled = await responseService.beginPublicSubmission({
+        formId,
+        email: `retain-labelled-${suite}@example.test`,
+        answers: { [fieldId]: 'Labelled' },
+        revisionId,
+      });
+      await prisma.formResponse.update({
+        where: { id: labelled.responseId },
+        data: { created_at: forever },
+      });
+      await responseService.updateStaff({
+        responseId: labelled.responseId,
+        staff_status: 'chased',
+      });
+
+      await responseService.expireStale();
+
+      const survivors = (
+        await prisma.formResponse.findMany({ where: { form_id: formId }, select: { id: true } })
+      ).map(row => row.id);
+
+      // Three days old, its link long dead — and still on the responses page,
+      // because "somebody tried and did not finish" is information the
+      // instructor is entitled to. It used to be deleted at 48 hours.
+      expect(survivors).toContain(recent.responseId);
+      // Ninety days old, and kept anyway: a staff member wrote something on it.
+      expect(survivors).toContain(labelled.responseId);
     });
   });
 

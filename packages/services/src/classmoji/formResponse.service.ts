@@ -72,6 +72,21 @@ export const FORM_TEAM_CHANGED = 'FORM_TEAM_CHANGED';
  */
 export const FORM_TEAM_UNRESOLVED = 'FORM_TEAM_UNRESOLVED';
 
+/**
+ * A confirm arrived for a row that holds an address and no answers — the state
+ * `beginAddressVerification` leaves behind. There is nothing to confirm yet;
+ * the route says so and points back at the form.
+ */
+export const FORM_NOT_SUBMITTED_YET = 'FORM_NOT_SUBMITTED_YET';
+/**
+ * The credential offered for a one-round-trip submit does not bind to the
+ * address being submitted (missing, spent, expired, another form's, another
+ * address's, or never verified). NOT AN ERROR the filler ever sees: the route
+ * falls back to the ordinary check-your-email flow, which is why the early
+ * send is an optimisation and never a requirement.
+ */
+export const MAGIC_LINK_NOT_BOUND = 'MAGIC_LINK_NOT_BOUND';
+
 export const MAGIC_LINK_INVALID = 'MAGIC_LINK_INVALID';
 export const MAGIC_LINK_EXPIRED = 'MAGIC_LINK_EXPIRED';
 export const MAGIC_LINK_USED = 'MAGIC_LINK_USED';
@@ -84,13 +99,64 @@ const serviceError = (code: string, message: string) => Object.assign(new Error(
 
 /** How long a verify/edit link stays usable. */
 export const MAGIC_TOKEN_TTL_MS = 48 * 60 * 60 * 1000;
-/** Links per response inside the rolling window. */
-export const MAGIC_TOKEN_MAX_PER_WINDOW = 3;
+/**
+ * Links per response inside the rolling window.
+ *
+ * Raised from three when the verification mail moved to blur time. An ordinary
+ * honest interaction now costs TWO links, not one — the address is typed, and
+ * then the form is submitted — so a budget of three refused somebody their
+ * second attempt inside the hour, which is exactly the person a "we could not
+ * find your response" support thread is about. Five keeps roughly two full
+ * attempts plus a resend, and keeps the ceiling on what one mailbox can be sent
+ * low enough to stay a ceiling.
+ *
+ * The per-CLIENT limit in the pages app is the primary defence against a mail
+ * relay; this one bounds what can be aimed at a single mailbox.
+ */
+export const MAGIC_TOKEN_MAX_PER_WINDOW = 5;
 export const MAGIC_TOKEN_WINDOW_MS = 60 * 60 * 1000;
-/** Unverified rows are swept at the same age as the link that would verify them. */
-export const PENDING_TTL_MS = MAGIC_TOKEN_TTL_MS;
 /** Abandoned server-side partials are swept after this long. */
 export const DRAFT_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+/**
+ * How long an unverified row survives.
+ *
+ * ── Why this is no longer the link's TTL ───────────────────────────────────
+ * It used to be 48h, exactly as long as the link that would verify it, on the
+ * reasoning that a row nobody can verify any more is only holding a
+ * (form_id, email_normalized) slot hostage. That reasoning had a cost nobody
+ * was paying attention to: the instructor never learned that somebody tried.
+ * A waitlist that quietly deletes half its applicants is worse than one that
+ * shows them as unverified, and "did anybody bounce off the confirmation
+ * step?" is a question staff can only answer if the rows are still there.
+ *
+ * Holding the slot is no longer the problem it was, either: a later submission
+ * from the same address REUSES the row and mints a fresh link (see
+ * `beginPublicSubmission`), so an abandoned row does not lock anybody out.
+ *
+ * Thirty days matches the anonymous-draft TTL — one retention story for
+ * "personal data typed by someone who never finished", rather than two.
+ */
+export const PENDING_TTL_MS = DRAFT_TTL_MS;
+
+/**
+ * When a still-unverified response is nudged, measured from its first
+ * submission.
+ *
+ * Six hours catches the overwhelmingly common case — "I meant to click that
+ * later" — inside the same day, while a full 42 hours of link life remain.
+ * Twenty-four hours is the last honest moment to ask: a fresh link minted then
+ * outlives the reminder by another two days, and a third nudge on a form
+ * somebody has now ignored twice is spam wearing a helpful hat.
+ *
+ * IDEMPOTENCE COMES FROM THE TOKEN TABLE, not from a column. A stage is due
+ * only when NO token for the response was created after `submitted_at + stage`
+ * — and sending mints one, which is precisely the record that the stage has
+ * been served. Running the sweep twice in a row therefore mails once, and the
+ * property survives a process restart, a re-run by hand, and a schedule that
+ * fires late. A resend the person asked for suppresses the next nudge too,
+ * which is correct: they have a fresh link in their inbox already.
+ */
+export const REMINDER_STAGES_MS = [6 * 60 * 60 * 1000, 24 * 60 * 60 * 1000] as const;
 
 /**
  * The raw token is returned to the caller ONCE and never stored; only its
@@ -157,30 +223,124 @@ function assertAccepting(form: LockedFormRow, now: Date): void {
   }
 }
 
+/** True for `{}` — a row that holds an address and no answers. */
+const answersAreEmpty = (answers: unknown): boolean =>
+  !answers || typeof answers !== 'object' || Object.keys(answers as object).length === 0;
+
 /**
- * Refuse if the cap is already full. Counts VERIFIED rows only — a
- * PENDING_VERIFICATION row holds a uniqueness slot but no place in the queue,
- * so an unverified submission never displaces a real one, and the 48h sweep
- * releases it. Must be called under the form's row lock.
+ * Refuse if the cap is already full — with the queue ordered by FIRST
+ * SUBMISSION, not by who read their email fastest.
+ *
+ * ── What is counted ────────────────────────────────────────────────────────
+ * Two classes of row, and the second is the whole point of this function:
+ *
+ *  1. VERIFIED submissions. Unconditional: they are in, and they are in
+ *     wherever they sit in the order.
+ *  2. UNVERIFIED submissions that came in BEFORE this one and can still be
+ *     verified — a real answer set (not an address placeholder) holding a
+ *     token that is neither spent nor expired.
+ *
+ * Class 2 is a RESERVATION, and it is what stops a slow inbox from costing
+ * somebody their place. Before this, the cap counted verified rows only, so
+ * two people submitting one second apart against the last slot were ranked by
+ * how quickly their mail server delivered: the later submission that verified
+ * first took the place, and the earlier one was told the form had filled up.
+ *
+ * ── Why this does not make an unverified row "close" a form ────────────────
+ * The reservation is consulted ONLY here, on the transition into the cap. The
+ * fill loader and `beginPublicSubmission` still count verified rows alone, so
+ * a pending row never turns a form away at the door — it only loses a tie it
+ * was already winning on time. That asymmetry is deliberate: a reservation is
+ * a promise to the person who submitted first, not a lock on the form.
+ *
+ * ── Why it stays exact under concurrency ───────────────────────────────────
+ * Every writer holds the form's row lock (see `lockForm`), so these counts are
+ * taken in a serialized order. N simultaneous confirmations against a cap of K
+ * admit exactly K — and now it is always the K earliest submissions, whatever
+ * order the confirmations arrive in, because each one measures itself against
+ * everything that came before it rather than against whatever happens to be
+ * verified at that instant.
+ *
+ * `before` is the submitted_at this response WILL HOLD when the transaction
+ * commits — for a row whose placeholder timestamp is being bumped to now, that
+ * is `now`, not the value on disk. Passing the stale one would let a browser
+ * that merely typed an address hours ago jump the queue.
+ *
+ * Omitting `before` (the classroom path, where a submission verifies in the
+ * same transaction) counts verified rows only, which is the behaviour that
+ * path has always had.
  */
 async function assertCapAvailable(
   tx: Prisma.TransactionClient,
   form: LockedFormRow,
-  excludeResponseId?: string
+  { excludeResponseId, before, now }: { excludeResponseId?: string; before?: Date; now?: Date } = {}
 ): Promise<void> {
   if (form.response_cap === null) return;
-  const verified = await tx.formResponse.count({
-    where: {
-      form_id: form.id,
-      submission_state: 'SUBMITTED',
-      verified_at: { not: null },
-      ...(excludeResponseId ? { id: { not: excludeResponseId } } : {}),
-    },
-  });
-  if (verified >= form.response_cap) {
+
+  // Sentinels rather than nullable casts: no row has an empty-string id, and
+  // nothing was submitted before the epoch, so "absent" is expressed as a
+  // predicate that is simply never true. One query, no dynamic SQL.
+  const exclude = excludeResponseId ?? '';
+  const cutoff = before ?? new Date(0);
+  const at = now ?? new Date();
+  /**
+   * The outer bound on how long a place can be held.
+   *
+   * A live token is the natural test for "can still verify", and on its own it
+   * is not enough: the reminder pass mints a FRESH link at six hours and again
+   * at twenty-four, and the resend button mints one whenever it is pressed, so
+   * "holds a live token" could be renewed indefinitely and a slot held for
+   * weeks by somebody who never verifies. The window is therefore measured from
+   * the SUBMISSION — one link's life, whatever links have been sent since —
+   * which is exactly the promise the design makes: verify within the window and
+   * you keep the place you submitted for.
+   */
+  const windowOpened = new Date(at.getTime() - MAGIC_TOKEN_TTL_MS);
+
+  const rows = await tx.$queryRaw<Array<{ count: bigint }>>`
+    SELECT COUNT(*) AS count
+    FROM form_responses r
+    WHERE r.form_id = ${form.id}
+      AND r.id <> ${exclude}
+      AND (
+        (r.submission_state = 'SUBMITTED' AND r.verified_at IS NOT NULL)
+        OR (
+          r.submission_state = 'PENDING_VERIFICATION'
+          AND r.submitted_at < ${cutoff}
+          AND r.submitted_at > ${windowOpened}
+          AND r.answers <> '{}'::jsonb
+          AND EXISTS (
+            SELECT 1
+            FROM form_magic_tokens t
+            WHERE t.response_id = r.id
+              AND t.used_at IS NULL
+              AND t.expires_at > ${at}
+          )
+        )
+      )
+  `;
+
+  const taken = Number(rows[0]?.count ?? 0);
+  if (taken >= form.response_cap) {
     throw serviceError(FORM_CAP_REACHED, 'This form has reached its response limit.');
   }
 }
+
+/**
+ * Is this row already inside the cap?
+ *
+ * NOT `verified_at !== null`, which is the reading that used to be safe and no
+ * longer is. Since the address can be verified BEFORE the answers are
+ * submitted, a row can carry `verified_at` while still being a
+ * PENDING_VERIFICATION placeholder that has never taken a slot — and treating
+ * that as "already counted" would let it walk past both the cap and the
+ * open/closed check on its way in. Counted means SUBMITTED and verified,
+ * which is exactly what `assertCapAvailable` counts.
+ */
+const alreadyCounted = (response: {
+  submission_state: SubmissionState;
+  verified_at: Date | null;
+}): boolean => response.submission_state === 'SUBMITTED' && response.verified_at !== null;
 
 /** The revision a submission claims to have rendered against must still be current. */
 function assertRevisionCurrent(form: LockedFormRow, revisionId: string): void {
@@ -209,6 +369,7 @@ async function validateAgainstRevision({
 }: {
   formId: string;
   revisionId: string;
+  /** `undefined` means "no answers to check" — the address-verification path. */
   answers: unknown;
   expectedAccess: 'PUBLIC' | 'CLASSROOM';
 }) {
@@ -237,7 +398,8 @@ async function validateAgainstRevision({
     throw serviceError(FORM_REVISION_STALE, 'Unknown form revision.');
   }
 
-  const validated = parseAnswers(fieldsOf(revision.fields), answers);
+  const validated =
+    answers === undefined ? undefined : parseAnswers(fieldsOf(revision.fields), answers);
   return { form, revision, validated };
 }
 
@@ -248,11 +410,13 @@ async function validateAgainstRevision({
  * `RosterEmail` uses. The template itself (`form-verify-link`) lands with the
  * public fill route; this shape is what the route hands to Tasks.sendEmailTask.
  */
+export type FormEmailTemplateId = 'form-verify-link' | 'form-verify-reminder';
+
 export interface FormVerifyEmail {
   payload: {
     to: string;
     template: {
-      id: 'form-verify-link';
+      id: FormEmailTemplateId;
       variables: Record<string, string | number>;
     };
   };
@@ -286,6 +450,86 @@ export function verifyUrlFor({
   rawToken: string;
 }): string {
   return `${pagesUrl()}/${classroomSlug}/forms/${formSlug}/verify?token=${rawToken}`;
+}
+
+/**
+ * Compose one link mail.
+ *
+ * Every variable here is user-authored — a form title, a classroom name, a name
+ * the filler typed about themselves — and Resend substitutes variables RAW, so
+ * they are escaped before they reach the template. Keys are UPPERCASE to match
+ * what `templates.mjs` declares.
+ */
+function composeLinkEmail({
+  to,
+  name,
+  formTitle,
+  classroomName,
+  verifyUrl,
+  template,
+}: {
+  to: string;
+  name?: string | null;
+  formTitle: string;
+  classroomName: string;
+  verifyUrl: string;
+  template: FormEmailTemplateId;
+}): FormVerifyEmail {
+  return {
+    payload: {
+      to,
+      template: {
+        id: template,
+        variables: escapeVars({
+          RECIPIENT_NAME: name || 'there',
+          FORM_TITLE: formTitle,
+          CLASSROOM_NAME: classroomName,
+          VERIFY_URL: verifyUrl,
+          EXPIRES_HOURS: MAGIC_TOKEN_TTL_MS / (60 * 60 * 1000),
+        }),
+      },
+    },
+  };
+}
+
+/**
+ * Mint a link for one response, under the per-response send cooldown.
+ *
+ * DB-backed so the limit holds across machines, and counted per RESPONSE —
+ * which is per (form, email), the unit a mail bomb aimed at one mailbox would
+ * target. Every path that can cause mail to be sent goes through here: the
+ * blur-time address verification, the submit, the resend button, and the
+ * reminder sweep. There is deliberately no way to mint a token that skips it.
+ *
+ * @throws MAGIC_LINK_COOLDOWN
+ */
+async function mintLinkFor(
+  tx: Prisma.TransactionClient,
+  responseId: string,
+  now: Date
+): Promise<string> {
+  const recentTokens = await tx.formMagicToken.count({
+    where: {
+      response_id: responseId,
+      created_at: { gt: new Date(now.getTime() - MAGIC_TOKEN_WINDOW_MS) },
+    },
+  });
+  if (recentTokens >= MAGIC_TOKEN_MAX_PER_WINDOW) {
+    throw serviceError(
+      MAGIC_LINK_COOLDOWN,
+      'Too many links requested for this address. Try again in an hour.'
+    );
+  }
+
+  const { raw, hash } = mintMagicToken();
+  await tx.formMagicToken.create({
+    data: {
+      response_id: responseId,
+      token_hash: hash,
+      expires_at: new Date(now.getTime() + MAGIC_TOKEN_TTL_MS),
+    },
+  });
+  return raw;
 }
 
 /**
@@ -328,12 +572,6 @@ export async function beginPublicSubmission({
   });
 
   const now = new Date();
-  const { raw, hash } = mintMagicToken();
-  const verifyUrl = verifyUrlFor({
-    classroomSlug: loadedForm.classroom.slug,
-    formSlug: loadedForm.slug,
-    rawToken: raw,
-  });
 
   return getPrisma().$transaction(async tx => {
     const form = await lockForm(tx, formId);
@@ -346,12 +584,13 @@ export async function beginPublicSubmission({
     // (Postgres 25P02 aborts it).
     const existing = await tx.formResponse.findFirst({
       where: { form_id: formId, user_id: null, email_normalized: emailNormalized },
-      select: { id: true },
+      select: { id: true, submission_state: true, answers: true },
     });
 
-    const response =
-      existing ??
-      (await tx.formResponse.create({
+    let responseId: string;
+
+    if (!existing) {
+      const created = await tx.formResponse.create({
         data: {
           form_id: formId,
           revision_id: revisionId,
@@ -361,58 +600,228 @@ export async function beginPublicSubmission({
           name: name ?? null,
           answers: validated as unknown as Prisma.InputJsonValue,
           submission_state: 'PENDING_VERIFICATION',
+          submitted_at: now,
         },
         select: { id: true },
-      }));
+      });
+      responseId = created.id;
+    } else {
+      responseId = existing.id;
 
-    // DB-backed so the limit holds across machines. Counted per RESPONSE, which
-    // is per (form, email) — the unit a mail bomb would target.
-    const recentTokens = await tx.formMagicToken.count({
-      where: {
-        response_id: response.id,
-        created_at: { gt: new Date(now.getTime() - MAGIC_TOKEN_WINDOW_MS) },
-      },
-    });
-    if (recentTokens >= MAGIC_TOKEN_MAX_PER_WINDOW) {
-      throw serviceError(
-        MAGIC_LINK_COOLDOWN,
-        'Too many links requested for this address. Try again in an hour.'
-      );
+      /**
+       * ── The one case where a submission may write over an existing row ────
+       *
+       * An ADDRESS PLACEHOLDER: PENDING_VERIFICATION with `{}` for answers, the
+       * row `beginAddressVerification` leaves behind when somebody types their
+       * address and the link goes out before they have finished typing. It
+       * holds an address and nothing else, so there is no one's data in it to
+       * protect — and refusing to write here would silently discard the answer
+       * set the person just submitted, which is the worst outcome available.
+       *
+       * Everything else is left exactly as it was, which is the rule that
+       * closes the impersonation hole: a SUBMITTED response, and an unverified
+       * one that already carries somebody's answers, cannot be overwritten by
+       * anyone who merely knows the address. They get a link, and only the
+       * inbox owner decides whether the stored answers change.
+       *
+       * `submitted_at` moves to now along with the answers. It is the FIFO
+       * position, and a placeholder's timestamp is when an address was typed,
+       * not when a response was made — leaving it would let somebody who opened
+       * the form at breakfast outrank a submission that actually arrived first.
+       */
+      if (
+        existing.submission_state === 'PENDING_VERIFICATION' &&
+        answersAreEmpty(existing.answers)
+      ) {
+        await tx.formResponse.update({
+          where: { id: existing.id },
+          data: {
+            revision_id: revisionId,
+            email: email.trim(),
+            name: name ?? null,
+            answers: validated as unknown as Prisma.InputJsonValue,
+            submitted_at: now,
+          },
+        });
+      }
     }
 
-    await tx.formMagicToken.create({
-      data: {
-        response_id: response.id,
-        token_hash: hash,
-        expires_at: new Date(now.getTime() + MAGIC_TOKEN_TTL_MS),
-      },
+    const raw = await mintLinkFor(tx, responseId, now);
+    const verifyUrl = verifyUrlFor({
+      classroomSlug: loadedForm.classroom.slug,
+      formSlug: loadedForm.slug,
+      rawToken: raw,
     });
 
     return {
-      responseId: response.id,
+      responseId,
       rawToken: raw,
       verifyUrl,
       mode: existing ? ('existing' as const) : ('new' as const),
       emails: [
-        {
-          payload: {
-            to: email.trim(),
-            template: {
-              id: 'form-verify-link' as const,
-              // Form titles, classroom names, and the filler's own name are all
-              // user-authored, and Resend injects variables raw — escape before
-              // they reach the template.
-              variables: escapeVars({
-                RECIPIENT_NAME: name || 'there',
-                FORM_TITLE: loadedForm.title,
-                CLASSROOM_NAME: loadedForm.classroom.name,
-                VERIFY_URL: verifyUrl,
-                EXPIRES_HOURS: MAGIC_TOKEN_TTL_MS / (60 * 60 * 1000),
-              }),
-            },
-          },
-        },
+        composeLinkEmail({
+          to: email.trim(),
+          name,
+          formTitle: loadedForm.title,
+          classroomName: loadedForm.classroom.name,
+          verifyUrl,
+          template: 'form-verify-link',
+        }),
       ],
+    };
+  });
+}
+
+// ─── Public submission: verify the ADDRESS, early ───────────────────────────
+
+export interface AddressVerificationResult {
+  /**
+   * Composed mail for the caller to send. EMPTY when nothing is to be sent —
+   * see `sent`. The caller must render the identical view either way.
+   */
+  emails: FormVerifyEmail[];
+  verifyUrl: string | null;
+  /**
+   * Whether a link was actually minted.
+   *
+   * FOR LOGGING AND TESTS ONLY. A route that rendered this would be handing
+   * anyone who can type an address a "has this person already responded?"
+   * oracle, which is the thing the whole flow is built to avoid.
+   */
+  sent: boolean;
+}
+
+/**
+ * Send the verification link when the respondent finishes typing their address,
+ * rather than after they finish the whole form.
+ *
+ * ── What changes, and what does not ────────────────────────────────────────
+ * The link has always proved one thing: that whoever holds it can read the
+ * mailbox the response is filed under. Nothing about that changes here — only
+ * WHEN it is sent. The row is stored exactly as `beginPublicSubmission` stores
+ * one (PENDING_VERIFICATION, holding the (form_id, email_normalized) slot,
+ * invisible to the cap and the queue) with `{}` where the answers will go, and
+ * the token is minted through the same cooldown. By the time the person
+ * presses Submit, the link is already in their inbox — and if they clicked it
+ * on the way, the submit lands in one round trip instead of two.
+ *
+ * ── An address that has already responded ──────────────────────────────────
+ * No mail. Somebody typing their address into a form they filled in last week
+ * should not be mailed for it, and a stranger typing SOMEBODY ELSE'S address
+ * certainly should not be able to. They are not stuck: submitting still mails
+ * the edit link exactly as it does today, and the check-email screen's resend
+ * button is the "unless they ask" door.
+ *
+ * The RESULT IS INDISTINGUISHABLE either way — same shape, same rendered line,
+ * no timing difference worth a probe. `sent` exists for the server log and the
+ * tests; a route that branched on it would rebuild the membership oracle by
+ * hand.
+ *
+ * @throws MAGIC_LINK_COOLDOWN, FORM_NOT_OPEN, FORM_CLOSED, FORM_REVISION_STALE,
+ *   FORM_ACCESS_MISMATCH.
+ */
+export async function beginAddressVerification({
+  formId,
+  email,
+  name,
+  revisionId,
+  force = false,
+}: {
+  formId: string;
+  email: string;
+  name?: string | null;
+  revisionId: string;
+  /**
+   * Send even for an address that has already responded.
+   *
+   * The "unless they ask" door, and the ONLY caller is the check-email screen's
+   * resend button — a person who is looking at "we sent a link to this address"
+   * and telling us it did not arrive. It mints an edit link for a submitted
+   * response, which is exactly what re-submitting the form already does today,
+   * so it opens no path that was not open before. Everything that guards the
+   * unforced call still applies: origin, honeypot, the per-client ceiling, and
+   * the per-address cooldown.
+   */
+  force?: boolean;
+}): Promise<AddressVerificationResult> {
+  const emailNormalized = normalizeEmail(email);
+  const { form: loadedForm } = await validateAgainstRevision({
+    formId,
+    revisionId,
+    // Nothing to validate: this path exists precisely because the answers do
+    // not exist yet. The submit still validates the whole set against the
+    // revision it names.
+    answers: undefined,
+    expectedAccess: 'PUBLIC',
+  });
+
+  const now = new Date();
+
+  return getPrisma().$transaction(async tx => {
+    const form = await lockForm(tx, formId);
+    assertAccepting(form, now);
+    assertRevisionCurrent(form, revisionId);
+
+    const existing = await tx.formResponse.findFirst({
+      where: { form_id: formId, user_id: null, email_normalized: emailNormalized },
+      select: { id: true, submission_state: true, verified_at: true },
+    });
+
+    /**
+     * Already verified — nothing to prove, so nothing to send.
+     *
+     * Two rows land here and both are right to skip. One has already responded:
+     * mailing somebody because a stranger typed their address is the behaviour
+     * this whole flow exists to avoid. The other verified their address earlier
+     * in this very session and has come back to the form; a second identical
+     * link is noise, and the browser has the first one anyway.
+     *
+     * `force` is the check-email screen's resend button, which is the person
+     * themselves asking.
+     */
+    if (existing && existing.verified_at !== null && !force) {
+      return { emails: [], verifyUrl: null, sent: false };
+    }
+
+    const responseId =
+      existing?.id ??
+      (
+        await tx.formResponse.create({
+          data: {
+            form_id: formId,
+            revision_id: revisionId,
+            user_id: null,
+            email: email.trim(),
+            email_normalized: emailNormalized,
+            name: name ?? null,
+            answers: {},
+            submission_state: 'PENDING_VERIFICATION',
+            submitted_at: now,
+          },
+          select: { id: true },
+        })
+      ).id;
+
+    const raw = await mintLinkFor(tx, responseId, now);
+    const verifyUrl = verifyUrlFor({
+      classroomSlug: loadedForm.classroom.slug,
+      formSlug: loadedForm.slug,
+      rawToken: raw,
+    });
+
+    return {
+      emails: [
+        composeLinkEmail({
+          to: email.trim(),
+          name,
+          formTitle: loadedForm.title,
+          classroomName: loadedForm.classroom.name,
+          verifyUrl,
+          template: 'form-verify-link',
+        }),
+      ],
+      verifyUrl,
+      sent: true,
     };
   });
 }
@@ -462,8 +871,21 @@ export async function verifyMagicToken(rawToken: string) {
   }
 
   const { form, revision, ...response } = token.response;
-  return { tokenId: token.id, response, form, revision };
+  return { tokenId: token.id, expiresAt: token.expires_at, response, form, revision };
 }
+
+/**
+ * Has this response been submitted, or is it only an address waiting for one?
+ *
+ * The distinction the verify page turns on: a link opened before the form was
+ * finished must show "your email is verified, go and finish" — never an empty
+ * answer set dressed up as a submission.
+ */
+export const isAddressPlaceholder = (response: {
+  submission_state: SubmissionState;
+  answers: unknown;
+}): boolean =>
+  response.submission_state === 'PENDING_VERIFICATION' && answersAreEmpty(response.answers);
 
 /**
  * Consume a magic link and commit the response.
@@ -516,20 +938,50 @@ export async function confirmSubmission(rawToken: string, { answers }: { answers
     }
 
     const response = token.response;
-    const alreadyVerified = response.verified_at !== null;
+    const counted = alreadyCounted(response);
+
+    /**
+     * Nothing to confirm.
+     *
+     * A link minted when the ADDRESS was typed opens a row with `{}` for
+     * answers. Confirming it would file an empty response — and, worse, take a
+     * cap slot with it. The verify page renders the "go and finish" state for
+     * exactly this row rather than a Confirm button, so reaching here means a
+     * hand-made POST; it is refused with a code the route can explain.
+     */
+    if (!counted && answers === undefined && answersAreEmpty(response.answers)) {
+      throw serviceError(
+        FORM_NOT_SUBMITTED_YET,
+        'This response has no answers yet — finish the form and submit it.'
+      );
+    }
 
     // Confirming a first submission requires the form to still be accepting.
-    // Editing an already-verified response does not — a closed form should not
-    // strand someone mid-edit, and the row is already inside the cap.
-    if (!alreadyVerified) {
+    // Editing a response that is already inside the cap does not — a closed
+    // form should not strand someone mid-edit.
+    //
+    // `counted`, not `verified_at !== null`: since an address can be verified
+    // before the answers exist, a row can carry `verified_at` and still never
+    // have taken a slot. See `alreadyCounted`.
+    if (!counted) {
       assertAccepting(lockedForm, now);
-      await assertCapAvailable(tx, lockedForm, response.id);
+      await assertCapAvailable(tx, lockedForm, {
+        excludeResponseId: response.id,
+        before: response.submitted_at,
+        now,
+      });
     }
 
     const data: Prisma.FormResponseUncheckedUpdateInput = {
       submission_state: 'SUBMITTED',
       verified_at: response.verified_at ?? now,
     };
+
+    // Answers arriving on a row that had none is a FIRST submission, whatever
+    // the row's age: its FIFO position is now, not when the address was typed.
+    if (!counted && answers !== undefined && answersAreEmpty(response.answers)) {
+      data.submitted_at = now;
+    }
 
     if (answers !== undefined) {
       const revision = await tx.formRevision.findUnique({ where: { id: response.revision_id } });
@@ -552,7 +1004,195 @@ export async function confirmSubmission(rawToken: string, { answers }: { answers
     await tx.formMagicToken.update({ where: { id: token.id }, data: { used_at: now } });
 
     const updated = await tx.formResponse.update({ where: { id: response.id }, data });
-    return { response: updated, firstVerification: !alreadyVerified };
+    return { response: updated, firstVerification: !counted };
+  });
+}
+
+/**
+ * Mark the ADDRESS behind a pre-submit link as proven, and leave the link alive.
+ *
+ * This is what clicking the emailed link does when the person has not submitted
+ * anything yet: it sets `verified_at` on a row that is still an empty
+ * placeholder, so the submit that follows can be recorded in ONE round trip
+ * instead of sending them back to their inbox a second time.
+ *
+ * ── Idempotent, and NOT a consumption ──────────────────────────────────────
+ * Corporate mail scanners and link prefetchers open links before a human does.
+ * If this burned the token, the person's own click would land on "already
+ * used"; if it were not idempotent, a reload would. So it does neither: the
+ * token stays usable, and a second call is a no-op that returns the same
+ * answer.
+ *
+ * Letting a scanner set `verified_at` grants a scanner nothing. `verified_at`
+ * on its own never admits a submission — the submit path additionally requires
+ * possession of the token itself (see `submitVerifiedPublic`), which only
+ * something that read the mailbox can have.
+ *
+ * @throws MAGIC_LINK_INVALID, MAGIC_LINK_EXPIRED, MAGIC_LINK_USED.
+ */
+export async function verifyAddressByToken(rawToken: string, now: Date = new Date()) {
+  const tokenHash = hashToken(rawToken);
+
+  const token = await getPrisma().formMagicToken.findUnique({
+    where: { token_hash: tokenHash },
+    include: { response: { select: { id: true, verified_at: true } } },
+  });
+
+  if (!token) throw serviceError(MAGIC_LINK_INVALID, 'This link is not valid.');
+  if (token.used_at) {
+    throw serviceError(MAGIC_LINK_USED, 'This link has already been used. Request a new one.');
+  }
+  if (token.expires_at.getTime() <= now.getTime()) {
+    throw serviceError(MAGIC_LINK_EXPIRED, 'This link has expired. Request a new one.');
+  }
+
+  if (token.response.verified_at) {
+    return { responseId: token.response.id, verifiedAt: token.response.verified_at };
+  }
+
+  const updated = await getPrisma().formResponse.update({
+    where: { id: token.response.id },
+    data: { verified_at: now },
+    select: { id: true, verified_at: true },
+  });
+  return { responseId: updated.id, verifiedAt: updated.verified_at! };
+}
+
+/**
+ * Record a public submission in ONE round trip, for somebody who has already
+ * proved they own the address they are submitting under.
+ *
+ * ── The binding, and why it cannot be claimed ──────────────────────────────
+ * The caller offers a raw magic token (from the HttpOnly, form-scoped cookie
+ * the verify page set when the link was opened in this browser). Four things
+ * must line up before a single answer is written, and every one of them is
+ * read from the SERVER's side of the wire:
+ *
+ *   1. the token hashes to a live row — unspent, unexpired;
+ *   2. its response belongs to THIS form;
+ *   3. its response has `verified_at` — the link was actually opened;
+ *   4. `email_normalized` on that response EQUALS the normalised address being
+ *      submitted.
+ *
+ * (4) is the binding requirement. Verification is a property of the
+ * (form, address) row, and the row is found from the TOKEN, not from the body
+ * — so a client that types a different address in the form does not inherit
+ * anything: the addresses simply fail to match and the whole request falls back
+ * to the ordinary check-your-email flow. There is no "I am verified" flag to
+ * forge, no id to swap, and no signature to strip; the credential is the same
+ * 256-bit token that was delivered to the mailbox, and it is checked against a
+ * hash the database holds.
+ *
+ * Anything that does not line up throws MAGIC_LINK_NOT_BOUND, which the route
+ * treats as "no shortcut available" rather than as an error. A stale cookie
+ * must never be able to make a legitimate submission fail.
+ *
+ * The token is CONSUMED here: it was single-use before this feature and it is
+ * single-use now. A later edit takes a fresh link, exactly as it always did.
+ *
+ * @throws MAGIC_LINK_NOT_BOUND, FORM_CAP_REACHED, FORM_NOT_OPEN, FORM_CLOSED,
+ *   FORM_REVISION_STALE, FORM_ACCESS_MISMATCH, and the contract's
+ *   answer-validation codes.
+ */
+export async function submitVerifiedPublic({
+  rawToken,
+  formId,
+  email,
+  name,
+  answers,
+  revisionId,
+}: {
+  rawToken: string;
+  formId: string;
+  email: string;
+  name?: string | null;
+  answers: unknown;
+  revisionId: string;
+}) {
+  const emailNormalized = normalizeEmail(email);
+  const tokenHash = hashToken(rawToken);
+
+  // Cheap disqualification before anything is validated or locked: a cookie
+  // from another form, or one that no longer names a token, is the common case
+  // and must cost nothing.
+  const peek = await getPrisma().formMagicToken.findUnique({
+    where: { token_hash: tokenHash },
+    select: { response: { select: { form_id: true, email_normalized: true } } },
+  });
+  if (
+    !peek ||
+    peek.response.form_id !== formId ||
+    peek.response.email_normalized !== emailNormalized
+  ) {
+    throw serviceError(MAGIC_LINK_NOT_BOUND, 'This browser has no verified link for that address.');
+  }
+
+  const { validated } = await validateAgainstRevision({
+    formId,
+    revisionId,
+    answers,
+    expectedAccess: 'PUBLIC',
+  });
+
+  const now = new Date();
+
+  return getPrisma().$transaction(async tx => {
+    // Lock order: form, then token. Identical to `confirmSubmission`, which is
+    // what keeps two writers racing the same response from deadlocking.
+    const lockedForm = await lockForm(tx, formId);
+    await tx.$queryRaw`SELECT id FROM form_magic_tokens WHERE token_hash = ${tokenHash} FOR UPDATE`;
+
+    const token = await tx.formMagicToken.findUnique({
+      where: { token_hash: tokenHash },
+      include: { response: true },
+    });
+
+    const response = token?.response;
+    if (
+      !token ||
+      !response ||
+      token.used_at ||
+      token.expires_at.getTime() <= now.getTime() ||
+      response.form_id !== formId ||
+      response.email_normalized !== emailNormalized ||
+      response.verified_at === null
+    ) {
+      throw serviceError(
+        MAGIC_LINK_NOT_BOUND,
+        'This browser has no verified link for that address.'
+      );
+    }
+
+    assertRevisionCurrent(lockedForm, revisionId);
+
+    const counted = alreadyCounted(response);
+    if (!counted) {
+      assertAccepting(lockedForm, now);
+      // `before: now` — this row's FIFO position is the submission happening
+      // right now, not the moment its address was typed.
+      await assertCapAvailable(tx, lockedForm, {
+        excludeResponseId: response.id,
+        before: now,
+        now,
+      });
+    }
+
+    await tx.formMagicToken.update({ where: { id: token.id }, data: { used_at: now } });
+
+    return tx.formResponse.update({
+      where: { id: response.id },
+      data: {
+        revision_id: revisionId,
+        email: email.trim(),
+        name: name ?? null,
+        answers: validated as unknown as Prisma.InputJsonValue,
+        submission_state: 'SUBMITTED',
+        verified_at: response.verified_at,
+        // An edit of a response that is already counted keeps its place in the
+        // queue; a first submission takes its place now.
+        ...(counted ? {} : { submitted_at: now }),
+      },
+    });
   });
 }
 
@@ -696,9 +1336,11 @@ export async function submitClassroom({
       throw serviceError(FORM_ALREADY_SUBMITTED, 'You have already responded to this form.');
     }
 
-    // Only a row that is not already counted needs a cap slot.
-    if (!existing || existing.verified_at === null) {
-      await assertCapAvailable(tx, form, existing?.id);
+    // Only a row that is not already counted needs a cap slot. No `before`:
+    // a classroom submission verifies in this same transaction, so there is no
+    // unverified queue for it to be ranked against.
+    if (!existing || !alreadyCounted(existing)) {
+      await assertCapAvailable(tx, form, { excludeResponseId: existing?.id, now });
     }
 
     const data = {
@@ -1054,24 +1696,47 @@ export async function deleteResponse(responseId: string) {
 /**
  * Drop the rows that are holding uniqueness slots without holding a submission.
  *
- * Two classes, deliberately different ages:
- *  - PENDING_VERIFICATION older than the link's own 48h TTL. Nobody can verify
- *    it any more, and its (form_id, email_normalized) slot must be released so
- *    the same person can start over.
+ * ── What changed, and why ──────────────────────────────────────────────────
+ * This used to delete every PENDING_VERIFICATION row at 48 hours, on the
+ * argument that a row nobody can verify any more is dead weight on the
+ * (form_id, email_normalized) slot. The argument was half right and the
+ * consequence was bad: an applicant who typed their address, got distracted,
+ * and never clicked simply VANISHED, and the instructor never learned that
+ * anybody had tried. On a waitlist that is the most interesting row on the
+ * page — somebody who wanted in and bounced off a confirmation step.
+ *
+ * They are visible as `Unverified` in the responses table, so the fix is to let
+ * them stay there: the age is now 30 days, the same retention the anonymous
+ * drafts get, and the responses surface says out loud when each one goes.
+ * Nothing disappears without having been visible for a month first.
+ *
+ * The slot is no longer hostage either. A later submission from the same
+ * address REUSES the pending row and mints a fresh link (see
+ * `beginPublicSubmission`), so an abandoned row costs nobody their second try —
+ * which is what made the aggressive sweep necessary in the first place.
+ *
+ * Three classes now:
+ *  - PENDING_VERIFICATION older than 30 days, EXCEPT any a staff member has put
+ *    a triage label on. Somebody wrote something about that row; deleting it
+ *    would throw away a person's work as well as a person's record.
  *  - Orphan DRAFT partials older than 30 days — the anonymous, cookie-keyed
  *    autosaves the "save partial responses" toggle creates. A classroom draft
  *    (user_id set) is kept: it belongs to an identified member and is theirs to
  *    finish or delete.
  *
- * Pure service function with no scheduling of its own; the Trigger.dev task that
- * calls it lands with the public fill route.
+ * Pure service function with no scheduling of its own; the Trigger.dev task
+ * that calls it lives in `packages/tasks/src/workflows/forms.ts`.
  */
 export async function expireStale(now: Date = new Date()) {
   const pendingBefore = new Date(now.getTime() - PENDING_TTL_MS);
   const draftsBefore = new Date(now.getTime() - DRAFT_TTL_MS);
 
   const pending = await getPrisma().formResponse.deleteMany({
-    where: { submission_state: 'PENDING_VERIFICATION', created_at: { lt: pendingBefore } },
+    where: {
+      submission_state: 'PENDING_VERIFICATION',
+      created_at: { lt: pendingBefore },
+      staff_status: null,
+    },
   });
 
   const drafts = await getPrisma().formResponse.deleteMany({
@@ -1083,4 +1748,138 @@ export async function expireStale(now: Date = new Date()) {
   });
 
   return { pendingDeleted: pending.count, draftsDeleted: drafts.count };
+}
+
+/** When an unverified row will be swept, for the staff surface to show. */
+export const pendingExpiresAt = (createdAt: Date): Date =>
+  new Date(createdAt.getTime() + PENDING_TTL_MS);
+
+// ─── Reminders ──────────────────────────────────────────────────────────────
+
+export interface ReminderSweepResult {
+  /** Composed mail for the CALLER to send, in submission order. */
+  emails: FormVerifyEmail[];
+  /** Rows nudged, by stage index. For the task's log line. */
+  remindedByStage: number[];
+  /** Rows that were due but had spent their hourly link budget. */
+  skippedForCooldown: number;
+}
+
+/**
+ * Nudge the people who submitted a public response and never clicked the link.
+ *
+ * ── Who is in scope ────────────────────────────────────────────────────────
+ * PENDING_VERIFICATION, `verified_at` still null, and a NON-EMPTY answer set.
+ * The last of those matters: a row with `{}` for answers is an address
+ * somebody typed into a form and abandoned — possibly somebody else's address,
+ * typed by a stranger — and mailing it twice more would turn the early-send
+ * convenience into an unsolicited three-message sequence. An entry has to
+ * exist before "finish your entry" is a sentence worth sending.
+ *
+ * ── Idempotence, with no column to track it ────────────────────────────────
+ * A stage is due when the response is at least `stage` old AND NO TOKEN for it
+ * was created after `submitted_at + stage`. Sending mints a token, which places
+ * a token after that boundary — so the same stage can never fire twice, and the
+ * property is recomputed from durable state on every run rather than
+ * remembered. Running the sweep twice back to back mails once. So does running
+ * it after a restart, or by hand, or late.
+ *
+ * A link the person asked for themselves (the resend button) suppresses the
+ * next nudge for the same reason, which is the behaviour you want: they have a
+ * fresh link in their inbox already.
+ *
+ * ── Failure is per row ─────────────────────────────────────────────────────
+ * One row that has spent its hourly link budget must not abort the sweep for
+ * everybody else, so the cooldown is caught and counted rather than thrown.
+ *
+ * The caller sends (or logs) the mail — the same "service prepares, route
+ * delivers" split `beginPublicSubmission` uses, and the reason this is
+ * testable without a mail transport.
+ */
+export async function remindUnverified(now: Date = new Date()): Promise<ReminderSweepResult> {
+  const oldest = new Date(now.getTime() - REMINDER_STAGES_MS[0]);
+
+  const candidates = await getPrisma().formResponse.findMany({
+    where: {
+      submission_state: 'PENDING_VERIFICATION',
+      verified_at: null,
+      user_id: null,
+      submitted_at: { lte: oldest },
+      // Only forms that could still take the response. Nudging somebody towards
+      // a form that closed is worse than saying nothing.
+      form: { status: 'OPEN', access: 'PUBLIC' },
+    },
+    select: {
+      id: true,
+      email: true,
+      name: true,
+      answers: true,
+      submitted_at: true,
+      form: {
+        select: {
+          title: true,
+          slug: true,
+          closes_at: true,
+          classroom: { select: { slug: true, name: true } },
+        },
+      },
+    },
+    orderBy: { submitted_at: 'asc' },
+  });
+
+  const emails: FormVerifyEmail[] = [];
+  const remindedByStage = REMINDER_STAGES_MS.map(() => 0);
+  let skippedForCooldown = 0;
+
+  for (const response of candidates) {
+    if (answersAreEmpty(response.answers)) continue;
+    if (response.form.closes_at && response.form.closes_at.getTime() <= now.getTime()) continue;
+
+    const age = now.getTime() - response.submitted_at.getTime();
+
+    // The LATEST stage this row has come of age for. Checking newest-first
+    // means a sweep that missed a run does not send two nudges in a row to
+    // catch up — it sends the one that is actually current.
+    let stageIndex = -1;
+    for (let index = REMINDER_STAGES_MS.length - 1; index >= 0; index--) {
+      if (age >= REMINDER_STAGES_MS[index]) {
+        stageIndex = index;
+        break;
+      }
+    }
+    if (stageIndex < 0) continue;
+
+    const boundary = new Date(response.submitted_at.getTime() + REMINDER_STAGES_MS[stageIndex]);
+    const servedAlready = await getPrisma().formMagicToken.count({
+      where: { response_id: response.id, created_at: { gt: boundary } },
+    });
+    if (servedAlready > 0) continue;
+
+    try {
+      const raw = await getPrisma().$transaction(tx => mintLinkFor(tx, response.id, now));
+      emails.push(
+        composeLinkEmail({
+          to: response.email,
+          name: response.name,
+          formTitle: response.form.title,
+          classroomName: response.form.classroom.name,
+          verifyUrl: verifyUrlFor({
+            classroomSlug: response.form.classroom.slug,
+            formSlug: response.form.slug,
+            rawToken: raw,
+          }),
+          template: 'form-verify-reminder',
+        })
+      );
+      remindedByStage[stageIndex] += 1;
+    } catch (error) {
+      if ((error as { code?: string }).code === MAGIC_LINK_COOLDOWN) {
+        skippedForCooldown += 1;
+        continue;
+      }
+      throw error;
+    }
+  }
+
+  return { emails, remindedByStage, skippedForCooldown };
 }

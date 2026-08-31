@@ -210,11 +210,13 @@ Need help, email us at hello@classmoji.io`,
   {
     name: 'Form — Verify link',
     alias: 'form-verify-link',
-    // "Confirm", not "verify": the recipient is finishing something they
-    // started, not proving something about themselves. The form's title is in
-    // the subject because someone who filled in three of these needs to know
-    // which one this is.
-    subject: '[Classmoji] Confirm your response to {{{FORM_TITLE}}}',
+    // "Verify your email", not "confirm your response": this mail now goes out
+    // as soon as the address is typed, so on most sends there is no response to
+    // confirm yet — only an address to prove. Saying "confirm your response" to
+    // somebody who has not finished the form reads as a message about work they
+    // have not done. The form's title is in the subject because someone who
+    // filled in three of these needs to know which one this is.
+    subject: '[Classmoji] Verify your email for {{{FORM_TITLE}}}',
     // Every one of these is user-authored (a form title, a classroom name, a
     // name the filler typed about themselves) and Resend substitutes variables
     // RAW — `formResponse.service` runs them through `escapeVars` before they
@@ -227,32 +229,80 @@ Need help, email us at hello@classmoji.io`,
       { key: 'EXPIRES_HOURS', type: 'string', fallbackValue: '48' },
     ],
     html: shell({
-      title: 'Confirm your form response',
-      preheader: 'Click to confirm your response to {{{FORM_TITLE}}}.',
+      title: 'Verify your email',
+      preheader: 'One click to verify your email for {{{FORM_TITLE}}}.',
       rows: [
-        heading('Confirm your response'),
+        heading('Verify your email'),
+        // Deliberately covers both readings — the person still typing, and the
+        // person who has already pressed Submit — because ONE template serves
+        // both and the sender must not be able to tell them apart.
         text(
-          'Hi {{{RECIPIENT_NAME}}}, you filled in <strong>{{{FORM_TITLE}}}</strong> for {{{CLASSROOM_NAME}}}. Open it to look your answers over and confirm them.'
+          'Hi {{{RECIPIENT_NAME}}}, you used this address on <strong>{{{FORM_TITLE}}}</strong> for {{{CLASSROOM_NAME}}}. Click below to verify it.'
         ),
-        // Said plainly and BEFORE the button. Someone who assumes they are
-        // already done will otherwise never find out that an unconfirmed
-        // response is swept away after two days.
-        text('Your response is not recorded until you do.', {
+        text('Your response is not recorded until this address is verified.', {
           size: 14,
           lh: 22,
           color: MUTED,
           pb: 20,
         }),
-        button('{{{VERIFY_URL}}}', 'Review and confirm'),
+        button('{{{VERIFY_URL}}}', 'Verify my email'),
+        // The second job this link does, said plainly. It is the durable handle
+        // on the response — the only one, since there is deliberately no
+        // "look up my response by email" form anywhere in the product.
         text(
-          'This link works for {{{EXPIRES_HOURS}}} hours and can be used once. Later on, filling the form in again with the same address will email you a fresh link to the response you already have.',
+          '<strong>Keep this email.</strong> The same link opens your answers again later if you want to change them — and if you are still filling the form in, you can click it now and go straight back to finish.',
+          { size: 14, lh: 22, color: MUTED, pb: 8 }
+        ),
+        text(
+          'The link works for {{{EXPIRES_HOURS}}} hours. If you need a new one, open the form again with the same address.',
           { size: 14, lh: 22, color: MUTED, pb: 8 }
         ),
         // A public form is a link anyone can share, so the recipient may
         // genuinely not have submitted anything — that has to be a real option,
         // and "ignore this" has to be the first thing the sentence says.
         text(
-          'If you did not fill in this form, ignore this email. Nothing is recorded, and the entry disappears on its own.',
+          'If you did not use this address on a Classmoji form, ignore this email. Nothing is recorded without the click.',
+          { size: 14, lh: 22, color: MUTED, pb: 24 }
+        ),
+      ],
+    }),
+  },
+
+  {
+    name: 'Form — Verify reminder',
+    alias: 'form-verify-reminder',
+    // A nudge, not a re-announcement. The subject leads with the ask because
+    // this lands in an inbox that already contains the first mail, and the only
+    // useful thing it can add is "this is still outstanding".
+    subject: '[Classmoji] One click to finish your {{{FORM_TITLE}}} entry',
+    variables: [
+      { key: 'RECIPIENT_NAME', type: 'string', fallbackValue: 'there' },
+      { key: 'FORM_TITLE', type: 'string' },
+      { key: 'CLASSROOM_NAME', type: 'string' },
+      { key: 'VERIFY_URL', type: 'string' },
+      { key: 'EXPIRES_HOURS', type: 'string', fallbackValue: '48' },
+    ],
+    html: shell({
+      title: 'One click to finish',
+      preheader: 'Your {{{FORM_TITLE}}} entry is waiting on one click.',
+      rows: [
+        heading('One click to finish'),
+        text(
+          'Hi {{{RECIPIENT_NAME}}}, your answers to <strong>{{{FORM_TITLE}}}</strong> for {{{CLASSROOM_NAME}}} are saved but not recorded — they are waiting on you to verify this address.'
+        ),
+        text('This is the last thing the form needs from you.', {
+          size: 14,
+          lh: 22,
+          color: MUTED,
+          pb: 20,
+        }),
+        button('{{{VERIFY_URL}}}', 'Finish my entry'),
+        text(
+          'This is a fresh link and works for {{{EXPIRES_HOURS}}} hours. It also opens your answers if you want to change anything before you finish.',
+          { size: 14, lh: 22, color: MUTED, pb: 8 }
+        ),
+        text(
+          'If you have changed your mind, do nothing — an entry that is never verified is never recorded.',
           { size: 14, lh: 22, color: MUTED, pb: 24 }
         ),
       ],

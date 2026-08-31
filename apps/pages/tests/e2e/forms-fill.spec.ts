@@ -602,11 +602,28 @@ test.describe('public fill — abuse surfaces', () => {
   test('a filled honeypot gets the success view and writes nothing', async ({ page }) => {
     const email = 'zz-e2e-bot@example.edu';
     await page.goto(fillPath);
-    await fillWaitlist(page, email, 'Definitely A Person');
 
-    // The trap: off-screen, aria-hidden, and unreachable by tab — a person
-    // cannot fill it, so anything in it came from a script reading the DOM.
+    /**
+     * The trap is sprung FIRST, and that ordering is now load-bearing.
+     *
+     * The verification link goes out when the email field is left, not when the
+     * form is submitted, so a script that types an address and only later fills
+     * the trap has already asked for one mail before it identifies itself. The
+     * trap guards the early send too (the raw value rides along on that request
+     * and the server decides it there as well), but it can only guard a request
+     * that happens after it is filled.
+     *
+     * What this test asserts is therefore the honeypot's actual claim: a caller
+     * that has sprung it writes nothing and mails nothing, on either endpoint.
+     * The residue of the other ordering — one placeholder row for an address
+     * somebody typed — is what the per-client ceiling and the per-address
+     * cooldown are for, and `forms-early-verify.spec.ts` pins those.
+     *
+     * Off-screen, aria-hidden, and unreachable by tab: a person cannot fill it,
+     * so anything in it came from a script reading the DOM.
+     */
     await page.locator('input#website').fill('https://spam.example');
+    await fillWaitlist(page, email, 'Definitely A Person');
     await page.getByRole('button', { name: 'Submit' }).click();
 
     // Same page a person gets. Telling a bot it failed is how it learns to skip
@@ -874,7 +891,20 @@ test.describe('public fill — abuse surfaces', () => {
     // server runs — catches it without a round trip.
     await expect(page.getByRole('alert').filter({ hasText: 'required' }).first()).toBeVisible();
     await expect(page.getByRole('heading', { name: 'Check your email' })).toHaveCount(0);
-    expect(await responsesOf(formId!)).toHaveLength(0);
+
+    /**
+     * NO SUBMISSION — which is a narrower claim than "no rows", and the right
+     * one now.
+     *
+     * Leaving the email field sends the verification link, so an address typed
+     * into a form that is then refused for a missing answer leaves an address
+     * placeholder behind: PENDING_VERIFICATION, `{}` for answers, invisible to
+     * the cap and to the queue. That is the design — the person can click the
+     * link, come back, and finish — and it is not a response.
+     */
+    const rows = await responsesOf(formId!);
+    expect(rows.filter(row => row.submission_state === 'SUBMITTED')).toHaveLength(0);
+    for (const row of rows) expect(row.answers).toEqual({});
   });
 
   test('and so does the server, for a client that skipped that check', async ({ page }) => {

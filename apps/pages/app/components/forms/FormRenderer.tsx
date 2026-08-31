@@ -130,9 +130,38 @@ export interface FormRendererProps {
   /** A server-side error to show above the submit button. */
   error?: string | null;
   onSubmit: (submission: RendererSubmission) => void;
+  /**
+   * Called when the filler LEAVES the email field having typed a syntactically
+   * valid address, and again if they later leave it having changed it to a
+   * different valid one. Never twice for the same address.
+   *
+   * This is what lets the public path send the verification link while the rest
+   * of the form is still being filled in, so the link is already waiting by the
+   * time Submit is pressed. Optional: a form without it behaves exactly as
+   * before, which is what the classroom fill and the verify page's edit mode
+   * want.
+   *
+   * The honeypot rides along for the same reason it rides along on submit — the
+   * SERVER decides what a filled trap means, and a link send is now the
+   * cheapest way to make the product send mail.
+   */
+  onIdentityEmail?:
+    | ((submission: { email: string; name: string | null; trap: string }) => void)
+    | null;
   /** Rendered between the last field and the submit row (the disclosure line). */
   footnote?: React.ReactNode;
 }
+
+/**
+ * "Looks like an address" — the trigger for the early send, and nothing more.
+ *
+ * Deliberately the same shape zod's `.email()` accepts rather than an attempt
+ * at RFC 5322: this decides whether it is worth ASKING the server to send a
+ * link, and the server validates it again before it writes anything. Being
+ * slightly generous costs a refused request; being strict would silently skip
+ * the send for addresses that are perfectly valid.
+ */
+const LOOKS_LIKE_EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 interface FormValues {
   answers: Record<string, unknown>;
@@ -272,6 +301,7 @@ export default function FormRenderer({
   busy = false,
   error,
   onSubmit,
+  onIdentityEmail,
   footnote,
 }: FormRendererProps) {
   const plan: IdentityPlan = useMemo(() => identityPlan(fields), [fields]);
@@ -386,6 +416,7 @@ export default function FormRenderer({
     reset,
     watch,
     setValue,
+    getValues,
     formState: { errors },
   } = useForm<FormValues>({
     resolver,
@@ -547,10 +578,91 @@ export default function FormRenderer({
     });
   });
 
+  /**
+   * ── The early send, driven by one delegated blur ─────────────────────────
+   *
+   * The email a public submission is filed under comes from one of two places:
+   * an `email` field the instructor put on the form, or — when the definition
+   * has none — the dedicated identity input this component adds. They are
+   * registered under `answers.{id}` and `identityEmail` respectively, which is
+   * exactly the `name` attribute each input carries, so ONE handler on the
+   * `<form>` recognises both by name and neither needs a prop threaded through
+   * `Control`.
+   *
+   * React's `onBlur` is `focusout` under the hood, so it bubbles. That is what
+   * makes the delegation work at all, and it is why this is not attached to the
+   * inputs: `Control` is a shared, module-scope component (see the note above
+   * `ControlProps`), and giving it a special case for one field type would put
+   * a form-specific concern inside the thing every field type renders through.
+   *
+   * `lastReported` is the "never twice for the same address" rule. A person who
+   * tabs through the email field four times without changing it sends one
+   * request, not four; changing the address to a different valid one sends
+   * again, because that is a different address and the first link is no use to
+   * them. The server's per-address cooldown is the backstop, not the mechanism.
+   */
+  const identityEmailName = plan.emailFieldId ? `answers.${plan.emailFieldId}` : 'identityEmail';
+  const reportEmail = useRef(onIdentityEmail);
+  reportEmail.current = onIdentityEmail;
+  const lastReported = useRef<string>('');
+  const currentValues = useRef(values);
+  currentValues.current = values;
+
+  /**
+   * An address the form ALREADY HELD when it mounted counts as reported.
+   *
+   * Otherwise coming back to the form — from a restored draft, from "wrong
+   * address", from the link they just opened — and merely tabbing past the
+   * email field would send a second identical link, because the mount reset
+   * `lastReported` while the field kept its value. The rule is "leaving the
+   * field with an address that is NEW", and a value that was there before
+   * anybody touched anything is not new.
+   *
+   * Read through `getValues` rather than the watched snapshot: this effect runs
+   * after the layout effect that applies a saved draft, and `getValues` reads
+   * react-hook-form's live store rather than whatever the last render captured.
+   */
+  useEffect(() => {
+    const current = getValues();
+    const answers = (current.answers ?? {}) as Record<string, unknown>;
+    const seeded = plan.emailFieldId ? answers[plan.emailFieldId] : current.identityEmail;
+    if (typeof seeded === 'string' && seeded.trim()) {
+      lastReported.current = seeded.trim().toLowerCase();
+    }
+  }, [getValues, plan.emailFieldId]);
+
+  const handleBlur = (event: React.FocusEvent<HTMLFormElement>) => {
+    if (!reportEmail.current || lockedIdentity) return;
+
+    const target = event.target as Partial<HTMLInputElement> | null;
+    if (!target || target.name !== identityEmailName) return;
+
+    const email = String(target.value ?? '').trim();
+    if (!LOOKS_LIKE_EMAIL.test(email)) return;
+    if (email.toLowerCase() === lastReported.current) return;
+    lastReported.current = email.toLowerCase();
+
+    const answers = (currentValues.current.answers ?? {}) as Record<string, unknown>;
+    const fromAnswers = plan.nameFieldId ? answers[plan.nameFieldId] : undefined;
+
+    reportEmail.current({
+      email,
+      name:
+        String(
+          (typeof fromAnswers === 'string' && fromAnswers) ||
+            currentValues.current.identityName ||
+            ''
+        ).trim() || null,
+      // Reported, never judged — the same contract as `RendererSubmission.trap`.
+      trap: typeof currentValues.current.website === 'string' ? currentValues.current.website : '',
+    });
+  };
+
   return (
     <FormBody
       fields={fields}
       reviewTargets={reviewTargets}
+      onBlur={onIdentityEmail ? handleBlur : undefined}
       register={register}
       watch={watch}
       setValue={setValue}
@@ -1338,6 +1450,8 @@ function Field({ field, name, register, watch, setValue, message, targets, error
 interface FormBodyProps {
   fields: FormField[];
   reviewTargets?: Record<string, ReviewTarget[]>;
+  /** Delegated `focusout`, for the early email send. See `FormRenderer`. */
+  onBlur?: (event: React.FocusEvent<HTMLFormElement>) => void;
   register: UseFormRegister<FormValues>;
   watch: UseFormWatch<FormValues>;
   setValue: UseFormSetValue<FormValues>;
@@ -1357,6 +1471,7 @@ interface FormBodyProps {
 function FormBody({
   fields,
   reviewTargets,
+  onBlur,
   register,
   watch,
   setValue,
@@ -1375,7 +1490,7 @@ function FormBody({
   const answerable = answerableFields(fields);
 
   return (
-    <form onSubmit={submit} noValidate data-hydrated={hydrated ? 'true' : 'false'}>
+    <form onSubmit={submit} onBlur={onBlur} noValidate data-hydrated={hydrated ? 'true' : 'false'}>
       {/* Mockup 4's locked identity row. It sits ABOVE the questions, not among
           them: it is not a question, it is the answer to "who is filling this
           in", and it is already settled by the session. */}

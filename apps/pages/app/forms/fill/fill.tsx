@@ -5,6 +5,7 @@ import { exceedsMaxDepth, type FormField } from '@classmoji/services/form-contra
 import { ClassmojiService } from '~/utils/db.server.ts';
 import { checkOrigin, readCappedBody } from '~/utils/originCheck.server.ts';
 import { clientIpFor, recordSubmissionAttempt } from '~/utils/submissionRate.server.ts';
+import { clearFormLinkCookie, readFormLinkCookie } from '~/utils/formLinkCookie.server.ts';
 import { dispatchVerifyEmail } from '~/utils/tasks.server.ts';
 import {
   FormCanvas,
@@ -46,7 +47,19 @@ import { loadPublicForm, type PublicFormLoad } from './publicForm.server.ts';
  * from the page — it calls `loadPublicForm` again and gets its own copy.
  */
 export type ClientFormLoad =
-  | Exclude<PublicFormLoad, { view: 'classroom-fill' }>
+  | (Exclude<PublicFormLoad, { view: 'classroom-fill' }> & {
+      /**
+       * This BROWSER holds a verified link for this form.
+       *
+       * A boolean, and only ever this browser's own answer to a question about
+       * itself: it is read from the form-scoped HttpOnly cookie the verify page
+       * set, so it tells the person in front of the screen something they
+       * already know and tells nobody else anything. It exists so the form can
+       * say "your address is verified, Submit is the last step" rather than
+       * leaving the one-round-trip path invisible until it happens.
+       */
+      linkVerified?: boolean;
+    })
   | Omit<Extract<PublicFormLoad, { view: 'classroom-fill' }>, 'server'>;
 
 /**
@@ -65,6 +78,16 @@ export type ClientFormLoad =
  * drops them unless the route hands the loader's headers back from `headers`.
  */
 const NO_STORE = { 'Cache-Control': 'no-store' };
+
+/**
+ * How long the check-email screen makes somebody wait before asking again.
+ *
+ * Short enough that a person who genuinely did not get the mail is not stuck
+ * staring at a disabled button, long enough that a double-click and an
+ * impatient triple-tap do not spend the server's three-per-hour budget in ten
+ * seconds and leave them unable to try again when it would have helped.
+ */
+const RESEND_COOLDOWN_MS = 30_000;
 
 /**
  * Loader headers, plus whatever the ACTION set on a document POST.
@@ -104,6 +127,15 @@ export const loader = async ({
     const { server: _server, ...clientSafe } = loaded;
     return data(clientSafe satisfies ClientFormLoad, { headers: NO_STORE });
   }
+  if (loaded.view === 'fill') {
+    return data(
+      {
+        ...loaded,
+        linkVerified: Boolean(readFormLinkCookie(request, params.formSlug!)),
+      } satisfies ClientFormLoad,
+      { headers: NO_STORE }
+    );
+  }
   return data(loaded satisfies ClientFormLoad, { headers: NO_STORE });
 };
 
@@ -112,6 +144,23 @@ export const loader = async ({
 /** What the action tells the page to render. Never carries `mode`. */
 type ActionResult =
   | { state: 'check-email'; email: string }
+  /**
+   * A link went out (or, indistinguishably, did not need to) for an address the
+   * respondent has just finished typing. Rendered as a quiet line beside the
+   * form, NOT as the check-email takeover: they are still filling it in.
+   */
+  | { state: 'link-sent'; email: string; resent: boolean }
+  /**
+   * The early send was declined for a reason the respondent cannot act on and
+   * must not be told about — a half-typed address, a form that has closed under
+   * them, a stale revision. Renders nothing at all.
+   */
+  | { state: 'link-skipped' }
+  /**
+   * Submitted under an address this browser had already verified. The response
+   * is recorded; there is no second round trip.
+   */
+  | { state: 'recorded-public' }
   | { state: 'closed' }
   | { state: 'stale'; answers: Record<string, unknown>; email: string; name: string | null }
   | { state: 'error'; message: string }
@@ -146,8 +195,15 @@ interface SubmissionBody {
    * report what is in the field; this server decides what that means.
    */
   trap?: string;
-  /** Classroom only. Absent means "submit". */
-  intent?: 'autosave' | 'submit';
+  /**
+   * Absent means "submit".
+   *
+   * `autosave` is classroom-only. `verify-email` is the public early send, fired
+   * when the respondent leaves the email field. `resend` is the check-email
+   * screen's button — the one place a link is minted for an address that has
+   * already responded, because that is the person ASKING for it.
+   */
+  intent?: 'autosave' | 'submit' | 'verify-email' | 'resend';
   /**
    * Classroom only. Per repeat group, the review targets the BROWSER rendered.
    * Not trusted for anything — the server re-resolves the team under the form's
@@ -354,6 +410,8 @@ export const action = async ({
     name: body.identity?.name,
   });
 
+  const linkIntent = body.intent === 'verify-email' || body.intent === 'resend';
+
   /**
    * The honeypot, checked AFTER the identity is read and BEFORE anything is
    * written: no row, no token, no cooldown consumed. A bot gets the same page a
@@ -363,12 +421,23 @@ export const action = async ({
    * Decided HERE, from the raw field value. The page used to send a boolean it
    * had computed itself, which meant the check ran on the attacker's side of the
    * wire: fill the trap, post `trapped: false`, and the trap was not there.
+   *
+   * It guards the EARLY SEND too, and that matters more than it did: leaving the
+   * email field is a cheaper way to make the product send mail than filling in a
+   * whole form, so a bot that skipped the trap on submit but sprang it on blur
+   * would otherwise have found the softer door.
    */
   if (typeof body.trap === 'string' && body.trap.trim() !== '') {
-    return { state: 'check-email', email: identity.email } satisfies ActionResult;
+    return (
+      linkIntent
+        ? { state: 'link-sent', email: identity.email, resent: body.intent === 'resend' }
+        : { state: 'check-email', email: identity.email }
+    ) satisfies ActionResult;
   }
 
   if (!identity.email) {
+    // Nothing to say on the early send — the address is simply not finished.
+    if (linkIntent) return { state: 'link-skipped' } satisfies ActionResult;
     return {
       state: 'error',
       message: 'We need an email address so we can send you a confirmation link.',
@@ -376,7 +445,7 @@ export const action = async ({
   }
 
   /**
-   * The per-sender ceiling, immediately before the only call that can send mail.
+   * The per-sender ceiling, immediately before the only calls that can send mail.
    *
    * The service's own cooldown counts per (form, email) — the unit a mail bomb
    * aimed at ONE mailbox would use — so varying the address evades it entirely
@@ -388,17 +457,149 @@ export const action = async ({
    * them would let a bot exhaust a real visitor's headroom for free. See
    * `submissionRate.server.ts` for the single-machine caveat and for why an
    * unattributable request is not counted.
+   *
+   * EVERY public write is counted, the early send included. The blur endpoint is
+   * now the cheapest way to make this product send mail, so it is metered by the
+   * same budget as the submit rather than by a softer one of its own.
    */
   const rate = recordSubmissionAttempt(clientIpFor(request), loaded.form.id);
   if (!rate.allowed) {
     console.warn('[forms:fill] rate-limited an anonymous submission', {
       formId: loaded.form.id,
+      intent: body.intent ?? 'submit',
       path: new URL(request.url).pathname,
     });
     return new Response('Too many submissions from this address. Try again shortly.', {
       status: 429,
       headers: { 'Retry-After': String(rate.retryAfterSeconds) },
     });
+  }
+
+  const revisionId = String(body.revisionId ?? '');
+
+  /**
+   * Map a write failure onto something the page can render. Shared by all three
+   * public write paths so a form that closes mid-flight is explained the same
+   * way whichever door the request came through.
+   */
+  const publicFailure = (error: unknown): ActionResult => {
+    const code = (error as { code?: string }).code;
+
+    if (code === 'FORM_REVISION_STALE') {
+      return { state: 'stale', answers, email: identity.email, name: identity.name };
+    }
+    if (code === 'FORM_NOT_OPEN' || code === 'FORM_CLOSED' || code === 'FORM_CAP_REACHED') {
+      return { state: 'closed' };
+    }
+    if (
+      code === 'FORM_ANSWERS_INVALID' ||
+      code === 'FORM_ANSWERS_TOO_LARGE' ||
+      code === 'FORM_ACCESS_MISMATCH'
+    ) {
+      return { state: 'error', message: (error as Error).message };
+    }
+    throw error;
+  };
+
+  // ── The early send ──────────────────────────────────────────────────────
+  //
+  // Fired when the respondent leaves the email field, and by the check-email
+  // screen's resend button. `force` is the difference between them and it is
+  // the whole of the difference: an address that has already responded is NOT
+  // mailed just because somebody typed it, but IS mailed when the person on the
+  // screen asks for it. Every outcome renders identically — see the note on
+  // `beginAddressVerification`.
+  if (linkIntent) {
+    try {
+      const result = await ClassmojiService.formResponse.beginAddressVerification({
+        formId: loaded.form.id,
+        email: identity.email,
+        name: identity.name,
+        revisionId,
+        force: body.intent === 'resend',
+      });
+
+      await dispatchVerifyEmail(result.emails, result.verifyUrl ?? '');
+
+      return {
+        state: 'link-sent',
+        email: identity.email,
+        resent: body.intent === 'resend',
+      } satisfies ActionResult;
+    } catch (error) {
+      const code = (error as { code?: string }).code;
+
+      // Indistinguishable from a send, for the same reason the submit path
+      // makes it indistinguishable: a visible cooldown answers "has this
+      // address asked for a link recently?"
+      if (code === 'MAGIC_LINK_COOLDOWN') {
+        return {
+          state: 'link-sent',
+          email: identity.email,
+          resent: body.intent === 'resend',
+        } satisfies ActionResult;
+      }
+
+      // A form that closed, or a page rendered against a revision that has
+      // since been republished. Neither is worth interrupting a half-filled
+      // form over — the submit will say so properly.
+      if (
+        code === 'FORM_REVISION_STALE' ||
+        code === 'FORM_NOT_OPEN' ||
+        code === 'FORM_CLOSED' ||
+        code === 'FORM_ACCESS_MISMATCH'
+      ) {
+        return { state: 'link-skipped' } satisfies ActionResult;
+      }
+
+      throw error;
+    }
+  }
+
+  /**
+   * ── The one-round-trip submit ────────────────────────────────────────────
+   *
+   * If this browser holds the link for this form (set when the emailed link was
+   * opened here), the address behind it is already proved and the response can
+   * be recorded now — no second trip to the inbox.
+   *
+   * The cookie is a HINT, never a claim. `submitVerifiedPublic` resolves it to
+   * a response row and requires that row's address to equal the one being
+   * submitted; anything that does not line up throws MAGIC_LINK_NOT_BOUND and
+   * this falls through to the ordinary flow below. That is what keeps the early
+   * send an optimisation rather than a dependency — a cleared cookie, a
+   * different device, or a spent token costs a round trip and nothing else.
+   */
+  const linkToken = readFormLinkCookie(request, params.formSlug!);
+  if (linkToken) {
+    try {
+      await ClassmojiService.formResponse.submitVerifiedPublic({
+        rawToken: linkToken,
+        formId: loaded.form.id,
+        email: identity.email,
+        name: identity.name,
+        answers,
+        revisionId,
+      });
+
+      return data({ state: 'recorded-public' } satisfies ActionResult, {
+        // The token is spent. Leaving the cookie behind would make the next
+        // submit offer a dead credential — harmless, since it falls back, but
+        // it would look like the shortcut had broken.
+        headers: {
+          'Set-Cookie': clearFormLinkCookie({
+            request,
+            classroomSlug: params.classroomSlug!,
+            formSlug: params.formSlug!,
+          }),
+        },
+      });
+    } catch (error) {
+      if ((error as { code?: string }).code !== 'MAGIC_LINK_NOT_BOUND') {
+        return publicFailure(error);
+      }
+      // Not bound. Fall through: this is an ordinary unverified submission.
+    }
   }
 
   try {
@@ -409,43 +610,19 @@ export const action = async ({
       answers,
       // The revision the BROWSER rendered against, not the current one — sending
       // the current one would make the staleness check unfalsifiable.
-      revisionId: String(body.revisionId ?? ''),
+      revisionId,
     });
 
     await dispatchVerifyEmail(result.emails, result.verifyUrl);
 
     return { state: 'check-email', email: identity.email } satisfies ActionResult;
   } catch (error) {
-    const code = (error as { code?: string }).code;
-
     // The same view as success. A visible cooldown would answer "has this
     // address submitted recently?" — the same oracle by another name.
-    if (code === 'MAGIC_LINK_COOLDOWN') {
+    if ((error as { code?: string }).code === 'MAGIC_LINK_COOLDOWN') {
       return { state: 'check-email', email: identity.email } satisfies ActionResult;
     }
-
-    if (code === 'FORM_REVISION_STALE') {
-      return {
-        state: 'stale',
-        answers,
-        email: identity.email,
-        name: identity.name,
-      } satisfies ActionResult;
-    }
-
-    if (code === 'FORM_NOT_OPEN' || code === 'FORM_CLOSED' || code === 'FORM_CAP_REACHED') {
-      return { state: 'closed' } satisfies ActionResult;
-    }
-
-    if (
-      code === 'FORM_ANSWERS_INVALID' ||
-      code === 'FORM_ANSWERS_TOO_LARGE' ||
-      code === 'FORM_ACCESS_MISMATCH'
-    ) {
-      return { state: 'error', message: (error as Error).message } satisfies ActionResult;
-    }
-
-    throw error;
+    return publicFailure(error);
   }
 };
 
@@ -747,6 +924,17 @@ export default function FormFill() {
   const result = fetcher.data;
 
   /**
+   * A SECOND fetcher, for the link sends.
+   *
+   * Not the submit fetcher: a blur-time send landing while a submission is in
+   * flight would replace the submit's result with its own, and the person would
+   * watch "check your email" turn back into a quiet hint. Two fetchers means the
+   * two conversations cannot overwrite each other's answers.
+   */
+  const linkFetcher = useFetcher<ActionResult>();
+  const linkResult = linkFetcher.data;
+
+  /**
    * The address the check-email state names.
    *
    * Held in state rather than read straight off the fetcher because React
@@ -758,6 +946,57 @@ export default function FormFill() {
   useEffect(() => {
     if (result?.state === 'check-email') setSentTo(result.email);
   }, [result]);
+
+  /**
+   * What was typed, kept across the check-email screen.
+   *
+   * "Wrong address? Change it" has to come back to a form that still has every
+   * answer in it. The localStorage draft would usually manage that on its own,
+   * but usually is not good enough for the one path whose entire purpose is not
+   * losing somebody's work: private mode, a full quota, and a form whose draft
+   * has not yet been debounced to disk are all ordinary. So the answers are held
+   * here, in memory, from the moment they are handed to the submit.
+   */
+  const [kept, setKept] = useState<{
+    answers: Record<string, unknown>;
+    email: string;
+    name: string | null;
+  } | null>(null);
+  /** Set by "wrong address", cleared by the next send. Suppresses check-email. */
+  const [correcting, setCorrecting] = useState(false);
+  useEffect(() => {
+    if (result?.state === 'check-email') setCorrecting(false);
+  }, [result]);
+
+  /**
+   * The resend throttle, counted HERE rather than reported by the server.
+   *
+   * The server's cooldown is per (form, address); surfacing it would tell
+   * whoever typed the address how many links that mailbox has had this hour,
+   * which is the membership oracle wearing a helpful face. This countdown is a
+   * fact about this browser instead — honest about the wait, silent about the
+   * mailbox — and the server's real limit sits behind it either way.
+   */
+  const [resendReadyAt, setResendReadyAt] = useState<number | null>(null);
+  const [clock, setClock] = useState(() => Date.now());
+  useEffect(() => {
+    if (result?.state === 'check-email') setResendReadyAt(Date.now() + RESEND_COOLDOWN_MS);
+  }, [result]);
+  useEffect(() => {
+    if (linkResult?.state === 'link-sent' && linkResult.resent) {
+      setResendReadyAt(Date.now() + RESEND_COOLDOWN_MS);
+    }
+  }, [linkResult]);
+  useEffect(() => {
+    if (resendReadyAt === null) return;
+    setClock(Date.now());
+    const handle = window.setInterval(() => setClock(Date.now()), 500);
+    return () => window.clearInterval(handle);
+  }, [resendReadyAt]);
+
+  const resendIn =
+    resendReadyAt === null ? 0 : Math.max(0, Math.ceil((resendReadyAt - clock) / 1000));
+  const resendReady = resendIn === 0;
 
   if (data.view === 'signin') {
     return (
@@ -819,9 +1058,33 @@ export default function FormFill() {
     );
   }
 
-  const checkEmail = result?.state === 'check-email' ? result.email : sentTo;
+  /**
+   * Recorded in one round trip, because the link had already been opened in
+   * this browser. Deliberately the SAME "You're in" the verify page shows: the
+   * person did the same thing and got the same outcome, and the fact that it
+   * took one fewer email is not news they need.
+   */
+  if (result?.state === 'recorded-public') {
+    return (
+      <FormCanvas theme={data.theme} classroomName={data.classroomName}>
+        <FormNotice icon="🎉" title="You're in">
+          <p>
+            Your response to <strong className="font-semibold">{data.form.title}</strong> is
+            recorded. We have your answers and the teaching team can see them.
+          </p>
+          <p className="mt-3 text-gray-500 dark:text-gray-400">
+            Nothing else is needed from you. If you want to change something later, fill the form in
+            again with the same address and we will email you a link to your response.
+          </p>
+        </FormNotice>
+      </FormCanvas>
+    );
+  }
+
+  const checkEmail = correcting ? null : result?.state === 'check-email' ? result.email : sentTo;
 
   if (checkEmail) {
+    const resent = linkResult?.state === 'link-sent' && linkResult.resent;
     return (
       <FormCanvas theme={data.theme} classroomName={data.classroomName}>
         <FormNotice icon="📧" title="Check your email">
@@ -833,6 +1096,59 @@ export default function FormFill() {
             Nothing is recorded until you click it. The link works for 48 hours, and the same link
             lets you change your answers later.
           </p>
+
+          {/* The two things that actually go wrong at this screen: the mail did
+              not arrive, and the address was wrong. Both used to be dead ends —
+              the only way out was to fill the whole form in again. */}
+          <div className="mt-6 flex flex-wrap items-center gap-3">
+            <button
+              type="button"
+              data-testid="forms-resend"
+              disabled={!resendReady || linkFetcher.state !== 'idle'}
+              onClick={() =>
+                linkFetcher.submit(
+                  {
+                    intent: 'resend',
+                    identity: { email: checkEmail, name: kept?.name ?? null },
+                    revisionId: data.revisionId,
+                    trap: '',
+                  } as SubmitTarget,
+                  { method: 'post', encType: 'application/json' }
+                )
+              }
+              className="rounded-md border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 disabled:opacity-50 dark:border-gray-600 dark:text-gray-200"
+            >
+              {linkFetcher.state !== 'idle'
+                ? 'Sending…'
+                : resendReady
+                  ? 'Send it again'
+                  : `Send it again in ${resendIn}s`}
+            </button>
+            <button
+              type="button"
+              data-testid="forms-wrong-address"
+              onClick={() => {
+                setCorrecting(true);
+                setSentTo(null);
+              }}
+              className="text-sm font-medium text-blue-600 hover:underline dark:text-blue-400"
+            >
+              Wrong address? Change it
+            </button>
+          </div>
+
+          {/* Honest about the throttle, and honest about nothing else. The
+              countdown is this page's own — it says how long until THIS
+              browser may ask again, which is a fact about the person reading
+              it. A server-side "that address has had three links this hour"
+              would be a fact about the MAILBOX, and answering it for anyone who
+              can type an address is the membership oracle by another name. */}
+          {resent ? (
+            <p role="status" className="mt-3 text-sm text-green-700 dark:text-green-400">
+              Sent again. If it still does not arrive, check your spam folder — or change the
+              address above.
+            </p>
+          ) : null}
         </FormNotice>
       </FormCanvas>
     );
@@ -854,6 +1170,9 @@ export default function FormFill() {
   }
 
   const stale = result?.state === 'stale' ? result : null;
+  const linkSent = linkResult?.state === 'link-sent' ? linkResult : null;
+  /** Verified in this browser, so Submit is genuinely the last step. */
+  const verifiedHere = Boolean(data.linkVerified);
 
   return (
     <FormCanvas theme={data.theme} classroomName={data.classroomName}>
@@ -869,25 +1188,95 @@ export default function FormFill() {
         </div>
       ) : null}
 
+      {/* Came back from the link. Said plainly, because "I clicked the thing in
+          my email and landed on the form again" is otherwise indistinguishable
+          from nothing having happened. */}
+      {verifiedHere ? (
+        <div
+          role="status"
+          data-testid="forms-verified-here"
+          className="mb-6 rounded-md border border-green-200 bg-green-50 px-3 py-2.5 text-sm text-green-900 dark:border-green-900 dark:bg-green-950 dark:text-green-200"
+        >
+          <strong className="font-semibold">Your email is verified.</strong> Finish your answers and
+          press Submit — that is the last step.
+        </div>
+      ) : null}
+
+      {/* The early send, reported once the address has been typed.
+          DELIBERATELY THE SAME LINE whatever happened on the server: a first
+          link, a link for an address that already responded, a send the
+          cooldown swallowed. Any difference between them answers "has this
+          person already applied?" for anybody who can type an address. */}
+      {!verifiedHere && linkSent ? (
+        <div
+          role="status"
+          data-testid="forms-link-sent"
+          className="mb-6 rounded-md border border-blue-200 bg-blue-50 px-3 py-2.5 text-sm text-blue-900 dark:border-blue-900 dark:bg-blue-950 dark:text-blue-200"
+        >
+          Check <strong className="font-semibold">{linkSent.email}</strong> for a verification link.
+          Clicking it now means you are done as soon as you submit — and it is also how you open
+          your answers later to change them.
+        </div>
+      ) : null}
+
       <FormRenderer
         /* Keyed on the revision: a stale submission comes back with the NEW
            questions and the person's OLD answers, which means the form state
            has to be rebuilt from the new definition rather than patched. */
         key={data.revisionId}
         fields={data.fields as FormField[]}
-        storedAnswers={stale?.answers ?? null}
-        identityDefaults={stale ? { email: stale.email, name: stale.name } : undefined}
+        /* `kept` is the "wrong address, take me back" path: everything typed,
+           held in memory across the check-email screen. */
+        storedAnswers={stale?.answers ?? (correcting ? (kept?.answers ?? null) : null)}
+        identityDefaults={
+          stale
+            ? { email: stale.email, name: stale.name }
+            : correcting && kept
+              ? { email: kept.email, name: kept.name }
+              : undefined
+        }
         draftKey={draftKeyFor(data.form.id, data.revisionId)}
         submitLabel="Submit"
         busy={fetcher.state !== 'idle'}
         error={result?.state === 'error' ? result.message : null}
-        footnote={
-          <>
-            Your answers are kept in this browser as you type. Nothing reaches {data.classroomName}{' '}
-            until you submit and click the link we email you.
-          </>
+        /**
+         * The early send. Fired when they leave the email field having typed a
+         * valid address, so the link is in their inbox before they have
+         * finished the form — and if they open it on the way, the submit is a
+         * single round trip.
+         */
+        onIdentityEmail={submission =>
+          linkFetcher.submit(
+            {
+              intent: 'verify-email',
+              identity: { email: submission.email, name: submission.name },
+              revisionId: data.revisionId,
+              trap: submission.trap,
+            } as SubmitTarget,
+            { method: 'post', encType: 'application/json' }
+          )
         }
-        onSubmit={submission =>
+        footnote={
+          verifiedHere ? (
+            <>
+              Your answers are kept in this browser as you type. Your email is already verified, so
+              submitting is the last thing this form needs.
+            </>
+          ) : (
+            <>
+              Your answers are kept in this browser as you type. Nothing reaches{' '}
+              {data.classroomName} until you submit and verify your email.
+            </>
+          )
+        }
+        onSubmit={submission => {
+          // Held BEFORE the request goes out, so "wrong address" has something
+          // to come back to even if the round trip never completes.
+          setKept({
+            answers: submission.answers,
+            email: submission.identity.email,
+            name: submission.identity.name,
+          });
           fetcher.submit(
             // One cast, the same one the builder needs: an answer set is
             // `Record<string, unknown>` by design (its shape is per field type),
@@ -902,8 +1291,8 @@ export default function FormFill() {
               trap: submission.trap,
             } as SubmitTarget,
             { method: 'post', encType: 'application/json' }
-          )
-        }
+          );
+        }}
       />
     </FormCanvas>
   );

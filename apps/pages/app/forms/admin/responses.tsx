@@ -204,6 +204,24 @@ const STATE_CHIP: Record<string, { label: string; title: string }> = {
 
 const absolute = (iso: string) => dayjs(iso).format('MMM D, YYYY h:mm A');
 
+/**
+ * The chip's hover text, with the expiry date when the row has one.
+ *
+ * An unverified row is kept for thirty days and then swept, and saying so ON
+ * THE ROW is the difference between a retention policy and a disappearance —
+ * these rows used to be deleted at 48 hours with nothing said to anybody. The
+ * escape hatch is named in the same breath because it is the action available
+ * from this screen: give it a status and the sweep leaves it alone.
+ */
+const chipTitle = (
+  chip: { title: string } | undefined,
+  row: { expiresAt: string | null }
+): string | undefined => {
+  if (!chip) return undefined;
+  if (!row.expiresAt) return chip.title;
+  return `${chip.title} Kept until ${absolute(row.expiresAt)}, then deleted — give it a status to keep it.`;
+};
+
 // ─── Route component ────────────────────────────────────────────────────────
 
 export default function FormResponses() {
@@ -1004,7 +1022,8 @@ function ResponseTableRow({
           </span>
           {chip ? (
             <span
-              title={chip.title}
+              title={chipTitle(chip, row)}
+              data-testid={`forms-state-chip-${row.id}`}
               className="rounded-full bg-gray-200 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-gray-600 dark:bg-gray-700 dark:text-gray-300"
             >
               {chip.label}
@@ -1118,6 +1137,20 @@ function ResponseDrawer({
             <dd className="text-gray-800 dark:text-gray-100">
               {chip ? `${chip.label} (${row.submissionState})` : row.submissionState}
             </dd>
+            {/* Only for a row that is genuinely going. A labelled one is exempt
+                from the sweep, so offering it a date would be a false promise
+                in the opposite direction. */}
+            {row.expiresAt ? (
+              <>
+                <dt className="text-gray-500 dark:text-gray-400">Kept until</dt>
+                <dd className="text-gray-800 dark:text-gray-100">
+                  {absolute(row.expiresAt)}
+                  <span className="block text-xs text-gray-500 dark:text-gray-400">
+                    Deleted then, unless you give it a status.
+                  </span>
+                </dd>
+              </>
+            ) : null}
             <dt className="text-gray-500 dark:text-gray-400">Account</dt>
             <dd className="truncate text-gray-800 dark:text-gray-100">
               {row.userId ? row.userId : 'No Classmoji account (email identity)'}

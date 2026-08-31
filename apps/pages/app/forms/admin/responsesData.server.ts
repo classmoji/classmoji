@@ -31,6 +31,16 @@ export interface ResponseRow {
   /** ISO. Serialized here so the client never has to care what arrived. */
   submittedAt: string;
   verifiedAt: string | null;
+  /**
+   * ISO. When an UNVERIFIED row will be swept; null in every other state.
+   *
+   * On the surface so the sweep stops being invisible. An unverified row is
+   * somebody who tried and did not finish — on a waitlist, often the most
+   * interesting row on the page — and it used to be deleted at 48 hours with
+   * nothing said to anybody. It now lives for thirty days and announces when it
+   * goes, and putting a staff label on it stops it going at all.
+   */
+  expiresAt: string | null;
   updatedAt: string;
   submissionState: string;
   staffStatus: string | null;
@@ -129,6 +139,7 @@ export function toResponseRow(row: {
   user_id: string | null;
   submitted_at: Date;
   verified_at: Date | null;
+  created_at?: Date;
   updated_at: Date;
   submission_state: string;
   staff_status: string | null;
@@ -144,6 +155,12 @@ export function toResponseRow(row: {
     userId: row.user_id,
     submittedAt: row.submitted_at.toISOString(),
     verifiedAt: row.verified_at ? row.verified_at.toISOString() : null,
+    // The sweep measures from `created_at`, and a labelled row is exempt — so
+    // the date is only offered for a row that will actually go.
+    expiresAt:
+      row.submission_state === 'PENDING_VERIFICATION' && row.created_at && !row.staff_status
+        ? ClassmojiService.formResponse.pendingExpiresAt(row.created_at).toISOString()
+        : null,
     updatedAt: row.updated_at.toISOString(),
     submissionState: row.submission_state,
     staffStatus: row.staff_status,

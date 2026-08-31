@@ -7,6 +7,7 @@ import { checkOrigin, readCappedBody } from '~/utils/originCheck.server.ts';
 import { FormCanvas, FormHeader, FormNotice } from '~/components/forms/FormCanvas.tsx';
 import FormRenderer, { clearDraftsForForm } from '~/components/forms/FormRenderer.tsx';
 import AnswerView from '~/components/forms/AnswerView.tsx';
+import { formLinkCookie } from '~/utils/formLinkCookie.server.ts';
 import { themeFor, type CanvasTheme } from './publicForm.server.ts';
 
 /**
@@ -61,6 +62,19 @@ export type VerifyLoad =
       theme: CanvasTheme;
       classroomName: string;
       fillPath: string;
+    }
+  /**
+   * The link was opened BEFORE the form was submitted — the state the early
+   * send makes ordinary. The address is now proved; the answers are still
+   * theirs to finish.
+   */
+  | {
+      view: 'verified';
+      theme: CanvasTheme;
+      classroomName: string;
+      fillPath: string;
+      form: { id: string; title: string; description: string | null };
+      identity: { email: string; name: string | null };
     }
   | {
       view: 'review';
@@ -125,6 +139,62 @@ export const loader = async ({
     return problem('invalid');
   }
 
+  /**
+   * ── The link, opened on the way through ──────────────────────────────────
+   *
+   * Since the verification mail now goes out when the ADDRESS is typed, the
+   * common case is a link opened while the form is still half-filled. There is
+   * no response to review — the row holds an address and `{}` — so this shows
+   * what actually happened (the address is verified) and sends them back to
+   * finish, rather than rendering an empty answer set as though it were a
+   * submission.
+   *
+   * Two side effects, both deliberate on a GET:
+   *
+   *  - `verifyAddressByToken` stamps `verified_at`. It is idempotent and does
+   *    NOT spend the token, which is what makes the page survive a reload and a
+   *    corporate mail scanner opening the link ahead of the human.
+   *  - the raw token is handed to this browser as an HttpOnly, form-scoped
+   *    cookie, which is what lets the submit that follows land in one round
+   *    trip. `verified_at` alone never admits a submission — see
+   *    `submitVerifiedPublic`.
+   */
+  if (ClassmojiService.formResponse.isAddressPlaceholder(resolved.response)) {
+    try {
+      await ClassmojiService.formResponse.verifyAddressByToken(token);
+    } catch (error) {
+      return problem(problemFor((error as { code?: string }).code));
+    }
+
+    const headers = new Headers(NO_STORE);
+    headers.append(
+      'Set-Cookie',
+      formLinkCookie({
+        request,
+        classroomSlug,
+        formSlug,
+        rawToken: token,
+        maxAgeSeconds: Math.max(0, (resolved.expiresAt.getTime() - Date.now()) / 1000),
+      })
+    );
+
+    return data(
+      {
+        view: 'verified' as const,
+        theme,
+        classroomName,
+        fillPath,
+        form: {
+          id: resolved.form.id,
+          title: resolved.form.title,
+          description: resolved.form.description,
+        },
+        identity: { email: resolved.response.email, name: resolved.response.name },
+      },
+      { headers }
+    );
+  }
+
   return data(
     {
       view: 'review' as const,
@@ -158,6 +228,8 @@ type ActionResult =
   | { state: 'cap' }
   | { state: 'closed' }
   | { state: 'link'; problem: LinkProblem }
+  /** A confirm for a row that has an address and no answers yet. */
+  | { state: 'not-submitted' }
   | { state: 'error'; message: string };
 
 export const action = async ({ request }: { request: Request }) => {
@@ -215,6 +287,12 @@ export const action = async ({ request }: { request: Request }) => {
     const code = (error as { code?: string }).code;
 
     if (code === 'FORM_CAP_REACHED') return { state: 'cap' } satisfies ActionResult;
+
+    // Unreachable from the UI — a placeholder renders the "go and finish"
+    // state, which has no Confirm button — so this only answers a hand-made
+    // POST. Answered accurately rather than as a generic error, because the
+    // accurate answer is also the useful one.
+    if (code === 'FORM_NOT_SUBMITTED_YET') return { state: 'not-submitted' } satisfies ActionResult;
 
     // A form that closed between the submission and the click. Honest, and the
     // same shape as the cap message: their answers are safe, but not counted.
@@ -355,6 +433,26 @@ export default function FormVerify() {
     );
   }
 
+  if (result?.state === 'not-submitted') {
+    return (
+      <FormCanvas theme={loaded.theme} classroomName={loaded.classroomName}>
+        <FormNotice icon="✍️" title="There is nothing to confirm yet">
+          <p>
+            This link belongs to an address, not to a response — the form has not been submitted
+            under it. Go back and finish your answers; your address is already verified, so pressing
+            Submit is the last step.
+          </p>
+          <Link
+            to={loaded.fillPath}
+            className="mt-5 inline-block rounded-md bg-gray-900 px-5 py-2.5 text-sm font-semibold text-white dark:bg-white dark:text-gray-900"
+          >
+            Back to the form
+          </Link>
+        </FormNotice>
+      </FormCanvas>
+    );
+  }
+
   // A link that was already dead when the action ran, and one that was dead
   // when the page loaded. Both land on the same explanation.
   if (result?.state === 'link') {
@@ -376,6 +474,40 @@ export default function FormVerify() {
         classroomName={loaded.classroomName}
         fillPath={loaded.fillPath}
       />
+    );
+  }
+
+  /**
+   * The address is proved and the form is not finished — the ordinary shape of
+   * this page now that the mail goes out early.
+   *
+   * It says three things in order, because each one answers the question the
+   * previous one raises: the address is verified, that is not the same as
+   * having applied, and here is the way back. The button is the primary action
+   * for the same reason — the only useful thing to do from here is go and
+   * finish.
+   */
+  if (loaded.view === 'verified') {
+    return (
+      <FormCanvas theme={loaded.theme} classroomName={loaded.classroomName}>
+        <FormNotice icon="✅" title="Your email is verified">
+          <p>
+            <strong className="font-semibold">{loaded.identity.email}</strong> is confirmed for{' '}
+            <strong className="font-semibold">{loaded.form.title}</strong>. Nothing has been
+            recorded yet — go back and finish your answers, and this time Submit is the last step.
+          </p>
+          <Link
+            to={loaded.fillPath}
+            data-testid="forms-go-finish"
+            className="mt-5 inline-block rounded-md bg-gray-900 px-5 py-2.5 text-sm font-semibold text-white dark:bg-white dark:text-gray-900"
+          >
+            Finish your answers →
+          </Link>
+          <p className="mt-4 text-gray-500 dark:text-gray-400">
+            Keep this email — the same link opens your response later if you want to change it.
+          </p>
+        </FormNotice>
+      </FormCanvas>
     );
   }
 
