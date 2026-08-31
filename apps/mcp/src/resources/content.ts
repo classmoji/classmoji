@@ -99,6 +99,8 @@ interface ModuleItemRow {
   slide?: { id: string; title?: string | null; is_draft?: boolean } | null;
   quiz?: { id: string; name?: string | null; status?: string } | null;
   repository?: { id: string; title?: string | null; is_published?: boolean } | null;
+  /** Form is the fifth item type. It carries `title`, not `name`. */
+  form?: { id: string; title?: string | null; status?: string; access?: string } | null;
 }
 
 interface ModuleRow {
@@ -112,10 +114,25 @@ interface ModuleRow {
   items: ModuleItemRow[];
 }
 
+/**
+ * One item, reduced to {type, target id, title}.
+ *
+ * Exactly one of the five target columns is populated per row (the item_type
+ * names which), so the `??` chain resolves whichever it is. Forms are included:
+ * `module.listForClassroom`'s ITEM_INCLUDE already loads `form: true`, and its
+ * `isItemPublished` already hides a DRAFT form from students the same way it
+ * hides a draft page — so nothing here has to re-decide visibility. A Form's
+ * label lives in `title` (a Quiz is the odd one out with `name`).
+ */
 function moduleItemSummary(item: ModuleItemRow) {
-  const target = item.page ?? item.slide ?? item.quiz ?? item.repository ?? null;
+  const target = item.page ?? item.slide ?? item.quiz ?? item.repository ?? item.form ?? null;
   const title =
-    item.page?.title ?? item.slide?.title ?? item.quiz?.name ?? item.repository?.title ?? null;
+    item.page?.title ??
+    item.slide?.title ??
+    item.quiz?.name ??
+    item.repository?.title ??
+    item.form?.title ??
+    null;
   return {
     id: item.id,
     type: item.item_type,
@@ -130,7 +147,7 @@ export const modulesResource: ResourceDefinition = {
   uriTemplate: 'classmoji://{org}/{slug}/modules',
   title: 'Modules (curriculum lists)',
   description:
-    'Ordered curriculum modules with their content items (pages, repos, quizzes, slides). ' +
+    'Ordered curriculum modules with their content items (pages, repos, quizzes, slides, forms). ' +
     'Students see published modules/items only; staff also see unpublished. Returns ' +
     '{enabled:false} when the classroom hides modules (show_modules).',
   scope: 'read',

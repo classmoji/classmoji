@@ -693,9 +693,10 @@ enum ModuleItemType {
   REPOSITORY
   QUIZ
   SLIDE
+  FORM
 }
 
-// A single ordered entry in a Module's content list. Exactly one of the four
+// A single ordered entry in a Module's content list. Exactly one of the five
 // *_id fields is set (enforced in the service layer + a CHECK migration).
 // An item may appear in multiple modules, but not twice in the same module.
 model ModuleItem {
@@ -707,6 +708,7 @@ model ModuleItem {
   repository_id String?
   quiz_id       String?
   slide_id      String?
+  form_id       String?
   created_at    DateTime       @default(now())
   updated_at    DateTime       @default(now()) @updatedAt
 
@@ -715,11 +717,13 @@ model ModuleItem {
   repository Repository? @relation(fields: [repository_id], references: [id], onDelete: Cascade)
   quiz       Quiz?       @relation(fields: [quiz_id], references: [id], onDelete: Cascade)
   slide      Slide?      @relation(fields: [slide_id], references: [id], onDelete: Cascade)
+  form       Form?       @relation(fields: [form_id], references: [id], onDelete: Cascade)
 
   @@unique([module_id, page_id])
   @@unique([module_id, repository_id])
   @@unique([module_id, quiz_id])
   @@unique([module_id, slide_id])
+  @@unique([module_id, form_id])
   @@index([module_id])
   @@map("module_items")
 }
@@ -1570,10 +1574,11 @@ model Form {
   created_at          DateTime   @default(now())
   updated_at          DateTime   @default(now()) @updatedAt
 
-  classroom Classroom      @relation(fields: [classroom_id], references: [id], onDelete: Cascade)
-  creator   User           @relation(fields: [created_by], references: [id])
-  revisions FormRevision[]
-  responses FormResponse[]
+  classroom    Classroom      @relation(fields: [classroom_id], references: [id], onDelete: Cascade)
+  creator      User           @relation(fields: [created_by], references: [id])
+  revisions    FormRevision[]
+  responses    FormResponse[]
+  module_items ModuleItem[]
 
   @@unique([classroom_id, slug])
   @@index([classroom_id])
