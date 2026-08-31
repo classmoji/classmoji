@@ -21,6 +21,7 @@ import type { FormField } from '@classmoji/services/form-contract';
 import { ClassmojiService } from '~/utils/db.server.ts';
 import { assertFormAdmin, formMutationBlocked } from '~/utils/formAuth.server.ts';
 import FormPreview from '~/components/forms/FormPreview.tsx';
+import { ConfirmDialog } from '~/components/forms/ConfirmDialog.tsx';
 import FieldCard from '~/components/forms/builder/FieldCard.tsx';
 import type { ScopeChoices } from '~/components/forms/builder/FieldConfig.tsx';
 import { FIELD_TYPE_META, makeField } from '~/components/forms/fieldTypes.ts';
@@ -336,16 +337,12 @@ export default function FormBuilder() {
   const save = () => post({ intent: 'save-fields', fields });
   const publish = () => post({ intent: 'publish', fields });
 
+  // Asked in-app rather than by the browser — see `ConfirmDialog`. The toolbar
+  // button opens the dialog; only the dialog's confirm posts.
+  const [askNewVersion, setAskNewVersion] = useState(false);
+
   const newVersion = () => {
-    if (
-      !confirm(
-        'Publishing creates a NEW VERSION of this form.\n\n' +
-          'Responses already collected keep the version they were filled against. ' +
-          'Anyone with the form open will be asked to reload before they can submit.'
-      )
-    ) {
-      return;
-    }
+    setAskNewVersion(false);
     post({ intent: 'new-version', fields });
   };
 
@@ -418,7 +415,7 @@ export default function FormBuilder() {
               </span>
               <button
                 type="button"
-                onClick={newVersion}
+                onClick={() => setAskNewVersion(true)}
                 disabled={busy || fields.length === 0}
                 className="rounded-md bg-gray-900 px-4 py-2 text-sm font-medium text-white disabled:opacity-40 dark:bg-white dark:text-gray-900"
               >
@@ -473,10 +470,27 @@ export default function FormBuilder() {
           unguarded blur would write an audit row saying the instructor edited
           the form when they only tabbed through it, and trigger a revalidation
           for nothing. */}
-      <div className="mb-5 flex flex-wrap items-end gap-4 rounded-lg border border-gray-200 px-3 py-2.5 dark:border-gray-700">
-        <label className="text-xs font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">
-          Closes
+      {/* Laid out as a grid of THREE FIXED SLOTS per column — label, control,
+          help — top-aligned, with the help slot always rendered even when it is
+          empty.
+
+          It used to be `items-end` with the help text tucked inside the Closes
+          label, and so the row re-laid itself out the moment a close time was
+          set: "Your local time" appeared, the Closes column grew, and because
+          the columns were bottom-aligned the Closes label and input jumped
+          UPWARD out of line with the response cap and the checkbox beside them.
+          Top-aligning fixes the jump; reserving the help slot's height keeps
+          the bordered box itself from changing height too. */}
+      <div className="mb-5 flex flex-wrap items-start gap-4 rounded-lg border border-gray-200 px-3 py-2.5 dark:border-gray-700">
+        <div>
+          <label
+            htmlFor="form-closes-at"
+            className="block text-xs font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400"
+          >
+            Closes
+          </label>
           <input
+            id="form-closes-at"
             type="datetime-local"
             value={closesAt}
             onChange={event => setClosesAt(event.target.value)}
@@ -494,15 +508,20 @@ export default function FormBuilder() {
             }}
             className="mt-1 block rounded-md border border-gray-300 bg-white px-2 py-1 text-sm normal-case tracking-normal text-gray-900 dark:border-gray-600 dark:bg-gray-900 dark:text-white"
           />
-          {closesAt ? (
-            <span className="mt-1 block text-[11px] font-normal normal-case tracking-normal text-gray-400">
-              Your local time
-            </span>
-          ) : null}
-        </label>
-        <label className="text-xs font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">
-          Response cap
+          {/* Always rendered, conditionally filled — see the note above. */}
+          <span className="mt-1 block h-4 text-[11px] leading-4 text-gray-400">
+            {closesAt ? 'Your local time' : null}
+          </span>
+        </div>
+        <div>
+          <label
+            htmlFor="form-response-cap"
+            className="block text-xs font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400"
+          >
+            Response cap
+          </label>
           <input
+            id="form-response-cap"
             type="number"
             min={1}
             placeholder="none"
@@ -516,15 +535,25 @@ export default function FormBuilder() {
             }}
             className="mt-1 block w-28 rounded-md border border-gray-300 bg-white px-2 py-1 text-sm normal-case tracking-normal text-gray-900 dark:border-gray-600 dark:bg-gray-900 dark:text-white"
           />
-        </label>
-        <label className="flex items-center gap-2 pb-1 text-sm text-gray-700 dark:text-gray-200">
-          <input
-            type="checkbox"
-            defaultChecked={data.form.allowMultiple}
-            onChange={event => post({ intent: 'save-meta', allowMultiple: event.target.checked })}
-          />
-          Let one person submit more than once
-        </label>
+          <span className="mt-1 block h-4" />
+        </div>
+        <div>
+          {/* This column has no label of its own — the checkbox carries its own
+              text — so it takes an empty one, and the transparent border plus
+              the same `py-1` as the inputs beside it makes the control row
+              exactly their height. Without the spacer the checkbox would sit a
+              label's height above the two inputs. */}
+          <span className="block h-4" aria-hidden="true" />
+          <label className="mt-1 flex items-center gap-2 border border-transparent py-1 text-sm text-gray-700 dark:text-gray-200">
+            <input
+              type="checkbox"
+              defaultChecked={data.form.allowMultiple}
+              onChange={event => post({ intent: 'save-meta', allowMultiple: event.target.checked })}
+            />
+            Let one person submit more than once
+          </label>
+          <span className="mt-1 block h-4" />
+        </div>
       </div>
 
       {fetcher.data?.error ? (
@@ -631,6 +660,19 @@ export default function FormBuilder() {
           </p>
         </aside>
       </div>
+
+      <ConfirmDialog
+        open={askNewVersion}
+        title="Publishing creates a new version of this form"
+        body={[
+          'Responses already collected keep the version they were filled against.',
+          'Anyone with the form open will be asked to reload before they can submit.',
+        ]}
+        confirmLabel="Publish new version"
+        busy={busy}
+        onConfirm={newVersion}
+        onCancel={() => setAskNewVersion(false)}
+      />
     </div>
   );
 }

@@ -6,6 +6,7 @@ import { IconDownload, IconSearch, IconTrash, IconX } from '@tabler/icons-react'
 import type { FormField } from '@classmoji/services/form-contract';
 
 import AnswerView from '~/components/forms/AnswerView.tsx';
+import { ConfirmDialog } from '~/components/forms/ConfirmDialog.tsx';
 import { formatAnswer, isScalarField } from '~/components/forms/answerFormat.ts';
 import { ClassmojiService } from '~/utils/db.server.ts';
 import { formMutationBlocked } from '~/utils/formAuth.server.ts';
@@ -254,15 +255,14 @@ export default function FormResponses() {
   const setNote = (id: string, note: string | null) =>
     submit({ intent: 'set-note', responseIds: [id], note });
 
+  // The ids a delete has been REQUESTED for and not yet confirmed. Keeping the
+  // whole array (rather than a boolean) is what preserves the single-vs-bulk
+  // wording, and means the bulk bar and the drawer share one dialog.
+  const [pendingDelete, setPendingDelete] = useState<string[] | null>(null);
+
+  // Only reached through the dialog.
   const remove = (ids: string[]) => {
-    const what = ids.length === 1 ? 'this response' : `${ids.length} responses`;
-    if (
-      !confirm(
-        `Delete ${what}?\n\nThe answers and the contact details go with it. This cannot be undone.`
-      )
-    ) {
-      return;
-    }
+    setPendingDelete(null);
     submit({ intent: 'delete', responseIds: ids });
     setSelected(new Set());
     if (openId && ids.includes(openId)) setOpenId(null);
@@ -396,7 +396,7 @@ export default function FormResponses() {
           />
           <button
             type="button"
-            onClick={() => remove(selectedIds)}
+            onClick={() => setPendingDelete(selectedIds)}
             className="rounded-md border border-red-200 bg-white px-2.5 py-1 text-xs font-medium text-red-700 dark:border-red-900 dark:bg-red-950 dark:text-red-300"
           >
             Delete
@@ -460,7 +460,7 @@ export default function FormResponses() {
                   onOpen={() => setOpenId(row.id)}
                   onStatus={next => setStatus([row.id], next)}
                   onNote={next => setNote(row.id, next)}
-                  onDelete={() => remove([row.id])}
+                  onDelete={() => setPendingDelete([row.id])}
                 />
               ))}
               {visible.length === 0 ? (
@@ -486,9 +486,24 @@ export default function FormResponses() {
           onClose={() => setOpenId(null)}
           onStatus={next => setStatus([open.id], next)}
           onNote={next => setNote(open.id, next)}
-          onDelete={() => remove([open.id])}
+          onDelete={() => setPendingDelete([open.id])}
         />
       ) : null}
+
+      <ConfirmDialog
+        open={pendingDelete !== null}
+        title={
+          pendingDelete && pendingDelete.length === 1
+            ? 'Delete this response?'
+            : `Delete ${pendingDelete?.length ?? 0} responses?`
+        }
+        body="The answers and the contact details go with it. This cannot be undone."
+        confirmLabel="Delete"
+        variant="danger"
+        busy={fetcher.state !== 'idle'}
+        onConfirm={() => pendingDelete && remove(pendingDelete)}
+        onCancel={() => setPendingDelete(null)}
+      />
     </div>
   );
 }

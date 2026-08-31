@@ -13,6 +13,7 @@ import {
 
 import { ClassmojiService, prisma } from '~/utils/db.server.ts';
 import { assertFormAdmin, formMutationBlocked } from '~/utils/formAuth.server.ts';
+import { ConfirmDialog } from '~/components/forms/ConfirmDialog.tsx';
 
 dayjs.extend(relativeTime);
 
@@ -179,6 +180,9 @@ export default function FormsList() {
   const fetcher = useFetcher<{ error?: string; ok?: boolean }>();
   const [query, setQuery] = useState('');
   const [copied, setCopied] = useState<string | null>(null);
+  // The form a delete has been REQUESTED for and not yet confirmed. Holding the
+  // row (not a boolean) is what lets the dialog name the form being deleted.
+  const [pendingDelete, setPendingDelete] = useState<FormRow | null>(null);
 
   const visible = useMemo(() => {
     const needle = query.trim().toLowerCase();
@@ -209,14 +213,9 @@ export default function FormsList() {
     );
   };
 
+  // Only reached through the dialog — the row's trash button opens it.
   const remove = (form: FormRow) => {
-    if (
-      !confirm(
-        `Delete “${form.title}”?\n\nThis also deletes every response collected against it. This cannot be undone.`
-      )
-    ) {
-      return;
-    }
+    setPendingDelete(null);
     fetcher.submit(
       { intent: 'delete', formId: form.id },
       { method: 'post', encType: 'application/json' }
@@ -377,7 +376,7 @@ export default function FormsList() {
                       </Link>
                       <button
                         type="button"
-                        onClick={() => remove(form)}
+                        onClick={() => setPendingDelete(form)}
                         title="Delete"
                         aria-label={`Delete ${form.title}`}
                         className="text-gray-400 hover:text-red-600 dark:hover:text-red-400"
@@ -407,6 +406,17 @@ export default function FormsList() {
           </table>
         </div>
       )}
+
+      <ConfirmDialog
+        open={pendingDelete !== null}
+        title={pendingDelete ? `Delete “${pendingDelete.title}”?` : 'Delete this form?'}
+        body="This also deletes every response collected against it. This cannot be undone."
+        confirmLabel="Delete form"
+        variant="danger"
+        busy={fetcher.state !== 'idle'}
+        onConfirm={() => pendingDelete && remove(pendingDelete)}
+        onCancel={() => setPendingDelete(null)}
+      />
     </div>
   );
 }
