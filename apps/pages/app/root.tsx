@@ -229,8 +229,19 @@ const DARK_MODE_SCRIPT = `
  * If it is exactly 'dark' or 'light' we honour it and DO NOT attach the
  * prefers-color-scheme listener, so the embedded reader matches the app even
  * when the app theme differs from the OS. With no such param (the canonical
- * pages host, opened directly) this is byte-for-byte the OS-driven behavior of
+ * pages host, opened directly) this is the OS-driven behavior of
  * `DARK_MODE_SCRIPT`. Class sites never carry the param and keep `DARK_MODE_SCRIPT`.
+ *
+ * FORCED LIGHT IS A POSITIVE MARKER. `?theme=light` adds a `light` class as well
+ * as removing `dark`, because "no dark class" cannot be told apart from "nobody
+ * expressed a preference" — and something has to be able to tell, or a rule
+ * keyed on `prefers-color-scheme` darkens a deliberately-light embed on a
+ * dark-mode machine. The forms canvas is the rule that needs it today (see
+ * `components/forms/FormCanvas.tsx`); every Tailwind `dark:` utility in this app
+ * is in the same position, compiling to a media query for want of a
+ * `@custom-variant dark`. Only this branch sets `light`, and this branch returns
+ * before the OS listener is attached, so `light` and `dark` are never both
+ * present.
  */
 const APP_DARK_MODE_SCRIPT = `
               (function() {
@@ -238,9 +249,11 @@ const APP_DARK_MODE_SCRIPT = `
                   var forced = new URLSearchParams(window.location.search).get('theme');
                   if (forced === 'dark' || forced === 'light') {
                     if (forced === 'dark') {
+                      document.documentElement.classList.remove('light');
                       document.documentElement.classList.add('dark');
                     } else {
                       document.documentElement.classList.remove('dark');
+                      document.documentElement.classList.add('light');
                     }
                     return;
                   }

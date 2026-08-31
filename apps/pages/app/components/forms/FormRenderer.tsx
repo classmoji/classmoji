@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
   useForm,
   type Resolver,
@@ -150,6 +150,23 @@ interface StoredDraft {
   identityEmail?: string;
 }
 
+/**
+ * The draft state before one is found — a module constant so the "no draft"
+ * render is referentially stable and cannot itself schedule a re-render.
+ */
+const NO_DRAFT: StoredDraft = {};
+
+/**
+ * `useLayoutEffect` on the client, `useEffect` on the server.
+ *
+ * The draft has to be applied BEFORE the browser paints (see `FormRenderer`),
+ * which only a layout effect guarantees. React warns when a component calls
+ * `useLayoutEffect` during SSR — it cannot run there — so the server gets the
+ * inert one. The branch is on the module, not inside a render, so the hook
+ * ORDER is identical in both environments; only which no-op runs differs.
+ */
+const useBeforePaint = typeof window === 'undefined' ? useEffect : useLayoutEffect;
+
 function readDraft(key: string | null | undefined): StoredDraft | null {
   if (!key || typeof window === 'undefined') return null;
   try {
@@ -262,17 +279,35 @@ export default function FormRenderer({
   const needsIdentityInputs = plan.emailFieldId === null && !lockedIdentity;
 
   /**
-   * A draft is read ONCE, synchronously, into the initial values.
+   * A draft is read ONCE, on the client, and applied before the first paint.
    *
-   * Restoring in an effect instead would mean the first paint shows an empty
-   * form and then repopulates it, which reads as the page losing the answers
-   * and getting them back — and would fight any typing that happened in
-   * between.
+   * ── Why not during render ──────────────────────────────────────────────────
+   * This used to call `readDraft` in the render body. The server has no
+   * localStorage, so with a draft on disk the FIRST CLIENT RENDER did not match
+   * the server's HTML: the "we restored" line appeared out of nowhere, and every
+   * control that renders from `watch()` (a multi-select's chips, a repeat
+   * group's cards) drew the draft's value instead of the empty one.
+   *
+   * React 19 answers a hydration mismatch by regenerating the tree on the
+   * client — and because `root.tsx` renders the whole `<html>`, that
+   * regeneration reset `<html>`'s attributes to the ones React knows about,
+   * throwing away the `dark` class root.tsx's pre-paint script had just added.
+   * The visible bug: a returning visitor got a WHITE page canvas (keyed on
+   * `html.dark`) around a DARK card (Tailwind v4's `dark:` utilities are
+   * media-query driven in this app). Measured, not deduced — a
+   * document-start MutationObserver logs `class` going "" → "dark" at ~257ms
+   * and "dark" → "" at ~316ms, next to React's hydration exception.
+   *
+   * ── Why a layout effect and not a plain one ────────────────────────────────
+   * The original reason for reading during render still stands: a first paint
+   * showing an empty form that then repopulates reads as the page losing the
+   * answers and getting them back. React runs layout effects after the
+   * hydration commit and BEFORE the browser paints, so the restore lands in the
+   * same frame — the empty state is never painted, and the server and the first
+   * client render still agree.
    */
-  const restored = useRef<StoredDraft | null>(null);
-  if (restored.current === null) restored.current = readDraft(draftKey) ?? {};
-  const draft = restored.current;
-  const didRestore = Boolean(draft && (draft.answers || draft.identityEmail || draft.identityName));
+  const [draft, setDraft] = useState<StoredDraft>(NO_DRAFT);
+  const didRestore = Boolean(draft.answers || draft.identityEmail || draft.identityName);
 
   const schema = useMemo(
     () =>
@@ -325,28 +360,55 @@ export default function FormRenderer({
     };
   }, [schema, fields]);
 
+  /**
+   * The form's values for a given draft — `{}` for "no draft yet", which is
+   * both what the server rendered and what the first client render must show.
+   * One builder because `useForm` needs it at mount and `reset` needs the same
+   * answer a moment later; two copies would drift on the next field type.
+   */
+  const valuesFor = (saved: StoredDraft): FormValues => ({
+    answers: defaultAnswers(
+      fields,
+      {
+        ...(storedAnswers ?? {}),
+        ...(saved.answers ?? {}),
+      },
+      reviewTargets
+    ),
+    identityName: saved.identityName ?? identityDefaults?.name ?? '',
+    identityEmail: saved.identityEmail ?? identityDefaults?.email ?? '',
+    website: '',
+  });
+
   const {
     register,
     handleSubmit,
+    reset,
     watch,
     setValue,
     formState: { errors },
   } = useForm<FormValues>({
     resolver,
-    defaultValues: {
-      answers: defaultAnswers(
-        fields,
-        {
-          ...(storedAnswers ?? {}),
-          ...(draft.answers ?? {}),
-        },
-        reviewTargets
-      ),
-      identityName: draft.identityName ?? identityDefaults?.name ?? '',
-      identityEmail: draft.identityEmail ?? identityDefaults?.email ?? '',
-      website: '',
-    },
+    defaultValues: valuesFor(NO_DRAFT),
   });
+
+  /**
+   * Apply the saved draft, once, between hydration and the first paint.
+   *
+   * Held behind a ref for the same reason `draftSink` below is: `valuesFor`
+   * closes over the props and so is a new function every render, which in a
+   * dependency array would say "changed" on renders where nothing about the
+   * draft did. The effect itself must run exactly once — a second run would
+   * overwrite whatever the person has typed since.
+   */
+  const buildValues = useRef(valuesFor);
+  buildValues.current = valuesFor;
+  useBeforePaint(() => {
+    const saved = readDraft(draftKey);
+    if (!saved || !(saved.answers || saved.identityEmail || saved.identityName)) return;
+    setDraft(saved);
+    reset(buildValues.current(saved));
+  }, [draftKey, reset]);
 
   // ── Debounced autosave ────────────────────────────────────────────────────
   const values = watch();

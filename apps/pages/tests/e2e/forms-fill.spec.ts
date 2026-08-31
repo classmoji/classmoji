@@ -1168,3 +1168,77 @@ test.describe('localStorage draft', () => {
       .toBe(false);
   });
 });
+
+// ─── Dark mode ──────────────────────────────────────────────────────────────
+
+/** Mean channel value of an `rgb(r, g, b)` string. 0 is black, 255 is white. */
+const brightness = (colour: string): number => {
+  const channels = colour.match(/\d+(\.\d+)?/g);
+  if (!channels || channels.length < 3) throw new Error(`not an rgb colour: ${colour}`);
+  return channels.slice(0, 3).reduce((sum, n) => sum + Number(n), 0) / 3;
+};
+
+const backgroundOf = (page: Page, selector: string): Promise<string> =>
+  page.locator(selector).evaluate(node => getComputedStyle(node).backgroundColor);
+
+/**
+ * The canvas has to be dark WHENEVER THE CARD IS, and the card's `dark:`
+ * utilities are driven by `prefers-color-scheme` — this app's `tailwind.css`
+ * declares no `@custom-variant dark`, so that is what Tailwind v4 compiles them
+ * to. The canvas used to key on the `dark` CLASS instead, and the two disagreed
+ * for real: a hydration mismatch in the renderer made React regenerate the
+ * document, which stripped the class the boot script had set, leaving a WHITE
+ * page around a DARK card.
+ *
+ * So these assert RESOLVED COLOURS under an emulated dark OS. Asserting that
+ * the class exists — the obvious test — passes on the broken code, because the
+ * class IS set; it is removed a frame later. Brightness rather than a literal
+ * hex because the colour is the classroom's theme, which is data.
+ *
+ * The second test goes through the draft restore, which is the path that
+ * triggers the mismatch: on the old code it fails, and a first visit never
+ * fires it at all.
+ */
+test.describe('dark mode', () => {
+  test.use({ colorScheme: 'dark' });
+
+  test('the page canvas is dark, not just the card', async ({ page }) => {
+    await page.goto(fillPath);
+
+    const canvas = await backgroundOf(page, 'div[style*="--forms-canvas"]');
+    const card = await backgroundOf(page, '.rounded-2xl');
+    const body = await backgroundOf(page, 'body');
+
+    expect(brightness(canvas), `canvas ${canvas} should be dark`).toBeLessThan(90);
+    expect(brightness(card), `card ${card} should be dark`).toBeLessThan(90);
+    // The overscroll area past the end of a long form is the body, painted from
+    // the same custom property — `tailwind.css` has a competing `html.dark body`.
+    expect(body).toBe(canvas);
+  });
+
+  test('a restored draft does not turn the canvas white', async ({ page }) => {
+    const crashes: string[] = [];
+    page.on('pageerror', error => crashes.push(error.message.split('\n')[0]));
+
+    await page.goto(fillPath);
+    await page.getByLabel(NAME_LABEL, { exact: true }).fill('Dark Mode Draft');
+    await expect
+      .poll(async () =>
+        page.evaluate(() => Object.keys(window.localStorage).some(key => key.startsWith('forms:')))
+      )
+      .toBe(true);
+
+    crashes.length = 0;
+    await page.reload();
+    await expect(
+      page.getByText('We restored the answers you started on this device')
+    ).toBeVisible();
+
+    const canvas = await backgroundOf(page, 'div[style*="--forms-canvas"]');
+    expect(brightness(canvas), `canvas ${canvas} should be dark`).toBeLessThan(90);
+    expect(await backgroundOf(page, 'body')).toBe(canvas);
+    // The mechanism, not only the symptom: restoring a draft must not make the
+    // first client render disagree with the server's HTML.
+    expect(crashes.filter(message => /[Hh]ydrat/.test(message))).toEqual([]);
+  });
+});
